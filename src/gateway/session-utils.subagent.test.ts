@@ -148,7 +148,7 @@ describe("session list subagent metadata", () => {
       saveSubagentRegistryToSqlite(runs);
       const read = async (sessionKey: string, at = now) =>
         expectDefined(await rowReader.row(sessionKey, { now: at }), "resident row");
-      expect((await read(root)).childSessions).toEqual([child]);
+      expect((await read(root)).childSessions).toBeUndefined();
       expect((await read(navigation)).childSessions).toEqual([child]);
       expect((await read(child)).hasActiveSubagentRun).toBe(true);
       expect((await read(root)).swarm?.groups).toMatchObject([{ groupId: "group", done: 1 }]);
@@ -158,7 +158,7 @@ describe("session list subagent metadata", () => {
       subagentRuns.set(moved.runId, moved);
       subagentRuns.commitOwnership(moved);
       expect((await read(root)).childSessions).toBeUndefined();
-      expect((await read(movedRoot)).childSessions).toEqual([child]);
+      expect((await read(movedRoot)).childSessions).toBeUndefined();
       expect((await read(navigation)).childSessions).toEqual([child]);
 
       const replacement = {
@@ -170,12 +170,12 @@ describe("session list subagent metadata", () => {
       persistRegistryFixture(new Map([[replacement.runId, replacement]]), [replacement.runId]);
       expect((await read(child)).hasActiveSubagentRun).toBe(false);
       expect((await read(movedRoot)).childSessions).toBeUndefined();
-      expect((await read(navigation)).childSessions).toBeUndefined();
+      expect((await read(navigation)).childSessions).toEqual([child]);
 
       const recent = { ...moved, execution: { ...moved.execution, endedAt: now - 29 * 60_000 } };
       subagentRuns.set(recent.runId, recent);
       subagentRuns.commitOwnership(recent);
-      expect((await read(movedRoot)).childSessions).toEqual([child]);
+      expect((await read(movedRoot)).childSessions).toBeUndefined();
       expect((await read(movedRoot, now + 2 * 60_000)).childSessions).toBeUndefined();
       await deleteSessionEntryLifecycle({
         agentId: "main",
@@ -306,6 +306,9 @@ describe("session list subagent metadata", () => {
       }),
     );
     const list = (spawnedBy?: string) => listSubagentSessions(store, { spawnedBy });
+    // Retained collector snapshots alone do not grant a relationship.
+    expect((await list(parentKey)).sessions).toEqual([]);
+    store[childKey]!.spawnedBy = parentKey;
     const before = await list();
     expect(before.sessions.find((row) => row.key === parentKey)?.childSessions).toEqual([childKey]);
     expect((await list(parentKey)).sessions.map((row) => row.key)).toEqual([childKey]);

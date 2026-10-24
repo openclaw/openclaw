@@ -128,7 +128,7 @@ export type CreateManagedWorktreeParams = {
   /** Guest projections receive committed source, never host ignored-file provisioning. */
   provisionIgnoredFiles?: boolean;
   signal?: AbortSignal;
-  onProgress?: (phase: "checkout" | "setup") => void;
+  onProgress?: (phase: "base" | "checkout" | "setup") => void;
   /** Committed prompt files are ready; workspace tools must still await creation. */
   onPromptReady?: (facts: {
     id: string;

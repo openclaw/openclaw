@@ -193,7 +193,6 @@ describe("ExecApprovalManager lifetime", () => {
           cronConfig: { triggers: { enabled: true } },
           log: createNoopLogger(),
           enqueueSystemEvent: vi.fn(),
-          requestHeartbeat: vi.fn(),
           runIsolatedAgentJob: async () => ({ status: "ok" }),
         });
         const entered = createDeferredCore();

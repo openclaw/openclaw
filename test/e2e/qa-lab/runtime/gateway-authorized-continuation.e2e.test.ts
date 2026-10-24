@@ -6,13 +6,7 @@ import path from "node:path";
 import { text as readBody } from "node:stream/consumers";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { withFastReplyConfig } from "../../../../src/auto-reply/reply/get-reply-fast-path.test-support.js";
-import {
-  clearConfigCache,
-  clearRuntimeConfigSnapshot,
-  getRuntimeConfigSnapshot,
-} from "../../../../src/config/config.js";
-import { resetConfigOverrides } from "../../../../src/config/runtime-overrides.js";
-import { clearSessionStoreCacheForTest } from "../../../../src/config/sessions/store-writer-state.js";
+import { getRuntimeConfigSnapshot } from "../../../../src/config/config.js";
 import { captureCronSchedulerWakeForTest } from "../../../../src/cron/service/scheduler-actor.test-support.js";
 import type { CronJob } from "../../../../src/cron/types.js";
 import type { GatewayClient } from "../../../../src/gateway/client.js";
@@ -22,9 +16,7 @@ import {
   disconnectGatewayClient,
   startGatewayWithClient,
 } from "../../../../src/gateway/test-helpers.e2e.js";
-import { resetAgentEventsForTest } from "../../../../src/infra/agent-events.js";
 import type { GatewaySchedulerClock } from "../../../../src/infra/gateway-scheduler.js";
-import { resetSystemEventsForTest } from "../../../../src/infra/system-events.js";
 import { withEnvAsync } from "../../../../src/test-utils/env.js";
 import { createGatewaySchedulerClock } from "../../../../src/test-utils/gateway-scheduler-clock.js";
 import {
@@ -42,6 +34,7 @@ import {
 import { createDeferred, withinTest } from "../../../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 import { isolatedGatewayEnv, messageText } from "./gateway-recovery.test-support.js";
+import { resetGatewayState } from "./gateway-startup-routing.test-support.js";
 
 type ProviderRequest = {
   instructions?: string;
@@ -81,14 +74,6 @@ vi.mock("../../../../src/infra/gateway-scheduler.js", async (importOriginal) => 
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function resetGatewayState(): void {
-  resetConfigOverrides();
-  clearRuntimeConfigSnapshot();
-  clearConfigCache();
-  clearSessionStoreCacheForTest();
-  resetAgentEventsForTest({ preserveListeners: true });
-  resetSystemEventsForTest();
-}
 beforeEach(resetGatewayState);
 afterEach(() => {
   schedulerClock.current = undefined;

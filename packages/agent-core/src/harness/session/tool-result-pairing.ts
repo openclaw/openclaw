@@ -42,15 +42,13 @@ type ToolUsePairingFrame = {
   failed: boolean;
 };
 
-type ToolCallOccurrenceQueue<T> = {
+/** Tracks repeated provider ids by occurrence instead of collapsing them into a set. */
+export function createToolCallOccurrenceQueue<T>(): {
   add: (id: string, occurrence: T) => void;
   claim: (id: string) => T | undefined;
   clear: () => void;
   readonly size: number;
-};
-
-/** Tracks repeated provider ids by occurrence instead of collapsing them into a set. */
-export function createToolCallOccurrenceQueue<T>(): ToolCallOccurrenceQueue<T> {
+} {
   const pendingById = new Map<string, T[]>();
   let pendingCount = 0;
   return {

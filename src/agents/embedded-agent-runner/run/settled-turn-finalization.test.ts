@@ -4,6 +4,7 @@ import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { makeEmbeddedRunnerAttempt as makeAttempt } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import type { EmbeddedRunAttemptWithReceiptEvidence } from "./attempt-result.js";
+import { CUT_OFF_SUMMARY_NOTICE_TEXT } from "./incomplete-turn-resolution.js";
 import { EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS } from "./lane-runtime.js";
 import { useFinalizationAdmission } from "./settled-finalization-harness.test-support.js";
 import {
@@ -142,6 +143,59 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
       }
     },
   );
+
+  function cutOffAttempt(stopReason: "length" | "stop") {
+    const attempt = settledAttempt(false);
+    const cutOff = textAssistant(undefined, {
+      stopReason,
+      content: [{ type: "thinking", thinking: "Next", thinkingSignature: "opaque" }],
+    });
+    return Object.assign(attempt, {
+      lastAssistant: cutOff,
+      currentAttemptAssistant: cutOff,
+      currentAttemptCompletedAssistant: cutOff,
+      messagesSnapshot: [...attempt.messagesSnapshot, cutOff],
+    });
+  }
+
+  it.each(["length", "stop"] as const)(
+    "labels a recovered summary only when the settled turn was cut off (%s)",
+    async (stopReason) => {
+      // #178300: a tool-free summary of a cut-off turn must not read as a clean finish.
+      backendMocks.finalize.mockResolvedValueOnce(
+        finalizationReply("answered", "All steps are complete."),
+      );
+
+      const result = await finalize(finalizationInput(cutOffAttempt(stopReason)));
+
+      expect(result.finalizationOutcome).toBe("answered");
+      expect(backendMocks.finalize.mock.calls[0]?.[0].prompt.includes("cut off")).toBe(
+        stopReason === "length",
+      );
+      expect(result.prepared.payloadsWithToolMedia?.map((payload) => payload.text)).toEqual(
+        stopReason === "length"
+          ? ["All steps are complete.", CUT_OFF_SUMMARY_NOTICE_TEXT]
+          : ["All steps are complete."],
+      );
+    },
+  );
+
+  it("holds the cut-off notice back with a summary whose source reply was already delivered", async () => {
+    const input = finalizationInput(cutOffAttempt("length"));
+    // The source reply lands while the finalizer runs, so its summary must not be sent.
+    input.terminalBase.runParams.resolveReplyDelivery = vi
+      .fn()
+      .mockResolvedValueOnce("missing")
+      .mockResolvedValue("delivered");
+    backendMocks.finalize.mockResolvedValueOnce(
+      finalizationReply("answered", "All steps are complete."),
+    );
+
+    const result = await finalize(input);
+
+    expect(result.finalizationOutcome).toBe("answered");
+    expect(result.prepared.payloadsWithToolMedia ?? []).toEqual([]);
+  });
 
   it("does not finalize an empty post-tool turn when media was delivered", async () => {
     const assistant = textAssistant();
@@ -441,7 +495,6 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
   it.each([
     { trigger: "user", expectation: "required", notice: true },
     { trigger: "cron", expectation: "optional", notice: false },
-    { trigger: "heartbeat", expectation: "optional", notice: false },
     { trigger: "user", expectation: "result-required", notice: false },
   ] as const)(
     "settles empty $trigger/$expectation turns without persisting a synthetic answer",

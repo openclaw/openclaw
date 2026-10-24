@@ -75,17 +75,6 @@ function isLikelyPlainText(buffer: Buffer): boolean {
   return controlBytes / sample.byteLength < 0.01;
 }
 
-async function detectFetchedFileMime(params: {
-  buffer: Buffer;
-  filePath: string;
-}): Promise<string> {
-  const detected = await detectMime(params);
-  if (detected) {
-    return detected;
-  }
-  return isLikelyPlainText(params.buffer) ? "text/plain" : "application/octet-stream";
-}
-
 export async function handleFileFetch(
   params: FileFetchParams,
   io?: OpenClawPluginNodeHostCommandIo,
@@ -216,7 +205,9 @@ export async function handleFileFetch(
 
     const sha256 = crypto.createHash("sha256").update(buffer).digest("hex");
     const base64 = buffer.toString("base64");
-    const mimeType = await detectFetchedFileMime({ buffer, filePath: opened.realPath });
+    const detectedMime = await detectMime({ buffer, filePath: opened.realPath });
+    const mimeType =
+      detectedMime || (isLikelyPlainText(buffer) ? "text/plain" : "application/octet-stream");
 
     return {
       ok: true as const,

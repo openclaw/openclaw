@@ -1,5 +1,6 @@
 import { vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { createReplyOperation } from "../../sessions/session-controller.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -42,6 +43,18 @@ export function createSessionBody<T extends string>(body: T) {
 
 export function createProviderSurface<T extends string>(provider: T) {
   return { Provider: provider, Surface: provider };
+}
+
+export function createPreparedReplyTurn(
+  body: string,
+  common: Parameters<typeof runPreparedReply>[0]["ctx"],
+  session: Partial<Parameters<typeof runPreparedReply>[0]["sessionCtx"]> = {},
+  inbound: Partial<Parameters<typeof runPreparedReply>[0]["ctx"]> = {},
+) {
+  return {
+    ctx: { ...createInboundBody(body), ...common, ...inbound },
+    sessionCtx: { ...createSessionBody(body), ...common, ...session },
+  };
 }
 
 export function createTelegramGroupSession(): SessionEntry {
@@ -137,8 +150,11 @@ export function baseParams(
     workspaceDir: "/tmp/workspace",
     abortedLastRun: false,
   };
-  const ctx = overrides.ctx ?? defaults.ctx;
+  const ctx: Parameters<typeof runPreparedReply>[0]["ctx"] = overrides.ctx ?? defaults.ctx;
   const sessionCtx = overrides.sessionCtx ?? defaults.sessionCtx;
+  const sessionKey = overrides.sessionKey ?? ctx.SessionKey ?? defaults.sessionKey;
+  const agentId =
+    overrides.agentId ?? parseAgentSessionKey(sessionKey)?.agentId ?? defaults.agentId;
   const resolveTestCanonicalText = (value: Record<string, unknown>) => {
     const { commandText, agentText, rawText } = finalizeInboundContextForSdk({ ...value });
     return { commandText, agentText, rawText };
@@ -147,14 +163,13 @@ export function baseParams(
   return {
     ...defaults,
     ...overrides,
+    sessionKey,
+    agentId,
     conversation:
       overrides.conversation ??
       prepareReplyConversation({
         ctx: sessionCtx,
-        sessionEntry:
-          overrides.sessionStore?.[overrides.sessionKey ?? defaults.sessionKey] ??
-          overrides.sessionEntry,
-        isHeartbeat: overrides.opts?.isHeartbeat,
+        sessionEntry: overrides.sessionStore?.[sessionKey] ?? overrides.sessionEntry,
       }),
     ctx: { ...ctx, ...resolveTestCanonicalText(ctx) },
     sessionCtx: {

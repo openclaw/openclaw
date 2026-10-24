@@ -2,13 +2,16 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { throwSettledAggregate } from "../../infra/error-graph-internal.js";
 import { observeOwnedDirectory } from "../../infra/owned-directory-observation.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { getOrCreatePromise } from "../../shared/lazy-promise.js";
 import type { readWorkspaceSkillStatusFacts } from "../discovery/status-files.js";
 import { resolveSkillDiscoveryLimits } from "../loading/skill-root-discovery.js";
 import type { SkillSnapshotProjectionInput } from "../loading/skill-snapshot-projection.js";
@@ -338,27 +341,24 @@ export async function prepareSkillSourcePlan(
   }
   const input = captureSkillsSourcePlanInput(workspaceDir, options);
   const key = JSON.stringify(input);
-  let pending = state.plans.get(key);
-  if (!pending) {
-    if (state.plans.size >= MAX_SOURCES) {
-      state.plans.delete(state.plans.keys().next().value!);
-    }
-    pending = pool()
-      .run({ kind: "plan", input }, { timeoutMs: 120_000 })
-      .then((result) => {
-        if (result.kind !== "plan") {
-          throw new Error("Unexpected Skills source plan response");
-        }
-        return { plan: result.plan, input };
-      });
-    state.plans.set(key, pending);
-    void pending.catch(() => {
-      if (state.plans.get(key) === pending) {
-        state.plans.delete(key);
+  return getOrCreatePromise(
+    state.plans,
+    key,
+    () => {
+      if (state.plans.size >= MAX_SOURCES) {
+        state.plans.delete(state.plans.keys().next().value!);
       }
-    });
-  }
-  return pending;
+      return pool()
+        .run({ kind: "plan", input }, { timeoutMs: 120_000 })
+        .then((result) => {
+          if (result.kind !== "plan") {
+            throw new Error("Unexpected Skills source plan response");
+          }
+          return { plan: result.plan, input };
+        });
+    },
+    { cacheRejections: false },
+  );
 }
 
 export async function projectSkillSnapshot(
@@ -467,6 +467,7 @@ export async function refreshSkillsDiscovery(
   params: {
     workspaceDir?: string;
     config?: OpenClawConfig;
+    pluginMetadataSnapshot?: PluginMetadataSnapshot;
     reason?: "manual" | "workshop" | "config-change";
   } = {},
 ): Promise<void> {
@@ -487,6 +488,7 @@ export async function refreshSkillsDiscovery(
           registerSkillsWatcher({
             workspaceDir: resolveAgentWorkspaceDir(params.config!, agentId),
             config: params.config,
+            pluginMetadataSnapshot: params.pluginMetadataSnapshot,
             agentId,
           }),
         ),
@@ -496,7 +498,10 @@ export async function refreshSkillsDiscovery(
     }
   } else {
     if (!state.sources.size && params.workspaceDir) {
-      await registerSkillsWatcher({ workspaceDir: params.workspaceDir });
+      await registerSkillsWatcher({
+        workspaceDir: params.workspaceDir,
+        pluginMetadataSnapshot: params.pluginMetadataSnapshot,
+      });
     }
     await scanDirtySources();
   }
@@ -536,15 +541,10 @@ async function resetSkillsDiscoverySources(
     closeRemoteSkillsWatchers(),
   ])
     .then((results) => {
-      const failures = results.flatMap((result) =>
-        result.status === "rejected" ? [result.reason] : [],
-      );
       if (resetState) {
         resetSkillsRefreshStateForTest();
       }
-      if (failures.length) {
-        throw new AggregateError(failures, "Skills discovery shutdown failed");
-      }
+      throwSettledAggregate(results, "Skills discovery shutdown failed");
     })
     .finally(() => {
       state.closing = undefined;

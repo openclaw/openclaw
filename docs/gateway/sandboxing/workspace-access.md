@@ -188,6 +188,8 @@ return to a supporting version before continuing guest work.
 With the OpenShell backend, `mirror` mode still uses the local workspace as the source of truth between exec turns, and `remote` mode uses the remote OpenShell workspace as the source of truth after the initial seed. The same access rules apply: `none` permits private workspace writes, while `ro` disables writes.
 
 Inbound media is copied into the active sandbox workspace (`media/inbound/*`).
+Later conversation turns load retained images from that same staged copy.
+Missing copies and paths outside the active sandbox remain unavailable.
 For a managed project session, attachments on follow-up messages use that
 session's private checkout, including after its worktree has been created.
 Attachment staging retains the managed workspace owner until the copy settles.

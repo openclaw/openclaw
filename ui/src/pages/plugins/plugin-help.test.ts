@@ -22,7 +22,6 @@ function installedModel(id: string): Parameters<ReturnType<typeof createPluginHe
     result: createResult(createPlugin({ id, name: id })),
     detail: { pluginId: id },
     catalogDetail: null,
-    installedDetailTab: "configuration",
   };
 }
 
@@ -41,7 +40,7 @@ it.each(["plugin", "route", "connection", "disconnect"])(
     if (change === "plugin") {
       help.update(installedModel("second"));
     } else if (change === "route") {
-      setPathname("/agents");
+      setPathname("/sessions");
     } else if (change === "connection") {
       setGatewayToken("replacement-operator");
       help.update(installedModel("first"));
@@ -88,7 +87,6 @@ it.each<[string, string, Record<string, string[]> | undefined]>([
     connected: true,
     result: createResult([]),
     detail: null,
-    installedDetailTab: "readme",
     catalogDetail: { result: catalog },
   };
   help.update(model);

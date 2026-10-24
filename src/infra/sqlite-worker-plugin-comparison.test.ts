@@ -126,16 +126,17 @@ describe("plugin state data-only comparison", () => {
         }
         return dispatch.call(this, message, transferList);
       };
-      const result = await store.compareAndApply(
-        "counter",
-        before.comparison,
-        operation === "update"
-          ? { operation, action: "set", value: { count: 3 } }
-          : { operation, action: "delete" },
-      );
+      const change = operation === "update" ? set(3) : ({ operation, action: "delete" } as const);
+      const result = await store.compareAndApply("counter", before.comparison, change);
       dispatch.mockRestore();
       expect(result).toMatchObject({ status: "conflict", current: { value: { count: 2 } } });
       expect(await store.lookup("counter")).toEqual({ count: 2 });
+      if (result.status !== "conflict") {
+        throw new Error("Expected an observed conflict");
+      }
+      expect(await store.compareAndApply("counter", result.current.comparison, change)).toEqual({
+        status: "applied",
+      });
     },
   );
 
@@ -156,31 +157,6 @@ describe("plugin state data-only comparison", () => {
     } finally {
       observation.restore();
     }
-  });
-
-  it("returns the current row after a legacy write without losing that update", async () => {
-    const { store, legacy } = fixture("conflict");
-    legacy.register("counter", { count: 1 });
-    const before = await store.observe("counter");
-    legacy.register("counter", { count: 2 });
-    const conflict = await store.compareAndApply("counter", before.comparison, {
-      operation: "update",
-      action: "set",
-      value: { count: 3 },
-    });
-    expect(conflict.status).toBe("conflict");
-    if (conflict.status !== "conflict") {
-      throw new Error("Expected an observed conflict");
-    }
-    expect(conflict.current.value).toEqual({ count: 2 });
-    expect(await store.lookup("counter")).toEqual({ count: 2 });
-    expect(
-      await store.compareAndApply("counter", conflict.current.comparison, {
-        operation: "update",
-        action: "set",
-        value: { count: 3 },
-      }),
-    ).toEqual({ status: "applied" });
   });
 
   it("refreshes age and default TTL for a defined same-value update", async () => {

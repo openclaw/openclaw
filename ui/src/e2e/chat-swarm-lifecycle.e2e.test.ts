@@ -91,6 +91,14 @@ suite.define(() => {
             "sessions.describe": { session: parent },
           },
         });
+        const publishParent = async (session: typeof parent) => {
+          await gateway.setMethodResponse("sessions.describe", { session });
+          await gateway.setMethodResponse(
+            "sessions.list",
+            chatSessionListResponse([session, ...children]),
+          );
+          await gateway.emitGatewayEvent("sessions.changed", changeEvent);
+        };
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         const widget = page.locator('[data-test-id="chat-swarm"]');
         const disclosure = widget.locator("details");
@@ -112,12 +120,7 @@ suite.define(() => {
             children: children.map((child) => ({ sessionKey: child.key, status: "done" })),
           }),
         };
-        await gateway.setMethodResponse("sessions.describe", { session: completedParent });
-        await gateway.setMethodResponse(
-          "sessions.list",
-          chatSessionListResponse([completedParent, ...children]),
-        );
-        await gateway.emitGatewayEvent("sessions.changed", changeEvent);
+        await publishParent(completedParent);
         await expectCount(
           widget.locator(".chat-swarm__tasks .chat-swarm__task-icon--done"),
           viewport.count,
@@ -178,20 +181,16 @@ suite.define(() => {
           hasActiveRun: false,
           updatedAt: 3,
         };
-        await gateway.setMethodResponse("sessions.describe", { session: settledParent });
-        await gateway.setMethodResponse(
-          "sessions.list",
-          chatSessionListResponse([settledParent, ...children]),
-        );
-        await gateway.emitGatewayEvent("sessions.changed", changeEvent);
+        await publishParent(settledParent);
         try {
           await expectVisible(
             widget.getByText("Child runs finished. Check the conversation for the final response."),
           );
-        } finally {
+        } catch (error) {
           await logSwarmDiagnostic(page, gateway, sessionKey).catch(() => {
             console.info("[swarm-final-diagnostic] unavailable");
           });
+          throw error;
         }
         await capture(page, proofDir, "settled-details");
         await page.keyboard.press("Space");
@@ -254,6 +253,7 @@ suite.define(() => {
           "sessions.describe": { session: parent },
         },
       });
+      await page.clock.install();
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       await gateway.waitForRequest("sessions.list", { match: { spawnedBy: sessionKey } });
       const widget = page.locator('[data-test-id="chat-swarm"]');
@@ -305,6 +305,8 @@ suite.define(() => {
       await gateway.setMethodResponse("sessions.describe", { session: failedParent });
       const reads = (await gateway.getRequests("sessions.list", { spawnedBy: sessionKey })).length;
       await gateway.emitGatewayEvent("sessions.changed", changeEvent);
+      // Let the paced child query run through its normal refresh callback.
+      await page.clock.runFor(5_000);
       await gateway.waitForRequest("sessions.list", {
         after: reads,
         match: { spawnedBy: sessionKey },

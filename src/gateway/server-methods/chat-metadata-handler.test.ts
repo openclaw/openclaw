@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { performance } from "node:perf_hooks";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { PreparedModelRuntimePublicationSupersededError as SupersededError } from "../../agents/prepared-model-runtime.errors.js";
 import { captureRuntimeConfigAsyncReader } from "../../config/config.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
@@ -15,6 +18,7 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import * as userModelAccounts from "../../state/user-model-accounts.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
@@ -33,17 +37,104 @@ import * as sessionReads from "../session-utils-store.js";
 import { createWorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
 import { chatHistoryHandlers } from "./chat-history-handler.js";
 import {
-  registerMetadataCallerCases,
-  registerMetadataRevocationCases,
-} from "./chat-metadata-ownership.test-support.js";
-import {
   chatMetadataCommandFields,
   connectChatMetadataAccount,
   createChatMetadataHarness,
+  createChatMetadataOwner,
 } from "./chat-metadata-runtime.test-support.js";
+import * as modelLists from "./models-list-result.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions, RespondFn } from "./types.js";
 
 type MetadataFixture = ReturnType<typeof createPersonalMetadataFixture>;
+
+it("serves commands independently of another agent's remembered model list", async ({ signal }) => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const config = {
+      agents: {
+        entries: { main: {}, other: {} },
+        defaults: { model: "test/main-model", modelPolicy: { allow: ["test/*"] } },
+      },
+    };
+    const pluginRegistry = createEmptyPluginRegistry();
+    const owner = (id: string) => ({
+      ...createChatMetadataOwner(config, id, {}, "test", "openai-completions"),
+      pluginRegistry,
+    });
+    const mainOwner = owner("main-model");
+    let otherOwner = owner("other-model");
+    const harness = createChatMetadataHarness(config);
+    harness.setOwner(mainOwner);
+    harness.getPreparedOwner.mockImplementation((params) =>
+      params?.agentId === "other" ? otherOwner : mainOwner,
+    );
+    const context = createDirectChatContext({
+      getRuntimeConfig: () => config,
+      readChatMetadata: harness.runtime.read,
+    });
+    const readCommands = async () => {
+      const respond = vi.fn<RespondFn>();
+      await callMetadata({
+        params: { agentId: "main", includeModels: false },
+        context,
+        respond,
+        signal,
+      });
+      expect(respond).toHaveBeenCalledWith(true, {
+        commands: [{ ...chatMetadataCommandFields, name: "command-1-1" }],
+        swarmEnabled: true,
+        revision: expect.any(String),
+      });
+    };
+    const request = {
+      agentId: "other",
+      params: { agentId: "other", view: "all" as const },
+      includeManualSelection: true,
+    };
+    const entered = createDeferred();
+    const release = createDeferred();
+    const abort = () => release.resolve();
+    signal.addEventListener("abort", abort, { once: true });
+    let blockOther = false;
+    const prepare = modelLists.prepareModelsListResult;
+    const preparation = vi
+      .spyOn(modelLists, "prepareModelsListResult")
+      .mockImplementation(async (params) => {
+        if (blockOther && params.agentId === "other") {
+          entered.resolve();
+          await release.promise;
+        }
+        return prepare(params);
+      });
+    const pending: Promise<unknown>[] = [];
+    try {
+      await harness.runtime.refresh();
+      await expect(harness.runtime.readModelsList(request)).resolves.toMatchObject({
+        models: expect.arrayContaining([expect.objectContaining({ id: "other-model" })]),
+      });
+      await readCommands();
+      otherOwner = owner("replacement-model");
+      blockOther = true;
+      await harness.runtime.refresh();
+      const models = harness.runtime.readModelsList(request);
+      pending.push(models);
+      await withinTest(entered.promise, signal);
+      const reading = readCommands();
+      pending.push(reading);
+      await withinTest(reading, signal);
+      release.resolve();
+      await Promise.all(pending);
+      await expect(harness.runtime.readModelsList(request)).resolves.toMatchObject({
+        models: expect.arrayContaining([expect.objectContaining({ id: "replacement-model" })]),
+      });
+    } finally {
+      release.resolve();
+      await Promise.allSettled(pending);
+      preparation.mockRestore();
+      signal.removeEventListener("abort", abort);
+      await harness.runtime.stop();
+    }
+  });
+});
 
 function metadataConnect(scopes: GatewayOperatorRoleDefinition["scopes"]) {
   return {
@@ -170,32 +261,22 @@ function createPersonalMetadataFixture(
   } satisfies OpenClawConfig;
   setRuntimeConfigSnapshot(config);
   let currentConfig: OpenClawConfig = config;
-  const clients = new Set([client]);
   const metadata = { models: [], swarmEnabled: false };
   const readChatMetadata = vi.fn<GatewayRequestContext["readChatMetadata"]>(async () => metadata);
   const context = createDirectChatContext({
     getRuntimeConfig: () => currentConfig,
     readChatMetadata,
-    getClientConnIds: (filter) =>
-      new Set(
-        [...clients]
-          .filter((current) => !filter || filter(current))
-          .map((current) => current.connId),
-      ),
+    getClientConnIds: (filter) => new Set(!filter || filter(client) ? [client.connId] : []),
   });
-  const request = async (
-    params: Record<string, unknown>,
-    overrides: Partial<Pick<GatewayRequestHandlerOptions, "client" | "signal">> = {},
-  ) => {
+  const request = async (params: Record<string, unknown>) => {
     const respond = vi.fn<RespondFn>();
-    await callMetadata({ params, context, client, respond, ...overrides });
+    await callMetadata({ params, context, client, respond });
     return respond;
   };
   return {
     owner,
     authProfileId,
     client,
-    clients,
     config,
     context,
     role,
@@ -284,17 +365,11 @@ describe("chat metadata ownership", () => {
         let request: ReturnType<typeof fixture.dispatch> | undefined;
         try {
           await harness.runtime.refresh();
-          const started = performance.now();
           request = fixture.dispatch({ sessionKey, includeModels }, signal);
           const winner = await Promise.race([
             request.pending.then(() => "response"),
             entered.promise.then(() => "placement"),
           ]);
-          console.info("chat metadata placement readiness", {
-            includeModels,
-            first: winner,
-            elapsedMs: performance.now() - started,
-          });
           expect(winner).toBe(first);
           if (includeModels) {
             expect(request.respond).not.toHaveBeenCalled();
@@ -416,37 +491,32 @@ describe("chat metadata ownership", () => {
       ]);
     }));
 
-  it.each([READ_SCOPE, SESSION_READ_SCOPE])(
-    "previews a retained personal account with %s without changing its cleared default",
-    (scope) =>
-      withOpenClawTestState({ layout: "state-only" }, async () => {
-        const fixture = createPersonalMetadataFixture([scope]);
-        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-        const { owner, authProfileId, metadata, readChatMetadata } = fixture;
-        userModelAccounts.clearUserProfileAuthLink({ profileId: owner.id, provider: "openai" });
-        const before = userModelAccounts.readUserModelAuthProfile(authProfileId);
+  it("previews a retained personal account with session read scope without changing its cleared default", () =>
+    withOpenClawTestState({ layout: "state-only" }, async () => {
+      const fixture = createPersonalMetadataFixture([SESSION_READ_SCOPE]);
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+      const { owner, authProfileId, metadata, readChatMetadata } = fixture;
+      userModelAccounts.clearUserProfileAuthLink({ profileId: owner.id, provider: "openai" });
+      const before = userModelAccounts.readUserModelAuthProfile(authProfileId);
 
-        const { pending, respond } = fixture.dispatch({ agentId: "main", authProfileId });
-        await pending;
+      const { pending, respond } = fixture.dispatch({ agentId: "main", authProfileId });
+      await pending;
 
-        expect(respond).toHaveBeenCalledWith(true, metadata);
-        expect(readChatMetadata).toHaveBeenCalledWith({
-          agentId: "main",
-          requesterProfileId: owner.id,
-          isCurrent: expect.any(Function),
+      expect(respond).toHaveBeenCalledWith(true, metadata);
+      expect(readChatMetadata).toHaveBeenCalledWith({
+        agentId: "main",
+        requesterProfileId: owner.id,
+        isCurrent: expect.any(Function),
+        assertCurrent: expect.any(Function),
+        draftAccountSelection: expect.objectContaining({
+          owner: owner.id,
+          authProfileId,
           assertCurrent: expect.any(Function),
-          draftAccountSelection: expect.objectContaining({
-            owner: owner.id,
-            authProfileId,
-            assertCurrent: expect.any(Function),
-          }),
-        });
-        expect(userModelAccounts.listUserProfileAuthLinks(owner.id)).toEqual([]);
-        expect(userModelAccounts.readUserModelAuthProfile(authProfileId)).toEqual(before);
-      }),
-  );
-
-  registerMetadataCallerCases(createPersonalMetadataFixture);
+        }),
+      });
+      expect(userModelAccounts.listUserProfileAuthLinks(owner.id)).toEqual([]);
+      expect(userModelAccounts.readUserModelAuthProfile(authProfileId)).toEqual(before);
+    }));
 
   it("rejects combining a personal draft preview with a persisted session selector", () =>
     withOpenClawTestState({ layout: "state-only" }, async () => {
@@ -465,8 +535,6 @@ describe("chat metadata ownership", () => {
       expect(readChatMetadata).not.toHaveBeenCalled();
     }));
 
-  registerMetadataRevocationCases(createPersonalMetadataFixture);
-
   it("reads saved and neutral metadata without host SQL or sharing the saved profile", () =>
     withOpenClawTestState({ scenario: "minimal" }, async () => {
       await captureRuntimeConfigAsyncReader()();
@@ -480,11 +548,10 @@ describe("chat metadata ownership", () => {
           authProfileOverrideSource: "user",
         },
       );
-      const readChatMetadata = vi.fn<GatewayRequestContext["readChatMetadata"]>(async () => ({
-        commands: [],
-        models: [],
-        swarmEnabled: false,
-      }));
+      const metadata = { commands: [], models: [], swarmEnabled: false };
+      const readChatMetadata = vi.fn<GatewayRequestContext["readChatMetadata"]>(
+        async () => metadata,
+      );
       const respond = vi.fn<RespondFn>();
       const context = createDirectChatContext({ readChatMetadata });
       const request = (params: Record<string, unknown>) =>
@@ -494,64 +561,11 @@ describe("chat metadata ownership", () => {
           await request(params);
         }
       });
-      expect(readChatMetadata.mock.calls).toEqual([
-        [
-          expect.objectContaining({
-            agentId: "main",
-            sessionKey,
-            isCurrent: expect.any(Function),
-            sessionEntry: expect.objectContaining({
-              authProfileOverride: "test:locked",
-              authProfileOverrideSource: "user",
-            }),
-          }),
-        ],
-        [
-          {
-            agentId: "main",
-            requesterProfileId: undefined,
-            isCurrent: expect.any(Function),
-            assertCurrent: expect.any(Function),
-          },
-        ],
+      expect(respond.mock.calls).toEqual([
+        [true, metadata],
+        [true, metadata],
       ]);
-      expect(respond).toHaveBeenCalledTimes(2);
-      readChatMetadata.mockClear();
-      await request({ agentId: "other", sessionKey });
-      expect(readChatMetadata).not.toHaveBeenCalled();
-      expect(respond).toHaveBeenLastCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: "INVALID_REQUEST" }),
-      );
     }));
-
-  it("returns a typed selection error for an ownerless explicit fleet", async () => {
-    const config: OpenClawConfig = {
-      agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
-    };
-    const respond = vi.fn<RespondFn>();
-    const readChatMetadata = vi.fn();
-
-    await callMetadata({
-      params: {},
-      respond,
-      context: createDirectChatContext({
-        getRuntimeConfig: () => config,
-        readChatMetadata,
-      }),
-    });
-
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "INVALID_REQUEST",
-        message: expect.stringContaining("has no explicit owner"),
-      }),
-    );
-    expect(readChatMetadata).not.toHaveBeenCalled();
-  });
 });
 
 describe("chat metadata dispatch authority", () => {

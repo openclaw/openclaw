@@ -31,6 +31,11 @@ const dotenvKey = "OPENCLAW_TEST_DOTENV";
 const shellKey = "OPENCLAW_TEST_SHELL";
 const config = (vars: Record<string, string>): OpenClawConfig => ({ env: { vars } });
 const windows = () => vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+function applied(source: OpenClawConfig) {
+  const env = {};
+  applyConfigEnvVars(source, env);
+  return env;
+}
 
 function initialize(ownedEnv: Record<string, string> = {}) {
   for (const name of [key, dotenvKey, shellKey]) {
@@ -66,59 +71,54 @@ afterEach(() => {
 
 describe("config env vars", () => {
   it("blocks config-owned host controls and startup env vars", () => {
-    const env: NodeJS.ProcessEnv = {};
-    applyConfigEnvVars(
-      {
+    expect(
+      applied({
         env: {
           OpenClaw_Config_ReadOnly: "1",
           vars: {
-            OPENCLAW_CONFIG_READONLY: "1",
-            BASH_ENV: "/tmp/pwn.sh",
-            SHELL: "/tmp/evil-shell",
-            HOME: "/tmp/evil-home",
-            ZDOTDIR: "/tmp/evil-zdotdir",
-            OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS: "1",
-            openclaw_allow_older_binary_destructive_actions: "1",
-            OPENCLAW_INCLUDE_ROOTS: "/tmp/evil-include-root",
+            ...Object.fromEntries(
+              `OPENCLAW_CONFIG_READONLY BASH_ENV SHELL HOME ZDOTDIR
+               OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS
+               openclaw_allow_older_binary_destructive_actions OPENCLAW_INCLUDE_ROOTS`
+                .split(/\s+/)
+                .map((name) => [name, "/tmp/blocked"]),
+            ),
+            OPENCLAW_DISABLE_GATEWAY_LOCAL_TERMINALS: "0",
+            OPENCLAW_DISABLE_CRON_HOST_EXECUTION: "0",
             OPENCLAW_NIX_MODE: "1",
             VALID: "literal",
           },
         },
-      },
-      env,
-    );
-    expect(env).toEqual({ OPENCLAW_NIX_MODE: "1", VALID: "literal" });
+      }),
+    ).toEqual({ OPENCLAW_NIX_MODE: "1", VALID: "literal" });
   });
 
   it("ignores malformed config env entries", () => {
-    const env: NodeJS.ProcessEnv = {};
-    applyConfigEnvVars(
-      JSON.parse(`{
-      "env": {"NOT-PORTABLE": "bad", "vars": {
-        " BAD KEY": "bad", "PORT": 8080, "DEBUG": true, "EMPTY": "", "VALID": "literal"
-      }}
-    }`),
-      env,
-    );
-    expect(env).toEqual({ VALID: "literal" });
+    expect(
+      applied(
+        JSON.parse(
+          '{"env":{"NOT-PORTABLE":"bad","vars":{" BAD KEY":"bad","PORT":8080,"DEBUG":true,"EMPTY":"","VALID":"literal"}}}',
+        ),
+      ),
+    ).toEqual({ VALID: "literal" });
   });
 
   it("does not apply unresolved references with or without defaults", () => {
-    const env: NodeJS.ProcessEnv = {};
-    applyConfigEnvVars(
-      config({ BARE_REF: "${SOME_VAR}", DEFAULT_REF: "${SOME_VAR:-fallback}", VALID: "literal" }),
-      env,
-    );
-    expect(env).toEqual({ VALID: "literal" });
+    expect(
+      applied(
+        config({ BARE_REF: "${SOME_VAR}", DEFAULT_REF: "${SOME_VAR:-fallback}", VALID: "literal" }),
+      ),
+    ).toEqual({ VALID: "literal" });
   });
 
   it("prepares updates and removals without mutating the target or rescanning per key", () => {
-    const env = { UPDATE_ME: "old", REMOVE_ME: "owned", KEEP_OVERRIDE: "ambient" };
+    const previousConfig = config({ UPDATE_ME: "old", REMOVE_ME: "owned", KEEP_OVERRIDE: "owned" });
+    const env: NodeJS.ProcessEnv = applied(previousConfig);
+    env.KEEP_OVERRIDE = "ambient";
     const prepared = prepareEnv({
-      previousConfig: config({ UPDATE_ME: "old", REMOVE_ME: "owned", KEEP_OVERRIDE: "owned" }),
+      previousConfig,
       nextConfig: config({ UPDATE_ME: "new" }),
       env,
-      previousOwnedEnv: { UPDATE_ME: "old", REMOVE_ME: "owned" },
     });
     expect(env).toEqual({ UPDATE_ME: "old", REMOVE_ME: "owned", KEEP_OVERRIDE: "ambient" });
     expect(prepared.env).toEqual({ UPDATE_ME: "new", KEEP_OVERRIDE: "ambient" });
@@ -176,10 +176,10 @@ describe("config env vars", () => {
   });
 
   it("retains live overrides during isolated loading and after publication", () => {
-    const env: NodeJS.ProcessEnv = { CONFIG_VALUE: "old" };
+    const previousConfig = config({ CONFIG_VALUE: "old" });
+    const env: NodeJS.ProcessEnv = applied(previousConfig);
     const stage = stageLoad({
-      previousConfig: config({ CONFIG_VALUE: "old" }),
-      previousOwnedEnv: { CONFIG_VALUE: "old" },
+      previousConfig,
       env,
     });
     stage.captureDotEnvBaseline();
@@ -233,12 +233,12 @@ describe("config env vars", () => {
     "rolls back Windows spelling unless concurrently renamed: %s",
     (concurrent) => {
       windows();
-      const env: NodeJS.ProcessEnv = { Config_Value: "old" };
+      const previousConfig = config({ Config_Value: "old" });
+      const env: NodeJS.ProcessEnv = applied(previousConfig);
       const prepared = prepareEnv({
-        previousConfig: config({ Config_Value: "old" }),
+        previousConfig,
         nextConfig: config({ CONFIG_VALUE: concurrent ? "new" : "old" }),
         env,
-        previousOwnedEnv: { Config_Value: "old" },
       });
       const rollback = prepared.publish();
       expect(env).toEqual({ CONFIG_VALUE: concurrent ? "new" : "old" });
@@ -308,7 +308,6 @@ describe("config env vars", () => {
       previousConfig,
       nextConfig: config({ [key]: "next" }),
       env,
-      previousOwnedEnv: ownedEnv,
     });
     expect(replacedLowerPrecedenceKeys).toEqual([key]);
     expect(ownedEnv).toEqual({ [key]: "shared" });

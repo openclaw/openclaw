@@ -1,7 +1,5 @@
-import { loadDeviceIdentityIfPresentAsync } from "../infra/device-identity-async.js";
-import { assertNoPendingLegacyExecApprovals } from "../infra/exec-approvals-migration-gate.js";
+import { prepareStartupClientCredentials } from "../commands/startup-client-credentials.js";
 
 export async function ensureNodeHostStateReady(): Promise<void> {
-  assertNoPendingLegacyExecApprovals();
-  await loadDeviceIdentityIfPresentAsync();
+  await prepareStartupClientCredentials();
 }

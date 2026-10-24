@@ -1,7 +1,11 @@
-import { createMemo, lazy, Loading, Show } from "solid-js";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { createMemo, lazy, Show } from "solid-js";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import type { ChatAttachmentRead } from "./chat-attachment-reads.ts";
+import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
+
+registerEnglishCatalog(registerChatComposerEnglish);
 
 // Keep preview-only rendering out of empty composers, including New Session.
 const AttachmentPreviewStrip = lazy(() => import("./chat-attachment-preview-strip.tsx"), {
@@ -31,7 +35,7 @@ export function AttachmentReadStatus(props: { pendingReads: number }) {
 
 export type AttachmentPreviewEntry = Pick<
   ChatAttachmentRead,
-  "attachment" | "state" | "progress" | "preparation"
+  "attachment" | "state" | "progress" | "preparation" | "errorMessage"
 > & {
   read: ChatAttachmentRead;
 };
@@ -51,13 +55,14 @@ export function AttachmentPreview(
       state: read.state,
       progress: read.progress,
       preparation: read.preparation,
+      errorMessage: read.errorMessage,
     }));
   });
   return (
     <Show when={entries().length > 0}>
-      <Loading>
+      <ChatLazyBoundary>
         <AttachmentPreviewStrip entries={entries()} controls={props} />
-      </Loading>
+      </ChatLazyBoundary>
     </Show>
   );
 }

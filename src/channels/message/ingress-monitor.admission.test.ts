@@ -20,6 +20,60 @@ describe("channel ingress monitor admission", () => {
     vi.restoreAllMocks();
   });
 
+  it.each([
+    [false, false],
+    [false, true],
+    [true, false],
+    [true, true],
+  ] as const)(
+    "keeps legacy queues only for unprotected intake (policy=%s batch=%s)",
+    async (policy, batch) => {
+      const queue = createChannelIngressQueue<StoredEvent>({
+        channelId: "test",
+        stateDir: tempDirs.make("openclaw-ingress-policy-compat-"),
+      });
+      const legacy: ChannelIngressQueue<StoredEvent> = {
+        ...queue,
+        enqueueAuthorized: undefined,
+        enqueueBatchAuthorized: undefined,
+      };
+      const monitor = createChannelIngressMonitor<RawEvent, string, StoredEvent>({
+        queue: legacy,
+        inspect: (raw) => ({ eventId: raw.id, laneKey: "lane:a" }),
+        prepareAdmission: async (raw) =>
+          policy ? { raw, assertCurrent: () => undefined } : undefined,
+        payload: {
+          storage: "raw-event",
+          version: 1,
+          serialize: (raw) => JSON.stringify(raw),
+          deserialize: (body) => JSON.parse(body) as RawEvent,
+          createClaimError: (kind) => new Error(kind),
+        },
+        deliver: vi.fn(),
+        pollIntervalMs: 60_000,
+        retention: "standard",
+      });
+      try {
+        const events = [
+          { id: "first", text: "one" },
+          { id: "second", text: "two" },
+        ];
+        const admission = batch ? monitor.admitBatch(events) : monitor.admit(events[0]!);
+        if (policy) {
+          await expect(admission).rejects.toThrow(/requires an authorized/);
+          expect(await queue.listPending()).toEqual([]);
+        } else {
+          await admission;
+          expect((await queue.listPending()).map((row) => row.id)).toEqual(
+            batch ? ["first", "second"] : ["first"],
+          );
+        }
+      } finally {
+        await monitor.stop();
+      }
+    },
+  );
+
   it("does not replay or acknowledge an append with a wrapped unknown native outcome", async () => {
     const queue = createChannelIngressQueue<StoredEvent>({
       channelId: "test",

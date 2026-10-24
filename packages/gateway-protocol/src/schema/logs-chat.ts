@@ -429,6 +429,7 @@ export const ChatRunStartupPhaseSchema = stringLiteralUnion([
   "waiting_for_state",
   "preparing_workspace",
   "naming_worktree",
+  "preparing_worktree_base",
   "creating_worktree",
   "running_setup",
   "provisioning_environment",

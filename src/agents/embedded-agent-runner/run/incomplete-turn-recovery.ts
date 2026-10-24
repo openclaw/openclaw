@@ -52,6 +52,8 @@ const REQUIRED_RESULT_TOOL_TERMINAL_CONTINUATION_INSTRUCTION =
   "Your turn ended without a final result. Continue from the current transcript and produce the required result now. NO_REPLY is not allowed. Do not repeat completed tool calls or restart from scratch. Tools are unavailable in this step: it is a text-only pass, so reply with plain text and do not attempt any tool call.";
 const READ_ONLY_TOOL_CONTINUATION_INSTRUCTION =
   "Your turn ended before completing the task. Continue from the current transcript, using tools for any remaining work, then produce the final reply. Do not repeat completed tool calls or restart from scratch.";
+const OUTPUT_LIMIT_FINALIZATION_INSTRUCTION =
+  "Your previous turn was cut off at the output token limit before it finished, so the task may be incomplete. Report only what the tool results show was done, and say plainly what was not finished. Do not describe unfinished steps as done.";
 
 type IncompleteTurnRecoveryParams = {
   provider?: string;
@@ -71,7 +73,6 @@ export function shouldRetrySilentErrorAssistantTurn(params: {
     | "clientToolCalls"
     | "yieldDetected"
     | "didSendDeterministicApprovalPrompt"
-    | "heartbeatToolResponse"
     | "lastToolError"
     | "toolMediaUrls"
     | "toolAudioAsVoice"
@@ -321,6 +322,16 @@ export function resolveSettledToolBatchEvidence(
   };
 }
 
+/** True when the settled turn ended at the output token limit rather than by choice. */
+export function isSettledTurnCutOffByOutputLimit(
+  attempt: Pick<
+    EmbeddedRunAttemptResult,
+    "currentAttemptAssistant" | "currentAttemptCompletedAssistant"
+  >,
+): boolean {
+  return resolveCurrentAttemptAssistant(attempt)?.stopReason === "length";
+}
+
 /** Selects the instruction and tool policy for one continuation after settled tools. */
 export function resolveSettledToolTerminalContinuation(
   params: IncompleteTurnRecoveryParams & {
@@ -336,6 +347,7 @@ export function resolveSettledToolTerminalContinuation(
     allToolsProvenSettled,
     parkedCodeModeRun,
     failedToolNames,
+    hasStaleToolError,
     hasUnsettledToolError,
     intentionalTermination,
   } = resolveSettledToolBatchEvidence(attempt);
@@ -396,12 +408,15 @@ export function resolveSettledToolTerminalContinuation(
   const resultRequired = params.terminalReplyExpectation === "result-required";
   const instruction = keepTools
     ? `${READ_ONLY_TOOL_CONTINUATION_INSTRUCTION}${resultRequired ? " NO_REPLY is not allowed." : ""}`
-    : resultRequired
-      ? REQUIRED_RESULT_TOOL_TERMINAL_CONTINUATION_INSTRUCTION
-      : SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION;
+    : `${resultRequired ? REQUIRED_RESULT_TOOL_TERMINAL_CONTINUATION_INSTRUCTION : SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION}${
+        // A tool-free summary of a cut-off turn cannot finish the work, so it must not certify it.
+        isSettledTurnCutOffByOutputLimit(attempt) ? ` ${OUTPUT_LIMIT_FINALIZATION_INSTRUCTION}` : ""
+      }`;
   return {
+    // An earlier failure the turn never recovered from may not block the summary,
+    // but the summary must still account for it.
     instruction:
-      allToolsProvenSettled && failedToolNames.size > 0
+      allToolsProvenSettled && (failedToolNames.size > 0 || hasStaleToolError)
         ? `${instruction} ${TOOL_FAILURE_INSTRUCTION}`
         : instruction,
     disableTools: !keepTools,

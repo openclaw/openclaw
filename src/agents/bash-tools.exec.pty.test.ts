@@ -2,7 +2,8 @@ import { readFile } from "node:fs/promises";
 import { afterEach, expect, test } from "vitest";
 import { deleteSession, markBackgrounded } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
-import { runExecProcess } from "./bash-tools.exec-runtime.js";
+import { runExecFixture } from "./bash-tools.exec-fixture.test-support.js";
+import type { runExecProcess } from "./bash-tools.exec-runtime.js";
 import { createProcessTool } from "./bash-tools.process.js";
 import { coerceEnv } from "./bash-tools.shared.js";
 
@@ -21,14 +22,12 @@ function currentNodeEvalCommand(source: string): string {
 function startProcess(
   options: Partial<Parameters<typeof runExecProcess>[0]> & { command: string },
 ) {
-  return runExecProcess({
+  return runExecFixture({
     workdir: process.cwd(),
     env: coerceEnv(process.env),
     usePty: true,
-    warnings: [],
     maxOutput: 20_000,
     pendingMaxOutput: 20_000,
-    notifyOnExit: false,
     timeoutSec: 5,
     ...options,
   });

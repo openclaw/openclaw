@@ -13,12 +13,6 @@ registerUsageEnglish();
 const CHARS_PER_TOKEN = 4;
 const DAY_MS = 86_400_000;
 
-type UsageCostWindowSummary = {
-  days: number;
-  endDate: string;
-  totals: UsageTotals;
-};
-
 function charsToTokens(chars: number): number {
   return Math.round(chars / CHARS_PER_TOKEN);
 }
@@ -38,7 +32,11 @@ function formatUsageTokens(n: number, report?: UsageTotals["usageReport"]): stri
 // Usage charts choose fixed precision from the surrounding scale; the shared
 // adaptive cost formatter would change labels as values cross its thresholds.
 function formatUsageCost(n: number, decimals = 2, report?: UsageTotals["usageReport"]): string {
-  return atLeast(`$${n.toFixed(decimals)}`, report);
+  const amount = n.toLocaleString("en-US", {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  });
+  return atLeast(`$${amount}`, report);
 }
 
 export function formatAnalysisCost(value: number, report?: UsageTotals["usageReport"]): string {
@@ -67,7 +65,8 @@ function buildPeakErrorHours(hourMsgs: number[], hourErrors: number[]) {
     .map((entry) => ({
       label: formatHourLabel(entry.hour),
       value: `${(entry.rate * 100).toFixed(2)}%`,
-      sub: `${Math.round(entry.errors)} ${normalizeLowercaseStringOrEmpty(t("usage.overview.errors"))} · ${Math.round(entry.msgs)} ${t("usage.overview.messagesAbbrev")}`,
+      weight: entry.rate,
+      sub: `${Math.round(entry.errors).toLocaleString()} ${normalizeLowercaseStringOrEmpty(t("usage.overview.errors"))} · ${Math.round(entry.msgs).toLocaleString()} ${t("usage.overview.messagesAbbrev")}`,
     }));
 }
 
@@ -107,7 +106,11 @@ function buildUsageCostWindows(
   daily: Array<UsageTotals & { date: string }>,
   rangeStartDate: string,
   rangeEndDate: string,
-): UsageCostWindowSummary[] {
+): {
+  days: number;
+  endDate: string;
+  totals: UsageTotals;
+}[] {
   const rangeStartDay = parseIsoDayIndex(rangeStartDate);
   const rangeEndDay = parseIsoDayIndex(rangeEndDate);
   if (rangeStartDay === null || rangeEndDay === null || rangeStartDay > rangeEndDay) {

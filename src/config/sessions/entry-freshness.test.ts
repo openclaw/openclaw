@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
-  resolveSessionEntryResetFreshness,
-  resolveSessionEntryResetFreshnessAsync,
+  resolveSessionEntryResetFreshness as resolve,
+  resolveSessionEntryResetFreshnessAsync as resolveAsync,
 } from "./entry-freshness.js";
 import {
   appendTranscriptEvent,
@@ -41,20 +41,15 @@ const params = (sessionKey: string) => ({
   now,
 });
 
-it.each([resolveSessionEntryResetFreshness, resolveSessionEntryResetFreshnessAsync])(
+it.each([resolve, resolveAsync])(
   "returns missing state with a resolved reset policy for absent entries (%s)",
   async (resolveFreshness) => {
-    const result = await resolveFreshness(params("agent:main:missing:thread:100.000"));
-
-    expect(result).toMatchObject({
+    expect(await resolveFreshness(params("agent:main:missing:thread:100.000"))).toMatchObject({
       state: "missing",
       entry: undefined,
       freshness: undefined,
       resetType: "thread",
-      resetPolicy: {
-        mode: "none",
-        atHour: 4,
-      },
+      resetPolicy: { mode: "none", atHour: 4 },
     });
   },
 );
@@ -63,7 +58,7 @@ it("uses the configured default agent for an unqualified session key", async () 
   const sessionKey = "global";
   await seed({}, { sessionKey, agentId: "ops", defaultAgentId: "ops" });
 
-  const result = resolveSessionEntryResetFreshness({
+  const result = resolve({
     ...params(sessionKey),
     defaultAgentId: "ops",
     resetType: "direct",
@@ -77,21 +72,17 @@ it("keeps provider-owned sessions fresh when reset policy is implicit", async ()
     sessionStartedAt: now - 2 * DAY_MS,
     lastInteractionAt: now - 2 * DAY_MS,
     providerOverride: "claude-cli",
-    cliSessionBindings: {
-      "claude-cli": { sessionId: "cli-session-provider-owned" },
-    },
+    cliSessionBindings: { "claude-cli": { sessionId: "cli-session-provider-owned" } },
   });
 
-  const result = resolveSessionEntryResetFreshness(params(threadKey));
-
-  expect(result).toMatchObject({ state: "fresh", freshness: { fresh: true } });
+  expect(resolve(params(threadKey))).toMatchObject({ state: "fresh", freshness: { fresh: true } });
 });
 
 it("resolves the store path from session config", async () => {
   const configuredStorePath = state.statePath("configured-sessions.json");
   await seed({ lastInteractionAt: now - 60 * 60 * 1000 }, { storePath: configuredStorePath });
 
-  const result = resolveSessionEntryResetFreshness({
+  const result = resolve({
     sessionKey: threadKey,
     sessionCfg: { store: configuredStorePath, reset: { mode: "idle", idleMinutes: 30 } },
     resetType: "thread",
@@ -106,7 +97,7 @@ it("resolves the store path from session config", async () => {
   });
 });
 
-it.each([resolveSessionEntryResetFreshness, resolveSessionEntryResetFreshnessAsync])(
+it.each([resolve, resolveAsync])(
   "uses the SQLite transcript header when lifecycle metadata is missing (%s)",
   async (resolveFreshness) => {
     const headerTimestamp = new Date(now - 2 * DAY_MS).toISOString();

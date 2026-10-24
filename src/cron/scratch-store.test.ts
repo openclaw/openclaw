@@ -5,9 +5,14 @@ import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loseFirstCronMutationReply } from "../../test/helpers/cron/runtime-mutation.js";
+import {
+  deleteCronJobScratch,
+  writeCronJobScratchForMaintenance,
+} from "../../test/helpers/cron/scratch-store.js";
 import { createCronRegressionState } from "../../test/helpers/cron/service-regression-fixtures.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
+import { writeConfigMachineStateAsync } from "../state/config-machine-state-async.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -16,15 +21,12 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { prepareCronAutomationPrompt } from "./isolated-agent/run-automation-context.js";
 import { createCronMutationCompletion } from "./mutation-completion.js";
 import { CRON_JOB_SCRATCH_MAX_BYTES } from "./scratch-contract.js";
 import { readCronScratchSnapshot } from "./scratch-read.js";
-import {
-  deleteCronJobScratch,
-  hashCronScratchSource,
-  readCronJobScratchState,
-} from "./scratch-store.js";
-import { writeCronJobScratchForMaintenance } from "./scratch-write.kernel.js";
+import { hashCronScratchSource, readCronJobScratchState } from "./scratch-store.js";
+import { cronTestJob } from "./service.fixture-builders.test-support.js";
 import { CronService } from "./service.js";
 import * as runtimeMutation from "./service/runtime-mutation.js";
 import * as cronStore from "./store.js";
@@ -123,6 +125,41 @@ async function withScratchService(run: (fixture: ScratchFixture) => Promise<void
 }
 
 describe("cron scratch worker service", () => {
+  it("prepares fresh scratch from the selected cron partition without caller SQL", async () => {
+    await withScratchService(async ({ write, job, storePath }) => {
+      await write("first scratch", 0);
+      await writeConfigMachineStateAsync("cron.store", `${storePath}.other`);
+      const params = {
+        cfg: {},
+        job,
+        agentId: "alpha",
+        runSessionKey: "agent:alpha:cron:scratch-owner",
+        message: "synthetic prompt",
+        storePath: `${storePath}.sessions`,
+        cronStorePath: storePath,
+        assertCurrent: () => {},
+        baseSessionKey: "agent:alpha:main",
+        formattedTime: "2026-10-22",
+        timeLine: "Current time: 2026-10-22",
+      };
+      const first = await withoutCallerSql(() => prepareCronAutomationPrompt(params));
+      expect(first.commandBody).toContain("Automation scratch (revision 1):\nfirst scratch");
+      await write("updated scratch", 1);
+      const updated = await withoutCallerSql(() => prepareCronAutomationPrompt(params));
+      expect(updated.commandBody).toContain("Automation scratch (revision 2):\nupdated scratch");
+
+      // Standalone callers still select the current machine partition themselves.
+      const { cronStorePath: _, ...standalone } = params;
+      expect((await prepareCronAutomationPrompt(standalone)).commandBody).not.toContain(
+        "Automation scratch",
+      );
+      await writeConfigMachineStateAsync("cron.store", storePath);
+      expect((await prepareCronAutomationPrompt(standalone)).commandBody).toContain(
+        "updated scratch",
+      );
+    });
+  });
+
   it("initializes missing shared state for a heartbeat scratch read off the caller thread", async () => {
     await withOpenClawTestState({ label: "heartbeat-scratch-cold-read" }, async (fixture) => {
       const databasePath = resolveOpenClawStateSqlitePath(fixture.env);
@@ -300,18 +337,15 @@ async function createFixture(jobIds = ["job-1"]) {
     storePath: path.join(root, "cron", "jobs.json"),
     options: { env },
   };
-  const job: CronJob = {
+  const job = cronTestJob({
     id: "job-1",
     name: "scratch-owner",
-    enabled: true,
     createdAtMs: 1,
     updatedAtMs: 1,
     schedule: { kind: "every", everyMs: 60_000, anchorMs: 0 },
     sessionTarget: "main",
-    wakeMode: "next-heartbeat",
     payload: { kind: "systemEvent", text: "test" },
-    state: {},
-  };
+  });
   runOpenClawStateWriteTransaction(({ db }) => {
     for (const [index, id] of jobIds.entries()) {
       upsertCronJobRow(db, cronStoreKey(fixture.storePath), { ...job, id }, index);

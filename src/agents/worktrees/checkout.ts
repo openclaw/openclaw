@@ -599,6 +599,14 @@ export async function addManagedWorktree(input: CheckoutOptions): Promise<Checko
         throw error;
       }
       rollbackGuard();
+      if (existingBranch && destinationRemoved && !(await worktreePathExists(absolute))) {
+        // Native PR provisioning owns this new clone, not its caller's branch.
+        // A lost registration cannot validate it; remove the settled clone while
+        // its template reader is still held, so the same PR can provision again.
+        rollbackGuard();
+        await fs.rm(options.destination, { recursive: true, force: true });
+        throw error;
+      }
       await assertRegistration(rollbackOptions);
       if (existingBranch) {
         throw new Error(

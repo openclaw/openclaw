@@ -1,6 +1,10 @@
 import { expect, it, vi } from "vitest";
 import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
-import { enqueueSystemEvent, peekSystemEventEntries } from "../../infra/system-events.js";
+import {
+  claimSystemEventTurn,
+  enqueueSystemEvent,
+  peekSystemEventEntries,
+} from "../../infra/system-events.js";
 import type { runReplyAgent } from "./agent-runner-run.js";
 import type { runPreparedReply } from "./get-reply-run.js";
 import { drainFormattedSystemEvents } from "./session-system-events.js";
@@ -28,23 +32,21 @@ export function registerSystemEventAdmissionCases({
       contextKey: "task:restart-sentinel:admission-proof",
     });
     const captured = peekSystemEventEntries(sessionKey);
-    const deferredEventIds = captured.map((event) => event.id!).filter(Boolean);
-    await runPrepared({
-      agentId: "main",
-      sessionKey,
-      opts: withReplySystemEventContext(
-        { isHeartbeat: true },
-        {
-          sessionKey,
-          events: captured,
-          deferredEventIds,
-        },
-      ),
-    });
-    expect(requireRunReplyAgentCall().followupRun.currentInboundContext?.text).toContain(
-      "Restart continuation retained for delivery",
-    );
-    expect(peekSystemEventEntries(sessionKey).map((event) => event.id)).toEqual(deferredEventIds);
+    const claim = claimSystemEventTurn(sessionKey, captured, vi.fn());
+    expect(claim).toBeDefined();
+    enqueueSystemEvent("Notification arrived after capture", { sessionKey });
+    try {
+      await runPrepared({ agentId: "main", sessionKey });
+      expect(requireRunReplyAgentCall().followupRun.currentInboundContext?.text).not.toContain(
+        "Restart continuation retained for delivery",
+      );
+      expect(requireRunReplyAgentCall().followupRun.currentInboundContext?.text).toContain(
+        "Notification arrived after capture",
+      );
+      expect(peekSystemEventEntries(sessionKey)).toEqual(captured);
+    } finally {
+      claim?.release();
+    }
   });
 
   it("admits only system events visible to the prepared agent", async () => {
@@ -55,20 +57,23 @@ export function registerSystemEventAdmissionCases({
       actualSystemEvents.drainFormattedSystemEvents,
     );
     enqueueSystemEvent(
-      "Alpha hook finished",
+      "Reminder: review heartbeat poll results",
       withSystemEventOwner({ sessionKey: "global" }, "alpha"),
     );
     enqueueSystemEvent(
       "Beta hook finished",
       withSystemEventOwner({ sessionKey: "global" }, "beta"),
     );
-    enqueueSystemEvent("Alpha follow-up", withSystemEventOwner({ sessionKey: "global" }, "alpha"));
+    enqueueSystemEvent(
+      "Cron: investigate heartbeat wake failures",
+      withSystemEventOwner({ sessionKey: "global" }, "alpha"),
+    );
 
     await runPrepared({
       agentId: "alpha",
       sessionKey: "global",
       opts: withReplySystemEventContext(
-        { isHeartbeat: true },
+        {},
         { sessionKey: "global", events: peekSystemEventEntries("agent:alpha:global") },
       ),
     });
@@ -76,7 +81,10 @@ export function registerSystemEventAdmissionCases({
     const call = requireRunReplyAgentCall();
     const context = call.followupRun.currentInboundContext;
     expect(call.followupRun.prompt).toBe("[User sent media without caption]");
-    for (const event of ["Alpha hook finished", "Alpha follow-up"]) {
+    for (const event of [
+      "Reminder: review heartbeat poll results",
+      "Cron: investigate heartbeat wake failures",
+    ]) {
       expect(context?.text).toContain(event);
       expect(context?.fragments).toContainEqual({
         kind: "conversation-data",

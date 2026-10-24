@@ -4,6 +4,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { operatorStandingGrantPublication } from "../../gateway/operator-approval-store.publication.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
+import { jsonSetPath } from "../../infra/database-engine/json-values.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -47,6 +48,7 @@ import { serializeCronJobState } from "./state-codec.js";
 import type { LoadedCronStore } from "./types.js";
 
 function bindCronJobRow(storeKey: string, job: CronStoredJob, sortOrder: number): CronJobInsert {
+  const definition = stripJobRuntimeFields(job);
   return {
     store_key: storeKey,
     job_id: job.id,
@@ -57,8 +59,12 @@ function bindCronJobRow(storeKey: string, job: CronStoredJob, sortOrder: number)
     enabled: job.enabled ? 1 : 0,
     updated_at: job.updatedAtMs,
     agent_id: job.agentId ?? null,
-    payload_kind: job.payload.kind,
-    job_json: JSON.stringify(stripJobRuntimeFields(job)),
+    // The stored kind, which differs from the runtime kind for private command schedules.
+    payload_kind:
+      isRecord(definition.payload) && typeof definition.payload.kind === "string"
+        ? definition.payload.kind
+        : job.payload.kind,
+    job_json: JSON.stringify(definition),
     grant_definition_revision: resolveCronJobGrantDefinitionRevision(job),
     grant_definition_generation: 1,
     grant_definition_updated_at: job.updatedAtMs,
@@ -123,7 +129,10 @@ export function rowToCronJob(
   if (
     !state ||
     getInvalidPersistedCronJobReason(jobJson) ||
-    (schedule?.kind === "stream" && jobJson.streamSandbox !== undefined)
+    (schedule?.kind === "stream" && jobJson.streamSandbox !== undefined) ||
+    // Command schedules persist only as `pluginCommand`; a stored agentTurn copy is not trusted.
+    (jobJson.pluginCommand !== undefined &&
+      (!isRecord(jobJson.payload) || jobJson.payload.kind !== "pluginCommand"))
   ) {
     return null;
   }
@@ -648,11 +657,13 @@ export function updateCronRuntimeRow(
         ...(enabledChanged
           ? {
               enabled: enabled ? 1 : 0,
-              job_json: eb.fn<string>("json_set", [
+              job_json: jsonSetPath(
+                db,
                 eb.ref("job_json"),
                 eb.val("$.enabled"),
                 eb.fn<string>("json", [eb.val(enabled ? "true" : "false")]),
-              ]),
+                true,
+              ),
             }
           : {}),
       }))

@@ -102,8 +102,6 @@ export async function resolveSlackMessageContent(params: {
   client?: SlackWebClient;
   mediaMaxBytes: number;
   resolveUserName?: (userId: string) => Promise<{ name?: string }>;
-  abortSignal?: AbortSignal;
-  assertCurrent?: () => void;
   preloadedMedia?: ReadonlyMap<SlackFile, SlackMediaResult>;
 }): Promise<SlackResolvedMessageContent | null> {
   const ownFiles = filterInheritedParentFiles({
@@ -121,8 +119,6 @@ export async function resolveSlackMessageContent(params: {
             client: params.client,
             token: params.botToken,
             maxBytes: params.mediaMaxBytes,
-            abortSignal: params.abortSignal,
-            assertCurrent: params.assertCurrent,
             preloadedMedia: params.preloadedMedia,
           }),
         )

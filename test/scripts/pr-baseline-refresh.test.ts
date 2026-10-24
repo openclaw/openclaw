@@ -145,7 +145,7 @@ function fixture(
       setup,
       env,
     );
-  const manifest = (bytes: string | null, path = "docs/fix.md") => {
+  const manifest = (bytes: string, path = "docs/fix.md") => {
     const blob = (commit: string) => {
       const line = f.git("ls-tree", commit, "--", path);
       if (!line) {
@@ -157,22 +157,17 @@ function fixture(
       }
       return { mode, oid };
     };
-    if (bytes !== null) {
-      writeFileSync(join(f.root, ".local/resolved.txt"), bytes);
-    }
+    writeFileSync(join(f.root, ".local/resolved.txt"), bytes);
     const resolution = {
       path,
       base: blob(f.incoming),
       source: blob(source),
       baseline: blob(baseline),
-      resolved:
-        bytes === null
-          ? null
-          : {
-              mode: "100644",
-              file: "resolved.txt",
-              sha256: createHash("sha256").update(bytes).digest("hex"),
-            },
+      resolved: {
+        mode: "100644",
+        file: "resolved.txt",
+        sha256: createHash("sha256").update(bytes).digest("hex"),
+      },
     };
     const value = {
       version: 1,

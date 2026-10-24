@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { realpathSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
@@ -11,6 +12,7 @@ import { runWithSqliteCleanup } from "./sqlite-lifecycle-errors.js";
 import { observeSqliteNativeClose } from "./sqlite-native-observer.js";
 import { runSqliteReadOnlyWorkerSync } from "./sqlite-readonly-worker.js";
 import { truncateSqliteWal } from "./sqlite-wal-checkpoint.js";
+import { readMatchingUpdateDatabaseGeneration } from "./update-database-generations.js";
 
 export type UpdateDoctorMigrationCapture = {
   expected(pathname: string): string | null | undefined;
@@ -28,11 +30,13 @@ type DoctorMigrationBackup = (
   db: DatabaseSync,
   options: { path: string; env: NodeJS.ProcessEnv; tables: readonly string[] },
 ) => { capture: MigrationSource; backupPath: string };
+type DoctorMigrationFullBackup = { path: string; generation?: string };
 const captures = new AsyncLocalStorage<{
   capture?: UpdateDoctorMigrationCapture;
   source?: MigrationSource;
   assertMigrationCurrent?: () => void;
   backup?: DoctorMigrationBackup;
+  fullBackups?: Map<string, DoctorMigrationFullBackup>;
 }>();
 
 /** Doctor's existing maintenance interval owns the publication receipt. */
@@ -52,7 +56,21 @@ export function runWithDoctorMigrationBackup<T>(
   backup: DoctorMigrationBackup,
   operation: () => T,
 ): T {
-  return captures.run({ ...captures.getStore(), backup }, operation);
+  return captures.run({ ...captures.getStore(), backup, fullBackups: new Map() }, operation);
+}
+
+/** Only the general Doctor backup owner admits full images for this maintenance run. */
+export function recordDoctorMigrationFullBackup(
+  sourcePath: string,
+  backup: DoctorMigrationFullBackup,
+): void {
+  captures.getStore()?.fullBackups?.set(realpathSync.native(sourcePath), backup);
+}
+
+export function getDoctorMigrationFullBackup(
+  sourcePath: string,
+): DoctorMigrationFullBackup | undefined {
+  return captures.getStore()?.fullBackups?.get(realpathSync.native(sourcePath));
 }
 
 export function getDoctorMigrationBackup(
@@ -214,10 +232,21 @@ export function runUpdateSqliteMigration<T>(
             throw new Error("Created SQLite migration family is no longer empty.");
           }
         }
-        const before = expected === null ? null : readSqliteGeneration(pathname);
+        // Before native exclusion, a cold read-only open may add an empty WAL
+        // index to the captured family. Exclusive handles keep the isolated read:
+        // closing a raw source descriptor here would release their process locks.
+        const before =
+          expected === null
+            ? null
+            : mode === "exclusive"
+              ? readSqliteGeneration(pathname)
+              : readMatchingUpdateDatabaseGeneration(pathname, expected);
         assertCurrent();
-        if (before !== expected) {
+        if (before === undefined || (mode === "exclusive" && before !== expected)) {
           throw new Error("SQLite migration source changed after update capture.");
+        }
+        if (before !== expected) {
+          capture.accept(pathname, expected, before);
         }
         if (mode !== "exclusive") {
           // Start WAL in normal mode: a cold exclusive WAL cannot later return

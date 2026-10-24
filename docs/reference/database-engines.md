@@ -123,10 +123,14 @@ The supported PostgreSQL families are:
   retained registry paths and explicit session or agent directories. Older SQLite
   schemas migrate only in the port's private copy. Compressed transcript events
   become plain JSON on PostgreSQL; transcript search is rebuilt before publication.
-  Rebuildable memory indexes are omitted. Their rebuild hook remains explicitly
-  pending the memory owner's rebuild entry point; empty metadata requests reindexing.
-  Canonical memory origins and
-  tombstones remain intact. Duplicate-key voice JSON refuses the port with a hashed
+  Rebuildable memory indexes are omitted; canonical memory origins, tombstones,
+  and the embedding cache remain intact. After publication and port-owner release,
+  the selected memory plugin rebuilds ported agents under fresh offline ownership.
+  Unchanged cached chunks reuse their embeddings. Output and `--json` report
+  per-agent results; a failure leaves the port successful and warns to retry
+  `openclaw memory index --agent <id>` before starting the Gateway. Retained stores
+  need their original agent configuration to rebuild.
+  Duplicate-key voice JSON refuses the port with a hashed
   row locator. Cold archive references are retained; user backups embed their blobs.
   PostgreSQL agent schemas support current-version
   bootstrap and the schema 27 to 28 forward migration, and reject schema drift
@@ -522,6 +526,10 @@ Keep this directory private and retain the complete set. Former PostgreSQL
 namespaces are not dropped automatically.
 
 All destination stores are privately migrated and verified before publication.
+Agent and shared-state columns normally created on a feature's first use are
+completed in the private copy when absent, preserving existing rows with `NULL`
+values and leaving the original SQLite store unchanged. Unknown columns still
+refuse the port.
 The command replaces each store atomically, switches config last while preserving
 SecretRefs, environment references, and includes, then archives its completed
 manifest with the captures. After success, start the Gateway through its service
@@ -605,10 +613,14 @@ Writers use `READ COMMITTED` and a transaction-scoped advisory lock derived from
 the store identity. Every PostgreSQL write, including a single statement, uses
 the adapter's `runTransaction` so it retains that lock and publishes its write
 token. A single-statement read may use autocommit; multi-statement snapshot reads
-use `REPEATABLE READ READ ONLY`. Connections
-set `synchronous_commit=off` to match SQLite WAL with `synchronous=NORMAL`: a
-server or operating-system crash can lose recently acknowledged commits. Backups
-and recovery must account for that durability policy. The adapter sets generous
+use `REPEATABLE READ READ ONLY`. OpenClaw uses the server's `synchronous_commit`
+setting. PostgreSQL's default `on` makes acknowledged commits durable across
+PostgreSQL or operating-system crashes. For SQLite WAL `synchronous=NORMAL`-like
+throughput, operators can opt in with
+`ALTER ROLE <openclaw_role> SET synchronous_commit = off` or the equivalent
+`ALTER DATABASE` setting. This can lose recently acknowledged commits on a server
+or operating-system crash, without corruption. Ports and backups always commit
+durably. The adapter sets generous
 lock and statement timeouts once during connection setup; operations do not
 change timeout settings individually.
 
@@ -616,6 +628,12 @@ PostgreSQL model-context navigation reads parse each selected transcript row onc
 and keep intermediate projections as JSONB until the navigation and byte counts
 cross the database boundary. The read remains bounded by the context page, and
 PostgreSQL transcript writes do not precompute navigation envelopes.
+
+Clean resident-actor appends write the transcript projection and session-window
+mutation in one PostgreSQL statement. Each write still targets its own table
+inside the existing locked transaction; commit and receipt publication keep
+their original boundaries. Batch imports, dirty projections, and native callers
+retain their existing flush paths.
 
 ## Anchors and backups
 
@@ -626,6 +644,13 @@ PostgreSQL schema metadata must match the anchor's store UUID and expected schem
 version. Admission checks run once per physical store per process load, and
 workers and handles reuse the admitted facts. Confirmed commits and uncertain
 commit outcomes invalidate cached store facts through the anchor's write token.
+
+When an agent worker is refused before opening its native writer, the host releases
+its prepared lease after native exit. The original refusal reaches its caller,
+and other logical borrowers can retry. This explicit refusal also preserves
+SQLite's clean-restart seal because no native writer opened. Unknown outcomes
+still invalidate that proof, and native and cleanup failures retain their
+existing retirement rules.
 
 PostgreSQL catalog admission captures column types, nullability, exact defaults,
 keys, CHECK expressions, index definitions (including partial predicates), and
@@ -836,6 +861,10 @@ writes invalidate only their declared replica scopes; raw writes and schema
 changes invalidate the whole store. Empty commits leave replica revisions
 unchanged, so unrelated reads can reuse their cached snapshots.
 A PostgreSQL function that writes rows and is called through SELECT must be classified unscoped.
+
+Worker commit receipts carry only explicitly staged domain facts on both engines.
+A write without staged facts still commits and invalidates caches, but publishes
+no domain receipt. Native operation settlement is independent of those facts.
 
 Full transcript hydration reads PostgreSQL payloads in byte-budgeted pages within
 one read snapshot. Paging preserves all selected events and their sequence order;

@@ -23,7 +23,7 @@ import { setSessionMcpRuntimeScheduler } from "./agent-bundle-mcp-manager-api.js
 import { getOrCreateSessionMcpRuntime } from "./agent-bundle-mcp-manager.test-support.js";
 import { disposeAllSessionMcpRuntimes, peekSessionMcpRuntime } from "./agent-bundle-mcp-tools.js";
 import {
-  applyMcpConnectionOverride,
+  applyMcpConnectionOverride as applyOverride,
   buildMcpRequesterRuntimeCacheKey,
   hashMcpResolvedConnections,
   partitionMcpServersByConnectionScope,
@@ -108,8 +108,7 @@ async function startAuthenticatedMcpProofServer() {
 
   const mail = await addEndpoint("mail", "Bearer test-mcp-mail-owner");
   const activeDrive = await addEndpoint("active-drive", "Bearer test-mcp-active-drive-owner");
-  const pinnedDrive = await addEndpoint("pinned-drive", "Bearer test-mcp-pinned-drive-owner");
-  const endpoints = [mail, activeDrive, pinnedDrive];
+  const endpoints = [mail, activeDrive];
   const endpointsByPath = new Map(endpoints.map((endpoint) => [endpoint.path, endpoint]));
   const server = http.createServer((request, response) => {
     const endpoint = endpointsByPath.get(request.url ?? "");
@@ -165,7 +164,6 @@ async function startAuthenticatedMcpProofServer() {
   return {
     mail,
     activeDrive,
-    pinnedDrive,
     close: async () => {
       await Promise.all(endpoints.map((endpoint) => endpoint.server.close()));
       server.closeAllConnections();
@@ -187,13 +185,18 @@ describe("mcp connection resolver helpers", () => {
   it("partitions static vs requester-scoped servers deterministically", () => {
     withResolvers((register) => {
       register("test-plugin", "user-mail", async () => ({ url: "https://example.test" }));
-      const { staticServers, requesterScopedServerNames } = partitionMcpServersByConnectionScope({
+      const partition = partitionMcpServersByConnectionScope({
         shared: { command: "true" },
+        calendar: { auth: "oauth", oauth: { identity: "per-requester" } },
         "user-mail": { transport: "streamable-http" },
         zebra: { command: "z" },
       });
-      expect(Object.keys(staticServers)).toEqual(["shared", "zebra"]);
-      expect(requesterScopedServerNames).toEqual(["user-mail"]);
+      expect(Object.keys(partition.staticServers)).toEqual(["shared", "zebra"]);
+      expect(partition).toMatchObject({
+        requesterScopedServerNames: ["calendar", "user-mail"],
+        oauthRequesterServerNames: ["calendar"],
+        resolverRequesterServerNames: ["user-mail"],
+      });
     });
   });
 
@@ -375,7 +378,6 @@ describe("mcp connection resolver helpers", () => {
       expect(proof.activeDrive.toolCalls).toBe(1);
       expect(proof.activeDrive.streamedResponses).toBeGreaterThanOrEqual(3);
       expect(proof.mail).toMatchObject({ requests: legacyRequests, toolCalls: 1 });
-      expect(proof.pinnedDrive.requests).toBe(0);
     } finally {
       await disposeAllSessionMcpRuntimes();
       await resetPreparedModelRuntimeSnapshotsForTest();
@@ -503,7 +505,7 @@ describe("mcp connection resolver helpers", () => {
       "user-mail": { ...retained, connection: "requester-scoped" },
     });
 
-    const applied = applyMcpConnectionOverride(servers["user-mail"], {
+    const applied = applyOverride(servers["user-mail"], {
       url: "https://live.example/user",
       headers: { Authorization: "Bearer test-auth-token" },
     });
@@ -515,25 +517,14 @@ describe("mcp connection resolver helpers", () => {
     });
     expect(servers["user-mail"].headers).toEqual({ Authorization: "test-auth-token" });
 
-    const override = (raw: unknown, url: string) => applyMcpConnectionOverride(raw, { url });
+    const url = "https://live.example/sse";
     expect(
-      override({ transport: "sse", toolFilter: { include: ["x"] } }, "https://live.example/sse"),
-    ).toMatchObject({ transport: "sse", url: "https://live.example/sse" });
-
-    const canonicalDefault = override(
-      { type: "sse", toolFilter: { include: ["x"] } },
-      "https://live.example/sse-type",
-    );
-    expect(canonicalDefault.transport).toBe("streamable-http");
-    expect(canonicalDefault).not.toHaveProperty("type");
-
-    const sseCase = override({ transport: "SSE" }, "https://live.example/sse-case");
-    expect(sseCase.transport).toBe("sse");
-
-    const unsupported = override(
-      { transport: "custom", type: " CuStOm " },
-      "https://live.example/unsupported",
-    );
+      applyOverride({ transport: "sse", toolFilter: { include: ["x"] } }, { url }),
+    ).toMatchObject({ transport: "sse", url });
+    const canonicalDefault = applyOverride({ type: "sse" }, { url });
+    expect(canonicalDefault).toEqual({ transport: "streamable-http", url });
+    expect(applyOverride({ transport: "SSE" }, { url }).transport).toBe("sse");
+    const unsupported = applyOverride({ transport: "custom", type: " CuStOm " }, { url });
     expect(unsupported.transport).toBe("custom");
     expect(
       resolveMcpTransportConfig("unsupported", unsupported, { logWarnings: false }),

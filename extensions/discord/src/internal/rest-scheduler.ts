@@ -152,7 +152,7 @@ export class RestScheduler<TData> {
     if (response.status !== 429) {
       return;
     }
-    const retryAfterMs = Math.max(0, readRetryAfter(parsed, response, 1) * 1000);
+    const retryAfterMs = Math.max(0, readRetryAfter(parsed, response) * 1000);
     const retryAt = resolveRateLimitResetAt(retryAfterMs);
     if (retryAt === undefined) {
       return;
@@ -283,13 +283,6 @@ export class RestScheduler<TData> {
       this.activeWorkers = Math.max(0, this.activeWorkers - 1);
       if (!requeued) {
         this.queuedRequests = Math.max(0, this.queuedRequests - 1);
-      }
-      if (bucket.active === 0 && countPending(bucket) === 0) {
-        for (const routeKey of bucket.routeKeys) {
-          if (this.routeBuckets.get(routeKey) === routeKey) {
-            this.routeBuckets.delete(routeKey);
-          }
-        }
       }
       this.drainQueues();
     }

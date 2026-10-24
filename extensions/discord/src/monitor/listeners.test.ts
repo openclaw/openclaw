@@ -6,6 +6,7 @@ import {
   type GatewayPresenceUpdate,
   PresenceUpdateStatus,
 } from "discord-api-types/v10";
+import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import { reportChannelRoomJoin } from "openclaw/plugin-sdk/channel-join-intro-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -36,10 +37,13 @@ vi.mock("./thread-bindings.manager.js", () => ({
 
 const mocks = vi.hoisted(() => ({
   reportChannelRoomJoin: vi.fn(async () => ({ kind: "posted" as const })),
-  enqueueSystemEvent: vi.fn<
-    typeof import("openclaw/plugin-sdk/system-event-runtime").enqueueRoutedSystemEvent
-  >(() => true),
-  requestHeartbeat: vi.fn(),
+  enqueueSessionEvent: vi.fn<PluginRuntime["system"]["enqueueSessionEvent"]>(() => ({
+    id: "presence",
+    cancel: () => false,
+    accepted: Promise.resolve({ ok: true }),
+    settled: Promise.resolve({ status: "completed", executionStarted: true, delivered: true }),
+  })),
+  captureSessionEventTarget: vi.fn(async () => Object.freeze({})),
   resolveAgentRoute: vi.fn(() => ({
     agentId: "molty",
     sessionKey: "agent:molty:discord:channel:channel-1",
@@ -65,16 +69,18 @@ vi.mock("../send.messages.js", async (importOriginal) => ({
   readMessagesDiscord: mocks.readMessagesDiscord,
 }));
 
-vi.mock("openclaw/plugin-sdk/heartbeat-runtime", () => ({
-  requestHeartbeat: mocks.requestHeartbeat,
+vi.mock("../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../runtime.js")>()),
+  getDiscordRuntime: () => ({
+    system: {
+      captureSessionEventTarget: mocks.captureSessionEventTarget,
+      enqueueSessionEvent: mocks.enqueueSessionEvent,
+    },
+  }),
 }));
 vi.mock("openclaw/plugin-sdk/routing", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/routing")>()),
   resolveAgentRoute: mocks.resolveAgentRoute,
-}));
-// mock-isolation: Listener events are recorded without enqueueing real system events.
-vi.mock("openclaw/plugin-sdk/system-event-runtime", () => ({
-  enqueueRoutedSystemEvent: mocks.enqueueSystemEvent,
 }));
 function thread(archived: boolean) {
   return { id: "thread-42", thread_metadata: { archived } };
@@ -181,12 +187,10 @@ function createPresenceListener({ presenceEvents, ...overrides }: PresenceListen
 }
 
 function expectWake(...userIds: string[]) {
-  expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(userIds.length);
-  expect(mocks.requestHeartbeat).toHaveBeenCalledTimes(userIds.length);
+  expect(mocks.enqueueSessionEvent).toHaveBeenCalledTimes(userIds.length);
   for (const userId of userIds) {
-    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith(
+    expect(mocks.enqueueSessionEvent).toHaveBeenCalledWith(
       expect.stringContaining(`user_id="${userId}"`),
-      expect.anything(),
       expect.anything(),
     );
   }
@@ -217,8 +221,13 @@ function pause<Args extends unknown[], Result>(operation: (...args: Args) => Pro
 
 function pausePresenceWork(
   store: PluginStateKeyedStore<number>,
-  stage: "lookup" | "permission" | "claim",
+  stage: "lookup" | "target" | "permission" | "claim",
 ) {
+  if (stage === "target") {
+    const blocked = pause(async () => Object.freeze({}));
+    mocks.captureSessionEventTarget.mockImplementationOnce(blocked.run);
+    return blocked;
+  }
   if (stage === "permission") {
     const blocked = pause(async () => true);
     mocks.canViewDiscordGuildChannel.mockImplementationOnce(blocked.run);
@@ -320,6 +329,10 @@ beforeEach(() => {
   mocks.canViewDiscordGuildChannel.mockReset().mockResolvedValue(true);
   mocks.hasAnyChannelPermissionDiscord.mockReset().mockResolvedValue(true);
   mocks.readMessagesDiscord.mockReset().mockResolvedValue([]);
+  mocks.resolveAgentRoute.mockReturnValue({
+    agentId: "molty",
+    sessionKey: "agent:molty:discord:channel:channel-1",
+  });
 });
 
 afterEach(() => vi.restoreAllMocks());
@@ -574,31 +587,101 @@ describe("Discord guild join introductions", () => {
 });
 
 describe("DiscordPresenceListener", () => {
-  it("retries when the queue rejects an event", async () => {
-    mocks.enqueueSystemEvent.mockReturnValueOnce(false);
+  it.each(["enqueue", "acceptance"] as const)("retries when %s rejects an event", async (stage) => {
+    mocks.enqueueSessionEvent.mockImplementationOnce(() => {
+      if (stage === "enqueue") {
+        throw new Error("session-event admission refused");
+      }
+      return {
+        id: "refused",
+        cancel: () => false,
+        accepted: Promise.resolve({ ok: false, error: "session-event admission refused" }),
+        settled: Promise.resolve({ status: "failed", executionStarted: false, delivered: false }),
+      };
+    });
     const listener = createPresenceListener({ presenceEvents: { burstLimit: 1 } });
     const registerIfAbsent = vi.spyOn(listener.store, "registerIfAbsent");
     await listener.transition();
 
-    expect(mocks.requestHeartbeat).not.toHaveBeenCalled();
+    expect(await listener.store.entries()).toEqual([]);
     await listener.online();
 
-    expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(2);
-    expect(mocks.requestHeartbeat).toHaveBeenCalledTimes(1);
+    expect(mocks.enqueueSessionEvent).toHaveBeenCalledTimes(2);
     expect(registerIfAbsent).toHaveBeenCalledTimes(2);
     const route = { agentId: "molty", sessionKey: "agent:molty:discord:channel:channel-1" };
     const destination = { to: "channel:channel-1", accountId: "molty" };
-    expect(mocks.enqueueSystemEvent).toHaveBeenLastCalledWith(
+    expect(mocks.enqueueSessionEvent).toHaveBeenLastCalledWith(
       expect.stringContaining('user_id="user-1"'),
-      expect.objectContaining(route),
-      expect.objectContaining({ deliveryContext: { ...destination, channel: "discord" } }),
-    );
-    expect(mocks.requestHeartbeat).toHaveBeenCalledWith(
-      expect.objectContaining({ ...route, heartbeat: { ...destination, target: "discord" } }),
+      expect.objectContaining({
+        ...route,
+        expectedTarget: await mocks.captureSessionEventTarget.mock.results.at(-1)?.value,
+        createIfMissing: true,
+        deliveryContext: { ...destination, channel: "discord" },
+      }),
     );
   });
 
-  it.each(["lookup", "permission", "claim"] as const)(
+  it("pins the selected route before awaiting the cooldown lookup", async () => {
+    const listener = createPresenceListener();
+    await listener.offline();
+    const lookup = pausePresenceWork(listener.store, "lookup");
+    await lookup.during(listener.online(), () => {
+      mocks.resolveAgentRoute.mockReturnValue({
+        agentId: "replacement",
+        sessionKey: "agent:replacement:discord:channel:channel-1",
+      });
+    });
+    expect(mocks.captureSessionEventTarget).toHaveBeenCalledWith(
+      "molty",
+      "agent:molty:discord:channel:channel-1",
+    );
+    expect(mocks.enqueueSessionEvent).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        agentId: "molty",
+        sessionKey: "agent:molty:discord:channel:channel-1",
+      }),
+    );
+  });
+
+  it("returns after acceptance and reports failed settlement without retrying the greeting", async () => {
+    type Receipt = ReturnType<PluginRuntime["system"]["enqueueSessionEvent"]>;
+    const accepted = createDeferred<Awaited<Receipt["accepted"]>>();
+    const settled = createDeferred<Awaited<Receipt["settled"]>>();
+    const submitted = createDeferred<void>();
+    mocks.enqueueSessionEvent.mockImplementationOnce(() => {
+      submitted.resolve();
+      return {
+        id: "pending",
+        cancel: () => false,
+        accepted: accepted.promise,
+        settled: settled.promise,
+      };
+    });
+    const warn = vi.fn();
+    const listener = createPresenceListener({ logger: { warn } as never });
+    await listener.offline();
+    const completed = vi.fn();
+    const pending = listener.online().then(completed);
+    await submitted.promise;
+    expect(completed).not.toHaveBeenCalled();
+    accepted.resolve({ ok: true });
+    await pending;
+    expect(warn).not.toHaveBeenCalled();
+    settled.resolve({
+      status: "failed",
+      executionStarted: true,
+      delivered: false,
+      error: "delivery failed",
+    });
+    await settled.promise;
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("delivery failed"));
+    await listener.online();
+    expectWake("user-1");
+    expect(await listener.store.entries()).toHaveLength(1);
+  });
+
+  it.each(["lookup", "target", "permission", "claim"] as const)(
     "rejects replaced policy after awaiting %s",
     async (stage) => {
       let policy = livePresencePolicy(["user-1"]);
@@ -621,7 +704,7 @@ describe("DiscordPresenceListener", () => {
       expectWake();
       await listener.transition("user-2");
       expectWake("user-2");
-      expect(mocks.enqueueSystemEvent.mock.lastCall?.[2]).toMatchObject({
+      expect(mocks.enqueueSessionEvent.mock.lastCall?.[1]).toMatchObject({
         deliveryContext: { to: "channel:channel-2" },
       });
     },
@@ -797,7 +880,7 @@ describe("DiscordPresenceListener", () => {
       // Post-window: replayed members stay marked online; a fresh transition emits.
       nowMs += 5 * 60 * 1000;
       await listener.online("replayed-1");
-      expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
+      expect(mocks.enqueueSessionEvent).not.toHaveBeenCalled();
       await listener.transition("replayed-1");
       expectWake("replayed-1");
     },

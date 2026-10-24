@@ -83,8 +83,8 @@ async function assertFullBranchLabel(page: Page) {
 }
 
 suite.define(() => {
-  it("keeps slow build-link navigation intact across Unicode boundaries and reload", async () => {
-    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+  it("keeps slow build-link navigation intact across Unicode boundaries and reload", async () =>
+    suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       await installMockGateway(page, { serverBuildId: BUILD_ID, serverVersion: "2026.7.10" });
 
       const response = await page.goto(`${suite.server.baseUrl}chat`);
@@ -106,6 +106,5 @@ suite.define(() => {
       await assertFullBranchLabel(page);
       await page.reload();
       await assertFullBranchLabel(page);
-    });
-  });
+    }));
 });

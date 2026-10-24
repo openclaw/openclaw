@@ -2,6 +2,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it, vi } from "vitest";
 import { createSlackActions } from "./channel-actions.js";
+import { createInvokeSpy } from "./message-action-dispatch.test-support.js";
 import { listSlackMessageActions } from "./message-actions.js";
 import { describeSlackMessageTool } from "./message-tool-api.js";
 
@@ -24,13 +25,15 @@ function requireSchemaProperty(
   };
 }
 
-const configuredSlack: OpenClawConfig = { channels: { slack: { botToken: "xoxb-test" } } };
+const configuredSlack: OpenClawConfig = {
+  channels: { slack: { botToken: "xoxb-test", actions: { channels: true } } },
+};
 
 describe("Slack message tools", () => {
   it("forwards trusted current-conversation, requester-account, and action authority context", async () => {
-    const invoke = vi.fn(async () => ({ content: [], details: { ok: true } }));
+    const invoke = createInvokeSpy();
     const assertDirectAdapterHandoff = vi.fn();
-    const actions = createSlackActions("slack", { invoke });
+    const actions = createSlackActions("slack");
     if (!actions.handleAction) {
       throw new Error("Slack message actions must provide an executor.");
     }
@@ -67,8 +70,8 @@ describe("Slack message tools", () => {
   });
 
   it("preserves a workspace-qualified channel for reactions", async () => {
-    const invoke = vi.fn(async () => ({ content: [], details: { ok: true } }));
-    const actions = createSlackActions("slack", { invoke });
+    const invoke = createInvokeSpy();
+    const actions = createSlackActions("slack");
     if (!actions.handleAction) {
       throw new Error("Slack message actions must provide an executor.");
     }
@@ -95,8 +98,8 @@ describe("Slack message tools", () => {
   });
 
   it("preserves a workspace-qualified channel for implicit upload destinations", async () => {
-    const invoke = vi.fn(async () => ({ content: [], details: { ok: true } }));
-    const actions = createSlackActions("slack", { invoke });
+    const invoke = createInvokeSpy();
+    const actions = createSlackActions("slack");
     if (!actions.handleAction) {
       throw new Error("Slack message actions must provide an executor.");
     }
@@ -132,8 +135,8 @@ describe("Slack message tools", () => {
   });
 
   it("forwards complete trusted context for current-requester member info", async () => {
-    const invoke = vi.fn(async () => ({ content: [], details: { ok: true } }));
-    const actions = createSlackActions("slack", { invoke });
+    const invoke = createInvokeSpy();
+    const actions = createSlackActions("slack");
     if (!actions.handleAction) {
       throw new Error("Slack message actions must provide an executor.");
     }
@@ -163,8 +166,8 @@ describe("Slack message tools", () => {
   });
 
   it("does not accept Slack read authority from generic tool context", async () => {
-    const invoke = vi.fn(async () => ({ content: [], details: { ok: true } }));
-    const actions = createSlackActions("slack", { invoke });
+    const invoke = createInvokeSpy();
+    const actions = createSlackActions("slack");
     if (!actions.handleAction) {
       throw new Error("Slack message actions must provide an executor.");
     }
@@ -206,6 +209,7 @@ describe("Slack message tools", () => {
       "send",
       "react",
       "reactions",
+      "channel-create",
       "conversation-open",
       "read",
       "edit",
@@ -221,6 +225,7 @@ describe("Slack message tools", () => {
     expect(discovery.capabilities).toEqual(["presentation"]);
     expect(Array.isArray(discovery.schema)).toBe(true);
     const schemas = Array.isArray(discovery.schema) ? discovery.schema : [];
+    expect(schemas.find((entry) => entry.actions?.includes("channel-create"))).toBeUndefined();
     expect(schemas.find((entry) => entry.actions?.includes("conversation-open"))).toMatchObject({
       actions: ["conversation-open"],
       visibility: "all-configured",
@@ -296,6 +301,7 @@ describe("Slack message tools", () => {
         slack: {
           botToken: "xoxb-root",
           actions: {
+            channels: false,
             reactions: false,
             messages: false,
             pins: false,
@@ -306,6 +312,7 @@ describe("Slack message tools", () => {
             default: {
               botToken: "xoxb-default",
               actions: {
+                channels: false,
                 reactions: false,
                 messages: false,
                 pins: false,
@@ -316,6 +323,7 @@ describe("Slack message tools", () => {
             work: {
               botToken: "xoxb-work",
               actions: {
+                channels: true,
                 reactions: true,
                 messages: true,
                 pins: false,
@@ -333,6 +341,7 @@ describe("Slack message tools", () => {
       "send",
       "react",
       "reactions",
+      "channel-create",
       "conversation-open",
       "read",
       "edit",
@@ -400,6 +409,7 @@ describe("Slack message tools", () => {
           slack: {
             botToken: "xoxb-test",
             actions: {
+              channels: false,
               reactions: false,
             },
           },
@@ -445,6 +455,7 @@ describe("Slack message tools", () => {
           slack: {
             botToken: "xoxb-test",
             actions: {
+              channels: false,
               reactions: false,
               messages: false,
               pins: false,

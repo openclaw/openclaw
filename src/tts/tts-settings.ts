@@ -4,11 +4,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../packages/normalization-core/src/string-coerce.js";
-import {
-  getRuntimeConfigSnapshot,
-  getRuntimeConfigSourceSnapshot,
-  selectApplicableRuntimeConfig,
-} from "../config/runtime-snapshot.js";
+import { selectLiveRuntimeConfig } from "../config/runtime-snapshot.js";
 import type {
   OpenClawConfig,
   ResolvedTtsPersona,
@@ -77,16 +73,6 @@ export function resolveModelOverridePolicy(
   };
 }
 
-export function resolveTtsRuntimeConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return (
-    selectApplicableRuntimeConfig({
-      inputConfig: cfg,
-      runtimeConfig: getRuntimeConfigSnapshot(),
-      runtimeSourceConfig: getRuntimeConfigSourceSnapshot(),
-    }) ?? cfg
-  );
-}
-
 export function asProviderConfig(value: unknown): SpeechProviderConfig {
   return withSpeakerSelectionCompat(asNonArrayRecord(value));
 }
@@ -142,7 +128,7 @@ export function resolveTtsConfig(
   cfgInput: OpenClawConfig,
   contextOrAgentId?: string | TtsConfigResolutionContext,
 ): ResolvedTtsConfig {
-  const cfg = resolveTtsRuntimeConfig(cfgInput);
+  const cfg = selectLiveRuntimeConfig(cfgInput);
   const raw: TtsConfig = resolveEffectiveTtsConfig(cfg, contextOrAgentId);
   const providerSource = raw.provider ? "config" : "default";
   const timeoutMs = raw.timeoutMs ?? DEFAULT_TTS_TIMEOUT_MS;

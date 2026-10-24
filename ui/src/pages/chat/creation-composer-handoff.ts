@@ -1,5 +1,5 @@
 import { t } from "../../i18n/index.ts";
-import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
+import { registerNewSessionRuntimeEnglish } from "../../i18n/locales/en-new-session-runtime.ts";
 import { chatQueueOrderKey } from "../../lib/chat/chat-queue-order.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { resolveCurrentUserIdentity } from "../../lib/chat/current-user-identity.ts";
@@ -21,7 +21,7 @@ import {
   retireOutboxPayload,
 } from "./outbox-payloads.ts";
 
-registerNewSessionSetupEnglish();
+registerNewSessionRuntimeEnglish();
 
 const stagedTransfers = new WeakMap<
   CreationComposerTransfer,

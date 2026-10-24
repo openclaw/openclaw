@@ -1,4 +1,3 @@
-// Googlechat tests cover channel plugin behavior.
 import { verifyChannelMessageAdapterCapabilityProofs } from "openclaw/plugin-sdk/channel-outbound";
 import {
   createDirectoryTestRuntime,
@@ -80,14 +79,6 @@ function createGoogleChatCfg(): OpenClawConfig {
   });
 }
 
-function requireMockArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0): unknown {
-  const call = mock.mock.calls[callIndex];
-  if (!call) {
-    throw new Error(`expected mock call ${callIndex}`);
-  }
-  return call[argIndex];
-}
-
 describe("googlechatPlugin outbound", () => {
   it("declares durable text and thread delivery with receipt proofs", async () => {
     sendGoogleChatMessageMock.mockResolvedValue({
@@ -117,28 +108,23 @@ describe("googlechatPlugin outbound", () => {
             text: "threaded",
             threadId: "thread-1",
           });
-          expect(requireMockArg(sendGoogleChatMessageMock)).toMatchObject({
-            space: "spaces/AAA",
-            thread: "thread-1",
-          });
+          expect(sendGoogleChatMessageMock).toHaveBeenCalledWith(
+            expect.objectContaining({
+              space: "spaces/AAA",
+              thread: "thread-1",
+            }),
+          );
         },
         messageSendingHooks: () => {
           expect(googlechatMessageAdapter.send?.text).toBeTypeOf("function");
         },
       },
     });
-    expect(proofs).toStrictEqual(
-      (
-        "text,media,poll,payload,silent,replyTo,thread,nativeQuote,messageSendingHooks," +
-        "batch,reconcileUnknownSend,afterSendSuccess,afterCommit"
-      )
-        .split(",")
-        .map((capability) => ({
-          capability,
-          status: ["text", "thread", "messageSendingHooks"].includes(capability)
-            ? "verified"
-            : "not_declared",
-        })),
+    expect(proofs.filter(({ status }) => status === "verified")).toStrictEqual(
+      ["text", "thread", "messageSendingHooks"].map((capability) => ({
+        capability,
+        status: "verified",
+      })),
     );
   });
 
@@ -238,14 +224,14 @@ it("preserves accountId when sending pairing approvals", async () => {
     cfg,
     accountId: "work",
   });
-  const request = requireMockArg(sendGoogleChatMessageMock) as {
-    account?: unknown;
-    space?: string;
-    text?: string;
-  };
-  expect(request.account).toBe(account);
-  expect(request.space).toBe("spaces/WORK");
-  expect(request.text).toBe(googlechatPairingTextAdapter.message);
+  expect(sendGoogleChatMessageMock.mock.calls[0]?.[0].account).toBe(account);
+  expect(sendGoogleChatMessageMock).toHaveBeenCalledWith(
+    expect.objectContaining({
+      account,
+      space: "spaces/WORK",
+      text: googlechatPairingTextAdapter.message,
+    }),
+  );
 });
 
 it("lists peers and groups from config", async () => {

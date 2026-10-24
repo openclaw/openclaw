@@ -1,11 +1,12 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { buildRestartRecoveryTerminalDeliveryEvidence } from "../agents/agent-command-restart-recovery.js";
 import { buildAnnounceIdempotencyKey } from "../agents/announce-idempotency.js";
 import { prepareCommandSessionRecoveryEntry } from "../agents/command/session-preparation.js";
 import type { AgentCommandOpts } from "../agents/command/types.js";
+import { RESTART_RECOVERY_INTERRUPTION_NOTE } from "../agents/restart-recovery-prompt.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "../agents/subagents/announce/subagent-announce.requester-settle-wake.js";
 import {
   mutateRequesterCompletionBatch,
@@ -133,7 +134,7 @@ describe("public yielded settle replay with real Gateway admission", () => {
       },
       expectsCompletionMessage: true,
       completion: { required: true, resultText: "isolated child result", capturedAt: now - 10 },
-      // A prior delivery does not discharge a new yielded synthesis obligation.
+      // Already-delivered results still owe the explicit yield continuation.
       delivery: { status: "delivered" },
       requesterSettleWake: wakeState([`settle-replay-child-${sequence}`]),
     };
@@ -434,6 +435,89 @@ describe("public yielded settle replay with real Gateway admission", () => {
     },
   );
 
+  it("adds restart guidance once when replaying an interrupted running settle wake", async () => {
+    requesterSessionKey = `agent:main:subagent:settle-requester-${sequence}`;
+    requesterScope = { ...requesterScope, sessionKey: requesterSessionKey };
+    await writeSessionStore({
+      entries: {
+        [requesterSessionKey]: {
+          sessionId: requesterSessionId,
+          updatedAt: Date.now(),
+          spawnDepth: 1,
+          spawnedBy: "agent:main:main",
+        },
+      },
+    });
+    child.requesterSessionKey = requesterSessionKey;
+    child.requesterDisplayKey = requesterSessionKey;
+    child.completionTarget = "parent";
+    child.cleanupCompletedAt = Date.now();
+    saveChild(child);
+    const prompts: string[] = [];
+    const runtimeContexts: string[] = [];
+    const acceptedInputs: unknown[] = [];
+    const completion = vi.fn<WakeOptions["completeBatch"]>();
+    try {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const entered = createDeferred();
+        mockCommand(async (command) => {
+          prompts.push(command.message!);
+          runtimeContexts.push(
+            (command.runtimeContextFragments ?? []).map((fragment) => fragment.text).join("\n\n"),
+          );
+          acceptedInputs.push(command.userTurnTranscriptRecorder!.getPendingInputMessage!());
+          await command.userTurnTranscriptRecorder!.persistApproved();
+          await markCommandExecutionStarted(command);
+          entered.resolve();
+          if (attempt < 2) {
+            await new Promise<void>((resolve) => {
+              command.abortSignal!.addEventListener("abort", () => resolve(), { once: true });
+            });
+            command.abortSignal!.throwIfAborted();
+          }
+        });
+        const dispatched = wake(child, completion).result;
+        await awaitGateBeforeSettlement(entered.promise, dispatched, "Settle wake did not execute");
+        if (attempt < 2) {
+          await harness.server.close({
+            reason: "gateway restart",
+            restartExpectedMs: 0,
+            drainTimeoutMs: 0,
+          });
+          await dispatched;
+          closeOpenClawAgentDatabasesForTest();
+          await start();
+          await prepareGatewayReplyRuntimeForTest({ force: true });
+          restoreChildren([child]);
+          const retryAt = child.requesterSettleWake?.nextAttemptAt;
+          if (retryAt !== undefined) {
+            vi.useFakeTimers({ toFake: ["Date"] });
+            vi.setSystemTime(retryAt);
+          }
+        } else {
+          expect(await dispatched).toBe(true);
+        }
+      }
+      expect(prompts).toHaveLength(3);
+      expect(runtimeContexts[0]).not.toContain(RESTART_RECOVERY_INTERRUPTION_NOTE);
+      for (const context of runtimeContexts.slice(1)) {
+        expect(context.split(RESTART_RECOVERY_INTERRUPTION_NOTE)).toHaveLength(2);
+      }
+      expect(prompts[1]).toBe(prompts[0]);
+      expect(prompts[2]).toBe(prompts[0]);
+      expect(acceptedInputs[1]).toEqual(acceptedInputs[0]);
+      expect(acceptedInputs[2]).toEqual(acceptedInputs[0]);
+      expect(agentCommandMock).toHaveBeenCalledTimes(3);
+      expect(completion).toHaveBeenCalledOnce();
+      expect(completion.mock.calls[0]?.[2]).toMatchObject({ delivered: true });
+      const duplicate = wake(child, completion);
+      expect(await duplicate.result).toBe(true);
+      expect(agentCommandMock).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it.each([
     "visible completed",
     "visible unconsumed completion",
@@ -553,6 +637,9 @@ describe("public yielded settle replay with real Gateway admission", () => {
         const persistence = await command.userTurnTranscriptRecorder!.persistApproved();
         if (transcriptOnly) {
           expect(persistence).toMatchObject({ appended: false });
+          expect(command.runtimeContextFragments).toEqual([
+            { kind: "runtime-instruction", text: RESTART_RECOVERY_INTERRUPTION_NOTE },
+          ]);
         }
       });
     }

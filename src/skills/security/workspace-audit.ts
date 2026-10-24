@@ -11,11 +11,6 @@ import type { OpenClawConfigWithLegacyRoster } from "../../config/legacy.roster.
 import type { SecurityAuditFinding } from "../../security/audit.types.js";
 import { isPathInside } from "../../security/scan-paths.js";
 
-type WorkspaceSkillScanLimits = {
-  maxFiles?: number;
-  maxDirVisits?: number;
-};
-
 const MAX_WORKSPACE_SKILL_SCAN_FILES_PER_WORKSPACE = 2_000;
 const MAX_WORKSPACE_SKILL_SCAN_ENTRIES_PER_WORKSPACE = 100_000;
 const MAX_WORKSPACE_SKILL_ESCAPE_DETAIL_ROWS = 12;
@@ -26,7 +21,6 @@ function realpathWithTimeout(p: string, timeoutMs = 2000): Promise<string | null
 
 async function listWorkspaceSkillMarkdownFiles(
   workspaceDir: string,
-  limits: WorkspaceSkillScanLimits = {},
 ): Promise<{ skillFilePaths: string[]; truncated: boolean }> {
   const skillsRoot = path.join(workspaceDir, "skills");
   let rootStat: Awaited<ReturnType<typeof fs.lstat>>;
@@ -39,11 +33,8 @@ async function listWorkspaceSkillMarkdownFiles(
     return { skillFilePaths: [], truncated: false };
   }
 
-  const maxFiles = limits.maxFiles ?? MAX_WORKSPACE_SKILL_SCAN_FILES_PER_WORKSPACE;
-  const maxTotalDirVisits = limits.maxDirVisits ?? maxFiles * 20;
-  if (maxFiles <= 0 || maxTotalDirVisits <= 0) {
-    return { skillFilePaths: [], truncated: true };
-  }
+  const maxFiles = MAX_WORKSPACE_SKILL_SCAN_FILES_PER_WORKSPACE;
+  const maxTotalDirVisits = maxFiles * 20;
   let fileCount = 0;
   let directoryVisits = 1;
   let truncated = false;
@@ -83,7 +74,6 @@ async function listWorkspaceSkillMarkdownFiles(
 export async function collectWorkspaceSkillSymlinkEscapeFindings(params: {
   cfg: OpenClawConfigWithLegacyRoster;
   workspaceDir?: string;
-  skillScanLimits?: WorkspaceSkillScanLimits;
 }): Promise<SecurityAuditFinding[]> {
   const findings: SecurityAuditFinding[] = [];
   const workspaceDirs = new Set(params.workspaceDir ? [params.workspaceDir] : []);
@@ -112,10 +102,7 @@ export async function collectWorkspaceSkillSymlinkEscapeFindings(params: {
   for (const workspaceDir of workspaceDirs) {
     const workspacePath = path.resolve(workspaceDir);
     const workspaceRealPath = (await realpathWithTimeout(workspacePath)) ?? workspacePath;
-    const { skillFilePaths, truncated } = await listWorkspaceSkillMarkdownFiles(
-      workspacePath,
-      params.skillScanLimits,
-    );
+    const { skillFilePaths, truncated } = await listWorkspaceSkillMarkdownFiles(workspacePath);
 
     if (truncated) {
       findings.push({

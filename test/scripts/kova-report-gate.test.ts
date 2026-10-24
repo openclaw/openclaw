@@ -273,16 +273,15 @@ function markRecordInstrumented(report: JsonObject, recordIndex = 0): JsonObject
   return record;
 }
 
-function setCompleteInstrumentedAssessment(record: JsonObject): void {
-  const measurements = objectAt(record.measurements);
-  measurements.performanceThresholdSkippedCount = 0;
+function setInstrumentedAssessment(record: JsonObject, skipped: JsonObject[] = []): void {
+  objectAt(record.measurements).performanceThresholdSkippedCount = skipped.length;
   record.performanceThresholdAssessment = {
-    complete: true,
-    reason: null,
-    rerun: null,
+    complete: skipped.length === 0,
+    reason: skipped.length ? "instrumented-performance-measurement" : null,
+    rerun: skipped.length ? "rerun without profiling for gateable performance evidence" : null,
     schemaVersion: "kova.performanceThresholdAssessment.v1",
-    skipped: [],
-    skippedCount: 0,
+    skipped,
+    skippedCount: skipped.length,
   };
 }
 
@@ -295,25 +294,16 @@ function attachInstrumentedPerformanceWarning(
   const actual = 612.4;
   const threshold = 900;
   const record = markRecordInstrumented(report, recordIndex);
-  const measurements = objectAt(record.measurements);
-  measurements.performanceThresholdSkippedCount = 1;
-  record.performanceThresholdAssessment = {
-    complete: false,
-    reason: "instrumented-performance-measurement",
-    rerun: "rerun without profiling for gateable performance evidence",
-    schemaVersion: "kova.performanceThresholdAssessment.v1",
-    skipped: [
-      {
-        actual,
-        affectsRecordStatus: false,
-        metric: metricId,
-        reason: "instrumented-performance-measurement",
-        status: "SKIPPED",
-        threshold,
-      },
-    ],
-    skippedCount: 1,
-  };
+  setInstrumentedAssessment(record, [
+    {
+      actual,
+      affectsRecordStatus: false,
+      metric: metricId,
+      reason: "instrumented-performance-measurement",
+      status: "SKIPPED",
+      threshold,
+    },
+  ]);
   const gate = objectAt(report.gate);
   if (!required) {
     arrayAt(gate.warning).push({ scenario: SCENARIO, state: STATE });
@@ -461,7 +451,7 @@ it("accepts profiled RSS growth emitted as a soak violation", () => {
 
 it("accepts omitted violations on a profiled PASS record", () => {
   const report = profiledResourceReport();
-  setCompleteInstrumentedAssessment(addProfiledPassRecord(report));
+  setInstrumentedAssessment(addProfiledPassRecord(report));
 
   expect(evaluateToleratedProfiledKovaReport(report)).toEqual({ ok: true });
 });

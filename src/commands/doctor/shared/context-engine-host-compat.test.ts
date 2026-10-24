@@ -8,14 +8,16 @@ import {
 } from "../../../context-engine/registry.js";
 import type { ContextEngineHostCapability } from "../../../context-engine/types.js";
 import { acquirePluginRegistryForInspection } from "../../../plugins/loader.js";
+import { loadManifestMetadataSnapshot } from "../../../plugins/manifest-contract-eligibility.js";
 import { PluginInstance } from "../../../plugins/plugin-instance.js";
+import { createPluginMetadataSnapshotFixture } from "../../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
 import { PluginRegistryInspectionResources } from "../../../plugins/registry-inspection-resources.js";
 import { retireInspectionInstances } from "../../../plugins/registry-inspection.test-support.js";
 import { createPluginRecord } from "../../../plugins/status.test-helpers.js";
 import {
-  collectContextEngineHostCompatibilityWarnings,
-  maybeRepairContextEngineHostCompatibility,
+  collectContextEngineHostCompatibilityWarnings as collectWarnings,
+  maybeRepairContextEngineHostCompatibility as repairCompatibility,
 } from "./context-engine-host-compat.js";
 
 vi.mock("../../../agents/cli-backends.js", () => ({
@@ -41,6 +43,13 @@ vi.mock("../../../context-engine/init.js", () => ({ ensureContextEnginesInitiali
 
 // mock-isolation: Control inspection leases without loading installed plugins.
 vi.mock("../../../plugins/loader.js", () => ({ acquirePluginRegistryForInspection: vi.fn() }));
+
+// mock-isolation: Fixture manifests declare engine owners without scanning installed plugins.
+vi.mock("../../../plugins/manifest-contract-eligibility.js", async () => {
+  const { createPluginMetadataSnapshotFixture: createSnapshot } =
+    await import("../../../plugins/plugin-metadata.test-support.js");
+  return { loadManifestMetadataSnapshot: vi.fn(() => createSnapshot()) };
+});
 
 let engineCounter = 0;
 
@@ -125,9 +134,7 @@ describe("doctor context-engine host compatibility", () => {
         registry,
         release: () => resources.release(),
       });
-      const pending = collectContextEngineHostCompatibilityWarnings(
-        doctorParams(configWithEngine(id)),
-      );
+      const pending = collectWarnings(doctorParams(configWithEngine(id)));
       try {
         expect(
           await Promise.race([
@@ -175,46 +182,54 @@ describe("doctor context-engine host compatibility", () => {
       }));
       const cfg = configWithEngine(id);
       const params = doctorParams(cfg);
-      const warnings = await collectContextEngineHostCompatibilityWarnings(params);
+      const warnings = await collectWarnings(params);
       expect(warnings.join("\n")).toContain(
         discovered
           ? "registered for read-only discovery; offline host compatibility inspection is unavailable"
           : "because it is not registered",
       );
-      const repair = await maybeRepairContextEngineHostCompatibility(params);
+      const repair = await repairCompatibility(params);
       expect(repair).toEqual({ config: cfg, changes: [], warnings });
       expect(repair.config).toBe(cfg);
       expect(factory).not.toHaveBeenCalled();
     },
   );
 
-  it("uses the system agent when inspecting an explicit multi-agent roster", async () => {
-    const engineId = await registerEngine([]);
-    const warnings = await collectContextEngineHostCompatibilityWarnings(
+  it("inspects the plugin that declares a differently named selected engine", async () => {
+    vi.mocked(loadManifestMetadataSnapshot).mockReturnValueOnce(
+      createPluginMetadataSnapshotFixture({
+        plugins: [{ id: "vendor-plugin", contextEngineIds: ["MiXeD-Engine"] }],
+      }),
+    );
+    vi.mocked(acquirePluginRegistryForInspection).mockResolvedValueOnce({
+      registry: createEmptyPluginRegistry(),
+      release: async () => undefined,
+    });
+    await collectWarnings(
       doctorParams(
-        configWithEngine(engineId, {
-          agents: {
-            ownership: "explicit",
-            defaults: { systemAgent: { agentId: "main" }, model: "anthropic/claude-sonnet-4-6" },
-            entries: {
-              main: { agentDir: "/tmp/openclaw-doctor-host-compat" },
-              helper: {},
-              third: {},
-            },
-          },
+        configWithEngine("MiXeD-Engine", {
+          plugins: { entries: { "vendor-plugin": { enabled: true } } },
         }),
       ),
     );
-
-    expect(warnings).toEqual([]);
+    expect(vi.mocked(acquirePluginRegistryForInspection)).toHaveBeenLastCalledWith(
+      expect.objectContaining({ onlyPluginIds: ["vendor-plugin"] }),
+    );
   });
 
-  it.each([false, true])("repairs only globally incompatible hosts (mixed=%s)", async (mixed) => {
+  it.each([false, true])("repairs incompatible system-agent hosts (mixed=%s)", async (mixed) => {
     const engineId = await registerEngine(["assemble-before-prompt"]);
     const cfg = configWithEngine(engineId, {
       ...(!mixed ? { plugins: { slots: { memory: "custom-memory" } } } : {}),
       agents: {
+        ownership: "explicit",
+        entries: {
+          main: { agentDir: "/tmp/openclaw-doctor-host-compat" },
+          helper: {},
+          third: {},
+        },
         defaults: {
+          systemAgent: { agentId: "main" },
           ...(!mixed ? { model: "anthropic/claude-sonnet-4-6" } : {}),
           models: {
             "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
@@ -224,8 +239,8 @@ describe("doctor context-engine host compatibility", () => {
       },
     });
     const params = doctorParams(cfg);
-    const warnings = mixed ? [] : await collectContextEngineHostCompatibilityWarnings(params);
-    const result = await maybeRepairContextEngineHostCompatibility(params);
+    const warnings = mixed ? [] : await collectWarnings(params);
+    const result = await repairCompatibility(params);
     if (mixed) {
       expect(result.config).toBe(cfg);
       expect(result.changes).toEqual([]);

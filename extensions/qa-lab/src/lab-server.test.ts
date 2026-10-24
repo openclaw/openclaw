@@ -80,6 +80,13 @@ async function makeTempDir(prefix: string) {
   return dir;
 }
 
+async function writeRepoFile(root: string, file: string, content: string) {
+  const target = path.join(root, file);
+  await mkdir(path.dirname(target), { recursive: true });
+  await writeFile(target, content, "utf8");
+  return target;
+}
+
 async function postLabJson(baseUrl: string, route: string, body: unknown) {
   return fetch(`${baseUrl}${route}`, {
     method: "POST",
@@ -259,8 +266,6 @@ async function createQaLabRepoRootFixture(params?: {
   models?: Array<{ key: string; name: string }>;
 }) {
   const repoRoot = await makeTempDir("qa-lab-repo-root-");
-  await mkdir(path.join(repoRoot, "dist"), { recursive: true });
-  await mkdir(path.join(repoRoot, "extensions/qa-lab/web/dist"), { recursive: true });
   const models =
     params?.models?.map((model) => ({
       key: model.key,
@@ -269,15 +274,15 @@ async function createQaLabRepoRootFixture(params?: {
       available: true,
       missing: false,
     })) ?? [];
-  await writeFile(
-    path.join(repoRoot, "dist/index.js"),
+  await writeRepoFile(
+    repoRoot,
+    "dist/index.js",
     `process.stdout.write(${JSON.stringify(JSON.stringify({ models }))});\n`,
-    "utf8",
   );
-  await writeFile(
-    path.join(repoRoot, "extensions/qa-lab/web/dist/index.html"),
+  await writeRepoFile(
+    repoRoot,
+    "extensions/qa-lab/web/dist/index.html",
     params?.uiHtml ?? "<!doctype html><html><body>qa lab fixture</body></html>",
-    "utf8",
   );
   return repoRoot;
 }
@@ -983,6 +988,7 @@ describe("qa-lab server", () => {
       "/api/state",
     );
     expect(snapshot.messages.map((message) => message.text)).toContain("hello from test");
+    expect(snapshot.messages.filter((message) => message.direction === "outbound")).toEqual([]);
 
     await expectFileMissing(outputPath);
   });
@@ -1098,9 +1104,7 @@ describe("qa-lab server", () => {
       openSpy.mockRestore();
     });
 
-    const lab = await startLab({
-      repoRoot,
-    });
+    const lab = await startLab({ repoRoot });
     const evidenceUrl = new URL("/api/evidence", lab.baseUrl);
     evidenceUrl.searchParams.set("path", ".artifacts/qa-e2e/utf8-preview/qa-evidence.json");
 
@@ -1141,10 +1145,7 @@ describe("qa-lab server", () => {
   it("anchors direct self-check runs under the explicit repo root by default", async () => {
     const repoRoot = await makeTempDir("qa-lab-self-check-root-");
 
-    const lab = await startLab({
-      repoRoot,
-      selfCheckWaitTimeoutMs: 1,
-    });
+    const lab = await startLab({ repoRoot, selfCheckWaitTimeoutMs: 1 });
 
     const result = await lab.runSelfCheck();
     expect(path.dirname(result.outputPath)).toBe(path.join(repoRoot, ".artifacts", "qa-e2e"));
@@ -1277,11 +1278,9 @@ describe("qa-lab server", () => {
   });
 
   it("does not eagerly load the runner model catalog before bootstrap is requested", async () => {
-    const repoRoot = await makeTempDir("qa-lab-lazy-catalog-");
+    const repoRoot = await createQaLabRepoRootFixture();
     const markerPath = path.join(repoRoot, "runner-catalog-hit.txt");
 
-    await mkdir(path.join(repoRoot, "dist"), { recursive: true });
-    await mkdir(path.join(repoRoot, "extensions/qa-lab/web/dist"), { recursive: true });
     await writeFile(
       path.join(repoRoot, "dist/index.js"),
       [
@@ -1299,17 +1298,7 @@ describe("qa-lab server", () => {
       ].join("\n"),
       "utf8",
     );
-    await writeFile(
-      path.join(repoRoot, "extensions/qa-lab/web/dist/index.html"),
-      "<!doctype html><html><body>lazy catalog</body></html>",
-      "utf8",
-    );
-
-    const lab = await startLab({
-      host: "127.0.0.1",
-      port: 0,
-      repoRoot,
-    });
+    const lab = await startLab({ repoRoot });
     await expectFileMissing(markerPath);
 
     const bootstrapResponse = await fetchWithRetry(`${lab.baseUrl}/api/bootstrap`);
@@ -1321,12 +1310,10 @@ describe("qa-lab server", () => {
   });
 
   it("aborts an in-flight runner model catalog when the lab stops", async ({ signal }) => {
-    const repoRoot = await makeTempDir("qa-lab-abort-catalog-");
+    const repoRoot = await createQaLabRepoRootFixture();
     const markerPath = path.join(repoRoot, "runner-catalog-started.txt");
     const stoppedPath = path.join(repoRoot, "runner-catalog-stopped.txt");
 
-    await mkdir(path.join(repoRoot, "dist"), { recursive: true });
-    await mkdir(path.join(repoRoot, "extensions/qa-lab/web/dist"), { recursive: true });
     await writeFile(path.join(repoRoot, "dist/package.json"), '{"type":"module"}');
     await writeFile(
       path.join(repoRoot, "dist/index.js"),
@@ -1343,15 +1330,7 @@ describe("qa-lab server", () => {
       ].join("\n"),
       "utf8",
     );
-    await writeFile(
-      path.join(repoRoot, "extensions/qa-lab/web/dist/index.html"),
-      "<!doctype html><html><body>abort catalog</body></html>",
-      "utf8",
-    );
-
-    const lab = await startStoppableLab({
-      repoRoot,
-    });
+    const lab = await startStoppableLab({ repoRoot });
 
     const bootstrapResponse = await fetchWithRetry(`${lab.baseUrl}/api/bootstrap`);
     expect(bootstrapResponse.status).toBe(200);
@@ -1363,31 +1342,6 @@ describe("qa-lab server", () => {
       // stop joins the catalog command's close, after its SIGTERM handler writes this marker.
       expect(await readFile(stoppedPath, "utf8")).toBe("terminated");
     }
-  });
-
-  it("can disable the embedded echo gateway for real-suite runs", async () => {
-    const lab = await startLab({
-      host: "127.0.0.1",
-      port: 0,
-      embeddedGateway: "disabled",
-    });
-    await fetch(`${lab.baseUrl}/api/inbound/message`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        conversation: { id: "bob", kind: "direct" },
-        senderId: "bob",
-        senderName: "Bob",
-        text: "hello from suite",
-      }),
-    });
-
-    const snapshot = (await (await fetchWithRetry(`${lab.baseUrl}/api/state`)).json()) as {
-      messages: Array<{ direction: string }>;
-    };
-    expect(snapshot.messages.filter((message) => message.direction === "outbound")).toEqual([]);
   });
 
   it("exposes structured outcomes and can attach control-ui after startup", async () => {
@@ -1412,26 +1366,13 @@ describe("qa-lab server", () => {
     const bootstrap = await readBootstrap(lab.baseUrl);
     expect(bootstrap.controlUiEmbeddedUrl).toBe("http://127.0.0.1:18789/");
 
-    const outcomes = await getLabJson<{
+    expect(await getLabJson(lab.baseUrl, "/api/outcomes")).toMatchObject({
       run: {
-        status: string;
-        counts: { total: number; passed: number; running: number };
-        scenarios: Array<{ id: string; status: string }>;
-      };
-    }>(lab.baseUrl, "/api/outcomes");
-    expect(outcomes.run.status).toBe("running");
-    expect(outcomes.run.counts).toEqual({
-      total: 2,
-      pending: 0,
-      running: 1,
-      passed: 1,
-      failed: 0,
-      skipped: 0,
+        status: "running",
+        counts: { total: 2, pending: 0, running: 1, passed: 1, failed: 0, skipped: 0 },
+        scenarios: [{ id: "channel-chat-baseline" }, { id: "cron-one-minute-ping" }],
+      },
     });
-    expect(outcomes.run.scenarios.map((scenario) => scenario.id)).toEqual([
-      "channel-chat-baseline",
-      "cron-one-minute-ping",
-    ]);
   });
 
   it("serves a new capture request after an earlier acquisition rejects", async () => {
@@ -1485,27 +1426,23 @@ describe("qa-lab server", () => {
     await fetchWithRetry(`${lab.baseUrl}/api/bootstrap`);
     expect(captureMock.acquire).not.toHaveBeenCalled();
 
-    const sessions = await getLabJson<{ sessions: Array<{ id: string }> }>(
-      lab.baseUrl,
-      "/api/capture/sessions",
-    );
-    expect(sessions.sessions.map((session) => session.id)).toContain("qa-capture-session");
+    expect(await getLabJson(lab.baseUrl, "/api/capture/sessions")).toMatchObject({
+      sessions: expect.arrayContaining([expect.objectContaining({ id: "qa-capture-session" })]),
+    });
     expect(captureMock.acquire).toHaveBeenCalledTimes(1);
 
-    const events = (await (
-      await fetchWithRetry(`${lab.baseUrl}/api/capture/events?sessionId=qa-capture-session`)
-    ).json()) as {
-      events: Array<{ flowId: string; provider?: string; model?: string; captureOrigin?: string }>;
-    };
-    expect(events.events.map((event) => event.flowId)).toContain("flow-1");
-    expect(events.events.find((event) => event.flowId === "flow-1")).toMatchObject({
-      provider: "openai",
-      model: "gpt-5.6-luna",
-      captureOrigin: "shared-fetch",
-    });
-    expect(events.events.find((event) => event.flowId === "flow-3")).toMatchObject({
-      provider: "ollama",
-      model: "kimi-k2.5:cloud",
+    expect(
+      await getLabJson(lab.baseUrl, "/api/capture/events?sessionId=qa-capture-session"),
+    ).toMatchObject({
+      events: expect.arrayContaining([
+        expect.objectContaining({
+          flowId: "flow-1",
+          provider: "openai",
+          model: "gpt-5.6-luna",
+          captureOrigin: "shared-fetch",
+        }),
+        expect.objectContaining({ flowId: "flow-3", provider: "ollama", model: "kimi-k2.5:cloud" }),
+      ]),
     });
 
     expect(

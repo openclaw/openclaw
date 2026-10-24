@@ -68,7 +68,7 @@ suite.define(() => {
           'openclaw-chat-pane[aria-hidden="false"] .chat-controls__model-picker',
         );
         const trigger = await openPicker(picker);
-        await revealChatModelOption(picker.locator('[data-chat-model-option="openai/gpt-5.5"]'));
+        await revealChatModelOption(picker, "openai/gpt-5.5");
         await picker.locator('[data-chat-model-option="openai/gpt-5.5"]').click();
         const patch = await gateway.waitForRequest("sessions.patch");
         expect(patch.params).toMatchObject({ key, model: "openai/gpt-5.5" });

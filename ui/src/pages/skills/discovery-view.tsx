@@ -1,14 +1,35 @@
-import { createMemo, For, onSettled } from "solid-js";
+import { createMemo, Errored, For, isPending, Loading, onSettled, Show } from "solid-js";
+import type { SkillLibraryEntry } from "../../../../packages/gateway-protocol/src/index.ts";
+import type { SkillStatusEntry } from "../../api/types.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { registerSkillsBrowserEnglish } from "../../i18n/locales/en-skills-browser.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import type { ClawHubSearchResult } from "../../lib/skills/clawhub-search.ts";
 import { PluginCardSummary } from "../plugins/plugin-card.tsx";
-import { skillDiscoveryEntries, type SkillDiscoveryEntry } from "./discovery.ts";
 import { SkillStateStatus, verdictForSkill } from "./skill-status.tsx";
 import type { SkillsProps } from "./view-types.ts";
 import "../../styles/skills-discovery.css";
 
 registerSkillsBrowserEnglish();
+
+type SkillDiscoveryEntry = {
+  id: string;
+  name: string;
+  description: string;
+  attribution: string;
+  skill?: SkillStatusEntry;
+  library?: SkillLibraryEntry;
+  remote?: ClawHubSearchResult;
+};
+
+function installedReference(skill: SkillStatusEntry): string | null {
+  const link = skill.clawhub;
+  if (!link?.valid) {
+    return null;
+  }
+  return link.requestedReference ?? (link.ownerHandle ? `@${link.ownerHandle}/${link.slug}` : null);
+}
 
 function DiscoveryCard(props: { entry: SkillDiscoveryEntry; skills: SkillsProps }) {
   const reference = () => props.entry.remote?.installRef ?? "";
@@ -71,6 +92,7 @@ function DiscoveryCard(props: { entry: SkillDiscoveryEntry; skills: SkillsProps 
               type="button"
               class="btn btn--sm plugin-catalog-card__install oc-action oc-action-secondary"
               disabled={
+                props.skills.saving ||
                 !props.skills.state.connected ||
                 !props.skills.canInstall ||
                 props.skills.loading ||
@@ -95,15 +117,78 @@ function DiscoveryCard(props: { entry: SkillDiscoveryEntry; skills: SkillsProps 
 }
 
 export function SkillDiscovery(props: SkillsProps) {
+  const query = createMemo(() => props.state.clawhubSearchQuery);
+  const connected = createMemo(() => props.state.connected);
+  const epoch = createMemo(() => props.clawhubSearchEpoch);
+  const pending = createMemo(() => isPending(props.readClawHubSearch), { loadingValue: true });
   let input: HTMLInputElement | undefined;
-  const entries = createMemo(() =>
-    skillDiscoveryEntries({
-      skills: props.state.skillsReport?.skills ?? [],
-      libraries: props.libraryEntries ?? [],
-      results: props.state.clawhubSearchResults ?? [],
-      query: props.state.clawhubSearchQuery,
-    }),
-  );
+  const entries = createMemo<SkillDiscoveryEntry[]>(() => {
+    const skills = props.mutationSkills;
+    const libraries = props.libraryEntries ?? [];
+    const results = props.state.clawhubSearchResults ?? [];
+    const queryValue = props.state.clawhubSearchQuery;
+    const items: SkillDiscoveryEntry[] = libraries
+      .filter((entry) => !entry.removed)
+      .map((library) => ({
+        id: `library:${library.skillId}`,
+        name: library.slug,
+        description: library.description,
+        attribution: library.ownerLabel,
+        library,
+        skill: skills.find(
+          (skill) => skill.source === "openclaw-library" && skill.name === library.name,
+        ),
+      }));
+    const libraryCommands = new Set(libraries.map((entry) => entry.name));
+    for (const skill of skills) {
+      // Library command names are persisted identities, unlike user-facing names/slugs.
+      if (skill.source === "openclaw-library" && libraryCommands.has(skill.name)) {
+        continue;
+      }
+      items.push({
+        id: `local:${skill.skillKey}`,
+        name: skill.name,
+        description: skill.description,
+        attribution: installedReference(skill) ?? skill.source,
+        skill,
+      });
+    }
+    const remoteIds = new Set<string>();
+    for (const remote of results) {
+      const reference = remote.installRef;
+      const identity = `${remote.registry}\n${reference}`;
+      if (remoteIds.has(identity)) {
+        continue;
+      }
+      remoteIds.add(identity);
+      // A name match is never installation proof. Match the registry and verified publisher/source.
+      const installed = items.find(
+        (entry) =>
+          entry.skill?.clawhub?.valid &&
+          entry.skill.clawhub.registry === remote.registry &&
+          installedReference(entry.skill) === reference,
+      );
+      if (installed) {
+        installed.remote = remote;
+      } else {
+        items.push({
+          id: `remote:${reference}`,
+          name: remote.displayName,
+          description: remote.summary ?? "",
+          attribution: reference,
+          remote,
+        });
+      }
+    }
+    const filter = queryValue.trim().toLowerCase();
+    // Remote matches retain the registry's semantic ranking, even if their copy lacks the query.
+    return items.filter(
+      (entry) =>
+        entry.remote ||
+        !filter ||
+        `${entry.name} ${entry.description} ${entry.attribution}`.toLowerCase().includes(filter),
+    );
+  });
   onSettled(() => {
     if (input?.isConnected) {
       input.focus({ preventScroll: true });
@@ -140,18 +225,31 @@ export function SkillDiscovery(props: SkillsProps) {
           {t("skillsPage.disconnected")}
         </p>
       )}
-      {props.state.clawhubSearchError && (
-        <div class="callout danger" role="alert">
-          {props.state.clawhubSearchError}{" "}
-          <button
-            type="button"
-            class="btn btn--sm"
-            onClick={() => props.onClawHubQueryChange(props.state.clawhubSearchQuery)}
-          >
-            {t("common.retry")}
-          </button>
-        </div>
-      )}
+      <Errored
+        fallback={(error, reset) => (
+          <Loading fallback={null}>
+            <Show when={!isPending(props.readClawHubSearch)}>
+              <div class="callout danger" role="alert">
+                {formatUiError(error())}{" "}
+                <button
+                  type="button"
+                  class="btn btn--sm"
+                  onClick={() => {
+                    props.onClawHubQueryChange(query());
+                    reset();
+                  }}
+                >
+                  {t("common.retry")}
+                </button>
+              </div>
+            </Show>
+          </Loading>
+        )}
+      >
+        <Loading on={[query(), connected(), epoch()]} fallback={null}>
+          {props.readClawHubSearch() && null}
+        </Loading>
+      </Errored>
       {props.state.clawhubInstallMessage && (
         <div
           role={props.state.clawhubInstallMessage!.kind === "error" ? "alert" : "status"}
@@ -168,21 +266,24 @@ export function SkillDiscovery(props: SkillsProps) {
       )}
       <div
         class="plugin-catalog-grid plugin-catalog-grid--results"
-        aria-busy={props.loading || props.state.clawhubSearchLoading ? "true" : "false"}
+        aria-busy={props.loading || pending() ? "true" : "false"}
       >
         <For each={entries()} keyed={(entry) => entry.id}>
           {(entry) => <DiscoveryCard entry={entry()} skills={props} />}
         </For>
       </div>
-      {entries().length === 0 &&
-        !props.loading &&
-        !props.state.clawhubSearchLoading &&
-        props.state.connected &&
-        !props.state.clawhubSearchError && (
-          <p class="muted" role="status">
-            {t("skillsPage.empty")}
-          </p>
-        )}
+      <Errored fallback={() => null}>
+        <Loading on={[query(), connected(), epoch()]} fallback={null}>
+          {props.readClawHubSearch() &&
+            entries().length === 0 &&
+            !props.loading &&
+            props.state.connected && (
+              <p class="muted" role="status">
+                {t("skillsPage.empty")}
+              </p>
+            )}
+        </Loading>
+      </Errored>
     </section>
   );
 }

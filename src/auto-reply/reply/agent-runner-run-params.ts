@@ -18,7 +18,6 @@ import { resolveCronRunToolsAllow } from "../../cron/tools-allow.js";
 import type { AgentFallbackCandidateCommonParams } from "./agent-runner-fallback-cycle.types.js";
 import type { FollowupRun } from "./queue.js";
 import { resolveReplyRunTrigger } from "./reply-turn-kind.js";
-import { getReplySystemEventContext } from "./system-event-session-key.js";
 
 export function resolveReplyScheduledToolPolicy(
   run: Pick<FollowupRun["run"], "scheduledAutomation" | "scheduledToolPolicy">,
@@ -46,19 +45,22 @@ export function resolveModelFallbackOptions(
   run: FollowupRun["run"],
   config: FollowupRun["run"]["config"] = run.config,
 ) {
+  // Only agent-turn jobs pick a model; system-event turns keep the session's fallback policy.
+  const automation =
+    run.scheduledAutomation?.job.payload.kind === "agentTurn" ? run.scheduledAutomation : undefined;
   const modelFallbackAvailability = resolveModelFallbackAvailability({
     cfg: config,
     agentId: run.agentId,
     sessionKey: run.sessionKey,
     modelSelectionLocked: run.modelSelectionLocked,
-    ...(run.scheduledAutomation
+    ...(automation
       ? {
           hasSessionModelOverride: false,
           modelFallbacksOverride: resolveCronFallbacksOverride({
             cfg: config,
-            job: run.scheduledAutomation.job,
+            job: automation.job,
             agentId: run.agentId,
-            ...run.scheduledAutomation.modelFallbackPolicy,
+            ...automation.modelFallbackPolicy,
           }),
         }
       : {
@@ -150,13 +152,12 @@ export function buildFallbackCandidateTurnParams(params: AgentFallbackCandidateC
     preparedRunAdmission: params.preparedRunAdmission,
     messageActionTurnCapability: params.messageActionTurnCapability,
     trigger: resolveReplyRunTrigger(turn),
-    heartbeatEventQueueSessionKey: getReplySystemEventContext(turn.opts)
-      ?.heartbeatEventQueueSessionKey,
     lane: params.runLane,
     fastModeStartedAtMs: params.fastModeStartedAtMs,
     fastModeAutoProgressState: params.fastModeAutoProgressState,
     isFinalFallbackAttempt: params.isFinalFallbackAttempt,
     resolvedModelSelection: params.resolvedModelSelection,
+    modelRoutingProvenance: params.modelRoutingProvenance,
     modelFallbacksOverride: params.modelFallbacksOverride,
     prompt: turn.commandBody,
     finalizePromptForResolvedTools:
@@ -170,11 +171,7 @@ export function buildFallbackCandidateTurnParams(params: AgentFallbackCandidateC
     currentInboundContext: turn.followupRun.currentInboundContext,
     extraSystemPrompt: turn.followupRun.run.extraSystemPrompt,
     sourceReplyDeliveryMode: turn.followupRun.run.sourceReplyDeliveryMode,
-    ...(turn.followupRun.run.scheduledAutomation
-      ? { requireExplicitMessageTarget: true }
-      : turn.isHeartbeat
-        ? { requireExplicitMessageTarget: turn.opts?.requireExplicitMessageTarget ?? true }
-        : {}),
+    ...(turn.followupRun.run.scheduledAutomation ? { requireExplicitMessageTarget: true } : {}),
     cleanupBundleMcpOnRunEnd: turn.opts?.cleanupBundleMcpOnRunEnd,
     silentReplyPromptMode: turn.followupRun.run.silentReplyPromptMode,
     suppressNextUserMessagePersistence: params.suppressQueuedUserPersistenceForCandidate,
@@ -184,7 +181,6 @@ export function buildFallbackCandidateTurnParams(params: AgentFallbackCandidateC
     disableTools: turn.opts?.disableTools,
     forceRestartSafeTools: turn.opts?.forceRestartSafeTools,
     forceCodeModeTools: turn.opts?.forceCodeModeTools,
-    continuesConversation: turn.opts?.continuesConversation,
     bootstrapContextMode: turn.opts?.bootstrapContextMode,
     bootstrapContextRunKind: params.bootstrapContextRunKind,
     images: params.currentTurnImages.images,

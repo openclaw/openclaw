@@ -35,7 +35,6 @@ import {
   finalizeReefIdentityBinding,
   REEF_DELIVERED_NAMESPACE,
   ReefDeliveredStore,
-  ReefInboxCursorStore,
   REEF_REVIEWS_NAMESPACE,
   releaseReefIdentityReservation,
   reserveReefIdentityBinding,
@@ -63,9 +62,7 @@ beforeEach(() => {
   stateDir = createStateTestDirectory();
   runtime = reopen();
 });
-afterEach(async () => {
-  await cleanupStateTestDirectory(stateDir);
-});
+afterEach(() => cleanupStateTestDirectory(stateDir));
 
 const rawStore = (namespace: string, maxEntries = 1) =>
   runtime.state.openKeyedStoreV2({ namespace, maxEntries, overflowPolicy: "reject-new" });
@@ -140,23 +137,6 @@ async function bindIdentity(handle: string): Promise<void> {
 }
 
 describe("Reef SQLite state", () => {
-  it("persists a monotonic inbox cursor for the bound Reef identity", async () => {
-    const binding = identityBinding("molty");
-    const requested = { ...binding };
-    const store = new ReefInboxCursorStore(reopen(), requested);
-    requested.handle = "changed";
-
-    expect(await store.load()).toBe(0);
-    await store.advance(12);
-    await store.advance(7);
-
-    expect(await new ReefInboxCursorStore(reopen(), binding).load()).toBe(12);
-    await expectReefStateOperationError(
-      new ReefInboxCursorStore(reopen(), identityBinding("clawd")).load(),
-      "Reef inbox cursor belongs to a different identity",
-    );
-  });
-
   it.each([
     [
       "durable-migration",
@@ -318,9 +298,9 @@ describe("Reef SQLite state", () => {
     expect(raw.lookup(key)?.claimOwner).not.toBe(firstOwner);
   });
 
-  it("persists review decisions and delivered ids", async () => {
+  it("persists review decisions", async () => {
     const keys = reefKeys();
-    const { reviews, delivered } = await openStores(reopen(), keys);
+    const { reviews } = await openStores(reopen(), keys);
     const review = reviewRequest();
     const digest = review.approvalDigest;
 
@@ -374,10 +354,6 @@ describe("Reef SQLite state", () => {
       approved: true,
       approvalDigest: digest,
     });
-    await delivered.confirm(receiptId);
-    await expect((await openStores(reopen(), keys)).delivered.status(receiptId)).resolves.toBe(
-      "delivered",
-    );
   });
 
   it.each(["keys", "lookup", "list"] as const)(

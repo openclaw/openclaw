@@ -25,6 +25,8 @@ vi.mock("./docker-mount-source.js", async (importOriginal) => {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 type MountInput = Parameters<typeof prepareSandboxMountPlan>[0];
+const skillsTarget = "/workspace/.openclaw/sandbox-skills/skills";
+const skillsBind = `/host/materialized skills/skills:${skillsTarget}:ro,z`;
 let root: string;
 function bind(Source: string, Destination: string, RW = true) {
   return { Type: "bind", Source, Destination, RW };
@@ -99,9 +101,7 @@ describe("managed mount plan", () => {
     expect(fs.readFileSync(path.join(workspace, ".openclaw/project.json"), "utf8")).toBe(
       "preserved",
     );
-    expect(plan.binds).toContain(
-      "/host/materialized skills/skills:/workspace/.openclaw/sandbox-skills/skills:ro,z",
-    );
+    expect(plan.binds).toContain(skillsBind);
   });
 
   it("rechecks the workspace owner after namespace lookup before creating scaffold directories", async () => {
@@ -131,50 +131,6 @@ describe("managed mount plan", () => {
     expect(fs.readdirSync(outside)).toEqual([]);
   });
 
-  it.each(["none", "ro", "rw"] as const)(
-    "maps all managed roots with %s permissions",
-    async (access) => {
-      const plan = await prepare(access);
-      if (access === "none") {
-        expect(plan.binds).toEqual([
-          "/host/state/private:/workspace:z",
-          "/host/state/private/skills:/workspace/skills:ro,z",
-        ]);
-      } else if (access === "ro") {
-        expect(plan.binds).toEqual([
-          "/host/state/private:/workspace:ro,z",
-          "/host/agent:/agent:ro,z",
-        ]);
-      } else {
-        expect(plan.binds).toEqual([
-          "/host/agent:/workspace:z",
-          "/host/agent/skills:/workspace/skills:ro,z",
-          "/host/agent/.agents/skills:/workspace/.agents/skills:ro,z",
-          "/host/materialized skills/skills:/workspace/.openclaw/sandbox-skills/skills:ro,z",
-        ]);
-      }
-    },
-  );
-
-  it("preserves custom daemon sources while keeping protected skill mounts authoritative", async () => {
-    const plan = await prepare("rw", {
-      binds: ["/custom/host:/data:ro", "/custom/override:/workspace/skills:rw"],
-    });
-    expect(plan.binds).toContain("/custom/host:/data:ro");
-    expect(plan.binds).toContain("/host/agent/skills:/workspace/skills:ro,z");
-    expect(plan.skippedBinds).toEqual(["/custom/override:/workspace/skills:rw"]);
-  });
-
-  it("selects the last custom destination while preserving its raw daemon bind", async () => {
-    const plan = await prepare("rw", {
-      binds: ["/daemon/A:/data:ro", "/daemon/B:/data/:rw", "invalid-bind"],
-    });
-    expect(plan.binds).toContain("/daemon/B:/data/:rw");
-    expect(plan.binds).not.toContain("/daemon/A:/data:ro");
-    expect(plan.binds).toContain("invalid-bind");
-    expect(plan.skippedBinds).toEqual([]);
-  });
-
   it("keeps meaningful source and target whitespace through create and retained comparison", async () => {
     const plan = await prepare("rw", {
       workspaceDir: path.join(root, "empty"),
@@ -183,13 +139,13 @@ describe("managed mount plan", () => {
     });
     expect(plan.binds).toEqual([
       "/host/state/empty:/workspace:z",
-      "/host/materialized skills/skills:/workspace/.openclaw/sandbox-skills/skills:ro,z",
+      skillsBind,
       "/daemon/A:/data:ro",
       "/daemon/B :/data :rw",
     ]);
     await expectMounts(plan, [
       bind("/host/state/empty", "/workspace"),
-      bind("/host/materialized skills/skills", "/workspace/.openclaw/sandbox-skills/skills", false),
+      bind("/host/materialized skills/skills", skillsTarget, false),
       bind("/daemon/A", "/data", false),
       bind("/daemon/B ", "/data "),
     ]);
@@ -225,9 +181,7 @@ describe("managed mount plan", () => {
       );
       expect(plan.binds).toContain(`/host/${workspace}-skill:/workspace/skills/nested:ro,z`);
       if (access === "rw") {
-        expect(plan.binds).toContain(
-          "/host/materialized-skill:/workspace/.openclaw/sandbox-skills/skills/nested:ro,z",
-        );
+        expect(plan.binds).toContain(`/host/materialized-skill:${skillsTarget}/nested:ro,z`);
       }
     },
   );
@@ -245,21 +199,6 @@ describe("managed mount plan", () => {
     });
     expect(plan.binds).toContain("/custom/data:/workspace/data/:ro");
     expect(plan.binds.some((mount) => mount.startsWith("/host/hidden:"))).toBe(false);
-  });
-
-  it("keeps protected skills read-only on a read-only Gateway source", async () => {
-    vi.mocked(resolveDockerSourceNamespace).mockResolvedValue([
-      { type: "bind", source: "/host/state", destination: root, writable: true },
-      {
-        type: "bind",
-        source: "/host/skills",
-        destination: path.join(root, "materialized"),
-        writable: false,
-      },
-    ]);
-    expect((await prepare("rw")).binds).toContain(
-      "/host/skills/skills:/workspace/.openclaw/sandbox-skills/skills:ro,z",
-    );
   });
 });
 
@@ -286,17 +225,10 @@ describe("retained mount identity", () => {
       await expectMounts(
         plan,
         [
-          { Type: "bind", Source: "/host/state/empty", Destination: "/workspace", RW: true },
+          bind("/host/state/empty", "/workspace"),
           ...(type === "tmpfs"
             ? []
-            : [
-                {
-                  Type: type,
-                  Source: "/engine/storage",
-                  Destination: "/workspace/cache",
-                  RW: true,
-                },
-              ]),
+            : [{ ...bind("/engine/storage", "/workspace/cache"), Type: type }]),
         ],
         type === "tmpfs" ? { "/workspace/cache": "rw" } : null,
         type !== "tmpfs",

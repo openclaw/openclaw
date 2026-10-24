@@ -33,7 +33,10 @@ it.each([
     visibleReply,
     { public: true, group: true },
   ),
-  settleCase("intentional silence", ok(silentResult), { delivered: true }),
+  settleCase("required public silence", ok(silentResult), missingReply, {
+    public: true,
+    group: true,
+  }),
   ...["ok", "timeout"].map((status) => ({
     name: `normalized silent result: ${status}`,
     response: {
@@ -52,30 +55,19 @@ it.each([
   })),
   settleCase("runtime timeout", { status: "timeout", summary: "aborted", stopReason: "timeout" }),
   settleCase("failed turn", { status: "error" }),
-  settleCase("empty successful turn", ok({ payloads: [] })),
+  settleCase("empty successful optional turn", ok({ payloads: [] }), { delivered: true }),
+  settleCase(
+    "optional silence promoted to a required human reply",
+    ok({
+      ...silentResult,
+      meta: { ...silentResult.meta, terminalReplyExpectation: "result-required" },
+    }),
+  ),
   settleCase(
     "failed silence",
     ok({ ...silentResult, meta: { ...silentResult.meta, aborted: true } }),
   ),
   settleCase("undelivered text", ok({ payloads: payloads("unsent answer") })),
-  settleCase(
-    "message-tool room: final sent with the message tool",
-    ok({
-      payloads: [],
-      didSendViaMessagingTool: true,
-      messagingToolSentTargets: [
-        {
-          tool: "message",
-          provider: "discord",
-          accountId: "acct-1",
-          to: "dm:U123",
-          text: "parent answer",
-          sourceReplyFinal: true,
-        },
-      ],
-    }),
-    visibleReply,
-  ),
   ...[false, true].map((publicReply) =>
     settleCase(
       `${publicReply ? "public" : "private"} room: plain final suppressed by policy`,
@@ -94,11 +86,6 @@ it.each([
       "policy suppression cannot settle " + Object.keys(meta)[0],
       ok({ ...policySuppression, payloads: payloads("partial answer"), meta }),
     ),
-  ),
-  settleCase(
-    "transferred next wave",
-    ok({ payloads: [], meta: { yielded: true }, requesterContinuationSettled: true }),
-    { delivered: true },
   ),
   settleCase(
     "replaced requester",

@@ -662,8 +662,7 @@ it("retains each child's admission re-arm reason and replays the same attempts a
     isCancellationAuthorized: () => true,
     timeoutMs: 10_000,
   };
-  const createAdapter = () =>
-    createNodeWorkerLaunchAdapter({ getTransport: () => transport, pollIntervalMs: 10 });
+  const createAdapter = () => createNodeWorkerLaunchAdapter({ getTransport: () => transport });
   try {
     const completed = await createAdapter().launch(request);
     expect(completed).toMatchObject({

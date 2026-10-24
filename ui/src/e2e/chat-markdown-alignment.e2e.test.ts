@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { BrowserContextOptions } from "playwright";
+import type { BrowserContextOptions, Page } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -10,27 +10,48 @@ const suite = createControlUiE2eSuite({
 });
 
 function withMarkdown(
-  options: BrowserContextOptions,
   text: string,
   run: Parameters<typeof suite.withPage>[1],
+  options: BrowserContextOptions = {},
   role = "assistant",
 ) {
   return suite.withPage(
-    { locale: "en-US", serviceWorkers: "block", ...options },
+    {
+      locale: "en-US",
+      serviceWorkers: "block",
+      colorScheme: "light",
+      viewport: { height: 800, width: 1180 },
+      ...options,
+    },
     async (fixture) => {
       await installMockGateway(fixture.page, {
-        historyMessages: [
-          {
-            role,
-            content: [{ type: "text", text }],
-            timestamp: Date.now(),
-          },
-        ],
+        historyMessages: [{ role, content: [{ type: "text", text }], timestamp: Date.now() }],
       });
       await fixture.page.goto(`${suite.server.baseUrl}chat`);
       return run(fixture);
     },
   );
+}
+
+async function capture(page: Page, name: string, fullPage = false) {
+  if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+    await page.screenshot({
+      animations: "disabled",
+      fullPage,
+      path: path.join(suite.artifactDir, `${name}.png`),
+    });
+  }
+}
+
+function expectMarkerGeometry(geometry: ReturnType<typeof readMarkdownGeometry>, rtl = false) {
+  const starts = rtl
+    ? geometry.textStarts
+    : [geometry.bulletTextX, geometry.numberedTextX, geometry.taskTextX];
+  expect(Math.max(...starts) - Math.min(...starts)).toBeLessThanOrEqual(1);
+  expect(geometry.checkboxGap).toBeGreaterThanOrEqual(7);
+  expect(geometry.checkboxGap).toBeLessThanOrEqual(9);
+  expect(Math.abs(geometry.detailsX - geometry.rootX)).toBeLessThanOrEqual(1);
+  expect(Math.abs(geometry.detailsRight - geometry.rootRight)).toBeLessThanOrEqual(1);
 }
 
 function readMarkdownGeometry(root: Element) {
@@ -111,27 +132,12 @@ function readMarkdownGeometry(root: Element) {
 
 suite.define(() => {
   it.each([
-    {
-      name: "desktop light",
-      colorScheme: "light" as const,
-      width: 1180,
-      reducedMotion: "no-preference" as const,
-    },
-    {
-      name: "phone dark",
-      colorScheme: "dark" as const,
-      width: 400,
-      reducedMotion: "reduce" as const,
-    },
-  ])(
+    { name: "desktop light", colorScheme: "light", width: 1180, reducedMotion: "no-preference" },
+    { name: "phone dark", colorScheme: "dark", width: 400, reducedMotion: "reduce" },
+  ] as const)(
     "keeps disclosures compact and borderless on $name",
     async ({ colorScheme, width, reducedMotion }) => {
       await withMarkdown(
-        {
-          colorScheme,
-          reducedMotion,
-          viewport: { height: 800, width },
-        },
         '## Alignment check\n\nこれは**（注記）**です\n\nsafe<br>break and unsafe<br class="wide">markup\n\n- Bullet item\n\n1. Numbered item\n\n- [ ] Unchecked task\n\n<details open>\n<summary>More details</summary>\n\nDisclosure body\n</details>\n\n<details>\n<summary>Collapsed details</summary>\nHidden body\n</details>',
         async ({ page }) => {
           const markdown = page.locator(".chat-group.assistant .chat-text", {
@@ -144,22 +150,11 @@ suite.define(() => {
 
           const geometry = await markdown.evaluate(readMarkdownGeometry);
 
-          if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-            await page.screenshot({
-              animations: "disabled",
-              path: path.join(suite.artifactDir, "disclosures.png"),
-            });
-          }
-
-          const textStarts = [geometry.bulletTextX, geometry.numberedTextX, geometry.taskTextX];
-          expect(Math.max(...textStarts) - Math.min(...textStarts)).toBeLessThanOrEqual(1);
-          expect(geometry.checkboxGap).toBeGreaterThanOrEqual(7);
-          expect(geometry.checkboxGap).toBeLessThanOrEqual(9);
+          await capture(page, "disclosures");
+          expectMarkerGeometry(geometry);
           expect(Math.abs(geometry.checkboxLineCenterDelta)).toBeLessThanOrEqual(1);
 
           expect(geometry.bodyTextX).toBeGreaterThan(geometry.detailsX);
-          expect(Math.abs(geometry.detailsX - geometry.rootX)).toBeLessThanOrEqual(1);
-          expect(Math.abs(geometry.detailsRight - geometry.rootRight)).toBeLessThanOrEqual(1);
           expect({
             checkboxSize: geometry.checkboxSize,
             border: Number.parseFloat(geometry.borderInlineStartWidth),
@@ -215,29 +210,20 @@ suite.define(() => {
             true,
           );
         },
+        { colorScheme, reducedMotion, viewport: { height: 800, width } },
       );
     },
   );
 
   it("preserves inline code content and IPv6 links in assistant Markdown", async () => {
     await withMarkdown(
-      {
-        colorScheme: "light",
-        viewport: { height: 800, width: 1180 },
-      },
       "## Markdown parser fidelity\n\n`   `\n\n[foo `bar` baz`\n\n[IPv6 destination](http://[2001:db8::1]:1896/a[b]?x=[y])",
       async ({ page }) => {
         const markdown = page.locator(".chat-group.assistant .chat-text", {
           hasText: "Markdown parser fidelity",
         });
         await markdown.waitFor();
-        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-          await page.screenshot({
-            animations: "disabled",
-            fullPage: true,
-            path: path.join(suite.artifactDir, "markdown-parser-fidelity.png"),
-          });
-        }
+        await capture(page, "markdown-parser-fidelity", true);
 
         expect(
           await markdown.evaluate((root) => ({
@@ -256,10 +242,6 @@ suite.define(() => {
 
   it("keeps user block art preformatted", async () => {
     await withMarkdown(
-      {
-        colorScheme: "light",
-        viewport: { height: 800, width: 1180 },
-      },
       "```\n  ▀▀▀▀  \n  ▄▄▄▄  \n  ████  \n```",
       async ({ page }) => {
         const blockArt = page.locator(".chat-group.user code.markdown-block-art");
@@ -273,17 +255,13 @@ suite.define(() => {
           )
           .toEqual(["pre", "normal", "normal"]);
       },
+      {},
       "user",
     );
   });
 
   it("preserves Markdown marker and disclosure alignment in RTL transcripts", async () => {
     await withMarkdown(
-      {
-        colorScheme: "light",
-        locale: "ar",
-        viewport: { height: 800, width: 1180 },
-      },
       "## فحص المحاذاة\n\n- عنصر نقطي\n\n1. عنصر مرقم\n\n- [ ] مهمة غير مكتملة\n\n<details open>\n<summary>تفاصيل إضافية</summary>\n\nمحتوى التفاصيل\n</details>",
       async ({ page }) => {
         const markdown = page.locator(".chat-group.assistant .chat-text[dir='rtl']", {
@@ -293,19 +271,14 @@ suite.define(() => {
 
         const geometry = await markdown.evaluate(readMarkdownGeometry);
 
-        expect(
-          Math.max(...geometry.textStarts) - Math.min(...geometry.textStarts),
-        ).toBeLessThanOrEqual(1);
+        expectMarkerGeometry(geometry, true);
         expect(Number.parseFloat(geometry.unorderedPaddingInlineStart)).toBe(24);
         expect(Number.parseFloat(geometry.orderedPaddingInlineStart)).toBe(24);
-        expect(geometry.checkboxGap).toBeGreaterThanOrEqual(7);
-        expect(geometry.checkboxGap).toBeLessThanOrEqual(9);
         expect(Number.parseFloat(geometry.chevronInlineStart)).toBe(0);
         expect(Number.parseFloat(geometry.summaryPaddingInlineStart)).toBeGreaterThanOrEqual(24);
         expect(geometry.detailsRight - geometry.summaryTextRight).toBe(24);
-        expect(Math.abs(geometry.detailsX - geometry.rootX)).toBeLessThanOrEqual(1);
-        expect(Math.abs(geometry.detailsRight - geometry.rootRight)).toBeLessThanOrEqual(1);
       },
+      { locale: "ar" },
     );
   });
 });

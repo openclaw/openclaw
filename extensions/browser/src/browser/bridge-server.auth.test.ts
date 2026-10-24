@@ -1,5 +1,6 @@
 import { createServer } from "node:http";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { promisify } from "node:util";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { getBridgeAuthForPort } from "./bridge-auth-registry.js";
 import { startBrowserBridgeServer, stopBrowserBridgeServer } from "./bridge-server.js";
 import { resolveBrowserConfig } from "./config.js";
@@ -8,33 +9,25 @@ import { isBrowserRuntimeRunning } from "./server-context.lifecycle.js";
 const tokenAuth = { authToken: "secret-token" };
 const tokenHeaders = { Authorization: "Bearer secret-token" };
 
-function buildResolvedConfig() {
-  return {
-    ...resolveBrowserConfig({
-      evaluateEnabled: false,
-      attachOnly: true,
-      defaultProfile: "openclaw",
-      profiles: { openclaw: { cdpPort: 1 } },
-    }),
-    controlPort: 0,
-  };
-}
-
 describe("startBrowserBridgeServer auth", () => {
-  const servers: Awaited<ReturnType<typeof startBrowserBridgeServer>>[] = [];
   async function startBridge(
     options: Omit<Parameters<typeof startBrowserBridgeServer>[0], "resolved"> = {},
   ) {
-    const bridge = await startBrowserBridgeServer({ resolved: buildResolvedConfig(), ...options });
-    servers.push(bridge);
+    const bridge = await startBrowserBridgeServer({
+      resolved: {
+        ...resolveBrowserConfig({
+          evaluateEnabled: false,
+          attachOnly: true,
+          defaultProfile: "openclaw",
+          profiles: { openclaw: { cdpPort: 1 } },
+        }),
+        controlPort: 0,
+      },
+      ...options,
+    });
+    onTestFinished(() => stopBrowserBridgeServer(bridge.server));
     return bridge;
   }
-
-  afterEach(async () => {
-    for (const bridge of servers.splice(0).toReversed()) {
-      await stopBrowserBridgeServer(bridge.server);
-    }
-  });
 
   it.each([
     ["127.0.0.1", tokenAuth, tokenHeaders],
@@ -69,17 +62,11 @@ describe("startBrowserBridgeServer auth", () => {
     }
 
     try {
-      await expect(
-        startBridge({
-          ...tokenAuth,
-          host: "127.0.0.1",
-          port: address.port,
-        }),
-      ).rejects.toMatchObject({ code: "EADDRINUSE" });
-    } finally {
-      await new Promise<void>((resolve) => {
-        blocker.close(() => resolve());
+      await expect(startBridge({ ...tokenAuth, port: address.port })).rejects.toMatchObject({
+        code: "EADDRINUSE",
       });
+    } finally {
+      await promisify(blocker.close.bind(blocker))();
     }
   });
 
@@ -97,7 +84,6 @@ describe("startBrowserBridgeServer auth", () => {
     const concurrentStop = stopBrowserBridgeServer(bridge.server);
     expect(concurrentStop).toBe(firstStop);
     await expect(firstStop).rejects.toThrow("relay cleanup failed");
-    await expect(concurrentStop).rejects.toThrow("relay cleanup failed");
     expect(bridge.server.listening).toBe(false);
     expect(getBridgeAuthForPort(bridge.port)).toBeUndefined();
     expect(close).toHaveBeenCalledOnce();

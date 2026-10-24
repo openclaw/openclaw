@@ -25,69 +25,57 @@ afterEach(() => {
   }
 });
 
+function group(
+  key: string,
+  message: MessageGroupData["messages"][number]["message"],
+  role: MessageGroupData["role"] = "tool",
+): MessageGroupData {
+  return {
+    kind: "group",
+    key,
+    role,
+    timestamp: 1000,
+    isStreaming: false,
+    visibleContent: role === "assistant" ? "text" : "non-text",
+    messages: [{ key, hasVisibleContent: true, message }],
+  };
+}
+
 describe.runIf(browserMode)("chat disclosure activation", () => {
   it.each(["work", "activity", "tool", "tool-output", "raw"] as const)(
     "toggles on rapid clicks without selecting labels and retains keyboard access (%s)",
     async (kind) => {
       container = document.body.appendChild(document.createElement("div"));
-      const groups: MessageGroupData[] = [
-        {
-          kind: "group",
-          key: "activity",
-          role: "tool",
-          timestamp: 1000,
-          isStreaming: false,
-          visibleContent: "non-text",
-          messages: [
+      const groups = [
+        group("activity", {
+          role: "assistant",
+          content: [
             {
-              key: "call",
-              hasVisibleContent: true,
-              message: {
-                role: "assistant",
-                content: [
-                  {
-                    type: "toolCall",
-                    id: "search",
-                    name: "web_search",
-                    arguments: { query: "disclosures" },
-                  },
-                ],
-                activity: [
-                  {
-                    itemId: "search",
-                    toolCallId: "search",
-                    kind: "tool",
-                    phase: "end",
-                    name: "web_search",
-                    title: "Search",
-                    status: "completed",
-                  },
-                ],
-              },
+              type: "toolCall",
+              id: "search",
+              name: "web_search",
+              arguments: { query: "disclosures" },
             },
           ],
-        },
-      ];
-      const output: MessageGroupData = {
-        kind: "group",
-        key: "output",
-        role: "tool",
-        timestamp: 1000,
-        isStreaming: false,
-        visibleContent: "non-text",
-        messages: [
-          {
-            key: "result",
-            hasVisibleContent: true,
-            message: {
-              role: "toolResult",
+          activity: [
+            {
+              itemId: "search",
               toolCallId: "search",
-              toolName: "web_search",
-              content: "Search results",
+              kind: "tool",
+              phase: "end",
+              name: "web_search",
+              title: "Search",
+              status: "completed",
             },
-          },
-        ],
-      };
+          ],
+        }),
+      ];
+      const output = group("output", {
+        role: "toolResult",
+        toolCallId: "search",
+        toolName: "web_search",
+        content: "Search results",
+      });
       let expanded = false;
       const toggle = () => {
         expanded = !expanded;
@@ -100,29 +88,33 @@ describe.runIf(browserMode)("chat disclosure activation", () => {
           isToolMessageExpanded: () => props.expanded,
           onToggleToolMessageExpanded: toggle,
         });
-        return kind === "work" ? (
-          <WorkGroupSummary
-            item={{ key: "work", durationMs: null, groups }}
-            options={{ expanded: props.expanded, onToggle: toggle }}
-          />
-        ) : kind === "activity" ? (
-          <ActivityGroup groups={groups} options={options()} presentation="standalone" />
-        ) : kind === "tool" ? (
-          <ChatToolCard
-            card={{
-              id: "search",
-              name: "web_search",
-              args: { query: "disclosures" },
-              completed: true,
-            }}
-            options={{ messageKey: "tool", expanded: props.expanded, onToggleExpanded: toggle }}
-          />
-        ) : kind === "tool-output" ? (
-          <MessageGroup group={output} options={options()} />
-        ) : (
-          <openclaw-chat-tool-raw>
-            <RawOutputToggle text="Copyable output" />
-          </openclaw-chat-tool-raw>
+        return (
+          <>
+            {kind === "work" ? (
+              <WorkGroupSummary
+                item={{ key: "work", durationMs: null, groups }}
+                options={{ expanded: props.expanded, onToggle: toggle }}
+              />
+            ) : kind === "activity" ? (
+              <ActivityGroup groups={groups} options={options()} presentation="standalone" />
+            ) : kind === "tool" ? (
+              <ChatToolCard
+                card={{
+                  id: "search",
+                  name: "web_search",
+                  args: { query: "disclosures" },
+                  completed: true,
+                }}
+                options={{ messageKey: "tool", expanded: props.expanded, onToggleExpanded: toggle }}
+              />
+            ) : kind === "tool-output" ? (
+              <MessageGroup group={output} options={options()} />
+            ) : (
+              <openclaw-chat-tool-raw>
+                <RawOutputToggle text="Copyable output" />
+              </openclaw-chat-tool-raw>
+            )}
+          </>
         );
       }
       const view = mountSolid(Disclosure, { expanded }, container);
@@ -155,21 +147,11 @@ describe.runIf(browserMode)("chat disclosure activation", () => {
       () => (
         <>
           <MessageGroup
-            group={{
-              kind: "group",
-              key: "answer",
-              role: "assistant",
-              timestamp: 1000,
-              isStreaming: false,
-              visibleContent: "text",
-              messages: [
-                {
-                  key: "answer",
-                  hasVisibleContent: true,
-                  message: { role: "assistant", content: "Copyable explanation." },
-                },
-              ],
-            }}
+            group={group(
+              "answer",
+              { role: "assistant", content: "Copyable explanation." },
+              "assistant",
+            )}
             options={{ showReasoning: false }}
           />
           <openclaw-chat-tool-raw>

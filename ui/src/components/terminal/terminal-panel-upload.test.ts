@@ -281,78 +281,57 @@ describe("OpenClawTerminalPanel upload lifecycle", () => {
     },
   );
 
-  it("cancels an active batch without pasting staged paths", async () => {
-    const controller = createTerminalController();
-    createGhosttyTerminalMock.mockResolvedValue(controller);
-    const pendingUpload = createDeferred<{ path: string; size: number }>();
-    let uploadSignal: AbortSignal | undefined;
-    const client: TerminalGatewayClient = {
-      forceReconnect: () => {},
-      request: async <T>(method: string, _params?: unknown, options?: { signal?: AbortSignal }) => {
-        if (method === "terminal.open") {
-          return terminalOpenResult("session-1") as T;
-        }
-        if (method === "terminal.upload") {
-          uploadSignal = options?.signal;
-          return (await pendingUpload.promise) as T;
-        }
-        return { ok: true } as T;
-      },
-      addEventListener: () => () => {},
-    };
-    const panel = await mountReadyPanel(client);
-    dropFiles(panel, [terminalUploadFile("archive.zip", "zip")]);
-    await waitForFast(() => {
-      expect(panel.querySelector(".tp-upload-card")?.textContent).toContain("Uploading 1 of 1");
-    });
+  it.each(["cancel button", "tab close"] as const)(
+    "cancels an active upload through %s without pasting late results",
+    async (trigger) => {
+      const controller = createTerminalController();
+      createGhosttyTerminalMock.mockResolvedValue(controller);
+      const pendingUpload = createDeferred<{ path: string; size: number }>();
+      let uploadSignal: AbortSignal | undefined;
+      const client: TerminalGatewayClient = {
+        forceReconnect: () => {},
+        request: async <T>(
+          method: string,
+          _params?: unknown,
+          options?: { signal?: AbortSignal },
+        ) => {
+          if (method === "terminal.open") {
+            return terminalOpenResult("session-1") as T;
+          }
+          if (method === "terminal.upload") {
+            uploadSignal = options?.signal;
+            return (await pendingUpload.promise) as T;
+          }
+          return { ok: true } as T;
+        },
+        addEventListener: () => () => {},
+      };
+      const panel = await mountReadyPanel(client);
+      dropFiles(panel, [terminalUploadFile("archive.zip", "zip")]);
+      await waitForFast(() => {
+        expect(panel.querySelector(".tp-upload-card")?.textContent).toContain("Uploading 1 of 1");
+      });
 
-    panel.querySelector<HTMLButtonElement>(".tp-upload-cancel")?.click();
-    await panel.updateComplete;
-    expect(uploadSignal?.aborted).toBe(true);
-    expect(panel.querySelector(".tp-upload-card")).toBeNull();
-    expect(panel.querySelector<HTMLButtonElement>(".tp-upload")?.disabled).toBe(false);
-
-    pendingUpload.resolve({ path: "/tmp/openclaw upload/archive.zip", size: 3 });
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(controller.terminal.paste).not.toHaveBeenCalled();
-  });
-
-  it("cancels a pending upload when its terminal tab closes", async () => {
-    const controller = createTerminalController();
-    createGhosttyTerminalMock.mockResolvedValue(controller);
-    const pendingUpload = createDeferred<{ path: string; size: number }>();
-    let uploadSignal: AbortSignal | undefined;
-    const client: TerminalGatewayClient = {
-      forceReconnect: () => {},
-      request: async <T>(method: string, _params?: unknown, options?: { signal?: AbortSignal }) => {
-        if (method === "terminal.open") {
-          return terminalOpenResult("session-1") as T;
-        }
-        if (method === "terminal.upload") {
-          uploadSignal = options?.signal;
-          return (await pendingUpload.promise) as T;
-        }
-        return { ok: true } as T;
-      },
-      addEventListener: () => () => {},
-    };
-    const panel = await mountReadyPanel(client);
-    dropFiles(panel, [terminalUploadFile("archive.zip", "zip")]);
-    await waitForFast(() => {
-      expect(panel.querySelector(".tp-upload-card")?.textContent).toContain("Uploading 1 of 1");
-    });
-
-    panel.querySelector<HTMLButtonElement>(".tabstrip-tab__close")?.click();
-    await waitForFast(() => {
-      expect(uploadSignal?.aborted).toBe(true);
+      panel
+        .querySelector<HTMLButtonElement>(
+          trigger === "cancel button" ? ".tp-upload-cancel" : ".tabstrip-tab__close",
+        )
+        ?.click();
+      await panel.updateComplete;
+      await waitForFast(() => {
+        expect(uploadSignal?.aborted).toBe(true);
+        expect(panel.querySelector(".tp-upload-card")).toBeNull();
+      });
+      if (trigger === "cancel button") {
+        expect(panel.querySelector<HTMLButtonElement>(".tp-upload")?.disabled).toBe(false);
+        pendingUpload.resolve({ path: "/tmp/openclaw upload/archive.zip", size: 3 });
+      } else {
+        pendingUpload.reject(new Error("terminal closed"));
+      }
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(controller.terminal.paste).not.toHaveBeenCalled();
       expect(panel.querySelector(".tp-upload-card")).toBeNull();
-    });
-
-    pendingUpload.reject(new Error("terminal closed"));
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(controller.terminal.paste).not.toHaveBeenCalled();
-    expect(panel.querySelector(".tp-upload-card")).toBeNull();
-  });
+    },
+  );
 });

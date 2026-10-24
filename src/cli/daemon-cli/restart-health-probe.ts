@@ -26,7 +26,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { inspectPortUsage } from "../../infra/ports-inspect.js";
 import { LOOPBACK_PORT_PROBE_HOSTS } from "../../infra/ports-probe.js";
 import type { PortUsage } from "../../infra/ports-types.js";
-import { sleep } from "../../utils.js";
+import { sleep, tryParseJson } from "../../utils.js";
 import type {
   GatewayPortHealthSnapshot,
   UnavailablePluginHealthSummary,
@@ -84,7 +84,22 @@ export type GatewayReachability = {
 type GatewayHttpReadiness = {
   healthz: number | null;
   readyz: number | null;
+  coreReady?: boolean;
+  failingChannels?: string[];
 };
+
+function readGatewayFailingChannels(response: { statusCode: number; body: string } | null) {
+  const readiness = asOptionalRecord(tryParseJson(response?.body ?? ""));
+  const failing = readiness?.failing;
+  return response?.statusCode === 503 &&
+    readiness?.ready === false &&
+    readiness.coreReady === true &&
+    Array.isArray(failing) &&
+    failing.length > 0 &&
+    failing.every((id): id is string => typeof id === "string" && id.trim().length > 0)
+    ? failing
+    : undefined;
+}
 
 /** Waits for the unauthenticated HTTP(S) readiness contracts reported by service start. */
 export async function waitForGatewayHttpReadiness(params: {
@@ -95,6 +110,8 @@ export async function waitForGatewayHttpReadiness(params: {
   delayMs: number;
   probeTimeoutMs?: number;
   port: number;
+  /** Software activation may finish while a channel needs operator attention. */
+  requireChannelHealth?: boolean;
   signal?: AbortSignal;
   onObservation?: (readiness: GatewayHttpReadiness) => void;
 }): Promise<GatewayHttpReadiness> {
@@ -107,21 +124,28 @@ export async function waitForGatewayHttpReadiness(params: {
     if (remainingMs <= 0) {
       return latest;
     }
-    const probeStatus = async (pathname: "/healthz" | "/readyz") => {
-      const result = await probe.requestHttp({
+    const request = (pathname: "/healthz" | "/readyz") =>
+      probe.requestHttp({
         host: "127.0.0.1",
         pathname,
         port: params.port,
         timeoutMs: Math.min(remainingMs, params.probeTimeoutMs ?? GATEWAY_RESTART_PROBE_TIMEOUT_MS),
         ...(params.signal ? { signal: params.signal } : {}),
       });
-      return result?.statusCode ?? null;
-    };
-    const [healthz, readyz] = await Promise.all([probeStatus("/healthz"), probeStatus("/readyz")]);
+    const [health, ready] = await Promise.all([request("/healthz"), request("/readyz")]);
+    const healthz = health?.statusCode ?? null;
+    const readyz = ready?.statusCode ?? null;
     params.signal?.throwIfAborted();
     latest = { healthz, readyz };
+    if (params.requireChannelHealth === false) {
+      const failingChannels = readGatewayFailingChannels(ready);
+      latest.coreReady = healthz === 200 && (readyz === 200 || failingChannels !== undefined);
+      if (failingChannels) {
+        latest.failingChannels = failingChannels;
+      }
+    }
     params.onObservation?.(latest);
-    if (healthz === 200 && readyz === 200) {
+    if (latest.coreReady ?? (healthz === 200 && readyz === 200)) {
       return latest;
     }
     if (attempt + 1 < params.attempts) {
@@ -371,7 +395,16 @@ export async function confirmGatewayReachable(params: {
           result.gatewayVersion = identity.version;
           result.gatewayBuildId =
             typeof identity.buildId === "string" ? identity.buildId : undefined;
-          result.reachable = ready?.statusCode === 200 && readiness?.ready === true;
+          const failingChannels = readGatewayFailingChannels(ready);
+          result.reachable =
+            (ready?.statusCode === 200 && readiness?.ready === true) ||
+            failingChannels !== undefined;
+          if (failingChannels) {
+            result.channelRuntimeWarnings = failingChannels.map((id) => ({
+              id,
+              error: "channel readiness unavailable",
+            }));
+          }
         }
       } catch {
         // Older or non-Gateway HTTP listeners cannot supply candidate identity.

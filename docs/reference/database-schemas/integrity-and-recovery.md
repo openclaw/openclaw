@@ -570,6 +570,14 @@ in one worker transaction. Read-only admission and bundled status reads use the
 retrieval worker without creating or migrating a missing database. The released
 synchronous status API retains a lazily opened diagnostic reader.
 
+Memory facts readers retain semantic-chunk presence and invalidated-source flags
+under the persisted `memory_index_state.revision`. Each read still obtains the
+revision, metadata, and vector rebuild marker in one statement; unchanged
+revisions skip the corpus scans on both SQLite and PostgreSQL. Corpus writers,
+including legacy embedding invalidation, advance the revision in the same
+transaction. Transactional reads bypass the cache so a rollback cannot publish
+speculative facts under a revision that a later commit reuses.
+
 If nested rollback or savepoint cleanup fails, the transaction owner preserves the original failure, discards staged state and post-commit observers, and closes the connection. Catching that failure cannot resume writes on the abandoned handle. A later operation must acquire a fresh connection through its database owner. Doctor plugin-state imports retain earlier committed batches; an aborted batch cannot commit its prefix. Ordinary row refusals that successfully roll back their savepoint still commit the successful prefix for resumable imports.
 
 The shared cache targets 64 handles, but live borrows, synchronous transactions, and incognito state are not evicted. After owners release them, the next new connection trims idle handles back to that target.
@@ -1030,6 +1038,12 @@ checkpoint clears the warning; a large WAL alone does not mean a checkpoint is
 blocked. File-size observation failures are recorded and logged separately from
 SQLite's completion result; they do not turn a completed checkpoint into a failure.
 
+Non-quiet checkpoint logs use the same warning threshold, including explicit and
+final-close checkpoints; a blocked checkpoint still returns an incomplete result.
+Best-effort incremental vacuum quietly skips writer contention before its
+transaction starts and retries on the next maintenance pass. Failures after
+transaction entry retain their diagnostics.
+
 Periodic maintenance yields before native work so the Gateway event loop can
 continue. After yielding, it rechecks the same database owner, physical file,
 and captured maintenance authority. Retirement cancels and joins pending work.
@@ -1222,6 +1236,12 @@ this repair. If startup cannot repair the indexes, stop the Gateway and run
 `openclaw doctor --fix` with the Node version that will run the Gateway, then
 restart it. Switching SQLite versions again may require another rebuild,
 without changing stored content or the database schema.
+
+Update rehearsal snapshots and update database backups do not repair these
+indexes. When every finding names a canonical, schema-validated FTS table, they
+copy the database unchanged and leave the rebuild to the runtime that admits it,
+because a check under the target SQLite can flag an index the previous runtime
+reads correctly. Such a check is not recorded as a full verification.
 
 <a id="downgrades-are-unsupported" />
 

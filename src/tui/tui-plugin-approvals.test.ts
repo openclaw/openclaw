@@ -1,12 +1,7 @@
-import type { Component, OverlayHandle } from "@earendil-works/pi-tui";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
-import { createDeferred as deferred } from "../../test/helpers/promise.js";
-import {
-  captureChoicePromptSelector,
-  type TestChoiceSelector as TestSelector,
-} from "./components/choice-prompt.test-support.js";
+import { createChoicePromptHarness, createPendingRequests } from "./tui-overlay.test-support.js";
 import { createTuiPluginApprovalController } from "./tui-plugin-approvals.js";
 
 function approvalPayload(
@@ -33,17 +28,7 @@ function approvalPayload(
 }
 
 const controllers: Array<ReturnType<typeof createTuiPluginApprovalController>> = [];
-const pendingCleanup: Array<() => Promise<void>> = [];
-
-function pending<T>(fallback: T) {
-  const result = deferred<T>();
-  pendingCleanup.push(async () => {
-    result.resolve(fallback);
-    await Promise.allSettled([result.promise]);
-    await new Promise(setImmediate);
-  });
-  return result;
-}
+const { pending, cleanupPending } = createPendingRequests();
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
@@ -51,9 +36,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  for (const cleanup of pendingCleanup.splice(0)) {
-    await cleanup();
-  }
+  await cleanupPending();
   for (const controller of controllers) {
     controller.dispose();
   }
@@ -64,40 +47,18 @@ afterEach(async () => {
 });
 
 function createHarness() {
-  const selectors: TestSelector[] = [];
-  const addSystem = vi.fn();
-  const closeOverlay = vi.fn();
-  const overlayHandles: OverlayHandle[] = [];
-  const openOverlay = vi.fn((component: Component) => {
-    selectors.push(captureChoicePromptSelector(component));
-    const handle = {
-      hide: vi.fn(),
-      setHidden: vi.fn(),
-      isHidden: vi.fn(() => false),
-      focus: vi.fn(),
-      unfocus: vi.fn(),
-      isFocused: vi.fn(() => true),
-      getBounds: () => undefined,
-    } satisfies OverlayHandle;
-    overlayHandles.push(handle);
-    return handle;
-  });
-  const requestRender = vi.fn();
+  const ui = createChoicePromptHarness();
+  const { selectors, openOverlay } = ui;
   const resolvePluginApproval = vi.fn().mockResolvedValue({ ok: true });
   const listPluginApprovals = vi.fn().mockResolvedValue([]);
-  let agentId = "main";
-  let sessionKey = "agent:main:main";
   const controller = createTuiPluginApprovalController({
+    ...ui,
     client: { listPluginApprovals, resolvePluginApproval },
-    chatLog: { addSystem },
-    getAgentId: () => agentId,
-    getSessionKey: () => sessionKey,
-    openOverlay,
-    closeOverlay,
-    requestRender,
+    chatLog: ui,
   });
   controllers.push(controller);
   return {
+    ...ui,
     controller,
     request: (request = {}, overrides = {}) =>
       controller.handleEvent("plugin.approval.requested", approvalPayload(overrides, request)),
@@ -111,20 +72,8 @@ function createHarness() {
       vi.waitFor(() =>
         expect(resolvePluginApproval).toHaveBeenCalledWith("plugin:skill-1", "allow-once"),
       ),
-    selectors,
-    addSystem,
-    closeOverlay,
-    openOverlay,
-    overlayHandles,
-    requestRender,
     resolvePluginApproval,
     listPluginApprovals,
-    setAgentId: (value: string) => {
-      agentId = value;
-    },
-    setSessionKey: (value: string) => {
-      sessionKey = value;
-    },
   };
 }
 
@@ -220,31 +169,23 @@ describe("TUI plugin approvals", () => {
     },
   );
 
-  it("preserves requested events received while a refresh is in flight", async () => {
-    const harness = createHarness();
-    const pendingList = pending<unknown[]>([]);
-    harness.listPluginApprovals.mockReturnValueOnce(pendingList.promise);
-
-    const refresh = harness.controller.refresh();
-    harness.request();
-    pendingList.resolve([]);
-    await refresh;
-
-    expect(harness.openOverlay).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not resurrect resolved approvals from a stale refresh snapshot", async () => {
-    const harness = createHarness();
-    const pendingList = pending<unknown[]>([]);
-    harness.listPluginApprovals.mockReturnValueOnce(pendingList.promise);
-
-    const refresh = harness.controller.refresh();
-    harness.controller.handleEvent("plugin.approval.resolved", { id: "plugin:skill-1" });
-    pendingList.resolve([approvalPayload()]);
-    await refresh;
-
-    expect(harness.openOverlay).not.toHaveBeenCalled();
-  });
+  it.each(["requested", "resolved"])(
+    "preserves newer %s events over an in-flight refresh snapshot",
+    async (event) => {
+      const harness = createHarness();
+      const pendingList = pending<unknown[]>([]);
+      harness.listPluginApprovals.mockReturnValueOnce(pendingList.promise);
+      const refresh = harness.controller.refresh();
+      if (event === "requested") {
+        harness.request();
+      } else {
+        harness.controller.handleEvent("plugin.approval.resolved", { id: "plugin:skill-1" });
+      }
+      pendingList.resolve(event === "requested" ? [] : [approvalPayload()]);
+      await refresh;
+      expect(harness.openOverlay).toHaveBeenCalledTimes(event === "requested" ? 1 : 0);
+    },
+  );
 
   it("reruns a refresh requested while another refresh is in flight", async () => {
     const harness = createHarness();

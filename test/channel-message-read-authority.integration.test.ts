@@ -7,7 +7,7 @@ import { createOperationalRunInstanceRef } from "../src/agents/admitted-run-cont
 import { wrapToolWithGatewayCallerIdentity } from "../src/agents/tools/gateway-caller-context.js";
 import { createMessageTool } from "../src/agents/tools/message-tool-execution.js";
 import { dispatchChannelMessageAction } from "../src/channels/plugins/message-action-dispatch.js";
-import type { ChannelMessageActionContext } from "../src/channels/plugins/types.js";
+import type { ChannelMessageActionContext } from "../src/channels/plugins/types.core.js";
 import * as commandSecretGateway from "../src/cli/command-secret-gateway.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../src/config/config.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../src/gateway/agent-runtime-approval-authority.js";

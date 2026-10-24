@@ -19,6 +19,7 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { createPermitPool } from "../shared/permit-pool.js";
+import { AgentDatabaseSchemaAdmissionChangedError } from "./agent-database-admission-error.js";
 import {
   AgentDatabaseAdmissionError,
   assertAgentDatabaseAdmitted,
@@ -59,7 +60,7 @@ type PreparationInput = {
 type Activation = {
   isCurrent: () => boolean;
   preparationReady: Promise<void>;
-  openAgent: (input: PreparationInput) => Promise<void>;
+  openAgent: (input: PreparationInput) => Promise<AsyncDisposable | void>;
   migrateAgent: (input: PreparationInput) => Promise<void | { maintain: () => Promise<void> }>;
   publishAgent: (input: PreparationInput) => Promise<void>;
 };
@@ -506,6 +507,7 @@ class AgentDatabaseStartupAdmission {
             async () => {
               await assertNotDeleted();
               await preparePendingAgentDatabase(refusal, { env, assertCurrent }, async () => {
+                await using prepared = new AsyncDisposableStack();
                 const input = {
                   agentId,
                   paths,
@@ -519,7 +521,10 @@ class AgentDatabaseStartupAdmission {
                 try {
                   assertCurrent();
                   phase("open");
-                  await activation.openAgent(input);
+                  const opened = await activation.openAgent(input);
+                  if (opened) {
+                    prepared.use(opened);
+                  }
                 } finally {
                   release?.();
                 }
@@ -546,10 +551,10 @@ class AgentDatabaseStartupAdmission {
                     await activation.publishAgent(input);
                     break;
                   } catch (error) {
-                    if (
-                      !(error instanceof AgentDatabaseStartupSupersededError) ||
-                      attempt >= STARTUP_PUBLICATION_ATTEMPTS
-                    ) {
+                    const retryable =
+                      error instanceof AgentDatabaseStartupSupersededError ||
+                      error instanceof AgentDatabaseSchemaAdmissionChangedError;
+                    if (!retryable || attempt >= STARTUP_PUBLICATION_ATTEMPTS) {
                       throw error;
                     }
                     log.warn("agent database startup preparation was superseded; retrying", {

@@ -6,8 +6,8 @@ import {
 } from "../../../infra/agent-events.js";
 import { getAgentRunContext } from "../../../infra/agent-run-registry.js";
 import { sessionChanges } from "../../../sessions/session-row-changes.js";
-import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
 import type { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
+import { getRecordedSubagentChildAuthority } from "./subagent-registry-memory.js";
 import { SubagentRegistryMutationRejectedError } from "./subagent-registry-persistence.js";
 import { getLatestSubagentRunForChild } from "./subagent-registry-queries.js";
 import type {
@@ -110,7 +110,7 @@ export function createInterruptedRecoveryCoordinator(params: {
       warnedRetainedOwners = new WeakSet();
     },
     async recover(runId: string, entry: SubagentRunRecord): Promise<boolean> {
-      const authority = resolveSubagentChildAuthority(entry);
+      const authority = getRecordedSubagentChildAuthority(entry);
       if (authority.status === "mismatch") {
         const owner = getSubagentRunRuntimeKey(entry);
         if (!warnedRetainedOwners.has(owner)) {

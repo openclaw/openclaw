@@ -5,6 +5,7 @@ import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import "../../../components/tooltip.ts";
 import { TabPanel, Tabs } from "../../../components/solid/tabs.tsx";
+import { registerChatToolContentEnglish } from "../../../i18n/locales/en-chat-tool-content.ts";
 import type { ToolCard, ToolCardOutcome } from "../../../lib/chat/chat-types.ts";
 import type { DiffFilePaths } from "../../../lib/chat/tool-call-diff.ts";
 import { resolveToolCallView, type ToolCallView } from "../../../lib/chat/tool-call-view.ts";
@@ -19,12 +20,14 @@ import {
   TOOL_OUTPUT_PREVIEW_CHARS,
   formatToolOutput,
 } from "../../../lib/chat/tool-output.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { HighlightedCommand } from "./chat-command-highlight.solid.tsx";
 import { DiffBlock } from "./chat-diff-render.solid.tsx";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import { RawOutputToggle, ToolDataBlock, ToolOutcome } from "./chat-tool-content.solid.tsx";
 import { toolWorkspacePath, type ToolRenderOptions } from "./chat-tool-render-model.ts";
+
+registerEnglishCatalog(registerChatToolContentEnglish);
 
 const KV_MAX_KEYS = 12;
 const KV_MAX_VALUE_CHARS = 400;

@@ -44,12 +44,11 @@ export function hasOfficialExternalContractTarget(params: {
 }
 
 export function hasOfficialExternalWebContractEnvTarget(params: {
-  contract: keyof NonNullable<OfficialExternalPluginCatalogManifest["contracts"]>;
   env: NodeJS.ProcessEnv;
 }): boolean {
   return BUNDLED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_ENTRIES.some((entry) => {
     const manifest = entry.openclaw;
-    const contractIds = normalizeLowercaseStringSet(manifest?.contracts?.[params.contract] ?? []);
+    const contractIds = normalizeLowercaseStringSet(manifest?.contracts?.webFetchProviders ?? []);
     return manifest?.webSearchProviders?.some((provider) => {
       const providerId = normalizeOptionalLowercaseString(provider.id);
       return Boolean(

@@ -32,6 +32,15 @@ async function matchingNames(catalog: InstalledSkill[], query: string) {
 }
 
 describe("installed skill catalog", () => {
+  it("keeps an emoji whole at the description cap", async () => {
+    const prefix = "a".repeat(511);
+    const found = await searchInstalledSkills(
+      [skill("boundary-guide", `${prefix}😀tail`)],
+      "boundary-guide",
+    );
+    expect(found.skills[0]?.description).toBe(prefix);
+  });
+
   it("shares body postings across runs while binding results, readers, and permissions per run", async () => {
     const build = vi.spyOn(ranking, "buildLexicalIndex");
     const metadata = { name: "shared-guide", description: "Shared catalog metadata" };

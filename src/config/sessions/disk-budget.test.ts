@@ -81,6 +81,14 @@ async function writeArtifact(filePath: string, content: string, stale = false) {
   }
   return filePath;
 }
+async function writeArtifacts(dir: string, files: Record<string, number>) {
+  for (const [name, bytes] of Object.entries(files)) {
+    await writeArtifact(path.join(dir, name), "x".repeat(bytes));
+  }
+}
+const activeStore = (sessionId = "keep", extra: Partial<SessionEntry> = {}) => ({
+  "agent:main:main": { ...makeEntry(sessionId), ...extra },
+});
 async function evictionFixture(dir: string) {
   const storePath = path.join(dir, "sessions.json");
   const oldKey = "agent:main:subagent:old-worker";
@@ -98,14 +106,6 @@ async function expectPathExists(...targetPaths: string[]): Promise<void> {
 
 async function expectPathMissing(targetPath: string): Promise<void> {
   await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
-}
-
-function expectBudgetResult(
-  result: Awaited<ReturnType<typeof enforceSessionDiskBudget>>,
-): asserts result is NonNullable<Awaited<ReturnType<typeof enforceSessionDiskBudget>>> {
-  if (result === null) {
-    throw new Error("expected disk budget enforcement result");
-  }
 }
 
 function refreshPathBeforeSecondStat(targetPath: string): ReturnType<typeof vi.spyOn> {
@@ -128,24 +128,16 @@ function refreshPathBeforeSecondStat(targetPath: string): ReturnType<typeof vi.s
 describe("enforceSessionDiskBudget", () => {
   it("excludes migration archives from usage (#106875)", async ({ dir, storePath }) => {
     const databasePath = resolveSqliteTargetFromSessionStorePath(storePath).path;
-    if (!databasePath) {
-      throw new Error("expected a SQLite database path");
-    }
-    await fs.writeFile(databasePath, Buffer.alloc(100));
     // Rollback archives are recovery artifacts outside the session budget;
     // counting them would evict live history to pay for unreclaimable bytes.
-    await fs.writeFile(path.join(dir, "legacy.jsonl.migrated"), Buffer.alloc(4096));
-    await fs.writeFile(path.join(dir, "legacy.jsonl.migrated.2"), Buffer.alloc(4096));
-    for (const kind of ["branch", "openai-codex"]) {
-      await fs.writeFile(
-        path.join(dir, `legacy.jsonl.pre-doctor-${kind}-repair-2026-08-30T10-20-30-000Z.bak`),
-        Buffer.alloc(4096),
-      );
-    }
-
-    const usage = await measureSessionPhysicalDiskUsage(storePath);
-
-    expect(usage).toMatchObject({ totalBytes: 100 });
+    await writeArtifacts(dir, {
+      [path.basename(databasePath)]: 100,
+      "legacy.jsonl.migrated": 4096,
+      "legacy.jsonl.migrated.2": 4096,
+      "legacy.jsonl.pre-doctor-branch-repair-2026-08-30T10-20-30-000Z.bak": 4096,
+      "legacy.jsonl.pre-doctor-openai-codex-repair-2026-08-30T10-20-30-000Z.bak": 4096,
+    });
+    expect(await measureSessionPhysicalDiskUsage(storePath)).toMatchObject({ totalBytes: 100 });
   });
 
   it("counts durable fixed-store agent partitions and their WAL files", async ({ dir }) => {
@@ -178,18 +170,17 @@ describe("enforceSessionDiskBudget", () => {
       dir,
       `old-session.jsonl.deleted.${formatSessionArchiveTimestamp(Date.now() - 24 * 60 * 60 * 1000)}`,
     );
-    const store: Record<string, SessionEntry> = {
-      "agent:main:main": makeEntry(sessionId),
-    };
+    const store = activeStore(sessionId);
     await writeStore(storePath, store);
-    await fs.writeFile(transcriptPath, "k".repeat(80), "utf-8");
-    await fs.writeFile(archivePath, "a".repeat(260), "utf-8");
+    await writeArtifacts(dir, {
+      [path.basename(transcriptPath)]: 80,
+      [path.basename(archivePath)]: 260,
+    });
 
-    const result = await enforceBudget(storePath, store, 300, 220);
+    await enforceBudget(storePath, store, 300, 220);
 
     await expectPathExists(transcriptPath);
     await expectPathMissing(archivePath);
-    expect(result).toMatchObject({ removedFiles: 1, removedEntries: 0 });
   });
 
   it("reclaims stale store temps, not in-flight ones (#56827)", async ({ dir, storePath }) => {
@@ -197,20 +188,19 @@ describe("enforceSessionDiskBudget", () => {
     const transcriptPath = path.join(dir, `${sessionId}.jsonl`);
     const staleTemp = path.join(dir, "sessions.json.111.0f9c1a2b-3c4d-4e5f-8a9b-0c1d2e3f4a5b.tmp");
     const freshTemp = path.join(dir, "sessions.json.222.1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d.tmp");
-    const store: Record<string, SessionEntry> = {
-      "agent:main:main": makeEntry(sessionId),
-    };
+    const store = activeStore(sessionId);
     await writeStore(storePath, store);
-    await fs.writeFile(transcriptPath, "k".repeat(80), "utf-8");
-    await fs.writeFile(staleTemp, "s".repeat(300), "utf-8");
-    await fs.writeFile(freshTemp, "f".repeat(300), "utf-8");
+    await writeArtifacts(dir, {
+      [path.basename(transcriptPath)]: 80,
+      [path.basename(staleTemp)]: 300,
+      [path.basename(freshTemp)]: 300,
+    });
     await ageFile(staleTemp);
 
-    const result = await enforceBudget(storePath, store, 750, 600);
+    await enforceBudget(storePath, store, 750, 600);
 
     await expectPathMissing(staleTemp);
     await expectPathExists(freshTemp, transcriptPath);
-    expect(result).toMatchObject({ removedFiles: 1 });
   });
 
   it("excludes runtime-only skills from budget", async ({ storePath }) => {
@@ -227,9 +217,10 @@ describe("enforceSessionDiskBudget", () => {
     };
     const store = { [sessionKey]: entry };
 
-    const result = await enforceBudget(storePath, store, 2_048, 1_024);
+    const log = { warn: vi.fn(), info: vi.fn() };
+    await enforceBudget(storePath, store, 2_048, 1_024, { log });
 
-    expect(result).toMatchObject({ overBudget: false, removedEntries: 0 });
+    expect(log.warn).not.toHaveBeenCalled();
     expect(store[sessionKey]).toBe(entry);
     expect(entry.skillsSnapshot?.resolvedSkills).toBe(resolvedSkills);
   });
@@ -249,14 +240,16 @@ describe("enforceSessionDiskBudget", () => {
     await writeStore(storePath, store);
 
     const inlineBytes = Buffer.byteLength(JSON.stringify(store, null, 2), "utf8");
-    const result = await enforceBudget(
+    const log = { warn: vi.fn(), info: vi.fn() };
+    await enforceBudget(
       storePath,
       store,
       Math.floor(inlineBytes / 2),
       Math.floor(inlineBytes / 3),
+      { log },
     );
 
-    expect(result).toMatchObject({ overBudget: false, removedEntries: 0 });
+    expect(log.warn).not.toHaveBeenCalled();
     expect(Object.keys(store)).toHaveLength(12);
   });
 
@@ -285,9 +278,8 @@ describe("enforceSessionDiskBudget", () => {
     await expectPathExists(oldBlob, activeBlob);
     await ageFile(oldBlob, 10 * 60_000);
 
-    const result = await enforceBudget(storePath, store, 1, 1, commitStore(storePath, store));
+    await enforceBudget(storePath, store, 1, 1, commitStore(storePath, store));
 
-    expectBudgetResult(result);
     expect(store).not.toHaveProperty(oldKey);
     expect(store).toHaveProperty(activeKey);
     await expectPathMissing(oldBlob);
@@ -295,18 +287,15 @@ describe("enforceSessionDiskBudget", () => {
   });
 
   it("revalidates prompt blob age before removal", async ({ dir, storePath }) => {
-    const store: Record<string, SessionEntry> = {
-      "agent:main:active": makeEntry("active"),
-    };
+    const store = { "agent:main:active": makeEntry("active") };
     const hash = "d".repeat(64);
     const blobPath = promptBlob(dir, hash);
     await writeStore(storePath, store);
     await writeArtifact(blobPath, "stale prompt blob".repeat(200), true);
     const statSpy = refreshPathBeforeSecondStat(blobPath);
     try {
-      const result = await enforceBudget(storePath, store, 1, 1);
+      await enforceBudget(storePath, store, 1, 1);
 
-      expect(result).toMatchObject({ overBudget: true, removedFiles: 0 });
       await expectPathExists(blobPath);
     } finally {
       statSpy.mockRestore();
@@ -314,18 +303,15 @@ describe("enforceSessionDiskBudget", () => {
   });
 
   it("reclaims stale skills prompt blob temps under pressure", async ({ dir, storePath }) => {
-    const store: Record<string, SessionEntry> = {
-      "agent:main:main": makeEntry("keep"),
-    };
+    const store = activeStore();
     const hash = "a".repeat(64);
     const tempPath = `${promptBlob(dir, hash)}.123.11111111-1111-4111-8111-111111111111.tmp`;
     await writeStore(storePath, store);
     await writeArtifact(tempPath, "t".repeat(2000), true);
 
-    const result = await enforceBudget(storePath, store, 1000, 500);
+    await enforceBudget(storePath, store, 1000, 500);
 
     await expectPathMissing(tempPath);
-    expect(result).toMatchObject({ removedFiles: 1, removedEntries: 0 });
   });
 
   it("preserves referenced legacy checkpoints", async ({ dir, storePath }) => {
@@ -360,11 +346,10 @@ describe("enforceSessionDiskBudget", () => {
     await fs.utimes(referencedCheckpointPath, new Date(0), new Date(0));
     await fs.writeFile(referencedPostCompactionPath, "p".repeat(260), "utf-8");
 
-    const result = await enforceBudget(storePath, store, 4000, 3000);
+    await enforceBudget(storePath, store, 4000, 3000);
 
     await expectPathMissing(checkpointPath);
     await expectPathExists(transcriptPath, referencedCheckpointPath, referencedPostCompactionPath);
-    expect(result).toMatchObject({ removedFiles: 1, removedEntries: 0 });
   });
 
   it("preserves custom transcript sidecars, not orphans", async ({ dir, storePath }) => {
@@ -374,22 +359,21 @@ describe("enforceSessionDiskBudget", () => {
     const referencedPointer = path.join(dir, "keep.log.trajectory-path.json");
     const orphanRuntime = path.join(dir, "old.trajectory.jsonl");
     const orphanPointer = path.join(dir, "old.trajectory-path.json");
-    const store: Record<string, SessionEntry> = {
-      "agent:main:main": Object.assign(makeEntry(sessionId), { sessionFile: transcriptPath }),
-    };
+    const store = activeStore(sessionId, { sessionFile: transcriptPath });
     await writeStore(storePath, store);
-    await fs.writeFile(transcriptPath, "k".repeat(80), "utf-8");
-    await fs.writeFile(referencedRuntime, "r".repeat(80), "utf-8");
-    await fs.writeFile(referencedPointer, "p".repeat(80), "utf-8");
-    await fs.writeFile(orphanRuntime, "o".repeat(5000), "utf-8");
-    await fs.writeFile(orphanPointer, "q".repeat(5000), "utf-8");
+    await writeArtifacts(dir, {
+      "keep.log": 80,
+      "keep.log.trajectory.jsonl": 80,
+      "keep.log.trajectory-path.json": 80,
+      "old.trajectory.jsonl": 5000,
+      "old.trajectory-path.json": 5000,
+    });
 
-    const result = await enforceBudget(storePath, store, 7000, 2000);
+    await enforceBudget(storePath, store, 7000, 2000);
 
     await expectPathExists(transcriptPath, referencedRuntime, referencedPointer);
     await expectPathMissing(orphanRuntime);
     await expectPathMissing(orphanPointer);
-    expect(result).toMatchObject({ removedFiles: 2, removedEntries: 0 });
   });
 
   it("retains the evicted transcript when the index commit fails", async ({ dir }) => {
@@ -410,11 +394,9 @@ describe("enforceSessionDiskBudget", () => {
   it("retains evicted artifacts when no durable index commit is available", async ({ dir }) => {
     const { storePath, oldKey, store, oldTranscript } = await evictionFixture(dir);
 
-    const result = await enforceBudget(storePath, store, 100, 100);
+    await enforceBudget(storePath, store, 100, 100);
 
-    expectBudgetResult(result);
-    expect(result).toMatchObject({ removedEntries: 1, removedFiles: 0 });
-    expect(result.totalBytesAfter).toBeGreaterThan(result.highWaterBytes);
+    expect((await measureSessionPhysicalDiskUsage(storePath)).totalBytes).toBeGreaterThan(100);
     expect(store[oldKey]).toBeUndefined();
     await expectPathExists(oldTranscript);
   });
@@ -431,7 +413,7 @@ describe("enforceSessionDiskBudget", () => {
       maxDiskBytes: 200_000,
       highWaterBytes: 0,
     });
-    const result = await enforceBudget(
+    await enforceBudget(
       storePath,
       store,
       maintenance.maxDiskBytes,
@@ -440,8 +422,9 @@ describe("enforceSessionDiskBudget", () => {
     );
 
     expect(maintenance.highWaterBytes).toBe(160_000);
-    expectBudgetResult(result);
-    expect(result.totalBytesAfter).toBeLessThanOrEqual(160_000);
+    expect((await measureSessionPhysicalDiskUsage(storePath)).totalBytes).toBeLessThanOrEqual(
+      160_000,
+    );
     expect(store).toHaveProperty("agent:main:subagent:worker-4");
     await expectPathExists(path.join(dir, "worker-4.jsonl"));
   });
@@ -523,7 +506,7 @@ it.each([
   },
 );
 
-it("counts shared empty evicted artifacts once", async ({ dir, storePath }) => {
+it("removes shared empty evicted artifacts", async ({ dir, storePath }) => {
   const artifacts = await Promise.all(
     ["old.jsonl", "old.trajectory.jsonl", "old.trajectory-path.json", PROMPT_FILE].map((name) =>
       writeOldFile(dir, name),
@@ -544,14 +527,8 @@ it("counts shared empty evicted artifacts once", async ({ dir, storePath }) => {
   await fs.writeFile(storePath, JSON.stringify(store, null, 2));
   await fs.writeFile(path.join(dir, "filler.bin"), Buffer.alloc(128));
 
-  const result = await enforceBudget(storePath, store, 64, 64, commitStore(storePath, store));
+  await enforceBudget(storePath, store, 64, 64, commitStore(storePath, store));
 
-  expect(result).toMatchObject({
-    removedEntries: 2,
-    removedFiles: artifacts.length,
-    freedBytes: 0,
-    totalBytesAfter: 130,
-  });
   expect(store).toEqual({});
   expect(artifacts.map((artifact) => nodeFs.existsSync(artifact))).toEqual(
     artifacts.map(() => false),
@@ -601,6 +578,7 @@ it("does not count an empty file removed by another cleanup before rm", async ({
   const artifact = await writeOldFile(dir, "orphan.jsonl");
   await fs.writeFile(path.join(dir, "filler.bin"), Buffer.alloc(128));
   const originalRm = nodeFs.promises.rm.bind(nodeFs.promises);
+  const log = { warn: vi.fn(), info: vi.fn() };
   const rm = vi.spyOn(nodeFs.promises, "rm").mockImplementation(async (target, options) => {
     if (target === artifact) {
       await originalRm(target);
@@ -608,9 +586,13 @@ it("does not count an empty file removed by another cleanup before rm", async ({
     return originalRm(target, options);
   });
   try {
-    const result = await enforceBudget(storePath, {}, 64, 64);
+    await enforceBudget(storePath, {}, 64, 64, { log });
 
-    expect(result).toMatchObject({ removedFiles: 0, freedBytes: 0 });
+    expect(log.warn).toHaveBeenCalledWith(
+      "session disk budget still above high-water target after cleanup",
+      expect.objectContaining({ removedFiles: 0, removedEntries: 0 }),
+    );
+    expect(log.info).not.toHaveBeenCalled();
     await expect(fs.stat(artifact)).rejects.toMatchObject({ code: "ENOENT" });
   } finally {
     rm.mockRestore();

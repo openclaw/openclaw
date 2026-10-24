@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
   controlUiSessionUrl,
   createSessionManagementE2eSuite,
@@ -67,11 +68,7 @@ suite.define(() => {
         ],
       });
       await suite.withPage(
-        {
-          locale: "en-US",
-          serviceWorkers: "block",
-          viewport: { width: 1280, height: 1000 },
-        },
+        { ...createControlUiE2eContextOptions(), viewport: { width: 1280, height: 1000 } },
         async ({ page }) => {
           const gateway = await installMockGateway(page, {
             sessions: [parent, selected, ...children],
@@ -117,7 +114,6 @@ suite.define(() => {
           await expect
             .poll(() => childList.locator(":scope > [data-session-tree]").count())
             .toBe(9);
-          // Wait for fonts before measuring row displacement.
           await page.evaluate(async () => {
             await document.fonts.ready;
           });
@@ -171,17 +167,14 @@ suite.define(() => {
             updatedAt: baseTime + 300,
           });
           await gateway.waitForRequest("sessions.list", { after: rootRequests, match: rootMatch });
-          // A sent request does not prove publication. Wait for the canonical owner
-          // to admit the exact cached page before awaiting the resulting paint.
+          // Wait for owner publication, not just the request, before checking paint.
           await expect
             .poll(() => evaluateControlUiContext(page, ({ sessions }) => sessions.state.result?.ts))
             .toBe(cachedRoot.ts);
           await page.evaluate(
             () =>
-              new Promise<void>((resolve) => {
-                requestAnimationFrame(() => {
-                  requestAnimationFrame(() => resolve());
-                });
+              new Promise<number>((resolve) => {
+                requestAnimationFrame(() => requestAnimationFrame(resolve));
               }),
           );
           const finalKeys = await keys();

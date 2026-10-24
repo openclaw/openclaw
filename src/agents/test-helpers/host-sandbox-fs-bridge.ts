@@ -47,15 +47,12 @@ export function createSandboxFsBridgeFromResolver(
       transfer("copy", sourcePath, destinationPath, cwd, mkdir),
     readFile: async ({ filePath, cwd }) => fs.readFile(hostPath(filePath, cwd)),
     writeFile: async ({ filePath, cwd, data, mkdir = true }) => {
-      const target = await prepareWrite(filePath, cwd, mkdir);
-      const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
-      await fs.writeFile(target, buffer);
+      await fs.writeFile(await prepareWrite(filePath, cwd, mkdir), data);
     },
     createFileExclusive: async ({ filePath, cwd, data, mkdir = true }) => {
       const target = await prepareWrite(filePath, cwd, mkdir);
-      const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
       try {
-        await fs.writeFile(target, buffer, { flag: "wx" });
+        await fs.writeFile(target, data, { flag: "wx" });
         return "created";
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === "EEXIST") {

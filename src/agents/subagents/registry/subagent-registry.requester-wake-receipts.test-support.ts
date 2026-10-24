@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
@@ -15,9 +14,7 @@ import { subagentRuns } from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
-import type { GatewayRequest } from "./subagent-registry.lifecycle-fixture.test-support.js";
-import type { createLifecycleWaits } from "./subagent-registry.lifecycle-waits.test-support.js";
-import type { PrepareRequesterWakeChildSession } from "./subagent-registry.requester-wake-session.test-support.js";
+import type { RequesterWakeFixture } from "./subagent-registry.requester-wake-session.test-support.js";
 import * as registry from "./subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { getSubagentRunRuntimeKey, isSameSubagentRunOwner } from "./subagent-run-generation.js";
@@ -198,6 +195,7 @@ export function registerRequesterWakeReceiptBoundaryTests({
   requesterSessionKey,
   prepareChildSession,
   spawnVisibleChild,
+  settleTurn,
   emitCompleted,
   flushOwnedWork,
   waitForDeliveredCleanup,
@@ -210,27 +208,7 @@ export function registerRequesterWakeReceiptBoundaryTests({
   holdAgentCall,
   releaseAgentCall,
   onReceiptsHeld,
-}: {
-  requesterSessionKey: string;
-  prepareChildSession: PrepareRequesterWakeChildSession;
-  spawnVisibleChild: (params: {
-    runId: string;
-    childSessionKey: string;
-    requesterTurnRunId: string;
-    expectsCompletionMessage: boolean;
-  }) => Promise<void>;
-  emitCompleted: (
-    runId: string,
-    childSessionKey: string,
-    text: string,
-    modelRouteChange?: string,
-  ) => void;
-  flushOwnedWork: () => Promise<void>;
-  waitForDeliveredCleanup: ReturnType<typeof createLifecycleWaits>["waitForDeliveredCleanup"];
-  waitForAgentCallCount: (count: number) => Promise<void>;
-  getRequesterWakeCalls: () => GatewayRequest[];
-  createGatewayContext: () => GatewayRequestContext;
-  statePath: (...parts: string[]) => string;
+}: RequesterWakeFixture & {
   sendMessageMock: typeof import("../../../infra/outbound/message.js").sendMessage;
   setEmptyReply: (value: boolean) => void;
   setWakeRefusal: (wake: boolean, persistence: boolean) => void;
@@ -337,24 +315,7 @@ export function registerRequesterWakeReceiptBoundaryTests({
     ).resolves.toMatchObject({ details: { status: "yielded" } });
 
     setWakeRefusal(rejectRequesterWake, rejectPersistence);
-    const { withLocalSessionPlacementTurnSettlement } =
-      await import("../../session-placement-admission.js");
-    await withLocalSessionPlacementTurnSettlement(
-      {
-        sessionId: "sess-main",
-        sessionKey: requesterSessionKey,
-        agentId: "main",
-        runId: requesterTurnRunId,
-      },
-      async () => ({
-        acceptedSessionSpawns: [alpha, beta],
-        meta: {
-          durationMs: 1,
-          yielded: true,
-          executionTrace: { runner: "cli", attempts: [], fallbackUsed: false },
-        },
-      }),
-    );
+    await settleTurn(requesterTurnRunId, [alpha, beta]);
     if (heldReceipts) {
       const members = await heldReceipts.transition.entered.promise;
       expect(members).toHaveLength(2);

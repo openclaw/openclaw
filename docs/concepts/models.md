@@ -195,8 +195,9 @@ also refresh the affected catalog. Use **Refresh** in Models or
 released models. **Retry** requests discovery again after a failure.
 
 If a credential refresh loses its plugin generation, OpenClaw retries publication
-once against current plugins. If that retry fails, the recorded failure and Gateway
-warning identify the failed fresh-generation retry.
+once against current plugins. If a newer publication supersedes that refresh,
+waiting requests adopt its result instead of failing on the obsolete publication.
+A failed fresh-generation retry still records the failure and emits a Gateway warning.
 
 For models configured to use a CLI runtime, channel picker availability follows that
 runtime's prepared authentication. A provider API key does not substitute for its
@@ -325,6 +326,9 @@ openclaw config set agents.defaults.modelPolicy.allow '["openai/gpt-5.4","anthro
 ```
 
 `openclaw models set`, provider setup, and `openclaw models aliases add` can add entries under `agents.defaults.models`, but they never change `modelPolicy.allow`. This keeps model metadata and aliases independent from override policy.
+
+On a fresh installation, provider-added aliases and runtime settings remain metadata;
+they do not create a one-model allowlist. Existing explicit model policies remain enforced.
 
 ### Choose the same model with different runtimes
 

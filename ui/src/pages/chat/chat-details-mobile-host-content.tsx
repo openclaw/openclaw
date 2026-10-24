@@ -1,9 +1,11 @@
 import { For, Show, createMemo, createSignal, onSettled } from "solid-js";
 import type { ControlUiSessionPullRequestSnapshot } from "../../../../src/gateway/control-ui-contract.js";
 import { PanelLoadingSkeleton } from "../../components/solid/panel-loading-skeleton.tsx";
+import { registerChatDetailsEnglish } from "../../i18n/locales/en-chat-details.ts";
+import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { elementRef } from "../../lib/reactive/element-ref.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { scopedSessionArtifactKey } from "../../lib/sessions/session-key.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { ContentPresentation } from "../../lib/solid/presentation.ts";
@@ -17,6 +19,7 @@ import {
   ChatDetailsMobileControls,
   type ChatDetailsMobilePage,
 } from "./components/chat-details-mobile-content.tsx";
+import { createDetailsProcessesPresentation } from "./components/chat-details-processes-presentation.ts";
 import type { ChatDetailsProps } from "./components/chat-details-types.ts";
 import { chatPullRequestId, retainedPublication } from "./components/chat-pull-requests.ts";
 import { syncSessionPanelInputs, useSessionPanel } from "./components/chat-session-panel.tsx";
@@ -25,6 +28,9 @@ import type { PreparedChatSessionSharing } from "./components/chat-session-shari
 import type { ChatSessionVersionsMobileProps } from "./components/chat-session-versions-mobile.tsx";
 import { createSessionAutomationInventory } from "./components/chat-summary-automations.tsx";
 import { ProcessesPanelData } from "./processes-panel-data.ts";
+
+registerEnglishCatalog(registerChatSessionEnglish);
+registerEnglishCatalog(registerChatDetailsEnglish);
 
 export type MobileDetailsBindings = {
   sharing?: PreparedChatSessionSharing;
@@ -105,13 +111,24 @@ function MobileHostContent(
         },
       )
     : () => undefined;
+  const detailsProcesses = createDetailsProcessesPresentation(() => ({
+    sessionKey: props.details.sessionKey,
+    agentId: props.details.currentAgentId ?? "main",
+    rows: processes()?.snapshot.rows ?? [],
+  }));
   const processData = createMemo(() => {
     const data = processes();
     if (!data) {
       return undefined;
     }
-    const { rows, error, loading } = data.snapshot;
-    return { rows, error, loading, refresh: () => data.refresh() };
+    const { error, errorKind, loading } = data.snapshot;
+    return {
+      rows: detailsProcesses.rows(),
+      error,
+      errorKind,
+      loading,
+      refresh: () => data.refresh(),
+    };
   });
   const route = () => props.host.destination.page?.details;
   const activePeople = createMemo(() =>

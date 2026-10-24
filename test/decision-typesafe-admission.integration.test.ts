@@ -1,16 +1,11 @@
-import fs from "node:fs";
-import { createServer } from "node:http";
-import path from "node:path";
 import { fileURLToPath } from "node:url";
 import * as providerHttp from "openclaw/plugin-sdk/provider-http";
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { resolveAgentDir } from "../src/agents/agent-scope.js";
 import { evaluateAttemptDecisionToolPrefilter } from "../src/agents/embedded-agent-runner/run/attempt-decision-prefilter.js";
 import { acquireAgentRunPreparedModelRuntime } from "../src/agents/prepared-model-runtime.js";
-import { resetPreparedModelRuntimeSnapshotsForTest } from "../src/agents/prepared-model-runtime.test-support.js";
 import { createDecisionTool } from "../src/agents/tools/decision-tool.js";
 import {
-  clearRuntimeConfigSnapshot,
   getRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../src/config/runtime-snapshot.js";
@@ -18,28 +13,18 @@ import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { prepareDecisionProviderReload } from "../src/decisions/runtime.js";
 import { createPluginRuntimeMock } from "../src/plugin-sdk/test-helpers/plugin-runtime-mock.js";
 import { runPluginRegisterSyncInRegistry } from "../src/plugins/loader-module-runtime.js";
-import { createPluginRecord } from "../src/plugins/loader-records.js";
-import { resetPluginLoaderTestStateForTest } from "../src/plugins/loader.test-fixtures.js";
 import { getPluginInstance } from "../src/plugins/plugin-instance-scope.js";
-import { clearPluginMetadataLifecycleCaches } from "../src/plugins/plugin-metadata-lifecycle.js";
-import { resolvePluginMetadataSnapshot } from "../src/plugins/plugin-metadata-snapshot.js";
 import { createTestPluginRegistry } from "../src/plugins/registry-runtime.test-helpers.js";
 import { setActivePluginRegistry } from "../src/plugins/runtime.js";
-import { createColdPluginHermeticEnv } from "../src/plugins/test-helpers/cold-plugin-fixtures.js";
 import { clearSecretsRuntimeSnapshotState } from "../src/secrets/runtime-state.js";
 import { createDeferredCore } from "../src/shared/deferred.js";
-import { withEnvAsync } from "../src/test-utils/env.js";
-import { reserveTestPortListener } from "../src/test-utils/port-claims.js";
-import { VERSION } from "../src/version.js";
-import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
-
-const roots = useAutoCleanupTempDirTracker(afterEach);
+import {
+  admissionPlugin,
+  resetAdmissionState,
+  withAdmissionFixture,
+} from "./decision-admission.test-support.js";
 
 it("lets admitted TypeSafe work finish after opt-out while preserving independent final-I/O guards", async () => {
-  const root = roots.make("decision-typesafe-admission-");
-  const emptyBundled = path.join(root, "bundled");
-  fs.mkdirSync(emptyBundled);
-  const workspaceDir = path.join(root, "workspace");
   const loading = createDeferredCore();
   const release = createDeferredCore();
   // Prepare the real client outside the request deadline; suspend only its lazy import.
@@ -49,73 +34,43 @@ it("lets admitted TypeSafe work finish after opt-out while preserving independen
     await release.promise;
     return original;
   });
-  let requests = 0;
-  const server = await reserveTestPortListener({
-    offsets: [0],
-    createListener: () =>
-      createServer((req, res) => {
-        requests++;
-        req.resume();
-        req.on("end", () => {
-          res.setHeader("Content-Type", "application/json");
-          res.end(
-            JSON.stringify({
-              model: "kev-latest",
-              answers: {
-                missing_request_context: { type: "noul", noul: 0.05 },
-                next_response_needs_tools: { type: "noul", noul: 0.05 },
-              },
-              usage: { input_tokens: 40, output_tokens: 2 },
-              latency_ms: 1,
-            }),
-          );
-        });
-      }),
-  });
-  const config = (decisionAssistance: boolean): OpenClawConfig => ({
-    agents: {
-      defaults: {
-        experimental: { decisionAssistance },
-        decisionModel: "typesafe/kev-latest",
-        workspace: workspaceDir,
-      },
-    },
-    plugins: {
-      load: { paths: [fileURLToPath(new URL("../extensions/typesafe", import.meta.url))] },
-      slots: { memory: "none" },
-      entries: {
-        typesafe: { enabled: true, config: { baseUrl: "http://localhost:" + server.claim.port } },
-      },
-    },
-  });
   try {
-    await withEnvAsync(
+    await withAdmissionFixture(
+      "typesafe",
       {
-        ...createColdPluginHermeticEnv(root, { bundledPluginsDir: emptyBundled }),
-        OPENCLAW_COMPATIBILITY_HOST_VERSION: VERSION,
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-        OPENCLAW_STATE_DIR: path.join(root, "state"),
+        model: "kev-latest",
+        answers: {
+          missing_request_context: { type: "noul", noul: 0.05 },
+          next_response_needs_tools: { type: "noul", noul: 0.05 },
+        },
+        usage: { input_tokens: 40, output_tokens: 2 },
+        latency_ms: 1,
       },
-      async () => {
-        const metadata = resolvePluginMetadataSnapshot({
-          config: config(true),
-          env: process.env,
-          workspaceDir,
+      async ({ state, baseUrl, received }) => {
+        const workspaceDir = state.workspaceDir;
+        const port = new URL(baseUrl).port;
+        const config = (decisionAssistance: boolean): OpenClawConfig => ({
+          agents: {
+            defaults: {
+              experimental: { decisionAssistance },
+              decisionModel: "typesafe/kev-latest",
+              workspace: workspaceDir,
+            },
+          },
+          plugins: {
+            load: { paths: [fileURLToPath(new URL("../extensions/typesafe", import.meta.url))] },
+            slots: { memory: "none" },
+            entries: {
+              typesafe: { enabled: true, config: { baseUrl: "http://localhost:" + port } },
+            },
+          },
         });
-        const manifest = metadata.byPluginId.get("typesafe");
-        if (!manifest) {
-          throw new Error("Missing source TypeSafe metadata");
-        }
+        const { metadata, record } = admissionPlugin("typesafe", config(true), workspaceDir);
         const builder = createTestPluginRegistry(
           createPluginRuntimeMock({
             config: { current: () => getRuntimeConfigSnapshot() ?? config(true) },
           }),
         );
-        const record = createPluginRecord({
-          ...manifest,
-          enabled: true,
-          configSchema: Boolean(manifest.configSchema),
-        });
         let authorityError: Error | undefined;
         const turn = (cfg: OpenClawConfig) =>
           evaluateAttemptDecisionToolPrefilter({
@@ -148,7 +103,7 @@ it("lets admitted TypeSafe work finish after opt-out while preserving independen
           // the suspended import and DNS below exercise admission, not cold setup.
           providerHttp.resolveProviderHttpRequestConfigWithOriginTrust({
             provider: "typesafe",
-            baseUrl: "http://localhost:" + server.claim.port + "/v1",
+            baseUrl: "http://localhost:" + port + "/v1",
             defaultBaseUrl: "https://api.typesafe.ai/v1",
           });
           // Retain Vitest imports for deterministic I/O gates, but use the discovered
@@ -179,7 +134,6 @@ it("lets admitted TypeSafe work finish after opt-out while preserving independen
               expect.objectContaining({ provider: "typesafe", id: "kev-latest" }),
             ]),
           );
-          const started = performance.now();
           const pending = turn(initial);
           await Promise.race([
             loading.promise,
@@ -189,31 +143,19 @@ it("lets admitted TypeSafe work finish after opt-out while preserving independen
               );
             }),
           ]);
-          const clientReadyMs = performance.now() - started;
           const disabledConfig = config(false);
           setRuntimeConfigSnapshot(disabledConfig);
           release.resolve();
           const admitted = await pending;
-          const admittedRequests = requests;
+          const admittedRequests = received.length;
           const skipped = await turn(disabledConfig);
           expect(skipped).toMatchObject({ status: "skipped", shouldPruneTools: false });
-          expect(requests).toBe(admittedRequests);
+          expect(received).toHaveLength(admittedRequests);
           const allowedConfig = config(true);
           setRuntimeConfigSnapshot(allowedConfig);
           const allowed = await turn(allowedConfig);
-          console.info(
-            JSON.stringify({
-              admittedRequests,
-              allowedRequests: requests - admittedRequests,
-              admitted: admitted.status,
-              clientReadyMs,
-              elapsedMs: performance.now() - started,
-              nextTurn: skipped.status,
-              allowed: allowed.status,
-            }),
-          );
           expect(allowed).toMatchObject({ status: "proposed", shouldPruneTools: true });
-          expect(requests - admittedRequests).toBe(1);
+          expect(received.length - admittedRequests).toBe(1);
           expect(admitted).toMatchObject({ status: "proposed", shouldPruneTools: true });
           expect(admittedRequests).toBe(1);
 
@@ -232,7 +174,7 @@ it("lets admitted TypeSafe work finish after opt-out while preserving independen
             const resolved = createDeferredCore();
             setRuntimeConfigSnapshot(config(true));
             const localConfig = getRuntimeConfigSnapshot()!;
-            const before = requests;
+            const before = received.length;
             const originalError = new Error("synthetic authority closed");
             const intercepted = vi
               .spyOn(providerHttp, "fetchWithProviderHttpGuard")
@@ -284,7 +226,7 @@ it("lets admitted TypeSafe work finish after opt-out while preserving independen
                     entries: {
                       typesafe: {
                         enabled: true,
-                        config: { baseUrl: "http://127.0.0.1:" + server.claim.port },
+                        config: { baseUrl: "http://127.0.0.1:" + port },
                       },
                     },
                   },
@@ -321,7 +263,7 @@ it("lets admitted TypeSafe work finish after opt-out while preserving independen
                   },
                 });
               }
-              expect(requests - before).toBe(change === "optout" ? 1 : 0);
+              expect(received.length - before).toBe(change === "optout" ? 1 : 0);
               if (change === "optout") {
                 expect(
                   builder.registry.decisionProviders[0]!.host.inspect(localConfig),
@@ -330,9 +272,6 @@ it("lets admitted TypeSafe work finish after opt-out while preserving independen
                   activeRequests: 0,
                 });
               }
-              console.info(
-                JSON.stringify({ preparationRevocation: change, requests: requests - before }),
-              );
             } finally {
               resolved.resolve();
               authorityError = undefined;
@@ -343,7 +282,7 @@ it("lets admitted TypeSafe work finish after opt-out while preserving independen
           setRuntimeConfigSnapshot(optedOut);
           const explicit = createDecisionTool("main", { config: optedOut });
           expect(explicit).not.toBeNull();
-          const beforeExplicit = requests;
+          const beforeExplicit = received.length;
           const evaluation = await explicit!.execute("explicit", {
             state: "hello",
             questions: {
@@ -352,23 +291,17 @@ it("lets admitted TypeSafe work finish after opt-out while preserving independen
             },
           });
           expect(evaluation.details).toMatchObject({ status: "ok" });
-          expect(requests - beforeExplicit).toBe(1);
-          console.info(JSON.stringify({ explicitLabsOffRequests: requests - beforeExplicit }));
+          expect(received.length - beforeExplicit).toBe(1);
         } finally {
           release.resolve();
           prepareDecisionProviderReload(builder.registry, new Set([record.id]));
           await getPluginInstance(record)?.dispose();
-          await resetPreparedModelRuntimeSnapshotsForTest();
-          clearPluginMetadataLifecycleCaches();
-          resetPluginLoaderTestStateForTest();
-          clearRuntimeConfigSnapshot();
+          await resetAdmissionState(true);
         }
       },
     );
   } finally {
     release.resolve();
     vi.doUnmock("../extensions/typesafe/src/client.js");
-    await server.releaseListener();
-    await server.claim.release();
   }
 });

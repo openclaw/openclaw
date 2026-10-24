@@ -1,8 +1,8 @@
 // Bound ACP events must persist a coherent source or target session owner.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createMockSubsystemLogger } from "../../../test/helpers/mock-subsystem-logger.js";
 import { emitAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.js";
 import { heartbeatNotifications } from "../../infra/heartbeat-events.js";
-import type { SubsystemLogger } from "../../logging/subsystem.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import {
   createChatRunState,
@@ -38,18 +38,7 @@ vi.mock("../session-lifecycle-state.js", async (importOriginal) => ({
 }));
 const { startGatewayEventSubscriptions } = await import("../server-runtime-subscriptions.js");
 type SubscriptionParams = Parameters<typeof startGatewayEventSubscriptions>[0];
-const mockLog: SubsystemLogger = {
-  subsystem: "gateway-test",
-  isEnabled: () => true,
-  trace: vi.fn(),
-  debug: vi.fn(),
-  info: vi.fn(),
-  warn: vi.fn(),
-  error: vi.fn(),
-  fatal: vi.fn(),
-  raw: vi.fn(),
-  child: () => mockLog,
-};
+const mockLog = createMockSubsystemLogger("gateway-test", { isEnabled: () => true });
 function createParams(): SubscriptionParams {
   const chatRunState = createChatRunState();
   return {

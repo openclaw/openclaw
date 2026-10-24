@@ -231,8 +231,16 @@ function prepareBlockedSubagentCompletion(
   } else {
     subagent.suppressCompletionDelivery = true;
   }
+  // A recovered requester already exhausted its turn. A system event would start
+  // another model turn just to report that failure; retain it on delivery instead.
+  const requesterRecoveryFailed =
+    (requesterOutcome?.reason === "visible_reply_missing" &&
+      requesterOutcome.disposition === "permanent_failure") ||
+    (subagent.delivery?.lastDropReason === "visible_reply_missing" &&
+      isCompletedRequesterDeliveryBlocked(subagent));
   const text =
     successful &&
+    !requesterRecoveryFailed &&
     !params.storeReplaced &&
     !params.operatorAuthorityUnavailable &&
     requesterOutcome?.reason !== "operator_authority_unavailable"

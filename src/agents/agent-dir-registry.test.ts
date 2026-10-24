@@ -103,21 +103,7 @@ describe("agent directory registry", () => {
     expect(ownerOf(agentDir, env)).toBe("main");
   });
 
-  it("reuses prepared directory identity for repeated registration and reverse lookup", () => {
-    const agentDir = tempDirs.make("openclaw-agent-dir-prepared-");
-    using _ = registered({ agentId: "main", agentDir });
-    using realpath = vi.spyOn(fs.realpathSync, "native");
-    for (let i = 0; i < 10; i++) {
-      expect(registerDir({ agentId: "main", agentDir })).toBe(false);
-      expect(ownerOf(agentDir)).toBe("main");
-    }
-    expect(realpath).not.toHaveBeenCalled();
-    // Destructive admission callers still request a current physical path.
-    expect(normalizePath(agentDir)).toBe(fs.realpathSync.native(agentDir));
-    expect(realpath).toHaveBeenCalled();
-  });
-
-  it.each([64, 256, 810])("reuses observations across walks of %i registered agents", (count) => {
+  it.each([64, 810])("reuses observations across walks of %i registered agents", (count) => {
     const root = tempDirs.make("openclaw-agent-dir-fleet-");
     const fleet = Array.from({ length: count }, (_, index) => ({
       agentId: `fleet-${index}`,
@@ -137,6 +123,10 @@ describe("agent directory registry", () => {
     expect(watch).toHaveBeenCalledTimes(initialWatches);
     expect(closes.every((close) => close.mock.calls.length === 0)).toBe(true);
     expect(realpath).not.toHaveBeenCalled();
+    // Destructive admission bypasses the prepared identity even when lookups reuse it.
+    const { agentDir } = fleet[0]!;
+    expect(normalizePath(agentDir)).toBe(fs.realpathSync.native(agentDir));
+    expect(realpath).toHaveBeenCalled();
   });
 
   it("retains ancestor watches when a named notification leaves directory identity unchanged", () => {

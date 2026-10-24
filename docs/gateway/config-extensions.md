@@ -301,6 +301,11 @@ conversation bindings, or any non-Codex harness.
   marketplace-qualified. `/codex plugins available` lists discoverable
   identities, and an owner or `operator.admin` can install one with
   `/codex plugins install <plugin>@<marketplace>`.
+- `plugins.entries.codex.config.codexPlugins.plugins.<key>.read_only`: defaults to
+  `false`. When `true`, only connected-app tools explicitly marked read-only
+  and enabled in the current app inventory are available. Unknown tools and
+  stale native tool grants are denied. This restriction applies with every
+  `allow_destructive_actions` value; it does not change that flag when disabled.
 - `plugins.entries.codex.config.codexPlugins.plugins.<key>.allow_destructive_actions`:
   per-plugin destructive-action override. When omitted, the global
   `allow_destructive_actions` value is used. The per-plugin value accepts the

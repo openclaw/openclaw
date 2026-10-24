@@ -11,6 +11,7 @@ import * as toolCards from "../../../lib/chat/tool-cards.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import * as thinking from "../../../lib/strip-thinking-tags.ts";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
+import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
 import { prepareGroupedMessage } from "./chat-message-bubble-presentation.ts";
 import { GroupedMessage } from "./chat-message-bubble-view.tsx";
@@ -63,7 +64,7 @@ describe("message action projections", () => {
     });
   });
 
-  it("prepares collapsed previews only for tool message shells", () => {
+  it("defers collapsed previews until a tool message shell renders", async () => {
     const preview = vi.spyOn(toolCards, "formatCollapsedToolPreviewText");
     onTestFinished(() => preview.mockRestore());
     const prepare = (role: string, content: string) =>
@@ -73,9 +74,26 @@ describe("message action projections", () => {
       });
     prepare("assistant", "A streaming reply");
     expect(preview).not.toHaveBeenCalled();
-    const tool = prepare("toolResult", "First line\nSecond line");
-    expect(preview).toHaveBeenCalledOnce();
-    expect(tool.toolPreview).toBe("First line Second line");
+    prepare("toolResult", "First line\nSecond line");
+    expect(preview).not.toHaveBeenCalled();
+    const container = document.createElement("div");
+    const view = mountSolid(
+      GroupedMessage,
+      {
+        preparation: prepareChatMessageRender({
+          role: "toolResult",
+          content: "First line\nSecond line",
+        }),
+        messageKey: "tool-preview",
+        options: { isStreaming: true, showReasoning: false },
+      },
+      container,
+    );
+    onTestFinished(view.dispose);
+    await waitForSolid(() =>
+      expect(container.querySelector(".chat-tool-msg-summary__names")?.textContent).toBe("tool"),
+    );
+    expect(preview).toHaveBeenCalledWith("First line\nSecond line");
   });
 
   const indented = "    *literal*";
@@ -449,3 +467,59 @@ describe("persisted human mentions in message bubbles", () => {
     },
   );
 });
+
+it.each(["annotation only", "additional prompt", "additional file"])(
+  "shows inline annotation content only for an annotation-only message: %s",
+  async (scenario) => {
+    const quote = "<strong>Selected text</strong>\nSecond selected line.";
+    const payload = `Selected text:\n${quote}\n\nUser comment:\nKeep the full context.\n\nSource session: agent:main:fixture\nSelected text UTF-16 length: ${quote.length}\nDOM text UTF-16 range: [0, ${quote.length})`;
+    const content: unknown[] = [
+      {
+        type: "attachment",
+        attachment: {
+          kind: "document",
+          label: "selection-comment.txt",
+          mimeType: "text/plain",
+          url: `data:text/plain;base64,${btoa(payload)}`,
+        },
+      },
+    ];
+    if (scenario === "additional prompt") {
+      content.push({ type: "text", text: "Please explain this." });
+    }
+    if (scenario === "additional file") {
+      content.push({
+        type: "attachment",
+        attachment: {
+          kind: "document",
+          label: "notes.txt",
+          mimeType: "text/plain",
+          url: `data:text/plain;base64,${btoa("File contents")}`,
+        },
+      });
+    }
+    const host = document.createElement("div");
+    mountSolid(
+      GroupedMessage,
+      {
+        preparation: prepareChatMessageRender({ role: "user", content }),
+        messageKey: "annotation-message",
+        options: { isStreaming: false, showReasoning: false },
+      },
+      host,
+    );
+    if (scenario === "annotation only") {
+      await waitForSolid(() =>
+        expect(host.querySelector("blockquote button")?.textContent).toBe(quote),
+      );
+      expect(host.querySelector('blockquote [slot="content"]')?.textContent).toBe(quote);
+      expect(host.textContent).toContain("Keep the full context.");
+      expect(host.querySelector("blockquote strong")).toBeNull();
+      expect(host.querySelector(".chat-bubble--with-images")).toBeNull();
+    } else {
+      expect(host.querySelector(".chat-selection-annotations__chip")).not.toBeNull();
+      expect(host.querySelector("blockquote")).toBeNull();
+      expect(host.textContent).not.toContain("Keep the full context.");
+    }
+  },
+);

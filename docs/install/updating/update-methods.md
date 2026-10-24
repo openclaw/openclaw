@@ -162,8 +162,10 @@ for a source-server update: it refuses tracked local changes, including build
 outputs, and prepares the fetched target in a private checkout. It checks that
 `main` can fast-forward, or rebases the local server branch with `--rebase-merges`.
 Dependencies install with a frozen lockfile and the candidate builds before the
-serving checkout changes. A preparation failure leaves the existing service
-running. After preparation, the script stops its selected service and checks for
+serving checkout changes. The built candidate checks the selected profile's
+configuration and migration inputs through `openclaw update admit` before the
+service stops. A refusal or unavailable admission leaves the existing service
+running; resolve the reported conflict and retry. After preparation, the script stops its selected service and checks for
 other observed managed consumers before publishing source, dependencies, and
 generated output together. Stop any shared-install siblings through their own
 service owners first; this script does not stop or restart them for you.
@@ -338,10 +340,11 @@ restarting the Gateway so it picks up canonical config and migrated state. Check
 `openclaw update status` for unfinished plugin upgrades and their repair commands.
 Normal CLI commands and Gateway startup do not apply deferred plugin migrations.
 
-On Windows, the published OpenClaw 2026.9.3 updater can exhaust its fixed
-30-second baseline package-fingerprint budget before replacing any files. It
-then reports `Package rollback verification timed out` and
-`retained package tree changed` even when the installed tree is unchanged.
+On any platform, the published OpenClaw 2026.9.3 and 2026.9.4 updaters can exhaust
+their fixed 30-second baseline package-fingerprint budget before replacing any
+files. They then report `Installation recovery is unverified`,
+`Package rollback verification timed out`, or `retained package tree changed`
+even when the installed tree is unchanged.
 A newer candidate cannot repair the updater already running. After creating a
 [verified backup](/install/updating/rollback-and-recovery#before-updating-create-a-verified-backup),
 stop the Gateway and use its existing package manager to install the target

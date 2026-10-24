@@ -43,6 +43,7 @@ export const pluginArrays = [
   "services",
   "gatewayDiscoveryServices",
   "commands",
+  "subagentProfiles",
   "interactiveHandlers",
   "sessionExtensions",
   "trustedToolPolicies",

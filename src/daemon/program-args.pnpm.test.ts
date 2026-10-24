@@ -13,6 +13,25 @@ import { buildSystemdUnit, parseSystemdExecStart } from "./systemd-unit.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
+async function writePackage(root: string, version: string) {
+  await fs.mkdir(path.join(root, "dist"), { recursive: true });
+  await fs.writeFile(
+    path.join(root, "package.json"),
+    JSON.stringify({ name: "openclaw", version }),
+  );
+  await fs.writeFile(path.join(root, "openclaw.mjs"), 'import "./dist/index.js";\n');
+  await fs.writeFile(path.join(root, "dist", "index.js"), `export default "${version}";\n`);
+}
+
+function gatewayArgs(cliEntrypoint: string, runtimePath = process.execPath) {
+  return resolveGatewayProgramArguments({
+    cliEntrypoint,
+    runtime: "node",
+    runtimePath,
+    port: 18789,
+  });
+}
+
 async function createPnpmInstall(nestedStore: boolean) {
   const home = tempDirs.make("openclaw-pnpm-task-");
   const layout = path.join(home, "pnpm", "global", "5");
@@ -21,13 +40,7 @@ async function createPnpmInstall(nestedStore: boolean) {
   const stableRoot = path.join(modules, "openclaw");
   const writeGeneration = async (version: string) => {
     const root = path.join(store, `openclaw@${version}`, "node_modules", "openclaw");
-    await fs.mkdir(path.join(root, "dist"), { recursive: true });
-    await fs.writeFile(
-      path.join(root, "package.json"),
-      JSON.stringify({ name: "openclaw", version }),
-    );
-    await fs.writeFile(path.join(root, "openclaw.mjs"), 'import "./dist/index.js";\n');
-    await fs.writeFile(path.join(root, "dist", "index.js"), `export default "${version}";\n`);
+    await writePackage(root, version);
     return root;
   };
   const originalRoot = await writeGeneration("2026.9.6");
@@ -47,12 +60,7 @@ describe("pnpm Scheduled Task entrypoint", () => {
     async ({ nestedStore, entry }) => {
       const fixture = await createPnpmInstall(nestedStore);
       const runtimePath = path.win32.join("C:\\Program Files", "nodejs", "node.exe");
-      const resolved = await resolveGatewayProgramArguments({
-        cliEntrypoint: path.join(fixture.originalRoot, entry),
-        runtime: "node",
-        runtimePath,
-        port: 18789,
-      });
+      const resolved = await gatewayArgs(path.join(fixture.originalRoot, entry), runtimePath);
 
       // Real filesystem ownership is host-native; the writer receives Windows paths.
       const windowsHome = path.win32.join("C:\\Users", "Fixture User");
@@ -133,12 +141,7 @@ describe("pnpm Scheduled Task entrypoint", () => {
         await fs.symlink(unrelatedRoot, fixture.stableRoot, "junction");
       }
       const originalEntry = path.join(fixture.originalRoot, "dist", "index.js");
-      const result = await resolveGatewayProgramArguments({
-        cliEntrypoint: originalEntry,
-        runtime: "node",
-        runtimePath: process.execPath,
-        port: 18789,
-      });
+      const result = await gatewayArgs(originalEntry);
       expect(result.programArguments.at(-4)).toBe(originalEntry);
     },
   );
@@ -160,13 +163,7 @@ it.each(["openclaw.mjs", "dist/index.js"])(
         "node_modules",
         "openclaw",
       );
-      await fs.mkdir(path.join(root, "dist"), { recursive: true });
-      await fs.writeFile(
-        path.join(root, "package.json"),
-        JSON.stringify({ name: "openclaw", version }),
-      );
-      await fs.writeFile(path.join(root, "openclaw.mjs"), 'import "./dist/index.js";\n');
-      await fs.writeFile(path.join(root, "dist", "index.js"), `export default "${version}";\n`);
+      await writePackage(root, version);
       await fs.writeFile(
         path.join(project, "package.json"),
         JSON.stringify({ dependencies: { openclaw: version } }),
@@ -176,12 +173,7 @@ it.each(["openclaw.mjs", "dist/index.js"])(
     };
     const original = await writeProject("2026.10.1");
     await fs.symlink(original.project, projectLink, "junction");
-    const { programArguments } = await resolveGatewayProgramArguments({
-      cliEntrypoint: path.join(original.root, entry),
-      runtime: "node",
-      runtimePath: process.execPath,
-      port: 18789,
-    });
+    const { programArguments } = await gatewayArgs(path.join(original.root, entry));
     const node = await resolveNodeProgramArguments({
       cliEntrypoint: path.join(original.root, entry),
       runtime: "node",

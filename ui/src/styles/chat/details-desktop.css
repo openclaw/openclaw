@@ -232,7 +232,6 @@
     .chat-details-people__row,
     .chat-details-people__name,
     .chat-details__row,
-    .chat-details__value,
     .chat-environment__action,
     .chat-summary__automation,
     .chat-summary__automation-title,
@@ -264,7 +263,6 @@
   :is(
     .chat-details-desktop-section__metadata,
     .chat-details-people__role,
-    .chat-details-people__remaining,
     .chat-details-people__count,
     .chat-details__badge,
     .chat-environment__counts,
@@ -301,7 +299,6 @@
   :is(
     .chat-details-desktop-section__heading,
     .chat-details__caption,
-    .chat-summary__automation-pending,
     .task-progress-details__heading,
     .task-progress-details__title
   ) {
@@ -365,8 +362,7 @@
   row-gap: var(--details-row-list-gap);
 }
 
-.chat-details .chat-details-desktop-body .chat-summary__automation-error,
-.chat-details .chat-details-desktop-body .chat-summary__automation-message {
+.chat-details .chat-details-desktop-body .chat-summary__automation-error {
   padding-inline: var(--details-row-padding);
 }
 
@@ -536,4 +532,9 @@
   .chat-environment__counts
   > span:is(.chat-environment__added, .chat-environment__removed) {
   font-weight: 500;
+}
+
+.chat-details-desktop-context > .chat-details-desktop-section,
+.chat-details-desktop-environment:not(:first-child) > .chat-details-desktop-section {
+  border-top: 1px solid var(--details-separator);
 }

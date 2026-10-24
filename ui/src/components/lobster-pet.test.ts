@@ -6,11 +6,8 @@ import { loadSettings, settingsKeyForGateway } from "../app/settings.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { getLobsterdex, getLobsterdexEntries } from "./lobster-dex.ts";
 import { resolveLobsterPetMode, resolveLobsterRunOutcome } from "./lobster-pet-contract.ts";
-import {
-  canonicalLobsterLook,
-  createLobsterPetLook,
-  renderLobsterSvg,
-} from "./lobster-pet-look.ts";
+import { canonicalLobsterLook, createLobsterPetLook } from "./lobster-pet-identity.ts";
+import { renderLobsterSvg } from "./lobster-pet-look.tsx";
 import { LOBSTER_PET_PALETTES } from "./lobster-pet-palettes.ts";
 import {
   LOBSTER_BOTTLE_FORTUNES,
@@ -419,12 +416,22 @@ describe("lobster pet element", () => {
   });
 
   it("cancels a pending pet when the pointer interaction is cancelled", async () => {
-    const element = createPet(42, "offline");
-    await element.updateComplete;
-    const sprite = element.querySelector(".lobster-pet");
-    sprite?.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+    const element = await visitingPet(42, "offline");
+    const sprite = expectDefined(element.querySelector(".lobster-pet"), "visible pet");
+    const pointer = {
+      button: 0,
+      pointerId: 1,
+      pointerType: "touch",
+      isPrimary: true,
+      bubbles: true,
+    };
+    const idleTimers = vi.getTimerCount();
+    sprite.dispatchEvent(new PointerEvent("pointerdown", pointer));
+    expect(vi.getTimerCount()).toBe(idleTimers + 1);
     await vi.advanceTimersByTimeAsync(300);
-    sprite?.dispatchEvent(new Event("pointercancel"));
+    const pendingTimers = vi.getTimerCount();
+    sprite.dispatchEvent(new PointerEvent("pointercancel", pointer));
+    expect(vi.getTimerCount()).toBe(pendingTimers - 1);
     await tick(element, 400);
     expect(spriteClasses(element)).not.toContain("lobster-pet--act-pet");
   });

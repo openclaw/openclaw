@@ -1,21 +1,28 @@
 import { performance } from "node:perf_hooks";
 import { WorkerTaskError } from "@openclaw/worker-runtime";
+import { getRuntimeConfig } from "../../../config/config.js";
 import { readSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
+import { WRITE_SCOPE } from "../../../gateway/operator-scopes.js";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import type { GatewayStartupTrace } from "../../../gateway/server-startup-trace.js";
 import {
   getAgentEventLifecycleGeneration,
   isAgentEventLifecycleGenerationCurrent,
 } from "../../../infra/agent-events.js";
+import { GatewayOperatorRecoveryAuthorizationError } from "../../../infra/restart-recovery-errors.js";
 import { isSystemEventStoreCurrent } from "../../../infra/system-event-ownership.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import {
   bindGatewayContextResolver,
   getGatewayContextResolver as getEntryGatewayContextResolver,
+  getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
 } from "../../../plugins/runtime/gateway-request-scope.js";
+import { onSessionIdentityMutation } from "../../../sessions/session-lifecycle-events.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { readRestartRecoveryRequesterSource } from "../../requester-run-recovery-source.js";
+import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
+import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";
 import { getCurrentSubagentRunOwner, subagentRuns } from "./subagent-registry-memory.js";
 import {
   mutateSubagentRuns,
@@ -42,6 +49,131 @@ const log = createSubsystemLogger("agents/subagents");
 const deferredCompletionSources = new WeakSet<object>();
 const unrestorableCompletionSources = new WeakMap<object, string>();
 
+/** The private child claim preserves channel facts; the registry still owns its continuation. */
+async function restoreChannelSubagentCompletionSource(
+  entry: SubagentRunRecord,
+  resolver: GatewayContextResolver,
+  gateway: NonNullable<ReturnType<GatewayContextResolver>>,
+  assertCurrent: () => void,
+  assertGatewayCurrent: () => void,
+) {
+  if (!entry.requesterAgentId || !entry.requesterStorePath || !entry.completionRequesterSessionId) {
+    return undefined;
+  }
+  const requester = {
+    agentId: entry.requesterAgentId,
+    sessionKey: entry.requesterSessionKey,
+    storePath: entry.requesterStorePath,
+    projection: "list" as const,
+  };
+  const revoked = new AbortController();
+  const releaseIdentity = onSessionIdentityMutation((mutation) => {
+    if (
+      mutation.agentId === requester.agentId &&
+      (mutation.previous.sessionId === entry.completionRequesterSessionId ||
+        mutation.previous.sessionKeys.includes(requester.sessionKey))
+    ) {
+      revoked.abort(new Error("Subagent recovery requester session changed"));
+    }
+  });
+  let retained = false;
+  try {
+    const assertPreparing = () => {
+      assertCurrent();
+      revoked.signal.throwIfAborted();
+    };
+    const child = {
+      ...resolveSubagentChildSessionOwner(entry, getRuntimeConfig()),
+      sessionKey: entry.childSessionKey,
+      projection: "list" as const,
+    };
+    const childEntry = await readSessionEntryReadOnlyInWorker(child, assertPreparing);
+    if (
+      !childEntry ||
+      resolveSubagentChildAuthority(entry, childEntry).status !== "verified" ||
+      childEntry.restartRecoveryOperatorSource
+    ) {
+      return undefined;
+    }
+    const requesterOrigin = readRestartRecoveryRequesterSource({
+      ...child,
+      entry: childEntry,
+      sourceRunId: entry.runId,
+    });
+    if (!requesterOrigin || requesterOrigin.operatorProfileId) {
+      return undefined;
+    }
+    const requesterEntry = await readSessionEntryReadOnlyInWorker(requester, assertPreparing);
+    if (
+      requesterEntry?.sessionId !== entry.completionRequesterSessionId ||
+      requesterEntry.lifecycleRevision !== entry.completionRequesterLifecycleRevision
+    ) {
+      return undefined;
+    }
+    const [
+      { captureOperatorToolGatewayContinuationContext },
+      { createSyntheticPluginRuntimeClient },
+    ] = await Promise.all([
+      import("../../../gateway/server-plugin-in-process-authority.js"),
+      import("../../../gateway/server-plugin-runtime-client.js"),
+    ]);
+    assertPreparing();
+    const scope = {
+      client: createSyntheticPluginRuntimeClient({
+        operatorRoleActor: { kind: "system" },
+        scopes: [WRITE_SCOPE],
+      }),
+      context: gateway,
+      resolveGatewayContext: resolver,
+      isWebchatConnect: () => false,
+    };
+    const continuation = await withPluginRuntimeGatewayRequestScope(scope, () =>
+      captureOperatorToolGatewayContinuationContext(child),
+    );
+    if (!continuation) {
+      return undefined;
+    }
+    const assertSourceCurrent = () => {
+      assertGatewayCurrent();
+      revoked.signal.throwIfAborted();
+      continuation.assertCurrent();
+    };
+    const client = createSyntheticPluginRuntimeClient({
+      operatorRoleActor: { kind: "system" },
+      scopes: continuation.scopes,
+      agentToolCaller: {
+        agentId: child.agentId,
+        sessionKey: child.sessionKey,
+        requesterOrigin,
+        assertCurrent: assertSourceCurrent,
+      },
+    });
+    retained = true;
+    return {
+      ...continuation,
+      assertCurrent: assertSourceCurrent,
+      signal: AbortSignal.any([continuation.signal, revoked.signal]),
+      release() {
+        releaseIdentity();
+        continuation.release();
+      },
+      run<T>(run: () => T): T {
+        assertSourceCurrent();
+        return continuation.run(() =>
+          withPluginRuntimeGatewayRequestScope(
+            { ...getPluginRuntimeGatewayRequestScope(), ...scope, client },
+            run,
+          ),
+        );
+      },
+    };
+  } finally {
+    if (!retained) {
+      releaseIdentity();
+    }
+  }
+}
+
 /** Only the restoration owner may classify missing or denied original authority. */
 export function getUnrestorableSubagentCompletionSourceReason(
   entry: SubagentRunRecord,
@@ -59,7 +191,7 @@ async function restoreSubagentCompletionSource(
   deferredCompletionSources.delete(runtimeKey);
   unrestorableCompletionSources.delete(runtimeKey);
   if (
-    entry.collect ||
+    (entry.collect && entry.execution.status === "terminal") ||
     (entry.execution.status === "terminal" &&
       !entry.requesterSettleWake &&
       entry.cleanupCompletedAt !== undefined)
@@ -90,13 +222,12 @@ async function restoreSubagentCompletionSource(
     const source = entry.operatorRecoverySource;
     const missingSourceReason =
       "The original operator source was not saved for this requester continuation";
-    if (!source) {
-      unrestorableCompletionSources.set(runtimeKey, missingSourceReason);
-    } else if (
-      source.agentId !== entry.requesterAgentId ||
-      source.sessionKey !== entry.requesterSessionKey ||
-      source.sessionId !== entry.completionRequesterSessionId ||
-      source.lifecycleRevision !== entry.completionRequesterLifecycleRevision
+    if (
+      source &&
+      (source.agentId !== entry.requesterAgentId ||
+        source.sessionKey !== entry.requesterSessionKey ||
+        source.sessionId !== entry.completionRequesterSessionId ||
+        source.lifecycleRevision !== entry.completionRequesterLifecycleRevision)
     ) {
       unrestorableCompletionSources.set(
         runtimeKey,
@@ -133,6 +264,23 @@ async function restoreSubagentCompletionSource(
     };
     assertCurrent();
     if (!source) {
+      if (gateway) {
+        continuation = await restoreChannelSubagentCompletionSource(
+          entry,
+          resolver,
+          gateway,
+          assertCurrent,
+          assertGatewayCurrent,
+        );
+        assertCurrent();
+        if (continuation) {
+          subagentRuns.bindCompletionAuthority(entry, continuation, true);
+          continuation = undefined;
+          unrestorableCompletionSources.delete(runtimeKey);
+          return;
+        }
+      }
+      unrestorableCompletionSources.set(runtimeKey, missingSourceReason);
       if (
         storePath &&
         entry.requesterAgentId &&
@@ -314,7 +462,10 @@ async function restoreSubagentCompletionSource(
       deferredCompletionSources.add(runtimeKey);
       return;
     }
-    if (error instanceof GatewayOperatorAccessDeniedError) {
+    if (
+      error instanceof GatewayOperatorAccessDeniedError ||
+      error instanceof GatewayOperatorRecoveryAuthorizationError
+    ) {
       unrestorableCompletionSources.set(
         runtimeKey,
         "The original operator no longer has access to this requester continuation",

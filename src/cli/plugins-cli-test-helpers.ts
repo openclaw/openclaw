@@ -1,7 +1,7 @@
 // Shared Vitest mocks and runtime capture helpers for plugin CLI command tests.
 import { Command } from "commander";
 import type { Mock } from "vitest";
-import { vi } from "vitest";
+import { expect, vi } from "vitest";
 import { createTestConfigSnapshot } from "../commands/test-runtime-config-helpers.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { HookInstallRecord } from "../config/types.hooks.js";
@@ -910,6 +910,16 @@ export async function runPluginsCommand(argv: string[]) {
   program.exitOverride();
   registerPluginsCli(program);
   return await program.parseAsync(argv, { from: "user" });
+}
+
+export function runPluginCli(...args: string[]) {
+  return runPluginsCommand(["plugins", ...args]);
+}
+
+export function expectNoPluginCliCalls(...mocks: unknown[]) {
+  for (const mock of mocks) {
+    expect(mock).not.toHaveBeenCalled();
+  }
 }
 
 export function resetPluginsCliTestState() {

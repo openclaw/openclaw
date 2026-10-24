@@ -30,7 +30,7 @@ export async function runPreparedReply(
 async function runPreparedReplyWithOwner(
   inputParams: RunPreparedReplyParams,
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
-  const source = prepareReplySourceInput(inputParams.sessionCtx, inputParams.cfg, inputParams.opts);
+  const source = await prepareReplySourceInput(inputParams.ctx, inputParams.cfg, inputParams.opts);
   const params = { ...inputParams, opts: source.options };
   const readAdmissionConfig = createRuntimeConfigReader(params.cfg);
   try {

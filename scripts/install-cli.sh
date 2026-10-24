@@ -123,15 +123,15 @@ OPENCLAW_EFFECTIVE_HOME="$(resolve_home_path "${OPENCLAW_HOME:-$HOME}")"
 PREFIX="${OPENCLAW_PREFIX:-${HOME}/.openclaw}"
 OPENCLAW_VERSION="${OPENCLAW_VERSION:-latest}"
 REQUIRED_COMPATIBLE_VERSION=""
-DEFAULT_NODE_VERSION="24.21.0"
+DEFAULT_NODE_VERSION="24.22.1"
 NODE_VERSION="${OPENCLAW_NODE_VERSION:-${DEFAULT_NODE_VERSION}}"
 NODE_VERSION_REQUESTED=0
 if [[ -n "${OPENCLAW_NODE_VERSION:-}" ]]; then
   NODE_VERSION_REQUESTED=1
 fi
-MIN_NODE_24_VERSION="24.16.0"
-MIN_NODE_26_VERSION="26.1.0"
-SUPPORTED_NODE_VERSION_LABEL="Node 24.16.0+ or Node 26.1.0+"
+MIN_NODE_24_VERSION="24.22.1"
+MIN_NODE_26_VERSION="26.12.1"
+SUPPORTED_NODE_VERSION_LABEL="Node 24.22.1+ or Node 26.12.1+"
 NODE_RELEASE_VERSION_CORE=""
 APK_NODE_BIN_DIR="/usr/bin"
 NPM_LOGLEVEL="${OPENCLAW_NPM_LOGLEVEL:-error}"
@@ -162,7 +162,7 @@ FAQ: https://docs.openclaw.ai/start/faq
   --git-dir, --dir <path>             Checkout directory (default: ~/openclaw, or \$OPENCLAW_HOME/openclaw)
   --version <ver>                     OpenClaw version (default: latest)
   --compatible-with <ver>             Refuse a CLI that cannot modify config written by <ver>
-  --node-version <ver>                Node version (default: 24.21.0)
+  --node-version <ver>                Node version (default: 24.22.1)
   --node-only                         Install only a private Node runtime (no system package changes)
   --runtime-only                      Install CLI runtime without Gateway probes, service changes, or onboarding
   --onboard                           Run "openclaw onboard" after install
@@ -553,7 +553,7 @@ link_node_runtime_paths() {
   dir="$(node_dir)"
   runtime_bin="${node_path%/*}"
 
-  mkdir -p "${dir}/bin" "${PREFIX}/tools"
+  (umask 077; mkdir -p "${dir}/bin" "${PREFIX}/tools")
   ln -sfn "$node_path" "${dir}/bin/node"
   ln -sfn "$npm_path" "${dir}/bin/npm"
   for name in npx corepack; do
@@ -924,7 +924,7 @@ install_node() {
   emit_json step name node status start version "$NODE_VERSION"
   log "Installing Node ${NODE_VERSION} (user-space)..."
 
-  mkdir -p "${PREFIX}/tools"
+  (umask 077; mkdir -p "${PREFIX}/tools")
   # Darwin's default mktemp location can ignore TMPDIR; use the prepared path explicitly.
   tmp="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-node.XXXXXX")"
   TMPFILES+=("$tmp")
@@ -948,7 +948,7 @@ install_node() {
   fi
 
   rm -rf "$dir"
-  mkdir -p "$dir"
+  (umask 077; mkdir -p "$dir")
   tar -xzf "$tmp/node.tgz" -C "$dir" --strip-components=1
   rm -rf "$tmp"
 
@@ -959,7 +959,7 @@ install_node() {
     installed_version="$("$(node_bin)" -v 2>/dev/null || echo unknown)"
     required_version="$(required_node_version)"
     sqlite_version="$(node_binary_sqlite_version "$(node_bin)")"
-    fail "Installed Node ${NODE_VERSION} must provide Node >= ${required_version} with WAL-reset-safe SQLite; found Node ${installed_version}, SQLite ${sqlite_version}. Re-run with --node-version 24.21.0 (or newer)"
+    fail "Installed Node ${NODE_VERSION} must provide Node >= ${required_version} with WAL-reset-safe SQLite; found Node ${installed_version}, SQLite ${sqlite_version}. Re-run with --node-version 24.22.1 (or newer)"
   fi
   # Existing CLI wrappers use this alias; activate only a runtime that can start.
   ln -sfn "$dir" "${PREFIX}/tools/node"
@@ -970,7 +970,7 @@ ensure_pnpm() {
   local repo_dir="${1:-$PWD}"
   local spec version pnpm_dir corepack_cmd="" npm_cmd lifecycle_arg selected_version
   spec="$(repo_pnpm_spec "$repo_dir" || true)"
-  [[ "$spec" == pnpm@* ]] || spec="pnpm@12.12.1"
+  [[ "$spec" == pnpm@* ]] || spec="pnpm@12.15.0"
   version="${spec#pnpm@}"
   version="${version%%+*}"
   pnpm_dir="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-pnpm.XXXXXX")" || return 1
@@ -1023,7 +1023,7 @@ fix_npm_prefix_if_needed() {
   fi
 
   local target="${HOME}/.npm-global"
-  mkdir -p "$target"
+  (umask 077; mkdir -p "$target")
   "$(npm_bin)" config set prefix "$target"
 
   local path_line="export PATH=\"${target}/bin:\$PATH\""
@@ -1041,7 +1041,7 @@ fix_npm_prefix_if_needed() {
 publish_executable_wrapper() {
   local target="$1" target_dir="" temp="" backup=""
   target_dir="${target%/*}"
-  mkdir -p "$target_dir"
+  (umask 077; mkdir -p "$target_dir")
   temp="$(mktemp "${target_dir}/.openclaw-wrapper.XXXXXX")" || return 1
   TMPFILES+=("$temp")
   cat > "$temp"
@@ -1117,7 +1117,6 @@ install_openclaw() {
     fi
   fi
 
-  mkdir -p "${PREFIX}/bin"
   publish_executable_wrapper "${PREFIX}/bin/openclaw" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
@@ -1134,7 +1133,7 @@ install_openclaw_from_git() {
   if [[ -z "$repo_dir" ]]; then
     fail "Git install dir cannot be empty"
   fi
-  mkdir -p "$(dirname "$repo_dir")"
+  (umask 077; mkdir -p "$(dirname "$repo_dir")")
   if [[ -d "$repo_dir" ]]; then
     repo_dir="$(cd "$repo_dir" && pwd -P)"
   else
@@ -1214,7 +1213,6 @@ install_openclaw_from_git() {
   run_pnpm -C "$repo_dir" build
   emit_json step name cli-build status ok
 
-  mkdir -p "${PREFIX}/bin"
   publish_executable_wrapper "${PREFIX}/bin/openclaw" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail

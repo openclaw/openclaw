@@ -18,6 +18,7 @@ import { resolveInboundReplyToolAuthorityOverlay } from "./reply-tool-authority.
 
 type ReplyQuestionInputParams = Pick<
   RunReplyAgentParams,
+  | "steeringIntent"
   | "commandBody"
   | "transcriptCommandBody"
   | "followupRun"
@@ -47,7 +48,7 @@ export async function runReplyQuestionInput(
   ).trim();
   if (
     !sessionKey ||
-    opts?.isHeartbeat ||
+    params.steeringIntent?.kind === "new-execution" ||
     params.resetTriggered ||
     isExplicitFollowupCommandTurn(params.sessionCtx) ||
     opts?.messageInjectionDisposition === "accepted" ||

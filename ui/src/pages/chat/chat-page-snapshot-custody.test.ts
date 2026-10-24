@@ -13,7 +13,7 @@ import { createSolidApplicationContextProvider } from "../../test-helpers/solid-
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { chatHistoryRequests } from "./chat-history-state.ts";
 import { settleChatPage, stubMatchMedia } from "./chat-page.test-support.ts";
-import "./chat-page.ts";
+import "./chat-page.tsx";
 import { createMountedPanes } from "./chat-pane-mounted.test-support.ts";
 import { ChatPaneRuntime } from "./chat-pane-render.ts";
 import { nativeHistoryMessage } from "./chat-pane.test-support.ts";

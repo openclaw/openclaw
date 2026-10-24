@@ -22,6 +22,27 @@ export function resultWithDetails(details: Record<string, unknown>) {
   return { details };
 }
 
+export type CapturedAgentEvent = { stream?: string; data?: Record<string, unknown> };
+
+export function requireEvent(
+  events: CapturedAgentEvent[],
+  predicate: (event: CapturedAgentEvent) => boolean,
+  label: string,
+): CapturedAgentEvent {
+  const event = events.find(predicate);
+  if (!event) {
+    throw new Error(`expected ${label} event`);
+  }
+  return event;
+}
+
+export function requireString(value: unknown, label: string): string {
+  if (typeof value !== "string") {
+    throw new Error(`expected ${label}`);
+  }
+  return value;
+}
+
 export function createTestContext() {
   const onBlockReplyFlush = vi.fn<NonNullable<ToolHandlerContext["params"]["onBlockReplyFlush"]>>();
   const onAgentEvent = vi.fn();

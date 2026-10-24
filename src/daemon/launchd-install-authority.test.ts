@@ -51,7 +51,7 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-const activation = ["bootout", "unload", "enable", "bootstrap"];
+const activation = ["bootout", "enable", "bootstrap"];
 const recovery = ["bootout", "enable", "bootstrap"];
 it.each<[string, boolean, string | null | undefined, string[], number]>([
   ["snapshot-read", false, "unchanged", [], 0],

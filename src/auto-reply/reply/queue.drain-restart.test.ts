@@ -40,7 +40,6 @@ import {
   installQueueRuntimeErrorSilencer,
   rejectQueuePreparation,
 } from "./queue.test-helpers.js";
-import { kickFollowupDrainIfIdle } from "./queue/drain.js";
 import { resetRecentQueuedMessageIdDedupe } from "./queue/recent-message-ids.test-support.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
 
@@ -180,7 +179,7 @@ it("parks queued input when database admission closes until a fresh drain is req
       expect(settled).not.toHaveBeenCalled();
     });
     closing = false;
-    kickFollowupDrainIfIdle(key);
+    scheduleFollowupDrain(key, runFollowup);
     await vi.advanceTimersByTimeAsync(0);
     expect(attempts).toBe(2);
     expect(queuedState()).toBeUndefined();
@@ -477,7 +476,7 @@ it.each(["followup", "collect"] as const)(
       await vi.waitFor(() => expect(getExistingFollowupQueue(queueKey)?.draining).toBe(false));
       expect(getActiveGatewayRootWorkCount()).toBe(0);
       expect(execute).not.toHaveBeenCalled();
-      kickFollowupDrainIfIdle(queueKey);
+      scheduleFollowupDrain(queueKey, execute);
       await delivered.promise;
       await run.controllerInput!.settlement.promise;
       await run.controllerInput!.claim?.settlement.promise;

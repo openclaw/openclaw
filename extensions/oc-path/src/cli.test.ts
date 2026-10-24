@@ -304,9 +304,9 @@ describe("openclaw path CLI", () => {
           const rt = createTestRuntime();
           await testCase.run(rt);
           expect(rt.exitCode).toBe(2);
-          expect(stdoutText(rt)).toBe("");
-          expect(JSON.parse(stderrText(rt))).toMatchObject({
-            error: { code: testCase.code },
+          expect(JSON.parse(stdoutText(rt))).toMatchObject({
+            ok: false,
+            error: { type: "cli_error", code: testCase.code },
           });
           expect(opens).toBeGreaterThan(0);
           expect(bytesRead).toBeLessThanOrEqual(JSONC_INPUT_LIMIT_BYTES + 1);
@@ -338,7 +338,7 @@ describe("openclaw path CLI", () => {
         }
 
         expect(rt.exitCode).toBe(2);
-        expect(JSON.parse(stderrText(rt))).toMatchObject({
+        expect(JSON.parse(stdoutText(rt))).toMatchObject({
           error: { code: "OC_PATH_FILE_NOT_REGULAR" },
         });
       },
@@ -746,8 +746,8 @@ describe("openclaw path CLI", () => {
       );
 
       expect(rt.exitCode).toBe(2);
-      expect(stderrText(rt)).toContain("OC_PATH_INPUT_NOT_UTF8");
-      expect(stderrText(rt)).toContain("the file was left unchanged");
+      expect(stdoutText(rt)).toContain("OC_PATH_INPUT_NOT_UTF8");
+      expect(stdoutText(rt)).toContain("the file was left unchanged");
       expect(readFileSync(filePath)).toEqual(before);
     });
 
@@ -950,8 +950,8 @@ describe("openclaw path CLI", () => {
         );
 
         expect(rt.exitCode).toBe(1);
-        expect(stderrText(rt)).toContain("OC_EMIT_SENTINEL");
-        expect(stderrText(rt)).toContain("oc://AGENTS.md/[frontmatter]/+note");
+        expect(stdoutText(rt)).toContain("OC_EMIT_SENTINEL");
+        expect(stdoutText(rt)).toContain("oc://AGENTS.md/[frontmatter]/+note");
         expect(readFileSync(filePath, "utf-8")).toBe(before);
       },
     );
@@ -970,9 +970,9 @@ describe("openclaw path CLI", () => {
         rt,
       );
       expect(rt.exitCode).toBe(1);
-      expect(stderrText(rt)).toContain("OC_EMIT_SENTINEL");
+      expect(stdoutText(rt)).toContain("OC_EMIT_SENTINEL");
       // Include the actual file in the sentinel error so operators can locate it.
-      expect(stderrText(rt)).toContain("gateway.jsonc");
+      expect(stdoutText(rt)).toContain("gateway.jsonc");
     });
 
     it("CLI-S05 malformed yaml returns structured parse-error", async () => {
@@ -995,15 +995,31 @@ describe("openclaw path CLI", () => {
   });
 
   describe("find", () => {
-    it("CLI-F01 enumerates wildcard matches", async () => {
-      const workspaceDir = tempDirs.make("oc-path-cli-");
-      const filePath = join(workspaceDir, "config.jsonc");
-      writeFileSync(filePath, '{ "items": [ { "id": "a" }, { "id": "b" } ] }', "utf-8");
-      const rt = createTestRuntime();
-      await pathFindCommand("oc://config.jsonc/items/*/id", { cwd: workspaceDir, json: true }, rt);
-      expect(rt.exitCode).toBe(0);
-      const out = JSON.parse(stdoutText(rt));
-      expect(out.count).toBe(2);
+    it.each(["jsonc", "yaml", "jsonl"])("CLI-F01 finds array indexes in %s", async (kind) => {
+      const options = { cwd: tempDirs.make("oc-path-cli-"), json: true };
+      const before = '{ "items": [ { "id": "a" }, { "id": "b" } ] }\n';
+      writeFileSync(join(options.cwd, `config.${kind}`), before, "utf-8");
+      const prefix = `oc://config.${kind}/${kind === "jsonl" ? "L1/" : ""}items`;
+      for (const [suffix, expected] of [
+        [".*/id", ["a", "b"]],
+        ['."1"/*', ["b"]],
+        ['.""/*', []],
+        ['."$first"/*', []],
+        ['."2"/*', []],
+      ] as const) {
+        const rt = createTestRuntime();
+        await pathFindCommand(prefix + suffix, options, rt);
+        expect(rt.exitCode).toBe(expected.length ? 0 : 1);
+        const out = JSON.parse(stdoutText(rt));
+        expect(out.count).toBe(expected.length);
+        expect(out.matches).toMatchObject(expected.map((valueText) => ({ match: { valueText } })));
+        for (const { path, match } of out.matches) {
+          const resolved = createTestRuntime();
+          await pathResolveCommand(path, options, resolved);
+          expect(JSON.parse(stdoutText(resolved))).toMatchObject({ resolved: true, match });
+        }
+      }
+      expect(readFileSync(join(options.cwd, `config.${kind}`), "utf-8")).toBe(before);
     });
 
     it("CLI-F02 returns 1 when zero matches", async () => {
@@ -1021,8 +1037,8 @@ describe("openclaw path CLI", () => {
       const rt = createTestRuntime();
       await pathFindCommand("oc://*.jsonc/items", { cwd: workspaceDir, json: true }, rt);
       expect(rt.exitCode).toBe(2);
-      expect(stderrText(rt)).toContain("OC_PATH_FILE_WILDCARD_UNSUPPORTED");
-      expect(stderrText(rt)).toContain("file-slot wildcards are not supported");
+      expect(stdoutText(rt)).toContain("OC_PATH_FILE_WILDCARD_UNSUPPORTED");
+      expect(stdoutText(rt)).toContain("file-slot wildcards are not supported");
     });
   });
 

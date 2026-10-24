@@ -218,9 +218,14 @@ it.each([
   try {
     await execution.run(job.id, "force");
     const result = execution.getJob(job.id)?.state;
-    if (
+    if (scenario === "archived") {
+      // The occurrence admission pauses the job before any session turn runs.
+      expect(reads).toEqual([]);
+      expect(result?.lastRunStatus).toBe("skipped");
+      expect(result?.lastError).toMatch(/it was archived/);
+      expect(execution.getJob(job.id)?.enabled).toBe(false);
+    } else if (
       scenario === "foreign" ||
-      scenario === "archived" ||
       scenario === "managed-foreign-owner" ||
       scenario === "managed-manual-owner" ||
       scenario === "managed-escape"
@@ -230,11 +235,9 @@ it.each([
       expect(result?.lastError).toMatch(
         scenario === "foreign"
           ? /only use its owning conversation’s workspace/
-          : scenario === "archived"
-            ? /is archived/
-            : scenario === "managed-escape"
-              ? /workspace does not match its managed worktree/
-              : /worktree is missing, retired, or mismatched/,
+          : scenario === "managed-escape"
+            ? /workspace does not match its managed worktree/
+            : /worktree is missing, retired, or mismatched/,
       );
     } else {
       expect(result?.lastRunStatus, result?.lastError).toBe("ok");

@@ -254,10 +254,7 @@ describe("Control UI relay tunnel", () => {
       concatSpy.mockRestore();
       copySpy.mockRestore();
     }
-    expect(await socket.sent.next()).toEqual({
-      kind: "binary",
-      bytes: Buffer.alloc(64 * 1024, 7),
-    });
+    expect(await socket.sent.next()).toEqual({ kind: "binary", bytes: Buffer.alloc(64 * 1024, 7) });
     expect(copiedBytes).toBeLessThanOrEqual(3 * 64 * 1024);
   });
 

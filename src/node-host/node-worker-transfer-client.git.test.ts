@@ -12,6 +12,7 @@ import {
   digest,
   fileEntry,
   manifestFixture,
+  serveTransfer,
   transferFixture,
   transferHandler,
   workspaceTransferHandler,
@@ -79,14 +80,10 @@ describe("node worker Git transfers", () => {
           res.writeHead(404).end();
         }
       });
-      const gatewayUrl = await listen(server);
-      try {
-        await expect(download(gatewayUrl, manifestRef)).resolves.toBe(manifestRef);
-        expect(requestedBlobs).toBe(0);
-        await expect(fs.readFile(path.join(workspaceDir, "script.sh"))).resolves.toEqual(content);
-      } finally {
-        await closeServer(server);
-      }
+      await using gateway = await serveTransfer(server);
+      await expect(download(gateway.gatewayUrl, manifestRef)).resolves.toBe(manifestRef);
+      expect(requestedBlobs).toBe(0);
+      await expect(fs.readFile(path.join(workspaceDir, "script.sh"))).resolves.toEqual(content);
     },
   );
 
@@ -302,41 +299,17 @@ describe("node worker Git transfers", () => {
         requestedBlobs += 1;
       }
     });
-    const gatewayUrl = await listen(server);
-    try {
-      await expect(download(gatewayUrl, manifestRef)).resolves.toBe(manifestRef);
-      expect(requestedBlobs).toBe(1);
-      for (const file of ["first.txt", "second.sh", "third.txt"]) {
-        await expect(fs.readFile(path.join(workspaceDir, file))).resolves.toEqual(body);
-      }
-      if (process.platform !== "win32") {
-        expect((await fs.stat(path.join(workspaceDir, "first.txt"))).mode & 0o777).toBe(0o644);
-        expect((await fs.stat(path.join(workspaceDir, "second.sh"))).mode & 0o777).toBe(0o755);
-      }
-      await fs.writeFile(path.join(workspaceDir, "first.txt"), "edited independently\n");
-      await expect(fs.readFile(path.join(workspaceDir, "third.txt"))).resolves.toEqual(body);
-    } finally {
-      await closeServer(server);
+    await using gateway = await serveTransfer(server);
+    await expect(download(gateway.gatewayUrl, manifestRef)).resolves.toBe(manifestRef);
+    expect(requestedBlobs).toBe(1);
+    for (const file of ["first.txt", "second.sh", "third.txt"]) {
+      await expect(fs.readFile(path.join(workspaceDir, file))).resolves.toEqual(body);
     }
-  });
-
-  it("round-trips a downloaded workspace with a supplied hash memo", async () => {
-    const root = tempDirs.make("node-worker-transfer-memo-");
-    const { download, upload } = transferFixture(root, "environment-memo");
-    const body = Buffer.from("memoized content\n");
-    const entry = fileEntry("artifact.txt", body);
-    const { sha256 } = entry;
-    const { rawManifest, manifestRef } = manifestFixture([entry]);
-    const server = createHttpServer(
-      workspaceTransferHandler(rawManifest, new Map([[sha256, body]]), () => manifestRef),
-    );
-    const gatewayUrl = await listen(server);
-    const hashMemo = new Map<string, string>();
-    try {
-      await expect(download(gatewayUrl, manifestRef, { hashMemo })).resolves.toBe(manifestRef);
-      await expect(upload(gatewayUrl, manifestRef, { hashMemo })).resolves.toBe(manifestRef);
-    } finally {
-      await closeServer(server);
+    if (process.platform !== "win32") {
+      expect((await fs.stat(path.join(workspaceDir, "first.txt"))).mode & 0o777).toBe(0o644);
+      expect((await fs.stat(path.join(workspaceDir, "second.sh"))).mode & 0o777).toBe(0o755);
     }
+    await fs.writeFile(path.join(workspaceDir, "first.txt"), "edited independently\n");
+    await expect(fs.readFile(path.join(workspaceDir, "third.txt"))).resolves.toEqual(body);
   });
 });

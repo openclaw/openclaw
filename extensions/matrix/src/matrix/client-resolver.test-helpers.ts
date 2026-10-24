@@ -75,7 +75,6 @@ export async function expectOneOffSharedMatrixClient(params?: {
     cfg: params?.cfg ?? {},
     timeoutMs: params?.timeoutMs,
     accountId,
-    startClient: false,
     role: "transient",
   });
 
@@ -96,7 +95,6 @@ export function expectExplicitMatrixClientConfig(params: { cfg: unknown; account
     cfg: params.cfg,
     timeoutMs: undefined,
     accountId,
-    startClient: false,
     role: "transient",
   });
 }

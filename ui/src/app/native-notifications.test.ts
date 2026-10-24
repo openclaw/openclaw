@@ -63,13 +63,23 @@ it("posts permission requests", () => {
   expect(postMessage).toHaveBeenCalledWith({ type: "request-permission" });
 });
 
-it("publishes pending immediately and suppresses duplicate test sends", () => {
+it("shares a test receipt and settles only after the native pending acknowledgement", async () => {
   const postMessage = installBridge();
   postMessage.mockClear();
-  capability?.sendTest();
-  capability?.sendTest();
+  const completion = capability?.sendTest();
+  expect(completion).toBeInstanceOf(Promise);
+  expect(capability?.sendTest()).toBe(completion);
   expect(capability?.snapshot).toEqual({ permission: "unknown", test: { state: "pending" } });
   expect(postMessage.mock.calls).toEqual([[{ type: "send-test" }]]);
+  const settled = vi.fn();
+  void completion?.then(settled);
+  publish({ permission: "granted", test: { state: "sent" } });
+  await Promise.resolve();
+  expect(settled).not.toHaveBeenCalled();
+  publish({ permission: "granted", test: { state: "pending" } });
+  publish({ permission: "granted", test: { state: "error", message: "Try again." } });
+  await expect(completion).resolves.toEqual({ state: "error", message: "Try again." });
+  expect(capability?.snapshot.test).toEqual({ state: "error", message: "Try again." });
 });
 
 it("forwards completion to the native permission owner without prompting", () => {
@@ -95,10 +105,12 @@ it("keeps permission and failed send as independent facts across focus refresh",
   expect(postMessage).toHaveBeenCalledWith({ type: "status" });
 });
 
-it("removes listeners on dispose", () => {
+it("retires a pending receipt and removes listeners on dispose", async () => {
   const postMessage = installBridge();
   const listener = vi.fn();
   capability?.subscribe(listener);
+  const completion = capability?.sendTest();
+  listener.mockClear();
   capability?.dispose();
   capability = null;
   postMessage.mockClear();
@@ -106,4 +118,5 @@ it("removes listeners on dispose", () => {
   publish({ permission: "granted", test: null });
   expect(postMessage).not.toHaveBeenCalled();
   expect(listener).not.toHaveBeenCalled();
+  await expect(completion).resolves.toBeUndefined();
 });

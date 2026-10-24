@@ -12,6 +12,7 @@ import {
 } from "../../infra/outbound/deliver-types.js";
 import type { DeliverOutboundPayloadsParams } from "../../infra/outbound/deliver.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
@@ -43,36 +44,18 @@ vi.mock("../../plugins/hook-runner-global.js", () => ({
 const { routeReply } = await import("./route-reply.js");
 type RouteReplyParams = Parameters<typeof routeReply>[0];
 
+const { slackPlugin } = await loadBundledPluginFacade<{ slackPlugin: ChannelPlugin }>({
+  pluginId: "slack",
+  artifactBasename: "channel-plugin-api.ts",
+});
+assert(slackPlugin.messaging?.hasStructuredReplyPayload);
+assert(slackPlugin.threading?.resolveReplyTransport);
 const slackMessaging: ChannelMessagingAdapter = {
-  hasStructuredReplyPayload: ({ payload }) => {
-    const blocks = (payload.channelData?.slack as { blocks?: unknown } | undefined)?.blocks;
-    if (typeof blocks === "string") {
-      return blocks.trim().length > 0;
-    }
-    return Array.isArray(blocks) && blocks.length > 0;
-  },
+  hasStructuredReplyPayload: slackPlugin.messaging.hasStructuredReplyPayload,
 };
-
 const slackThreading: ChannelThreadingAdapter = {
-  resolveReplyTransport: ({ threadId, replyToId, replyDelivery }) => {
-    const resolvedReplyToId =
-      resolveSlackThreadTsCandidate(replyDelivery?.replyToMode === "off" ? undefined : replyToId) ??
-      resolveSlackThreadTsCandidate(threadId);
-    return {
-      replyToId:
-        replyDelivery?.replyToMode === "off" && !resolvedReplyToId ? null : resolvedReplyToId,
-      threadId: null,
-    };
-  },
+  resolveReplyTransport: slackPlugin.threading.resolveReplyTransport,
 };
-
-function resolveSlackThreadTsCandidate(value?: string | number | null): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const normalized = value.trim();
-  return /^\d+\.\d+$/.test(normalized) ? normalized : undefined;
-}
 
 function createChannelPlugin(
   id: ChannelPlugin["id"],

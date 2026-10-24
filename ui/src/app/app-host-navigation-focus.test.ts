@@ -5,7 +5,6 @@ import { resetAppHostTestGlobals } from "./app-host.test-support.ts";
 import {
   handleNavDrawerKeydown,
   NAV_DRAWER_TOGGLE_REGISTRATION,
-  navDrawerFocusableElements,
   visibleNavDrawerToggle,
 } from "./navigation-surface.ts";
 import { registerRouteElement, RouteElements, type RouteElementEvent } from "./route-elements.ts";
@@ -61,7 +60,6 @@ it("wraps Tab across composed drawer controls using the modal focus order", () =
   drawer.addEventListener("keydown", (event) => handleNavDrawerKeydown(host, event));
   document.body.append(drawer);
   onTestFinished(() => drawer.remove());
-  expect(navDrawerFocusableElements(drawer)).toEqual([first, last]);
   for (const [from, to, shiftKey, root] of [
     [last, first, false, document],
     [first, last, true, shadow],

@@ -251,16 +251,14 @@ remain loaded after their registrations are removed.
 Bundled plugins can reload while preserving their enabled or disabled policy.
 Reload follows the selected bundled copy even when a dormant registry install
 record remains after a source update; that record stays unchanged.
-Bundled plugins, including TypeScript source entries, reuse their process-loaded
-code when their registrations reload. If the plugin's files changed while its
-original module remains loaded,
-the result reports `restartRequired: true` with a warning, and CLI and tool
-output explain that a Gateway restart is needed to load edited code. Reload does
-not rebuild bundled code. Rebuild before restarting when the installation loads
-compiled output.
-External captured sources return `restartRequired: false` after replacement.
-Reloading unchanged bundled files also returns `restartRequired: false`; channel
-and service registrations can be replaced without restarting the Gateway.
+Explicit bundled reload captures fresh plugin code, including TypeScript source
+entries and plugin-only compiled chunks. Host and SDK modules retain their
+process-loaded identity. Successful replacement returns `restartRequired: false`
+for both bundled and external plugins. Unselected plugins keep their registrations.
+Reload does not rebuild bundled code. Rebuild before reloading when the installation
+loads compiled output. Compiled reload requires the build's runtime dependency
+ownership metadata; rebuild if reload reports that it is missing. Changes to host
+or SDK code require a Gateway restart.
 Reloading a discovered source does not create an
 install record or grant permission to install, replace, or remove its files.
 

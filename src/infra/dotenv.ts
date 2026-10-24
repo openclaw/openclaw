@@ -261,7 +261,6 @@ export function loadWorkspaceDotEnvFile(filePath: string, opts?: { env?: NodeJS.
     entryFilter: (key) =>
       !shouldBlockWorkspaceStaticDotEnvKey(key) &&
       !getProviderAuthBlockedKeys().has(key.toUpperCase()),
-    quiet: true,
   });
   if (!parsed) {
     return;
@@ -283,7 +282,6 @@ async function loadWorkspaceDotEnvFileAsync(
   const parsed = await readDotEnvFileAsync({
     filePath,
     entryFilter: (key) => !shouldBlockWorkspaceStaticDotEnvKey(key),
-    quiet: true,
   });
   if (!parsed?.entries.length) {
     return;

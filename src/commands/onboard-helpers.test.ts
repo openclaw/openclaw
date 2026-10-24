@@ -448,7 +448,7 @@ describe("probeGatewayReachable", () => {
     const detail = `${"x".repeat(118)}…`;
     mocks.probeGateway.mockRejectedValue(new Error(`${"x".repeat(118)}🚀tail\nignored`));
     expect(await probeGatewayReachable(localProbe)).toEqual({ ok: false, detail });
-    expect(await probeGatewayConfiguredModel(localProbe)).toEqual({ kind: "unreachable", detail });
+    expect(await probeGatewayConfiguredModel(localProbe)).toBe("unreachable");
   });
 
   it.each([
@@ -487,16 +487,13 @@ describe("probeGatewayReachable", () => {
         configSnapshot: { valid: true, config: { gateway: { mode: "local" } } },
       });
 
-    await expect(probeGatewayConfiguredModel(localProbe)).resolves.toEqual({ kind: "configured" });
+    await expect(probeGatewayConfiguredModel(localProbe)).resolves.toBe("configured");
     await expect(
       probeGatewayConfiguredModel({
         ...localProbe,
         originScopedDeviceAuth: true,
       }),
-    ).resolves.toEqual({
-      kind: "missing-configured-model",
-      detail: "Gateway default agent has no configured model",
-    });
+    ).resolves.toBe("missing-configured-model");
     expect(mocks.probeGateway).toHaveBeenLastCalledWith(
       expect.objectContaining({ detailLevel: "config", originScopedDeviceAuth: true }),
     );
@@ -511,7 +508,7 @@ describe("probeGatewayReachable", () => {
         error: "device pairing required",
         connectErrorDetails: { code: ConnectErrorDetailCodes.PAIRING_REQUIRED },
       },
-      { kind: "reachable-unverified", detail: "device pairing required" },
+      "reachable-unverified",
     ],
     [
       "unrecognized connect error",
@@ -520,7 +517,7 @@ describe("probeGatewayReachable", () => {
         error: "foreign protocol error",
         connectErrorDetails: { code: "NOT_AN_OPENCLAW_CONNECT_ERROR" },
       },
-      { kind: "unreachable", detail: "foreign protocol error" },
+      "unreachable",
     ],
     [
       "config without handshake evidence",
@@ -533,7 +530,7 @@ describe("probeGatewayReachable", () => {
           config: { agents: { defaults: { model: "openai/foreign-model" } } },
         },
       },
-      { kind: "unreachable" },
+      "unreachable",
     ],
     [
       "invalid config",
@@ -542,7 +539,7 @@ describe("probeGatewayReachable", () => {
         gatewayReached: true,
         configSnapshot: { valid: false },
       },
-      { kind: "reachable-unverified", detail: "Gateway returned an invalid config snapshot" },
+      "reachable-unverified",
     ],
   ])("classifies %s", async (_name, result, expected) => {
     mocks.probeGateway.mockResolvedValueOnce(result);

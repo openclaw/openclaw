@@ -6,12 +6,13 @@ import type {
   PluginDoctorStateMigration,
   PluginDoctorStateMigrationContext,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
-import { expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import {
   createMemoryLanceDbStateMigrations,
   resolveMemoryLanceDbPluginRoot,
   stateMigrations,
 } from "./doctor-contract-api.js";
+import { MemoryDB } from "./lancedb-store.js";
 import { installTmpDirHarness } from "./test-helpers.js";
 
 const unusedDoctorContext = {
@@ -21,6 +22,12 @@ const unusedDoctorContext = {
 } as PluginDoctorStateMigrationContext;
 
 const { getDbPath, getTmpDir } = installTmpDirHarness({ prefix: "openclaw-memory-doctor-" });
+const entry = (text: string) => ({
+  text,
+  vector: [1, 0],
+  importance: 0.8,
+  category: "preference" as const,
+});
 
 type MigrationParams = Parameters<PluginDoctorStateMigration["detectLegacyState"]>[0];
 const scopeMigration = expectDefined(stateMigrations[0], "memory-lancedb state migration");
@@ -72,13 +79,12 @@ async function createLegacyTable(
   try {
     const table = await connection.createTable(
       "memories",
-      rows.map((row, index) =>
-        Object.assign(
-          { vector: [1, 0], importance: 0.7, category: "fact", createdAt: index + 1 },
-          scoped ? { agentId: "main" } : {},
-          row,
-        ),
-      ),
+      rows.map((row, index) => ({
+        ...entry(row.text),
+        createdAt: index + 1,
+        ...(scoped ? { agentId: "main" } : {}),
+        ...row,
+      })),
     );
     table.close();
   } finally {
@@ -100,6 +106,63 @@ test("closes the connection when opening a table fails before migration starts",
     failedOperation.mockRestore();
     connection.close();
   }
+});
+
+describe("MemoryDB agent isolation", () => {
+  let db: MemoryDB;
+  beforeEach(() => {
+    db = new MemoryDB(getDbPath(), 2);
+  });
+  afterEach(() => db.close());
+
+  test("cancels a timed-out native search and keeps the table usable", async () => {
+    const stored = await db.store("alpha", entry("alpha"));
+    await expect(db.search("alpha", [1, 0], 5, 0, { timeoutMs: 0 })).rejects.toThrow(
+      "Query timeout",
+    );
+    await expect(db.search("alpha", [1, 0], 5, 0, { timeoutMs: 5_000 })).resolves.toMatchObject([
+      { entry: { id: stored.id, text: "alpha" } },
+    ]);
+  });
+
+  test("scopes store, search, list, query, delete, and restart reads", async () => {
+    const alpha = await db.store("alpha", entry("alpha"));
+    await db.store("beta", entry("beta"));
+    await expect(db.search("alpha", [1, 0], 5, 0)).resolves.toMatchObject([
+      { entry: { id: alpha.id, text: "alpha" } },
+    ]);
+    await expect(db.list("beta")).resolves.toMatchObject([{ text: "beta" }]);
+    await expect(
+      db.query("alpha", {
+        columns: ["id", "text"],
+        filter: { column: "category", operator: "=", value: "preference" },
+      }),
+    ).resolves.toMatchObject([{ id: alpha.id, text: "alpha" }]);
+    await expect(db.delete("beta", alpha.id)).resolves.toBe(false);
+    await expect(db.list("alpha")).resolves.toMatchObject([{ id: alpha.id }]);
+    db.close();
+    db = new MemoryDB(getDbPath(), 2);
+    await expect(db.list("alpha")).resolves.toMatchObject([{ id: alpha.id, text: "alpha" }]);
+    await expect(db.list("beta")).resolves.toMatchObject([{ text: "beta" }]);
+  });
+
+  test("rejects search when a persisted table is reopened with a different vector dimension", async () => {
+    await db.store("main", entry("fixed-size vector"));
+    db.close();
+    db = new MemoryDB(getDbPath(), 3);
+    await expect(db.search("main", [1, 0, 0], 5, 0)).rejects.toThrow(
+      "No vector column found to match with the query vector dimension: 3",
+    );
+  });
+
+  test("refuses an unscoped legacy table until doctor migrates it", async () => {
+    await createLegacyTable();
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await expect(db.list("main")).rejects.toThrow(
+        'Run "openclaw doctor --fix" to assign legacy rows to the default agent',
+      );
+    }
+  });
 });
 
 test("assigns explicit-roster legacy rows to the configured system agent", async () => {

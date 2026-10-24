@@ -29,8 +29,10 @@ import {
   mutateSessionGroupCatalog,
   readSessionGroupCatalog,
 } from "./session-group-catalog.js";
-import { readSessionGroupCatalogSnapshot } from "./session-group-catalog.kernel.js";
-import { registerSessionGroupInDatabase } from "./session-group-registration.kernel.js";
+import {
+  mutateSessionGroupCatalogInDatabase,
+  readSessionGroupCatalogSnapshot,
+} from "./session-group-catalog.kernel.js";
 import {
   deleteSessionGroup,
   ensureSessionGroupRegistered,
@@ -57,7 +59,7 @@ describe("session groups catalog", () => {
   const put = (
     names: string[],
     options: Partial<Omit<Parameters<typeof putSessionGroups>[0], "names">> = {},
-  ) => putSessionGroups({ cfg, env, names, ...options });
+  ) => putSessionGroups({ cfg, names, ...options });
   const defaults = (name: string, cwd: string | null, worktree = true) =>
     updateSessionGroupDefaults(name, { cwd, worktree }, env);
   const groups = (...names: string[]) => names.map((name, position) => ({ name, position }));
@@ -345,9 +347,15 @@ describe("session groups catalog", () => {
     );
 
     const database = openOpenClawStateDatabase({ env });
-    expect(registerSessionGroupInDatabase(database, "Travel", env)).toBe(false);
+    expect(
+      mutateSessionGroupCatalogInDatabase(database, { kind: "register", name: "Travel" }, env)
+        .changed,
+    ).toBe(false);
     expect(readSessionGroupCatalogSnapshot(database.db).groups).toEqual(groups("Work", "Travel"));
-    expect(registerSessionGroupInDatabase(database, "Later", env)).toBe(true);
+    expect(
+      mutateSessionGroupCatalogInDatabase(database, { kind: "register", name: "Later" }, env)
+        .changed,
+    ).toBe(true);
     expect(readSessionGroupCatalogSnapshot(database.db).groups.at(-1)).toEqual({
       name: "Later",
       position: 2,
@@ -360,7 +368,6 @@ describe("session groups catalog", () => {
       cfg,
       names: ["Old", "Other"],
       sectionOrder: ["ungrouped", "category:Old", "work", "category:Other"],
-      env,
     });
     // Store saves run maintenance pruning; stale timestamps would be dropped.
     const updatedAtA = Date.now() - 1_000;
@@ -409,7 +416,6 @@ describe("session groups catalog", () => {
       cfg,
       names: ["Gone"],
       sectionOrder: ["category:Gone", "ungrouped", "work"],
-      env,
     });
     const storePath = await seedSessionStore({
       "agent:main:dashboard:a": { sessionId: "a1", updatedAt: Date.now(), category: "Gone" },
@@ -506,7 +512,6 @@ describe("session groups catalog", () => {
       cfg,
       names: ["A", "B"],
       sectionOrder: ["category:A", "ungrouped", "category:B"],
-      env,
     });
     await seedSessionStore({
       "agent:main:dashboard:a": { sessionId: "a1", updatedAt: Date.now(), category: "A" },
@@ -619,7 +624,7 @@ describe("session groups catalog", () => {
   });
 
   it("keeps the source sidebar slot when the merge target has no stored slot", async () => {
-    await putSessionGroups({ cfg, names: ["A", "B"], sectionOrder: ["category:A", "work"], env });
+    await putSessionGroups({ cfg, names: ["A", "B"], sectionOrder: ["category:A", "work"] });
 
     const result = await renameSessionGroup({ cfg, name: "A", to: "B", env });
 

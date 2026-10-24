@@ -74,7 +74,10 @@ import {
   resolveTalkVoiceSession,
 } from "../voice-selection.js";
 import { talkClientHandlers } from "./client.js";
-import { registerNativeConsultExactControlTests } from "./native-consult-control.test-support.js";
+import {
+  createNativeTalkCall,
+  registerNativeConsultExactControlTests,
+} from "./native-consult-control.test-support.js";
 import { registerOwnedNativeConsultRun } from "./native-consult-target.test-support.js";
 import { talkSessionHandlers } from "./session.js";
 
@@ -175,6 +178,54 @@ function control(
     text,
     ...options,
   });
+}
+
+function unrelatedRun(storePath: string, sessionId: string, runId: string) {
+  const operation = createReplyOperation({
+    sessionKey: "global",
+    sessionId,
+    agentId: "voice",
+    resetTriggered: false,
+    target: captureSessionTarget({
+      storeScope: `${storePath}.unrelated`,
+      sessionKey: "global",
+      agentId: "voice",
+      incarnation: sessionId,
+    }),
+  });
+  const abort = vi.fn();
+  const handle = createEmbeddedRunHandle({ runId, abort });
+  setActiveEmbeddedRun(sessionId, handle, "global", undefined, "voice", operation);
+  return {
+    operation,
+    abort,
+    dispose() {
+      clearActiveEmbeddedRun(sessionId, handle, "global");
+      operation.complete();
+    },
+  };
+}
+
+function pauseControl(
+  target: Parameters<typeof control>[0],
+  cancelRun?: NonNullable<Parameters<typeof control>[2]>["cancelRun"],
+) {
+  const preparing = createDeferredCore();
+  const prepared = createDeferredCore();
+  const pending = control(target, "cancel", {
+    mode: "cancel",
+    cancelRun,
+    getToolAuthorityOverlay: () => ({
+      senderIsOwner: false,
+      disableTools: false,
+      traceAuthorized: false,
+    }),
+    prepareToolAuthorityOverlay: async () => {
+      preparing.resolve();
+      await prepared.promise;
+    },
+  });
+  return { preparing, prepared, pending };
 }
 
 function configureProvider(provider: RealtimeVoiceProviderPlugin, supportsGatewayControl = true) {
@@ -299,15 +350,10 @@ afterEach(async () => {
 });
 
 async function createRelayCall(params: Record<string, unknown> = {}) {
-  const respond = await dispatch("talk.session.create", {
-    sessionKey: "main",
-    mode: "realtime",
-    transport: "gateway-relay",
-    brain: "agent-consult",
-    ...params,
-  });
-  expectOk(respond);
-  const sessionId = (respond.mock.calls[0]![1] as { sessionId: string }).sessionId;
+  const { sessionId } = await createNativeTalkCall(dispatch, false, params);
+  if (!sessionId) {
+    throw new Error("Expected a relay session ID");
+  }
   const record = getUnifiedTalkSession(sessionId);
   if (record.kind !== "realtime-relay") {
     throw new Error("Expected realtime relay");
@@ -465,20 +511,7 @@ it.each([
       : { kind: "voice-session", voiceSessionId },
   );
   expect(targetRun?.isCurrent()).toBe(true);
-  const preparing = createDeferredCore();
-  const prepared = createDeferredCore();
-  const pending = control(targetRun, "cancel", {
-    mode: "cancel",
-    getToolAuthorityOverlay: () => ({
-      senderIsOwner: false,
-      disableTools: false,
-      traceAuthorized: false,
-    }),
-    prepareToolAuthorityOverlay: async () => {
-      preparing.resolve();
-      await prepared.promise;
-    },
-  });
+  const { preparing, prepared, pending } = pauseControl(targetRun);
   await preparing.promise;
   const entry = rpcSourceTesting.get(runId)!;
   if (change === "replaced") {
@@ -552,38 +585,10 @@ it.each([
       { executionStarted: source === "native" },
     );
     const operation = registration.entry.input.claim!.operation!;
-    const preparing = createDeferredCore();
-    const prepared = createDeferredCore();
     const cancelRun = override ? vi.fn(async () => true) : undefined;
-    const pending = control(runTarget(target), "cancel", {
-      mode: "cancel",
-      cancelRun,
-      getToolAuthorityOverlay: () => ({
-        senderIsOwner: false,
-        disableTools: false,
-        traceAuthorized: false,
-      }),
-      prepareToolAuthorityOverlay: async () => {
-        preparing.resolve();
-        await prepared.promise;
-      },
-    });
+    const { preparing, prepared, pending } = pauseControl(runTarget(target), cancelRun);
     await preparing.promise;
-    const foreignOperation = createReplyOperation({
-      sessionKey: "global",
-      sessionId,
-      agentId: "voice",
-      resetTriggered: false,
-      target: captureSessionTarget({
-        storeScope: `${target.storePath}.unrelated`,
-        sessionKey: "global",
-        agentId: "voice",
-        incarnation: sessionId,
-      }),
-    });
-    const abortForeign = vi.fn();
-    const foreign = createEmbeddedRunHandle({ runId, abort: abortForeign });
-    setActiveEmbeddedRun(sessionId, foreign, "global", undefined, "voice", foreignOperation);
+    const foreign = unrelatedRun(target.storePath, sessionId, runId);
     try {
       prepared.resolve();
       expect(await pending).toMatchObject({
@@ -593,17 +598,16 @@ it.each([
         reason: "no_active_run",
       });
       expect(abort).not.toHaveBeenCalled();
-      expect(abortForeign).not.toHaveBeenCalled();
+      expect(foreign.abort).not.toHaveBeenCalled();
       if (cancelRun) {
         expect(cancelRun).not.toHaveBeenCalled();
       }
       expect(operation.abortSignal.aborted).toBe(false);
-      expect(foreignOperation.abortSignal.aborted).toBe(false);
+      expect(foreign.operation.abortSignal.aborted).toBe(false);
     } finally {
       prepared.resolve();
       await Promise.allSettled([pending]);
-      clearActiveEmbeddedRun(sessionId, foreign, "global");
-      foreignOperation.complete();
+      foreign.dispose();
     }
   },
 );
@@ -612,14 +616,7 @@ it.each(["source", "claim"] as const)(
   "preserves status and cancellation for an owned queued chat.send reply with %s signal",
   async (signalOwner) => {
     config.session = { scope: "global" };
-    const respond = await dispatch("talk.client.create", {
-      sessionKey: "main",
-      mode: "realtime",
-      transport: "webrtc",
-      brain: "agent-consult",
-      capabilities: ["gateway-control-v1"],
-    });
-    expectOk(respond);
+    const { voiceSessionId } = await createNativeTalkCall(dispatch, true);
     const sessionId = loadSessionEntry({ agentId: "voice", sessionKey: "global" })!.sessionId;
     const target = await prepareTalkSessionTarget(config, "main");
     const registration = registerChatAbortController({
@@ -664,14 +661,16 @@ it.each(["source", "claim"] as const)(
     const resolvedSessionId = "materialized-reply-session";
     updateRpcSourceSessionId(rpcSourceTesting.get("queued-talk")!, resolvedSessionId);
     operation.updateSessionId(resolvedSessionId);
-    const voiceSessionId = (respond.mock.calls[0]![1] as { voiceSessionId: string }).voiceSessionId;
     await registerClientVoiceConsultRun({
       agentId: "voice",
       sessionKey: "main",
-      voiceSessionId,
+      voiceSessionId: voiceSessionId!,
       runId: "queued-talk",
     });
-    const voiceTarget = runTarget(target, { kind: "voice-session", voiceSessionId });
+    const voiceTarget = runTarget(target, {
+      kind: "voice-session",
+      voiceSessionId: voiceSessionId!,
+    });
     try {
       expect(voiceTarget?.isCurrent()).toBe(true);
       registration.cleanup();
@@ -686,38 +685,15 @@ it.each(["source", "claim"] as const)(
         await dispatch("talk.client.steer", { sessionKey: "main", text: "status", mode: "status" }),
         expect.objectContaining({ active: true, sessionId: resolvedSessionId }),
       );
-      const abortUnrelated = vi.fn();
-      const unrelated = createEmbeddedRunHandle({ runId: "queued-talk", abort: abortUnrelated });
       // Colliding session IDs must not cross the distinct physical controller target.
-      const unrelatedSessionId = resolvedSessionId;
-      const unrelatedOperation = createReplyOperation({
-        sessionKey: "global",
-        sessionId: unrelatedSessionId,
-        agentId: "voice",
-        resetTriggered: false,
-        target: captureSessionTarget({
-          storeScope: `${target.storePath}.unrelated`,
-          sessionKey: "global",
-          agentId: "voice",
-          incarnation: unrelatedSessionId,
-        }),
-      });
-      setActiveEmbeddedRun(
-        unrelatedSessionId,
-        unrelated,
-        "global",
-        undefined,
-        "voice",
-        unrelatedOperation,
-      );
+      const unrelated = unrelatedRun(target.storePath, resolvedSessionId, "queued-talk");
       try {
         expect(await control(targetRun)).toMatchObject({ active: false, aborted: false });
-        expect(abortUnrelated).not.toHaveBeenCalled();
-        expect(unrelatedOperation.abortSignal.aborted).toBe(false);
+        expect(unrelated.abort).not.toHaveBeenCalled();
+        expect(unrelated.operation.abortSignal.aborted).toBe(false);
         expect(operation.abortSignal.aborted).toBe(false);
       } finally {
-        clearActiveEmbeddedRun(unrelatedSessionId, unrelated, "global");
-        unrelatedOperation.complete();
+        unrelated.dispose();
       }
       expectOk(
         await dispatch("talk.client.steer", { sessionKey: "main", text: "cancel", mode: "cancel" }),
@@ -971,19 +947,10 @@ describe.each(["browser", "relay"] as const)("native %s Talk consultation", (tra
     config.session = { mainKey: "home", scope };
     config.talk = { ...config.talk, realtime: { instructions: "Keep native answers brief." } };
     const target = await prepareTalkSessionTarget(config, "main");
-    const method = transport === "browser" ? "talk.client.create" : "talk.session.create";
-    const respond = await dispatch(method, {
-      sessionKey: "main",
-      mode: "realtime",
-      transport: transport === "browser" ? "webrtc" : "gateway-relay",
-      brain: "agent-consult",
-      ...(transport === "browser" ? { capabilities: ["gateway-control-v1"] } : {}),
-    });
-    expect(respond).toHaveBeenCalledWith(true, expect.any(Object), undefined);
+    const result = await createNativeTalkCall(dispatch, transport === "browser");
     expect(providerInstructions).toBe(
       `Keep native answers brief.\n\n${REALTIME_VOICE_AGENT_CONTEXT_INSTRUCTIONS}`,
     );
-    const result = respond.mock.calls[0]?.[1] as { voiceSessionId?: string; sessionId?: string };
     const storage = { agentId: "voice", sessionKey: canonicalKey, storePath: target.storePath };
     const created = loadSessionEntry(storage);
     expect(created?.sessionId).toBeTruthy();

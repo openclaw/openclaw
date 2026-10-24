@@ -4,13 +4,10 @@ import { renderUpdateRunReport } from "../../../src/infra/update-run-report.ts";
 import { createUpdateRunFixture } from "../test-helpers/update-run.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import { flushMicrotasks, type RequestFn } from "./overlays-access.test-support.ts";
-import { createApplicationOverlays } from "./overlays.ts";
-import { updateRunHarness } from "./update-run.test-support.ts";
+import { disposeTestOverlays, requestCalls, runTest } from "./overlays-update.test-support.ts";
 
-let dispose: (() => void) | undefined;
-afterEach(() => {
-  dispose?.();
-  dispose = undefined;
+afterEach(async () => {
+  await disposeTestOverlays();
   vi.useRealTimers();
 });
 
@@ -37,9 +34,7 @@ async function start(patch: Partial<Run>, retry = false) {
           }
         : {},
   );
-  const harness = updateRunHarness(request);
-  const overlays = createApplicationOverlays(harness.gateway);
-  dispose = () => overlays.dispose();
+  const { harness, overlays } = runTest(request);
   await flushMicrotasks();
   await overlays.runUpdate();
   return {
@@ -68,7 +63,7 @@ it("retries the first accepted OCM job read without reconnecting or resubmitting
   await vi.advanceTimersByTimeAsync(5_000);
   expect(overlays.snapshot.updateRun).toEqual(run);
   expect(overlays.snapshot.updateReconciliationPending).toBe(false);
-  expect(request.mock.calls.filter(([method]) => method === "update.run")).toHaveLength(1);
+  expect(requestCalls(request, "update.run")).toHaveLength(1);
   await expectPollingStopped(request);
 });
 

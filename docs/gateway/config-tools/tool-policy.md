@@ -75,7 +75,7 @@ whether the tool is available. Subagent and non-owner restrictions still apply.
 | `group:memory`     | `memory_search`, `memory_get`                                                                                                                                                                                                                            |
 | `group:web`        | `web_search`, `x_search`, `web_fetch`                                                                                                                                                                                                                    |
 | `group:ui`         | `browser`, `screen`, `theme`, `dashboard`, `terminal`, `portal`, `canvas`, `show_widget`                                                                                                                                                                 |
-| `group:automation` | `heartbeat_respond`, `automations` (`cron` alias), `gateway`, `plugins`, `openclaw`                                                                                                                                                                      |
+| `group:automation` | `automations` (`cron` alias), `gateway`, `plugins`, `openclaw`                                                                                                                                                                                           |
 | `group:messaging`  | `message`                                                                                                                                                                                                                                                |
 | `group:nodes`      | `nodes`, `computer`                                                                                                                                                                                                                                      |
 | `group:agents`     | `agents_list`, `get_goal`, `create_goal`, `update_goal`, `progress_card`, `ask_user`, `skill_workshop`                                                                                                                                                   |
@@ -234,7 +234,42 @@ Tool Search and Code Mode remain available as dispatchers over the permitted cat
 
 Adding, changing or removing `tools.gatewayPolicy` requires a Gateway restart. Deployment owners such as OCE supply the policy when deploying the Gateway and activate changes through restart or replacement after affected old work ends. Newly assembled tools then use the new deployment policy. Ordinary tool-policy settings keep their existing reload behavior.
 
-This policy limits model-directed tools. Direct human Gateway administration keeps its existing authorization. It does not configure native Codex tools, restrict arbitrary Harness-local programs, or replace the separate controls required for scheduled command jobs and automation administration.
+This policy limits model-directed tools. Direct human Gateway administration keeps its existing authorization. It does not configure native Codex tools or restrict arbitrary Harness-local programs.
+
+### Automation scope and command jobs
+
+The tool/action allowlist alone cannot distinguish an ordinary Agent-turn schedule from a command job. Add automation restrictions when model turns should keep caller-scoped scheduling:
+
+```json5
+{
+  tools: {
+    gatewayPolicy: {
+      allow: ["automations"],
+      actions: {
+        automations: [
+          "status",
+          "list",
+          "get",
+          "add",
+          "update",
+          "remove",
+          "run",
+          "runs",
+          "next_check",
+          "wake",
+        ],
+      },
+      automations: { scope: "caller", allowCommandJobs: false },
+    },
+  },
+}
+```
+
+`scope: "caller"` withholds administrative automation grants from model turns, including conversations started by administrators or configured channel owners and restored continuations. Existing caller ownership and visibility checks still apply.
+
+`allowCommandJobs: false` rejects model creation, conversion, editing, enablement and manual execution of command jobs and on-exit command watchers. The Gateway checks the stored job as well as the requested change, so a patch that omits the payload kind cannot bypass the restriction. Ordinary Agent-turn schedules remain available. Use `cron.triggers.enabled: false` separately to disable streams, script payloads, condition triggers and event sources; that setting also applies to humans.
+
+These automation fields affect model-directed calls. Direct authorized human UI, CLI and RPC administration remains available. Omit the fields to retain existing conversational administrator management. Changes follow the Gateway restart contract above.
 
 ## `tools.byProvider`
 

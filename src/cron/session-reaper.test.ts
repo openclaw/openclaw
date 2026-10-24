@@ -84,6 +84,26 @@ describe("sweepCronRunSessions", () => {
     updatedAt: now - 25 * 3_600_000,
     ...overrides,
   });
+  const continuation = (sessionId: string) =>
+    expiredRun(sessionId, {
+      delivery: { kind: "none" },
+      cronRunContinuation: {
+        lifecycleRevision: "revision-parent",
+        phase: "ready",
+        basePersisted: true,
+      },
+    });
+  async function holdWriter(sessionKey: string) {
+    const entered = createDeferred();
+    const released = createDeferred();
+    const writer = patchSessionEntryCore({ storePath, sessionKey }, async () => {
+      entered.resolve();
+      await released.promise;
+      return {};
+    });
+    await entered.promise;
+    return { writer, release: () => released.resolve() };
+  }
   const sharedScope = (target: string, agentId: string, sessionKey: string) => ({
     agentId,
     defaultAgentId: "main",
@@ -355,14 +375,7 @@ describe("sweepCronRunSessions", () => {
   it("retains an expired continuation until its native child and completion settle", async () => {
     const parentKey = "agent:main:cron:job1:run:pending-parent";
     const idleKey = "agent:main:cron:job1:run:idle-sibling";
-    const parent = expiredRun("pending-parent", {
-      delivery: { kind: "none" },
-      cronRunContinuation: {
-        lifecycleRevision: "revision-parent",
-        phase: "ready",
-        basePersisted: true,
-      },
-    });
+    const parent = continuation("pending-parent");
     await seedSessionEntries(storePath, {
       [parentKey]: parent,
       [idleKey]: { ...parent, sessionId: "idle-sibling" },
@@ -392,28 +405,12 @@ describe("sweepCronRunSessions", () => {
   it("retains a continuation when a child is admitted after retention selection", async () => {
     const sessionKey = "agent:main:cron:job1:run:late-child-parent";
     const writerKey = "agent:main:main";
-    const parent: SessionEntry = {
-      sessionId: "late-child-parent",
-      delivery: { kind: "none" },
-      updatedAt: now - 25 * 3_600_000,
-      cronRunContinuation: {
-        lifecycleRevision: "revision-parent",
-        phase: "ready",
-        basePersisted: true,
-      },
-    };
+    const parent = continuation("late-child-parent");
     await seedSessionEntries(storePath, {
       [sessionKey]: parent,
       [writerKey]: { sessionId: "unrelated-writer", updatedAt: now },
     });
-    const writerStarted = createDeferred();
-    const releaseWriter = createDeferred();
-    const writer = patchSessionEntryCore({ storePath, sessionKey: writerKey }, async () => {
-      writerStarted.resolve();
-      await releaseWriter.promise;
-      return {};
-    });
-    await writerStarted.promise;
+    const { writer, release } = await holdWriter(writerKey);
 
     const sweeping = sweep(now);
     const child = createSubagentRunRecord({
@@ -424,13 +421,13 @@ describe("sweepCronRunSessions", () => {
     });
     subagentRuns.set(child.runId, child);
     try {
-      releaseWriter.resolve();
+      release();
       const result = await sweeping;
       expect(result).toEqual({ swept: true, pruned: 0 });
       expect(log.warn).not.toHaveBeenCalled();
       expect(readSessionEntries(storePath)[sessionKey]).toEqual(parent);
     } finally {
-      releaseWriter.resolve();
+      release();
       await Promise.allSettled([writer, sweeping]);
     }
   });
@@ -438,15 +435,8 @@ describe("sweepCronRunSessions", () => {
   it("preserves an expired run when work is admitted before writer-owned removal", async () => {
     const sessionKey = "agent:main:cron:job1:run:active-run";
     await writeEntry(sessionKey, expiredRun("active-run"));
-    const writerStarted = createDeferred();
-    const releaseWriter = createDeferred();
     const firstValidation = createDeferred();
-    const writer = patchSessionEntryCore({ storePath, sessionKey }, async () => {
-      writerStarted.resolve();
-      await releaseWriter.promise;
-      return {};
-    });
-    await writerStarted.promise;
+    const { writer, release } = await holdWriter(sessionKey);
 
     const sweeping = sweep(now);
     const admissionPromise = beginSessionEffect({
@@ -460,7 +450,7 @@ describe("sweepCronRunSessions", () => {
 
     let admission: Awaited<ReturnType<typeof beginSessionEffect>> | undefined;
     try {
-      releaseWriter.resolve();
+      release();
       const result = await sweeping;
       admission = await admissionPromise;
 
@@ -471,7 +461,7 @@ describe("sweepCronRunSessions", () => {
       });
     } finally {
       admission?.release();
-      releaseWriter.resolve();
+      release();
       await Promise.allSettled([writer, sweeping, admissionPromise]);
     }
   });

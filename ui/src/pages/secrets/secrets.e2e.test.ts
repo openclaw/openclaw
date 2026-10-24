@@ -249,6 +249,8 @@ suite.define(() => {
       });
 
       async function reject(dialog: Locator, text = "Enter a value.", proof?: string) {
+        // Complete the modal's opening transition before submitting its form.
+        await dialog.locator('dialog[data-phase="open"]').waitFor();
         await button(dialog, "Save").click();
         await dialog.getByRole("alert").getByText(text).waitFor();
         expect(await gateway.getRequests("secrets.store.set")).toHaveLength(0);

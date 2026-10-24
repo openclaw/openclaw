@@ -19,13 +19,14 @@ const installRoot = path.join(root, "installed");
 fs.mkdirSync(installRoot);
 fs.writeFileSync(path.join(installRoot, "package.json"), '{"version":"2026.9.6"}');
 assert.equal(getCompileCacheDir(), undefined);
+process.env.NODE_COMPILE_CACHE = path.join(root, "native-cache");
 const beforeEnable = { ...process.env };
 enableOpenClawCompileCache({
   currentFile: path.join(installRoot, "dist", "entry.js"),
   installRoot,
-  env: { ...process.env, NODE_COMPILE_CACHE: path.join(root, "native-cache") },
 });
 assert.deepEqual({ ...process.env }, beforeEnable);
+delete process.env.NODE_COMPILE_CACHE;
 const activeDirectory = getCompileCacheDir();
 assert.ok(activeDirectory);
 const stagingRoot = path.join(root, "staging");

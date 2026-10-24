@@ -14,7 +14,10 @@ vi.mock("node:inspector/promises", () => ({
     disconnect = native.disconnect;
   },
 }));
-vi.mock("node:timers/promises", () => ({ setTimeout: native.wait }));
+vi.mock("node:timers/promises", async (original) => ({
+  ...(await original<typeof import("node:timers/promises")>()),
+  setTimeout: native.wait,
+}));
 vi.mock("node:trace_events", () => assert.fail("trace_events must not load in a worker"));
 vi.mock("../infra/openclaw-root.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/openclaw-root.js")>()),

@@ -1,11 +1,9 @@
-import fs from "node:fs/promises";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { waitForAbortSignal } from "../infra/abort-signal.js";
 import * as deviceIdentity from "../infra/device-identity-async.js";
-import { flushDiagnosticsTimeline } from "../infra/diagnostics-timeline.js";
 import { createPluginRecord } from "../plugins/loader-records.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
@@ -21,7 +19,7 @@ import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/c
 import { CLI_DEFAULT_OPERATOR_SCOPES } from "./method-scopes.js";
 import { dispatchGatewayRequestInProcess } from "./server-in-process-dispatch.js";
 import { closeKernelFixture, createKernelFixture } from "./server-kernel.fixture-test-support.js";
-import { createGatewayKernel } from "./server-kernel.js";
+import { createGatewayKernel, gatewayKernelLogs } from "./server-kernel.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import type { GatewayHostLifecycle, GatewayServer } from "./server-public.js";
@@ -290,7 +288,7 @@ describe("createGatewayKernel", () => {
           .mockReturnValue(reloadWork);
         const stopRecovery = vi.fn(() => recoveryWork);
         kernel.kernel.setScheduledServiceHandles({
-          heartbeatRunner: kernel.runtimeState.heartbeatRunner,
+          stopScheduledServices: kernel.runtimeState.stopScheduledServices,
           stopDeliveryRecovery: stopRecovery,
         });
         const stopUpdateCheck = vi
@@ -409,6 +407,12 @@ describe("createGatewayKernel", () => {
       };
 
       const getReadiness = kernel.createHttpTransportOptions().getReadiness;
+      using readyLog = vi.spyOn(gatewayKernelLogs.log, "info");
+      using readyTrace = vi.spyOn(kernel.startupTrace, "mark");
+      expect(kernel.getReadiness).toBe(getReadiness);
+      expect(kernel.gatewayRequestContext.unavailableGatewayMethods).toBe(
+        kernel.unavailableGatewayMethods,
+      );
       const notReady = { ready: false, failing: ["startup-sidecars"] };
       expect(getReadiness()).toMatchObject(notReady);
       await expect(
@@ -420,11 +424,34 @@ describe("createGatewayKernel", () => {
         ok: true,
         payload: { runId, status: "ok" },
       });
-      kernel.kernel.unlockStartupMethods();
+      kernel.kernel.unlockStartupMethods({ keepChatSendUnavailable: true });
       kernel.kernel.markSidecarsReady();
 
       expect(getReadiness()).toMatchObject(notReady);
       kernel.kernel.setDispatchReady(true);
+      expect(kernel.createHttpTransportOptions().getStartup?.()).toMatchObject({
+        ok: true,
+        status: "started",
+      });
+      expect(getReadiness()).toMatchObject({
+        ready: false,
+        coreReady: false,
+        failing: ["chat-recovery"],
+      });
+      await expect(
+        dispatchGatewayRequestInProcess("chat.send", chatParams, dispatchOptions),
+      ).rejects.toThrow("chat.send unavailable during gateway startup");
+
+      expect(readyLog).not.toHaveBeenCalledWith("gateway ready");
+      expect(readyTrace).not.toHaveBeenCalledWith("ready");
+      kernel.kernel.unlockStartupMethods();
+      expect(readyLog).toHaveBeenCalledWith("gateway ready");
+      expect(readyTrace).toHaveBeenCalledWith("ready");
+      kernel.kernel.unlockStartupMethods();
+      expect(readyLog.mock.calls.filter(([message]) => message === "gateway ready")).toHaveLength(
+        1,
+      );
+      expect(readyTrace.mock.calls.filter(([phase]) => phase === "ready")).toHaveLength(1);
       expectCoreAgentDatabaseReadiness(getReadiness, state);
       await expect(
         dispatchGatewayRequestInProcess("chat.send", chatParams, dispatchOptions),
@@ -551,12 +578,7 @@ describe("createGatewayKernel", () => {
   it("dispatches without a transport when optional chat identity bootstrap fails", async ({
     signal,
   }) => {
-    const fixture = await createKernelFixture("gateway-kernel-no-transport", {
-      env: {
-        OPENCLAW_DIAGNOSTICS: "1",
-        OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: undefined,
-      },
-    });
+    const fixture = await createKernelFixture("gateway-kernel-no-transport");
     const { state } = fixture;
     const originalPluginRegistry = captureActivePluginRegistrySnapshot();
     const inspectAccount = vi.fn(() => ({ enabled: true, configured: true }));
@@ -586,8 +608,6 @@ describe("createGatewayKernel", () => {
     try {
       stageActivePluginRegistry(ambientRegistry, null, "default");
       capturedLoadedPluginRegistry = captureActivePluginRegistrySnapshot();
-      const timelinePath = state.path("kernel-startup.jsonl");
-      state.envVars.OPENCLAW_DIAGNOSTICS_TIMELINE_PATH = timelinePath;
       await fixture.configure();
       stageActivePluginRegistry(createEmptyPluginRegistry(), null, "default");
 
@@ -627,47 +647,12 @@ describe("createGatewayKernel", () => {
         }),
       ).resolves.toEqual({ runId: "kernel-run", status: "ok", summary: "cached" });
       expect(getActiveGatewayRootWorkCount()).toBe(0);
-
-      flushDiagnosticsTimeline();
-      const measureNames = (await fs.readFile(timelinePath, "utf8"))
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line) as Record<string, unknown>)
-        .filter((event) => event.type === "span.start" && event.phase === "startup")
-        .map((event) => {
-          const attributes = event.attributes as { traceName?: string } | undefined;
-          return attributes?.traceName ?? event.name;
-        });
-      expect(measureNames).toEqual(
-        [
-          "config.snapshot.read config.snapshot.read.file config.snapshot.read.hash",
-          "config.snapshot.read.parse config.snapshot.read.includes config.snapshot.read.env",
-          "config.snapshot.read.validate config.snapshot.read.materialize config.snapshot.read.observe",
-          "plugins.metadata.scan plugins.metadata.freeze",
-          "state.ownership state.runtime-imports state.schema-preflight",
-          "runtime.network-imports runtime.network-bootstrap config.runtime-imports config.snapshot",
-          "config.auth config.auth.snapshot-validate config.auth.runtime-overrides",
-          "config.auth.startup-overrides config.auth.secret-surface config.auth.secret-preflight",
-          "config.auth.preflight-override config.auth.ensure config.auth.runtime-startup-overrides",
-          "config.auth.secrets-activate agents.github-profile-cleanup plugins.bootstrap-imports",
-          "cron.store-path plugins.bootstrap gateway.kernel-state node-desktop.runtime-import",
-          "host-desktop.runtime-import computer.runtime-import device-identity device-pairing",
-          "runtime.config control-ui.root terminal.launch-import gateway.wizard-imports tls.runtime",
-          "gateway.channel-manager-import runtime.state gateway.shutdown-runtime-import",
-          "gateway.lifecycle gateway.core-runtime runtime.post-early-imports runtime.subscriptions",
-          "runtime.services gateway.handlers runtime.early runtime.early.discovery",
-          "gateway.request-runtime gateway.chat-metadata-lifecycle gateway.config-revision-key",
-          "gateway.request-context sessions.projection gateway.instance-runtime-import",
-          "gateway.owner-profile sessions.materialize gateway.lifetime-sidecars",
-        ].flatMap((phase) => phase.split(" ")),
-      );
     } finally {
       loadIdentity.mockRestore();
       try {
         await kernel?.closeOnStartupFailure();
       } finally {
         try {
-          flushDiagnosticsTimeline();
           if (capturedLoadedPluginRegistry) {
             restoreActivePluginRegistrySnapshot(capturedLoadedPluginRegistry);
           }

@@ -5,7 +5,7 @@ import { createSignal, flush, untrack } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { subscribeNativeOverlayOcclusion } from "../../lib/native-overlay-occlusion.ts";
 import { installDialogPolyfill } from "../../test-helpers/modal-dialog.ts";
-import { ModalDialog, OpenClawModalDialog, type ModalDialogProperties } from "../modal-dialog.ts";
+import { ModalDialog, OpenClawModalDialog, type ModalDialogProperties } from "../modal-dialog.tsx";
 
 function modalDialog(host: OpenClawModalDialog): HTMLDialogElement {
   const dialog = host.querySelector<HTMLDialogElement>(":scope > .oc-modal-dialog");

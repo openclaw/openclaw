@@ -549,7 +549,6 @@ function buildCoreDistEntries(): Record<string, string> {
     "telegram/token": bundledPluginFile("telegram", "src/token.ts"),
     "plugins/build-smoke-entry": "src/plugins/build-smoke-entry.ts",
     "plugins/runtime/index": "src/plugins/runtime/index.ts",
-    "llm-slug-generator": "src/hooks/llm-slug-generator.ts",
     "mcp/plugin-tools-serve": "src/mcp/plugin-tools-serve.ts",
     "mcp/openclaw-tools-serve": "src/mcp/openclaw-tools-serve.ts",
   };

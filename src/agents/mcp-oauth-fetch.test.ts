@@ -9,29 +9,25 @@ const oauthMocks = vi.hoisted(() => ({
 }));
 const IDENTITY = operatorMcpOAuthIdentity("docs", "https://mcp.example.com/mcp");
 
-vi.mock("./mcp-oauth.js", () =>
-  Object.fromEntries([
-    ["recordMcpOAuthAuthorizationRequired", oauthMocks.recordAuthorizationRequired],
-    ["resolveMcpOAuthAccessToken", oauthMocks.resolve],
-  ]),
-);
-
-function bearer(headers: HeadersInit | undefined): string | null {
-  return new Headers(headers).get("authorization")?.replace(/^Bearer /u, "") ?? null;
-}
-
-function callHeaders(fetchFn: ReturnType<typeof vi.fn<FetchLike>>, index: number): HeadersInit {
-  const call = fetchFn.mock.calls[index];
-  const input = call?.[0];
-  return input instanceof Request ? input.headers : (call?.[1]?.headers ?? {});
-}
+// mock-isolation: exercise bearer retries without starting the persistent OAuth coordinator.
+vi.mock("./mcp-oauth.js", () => ({
+  recordMcpOAuthAuthorizationRequired: oauthMocks.recordAuthorizationRequired,
+  resolveMcpOAuthAccessToken: oauthMocks.resolve,
+}));
 
 function wrap(fetchFn: ReturnType<typeof vi.fn<FetchLike>>) {
   return withMcpOAuthBearer({ fetchFn, authFetchFn: fetchFn, identity: IDENTITY });
 }
 
 function expectBearers(fetchFn: ReturnType<typeof vi.fn<FetchLike>>, tokens: (string | null)[]) {
-  expect(tokens.map((_, index) => bearer(callHeaders(fetchFn, index)))).toEqual(tokens);
+  expect(
+    fetchFn.mock.calls.map(
+      ([input, init]) =>
+        new Headers(input instanceof Request ? input.headers : init?.headers)
+          .get("authorization")
+          ?.replace(/^Bearer /u, "") ?? null,
+    ),
+  ).toEqual(tokens);
 }
 
 function makeResponse(status = 200, challenge?: string) {
@@ -71,9 +67,7 @@ describe("MCP OAuth bearer fetch", () => {
         ),
       )
       .mockResolvedValueOnce(makeResponse());
-    const wrapped = wrap(fetchFn);
-
-    await expect(wrapped("https://mcp.example.com/mcp")).resolves.toMatchObject({ status: 200 });
+    await expect(wrap(fetchFn)(IDENTITY.serverUrl)).resolves.toMatchObject({ status: 200 });
     expectBearers(fetchFn, [null, "test-auth-token"]);
     expect(oauthMocks.resolve.mock.calls[0]?.[0]).toMatchObject({ allowMissingToken: true });
     expect(oauthMocks.resolve.mock.calls[1]?.[0]).toMatchObject({
@@ -93,10 +87,8 @@ describe("MCP OAuth bearer fetch", () => {
       bodies.push(await new Request(input, init).text());
       return makeResponse(bodies.length === 1 ? 401 : 200);
     });
-    const wrapped = wrap(fetchFn);
-
-    const response = await wrapped(
-      new Request("https://mcp.example.com/mcp", {
+    const response = await wrap(fetchFn)(
+      new Request(IDENTITY.serverUrl, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: '{"jsonrpc":"2.0","method":"tools/list"}',
@@ -140,9 +132,7 @@ describe("MCP OAuth bearer fetch", () => {
       .mockResolvedValueOnce("decoy-token")
       .mockResolvedValueOnce("test-auth-token");
     const fetchFn = vi.fn<FetchLike>(async () => makeResponse(401));
-    const wrapped = wrap(fetchFn);
-
-    await expect(wrapped("https://mcp.example.com/mcp")).resolves.toMatchObject({ status: 401 });
+    await expect(wrap(fetchFn)(IDENTITY.serverUrl)).resolves.toMatchObject({ status: 401 });
     expect(fetchFn).toHaveBeenCalledTimes(2);
     expect(oauthMocks.resolve).toHaveBeenCalledTimes(2);
     expect(oauthMocks.recordAuthorizationRequired).toHaveBeenCalledWith(

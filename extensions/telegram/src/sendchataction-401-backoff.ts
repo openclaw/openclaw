@@ -28,6 +28,14 @@ export type TelegramSendChatActionHandler = {
 
 type CreateTelegramSendChatActionHandlerParams = {
   logger: (message: string) => void;
+  /**
+   * When the owning account is retired, an authorization backoff still
+   * sleeping before transport I/O aborts immediately instead of keeping the
+   * shared limiter's shutdown waiting out the remaining backoff.
+   */
+  retirementSignal?: AbortSignal;
+  /** The rejection surfaced to the caller when retirement ends its backoff. */
+  retiredError?: Error;
 };
 
 const BACKOFF_POLICY: BackoffPolicy = {
@@ -67,6 +75,8 @@ function is401Error(error: unknown): boolean {
  */
 export function createTelegramSendChatActionHandler({
   logger,
+  retirementSignal,
+  retiredError,
 }: CreateTelegramSendChatActionHandlerParams) {
   let consecutive401Failures = 0;
   let consecutiveTransientFailures = 0;
@@ -143,6 +153,11 @@ export function createTelegramSendChatActionHandler({
       clearTransientCooldown();
       return result;
     } catch (error) {
+      // A retirement-terminated pre-I/O backoff surfaces the released error to
+      // the caller; only the sleep aborts, never transport I/O that began.
+      if (retirementSignal?.aborted && error instanceof Error && error.name === "AbortError") {
+        throw retiredError instanceof Error ? retiredError : error;
+      }
       if (signal.aborted && error instanceof Error && error.name === "AbortError") {
         throw error;
       }
@@ -162,7 +177,7 @@ export function createTelegramSendChatActionHandler({
               `Retrying with exponential backoff.`,
           );
         }
-      } else if (isRetryableTelegramApiError(error, { context: "action" })) {
+      } else if (isRetryableTelegramApiError(error)) {
         consecutiveTransientFailures++;
         const retryAfterMs = readTelegramRetryAfterMs(error);
         const cooldownMs =
@@ -202,6 +217,12 @@ export function createTelegramSendChatActionHandler({
     } else {
       signal?.addEventListener("abort", abort, { once: true });
     }
+    const onRetired = () => controller.abort();
+    if (retirementSignal?.aborted) {
+      onRetired();
+    } else {
+      retirementSignal?.addEventListener("abort", onRetired, { once: true });
+    }
     try {
       return await sendWithBackoff(async () => {
         const result = await prev(method, payload, signal);
@@ -212,6 +233,7 @@ export function createTelegramSendChatActionHandler({
       }, controller.signal);
     } finally {
       signal?.removeEventListener("abort", abort);
+      retirementSignal?.removeEventListener("abort", onRetired);
       controller.abort();
     }
   };

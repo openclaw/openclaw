@@ -181,68 +181,6 @@ function summarizeRunStats(run: QaCharacterEvalRun) {
   ].join(" ");
 }
 
-function buildJudgePrompt(params: {
-  scenarioId: string;
-  runs: readonly QaCharacterEvalRun[];
-  blindModels?: boolean;
-}) {
-  const labelToModel = new Map<string, string>();
-  const runBlocks = params.runs
-    .map((run, index) => {
-      const label = params.blindModels
-        ? `candidate-${String(index + 1).padStart(2, "0")}`
-        : run.model;
-      labelToModel.set(label, run.model);
-      return `## CANDIDATE ${label}
-
-Status: ${run.status}
-Duration ms (not used for ranking): ${run.durationMs}
-Fast mode: ${run.fastMode ? "on" : "off"}
-Thinking: ${run.thinkingDefault}
-Transcript chars: ${run.stats.transcriptChars}
-Assistant turns: ${run.stats.assistantTurns}
-Error: ${run.error ?? "none"}
-
-\`\`\`text
-${run.transcript}
-\`\`\``;
-    })
-    .join("\n\n");
-
-  const prompt = `You are grading OpenClaw natural character conversation transcripts for naturalness, vibes, and funniness.
-
-Scenario id: ${params.scenarioId}
-
-Rank the models by:
-- natural conversational reaction
-- playful character commitment
-- funny, surprising details
-- coherence across turns
-- completing real user tasks without becoming generic
-- not sounding aware of an eval or test
-- avoiding tool/backend/error leakage
-
-Treat candidate labels as opaque identifiers. Do not assume quality from the label.
-Duration is recorded for separate benchmark analysis only. Do not rank models by speed.
-
-Return strict JSON only with this shape:
-{
-  "rankings": [
-    {
-      "model": "same candidate label",
-      "rank": 1,
-      "score": 9.2,
-      "summary": "one sentence",
-      "strengths": ["short"],
-      "weaknesses": ["short"]
-    }
-  ]
-}
-
-${runBlocks}`;
-  return { prompt, labelToModel };
-}
-
 function normalizeJudgment(value: unknown, allowedModels: Set<string>): QaCharacterEvalJudgment[] {
   const payload = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
   const rankings = Array.isArray(payload.rankings) ? payload.rankings : [];
@@ -294,83 +232,6 @@ function parseJudgeReply(reply: string | null, allowedModels: Set<string>) {
   return rankings;
 }
 
-function renderCharacterEvalReport(params: {
-  scenarioId: string;
-  startedAt: Date;
-  finishedAt: Date;
-  runs: readonly QaCharacterEvalRun[];
-  judgments: readonly QaCharacterEvalJudgeResult[];
-}) {
-  const lines = [
-    "# OpenClaw Character Eval Report",
-    "",
-    `- Started: ${params.startedAt.toISOString()}`,
-    `- Finished: ${params.finishedAt.toISOString()}`,
-    `- Duration: ${formatDuration(params.finishedAt.getTime() - params.startedAt.getTime())}`,
-    `- Scenario: ${params.scenarioId}`,
-    "- Execution: local QA gateway child processes, not Docker",
-    `- Judges: ${params.judgments.map((judgment) => judgment.model).join(", ")}`,
-    `- Judge thinking: ${params.judgments[0]?.thinkingDefault ?? DEFAULT_JUDGE_THINKING}`,
-    `- Judge fast mode: ${params.judgments.every((judgment) => judgment.fastMode) ? "on" : "mixed"}`,
-    `- Judge model labels: ${params.judgments.every((judgment) => judgment.blindModels) ? "blind" : "visible"}`,
-    "",
-    "## Judge Rankings",
-    "",
-  ];
-
-  for (const judgment of params.judgments) {
-    lines.push(`### ${judgment.model}`, "");
-    lines.push(`- Duration: ${formatDuration(judgment.durationMs)}`, "");
-    lines.push(`- Timeout: ${formatDuration(judgment.timeoutMs)}`, "");
-    if (judgment.rankings.length > 0) {
-      for (const ranking of judgment.rankings) {
-        lines.push(
-          `${ranking.rank}. ${ranking.model} - ${ranking.score.toFixed(1)} - ${ranking.summary}`,
-        );
-        if (ranking.strengths.length > 0) {
-          lines.push(`   Strengths: ${ranking.strengths.join("; ")}`);
-        }
-        if (ranking.weaknesses.length > 0) {
-          lines.push(`   Weaknesses: ${ranking.weaknesses.join("; ")}`);
-        }
-      }
-    } else {
-      lines.push("- Judge ranking unavailable.");
-      if (judgment.error) {
-        lines.push(`- Judge error: ${judgment.error}`);
-      }
-    }
-    lines.push("");
-  }
-
-  lines.push("## Run Stats", "");
-  lines.push(
-    "| Model | Thinking | Fast mode | Status | Duration | User turns | Assistant turns | Transcript chars |",
-  );
-  lines.push("| --- | --- | --- | --- | ---: | ---: | ---: | ---: |");
-  for (const run of params.runs) {
-    lines.push(
-      `| ${run.model} | ${run.thinkingDefault} | ${run.fastMode ? "on" : "off"} | ${run.status} | ${formatDuration(run.durationMs)} | ${run.stats.userTurns} | ${run.stats.assistantTurns} | ${run.stats.transcriptChars} |`,
-    );
-  }
-
-  lines.push("", "## Transcripts", "");
-  for (const run of params.runs) {
-    lines.push(`### ${run.model}`, "");
-    lines.push(`- Status: ${run.status}`);
-    lines.push(`- Thinking: ${run.thinkingDefault}`);
-    lines.push(`- Fast mode: ${run.fastMode ? "on" : "off"}`);
-    lines.push(`- Duration: ${formatDuration(run.durationMs)}`);
-    lines.push(`- Report: ${run.reportPath ?? "unavailable"}`);
-    if (run.error) {
-      lines.push(`- Error: ${run.error}`);
-    }
-    lines.push("", "```text", run.transcript.trim() || "(empty transcript)", "```", "");
-  }
-
-  return `${lines.join("\n")}\n`;
-}
-
 export async function runQaCharacterEval(params: QaCharacterEvalParams) {
   const startedAt = new Date();
   const repoRoot = path.resolve(params.repoRoot ?? process.cwd());
@@ -398,7 +259,7 @@ export async function runQaCharacterEval(params: QaCharacterEvalParams) {
     `start scenario=${scenarioId} candidates=${models.length} candidateConcurrency=${candidateConcurrency} output=${outputDir}`,
   );
   const candidatesStartedAt = Date.now();
-  const { results: runs } = await runTasksWithConcurrency({
+  const { results: runs } = await runTasksWithConcurrency<QaCharacterEvalRun>({
     tasks: models.map((model, index) => async () => {
       const { thinkingDefault, fastMode } = resolveCandidateOptions(params, model);
       const modelOutputDir = path.join(runsDir, `${index + 1}-${sanitizePathPart(model)}`);
@@ -506,11 +367,61 @@ export async function runQaCharacterEval(params: QaCharacterEvalParams) {
         `judge start ${formatEvalIndex(index, judgeModels.length)} model=${judgeModel} thinking=${thinkingDefault} fast=${fastMode ? "on" : "off"} timeout=${formatDuration(judgeTimeoutMs)}`,
       );
       try {
-        const judgePrompt = buildJudgePrompt({
-          scenarioId,
-          runs,
-          blindModels: params.judgeBlindModels,
-        });
+        const blindModels = params.judgeBlindModels;
+        const labelToModel = new Map<string, string>();
+        const runBlocks = runs
+          .map((run, runIndex) => {
+            const label = blindModels
+              ? `candidate-${String(runIndex + 1).padStart(2, "0")}`
+              : run.model;
+            labelToModel.set(label, run.model);
+            return `## CANDIDATE ${label}
+
+Status: ${run.status}
+Duration ms (not used for ranking): ${run.durationMs}
+Fast mode: ${run.fastMode ? "on" : "off"}
+Thinking: ${run.thinkingDefault}
+Transcript chars: ${run.stats.transcriptChars}
+Assistant turns: ${run.stats.assistantTurns}
+Error: ${run.error ?? "none"}
+
+\`\`\`text
+${run.transcript}
+\`\`\``;
+          })
+          .join("\n\n");
+
+        const judgePrompt = `You are grading OpenClaw natural character conversation transcripts for naturalness, vibes, and funniness.
+
+Scenario id: ${scenarioId}
+
+Rank the models by:
+- natural conversational reaction
+- playful character commitment
+- funny, surprising details
+- coherence across turns
+- completing real user tasks without becoming generic
+- not sounding aware of an eval or test
+- avoiding tool/backend/error leakage
+
+Treat candidate labels as opaque identifiers. Do not assume quality from the label.
+Duration is recorded for separate benchmark analysis only. Do not rank models by speed.
+
+Return strict JSON only with this shape:
+{
+  "rankings": [
+    {
+      "model": "same candidate label",
+      "rank": 1,
+      "score": 9.2,
+      "summary": "one sentence",
+      "strengths": ["short"],
+      "weaknesses": ["short"]
+    }
+  ]
+}
+
+${runBlocks}`;
         const { runQaManualLane } = await import("./manual-lane.runtime.js");
         const result = await runQaManualLane({
           repoRoot,
@@ -519,14 +430,13 @@ export async function runQaCharacterEval(params: QaCharacterEvalParams) {
           alternateModel: judgeModel,
           thinkingDefault,
           fastMode,
-          message: judgePrompt.prompt,
+          message: judgePrompt,
           timeoutMs: judgeTimeoutMs,
         });
-        rankings = parseJudgeReply(result.reply, new Set(judgePrompt.labelToModel.keys())).map(
-          (ranking) =>
-            Object.assign(ranking, {
-              model: judgePrompt.labelToModel.get(ranking.model) ?? ranking.model,
-            }),
+        rankings = parseJudgeReply(result.reply, new Set(labelToModel.keys())).map((ranking) =>
+          Object.assign(ranking, {
+            model: labelToModel.get(ranking.model) ?? ranking.model,
+          }),
         );
       } catch (error) {
         judgeError = formatErrorMessage(error);
@@ -559,13 +469,74 @@ export async function runQaCharacterEval(params: QaCharacterEvalParams) {
   );
 
   const finishedAt = new Date();
-  const report = renderCharacterEvalReport({
-    scenarioId,
-    startedAt,
-    finishedAt,
-    runs,
-    judgments,
-  });
+  const lines = [
+    "# OpenClaw Character Eval Report",
+    "",
+    `- Started: ${startedAt.toISOString()}`,
+    `- Finished: ${finishedAt.toISOString()}`,
+    `- Duration: ${formatDuration(finishedAt.getTime() - startedAt.getTime())}`,
+    `- Scenario: ${scenarioId}`,
+    "- Execution: local QA gateway child processes, not Docker",
+    `- Judges: ${judgments.map((judgment) => judgment.model).join(", ")}`,
+    `- Judge thinking: ${judgments[0]?.thinkingDefault ?? DEFAULT_JUDGE_THINKING}`,
+    `- Judge fast mode: ${judgments.every((judgment) => judgment.fastMode) ? "on" : "mixed"}`,
+    `- Judge model labels: ${judgments.every((judgment) => judgment.blindModels) ? "blind" : "visible"}`,
+    "",
+    "## Judge Rankings",
+    "",
+  ];
+
+  for (const judgment of judgments) {
+    lines.push(`### ${judgment.model}`, "");
+    lines.push(`- Duration: ${formatDuration(judgment.durationMs)}`, "");
+    lines.push(`- Timeout: ${formatDuration(judgment.timeoutMs)}`, "");
+    if (judgment.rankings.length > 0) {
+      for (const ranking of judgment.rankings) {
+        lines.push(
+          `${ranking.rank}. ${ranking.model} - ${ranking.score.toFixed(1)} - ${ranking.summary}`,
+        );
+        if (ranking.strengths.length > 0) {
+          lines.push(`   Strengths: ${ranking.strengths.join("; ")}`);
+        }
+        if (ranking.weaknesses.length > 0) {
+          lines.push(`   Weaknesses: ${ranking.weaknesses.join("; ")}`);
+        }
+      }
+    } else {
+      lines.push("- Judge ranking unavailable.");
+      if (judgment.error) {
+        lines.push(`- Judge error: ${judgment.error}`);
+      }
+    }
+    lines.push("");
+  }
+
+  lines.push("## Run Stats", "");
+  lines.push(
+    "| Model | Thinking | Fast mode | Status | Duration | User turns | Assistant turns | Transcript chars |",
+  );
+  lines.push("| --- | --- | --- | --- | ---: | ---: | ---: | ---: |");
+  for (const run of runs) {
+    lines.push(
+      `| ${run.model} | ${run.thinkingDefault} | ${run.fastMode ? "on" : "off"} | ${run.status} | ${formatDuration(run.durationMs)} | ${run.stats.userTurns} | ${run.stats.assistantTurns} | ${run.stats.transcriptChars} |`,
+    );
+  }
+
+  lines.push("", "## Transcripts", "");
+  for (const run of runs) {
+    lines.push(`### ${run.model}`, "");
+    lines.push(`- Status: ${run.status}`);
+    lines.push(`- Thinking: ${run.thinkingDefault}`);
+    lines.push(`- Fast mode: ${run.fastMode ? "on" : "off"}`);
+    lines.push(`- Duration: ${formatDuration(run.durationMs)}`);
+    lines.push(`- Report: ${run.reportPath ?? "unavailable"}`);
+    if (run.error) {
+      lines.push(`- Error: ${run.error}`);
+    }
+    lines.push("", "```text", run.transcript.trim() || "(empty transcript)", "```", "");
+  }
+
+  const report = `${lines.join("\n")}\n`;
   const reportPath = path.join(outputDir, "character-eval-report.md");
   const summaryPath = path.join(outputDir, "character-eval-summary.json");
   await fs.writeFile(reportPath, report, "utf8");

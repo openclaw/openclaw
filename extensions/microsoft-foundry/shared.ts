@@ -339,7 +339,7 @@ export function buildFoundryProviderBaseUrl(
   const resolvedApi = resolveFoundryApi(modelId, modelNameHint, configuredApi);
   const base = normalizeFoundryEndpoint(endpoint);
   const path = resolvedApi === ANTHROPIC_MESSAGES_API ? "/anthropic" : "/openai/v1";
-  return base.endsWith(path) ? base : `${base}${path}`;
+  return `${base}${path}`;
 }
 
 export function extractFoundryEndpoint(baseUrl: string | null | undefined): string | undefined {

@@ -208,7 +208,7 @@ it.each(["default", "per-agent"])(
                     pluginId: "clawrouter",
                     capabilities: {
                       questionTypes: ["boolean", "choice", "score"],
-                      maxQuestions: 200,
+                      maxQuestions: 400,
                       maxChoiceAlternatives: 255,
                       confidence: "provider-specific",
                     },

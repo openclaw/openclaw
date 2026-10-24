@@ -145,26 +145,63 @@ it("ignores catalog completion after cancellation", async () => {
   await waitForSolid(() => expect(host.childElementCount).toBe(0));
 });
 
-it("preserves Cancel focus and disabled submission on load failure", async () => {
-  const catalog = createDeferred<{ profiles: []; devices: [] }>();
-  const { result, modal, submit } = await openDialog({ loadCatalog: () => catalog.promise });
-  const cancel = modal.querySelector<HTMLButtonElement>(
-    '.session-move__actions button[type="button"]',
-  )!;
-  cancel.focus();
-  expect(modal.textContent).toContain("Loading");
-  expect(submit.disabled).toBe(true);
+it.each(["Device ID", ""])(
+  "preserves Cancel focus through catalog failure and retry with source label %j",
+  async (sourceLabel) => {
+    const catalog = createDeferred<Awaited<ReturnType<DialogOptions["loadCatalog"]>>>();
+    const retryCatalog = createDeferred<Awaited<ReturnType<DialogOptions["loadCatalog"]>>>();
+    const loadCatalog = vi
+      .fn<DialogOptions["loadCatalog"]>()
+      .mockReturnValueOnce(catalog.promise)
+      .mockReturnValueOnce(retryCatalog.promise);
+    const { result, modal, submit, click } = await openDialog({
+      source: { label: sourceLabel, target: { kind: "device", deviceId: "device-a" } },
+      loadCatalog,
+    });
+    const form = modal.querySelector("form");
+    const cancel = modal.querySelector<HTMLButtonElement>(
+      '.session-move__actions button[type="button"]',
+    )!;
+    cancel.focus();
+    expect(modal.textContent).toContain("Loading");
+    expect(submit.disabled).toBe(true);
+    expect(modal.querySelector(".session-move__origin")?.textContent ?? "").toBe(sourceLabel);
 
-  catalog.reject(new Error("Catalog unavailable"));
-  await waitForSolid(() =>
-    expect(modal.querySelector('[role="alert"]')?.textContent).toContain("Catalog unavailable"),
-  );
-  expect(document.activeElement).toBe(cancel);
-  expect(modal.querySelector('button[type="submit"]')).toBe(submit);
-  expect(submit.disabled).toBe(true);
-  cancel.click();
-  await expect(result).resolves.toBeNull();
-});
+    catalog.reject(new Error("Catalog unavailable"));
+    await waitForSolid(() =>
+      expect(modal.querySelector('[role="alert"]')?.textContent).toContain("Catalog unavailable"),
+    );
+    expect(document.activeElement).toBe(cancel);
+    expect(modal.querySelector("form")).toBe(form);
+    expect(modal.querySelector('button[type="submit"]')).toBe(submit);
+    expect(submit.disabled).toBe(true);
+    expect(modal.querySelector(".session-move__origin")?.textContent ?? "").toBe(sourceLabel);
+
+    modal.querySelector<HTMLButtonElement>('[role="alert"] button')!.click();
+    await waitForSolid(() => expect(loadCatalog).toHaveBeenCalledTimes(2));
+    expect(document.activeElement).toBe(cancel);
+    expect(submit.disabled).toBe(true);
+    retryCatalog.resolve({
+      profiles: [],
+      devices: [{ deviceId: "device-a", label: "Desktop", facts: [], selectable: true }],
+    });
+    await waitForSolid(() =>
+      expect(modal.querySelector(".session-move__origin")?.textContent).toBe("Desktop"),
+    );
+    expect(modal.querySelector(".session-move__origin span")?.getAttribute("title")).toBe(
+      "Desktop",
+    );
+    expect(document.activeElement).toBe(cancel);
+    expect(modal.querySelector("form")).toBe(form);
+    expect(modal.querySelector('.session-move__actions button[type="button"]')).toBe(cancel);
+    expect(modal.querySelector('button[type="submit"]')).toBe(submit);
+    expect(submit.disabled).toBe(true);
+    click("gateway");
+    expect(submit.disabled).toBe(false);
+    cancel.click();
+    await expect(result).resolves.toBeNull();
+  },
+);
 
 it("orders available Move profiles by label before blocked profiles", async () => {
   const { result, modal, button, submit, click } = await openDialog({

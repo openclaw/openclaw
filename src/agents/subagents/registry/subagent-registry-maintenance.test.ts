@@ -72,6 +72,42 @@ afterEach(async () => {
 });
 
 describe("subagent maintenance protection", () => {
+  it("does not revisit settled live facts while capturing current protection", async () => {
+    const pending = createRun();
+    const rows = new Map([[pending.runId, pending]]);
+    let settledFactReads = 0;
+    for (let index = 0; index < 200; index++) {
+      const settled = createRun({
+        runId: `settled-${index}`,
+        childSessionKey: `agent:main:subagent:settled-${index}`,
+      });
+      Object.defineProperty(settled, "cleanupCompletedAt", {
+        enumerable: true,
+        get() {
+          settledFactReads++;
+          return 3;
+        },
+      });
+      rows.set(settled.runId, settled);
+      subagentRuns.set(settled.runId, settled);
+    }
+    saveSubagentRegistryToSqlite(rows);
+    const prepared = await prepareSessionMaintenancePreservation(storePath);
+    try {
+      settledFactReads = 0;
+      expect(prepared.capture().providerKeys).toEqual([pending.childSessionKey]);
+      expect(prepared.capture().providerKeys).toEqual([pending.childSessionKey]);
+      expect(settledFactReads).toBe(0);
+      // A live replacement vetoes durable protection, and deleting it exposes durable facts again.
+      subagentRuns.set(pending.runId, { ...pending, cleanupCompletedAt: 4 });
+      expect(prepared.capture().providerKeys).toEqual([]);
+      subagentRuns.delete(pending.runId);
+      expect(prepared.capture().providerKeys).toEqual([pending.childSessionKey]);
+    } finally {
+      prepared.dispose();
+    }
+  });
+
   it("loads protection once without decoding retained task and reply text", async () => {
     const publicRun = createRun();
     const privateRun = createRun({
@@ -220,7 +256,8 @@ describe("subagent maintenance protection", () => {
     const runs = new Map<string, SubagentRunRecord>();
     const prepared = await prepareSessionMaintenancePreservation(storePath, { native: true });
     try {
-      expect(prepared.capture().providerKeys).toEqual([second.childSessionKey]);
+      const previous = prepared.capture();
+      expect(previous.providerKeys).toEqual([second.childSessionKey]);
       await mutateSubagentRuns(
         [first.runId],
         () => ({
@@ -239,6 +276,7 @@ describe("subagent maintenance protection", () => {
       } finally {
         observation.restore();
       }
+      expect(previous.providerKeys).toEqual([second.childSessionKey]);
       expect(await protectedKeys()).toEqual([first.childSessionKey, second.childSessionKey]);
       await mutateSubagentRuns(
         [first.runId],

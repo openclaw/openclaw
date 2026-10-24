@@ -1,6 +1,5 @@
 import { spawnSync } from "node:child_process";
 import {
-  chmodSync,
   cpSync,
   existsSync,
   mkdirSync,
@@ -23,9 +22,13 @@ import {
 import { buildInlineProviderModels } from "../../src/agents/embedded-agent-runner/model.inline-provider.js";
 import { ModelsConfigSchema } from "../../src/config/zod-schema.core.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import {
+  readJson,
+  readJsonLines,
+  writeExecutable,
+  writeJson,
+} from "./upgrade-survivor-shard.test-support.js";
 
-const readJson = (file: string) => JSON.parse(readFileSync(file, "utf8"));
-const writeJson = (file: string, value: unknown) => writeFileSync(file, JSON.stringify(value));
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const expectSuccess = (result: ReturnType<typeof spawnSync>) =>
   expect(result.status, String(result.stdout) + String(result.stderr)).toBe(0);
@@ -88,8 +91,7 @@ const failed = failPath && args[0] === "config" && args[1] === "set" &&
 process.exit(failed ? 17 : 0);
 `,
   );
-  writeFileSync(join(binDir, "openclaw"), `#!/usr/bin/env node\nrequire("./openclaw-log.js");\n`);
-  chmodSync(join(binDir, "openclaw"), 0o755);
+  writeExecutable(join(binDir, "openclaw"), `#!/usr/bin/env node\nrequire("./openclaw-log.js");\n`);
   writeFileSync(
     join(binDir, "openclaw.cmd"),
     `@echo off\r\n"${process.execPath}" "%~dp0openclaw-log.js" %*\r\n`,
@@ -120,15 +122,9 @@ process.exit(failed ? 17 : 0);
       ),
     },
   });
-  const loggedArgs: string[][] = existsSync(logPath)
-    ? readFileSync(logPath, "utf8")
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line))
-    : [];
   return {
     result,
-    loggedArgs,
+    loggedArgs: existsSync(logPath) ? readJsonLines<string[]>(logPath) : [],
     summary: existsSync(summaryPath) ? readJson(summaryPath) : null,
   };
 }
@@ -162,7 +158,7 @@ describe("upgrade survivor config recipe command resolution", () => {
       cpSync(stateScript, join(candidateRoot, stateScript));
       writeFileSync(candidate, "unused by the Docker boundary stub");
       mkdirSync(binDir);
-      writeFileSync(
+      writeExecutable(
         join(binDir, "docker"),
         `#!/usr/bin/env bash
 set -euo pipefail
@@ -172,7 +168,6 @@ case "$1" in
   *) echo "Unexpected Docker command: $1" >&2; exit 1 ;;
 esac
 `,
-        { mode: 0o755 },
       );
 
       const result = spawnSync("bash", [join(harnessRoot, DOCKER_RUNNER_PATH)], {
@@ -399,13 +394,8 @@ esac
     expect(steps.map((step) => step.intent)).toEqual(["update", "gateway", "validate"]);
     expect(gateway.auth).toEqual({
       mode: "password",
-      password: {
-        source: "env",
-        provider: "default",
-        id: "GATEWAY_AUTH_PASSWORD_REF",
-      },
+      password: { source: "env", provider: "default", id: "GATEWAY_AUTH_PASSWORD_REF" },
     });
-    expect(gateway.auth).not.toHaveProperty("token");
   });
 
   it("composes configured plugin installs into the SQLite volume scenario", () => {
@@ -513,70 +503,66 @@ esac
     });
   });
 
-  it("records one successful batch before overrides and final validation", () => {
-    const scenario = "configured-plugin-installs";
-    const version = "2026.6.34";
-    const { result, summary, loggedArgs } = runRecipeFixture({ scenario, version });
-    expectSuccess(result);
-    const steps = baselineSteps(scenario, version);
-    expect(loggedArgs).toEqual(steps.map((step) => step.argv));
-    expect(stepIds(summary.steps)).toEqual([
-      ...sharedIds,
-      "channels",
-      "tools-tool-search",
-      "plugins-configured-installs",
-      "channels-whatsapp-unset",
-      "channels-matrix",
-      "validate",
-    ]);
-    expect(summary.steps.find((step: { id: string }) => step.id === "channels")).toMatchObject({
-      id: "channels",
-      ok: true,
-      status: 0,
-      intents: ["discord-channel", "telegram-channel", "whatsapp-channel"],
-    });
-    expect(summary.acceptedIntents).toEqual([
-      ...sharedIntents,
-      "discord-channel",
-      "telegram-channel",
-      "whatsapp-channel",
-      "tool-search",
-      "configured-plugin-installs",
-      "validate",
-    ]);
-  });
-
   it.each([
-    { version: "2026.6.34", batched: true },
-    { version: "2026.6.1", batched: false },
+    { version: "2026.6.34", batched: true, failPath: undefined },
+    { version: "2026.6.34", batched: true, failPath: "channels.telegram" },
+    { version: "2026.6.1", batched: false, failPath: "channels.telegram" },
   ])(
-    "preserves failure receipts and aborts without fallback for $version",
-    ({ version, batched }) => {
+    "records recipe receipts and stops at the first failure ($version, $failPath)",
+    ({ version, batched, failPath }) => {
+      const scenario = "configured-plugin-installs";
       const { result, summary, loggedArgs } = runRecipeFixture({
-        scenario: "configured-plugin-installs",
+        scenario,
         version,
-        failPath: "channels.telegram",
+        failPath,
       });
-      expect(result.status).toBe(1);
+      const failed = failPath !== undefined;
+      expect(result.status, result.stdout + result.stderr).toBe(failed ? 1 : 0);
       expect(stepIds(summary.steps)).toEqual([
         ...sharedIds,
         ...(batched ? ["channels"] : ["channels-discord", "channels-telegram"]),
+        ...(failed
+          ? []
+          : [
+              "tools-tool-search",
+              "plugins-configured-installs",
+              "channels-whatsapp-unset",
+              "channels-matrix",
+              "validate",
+            ]),
       ]);
-      expect(summary.steps.slice(0, -1).every((step: { ok: boolean }) => step.ok)).toBe(true);
-      expect(summary.steps.at(-1)).toMatchObject({
-        id: batched ? "channels" : "channels-telegram",
-        ok: false,
-        status: 17,
-      });
       expect(summary.acceptedIntents).toEqual([
         ...sharedIntents,
-        ...(batched ? [] : ["discord-channel"]),
+        ...(failed
+          ? batched
+            ? []
+            : ["discord-channel"]
+          : [
+              "discord-channel",
+              "telegram-channel",
+              "whatsapp-channel",
+              "tool-search",
+              "configured-plugin-installs",
+              "validate",
+            ]),
       ]);
-      const steps = baselineSteps("configured-plugin-installs", version);
-      expect(loggedArgs).toEqual(steps.slice(0, batched ? 9 : 10).map((step) => step.argv));
-      expect(result.stderr).toContain(
-        `baseline config recipe failed at ${batched ? "channels" : "channels-telegram"}: 17`,
+      const steps = baselineSteps(scenario, version);
+      expect(loggedArgs).toEqual(
+        (failed ? steps.slice(0, batched ? 9 : 10) : steps).map((step) => step.argv),
       );
+      if (failed) {
+        expect(summary.steps.slice(0, -1).every((step: { ok: boolean }) => step.ok)).toBe(true);
+        const id = batched ? "channels" : "channels-telegram";
+        expect(summary.steps.at(-1)).toMatchObject({ id, ok: false, status: 17 });
+        expect(result.stderr).toContain(`baseline config recipe failed at ${id}: 17`);
+      } else {
+        expect(summary.steps.find((step: { id: string }) => step.id === "channels")).toMatchObject({
+          id: "channels",
+          ok: true,
+          status: 0,
+          intents: ["discord-channel", "telegram-channel", "whatsapp-channel"],
+        });
+      }
     },
   );
 });

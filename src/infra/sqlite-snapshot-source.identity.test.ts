@@ -27,13 +27,8 @@ const directories = useAutoCleanupTempDirTracker((cleanup) => {
 });
 
 function readValue(pathname: string) {
-  const { DatabaseSync } = requireNodeSqlite();
-  const database = new DatabaseSync(pathname, { readOnly: true });
-  try {
-    return database.prepare("SELECT value FROM probe").get();
-  } finally {
-    database.close();
-  }
+  using database = new (requireNodeSqlite().DatabaseSync)(pathname, { readOnly: true });
+  return database.prepare("SELECT value FROM probe").get();
 }
 
 it("keeps queued stale and current source admissions independent through the real copy child", async () => {
@@ -44,18 +39,13 @@ it("keeps queued stale and current source admissions independent through the rea
   const cache = path.join(root, "cache");
   fs.mkdirSync(cache);
   vi.stubEnv("XDG_CACHE_HOME", cache);
-  const { DatabaseSync } = requireNodeSqlite();
-  for (const fixture of [
-    { pathname: source, value: "original" },
-    { pathname: successor, value: "successor" },
-  ]) {
-    const database = new DatabaseSync(fixture.pathname);
-    try {
-      database.exec("PRAGMA journal_mode=DELETE; CREATE TABLE probe(value TEXT);");
-      database.prepare("INSERT INTO probe VALUES (?)").run(fixture.value);
-    } finally {
-      database.close();
-    }
+  for (const [pathname, value] of [
+    [source, "original"],
+    [successor, "successor"],
+  ] as const) {
+    using database = new (requireNodeSqlite().DatabaseSync)(pathname);
+    database.exec("PRAGMA journal_mode=DELETE; CREATE TABLE probe(value TEXT);");
+    database.prepare("INSERT INTO probe VALUES (?)").run(value);
   }
   const originalIdentity = readDatabasePathIdentitySync(source);
   const originalBytes = fs.readFileSync(source);
@@ -79,16 +69,16 @@ it("keeps queued stale and current source admissions independent through the rea
   cleanupJoined = false;
   const accepted: RetainedSqliteSnapshotPreparation[] = [];
   try {
-    const stale = startSqliteReadOnlyLocationAsync(source, {
-      preserveSourceArtifacts: true,
-      expectedSourceIdentity: originalIdentity,
-    });
-    accepted.push(stale);
-    const current = startSqliteReadOnlyLocationAsync(source, {
-      preserveSourceArtifacts: true,
-      expectedSourceIdentity: currentIdentity,
-    });
-    accepted.push(current);
+    const start = (expectedSourceIdentity: typeof originalIdentity) => {
+      const request = startSqliteReadOnlyLocationAsync(source, {
+        preserveSourceArtifacts: true,
+        expectedSourceIdentity,
+      });
+      accepted.push(request);
+      return request;
+    };
+    const stale = start(originalIdentity);
+    const current = start(currentIdentity);
     const [staleOutcome, currentOutcome] = await Promise.allSettled([stale.result, current.result]);
     expect(currentOutcome.status).toBe("fulfilled");
     if (currentOutcome.status !== "fulfilled") {

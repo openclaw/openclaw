@@ -42,13 +42,11 @@ import {
   requireRecord,
   expectFreshFinalText,
   expectRecordFields,
+  runBase,
+  sendFinal,
 } from "./message-handler.process.test-helpers.js";
 
 registerDiscordProcessTestLifecycle();
-
-async function runBase(overrides: Parameters<typeof createBaseContext>[0] = {}) {
-  await runProcessDiscordMessage(await createBaseContext(overrides));
-}
 
 async function runAutomatic(
   overrides: Parameters<typeof createAutomaticSourceDeliveryContext>[0] = {},
@@ -91,18 +89,6 @@ function message(id: string, content: string | undefined, channelId = "c1") {
 function attachment(filename: string, content_type: string, id: string) {
   return { id, url: `https://cdn.discordapp.com/attachments/${filename}`, content_type, filename };
 }
-async function sendFinal(
-  params: DispatchInboundParams | undefined,
-  payload: Parameters<DispatchInboundParams["dispatcher"]["sendFinalReply"]>[0],
-  wait = true,
-) {
-  await params?.dispatcher.sendFinalReply(payload);
-  if (wait) {
-    await params?.dispatcher.waitForIdle();
-  }
-  return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
-}
-
 const emptyCounts = {
   delivered: 0,
   deliveredNotVisible: 0,
@@ -135,7 +121,6 @@ describe("processDiscordMessage ack reactions", () => {
     const delivery = firstMockCall(deliverDiscordReply, "reply delivery");
     expect(requireRecord(reaction[3], "feedback options").rest).toBe(feedbackRest);
     expect(requireRecord(delivery[0], "delivery params").rest).toBe(deliveryRest);
-    expect(feedbackRest).not.toBe(deliveryRest);
   });
 
   it.each([

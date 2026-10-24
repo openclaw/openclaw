@@ -13,6 +13,7 @@ import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { stateDir } from "../../gateway/server-methods/requester-cron-authority.test-support.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
+import { admitScheduledOccurrence } from "../execution-context-admission.js";
 import { CronService } from "../service.js";
 import { createNoopLogger } from "../service.test-harness.js";
 import { runCronSessionTurn } from "../session-run.js";
@@ -114,7 +115,6 @@ export function createAuthorityCronService(
     defaultAgentId: "main",
     log: createNoopLogger(),
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
     runSessionEvent: (request) =>
       runCronSessionTurn({
         ...request,
@@ -125,6 +125,9 @@ export function createAuthorityCronService(
           "explicit Cron session target",
         ),
       }),
+    // Admits like the Gateway, so parent reads, pauses and child bindings are real.
+    admitScheduledOccurrence: ({ job }) =>
+      admitScheduledOccurrence({ cfg: config, job, agentId: "main", trigger: "cron" }),
     runIsolatedAgentJob: (request) =>
       runCron({
         ...request,

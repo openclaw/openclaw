@@ -1,11 +1,9 @@
 import path from "node:path";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { registerInternalHook } from "openclaw/plugin-sdk/hook-runtime";
-import { describe, expect, it, vi } from "vitest";
-import { CODEX_INFERENCE_GENERATION_KEY } from "./inference-context.js";
-import { getCodexInferenceThread, ownCodexInferenceClient } from "./inference-routing.js";
-import { isJsonObject } from "./protocol.js";
+import { describe, expect, it } from "vitest";
+import { ownCodexInferenceClient } from "./inference-routing.js";
 import { itemNotification } from "./protocol.test-helpers.js";
+import { readManagedInstructions } from "./run-attempt-continuity.test-support.js";
 import { seedRunSessionOwnerForTest } from "./run-attempt-session-owners.test-support.js";
 import {
   createParams,
@@ -25,7 +23,6 @@ describe("Codex app-server skill catalog delivery", () => {
   it("keeps managed catalogs fresh and parent-local without thread refreshes", async () => {
     const sessionKey = "agent:main:dashboard:incognito-managed-skills";
     await seedRunSessionOwnerForTest("session-1", sessionKey);
-    let started = createDeferred<void>();
     const received: string[] = [];
     const personalUser = "Synthetic selected personal preferences.";
     const personalPath = path.join(tempDir, "users", "alice", "USER.md");
@@ -44,38 +41,7 @@ describe("Codex app-server skill catalog delivery", () => {
         return { account: { type: "apiKey" } };
       }
       if (method === "turn/start") {
-        const route = getCodexInferenceThread(harness.client, "thread-1");
-        expect(route).toBeDefined();
-        if (!route || !isJsonObject(request) || !isJsonObject(request.responsesapiClientMetadata)) {
-          throw new Error("Missing managed turn registration");
-        }
-        const generation = request.responsesapiClientMetadata[CODEX_INFERENCE_GENERATION_KEY];
-        if (typeof generation !== "string") {
-          throw new Error("Missing managed generation");
-        }
-        const nativeBody = { instructions: "Native model-owned policy", input: [] };
-        const metadata = { requestKind: "turn", threadId: "thread-1", generation };
-        const parent = route.context.prepare(nativeBody, metadata);
-        parent.assertCurrent();
-        const instructions = parent.body.instructions;
-        if (typeof instructions !== "string") {
-          throw new Error("Expected managed parent instructions to be a string");
-        }
-        received.push(instructions);
-        // A continuation uses the same current registration even if native history
-        // was rebuilt by compaction. Neither compaction nor children borrow it.
-        expect(route.context.prepare(nativeBody, metadata).body).toEqual(parent.body);
-        expect(
-          route.context.prepare(nativeBody, { ...metadata, requestKind: "compaction" }).body,
-        ).toBe(nativeBody);
-        expect(
-          route.context.prepare(nativeBody, {
-            ...metadata,
-            threadId: "child",
-            parentThreadId: "thread-1",
-          }).body,
-        ).toBe(nativeBody);
-        started.resolve();
+        received.push(readManagedInstructions(harness.client, request));
       }
       return undefined;
     });
@@ -86,7 +52,6 @@ describe("Codex app-server skill catalog delivery", () => {
       undefined,
       SECOND_CATALOG,
     ].entries()) {
-      started = createDeferred<void>();
       const params = createParams(path.join(tempDir, "managed.jsonl"), tempDir, {
         sessionKey,
         runId: `managed-${index}`,
@@ -97,12 +62,7 @@ describe("Codex app-server skill catalog delivery", () => {
         params.bootstrapContextRunKind = "cron";
       }
       const run = runCodexAppServerAttempt(params);
-      await Promise.race([
-        started.promise,
-        run.then(() => {
-          throw new Error("Attempt completed before turn/start");
-        }),
-      ]);
+      await run.waitForTurnAccepted();
       await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
       const result = await run;
       if (index !== 2) {
@@ -140,24 +100,13 @@ describe("Codex app-server skill catalog delivery", () => {
     const workspaceDir = path.join(tempDir, "incognito-restore-failure-workspace");
     const injectCount = () =>
       harness.requests.filter(({ method }) => method === "thread/inject_items").length;
-    const turnStarts = () =>
-      harness.requests.filter(({ method }) => method === "turn/start").length;
     const runTurn = async (runId: string, catalog: string, options: { compact?: boolean } = {}) => {
       const params = createParams(sessionFile, workspaceDir, { sessionKey, runId });
       // Allow the real before_compaction history worker to start.
       params.timeoutMs = 60_000;
       params.skillsSnapshot = { prompt: catalog, skills: [] };
-      const turnStartsBefore = turnStarts();
       const run = runCodexAppServerAttempt(params);
-      await Promise.race([
-        vi.waitFor(() => expect(turnStarts()).toBe(turnStartsBefore + 1), {
-          interval: 1,
-          timeout: 10_000,
-        }),
-        run.then(() => {
-          throw new Error(`Codex attempt ${runId} completed before requesting a turn`);
-        }),
-      ]);
+      await run.waitForTurnAccepted();
       if (options.compact) {
         await harness.notify(
           itemNotification("item/started", { type: "contextCompaction", id: "compact-1" }),

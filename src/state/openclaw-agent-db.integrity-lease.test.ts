@@ -8,6 +8,7 @@ import { observeHostDataSql } from "../../test/helpers/sqlite-statement-executio
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { readSqliteCleanCloseSeal } from "../infra/sqlite-clean-close-seal.js";
 import { readSqliteDatabaseCleanClose } from "../infra/sqlite-database-admission.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
@@ -117,6 +118,18 @@ function openOwner() {
     database,
     cleanClose: () => readSqliteDatabaseCleanClose(database.path),
   };
+}
+
+function expectUnknownDeletionHistory(db: EngineConnection) {
+  expect(
+    db.prepare("SELECT name FROM sqlite_schema WHERE name='agent_deletion_journal'").get(),
+  ).toBeUndefined();
+}
+
+function expectPreservedRow(db: EngineConnection) {
+  expect(
+    db.prepare("SELECT state_json FROM auth_profile_state WHERE state_key='preserved'").get(),
+  ).toEqual({ state_json: '{"ok":true}' });
 }
 
 it("independent schema registration lets an agent writer commit shared state before admission", async () => {
@@ -451,11 +464,7 @@ it.each(["closing", "unregistering", "reopening shared state before closing"])(
 
     if (operation === "reopening shared state before closing") {
       const reopened = openOpenClawStateDatabase({ env });
-      expect(
-        reopened.db
-          .prepare("SELECT name FROM sqlite_schema WHERE name='agent_deletion_journal'")
-          .get(),
-      ).toBeUndefined();
+      expectUnknownDeletionHistory(reopened.db);
     }
     expect(() =>
       operation === "unregistering"
@@ -465,19 +474,11 @@ it.each(["closing", "unregistering", "reopening shared state before closing"])(
     expect(database.db.isOpen).toBe(false);
     {
       using retained = openNodeSqliteDatabase(pathname, { readOnly: true });
-      expect(
-        retained
-          .prepare("SELECT state_json FROM auth_profile_state WHERE state_key='preserved'")
-          .get(),
-      ).toEqual({ state_json: '{"ok":true}' });
+      expectPreservedRow(retained);
     }
     {
       using reopened = openNodeSqliteDatabase(shared.path, { readOnly: true });
-      expect(
-        reopened
-          .prepare("SELECT name FROM sqlite_schema WHERE name='agent_deletion_journal'")
-          .get(),
-      ).toBeUndefined();
+      expectUnknownDeletionHistory(reopened);
       expect(reopened.prepare("SELECT * FROM agent_database_leases").all()).toEqual([]);
     }
     const discovery = discoverAgentDatabaseMigrationTargets({
@@ -492,11 +493,7 @@ it.each(["closing", "unregistering", "reopening shared state before closing"])(
     expect(discovery.warnings.join("\n")).toContain(`Held agent retained database ${pathname}`);
     expect(discovery.warnings.join("\n")).toContain("openclaw doctor --fix");
     const reopened = openOpenClawAgentDatabase({ agentId: "retained", path: pathname, env });
-    expect(
-      reopened.db
-        .prepare("SELECT state_json FROM auth_profile_state WHERE state_key='preserved'")
-        .get(),
-    ).toEqual({ state_json: '{"ok":true}' });
+    expectPreservedRow(reopened.db);
   },
 );
 
@@ -544,9 +541,7 @@ it("retains the selected sibling inventory when failed-open cleanup must recreat
     open.mockRestore();
   }
   using shared = openNodeSqliteDatabase(sharedPath, { readOnly: true });
-  expect(
-    shared.prepare("SELECT name FROM sqlite_schema WHERE name='agent_deletion_journal'").get(),
-  ).toBeUndefined();
+  expectUnknownDeletionHistory(shared);
   expect(shared.prepare("SELECT * FROM agent_database_leases").all()).toEqual([]);
   expect(fs.existsSync(pathname)).toBe(false);
   expect(fs.readFileSync(siblingPath)).toEqual(before);
@@ -562,11 +557,7 @@ it.each(["", "-wal", "-shm", "-journal"])(
     fs.writeFileSync(quarantinePath + suffix, "");
     for (let attempt = 0; attempt < 2; attempt++) {
       const reopened = openOpenClawStateDatabase({ env });
-      expect(
-        reopened.db
-          .prepare("SELECT name FROM sqlite_schema WHERE name='agent_deletion_journal'")
-          .get(),
-      ).toBeUndefined();
+      expectUnknownDeletionHistory(reopened.db);
       closeOpenClawStateDatabase();
     }
   },

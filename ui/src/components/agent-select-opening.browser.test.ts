@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import "../test-helpers/load-styles.ts";
 import "./agent-select-registration.ts";
-import type { AgentSelectOption } from "./agent-select.ts";
+import type { AgentSelectOption } from "./agent-select-types.ts";
 
 afterEach(() => {
   document.body.replaceChildren();

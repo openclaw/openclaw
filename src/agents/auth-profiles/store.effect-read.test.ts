@@ -22,6 +22,17 @@ const store: AuthProfileStore = {
 const saveOptions = { filterExternalAuthProfiles: false, syncExternalCli: false };
 afterEach(() => vi.restoreAllMocks());
 
+function revokeCredential(agentDir?: string) {
+  return runtime.updateAuthProfileStoreWithLock({
+    agentDir,
+    saveOptions,
+    updater(current) {
+      delete current.profiles[profileId];
+      return true;
+    },
+  });
+}
+
 it.each(["agent", "shared", "agent+shared"] as const)(
   "reads the admitted %s auth owner at an effect without main-thread SQL",
   async (kind) => {
@@ -83,14 +94,7 @@ it.each(["agent", "shared"] as const)(
             { profileId, inheritedAuthDir: agentDir, externalCli: { mode: "none" } },
             async (reader) => {
               await reader.read();
-              await runtime.updateAuthProfileStoreWithLock({
-                agentDir,
-                saveOptions,
-                updater(current) {
-                  delete current.profiles[profileId];
-                  return true;
-                },
-              });
+              await revokeCredential(agentDir);
               reader.assertCurrent();
               disclosed = true;
             },
@@ -118,14 +122,7 @@ it("settles an accepted disclosure when credentials change afterward", async () 
         await reader.read();
         reader.assertCurrent();
         disclosures++;
-        await runtime.updateAuthProfileStoreWithLock({
-          agentDir,
-          saveOptions,
-          updater(current) {
-            delete current.profiles[profileId];
-            return true;
-          },
-        });
+        await revokeCredential(agentDir);
       },
     );
     expect(disclosures).toBe(1);

@@ -16,6 +16,7 @@ const {
   createTestInstalledPluginIndex: createIndex,
   restorePersistedInstalledPluginIndexIfCurrentMock: restoreIndexMock,
   writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock: writeRecordsMock,
+  expectNoPluginCliCalls: expectNoCalls,
 } = cli;
 
 let alphaInstallPath: string;
@@ -23,13 +24,7 @@ let actual: typeof import("../plugins/uninstall.js");
 let readInstallRecords: (typeof import("../plugins/installed-plugin-index-record-reader.js"))["loadInstalledPluginIndexInstallRecordsSync"];
 const originalEnv = captureEnv(["OPENCLAW_NIX_MODE"]);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const uninstall = (...args: string[]) => cli.runPluginsCommand(["plugins", "uninstall", ...args]);
-
-function expectNoCalls(...mocks: Array<{ mock: { calls: unknown[][] } }>) {
-  for (const mock of mocks) {
-    expect(mock).not.toHaveBeenCalled();
-  }
-}
+const uninstall = (...args: string[]) => cli.runPluginCli("uninstall", ...args);
 
 function setPluginSnapshot(
   ...plugins: Array<

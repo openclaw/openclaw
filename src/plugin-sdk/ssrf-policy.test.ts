@@ -1,4 +1,3 @@
-// SSRF policy tests cover URL allow/deny decisions for plugin network helpers.
 import { describe, expect, it, vi } from "vitest";
 import type { LookupFn } from "../infra/net/ssrf.js";
 import {
@@ -29,40 +28,28 @@ function createLookupFn(addresses: Array<{ address: string; family: number }>): 
   }) as unknown as LookupFn;
 }
 
-describe("ssrfPolicyFromAllowPrivateNetwork", () => {
-  it("returns undefined when private-network access is disabled", () => {
-    expect(ssrfPolicyFromAllowPrivateNetwork(false)).toBeUndefined();
+function resolveAllowedOrigin(baseUrl: string, address: string, family: number) {
+  const url = new URL(baseUrl);
+  const policy = ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl);
+  expect(policy?.allowedOrigins).toEqual([url.origin]);
+  return resolvePinnedHostnameWithPolicy(url.hostname.replace(/^\[|\]$/g, ""), {
+    policy: resolveSsrFPolicyForUrl(url, policy),
+    lookupFn: createLookupFn([{ address, family }]),
   });
-});
+}
 
-describe("isPrivateNetworkOptInEnabled", () => {
-  it.each([
-    [
-      "returns true for nested network dangerous opt-in config",
-      { network: { dangerouslyAllowPrivateNetwork: true } },
-      true,
-    ],
-  ])("$0", (_name, input, expected) => {
-    expect(isPrivateNetworkOptInEnabled(input)).toBe(expected);
-  });
+it("ssrfPolicyFromAllowPrivateNetwork returns undefined when disabled", () => {
+  expect(ssrfPolicyFromAllowPrivateNetwork(false)).toBeUndefined();
 });
-
-describe("ssrfPolicyFromPrivateNetworkOptIn", () => {
-  it.each([
-    [
-      "returns the compat policy for nested dangerous input",
-      { network: { dangerouslyAllowPrivateNetwork: true } },
-      { allowPrivateNetwork: true },
-    ],
-  ])("$0", (_name, input, expected) => {
-    expect(ssrfPolicyFromPrivateNetworkOptIn(input)).toEqual(expected);
-  });
+const nestedOptIn = { network: { dangerouslyAllowPrivateNetwork: true } };
+it("isPrivateNetworkOptInEnabled accepts nested dangerous opt-in config", () => {
+  expect(isPrivateNetworkOptInEnabled(nestedOptIn)).toBe(true);
 });
-
-describe("mergeSsrFPolicies", () => {
-  it("returns undefined when no policy contributes values", () => {
-    expect(mergeSsrFPolicies(undefined, {})).toBeUndefined();
-  });
+it("ssrfPolicyFromPrivateNetworkOptIn returns the compat policy for nested input", () => {
+  expect(ssrfPolicyFromPrivateNetworkOptIn(nestedOptIn)).toEqual({ allowPrivateNetwork: true });
+});
+it("mergeSsrFPolicies returns undefined when no policy contributes values", () => {
+  expect(mergeSsrFPolicies(undefined, {})).toBeUndefined();
 });
 
 describe("legacy private-network alias helpers", () => {
@@ -76,53 +63,36 @@ describe("legacy private-network alias helpers", () => {
     const migrated = migrateLegacyFlatAllowPrivateNetworkAlias({
       entry: {
         allowPrivateNetwork: true,
-        network: {
-          dangerouslyAllowPrivateNetwork: false,
-        },
+        network: { dangerouslyAllowPrivateNetwork: false },
       },
       pathPrefix: "channels.matrix.accounts.default",
       changes,
     });
 
-    expect(migrated.entry).toEqual({
-      network: {
-        dangerouslyAllowPrivateNetwork: false,
-      },
-    });
+    expect(migrated.entry).toEqual({ network: { dangerouslyAllowPrivateNetwork: false } });
     expect(changes[0]).toContain("(false)");
   });
 });
 
 describe("assertHttpUrlTargetsPrivateNetwork", () => {
-  it.each([
-    [
-      "allows https targets without private-network checks",
-      "https://matrix.example.org",
-      {
+  it("allows https targets without private-network checks", async () => {
+    await expect(
+      assertHttpUrlTargetsPrivateNetwork("https://matrix.example.org", {
         dangerouslyAllowPrivateNetwork: false,
-      },
-      "resolve",
-      undefined,
-    ],
-    [
-      "rejects cleartext public hosts even when private-network access is enabled",
-      "http://matrix.example.org:8008",
-      {
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("rejects cleartext public hosts even when private-network access is enabled", async () => {
+    const errorMessage =
+      "Matrix homeserver must use https:// unless it targets a private or loopback host";
+    await expect(
+      assertHttpUrlTargetsPrivateNetwork("http://matrix.example.org:8008", {
         dangerouslyAllowPrivateNetwork: true,
         lookupFn: createLookupFn([{ address: "93.184.216.34", family: 4 }]),
-        errorMessage:
-          "Matrix homeserver must use https:// unless it targets a private or loopback host",
-      },
-      "reject",
-      "Matrix homeserver must use https:// unless it targets a private or loopback host",
-    ],
-  ])("$0", async (_name, url, policy, outcome, expectedError) => {
-    const result = assertHttpUrlTargetsPrivateNetwork(url, policy);
-    if (outcome === "reject") {
-      await expect(result).rejects.toThrow(expectedError);
-      return;
-    }
-    await expect(result).resolves.toBeUndefined();
+        errorMessage,
+      }),
+    ).rejects.toThrow(errorMessage);
   });
 
   it("prefers the canonical flag when both canonical and legacy flags are present", async () => {
@@ -159,59 +129,38 @@ describe("assertHttpUrlTargetsPrivateNetwork", () => {
   });
 });
 
-describe("normalizeHostnameSuffixAllowlist", () => {
-  it.each([
-    [
-      "normalizes wildcard prefixes and deduplicates",
-      ["*.TrafficManager.NET", ".trafficmanager.net.", " * ", "x"],
-      undefined,
-      ["*"],
-    ],
-  ])("$0", (_name, input, defaults, expected) => {
-    expect(normalizeHostnameSuffixAllowlist(input, defaults)).toEqual(expected);
-  });
+it("normalizeHostnameSuffixAllowlist normalizes wildcard prefixes and deduplicates", () => {
+  expect(
+    normalizeHostnameSuffixAllowlist(["*.TrafficManager.NET", ".trafficmanager.net.", " * ", "x"]),
+  ).toEqual(["*"]);
 });
-
-describe("isHttpsUrlAllowedByHostnameSuffixAllowlist", () => {
-  it.each([
-    ["supports suffix match", "https://a.example.com/x", ["example.com"], true],
-    ["supports wildcard allowlist", "https://evil.com/x", ["*"], true],
-  ])("$0", (_name, url, allowlist, expected) => {
-    expect(isHttpsUrlAllowedByHostnameSuffixAllowlist(url, allowlist)).toBe(expected);
-  });
+it.each([
+  ["supports suffix match", "https://a.example.com/x", ["example.com"], true],
+  ["supports wildcard allowlist", "https://evil.com/x", ["*"], true],
+])("isHttpsUrlAllowedByHostnameSuffixAllowlist $0", (_name, url, allowlist, expected) => {
+  expect(isHttpsUrlAllowedByHostnameSuffixAllowlist(url, allowlist)).toBe(expected);
 });
-
-describe("buildHostnameAllowlistPolicyFromSuffixAllowlist", () => {
-  it.each([
-    ["returns undefined for an explicit empty list", [], undefined],
-    [
-      "returns undefined when wildcard is mixed with concrete hosts",
-      ["example.com", "*"],
-      undefined,
-    ],
-    [
-      "normalizes wildcard prefixes, leading/trailing dots, and deduplicates patterns",
-      ["*.TrafficManager.NET", ".trafficmanager.net.", " blob.core.windows.net "],
-      {
-        hostnameAllowlist: [
-          "trafficmanager.net",
-          "*.trafficmanager.net",
-          "blob.core.windows.net",
-          "*.blob.core.windows.net",
-        ],
-      },
-    ],
-  ])("$0", (_name, input, expected) => {
-    expect(buildHostnameAllowlistPolicyFromSuffixAllowlist(input)).toEqual(expected);
-  });
+it.each([
+  ["returns undefined for an explicit empty list", [], undefined],
+  ["returns undefined when wildcard is mixed with concrete hosts", ["example.com", "*"], undefined],
+  [
+    "normalizes wildcard prefixes, leading/trailing dots, and deduplicates patterns",
+    ["*.TrafficManager.NET", ".trafficmanager.net.", " blob.core.windows.net "],
+    {
+      hostnameAllowlist: [
+        "trafficmanager.net",
+        "*.trafficmanager.net",
+        "blob.core.windows.net",
+        "*.blob.core.windows.net",
+      ],
+    },
+  ],
+])("buildHostnameAllowlistPolicyFromSuffixAllowlist $0", (_name, input, expected) => {
+  expect(buildHostnameAllowlistPolicyFromSuffixAllowlist(input)).toEqual(expected);
 });
 
 describe("ssrfPolicyFromHttpBaseUrlAllowedOrigin — SDK boundary safety", () => {
-  // The constructor itself is permissive: any well-formed http(s) origin
-  // becomes a single-entry allowedOrigins policy. The metadata/link-local
-  // block lives in the resolver (assertAllowedTrustedHostnameResolvedAddressesOrThrow),
-  // so a plugin author's allowedOrigins entry pointing at a metadata target
-  // must still be rejected when an actual request goes through the guard.
+  // allowedOrigins must not bypass metadata/link-local rejection at resolution.
   it.each([
     ["AWS/EC2 IMDS IPv4 literal", "169.254.169.254", 4, undefined],
     ["GCP metadata canonical hostname", "metadata.google.internal", 4, "169.254.169.254"],
@@ -219,17 +168,8 @@ describe("ssrfPolicyFromHttpBaseUrlAllowedOrigin — SDK boundary safety", () =>
   ])(
     "rejects plugin-supplied allowedOrigins entry: $0",
     async (_name, hostname, family, resolvedAddress) => {
-      const baseUrl = `http://${hostname}/v1`;
-      const policy = ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl);
-      expect(policy?.allowedOrigins).toEqual([new URL(baseUrl).origin]);
-
-      const policyForUrl = resolveSsrFPolicyForUrl(new URL(baseUrl), policy);
-      const lookupAddress = resolvedAddress ?? hostname.replace(/^\[|\]$/g, "");
       await expect(
-        resolvePinnedHostnameWithPolicy(hostname, {
-          policy: policyForUrl,
-          lookupFn: createLookupFn([{ address: lookupAddress, family }]),
-        }),
+        resolveAllowedOrigin(`http://${hostname}/v1`, resolvedAddress ?? hostname, family),
       ).rejects.toThrow(SsrFBlockedError);
     },
   );
@@ -243,15 +183,8 @@ describe("ssrfPolicyFromHttpBaseUrlAllowedOrigin — SDK boundary safety", () =>
     ["ISATAP-embedded IPv4 loopback", "2001:4860:1::5efe:7f00:1", 6],
     ["IPv4 unspecified", "0.0.0.0", 4],
   ] as const)("rejects a trusted private origin rebound to %s", async (_name, address, family) => {
-    const baseUrl = "http://lan-llm.corp.internal:11434/v1";
-    const policy = ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl);
-    const policyForUrl = resolveSsrFPolicyForUrl(new URL(baseUrl), policy);
-
     await expect(
-      resolvePinnedHostnameWithPolicy("lan-llm.corp.internal", {
-        policy: policyForUrl,
-        lookupFn: createLookupFn([{ address, family }]),
-      }),
+      resolveAllowedOrigin("http://lan-llm.corp.internal:11434/v1", address, family),
     ).rejects.toThrow(SsrFBlockedError);
   });
 
@@ -265,16 +198,8 @@ describe("ssrfPolicyFromHttpBaseUrlAllowedOrigin — SDK boundary safety", () =>
   ] as const)(
     "allows an explicit %s origin to resolve to loopback",
     async (host, address, family) => {
-      const baseUrl = `http://${host}:11434/v1`;
-      const policy = ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl);
-      const policyForUrl = resolveSsrFPolicyForUrl(new URL(baseUrl), policy);
-      const hostname = new URL(baseUrl).hostname.replace(/^\[|\]$/g, "");
-
       await expect(
-        resolvePinnedHostnameWithPolicy(hostname, {
-          policy: policyForUrl,
-          lookupFn: createLookupFn([{ address, family }]),
-        }),
+        resolveAllowedOrigin(`http://${host}:11434/v1`, address, family),
       ).resolves.toBeDefined();
     },
   );

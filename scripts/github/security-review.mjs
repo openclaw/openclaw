@@ -46,6 +46,32 @@ function ciRunState(run) {
 
 async function ciState(review) {
   const { api, owner, repo, pullRequest } = review;
+  const completedRunId = Number(process.env.OPENCLAW_SECURITY_REVIEW_CI_RUN_ID || 0);
+  const completedAttempt = Number(process.env.OPENCLAW_SECURITY_REVIEW_CI_RUN_ATTEMPT || 0);
+  if (
+    !Number.isSafeInteger(completedRunId) ||
+    completedRunId < 0 ||
+    !Number.isSafeInteger(completedAttempt) ||
+    completedAttempt < 0 ||
+    Boolean(completedRunId) !== Boolean(completedAttempt)
+  ) {
+    throw new Error("Invalid completed CI run identity.");
+  }
+  function assertCompletedRunObserved(observed) {
+    if (
+      completedRunId &&
+      (!observed ||
+        observed.id < completedRunId ||
+        (observed.id === completedRunId &&
+          (observed.run_attempt < completedAttempt ||
+            (observed.run_attempt === completedAttempt && observed.status !== "completed"))))
+    ) {
+      // A successful scheduled pass advances its window; do not strand this completed run.
+      throw new GitHubDiffDataError(
+        "The completed CI run is missing or stale in the current observation.",
+      );
+    }
+  }
   const root = `/repos/${owner}/${repo}/actions`;
   const response = await api.request(
     `${root}/workflows/ci.yml/runs?head_sha=${pullRequest.head.sha}&per_page=100`,
@@ -91,6 +117,7 @@ async function ciState(review) {
       break;
     }
   }
+  assertCompletedRunObserved(run);
   if (!run || run.status !== "completed") {
     return "pending";
   }
@@ -131,6 +158,7 @@ async function ciState(review) {
   if (current.id !== run.id || current.head_sha !== run.head_sha) {
     throw new Error("The CI run identity changed during security review.");
   }
+  assertCompletedRunObserved(current);
   if (currentState === "pending") {
     return "pending";
   }

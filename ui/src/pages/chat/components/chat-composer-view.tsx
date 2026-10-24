@@ -1,19 +1,19 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { dynamic } from "@solidjs/web";
-import { createMemo, createSignal, Show } from "solid-js";
+import { createMemo, createSignal, lazy, Show } from "solid-js";
 import { createFooterControlRef } from "../../../app/shell-layout-traits-solid.tsx";
 import { McpAppCatalog } from "../../../components/mcp-app-catalog.tsx";
 import { McpAppResources } from "../../../components/mcp-app-resources.tsx";
 import { createBackgroundLayoutRef } from "../../../components/session-background-layout-context.tsx";
+import { Icon } from "../../../components/solid/icon.tsx";
 import "../../../styles/chat/composer-surface.css";
 import "../../../styles/chat/composer-mobile.css";
-import { Icon } from "../../../components/solid/icon.tsx";
 import { McpAppContextStrip } from "../../../components/solid/mcp-app-context-strip.tsx";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { PaneSubagentStop } from "../chat-pane-header-view.tsx";
+import { hasVisibleChatActivityPills } from "./chat-activity-pills-visibility.ts";
 import "../../../styles/chat/composer-context-strip.css";
-import { ChatActivityPills } from "./chat-activity-pills.tsx";
 import { createChatAttachmentInputHandle } from "./chat-attachment-inputs.ts";
 import { ChatAttachmentInputs } from "./chat-attachment-inputs.tsx";
 import { AttachmentPreview, AttachmentReadStatus } from "./chat-attachments.tsx";
@@ -41,11 +41,16 @@ import { commitComposerDraft } from "./chat-composer-state.ts";
 import { renderFallbackIndicatorSolid } from "./chat-composer-status.tsx";
 import { renderComposerTextarea, type ComposerTextareaProps } from "./chat-composer-textarea.tsx";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
+import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import { isPastedTextAttachment } from "./chat-pasted-text.ts";
 import { ChatPermissionPicker } from "./chat-permission-picker.tsx";
 import { ChatVoiceStatus, ComposerDictationStatus } from "./chat-voice-activity.tsx";
 
 type ChatComposerViewContext = ReturnType<typeof createChatComposerContext>;
+
+const ChatActivityPills = lazy(() => import("./chat-activity-pills.tsx"), {
+  export: "ChatActivityPills",
+});
 
 export function renderChatComposerView(
   context: () => ChatComposerViewContext,
@@ -329,8 +334,20 @@ export function renderChatComposerView(
             }}
           </Show>
         </div>
-        <Show when={props.mobileComposer && props.mobileActivityPills}>
-          {(activities) => <ChatActivityPills {...activities()} />}
+        <Show
+          when={
+            props.mobileComposer &&
+            props.mobileActivityPills &&
+            hasVisibleChatActivityPills(props.mobileActivityPills)
+              ? props.mobileActivityPills
+              : undefined
+          }
+        >
+          {(activities) => (
+            <ChatLazyBoundary>
+              <ChatActivityPills {...activities()} onLayout={props.onActivityPillsLayout} />
+            </ChatLazyBoundary>
+          )}
         </Show>
         {props.mobileApprovalContent}
       </div>
@@ -338,7 +355,7 @@ export function renderChatComposerView(
         <ComposerQueue composer={props} showAbortableUi={context().showAbortableUi} />
       </Show>
       {showComposerInput() ? (
-        <ComposerInputScope state={context().state}>
+        <ComposerInputScope>
           <div
             class={[
               "agent-chat__input agent-chat__input--chat agent-chat__input--mobile-toolbar",
@@ -369,7 +386,14 @@ export function renderChatComposerView(
               focusComposerFromChrome(event, context().canCompose, state.composerTextarea)
             }
             ref={[
-              context().state.composerInputRef ?? undefined,
+              elementRef<HTMLDivElement>((element) => {
+                state.composerInputRef?.(element);
+                return () => {
+                  if (state.composerInput === element) {
+                    state.composerInputRef?.();
+                  }
+                };
+              }),
               createBackgroundLayoutRef("composer"),
             ]}
           >

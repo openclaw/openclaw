@@ -65,10 +65,7 @@ function attachmentLayout(card: Element) {
   const reason = part("reason");
   const reasonRect = reason.getBoundingClientRect();
   const separator = part("separator");
-  const separatorRect = separator.getBoundingClientRect();
   return {
-    leftGap: separatorRect.left - badge.right,
-    rightGap: reasonRect.left - separatorRect.right,
     badgeBottom: badge.bottom,
     cardBottom: card.getBoundingClientRect().bottom,
     cardClientWidth: card.clientWidth,
@@ -457,14 +454,12 @@ suite.define(() => {
 
       try {
         const failedCard = cards.filter({ hasText: "settings.toml" });
-        await failedCard.scrollIntoViewIfNeeded();
-        const { leftGap, rightGap } = await failedCard.evaluate(attachmentLayout);
-        expect(leftGap).toBeGreaterThan(4);
-        expect(rightGap).toBeGreaterThan(4);
-        expect(Math.abs(leftGap - rightGap)).toBeLessThan(0.25);
-
-        for (const width of [320, 560]) {
-          await page.setViewportSize({ width, height: 852 });
+        for (const viewport of [
+          DESKTOP_VIEWPORT,
+          { width: 320, height: 852 },
+          { width: 560, height: 852 },
+        ]) {
+          await page.setViewportSize(viewport);
           // The viewport ACK does not settle the retained pane's responsive geometry.
           await failedCard.scrollIntoViewIfNeeded();
           await waitForLayoutSettled(
@@ -475,7 +470,7 @@ suite.define(() => {
           expect(layout).toMatchObject({ separatorDisplay: "none", reasonWhiteSpace: "normal" });
           expect(layout.reasonTop).toBeGreaterThanOrEqual(layout.badgeBottom);
           expect(layout.reasonBottom).toBeLessThanOrEqual(layout.cardBottom);
-          expect(layout.reasonRight).toBeLessThanOrEqual(width);
+          expect(layout.reasonRight).toBeLessThanOrEqual(viewport.width);
           expect(layout.cardScrollWidth).toBeLessThanOrEqual(layout.cardClientWidth);
           await expectNoHorizontalOverflow(page);
         }

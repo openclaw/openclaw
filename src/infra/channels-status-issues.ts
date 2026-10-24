@@ -3,7 +3,6 @@ import { ChannelsStatusResultSchema } from "../../packages/gateway-protocol/src/
 import { listChannelPlugins } from "../channels/plugins/index.js";
 import type {
   ChannelAccountSnapshot,
-  ChannelId,
   ChannelPlugin,
   ChannelStatusIssue,
 } from "../channels/plugins/types.public.js";
@@ -22,72 +21,6 @@ const RUNTIME_ISSUE_MESSAGES = new Map([
   ],
   ["stuck", "Channel runtime appears stuck with stale run activity."],
 ]);
-
-function resolveIssueAccountId(account: ChannelAccountSnapshot): string {
-  return typeof account.accountId === "string" && account.accountId.trim()
-    ? account.accountId
-    : "default";
-}
-
-function collectGenericRuntimeStatusIssues(
-  channel: ChannelId,
-  accounts: ChannelAccountSnapshot[],
-): ChannelStatusIssue[] {
-  const now = Date.now();
-  const issues: ChannelStatusIssue[] = [];
-  for (const account of accounts) {
-    if (account.enabled === false || account.configured === false) {
-      continue;
-    }
-    const accountId = resolveIssueAccountId(account);
-    // Dead ingress outranks the restart-pending short-circuit: a pending restart
-    // cannot fix a channel whose inbound admission is unavailable, and hiding it
-    // behind "status may be stale" is how silent inbound loss stays invisible.
-    if (account.ingressUnavailable === true && !account.terminalDisconnect) {
-      issues.push({
-        channel,
-        accountId,
-        kind: "runtime",
-        message:
-          "Channel cannot admit inbound events; its durable ingress queue is unavailable. Outbound may still work.",
-        fix: "check openclaw logs for the ingress failure, then rerun openclaw doctor",
-      });
-      continue;
-    }
-    // Generic health issues are derived before plugin-specific checks so every
-    // channel gets the same stale/disconnected runtime warnings.
-    const health = evaluateChannelHealth(account, {
-      channelId: channel,
-      now,
-      channelConnectGraceMs: DEFAULT_CHANNEL_CONNECT_GRACE_MS,
-      staleEventThresholdMs: DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
-    });
-    if (health.healthy) {
-      continue;
-    }
-    // Older status snapshots can omit running; absence is not a stopped runtime.
-    if (health.reason === "not-running" && account.running !== false) {
-      continue;
-    }
-    const blocked = health.reason === "terminal-disconnect" || health.reason === "blocked";
-    const message = blocked
-      ? account.lastError || "Channel runtime is blocked and needs operator action."
-      : RUNTIME_ISSUE_MESSAGES.get(health.reason);
-    if (message === undefined) {
-      continue;
-    }
-    issues.push({
-      channel,
-      accountId,
-      kind: "runtime",
-      message,
-      fix: blocked
-        ? "resolve the reported channel error, then restart the channel"
-        : "restart the channel or gateway",
-    });
-  }
-  return issues;
-}
 
 /** Collects generic and plugin-specific issues from a channels status payload. */
 export function collectChannelStatusIssues(
@@ -109,7 +42,62 @@ export function collectChannelStatusIssues(
       continue;
     }
     const accounts = raw as ChannelAccountSnapshot[];
-    issues.push(...collectGenericRuntimeStatusIssues(plugin.id, accounts));
+    const channel = plugin.id;
+    const now = Date.now();
+    for (const account of accounts) {
+      if (account.enabled === false || account.configured === false) {
+        continue;
+      }
+      const accountId =
+        typeof account.accountId === "string" && account.accountId.trim()
+          ? account.accountId
+          : "default";
+      // Dead ingress outranks the restart-pending short-circuit: a pending restart
+      // cannot fix a channel whose inbound admission is unavailable, and hiding it
+      // behind "status may be stale" is how silent inbound loss stays invisible.
+      if (account.ingressUnavailable === true && !account.terminalDisconnect) {
+        issues.push({
+          channel,
+          accountId,
+          kind: "runtime",
+          message:
+            "Channel cannot admit inbound events; its durable ingress queue is unavailable. Outbound may still work.",
+          fix: "check openclaw logs for the ingress failure, then rerun openclaw doctor",
+        });
+        continue;
+      }
+      // Generic health issues are derived before plugin-specific checks so every
+      // channel gets the same stale/disconnected runtime warnings.
+      const health = evaluateChannelHealth(account, {
+        channelId: channel,
+        now,
+        channelConnectGraceMs: DEFAULT_CHANNEL_CONNECT_GRACE_MS,
+        staleEventThresholdMs: DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
+      });
+      if (health.healthy) {
+        continue;
+      }
+      // Older status snapshots can omit running; absence is not a stopped runtime.
+      if (health.reason === "not-running" && account.running !== false) {
+        continue;
+      }
+      const blocked = health.reason === "terminal-disconnect" || health.reason === "blocked";
+      const message = blocked
+        ? account.lastError || "Channel runtime is blocked and needs operator action."
+        : RUNTIME_ISSUE_MESSAGES.get(health.reason);
+      if (message === undefined) {
+        continue;
+      }
+      issues.push({
+        channel,
+        accountId,
+        kind: "runtime",
+        message,
+        fix: blocked
+          ? "resolve the reported channel error, then restart the channel"
+          : "restart the channel or gateway",
+      });
+    }
     const collect = plugin.status?.collectStatusIssues;
     if (collect) {
       issues.push(...collect(accounts));

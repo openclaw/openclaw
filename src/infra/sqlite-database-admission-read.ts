@@ -152,6 +152,18 @@ export function createSqliteDatabaseAdmissionReader(owner: {
       : read(pathAdmission(location));
   }
 
+  /** Optional preparation consumes only facts already delivered to this isolate. */
+  function peekSqliteDatabaseAdmissionForPath<T>(
+    location: string,
+    key: SqliteDatabaseFactKey<T>,
+  ): T | undefined {
+    const record = state.registry.forLocation(location);
+    const fact = record?.facts.get(key.name);
+    return record && fact && valid(record, fact)
+      ? readSqliteDatabaseAdmissionFact(fact, key)
+      : undefined;
+  }
+
   function getSqliteDatabaseSchemaRevision(
     connection: EngineConnection,
     options: { existingOnly?: boolean } = {},
@@ -187,6 +199,7 @@ export function createSqliteDatabaseAdmissionReader(owner: {
     getSqliteDatabaseAdmission,
     getSqliteDatabaseSchemaRevision,
     getOrLoadSqliteDatabaseAdmissionForPath,
+    peekSqliteDatabaseAdmissionForPath,
     hasSqliteDatabaseSchemaAdmissionForPath,
     getSqliteDatabaseAdmissionIdentityForPath,
     hasSqliteDatabaseSchemaAdmissionForIdentity,

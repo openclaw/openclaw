@@ -346,9 +346,71 @@ describePosix("explicit prior-CI admin landing", () => {
     }
   });
 
+  it.each(["current", "older", "foreign"] as const)(
+    "checks the %s publisher against main after the bound workflow changes",
+    (publisher) => {
+      const f = preExistingCandidate();
+      const workflowPath = ".github/workflows/security-review.yml";
+      const workflow = f.git(["show", `${f.base}:${workflowPath}`]);
+      // Add an input to both checkouts so admission must use main's inventory too.
+      const updated = workflow.replaceAll(
+        "sparse-checkout: |",
+        "sparse-checkout: |\n            /sibling.txt",
+      );
+      const blob = f.git(["hash-object", "-w", "--stdin"], updated + "\n");
+      let tree = blob;
+      for (const [directory, name, kind] of [
+        [":.github/workflows", "security-review.yml", "100644 blob"],
+        [":.github", "workflows", "040000 tree"],
+        ["", ".github", "040000 tree"],
+      ]) {
+        const entries = f
+          .git(["ls-tree", `${f.base}${directory}`])
+          .split("\n")
+          .filter((entry) => !entry.endsWith(`\t${name}`));
+        tree = f.git(["mktree"], [...entries, `${kind} ${tree}\t${name}`, ""].join("\n"));
+      }
+      const main = f.commit(tree, [f.base]);
+      f.git(["push", "-q", "origin", `${main}:refs/heads/main`]);
+      const state = f.state();
+      state.priorCi.security.sourceSha = publisher === "older" ? f.base : main;
+      if (publisher === "foreign") {
+        state.priorCi.security.fault = "untrusted-publisher-source";
+      }
+      f.save(state);
+
+      const result = f.adminPriorCi(f.path);
+      expectResult(
+        f,
+        result,
+        publisher === "current"
+          ? undefined
+          : publisher === "older"
+            ? "publisher source differs from the current owner"
+            : "publisher source is not on protected main",
+        publisher === "current" ? 1 : 0,
+      );
+      if (publisher === "current") {
+        expect(f.record().priorCiAdmin.securityReview).toMatchObject({
+          sourceSha: main,
+          sources: expect.arrayContaining([
+            { path: workflowPath, sha: blob },
+            { path: "sibling.txt", sha: f.git(["rev-parse", `${main}:sibling.txt`]) },
+          ]),
+        });
+      } else {
+        expectNoIntent(f);
+      }
+    },
+  );
+
   it.each([
     ["success", ""],
     ["pending", ""],
+    ["head-only-enforcement", ""],
+    ["wrong-ci-run", "successful exact-head security enforcement is required"],
+    ["wrong-ci-attempt", "successful exact-head security enforcement is required"],
+    ["duplicate-enforcement", "successful exact-head security enforcement is required"],
     ["automation-dispatch", "successful protected Security Review publisher is required"],
     ["missing-job", "security-fast must pass independently"],
     ["duplicate-job", "security-fast must pass independently"],
@@ -360,6 +422,8 @@ describePosix("explicit prior-CI admin landing", () => {
     ["foreign-workflow", "successful protected Security Review publisher is required"],
     ["new-publisher-attempt", "publisher attempt identity changed"],
     ["changed-publisher-source", "publisher source differs from the current owner"],
+    ["malformed-workflow", "complete protected publisher source is required"],
+    ["changed-workflow-bytes", "blob bytes mismatch"],
     ["untrusted-publisher-source", "publisher source is not on protected main"],
     ["missing-enforcement", "successful exact-head security enforcement is required"],
     ["incomplete-publisher", "incomplete Security Review job identities"],
@@ -369,7 +433,7 @@ describePosix("explicit prior-CI admin landing", () => {
   ])("validates %s security evidence without dispatch", (fault, message) => {
     const f = preExistingCandidate();
     const state = f.state();
-    const accepted = fault === "success" || fault === "pending";
+    const accepted = ["success", "pending", "head-only-enforcement"].includes(fault!);
     if (fault === "success" || fault === "pending") {
       state.priorCi.security.combinedState = fault;
     } else {

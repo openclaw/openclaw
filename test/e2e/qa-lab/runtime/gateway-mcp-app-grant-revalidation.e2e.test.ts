@@ -4,15 +4,18 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
 import {
-  createQaGatewayChild,
+  buildQaGatewayConfig,
   startQaMockOpenAiServer,
 } from "../../../../extensions/qa-lab/api.js";
 import type {
+  BoardSnapshot,
   BoardWidgetAppViewResult,
   BoardWidgetPutResult,
+  EventFrame,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
-import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import type { OpenClawTestInstance } from "../../../helpers/openclaw-test-instance.js";
+import { runQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 import {
   TEST_TIMEOUT_MS,
@@ -20,9 +23,15 @@ import {
   startHttpFixture,
   stopChild,
   waitForMcpFixtureGate,
-  type GatewayHandle,
   type HttpFixture,
 } from "./gateway-node-mcp.test-support.js";
+import {
+  createSkillLibraryWireInstance,
+  SKILL_LIBRARY_ALICE,
+  SKILL_LIBRARY_BOB,
+  SKILL_LIBRARY_WRITER_SCOPES,
+  SkillLibraryWireClient,
+} from "./skill-library-wire-fixture.js";
 
 const APP_TOOL_NAME = "streamableHttp__parity_app";
 const POST_REVOCATION_MARKER = "post-revocation";
@@ -80,7 +89,7 @@ function appConfig(cfg: OpenClawConfig, fixture: HttpFixture): OpenClawConfig {
 }
 
 function postStandalone(
-  gateway: GatewayHandle,
+  gateway: { baseUrl: string },
   ticket: string,
   method: string,
   params: Record<string, unknown>,
@@ -96,7 +105,7 @@ function postStandalone(
 }
 
 it(
-  "rejects a standalone tool call revoked during a real catalog refresh",
+  "isolates shared-board pins by requester and rejects tool calls revoked during catalog refresh",
   { timeout: TEST_TIMEOUT_MS },
   async ({ signal, onTestFinished }) => {
     // Finish hooks run in reverse order: join children before deleting their paths.
@@ -111,11 +120,11 @@ it(
     const armPath = path.join(gateDir, "arm");
     const startedPath = path.join(gateDir, "started");
     const releasePath = path.join(gateDir, "release");
-    const gatewayParent = path.join(taskRoot, "gateway");
     const fixturePath = path.join(repoRoot, "test/e2e/qa-lab/runtime/gateway-node-mcp.fixture.mjs");
     let startingFixture: Promise<HttpFixture> | undefined;
     let mock: Awaited<ReturnType<typeof startQaMockOpenAiServer>> | undefined;
-    const gatewayOwner = createQaGatewayChild();
+    let instance: OpenClawTestInstance | undefined;
+    const clients: SkillLibraryWireClient[] = [];
     let pendingCall: Promise<Response> | undefined;
     const cleanupErrors: unknown[] = [];
     let cleanupPromise: Promise<void> | undefined;
@@ -124,13 +133,16 @@ it(
         const acquiredFixture = await startingFixture?.catch(() => undefined);
         await fs.writeFile(releasePath, "released\n").catch(() => {});
         await pendingCall?.catch(() => {});
+        const closed = await Promise.allSettled(clients.map((client) => client.close()));
         const stopped = await Promise.allSettled([
-          stopQaGatewayFixture(gatewayOwner),
+          ...(instance ? [instance.cleanup()] : []),
           ...(acquiredFixture ? [stopChild(acquiredFixture)] : []),
           ...(mock ? [Promise.resolve(mock.stop())] : []),
         ]);
         cleanupErrors.push(
-          ...stopped.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
+          ...[...closed, ...stopped].flatMap((result) =>
+            result.status === "rejected" ? [result.reason] : [],
+          ),
         );
       })());
     onTestFinished(cleanup);
@@ -138,7 +150,7 @@ it(
     await runQaGatewayFixture(
       async () => {
         await Promise.all(
-          [fixtureHome, fixtureTemp, gateDir, gatewayParent].map((directory) =>
+          [fixtureHome, fixtureTemp, gateDir].map((directory) =>
             fs.mkdir(directory, { recursive: true }),
           ),
         );
@@ -158,26 +170,95 @@ it(
         });
         const fixture = await startingFixture;
         mock = await startQaMockOpenAiServer();
-        const gateway = await gatewayOwner.start({
-          repoRoot,
-          command: {
-            executablePath: process.execPath,
-            argsPrefix: ["dist/index.js"],
-            cwd: repoRoot,
-            tempParentDir: gatewayParent,
-            usePackagedPlugins: true,
+        instance = await createSkillLibraryWireInstance({ signal });
+        const authConfig = JSON.parse(
+          await fs.readFile(instance.configPath, "utf8"),
+        ) as OpenClawConfig;
+        const config = appConfig(
+          buildQaGatewayConfig({
+            bind: "loopback",
+            gatewayPort: instance.port,
+            gatewayToken: instance.gatewayToken,
+            workspaceDir: instance.state.workspaceDir,
+            providerBaseUrl: `${mock.baseUrl}/v1`,
+            providerMode: "mock-openai",
+            primaryModel: "mock-openai/gpt-5.6-luna",
+            controlUiEnabled: false,
+            enabledPluginIds: ["openai"],
+          }),
+          fixture,
+        );
+        config.gateway = {
+          ...authConfig.gateway,
+          // Shared-board write access does not confer ownership of another person's preview.
+          roles: {
+            default: "writer",
+            definitions: {
+              writer: {
+                sessions: { others: "write" },
+                agents: "*",
+                scopes: ["operator.admin", "operator.read", "operator.write"],
+              },
+            },
           },
-          providerBaseUrl: `${mock.baseUrl}/v1`,
-          providerMode: "mock-openai",
-          primaryModel: "mock-openai/gpt-5.6-luna",
-          transportBaseUrl: "http://127.0.0.1",
-          controlUiEnabled: false,
-          runtimeEnvPatch: { OPENCLAW_SKIP_CHANNELS: "1" },
-          mutateConfig: (cfg) => appConfig(cfg, fixture),
+        };
+        config.agents!.defaults!.models!["mock-openai/gpt-5.6-luna"]!.agentRuntime = {
+          id: "openclaw",
+        };
+        await instance.state.writeConfig(config);
+        const childEnv = createChildEnv({
+          home: instance.homeDir,
+          tempDir: fixtureTemp,
+          extra: {
+            ...instance.state.envVars,
+            OPENCLAW_BUILD_PRIVATE_QA: "1",
+            OPENCLAW_SKIP_CHANNELS: "1",
+          },
         });
-
+        for (const key of Object.keys(instance.env)) {
+          delete instance.env[key];
+        }
+        Object.assign(instance.env, childEnv);
+        await instance.startGateway();
+        const connect = async (options?: Parameters<typeof SkillLibraryWireClient.connect>[1]) => {
+          const connected = await SkillLibraryWireClient.connect(instance!, options);
+          clients.push(connected.client);
+          return connected;
+        };
+        const { hello } = await connect();
+        const boardEvents: EventFrame[] = [];
+        const { client: alice } = await connect({
+          email: SKILL_LIBRARY_ALICE,
+          scopes: ["operator.admin", ...SKILL_LIBRARY_WRITER_SCOPES],
+          buildId: hello.server.buildId,
+          onEvent: (event) => {
+            if (event.event === "board.changed") {
+              boardEvents.push(event);
+            }
+          },
+        });
+        const { client: bob, hello: bobHello } = await connect({
+          email: SKILL_LIBRARY_BOB,
+          buildId: hello.server.buildId,
+        });
+        expect(bobHello.auth?.scopes?.toSorted()).toEqual(
+          [...SKILL_LIBRARY_WRITER_SCOPES].toSorted(),
+        );
+        const aliceId = (await alice.request<{ profile: { id: string } }>("users.self", {})).profile
+          .id;
+        const bobId = (await bob.request<{ profile: { id: string } }>("users.self", {})).profile.id;
+        expect(aliceId).not.toBe(bobId);
+        await alice.request("sessions.subscribe", {});
+        const gateway = { baseUrl: `http://127.0.0.1:${instance.port}` };
         const sessionKey = `agent:qa:mcp-app-grant-${randomUUID()}`;
-        const started = (await gateway.call(
+        await alice.request("sessions.create", {
+          key: sessionKey,
+          agentId: "qa",
+          visibility: "shared",
+          worktree: false,
+          cwd: instance.state.workspaceDir,
+        });
+        const started = (await alice.request(
           "agent",
           {
             sessionKey,
@@ -185,25 +266,60 @@ it(
             deliver: false,
             idempotencyKey: randomUUID(),
           },
-          { timeoutMs: 30_000 },
+          30_000,
         )) as { runId?: unknown; status?: unknown };
         if (started.status !== "accepted" || typeof started.runId !== "string") {
           throw new Error(`mock-provider App turn did not start: ${JSON.stringify(started)}`);
         }
         await expect(
-          gateway.call(
-            "agent.wait",
-            { runId: started.runId, timeoutMs: 60_000 },
-            { timeoutMs: 65_000 },
-          ),
+          alice.request("agent.wait", { runId: started.runId, timeoutMs: 60_000 }, 65_000),
         ).resolves.toMatchObject({ runId: started.runId, status: "ok" });
-        const history = (await gateway.call("chat.history", {
+        const history = (await alice.request("chat.history", {
           sessionKey,
           limit: 50,
         })) as { messages?: unknown[] };
         const sourceViewId = requireMcpAppViewId(history.messages ?? []);
 
-        const pinned = (await gateway.call("board.widget.put", {
+        const control = await bob.request<BoardWidgetPutResult>("board.widget.put", {
+          sessionKey,
+          name: "bob-control",
+          content: { kind: "html", html: "<p>Bob can write this shared board</p>" },
+        });
+        // Read on the observing socket fences events already published before the RPC reply.
+        await alice.request("board.get", { sessionKey });
+        expect(control.widgets.map((widget) => widget.name)).toEqual(["bob-control"]);
+        expect(
+          boardEvents.map((event) => (isRecord(event.payload) ? event.payload.widget : undefined)),
+        ).toEqual(["bob-control"]);
+        boardEvents.length = 0;
+        const markersBefore = await readExecutedMarkers(eventPath);
+        await expect(
+          bob.request("board.widget.put", {
+            sessionKey,
+            name: "foreign-pin",
+            content: { kind: "mcp-app", viewId: sourceViewId },
+          }),
+        ).rejects.toThrow("MCP App view expired or is not authorized for this session");
+        const afterRejectedPin = await alice.request<BoardSnapshot>("board.get", { sessionKey });
+        expect(afterRejectedPin.revision).toBe(control.revision);
+        expect(afterRejectedPin.widgets.map((widget) => widget.name)).toEqual(["bob-control"]);
+        expect(boardEvents).toEqual([]);
+        expect(await readExecutedMarkers(eventPath)).toEqual(markersBefore);
+        console.info(
+          "[mcp-board-requester-proof]",
+          JSON.stringify({
+            distinctAuthenticatedProfiles: aliceId !== bobId,
+            bobScopes: bobHello.auth?.scopes,
+            bobControlWidget: control.resolvedWidgetName,
+            revisionBefore: control.revision,
+            revisionAfterRejectedPin: afterRejectedPin.revision,
+            widgetsAfterRejectedPin: afterRejectedPin.widgets.map((widget) => widget.name),
+            publishedEventsAfterRejectedPin: boardEvents.length,
+            toolCallsAfterRejectedPin:
+              (await readExecutedMarkers(eventPath)).length - markersBefore.length,
+          }),
+        );
+        const pinned = (await alice.request("board.widget.put", {
           sessionKey,
           name: "grant-proof",
           content: { kind: "mcp-app", viewId: sourceViewId },
@@ -213,21 +329,33 @@ it(
           throw new Error("board.widget.put omitted the exact widget revision identity");
         }
         expect(widget.grantState).toBe("pending");
+        await alice.request("board.get", { sessionKey });
+        expect(
+          boardEvents.map((event) => (isRecord(event.payload) ? event.payload.widget : undefined)),
+        ).toEqual(["grant-proof"]);
+        console.info(
+          "[mcp-board-requester-proof]",
+          JSON.stringify({
+            alicePinnedWidget: widget.name,
+            grantState: widget.grantState,
+            publishedEventsAfterAlicePin: boardEvents.length,
+          }),
+        );
         const widgetRef = {
           sessionKey,
           name: widget.name,
           revision: widget.revision,
           instanceId: widget.instanceId,
         };
-        await gateway.call("board.widget.grant", {
+        await alice.request("board.widget.grant", {
           ...widgetRef,
           decision: "granted",
         });
-        const reminted = (await gateway.call(
+        const reminted = (await alice.request(
           "board.widget.appView",
           widgetRef,
         )) as BoardWidgetAppViewResult;
-        const appView = (await gateway.call("mcp.app.view", {
+        const appView = (await alice.request("mcp.app.view", {
           sessionKey,
           viewId: reminted.viewId,
         })) as { standaloneUrl?: unknown };
@@ -256,7 +384,7 @@ it(
 
         pendingCall = callTool(POST_REVOCATION_MARKER);
         await waitForMcpFixtureGate(startedPath, signal);
-        await gateway.call("board.update", {
+        await alice.request("board.update", {
           sessionKey,
           ops: [{ kind: "widget_remove", name: widget.name }],
         });

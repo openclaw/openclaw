@@ -2,7 +2,10 @@ import type { WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
 import { createCrabboxXfceSessionEnvironment } from "./crabbox-worker-desktop-setup.js";
 import { createCrabboxNodeProcessRuntime } from "./crabbox-worker-node-process.js";
 import type { CrabboxOperatingSystem } from "./crabbox-worker-profile.js";
-import { wrapCrabboxNodeScript } from "./crabbox-worker-script.js";
+import {
+  createCrabboxWorkerStateDirScript,
+  wrapCrabboxNodeScript,
+} from "./crabbox-worker-script.js";
 import { CRABBOX_SETUP_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
 
 const CLOUD_SETUP_CODE_ENV = "CRABBOX_WORKER_SETUP_CODE";
@@ -101,7 +104,7 @@ setPhase("preparation");
   try { tokens = JSON.parse(credentials || "{}"); }
   catch { throw new Error("Cloud worker bootstrap credential format is invalid"); }
   const home = fs.realpathSync(os.homedir());
-  const stateDir = path.join(home, ".openclaw", "cloud-workers", leaseId);
+  const stateDir = ${createCrabboxWorkerStateDirScript(leaseId)};
   const runtimeRoot = path.join(home, ".openclaw-worker", "node-runtimes");
   const runtimeDir = path.join(runtimeRoot, bootstrap.sha256);
   const cli = path.join(runtimeDir, "node_modules", "openclaw", "openclaw.mjs");
@@ -174,6 +177,13 @@ setPhase("preparation");
   if (mode) {
     fs.mkdirSync(stateDir, { recursive: true, ...directoryOptions });
     if (process.platform !== "win32") fs.chmodSync(stateDir, 0o700);
+    else if (path.dirname(stateDir) === path.join(path.parse(home).root, "ocw")) {
+      // The drive root does not inherit the worker profile's private permissions.
+      const quote = (value) => "'" + value.replaceAll("'", "''") + "'";
+      const secureState = "$ErrorActionPreference = 'Stop'; $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value; icacls.exe " + quote(stateDir) + " /inheritance:r /grant:r ('*' + $sid + ':(OI)(CI)F') /grant:r '*S-1-5-18:(OI)(CI)F' /grant:r '*S-1-5-32-544:(OI)(CI)F' | Out-Null; exit $LASTEXITCODE";
+      const result = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", secureState], { env: nodeEnv, encoding: "utf8", windowsHide: true, timeout: 10000 });
+      if (result.error || result.status !== 0) throw subprocessError("Cloud worker state directory permissions could not be secured", result);
+    }
   }
   ${createCrabboxNodeProcessRuntime(desktopTarget, leaseId)}
   if (desktopTarget === "macos") finishDesktopSetup();

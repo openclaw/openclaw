@@ -5,6 +5,7 @@ import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { consumeRootCommandOptionToken, FLAG_TERMINATOR } from "../infra/cli-root-options.js";
 import { pathExists } from "../infra/fs-safe.js";
 import { readPackageName, readPackageVersion } from "../infra/package-json.js";
+import { realpathOrResolve } from "../infra/path-existence.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { isBunRuntime, resolveRuntimeScriptPosition } from "./runtime-binary.js";
 import {
@@ -184,15 +185,7 @@ export function resolveServiceEntrypoint(
 function tryRealpath(value: string): Promise<string>;
 function tryRealpath(value: string | undefined): Promise<string | undefined>;
 async function tryRealpath(value: string | undefined): Promise<string | undefined> {
-  if (!value) {
-    return undefined;
-  }
-  const resolved = path.resolve(value);
-  try {
-    return await fs.realpath(resolved);
-  } catch {
-    return resolved;
-  }
+  return value ? realpathOrResolve(path.resolve(value)) : undefined;
 }
 
 async function isGatewayServiceSourceCheckoutRoot(candidate: string): Promise<boolean> {

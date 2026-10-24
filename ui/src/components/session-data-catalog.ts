@@ -37,7 +37,7 @@ import {
   createPanelRefreshStatus,
   failPanelRefresh,
   type PanelRefreshStatus,
-} from "./panel-refresh-status.ts";
+} from "./panel-refresh-status-state.ts";
 import type { ContextualSidebar } from "./sidebar-context-state.ts";
 
 export interface SessionDataInputs {
@@ -85,13 +85,11 @@ export interface SessionCatalogDataOwner {
 interface SessionCatalogResetOwner extends SessionCatalogDataOwner {
   sessionScopeGeneration: number;
   pendingCatalogArchives: ReadonlySet<string>;
-  sessionsLoading: boolean;
 }
 
 export function retireSessionCatalogData(owner: SessionCatalogResetOwner): void {
   owner.sessionScopeGeneration += 1;
   owner.pendingCatalogArchives = new Set();
-  owner.sessionsLoading = false;
   owner.loadingMoreSessionCatalogIds = new Set();
   owner.sessionCatalogLive.clear();
 }
@@ -130,6 +128,7 @@ export function areSessionCatalogsSettled(
         owner.loadingMoreSessionCatalogIds.size === 0 &&
         owner.sessionCatalogs.every(
           (catalog) =>
+            !catalog.pending &&
             !catalog.error &&
             catalog.hosts.every((entry) => !entry.pending && !entry.error && !entry.nextCursor),
         )))
@@ -311,7 +310,7 @@ export async function refreshSessionCatalogs(owner: SessionCatalogDataOwner): Pr
 function hiddenSessionCatalogPages(owner: SessionCatalogDataOwner) {
   const hiddenIds = new Set(owner.sessionCatalogIdsWithoutVisibleRows());
   return owner.sessionCatalogs.flatMap((catalog) => {
-    if (!hiddenIds.has(catalog.id) || catalog.error) {
+    if (!hiddenIds.has(catalog.id) || catalog.pending || catalog.error) {
       return [];
     }
     const hostIds = catalog.hosts

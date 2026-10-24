@@ -1,6 +1,8 @@
 import type { JSX } from "@solidjs/web";
 import { For, Show, createMemo, onCleanup, refresh, untrack, useContext } from "solid-js";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
+import { registerChatMediaEnglish } from "../../../i18n/locales/en-chat-media.ts";
+import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { observeChatAttachmentViewport } from "./chat-attachment-viewport.ts";
@@ -37,11 +39,13 @@ import {
 import {
   observeChatMediaResourceSubscriber,
   releaseChatMediaResourceOwner,
-  type ImageBlock,
-  type ImageRenderOptions,
-  type MessageMediaAction,
 } from "./chat-message-media.ts";
+import type { ImageBlock, ImageRenderOptions, MessageMediaAction } from "./chat-message-media.ts";
 import { TranscriptMediaDisconnect } from "./chat-transcript-media-lifecycle.ts";
+
+registerEnglishCatalog(registerChatComposerEnglish);
+
+registerEnglishCatalog(registerChatMediaEnglish);
 
 const CANONICAL_IMAGE_HANDOFF_TIMEOUT_MS = 30_000;
 
@@ -59,6 +63,7 @@ type ImagePresentation = {
   image: ImageBlock;
   key?: symbol;
   managed: boolean;
+  originalUnavailable?: boolean;
   previewUrl?: string;
   state?: "loading" | "unavailable";
   actions?: Pick<AssistantAttachmentStatusCardProps, "path" | "onAllow" | "onRetry" | "onOpen">;
@@ -259,7 +264,7 @@ function createMessageImagePresentation(props: MessageImageProps) {
           refreshImage();
         }
       };
-      return renderImagePlaceholder(image, reason, {
+      const placeholder = renderImagePlaceholder(image, reason, {
         path: isLocalAssistantAttachmentSource(source) ? source : undefined,
         onAllow:
           !decodeFailed && availability.status === "unavailable" && availability.canAllow
@@ -274,6 +279,10 @@ function createMessageImagePresentation(props: MessageImageProps) {
             ? () => retryAvailability()
             : undefined,
       });
+      return {
+        ...placeholder,
+        originalUnavailable: availability.status === "unavailable" && !availability.unconfirmed,
+      };
     }
     if (!managed) {
       const retained = retainedImage;
@@ -616,11 +625,10 @@ function MessageImage(props: MessageImageProps): JSX.Element {
 }
 
 function MessageImageContent(props: MessageImageProps): JSX.Element {
-  const presentation = createMessageImagePresentation(props);
-  const model = presentation.model;
+  const view = createMessageImagePresentation(props);
   return (
-    <Show when={model().key} keyed>
-      {(_key) => <ImageFrame model={model()} presentation={presentation} options={props.options} />}
+    <Show when={view.model().key} keyed>
+      {(_key) => <ImageFrame model={view.model()} presentation={view} options={props.options} />}
     </Show>
   );
 }
@@ -638,7 +646,8 @@ function ImageFrame(props: {
   // Native previews use the viewer’s file controls. Show their inline menu only
   // when a failed preview cannot open that viewer, never over retained pixels.
   const hasFileActions = () =>
-    props.model.managed || (compact() && isLocalAssistantAttachmentSource(image().url ?? ""));
+    !props.model.originalUnavailable &&
+    (props.model.managed || (compact() && isLocalAssistantAttachmentSource(image().url ?? "")));
   // A mounted preview keeps its initial frame when the upload receipt adds dimensions.
   // Fresh history mounts use those durable dimensions; older facts retain a stable fallback.
   const initialDimensions = untrack(() => resolveChatImagePreviewSize(props.model.image));
@@ -650,6 +659,7 @@ function ImageFrame(props: {
         {
           "chat-image-frame--managed": props.model.managed,
           "chat-image-frame--compact": compact(),
+          "chat-image-frame--compact-actions": compact() && hasFileActions(),
         },
       ]}
       style={{
@@ -699,7 +709,7 @@ function ImageFrame(props: {
         </span>
       </Show>
       <Show when={!pending() && hasFileActions()}>
-        <ChatImageActions title={title()} readOriginalBlob={loadOriginal} />
+        <ChatImageActions title={title()} readOriginalBlob={loadOriginal} overlay={!compact()} />
       </Show>
     </span>
   );

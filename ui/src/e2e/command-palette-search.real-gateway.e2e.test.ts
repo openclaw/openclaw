@@ -206,7 +206,6 @@ const suite = createControlUiE2eSuite({
             workspace: owner.state.workspaceDir,
             model: "fixture/search-model",
             modelPolicy: { allow: ["fixture/*"] },
-            heartbeat: { every: "0m" },
           },
           entries: Object.fromEntries(
             agentIds.map((id) => [id, { identity: { name: `Synthetic ${id} assistant` } }]),
@@ -868,8 +867,21 @@ suite.define(() => {
       passed = true;
     } finally {
       if (!passed) {
-        // CI retains console output; keep only counts and allowlisted error categories.
+        // CI retains console output; identify pending request ownership without query values.
         console.error("[search-proof] connection", JSON.stringify(connection));
+        console.error(
+          "[search-proof] pending RPC",
+          JSON.stringify(
+            rpc
+              .filter((metric) => metric.elapsedMs === undefined)
+              .map((metric) => ({
+                method: metric.method,
+                transcriptSearch: typeof metric.params.query === "string",
+                metadataSearch: typeof metric.params.search === "string",
+                commandPalette: metric.params.source === "command-palette",
+              })),
+          ),
+        );
         await writeFile(
           path.join(artifactDir, "gateway-failure.log"),
           owner

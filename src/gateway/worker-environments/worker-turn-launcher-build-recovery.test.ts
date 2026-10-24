@@ -30,6 +30,7 @@ import {
   WorkerTunnelOwnerDisconnectedError,
   type WorkerTurnTunnelHandle,
 } from "./tunnel-contract.js";
+import { completeTurn, localResult } from "./worker-turn-launcher-flow.test-support.js";
 import * as worker from "./worker-turn-launcher.test-support.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 import { createWorkerWorkspaceRecoveryFixture } from "./workspace-recovery.test-support.js";
@@ -38,7 +39,6 @@ afterAll(closeStateDatabaseForTest);
 
 const refreshedBundleHash = "b".repeat(64);
 const replacementReply = "Continued on the replacement worker";
-const localResult = async () => ({ meta: { durationMs: 1 } });
 const unexpected = (operation: string) => async (): Promise<never> => {
   throw new Error(`unexpected ${operation}`);
 };
@@ -175,8 +175,7 @@ async function createBuildRecoveryHarness(
     if (rejection === "handoff") {
       throw new StaleWorkerBuildError();
     }
-    const leafId = await worker.appendWorkerReply(replacementReply, 51);
-    return worker.acknowledgeCompletedWorkerTurn(request.turnClaim, leafId);
+    return completeTurn(request, replacementReply, 51);
   });
   const destroy = vi.fn(async () => environment);
   const environments: worker.WorkerTurnEnvironmentService &
@@ -390,8 +389,7 @@ async function createRefreshWaitHarness(fence = false) {
   };
   const launchTurn = vi.fn<WorkerTurnTunnelHandle["launchTurn"]>(async (request) => {
     request.onDispatchReady?.();
-    const leafId = await worker.appendWorkerReply("Ran on the refreshed worker", 51);
-    return worker.acknowledgeCompletedWorkerTurn(request.turnClaim, leafId);
+    return completeTurn(request, "Ran on the refreshed worker", 51);
   });
   const acquireTurnCredential = vi.fn(async () => {
     // This boundary also wakes the negative control on the original launcher.

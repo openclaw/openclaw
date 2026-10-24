@@ -2,8 +2,8 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerXAllowlistMethods } from "./admin.js";
-import { createXApiClient, type XFetch } from "./api.js";
 import { openXSpend, XBudgetExceededError } from "./spend.js";
+import { createXTestApi as createXApiClient, type XFetch } from "./test-support/api-client.js";
 import { createKeyedState } from "./test-support/monitor.js";
 import { createXTestSpend } from "./test-support/spend.js";
 

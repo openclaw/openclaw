@@ -24,6 +24,8 @@ import { planRuntimePluginDiscovery } from "../plugins/provider-discovery.js";
 import { getLiveCatalogRetainedData } from "../plugins/provider-live-catalog-cache.js";
 import { restorePreparedSyntheticAuthFacts } from "../plugins/provider-synthetic-auth.js";
 import { manifestPluginResolvesRuntimeModelCatalogAugment } from "../plugins/providers.js";
+import { getPluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
+import type { PluginRegistry } from "../plugins/registry-types.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import {
   listManifestSyntheticAuthProviderRefs,
@@ -74,7 +76,7 @@ import type { PreparedModelRuntimePluginGeneration } from "./prepared-model-runt
 import { AuthStorage } from "./sessions/auth-storage.js";
 
 type WorkerGeneration = {
-  pluginGeneration: PreparedModelRuntimePluginGeneration;
+  pluginGeneration: PreparedModelRuntimePluginGeneration & { pluginRegistry: PluginRegistry };
   pluginIds: ReadonlySet<string>;
   staticProviderIds: ReadonlySet<string>;
   release: () => void | Promise<void>;
@@ -466,6 +468,13 @@ async function runCatalogRequest(
     work.beginClose();
     await work.runWhenIdle(() => undefined);
     if (acquiredGeneration) {
+      const successor = getPluginRegistryInspectionResources(
+        acquiredGeneration.pluginGeneration.pluginRegistry,
+      );
+      if (!successor) {
+        throw new Error("Catalog scope growth has no inspection resource owner");
+      }
+      successor.adoptRetainedRegistrations(prepared.pluginGeneration.pluginRegistry);
       const releasePrevious = prepared.release;
       Object.assign(prepared, acquiredGeneration);
       acquiredGeneration = undefined;

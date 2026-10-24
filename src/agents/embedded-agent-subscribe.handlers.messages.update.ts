@@ -171,6 +171,16 @@ export function handleMessageUpdate(
   const priorBlockFinal = ctx.state.streamBlockFinal;
   const priorBlockIndex = ctx.state.lastAssistantStreamContentIndex;
   const streamContentIndex = resolveAssistantStreamContentIndex(assistantRecord?.contentIndex);
+  if (
+    isResponsesTextEvent &&
+    priorBlockIndex !== undefined &&
+    streamContentIndex !== undefined &&
+    streamContentIndex < priorBlockIndex
+  ) {
+    // Terminal annotations can correct an already delivered item. Keep the active reply
+    // scope: message_end publishes the corrected snapshot without replaying old prose.
+    return undefined;
+  }
   const streamItemId = resolveAssistantStreamItemId({
     contentIndex: streamContentIndex,
     message: partialAssistant,
@@ -530,9 +540,10 @@ export function handleMessageUpdate(
       projection?.projector.matchesTrimmedSource &&
       ((previousText === previousCleaned && next === cleanedText) ||
         (appendDelta !== null && replyDelta === appendDelta));
-    if (plainAppend) {
+    // Block snapshots only serve the optional block-delivery consumer.
+    if (ctx.params.onBlockReply && plainAppend) {
       ctx.blockChunker.append(chunk);
-    } else {
+    } else if (ctx.params.onBlockReply) {
       const previousBlock = extractAssistantStreamSnapshot(ctx, partialAssistant, {
         throughIndex: streamItemChanged ? blockSourceIndex : priorSourceIndex,
         observedText: streamItemChanged ? "" : priorBlockText,

@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
-import "../components/modal-dialog.ts";
+import "../components/modal-dialog.tsx";
 import "../components/sidebar-update-card.tsx";
 import { createTooltip, settleTooltip } from "../components/tooltip.test-support.ts";
 import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
@@ -12,7 +12,6 @@ import {
 import { resetAppHostTestGlobals } from "./app-host.test-support.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext } from "./context.ts";
-import { COMMAND_PALETTE_ELEMENT, ensureCustomElementDefined } from "./lazy-custom-element.ts";
 import { handleNavDrawerKeydown } from "./navigation-surface.ts";
 
 let navigate: ReturnType<typeof vi.fn>;
@@ -60,6 +59,17 @@ function keydown(init: KeyboardEventInit) {
   return new KeyboardEvent("keydown", { cancelable: true, ...init });
 }
 
+function platformIs(platform: string) {
+  const spy = vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
+  onTestFinished(() => spy.mockRestore());
+}
+
+function append<T extends HTMLElement>(element: T): T {
+  document.body.append(element);
+  onTestFinished(() => element.remove());
+  return element;
+}
+
 function nativeNavigate(detail: { path: string; search?: string }) {
   const event = new CustomEvent("openclaw:native-navigate", { cancelable: true, detail });
   window.dispatchEvent(event);
@@ -81,8 +91,7 @@ it("focuses the navigation drawer without a tooltip claiming Escape", async () =
   Object.defineProperty(trigger, "checkVisibility", { value: () => true });
   drawer.append(tooltip);
   shell.element.append(drawer);
-  document.body.append(shell.element);
-  onTestFinished(() => shell.element.remove());
+  append(shell.element);
   await settleTooltip(tooltip);
   shell.toggleNavigationSurface();
   shell.afterCommit();
@@ -95,14 +104,12 @@ it("focuses the navigation drawer without a tooltip claiming Escape", async () =
 it.each(["MacIntel", "Win32"])(
   "uses only the platform sidebar modifier on %s without consuming text navigation",
   (platform) => {
-    const platformSpy = vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
+    platformIs(platform);
     const snapshot = { navCollapsed: false };
     const update = vi.fn((next: { navCollapsed: boolean }) => Object.assign(snapshot, next));
     navigationShell({ navigation: { snapshot, update } } as unknown as ApplicationContext);
     const drawer = Object.assign(document.createElement("div"), { closeNavDrawer: vi.fn() });
-    const editor = document.body.appendChild(document.createElement("textarea"));
-    onTestFinished(() => editor.remove());
-    onTestFinished(() => platformSpy.mockRestore());
+    const editor = append(document.createElement("textarea"));
     for (const modifiers of [
       { metaKey: true },
       { ctrlKey: true },
@@ -177,8 +184,7 @@ it.each(["none", "keyboardShortcuts", "approvalOverlay"] as const)(
       });
       Object.assign(shell.elements, { [surface]: overlay });
       shell.element.append(overlay);
-      document.body.append(shell.element);
-      onTestFinished(() => shell.element.remove());
+      append(shell.element);
       document.dispatchEvent(keydown({ key: "Escape" }));
       expect(navigate).not.toHaveBeenCalled();
       overlay.remove();
@@ -196,7 +202,7 @@ it.each(["none", "keyboardShortcuts", "approvalOverlay"] as const)(
 
 it("keeps the raw config editor unchanged when Escape is pressed", () => {
   settingsShell();
-  const rawField = document.body.appendChild(document.createElement("label"));
+  const rawField = append(document.createElement("label"));
   rawField.className = "config-raw-field";
   const rawEditor = rawField.appendChild(document.createElement("textarea"));
   rawEditor.value = '{ "gateway": { "port": 18789 } }';
@@ -204,7 +210,6 @@ it("keeps the raw config editor unchanged when Escape is pressed", () => {
   const onInput = vi.fn();
   rawEditor.addEventListener("input", onInput);
 
-  onTestFinished(() => rawField.remove());
   const event = keydown({ key: "Escape", bubbles: true });
   rawEditor.dispatchEvent(event);
 
@@ -216,15 +221,12 @@ it("keeps the raw config editor unchanged when Escape is pressed", () => {
 it("lets a shadow-root confirmation own Escape without leaving Settings", async () => {
   const restoreDialogPolyfill = installDialogPolyfill();
   settingsShell();
-  const container = document.body.appendChild(document.createElement("div"));
+  const container = append(document.createElement("div"));
   const shadow = container.attachShadow({ mode: "open" });
   const modal = shadow.appendChild(document.createElement("openclaw-modal-dialog"));
   const cancel = modal.appendChild(document.createElement("button"));
 
-  onTestFinished(() => {
-    container.remove();
-    restoreDialogPolyfill();
-  });
+  onTestFinished(restoreDialogPolyfill);
   const { dialog } = await getRenderedModalDialog(shadow);
   expect(dialog.open).toBe(true);
   expect(dialog.getRootNode()).toBe(shadow);
@@ -267,8 +269,7 @@ it.each(["operator.write", "operator.sessions.write"])(
         togglePalette,
       },
     );
-    document.body.append(shell.elements.commandPalette);
-    onTestFinished(() => shell.elements.commandPalette?.remove());
+    append(shell.elements.commandPalette);
     window.dispatchEvent(new Event("openclaw:native-open-search"));
     const toggleEvent = new CustomEvent("openclaw:native-toggle-search", { cancelable: true });
     window.dispatchEvent(toggleEvent);
@@ -280,16 +281,12 @@ it.each(["operator.write", "operator.sessions.write"])(
     expect(toggleEvent.defaultPrevented).toBe(true);
     expect(navigate).toHaveBeenCalledWith("new-session", { search: "?agent=agent%2Fa" });
 
-    const platform = vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
-    onTestFinished(() => platform.mockRestore());
+    platformIs("MacIntel");
     shell.elements.commandPalette.remove();
     const shortcut = keydown({ key: "k", metaKey: true });
     document.dispatchEvent(shortcut);
     // Join the cold import before the shared runner retires this module graph.
-    await ensureCustomElementDefined(
-      COMMAND_PALETTE_ELEMENT.tagName,
-      COMMAND_PALETTE_ELEMENT.loadModule,
-    );
+    await vi.dynamicImportSettled();
     expect(shortcut.defaultPrevented).toBe(true);
     expect(togglePalette).toHaveBeenCalledOnce();
   },
@@ -301,13 +298,11 @@ it.each(
   ),
 )("opens a draft from the composer on $platform (native=$native)", ({ platform, native }) => {
   vi.stubGlobal("__OPENCLAW_NATIVE_WEB_CHROME__", native);
-  const platformSpy = vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
+  platformIs(platform);
   navigationShell(nativeSessionContext("research", { scopes: ["operator.sessions.write"] }));
-  const textarea = document.body.appendChild(document.createElement("textarea"));
-  onTestFinished(() => textarea.remove());
+  const textarea = append(document.createElement("textarea"));
   textarea.value = "Keep this foreground draft";
   const modifier = platform === "MacIntel" ? { metaKey: true } : { ctrlKey: true };
-  onTestFinished(() => platformSpy.mockRestore());
   // Receiver semantics only; synthetic DOM events cannot prove OS delivery.
   const chord = native
     ? { key: "n", code: "KeyN", shiftKey: false }
@@ -336,7 +331,7 @@ it.each(
 it.each(["modal", "onboarding", "read-only", "unavailable", "offline"])(
   "leaves the New Session shortcut unhandled during %s",
   (guard) => {
-    const platformSpy = vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
+    platformIs("MacIntel");
     const shell = createShellOwner();
     const context = nativeSessionContext("main", {
       ...(guard === "read-only" ? { scopes: ["operator.read"] } : {}),
@@ -353,7 +348,6 @@ it.each(["modal", "onboarding", "read-only", "unavailable", "offline"])(
     }
     onTestFinished(() => {
       document.openClawModalLayers?.delete(modal);
-      platformSpy.mockRestore();
     });
     const key = keydown({ key: "O", code: "KeyO", metaKey: true, shiftKey: true });
     document.dispatchEvent(key);
@@ -363,13 +357,12 @@ it.each(["modal", "onboarding", "read-only", "unavailable", "offline"])(
 );
 
 it("leaves a rendered modal navigation drawer in control of the New Session chord", () => {
-  vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
+  platformIs("MacIntel");
   const shell = navigationShell(nativeSessionContext("main"));
-  const drawer = document.body.appendChild(document.createElement("nav"));
+  const drawer = append(document.createElement("nav"));
   drawer.className = "shell-nav";
   drawer.setAttribute("aria-modal", "true");
   Object.assign(shell, { navDrawerElement: drawer });
-  onTestFinished(() => drawer.remove());
   document.dispatchEvent(keydown({ key: "O", code: "KeyO", metaKey: true, shiftKey: true }));
   expect(navigate).not.toHaveBeenCalled();
 });
@@ -400,18 +393,13 @@ it("does not start a native session without exact sessions.create access", () =>
 });
 
 it.each([
-  { path: "/settings/appearance", routeId: "appearance", basePath: "", search: undefined },
-  { path: "/settings/appearance", routeId: "appearance", basePath: "/gateway", search: undefined },
-  { path: "/settings/channels", routeId: "channels", basePath: "", search: undefined },
-  {
-    path: "/chat/main/dashboard/12345678-90ab-cdef-1234-567890abcdef",
-    routeId: "chat",
-    search: "?view=chat",
-    basePath: "/gateway",
-  },
-])(
-  "preserves native destination $basePath$path and acknowledges it",
-  ({ path, routeId, search, basePath }) => {
+  ["/settings/appearance", "appearance", "", undefined],
+  ["/settings/appearance", "appearance", "/gateway", undefined],
+  ["/settings/channels", "channels", "", undefined],
+  ["/chat/main/dashboard/12345678-90ab-cdef-1234-567890abcdef", "chat", "/gateway", "?view=chat"],
+] as const)(
+  "preserves native destination %s and acknowledges it",
+  (path, routeId, basePath, search) => {
     navigationShell({ basePath });
     const event = nativeNavigate({ path, search });
     expect(event.defaultPrevented).toBe(true);

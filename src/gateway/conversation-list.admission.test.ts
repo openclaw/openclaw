@@ -4,7 +4,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   listConversations,
-  registerConversationAddresses,
   prepareConversationRegistryScope,
 } from "../config/sessions/conversation-registry.js";
 import { listSessionEntriesCore } from "../config/sessions/session-accessor.entry.js";
@@ -13,6 +12,8 @@ import {
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as channelResolution from "../infra/outbound/channel-resolution.js";
+import * as outboundSession from "../infra/outbound/outbound-session.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -50,8 +51,6 @@ async function createDirectory(
   const scope = await prepareConversationRegistryScope({ config, agentId });
   const routed = createDeferredCore();
   const deps = {
-    listConversations,
-    registerConversationAddresses,
     resolveOutboundChannelPlugin: () => ({
       ...createChannelTestPluginBase({ id: "reef" }),
       directory: {
@@ -75,8 +74,14 @@ async function createDirectory(
       };
     },
   };
+  vi.spyOn(channelResolution, "resolveOutboundChannelPlugin").mockImplementation(
+    deps.resolveOutboundChannelPlugin,
+  );
+  vi.spyOn(outboundSession, "resolveOutboundSessionRoute").mockImplementation((input) =>
+    deps.resolveOutboundSessionRoute(input),
+  );
   const list = (overrides: Partial<Parameters<typeof runGatewayConversationList>[0]> = {}) =>
-    runGatewayConversationList({ config, agentId, channel: "reef", limit: 10, ...overrides }, deps);
+    runGatewayConversationList({ config, agentId, channel: "reef", limit: 10, ...overrides });
   const expectStored = async (count: number) => {
     expect(await listConversations(scope)).toHaveLength(count);
     expect(listSessionEntriesCore(scope)).toEqual([]);

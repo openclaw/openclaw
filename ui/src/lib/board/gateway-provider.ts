@@ -5,9 +5,9 @@ import type {
   BoardGetParams,
   BoardOp,
   BoardSnapshot,
-  BoardWidget,
   BoardWidgetAppViewResult,
 } from "@openclaw/gateway-protocol";
+import { truncateCodePoints } from "@openclaw/normalization-core/code-points";
 import { sleepWithAbort } from "@openclaw/retry";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { formatUiError } from "../format-error.ts";
@@ -18,7 +18,7 @@ import {
   resolveUiConversationIdentity,
 } from "../sessions/session-key.ts";
 import { BoardMcpAppViewCache } from "./mcp-app-view-cache.ts";
-import { emptyBoardSnapshot, normalizeBoardWidgetTitle } from "./provider-helpers.ts";
+import { emptyBoardSnapshot } from "./provider-helpers.ts";
 import {
   EventStream,
   ValueSignal,
@@ -240,7 +240,8 @@ export class GatewayBoardProvider implements BoardProvider {
     name: string,
     content: { kind: "canvas-doc"; docId: string } | { kind: "mcp-app"; viewId: string },
   ): Promise<void> {
-    const title = normalizeBoardWidgetTitle(input.title);
+    const normalizedTitle = input.title?.trim() ?? "";
+    const title = normalizedTitle ? truncateCodePoints(normalizedTitle, 80) : undefined;
     await this.mutate(
       "board.widget.put",
       {
@@ -548,7 +549,22 @@ export class GatewayBoardProvider implements BoardProvider {
       ) {
         if (preserveMissingViewContracts && widget.viewGeneration === undefined) {
           // Mutation snapshots omit the view contract minted by board.get.
-          const preserved = preserveBoardWidgetViewContract(widget, previous);
+          const preserved = {
+            ...widget,
+            ...(previous.frameUrl !== undefined ? { frameUrl: previous.frameUrl } : {}),
+            ...(previous.viewTicket !== undefined ? { viewTicket: previous.viewTicket } : {}),
+            ...(previous.viewTicketTtlMs !== undefined
+              ? { viewTicketTtlMs: previous.viewTicketTtlMs }
+              : {}),
+            ...(previous.viewGeneration !== undefined
+              ? { viewGeneration: previous.viewGeneration }
+              : {}),
+            ...(previous.sandboxUrl !== undefined ? { sandboxUrl: previous.sandboxUrl } : {}),
+            ...(previous.sandboxPort !== undefined ? { sandboxPort: previous.sandboxPort } : {}),
+            ...(previous.sandboxOrigin !== undefined
+              ? { sandboxOrigin: previous.sandboxOrigin }
+              : {}),
+          };
           copyBoardWidgetTicketReceipt(preserved, previous, receivedAtMs);
           return preserved;
         }
@@ -611,19 +627,4 @@ export class GatewayBoardProvider implements BoardProvider {
       });
     }
   }
-}
-
-function preserveBoardWidgetViewContract(widget: BoardWidget, previous: BoardWidget): BoardWidget {
-  return {
-    ...widget,
-    ...(previous.frameUrl !== undefined ? { frameUrl: previous.frameUrl } : {}),
-    ...(previous.viewTicket !== undefined ? { viewTicket: previous.viewTicket } : {}),
-    ...(previous.viewTicketTtlMs !== undefined
-      ? { viewTicketTtlMs: previous.viewTicketTtlMs }
-      : {}),
-    ...(previous.viewGeneration !== undefined ? { viewGeneration: previous.viewGeneration } : {}),
-    ...(previous.sandboxUrl !== undefined ? { sandboxUrl: previous.sandboxUrl } : {}),
-    ...(previous.sandboxPort !== undefined ? { sandboxPort: previous.sandboxPort } : {}),
-    ...(previous.sandboxOrigin !== undefined ? { sandboxOrigin: previous.sandboxOrigin } : {}),
-  };
 }

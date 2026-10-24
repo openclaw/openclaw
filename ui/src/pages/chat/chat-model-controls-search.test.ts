@@ -1,11 +1,13 @@
 /* @vitest-environment jsdom */
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
+import { installModelPickerLayout } from "../../test-helpers/model-picker-layout.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { createChatHeaderState, renderModelControls } from "./chat-model-controls.test-support.ts";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 
 beforeEach(() => {
+  installModelPickerLayout();
   onTestFinished(installChatComposerPickerDismissal(document));
 });
 
@@ -57,7 +59,15 @@ describe("chat model controls", () => {
     const anthropicModels = container.querySelector<HTMLElement>(
       '[data-chat-model-provider-group="anthropic"]',
     );
+    const anthropicToggle = anthropicModels!.querySelector<HTMLButtonElement>(
+      "[data-chat-model-provider-toggle]",
+    )!;
+    expect(anthropicToggle.getAttribute("aria-expanded")).toBe("false");
+    anthropicToggle.click();
+    flush();
     expect(anthropicModels?.textContent).toContain("Claude Sonnet 4.6");
+    anthropicToggle.click();
+    flush();
     const details = container.querySelector<HTMLDetailsElement>(".chat-controls__model-picker");
     const search = container.querySelector<HTMLInputElement>("[data-chat-model-search]");
     details!.open = true;
@@ -113,8 +123,11 @@ describe("chat model controls", () => {
     expect(details?.open).toBe(false);
 
     onModelSelect.mockClear();
-    details!.dispatchEvent(new Event("toggle"));
     details!.open = true;
+    details!.dispatchEvent(new Event("toggle"));
+    search!.value = "";
+    search!.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    flush();
     container
       .querySelector<HTMLButtonElement>(
         '[data-chat-model-provider-group="anthropic"] [data-chat-model-provider-toggle]',

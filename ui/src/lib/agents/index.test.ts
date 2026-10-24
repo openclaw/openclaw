@@ -6,14 +6,14 @@ import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context-fixtures.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { createSessionState } from "../sessions/session-capability.ts";
+import { agentCreationRejection } from "./creation.test-support.ts";
 import {
+  buildToolsEffectiveRequestKey,
   createAgentCapability,
-  loadToolsCatalog,
-  loadToolsEffective,
-  refreshVisibleToolsEffectiveForCurrentSession,
-  setDefaultAgent,
+  readToolsEffective,
 } from "./index.ts";
-import type { AgentsState } from "./index.ts";
+import { setDefaultAgent } from "./mutations.ts";
 
 type AgentsConfigCapability = Parameters<typeof setDefaultAgent>[0];
 
@@ -44,40 +44,9 @@ function createGatewayHarness(client: GatewayBrowserClient) {
   };
 }
 
-function createState(): { state: AgentsState; request: ReturnType<typeof vi.fn<TestRequest>> } {
-  const request = vi.fn<TestRequest>();
-  const state: AgentsState = {
-    client: {
-      request,
-    } as unknown as AgentsState["client"],
-    connected: true,
-    requestGeneration: 0,
-    agentsLoading: false,
-    agentsError: null,
-    agentsList: null,
-    agentsSelectedId: "main",
-    sessions: {
-      state: {
-        result: null,
-        agentId: null,
-        modelOverrides: {},
-        loading: false,
-        error: null,
-        deletedSessions: [],
-        groups: [],
-        groupSettings: [],
-        sectionOrder: [],
-      },
-    },
-    toolsCatalogLoading: false,
-    toolsCatalogError: null,
-    toolsCatalogResult: null,
-    toolsEffectiveLoading: false,
-    toolsEffectiveLoadingKey: null,
-    toolsEffectiveResultKey: null,
-    toolsEffectiveError: null,
-    toolsEffectiveResult: null,
-    sessionKey: "main",
+function createToolsState(): Parameters<typeof buildToolsEffectiveRequestKey>[0] {
+  return {
+    sessions: { state: createSessionState() },
     sessionsResult: {
       ts: 0,
       path: "",
@@ -94,38 +63,24 @@ function createState(): { state: AgentsState; request: ReturnType<typeof vi.fn<T
       ],
     },
     chatModelCatalog: [{ id: "gpt-5-mini", name: "GPT-5 Mini", provider: "openai" }],
-    agentsPanel: "overview",
   };
-  return { state, request };
 }
 
-function createSaveState(): {
-  state: AgentsState;
-  config: AgentsConfigCapability & {
-    state: {
-      configFormDirty: boolean;
-      configForm: Record<string, unknown>;
-      configFormOriginal: Record<string, unknown>;
-    };
-  };
-  request: ReturnType<typeof vi.fn<TestRequest>>;
-} {
-  const { state, request } = createState();
-  const configState = {
+function createSaveState() {
+  const state: {
+    configFormDirty: boolean;
+    configForm: Record<string, unknown>;
+    configFormOriginal: Record<string, unknown>;
+  } = {
     configFormDirty: true,
     configForm: { agents: { entries: { main: {} } } },
     configFormOriginal: { agents: { entries: { main: {} } } },
   };
-  const config = {
-    state: configState,
-    save: vi.fn(async () => true),
-    stageDefaultAgent: vi.fn(() => false),
-  } satisfies AgentsConfigCapability;
   return {
     state,
-    config,
-    request,
-  };
+    save: vi.fn<AgentsConfigCapability["save"]>(async () => true),
+    stageDefaultAgent: vi.fn<AgentsConfigCapability["stageDefaultAgent"]>(() => false),
+  } satisfies AgentsConfigCapability;
 }
 
 describe("createAgentCapability lifecycle", () => {
@@ -259,7 +214,11 @@ describe("createAgentCapability lifecycle", () => {
     const agents = createAgentCapability(harness.gateway);
 
     const staleLoad = agents.refreshList();
+    const staleRead = agents.listRead;
     harness.publish(false);
+    // Retiring a transport must release a native async frame before its reply.
+    await expect(staleRead).resolves.toBeNull();
+    await expect(staleLoad).resolves.toBeNull();
     harness.publish(true);
     const currentLoad = agents.refreshList();
 
@@ -288,7 +247,11 @@ describe("createAgentCapability lifecycle", () => {
     const agents = createAgentCapability(harness.gateway);
 
     const staleLoad = agents.refreshFiles("main");
+    const staleRead = agents.files("main").read;
     harness.publish(false);
+    expect(agents.files("main").read).toBeNull();
+    await expect(staleRead).resolves.toBeNull();
+    await expect(staleLoad).resolves.toBeNull();
     harness.publish(true);
     const currentLoad = agents.refreshFiles("main");
 
@@ -376,6 +339,20 @@ describe("createAgentCapability lifecycle", () => {
     agents.dispose();
   });
 
+  it("exposes current failures without rejecting legacy roster and file callers", async () => {
+    const request = vi.fn<TestRequest>().mockRejectedValue(new Error("Read unavailable"));
+    const harness = createGatewayHarness(createTestGatewayClient(request));
+    const agents = createAgentCapability(harness.gateway);
+    const roster = agents.refreshList();
+    const files = agents.refreshFiles("main");
+
+    await expect(agents.listRead).resolves.toEqual({ error: "Read unavailable" });
+    await expect(agents.files("main").read).resolves.toEqual({ error: "Read unavailable" });
+    await expect(Promise.all([roster, files])).resolves.toEqual([null, null]);
+    expect(agents.state.agentsError).toBe("Read unavailable");
+    agents.dispose();
+  });
+
   it("does not commit a list request after disposal", async () => {
     const pending = deferred<unknown>();
     const request = vi.fn<TestRequest>().mockReturnValue(pending.promise);
@@ -393,189 +370,35 @@ describe("createAgentCapability lifecycle", () => {
   });
 });
 
-describe("loadToolsCatalog", () => {
-  it("loads catalog and stores result", async () => {
-    const { state, request } = createState();
-    const payload = {
-      agentId: "main",
-      profiles: [{ id: "full", label: "Full" }],
-      groups: [
-        {
-          id: "media",
-          label: "Media",
-          source: "core",
-          tools: [{ id: "tts", label: "tts", description: "Text-to-speech", source: "core" }],
-        },
-      ],
-    };
-    request.mockResolvedValue(payload);
-
-    await loadToolsCatalog(state, "main");
-
-    expect(request).toHaveBeenCalledWith("tools.catalog", {
-      agentId: "main",
-      includePlugins: true,
-    });
-    expect(state.toolsCatalogResult).toEqual(payload);
-    expect(state.toolsCatalogError).toBeNull();
-    expect(state.toolsCatalogLoading).toBe(false);
-  });
-
-  it("captures request errors for fallback UI handling", async () => {
-    const { state, request } = createState();
-    request.mockRejectedValue(new Error("gateway unavailable"));
-
-    await loadToolsCatalog(state, "main");
-
-    expect(state.toolsCatalogResult).toBeNull();
-    expect(state.toolsCatalogError).toBe("gateway unavailable");
-    expect(state.toolsCatalogLoading).toBe(false);
-  });
-
-  it("keeps a replacement-client catalog load isolated from the old request", async () => {
-    const { state, request: oldRequest } = createState();
-    const oldResult = deferred<unknown>();
-    const nextResult = deferred<unknown>();
-    oldRequest.mockReturnValue(oldResult.promise);
-    const nextRequest = vi.fn<TestRequest>().mockReturnValue(nextResult.promise);
-
-    const oldLoad = loadToolsCatalog(state, "main");
-    state.client = { request: nextRequest } as unknown as AgentsState["client"];
-    state.requestGeneration += 1;
-    state.toolsCatalogLoading = false;
-    state.toolsCatalogLoadingAgentId = null;
-    const nextLoad = loadToolsCatalog(state, "main");
-
-    oldResult.resolve({ agentId: "main", profiles: [], groups: [{ id: "old" }] });
-    await oldLoad;
-    expect(state.toolsCatalogResult).toBeNull();
-    expect(state.toolsCatalogLoading).toBe(true);
-
-    nextResult.resolve({ agentId: "main", profiles: [], groups: [{ id: "new" }] });
-    await nextLoad;
-    expect(state.toolsCatalogResult?.groups).toEqual([{ id: "new" }]);
-    expect(state.toolsCatalogLoading).toBe(false);
-  });
-});
-
-describe("loadToolsEffective", () => {
-  it("loads effective tools for the active session", async () => {
-    const { state, request } = createState();
-    const payload = {
-      agentId: "main",
-      profile: "coding",
-      groups: [
-        {
-          id: "core",
-          label: "Built-in tools",
-          source: "core",
-          tools: [
-            {
-              id: "read",
-              label: "Read",
-              description: "Read files",
-              rawDescription: "Read files",
-              source: "core",
-            },
-          ],
-        },
-      ],
-    };
-    request.mockResolvedValue(payload);
-
-    await loadToolsEffective(state, { agentId: "main", sessionKey: "main" });
-
+describe("readToolsEffective", () => {
+  it("returns the effective-tools payload for the requested agent and session", async () => {
+    const payload = { agentId: "main", profile: "coding", groups: [] };
+    const request = vi.fn(async () => payload);
+    const client = createTestGatewayClient(request);
+    await expect(
+      readToolsEffective(client, { agentId: "main", sessionKey: "main" }),
+    ).resolves.toEqual(payload);
     expect(request).toHaveBeenCalledWith("tools.effective", {
       agentId: "main",
       sessionKey: "main",
     });
-    expect(state.toolsEffectiveResult).toEqual(payload);
-    expect(state.toolsEffectiveResultKey).toBe("main:main:model=openai/gpt-5-mini");
-    expect(state.toolsEffectiveError).toBeNull();
-    expect(state.toolsEffectiveLoading).toBe(false);
   });
 
-  it("captures effective-tool request errors", async () => {
-    const { state, request } = createState();
-    request.mockRejectedValue(new Error("gateway unavailable"));
-
-    await loadToolsEffective(state, { agentId: "main", sessionKey: "main" });
-
-    expect(state.toolsEffectiveResult).toBeNull();
-    expect(state.toolsEffectiveResultKey).toBeNull();
-    expect(state.toolsEffectiveError).toBe("gateway unavailable");
-    expect(state.toolsEffectiveLoading).toBe(false);
+  it("throws the existing display error for the native error boundary", async () => {
+    const client = createTestGatewayClient(
+      vi.fn(async () => {
+        throw new Error("gateway unavailable");
+      }),
+    );
+    await expect(
+      readToolsEffective(client, { agentId: "main", sessionKey: "main" }),
+    ).rejects.toThrow("gateway unavailable");
   });
+});
 
-  it("keeps a replacement-client effective-tools load isolated from the old request", async () => {
-    const { state, request: oldRequest } = createState();
-    const oldResult = deferred<unknown>();
-    const nextResult = deferred<unknown>();
-    oldRequest.mockReturnValue(oldResult.promise);
-    const nextRequest = vi.fn<TestRequest>().mockReturnValue(nextResult.promise);
-
-    const oldLoad = loadToolsEffective(state, { agentId: "main", sessionKey: "main" });
-    state.client = { request: nextRequest } as unknown as AgentsState["client"];
-    state.requestGeneration += 1;
-    state.toolsEffectiveLoading = false;
-    state.toolsEffectiveLoadingKey = null;
-    const nextLoad = loadToolsEffective(state, { agentId: "main", sessionKey: "main" });
-
-    oldResult.resolve({ agentId: "main", profile: "old", groups: [] });
-    await oldLoad;
-    expect(state.toolsEffectiveResult).toBeNull();
-    expect(state.toolsEffectiveLoading).toBe(true);
-
-    nextResult.resolve({ agentId: "main", profile: "new", groups: [] });
-    await nextLoad;
-    expect(state.toolsEffectiveResult?.profile).toBe("new");
-    expect(state.toolsEffectiveLoading).toBe(false);
-  });
-
-  it("keeps the newest visible-session tools when an older response finishes last", async () => {
-    const { state, request } = createState();
-    const oldRequest = deferred<unknown>();
-    const currentRequest = deferred<unknown>();
-    request.mockReturnValueOnce(oldRequest.promise).mockReturnValueOnce(currentRequest.promise);
-    state.agentsPanel = "tools";
-    state.sessionKey = "agent:main:older";
-
-    const staleLoad = refreshVisibleToolsEffectiveForCurrentSession(state);
-    state.sessionKey = "agent:main:current";
-    const currentLoad = refreshVisibleToolsEffectiveForCurrentSession(state);
-    currentRequest.resolve({ agentId: "main", profile: "current", groups: [] });
-    await currentLoad;
-    oldRequest.resolve({ agentId: "main", profile: "stale", groups: [] });
-    await staleLoad;
-
-    expect(state.toolsEffectiveResult?.profile).toBe("current");
-    expect(state.toolsEffectiveError).toBeNull();
-    expect(state.toolsEffectiveLoading).toBe(false);
-  });
-
-  it("ignores a retired visible-session failure after a newer tools response", async () => {
-    const { state, request } = createState();
-    const oldRequest = deferred<unknown>();
-    request.mockReturnValueOnce(oldRequest.promise).mockResolvedValueOnce({
-      agentId: "main",
-      profile: "current",
-      groups: [],
-    });
-    state.agentsPanel = "tools";
-    state.sessionKey = "agent:main:older";
-
-    const staleLoad = refreshVisibleToolsEffectiveForCurrentSession(state);
-    state.sessionKey = "agent:main:current";
-    await refreshVisibleToolsEffectiveForCurrentSession(state);
-    oldRequest.reject(new Error("retired connection failed"));
-    await staleLoad;
-
-    expect(state.toolsEffectiveResult?.profile).toBe("current");
-    expect(state.toolsEffectiveError).toBeNull();
-  });
-
+describe("buildToolsEffectiveRequestKey", () => {
   it("uses the catalog provider when the active session reports a stale provider", async () => {
-    const { state, request } = createState();
+    const state = createToolsState();
     const sessionsResult = state.sessionsResult!;
     state.sessionsResult = {
       ts: sessionsResult.ts,
@@ -593,19 +416,13 @@ describe("loadToolsEffective", () => {
       ],
     };
     state.chatModelCatalog = [{ id: "deepseek-chat", name: "DeepSeek Chat", provider: "deepseek" }];
-    request.mockResolvedValue({
-      agentId: "main",
-      profile: "coding",
-      groups: [],
-    });
-
-    await loadToolsEffective(state, { agentId: "main", sessionKey: "main" });
-
-    expect(state.toolsEffectiveResultKey).toBe("main:main:model=deepseek/deepseek-chat");
+    expect(buildToolsEffectiveRequestKey(state, { agentId: "main", sessionKey: "main" })).toBe(
+      "main:main:model=deepseek/deepseek-chat",
+    );
   });
 
   it("preserves already-qualified session models when the active session provider is stale and the catalog is empty", async () => {
-    const { state, request } = createState();
+    const state = createToolsState();
     const sessionsResult = state.sessionsResult!;
     state.sessionsResult = {
       ts: sessionsResult.ts,
@@ -623,21 +440,15 @@ describe("loadToolsEffective", () => {
       ],
     };
     state.chatModelCatalog = [];
-    request.mockResolvedValue({
-      agentId: "main",
-      profile: "coding",
-      groups: [],
-    });
-
-    await loadToolsEffective(state, { agentId: "main", sessionKey: "main" });
-
-    expect(state.toolsEffectiveResultKey).toBe("main:main:model=openai/gpt-5-mini");
+    expect(buildToolsEffectiveRequestKey(state, { agentId: "main", sessionKey: "main" })).toBe(
+      "main:main:model=openai/gpt-5-mini",
+    );
   });
 });
 
 describe("setDefaultAgent", () => {
   it("stages the default agent and persists a clean draft", async () => {
-    const { config } = createSaveState();
+    const config = createSaveState();
     const refreshAgents = vi.fn(async () => null);
     config.state.configForm = { agents: { entries: { main: {}, kimi: {} } } };
     config.state.configFormOriginal = { agents: { entries: { main: {}, kimi: {} } } };
@@ -654,7 +465,7 @@ describe("setDefaultAgent", () => {
   });
 
   it("does not persist when the agent is absent from the config list", async () => {
-    const { config } = createSaveState();
+    const config = createSaveState();
     const refreshAgents = vi.fn(async () => null);
     config.state.configForm = { agents: { entries: { main: {} } } };
     vi.mocked(config.stageDefaultAgent).mockReturnValue(false);
@@ -667,7 +478,7 @@ describe("setDefaultAgent", () => {
   });
 
   it("does not persist unrelated dirty agent config drafts", async () => {
-    const { config } = createSaveState();
+    const config = createSaveState();
     const refreshAgents = vi.fn(async () => null);
     config.state.configFormDirty = true;
     config.state.configFormOriginal = { agents: { entries: { main: {}, kimi: {} } } };
@@ -710,7 +521,7 @@ describe("setDefaultAgent", () => {
   });
 
   it("keeps the shared agent cache unchanged when saving fails", async () => {
-    const { config } = createSaveState();
+    const config = createSaveState();
     const refreshAgents = vi.fn(async () => null);
     config.state.configFormDirty = false;
     vi.mocked(config.stageDefaultAgent).mockImplementation(() => {
@@ -725,7 +536,7 @@ describe("setDefaultAgent", () => {
   });
 
   it("passes the originating action guard through the queued config save", async () => {
-    const { config } = createSaveState();
+    const config = createSaveState();
     const refreshAgents = vi.fn(async () => null);
     let canDispatch = true;
     config.state.configFormDirty = false;
@@ -742,5 +553,163 @@ describe("setDefaultAgent", () => {
 
     expect(config.save).toHaveBeenCalledOnce();
     expect(refreshAgents).not.toHaveBeenCalled();
+  });
+});
+
+describe("agent creation", () => {
+  it.each(["Provider rejected credentials", "Workspace could not be created"])(
+    "reports a failed creation and removes only its pending row: %s",
+    async (message) => {
+      const roster = { defaultId: "main", agents: [{ id: "main", name: "Molty" }] };
+      const request = vi
+        .fn<TestRequest>()
+        .mockResolvedValueOnce(roster)
+        .mockRejectedValueOnce(agentCreationRejection(message))
+        .mockResolvedValueOnce({ exists: true, valid: true, sourceConfig: {} });
+      const agents = createAgentCapability(
+        createGatewayHarness({ request } as unknown as GatewayBrowserClient).gateway,
+      );
+      await agents.ensureList();
+      await expect(agents.create("New agent")).rejects.toThrow(message);
+      expect(request).toHaveBeenCalledWith("agents.create", {
+        agentId: expect.stringMatching(/^bot-/),
+        name: "New agent",
+        onboarding: true,
+      });
+      expect(agents.state.agentsList).toEqual(roster);
+      expect(agents.state.pendingAgent).toBeUndefined();
+      agents.dispose();
+    },
+  );
+
+  it("shows a pending agent immediately and publishes the verified receipt without another roster read", async () => {
+    const creation = deferred<unknown>();
+    const roster = {
+      defaultId: "main",
+      mainKey: "main",
+      scope: "per-sender",
+      agents: [{ id: "main", name: "Molty" }],
+    };
+    const request = vi
+      .fn<TestRequest>()
+      .mockResolvedValueOnce(roster)
+      .mockReturnValueOnce(creation.promise);
+    const agents = createAgentCapability(
+      createGatewayHarness({ request } as unknown as GatewayBrowserClient).gateway,
+    );
+    await agents.ensureList();
+    const creating = agents.create("New agent");
+    expect(agents.state.pendingAgent).toMatchObject({
+      id: expect.stringMatching(/^bot-/),
+      name: "New agent",
+    });
+    await expect(agents.create("New agent")).resolves.toBeNull();
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["agents.list", "agents.create"]);
+    const pending = agents.state.pendingAgent;
+    expect(pending).toEqual({ id: expect.stringMatching(/^bot-/), name: "New agent" });
+    expect(agents.state.agentsList).toEqual(roster);
+    const receipt = {
+      agentId: pending!.id,
+      name: pending!.name,
+      onboarding: { sessionKey: `agent:${pending!.id}:main`, status: "completed" },
+    };
+    creation.resolve(receipt);
+    await expect(creating).resolves.toEqual(receipt);
+    expect(request).toHaveBeenLastCalledWith("agents.create", {
+      agentId: receipt.agentId,
+      name: "New agent",
+      onboarding: true,
+    });
+    expect(agents.state.agentsList?.agents).toEqual([pending, ...roster.agents]);
+    expect(agents.state.recentlyCreatedAgentId).toBe(receipt.agentId);
+    expect(agents.state.pendingAgent).toBeUndefined();
+    agents.dispose();
+  });
+
+  it("reconciles an overlapping config refresh without holding up the new chat", async () => {
+    const creation = deferred<unknown>();
+    const staleRead = deferred<unknown>();
+    const currentRead = deferred<unknown>();
+    const request = vi
+      .fn<TestRequest>()
+      .mockResolvedValueOnce({ defaultId: "main", agents: [{ id: "main", name: "Old name" }] })
+      .mockReturnValueOnce(creation.promise)
+      .mockReturnValueOnce(staleRead.promise)
+      .mockReturnValueOnce(currentRead.promise);
+    const agents = createAgentCapability(
+      createGatewayHarness({ request } as unknown as GatewayBrowserClient).gateway,
+    );
+    await agents.ensureList();
+    const creating = agents.create("New agent");
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    const oldRefresh = agents.refreshList();
+    const pending = agents.state.pendingAgent!;
+    creation.resolve({ agentId: pending.id, name: pending.name });
+    await creating;
+    expect(agents.state.agentsList?.agents[0]).toEqual(pending);
+    expect(agents.state.agentsLoading).toBe(true);
+    staleRead.resolve({ defaultId: "main", agents: [{ id: "main", name: "Stale name" }] });
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(4));
+    expect(agents.state.agentsList?.agents[0]).toEqual(pending);
+    const currentRoster = {
+      defaultId: "main",
+      agents: [
+        { id: "main", name: "Renamed" },
+        { ...pending, identity: { emoji: "🌱" } },
+      ],
+    };
+    currentRead.resolve(currentRoster);
+    expect(await oldRefresh).toBe(agents.state.agentsList);
+    expect(agents.state.agentsList?.agents).toEqual([
+      { id: "main", name: "Renamed" },
+      { ...pending, identity: { emoji: "🌱" } },
+    ]);
+    request.mockRejectedValueOnce(new Error("Temporary read failure"));
+    await agents.refreshList();
+    expect(agents.state.agentsList).toEqual(currentRoster);
+    expect(agents.state.agentsError).toContain("Temporary read failure");
+    request.mockResolvedValueOnce(currentRoster);
+    await expect(agents.ensureList()).resolves.toEqual(currentRoster);
+    expect(agents.state.agentsList?.agents.map((agent) => agent.id)).toEqual(["main", pending.id]);
+    expect(agents.state.agentsError).toBeNull();
+    agents.dispose();
+  });
+
+  it("recovers a disconnected creation receipt without dispatching another attempt", async () => {
+    const creation = deferred<unknown>();
+    const creationStarted = deferred();
+    const roster = { defaultId: "main", agents: [{ id: "main", name: "Molty" }] };
+    const request = vi
+      .fn<TestRequest>()
+      .mockResolvedValueOnce(roster)
+      .mockImplementationOnce(() => {
+        creationStarted.resolve();
+        return creation.promise;
+      })
+      .mockResolvedValueOnce(roster);
+    const harness = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+    const agents = createAgentCapability(harness.gateway);
+    await agents.ensureList();
+    const creating = agents.create("New agent");
+    const pending = agents.state.pendingAgent!;
+    await creationStarted.promise;
+    harness.publish(false);
+    creation.resolve({
+      agentId: pending.id,
+      name: pending.name,
+      onboarding: { status: "completed", sessionKey: `agent:${pending.id}:main` },
+    });
+    await expect(creating).resolves.toBeNull();
+    expect(agents.state.pendingAgent).toBeUndefined();
+    expect(agents.state.agentsList).toEqual(roster);
+    harness.publish(true);
+    await expect(agents.create("New agent")).resolves.toMatchObject({ agentId: pending.id });
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "agents.list",
+      "agents.create",
+      "agents.list",
+    ]);
+    agents.dispose();
   });
 });

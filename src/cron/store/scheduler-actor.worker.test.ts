@@ -38,6 +38,8 @@ type TickInput = Omit<
 >;
 const cronSchedule = { kind: "cron", expr: "* * * * *", tz: "UTC", staggerMs: 0 } as const;
 const jobIds = (runs: { job: CronJob }[]) => runs.map(({ job: entry }) => entry.id);
+const ids = (prefix: string, count: number) =>
+  Array.from({ length: count }, (_, i) => `${prefix}-${i}`);
 const immediate = (count: number) => ({
   snapshot: { ...snapshot, config: { ...snapshot.config, maxMissedJobsPerRestart: count } },
 });
@@ -146,6 +148,9 @@ function storedScheduler(label: string, jobs: CronJob[]) {
   };
 }
 
+const singleJobScheduler = (id: string, dueAtMs: number, overrides: Partial<CronJob> = {}) =>
+  storedScheduler(id, [job(id, dueAtMs, overrides)]);
+
 function observeWakes(channelName: string) {
   const receiver = new BroadcastChannel(channelName);
   const posted = vi.spyOn(BroadcastChannel.prototype, "postMessage");
@@ -170,10 +175,8 @@ it("activates scheduled requests in FIFO capacity order and observes a queued ed
     jobSeries("job", count, (index) => now - (count - index) * minute).toReversed(),
   );
   const started = scheduler.start(now, immediate(count));
-  expect(jobIds(started.accepted)).toEqual(Array.from({ length: count }, (_, i) => `job-${i}`));
-  expect(jobIds(started.launches)).toEqual(
-    Array.from({ length: DEFAULT_CRON_MAX_CONCURRENT_RUNS }, (_, index) => `job-${index}`),
-  );
+  expect(jobIds(started.accepted)).toEqual(ids("job", count));
+  expect(jobIds(started.launches)).toEqual(ids("job", DEFAULT_CRON_MAX_CONCURRENT_RUNS));
   const queuedId = `job-${DEFAULT_CRON_MAX_CONCURRENT_RUNS}`;
   const persisted = scheduler.read();
   expect(persisted.filter((entry) => entry.state.runningAtMs === now)).toHaveLength(
@@ -252,8 +255,7 @@ it.each(["every", "cron"] as const)(
 it("keeps startup work pending while its subscriber is paused", () => {
   const scheduler = storedScheduler("paused-start", [job("pending", now - minute)]);
   const started = scheduler.start(now, { paused: true });
-  expect(started.accepted).toEqual([]);
-  expect(started.launches).toEqual([]);
+  expect(started).toMatchObject({ accepted: [], launches: [] });
   const resumed = scheduler.tick(now + 1, 1, { channelName: scheduler.channelName, paused: false });
   expect(jobIds(resumed.launches)).toEqual(["pending"]);
 });
@@ -304,7 +306,7 @@ it("persists the five-immediate limit, overflow staggering, and pending requests
     jobSeries("job", 7, (index) => now - (7 - index) * minute),
   );
   const started = scheduler.start();
-  expect(jobIds(started.accepted)).toEqual(["job-0", "job-1", "job-2", "job-3", "job-4"]);
+  expect(jobIds(started.accepted)).toEqual(ids("job", 5));
   const deferred = scheduler.read().slice(5);
   expect(deferred.map(({ state }) => [state.nextRunAtMs, state.startupCatchupAtMs])).toEqual([
     [now + 5_000, now + 5_000],
@@ -316,12 +318,15 @@ it("persists the five-immediate limit, overflow staggering, and pending requests
   expect(scheduler.read().slice(5)).toEqual(deferred);
 });
 
-it("defers missed agent and heartbeat work for two minutes without blocking command work", () => {
+it("defers missed isolated and main-session work for two minutes without blocking command work", () => {
   const scheduler = storedScheduler("agent-startup", [
     job("agent", now - 3 * minute, {
       payload: { kind: "agentTurn", message: "synthetic startup task" },
     }),
-    job("heartbeat", now - 2 * minute, { payload: { kind: "heartbeat" } }),
+    job("main-session", now - 2 * minute, {
+      sessionTarget: "main",
+      payload: { kind: "systemEvent", text: "synthetic startup notice" },
+    }),
     job("command", now - minute),
   ]);
   const started = scheduler.start(now, { deferAgentWork: true });
@@ -333,26 +338,25 @@ it("defers missed agent and heartbeat work for two minutes without blocking comm
       .map(({ id, state }) => [id, state.nextRunAtMs, state.startupCatchupAtMs]),
   ).toEqual([
     ["agent", now + 120_000, now + 120_000],
-    ["heartbeat", now + 125_000, now + 125_000],
+    ["main-session", now + 125_000, now + 125_000],
   ]);
   expect(scheduler.tick(now + 119_999, 119_999).accepted).toEqual([]);
   expect(jobIds(scheduler.tick(now + 120_000, 120_000).accepted)).toEqual(["agent"]);
+  expect(jobIds(scheduler.tick(now + 125_000, 125_000).accepted)).toEqual(["main-session"]);
 });
 
 it("retains a persisted paced occurrence across actor and database restart", async () => {
   const pacedAtMs = now + 30 * minute;
-  const scheduler = storedScheduler("paced-restart", [
-    job("paced", pacedAtMs, {
-      schedule: cronSchedule,
-      pacing: { min: "15m", max: "4h" },
-      state: {
-        nextRunAtMs: pacedAtMs,
-        pacedNextRunAtMs: pacedAtMs,
-        lastRunAtMs: now - minute,
-        lastRunStatus: "ok",
-      },
-    }),
-  ]);
+  const scheduler = singleJobScheduler("paced", pacedAtMs, {
+    schedule: cronSchedule,
+    pacing: { min: "15m", max: "4h" },
+    state: {
+      nextRunAtMs: pacedAtMs,
+      pacedNextRunAtMs: pacedAtMs,
+      lastRunAtMs: now - minute,
+      lastRunStatus: "ok",
+    },
+  });
   expect(scheduler.start().accepted).toEqual([]);
   const before = scheduler.read()[0];
   expect((await scheduler.restart(now + 10 * minute)).accepted).toEqual([]);
@@ -375,7 +379,7 @@ it.each([false, true])("bounds forward clock catch-up with intervening refresh=%
     expect(scheduler.refresh({ nowMs: jumpedAtMs, monotonicMs: 1_000 }).accepted).toEqual([]);
   }
   const jumped = scheduler.tick(jumpedAtMs, 1_000);
-  expect(jobIds(jumped.accepted)).toEqual(["jump-0", "jump-1", "jump-2", "jump-3", "jump-4"]);
+  expect(jobIds(jumped.accepted)).toEqual(ids("jump", 5));
   expect(
     scheduler
       .read()
@@ -393,25 +397,18 @@ it.each([false, true])("bounds forward clock catch-up with intervening refresh=%
 
 it("keeps the persisted next deadline when the wall clock moves backward", () => {
   const deadline = now + minute;
-  const scheduler = storedScheduler("backward-jump", [
-    job("backward", deadline, {
-      schedule: cronSchedule,
-    }),
-  ]);
+  const scheduler = singleJobScheduler("backward", deadline, { schedule: cronSchedule });
   expect(scheduler.start().accepted).toEqual([]);
   const moved = scheduler.tick(now - 60 * minute, 1_000);
-  expect(moved.accepted).toEqual([]);
-  expect(moved.nextWakeAtMs).toBe(deadline);
+  expect(moved).toMatchObject({ accepted: [], nextWakeAtMs: deadline });
   expect(scheduler.read()[0]?.state.nextRunAtMs).toBe(deadline);
   expect(scheduler.receipts()).toEqual([]);
 });
 
 it("keeps an overdue active occurrence on a bounded future wake", () => {
-  const scheduler = storedScheduler("active-wake", [
-    job("active", now - 17 * minute, {
-      state: { nextRunAtMs: now - 17 * minute, runningAtMs: now - minute },
-    }),
-  ]);
+  const scheduler = singleJobScheduler("active", now - 17 * minute, {
+    state: { nextRunAtMs: now - 17 * minute, runningAtMs: now - minute },
+  });
   const started = scheduler.start();
   expect(started.accepted).toEqual([]);
   expect(started.nextWakeAtMs).toBeGreaterThanOrEqual(now + 2_000);
@@ -420,9 +417,7 @@ it("keeps an overdue active occurrence on a bounded future wake", () => {
 });
 
 it("uses pushed owner and enablement configuration", () => {
-  const scheduler = storedScheduler("snapshot-order", [
-    job("default-owner", now + minute, { agentId: undefined }),
-  ]);
+  const scheduler = singleJobScheduler("default-owner", now + minute, { agentId: undefined });
   scheduler.start();
   const current = { config: { cronEnabled: false, defaultAgentId: "current" } };
   scheduler.refresh({ snapshot: current });
@@ -434,8 +429,7 @@ it("uses pushed owner and enablement configuration", () => {
     snapshot: { config: { ...current.config, cronEnabled: true } },
   });
   const requested = scheduler.tick(now + minute, minute).accepted;
-  expect(requested).toHaveLength(1);
-  expect(requested[0]?.runReceipt.agentId).toBe("current");
+  expect(requested).toMatchObject([{ runReceipt: { agentId: "current" } }]);
 });
 
 it("keeps scheduling for an active subscriber and resumes after every subscriber paused", () => {

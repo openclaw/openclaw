@@ -23,7 +23,6 @@ import {
 } from "../../components/terminal/terminal-pending-actions.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
-import { lazySidebarElements } from "./chat-pane-sidebar-layout.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
 import { closeSlot, openSlot, setSidebarDock, type SidebarSlotId } from "./sidebar-layout.ts";
@@ -50,14 +49,12 @@ interface SessionPanelToggleOptions {
 }
 
 const panelToggleEvents = [
-  [TERMINAL_PANEL_TOGGLE_EVENT, "terminal", "openclaw-terminal-panel"],
-  [BROWSER_PANEL_TOGGLE_EVENT, "browser", "openclaw-browser-panel"],
-  [LINK_READER_PANEL_TOGGLE_EVENT, "link-reader", "openclaw-link-reader-panel"],
-  [DESKTOP_PANEL_TOGGLE_EVENT, "desktop", "openclaw-desktop-panel"],
-  [PORTAL_PANEL_TOGGLE_EVENT, "portal", "openclaw-portals-page"],
+  [TERMINAL_PANEL_TOGGLE_EVENT, "terminal"],
+  [BROWSER_PANEL_TOGGLE_EVENT, "browser"],
+  [LINK_READER_PANEL_TOGGLE_EVENT, "link-reader"],
+  [DESKTOP_PANEL_TOGGLE_EVENT, "desktop"],
+  [PORTAL_PANEL_TOGGLE_EVENT, "portal"],
 ] as const;
-
-type PanelTagName = (typeof panelToggleEvents)[number][2];
 
 function canOpenLinkReader(owner: ActivePanelOwner | null, url: string | undefined): boolean {
   return Boolean(
@@ -105,11 +102,7 @@ export function createChatPaneSessionPanelToggles(options: SessionPanelToggleOpt
     }
   }
 
-  function handle(
-    slot: (typeof panelToggleEvents)[number][1],
-    tagName: PanelTagName,
-    event: Event,
-  ): void {
+  function handle(slot: (typeof panelToggleEvents)[number][1], event: Event): void {
     const owner = options.current();
     if (!owner) {
       return;
@@ -187,28 +180,39 @@ export function createChatPaneSessionPanelToggles(options: SessionPanelToggleOpt
       owner: owner.state,
       sessionKey: owner.state.sessionKey,
     };
-    const sessionKey = owner.state.sessionKey;
-    const isCurrent = () =>
-      options.pending.requests.get(slot) === queue &&
-      options.current()?.state === owner.state &&
-      owner.state.sessionKey === sessionKey;
     options.pending.requests = new Map(options.pending.requests).set(slot, queue);
     options.updateSidebarLayout(layout);
     options.onOpenPanel?.(slot);
-    void Promise.all([
-      customElements.whenDefined("openclaw-chat-sidebar-region"),
-      customElements.whenDefined(tagName),
-    ])
+    deliverPending(slot);
+  }
+
+  const delivering = new WeakSet<PendingSessionPanelToggle>();
+  function deliverPending(slot: SessionPanelToggleSlot): void {
+    const owner = options.current();
+    const queue = options.pending.requests.get(slot);
+    if (
+      owner &&
+      queue &&
+      (queue.owner !== owner.state ||
+        queue.sessionKey !== owner.state.sessionKey ||
+        !owner.state.sidebarLayout.columns.some((column) =>
+          column.panels.some((panel) => panel.slot === slot),
+        ))
+    ) {
+      deletePending(slot);
+      return;
+    }
+    if (!owner || !queue || delivering.has(queue) || !owner.sidebarRegion?.readPanelHost?.(slot)) {
+      return;
+    }
+    const isCurrent = () =>
+      options.pending.requests.get(slot) === queue &&
+      options.current()?.state === owner.state &&
+      owner.state.sessionKey === queue.sessionKey;
+    delivering.add(queue);
+    void owner
+      .awaitDomCommit()
       .then(async () => {
-        // Definition precedes the lazy owner's publication that mounts its outlet.
-        await Promise.all([
-          lazySidebarElements.snapshot.get("region")?.pending,
-          lazySidebarElements.snapshot.get(slot)?.pending,
-        ]);
-        if (!isCurrent()) {
-          return;
-        }
-        await owner.awaitDomCommit();
         if (!isCurrent()) {
           return;
         }
@@ -230,6 +234,7 @@ export function createChatPaneSessionPanelToggles(options: SessionPanelToggleOpt
         }
       })
       .finally(() => {
+        delivering.delete(queue);
         if (options.pending.requests.get(slot) === queue) {
           deletePending(slot);
         }
@@ -254,16 +259,19 @@ export function createChatPaneSessionPanelToggles(options: SessionPanelToggleOpt
         handlePluginPanel(event);
       }
     }
-    for (const [, slot, tagName] of panelToggleEvents) {
+    for (const [, slot] of panelToggleEvents) {
       let event: Event | null;
       while ((event = takeSessionPanelToggle(slot, owner.state.sessionKey))) {
-        handle(slot, tagName, event);
+        handle(slot, event);
       }
+    }
+    for (const slot of options.pending.requests.keys()) {
+      deliverPending(slot);
     }
   }
 
-  const stop = panelToggleEvents.map(([eventName, slot, tagName]) =>
-    listen(window, eventName, (event) => handle(slot, tagName, event)),
+  const stop = panelToggleEvents.map(([eventName, slot]) =>
+    listen(window, eventName, (event) => handle(slot, event)),
   );
   stop.push(
     listen(window, PLUGIN_PANEL_TOGGLE_EVENT, handlePluginPanel),

@@ -325,7 +325,7 @@ The active categories below are listed in browse order:
 | `computer-use`        | Interactive desktop and browser navigation, clicking, typing, and screenshots. Hosting execution environments belongs in Infrastructure; web search and crawling belong in Web.                                                             |
 | `media`               | Creating, transforming, or understanding images, video, music, and other media. Spoken interaction and transcription belong in Voice.                                                                                                       |
 | `security`            | Protecting access and enforcing trust through authentication, authorization, credential controls, security auditing, or policy. Authentication incidental to another purpose does not belong here.                                          |
-| `integrations`        | General connectors, API bridges, and service integration platforms without a more specific user purpose. A connector to a particular workflow belongs in that workflow's category; exposing tools or MCP is not enough.                     |
+| `integrations`        | General-purpose integrations, API bridges, and service integration platforms without a more specific user purpose. An integration for a particular workflow belongs in that workflow's category; exposing tools or MCP is not enough.       |
 | `developer-tools`     | Writing, reviewing, testing, and debugging software, development environments, and coding workflows. Plugins whose main purpose is providing the agent execution engine belong in Agent runtimes.                                           |
 | `infrastructure`      | Deploying, hosting, monitoring, and operating systems, networks, services, and execution environments. Engines that run the agent loop belong in Agent runtimes; coordinating agents belongs in Agent orchestration.                        |
 | `documents-files`     | Reading, creating, extracting, transferring, and managing documents and files. Software code review belongs in Developer tools; task and project management belongs in Productivity.                                                        |
@@ -444,6 +444,13 @@ normal allocation retains its authentication and provisioning checks.
 See [Configuration reference](/gateway/configuration-reference#plugins) for the full `plugins.*` schema.
 
 ## Notes
+
+- `contextEngineIds` optionally declares a nonempty list of registered engine IDs
+  for a `kind: "context-engine"` plugin. IDs are case-sensitive, nonblank, and
+  cannot be `legacy` or `none`. This metadata connects the engine selected in
+  `plugins.slots.contextEngine` to its plugin before runtime loading. A single
+  engine can be selected automatically during installation; multiple engines
+  require an explicit choice. See [Plugin and engine IDs](/concepts/context-engine#plugin-and-engine-ids).
 
 - The manifest is **required for native OpenClaw plugins**, including local filesystem loads. Runtime still loads the plugin module separately; the manifest is only for discovery + validation.
 - Native manifests are parsed with JSON5, so comments, trailing commas, and unquoted keys are accepted as long as the final value is still an object.

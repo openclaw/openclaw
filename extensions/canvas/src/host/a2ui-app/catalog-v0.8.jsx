@@ -1,7 +1,7 @@
 import { isSafeRegex } from "@a2ui/web_core/v0_8";
 import { Dynamic } from "@solidjs/web";
 import { For, Match, Show, Switch, createMemo, createSignal, createUniqueId } from "solid-js";
-import { CatalogDialog, catalogAlignment } from "./catalog-primitives.jsx";
+import { CatalogBoundary, CatalogDialog, catalogAlignment } from "./catalog-primitives.jsx";
 
 const tags = Object.fromEntries(
   "Text Image Icon Video AudioPlayer Row Column List Card Tabs Divider Modal Button CheckBox TextField DateTimeInput MultipleChoice Slider"
@@ -72,12 +72,13 @@ function Choice(props) {
     const value = readValue(props, choices().selections);
     return Array.isArray(value) ? value : [];
   };
-  const options = () =>
+  const options = createMemo(() =>
     (choices().options ?? []).filter((option) =>
       String(readValue(props, option.label) ?? "")
         .toLowerCase()
         .includes(filter().toLowerCase()),
-    );
+    ),
+  );
   const toggle = (value) => {
     const current = selected();
     const next = current.includes(value)
@@ -248,7 +249,11 @@ export function CatalogNode(props) {
       each={props.node ? [props.node] : []}
       keyed={(node) => `${node.id}:${node.dataContextPath}`}
     >
-      {(node) => <CatalogElement {...props} node={node()} />}
+      {(node) => (
+        <CatalogBoundary>
+          <CatalogElement {...props} node={node()} />
+        </CatalogBoundary>
+      )}
     </For>
   );
 }

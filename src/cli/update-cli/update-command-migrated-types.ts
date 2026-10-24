@@ -18,6 +18,7 @@ export type UpdatePostCoreInput = {
   root: string;
   requester?: UpdateRequester;
   originalRecoveryCapture?: UpdateRecoveryBaselineRef;
+  busyTimeoutMs?: number;
   opts: Pick<
     UpdateCommandOptions,
     "json" | "restart" | "yes" | "acceptCapabilities" | "fullIntegrityCheck" | "timeout"

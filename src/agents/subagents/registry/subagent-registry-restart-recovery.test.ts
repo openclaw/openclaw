@@ -418,6 +418,7 @@ describe("subagent registry restart recovery", () => {
     it.each([
       "current lifecycle",
       "different run",
+      "different last run",
       "completed session",
       "completed session with stale abort marker",
       "legacy completed session",
@@ -430,7 +431,13 @@ describe("subagent registry restart recovery", () => {
       }
       Object.assign(mocks.entries[childSessionKey]!, {
         status: scenario.includes("completed session") ? "done" : undefined,
-        lifecycleRunId: scenario === "different run" ? "newer-run" : entry.runId,
+        lifecycleRunId:
+          scenario === "different last run"
+            ? undefined
+            : scenario === "different run"
+              ? "newer-run"
+              : entry.runId,
+        lastRunId: scenario === "different last run" ? "newer-run" : undefined,
         abortedLastRun: scenario.endsWith("stale abort marker"),
       });
       expect(await recover(entry)).toEqual({ status: "ignored" });

@@ -9,12 +9,19 @@ import type { RunEmbeddedAgentInternalParams } from "../../agents/embedded-agent
 import { finalizeCronPromptForResolvedTools } from "../../cron/isolated-agent/run-delivery-trace.js";
 import { resolveCronSourceDeliveryPlan } from "../../cron/isolated-agent/source-delivery-plan.js";
 import * as cronInference from "../../cron/run-inference.js";
+import { TEST_SCHEDULED_OCCURRENCE } from "../../cron/scheduled-occurrence.test-support.js";
 import type { CronAgentExecutionPhaseUpdate } from "../../cron/types.js";
 import { onAgentEvent, type AgentEventPayload } from "../../infra/agent-events.js";
+import {
+  consumeCronNextCheckProposal,
+  createAutomationResultRecorder,
+} from "../../infra/agent-run-registry.automation.js";
+import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import { useBundledProviderPolicyArtifactsForTest } from "../../plugin-sdk/test-helpers/provider-policy-artifacts.test-support.js";
 import {
   createFollowupRun,
   createMinimalRunAgentTurnParams,
+  createMockReplyOperation,
   getRawExecuteAgentTurnForTest,
   runInitialFallbackAttempt,
   type FallbackRunnerParams,
@@ -31,6 +38,7 @@ const executeAgentTurn = await getRawExecuteAgentTurnForTest();
 
 function createScheduledAutomation(): ScheduledSessionAutomation {
   return {
+    occurrence: TEST_SCHEDULED_OCCURRENCE,
     admissionSource: "operator-schedule",
     job: {
       id: "scheduled-target-test",
@@ -81,6 +89,48 @@ function expectedCompletionEvidence(runtime: "embedded" | "cli") {
 }
 
 describe("ordinary session event execution", () => {
+  it("captures a structured result before event settlement consumes the invocation", async () => {
+    const runId = "automation-result-capture";
+    const automation = createScheduledAutomation();
+    automation.job.payload = {
+      kind: "agentTurn",
+      message: "Check quietly",
+      includeReasoning: true,
+    };
+    const followupRun = createFollowupRun();
+    const event = createEventExecution();
+    followupRun.run.scheduledAutomation = automation;
+    followupRun.run.internalEventExecution = event;
+    let recordResult: ReturnType<typeof createAutomationResultRecorder> | undefined;
+    state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
+      recordResult = createAutomationResultRecorder(runId, automation.job.id);
+      recordResult({ outcome: "no_change", summary: "Nothing new." });
+      return { payloads: [{ text: "No updates." }], meta: {} };
+    });
+    event.onTerminal = vi.fn(() => {
+      expect(() => recordResult?.({ outcome: "done", summary: "Too late." })).toThrow(
+        "Automation invocation is no longer active",
+      );
+      consumeCronNextCheckProposal(runId, automation.job.id);
+      expect(getAgentRunContext(runId)?.cronRunsByJobId).toBeUndefined();
+    });
+    const { replyOperation } = createMockReplyOperation();
+
+    const result = await executeAgentTurn(
+      createMinimalRunAgentTurnParams({ followupRun, replyOperation, opts: { runId } }),
+    );
+
+    expect(event.onTerminal).toHaveBeenCalledOnce();
+    expect(result.outcome).toMatchObject({
+      kind: "settled",
+      status: "ok",
+      automation: {
+        result: { outcome: "no_change", summary: "Nothing new." },
+        includeReasoning: true,
+      },
+    });
+  });
+
   it.each(["embedded", "cli"] as const)(
     "retains scheduled destination guidance in the %s turn without changing the system prefix",
     async (runtime) => {
@@ -235,6 +285,7 @@ describe("ordinary session event execution", () => {
         onSuccessfulAuthProfile,
       },
       assertCandidate,
+      resolveCliAuthProfile: vi.fn(async () => "scheduled-profile"),
       dispose,
     });
     onTestFinished(() => acquire.mockRestore());
@@ -269,6 +320,60 @@ describe("ordinary session event execution", () => {
     expect(settle).toHaveBeenCalledOnce();
     expect(dispose).toHaveBeenCalledOnce();
   });
+
+  it.for([false, true])(
+    "carries scheduled credential authority into CLI preparation (revoked=%s)",
+    async (revoke, { onTestFinished }) => {
+      const followupRun = createFollowupRun();
+      useCliFallback(followupRun);
+      const automation = createScheduledAutomation();
+      followupRun.run.scheduledAutomation = automation;
+      automation.job.inferenceBinding = {
+        version: 1,
+        provider: "claude-cli",
+        profileId: "scheduled-profile",
+        authorizationId: "a".repeat(64),
+        authRequirement: "subscription",
+        source: "auto",
+      };
+      let retired = false;
+      const assertCurrent = vi.fn(() => {
+        if (retired) {
+          throw new Error("scheduled credential retired");
+        }
+      });
+      const acquire = vi.spyOn(cronInference, "prepareCronRunInference").mockResolvedValue({
+        runParams: {
+          authProfileId: "scheduled-profile",
+          authProfileBinding: {
+            profileId: "scheduled-profile",
+            authRequirement: "subscription",
+            assertCurrent,
+            revalidate: async () => {},
+          },
+        },
+        assertCandidate: vi.fn(),
+        resolveCliAuthProfile: vi.fn(async () => "scheduled-profile"),
+        dispose: vi.fn(),
+      });
+      onTestFinished(() => acquire.mockRestore());
+      state.runCliAgentMock.mockImplementationOnce(async (params: RunCliAgentParams) => {
+        expect(params.authProfileId).toBe("scheduled-profile");
+        expect(params.assertCurrent).toBeTypeOf("function");
+        params.assertCurrent?.();
+        retired = revoke;
+        // The real CLI owner invokes this guard again after awaited preparation.
+        params.assertCurrent?.();
+        return { payloads: [{ text: "done" }], meta: {} };
+      });
+      const result = await executeAgentTurn(createMinimalRunAgentTurnParams({ followupRun }));
+      expect(state.runCliAgentMock).toHaveBeenCalledOnce();
+      expect(assertCurrent).toHaveBeenCalledTimes(2);
+      expect(result.outcome).toMatchObject(
+        revoke ? { kind: "rejected" } : { kind: "settled", status: "ok" },
+      );
+    },
+  );
 
   it.for([
     { runtime: "embedded", outcome: "start" },

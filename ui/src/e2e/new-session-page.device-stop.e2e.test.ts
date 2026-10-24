@@ -89,7 +89,10 @@ suite.define(() => {
       await stop.waitFor({ state: "visible" });
       const menuText = (await stop.textContent())?.trim();
       await stop.click();
-      const dialog = await waitForConfirmModal(page);
+      const workerStopConfirmation = page.locator("openclaw-modal-dialog").filter({
+        has: page.locator(".session-worker-stop"),
+      });
+      const dialog = await waitForConfirmModal(page, workerStopConfirmation);
       expect(menuText).toBe("Stop device worker…");
       expect(
         await dialog.getByRole("heading", { name: "Stop worker?", exact: true }).textContent(),
@@ -107,7 +110,7 @@ suite.define(() => {
       await details.locator(".chat-environment__machine-trigger").click();
       await stop.click();
       await (
-        await waitForConfirmModal(page)
+        await waitForConfirmModal(page, workerStopConfirmation)
       )
         .getByRole("button", { name: "Stop worker", exact: true })
         .click();

@@ -18,8 +18,8 @@ import {
   deliverPrivateCommandReply,
   resolvePrivateCommandRouteTargets,
 } from "./commands-private-route.js";
+import { parseSlashCommandWithSetUnset } from "./commands-setunset.js";
 import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
-import { parseMcpCommand } from "./mcp-commands.js";
 
 const MCP_SHOW_PRIVATE_ROUTE_UNAVAILABLE =
   "I couldn't find a private owner route for MCP configuration. Run /mcp show from an owner DM so sensitive server details are not posted in this chat.";
@@ -108,7 +108,22 @@ async function deliverGroupMcpShowReplyPrivately(params: HandleCommandsParams, n
 
 /** Command handler for /mcp show/set/unset operations. */
 export const handleMcpCommand: CommandHandler = defineAuthorizedTextCommand(
-  { label: "/mcp", match: parseMcpCommand, ownerOnly: true },
+  {
+    label: "/mcp",
+    match: (raw) =>
+      parseSlashCommandWithSetUnset<{ action: "show"; name?: string }>({
+        raw,
+        slash: "/mcp",
+        usageMessage: "Usage: /mcp show|set|unset",
+        onKnownAction: (action, args) => {
+          if (action === "show" || action === "get") {
+            return { action: "show", name: args || undefined };
+          }
+          return undefined;
+        },
+      }),
+    ownerOnly: true,
+  },
   async (params, mcpCommand) => {
     const disabled = requireCommandFlagEnabled(params.cfg, {
       label: "/mcp",
@@ -138,7 +153,7 @@ export const handleMcpCommand: CommandHandler = defineAuthorizedTextCommand(
     }
 
     const mutation = {
-      name: mcpCommand.name,
+      name: mcpCommand.path,
       assertCurrent: params.command.assertOwnerCurrent,
     };
     const result =
@@ -149,11 +164,11 @@ export const handleMcpCommand: CommandHandler = defineAuthorizedTextCommand(
       return commandReply(`⚠️ ${result.error}`);
     }
     if (mcpCommand.action === "set") {
-      return commandReply(`🔌 MCP server "${mcpCommand.name}" saved to ${result.path}.`);
+      return commandReply(`🔌 MCP server "${mcpCommand.path}" saved to ${result.path}.`);
     }
     if (!result.removed) {
-      return commandReply(`🔌 No MCP server named "${mcpCommand.name}" in ${result.path}.`);
+      return commandReply(`🔌 No MCP server named "${mcpCommand.path}" in ${result.path}.`);
     }
-    return commandReply(`🔌 MCP server "${mcpCommand.name}" removed from ${result.path}.`);
+    return commandReply(`🔌 MCP server "${mcpCommand.path}" removed from ${result.path}.`);
   },
 );

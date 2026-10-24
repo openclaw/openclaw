@@ -42,7 +42,6 @@ export type PluginModuleLoaderFactory = typeof createJiti;
 type ResolvePluginModuleLoaderCacheEntryParams = {
   modulePath: string;
   importerUrl: string;
-  argvEntry?: string;
   preferBuiltDist?: boolean;
   loaderFilename?: string;
   aliasMap?: Record<string, string>;
@@ -201,7 +200,7 @@ function resolvePluginModuleLoaderCacheEntry(params: ResolvePluginModuleLoaderCa
       }
     : preparePluginLoaderAliases({
         modulePath: params.modulePath,
-        argv1: params.argvEntry ?? process.argv[1],
+        argv1: process.argv[1],
         moduleUrl: params.importerUrl,
         devSourceRoot: params.devSourceRoot,
         pluginSdkResolution: params.pluginSdkResolution,

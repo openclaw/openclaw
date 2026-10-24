@@ -17,7 +17,6 @@ registerEnglishCatalog(registerBrowserEnglish);
 
 export function BrowserToolbar(
   props: { controller: BrowserPanel } & {
-    embedded: boolean;
     mobilePresentation?: boolean;
     fetchFavicon?: LinkFaviconFetcher;
   },
@@ -83,7 +82,7 @@ export function BrowserToolbar(
     });
     return null;
   }
-  const measureAddress = createLayoutMeasurement(
+  createLayoutMeasurement(
     () => props.controller.urlDraft,
     () => {
       const overflow = addressText.scrollWidth > addressText.clientWidth + 1;
@@ -91,20 +90,8 @@ export function BrowserToolbar(
         addressText.dataset.overflow = String(overflow);
       };
     },
-    { targets: () => [addressText] },
+    { targets: () => [addressText], fonts: true },
   );
-  onSettled(() => {
-    // Fonts can settle without changing the address viewport's dimensions.
-    let disposed = false;
-    void document.fonts.ready.then(() => {
-      if (!disposed) {
-        measureAddress();
-      }
-    });
-    return () => {
-      disposed = true;
-    };
-  });
   const menuItems = createMemo((): MenuItem[] => [
     ...(!props.controller.host.fixedTab
       ? [

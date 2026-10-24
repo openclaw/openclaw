@@ -1,7 +1,7 @@
 /* Keep the first message stationary when pending admission becomes a native session. */
 .agent-chat__header--mobile,
 openclaw-pending-session-create .sidebar-region__header .chat-pane__header--mobile {
-  min-height: 54px;
+  min-height: 48px;
 }
 
 .agent-chat__header--mobile {
@@ -9,10 +9,10 @@ openclaw-pending-session-create .sidebar-region__header .chat-pane__header--mobi
   display: flex;
   flex: 0 0 auto;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
   box-sizing: border-box;
   min-width: 0;
-  padding: 10px 12px 4px;
+  padding: 2px 8px;
   color: var(--text);
   font-family: var(--font-body);
 }
@@ -27,10 +27,10 @@ openclaw-pending-session-create .sidebar-region__header .chat-pane__header--mobi
 
 .agent-chat__header--mobile .mobile-header__control {
   display: grid;
-  flex: 0 0 40px;
+  flex: 0 0 44px;
   place-items: center;
-  width: 40px;
-  height: 40px;
+  width: 44px;
+  height: 44px;
   padding: 0;
   border: 0;
   border-radius: 50%;
@@ -50,18 +50,7 @@ openclaw-pending-session-create .sidebar-region__header .chat-pane__header--mobi
   height: 20px;
 }
 
-.agent-chat__header--mobile .mobile-header__navigation {
-  box-sizing: border-box;
-  border: 1px solid var(--border-strong);
-  background: var(--bg-hover);
-}
-
-.agent-chat__header--mobile .mobile-header__navigation .mobile-header__glyph {
-  transform: none;
-}
-
-.agent-chat__header--mobile :is(.mobile-header__incognito, .mobile-header__dashboard),
-.agent-chat__header--mobile .mobile-header__dashboard:hover {
+.agent-chat__header--mobile .mobile-header__incognito {
   color: var(--accent);
 }
 
@@ -71,15 +60,6 @@ openclaw-pending-session-create .sidebar-region__header .chat-pane__header--mobi
   flex-direction: column;
   align-items: flex-start;
   min-width: 0;
-}
-
-.agent-chat__header--mobile .mobile-header__project {
-  width: 100%;
-  min-width: 0;
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 500;
-  line-height: 18px;
 }
 
 .agent-chat__header--mobile .mobile-header__title-row {
@@ -95,12 +75,12 @@ openclaw-pending-session-create .sidebar-region__header .chat-pane__header--mobi
   flex: 1 1 0;
   align-items: center;
   min-width: 0;
-  min-height: 22px;
+  min-height: 44px;
   padding: 0;
   border: 0;
   background: transparent;
   color: inherit;
-  font: 600 14px/20px var(--font-body);
+  font: 600 15px/20px var(--font-body);
   text-align: start;
   cursor: var(--cursor-action);
 }
@@ -136,24 +116,13 @@ openclaw-pending-session-create .sidebar-region__header .chat-pane__header--mobi
   white-space: nowrap;
 }
 
-.agent-chat__header--mobile :is(.mobile-header__people, .mobile-header__actions) {
+.agent-chat__header--mobile .mobile-header__actions {
   display: flex;
-  flex: 0 0 40px;
+  flex: 0 0 44px;
   align-items: center;
   justify-content: center;
-  width: 40px;
-  height: 40px;
-}
-
-.agent-chat__header--mobile .mobile-header__capsule {
-  display: flex;
-  box-sizing: border-box;
-  flex: 0 0 auto;
-  align-items: center;
-  height: 40px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-full);
-  background: var(--bg-hover);
+  width: 44px;
+  height: 44px;
 }
 
 .agent-chat__header--mobile .mobile-header__notices {
@@ -215,13 +184,7 @@ openclaw-pending-session-create .sidebar-region__header .chat-pane__header--mobi
 }
 
 .agent-chat__header--mobile .mobile-header__spinner {
-  animation: mobile-header-spin 1s linear infinite;
-}
-
-@keyframes mobile-header-spin {
-  to {
-    transform: rotate(360deg);
-  }
+  animation: btn-spinner-spin 1s linear infinite;
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -38,6 +38,7 @@ vi.mock("./google-genai-runtime.js", () => ({
 
 import * as providerAuthRuntime from "openclaw/plugin-sdk/provider-auth-runtime";
 import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
+import * as googleBase64 from "./base64.js";
 import { googleVideoGenerationProvider } from "./video-generation-provider.js";
 
 function mockGoogleApiKeyAuth(apiKey = "google-key") {
@@ -263,6 +264,49 @@ describe("google video generation provider", () => {
   });
 
   it.each([
+    {
+      name: "image default MIME",
+      input: { inputImages: [{ buffer: Buffer.from([0, 255, 128]) }] },
+      image: { imageBytes: "AP+A", mimeType: "image/png" },
+      video: undefined,
+    },
+    {
+      name: "video default MIME",
+      input: { inputVideos: [{ buffer: Buffer.from([0, 255, 128]), mimeType: " " }] },
+      image: undefined,
+      video: { videoBytes: "AP+A", mimeType: "video/mp4" },
+    },
+    {
+      name: "image explicit MIME",
+      input: { inputImages: [{ buffer: Buffer.from([0, 255, 128]), mimeType: " image/WebP " }] },
+      image: { imageBytes: "AP+A", mimeType: "image/WebP" },
+      video: undefined,
+    },
+    {
+      name: "video empty buffer",
+      input: { inputVideos: [{ buffer: Buffer.alloc(0), mimeType: " video/WebM " }] },
+      image: undefined,
+      video: { videoBytes: "", mimeType: "video/WebM" },
+    },
+    {
+      name: "URL-only image",
+      input: { inputImages: [{ url: "https://example.com/reference.png" }] },
+      image: undefined,
+      video: undefined,
+    },
+  ])("encodes $name at the SDK boundary", async ({ input, image, video }) => {
+    mockGoogleApiKeyAuth();
+    generateVideosMock.mockResolvedValue(completedVideo({ videoBytes: "b3V0" }));
+
+    const result = await generateVideo(input);
+
+    expect(generateVideosMock).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ image, video }),
+    );
+    expect(result.videos[0]?.buffer).toEqual(Buffer.from("out"));
+  });
+
+  it.each([
     ["non-canonical pad bits", "ZE=="],
     ["mixed alphabet", "aGVsbG8+_"],
   ])("rejects %s in inline video bytes", async (_scenario, videoBytes) => {
@@ -276,20 +320,39 @@ describe("google video generation provider", () => {
     ).rejects.toThrow("Google video generation returned malformed base64 video data");
   });
 
-  it("rejects inline video bytes that exceed the configured media cap", async () => {
+  it("rejects oversized inline video before canonicalization or decoding", async () => {
     mockGoogleApiKeyAuth();
+    const videoBytes = " -_9tcDQ\n";
     generateVideosMock.mockResolvedValue(
       completedVideo({
-        videoBytes: Buffer.from("too-large").toString("base64"),
+        videoBytes,
         mimeType: "video/mp4",
       }),
     );
+    const canonicalize = vi.spyOn(googleBase64, "canonicalizeGoogleProviderBase64");
+    const decode = vi.spyOn(Buffer, "from");
     await expect(
       generateVideo({
         cfg: { agents: { defaults: { mediaMaxMb: 0.000001 } } },
         durationSeconds: 3,
       }),
     ).rejects.toThrow("Google generated video download exceeds 1 bytes");
+    expect(canonicalize).not.toHaveBeenCalled();
+    expect(decode).not.toHaveBeenCalledWith(expect.any(String), "base64");
+  });
+
+  it.each([
+    { videoBytes: "YQ==", expected: [0x61], maxBytes: 1 },
+    { videoBytes: " -_8\n", expected: [0xfb, 0xff], maxBytes: 2 },
+  ])("accepts inline video exactly at the $maxBytes-byte cap", async (fixture) => {
+    mockGoogleApiKeyAuth();
+    generateVideosMock.mockResolvedValue(completedVideo({ videoBytes: fixture.videoBytes }));
+
+    const result = await generateVideo({
+      cfg: { agents: { defaults: { mediaMaxMb: fixture.maxBytes / (1024 * 1024) } } },
+    });
+
+    expect(result.videos[0]?.buffer).toEqual(Buffer.from(fixture.expected));
   });
 
   it.each([

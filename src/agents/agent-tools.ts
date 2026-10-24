@@ -12,9 +12,9 @@
  * Tool factories and policy modules implement each rule; this module orders
  * their application. Sync and async callers share the same assembly.
  */
-import { HEARTBEAT_RESPONSE_TOOL_NAME } from "../auto-reply/heartbeat-tool-response.js";
 import { messageToolOwnsVisibleReply } from "../auto-reply/source-reply-delivery-mode.js";
 import { createRuntimeConfigReader } from "../config/runtime-snapshot.js";
+import { readScheduledToolTargets } from "../cron/execution-context-registry.js";
 import { resolveEventSessionRoutingPolicy } from "../infra/event-session-routing.js";
 import { mergeGatewayAgentCliPath } from "../infra/openclaw-cli-shim.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
@@ -46,7 +46,7 @@ import {
   getActiveAgentRingZeroTools,
   mergeAgentRingZeroTools,
 } from "./agent-tools.ring-zero-context.js";
-import { resolveTurnToolSurface } from "./agent-tools.turn-authority.js";
+import { isSchedulerSystemTurn, resolveTurnToolSurface } from "./agent-tools.turn-authority.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { registerOneShotExecScopeCleanup } from "./bash-process-control.js";
 import { resolveProcessToolScopeKey } from "./bash-process-scope.js";
@@ -101,7 +101,6 @@ import {
   TOOL_SEARCH_RAW_TOOL_NAME,
 } from "./tool-search.js";
 import { replaceWithEffectiveCronCreatorToolAllowlist } from "./tools/cron-tool.js";
-import { resolveHeartbeatTools } from "./tools/heartbeat-response-tool.js";
 import { prepareSessionPortalToolAccess } from "./tools/session-portal-target.js";
 
 export { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js";
@@ -122,8 +121,12 @@ function* assembleOpenClawCodingTools(
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
   const { isMemoryFlushRun, memoryFlush, memoryFlushWritePath } =
     resolveMemoryFlushToolSetup(options);
+  // Hook and join-intro turns run through the cron runner as "event" jobs; they
+  // get the same current-job automations scope as scheduled runs.
   const cronSelfRemoveOnlyJobId =
-    options?.trigger === "cron" && options.jobId?.trim() ? options.jobId.trim() : undefined;
+    (options?.trigger === "cron" || options?.trigger === "event") && options.jobId?.trim()
+      ? options.jobId.trim()
+      : undefined;
   // Prefer the already-resolved sandbox context policy. Recomputing from
   // sessionKey/config can lose the real sandbox agent when callers pass a
   // legacy alias like `main` instead of an agent session key.
@@ -146,7 +149,6 @@ function* assembleOpenClawCodingTools(
   const executionSessionKey = options?.runSessionKey ?? options?.sessionKey;
   const attachmentReadRoot = subagentAttachmentRootForRun(executionAgentId, executionSessionKey);
 
-  const { enableHeartbeatTool, offerHeartbeatTool } = resolveHeartbeatTools(options, agentId);
   const toolSearchConfig = resolveToolSearchConfig(options?.config);
   const toolSearchControlsEnabled =
     options?.includeToolSearchControls === true && toolSearchConfig.enabled;
@@ -172,7 +174,6 @@ function* assembleOpenClawCodingTools(
   const runtimeProfileAlsoAllow = [
     ...(options && messageToolOwnsVisibleReply(options) ? ["message"] : []),
     ...(runtimeToolAllowlistIncludesMessage ? ["message"] : []),
-    ...(offerHeartbeatTool ? [HEARTBEAT_RESPONSE_TOOL_NAME] : []),
     ...toolSearchControlAllowlist,
   ];
   const sandboxWorkspaceMediaReadAllowed = isConversationToolAllowed(capabilityProfile, "read");
@@ -264,7 +265,6 @@ function* assembleOpenClawCodingTools(
             reviewer: options?.exec?.reviewer ?? execConfig.reviewer,
             reviewTranscript: options?.exec?.reviewTranscript,
             trigger: options?.trigger,
-            continuesConversation: options?.continuesConversation,
             node: options?.exec?.node ?? execConfig.node,
             pathPrepend: mergeGatewayAgentCliPath(
               options?.exec?.pathPrepend ?? execConfig.pathPrepend,
@@ -425,6 +425,7 @@ function* assembleOpenClawCodingTools(
             sandboxSessionRenameOnly: capabilityProfile.policy.sandboxSessionRenameOnly,
             questionInputMode: capabilityProfile.conversation.questionInputMode,
             sessionPermissionPolicy,
+            requesterIsSubagent: capabilityProfile.policy.subagentPolicy !== undefined,
             execSession: sessionPermissionPolicy
               ? { permissionMode: sessionPermissionPolicy.mode }
               : undefined,
@@ -442,6 +443,7 @@ function* assembleOpenClawCodingTools(
             gatewayCallerChannel: gatewayCaller.channel,
             gatewayCallerLocal: gatewayCaller.local,
             gatewayCallerScheduled: gatewayCaller.scheduled,
+            scheduledToolTargets: readScheduledToolTargets(options),
             admitScheduledMessageInvocation: options?.messageActionTurnCapability
               ? messageInvocationPolicy.admit
               : undefined,
@@ -472,8 +474,6 @@ function* assembleOpenClawCodingTools(
                 : (options?.computerTransport ??
                   resolveSessionPlacementComputer(options?.operationalRunInstance)),
             sourceReplyOnly,
-            enableHeartbeatTool,
-            offerHeartbeatTool,
             disablePluginTools: !includePluginTools,
             wrapBeforeToolCallHook: false,
             ...(cronSelfRemoveOnlyJobId ? { cronSelfRemoveOnlyJobId } : {}),
@@ -568,6 +568,7 @@ function* assembleOpenClawCodingTools(
         ? completeTurnTools(messageInvocationPolicy.filter(capabilityProfile, undefined, "session"))
         : undefined,
     ownerOnlyDenied: new Set(ownerOnlyCoreToolDenylist),
+    schedulerSystemTurn: isSchedulerSystemTurn(options ?? {}),
   });
   assertMemoryFlushPersistenceToolAvailable(authorizedTools, options?.memoryFlushTools);
   authorizedTools.forEach(bindAssembledAgentToolActionDescriptor);

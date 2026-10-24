@@ -316,59 +316,57 @@ it.runIf(!isWin)(
   },
 );
 
-describe("getShellConfig on Windows", () => {
-  let programFiles: string;
-  beforeEach(() => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    delete process.env.ProgramW6432;
-    delete process.env.SystemRoot;
-    delete process.env.WINDIR;
-    programFiles = tempDirs.make("openclaw-pfiles-");
-    process.env.ProgramFiles = programFiles;
-    process.env.PATH = "";
-  });
+it.each<[Record<string, string>, string | undefined]>([
+  [{ POWERSHELL_DISTRIBUTION_CHANNEL: "synthetic", BASH_VERSION: "5" }, "pwsh"],
+  [{ BASH_VERSION: "5", ZSH_VERSION: "5" }, "bash"],
+  [{ ZSH_VERSION: "5", FISH_VERSION: "4" }, "zsh"],
+  [{ FISH_VERSION: "4", KSH_VERSION: "1" }, "fish"],
+  [{ KSH_VERSION: "1", NU_VERSION: "1" }, "ksh"],
+  [{ NU_VERSION: "1", NUSHELL_VERSION: "1" }, "nu"],
+  [{ NUSHELL_VERSION: "1" }, "nu"],
+  [{ BASH_VERSION: "", ZSH_VERSION: "5" }, "zsh"],
+  [{}, undefined],
+])("detectRuntimeShell preserves runtime hint precedence: %j", (hints, expected) => {
+  vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+  for (const key of runtimeHints) {
+    delete process.env[key];
+  }
+  vi.stubEnv("SHELL", "");
+  for (const [key, value] of Object.entries(hints)) {
+    vi.stubEnv(key, value);
+  }
+  expect(detectRuntimeShell()).toBe(expected);
+});
 
-  it.each(["ProgramFiles", "ProgramW6432"] as const)("finds PowerShell 7 in %s", (installEnv) => {
-    const programW6432 = tempDirs.make("openclaw-pw6432-");
-    const pwsh7Path = writeCommand(
-      installEnv === "ProgramFiles" ? programFiles : programW6432,
-      "PowerShell/7/pwsh.exe",
-    );
-
-    process.env.ProgramW6432 = programW6432;
-
-    expect(getShellConfig().shell).toBe(pwsh7Path);
-  });
-
-  it("finds pwsh on PATH when not in standard install locations", () => {
-    const binDir = createTempCommandDir("pwsh");
-    const pwshPath = path.join(binDir, "pwsh");
-
-    process.env.PATH = binDir;
-
-    expect(getShellConfig().shell).toBe(pwshPath);
-  });
-
-  it("prefers a native pwsh.exe over earlier bare shims, batch wrappers, and PowerShell 5.1", () => {
-    const shimDir = createTempCommandDir("pwsh");
-    const binDir = createTempCommandDir("pwsh.exe");
-    const systemRoot = tempDirs.make("openclaw-sysroot-");
-    const pwshPath = path.join(binDir, "pwsh.exe");
-    writeCommand(binDir, "pwsh.cmd", true);
-    writeCommand(systemRoot, "System32/WindowsPowerShell/v1.0/powershell.exe");
-
-    process.env.SystemRoot = systemRoot;
-    process.env.PATH = [shimDir, binDir].join(path.delimiter);
-
-    expect(getShellConfig().shell).toBe(pwshPath);
-  });
-
-  it("falls back to Windows PowerShell 5.1 path when pwsh is unavailable", () => {
-    const sysRoot = tempDirs.make("openclaw-sysroot-");
-    const ps51Path = writeCommand(sysRoot, "System32/WindowsPowerShell/v1.0/powershell.exe");
-
-    process.env.SystemRoot = sysRoot;
-
-    expect(getShellConfig().shell).toBe(ps51Path);
-  });
+const ps51 = "System32/WindowsPowerShell/v1.0/powershell.exe";
+it.each([
+  {
+    name: "ProgramFiles",
+    files: ["pfiles/PowerShell/7/pwsh.exe"],
+    expected: "pfiles/PowerShell/7/pwsh.exe",
+  },
+  {
+    name: "ProgramW6432",
+    files: ["pw6432/PowerShell/7/pwsh.exe"],
+    expected: "pw6432/PowerShell/7/pwsh.exe",
+  },
+  { name: "PATH", files: ["bin/pwsh"], expected: "bin/pwsh" },
+  {
+    name: "native executable before shims, batch wrappers, and PowerShell 5.1",
+    files: ["shims/pwsh", "bin/pwsh.exe", "bin/pwsh.cmd", ps51],
+    expected: "bin/pwsh.exe",
+  },
+  { name: "PowerShell 5.1 fallback", files: [ps51], expected: ps51 },
+])("getShellConfig on Windows selects $name", ({ files, expected }) => {
+  vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+  const root = tempDirs.make("openclaw-powershell-");
+  for (const file of files) {
+    writeCommand(root, file, /^(?:shims|bin)\//.test(file));
+  }
+  process.env.ProgramFiles = path.join(root, "pfiles");
+  process.env.ProgramW6432 = path.join(root, "pw6432");
+  process.env.SystemRoot = root;
+  delete process.env.WINDIR;
+  process.env.PATH = ["shims", "bin"].map((dir) => path.join(root, dir)).join(path.delimiter);
+  expect(getShellConfig().shell).toBe(path.join(root, expected));
 });

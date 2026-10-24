@@ -1,9 +1,75 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
+import { expect } from "vitest";
 import { loadSqliteVecExtension } from "../infra/database-engine/sqlite-vec.js";
+import { requireGitCommand } from "../infra/git-exec.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { withEnvAsync } from "../test-utils/env.js";
+import { initializeGitBackupRepository, readGitBackupLog } from "./git-backup.js";
+
+export function gitBackupRepository(root: string, name = "repository") {
+  const repositoryPath = path.join(root, name);
+  const options = { repositoryPath, stateDir: path.join(root, "state") };
+  const git = (...args: string[]) => requireGitCommand(repositoryPath, args);
+  const file = (...parts: string[]) => path.join(repositoryPath, ...parts);
+  return {
+    root,
+    ...options,
+    options,
+    git,
+    file,
+    init: (remote?: string) => initializeGitBackupRepository({ ...options, remote }),
+    log: (limit = 10) => readGitBackupLog({ repositoryPath, limit }),
+    configureIdentity: async () => {
+      await git("config", "user.name", "OpenClaw Backup Test");
+      await git("config", "user.email", "backup@example.invalid");
+    },
+    write: async (relative: string, contents: string) => {
+      await fs.mkdir(path.dirname(file(relative)), { recursive: true });
+      await fs.writeFile(file(relative), contents);
+    },
+    commit: async (message: string, ...files: string[]) => {
+      await git("add", "--", ...files);
+      await git("commit", "-m", message);
+    },
+  };
+}
+
+export function expectDatabaseRows(databasePath: string, queries: Record<string, unknown[]>) {
+  using database = new DatabaseSync(databasePath, { readOnly: true });
+  for (const [sql, expected] of Object.entries(queries)) {
+    expect(database.prepare(sql).all(), sql).toEqual(expected);
+  }
+}
+
+export async function withBackupStateEnv<T>(
+  values: Parameters<typeof withEnvAsync>[0],
+  run: () => Promise<T>,
+): Promise<T> {
+  return withEnvAsync(values, async () => {
+    await using state = { run, [Symbol.asyncDispose]: closeOpenClawStateDatabaseAsync };
+    return await state.run();
+  });
+}
+
+export function createStateDatabaseFixture(root: string) {
+  const stateDir = path.join(root, "state");
+  const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+  openOpenClawStateDatabase({ env });
+  closeOpenClawStateDatabaseForTest();
+  return {
+    stateDir,
+    database: { path: resolveOpenClawStateSqlitePath(env), identity: { role: "global" as const } },
+  };
+}
 
 const schemaMeta = `CREATE TABLE schema_meta (
   meta_key TEXT NOT NULL PRIMARY KEY, role TEXT NOT NULL, schema_version INTEGER NOT NULL,

@@ -175,7 +175,7 @@ export async function mountMcpAppSurfaceFixture(page: Page, baseUrl: string) {
   await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
   await page.addScriptTag({
     type: "module",
-    url: new URL("src/components/mcp-app-view-registration.ts", baseUrl).href,
+    url: new URL("src/components/mcp-app-view.tsx", baseUrl).href,
   });
   const fixtureUrl = new URL("src/pages/chat/components/chat-sidebar.test-support.ts", baseUrl)
     .href;

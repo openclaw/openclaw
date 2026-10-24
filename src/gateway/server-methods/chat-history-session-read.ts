@@ -85,14 +85,20 @@ export async function prepareChatHistorySessionRead({
     const identity = record
       ? { agentId: record.agentId, canonicalKey: record.key }
       : requestedIdentity;
+    const storePath =
+      record?.storeTarget.storePath ??
+      resolveSessionStorePathCore(cfg.session?.store, { agentId: identity.agentId });
     return {
       cfg,
       ...identity,
       record,
       entry: record?.storedEntry ?? record?.entry,
-      storePath:
-        record?.storeTarget.storePath ??
-        resolveSessionStorePathCore(cfg.session?.store, { agentId: identity.agentId }),
+      storePath,
+      // Retained publication compares physical owners; row lookup keeps the configured locator.
+      sourcePath:
+        retainedSessionId && record && !isIncognitoSessionKey(record.key)
+          ? read.readSource(record)?.path
+          : storePath,
       storeKeys: [identity.canonicalKey],
       store: {},
     };
@@ -129,9 +135,7 @@ export async function prepareChatHistorySessionRead({
   if (!selectedSession) {
     return undefined;
   }
-  const { agentId: sessionAgentId, storePath, canonicalKey } = selectedSession;
-  // Capture the selected physical session before transcript ownership crosses a worker boundary.
-  const entry = selectedSession.entry ? structuredClone(selectedSession.entry) : undefined;
+  const { agentId: sessionAgentId, storePath, canonicalKey, entry } = selectedSession;
   const readTranscriptOwner = async () => {
     if (!requestedSessionId) {
       return true;
@@ -287,7 +291,7 @@ export async function prepareChatHistorySessionRead({
             (target &&
               (target.agentId !== sessionAgentId ||
                 target.canonicalKey !== canonicalKey ||
-                current.sourcePath !== storePath)) ||
+                current.sourcePath !== selectedSession.sourcePath)) ||
             (publication.requireCurrentSession && target?.entry.sessionId !== retainedSessionId)
           ) {
             unavailable("retained session changed while reading history");

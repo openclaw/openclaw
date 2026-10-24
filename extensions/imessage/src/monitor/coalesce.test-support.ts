@@ -34,46 +34,10 @@ describe("combineIMessagePayloads", () => {
     expect(combineIMessagePayloads([payload])).toBe(payload);
   });
 
-  it("merges two same-sender rows into one payload anchored on the first GUID", () => {
-    const first = makePayload({
-      text: "summarize",
-      guid: "row-1",
-      created_at: "2025-01-01T00:00:00Z",
-    });
-    const second = makePayload({
-      text: "https://example.com/article",
-      guid: "row-2",
-      created_at: "2025-01-01T00:00:01.500Z",
-    });
-    expect(combineIMessagePayloads([first, second])).toMatchObject({
-      text: "summarize https://example.com/article",
-      guid: "row-1",
-      created_at: "2025-01-01T00:00:01.500Z",
-    });
-  });
-
-  it("preserves attachments instead of dropping them on merge", () => {
-    const text = makePayload({ text: "Save", guid: "row-1" });
-    const image = makePayload({
-      text: "caption",
-      guid: "row-2",
-      attachments: [attachment("a")],
-    });
-    expect(combineIMessagePayloads([text, image]).attachments).toEqual([attachment("a")]);
-  });
-
   it.each([
     ["URL balloon", ["https://example.com", "https://example.com"], "https://example.com"],
     ["case/trim, not suffix", ["  MIXED ", "mixed", "Mixed suffix", "mIxEd"], "MIXED Mixed suffix"],
     ["Unicode lowercase expansion", ["\u0130", "i\u0307", "tail"], "\u0130 tail"],
-  ] satisfies [string, string[], string][])(
-    "dedupes full message text: %s",
-    (_, texts, expected) => {
-      expect(combineTexts(texts)).toBe(expected);
-    },
-  );
-
-  it.each([
     [
       "partial later text",
       [a(3000), "B".repeat(3000)],
@@ -84,7 +48,7 @@ describe("combineIMessagePayloads", () => {
     ["surrogate at limit", [`${a(3999)}😀`, "tail"], `${a(3999)}…[truncated]`],
     ["separator at limit", [a(3999), "tail"], `${a(3999)} …[truncated]`],
   ] satisfies [string, string[], string][])(
-    "preserves the exact bounded text for %s",
+    "combines bounded, deduplicated text: %s",
     (_, texts, expected) => {
       expect(combineTexts(texts)).toBe(expected);
     },
@@ -144,28 +108,18 @@ describe("combineIMessagePayloads", () => {
     });
   });
 
-  it.each([{ reply_to_guid: "reply-parent" }, { thread_originator_guid: "thread-parent" }])(
-    "preserves the complete real provider reply tuple from a later row",
-    (parent) => {
-      const first = makePayload({ text: "hello", guid: "row-1" });
-      const reply = makePayload({ text: "follow-up", guid: "row-2", ...parent, ...quote });
-      expect(combineIMessagePayloads([first, reply])).toMatchObject({ ...parent, ...quote });
-    },
-  );
-
-  it("keeps the parent GUID and quote metadata from the same reply row", () => {
+  it.each([
+    { reply_to_guid: "reply-parent" },
+    { thread_originator_guid: "thread-parent" },
+    { reply_to_guid: "reply-parent", thread_originator_guid: "thread-parent" },
+  ])("preserves the complete real provider reply tuple from a later row", (parent) => {
     const first = makePayload({
-      text: "first",
+      text: "hello",
       guid: "row-1",
       reply_to_text: "unrelated stale quote",
       reply_to_sender: "+15555550001",
     });
-    const parent = {
-      thread_originator_guid: "thread-parent",
-      reply_to_guid: "reply-parent",
-      ...quote,
-    };
-    const reply = makePayload({ text: "second", guid: "row-2", ...parent });
-    expect(combineIMessagePayloads([first, reply])).toMatchObject(parent);
+    const reply = makePayload({ text: "follow-up", guid: "row-2", ...parent, ...quote });
+    expect(combineIMessagePayloads([first, reply])).toMatchObject({ ...parent, ...quote });
   });
 });

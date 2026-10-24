@@ -608,13 +608,6 @@ describe("Crabbox version admission", () => {
         "Crabbox version command execution failed: output capture failed",
       ),
     });
-    for (
-      let current: unknown = Object.getOwnPropertyDescriptor(probe, "cause")?.value;
-      current instanceof Error;
-      current = current.cause
-    ) {
-      expect(current.message).not.toContain(token);
-    }
     expect(inspect(probe, { depth: null })).not.toContain(token);
     expect(probe).not.toHaveProperty("cause");
     expect(probe).toHaveProperty("reason", expect.not.stringContaining("synthetic-version-secret"));

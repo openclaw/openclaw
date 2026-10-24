@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import type { ChannelAccountHealthSummary, HealthSummary } from "../gateway/health/types.js";
 import * as loggingConfig from "../logging/config.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
@@ -7,6 +8,7 @@ import {
   formatDeliveryQueueHealthLine,
   formatGatewayClosedDiagnostic,
   formatHealthChannelLines,
+  formatHealthCheckFailure,
 } from "./health-format.js";
 import {
   healthSummary as createHealthSummary,
@@ -34,6 +36,53 @@ it.each([
     expect(formatGatewayClosedDiagnostic(error)).toBe(expected);
   },
 );
+
+describe("health failure diagnostic redaction", () => {
+  afterEach(() => {
+    resetSecretRedactionRegistryForTest();
+    vi.restoreAllMocks();
+  });
+
+  it.each([false, true])("keeps built-in and custom masking with rich=%s", (rich) => {
+    vi.spyOn(loggingConfig, "readLoggingConfig").mockReturnValue({
+      redactPatterns: ["deploymentMask9X"],
+    });
+    const output = stripAnsi(
+      formatHealthCheckFailure(new Error("remote password=mockPass7X deploymentMask9X visible"), {
+        rich,
+      }),
+    );
+    expect(output).toContain("Health check failed:");
+    expect(output).toContain("remote");
+    expect(output).toContain("visible");
+    expect(output).not.toContain("mockPass7X");
+    expect(output).not.toContain("deploymentMask9X");
+    expect(output).toContain("***");
+  });
+
+  it.each([false, true])("masks complete and normalized registered values with rich=%s", (rich) => {
+    for (const [registered, message] of [
+      ["proofSecr9X", "remote proofSecr9X visible"],
+      ["proofSecr9X", "remote proofSe\u001b[31mcr9X visible"],
+      ["lineA9\nlineB7", "remote lineA9\nlineB7 visible"],
+    ] as const) {
+      registerSecretValueForRedaction(registered);
+      const output = stripAnsi(formatHealthCheckFailure(message, { rich }));
+      expect(output).toContain("remote");
+      expect(output).toContain("visible");
+      for (const part of registered.split("\n")) {
+        expect(output).not.toContain(part);
+      }
+      expect(output).toContain("***");
+    }
+    if (rich) {
+      registerSecretValueForRedaction("joined secret");
+      expect(stripAnsi(formatHealthCheckFailure(new Error("joined\nsecret"), { rich }))).toBe(
+        "Health check failed: ***",
+      );
+    }
+  });
+});
 
 const channelSummary = (id: string, label: string, account: ChannelAccountHealthSummary) =>
   createHealthSummary({

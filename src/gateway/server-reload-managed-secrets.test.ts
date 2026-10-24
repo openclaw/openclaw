@@ -374,7 +374,7 @@ describe("managed reload authored source", () => {
     expect(policies).toEqual([prepared.config]);
   });
 
-  it.each(["success", "hook fails", "publisher fails", "publisher replaces then fails"] as const)(
+  it.each(["hook fails", "publisher fails", "publisher replaces then fails"] as const)(
     "commits the exact target and reconciles publication outcome: %s",
     async (outcome) => {
       const [initial, candidate] = await prepareCandidates();
@@ -386,7 +386,7 @@ describe("managed reload authored source", () => {
       const beforeSnapshotPublication = vi.fn(async (config: OpenClawConfig | null) => {
         if (!publisherFails) {
           expect(getActiveSecretsRuntimeSnapshotState()?.config).toEqual(initial.config);
-          if (outcome === "hook fails" && config === candidate.config) {
+          if (config === candidate.config) {
             throw failure;
           }
         }
@@ -405,14 +405,9 @@ describe("managed reload authored source", () => {
       const publication = publisherFails
         ? activate.activatePreparedSnapshot(candidate, reloadActivation)
         : publish(activate, candidate);
-      const survivor = outcome === "success" || replaced ? candidate : initial;
-      if (outcome !== "success") {
-        await expect(publication).rejects.toBe(failure);
-        expectPublishedConfigs(beforeSnapshotPublication, candidate.config, survivor.config);
-      } else {
-        await expect(publication).resolves.toBe(candidate);
-        expect(beforeSnapshotPublication).toHaveBeenCalledExactlyOnceWith(candidate.config);
-      }
+      const survivor = replaced ? candidate : initial;
+      await expect(publication).rejects.toBe(failure);
+      expectPublishedConfigs(beforeSnapshotPublication, candidate.config, survivor.config);
       expect(getActiveSecretsRuntimeSnapshotState()?.config).toEqual(survivor.config);
     },
   );

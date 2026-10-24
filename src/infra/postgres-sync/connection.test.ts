@@ -1,28 +1,42 @@
-import { channel } from "node:diagnostics_channel";
 import { MessageChannel, receiveMessageOnPort, threadId } from "node:worker_threads";
 import { expect, it, vi } from "vitest";
 import { withEngineStoreAdmission } from "../database-engine/admission-scope.js";
 import { readSqliteDatabaseScopedWriteToken as readToken } from "../sqlite-database-admission.js";
 import { readSqliteNativeMutationRevision as readRevision } from "../sqlite-schema-facts.js";
+import {
+  runSqliteImmediateTransaction as prepared,
+  runSqliteImmediateTransactionSync as immediate,
+  runSqliteReservedTransactionSync as reserved,
+  runSqliteWorkerTransactionSync as worker,
+} from "../sqlite-transaction.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../sqlite-worker-contract.js";
 import {
+  assertSqliteWorkerCommitReceiptPending as assertPending,
   deferSqliteWorkerCommitReceipt as deferReceipt,
   observeSqliteWorkerCommittedFacts,
   withSqliteWorkerOperationAdmission as withAdmission,
 } from "../sqlite-worker-operation-admission.js";
+import type { SqliteWorkerOperationContext } from "../sqlite-worker-operation-settlement.js";
 import { PostgresSyncConnection } from "./connection.js";
 import { usePostgresFixture } from "./fixture.test-support.js";
 import type { BridgeReply, BridgeRequest, PostgresErrorData } from "./protocol.js";
+import { observeStatementEvents } from "./sql.test-support.js";
 
 const harness = usePostgresFixture();
+const writeBegin = "BEGIN ISOLATION LEVEL READ COMMITTED; SELECT pg_advisory_xact_lock(-42)";
 
-function observeStatements() {
-  const statements = channel("openclaw.database.statement");
-  const events: unknown[] = [];
-  const subscriber = (event: unknown) => events.push(event);
-  statements.subscribe(subscriber);
-  harness.cleanups.push(() => statements.unsubscribe(subscriber));
-  return events;
+function transactionFixture() {
+  const db = harness.connection();
+  const statements: string[] = [];
+  db.exec = (sql) => {
+    statements.push(sql);
+    if (sql.startsWith("BEGIN")) {
+      db.isTransaction = true;
+    } else if (sql === "COMMIT" || sql === "ROLLBACK") {
+      db.isTransaction = false;
+    }
+  };
+  return { db, statements };
 }
 
 function transportFixture(
@@ -166,50 +180,6 @@ it.each([
   expect(readToken(fixture.db.anchor, "entry")).toBe(before);
 });
 
-it.each(["read", "write", "rollback", "inner-rollback"] as const)(
-  "publishes worker receipts only for committed mutations (%s)",
-  (mode) => {
-    const { db, command } = transportFixture("normal");
-    const admission = harness.admission((_request, grant) => grant());
-    const receipts: unknown[] = [];
-    observeSqliteWorkerCommittedFacts(admission, ({ facts }) => receipts.push(facts));
-    const operation = () => {
-      command(mode === "read" ? "SELECT" : "INSERT");
-      db.exec(mode === "read" ? "SELECT 1" : "INSERT INTO proof VALUES (7)");
-      if (mode === "inner-rollback") {
-        command("SAVEPOINT");
-        expect(() =>
-          db.runTransaction(() => {
-            deferReceipt(db, { value: 7 });
-            command("ROLLBACK");
-            throw new Error("cancel inner receipt");
-          }),
-        ).toThrow("cancel inner receipt");
-      }
-      if (mode === "rollback") {
-        command("ROLLBACK");
-        throw new Error("cancel write");
-      }
-    };
-    const run = () =>
-      withAdmission({ port: admission.port, sourceReservations: true }, () =>
-        db.runTransaction(operation, {
-          withCommit(commit) {
-            command("COMMIT");
-            commit();
-          },
-        }),
-      );
-    if (mode === "rollback") {
-      expect(run).toThrow("cancel write");
-    } else {
-      run();
-    }
-    admission.service();
-    expect(receipts).toEqual(mode === "write" || mode === "inner-rollback" ? [{}] : []);
-  },
-);
-
 it("invalidates local mutation witnesses inside a transaction and across rollback", () => {
   const fixture = transportFixture("normal");
   fixture.db.isTransaction = true;
@@ -238,7 +208,8 @@ it.each([
   ["error", "SELECT ?::text", "private\0text", "SELECT ?::text"],
 ] as const)("redacts statement observations on %s", (outcome, sql, binding, redacted) => {
   const fixture = transportFixture("normal");
-  const events = observeStatements();
+  using observation = observeStatementEvents();
+  const { events } = observation;
   const run = () => fixture.db.prepare(sql).get(binding);
   if (outcome === "error") {
     fixture.rejectQuery({
@@ -295,3 +266,110 @@ it.each(["mismatched", "missing", "timeout"] as const)(
     expect(readToken(db.anchor, "entry")).toBe(after);
   },
 );
+
+it.each([false, true])("settles anchored receipts (rollback=%s)", (rollback) => {
+  const { db } = transactionFixture();
+  const admission = harness.admission((_request, grant) => grant());
+  const owner: SqliteWorkerOperationContext = { port: admission.port };
+  const receipts: unknown[] = [];
+  observeSqliteWorkerCommittedFacts(admission, ({ facts }) => receipts.push(facts));
+  const write = () =>
+    withAdmission(owner, () =>
+      immediate(db, () => {
+        deferReceipt(db, { value: 7 });
+        assertPending(db);
+        assertPending(db.anchor);
+        expect(owner.committed).toBeUndefined();
+        if (rollback) {
+          throw new Error("cancel receipt");
+        }
+      }),
+    );
+  if (rollback) {
+    expect(write).toThrow("cancel receipt");
+  } else {
+    write();
+  }
+  admission.service();
+  expect(receipts).toEqual(rollback ? [] : [{ value: 7 }]);
+  expect(owner.pendingReceipts?.size).toBe(0);
+});
+
+it.each(["reserved", "worker"] as const)(
+  "uses a locked read-committed transaction for %s writes",
+  (mode) => {
+    const { db, statements } = transactionFixture();
+    const operation = () => {
+      statements.push("body");
+      return 7;
+    };
+    const admit = (stage: string) => statements.push(`admit:${stage}`);
+    expect(
+      mode === "reserved"
+        ? reserved(db, operation, {})
+        : worker({ database: db, databasePath: "", admit }, operation),
+    ).toBe(7);
+    expect(statements).toEqual(
+      mode === "worker"
+        ? ["admit:transaction", writeBegin, "body", "admit:commit", "COMMIT"]
+        : [writeBegin, "body", "COMMIT"],
+    );
+  },
+);
+
+it("runs the commit authority guard and rolls back when it refuses", () => {
+  const { db, statements } = transactionFixture();
+  const refusal = new Error("authority revoked");
+  expect(() =>
+    immediate(db, () => 1, {
+      withCommit() {
+        throw refusal;
+      },
+    }),
+  ).toThrow(refusal);
+  expect(statements).toEqual([writeBegin, "ROLLBACK"]);
+  expect(db.isTransaction).toBe(false);
+});
+
+it("prepares before asynchronous admission and commits only inside its guard", async () => {
+  const { db, statements } = transactionFixture();
+  const result = await prepared(
+    db,
+    async () => {
+      statements.push("prepare");
+      return () => "result";
+    },
+    {
+      withCommit(commit) {
+        statements.push("guard");
+        commit();
+      },
+    },
+    (write) => {
+      statements.push("admit");
+      return write();
+    },
+  );
+  expect(result).toBe("result");
+  expect(statements).toEqual(["prepare", "admit", writeBegin, "guard", "COMMIT"]);
+});
+
+it("rolls a failed inner write back to its savepoint before the outer commit", () => {
+  const { db, statements } = transactionFixture();
+  const failure = new Error("inner write refused");
+  immediate(db, () => {
+    expect(() =>
+      immediate(db, () => {
+        throw failure;
+      }),
+    ).toThrow(failure);
+    expect(db.isTransaction).toBe(true);
+  });
+  expect(statements).toEqual([
+    writeBegin,
+    "SAVEPOINT openclaw_tx_nested",
+    "ROLLBACK TO SAVEPOINT openclaw_tx_nested",
+    "RELEASE SAVEPOINT openclaw_tx_nested",
+    "COMMIT",
+  ]);
+});

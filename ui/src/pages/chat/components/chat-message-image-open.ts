@@ -1,5 +1,6 @@
 import { fetchControlUiResource } from "../../../app/browser-http.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
+import { registerChatMediaEnglish } from "../../../i18n/locales/en-chat-media.ts";
 import { openExternalUrlSafe, resolveSafeExternalUrl } from "../../../lib/open-external-url.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { chatImageRenditionWidth } from "./chat-image-rendition.ts";
@@ -23,6 +24,8 @@ import {
   type ImageBlock,
   type ImageRenderOptions,
 } from "./chat-message-media.ts";
+
+registerChatMediaEnglish();
 
 export function openResolvedImage(
   onOpenImage: ((item: ImageLightboxItem, requestVersion?: number) => void) | undefined,

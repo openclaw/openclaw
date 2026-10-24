@@ -276,7 +276,7 @@
 .chat-workspace-mobile__stem,
 .chat-workspace-mobile__directory {
   overflow: hidden;
-  text-overflow: ellipsis;
+  text-overflow: clip;
   white-space: nowrap;
 }
 

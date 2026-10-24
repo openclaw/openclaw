@@ -104,61 +104,31 @@ export function createTeamScaleSidebarListOwner(input: TeamScaleSidebarListInven
           : undefined;
       const eligible = [...rows.values()]
         .filter((row) => {
-          if (query.agentId && row.agentId !== query.agentId) {
-            return false;
-          }
-          if (query.ownerId && row.owner?.actor.id !== query.ownerId) {
-            return false;
-          }
-          if (
-            query.involvingMe === true &&
-            (row.hiddenFromInvolvingMe === true ||
-              (!ownedBy(row, input.viewerProfileId) &&
-                !row.participants?.some(({ identity }) => identity.id === input.viewerProfileId)))
-          ) {
-            return false;
-          }
-          if (query.archived !== "all" && (row.archived === true) !== (query.archived === true)) {
-            return false;
-          }
-          if (query.pinned !== undefined && (row.pinned === true) !== query.pinned) {
-            return false;
-          }
-          if (query.hasBoard !== undefined && (row.hasBoard === true) !== query.hasBoard) {
-            return false;
-          }
-          if (query.boardFace !== undefined && row.boardFace !== query.boardFace) {
-            return false;
-          }
-          if (query.excludeDock !== false && row.isDock === true) {
-            return false;
-          }
-          if (query.excludeSubagents && isSubagentSessionRow(row.key, row)) {
-            return false;
-          }
-          if (query.excludeCron && isCronSessionDisplayKey(row.key)) {
-            return false;
-          }
-          if (query.excludeSystem && isSystemCreatedSessionRow(row)) {
-            return false;
-          }
-          if (query.includeGlobal === false && row.kind === "global") {
-            return false;
-          }
-          if (query.includeUnknown === false && row.kind === "unknown") {
-            return false;
-          }
-          if (
-            typeof query.spawnedBy === "string" &&
-            !(row.childOwnerSessionKeys ?? [row.controlOwnerSessionKey ?? row.spawnedBy]).includes(
-              query.spawnedBy,
-            )
-          ) {
-            return false;
-          }
           return (
-            typeof query.search !== "string" ||
-            `${row.label} ${row.displayName}`.toLowerCase().includes(query.search.toLowerCase())
+            (!query.agentId || row.agentId === query.agentId) &&
+            (!query.ownerId || row.owner?.actor.id === query.ownerId) &&
+            (query.involvingMe !== true ||
+              (row.hiddenFromInvolvingMe !== true &&
+                (ownedBy(row, input.viewerProfileId) ||
+                  row.participants?.some(
+                    ({ identity }) => identity.id === input.viewerProfileId,
+                  )))) &&
+            (query.archived === "all" || (row.archived === true) === (query.archived === true)) &&
+            (query.pinned === undefined || (row.pinned === true) === query.pinned) &&
+            (query.hasBoard === undefined || (row.hasBoard === true) === query.hasBoard) &&
+            (query.boardFace === undefined || row.boardFace === query.boardFace) &&
+            (query.excludeDock === false || row.isDock !== true) &&
+            (!query.excludeSubagents || !isSubagentSessionRow(row.key, row)) &&
+            (!query.excludeCron || !isCronSessionDisplayKey(row.key)) &&
+            (!query.excludeSystem || !isSystemCreatedSessionRow(row)) &&
+            (query.includeGlobal !== false || row.kind !== "global") &&
+            (query.includeUnknown !== false || row.kind !== "unknown") &&
+            (typeof query.spawnedBy !== "string" ||
+              (row.childOwnerSessionKeys ?? [row.controlOwnerSessionKey ?? row.spawnedBy]).includes(
+                query.spawnedBy,
+              )) &&
+            (typeof query.search !== "string" ||
+              `${row.label} ${row.displayName}`.toLowerCase().includes(query.search.toLowerCase()))
           );
         })
         .toSorted((a, b) =>
@@ -302,6 +272,7 @@ export function prepareTeamScaleSessionOwnership(
         id: owner.id,
         identity: { type: "profile", id: owner.id },
         label: owner.name,
+        avatarUrl: owner.avatarUrl,
       },
     };
     row.hiddenFromInvolvingMe = false;

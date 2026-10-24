@@ -116,6 +116,38 @@ function internalCapabilityUrl(publicUrl: string, pathName = "/internal/synology
   return `${pathName}${new URL(publicUrl).search}`;
 }
 
+function prepare(account: ResolvedSynologyChatAccount, mediaUrl: string) {
+  return prepareSynologyHostedMedia({ account, mediaUrl });
+}
+
+function mockPdf(buffer: Buffer, fileName = "report.pdf") {
+  mockMedia(buffer, "application/pdf", fileName);
+}
+
+function mockMedia(
+  buffer: Buffer,
+  contentType = "application/octet-stream",
+  fileName = "document.bin",
+) {
+  loadWebMediaMock.mockResolvedValueOnce({ buffer, kind: undefined, contentType, fileName });
+}
+
+const image = {
+  buffer: Buffer.from("frozen-image-bytes"),
+  kind: "image",
+  contentType: "image/png",
+  fileName: "floor-plan.png",
+} satisfies Awaited<ReturnType<typeof loadWebMediaType>>;
+
+function serve(
+  url: string,
+  response: ReturnType<typeof makeRes>,
+  account: ResolvedSynologyChatAccount,
+  method = "GET",
+) {
+  return tryHandleSynologyHostedMediaRequest(makeReq(method, "", { url }), response, account);
+}
+
 function utf16Buffer(value: string, endian: "le" | "be", includeBom = true): Buffer {
   const buffer = Buffer.from(`${includeBom ? "\ufeff" : ""}${value}`, "utf16le");
   return endian === "le" ? buffer : buffer.swap16();
@@ -123,44 +155,44 @@ function utf16Buffer(value: string, endian: "le" | "be", includeBom = true): Buf
 
 function utf32Buffer(value: string, endian: "le" | "be", includeBom = true): Buffer {
   const codePoints = Array.from(value, (character) => character.codePointAt(0) ?? 0xfffd);
-  const bomBytes = includeBom ? 4 : 0;
-  const buffer = Buffer.alloc(bomBytes + codePoints.length * 4);
   if (includeBom) {
-    if (endian === "le") {
-      buffer.writeUInt32LE(0xfeff, 0);
-    } else {
-      buffer.writeUInt32BE(0xfeff, 0);
-    }
+    codePoints.unshift(0xfeff);
   }
+  const buffer = Buffer.alloc(codePoints.length * 4);
   codePoints.forEach((codePoint, index) => {
-    const offset = bomBytes + index * 4;
-    if (endian === "le") {
-      buffer.writeUInt32LE(codePoint, offset);
-    } else {
-      buffer.writeUInt32BE(codePoint, offset);
-    }
+    buffer.writeUInt32LE(codePoint, index * 4);
   });
-  return buffer;
+  return endian === "le" ? buffer : buffer.swap32();
 }
 
 describe("Synology Chat hosted outbound media", () => {
+  let account: ResolvedSynologyChatAccount;
+  async function stageUrl(mediaUrl = "https://files.example.com/report.pdf") {
+    return internalCapabilityUrl((await prepare(account, mediaUrl)).url);
+  }
+  async function get(url: string, method = "GET", requestAccount = account) {
+    const response = makeRes();
+    await serve(url, response, requestAccount, method);
+    return response;
+  }
+  async function expectStatus(
+    url: string,
+    status: number,
+    requestAccount = account,
+    method = "GET",
+  ) {
+    expect((await get(url, method, requestAccount)).statusCode).toBe(status);
+  }
+
   beforeEach(async () => {
     await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     fs.rmSync(testStateDir, { recursive: true, force: true });
     fs.mkdirSync(testStateDir, { recursive: true });
     installRuntime();
+    account = createAccount();
     loadWebMediaMock.mockReset();
-    loadWebMediaMock.mockResolvedValue({
-      buffer: Buffer.from("frozen-image-bytes"),
-      kind: "image",
-      contentType: "image/png",
-      fileName: "floor-plan.png",
-    });
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
+    loadWebMediaMock.mockResolvedValue(image);
   });
 
   afterEach(() => {
@@ -196,17 +228,8 @@ describe("Synology Chat hosted outbound media", () => {
   it("reconstructs persisted bytes before response backpressure", async () => {
     installRuntime();
     const frozenBytes = Buffer.alloc(40 * 1024, 0x61);
-    loadWebMediaMock.mockResolvedValueOnce({
-      buffer: frozenBytes,
-      kind: undefined,
-      contentType: "application/pdf",
-      fileName: "report.pdf",
-    });
-    const account = createAccount();
-    const prepared = await prepareSynologyHostedMedia({
-      account,
-      mediaUrl: "https://files.example.com/report.pdf",
-    });
+    mockPdf(frozenBytes);
+    const prepared = await prepare(account, "https://files.example.com/report.pdf");
     const response = makeRes();
     const write = response.write.bind(response);
     let firstWrite = true;
@@ -220,18 +243,12 @@ describe("Synology Chat hosted outbound media", () => {
     }) as typeof response.write;
     const writeSpy = vi.spyOn(response, "write");
     let settled = false;
-
-    const serving = tryHandleSynologyHostedMediaRequest(
-      makeReq("GET", "", { url: internalCapabilityUrl(prepared.url) }),
-      response,
-      account,
-    ).finally(() => {
+    const serving = serve(internalCapabilityUrl(prepared.url), response, account).finally(() => {
       settled = true;
     });
     await vi.waitFor(() => expect(writeSpy).toHaveBeenCalledOnce());
     expect(writeSpy).toHaveBeenCalledWith(frozenBytes);
     expect(settled).toBe(false);
-
     response.emit("drain");
     await expect(serving).resolves.toBe(true);
     expect(writeSpy).toHaveBeenCalledOnce();
@@ -240,17 +257,8 @@ describe("Synology Chat hosted outbound media", () => {
 
   it("rejects persisted corruption before writing response bytes", async () => {
     const { openedStores } = installRuntime();
-    loadWebMediaMock.mockResolvedValueOnce({
-      buffer: Buffer.alloc(40 * 1024, 0x61),
-      kind: undefined,
-      contentType: "application/pdf",
-      fileName: "report.pdf",
-    });
-    const account = createAccount();
-    const prepared = await prepareSynologyHostedMedia({
-      account,
-      mediaUrl: "https://files.example.com/report.pdf",
-    });
+    mockPdf(Buffer.alloc(40 * 1024, 0x61));
+    const prepared = await prepare(account, "https://files.example.com/report.pdf");
     const chunkStore = openedStores[1] as
       | PluginStateKeyedStore<HostedOutboundMediaChunkRecord>
       | undefined;
@@ -267,15 +275,7 @@ describe("Synology Chat hosted outbound media", () => {
     });
     const response = makeRes({ finishOnEnd: false });
     const writeSpy = vi.spyOn(response, "write");
-
-    await expect(
-      tryHandleSynologyHostedMediaRequest(
-        makeReq("GET", "", { url: internalCapabilityUrl(prepared.url) }),
-        response,
-        account,
-      ),
-    ).resolves.toBe(true);
-
+    await expect(serve(internalCapabilityUrl(prepared.url), response, account)).resolves.toBe(true);
     expect(response.statusCode).toBe(404);
     expect(response.destroyed).toBe(false);
     expect(writeSpy).not.toHaveBeenCalled();
@@ -283,81 +283,42 @@ describe("Synology Chat hosted outbound media", () => {
   });
 
   it("never treats capability query values as an on-demand fetch target", async () => {
-    const account = createAccount();
-    const prepared = await prepareSynologyHostedMedia({
-      account,
-      mediaUrl: "https://files.example.com/floor-plan.png",
-    });
+    const prepared = await prepare(account, "https://files.example.com/floor-plan.png");
     const requestUrl = new URL(internalCapabilityUrl(prepared.url), "http://localhost");
     requestUrl.searchParams.set("url", "http://127.0.0.1/private");
     requestUrl.searchParams.set("target", "https://files.example.com/changed.png");
     const response = makeRes();
-
-    await tryHandleSynologyHostedMediaRequest(
-      makeReq("GET", "", { url: `${requestUrl.pathname}${requestUrl.search}` }),
-      response,
-      account,
-    );
-
+    await serve(`${requestUrl.pathname}${requestUrl.search}`, response, account);
     expect(response.statusCode).toBe(200);
     expect(Buffer.from(response.body).toString("utf8")).toBe("frozen-image-bytes");
     expect(response.headers).not.toHaveProperty("location");
     expect(loadWebMediaMock).toHaveBeenCalledTimes(1);
-
     const targetOnly = makeRes();
     await expect(
-      tryHandleSynologyHostedMediaRequest(
-        makeReq("GET", "", { url: "/internal/synology?target=http://127.0.0.1/private" }),
-        targetOnly,
-        account,
-      ),
+      serve("/internal/synology?target=http://127.0.0.1/private", targetOnly, account),
     ).resolves.toBe(false);
     expect(loadWebMediaMock).toHaveBeenCalledTimes(1);
   });
 
   it("keeps preparation limits after a fresh runtime initializes its stores", async () => {
-    let releaseLoads: (() => void) | undefined;
-    const loadGate = new Promise<void>((resolve) => {
-      releaseLoads = resolve;
-    });
+    const { promise: loadGate, resolve: releaseLoads } = Promise.withResolvers<void>();
     loadWebMediaMock.mockImplementation(async () => {
       await loadGate;
-      return {
-        buffer: Buffer.from("frozen-image-bytes"),
-        kind: "image",
-        contentType: "image/png",
-        fileName: "floor-plan.png",
-      };
+      return image;
     });
-    const account = createAccount();
-    const first = prepareSynologyHostedMedia({
-      account,
-      mediaUrl: "https://files.example.com/one.png",
-    });
-    const second = prepareSynologyHostedMedia({
-      account,
-      mediaUrl: "https://files.example.com/two.png",
-    });
+    const first = prepare(account, "https://files.example.com/one.png");
+    const second = prepare(account, "https://files.example.com/two.png");
     await vi.waitFor(() => expect(loadWebMediaMock).toHaveBeenCalledTimes(2));
-
-    const third = prepareSynologyHostedMedia({
-      account,
-      mediaUrl: "https://files.example.com/three.png",
-    });
+    const third = prepare(account, "https://files.example.com/three.png");
     await Promise.resolve();
-    releaseLoads?.();
-
+    releaseLoads();
     await expect(third).rejects.toThrow("attachment preparation is busy");
     await expect(Promise.all([first, second])).resolves.toHaveLength(2);
     expect(loadWebMediaMock).toHaveBeenCalledTimes(2);
   });
 
   it("fails closed for wrong tokens, accounts, routes, and unsupported methods", async () => {
-    const account = createAccount();
-    const prepared = await prepareSynologyHostedMedia({
-      account,
-      mediaUrl: "https://files.example.com/report.pdf",
-    });
+    const prepared = await prepare(account, "https://files.example.com/report.pdf");
     const capability = new URL(prepared.url);
     const tokenKey = [...capability.searchParams.keys()].find((key) =>
       key.startsWith("__openclaw_synology_media_token_"),
@@ -365,58 +326,27 @@ describe("Synology Chat hosted outbound media", () => {
     if (!tokenKey) {
       throw new Error("expected Synology hosted media token");
     }
-
     const wrongToken = new URLSearchParams(capability.search);
     wrongToken.set(tokenKey, "wrong");
-    const unauthorized = makeRes();
-    await tryHandleSynologyHostedMediaRequest(
-      makeReq("GET", "", { url: `/internal/synology?${wrongToken.toString()}` }),
-      unauthorized,
-      account,
-    );
-    expect(unauthorized.statusCode).toBe(401);
-
-    const crossAccount = makeRes();
-    await tryHandleSynologyHostedMediaRequest(
-      makeReq("GET", "", { url: internalCapabilityUrl(prepared.url) }),
-      crossAccount,
+    await expectStatus(`/internal/synology?${wrongToken.toString()}`, 401);
+    await expectStatus(
+      internalCapabilityUrl(prepared.url),
+      404,
       createAccount({ accountId: "other" }),
     );
-    expect(crossAccount.statusCode).toBe(404);
-
-    const crossRoute = makeRes();
-    await tryHandleSynologyHostedMediaRequest(
-      makeReq("GET", "", { url: internalCapabilityUrl(prepared.url, "/other") }),
-      crossRoute,
-      account,
-    );
-    expect(crossRoute.statusCode).toBe(404);
-
-    const method = makeRes();
-    await tryHandleSynologyHostedMediaRequest(
-      makeReq("POST", "", { url: internalCapabilityUrl(prepared.url) }),
-      method,
-      account,
-    );
-    expect(method.statusCode).toBe(405);
+    await expectStatus(internalCapabilityUrl(prepared.url, "/other"), 404);
+    await expectStatus(internalCapabilityUrl(prepared.url), 405, account, "POST");
   });
 
   it("bounds unauthenticated capability lookups before reading persistent state", async () => {
     const { openedStores } = installRuntime();
-    const account = createAccount();
-    const prepared = await prepareSynologyHostedMedia({
-      account,
-      mediaUrl: "https://files.example.com/report.pdf",
-    });
+    const prepared = await prepare(account, "https://files.example.com/report.pdf");
     const metadataStore = openedStores[0];
     if (!metadataStore) {
       throw new Error("expected hosted media metadata store");
     }
     const originalLookup = metadataStore.lookup.bind(metadataStore);
-    let releaseReads: (() => void) | undefined;
-    const readGate = new Promise<void>((resolve) => {
-      releaseReads = resolve;
-    });
+    const { promise: readGate, resolve: releaseReads } = Promise.withResolvers<void>();
     const lookupSpy = vi.spyOn(metadataStore, "lookup").mockImplementation(async (key) => {
       await readGate;
       return await originalLookup(key);
@@ -431,17 +361,10 @@ describe("Synology Chat hosted outbound media", () => {
     capability.searchParams.set(tokenKey, "wrong");
     const requestUrl = `${capability.pathname}${capability.search}`;
     const responses = Array.from({ length: 5 }, () => makeRes());
-    const requests = responses.map((response) =>
-      tryHandleSynologyHostedMediaRequest(
-        makeReq("GET", "", { url: requestUrl }),
-        response,
-        account,
-      ),
-    );
-
+    const requests = responses.map((response) => serve(requestUrl, response, account));
     await vi.waitFor(() => expect(lookupSpy).toHaveBeenCalledTimes(4));
     expect(responses.filter((response) => response.statusCode === 503)).toHaveLength(1);
-    releaseReads?.();
+    releaseReads();
     await expect(Promise.all(requests)).resolves.toEqual([true, true, true, true, true]);
     expect(responses.map((response) => response.statusCode).toSorted((a, b) => a - b)).toEqual([
       401, 401, 401, 401, 503,
@@ -449,40 +372,12 @@ describe("Synology Chat hosted outbound media", () => {
   });
 
   it("holds serving slots until responses finish or close", async () => {
-    const account = createAccount();
-    const prepared = await prepareSynologyHostedMedia({
-      account,
-      mediaUrl: "https://files.example.com/report.pdf",
-    });
-    const requestUrl = internalCapabilityUrl(prepared.url);
+    const requestUrl = await stageUrl();
     const stalled = Array.from({ length: 4 }, () => makeRes({ finishOnEnd: false }));
-    await Promise.all(
-      stalled.map((response) =>
-        tryHandleSynologyHostedMediaRequest(
-          makeReq("GET", "", { url: requestUrl }),
-          response,
-          account,
-        ),
-      ),
-    );
-
-    const blocked = makeRes();
-    await tryHandleSynologyHostedMediaRequest(
-      makeReq("GET", "", { url: requestUrl }),
-      blocked,
-      account,
-    );
-    expect(blocked.statusCode).toBe(503);
-
+    await Promise.all(stalled.map((response) => serve(requestUrl, response, account)));
+    await expectStatus(requestUrl, 503);
     stalled[0]?.emit("finish");
-    const admitted = makeRes();
-    await tryHandleSynologyHostedMediaRequest(
-      makeReq("GET", "", { url: requestUrl }),
-      admitted,
-      account,
-    );
-    expect(admitted.statusCode).toBe(200);
-
+    await expectStatus(requestUrl, 200);
     for (const response of stalled.slice(1)) {
       response.emit("close");
     }
@@ -494,36 +389,16 @@ describe("Synology Chat hosted outbound media", () => {
     const previous = makeRes({ finishOnEnd: false });
     const current = Array.from({ length: 4 }, () => makeRes({ finishOnEnd: false }));
     try {
-      const account = createAccount();
-      const prepared = await prepareSynologyHostedMedia({
-        account,
-        mediaUrl: "https://files.example.com/report.pdf",
-      });
-      const requestUrl = internalCapabilityUrl(prepared.url);
-      await tryHandleSynologyHostedMediaRequest(
-        makeReq("GET", "", { url: requestUrl }),
-        previous,
-        account,
-      );
+      const requestUrl = await stageUrl();
+      await serve(requestUrl, previous, account);
       expect(previous.statusCode).toBe(200);
       installRuntime();
       for (const response of current) {
-        await tryHandleSynologyHostedMediaRequest(
-          makeReq("GET", "", { url: requestUrl }),
-          response,
-          account,
-        );
+        await serve(requestUrl, response, account);
         expect(response.statusCode).toBe(200);
       }
       previous.emit("finish");
-
-      const blocked = makeRes();
-      await tryHandleSynologyHostedMediaRequest(
-        makeReq("GET", "", { url: requestUrl }),
-        blocked,
-        account,
-      );
-      expect(blocked.statusCode).toBe(503);
+      await expectStatus(requestUrl, 503);
     } finally {
       previous.emit("close");
       for (const response of current) {
@@ -537,134 +412,68 @@ describe("Synology Chat hosted outbound media", () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_700_000_000_000);
     installRuntime();
-    const account = createAccount();
-    const prepared = await prepareSynologyHostedMedia({
-      account,
-      mediaUrl: "https://files.example.com/report.pdf",
-    });
-    const requestUrl = internalCapabilityUrl(prepared.url);
+    const requestUrl = await stageUrl();
     const stalled = makeRes({ finishOnEnd: false });
-    await tryHandleSynologyHostedMediaRequest(
-      makeReq("GET", "", { url: requestUrl }),
-      stalled,
-      account,
-    );
-
+    await serve(requestUrl, stalled, account);
     await vi.advanceTimersByTimeAsync(2 * 60_000);
     expect(stalled.destroyed).toBe(true);
-
-    const admitted = makeRes();
-    await tryHandleSynologyHostedMediaRequest(
-      makeReq("GET", "", { url: requestUrl }),
-      admitted,
-      account,
-    );
-    expect(admitted.statusCode).toBe(200);
+    await expectStatus(requestUrl, 200);
   });
 
   it("starts the response deadline before persisted metadata can stall", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_700_000_000_000);
     const { openedStores } = installRuntime();
-    const account = createAccount();
-    const prepared = await prepareSynologyHostedMedia({
-      account,
-      mediaUrl: "https://files.example.com/report.pdf",
-    });
+    const prepared = await prepare(account, "https://files.example.com/report.pdf");
     const metadataStore = openedStores[0];
     if (!metadataStore) {
       throw new Error("expected hosted media metadata store");
     }
     const lookup = metadataStore.lookup.bind(metadataStore);
-    let markLookupStarted: (() => void) | undefined;
-    let releaseLookup: (() => void) | undefined;
-    const lookupStarted = new Promise<void>((resolve) => {
-      markLookupStarted = resolve;
-    });
-    const lookupGate = new Promise<void>((resolve) => {
-      releaseLookup = resolve;
-    });
+    const { promise: lookupStarted, resolve: markLookupStarted } = Promise.withResolvers<void>();
+    const { promise: lookupGate, resolve: releaseLookup } = Promise.withResolvers<void>();
     vi.spyOn(metadataStore, "lookup").mockImplementationOnce(async (key) => {
-      markLookupStarted?.();
+      markLookupStarted();
       await lookupGate;
       return await lookup(key);
     });
     const response = makeRes({ finishOnEnd: false });
-    const pending = tryHandleSynologyHostedMediaRequest(
-      makeReq("GET", "", { url: internalCapabilityUrl(prepared.url) }),
-      response,
-      account,
-    );
-
+    const pending = serve(internalCapabilityUrl(prepared.url), response, account);
     await lookupStarted;
     await vi.advanceTimersByTimeAsync(2 * 60_000);
     expect(response.statusCode).toBe(504);
     expect(Buffer.from(response.body).toString("utf8")).toBe("Attachment response timed out");
-    releaseLookup?.();
+    releaseLookup();
     await expect(pending).resolves.toBe(true);
     expect(response.statusCode).toBe(504);
   });
 
   it("bounds repeated authenticated downloads without charging HEAD requests", async () => {
     const { openedStores } = installRuntime();
-    loadWebMediaMock.mockResolvedValueOnce({
-      buffer: Buffer.alloc(32 * 1024 * 1024, 0x61),
-      kind: undefined,
-      contentType: "application/pdf",
-      fileName: "report.pdf",
-    });
-    const account = createAccount();
-    const prepared = await prepareSynologyHostedMedia({
-      account,
-      mediaUrl: "https://files.example.com/report.pdf",
-    });
-    const requestUrl = internalCapabilityUrl(prepared.url);
+    mockPdf(Buffer.alloc(32 * 1024 * 1024, 0x61));
+    const requestUrl = await stageUrl();
     const chunkStore = openedStores[1];
     if (!chunkStore) {
       throw new Error("expected hosted media chunk store");
     }
     const chunkReads = trackChunkReads(chunkStore);
-
     for (let index = 0; index < 4; index += 1) {
-      const response = makeRes();
-      await tryHandleSynologyHostedMediaRequest(
-        makeReq("GET", "", { url: requestUrl }),
-        response,
-        account,
-      );
+      const response = await get(requestUrl);
       expect(response.statusCode).toBe(200);
       await Promise.resolve();
     }
     const chunkReadsAtLimit = chunkReads();
     expect(chunkReadsAtLimit).toBeGreaterThan(0);
-
-    const head = makeRes();
-    await tryHandleSynologyHostedMediaRequest(
-      makeReq("HEAD", "", { url: requestUrl }),
-      head,
-      account,
-    );
-    expect(head.statusCode).toBe(200);
-
-    const limited = makeRes();
-    await tryHandleSynologyHostedMediaRequest(
-      makeReq("GET", "", { url: requestUrl }),
-      limited,
-      account,
-    );
+    await expectStatus(requestUrl, 200, account, "HEAD");
+    const limited = await get(requestUrl);
     expect(limited.statusCode).toBe(429);
     expect(limited.headers["retry-after"]).toBe("60");
     expect(chunkReads()).toBe(chunkReadsAtLimit);
   });
 
   it("persists frozen capabilities across plugin-state reopen and runtime replacement", async () => {
-    const account = createAccount();
-    const prepared = await prepareSynologyHostedMedia({
-      account,
-      mediaUrl: "https://files.example.com/floor-plan.png",
-    });
+    const prepared = await prepare(account, "https://files.example.com/floor-plan.png");
     const requestUrl = internalCapabilityUrl(prepared.url);
-
     resetPluginStateStoreForTests();
     installRuntime();
     loadWebMediaMock.mockResolvedValueOnce({
@@ -673,13 +482,7 @@ describe("Synology Chat hosted outbound media", () => {
       contentType: "image/png",
       fileName: "changed.png",
     });
-    const response = makeRes();
-    await tryHandleSynologyHostedMediaRequest(
-      makeReq("GET", "", { url: requestUrl }),
-      response,
-      account,
-    );
-
+    const response = await get(requestUrl);
     expect(response.statusCode).toBe(200);
     expect(Buffer.from(response.body).toString("utf8")).toBe("frozen-image-bytes");
     expect(loadWebMediaMock).toHaveBeenCalledTimes(1);
@@ -693,163 +496,67 @@ describe("Synology Chat hosted outbound media", () => {
       contentType: "image/svg+xml",
       fileName: "active.svg",
     });
-    await expect(
-      prepareSynologyHostedMedia({
-        account: createAccount(),
-        mediaUrl: "https://files.example.com/active.svg",
-      }),
-    ).rejects.toThrow("do not support active content type");
+    await expect(prepare(account, "https://files.example.com/active.svg")).rejects.toThrow(
+      "do not support active content type",
+    );
     await expect(
       Promise.all(openedStores.map(async (store) => await store.entries())),
     ).resolves.toEqual([[], []]);
     expect(getRegisterCallCount()).toBe(0);
   });
 
-  it.each([
-    {
-      name: "XML-prefixed SVG bytes with generic metadata",
-      buffer: Buffer.from('<?xml version="1.0"?><!--fixture--><svg onload="alert(1)"/>'),
-      contentType: "application/octet-stream",
-      fileName: "diagram.bin",
+  const generic = ["application/octet-stream", "diagram.bin"] as const;
+  const passive = ["image/png", "photo.png"] as const;
+  it.each<[string, Buffer, string?, string?]>([
+    [
+      "XML prefix",
+      Buffer.from('<?xml version="1.0"?><!--fixture--><svg onload="alert(1)"/>'),
+      ...generic,
+    ],
+    [
+      "SVG doctype",
+      Buffer.from('<!DOCTYPE svg><svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"/>'),
+      ...generic,
+    ],
+    [
+      "long wrappers",
+      Buffer.from(`${" ".repeat(5_000)}${"<!--fixture-->".repeat(6)}<svg onload="alert(1)"/>`),
+      ...generic,
+    ],
+    ["UTF-16LE HTML", utf16Buffer("<script>alert('active')</script>", "le"), ...passive],
+    ["UTF-16BE SVG", utf16Buffer('  <!--fixture--><svg onload="alert(1)"/>', "be"), ...passive],
+    ["BOM-less UTF-16LE", utf16Buffer('<img src="x" onerror="alert(1)">', "le", false)],
+    [
+      "BOM-less UTF-16BE",
+      utf16Buffer("  <div><script>alert('active')</script></div>", "be", false),
+    ],
+    ["BOM-less UTF-32LE", utf32Buffer('<embed src="data:text/html,active">', "le", false)],
+    ["UTF-32BE SVG", utf32Buffer('<svg onload="alert(1)"/>', "be"), ...passive],
+    ["abrupt comment", Buffer.from("<!--><script>alert('active')</script>")],
+    ["comment-start-dash", Buffer.from("<!---><script>alert('active')</script>")],
+    ["incorrect comment close", Buffer.from("<!--fixture--!><script>alert('active')</script>")],
+    ["active filename", Buffer.from("not markup"), "application/octet-stream", "report.html"],
+  ])(
+    "rejects %s",
+    async (_name, buffer, contentType = "application/octet-stream", fileName = "document.bin") => {
+      mockMedia(buffer, contentType, fileName);
+      await expect(prepare(account, "https://files.example.com/disguised-content")).rejects.toThrow(
+        "do not support active content type",
+      );
     },
-    {
-      name: "SVG doctype bytes with generic metadata",
-      buffer: Buffer.from(
-        '<!DOCTYPE svg><svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"/>',
-      ),
-      contentType: "application/octet-stream",
-      fileName: "diagram.bin",
-    },
-    {
-      name: "SVG bytes beyond long whitespace and repeated wrappers",
-      buffer: Buffer.from(
-        `${" ".repeat(5_000)}${"<!--fixture-->".repeat(6)}<svg onload="alert(1)"/>`,
-      ),
-      contentType: "application/octet-stream",
-      fileName: "diagram.bin",
-    },
-    {
-      name: "UTF-16LE HTML bytes with passive metadata",
-      buffer: utf16Buffer("<script>alert('active')</script>", "le"),
-      contentType: "image/png",
-      fileName: "photo.png",
-    },
-    {
-      name: "UTF-16BE SVG bytes with passive metadata",
-      buffer: utf16Buffer('  <!--fixture--><svg onload="alert(1)"/>', "be"),
-      contentType: "image/png",
-      fileName: "photo.png",
-    },
-    {
-      name: "BOM-less UTF-16LE HTML bytes with generic metadata",
-      buffer: utf16Buffer('<img src="x" onerror="alert(1)">', "le", false),
-      contentType: "application/octet-stream",
-      fileName: "document.bin",
-    },
-    {
-      name: "BOM-less UTF-16BE HTML bytes with generic metadata",
-      buffer: utf16Buffer("  <div><script>alert('active')</script></div>", "be", false),
-      contentType: "application/octet-stream",
-      fileName: "document.bin",
-    },
-    {
-      name: "BOM-less UTF-32LE HTML bytes with generic metadata",
-      buffer: utf32Buffer('<embed src="data:text/html,active">', "le", false),
-      contentType: "application/octet-stream",
-      fileName: "document.bin",
-    },
-    {
-      name: "UTF-32BE SVG bytes with passive metadata",
-      buffer: utf32Buffer('<svg onload="alert(1)"/>', "be"),
-      contentType: "image/png",
-      fileName: "photo.png",
-    },
-    {
-      name: "an abruptly closed comment before an active element",
-      buffer: Buffer.from("<!--><script>alert('active')</script>"),
-      contentType: "application/octet-stream",
-      fileName: "document.bin",
-    },
-    {
-      name: "an abruptly closed comment-start-dash before an active element",
-      buffer: Buffer.from("<!---><script>alert('active')</script>"),
-      contentType: "application/octet-stream",
-      fileName: "document.bin",
-    },
-    {
-      name: "an incorrectly closed comment before an active element",
-      buffer: Buffer.from("<!--fixture--!><script>alert('active')</script>"),
-      contentType: "application/octet-stream",
-      fileName: "document.bin",
-    },
-    {
-      name: "an active filename with generic content",
-      buffer: Buffer.from("not markup"),
-      contentType: "application/octet-stream",
-      fileName: "report.html",
-    },
-  ])("rejects $name", async ({ buffer, contentType, fileName }) => {
-    loadWebMediaMock.mockResolvedValueOnce({
-      buffer,
-      kind: undefined,
-      contentType,
-      fileName,
-    });
-    await expect(
-      prepareSynologyHostedMedia({
-        account: createAccount(),
-        mediaUrl: "https://files.example.com/disguised-content",
-      }),
-    ).rejects.toThrow("do not support active content type");
-  });
+  );
 
-  it.each([
-    {
-      name: "BOM-less UTF-32 source text",
-      buffer: utf32Buffer("Example source: <div> is a literal tag.", "le", false),
-    },
-  ])("keeps passive $name containing embedded markup available", async ({ buffer }) => {
-    loadWebMediaMock.mockResolvedValueOnce({
-      buffer,
-      kind: undefined,
-      contentType: "text/plain",
-      fileName: "example.txt",
-    });
-    const account = createAccount();
-    const prepared = await prepareSynologyHostedMedia({
-      account,
-      mediaUrl: "https://files.example.com/example.txt",
-    });
-    const response = makeRes();
-
-    await tryHandleSynologyHostedMediaRequest(
-      makeReq("GET", "", { url: internalCapabilityUrl(prepared.url) }),
-      response,
-      account,
-    );
-
+  it("keeps passive BOM-less UTF-32 source text containing embedded markup available", async () => {
+    const buffer = utf32Buffer("Example source: <div> is a literal tag.", "le", false);
+    mockMedia(buffer, "text/plain", "example.txt");
+    const response = await get(await stageUrl("https://files.example.com/example.txt"));
     expect(response.statusCode).toBe(200);
     expect(Buffer.from(response.body)).toEqual(buffer);
   });
 
   it("sanitizes response filenames before constructing headers", async () => {
-    loadWebMediaMock.mockResolvedValueOnce({
-      buffer: Buffer.from("pdf"),
-      kind: undefined,
-      contentType: "application/pdf",
-      fileName: '../quarter\r\nX-Evil: yes/"plan".pdf',
-    });
-    const account = createAccount();
-    const prepared = await prepareSynologyHostedMedia({
-      account,
-      mediaUrl: "https://files.example.com/report.pdf",
-    });
-    const response = makeRes();
-    await tryHandleSynologyHostedMediaRequest(
-      makeReq("GET", "", { url: internalCapabilityUrl(prepared.url) }),
-      response,
-      account,
-    );
+    mockPdf(Buffer.from("pdf"), '../quarter\r\nX-Evil: yes/"plan".pdf');
+    const response = await get(await stageUrl("https://files.example.com/report.pdf"));
     const disposition = response.headers["content-disposition"] ?? "";
     expect(disposition).toContain("attachment");
     expect(disposition).not.toMatch(/[\r\n]/u);
@@ -860,18 +567,10 @@ describe("Synology Chat hosted outbound media", () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_700_000_000_000);
     installRuntime();
-    const account = createAccount();
-    const prepared = await prepareSynologyHostedMedia({
-      account,
-      mediaUrl: "https://files.example.com/report.pdf",
-    });
+    const prepared = await prepare(account, "https://files.example.com/report.pdf");
     vi.setSystemTime(1_700_000_000_000 + 10 * 60_000 + 1);
     const response = makeRes();
-    await tryHandleSynologyHostedMediaRequest(
-      makeReq("GET", "", { url: internalCapabilityUrl(prepared.url) }),
-      response,
-      account,
-    );
+    await serve(internalCapabilityUrl(prepared.url), response, account);
     expect(response.statusCode).toBe(404);
     expect(loadWebMediaMock).toHaveBeenCalledTimes(1);
   });

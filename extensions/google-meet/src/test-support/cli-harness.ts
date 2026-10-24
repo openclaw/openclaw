@@ -1,12 +1,10 @@
 import { Command } from "commander";
 import * as gatewayRuntime from "openclaw/plugin-sdk/gateway-runtime";
-import { afterEach, expect, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, expect, vi } from "vitest";
 import { registerGoogleMeetCli } from "../cli.js";
 import { resolveGoogleMeetConfig } from "../config.js";
 import type { GoogleMeetRuntime } from "../runtime.js";
-import { meetApiFixtures } from "./fixtures.test-helpers.js";
-
-export { captureStdout } from "./fixtures.test-helpers.js";
+import { captureStdout, meetApiFixtures } from "./fixtures.test-helpers.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -27,20 +25,52 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
   };
 });
 
-export function expectFields(value: unknown, expected: Record<string, unknown>): void {
-  expect(value).toMatchObject(expected);
-}
-
-export function parseStdoutJson(stdout: { output: () => string }): Record<string, unknown> {
-  return JSON.parse(stdout.output()) as Record<string, unknown>;
+export function useCli() {
+  let stdout: ReturnType<typeof captureStdout>;
+  beforeEach(() => {
+    stdout = captureStdout();
+  });
+  afterEach(() => {
+    stdout.restore();
+    vi.unstubAllGlobals();
+    process.exitCode = undefined;
+  });
+  afterAll(() => {
+    vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
+    vi.resetModules();
+  });
+  return {
+    run: async (args: string[], params: Parameters<typeof setupCli>[0] = {}) => {
+      stdout.restore();
+      stdout = captureStdout();
+      await setupCli(params).parseAsync(["googlemeet", ...args], { from: "user" });
+    },
+    output: () => stdout.output(),
+    json: (): Record<string, unknown> => JSON.parse(stdout.output()),
+  };
 }
 
 export function jsonResponse(value: unknown): Response {
   return Response.json(value);
 }
 
-export function requestUrl(input: RequestInfo | URL): URL {
+function requestUrl(input: RequestInfo | URL): URL {
   return new URL(typeof input === "string" || input instanceof URL ? input : input.url);
+}
+
+export function expectText(text: string, ...parts: string[]) {
+  for (const part of parts) {
+    expect(text).toContain(part);
+  }
+}
+
+export function stubJsonRoutes(routes: Record<string, unknown>) {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+    const response = routes[requestUrl(input).href];
+    return response ? jsonResponse(response) : new Response("not found", { status: 404 });
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
 }
 
 export function stubMeetArtifactsApi(

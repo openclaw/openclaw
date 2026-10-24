@@ -1,4 +1,40 @@
-import { createEffect, createMemo, onSettled } from "solid-js";
+import { Errored, createEffect, createMemo, createSignal, onSettled } from "solid-js";
+
+/** Read through to the synchronous owner; notifications invalidate without copying its state. */
+export function observeSource(read, subscribe) {
+  const [revision, setRevision] = createSignal(0);
+  onSettled(() => subscribe(() => setRevision((value) => value + 1)));
+  return {
+    revision,
+    read: () => {
+      revision();
+      return read();
+    },
+  };
+}
+
+export function CatalogBoundary(props) {
+  return (
+    <Errored
+      fallback={(_error, reset) => (
+        <div class="error" role="alert">
+          Unable to render component.{" "}
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              reset();
+            }}
+          >
+            Retry
+          </button>
+        </div>
+      )}
+    >
+      {props.children}
+    </Errored>
+  );
+}
 
 export const catalogAlignment = (value) =>
   ({

@@ -196,11 +196,25 @@ it("mirrors the published opener palette only while PiP is open", async () => {
 
 it("reports denial without disrupting the connection and permits a retry", async () => {
   const f = await setup("denied");
-  f.button().click();
+  const button = f.button();
+  const surface = f.panel.querySelector(".desktop-surface");
+  button.click();
+  button.click();
+  expect(f.requestWindow).toHaveBeenCalledOnce();
   await waitForSolid(() => expect(f.alert()?.textContent).toContain("Check browser permissions"));
   expect(f.button().disabled).toBe(false);
+  expect(f.button()).toBe(button);
+  expect(f.panel.querySelector(".desktop-surface")).toBe(surface);
+  const retry = createDeferred<Window>();
+  f.requestWindow.mockImplementationOnce(() => retry.promise);
   f.button().click();
   expect([f.requestWindow.mock.calls.length, f.disconnect.mock.calls.length]).toEqual([2, 0]);
+  await waitForSolid(() => {
+    expect(f.alert()).toBeNull();
+    expect(button.disabled).toBe(true);
+  });
+  retry.reject(new DOMException("denied", "NotAllowedError"));
+  await waitForSolid(() => expect(f.alert()?.textContent).toContain("Check browser permissions"));
 });
 
 type Fixture = Awaited<ReturnType<typeof setup>>;
@@ -248,6 +262,7 @@ it("closes an active mirror on disconnect and stops failed frame copies instead 
   });
   f.tick(0);
   expect([f.popup.closed, f.frames.size, f.disconnect.mock.calls.length]).toEqual([true, 0, 0]);
+  await waitForSolid(() => expect(f.alert()?.textContent).toContain("Check browser permissions"));
   f.popup.closed = false;
   f.drawImage.mockReset();
   await f.panel.updateComplete;

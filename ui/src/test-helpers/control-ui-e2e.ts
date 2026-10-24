@@ -16,6 +16,7 @@ import type {
   SessionsDiffResult,
 } from "../../../packages/gateway-protocol/src/schema/sessions.ts";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
+import type { ControlUiBootstrapConfig } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-contract.js";
 import { controlUiPluginAssetRoot } from "../../../src/gateway/control-ui-plugin-assets-contract.js";
 import type {
@@ -28,6 +29,7 @@ import type { ControlUiReadiness } from "../app/control-ui-readiness.ts";
 import { normalizeControlUiBuildInfo } from "../build-info-normalizers.ts";
 import type { ControlUiBuildInfo } from "../build-info.ts";
 import { createControlUiAttachmentFacts } from "./control-ui-attachment-fixtures.ts";
+import { buildControlUiMockBootstrapConfig } from "./control-ui-bootstrap-fixture.ts";
 import { createControlUiE2eBuildPublication } from "./control-ui-e2e-build-publication.ts";
 import type {
   ControlUiMockGateway,
@@ -247,9 +249,11 @@ const require = createRequire(import.meta.url);
 const json5EsmPath = require.resolve("json5/dist/index.mjs");
 const json5BrowserSource = readFileSync(require.resolve("json5/dist/index.min.js"), "utf8");
 
+export { installControlUiMockBootstrapDocument } from "./control-ui-bootstrap-fixture.ts";
 export { defaultControlUiFeatureMethods } from "./control-ui-e2e-defaults.ts";
 
 export type ControlUiMockGatewayScenario = {
+  bootstrapPreferences?: ControlUiBootstrapConfig["preferences"];
   /** Auto-wait for sidebar rosters unless startup is held or connect fails; true overrides those skips, false disables the wait. */
   awaitInitialRoster?: boolean;
   nativePlugins?: readonly NativeControlUiPluginFixture[];
@@ -369,8 +373,12 @@ export type ControlUiMockGatewayScenario = {
 };
 
 type NormalizedControlUiMockGatewayScenario = Required<
-  Omit<ControlUiMockGatewayScenario, "nativePlugins" | "awaitInitialRoster">
->;
+  Omit<
+    ControlUiMockGatewayScenario,
+    "nativePlugins" | "awaitInitialRoster" | "bootstrapPreferences"
+  >
+> &
+  Pick<ControlUiMockGatewayScenario, "bootstrapPreferences">;
 
 const DEFAULT_MOCK_MAX_PAYLOAD_BYTES = 25 * 1024 * 1024;
 const DEFAULT_MOCK_ATTACHMENT_MAX_BYTES = Math.floor(
@@ -664,6 +672,49 @@ export async function buildProductionControlUiE2e(
   }
 }
 
+export async function refreshProductionControlUiE2e(
+  outDir: string,
+  buildId: string,
+): Promise<void> {
+  // Refresh release identity in a caller-owned copy without recompiling its assets.
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    NODE_ENV: "production",
+    OPENCLAW_CONTROL_UI_BUILD_ID: buildId,
+  };
+  for (const key of Object.keys(env)) {
+    if (key.startsWith("VITEST")) {
+      delete env[key];
+    }
+  }
+  const result = spawnSync(
+    process.execPath,
+    [
+      "--import",
+      "tsx",
+      "--input-type=module",
+      "--eval",
+      `const { refreshControlUiBuildOutput, resolveControlUiBuildInfo } =
+await import(process.argv[1]);
+await refreshControlUiBuildOutput(process.argv[2], resolveControlUiBuildInfo());`,
+      new URL("../../vite.config.ts", import.meta.url).href,
+      outDir,
+    ],
+    {
+      cwd: path.join(resolveRepoRoot(), "ui"),
+      encoding: "utf8",
+      env,
+      stdio: ["ignore", "inherit", "pipe"],
+      maxBuffer: 10 * 1024 * 1024,
+    },
+  );
+  if (result.status !== 0) {
+    throw new Error(
+      `Production Control UI identity refresh failed (exit ${result.status ?? "unknown"}):\n${result.stderr || result.error?.message || "See streamed build output above."}`,
+    );
+  }
+}
+
 async function runProductionControlUiBuild(
   outDir: string,
   options: ControlUiE2eBuildOptions = {},
@@ -772,6 +823,7 @@ function normalizeScenario(
       ? basePathWithSlash.slice(0, -1)
       : basePathWithSlash;
   return {
+    bootstrapPreferences: scenario.bootstrapPreferences,
     pluginAssetsRequireAuth: scenario.pluginAssetsRequireAuth ?? true,
     attachmentMaxBytes: scenario.attachmentMaxBytes ?? DEFAULT_MOCK_ATTACHMENT_MAX_BYTES,
     automaticallyFetchFavicons: scenario.automaticallyFetchFavicons ?? false,
@@ -865,34 +917,7 @@ function normalizeScenario(
 }
 
 export function createControlUiMockBootstrapConfig(scenario: ControlUiMockGatewayScenario = {}) {
-  const normalizedScenario = normalizeScenario(scenario);
-  const nativeCatalog = normalizedScenario.methodResponses["plugins.controlUi.list"] as
-    | { plugins?: { pluginId: string }[] }
-    | undefined;
-  return {
-    pluginAssetsRequireAuth: normalizedScenario.pluginAssetsRequireAuth,
-    pluginFrameGrants: (normalizedScenario.pluginAssetsRequireAuth
-      ? (nativeCatalog?.plugins ?? [])
-      : []
-    ).map(({ pluginId }) => ({
-      pluginId,
-      path: `/__openclaw__/plugins/control-ui/${encodeURIComponent(pluginId)}/`,
-      match: "prefix",
-    })),
-    allowExternalEmbedUrls: false,
-    automaticallyFetchFavicons: normalizedScenario.automaticallyFetchFavicons,
-    communityInvite: normalizedScenario.communityInvite,
-    assistantAgentId: normalizedScenario.assistantAgentId,
-    assistantAvatar: "",
-    assistantName: normalizedScenario.assistantName,
-    basePath: normalizedScenario.basePath,
-    devGitBranch: normalizedScenario.devGitBranch || undefined,
-    embedSandbox: "scripts",
-    serverVersion: normalizedScenario.serverVersion,
-    serverBuildId: normalizedScenario.serverBuildId,
-    terminalEnabled: normalizedScenario.terminalEnabled,
-    cliAgentsEnabled: normalizedScenario.cliAgentsEnabled,
-  };
+  return buildControlUiMockBootstrapConfig(normalizeScenario(scenario));
 }
 
 export function createControlUiMockGatewayInitScript(

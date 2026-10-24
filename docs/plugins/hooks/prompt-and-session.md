@@ -65,13 +65,14 @@ Use the phase-specific hooks for new plugins:
   a tool-backed capability and the same turn must be allowed to call that
   tool. See [Authorized prompt
   enrichment](/plugins/hooks/prompt-and-session#authorized-prompt-enrichment).
-- `heartbeat_prompt_contribution`: runs only for heartbeat turns and returns
-  `prependContext` or `appendContext`. Intended for background monitors that
-  need to summarize current state without changing user-initiated turns.
+- `heartbeat_prompt_contribution`: retains its public name for receipt-owned
+  proactive automation jobs and returns `prependContext` or `appendContext`.
+  It adds monitoring context without changing user-initiated turns. It does not
+  run as a generic prompt-preparation hook or create a separate heartbeat turn.
 
 On embedded, CLI, and harness runtime prompt-preparation paths (including
 ACPX, Agents API, Codex, and Copilot), ordering is: drain queued injections →
-`agent_turn_prepare` → heartbeat contribution (if applicable) → ordinary
+`agent_turn_prepare` → ordinary
 `before_prompt_build` → finalized tool policy → authorized prompt enrichment.
 
 For multiple registrations, the first defined provider/model/fallback override and

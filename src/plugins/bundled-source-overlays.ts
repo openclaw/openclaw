@@ -67,7 +67,6 @@ export function isBundledSourceOverlayPath(params: {
 export function listBundledSourceOverlayDirs(params: {
   bundledRoot?: string;
   env?: NodeJS.ProcessEnv;
-  mountPoints?: ReadonlySet<string>;
 }): string[] {
   const env = params.env ?? process.env;
   if (sourceOverlaysDisabled(env) || !params.bundledRoot) {
@@ -85,7 +84,7 @@ export function listBundledSourceOverlayDirs(params: {
     return [];
   }
 
-  const mountPoints = params.mountPoints ?? readLinuxMountPoints();
+  const mountPoints = readLinuxMountPoints();
   const legacyRootMounted = isBundledSourceOverlayPath({
     sourcePath: legacyRoot,
     mountPoints,

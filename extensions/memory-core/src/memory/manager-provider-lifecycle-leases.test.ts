@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { setTimeout as delay } from "node:timers/promises";
+import { setTimeout as delay, setImmediate as yieldToEventLoop } from "node:timers/promises";
 import type { EmbeddingProvider } from "openclaw/plugin-sdk/embedding-providers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
@@ -11,7 +11,10 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { describe, expect, it, vi } from "vitest";
 import * as generationLease from "./manager-index-generation-lease.js";
-import { createManagerIndexFixture } from "./manager-index.test-support.js";
+import {
+  createManagerIndexFixture,
+  holdMemoryTestOperation as hold,
+} from "./manager-index.test-support.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
 
@@ -41,17 +44,6 @@ type LifecycleFields = {
   searchVector: () => Promise<{ results: unknown[]; candidates: unknown[] }>;
   ensureVectorReady: () => Promise<boolean>;
 };
-function hold<T>(value: () => T) {
-  const entered = createDeferred<void>();
-  const gate = createDeferred<void>();
-  const run = async () => {
-    entered.resolve();
-    await gate.promise;
-    return value();
-  };
-  return { entered: entered.promise, release: () => gate.resolve(), run };
-}
-
 describe("memory index", () => {
   const fixture = createManagerIndexFixture({
     getMemorySearchManager,
@@ -59,6 +51,16 @@ describe("memory index", () => {
   });
   const { provider: providerFixture } = fixture;
   const { createConfig: createCfg, getFreshManager, getPersistentManager } = fixture;
+  async function open(
+    params: Parameters<typeof createCfg>[0] = { provider: "openai" },
+    sync = false,
+  ) {
+    const manager = await getPersistentManager(createCfg(params));
+    if (sync) {
+      await manager.sync({ reason: "test" });
+    }
+    return { manager, fields: manager as unknown as LifecycleFields };
+  }
 
   it("keeps an active FTS-only generation stable while fallback activates", async () => {
     const manager = await getFreshManager(
@@ -111,9 +113,7 @@ describe("memory index", () => {
   });
 
   it("waits for admitted provider users before retirement", async () => {
-    const manager = await getPersistentManager(createCfg({ provider: "openai" }));
-    await manager.sync({ reason: "test" });
-    const fields = manager as unknown as LifecycleFields;
+    const { manager, fields } = await open(undefined, true);
     assert.ok(fields.provider, "Expected a test embedding provider");
     const firstQueryGate = hold(() => [1, 0, 0, 0]);
     fields.provider.embed = firstQueryGate.run;
@@ -139,8 +139,7 @@ describe("memory index", () => {
   });
 
   it("uses the leased provider runtime after retirement starts", async () => {
-    const manager = await getPersistentManager(createCfg({ provider: "openai" }));
-    const fields = manager as unknown as LifecycleFields;
+    const { manager, fields } = await open();
     await manager.probeEmbeddingAvailability();
     const provider = fields.provider;
     assert.ok(provider, "Expected a test embedding provider");
@@ -172,21 +171,17 @@ describe("memory index", () => {
   });
 
   it("waits for an admitted search before manager teardown", async () => {
-    const manager = await getPersistentManager(createCfg({ provider: "openai" }));
-    await manager.sync({ reason: "test" });
-    const fields = manager as unknown as LifecycleFields;
+    const { manager, fields } = await open(undefined, true);
     const vectorSearchGate = hold(() => ({ results: [], candidates: [] }));
     fields.searchVector = vectorSearchGate.run;
 
-    const generationReleaseStarted = createDeferred<void>();
-    const generationReleaseGate = createDeferred<void>();
+    const generationRelease = hold(() => {});
     const acquireGeneration = generationLease.acquireMemoryIndexReadGeneration;
     vi.spyOn(generationLease, "acquireMemoryIndexReadGeneration").mockImplementationOnce(
       async (...args) => {
         const release = await acquireGeneration(...args);
         return async () => {
-          generationReleaseStarted.resolve();
-          await generationReleaseGate.promise;
+          await generationRelease.run();
           await release();
         };
       },
@@ -202,15 +197,13 @@ describe("memory index", () => {
       expect(fields).toMatchObject({ closing: true, closed: false });
       expect(providerFixture.providerCloseCalls).toBe(0);
       vectorSearchGate.release();
-      await generationReleaseStarted.promise;
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await generationRelease.entered;
+      await yieldToEventLoop();
       expect(closeSettled).not.toHaveBeenCalled();
       expect(providerFixture.providerCloseCalls).toBe(0);
     } finally {
       vectorSearchGate.release();
-      generationReleaseGate.resolve();
+      generationRelease.release();
       await Promise.allSettled([searchPromise, closePromise]);
     }
 
@@ -220,8 +213,7 @@ describe("memory index", () => {
   });
 
   it("waits for an admitted vector probe before manager teardown", async () => {
-    const manager = await getPersistentManager(createCfg({ provider: "openai" }));
-    const fields = manager as unknown as LifecycleFields;
+    const { manager, fields } = await open();
     const probeGate = hold(() => true);
     fields.ensureVectorReady = probeGate.run;
 
@@ -303,10 +295,10 @@ describe("memory index", () => {
   });
 
   it("fails closed and retries a required primary after a null fallback result", async () => {
-    const cfg = createCfg({ provider: "openai", fallback: "fallback-provider" });
-    const manager = await getPersistentManager(cfg);
-    await manager.sync({ reason: "test" });
-    const fields = manager as unknown as LifecycleFields;
+    const { manager, fields } = await open(
+      { provider: "openai", fallback: "fallback-provider" },
+      true,
+    );
     assert.ok(fields.provider, "Expected a test embedding provider");
     fields.provider.embed = async () => {
       throw new Error("embedding provider failed");
@@ -346,10 +338,7 @@ describe("memory index", () => {
   });
 
   it("keeps concurrent optional searches in FTS mode when shared fallback fails", async () => {
-    const cfg = createCfg({ fallback: "fallback-provider" });
-    const manager = await getPersistentManager(cfg);
-    await manager.sync({ reason: "test" });
-    const fields = manager as unknown as LifecycleFields;
+    const { manager, fields } = await open({ fallback: "fallback-provider" }, true);
     assert.ok(fields.provider, "Expected a test embedding provider");
     fields.provider.embed = async () => {
       throw new Error("embedding provider failed");

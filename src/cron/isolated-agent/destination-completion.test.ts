@@ -39,6 +39,17 @@ import { resolveDeliveryTarget } from "./delivery-target.js";
 type CompletionFixture = Parameters<Parameters<typeof withCompletionFixture>[0]>[0];
 type Conversation = Parameters<typeof readConversationMessages>[0];
 
+function latest(scope: Conversation) {
+  return loadSessionEntryReadOnly({ ...scope, readConsistency: "latest" });
+}
+
+function usePerPeerSessions(params: CompletionFixture["params"]) {
+  params.cfgWithAgentDefaults.session = {
+    ...params.cfgWithAgentDefaults.session,
+    dmScope: "per-channel-peer",
+  };
+}
+
 function resetConversation(
   scope: Conversation,
   sessionId = "replacement-session",
@@ -100,15 +111,13 @@ it("keeps the destination session for a reply to a delivered cron question", () 
     const deliveryStartedAt = Date.now();
     const delivered = await dispatchCronDelivery(params);
     expect(delivered, JSON.stringify(delivered)).toMatchObject({ delivered: true });
-    const entry = loadSessionEntryReadOnly({ ...destination, readConsistency: "latest" });
+    const entry = latest(destination);
     expect(entry).toMatchObject(generation);
     expect(entry?.lastInteractionAt).toBeGreaterThanOrEqual(deliveryStartedAt);
 
     expect(await dispatchCronDelivery(params)).toMatchObject({ delivered: true });
     expect(sendText).toHaveBeenCalledOnce();
-    expect(
-      loadSessionEntryReadOnly({ ...destination, readConsistency: "latest" })?.lastInteractionAt,
-    ).toBe(entry?.lastInteractionAt);
+    expect(latest(destination)?.lastInteractionAt).toBe(entry?.lastInteractionAt);
 
     const reply = await initSessionState({
       cfg: params.cfgWithAgentDefaults,
@@ -194,16 +203,13 @@ it("inherits required sandbox policy from the exact execution source for a new d
       messageId: "sandboxed-report",
     }));
     installCompletionChannel("telegram", { deliveryMode: "direct", sendText });
-    params.cfgWithAgentDefaults.session = {
-      ...params.cfgWithAgentDefaults.session,
-      dmScope: "per-channel-peer",
-    };
+    usePerPeerSessions(params);
     await prepareDelivery(fixture, { mode: "announce", channel: "telegram", to: "12345" });
     setReport(fixture, "Sandboxed report");
 
     expect(await dispatchCronDelivery(params)).toMatchObject({ delivered: true });
     expect(sendText).toHaveBeenCalledOnce();
-    expect(loadSessionEntryReadOnly({ ...destination, readConsistency: "latest" })).toMatchObject({
+    expect(latest(destination)).toMatchObject({
       sandbox: "required",
       createdVia: "cron",
       createdActor: actor,
@@ -225,10 +231,7 @@ it.each(["rejected", "uncertain"] as const)(
           context: { channel: "telegram", to: "67890", accountId: "default", threadId: "12" },
         }),
       });
-      const original = loadSessionEntryReadOnly({
-        ...destination,
-        readConsistency: "latest",
-      });
+      const original = latest(destination);
       const sendText = vi.fn(async () => {
         if (clock) {
           clock.mockReturnValue(Date.now() + 31_000);
@@ -269,9 +272,7 @@ it.each(["rejected", "uncertain"] as const)(
             : { delivered: false },
         );
         expect(sendText).toHaveBeenCalledOnce();
-        expect(loadSessionEntryReadOnly({ ...destination, readConsistency: "latest" })).toEqual(
-          original,
-        );
+        expect(latest(destination)).toEqual(original);
         expect(await readConversationMessages(destination)).toEqual([]);
         expect(await fixture.messages()).toEqual([]);
       } finally {
@@ -301,10 +302,7 @@ it.each(["persistent", "threaded", "stable", "tool-commit-failure", "cross-agent
         sessionKey: destinationKey,
         sessionId: "recipient-session",
       };
-      params.cfgWithAgentDefaults.session = {
-        ...params.cfgWithAgentDefaults.session,
-        dmScope: "per-channel-peer",
-      };
+      usePerPeerSessions(params);
       if (mode === "cross-agent") {
         params.cfgWithAgentDefaults.agents = {
           entries: {
@@ -382,9 +380,7 @@ it.each(["persistent", "threaded", "stable", "tool-commit-failure", "cross-agent
         if (mode === "persistent") {
           expect(await readConversationMessages(destination)).toHaveLength(1);
         } else if (mode !== "cross-agent") {
-          expect(
-            loadSessionEntryReadOnly({ ...destination, readConsistency: "latest" }),
-          ).toBeUndefined();
+          expect(latest(destination)).toBeUndefined();
         }
         expect(await fixture.messages()).toEqual([]);
         return { channel: "telegram", messageId: "notification-message" };
@@ -503,10 +499,7 @@ it.each(["no-route", "silent"] as const)(
       const { params } = fixture;
       const sendText = vi.fn(async () => ({ channel: "telegram", messageId: "unexpected" }));
       installCompletionChannel("telegram", { deliveryMode: "direct", sendText });
-      params.cfgWithAgentDefaults.session = {
-        ...params.cfgWithAgentDefaults.session,
-        dmScope: "per-channel-peer",
-      };
+      usePerPeerSessions(params);
       params.deliveryRequested = true;
       await prepareDelivery(
         fixture,
@@ -536,11 +529,7 @@ it.each(["no-route", "silent"] as const)(
         });
       }
       expect(
-        loadSessionEntryReadOnly({
-          ...fixture.scope,
-          sessionKey: "agent:main:telegram:direct:12345",
-          readConsistency: "latest",
-        }),
+        latest({ ...fixture.scope, sessionKey: "agent:main:telegram:direct:12345" }),
       ).toBeUndefined();
       expect(sendText).not.toHaveBeenCalled();
     }, "isolated"),
@@ -558,10 +547,7 @@ it("delivers into the current destination after resets before send and between r
       lifecycleRevision: "recipient-generation",
       updatedAt: 1,
     });
-    params.cfgWithAgentDefaults.session = {
-      ...params.cfgWithAgentDefaults.session,
-      dmScope: "per-channel-peer",
-    };
+    usePerPeerSessions(params);
     const sendText = vi.fn(async () => ({ channel: "telegram", messageId: "current-message" }));
     installCompletionChannel("telegram", { deliveryMode: "direct", sendText });
     const tts = vi
@@ -577,12 +563,10 @@ it("delivers into the current destination after resets before send and between r
       const result = await dispatchCronDelivery(params);
       expect(sendText).toHaveBeenCalledOnce();
       expect(result).toMatchObject({ delivered: true, deliveryError: undefined });
-      expect(loadSessionEntryReadOnly({ ...destination, readConsistency: "latest" })).toMatchObject(
-        {
-          sessionId: "replacement-session",
-          lifecycleRevision: "replacement-generation",
-        },
-      );
+      expect(latest(destination)).toMatchObject({
+        sessionId: "replacement-session",
+        lifecycleRevision: "replacement-generation",
+      });
       await expectReport(destination, "Report after destination reset");
 
       await resetConversation(
@@ -598,12 +582,10 @@ it("delivers into the current destination after resets before send and between r
         deliveryError: undefined,
       });
       expect(sendText).toHaveBeenCalledTimes(2);
-      expect(loadSessionEntryReadOnly({ ...destination, readConsistency: "latest" })).toMatchObject(
-        {
-          sessionId: "next-recipient-session",
-          lifecycleRevision: "next-recipient-generation",
-        },
-      );
+      expect(latest(destination)).toMatchObject({
+        sessionId: "next-recipient-session",
+        lifecycleRevision: "next-recipient-generation",
+      });
       await expectReport(destination, "Next scheduled report");
       expect(await fixture.messages()).toEqual([]);
     } finally {
@@ -617,10 +599,7 @@ it("rejects implicit current delivery when the creator resets after route resolu
       const { params } = fixture;
       const sendText = vi.fn(async () => ({ channel: "telegram", messageId: "stale-report" }));
       installCompletionChannel("telegram", { deliveryMode: "direct", sendText });
-      params.cfgWithAgentDefaults.session = {
-        ...params.cfgWithAgentDefaults.session,
-        dmScope: "per-channel-peer",
-      };
+      usePerPeerSessions(params);
       await replaceSessionEntry(fixture.scope, {
         ...params.sourceSessionGeneration,
         sessionId: fixture.scope.sessionId,

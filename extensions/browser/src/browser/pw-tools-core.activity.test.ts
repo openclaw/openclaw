@@ -1,26 +1,22 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { expect, it, vi } from "vitest";
 import { DEFAULT_AI_SNAPSHOT_MAX_CHARS, DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS } from "./constants.js";
-import {
-  getPwToolsCoreSessionMocks,
-  installPwToolsCoreTestHooks,
-  setPwToolsCoreCurrentPage,
-} from "./pw-tools-core.test-harness.js";
+import * as harness from "./pw-tools-core.test-harness.js";
 
-installPwToolsCoreTestHooks();
+harness.installPwToolsCoreTestHooks();
 const {
   getConsoleMessagesViaPlaywright: readConsole,
   getNetworkRequestsViaPlaywright: readRequests,
   getPageTextViaPlaywright: readText,
 } = await import("./pw-tools-core.activity.js");
 const target = { cdpUrl: "http://127.0.0.1:18792" };
-const session = getPwToolsCoreSessionMocks();
+const session = harness.getPwToolsCoreSessionMocks();
 
 function installTextPage(
   contents: Record<string, string[]>,
   overrides: { count?: () => Promise<number>; innerText?: () => Promise<string> } = {},
 ) {
-  setPwToolsCoreCurrentPage({
+  harness.setPwToolsCoreCurrentPage({
     locator: (selector: string) => ({
       first: () => ({
         count: async () => (contents[selector]?.length ? 1 : 0),
@@ -85,7 +81,7 @@ it("caps article text at the hard limit", async () => {
 });
 
 it("filters by URL or resource type and clears the full network buffer", async () => {
-  setPwToolsCoreCurrentPage({});
+  harness.setPwToolsCoreCurrentPage({});
   const byUrl = { id: "1", url: "https://x/fetch", resourceType: "document" };
   const byType = { id: "2", url: "https://x/api", resourceType: "fetch" };
   const requests = [byUrl, byType, { id: "3", url: "https://x/logo", resourceType: "image" }];
@@ -102,7 +98,7 @@ it("filters by URL or resource type and clears the full network buffer", async (
 });
 
 it("treats warn as warning priority", async () => {
-  setPwToolsCoreCurrentPage({});
+  harness.setPwToolsCoreCurrentPage({});
   session.ensurePageState.mockReturnValueOnce({
     ...session.ensurePageState(),
     console: ["error", "warning", "info"].map((type) => ({ type, text: type, timestamp: "1" })),

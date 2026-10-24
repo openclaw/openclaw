@@ -118,7 +118,6 @@ function compareQaAgenticParity(
     baselineLabel: baseline,
     candidateSummary,
     baselineSummary,
-    comparedAt: "2026-04-11T00:00:00.000Z",
   });
 }
 
@@ -136,7 +135,7 @@ function expectRuntimeFailure(
   failure: string,
   expected: Record<string, unknown> = {},
 ) {
-  const report = buildQaRuntimeParityReport({ summary, comparedAt: "2026-05-10T00:00:00.000Z" });
+  const report = buildQaRuntimeParityReport({ summary });
   expect(report).toMatchObject({ pass: false, ...expected });
   expect(report.failures).toContain(failure);
   return report;

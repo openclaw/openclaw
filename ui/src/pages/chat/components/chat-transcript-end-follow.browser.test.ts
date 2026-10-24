@@ -120,6 +120,26 @@ async function settleFrames() {
   });
 }
 
+it.each([true, false])(
+  "preserves footer-only resize intent while following: %s",
+  async (following) => {
+    const { host, thread } = following
+      ? await mountFollowingFixture()
+      : await mountEndFollowFixture(200);
+    host.followEnabled = following;
+    if (!following) {
+      await expect.poll(() => thread.scrollTop).toBe(200);
+    }
+    const before = thread.scrollTop;
+    // An asynchronously resized footer changes padding without rendering transcript rows.
+    host.viewportPadding = 69;
+    thread.parentElement!.style.paddingBottom = "69px";
+    await expect.poll(() => thread.style.paddingBottom).toBe("69px");
+    await settleFrames();
+    expect(thread.scrollTop).toBe(following ? before + 9 : before);
+  },
+);
+
 async function resizeViewport(host: EndFollowFixture, thread: HTMLElement, height: number) {
   host.viewportHeight = height;
   host.requestRender();
@@ -358,13 +378,15 @@ it("does not turn a resize-clamped reader into permission to follow", async () =
 it("preserves compensation provenance for later native scroll listeners", async () => {
   const { host, thread, extent, distance } = await mountFollowingFixture();
   const readerIdle = new Promise<void>((resolve) => {
-    let moved = false;
+    let sawScrolling = false;
     const unsubscribe = subscribeTranscriptScroll(thread, (observation) => {
-      if (observation.type !== "offset") {
+      // Startup scrolling cannot establish that the later resize clamp is idle.
+      if (observation.type !== "offset" || thread.clientHeight !== 600 || distance() !== 0) {
         return;
       }
-      moved ||= observation.scrolling && observation.delta !== 0;
-      if (moved && !observation.scrolling) {
+      // The clamp receipt can consume the delta before the native observation.
+      sawScrolling ||= observation.scrolling;
+      if (sawScrolling && !observation.scrolling) {
         unsubscribe();
         resolve();
       }
@@ -372,10 +394,12 @@ it("preserves compensation provenance for later native scroll listeners", async 
   });
   await commitTask(host, () => departAndClamp(host, thread));
   await readerIdle;
+  await expect.poll(() => thread.clientHeight).toBe(600);
   await expect.poll(distance).toBe(0);
   await settleFrames();
   expect(host.transcript.isProgrammaticScroll).toBe(false);
 
+  const expectedOffset = thread.scrollTop + 48;
   const observations: Array<{ trusted: boolean; programmatic: boolean }> = [];
   // Mount already installed the offset observer. Native dispatch has no outer
   // JavaScript stack, so microtasks may run before this later listener.
@@ -385,11 +409,11 @@ it("preserves compensation provenance for later native scroll listeners", async 
       programmatic: host.transcript.isProgrammaticScroll,
     });
   });
-  await commitTask(host, () => {
+  await commitScrollTask(host, thread, expectedOffset, () => {
     host.earlierRowHeight += 48;
   });
   await expect.poll(() => extent.offsetHeight).toBe(1348);
-  await expect.poll(() => observations.length).toBeGreaterThan(0);
+  expect(observations.length).toBeGreaterThan(0);
   expect(observations[0]).toEqual({ trusted: true, programmatic: true });
   thread.dispatchEvent(new WheelEvent("wheel", { deltaY: -1 }));
   expect(host.transcript.isProgrammaticScroll).toBe(false);

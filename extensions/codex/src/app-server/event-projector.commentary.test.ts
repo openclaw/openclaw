@@ -26,6 +26,13 @@ function commentaryItem(id: string, text = "") {
   return fixture.message(id, text, "commentary");
 }
 
+function reviewedToolDetails(projector: Awaited<ReturnType<typeof createProjector>>) {
+  const message = fixture
+    .result(projector)
+    .messagesSnapshot.find((entry) => entry.role === "toolResult");
+  return requireRecord(message, "reviewed tool result").details;
+}
+
 describe("CodexAppServerEventProjector text and guardian projection", () => {
   it("keeps intermediate agentMessage items out of the final visible reply", async () => {
     const { onAssistantMessageStart, onPartialReply, projector } =
@@ -184,11 +191,7 @@ describe("CodexAppServerEventProjector text and guardian projection", () => {
       const result = fixture.result(projector);
       expect(result.assistantTexts).toEqual(["final answer"]);
       const commentary = result.messagesSnapshot.find(
-        (message) =>
-          requireRecord(
-            requireRecord(message, "assistant snapshot").openclawStreamFallback ?? {},
-            "commentary fallback",
-          ).itemId === "msg-commentary",
+        (message) => readMirrorIdentity(message) === `${TURN_ID}:commentary:msg-commentary`,
       );
       expect(commentary).toMatchObject({
         role: "assistant",
@@ -263,16 +266,14 @@ describe("CodexAppServerEventProjector text and guardian projection", () => {
   it("pairs a raw commentary echo after an empty typed completion", async () => {
     const { projector, onAgentEvent } = await fixture.observe();
 
-    await fixture.start(projector, fixture.message("msg-commentary", "", "commentary"));
+    await fixture.start(projector, commentaryItem("msg-commentary"));
     await fixture.complete(projector, commentaryItem("msg-commentary"));
     await fixture.rawAssistant(projector, "<oai-mem-citation>source</oai-mem-citation>", {
       id: "msg-commentary",
       phase: "commentary",
     });
 
-    const preambles = fixture.events(onAgentEvent, "item", "preamble");
-
-    expect(preambles).toEqual([]);
+    expect(fixture.events(onAgentEvent, "item", "preamble")).toEqual([]);
 
     await fixture.rawAssistant(projector, "Later raw-only note", { phase: "commentary" });
     await fixture.finish(projector, []);
@@ -395,10 +396,7 @@ describe("CodexAppServerEventProjector text and guardian projection", () => {
       ["cmd-1", "reviewing", true],
       ["cmd-1", "approved", true],
     ]);
-    const toolResult = fixture
-      .result(projector)
-      .messagesSnapshot.find((message) => message.role === "toolResult");
-    expect(requireRecord(toolResult, "reviewed tool result").details).toMatchObject({
+    expect(reviewedToolDetails(projector)).toMatchObject({
       approvalReviews: [{ id: "review-1", status: "approved" }],
       approvalReviewOutcome: "approved",
     });
@@ -465,10 +463,7 @@ describe("CodexAppServerEventProjector text and guardian projection", () => {
     }
     expect(events("tool", "review").at(-1)?.approvalReviewOutcome).toBe("reviewing");
     await send(commandItem("completed", "cmd-many-reviews"));
-    const toolResult = fixture
-      .result(projector)
-      .messagesSnapshot.find((message) => message.role === "toolResult");
-    expect(requireRecord(toolResult, "bounded review tool result").details).toMatchObject({
+    expect(reviewedToolDetails(projector)).toMatchObject({
       approvalReviews: Array.from({ length: 16 }, (_, index) => ({ id: `review-${index + 2}` })),
       approvalReviewOutcome: "approved",
     });

@@ -23,8 +23,12 @@ import { getGatewayExtensionRelayModule } from "../extension-relay.runtime.js";
 import { runExtensionRelayDaemon } from "../relay-daemon.js";
 import { getFreePort } from "../test-port.js";
 import { BROWSER_RELAY_EXTENSION_SUBPROTOCOL } from "./auth-v2.js";
-import { authenticateExtension, authenticateRelayHttp } from "./relay-coexistence.test-support.js";
-import { RawHttpConnection } from "./relay-http.test-support.js";
+import {
+  authenticateExtension,
+  authenticateRelayHttp,
+  maskedFrame,
+  RawHttpConnection,
+} from "./relay-http.test-support.js";
 
 const getPluginRuntimeGatewayRequestScopeMock = vi.hoisted(() => vi.fn());
 vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
@@ -60,18 +64,9 @@ async function relayInventory(port: number): Promise<unknown> {
 
 function encodeUpgradeHead(messages: object[]): Buffer {
   return Buffer.concat(
-    messages.map((message) => {
-      const payload = Buffer.from(JSON.stringify(message));
-      const extended = payload.length >= 126;
-      const header = Buffer.alloc(extended ? 8 : 6);
-      header[0] = 0x81;
-      header[1] = 0x80 | (extended ? 126 : payload.length);
-      if (extended) {
-        header.writeUInt16BE(payload.length, 2);
-      }
-      // The fixed zero mask leaves these synthetic payload bytes unchanged.
-      return Buffer.concat([header, payload]);
-    }),
+    messages.map((message) =>
+      maskedFrame(Buffer.from(JSON.stringify(message)), { mask: Buffer.alloc(4) }),
+    ),
   );
 }
 

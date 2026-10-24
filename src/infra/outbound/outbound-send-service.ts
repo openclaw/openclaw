@@ -7,18 +7,15 @@ import { normalizeConversationReadInvocationOrigin } from "../../channels/plugin
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.public.js";
 import { isChannelPartialDeliveryError } from "../../channels/turn/partial-delivery-error.js";
-import { appendAssistantMessageToSessionTranscript } from "../../config/sessions.js";
-import { getOwnedSessionTranscriptWriterFence } from "../../config/sessions/transcript-write-context.js";
 import {
   normalizeMessagePresentation,
   renderMessagePresentationFallbackText,
 } from "../../interactive/payload.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
-import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
+import { mirrorDeliveredPayloads } from "./deliver-transcript.js";
 import type { NormalizedOutboundPayload } from "./deliver.js";
 import {
   createChannelActionContext,
@@ -28,8 +25,6 @@ import { collectActionMediaSourceHints } from "./message-action-params.js";
 import type { MessagePollResult, MessageSendResult } from "./message.js";
 import { sendMessage, sendPoll } from "./message.js";
 import type { OutboundMirror } from "./mirror.js";
-
-const log = createSubsystemLogger("outbound/send-service");
 
 type OutboundSendContext = Omit<ResolvedActionContext, "mediaAccess"> & {
   mediaAccess?: OutboundMediaAccess;
@@ -212,34 +207,15 @@ export async function executeSendAction(params: SendActionParams): Promise<{
             params.ctx.mirror.mediaUrls ??
             params.mediaUrls ??
             (params.mediaUrl ? [params.mediaUrl] : undefined);
-          try {
-            const writerFence = getOwnedSessionTranscriptWriterFence({
-              sessionKey: params.ctx.mirror.sessionKey,
-            });
-            const mirrorResult = await appendAssistantMessageToSessionTranscript({
-              agentId: params.ctx.mirror.agentId,
-              sessionKey: params.ctx.mirror.sessionKey,
-              expectedSessionId: params.ctx.mirror.expectedSessionId,
-              ...(writerFence?.expectedLifecycleRevision !== undefined
-                ? { expectedLifecycleRevision: writerFence.expectedLifecycleRevision }
-                : {}),
-              ...(writerFence ? { expectedWriterRunId: writerFence.expectedWriterRunId } : {}),
-              text: mirrorText,
-              mediaUrls: mirrorMediaUrls,
-              idempotencyKey: params.ctx.mirror.idempotencyKey,
-              deliveryMirror: params.ctx.mirror.deliveryMirror,
-              config: params.ctx.cfg,
-            });
-            if (!mirrorResult.ok) {
-              log.warn(
-                `failed to mirror plugin-handled delivery; channel send already succeeded: ${mirrorResult.reason}`,
-              );
-            }
-          } catch (error) {
-            log.warn(
-              `failed to mirror plugin-handled delivery; channel send already succeeded: ${formatErrorMessage(error)}`,
-            );
-          }
+          await mirrorDeliveredPayloads({
+            delivery: {
+              cfg: params.ctx.cfg,
+              channel: params.ctx.channel,
+              to: params.to,
+              mirror: params.ctx.mirror,
+            },
+            payloads: [{ text: mirrorText, mediaUrls: mirrorMediaUrls ?? [] }],
+          });
         },
       });
     } catch (error) {

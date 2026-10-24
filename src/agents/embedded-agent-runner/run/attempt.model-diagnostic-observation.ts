@@ -74,7 +74,7 @@ function jsonLength(
       }
       if (!utf8 && promptStringLengths) {
         const fields = promptStringLengths.current.get(this) ?? new Map();
-        fields.set(key, { text: part, chars });
+        fields.set(key, cached?.text === part ? cached : { text: part, chars });
         promptStringLengths.current.set(this, fields);
       }
       stringLengths += chars;

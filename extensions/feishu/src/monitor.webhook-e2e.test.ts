@@ -2,21 +2,24 @@ import crypto from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import { createConnection } from "node:net";
 import * as Lark from "@larksuiteoapi/node-sdk";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resolveRequestClientIp } from "openclaw/plugin-sdk/webhook-ingress";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
+import * as client from "./client.js";
 import { normalizeCompatibilityConfig } from "./doctor-contract.js";
 import { createFeishuRuntimeMockModule } from "./monitor.test-mocks.js";
 import {
   buildWebhookConfig,
   createFeishuWebhookTestAccount,
+  createHeldWebhookDispatch,
+  expectWebhookJson as expectJson,
   getGatewayPort,
   getGatewayServer,
   postSignedPayload,
   sendRawSignedFeishuRequest,
   signFeishuPayload,
   waitForWebhookRoute,
+  waitForWebhookResponseClose,
   withRunningWebhookMonitor,
 } from "./monitor.webhook.test-helpers.js";
 
@@ -77,9 +80,9 @@ vi.mock("./runtime.js", () => createFeishuRuntimeMockModule());
 import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import { buildFeishuWebhookRateLimitKey } from "./monitor-rate-limit-key.js";
 import { cleanupFeishuMonitorStateForTests } from "./monitor.cleanup.test-helpers.js";
-import { monitorFeishuProvider } from "./monitor.js";
+import { monitorFeishuProvider, type FeishuStatusSink } from "./monitor.js";
 import { feishuWebhookRateLimiter } from "./monitor.state.js";
-import { monitorWebhook } from "./monitor.transport.js";
+import { monitorWebhook, monitorWebSocket } from "./monitor.transport.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
 beforeAll(async () => {
@@ -188,11 +191,6 @@ async function expectText(response: Response, status: number, body: string) {
   expect(await response.text()).toBe(body);
 }
 
-async function expectJson(response: Response, value: unknown) {
-  expect(response.status).toBe(200);
-  expect(await response.json()).toEqual(value);
-}
-
 function expectAccepted(response: Response, value: string | null = "durable") {
   expect(response.status).toBe(200);
   expect(response.headers.get("x-openclaw-delivery-accepted")).toBe(value);
@@ -205,6 +203,114 @@ function eventPayload(
 ) {
   return { schema: "2.0", header: { event_type, ...header }, event };
 }
+
+describe("Feishu transport status publishing", () => {
+  let now: number;
+  beforeEach(() => {
+    now = 1_700_000_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+  });
+  afterEach(() => vi.restoreAllMocks());
+  type Patch = Parameters<FeishuStatusSink>[0];
+  type Callbacks = NonNullable<Parameters<typeof client.createFeishuWSClient>[1]>;
+  function expectPatch(actual: Patch | undefined, expected: Patch) {
+    expect(actual).toMatchObject(expected);
+    expect(actual?.lastTransportActivityAt).toBeUndefined();
+  }
+  async function withWsStatus(
+    run: (patches: Patch[], callbacks: Callbacks) => void | Promise<void>,
+    failure?: Error,
+  ) {
+    const patches: Patch[] = [];
+    const abort = new AbortController();
+    let callbacks: Callbacks = {};
+    vi.spyOn(client, "createFeishuWSClient").mockImplementation(async (_account, received) => {
+      if (failure) {
+        throw failure;
+      }
+      callbacks = received ?? {};
+      return { start: vi.fn(async () => undefined), close: vi.fn() } as never;
+    });
+    const account = createFeishuWebhookTestAccount("status");
+    account.config.connectionMode = "websocket";
+    const monitor = monitorWebSocket({
+      account,
+      accountId: "status",
+      abortSignal: abort.signal,
+      eventDispatcher: {} as never,
+      statusSink: (patch) => patches.push(patch),
+    });
+    try {
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      await run(patches, callbacks);
+    } finally {
+      abort.abort();
+      await monitor;
+    }
+  }
+  it("publishes connected state when the WS SDK reports ready or reconnected", async () => {
+    await withWsStatus((patches, callbacks) => {
+      expect(patches).toEqual([]);
+      for (const [index, callback] of [callbacks.onReady, callbacks.onReconnected].entries()) {
+        callback?.();
+        expectPatch(patches[index], {
+          connected: true,
+          lifecycle: "ready",
+          lastConnectedAt: now,
+          lastEventAt: now,
+          lastError: null,
+        });
+        if (index === 0) {
+          expect(patches[0]?.terminalDisconnect).toBeUndefined();
+          now += 1_000;
+        }
+      }
+      now += 1_000;
+      callbacks.onReconnecting?.();
+      expectPatch(patches[2], { connected: false, lifecycle: "recovering", lastEventAt: now });
+    });
+  });
+  it("publishes disconnected when WS handshake throws", async () => {
+    await withWsStatus((patches) => {
+      const disconnected = patches.find((patch) => patch.connected === false);
+      expect(disconnected).toBeDefined();
+      expectPatch(disconnected, { lifecycle: "recovering", lastEventAt: now });
+    }, new Error("boom"));
+  });
+  it("publishes blocked for the SDK terminal WebSocket error", async () => {
+    await withWsStatus(async (patches, callbacks) => {
+      expect(callbacks.onError).toBeTypeOf("function");
+      callbacks.onError?.(new Error("WebSocket reconnect exhausted after 3 attempts"));
+      await vi.waitFor(() =>
+        expect(patches).toContainEqual(
+          expect.objectContaining({
+            connected: false,
+            lifecycle: "blocked",
+            terminalDisconnect: true,
+          }),
+        ),
+      );
+    });
+  });
+  it("publishes connected after Gateway route registration", async () => {
+    const patches: Patch[] = [];
+    await withTransport(
+      "webhook-status",
+      { statusSink: (patch) => patches.push(patch) },
+      async () => {
+        const connected = patches.find((patch) => patch.connected === true);
+        expect(connected).toBeDefined();
+        expectPatch(connected, {
+          lifecycle: "ready",
+          lastConnectedAt: now,
+          lastEventAt: now,
+        });
+      },
+    );
+  });
+});
 
 afterEach(async () => {
   webhookBodyTimeoutMs.value = undefined;
@@ -432,15 +538,13 @@ describe("Feishu webhook signed-request e2e", () => {
   });
 
   it("acks durable envelopes only after ingress admission resolves", async () => {
-    const admission = createDeferred<void>();
-    const invoke = vi.fn(async () => await admission.promise);
-    const invokeWebhookEvent = async () => {
-      await invoke();
-      return { kind: "durable" as const, value: undefined };
-    };
+    const admission = createHeldWebhookDispatch({ kind: "durable" as const, value: undefined });
     await withTransport(
       "durable-ack-ordering",
-      { eventDispatcher: { invoke } as never, invokeWebhookEvent },
+      {
+        eventDispatcher: { invoke: admission.handler } as never,
+        invokeWebhookEvent: admission.handler,
+      },
       async (url) => {
         const payload = eventPayload(
           "im.message.receive_v1",
@@ -452,19 +556,20 @@ describe("Feishu webhook signed-request e2e", () => {
           acceptedResponseReceived = true;
           return response;
         });
-        await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(1));
+        await admission.started;
+        expect(admission.handler).toHaveBeenCalledTimes(1);
         expect(acceptedResponseReceived).toBe(false);
-        admission.resolve();
+        admission.release();
         expectAccepted(await acceptedRequest);
       },
-      () => admission.resolve(),
+      admission.release,
     );
   });
 
   it("filters prototype-bearing keys without changing the Lark webhook envelope", async () => {
     const accountId = "prototype-guard";
     const encryptKey = "encrypt_key";
-    const account = createFeishuWebhookTestAccount(accountId, `/hook-${accountId}`);
+    const account = createFeishuWebhookTestAccount(accountId);
     const handler = vi.fn(async () => ({ accepted: true }));
     const dispatcher = new Lark.EventDispatcher({
       encryptKey,
@@ -583,13 +688,6 @@ function rateLimitKey(clientIp?: string) {
     accountId: "rate-limit-key",
     path: "/hook-rate-limit-key",
     clientIp,
-  });
-}
-
-function waitForWebhookResponseClose(): Promise<void> {
-  const server = getGatewayServer();
-  return new Promise<void>((resolve) => {
-    server.once("request", (_req, res) => res.once("close", resolve));
   });
 }
 
@@ -755,11 +853,11 @@ describe("Feishu webhook security hardening", () => {
 
   it("releases pre-auth capacity before signed event dispatch", { timeout: 15_000 }, async () => {
     preAuthInFlightLimit.value = 1;
-    const dispatchGate = createDeferred<void>();
-    const invokeWebhookEvent = vi.fn(async () => {
-      await dispatchGate.promise;
-      return { kind: "durable" as const, value: { accepted: true } };
+    const dispatch = createHeldWebhookDispatch({
+      kind: "durable" as const,
+      value: { accepted: true },
     });
+    const invokeWebhookEvent = dispatch.handler;
     let signedRequest: Promise<Response> | undefined;
     await withTransport(
       "pre-auth-dispatch",
@@ -767,20 +865,18 @@ describe("Feishu webhook security hardening", () => {
       async (url) => {
         const rawBody = JSON.stringify(eventPayload("test.pre_auth_dispatch"));
         signedRequest = postSigned(url, rawBody);
-        await vi.waitFor(() => expect(invokeWebhookEvent).toHaveBeenCalledOnce(), {
-          timeout: 5_000,
-          interval: 10,
-        });
+        await dispatch.started;
+        expect(invokeWebhookEvent).toHaveBeenCalledOnce();
 
         const admittedInvalidSignature = await postRaw(url, "{}");
         expect(admittedInvalidSignature.status).toBe(401);
         expect(invokeWebhookEvent).toHaveBeenCalledOnce();
 
-        dispatchGate.resolve();
+        dispatch.release();
         expect((await signedRequest).status).toBe(200);
       },
       async () => {
-        dispatchGate.resolve();
+        dispatch.release();
         if (signedRequest) {
           await signedRequest.catch(() => undefined);
         }

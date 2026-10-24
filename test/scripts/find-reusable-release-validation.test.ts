@@ -62,7 +62,6 @@ interface ParentTuple {
 
 interface ChildTuple {
   conclusion: string;
-  policyPassed?: boolean;
   dispatchNonce: string;
   displayTitle: string;
   event: string;
@@ -83,7 +82,6 @@ interface ChildTuple {
 interface NormalizedEvidence {
   children: ChildTuple[];
   conclusions: {
-    allRequiredSucceeded: boolean;
     children: Record<string, string>;
     current: string;
     root: string;
@@ -235,7 +233,6 @@ function normalizedEvidence(options: {
   const npmTelegramRequired =
     !npmBetaCoverage &&
     validationInputs !== null &&
-    !validationInputs.telegramWaiver &&
     Boolean(validationInputs.npmTelegramPackageSpec || validationInputs.releasePackageSpec);
   const manifest = {
     version: 4,
@@ -362,7 +359,6 @@ function normalizedEvidence(options: {
       Object.assign(
         {
           conclusion: "success",
-          policyPassed: true,
           dispatchNonce: `full-release-validation-${runId}-${sourceParentAttempt}${suffix}`,
           displayTitle: `${name} full-release-validation-${runId}-${sourceParentAttempt}${suffix}`,
           event: "workflow_dispatch",
@@ -384,7 +380,6 @@ function normalizedEvidence(options: {
   return {
     children,
     conclusions: {
-      allRequiredSucceeded: true,
       children: Object.fromEntries(children.map((child) => [child.role, child.conclusion])),
       current: "success",
       root: "success",
@@ -799,41 +794,24 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
     });
   });
 
-  it.each(["", "2026.8.1"])(
-    "reuses strict protected-tag evidence with Telegram waiver %j",
-    (version) => {
-      const { priorSha } = getSharedRepo();
-      const trustedWorkflowRef = `release-publish/${VERIFIER_SHA.slice(0, 12)}-456`;
-      const producerRef = `release-ci/${VERIFIER_SHA.slice(0, 12)}-122`;
-      const record = normalizedEvidence({
-        producerSha: VERIFIER_SHA,
-        targetSha: priorSha,
-        trustedWorkflowRef,
-        workflowRef: producerRef,
-        validationInputs: version
-          ? {
-              ...DEFAULT_INPUTS,
-              telegramWaiver: `${version}-owner-approved`,
-              targetVersion: version,
-              releasePackageSpec: `openclaw@${version}`,
-            }
-          : DEFAULT_INPUTS,
-      });
-
-      const result = resolveEvidence(record, {
-        inputs: record.validationInputs,
-        trustedWorkflowRef,
-        verifierOnMain: false,
-        workflowRef: `release-ci/${VERIFIER_SHA.slice(0, 12)}-123`,
-      });
-
-      expect(result.status).toBe(0);
-      expect(parseOutput(result.stdout)).toMatchObject({
-        evidence_run_id: "111",
-        reuse: "true",
-      });
-    },
-  );
+  it("reuses strict evidence from the protected tooling tag", () => {
+    const { priorSha } = getSharedRepo();
+    const trustedWorkflowRef = `release-publish/${VERIFIER_SHA.slice(0, 12)}-456`;
+    const producerRef = `release-ci/${VERIFIER_SHA.slice(0, 12)}-122`;
+    const record = normalizedEvidence({
+      producerSha: VERIFIER_SHA,
+      targetSha: priorSha,
+      trustedWorkflowRef,
+      workflowRef: producerRef,
+    });
+    const result = resolveEvidence(record, {
+      trustedWorkflowRef,
+      verifierOnMain: false,
+      workflowRef: `release-ci/${VERIFIER_SHA.slice(0, 12)}-123`,
+    });
+    expect(result.status).toBe(0);
+    expect(parseOutput(result.stdout)).toMatchObject({ evidence_run_id: "111", reuse: "true" });
+  });
 
   it("reuses strict evidence produced by an ancestor of the protected tooling tag", () => {
     const { priorSha } = getSharedRepo();
@@ -1061,12 +1039,6 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
       },
     },
     {
-      label: "successful child rejected by canonical policy",
-      mutate(record: NormalizedEvidence) {
-        expectDefined(record.children[0], "reusable release child").policyPassed = false;
-      },
-    },
-    {
       label: "extra child role",
       mutate(record: NormalizedEvidence) {
         record.children.push({
@@ -1106,18 +1078,6 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
       expected: "validation inputs differ",
       label: "different lane inputs",
       recordOptions: { validationInputs: { ...DEFAULT_INPUTS, provider: "anthropic" } },
-      resolverOptions: {},
-    },
-    {
-      expected: "validation inputs differ",
-      label: "owner-waived Telegram evidence for an unwaived request",
-      recordOptions: {
-        validationInputs: {
-          ...DEFAULT_INPUTS,
-          telegramWaiver: "2026.8.1-owner-approved",
-          targetVersion: "2026.8.1",
-        },
-      },
       resolverOptions: {},
     },
     {

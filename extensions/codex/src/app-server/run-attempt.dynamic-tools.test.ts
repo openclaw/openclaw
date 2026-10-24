@@ -17,7 +17,11 @@ import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-sna
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { setCodexTestToolFactory } from "./host-capability.test-support.js";
-import type { CodexDynamicToolCallParams } from "./protocol.js";
+import {
+  flattenCodexDynamicToolFunctions,
+  type CodexDynamicToolCallParams,
+  type CodexThreadStartParams,
+} from "./protocol.js";
 import { turnCompleted } from "./protocol.test-helpers.js";
 import {
   bindProductionHarnessHostCapabilitiesForTest,
@@ -53,7 +57,7 @@ function callTool(
 }
 
 async function startTool(
-  tool: ReturnType<typeof createRuntimeDynamicTool>,
+  tool: ReturnType<typeof createRuntimeDynamicTool> | ReturnType<typeof createRuntimeDynamicTool>[],
   {
     harness = createStartedThreadHarness(),
     clock = false,
@@ -68,7 +72,7 @@ async function startTool(
     { runtimePlan: createCodexRuntimePlanFixture() },
     overrides,
   );
-  setCodexTestToolFactory(params, () => [tool]);
+  setCodexTestToolFactory(params, () => (Array.isArray(tool) ? tool : [tool]));
   setCodexTestModelSupportsTools(params, true);
   onTestFinished(await bindProductionHarnessHostCapabilitiesForTest(params));
   if (clock) {
@@ -119,6 +123,63 @@ function observeDiagnostics() {
 setupRunAttemptTestHooks();
 
 describe("runCodexAppServerAttempt dynamic tools", () => {
+  it("enforces Gateway policy on an owner turn's tool declarations and callbacks", async () => {
+    const task = createRuntimeDynamicTool("managed_task");
+    task.parameters = {
+      type: "object",
+      properties: { action: { type: "string", enum: ["read", "write"] } },
+      required: ["action"],
+    };
+    const admin = createRuntimeDynamicTool("gateway");
+    const config = createTestParams().config;
+    const managedConfig = {
+      ...config,
+      tools: {
+        ...config?.tools,
+        gatewayPolicy: { allow: ["managed_task"], actions: { managed_task: ["read"] } },
+      },
+    };
+    setRuntimeConfigSnapshot(managedConfig);
+    const { harness, run } = await startTool([task, admin], {
+      senderIsOwner: true,
+      config: managedConfig,
+      clock: true,
+    });
+    try {
+      await run.waitForTurnAccepted();
+      const start = harness.requests.find(({ method }) => method === "thread/start")
+        ?.params as CodexThreadStartParams;
+      expect(flattenCodexDynamicToolFunctions(start.dynamicTools ?? [])).toMatchObject([
+        { name: "managed_task", inputSchema: { properties: { action: { enum: ["read"] } } } },
+      ]);
+      await expect(callTool(harness, "gateway", "denied-admin")).resolves.toMatchObject({
+        success: false,
+      });
+      for (const [callId, args] of [
+        ["denied-action", { action: "write" }],
+        ["missing-action", {}],
+      ] as const) {
+        await expect(callTool(harness, "managed_task", callId, args)).resolves.toMatchObject({
+          success: false,
+          contentItems: [
+            { type: "inputText", text: expect.stringContaining("Gateway tool policy") },
+          ],
+        });
+      }
+      expect(admin.execute).not.toHaveBeenCalled();
+      expect(task.execute).not.toHaveBeenCalled();
+      await expect(
+        callTool(harness, "managed_task", "allowed-task", { action: "read" }),
+      ).resolves.toMatchObject({ success: true });
+      expect(task.execute).toHaveBeenCalledOnce();
+      await completeRun(harness, run);
+    } finally {
+      harness.close();
+      await run;
+      vi.useRealTimers();
+    }
+  });
+
   it.each<
     [
       string,

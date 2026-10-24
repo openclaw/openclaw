@@ -163,6 +163,7 @@ export function createSpawnBoundaryConfig(
       providers: {
         custom: {
           api: "openai-completions",
+          apiKey: "test-key",
           baseUrl: "https://example.invalid/v1",
           models: [
             {

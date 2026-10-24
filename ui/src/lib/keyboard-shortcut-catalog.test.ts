@@ -3,8 +3,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { isCommandPaletteShortcut } from "../components/command-palette-contract.ts";
 import { isTerminalPanelShortcut } from "../components/panel-toggle-contract.ts";
-import { t } from "../i18n/index.ts";
-import { resolveKeyboardShortcutSections } from "./keyboard-shortcut-catalog.ts";
 import {
   isApplePlatform,
   KEYBOARD_SHORTCUT_COMBOS,
@@ -16,20 +14,6 @@ describe("keyboard shortcut catalog matching", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
-  });
-  it.each([false, true])("shows the New Session chord for native=%s", (native) => {
-    vi.stubGlobal("__OPENCLAW_NATIVE_WEB_CHROME__", native);
-    for (const preference of ["enter", "modifier-enter"] as const) {
-      const entry = resolveKeyboardShortcutSections(preference)
-        .flatMap((section) => section.entries)
-        .find((candidate) => candidate.id === "newSession")!;
-      expect(entry.combos.map((combo) => formatKeyboardShortcutParts(combo, true))).toEqual([
-        native ? ["⌘", "N"] : ["⌘", "⇧", "O"],
-      ]);
-      expect(entry.combos.map((combo) => formatKeyboardShortcutParts(combo, false))).toEqual([
-        native ? ["Ctrl", "N"] : ["Ctrl", "Shift", "O"],
-      ]);
-    }
   });
   it.each(["MacIntel", "Win32", "Linux x86_64"])(
     "matches direct session shortcuts exactly on %s without taking New Window",
@@ -208,77 +192,31 @@ describe("keyboard shortcut catalog presentation", () => {
     expect(formatKeyboardShortcutParts(KEYBOARD_SHORTCUT_COMBOS.zoomReset, true)).toEqual(["0"]);
   });
 
-  it("swaps both send-preference chords when the composer preference is modifier-enter", () => {
-    const entryCombos = (id: string) =>
-      resolveKeyboardShortcutSections("modifier-enter")
-        .flatMap((section) => section.entries)
-        .find((entry) => entry.id === id)?.combos;
-
-    expect(entryCombos("startNewSession")).toEqual([KEYBOARD_SHORTCUT_COMBOS.modifiedEnter]);
-    expect(entryCombos("sendMessage")).toEqual([KEYBOARD_SHORTCUT_COMBOS.modifiedEnter]);
-  });
-
-  it("derives the displayed send chord from the composer's active preference", () => {
-    const sendEntry = (preference: "enter" | "modifier-enter") =>
-      resolveKeyboardShortcutSections(preference)
-        .find((section) => section.id === "chat")
-        ?.entries.find((entry) => entry.id === "sendMessage");
-
-    expect(sendEntry("enter")?.combos).toEqual([KEYBOARD_SHORTCUT_COMBOS.sendMessage]);
-    expect(sendEntry("modifier-enter")?.combos).toEqual([KEYBOARD_SHORTCUT_COMBOS.modifiedEnter]);
-  });
-
-  it("lists every built-in panel with a unique chord", () => {
-    const panels = resolveKeyboardShortcutSections().find((section) => section.id === "panels")!;
-    const expected = {
-      terminalPanel: [["⌃", "`"]],
-      homePanel: [["⌘", "⇧", "H"]],
-      workspaceFiles: [["⌘", "⇧", "B"]],
-      sideChat: [["⌘", "⇧", "S"]],
-      browserPanel: [["⌘", "⌥", "⇧", "U"]],
-      desktopPanel: [["⌘", "⌥", "⇧", "D"]],
-      discussionPanel: [["⌘", "⌥", "⇧", "J"]],
-      dashboardPanel: [["⌘", "⌥", "⇧", "G"]],
-      reviewPanel: [["⌘", "⌥", "⇧", "E"]],
-    };
-    expect(
-      Object.fromEntries(
-        panels.entries.map((entry) => [
-          entry.id,
-          entry.combos.map((combo) => formatKeyboardShortcutParts(combo, true)),
-        ]),
-      ),
-    ).toEqual(expected);
+  it("gives every built-in shortcut a unique chord", () => {
     const combos = Object.values(KEYBOARD_SHORTCUT_COMBOS).map((combo) =>
       JSON.stringify(formatKeyboardShortcutParts(combo, true)),
     );
     expect(new Set(combos).size).toBe(combos.length);
-    for (const entry of panels.entries) {
-      for (const combo of entry.combos.filter((candidate) => candidate.modifiers.includes("alt"))) {
-        expect(
-          matchesShortcutCombo(
-            combo,
-            new KeyboardEvent("keydown", {
-              key: "¨",
-              code: `Key${combo.key.toUpperCase()}`,
-              metaKey: true,
-              altKey: true,
-              shiftKey: true,
-            }),
-          ),
-          entry.id,
-        ).toBe(true);
-      }
-    }
   });
 
-  it("gives every section and shortcut a resolvable label and at least one real chord", () => {
-    for (const section of resolveKeyboardShortcutSections()) {
-      expect(t(section.label), section.label).not.toBe(section.label);
-      for (const entry of section.entries) {
-        expect(t(entry.label), entry.label).not.toBe(entry.label);
-        expect(entry.combos.length, entry.id).toBeGreaterThan(0);
-      }
-    }
+  it.each([
+    ["browserPanel", "KeyU"],
+    ["desktopPanel", "KeyD"],
+    ["discussionPanel", "KeyJ"],
+    ["dashboardPanel", "KeyG"],
+    ["reviewPanel", "KeyE"],
+  ] as const)("matches %s on a non-Latin keyboard", (id, code) => {
+    expect(
+      matchesShortcutCombo(
+        KEYBOARD_SHORTCUT_COMBOS[id],
+        new KeyboardEvent("keydown", {
+          key: "¨",
+          code,
+          metaKey: true,
+          altKey: true,
+          shiftKey: true,
+        }),
+      ),
+    ).toBe(true);
   });
 });

@@ -14,6 +14,7 @@ import {
   resolveAgentRoute,
   resolveThreadSessionKeys,
   buildAgentMainSessionKey,
+  normalizeAgentId,
   sanitizeAgentId,
 } from "openclaw/plugin-sdk/routing";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -227,13 +228,37 @@ export async function touchTelegramConversationRoute(
   await bindings.touchAsync(captured.bindingId, undefined, captured.conversation);
 }
 
-export function resolveTelegramConversationBaseSessionKey(
+function resolveTelegramConversationBaseSessionKey(
   params: Parameters<typeof resolveTelegramNamedAccountBaseSessionKey>[1],
 ): string {
   return resolveTelegramNamedAccountBaseSessionKey(
     resolveDefaultTelegramAccountId(params.cfg),
     params,
   );
+}
+
+/** Outbound DMs reuse inbound binding facts: only an unbound named account is a fallback. */
+export function resolveTelegramOutboundDirectBaseSessionKey(params: {
+  cfg: OpenClawConfig;
+  route: Pick<TelegramResolvedRoute, "agentId" | "accountId" | "sessionKey">;
+  chatId: string;
+}): string {
+  const resolvedRoute = resolveAgentRoute({
+    cfg: params.cfg,
+    channel: "telegram",
+    // Unbound destinations keep the caller's agent instead of requiring a fleet default.
+    defaultAgentId: params.route.agentId,
+    accountId: params.route.accountId,
+    peer: { kind: "direct", id: params.chatId },
+  });
+  const isOwnBinding =
+    normalizeAgentId(resolvedRoute.agentId) === normalizeAgentId(params.route.agentId);
+  return resolveTelegramConversationBaseSessionKey({
+    cfg: params.cfg,
+    route: isOwnBinding ? resolvedRoute : { ...params.route, matchedBy: "default" },
+    chatId: params.chatId,
+    isGroup: false,
+  });
 }
 
 export function resolveTelegramTargetSession(params: {
@@ -252,4 +277,19 @@ export function resolveTelegramTargetSession(params: {
         threadId: `${params.chatId}:${params.dmThreadId}`,
       }).sessionKey
     : baseSessionKey;
+}
+
+/** Route inbound DM-topic and named-account traffic to the same session as its messages. */
+export function applyTelegramTargetSession(
+  params: Parameters<typeof resolveTelegramTargetSession>[0],
+): TelegramResolvedRoute {
+  const sessionKey = resolveTelegramTargetSession(params);
+  return {
+    ...params.route,
+    sessionKey,
+    lastRoutePolicy: deriveLastRoutePolicy({
+      sessionKey,
+      mainSessionKey: params.route.mainSessionKey,
+    }),
+  };
 }

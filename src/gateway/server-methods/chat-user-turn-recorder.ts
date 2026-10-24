@@ -268,7 +268,12 @@ export function createGatewayChatUserTurnController(params: {
                 agentId: session.agentId,
                 sessionKey: session.sessionKey,
                 sourceRunId: session.clientRunId,
-                inputProvenance: request.systemInputProvenance,
+                // Goal Resume is an authenticated operator action even though its
+                // hidden transcript input is marked as an internal system message.
+                inputProvenance:
+                  request.goalOperation?.action === "resume"
+                    ? undefined
+                    : request.systemInputProvenance,
               }),
         })
       : {}),

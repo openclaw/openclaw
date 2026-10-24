@@ -13,6 +13,8 @@ import {
 } from "./workspace-actual-manifest.js";
 import { withWorkspaceHashMemo, workspaceStatIdentity } from "./workspace-hash-memo.js";
 import { MAX_WORKSPACE_INVENTORY_TOTAL_BYTES } from "./workspace-inventory-limits.js";
+import { sha256, workspaceFile } from "./workspace-manifest-fixtures.test-support.js";
+import { writeWorkspaceFiles } from "./workspace-sync-scripts.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
@@ -338,16 +340,14 @@ it("stops an admitted directory enumeration on caller cancellation", async () =>
 
 it("preserves bottom-up directory membership and canonical output across input orders", async () => {
   const root = await fs.realpath(tempDirs.make("workspace-inventory-membership-"));
-  for (const file of [
+  const files = [
     "cache/nested/node_modules/pkg/file.js",
     "mixed/child/keep.txt",
     "mixed/node_modules/pkg/file.js",
     "Zebra.txt",
     "älg.txt",
-  ]) {
-    await fs.mkdir(path.dirname(path.join(root, file)), { recursive: true });
-    await fs.writeFile(path.join(root, file), file);
-  }
+  ];
+  await writeWorkspaceFiles(root, Object.fromEntries(files.map((file) => [file, file])));
   await fs.mkdir(path.join(root, "preserved/node_modules"), { recursive: true });
   await fs.symlink("../outside", path.join(root, "escaping"));
   const included = [
@@ -372,6 +372,7 @@ it("preserves bottom-up directory membership and canonical output across input o
       includePaths: new Set(paths),
       preserveDirectories: new Set(["preserved"]),
     });
+  const opened = vi.spyOn(fs, "opendir");
   const first = await capture(included);
   const reversed = await capture(included.toReversed());
   expect(first.manifest.directories).toEqual(["mixed", "mixed/child", "preserved"]);
@@ -381,6 +382,12 @@ it("preserves bottom-up directory membership and canonical output across input o
     "älg.txt",
   ]);
   expect(reversed).toEqual(first);
+  expect(opened.mock.calls.map(([directory]) => path.relative(root, String(directory)))).toEqual([
+    "cache/nested",
+    "cache",
+    "cache/nested",
+    "cache",
+  ]);
 });
 
 it("reserves aggregate inventory bytes even when every file hits the hash memo", async () => {
@@ -402,6 +409,28 @@ it("reserves aggregate inventory bytes even when every file hits the hash memo",
   expect(metrics).toMatchObject({ contentHashCount: 0, memoHitCount: 1 });
 });
 
+it("opens only changed file content while retaining fresh edits and deletions", async () => {
+  const { root, files, capture } = await inventoryFixture(3);
+  const memo = new Map<string, string>();
+  const read = () => withWorkspaceHashMemo(memo, () => capture());
+  const first = await read();
+  const changed = path.join(root, files[1]!);
+  const before = await fs.stat(changed);
+  await fs.writeFile(changed, "edited");
+  // Size and mtime alone cannot identify a file's contents.
+  await fs.utimes(changed, before.atime, before.mtime);
+  await fs.unlink(path.join(root, files[2]!));
+  const opened = vi.spyOn(fs, "open");
+  const next = await read();
+  expect(next.manifestRef).not.toBe(first.manifestRef);
+  expect(next.manifest.entries.map((entry) => entry.path)).toEqual(files.slice(0, 2));
+  expect(next.manifest.entries[1]).toMatchObject({
+    sha256: createHash("sha256").update("edited").digest("hex"),
+  });
+  expect(opened.mock.calls.some(([file]) => file === path.join(root, files[0]!))).toBe(false);
+  expect(opened.mock.calls.some(([file]) => file === changed)).toBe(true);
+});
+
 it("bounds active fallback scratch across inventories and skips reads on memo hits", async () => {
   vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
   const fixtures = await Promise.all(
@@ -415,13 +444,7 @@ it("bounds active fallback scratch across inventories and skips reads on memo hi
             owner * 32 + index,
           );
           await fs.writeFile(path.join(root, file), bytes);
-          return {
-            path: file,
-            type: "file",
-            mode: 0o644,
-            size: bytes.length,
-            sha256: createHash("sha256").update(bytes).digest("hex"),
-          };
+          return workspaceFile(file, bytes);
         }),
       );
       const memo = new Map<string, string>();
@@ -490,7 +513,7 @@ it.each(["", "\u0000binary\u00ff"])(
     expect(first).toMatchObject({
       type: "file",
       size: expected.length,
-      sha256: createHash("sha256").update(expected).digest("hex"),
+      sha256: sha256(expected),
     });
     expect(second).toEqual(first);
     if (first.type !== "file" || second.type !== "file") {

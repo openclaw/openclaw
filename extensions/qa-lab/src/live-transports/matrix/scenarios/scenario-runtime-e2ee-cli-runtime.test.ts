@@ -31,7 +31,6 @@ const constructors = {
     createMatrixQaCliE2eeSetupRuntime({
       context,
       artifactLabel: "setup",
-      initialConfig: { fixtureToken: "test-config-value" },
     }),
   "self-verification": (context: MatrixQaScenarioContext) =>
     createMatrixQaCliSelfVerificationRuntime({ context, ...account }),
@@ -53,18 +52,17 @@ describe("Matrix CLI construction", () => {
     await fs.mkdir(fixture.tempRoot);
   });
 
-  it.each(["setup", "self-verification"] as const)(
-    "removes the private %s config root after late environment failure while preserving output artifacts",
-    async (name) => {
-      await expect(
-        constructors[name](createMatrixQaE2eeTestContext({ outputDir })),
-      ).rejects.toThrow("require the gateway runtime environment");
-      expect(await fs.readdir(fixture.tempRoot)).toEqual([]);
-      expect((await fs.readdir(outputDir)).length).toBeGreaterThan(0);
-    },
-  );
+  it("removes the private setup root after late environment failure, preserving artifacts", async () => {
+    await expect(constructors.setup(createMatrixQaE2eeTestContext({ outputDir }))).rejects.toThrow(
+      "require the gateway runtime environment",
+    );
+    expect(await fs.readdir(fixture.tempRoot)).toEqual([]);
+    expect((await fs.readdir(outputDir)).length).toBeGreaterThan(0);
+  });
 
-  describe.each(Object.entries(constructors))("%s", (_name, create) => {
+  // Self-verification delegates setup and cleanup to the setup constructor.
+  describe.each(["setup", "recovery"] as const)("%s failures", (name) => {
+    const create = constructors[name];
     it("removes its temp root on an actual filesystem setup failure", async () => {
       await fs.writeFile(outputDir, "not a directory");
       await expect(create(context())).rejects.toMatchObject({ code: "ENOTDIR" });
@@ -82,21 +80,20 @@ describe("Matrix CLI construction", () => {
         errors: [setupFailure, cleanupFailure],
       });
     });
+  });
 
-    it("keeps successful private state until disposal and preserves the artifact directory", async () => {
-      const runtime = await create(context());
+  it.each(["self-verification", "recovery"] as const)(
+    "%s keeps private state until disposal and preserves artifacts",
+    async (name) => {
+      const runtime = await constructors[name](context());
       const privateRoot = path.dirname(runtime.configPath);
       try {
         const config = JSON.parse(await fs.readFile(runtime.configPath, "utf8"));
-        if ("fixtureToken" in config) {
-          expect(config.fixtureToken).toBe("test-config-value");
-        } else {
-          expect(config.channels.matrix.accounts.self).toMatchObject({
-            accessToken: "test-access-token",
-            initialSyncLimit: 0,
-            startupVerification: "off",
-          });
-        }
+        expect(config.channels.matrix.accounts.self).toMatchObject({
+          accessToken: "test-access-token",
+          initialSyncLimit: 0,
+          startupVerification: "off",
+        });
         if (process.platform !== "win32") {
           expect((await fs.stat(privateRoot)).mode & 0o777).toBe(0o700);
           expect((await fs.stat(runtime.configPath)).mode & 0o777).toBe(0o600);
@@ -107,6 +104,6 @@ describe("Matrix CLI construction", () => {
       await expect(fs.stat(privateRoot)).rejects.toMatchObject({ code: "ENOENT" });
       const artifactDir = "rootDir" in runtime ? runtime.rootDir : runtime.artifactDir;
       expect((await fs.stat(artifactDir)).isDirectory()).toBe(true);
-    });
-  });
+    },
+  );
 });

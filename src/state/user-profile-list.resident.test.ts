@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -7,12 +8,23 @@ import {
   closeOpenClawStateDatabaseByPathAsync,
 } from "./openclaw-state-db-cache.js";
 import * as stateReads from "./openclaw-state-db-readonly.js";
+import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
-import { fenceUserProfileMutationAuthority, onUserProfilesChanged } from "./user-profile-events.js";
+import {
+  fenceUserProfileMutationAuthority,
+  onUserProfilesChanged,
+  readUserProfileAliasRevision,
+  readUserProfileVersion,
+} from "./user-profile-events.js";
+import {
+  readUserProfileEmailBindings,
+  readUserProfileSnapshotCommand,
+} from "./user-profile-identity.read.js";
+import { readUserProfileSnapshotSync } from "./user-profile-list-item.test-support.js";
 import * as profiles from "./user-profile-list.js";
 import { getUserProfileDisplaysNative } from "./user-profile-list.native.js";
 import {
@@ -43,7 +55,30 @@ function fixture(filename?: string) {
     residentAliases: (id: string) => profiles.readResidentUserProfileAliases(id, options),
     access: (id: string) => profiles.captureResidentUserProfileAccess(id, options),
     resolve: (id: string) => profiles.resolveUserProfileReference(id, options),
+    bindings: (id: string) =>
+      readUserProfileEmailBindings(openOpenClawStateDatabase(options).db, id)
+        .map(({ bindingId }) => {
+          if (bindingId === null) {
+            throw new Error("Test alias binding was not initialized");
+          }
+          return bindingId;
+        })
+        .toSorted(),
   };
+}
+
+function expectRenewed(
+  actual: readonly string[],
+  retained: readonly string[],
+  retired: readonly string[],
+  added = 1,
+) {
+  expect(actual).toHaveLength(retained.length + added);
+  expect(actual).toEqual(expect.arrayContaining([...retained]));
+  expect(new Set(actual).size).toBe(actual.length);
+  for (const binding of retired) {
+    expect(actual).not.toContain(binding);
+  }
 }
 
 async function prepareIdentity(...args: Parameters<typeof profiles.prepareUserProfileIdentity>) {
@@ -254,14 +289,35 @@ describe("resident profile display and reference catalog", () => {
       setUserProfileRole(first.id, "reader", options);
       expect(prepared.readCurrentProfile()).toEqual({ ...summary, assignedRole: "reader" });
       prepared.readCurrentFacts(bindings);
+      const targetBindings = options.bindings(target.id);
+      let movedBindings: string[] = [];
+      const aliasRevision = readUserProfileAliasRevision();
       if (producer === "email") {
         linkEmail(email, target.id, options);
+        movedBindings = options.bindings(target.id);
+        expectRenewed(movedBindings, targetBindings, selectedBindings);
+        expect(options.bindings(first.id)).toEqual(retainedBindings);
+        expect(options.aliases(first.id)).toEqual(new Set([first.id]));
+        expect(options.aliases(target.id)).toEqual(new Set([target.id]));
         linkEmail(email, first.id, options);
+        expectRenewed(options.bindings(first.id), retainedBindings, [
+          ...selectedBindings,
+          ...movedBindings,
+        ]);
+        expect(options.bindings(target.id)).toEqual(targetBindings);
+        expect(readUserProfileAliasRevision()).toBe(aliasRevision);
       } else if (producer === "github") {
-        syncAccount(options, email, 41, "second-account");
+        const second = syncAccount(options, email, 41, "second-account");
+        expect(second.id).not.toBe(first.id);
+        expect(options.bindings(first.id)).toEqual(retainedBindings);
+        movedBindings = options.bindings(second.id);
+        expectRenewed(movedBindings, [], selectedBindings);
       } else {
-        migrateLegacyTailscaleProfileIdentities(options);
+        expect(migrateLegacyTailscaleProfileIdentities(options).warnings).toEqual([]);
+        expect(options.bindings(first.id)).toEqual(retainedBindings);
+        expect(options.bindings(target.id)).toEqual(targetBindings);
         linkEmail(email, first.id, options);
+        expectRenewed(options.bindings(first.id), retainedBindings, selectedBindings);
       }
       const after = spyOnQueries(options);
       expect(prepared.readCurrentFacts().profile).toEqual({
@@ -276,6 +332,19 @@ describe("resident profile display and reference catalog", () => {
       expect(() => selected.readCurrentFacts(selectedBindings)).toThrow("user profile not found");
       expect(retained.readCurrentFacts(retainedBindings)).toEqual(prepared.readCurrentFacts());
       expect(after).not.toHaveBeenCalled();
+      after.mockRestore();
+      if (producer === "github") {
+        expect(syncAccount(options, email, 40, "first-account").id).toBe(first.id);
+        expectRenewed(options.bindings(first.id), retainedBindings, [
+          ...selectedBindings,
+          ...movedBindings,
+        ]);
+      } else if (producer === "email") {
+        const returned = options.bindings(first.id);
+        closeOpenClawStateDatabaseByPath(options.path);
+        expect(options.bindings(first.id)).toEqual(returned);
+        expect(options.bindings(target.id)).toEqual(targetBindings);
+      }
     },
   );
 
@@ -328,32 +397,99 @@ describe("resident profile display and reference catalog", () => {
       const options = fixture();
       const [first, second, third] = createProfiles(options, "first", "second", "third");
       if (producer === "github") {
+        linkEmail("source-other@example.test", first.id, options);
         syncAccount(options, "second@example.test", 41, "target-profile");
       }
+      const sourceBindings = options.bindings(first.id);
+      const targetBindings = options.bindings(second.id);
       await prepareCatalog(options);
       const merge = () =>
         producer === "email"
           ? linkEmail("first@example.test", second.id, options)
           : syncAccount(options, "first@example.test", 41, "target-profile");
       const seen = vi.fn(() => options.residentAliases(second.id));
-      releases.push(sessionChanges.subscribe(seen));
-      expect(() =>
+      const aliasRevision = readUserProfileAliasRevision();
+      const version = readUserProfileVersion();
+      const published = vi.fn(() => ({
+        aliases: options.aliases(second.id),
+        revision: readUserProfileAliasRevision(),
+      }));
+      releases.push(sessionChanges.subscribe(seen), onUserProfilesChanged(published));
+      const rollback = () =>
         runOpenClawStateWriteTransaction(() => {
           merge();
           setDisplayName(second.id, "Rolled back", options);
           setUserProfileRole(second.id, "rolled-back-role", options);
           expect(options.identity(second.id)?.role).toBeNull();
           expect(options.display(first.id).id).toBe(first.id);
+          expect(options.aliases(second.id)).toEqual(new Set([second.id]));
+          expect(readUserProfileAliasRevision()).toBe(aliasRevision);
+          expect(published).not.toHaveBeenCalled();
           expect(seen).not.toHaveBeenCalled();
           throw new Error("rollback");
-        }, options),
-      ).toThrow("rollback");
-      expect(seen).not.toHaveBeenCalled();
-      expect(options.identity(second.id)?.role).toBeNull();
-      merge();
+        }, options);
+      const expectRollback = () => {
+        expect(rollback).toThrow("rollback");
+        expect(options.bindings(first.id)).toEqual(sourceBindings);
+        expect(options.bindings(second.id)).toEqual(targetBindings);
+        expect(readUserProfileAliasRevision()).toBe(aliasRevision);
+        expect(options.identity(second.id)?.role).toBeNull();
+        expect(published).not.toHaveBeenCalled();
+        expect(seen).not.toHaveBeenCalled();
+      };
+      expectRollback();
+      runOpenClawStateWriteTransaction(expectRollback, options);
+      runOpenClawStateWriteTransaction(() => {
+        merge();
+        expect(options.aliases(second.id)).toEqual(new Set([second.id]));
+        expect(readUserProfileAliasRevision()).toBe(aliasRevision);
+      }, options);
       expect(seen.mock.results.at(-1)?.value).toEqual(new Set([first.id, second.id]));
+      expect(published).toHaveBeenCalledOnce();
+      expect(published.mock.results[0]?.value).toEqual({
+        aliases: new Set([first.id, second.id]),
+        revision: aliasRevision + 1,
+      });
+      expect(readUserProfileVersion()).toBe(version + 1);
+      const mergedBindings = options.bindings(second.id);
+      expectRenewed(mergedBindings, targetBindings, sourceBindings, sourceBindings.length);
+      expect(options.bindings(first.id)).toEqual([]);
+      expect(readUserProfileSnapshotSync(options).profiles).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: first.id, mergedInto: second.id, emails: [] }),
+          expect.objectContaining({ id: second.id, mergedInto: null }),
+        ]),
+      );
+      const emails = [
+        "first@example.test",
+        "second@example.test",
+        ...(producer === "github" ? ["source-other@example.test"] : []),
+      ].toSorted();
+      expect(linkEmail("first@example.test", first.id, options)).toMatchObject({
+        id: second.id,
+        mergedInto: null,
+        emails,
+        hasAvatar: false,
+      });
+      expect(ensureProfileForEmail("first@example.test", options).id).toBe(second.id);
+      expect(options.bindings(second.id)).toEqual(mergedBindings);
+      expect(published).toHaveBeenCalledOnce();
+      expect(readUserProfileAliasRevision()).toBe(aliasRevision + 1);
+      expect(readUserProfileVersion()).toBe(version + 1);
+      expect(options.aliases(first.id)).toEqual(new Set([first.id, second.id]));
       linkEmail("first@example.test", third.id, options);
       linkEmail("second@example.test", third.id, options);
+      if (producer === "github") {
+        linkEmail("source-other@example.test", third.id, options);
+      }
+      expect(readUserProfileAliasRevision()).toBe(aliasRevision + 2);
+      expect(readUserProfileSnapshotSync(options).profiles).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: first.id, mergedInto: third.id, emails: [] }),
+          expect.objectContaining({ id: second.id, mergedInto: third.id }),
+          expect.objectContaining({ id: third.id, mergedInto: null }),
+        ]),
+      );
       const head = { ok: true, value: third.id };
       expect(options.resolve(first.id)).toEqual(head);
       setDisplayName(first.id, "Current person", options);
@@ -378,6 +514,72 @@ describe("resident profile display and reference catalog", () => {
       expect(native).not.toHaveBeenCalled();
     },
   );
+
+  it("keeps aliases stable across cosmetics and same-head GitHub refresh", async () => {
+    const options = fixture();
+    const revision = readUserProfileAliasRevision();
+    const profile = ensureProfileForEmail("cosmetic@aliases.test", options);
+    await prepareCatalog(options);
+    const bindings = options.bindings(profile.id);
+    expect(bindings).toEqual([expect.any(String)]);
+    linkEmail("cosmetic@aliases.test", profile.id, options);
+    setDisplayName(profile.id, "Updated name", options);
+    expect(setAvatar(profile.id, new Uint8Array([1]), "image/png", options).ok).toBe(true);
+    syncAccount(options, "cosmetic@aliases.test", 123, "verified-profile");
+    syncAccount(options, "cosmetic@aliases.test", 123, "renamed-profile");
+    expect(options.aliases(profile.id)).toEqual(new Set([profile.id]));
+    expect(readUserProfileAliasRevision()).toBe(revision);
+    expect(options.bindings(profile.id)).toEqual(bindings);
+  });
+
+  it.each([false, true])("does not create missing alias storage (database=%s)", async (exists) => {
+    const options = fixture();
+    const db = exists ? openOpenClawStateDatabase(options).db : undefined;
+    expect(options.aliases("missing")).toEqual(new Set(["missing"]));
+    if (db) {
+      expect(tableExists(db, "user_profiles")).toBe(false);
+      const execute = vi.spyOn(db, "exec");
+      expect(readUserProfileSnapshotCommand(db, { type: "userProfiles.catalog" })).toEqual({
+        type: "userProfiles.catalog",
+        profiles: [],
+        emailBindings: [],
+      });
+      expect(
+        execute.mock.calls
+          .map(([sql]) => sql)
+          .filter((sql) => /^(BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE)\b/iu.test(sql)),
+      ).toEqual([]);
+      execute.mockRestore();
+    } else {
+      expect(fs.existsSync(options.path)).toBe(false);
+    }
+    const [source, target] = createProfiles(options, "source", "target");
+    linkEmail("source@example.test", target.id, options);
+    await prepareCatalog(options);
+    expect(options.aliases(target.id)).toEqual(new Set([source.id, target.id]));
+  });
+
+  it("honors path precedence and drops handle-bound aliases after reopen", async () => {
+    const options = fixture();
+    const other = fixture(path.join("state", "openclaw.sqlite"));
+    const [source, target] = createProfiles(options, "source", "target");
+    linkEmail("source@example.test", target.id, options);
+    const catalog = await prepareCatalog(options);
+    const env = { OPENCLAW_STATE_DIR: path.dirname(path.dirname(other.path)) };
+    expect(profiles.readUserProfileAliases(target.id, { ...options, env })).toEqual(
+      new Set([source.id, target.id]),
+    );
+    expect(profiles.readUserProfileAliases(target.id, { env })).toEqual(new Set([target.id]));
+    expect(fs.existsSync(other.path)).toBe(false);
+    catalog.release();
+    closeOpenClawStateDatabaseByPath(options.path);
+    // Fixture-only external change while closed; no external-process polling contract.
+    openOpenClawStateDatabase(options)
+      .db.prepare("DELETE FROM user_profiles WHERE id = ?")
+      .run(source.id);
+    await prepareCatalog(options);
+    expect(options.aliases(target.id)).toEqual(new Set([target.id]));
+  });
 
   it("keeps native display reads bounded for one-hop aliases and text keys without creating missing storage", () => {
     const options = fixture();

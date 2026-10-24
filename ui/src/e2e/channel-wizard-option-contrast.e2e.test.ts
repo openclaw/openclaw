@@ -13,8 +13,8 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
-  it("keeps option subtext legible and keyboard focus visible in forced colors", async () => {
-    await suite.withPage(
+  it("keeps option subtext legible and keyboard focus visible in forced colors", async () =>
+    suite.withPage(
       { colorScheme: "dark", ...createControlUiE2eContextOptions() },
       async ({ page }) => {
         const gateway = await installMockGateway(page, {
@@ -115,6 +115,5 @@ suite.define(() => {
         const answer = await gateway.waitForRequest("wizard.next");
         expect(answer.params).toMatchObject({ answer: { value: "another" } });
       },
-    );
-  });
+    ));
 });

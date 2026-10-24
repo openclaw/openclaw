@@ -65,32 +65,6 @@ test("lists entry names and types relative to the mounted directory", async () =
   await expect(list(".", path.join(workspaceDir, "notes"))).resolves.toEqual([entry("one.txt")]);
 });
 
-test.each([
-  ["none", "sandbox.txt"],
-  ["ro", "sandbox.txt"],
-  ["rw", "agent.txt"],
-] as const)("maps %s workspace access", async (workspaceAccess, expectedName) => {
-  await using workspace = await makeWorkspace();
-  const root = workspace.root;
-  const workspaceDir = path.join(root, "sandbox");
-  const agentWorkspaceDir = path.join(root, "agent");
-  await writeFile(workspaceDir, "sandbox.txt", "sandbox");
-  await writeFile(agentWorkspaceDir, "agent.txt", "agent");
-  const list = directoryReader({
-    workspaceDir,
-    agentWorkspaceDir,
-    workspaceAccess,
-  });
-
-  await expect(list(workspaceDir)).resolves.toEqual([entry(expectedName)]);
-  if (workspaceAccess === "ro") {
-    await expect(list(agentWorkspaceDir)).resolves.toEqual([entry("agent.txt")]);
-  } else {
-    await expectOutside(list(agentWorkspaceDir));
-  }
-  await expectOutside(list(root));
-});
-
 test("lists the protected skill mount instead of its workspace shadow", async () => {
   await using workspace = await makeWorkspace();
   const root = workspace.root;
@@ -190,8 +164,10 @@ test.each([true, false])("native tool paths (workspaceOnly=%s)", async (workspac
   for (const args of [{}, { path: "." }, { path: workspaceDir }]) {
     expect(await rw("ls", args)).toContain("note.txt");
   }
+  await expectOutside(rw("ls", { path: agentWorkspaceDir }));
   expect(await readText(workspaceDir, "agent.txt")).toBe("shadow-data");
   const ro = makeTools("ro");
+  expect(await ro("read", { path: "agent.txt" })).toContain("shadow-data");
   expect(await ro("read", { path: path.join(agentWorkspaceDir, "agent.txt") })).toContain(
     "agent-data",
   );
@@ -209,8 +185,12 @@ test.each([true, false])("native tool paths (workspaceOnly=%s)", async (workspac
   }
   if (workspaceOnly) {
     await expectOutside(ro("ls", { path: agentWorkspaceDir }));
+  } else {
+    expect(await ro("ls", { path: agentWorkspaceDir })).toContain("agent.txt");
   }
   const none = makeTools("none");
+  expect(await none("read", { path: "agent.txt" })).toContain("shadow-data");
+  expect(await none("ls", { path: workspaceDir })).toContain("agent.txt");
   await expectOutside(none("read", { path: path.join(agentWorkspaceDir, "agent.txt") }));
   for (const name of ["read", "write", "edit", "ls"]) {
     await expectOutside(

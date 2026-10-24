@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { mkdir } from "node:fs/promises";
 import { backup } from "node:sqlite";
 import { queryObjects } from "node:v8";
+import { emitModelTransportError } from "@openclaw/ai/diagnostics";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
@@ -928,7 +929,14 @@ describe("Activity recap lifecycle with the canonical session store", () => {
       coveredMessages: 3,
       text: "Recap from the relocated store.",
     });
-    expect(complete.mock.calls[1]![0].abortSignal?.aborted).toBe(true);
+    const abortSignal = complete.mock.calls[1]![0].abortSignal;
+    expect(abortSignal?.aborted).toBe(true);
+    const transportLog = { info: vi.fn(), debug: vi.fn(), warn: vi.fn() };
+    emitModelTransportError(transportLog, "model-fetch", "activity recap", abortSignal);
+    expect(transportLog.warn).not.toHaveBeenCalled();
+    expect(transportLog.debug.mock.calls.concat(transportLog.info.mock.calls)).toEqual([
+      ["[model-fetch] aborted activity recap"],
+    ]);
     oldCompletion.resolve(result("Outdated store result."));
     await service.dispose();
     expect(read(relocatedScope)?.activitySummary?.text).toBe("Recap from the relocated store.");

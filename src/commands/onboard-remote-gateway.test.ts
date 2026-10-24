@@ -84,10 +84,7 @@ function makeLocalConfig(): OpenClawConfig {
   return {
     wizard: { securityAcknowledgedAt: "2026-07-11T00:00:00.000Z" },
     agents: {
-      defaults: {
-        workspace: "/client/workspace",
-        model: { primary: "openai/local-only" },
-      },
+      defaults: { workspace: "/client/workspace", model: { primary: "openai/local-only" } },
     },
     gateway: {
       mode: "remote",
@@ -446,24 +443,16 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
             modelRef: "claude-cli/opus",
             workspace: "/gateway/workspace",
           });
-          return {
-            sessionId: (options.params as { sessionId: string }).sessionId,
-            done: false,
-            status: "running",
-          };
+          return setupReply(options);
         }
         if (options.method === "wizard.next") {
           remoteConfig.modelRef = "claude-cli/opus";
-          return {
-            done: true,
-            status: "done",
-            modelActivation: { modelRef: remoteConfig.modelRef },
-          };
+          return setupReply(options);
         }
         if (options.method === "openclaw.setup.verify") {
           expect(options.timeoutMs).toBe(30_000);
           expect(remoteConfig.modelRef).toBe("claude-cli/opus");
-          return { ok: true, modelRef: remoteConfig.modelRef, latencyMs: 100 };
+          return setupReply(options);
         }
         if (options.method === "openclaw.chat") {
           expect(options.timeoutMs).toBe(190_000);

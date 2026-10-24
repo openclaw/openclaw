@@ -404,7 +404,6 @@ function createPublicationBackend(
                   admission: {
                     hasIndex: true,
                     ftsAvailable: published.value.ftsAvailable,
-                    schemaVersion: getAdmittedSqliteSchemaFacts(db)?.userVersion,
                     identity: readOpenClawAgentDatabaseIdentity({ db }),
                     facts: published.facts,
                   },
@@ -551,7 +550,9 @@ function createPublicationBackend(
           write(() => {
             stageMemoryIndexSchemaExtension(db);
             stageOpenClawAgentDatabaseSchemaExtension(db);
-            vectorIndex.capability.drop(vectorIndex.index);
+            if (hasVectorTable) {
+              vectorIndex.capability.drop(vectorIndex.index);
+            }
             vectorIndex.capability.create(vectorIndex.index, dimensions);
             admitStoreSearch(db, memoryVectorSearchSchema(dimensions), {
               extension: "memory.vector",

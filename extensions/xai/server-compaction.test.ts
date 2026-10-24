@@ -3,11 +3,11 @@ import {
   createOpenAIResponsesTransportStreamFn,
   requestPreparedOpenAIResponsesCompaction,
 } from "@openclaw/ai/transports";
-import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import { makeAgentAssistantMessage } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, expect, it, vi } from "vitest";
 import { wrapXaiProviderStream } from "./stream.js";
+import { xaiModel } from "./test-helpers.js";
 
 const sdkState = vi.hoisted(() => ({
   clients: [] as Array<Record<string, unknown>>,
@@ -25,30 +25,26 @@ vi.mock("openai", () => {
   return { default: MockOpenAI, AzureOpenAI: MockOpenAI };
 });
 
-const model = {
+const model = xaiModel({
   id: "grok-4",
   name: "Grok 4",
-  api: "openai-responses",
-  provider: "xai",
   baseUrl: "https://api.x.ai/v1",
-  reasoning: true,
   input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 256_000,
   maxTokens: 8_192,
-} satisfies Model<"openai-responses">;
+});
 
 function prepareRequests(
   context: Context,
   targetModel: Model<"openai-responses"> = model,
   wrapper: { fastMode?: boolean; clientVersion?: string } = {},
 ) {
-  const streamFn: StreamFn | undefined = wrapXaiProviderStream(
+  const streamFn = wrapXaiProviderStream(
     {
       streamFn: createOpenAIResponsesTransportStreamFn(),
       extraParams: { fastMode: wrapper.fastMode, tool_stream: false },
     } as never,
-    { clientVersion: wrapper.clientVersion },
+    wrapper,
   );
   if (!streamFn) {
     throw new Error("expected xAI stream wrapper");
@@ -116,13 +112,14 @@ it("compacts and replays through the legacy xAI fast-mode wrapper", async () => 
   context.messages.push({ role: "user", content: "What was the code?", timestamp: 3 });
   const replayPayload = await requests.replay();
 
-  expect(replayPayload?.model).toBe("grok-4-fast");
-  // Normal replay carries the system prompt in instructions, not compaction input.
-  expect(replayPayload?.instructions).toBe("Retain the conversation.");
-  expect(replayPayload?.input).toEqual([
-    expect.objectContaining({ type: "compaction", encrypted_content: "opaque" }),
-    expect.objectContaining({ role: "user", type: "message" }),
-  ]);
+  expect(replayPayload).toMatchObject({
+    model: "grok-4-fast",
+    instructions: "Retain the conversation.",
+    input: [
+      { type: "compaction", encrypted_content: "opaque" },
+      { role: "user", type: "message" },
+    ],
+  });
   expect(JSON.stringify(replayPayload)).not.toContain("NORTH-COPPER-17");
 });
 

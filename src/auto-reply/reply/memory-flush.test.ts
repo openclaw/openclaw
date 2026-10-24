@@ -19,6 +19,16 @@ import { createMockFollowupRun } from "./test-helpers.js";
 
 const TEST_MODEL_ID = "gpt-5.4";
 const TEST_CONTEXT_WINDOW = 200_000;
+const OPENAI_URL = "https://api.openai.com/v1";
+const AZURE_ROUTE = {
+  provider: "azure-openai",
+  api: "azure-openai-responses",
+  baseUrl: "https://foo.openai.azure.com/openai/v1",
+} as const;
+const CUSTOM_THRESHOLD = { responsesCompactThreshold: 150_000 };
+type CompactionRoute = Partial<
+  Pick<ModelDefinitionConfig, "api" | "baseUrl" | "compat" | "contextTokens" | "contextWindow">
+> & { provider?: string; preparedWindow?: number; extraParams?: Record<string, unknown> };
 
 function buildModelConfig(route: Partial<ModelDefinitionConfig>): ModelDefinitionConfig {
   return {
@@ -37,142 +47,113 @@ function providerConfig(
   provider: string,
   api: ModelDefinitionConfig["api"],
   models: ModelDefinitionConfig[],
-  baseUrl = "https://api.openai.com/v1",
+  baseUrl = OPENAI_URL,
 ): OpenClawConfig["models"] {
   return { providers: { [provider]: { api, baseUrl, models } } };
 }
 
-function buildHostConfig({
-  provider,
-  api,
-  baseUrl,
-  compat,
-  contextTokens,
-  contextWindow = TEST_CONTEXT_WINDOW,
-  extraParams,
-}: {
-  provider: string;
-  api: ModelDefinitionConfig["api"];
-  baseUrl?: string;
-  compat?: ModelDefinitionConfig["compat"];
-  contextTokens?: number;
-  contextWindow?: number;
-  extraParams?: Record<string, unknown>;
-}): OpenClawConfig {
-  const modelEntry = { [modelKey(provider, TEST_MODEL_ID)]: { params: extraParams } };
-  const route = { api, baseUrl, compat, contextTokens, contextWindow };
-  return {
-    models:
-      baseUrl === undefined
-        ? undefined
-        : providerConfig(provider, api, [buildModelConfig(route)], baseUrl),
-    agents: { defaults: { models: modelEntry } },
-  };
-}
-
-function compactionCase(
-  name: string,
-  expectedThreshold: number | undefined,
-  overrides: Partial<Parameters<typeof buildHostConfig>[0]> & {
-    preparedWindow?: number;
-    resolvedBaseUrl?: string;
-  } = {},
-) {
-  const route = {
-    provider: "openai",
-    api: "openai-responses" as const,
-    baseUrl: "https://api.openai.com/v1",
-    ...overrides,
-  };
-  return {
-    name,
-    expectedThreshold,
-    expectedEnabled: expectedThreshold !== undefined,
-    ...route,
-    resolvedBaseUrl: overrides.resolvedBaseUrl ?? route.baseUrl!,
-  };
-}
-
 describe("Responses server compaction host/transport parity", () => {
-  it.each([
-    compactionCase("prepared-only OpenAI window", 560_000, {
-      baseUrl: undefined,
-      resolvedBaseUrl: "https://api.openai.com/v1",
-      preparedWindow: 800_000,
-    }),
-    compactionCase("prepared active cap below an authored native window", 112_000, {
-      contextWindow: 1_000_000,
-      preparedWindow: 160_000,
-    }),
-    compactionCase("OpenAI default route without an authored base URL", 140_000, {
-      baseUrl: undefined,
-      resolvedBaseUrl: "https://api.openai.com/v1",
-    }),
-    compactionCase("OpenAI direct route with an active runtime cap", 190_400, {
-      contextTokens: 272_000,
-      contextWindow: 1_050_000,
-    }),
-    compactionCase("OpenAI public route", 140_000),
-    compactionCase("ChatGPT OAuth route", undefined, {
-      api: "openai-chatgpt-responses",
-      baseUrl: "https://chatgpt.com/backend-api/codex",
-      extraParams: { responsesCompactThreshold: 150_000 },
-    }),
-    compactionCase("Azure OpenAI route", undefined, {
-      provider: "azure-openai",
-      api: "azure-openai-responses",
-      baseUrl: "https://foo.openai.azure.com/openai/v1",
-    }),
-    compactionCase("Azure Cognitive Services route", undefined, {
-      provider: "azure",
-      api: "azure-openai-responses",
-      baseUrl: "https://foo.cognitiveservices.azure.com/openai/v1",
-    }),
-    compactionCase("OpenAI route with store disabled by compatibility metadata", undefined, {
-      compat: { supportsStore: false },
-      extraParams: { responsesCompactThreshold: 150_000 },
-    }),
-    compactionCase("case-normalized OpenAI provider", 140_000, { provider: "OpenAI" }),
-    compactionCase("custom proxy route", undefined, {
-      baseUrl: "https://proxy.example.com/v1",
-      extraParams: { responsesCompactThreshold: 150_000 },
-    }),
-    compactionCase("explicitly disabled OpenAI server compaction", undefined, {
-      extraParams: { responsesServerCompaction: false },
-    }),
-    compactionCase("explicitly enabled Azure server compaction", 150_000, {
-      provider: "azure-openai",
-      api: "azure-openai-responses",
-      baseUrl: "https://foo.openai.azure.com/openai/v1",
-      extraParams: { responsesServerCompaction: true, responsesCompactThreshold: 150_000 },
-    }),
-  ])("keeps $name gates aligned", (testCase) => {
-    const cfg = buildHostConfig(testCase);
+  it.each<[string, number | undefined, CompactionRoute]>([
+    ["prepared-only window", 560_000, { baseUrl: undefined, preparedWindow: 800_000 }],
+    ["prepared cap", 112_000, { contextWindow: 1_000_000, preparedWindow: 160_000 }],
+    ["default URL", 140_000, { baseUrl: undefined }],
+    ["runtime cap", 190_400, { contextTokens: 272_000, contextWindow: 1_050_000 }],
+    ["public route", 140_000, {}],
+    [
+      "OAuth",
+      undefined,
+      {
+        api: "openai-chatgpt-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        extraParams: CUSTOM_THRESHOLD,
+      },
+    ],
+    ["Azure OpenAI", undefined, AZURE_ROUTE],
+    [
+      "Azure Cognitive Services",
+      undefined,
+      {
+        ...AZURE_ROUTE,
+        provider: "azure",
+        baseUrl: "https://foo.cognitiveservices.azure.com/openai/v1",
+      },
+    ],
+    [
+      "store disabled",
+      undefined,
+      { compat: { supportsStore: false }, extraParams: CUSTOM_THRESHOLD },
+    ],
+    ["normalized provider", 140_000, { provider: "OpenAI" }],
+    [
+      "proxy",
+      undefined,
+      { baseUrl: "https://proxy.example.com/v1", extraParams: CUSTOM_THRESHOLD },
+    ],
+    ["disabled", undefined, { extraParams: { responsesServerCompaction: false } }],
+    [
+      "Azure enabled",
+      150_000,
+      { ...AZURE_ROUTE, extraParams: { ...CUSTOM_THRESHOLD, responsesServerCompaction: true } },
+    ],
+  ])("keeps %s gates aligned", (_name, threshold, overrides) => {
+    const {
+      provider,
+      api,
+      baseUrl,
+      compat,
+      contextTokens,
+      contextWindow,
+      preparedWindow,
+      extraParams,
+    } = {
+      provider: "openai",
+      api: "openai-responses" as const,
+      baseUrl: OPENAI_URL,
+      ...overrides,
+    };
+    const cfg: OpenClawConfig = {
+      models:
+        baseUrl === undefined
+          ? undefined
+          : providerConfig(
+              provider,
+              api,
+              [
+                buildModelConfig({
+                  api,
+                  baseUrl,
+                  compat,
+                  contextTokens,
+                  contextWindow: contextWindow ?? TEST_CONTEXT_WINDOW,
+                }),
+              ],
+              baseUrl,
+            ),
+      agents: {
+        defaults: { models: { [modelKey(provider, TEST_MODEL_ID)]: { params: extraParams } } },
+      },
+    };
     const hostThreshold = resolveResponsesServerCompactionThreshold({
-      contextWindowTokens:
-        testCase.preparedWindow ??
-        testCase.contextTokens ??
-        testCase.contextWindow ??
-        TEST_CONTEXT_WINDOW,
+      contextWindowTokens: preparedWindow ?? contextTokens ?? contextWindow ?? TEST_CONTEXT_WINDOW,
       cfg,
-      provider: testCase.provider,
+      provider,
       modelId: TEST_MODEL_ID,
     });
     const payload: Record<string, unknown> = {};
     const policy = resolveOpenAIResponsesPayloadPolicy(
       {
         id: TEST_MODEL_ID,
-        provider: testCase.provider,
-        api: testCase.api,
-        baseUrl: testCase.resolvedBaseUrl,
-        compat: testCase.compat,
-        contextTokens: testCase.contextTokens ?? testCase.preparedWindow,
-        contextWindow: testCase.contextWindow ?? testCase.preparedWindow ?? TEST_CONTEXT_WINDOW,
+        provider,
+        api,
+        baseUrl: baseUrl ?? OPENAI_URL,
+        compat,
+        contextTokens: contextTokens ?? preparedWindow,
+        contextWindow: contextWindow ?? preparedWindow ?? TEST_CONTEXT_WINDOW,
       },
       {
         storeMode: "provider-policy",
         enableServerCompaction: true,
-        extraParams: testCase.extraParams,
+        extraParams,
       },
     );
     applyOpenAIResponsesPayloadPolicy(payload, policy);
@@ -180,8 +161,8 @@ describe("Responses server compaction host/transport parity", () => {
 
     expect(hostThreshold !== undefined).toBe(transportEnabled);
     expect(policy.compactThreshold).toBe(hostThreshold);
-    expect(transportEnabled).toBe(testCase.expectedEnabled);
-    expect(hostThreshold).toBe(testCase.expectedThreshold);
+    expect(transportEnabled).toBe(threshold !== undefined);
+    expect(hostThreshold).toBe(threshold);
   });
 });
 

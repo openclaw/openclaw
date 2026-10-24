@@ -18,34 +18,11 @@ import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
 import { matchCommandPrefix, rejectUnauthorizedCommand } from "./command-gates.js";
 import type { CommandHandler, CommandHandlerResult } from "./commands-types.js";
 import { createCompactionNoticePayload } from "./compaction-notice.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
-
-function extractCompactInstructions(params: {
-  rawBody?: string;
-  ctx: import("../templating.js").MsgContext;
-  cfg: OpenClawConfig;
-  agentId?: string;
-  isGroup: boolean;
-}): string | undefined {
-  const raw = stripStructuralPrefixes(params.rawBody ?? "");
-  const stripped = params.isGroup
-    ? stripMentions(raw, params.ctx, params.cfg, params.agentId)
-    : raw;
-  const trimmed = stripped.trim();
-  if (!trimmed.toLowerCase().startsWith("/compact")) {
-    return undefined;
-  }
-  let rest = trimmed.slice("/compact".length).trimStart();
-  if (rest.startsWith(":")) {
-    rest = rest.slice(1).trimStart();
-  }
-  return rest.length ? rest : undefined;
-}
 
 function formatCompactionReason(reason?: string): string | undefined {
   const text = normalizeOptionalString(reason);
@@ -75,40 +52,6 @@ function compactionUnavailable(reason: string, interruptionNotice = ""): Command
       isStatusNotice: true,
     },
   };
-}
-
-function resolveManualCompactContextTokenBudget(params: {
-  cfg: OpenClawConfig;
-  provider?: string;
-  model?: string;
-  liveContextTokens?: number;
-  persistedContextTokens?: number;
-}): number | undefined {
-  const liveContextTokens = floorPositiveFiniteNumber(params.liveContextTokens);
-
-  const model = normalizeOptionalString(params.model);
-  const provider = normalizeOptionalString(params.provider);
-  if (!model || !provider) {
-    return liveContextTokens ?? floorPositiveFiniteNumber(params.persistedContextTokens);
-  }
-
-  const configuredContextTokens = resolveContextTokensForModel({
-    cfg: params.cfg,
-    provider,
-    model: resolveManualCompactContextModelId({
-      provider,
-      model,
-    }),
-    allowAsyncLoad: false,
-  });
-  if (configuredContextTokens !== undefined && configuredContextTokens > 0) {
-    const configuredBudget = Math.floor(configuredContextTokens);
-    return liveContextTokens !== undefined
-      ? Math.min(liveContextTokens, configuredBudget)
-      : configuredBudget;
-  }
-
-  return liveContextTokens ?? floorPositiveFiniteNumber(params.persistedContextTokens);
 }
 
 function resolveManualCompactContextModelId(params: { provider: string; model: string }): string {
@@ -166,20 +109,40 @@ export async function handleCompactCommand(
     sessionAgentId === currentAgentId && params.agentDir
       ? params.agentDir
       : resolveAgentDir(params.cfg, sessionAgentId);
-  const customInstructions = extractCompactInstructions({
-    rawBody: params.ctx.commandText,
-    ctx: params.ctx,
-    cfg: params.cfg,
-    agentId: sessionAgentId,
-    isGroup: params.isGroup,
-  });
-  const contextTokenBudget = resolveManualCompactContextTokenBudget({
-    cfg: params.cfg,
-    provider: params.provider,
-    model: params.model,
-    liveContextTokens: params.contextTokens,
-    persistedContextTokens: targetSessionEntry.contextTokens,
-  });
+  const raw = stripStructuralPrefixes(params.ctx.commandText ?? "");
+  const stripped = params.isGroup
+    ? stripMentions(raw, params.ctx, params.cfg, sessionAgentId)
+    : raw;
+  const trimmed = stripped.trim();
+  const compactInstructions = trimmed.toLowerCase().startsWith("/compact")
+    ? trimmed.slice("/compact".length).trimStart()
+    : "";
+  const customInstructions =
+    (compactInstructions.startsWith(":")
+      ? compactInstructions.slice(1).trimStart()
+      : compactInstructions) || undefined;
+  const liveContextTokens = floorPositiveFiniteNumber(params.contextTokens);
+  const model = normalizeOptionalString(params.model);
+  const provider = normalizeOptionalString(params.provider);
+  const configuredContextTokens =
+    model && provider
+      ? resolveContextTokensForModel({
+          cfg: params.cfg,
+          provider,
+          model: resolveManualCompactContextModelId({ provider, model }),
+          allowAsyncLoad: false,
+        })
+      : undefined;
+  const configuredBudget =
+    configuredContextTokens !== undefined && configuredContextTokens > 0
+      ? Math.floor(configuredContextTokens)
+      : undefined;
+  const contextTokenBudget =
+    configuredBudget !== undefined
+      ? liveContextTokens !== undefined
+        ? Math.min(liveContextTokens, configuredBudget)
+        : configuredBudget
+      : (liveContextTokens ?? floorPositiveFiniteNumber(targetSessionEntry.contextTokens));
   const compactionStorePath = resolveSessionStorePathForScope({
     agentId: sessionAgentId,
     sessionKey: params.sessionKey,

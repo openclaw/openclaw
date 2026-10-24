@@ -8,6 +8,7 @@ import {
   cancelSession,
   createGate,
   expectSuccessor,
+  holdMetadataWrite,
   locatorSessionKey,
   memoryGuard,
   observeControlRead,
@@ -16,7 +17,6 @@ import {
   startTurn,
 } from "./manager.cancellation-locator.test-support.js";
 import { stopAcpControllerTurns } from "./manager.controller-test-support.js";
-import { DEFAULT_DEPS } from "./manager.types.js";
 
 it.each([
   ["durable", "cached-status"],
@@ -42,14 +42,7 @@ it.each([
             await runtimeGate.wait();
           });
         }
-        const upsert = DEFAULT_DEPS.upsertSessionMeta;
-        const writer =
-          boundary === "metadata-write"
-            ? vi.spyOn(DEFAULT_DEPS, "upsertSessionMeta").mockImplementationOnce(async (params) => {
-                await runtimeGate.wait();
-                return upsert(params);
-              })
-            : undefined;
+        const writer = boundary === "metadata-write" ? holdMetadataWrite(runtimeGate) : undefined;
         const close = vi.spyOn(f.runtime, "close");
         const cancellation = cancelSession(f, "locator-replacement");
         const result = Promise.allSettled([cancellation]);

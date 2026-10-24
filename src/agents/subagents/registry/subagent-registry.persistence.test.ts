@@ -438,7 +438,7 @@ describe("subagent registry persistence", () => {
       recoveryRuntime: createSubagentPersistenceRuntime(callGateway),
       resolveGatewayContext: () => gateway as never,
     };
-    await activateSubagentRegistry(gateway.resolveGatewayContext);
+    await activateSubagentRegistry(gateway.resolveGatewayContext).settled;
     const wait = createAgentsWaitTool({
       agentSessionKey: "agent:main:main",
       agentId: "main",
@@ -543,11 +543,9 @@ describe("subagent registry persistence", () => {
         "acknowledged runtime lock remains held; decoded durable row is restart-ready",
       ).toBe(true);
       expect(
-        held?.delivery?.attemptCount,
+        [held?.delivery?.attemptCount, held?.delivery?.payload, held?.delivery?.nextAttemptAt],
         "no deferral before announcement settles",
-      ).toBeUndefined();
-      expect(held?.delivery?.payload).toBeUndefined();
-      expect(held?.delivery?.nextAttemptAt).toBeUndefined();
+      ).toEqual([undefined, undefined, undefined]);
       expect(retryReady, "retry readiness must remain pending while announcement is held").toBe(
         false,
       );
@@ -696,7 +694,7 @@ describe("subagent registry persistence", () => {
     const resolveGatewayContext = () => gateway;
     gateway.resolveGatewayContext = resolveGatewayContext;
     if (change === "Gateway replacement") {
-      await activateSubagentRegistry(resolveGatewayContext);
+      await activateSubagentRegistry(resolveGatewayContext).settled;
     }
     const runId = "held-resume-read";
     const now = Date.now();

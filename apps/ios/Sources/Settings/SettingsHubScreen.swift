@@ -171,6 +171,9 @@ struct EmbeddedDashboardContent: View {
                     storedOperatorToken: storedOperatorToken,
                     usesNativeNavigationChrome: true),
                 tls: self.config?.tls,
+                basicProxyCredentialProvider: {
+                    AuthenticatedControlUI.basicProxyCredential(config: self.config)
+                },
                 deviceSettingsBridge: self.bridge,
                 usesNativeEmbed: true,
                 embedCompatibility: self.embedCompatibility)

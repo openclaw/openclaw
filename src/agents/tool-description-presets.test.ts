@@ -72,13 +72,22 @@ it("distinguishes sessions_send local context selection from exact external addr
   expect(describeSessionsSendTool()).toContain("on this Gateway");
   expect(describeSessionsSendTool()).toContain("not an external address");
   expect(describeSessionsSendTool()).not.toContain("conversations_");
-  expect(describeSessionsSendTool()).toContain("A peer reply reaches you once");
+  expect(describeSessionsSendTool()).toContain(
+    "When a new turn starts, its reply reaches you once",
+  );
   expect(describeSessionsSendTool()).toContain("Continue with another sessions_send");
   expect(describeSessionsSendTool()).toContain("post to channels with message");
   expect(describeSessionsSendTool()).toContain('`targetDisposition: "queued"` or `"steered"`');
   expect(describeSessionsSendTool()).toContain("neither proves target completion");
+  expect(describeSessionsSendTool()).toContain("Ordinary peer sends start a separate turn.");
   expect(describeSessionsSendTool()).toContain(
-    "With timeoutSeconds:0, your own running child is steered into its active run (admission only, no separate completion turn; use mode:followup for one); other sessions use ordinary message delivery.",
+    "A zero-wait send to your own busy child or an eligible run-scoped target may use its active input queue.",
+  );
+  expect(describeSessionsSendTool()).toContain(
+    "An idle recipient or a default self-send starts a new turn",
+  );
+  expect(describeSessionsSendTool()).toContain(
+    "mode:followup always starts a separate turn and preserves its independent reply",
   );
 });
 

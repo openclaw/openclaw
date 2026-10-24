@@ -1,4 +1,3 @@
-import http from "node:http";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
@@ -21,6 +20,7 @@ import { makeBridge, makeCall as makeCallRecord } from "./realtime-call-control.
 import { RealtimeCallHandler } from "./realtime-handler.js";
 import {
   createRealtimeConfig,
+  makeRequest,
   makeRealtimeProvider,
   updateCallMetadata,
   sendCarrierStart,
@@ -29,6 +29,7 @@ import { StreamDisconnectGrace } from "./stream-disconnect-grace.js";
 
 const realtimeVoiceHarnessTestHooks = vi.hoisted(() => ({
   onCreate: undefined as ((harness: RealtimeVoiceSessionHarness) => void) | undefined,
+  sessions: new Map<string, RealtimeVoiceSessionHarness>(),
 }));
 
 vi.mock("openclaw/plugin-sdk/realtime-voice", async (importOriginal) => {
@@ -39,6 +40,7 @@ vi.mock("openclaw/plugin-sdk/realtime-voice", async (importOriginal) => {
       params: Parameters<typeof actual.createRealtimeVoiceSessionHarness>[0],
     ) => {
       const harness = actual.createRealtimeVoiceSessionHarness(params);
+      realtimeVoiceHarnessTestHooks.sessions.set(params.talk.sessionId, harness);
       realtimeVoiceHarnessTestHooks.onCreate?.(harness);
       return harness;
     },
@@ -48,6 +50,7 @@ vi.mock("openclaw/plugin-sdk/realtime-voice", async (importOriginal) => {
 const cleanup: Array<() => void | Promise<void>> = [];
 afterEach(async () => {
   realtimeVoiceHarnessTestHooks.onCreate = undefined;
+  realtimeVoiceHarnessTestHooks.sessions.clear();
   vi.useRealTimers();
   for (const close of cleanup.splice(0).toReversed()) {
     await close();
@@ -70,14 +73,6 @@ async function startUpgradeWsServer(params: Parameters<typeof openUpgradeServer>
   const server = await openUpgradeServer(params);
   cleanup.push(server.close);
   return server;
-}
-
-function makeRequest(url: string, host = "gateway.ts.net"): http.IncomingMessage {
-  const req = new http.IncomingMessage(null as never);
-  req.url = url;
-  req.method = "POST";
-  req.headers = host ? { host } : {};
-  return req;
 }
 
 const PROVIDER_WITH_LOCAL_BARGE_IN_CAPABILITIES = {
@@ -314,7 +309,10 @@ async function bargeInHarness(params: {
 }
 
 function recentTalkEvents(call: CallRecord): RecentTalkEvent[] {
-  return (call.metadata?.recentTalkEvents as RecentTalkEvent[] | undefined) ?? [];
+  return expectDefined(
+    realtimeVoiceHarnessTestHooks.sessions.get(`voice-call:${call.callId}:realtime`),
+    "voice-call realtime session harness",
+  ).talk.recentEvents.slice(-12);
 }
 
 function talkEvents(call: CallRecord, type: string) {

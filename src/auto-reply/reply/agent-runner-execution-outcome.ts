@@ -1,4 +1,5 @@
 import { hasCompletedSourceReplyDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
+import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { withExecRequestTurn } from "../../infra/exec-request-context.js";
 import { recordMessageToolRunOutcome } from "../../infra/message-tool-run-outcome-store.js";
@@ -10,7 +11,6 @@ import type { AgentTurnExecutionResult, AgentTurnParams } from "./agent-runner-e
 import { bindGoalContinuationExecution } from "./goal-continuation-return.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import type { SessionEventExecution } from "./session-event-contract.js";
-import { getReplySystemEventContext } from "./system-event-session-key.js";
 import { withVisibleWorkSessionReporter } from "./visible-work-sessions.js";
 
 const messageToolOutcomeLog = createSubsystemLogger("auto-reply/message-tool-outcome");
@@ -134,9 +134,7 @@ export async function runAgentTurnWithOutcome(
           sessionId: params.followupRun.run.sessionId,
           agentId: params.followupRun.run.agentId,
         },
-        owners:
-          eventExecution?.execRequestOwners ??
-          getReplySystemEventContext(params.opts)?.execRequestOwners,
+        owners: eventExecution?.execRequestOwners,
         abortSignal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,
       },
       () =>
@@ -148,6 +146,21 @@ export async function runAgentTurnWithOutcome(
           run,
         ),
     );
+    const automation = params.followupRun.run.scheduledAutomation;
+    const invocation = automation
+      ? getAgentRunContext(runId)?.cronRunsByJobId?.get(automation.job.id)
+      : undefined;
+    if (automation && invocation) {
+      invocation.closed = true;
+      if (result.outcome.kind === "settled") {
+        result.outcome.automation = {
+          result: invocation.result,
+          includeReasoning:
+            automation.job.payload.kind === "agentTurn" &&
+            automation.job.payload.includeReasoning === true,
+        };
+      }
+    }
     await recordAgentTurnExecutionOutcome(params, result);
     terminalRecorded = true;
     await recordSessionEventTerminalOutcome(eventExecution, runId, result);

@@ -1,9 +1,9 @@
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { npmRegistryPackument } from "./plugin-npm-publication-readback.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -14,16 +14,7 @@ function readback(fault: string, deferVisibility = true, route = "npm-oidc") {
   const summary = join(root, "summary.md");
   const name = "@openclaw/demo";
   const version = "2026.9.2-beta.1";
-  const dist = {
-    integrity: `sha512-${createHash("sha512").update(bytes).digest("base64")}`,
-    shasum: createHash("sha1").update(bytes).digest("hex"),
-    tarball: "https://registry.npmjs.org/@openclaw/demo/-/demo.tgz",
-  };
-  const packument = {
-    name,
-    "dist-tags": { beta: version },
-    versions: { [version]: { name, version, dist } },
-  };
+  const packument = npmRegistryPackument(name, version, bytes);
   writeFileSync(tarball, bytes);
   writeFileSync(summary, "");
   const preload = `// Only explicit retry waits advance the mocked registry's clock.

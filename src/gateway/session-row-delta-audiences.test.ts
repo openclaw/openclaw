@@ -6,8 +6,115 @@ import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
+import {
+  initializeSessionReadContext,
+  listSessions,
+  requestContext,
+} from "./server-methods/sessions-read-cache.test-support.js";
 import { createSessionRowEventPeer } from "./session-row-event.test-support.js";
+import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
+import type { SessionsListResult } from "./session-utils.types.js";
+
+it("preserves shared ancestor references across staggered roster reads and first admission", async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+    const cfg = { agents: { entries: { main: {} } } };
+    const profile = ensureProfileForEmail("row-delta-polling@example.test");
+    const parent = "agent:main:parent";
+    const child = "agent:main:child";
+    for (const [key, label, updatedAt, parentSessionKey] of [
+      [parent, "Parent", 1, undefined],
+      [child, "Child", 2, parent],
+    ] as const) {
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: key },
+        { sessionId: key, label, updatedAt, visibility: "shared", parentSessionKey },
+      );
+    }
+    const connection = createGatewayConnectionState({
+      scheduler: createTestGatewayScheduler(),
+      bootId: "row-delta-polling",
+      cfg,
+    });
+    const context = requestContext(cfg);
+    context.forgetConnectionAncestors = connection.forgetConnectionAncestors;
+    await initializeSessionReadContext(context);
+    const projection = getSessionRowProjection(context)!;
+    const detach = connection.attachSessionRowProjection(projection);
+    const peers = Array.from({ length: 4 }, (_, index) => {
+      const peer = createSessionRowEventPeer(profile, `polling-${index}`, 1);
+      peer.client.connect.caps = ["session-row-deltas"];
+      if (index >= 2) {
+        peer.client.connect.caps.push("session-event-field-refs");
+      }
+      connection.clients.add(peer.client);
+      connection.sessionEventSubscribers.subscribe(peer.client.connId);
+      const decoder = new GatewayChatEvents(() => {
+        throw new Error("Unexpected missing row baseline");
+      });
+      return Object.assign(peer, { decoder });
+    });
+    const publish = () =>
+      connection.broadcastToConnIds(
+        "sessions.changed",
+        { sessionKey: child, agentId: "main", reason: "send" },
+        new Set(peers.map((peer) => peer.client.connId)),
+      );
+    const frameFor = (peer: (typeof peers)[number]) =>
+      JSON.parse(peer.send.mock.lastCall![0]) as EventFrame;
+    try {
+      publish();
+      // The socket admits this row before a roster listener or its first list exists.
+      for (const peer of peers) {
+        peer.decoder.dispatch(frameFor(peer));
+      }
+      publish();
+      const initial = frameFor(peers[0]!).payload as {
+        ancestorSessionRefs: Array<{ revision: string }>;
+      };
+      const revision = initial.ancestorSessionRefs[0]!.revision;
+      for (const peer of peers) {
+        peer.decoder.dispatch(frameFor(peer));
+      }
+      for (const reader of [...peers, peers[0]!]) {
+        const result = await reader.decoder.request<SessionsListResult>(
+          {
+            request: async <T>() =>
+              (await listSessions({
+                client: reader.client,
+                context,
+                request: { agentId: "main", limit: 1 },
+              })) as T,
+          },
+          "sessions.list",
+          { agentId: "main", limit: 1 },
+        );
+        expect(result.sessions.map((row) => row.key)).toEqual([child]);
+        publish();
+        for (const peer of peers) {
+          const frame = frameFor(peer);
+          expect(frame.payload).toMatchObject({
+            ancestorSessions: [],
+            ancestorSessionRefs: [{ key: parent, revision }],
+          });
+          let decoded: EventFrame | undefined;
+          peer.decoder.dispatch(frame, (event) => {
+            decoded = event;
+          });
+          expect(decoded?.payload).toMatchObject({
+            session: { key: child, label: "Child" },
+            ancestorSessions: [{ key: parent, sessionId: parent, label: "Parent" }],
+          });
+          expect(decoded?.payload).not.toHaveProperty("ancestorSessionRefs");
+        }
+      }
+    } finally {
+      detach();
+      await connection.mentionInbox.dispose();
+      projection.dispose();
+    }
+  });
+});
 
 it("separates equal versions with different contents when reusing recipient encodings", async () => {
   await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {

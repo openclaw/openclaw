@@ -4,6 +4,9 @@ import { expect, test } from "vitest";
 import { createQaGatewayChild, writeJson } from "../../../../extensions/qa-lab/api.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import {
+  bindTelegramProof,
+  telegramProofChannel,
+  telegramRequestHandler,
   createTelegramApi,
   readTelegramRequest,
   telegramGatewayOptions,
@@ -58,80 +61,62 @@ test("visibly settles a message-tool-only Telegram turn after a provider failure
       !isModelRequest || providerBodies.length > 1 ? "; Retry-After: 120 seconds" : "";
     writeJson(res, 500, { error: { message: `${RAW_ERROR_DETAIL}${retryHint}` } });
   };
-  await withServer(
-    (req, res) => {
-      void handleRequest(req, res).catch((error: unknown) => {
-        writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) });
-      });
-    },
-    async (apiRoot) =>
-      withTempDir("openclaw-telegram-failure-settlement-", async (workspace) => {
-        const owner = createQaGatewayChild();
-        try {
-          const gateway = await owner.start(
-            telegramGatewayOptions({
-              workspace,
-              apiRoot,
-              providerBaseUrl: `${apiRoot}/v1`,
-              telegram: {
-                enabled: true,
-                defaultAccount: "proof",
-                accounts: {
-                  proof: {
-                    enabled: true,
-                    botToken: BOT_TOKEN,
-                    apiRoot,
-                    groupPolicy: "open",
-                    silentErrorReplies: true,
-                    groups: { [String(CHAT_ID)]: { groupPolicy: "open", requireMention: false } },
-                    streaming: { mode: "off" },
-                  },
-                },
-              },
-              runtimeEnvPatch: {
-                OPENCLAW_SKIP_CHANNELS: undefined,
-                OPENCLAW_SKIP_PROVIDERS: undefined,
-              },
-              mutateConfig: (cfg) => {
-                cfg.messages = {
-                  ...cfg.messages,
-                  groupChat: { ...cfg.messages?.groupChat, visibleReplies: "message_tool" },
-                };
-                cfg.bindings = [
-                  ...(cfg.bindings ?? []),
-                  { agentId: "qa", match: { channel: "telegram", accountId: "proof" } },
-                ];
-                return cfg;
-              },
+  await withServer(telegramRequestHandler(handleRequest), async (apiRoot) =>
+    withTempDir("openclaw-telegram-failure-settlement-", async (workspace) => {
+      const owner = createQaGatewayChild();
+      try {
+        const gateway = await owner.start(
+          telegramGatewayOptions({
+            workspace,
+            apiRoot,
+            providerBaseUrl: `${apiRoot}/v1`,
+            telegram: telegramProofChannel(apiRoot, BOT_TOKEN, {
+              groupPolicy: "open",
+              silentErrorReplies: true,
+              groups: { [String(CHAT_ID)]: { groupPolicy: "open", requireMention: false } },
+              streaming: { mode: "off" },
             }),
-          );
-          await expect
-            .poll(
-              () =>
-                sends().map((send) => ({
-                  chatId: send.chat_id,
-                  silent: send.disable_notification,
-                  text: send.text,
-                })),
-              { interval: 100, timeout: 30_000 },
-            )
-            .toEqual([{ chatId: String(CHAT_ID), silent: true, text: FAILURE_TEXT }]);
-          expect(providerRequests).toBeGreaterThan(0);
-          expect(providerBodies[1]?.model).toBe(providerBodies[0]?.model);
-          expect(JSON.stringify(providerBodies[1]?.input)).toContain(REQUEST_TEXT);
-          expect(providerBodies[1]?.input).not.toEqual(providerBodies[0]?.input);
-          expect(gateway.logs()).toContain(RAW_RETRY_ERROR_DETAIL);
-          const publicReplies = sends()
-            .map((send) => send.text)
-            .join("\n");
-          expect(publicReplies).not.toContain(RAW_ERROR_DETAIL);
-          expect(publicReplies).not.toContain(RAW_ERROR_CANARY);
-        } finally {
-          await stopQaGatewayFixture(owner);
-          for (const poll of api.updates.pendingPolls) {
-            poll.destroy();
-          }
+            runtimeEnvPatch: {
+              OPENCLAW_SKIP_CHANNELS: undefined,
+              OPENCLAW_SKIP_PROVIDERS: undefined,
+            },
+            mutateConfig: (cfg) => {
+              cfg.messages = {
+                ...cfg.messages,
+                groupChat: { ...cfg.messages?.groupChat, visibleReplies: "message_tool" },
+              };
+              bindTelegramProof(cfg);
+              return cfg;
+            },
+          }),
+        );
+        await expect
+          .poll(
+            () =>
+              sends().map((send) => ({
+                chatId: send.chat_id,
+                silent: send.disable_notification,
+                text: send.text,
+              })),
+            { interval: 100, timeout: 30_000 },
+          )
+          .toEqual([{ chatId: String(CHAT_ID), silent: true, text: FAILURE_TEXT }]);
+        expect(providerRequests).toBeGreaterThan(0);
+        expect(providerBodies[1]?.model).toBe(providerBodies[0]?.model);
+        expect(JSON.stringify(providerBodies[1]?.input)).toContain(REQUEST_TEXT);
+        expect(providerBodies[1]?.input).not.toEqual(providerBodies[0]?.input);
+        expect(gateway.logs()).toContain(RAW_RETRY_ERROR_DETAIL);
+        const publicReplies = sends()
+          .map((send) => send.text)
+          .join("\n");
+        expect(publicReplies).not.toContain(RAW_ERROR_DETAIL);
+        expect(publicReplies).not.toContain(RAW_ERROR_CANARY);
+      } finally {
+        await stopQaGatewayFixture(owner);
+        for (const poll of api.updates.pendingPolls) {
+          poll.destroy();
         }
-      }),
+      }
+    }),
   );
 }, 120_000);

@@ -111,18 +111,12 @@ export function buildControlUiChannelAvatarUrl(
   return `${path}?v=${encodeURIComponent(revision)}`;
 }
 
-type ControlUiResourceUrlMatch = {
-  value: string;
-  search: string;
-  hash: string;
-};
-
 /** Matches an exact root-relative same-origin resource URL without parser reinterpretation. */
 export function matchControlUiResourceUrl(
   route: ControlUiResourceRoute,
   value: string,
   basePath?: string | null,
-): ControlUiResourceUrlMatch | undefined {
+): { value: string; search: string; hash: string } | undefined {
   if (!value.startsWith("/") || value.startsWith("//") || value.includes("\\")) {
     return undefined;
   }

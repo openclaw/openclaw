@@ -96,6 +96,21 @@ export function applyUpdateRunStep(
   record: UpdateRunRecord,
   { reason, ...step }: UpdateRunStep & { reason?: string },
 ): void {
+  // Post-success retirement is advisory; it may add diagnostics, never change the terminal outcome.
+  if (
+    record.finishedAtMs !== null &&
+    (record.status === "succeeded" ||
+      (record.status === "skipped" && record.reason === "already-current")) &&
+    step.status === "completed" &&
+    [
+      "recovery-artifact-cleanup",
+      "warning:recovery-artifact-cleanup",
+      "diagnostic:recovery-artifact-cleanup",
+    ].includes(step.step)
+  ) {
+    upsertStep(record, step);
+    return;
+  }
   if (record.status === "running") {
     upsertStep(record, step);
     if (reason !== undefined) {

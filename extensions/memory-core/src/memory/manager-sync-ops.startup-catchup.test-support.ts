@@ -52,12 +52,31 @@ async function createStartupHarnessDatabase(
   }
   return database;
 }
-export class SessionStartupCatchupHarness extends MemorySyncTestHarness {
+export abstract class SessionSyncHarness extends MemorySyncTestHarness {
   protected readonly createProvider = (): never => {
-    throw new Error("Startup catch-up harness does not acquire embedding providers");
+    throw new Error("Session sync harness does not acquire embedding providers");
   };
   protected readonly agentId = "main";
   protected readonly workspaceDir = "/tmp/openclaw-test-workspace";
+  protected readonly batch = {
+    enabled: false,
+    wait: false,
+    concurrency: 1,
+    pollIntervalMs: 0,
+    timeoutMs: 0,
+  };
+  protected readonly cache = { enabled: false };
+  protected providerUnavailableReason?: string;
+  protected providerLifecycle = { mode: "active" as const, providerId: "test" };
+  protected computeProviderKey = () => "test";
+  protected resolveProviderIndexIdentities = () => [];
+  protected withTimeout = async <T>(promise: Promise<T>): Promise<T> => await promise;
+  protected async pruneEmbeddingCacheIfNeeded(): Promise<void> {}
+  protected resetProviderInitializationForRetry(): void {}
+  protected assertRequiredProviderAvailable(): void {}
+}
+
+export class SessionStartupCatchupHarness extends SessionSyncHarness {
   protected readonly settings = {
     chunking: { overlap: 0, tokens: 256 },
     extraPaths: [],
@@ -70,16 +89,6 @@ export class SessionStartupCatchupHarness extends MemorySyncTestHarness {
     },
     sync: { sessions: { deltaBytes: 100_000, deltaMessages: 50, postCompactionForce: true } },
   } as unknown as ResolvedMemorySearchConfig;
-  protected readonly batch = {
-    enabled: false,
-    wait: false,
-    concurrency: 1,
-    pollIntervalMs: 0,
-    timeoutMs: 0,
-  };
-  protected readonly cache = { enabled: false };
-  protected providerUnavailableReason?: string;
-  protected providerLifecycle = { mode: "active" as const, providerId: "test" };
 
   readonly syncCalls: MemorySyncParams[] = [];
   readonly indexedPaths: string[] = [];
@@ -197,9 +206,6 @@ export class SessionStartupCatchupHarness extends MemorySyncTestHarness {
     this.sessionUnsubscribe = null;
   }
 
-  protected computeProviderKey = () => "test";
-  protected resolveProviderIndexIdentities = () => [];
-
   protected async sync(params?: MemorySyncParams): Promise<void> {
     this.syncCalls.push(params ?? {});
     this.pendingSyncWork = this.indexSessionUpdates
@@ -210,7 +216,6 @@ export class SessionStartupCatchupHarness extends MemorySyncTestHarness {
     await this.pendingSyncWork;
   }
 
-  protected withTimeout = async <T>(promise: Promise<T>): Promise<T> => await promise;
   protected getIndexConcurrency = () => 1;
 
   protected override listSessionCorpusEntries(
@@ -226,10 +231,6 @@ export class SessionStartupCatchupHarness extends MemorySyncTestHarness {
     this.corpusListWork = work.then(() => undefined);
     return work;
   }
-
-  protected async pruneEmbeddingCacheIfNeeded(): Promise<void> {}
-  protected resetProviderInitializationForRetry(): void {}
-  protected assertRequiredProviderAvailable(): void {}
 
   protected async indexFile(entry: MemoryIndexEntry, _source: MemorySource): Promise<void> {
     this.indexedPaths.push(entry.path);

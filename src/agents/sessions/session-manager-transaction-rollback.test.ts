@@ -14,18 +14,14 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { sessionScope } from "./session-manager-fixtures.test-support.js";
 import { SessionManager as Manager } from "./session-manager.js";
 
 async function createTarget(state: OpenClawTestState, name: string, lazy = false) {
-  const scope = {
-    agentId: "main",
-    env: state.env,
-    sessionKey: `agent:main:dashboard:${name}`,
-  };
+  const scope = { agentId: "main", env: state.env, sessionKey: `agent:main:dashboard:${name}` };
   const target = {
+    ...sessionScope(resolveSessionStorePathCore(undefined, scope), name),
     ...scope,
-    sessionId: name,
-    storePath: resolveSessionStorePathCore(undefined, scope),
   };
   if (lazy) {
     await upsertSessionEntryCore(target, { sessionId: name, updatedAt: 1 });

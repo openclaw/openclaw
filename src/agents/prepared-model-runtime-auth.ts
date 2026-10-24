@@ -105,13 +105,13 @@ export type PreparedAccountCatalogAccess = {
     includesProvider: (provider: string) => boolean,
     profileIds?: readonly string[],
   ) => void;
-  readServiceTierObservation: (params: {
+  readServiceTierObservations: (params: {
     identityKey: string;
     modelId: string;
     runtimeId: string;
     api: string;
     baseUrl: string;
-  }) => Pick<ModelServiceTierObservation, "requestedTier" | "responseTier"> | undefined;
+  }) => Pick<ModelServiceTierObservation, "requestedTier" | "responseTier">[];
   prepareServiceTierObserver: (params: {
     selectedCredential: SelectedModelCredential;
     credential?: AuthProfileCredential;

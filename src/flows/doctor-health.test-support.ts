@@ -29,6 +29,13 @@ export function createDoctorRuntime() {
   return { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 }
 
+export function createDoctorConfig(state: OpenClawTestState) {
+  return {
+    agents: { ownership: "explicit", entries: { main: { workspace: state.workspaceDir } } },
+    gateway: { mode: "local" },
+  } satisfies OpenClawConfig;
+}
+
 export function withDoctorState<T>(
   run: (state: OpenClawTestState) => Promise<T>,
   env?: Record<string, string | undefined>,
@@ -102,7 +109,7 @@ const mocks = vi.hoisted(() => {
       select: vi.fn(),
     },
     "../commands/doctor-update.js": {
-      maybeOfferUpdateBeforeDoctor: async () => ({ updated: false }),
+      maybeOfferUpdateBeforeDoctor: async () => false,
     },
     "../commands/doctor-ui.js": { maybeRepairUiProtocolFreshness: async () => undefined },
     "../commands/doctor-install.js": { noteSourceInstallIssues: () => undefined },

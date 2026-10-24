@@ -40,7 +40,7 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-engine-sessions", async (importOri
 import { MemoryIndexDatabase } from "./manager-database-context.js";
 import type { MemoryIndexEntry } from "./manager-index-preparation.js";
 import { loadMemorySourceFileState } from "./manager-source-state.js";
-import { MemorySyncTestHarness } from "./manager-sync-ops.test-support.js";
+import { SessionSyncHarness } from "./manager-sync-ops.startup-catchup.test-support.js";
 
 function createDb(): DatabaseSync {
   const { DatabaseSync: NodeDatabaseSync } = requireNodeSqlite();
@@ -49,26 +49,11 @@ function createDb(): DatabaseSync {
   return db;
 }
 
-class SessionSyncYieldHarness extends MemorySyncTestHarness {
-  protected readonly createProvider = (): never => {
-    throw new Error("Sync yield harness does not acquire embedding providers");
-  };
+class SessionSyncYieldHarness extends SessionSyncHarness {
   protected readonly cfg = {} as OpenClawConfig;
-  protected readonly agentId = "main";
-  protected readonly workspaceDir = "/tmp/openclaw-test-workspace";
   protected readonly settings = {
     sync: { sessions: { deltaBytes: 100_000, deltaMessages: 50, postCompactionForce: true } },
   } as ResolvedMemorySearchConfig;
-  protected readonly batch = {
-    enabled: false,
-    wait: false,
-    concurrency: 1,
-    pollIntervalMs: 0,
-    timeoutMs: 0,
-  };
-  protected readonly cache = { enabled: false };
-  protected providerUnavailableReason?: string;
-  protected providerLifecycle = { mode: "active" as const, providerId: "test" };
   protected publishedDatabase: MemoryIndexDatabase;
 
   readonly indexedPaths: string[] = [];
@@ -102,27 +87,11 @@ class SessionSyncYieldHarness extends MemorySyncTestHarness {
     }));
   }
 
-  protected computeProviderKey(): string {
-    return "test";
-  }
-
-  protected resolveProviderIndexIdentities() {
-    return [];
-  }
-
   protected async sync(): Promise<void> {}
-
-  protected async withTimeout<T>(promise: Promise<T>): Promise<T> {
-    return await promise;
-  }
 
   protected getIndexConcurrency(): number {
     return this.indexConcurrency;
   }
-
-  protected async pruneEmbeddingCacheIfNeeded(): Promise<void> {}
-  protected resetProviderInitializationForRetry(): void {}
-  protected assertRequiredProviderAvailable(): void {}
 
   protected async indexFile(entry: MemoryIndexEntry, _source: MemorySource): Promise<void> {
     this.indexedPaths.push(entry.path);

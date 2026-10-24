@@ -13,6 +13,7 @@ import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { createGatewayKernel } from "./server-kernel.js";
 import type { GatewayServer } from "./server-public.js";
 import * as fixture from "./server-startup-state.test-support.js";
+import { gatewayTestTextTransport } from "./server/connection-transport.test-support.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { startClaimedGateway } from "./test-helpers.listener.js";
 
@@ -55,7 +56,7 @@ it("reconnects affected nodes when plugins attach after their handshake", async 
     await once(peer, "open");
     const socket = await accepted;
     const client: GatewayWsClient = {
-      socket,
+      socket: gatewayTestTextTransport(socket),
       connId: name,
       usesSharedGatewayAuth: false,
       connect: {

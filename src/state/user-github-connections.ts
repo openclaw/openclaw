@@ -31,6 +31,7 @@ import type { UserGitHubConnectionWorkerOperations } from "./user-github-connect
 import { captureUserProfileAuthorityRead } from "./user-profile-events.js";
 
 export { observeUserGitHubProfileRetirement } from "./user-github-connection-events.js";
+export { requirePendingUserGitHubConnection } from "./user-github-connections.types.js";
 export type {
   UserGitHubConnection,
   UserGitHubConnected,

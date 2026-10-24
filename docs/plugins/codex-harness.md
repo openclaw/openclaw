@@ -26,6 +26,11 @@ its temporary loopback address. Upstream, authentication-profile, and creation-t
 policy changes still invalidate thread reuse; live requests continue through the
 current owned proxy.
 
+If active work still claims a native thread, OpenClaw rejects configuration
+changes that would release it without trying fallback models. Wait for that work
+to finish or stop it before retrying. The original thread and its configuration
+remain available.
+
 Provider-review acknowledgments must continue the reviewed native thread. If
 changed tools or runtime configuration would require a replacement thread, or
 native resume fails, OpenClaw refuses the acknowledgment before creating or saving
@@ -46,6 +51,13 @@ The Codex adapter retains native item identities, protocol parsing, approvals,
 hook handling, and transcript provenance. Constructed messages are persisted
 through the existing scoped transcript APIs; the shared projection helpers do
 not own storage.
+
+Run tool summaries retain explicit native-tool failures recorded before execution,
+including malformed patches and workspace refusals. A successful retry leaves the
+earlier failure in the count. Code Mode wrapper output does not add another count
+when a native execution item already accounts for it. A completed command result
+with a nonzero exit code also marks the run unsafe to replay, even if its native
+execution item is missing.
 
 During `initialize`, OpenClaw uses `capabilities.optOutNotificationMethods` to
 suppress unused app-server notifications before they reach the transport and JSON
@@ -580,8 +592,10 @@ result delivery remain separate facts.
 
 Once every native child has finished and its result has been captured, pending
 result delivery no longer prevents the parent from resuming. OpenClaw retains
-those results for delivery and retry. Running or interrupted children that can
-resume still protect the parent subscription.
+those results for delivery and retry. Running children still protect the parent
+subscription. Interrupted assignments remain resumable without pinning an idle
+parent. Admitted resumed execution reacquires protection before inference, even
+if its start notification is delayed.
 
 Retirement revokes captured requester authority immediately, then joins accepted
 native submission and assignment writes before releasing child subscriptions.

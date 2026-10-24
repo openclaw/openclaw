@@ -1,3 +1,4 @@
+import { toImageDataUrl } from "openclaw/plugin-sdk/image-generation";
 import {
   readGeneratedVideoAsset,
   resolveGeneratedMediaMaxBytes,
@@ -21,6 +22,7 @@ import {
   normalizeVideoGenerationDuration,
   type GeneratedVideoAsset,
   type VideoGenerationProvider,
+  type VideoGenerationProviderCapabilities,
   type VideoGenerationRequest,
 } from "openclaw/plugin-sdk/video-generation";
 import { resolveFalHttpRequestConfig } from "./http-config.js";
@@ -144,48 +146,39 @@ function readFalCompletedQueueResult(payload: unknown) {
   };
 }
 
-function toDataUrl(buffer: Buffer, mimeType: string): string {
-  return `data:${mimeType};base64,${buffer.toString("base64")}`;
-}
-
-function resolveFalQueueBaseUrl(baseUrl: string): string {
-  const url = URL.parse(baseUrl);
-  if (!url) {
-    return DEFAULT_FAL_QUEUE_BASE_URL;
-  }
-  if (url.hostname === "fal.run") {
-    url.hostname = "queue.fal.run";
-    return url.toString().replace(/\/$/, "");
-  }
-  return baseUrl.replace(/\/$/, "");
-}
-
 function isFalSeedance2Model(model: string): boolean {
   return SEEDANCE_2_VIDEO_MODELS.includes(model as (typeof SEEDANCE_2_VIDEO_MODELS)[number]);
+}
+
+function isFalPromptOnlyVideoModel(model: string): boolean {
+  const normalizedModel = normalizeLowercaseStringOrEmpty(model);
+  return (
+    normalizedModel === DEFAULT_FAL_VIDEO_MODEL || normalizedModel === HEYGEN_VIDEO_AGENT_MODEL
+  );
+}
+
+function resolveFalVideoModelCapabilities(
+  model: string,
+): VideoGenerationProviderCapabilities | undefined {
+  const unsupported = isFalPromptOnlyVideoModel(model)
+    ? {
+        supportsAspectRatio: false,
+        supportsResolution: false,
+        supportsSize: false,
+        supportsAudio: false,
+      }
+    : isFalSeedance2Model(model)
+      ? undefined
+      : { supportsAudio: false };
+  return unsupported
+    ? { generate: unsupported, imageToVideo: { enabled: true, ...unsupported } }
+    : undefined;
 }
 
 function isFalSeedance2ReferenceModel(model: string): boolean {
   return SEEDANCE_2_REFERENCE_VIDEO_MODELS.includes(
     model as (typeof SEEDANCE_2_REFERENCE_VIDEO_MODELS)[number],
   );
-}
-
-function resolveFalDuration(
-  durationSeconds: number | undefined,
-  model: string,
-): number | string | undefined {
-  const duration = normalizeVideoGenerationDuration({ durationSeconds });
-  if (duration === undefined) {
-    return undefined;
-  }
-  if (isFalSeedance2Model(model)) {
-    return SEEDANCE_2_DURATION_SECONDS.includes(
-      duration as (typeof SEEDANCE_2_DURATION_SECONDS)[number],
-    )
-      ? String(duration)
-      : undefined;
-  }
-  return duration;
 }
 
 function resolveFalReferenceUrl(
@@ -200,7 +193,7 @@ function resolveFalReferenceUrl(
   if (!asset?.buffer) {
     throw new Error(`fal ${label} is missing media data.`);
   }
-  return toDataUrl(asset.buffer, normalizeOptionalString(asset.mimeType) ?? defaultMimeType);
+  return toImageDataUrl({ buffer: asset.buffer, mimeType: asset.mimeType, defaultMimeType });
 }
 
 function applyFalSeedanceControls(
@@ -219,9 +212,16 @@ function applyFalSeedanceControls(
   if (req.resolution) {
     body.resolution = isFalSeedance2Model(model) ? req.resolution.toLowerCase() : req.resolution;
   }
-  const duration = resolveFalDuration(req.durationSeconds, model);
-  if (duration) {
-    body.duration = duration;
+  const duration = normalizeVideoGenerationDuration({ durationSeconds: req.durationSeconds });
+  const seedance = isFalSeedance2Model(model);
+  if (
+    duration &&
+    (!seedance ||
+      SEEDANCE_2_DURATION_SECONDS.includes(
+        duration as (typeof SEEDANCE_2_DURATION_SECONDS)[number],
+      ))
+  ) {
+    body.duration = seedance ? String(duration) : duration;
   }
   if (isFalSeedance2Model(model) && req.audio !== undefined) {
     body.generate_audio = req.audio;
@@ -256,14 +256,13 @@ function buildFalVideoRequestBody(
     requestBody.image_url =
       normalizeOptionalString(input.url) ??
       (input.buffer
-        ? toDataUrl(input.buffer, normalizeOptionalString(input.mimeType) ?? "image/png")
+        ? toImageDataUrl({ buffer: input.buffer, mimeType: input.mimeType })
         : undefined);
   }
   // MiniMax Live on fal currently documents prompt + optional image_url only.
   // Keep the default model conservative so queue requests do not hang behind
   // unsupported knobs such as duration/resolution/aspect-ratio overrides.
-  const normalizedModel = normalizeLowercaseStringOrEmpty(model);
-  if (normalizedModel === DEFAULT_FAL_VIDEO_MODEL || normalizedModel === HEYGEN_VIDEO_AGENT_MODEL) {
+  if (isFalPromptOnlyVideoModel(model)) {
     return requestBody;
   }
   applyFalSeedanceControls(req, model, requestBody);
@@ -347,6 +346,7 @@ export function buildFalVideoGenerationProvider(): VideoGenerationProvider {
       "fal-ai/wan/v2.2-a14b/image-to-video",
     ],
     isConfiguredAsync: (ctx) => isProviderApiKeyConfiguredAsync({ provider: "fal", ...ctx }),
+    resolveModelCapabilities: ({ model }) => resolveFalVideoModelCapabilities(model),
     capabilities: {
       generate: buildFalVideoModeCapabilities(SEEDANCE_2_VIDEO_MODELS),
       imageToVideo: {
@@ -392,7 +392,14 @@ export function buildFalVideoGenerationProvider(): VideoGenerationProvider {
         }
       };
       const requestBody = buildFalVideoRequestBody(req, model);
-      const queueBaseUrl = resolveFalQueueBaseUrl(baseUrl);
+      const queueUrl = URL.parse(baseUrl);
+      let queueBaseUrl = baseUrl.replace(/\/$/, "");
+      if (!queueUrl) {
+        queueBaseUrl = DEFAULT_FAL_QUEUE_BASE_URL;
+      } else if (queueUrl.hostname === "fal.run") {
+        queueUrl.hostname = "queue.fal.run";
+        queueBaseUrl = queueUrl.toString().replace(/\/$/, "");
+      }
       const submitted = readFalQueueResponse(
         await fetchFalJson({
           url: `${queueBaseUrl}/${model}`,

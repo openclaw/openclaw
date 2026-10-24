@@ -52,7 +52,7 @@ import type { ChatState } from "./chat-state-contract.ts";
 import { refreshPageChat } from "./chat-state-refresh.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
 import { readTranscriptViewport } from "./components/chat-transcript-scroll-events.ts";
-import { persistChatComposerState } from "./composer-persistence.ts";
+import { persistChatComposerState } from "./composer-draft-storage.ts";
 import {
   getChatSessionProjection,
   publishChatSessionProjectionMessages,

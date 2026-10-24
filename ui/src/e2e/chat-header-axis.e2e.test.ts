@@ -57,7 +57,7 @@ suite.define(() => {
         const title = header.locator(titleSelector);
         await header.waitFor();
         const projectSurface = header.locator(
-          desktop ? ".workspace-icon" : ".mobile-header__project",
+          desktop ? ".workspace-icon" : ".mobile-header__title",
         );
         await projectSurface.waitFor();
 
@@ -77,8 +77,7 @@ suite.define(() => {
             const titleRect = rect(".mobile-header__title-text");
             const identity = rect(".mobile-header__identity");
             const navigation = rect(".mobile-header__navigation");
-            const capsule = rect(".mobile-header__capsule");
-            const project = rect(".mobile-header__project");
+            const actions = rect(".mobile-header__actions");
             return {
               overflow: root.scrollWidth - root.clientWidth,
               titleWidth: titleRect.width,
@@ -86,9 +85,8 @@ suite.define(() => {
               navigationRight: navigation.right,
               identityLeft: identity.left,
               identityRight: identity.right,
-              capsuleLeft: capsule.left,
-              projectBottom: project.bottom,
-              titleTop: titleRect.top,
+              actionsLeft: actions.left,
+              height: root.getBoundingClientRect().height,
             };
           });
           expect(geometry.overflow).toBeLessThanOrEqual(1);
@@ -97,9 +95,8 @@ suite.define(() => {
             "Implement parent breadcrumb navigation and polish overflow behavior",
           );
           expect(geometry.navigationRight).toBeLessThanOrEqual(geometry.identityLeft);
-          expect(geometry.identityRight).toBeLessThanOrEqual(geometry.capsuleLeft);
-          expect(geometry.projectBottom).toBeLessThanOrEqual(geometry.titleTop);
-          await header.getByRole("button", { name: "Panels", exact: true }).click({ trial: true });
+          expect(geometry.identityRight).toBeLessThanOrEqual(geometry.actionsLeft);
+          expect(geometry.height).toBe(48);
           await header.locator(".mobile-header__title").click();
           await pane.locator(".chat-mobile-host__details:not([hidden])").waitFor();
           return;

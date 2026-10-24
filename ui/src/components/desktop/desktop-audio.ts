@@ -1,5 +1,5 @@
 import type { DesktopObserveResult } from "@openclaw/gateway-protocol";
-import { onCleanup, onSettled } from "solid-js";
+import { onSettled } from "solid-js";
 import { resolveGatewayWebSocketUrl } from "../../lib/gateway-websocket-url.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
@@ -39,16 +39,17 @@ export function createDesktopAudio(
   let startReady = false;
   let startRequested = false;
   const visible = () => !host.ownerDocument.hidden && (!host.embedded || host.presented);
-  onSettled(() =>
-    listen(host.ownerDocument, "visibilitychange", () => {
+  onSettled(() => {
+    const stopVisibility = listen(host.ownerDocument, "visibilitychange", () => {
       if (host.ownerDocument.hidden) {
         retire();
       }
-    }),
-  );
-  onCleanup(() => {
-    changed = undefined;
-    close();
+    });
+    return () => {
+      stopVisibility();
+      changed = undefined;
+      close();
+    };
   });
 
   function toggle(): void {

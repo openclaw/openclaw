@@ -15,23 +15,23 @@ import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar-co
 import { mountCard } from "./chat-tool-cards.test-support.tsx";
 import { ChatToolOutput } from "./chat-tool-output-view.tsx";
 
+type NativeExecution = {
+  output: string;
+  chunk_id: string;
+  wall_time_seconds: number;
+  session_id?: number;
+  exit_code?: number;
+  extra?: string;
+};
 type NativeOutputCase = [
-  name: string,
-  (
-    | { output: string; exitCode: number }
-    | { literal: string }
-    | {
-        execution: {
-          output: string;
-          chunk_id: string;
-          wall_time_seconds: number;
-          session_id?: number;
-          exit_code?: number;
-          extra?: string;
-        };
-      }
-  ),
+  string,
+  { output: string; exitCode: number } | { literal: string } | { execution: NativeExecution },
 ];
+
+const execution = (fields: Partial<NativeExecution>) => ({
+  execution: { output: "done", chunk_id: "chunk", wall_time_seconds: 0.7, ...fields },
+});
+const nativeOutput = (output: string, exitCode = 0) => ({ output, exitCode });
 
 function outputCard(overrides: Partial<ToolCard> = {}): ToolCard {
   return {
@@ -86,6 +86,12 @@ function button(root: Element, label: string): HTMLButtonElement {
   return found!;
 }
 
+const textOf = (root: ParentNode) => root.querySelector(".chat-tool-output__text")?.textContent;
+const busy = (root: ParentNode) => root.querySelector("[aria-busy]")?.getAttribute("aria-busy");
+const actions = (root: ParentNode) => root.querySelector(".chat-tool-output__actions");
+const expectText = (root: ParentNode, text: string) =>
+  waitForSolid(() => expect(textOf(root)).toBe(text));
+
 afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
@@ -107,52 +113,27 @@ describe("tool output inspection", () => {
           content: { kind: "tool-output", card: outputCard({ name, args, outputText: text }) },
         }),
       );
-      await waitForSolid(() =>
-        expect(view.container.querySelector(".chat-tool-output__text")?.textContent).toBe(text),
-      );
+      await expectText(view.container, text);
     },
   );
 
   it.each<NativeOutputCase>([
     [
       "JSON lexemes",
-      {
-        output:
-          '{"id":9007199254740993,"overflow":1e400,"zero":-0,"state":"before","state":"after"}',
-        exitCode: 0,
-      },
+      nativeOutput(
+        '{"id":9007199254740993,"overflow":1e400,"zero":-0,"state":"before","state":"after"}',
+      ),
     ],
-    ["failed command without a chunk ID", { output: "service unavailable\n", exitCode: 1 }],
-    ["literal markup", { output: "<script>danger()</script>\n**literal**", exitCode: 0 }],
+    ["failed command without a chunk ID", nativeOutput("service unavailable\n", 1)],
+    ["literal markup", nativeOutput("<script>danger()</script>\n**literal**")],
     ["incomplete response", { literal: '[{"type":"input_text","text":"partial' }],
     [
       "mixed media",
       { literal: '[{"type":"input_text","text":"caption"},{"type":"input_image","omitted":true}]' },
     ],
     ["ordinary JSON", { literal: '{"output":"data","state":"before","state":"after"}' }],
-    [
-      "process handle",
-      {
-        execution: {
-          session_id: 321,
-          output: "still running",
-          chunk_id: "chunk",
-          wall_time_seconds: 0.7,
-        },
-      },
-    ],
-    [
-      "additional response fields",
-      {
-        execution: {
-          exit_code: 0,
-          extra: "keep this field",
-          output: "done",
-          chunk_id: "chunk",
-          wall_time_seconds: 0.7,
-        },
-      },
-    ],
+    ["process handle", execution({ session_id: 321, output: "still running" })],
+    ["additional response fields", execution({ exit_code: 0, extra: "keep this field" })],
   ])("preserves %s during native output inspection", async (_name, testCase) => {
     const raw =
       "literal" in testCase
@@ -179,10 +160,8 @@ describe("tool output inspection", () => {
       outputCard({ outputText: raw }),
       vi.fn<SidebarFullMessageLoader>().mockResolvedValue(result(raw)),
     );
-    await vi.waitFor(() =>
-      expect(panel.container.querySelector("[aria-busy]")?.getAttribute("aria-busy")).toBe("false"),
-    );
-    const shown = panel.container.querySelector(".chat-tool-output__text")?.textContent ?? "";
+    await vi.waitFor(() => expect(busy(panel.container)).toBe("false"));
+    const shown = textOf(panel.container) ?? "";
     if ("literal" in testCase) {
       expect(shown).toBe(raw);
       return;
@@ -254,19 +233,11 @@ describe("tool output inspection", () => {
       .mockResolvedValueOnce(result("first output"))
       .mockResolvedValueOnce(result("reattached output"));
     const panel = mount(outputCard(), load);
-    await waitForSolid(() =>
-      expect(panel.container.querySelector(".chat-tool-output__text")?.textContent).toBe(
-        "first output",
-      ),
-    );
+    await expectText(panel.container, "first output");
     panel.dispose();
     expect(load).toHaveBeenCalledTimes(1);
     const reattached = mount(outputCard({ outputText: "new preview" }), load);
-    await waitForSolid(() =>
-      expect(reattached.container.querySelector(".chat-tool-output__text")?.textContent).toBe(
-        "reattached output",
-      ),
-    );
+    await expectText(reattached.container, "reattached output");
     expect(load).toHaveBeenCalledTimes(2);
   });
 
@@ -300,19 +271,13 @@ describe("tool output inspection", () => {
       const panel = mount(outputCard({ outputTruncated }), loader);
       try {
         flush();
-        expect(panel.container.querySelector("[aria-busy]")?.getAttribute("aria-busy")).toBe(
-          "true",
-        );
-        expect(panel.container.querySelector(".chat-tool-output__actions")).toBeNull();
+        expect(busy(panel.container)).toBe("true");
+        expect(actions(panel.container)).toBeNull();
       } finally {
         pending.resolve();
       }
-      await vi.waitFor(() =>
-        expect(panel.container.querySelector(".chat-tool-output__text")?.textContent?.length).toBe(
-          text.length,
-        ),
-      );
-      expect(panel.container.querySelector(".chat-tool-output__text")?.textContent).toBe(text);
+      await vi.waitFor(() => expect(textOf(panel.container)?.length).toBe(text.length));
+      expect(textOf(panel.container)).toBe(text);
       expect(button(panel.container, t("chat.toolCards.copyOutput"))).toBeDefined();
       expect(button(panel.container, t("chat.toolCards.downloadOutput"))).toBeDefined();
       expect(request).toHaveBeenCalledWith("chat.message.get", {
@@ -378,9 +343,7 @@ describe("tool output inspection", () => {
       if (!retrieved) {
         expect(load).not.toHaveBeenCalled();
       }
-      expect(panel.container.querySelector(".chat-tool-output__text")?.textContent).toBe(
-        card.outputText,
-      );
+      expect(textOf(panel.container)).toBe(card.outputText);
     },
   );
 
@@ -404,13 +367,10 @@ describe("tool output inspection", () => {
       );
       await vi.waitFor(() => expect(load).toHaveBeenCalledOnce());
       await vi.waitFor(() =>
-        expect(
-          panel.container.getAttribute("aria-busy") ??
-            panel.container.querySelector("[aria-busy]")?.getAttribute("aria-busy"),
-        ).toBe("false"),
+        expect(panel.container.getAttribute("aria-busy") ?? busy(panel.container)).toBe("false"),
       );
       expect(panel.container.textContent).not.toContain(t("chat.toolCards.fullOutputUnavailable"));
-      expect(panel.container.querySelector(".chat-tool-output__text")?.textContent).toBe(marker);
+      expect(textOf(panel.container)).toBe(marker);
     },
   );
 
@@ -442,17 +402,11 @@ describe("tool output inspection", () => {
       } else {
         panel.update({ ...panel.props, connectionEpoch: 2 });
       }
-      await vi.waitFor(() =>
-        expect(panel.container.querySelector(".chat-tool-output__text")?.textContent).toBe(
-          "new selection",
-        ),
-      );
+      await vi.waitFor(() => expect(textOf(panel.container)).toBe("new selection"));
       complete(result("stale response"));
       await Promise.resolve();
       flush();
-      expect(panel.container.querySelector(".chat-tool-output__text")?.textContent).toBe(
-        "new selection",
-      );
+      expect(textOf(panel.container)).toBe("new selection");
     },
   );
 
@@ -470,20 +424,14 @@ describe("tool output inspection", () => {
     );
 
     button(panel.container, t("common.retry")).click();
-    await waitForSolid(() =>
-      expect(panel.container.querySelector("[aria-busy]")?.getAttribute("aria-busy")).toBe("true"),
-    );
+    await waitForSolid(() => expect(busy(panel.container)).toBe("true"));
     expect(panel.container.querySelector('[role="alert"]')).toBeNull();
-    expect(panel.container.querySelector(".chat-tool-output__text")?.textContent).toBe("preview");
-    expect(panel.container.querySelector(".chat-tool-output__actions")).toBeNull();
+    expect(textOf(panel.container)).toBe("preview");
+    expect(actions(panel.container)).toBeNull();
 
     retried.resolve(result("complete output"));
-    await waitForSolid(() =>
-      expect(panel.container.querySelector(".chat-tool-output__text")?.textContent).toBe(
-        "complete output",
-      ),
-    );
-    expect(panel.container.querySelector("[aria-busy]")?.getAttribute("aria-busy")).toBe("false");
-    expect(panel.container.querySelector(".chat-tool-output__actions")).not.toBeNull();
+    await expectText(panel.container, "complete output");
+    expect(busy(panel.container)).toBe("false");
+    expect(actions(panel.container)).not.toBeNull();
   });
 });

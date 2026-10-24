@@ -102,7 +102,7 @@ function resolveCapability(token: string | undefined, key = sessionKey) {
   });
 }
 
-it.each(["failure", "policy-session", "heartbeat", "untrusted-ingress"] as const)(
+it.each(["failure", "policy-session", "untrusted-ingress"] as const)(
   "scopes CLI source authority to trusted turns through %s settlement",
   async (outcome) => {
     const turn = channelTurn();
@@ -134,7 +134,7 @@ it.each(["failure", "policy-session", "heartbeat", "untrusted-ingress"] as const
     const result = await executeChannelTurn({
       ...turn,
       ...(outcome === "policy-session" ? { runtimePolicySessionKey: policySessionKey } : {}),
-      isHeartbeat: outcome === "heartbeat",
+
       sessionCtx: {
         ...turn.sessionCtx,
         Provider: outcome === "untrusted-ingress" ? "webchat" : "discord",

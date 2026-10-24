@@ -1,6 +1,37 @@
 import type { Locator } from "playwright";
 import { getControlUiContextHandle } from "../test-helpers/control-ui-e2e-context.ts";
 
+type AnchorFrames = { frame: number; positions: Array<number | null>; readerDelta: number };
+export type AnchorWindow = typeof window & { prependFrames: AnchorFrames };
+
+export function sampleHistoryAnchor(anchor: Locator) {
+  return anchor.evaluateHandle((original) => {
+    const host = original.closest("openclaw-chat-pane")!;
+    const selector = `.chat-bubble[data-message-id="${CSS.escape(original.getAttribute("data-message-id")!)}"]`;
+    const frames: AnchorFrames = { frame: 0, positions: [], readerDelta: 0 };
+    (window as AnchorWindow).prependFrames = frames;
+    const sample = () => {
+      const bubble = host.querySelector(selector);
+      frames.positions.push(
+        bubble ? bubble.getBoundingClientRect().top + frames.readerDelta : null,
+      );
+      frames.frame = requestAnimationFrame(sample);
+    };
+    sample();
+    return () => {
+      cancelAnimationFrame(frames.frame);
+      return frames.positions;
+    };
+  });
+}
+
+export function historyMessageCount(pane: Locator) {
+  return pane.evaluate(
+    (element: HTMLElement & { state: { chatMessages: unknown[] } }) =>
+      element.state.chatMessages.length,
+  );
+}
+
 type HistoryPaginationSample = {
   marks: {
     armed: number;

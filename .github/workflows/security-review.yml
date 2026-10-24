@@ -10,6 +10,12 @@ on:
     types: [completed]
   schedule:
     - cron: "4-59/10 * * * *" # reconcile CI completions whose workflow_run delivery was lost
+  workflow_dispatch:
+    inputs:
+      completed_ci_run_id:
+        description: Completed CI run whose security review needs reconciliation
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -38,7 +44,9 @@ jobs:
       (contains(github.event.changes.body.from, '/allow-security-sensitive-change') ||
       contains(github.event.changes.body.from, '/allow-dependencies-change')))))) &&
       (github.event_name != 'workflow_run' || github.event.workflow_run.event == 'pull_request' ||
-      github.event.workflow_run.event == 'workflow_dispatch') }}
+      github.event.workflow_run.event == 'workflow_dispatch') &&
+      (github.event_name != 'workflow_dispatch' ||
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) }}
     # Rate-limit recovery can hold a scheduled resolver for an hour. GitHub keeps one
     # pending pass; the next pass still starts from the last successful window.
     concurrency:
@@ -95,7 +103,7 @@ jobs:
         timeout-minutes: 3
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.21.0"
+          node-version: "24.22.1"
           package-manager-cache: false
 
       - name: Resolve current pull requests
@@ -138,6 +146,8 @@ jobs:
     env:
       OPENCLAW_SECURITY_REVIEW_PR_NUMBER: ${{ matrix.pr }}
       OPENCLAW_SECURITY_REVIEW_HEAD_SHA: ${{ matrix.head }}
+      OPENCLAW_SECURITY_REVIEW_CI_RUN_ID: ${{ matrix.ciRunId }}
+      OPENCLAW_SECURITY_REVIEW_CI_RUN_ATTEMPT: ${{ matrix.ciRunAttempt }}
     steps:
       - name: Check out trusted workflow scripts
         id: checkout

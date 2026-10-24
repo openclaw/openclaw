@@ -3,7 +3,6 @@ import { QuestionManager } from "../gateway/question-manager.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import * as questionDispatch from "./harness/gateway-question-dispatch.js";
 import { createAskUserTool } from "./tools/ask-user-tool.js";
-import { resetPendingAskUserQuestionsForTest } from "./tools/ask-user-tool.test-support.js";
 
 const pendingAskUserFinishes = new Set<() => Promise<void>>();
 
@@ -76,5 +75,4 @@ export async function activateAskUserPrompt(toolCallId: string, args: unknown) {
 
 export async function finishPendingAskUserPrompts() {
   await Promise.all([...pendingAskUserFinishes].map((finish) => finish()));
-  resetPendingAskUserQuestionsForTest();
 }
