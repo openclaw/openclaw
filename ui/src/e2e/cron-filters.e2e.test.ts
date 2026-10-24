@@ -93,25 +93,6 @@ const requireRecord = createRequireRecord("record", "expected-object-value");
 
 const requestParams = (request: MockGatewayRequest) => requireRecord(request.params);
 
-async function waitForCronListRequest(
-  gateway: MockGatewayControls,
-  predicate: (params: Record<string, unknown>) => boolean,
-): Promise<MockGatewayRequest> {
-  const deadline = Date.now() + 10_000;
-  let requests: MockGatewayRequest[] = [];
-  while (Date.now() < deadline) {
-    requests = await gateway.getRequests("cron.list");
-    const match = requests.find((request) => predicate(requestParams(request)));
-    if (match) {
-      return match;
-    }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 10);
-    });
-  }
-  throw new Error(`No matching cron.list request found: ${JSON.stringify(requests)}`);
-}
-
 function button(page: Page, name: string) {
   return page.getByRole("button", { name, exact: true });
 }
@@ -210,20 +191,18 @@ suite.define(() => {
       await jobTitle(page, "Digest every minute").waitFor({ timeout: 10_000 });
       await jobTitle(page, "Nightly cron pending").waitFor({ timeout: 10_000 });
 
-      const initialRequest = await waitForCronListRequest(
-        gateway,
-        (params) => params.limit === 50 && params.scheduleKind === "all",
-      );
+      const initialRequest = await gateway.waitForRequest("cron.list", {
+        match: { limit: 50, scheduleKind: "all" },
+      });
       expect(requestParams(initialRequest)).toMatchObject(defaultListParams);
 
       await page.locator(".cron-filter-popover__trigger").click();
       await page.locator('[data-test-id="cron-jobs-schedule-filter"]').selectOption("cron");
       await page.locator('[data-test-id="cron-jobs-last-status-filter"]').selectOption("unknown");
 
-      const filteredRequest = await waitForCronListRequest(
-        gateway,
-        (params) => params.scheduleKind === "cron" && params.lastRunStatus === "unknown",
-      );
+      const filteredRequest = await gateway.waitForRequest("cron.list", {
+        match: { scheduleKind: "cron", lastRunStatus: "unknown" },
+      });
       expect(requestParams(filteredRequest)).toMatchObject({
         ...defaultListParams,
         lastRunStatus: "unknown",
