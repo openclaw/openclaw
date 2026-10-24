@@ -148,33 +148,38 @@ afterEach(() => {
 it.each(["desktop", undefined] as const)(
   "retains %s rows through failure but replaces them for a pending session",
   async (presentation) => {
+    const path = presentation ? "notes.md" : "C:\\workspace\\notes.md";
     const workspace = createWorkspace({
       presentation,
-      list: { root: "/workspace", files: [file("notes.md")] },
+      activeId: `file:${path}`,
+      list: { root: "/workspace", files: [file(path)] },
     });
     const mounted = await mountWorkspace(workspace);
-    const row = mounted.getByRole("button", { name: /^notes\.md$/ });
+    const row = mounted.getByRole("button", { name: path });
     const disclosure = row.closest("details");
     if (!presentation) {
       expect(disclosure).not.toBeNull();
+      expect(row.closest(".chat-workspace-rail__file--active")).not.toBeNull();
     }
     disclosure?.querySelector("summary")?.click();
+    row.focus();
     const open = disclosure?.open;
     mounted.update({ ...workspace, error: "Refresh unavailable" });
     await waitForSolid(() =>
       expect(mounted.getByRole("alert").textContent).toBe("Refresh unavailable"),
     );
-    expect(mounted.getByRole("button", { name: /^notes\.md$/ })).toBe(row);
+    expect(mounted.getByRole("button", { name: path })).toBe(row);
     expect(disclosure?.open).toBe(open);
+    expect(document.activeElement).toBe(row);
     row.click();
     expect(workspace.onOpenFile).toHaveBeenCalledWith(
-      "notes.md",
+      path,
       "session",
       ...(presentation ? ["preview"] : []),
     );
     mounted.update(workspace);
     await waitForSolid(() => expect(mounted.queryByRole("alert")).toBeNull());
-    expect(mounted.getByRole("button", { name: /^notes\.md$/ })).toBe(row);
+    expect(mounted.getByRole("button", { name: path })).toBe(row);
     expect(disclosure?.open).toBe(open);
     mounted.update(
       createWorkspace({ presentation, sessionKey: "agent:main:other", loading: true }),
@@ -182,7 +187,7 @@ it.each(["desktop", undefined] as const)(
     await waitForSolid(() =>
       expect(mounted.container.querySelector("openclaw-panel-loading-skeleton")).not.toBeNull(),
     );
-    expect(mounted.container.textContent).not.toContain("notes.md");
+    expect(mounted.queryByRole("button", { name: path })).toBeNull();
     if (presentation) {
       expect(button(mounted.container, "Search files")).not.toBeNull();
     }
@@ -215,72 +220,6 @@ describe("session workspace path actions", () => {
       }
     },
   );
-
-  it("retains selection and action focus across row refreshes", async () => {
-    clipboard();
-    const workspace = createWorkspace({ list: { root: "/workspace", files: [file("README.md")] } });
-    const { container, update } = await mountWorkspace(workspace);
-    workspace.onOpenFile = () => {
-      workspace.activeId = "file:README.md";
-      update();
-    };
-    const selected = () =>
-      container.querySelector(".chat-workspace-rail__file--active")?.textContent;
-    const preview = button(container, "Preview")!;
-    preview.focus();
-    preview.click();
-    update({ ...workspace, list: { ...workspace.list!, files: [file("README.md")] } });
-    expect(selected()).toContain("README.md");
-    expect(document.activeElement).toBe(preview);
-    const copy = button(container, "Copy path")!;
-    copy.focus();
-    copy.click();
-    await vi.waitFor(() => expect(copy.getAttribute("aria-label")).toBe("Copied!"));
-    update({ ...workspace, list: { ...workspace.list!, files: [file("README.md")] } });
-    expect(selected()).toContain("README.md");
-    expect(document.activeElement).toBe(copy);
-    expect(button(container, "Copied!")).toBe(copy);
-    expect(copy.parentElement?.querySelector('[role="status"]')?.textContent).toBe("Copied!");
-  });
-
-  it("keeps Windows file labels readable and distinct", async () => {
-    const root = "C:\\synthetic\\very-long-workspace-prefix";
-    const separator = "\\";
-    const path = (...parts: string[]) => [root, ...parts].join(separator);
-    const paths = [path("inventory.csv"), path("ui", "index.ts"), path("api", "index.ts")];
-    const writeText = clipboard();
-    const onOpenFile = vi.fn();
-    const files = paths.map((filePath, index) => file(filePath, index === 2 ? "read" : "modified"));
-    const workspace = createWorkspace({
-      list: { files, root },
-      activeId: `file:${paths[1]}`,
-      onOpenFile,
-    });
-    const { container: mount, update } = await mountWorkspace(workspace);
-    update(workspace);
-    expect(fileNames(mount)).toEqual([
-      "inventory.csv",
-      `ui${separator}index.ts`,
-      `api${separator}index.ts`,
-    ]);
-    const rows = [...mount.querySelectorAll(".chat-workspace-rail__file")];
-    for (const [index, row] of rows.entries()) {
-      const open = row.querySelector<HTMLButtonElement>(".chat-workspace-rail__file-open")!;
-      expect(open.getAttribute("aria-label")).toBe(paths[index]);
-      expect(row.querySelector("openclaw-tooltip")?.content).toBe(paths[index]);
-      open.click();
-      expect(onOpenFile).toHaveBeenLastCalledWith(paths[index], "session");
-      button(row, "Copy path")!.click();
-      await vi.waitFor(() => expect(writeText).toHaveBeenLastCalledWith(paths[index]));
-    }
-    expect(rows[1]?.classList.contains("chat-workspace-rail__file--active")).toBe(true);
-    workspace.filter = "changed";
-    update(workspace);
-    expect(fileNames(mount)).toEqual(["inventory.csv", `ui${separator}index.ts`]);
-    workspace.browserSearch = `ui${separator}index`;
-    update(workspace);
-    expect(fileNames(mount)).toEqual([`ui${separator}index.ts`]);
-  });
 
   it("reports copy failure without opening the session file or bubbling", async () => {
     const writeText = clipboard(

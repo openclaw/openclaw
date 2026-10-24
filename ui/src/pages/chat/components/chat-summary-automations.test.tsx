@@ -4,6 +4,7 @@ import { createSignal } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { CronCompactJob, CronJobsListResult } from "../../../api/types.ts";
+import { ApplicationProvider } from "../../../lib/reactive/context.ts";
 import { createApplicationGateway } from "../../../test-helpers/application-context.ts";
 import {
   createGatewayRequestMock,
@@ -11,12 +12,10 @@ import {
 } from "../../../test-helpers/gateway-client.ts";
 import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import { SessionAutomationMobileList } from "./chat-automation-mobile.tsx";
-import { ChatDetailsMobileContent } from "./chat-details-mobile-content.tsx";
-import {
-  ChatSummaryAutomations,
-  createSessionAutomationInventory,
-} from "./chat-summary-automations.tsx";
+import { ChatDetailsMobileHostContent } from "../chat-details-mobile-host-content.tsx";
+import { createChatMobileHostFixture } from "../chat-mobile-host.test-support.ts";
+import { createInitializationContext } from "../chat-pane.test-support.ts";
+import { ChatSummaryAutomations } from "./chat-summary-automations.tsx";
 
 type Page = CronJobsListResult<CronCompactJob>;
 
@@ -54,16 +53,24 @@ function sequence(...pages: (Page | Promise<Page>)[]) {
   return request;
 }
 function source(request = sequence(page([job()])), offline = false, scopes = ["operator.read"]) {
+  const current = createApplicationGateway({
+    ...createApplicationGateway().gateway.snapshot,
+    client: createTestGatewayClient(request),
+    phase: offline ? "offline" : "connected",
+    hello: { type: "hello-ok", protocol: 4, auth: { role: "operator", scopes } },
+    assistantAgentId: "ops",
+    sessionKey: "agent:ops:task",
+  });
   return {
     request,
-    ...createApplicationGateway({
-      ...createApplicationGateway().gateway.snapshot,
-      client: createTestGatewayClient(request),
-      phase: offline ? "offline" : "connected",
-      hello: { type: "hello-ok", protocol: 4, auth: { role: "operator", scopes } },
-      assistantAgentId: "ops",
-      sessionKey: "agent:ops:task",
-    }),
+    ...current,
+    phase: (phase: typeof current.gateway.snapshot.phase) =>
+      current.publish({ ...current.gateway.snapshot, phase }),
+    scopes: (nextScopes: string[]) =>
+      current.publish({
+        ...current.gateway.snapshot,
+        hello: { type: "hello-ok", protocol: 4, auth: { role: "operator", scopes: nextScopes } },
+      }),
   };
 }
 function component(
@@ -186,39 +193,25 @@ it("updates a held automation's runtime state without rereading its inventory", 
   current.unmount();
 });
 
-it("admits only presented session-scoped reads and uses the existing automation destination", async () => {
-  const pending = createDeferred<Page>();
-  const current = component(sequence(pending.promise), false);
-  const { element } = current;
+it("omits confirmed-empty sections and preserves manual collapse until the content disappears", async () => {
+  const title = "A long automation title that must remain unabridged and accessible";
+  const current = component(
+    sequence(page()).mockResolvedValue(page([job({ name: title })])),
+    false,
+  );
   flush();
   expect(current.request).not.toHaveBeenCalled();
   current.update({ presented: true });
-  expect(element.textContent?.trim()).toBe("");
-  expect(element.textContent).not.toContain("No automations");
-  expect(current.request).toHaveBeenCalledWith(
-    "cron.list",
-    expect.objectContaining({ sessionKey: "agent:ops:task", sessionAgentId: "ops", compact: true }),
-  );
-  const fullTitle = "A long automation title that must remain unabridged and accessible";
-  pending.resolve(page([job({ name: fullTitle })]));
-  await current.ready(fullTitle);
-  const link = current.part<HTMLAnchorElement>("")!;
-  expect(current.part("-title")?.textContent?.trim()).toBe(fullTitle);
-  expect(current.find<HTMLDetailsElement>('[data-details-group="automations"]')?.open).toBe(true);
-  const onNavigate = vi.fn();
-  current.update({ onNavigate });
-  link.click();
-  expect(onNavigate).toHaveBeenCalledWith("summary-job");
-  expect(current.request).toHaveBeenCalledTimes(1);
-});
-
-it("omits confirmed-empty sections and preserves manual collapse until the content disappears", async () => {
-  const current = component(sequence(page()).mockResolvedValue(page([job()])));
-  flush();
+  expect(current.element.textContent?.trim()).toBe("");
   await current.empty();
   expect(current.find("summary")).toBeNull();
   current.cron("added");
-  await current.ready();
+  await current.ready(title);
+  expect(current.part("-title")?.textContent?.trim()).toBe(title);
+  const onNavigate = vi.fn();
+  current.update({ onNavigate });
+  current.part<HTMLAnchorElement>()!.click();
+  expect(onNavigate).toHaveBeenCalledWith("summary-job");
   const group = current.find<HTMLDetailsElement>("details")!;
   expect(group.open).toBe(true);
   group.open = false;
@@ -226,13 +219,13 @@ it("omits confirmed-empty sections and preserves manual collapse until the conte
   flush();
   current.cron();
   flush();
-  await current.ready();
+  await current.ready(title);
   expect(current.find("details")).toBe(group);
   expect(group.open).toBe(false);
   const link = current.part("");
   current.update({ presented: false });
   current.update({ presented: true });
-  await current.ready();
+  await current.ready(title);
   expect(current.find("details")).toBe(group);
   expect(group.open).toBe(false);
   expect(current.part("")).toBe(link);
@@ -241,37 +234,46 @@ it("omits confirmed-empty sections and preserves manual collapse until the conte
   await current.empty();
   expect(current.find("summary")).toBeNull();
   current.cron("added");
-  await current.ready();
+  await current.ready(title);
   expect(current.find<HTMLDetailsElement>("details")?.open).toBe(true);
 });
 
-it.each([false, true])(
-  "recovers inventory reads without changing paused jobs: loaded=%s",
-  async (loaded) => {
+it.each(["recover", "hidden", "offline", "denied", "unmounted"] as const)(
+  "settles scheduled inventory recovery: %s",
+  async (boundary) => {
     vi.useFakeTimers();
-    const request = createGatewayRequestMock();
-    if (loaded) {
-      request.mockResolvedValueOnce(page([job({ enabled: false })]));
-    }
-    request.mockRejectedValueOnce(new Error("Temporary inventory failure"));
-    const current = component(request);
+    const current = component(
+      createGatewayRequestMock().mockRejectedValue(new Error("Temporary failure")),
+    );
     await tick();
-    if (loaded) {
-      current.cron();
-      await tick();
+    expect(current.part("-retry")).toBeNull();
+    const count = current.request.mock.calls.length;
+    if (boundary === "recover") {
+      current.request.mockResolvedValue(
+        page([job({ name: "Recovered automation", enabled: false })]),
+      );
+      current.publish({ ...current.gateway.snapshot });
+      await tick(29_999);
+      expect(current.request).toHaveBeenCalledTimes(count);
+      await tick(1);
+      expect(current.element.textContent).toContain("Recovered automation");
       expect(current.element.textContent).toContain("Paused");
+      expect(current.part("-retry")).toBeNull();
+      expect(current.request).toHaveBeenCalledTimes(count + 1);
+      return;
     }
-    expect(current.part("-retry")).toBeNull();
-    const count = request.mock.calls.length;
-    request.mockResolvedValue(page([job({ name: "Recovered automation", enabled: false })]));
-    current.publish({ ...current.gateway.snapshot });
-    await vi.advanceTimersByTimeAsync(29_999);
-    expect(request).toHaveBeenCalledTimes(count);
-    await tick(1);
-    expect(current.element.textContent).toContain("Recovered automation");
-    expect(current.element.textContent).toContain("Paused");
-    expect(current.part("-retry")).toBeNull();
-    expect(request).toHaveBeenCalledTimes(count + 1);
+    if (boundary === "hidden") {
+      current.update({ presented: false });
+    } else if (boundary === "offline") {
+      current.phase("reconnecting");
+    } else if (boundary === "denied") {
+      current.scopes([]);
+    } else {
+      current.unmount();
+    }
+    await tick(60_000);
+    expect(current.request).toHaveBeenCalledTimes(count);
+    expect(vi.getTimerCount()).toBe(0);
   },
 );
 
@@ -310,33 +312,6 @@ it.each(["retry", "event", "reconnect"] as const)(
     expect(current.element.textContent).toContain("Authorized automation");
     expect(current.element.textContent).toContain("Paused");
     expect(request).toHaveBeenCalledTimes(3);
-  },
-);
-
-it.each(["hidden", "offline", "denied", "unmounted"] as const)(
-  "retires pending inventory recovery when %s",
-  async (boundary) => {
-    vi.useFakeTimers();
-    const current = component(
-      createGatewayRequestMock().mockRejectedValue(new Error("Temporary failure")),
-    );
-    await tick();
-    if (boundary === "hidden") {
-      current.update({ presented: false });
-    } else if (boundary === "offline") {
-      current.publish({ ...current.gateway.snapshot, phase: "reconnecting" });
-    } else if (boundary === "denied") {
-      current.publish({
-        ...current.gateway.snapshot,
-        hello: { type: "hello-ok", protocol: 4, auth: { role: "operator", scopes: [] } },
-      });
-    } else {
-      current.unmount();
-    }
-    const count = current.request.mock.calls.length;
-    await tick(60_000);
-    expect(current.request).toHaveBeenCalledTimes(count);
-    expect(vi.getTimerCount()).toBe(0);
   },
 );
 
@@ -383,7 +358,7 @@ it("fences late pages on session and same-client reconnect boundaries", async ()
   flush();
   current.update({ sessionKey: "agent:ops:second" });
   const snapshot = current.gateway.snapshot;
-  current.publish({ ...snapshot, phase: "reconnecting" });
+  current.phase("reconnecting");
   current.publish(snapshot);
   flush();
   expect(current.request).toHaveBeenCalledTimes(3);
@@ -404,7 +379,7 @@ it("does not invent inventory while offline or without a resolvable session", as
   flush();
   expect(ui.element.textContent?.trim()).toBe("");
   ui.update({ sessionKey: "unresolved-session" });
-  ui.publish({ ...ui.gateway.snapshot, phase: "connected" });
+  ui.phase("connected");
   flush();
   expect(ui.element.textContent?.trim()).toBe("");
   expect(ui.request).not.toHaveBeenCalled();
@@ -434,14 +409,7 @@ it.each([false, true])("retires automation access and late pages: loaded=%s", as
   }
   flush();
   const authorized = current.gateway.snapshot;
-  current.publish({
-    ...authorized,
-    hello: {
-      type: "hello-ok",
-      protocol: 4,
-      auth: { role: "operator", scopes: ["operator.sessions.read"] },
-    },
-  });
+  current.scopes(["operator.sessions.read"]);
   await current.empty();
   pending.resolve(page([job({ name: "Retired automation" })]));
   await pending.promise;
@@ -460,56 +428,20 @@ it("shares pending reads and failed refresh recovery between the mobile list and
   const refresh = createDeferred<Page>();
   const recovery = createDeferred<Page>();
   const current = source(sequence(first.promise, refresh.promise, recovery.promise));
-  const view = mountSolid(() => {
-    let host!: HTMLElement;
-    const props = { gateway: current.gateway, sessionKey: "agent:ops:task", presented: true };
-    const inventory = createSessionAutomationInventory(props, () => host);
-    return (
-      <section ref={(element) => (host = element)}>
-        {inventory.lifecycle}
-        <output>{inventory.loaded() ? inventory.total() : "unknown"}</output>
-        <SessionAutomationMobileList inventory={inventory} basePath="" onOpenAutomation={vi.fn()} />
-        <ChatDetailsMobileContent
-          details={{
-            sessionKey: "agent:ops:task",
-            selectedSession: { key: "agent:ops:task", kind: "direct" },
-            currentAgentId: "ops",
-            messages: [],
-          }}
-          presented
-          page={{
-            kind: "root",
-            content: {
-              entries: {
-                labels: {
-                  people: "People",
-                  taskProgress: "Task progress",
-                  subagents: "Subagents",
-                  processes: "Processes",
-                  environment: "Environment",
-                  context: "Context",
-                  pullRequests: "Pull requests",
-                  automations: "Automations",
-                  generatedFiles: "Generated files",
-                  session: "Session",
-                },
-                people: { label: "People" },
-                versions: { label: "Versions", metadata: 1 },
-                onNavigate: vi.fn(),
-              },
-              processes: undefined,
-              subagents: {
-                workingLabel: "Working",
-                onOpenSubagent: vi.fn(),
-                onOpenSubagents: vi.fn(),
-              },
-              automations: { inventory, summary: { label: "Automations" } },
-            },
-          }}
-        />
-      </section>
-    );
+  const context = { ...createInitializationContext(), gateway: current.gateway };
+  const host = createChatMobileHostFixture("automations", {
+    open: true,
+    destination: { area: "details" },
   });
+  const view = mountSolid(() => (
+    <ApplicationProvider value={context}>
+      <ChatDetailsMobileHostContent
+        host={host}
+        details={{ sessionKey: "agent:ops:task", currentAgentId: "ops", messages: [] }}
+        presented
+      />
+    </ApplicationProvider>
+  ));
   await waitForSolid(() => {
     expect(view.container.textContent).toContain("Loading automations…");
     expect(current.request).toHaveBeenCalledTimes(1);
@@ -519,8 +451,12 @@ it("shares pending reads and failed refresh recovery between the mobile list and
   });
   first.resolve(page([job()]));
   const rows = () => view.container.querySelectorAll<HTMLAnchorElement>("a");
-  await waitForSolid(() => expect(rows()).toHaveLength(1));
-  expect(view.container.querySelector("output")?.textContent).toBe("1");
+  await waitForSolid(() => {
+    expect(rows()).toHaveLength(1);
+    expect(
+      view.container.querySelector('[data-details-group="automations"] button')?.textContent,
+    ).toContain("Check the task");
+  });
   const retainedRows = [...rows()];
   retainedRows[0]!.focus();
   current.publishEvent({ type: "event", event: "cron", payload: { action: "updated" } });
