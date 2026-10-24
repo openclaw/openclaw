@@ -18,6 +18,7 @@ import {
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
+import { gatewayConnect } from "../server/client-fixtures.test-support.js";
 import type { GatewayClient } from "./client-types.js";
 import type { RespondFn } from "./types.js";
 
@@ -42,13 +43,7 @@ vi.mock("@openclaw/fs-safe/atomic", async (importOriginal) => {
 });
 
 const client: GatewayClient = {
-  connect: {
-    minProtocol: 1,
-    maxProtocol: 1,
-    role: "operator",
-    scopes: ["operator.admin"],
-    client: { id: "test", mode: "test", platform: "test", version: "1" },
-  },
+  connect: gatewayConnect(["operator.admin"], { id: "test", mode: "test", version: "1" }),
 };
 let state: OpenClawTestState;
 let config: OpenClawConfig;

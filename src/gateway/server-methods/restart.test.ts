@@ -9,7 +9,9 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../../process/gateway-work-admission.js";
+import { gatewayRequest } from "../request-frame.test-support.js";
 import { handleGatewayRequest } from "../server-methods.js";
+import { gatewayConnect } from "../server/client-fixtures.test-support.js";
 import { restartHandlers } from "./restart.js";
 
 const scheduleSafeGatewayRestart = vi.hoisted(() => vi.fn());
@@ -69,23 +71,12 @@ async function invokeRestartRequestThroughGateway(params: unknown) {
     'restartHandlers["gateway.restart.request"] test invariant',
   );
   await handleGatewayRequest({
-    req: {
-      type: "req",
-      id: `request-${crypto.randomUUID()}`,
-      method: "gateway.restart.request",
-      params,
-    },
+    req: gatewayRequest(`request-${crypto.randomUUID()}`, "gateway.restart.request", params),
     respond,
     client: {
       connId: `conn-${crypto.randomUUID()}`,
       clientIp: "127.0.0.1",
-      connect: {
-        role: "operator",
-        scopes: ["operator.admin"],
-        client: { id: "cli", version: "test", platform: "linux", mode: "cli" },
-        minProtocol: 1,
-        maxProtocol: 1,
-      },
+      connect: gatewayConnect(["operator.admin"], { id: "cli", platform: "linux", mode: "cli" }),
     },
     isWebchatConnect: () => false,
     context: { logGateway: { warn: vi.fn() } } as unknown as Parameters<

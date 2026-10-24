@@ -5,7 +5,9 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { managedWorktrees } from "../../agents/worktrees/service.js";
 import type { ManagedWorktreeRecord } from "../../agents/worktrees/types.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
+import { gatewayRequest } from "../request-frame.test-support.js";
 import { handleGatewayRequest } from "../server-methods.js";
+import { gatewayConnect } from "../server/client-fixtures.test-support.js";
 import { worktreesHandlers } from "./worktrees.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -38,22 +40,11 @@ async function dispatchCreate(params: { repoRoot: string; scopes: string[]; work
   }
   const respond = vi.fn();
   await handleGatewayRequest({
-    req: {
-      type: "req",
-      id: "req-worktree-create",
-      method: "worktrees.create",
-      params: { repoRoot: params.repoRoot },
-    },
+    req: gatewayRequest("req-worktree-create", "worktrees.create", { repoRoot: params.repoRoot }),
     respond,
     client: {
       connId: "conn-worktree-create",
-      connect: {
-        role: "operator",
-        scopes: params.scopes,
-        client: { id: "test", version: "1", platform: "test", mode: "test" },
-        minProtocol: 1,
-        maxProtocol: 1,
-      },
+      connect: gatewayConnect(params.scopes, { id: "test", version: "1", mode: "test" }),
     } as Parameters<typeof handleGatewayRequest>[0]["client"],
     isWebchatConnect: () => false,
     context: {
