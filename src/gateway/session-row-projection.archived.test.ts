@@ -365,6 +365,7 @@ it("bounds archived residency across pages and evicts the least recently read ro
         pagePrepared.resolve();
         return releasePage.promise;
       }
+      return undefined;
     };
     const pendingPage = listRows(projection, {
       archived: true,
@@ -385,6 +386,7 @@ it("bounds archived residency across pages and evicts the least recently read ro
           secondPrepared.resolve();
           return releaseSecond.promise;
         }
+        return undefined;
       };
       overlappingPage = listRows(projection, { archived: true, limit: 110, offset: 18 });
       await waitForPage(overlappingPage, secondPrepared, signal);
@@ -425,6 +427,7 @@ it("bounds archived residency across pages and evicts the least recently read ro
           return barrier.resume.promise;
         }
       }
+      return undefined;
     };
     const pages: Array<ReturnType<typeof listProjectedSessions>> = [];
     try {
