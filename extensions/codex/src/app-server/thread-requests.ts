@@ -273,6 +273,9 @@ export function buildCodexRuntimeThreadConfig(
   const codeModeOnly = options.nativeCodeModeOnlyEnabled === true;
   const merged = expectDefined(
     mergeCodexThreadConfigs(
+      // Codex owns model eligibility, history replay, and the pinned request effort.
+      // Opt into its cache-preserving controls until the bundled default catches up.
+      { "features.reasoning_effort_override": true },
       enabled
         ? { ...CODEX_CODE_MODE_THREAD_CONFIG, "features.code_mode_only": codeModeOnly }
         : undefined,
