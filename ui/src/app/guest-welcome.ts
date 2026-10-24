@@ -238,16 +238,12 @@ export class GuestWelcome {
       gatewayOriginScope(this.options.gateway.connection.gatewayUrl) +
       ":" +
       encodeURIComponent(result.sessionKey);
-    let visited: boolean | null;
     try {
-      const storage = getSafeLocalStorage();
-      visited = storage ? storage.getItem(key) === "1" : null;
+      if (getSafeLocalStorage()?.getItem(key) === "1") {
+        return;
+      }
     } catch {
-      visited = null;
-    }
-    // Without a durable record, only the call that created the session lands the guest.
-    if (visited === true || (visited === null && !result.created)) {
-      return;
+      // Unreadable storage cannot prove a visit; the write below decides.
     }
     let home = false;
     try {
@@ -258,10 +254,17 @@ export class GuestWelcome {
     if (!home || epoch !== this.epoch) {
       return;
     }
+    let recorded = false;
     try {
-      getSafeLocalStorage()?.setItem(key, "1");
+      const storage = getSafeLocalStorage();
+      storage?.setItem(key, "1");
+      recorded = storage !== null;
     } catch {
-      // Blocked storage still lands once for this load.
+      // Blocked or full storage leaves no record.
+    }
+    // Without a durable record, only the call that created the session lands the guest.
+    if (!recorded && !result.created) {
+      return;
     }
     this.options.openSession(result.sessionKey, result.agentId);
   }

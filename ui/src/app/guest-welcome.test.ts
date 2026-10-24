@@ -124,6 +124,23 @@ describe("GuestWelcome", () => {
     expect(created.openSession).toHaveBeenCalledOnce();
   });
 
+  it("lands only the creating call when storage reads but cannot write", async () => {
+    const full = createStorageMock();
+    full.setItem = () => {
+      throw new DOMException("quota", "QuotaExceededError");
+    };
+    vi.stubGlobal("localStorage", full);
+    const existing = harness({ responses: [{ ...READY, created: false }] });
+    existing.connect();
+    await vi.runAllTimersAsync();
+    expect(existing.isHomeLanding).toHaveBeenCalledOnce();
+    expect(existing.openSession).not.toHaveBeenCalled();
+    const created = harness({ responses: [{ ...READY, created: true }] });
+    created.connect();
+    await vi.runAllTimersAsync();
+    expect(created.openSession).toHaveBeenCalledOnce();
+  });
+
   it.each([
     ["the method is not advertised", { methods: [] }],
     ["the Gateway predates the method catalog", { methods: null }],
