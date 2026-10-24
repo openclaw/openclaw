@@ -143,8 +143,10 @@ warm-snapshot comparison path remains separate.
 For the 100 ms RTT / 10 Mbps profile, replace `--latency-ms 0` with
 `--latency-ms 100 --network-latency-ms 100 --download-kbps 10000` and add
 `--cold-http-cache`. HTTP/CDP throttling does not affect the synthetic WebSocket,
-so the explicit RPC reply floor is required. The floor includes no real server
-work and serialized Gateway events may add their own fixture delay.
+so critical-path mode also applies the explicit RPC reply floor and serializes
+received frame bytes at the selected download rate. HTTP and WebSocket traffic
+use separate simulated pipes. The floor includes no real server work, and
+serialized Gateway events may add their own fixture delay.
 
 `run-1.critical-path.json` records document-clock start/readiness/capture times,
 RPCs (including requests already in flight at interaction start), duplicate
