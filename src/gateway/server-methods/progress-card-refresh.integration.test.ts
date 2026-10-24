@@ -423,6 +423,12 @@ describe("registered progress refresh admission", () => {
           ),
         );
         expect(respond.mock.calls).toEqual([acceptedResponse(), acceptedResponse()]);
+        const accepted = respond.mock.calls[0]?.[1];
+        if (!isRecord(accepted) || typeof accepted.runId !== "string") {
+          throw new Error("Missing active refresh acceptance");
+        }
+        // The ACK precedes native steering; keep its incumbent alive until source settlement.
+        await rpcSourceTesting.get(accepted.runId)?.input.settlement.promise;
         expect(claim).not.toHaveBeenCalled();
         expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
         expect(getAgentRunContext("original-work")).toMatchObject(visibleProjection);

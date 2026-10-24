@@ -26,7 +26,7 @@ import type {
   UpdateRunStep,
 } from "./update-run-record.js";
 import { UpdateRecoveryRequiredError } from "./update-run-recovery-schema.js";
-import { isRequiredUpdateRunStep } from "./update-run-write.js";
+import { hasUpdateRunDiagnostics, isRequiredUpdateRunStep } from "./update-run-write.js";
 
 export type UpdateRunWriteOptions = UpdateRunLedgerOptions & {
   context?: OpenClawStateWorkerContext;
@@ -198,14 +198,7 @@ export async function recordUpdateRunDiagnosticsAsync(
   warn: (message: string) => void,
   options: UpdateRunWriteOptions & { preserveRecovery?: true } = {},
 ): Promise<UpdateRunRecord | undefined> {
-  if (
-    !(
-      diagnostics.failure ||
-      diagnostics.recovery ||
-      diagnostics.rollbackOutcome ||
-      diagnostics.verification
-    )
-  ) {
+  if (!hasUpdateRunDiagnostics(diagnostics)) {
     return undefined;
   }
   try {

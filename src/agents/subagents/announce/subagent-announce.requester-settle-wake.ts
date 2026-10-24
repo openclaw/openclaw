@@ -508,6 +508,7 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
       children: completionRows,
       recoveryChildren: recoveryRows,
       completionChannel: directOrigin?.channel,
+      requesterOrigin: directOrigin,
       retainedMessage:
         parentOnly && state.privateInput?.runId === directIdempotencyKey
           ? state.privateInput.message

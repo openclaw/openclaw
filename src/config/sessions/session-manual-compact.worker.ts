@@ -19,6 +19,7 @@ import type {
   SessionSourcePredicate,
   SessionSourceValidation,
 } from "./session-source-authority.js";
+import { createSessionSourceConversationMatches } from "./session-source-conversation-matches.js";
 import { reconcileSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
 
 export type ManualCompactInput = {
@@ -45,20 +46,7 @@ export function compactManualTranscript(
   input: ManualCompactInput,
   context: AgentWorkerOperationContext,
 ) {
-  const sourceMatches = input.sources.flatMap((source, index) =>
-    source.conversationAlternatives
-      ? [
-          {
-            index,
-            matches: new Int32Array(
-              new SharedArrayBuffer(
-                (source.conversationAlternatives.length + 1) * Int32Array.BYTES_PER_ELEMENT,
-              ),
-            ),
-          },
-        ]
-      : [],
-  );
+  const sourceMatches = createSessionSourceConversationMatches(input.sources);
   using source = prepareSessionColdSourceGuard(context.options, input.sources, sourceMatches);
   const database = context.open();
   const rows = readTranscriptEventRows(database, input.scope.sessionId);

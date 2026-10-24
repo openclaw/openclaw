@@ -93,7 +93,9 @@ the input owner marks optional may finish silently; it does not by itself satisf
 an outstanding user reply.
 OpenClaw does not automatically send the child result, parent final, or
 generated media to a channel. The parent can still choose to send a message
-through its permitted tools.
+through its permitted tools. When the requester has no current conversation or
+delivery target, the private completion guidance tells it to record its final
+reply in the session for the requester; no messaging send is needed.
 
 If the parent called `sessions_yield` while waiting for private children, the
 yield hands the conversation back to it. When those children settle, the parent

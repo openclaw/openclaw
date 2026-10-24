@@ -630,56 +630,65 @@ describe("diagnostic support export", () => {
     }
   });
 
-  it("includes mDNS config state and recent Bonjour log summary", async () => {
-    const configPath = path.join(tempDir, "openclaw.json");
-    const outputPath = path.join(tempDir, "support-bonjour.zip");
-    writeJson(configPath, { discovery: { mdns: { mode: "minimal" } } });
-    vi.mocked(logTailModule.readConfiguredLogTail).mockResolvedValue({
-      file: path.join(tempDir, "logs", "openclaw.log"),
-      cursor: 0,
-      size: 0,
-      truncated: false,
-      reset: false,
-      lines: [
-        JSON.stringify({
-          time: "2026-04-22T12:00:00.000Z",
-          level: "warn",
-          subsystem: "gateway/discovery/bonjour",
-          msg: "bonjour: suppressing ciao interface assertion: AssertionError",
-        }),
-        JSON.stringify({
+  it.each([
+    [undefined, "unset"],
+    ["  ", "unset"],
+    ["1", "force-disabled"],
+    ["0", "force-enabled"],
+    ["not-a-boolean", "unrecognized"],
+  ] as const)(
+    "includes mDNS config state and recent Bonjour log summary (%s)",
+    async (value, expected) => {
+      const configPath = path.join(tempDir, "openclaw.json");
+      const outputPath = path.join(tempDir, "support-bonjour.zip");
+      writeJson(configPath, { discovery: { mdns: { mode: "minimal" } } });
+      vi.mocked(logTailModule.readConfiguredLogTail).mockResolvedValue({
+        file: path.join(tempDir, "logs", "openclaw.log"),
+        cursor: 0,
+        size: 0,
+        truncated: false,
+        reset: false,
+        lines: [
+          JSON.stringify({
+            time: "2026-04-22T12:00:00.000Z",
+            level: "warn",
+            subsystem: "gateway/discovery/bonjour",
+            msg: "bonjour: suppressing ciao interface assertion: AssertionError",
+          }),
+          JSON.stringify({
+            time: "2026-04-22T12:00:00.500Z",
+            level: "warn",
+            msg: "bonjour: disabling advertiser after 3 failed restarts",
+          }),
+        ],
+      });
+      vi.stubEnv("OPENCLAW_DISABLE_BONJOUR", value);
+      await writeDiagnosticSupportExport({ outputPath });
+
+      const entries = await readZipTextEntries(outputPath);
+      const configShape = readJsonEntry(entries, "config/shape.json");
+      expect(configShape).toHaveProperty("discovery", {
+        mdnsMode: "minimal",
+        bonjourEnvOverride: expected,
+      });
+
+      const diagnostics = readJsonEntry(entries, "diagnostics.json");
+      expect(diagnostics).toHaveProperty("bonjour", {
+        count: 2,
+        warnings: 2,
+        last: {
           time: "2026-04-22T12:00:00.500Z",
           level: "warn",
-          msg: "bonjour: disabling advertiser after 3 failed restarts",
-        }),
-      ],
-    });
-    vi.stubEnv("OPENCLAW_DISABLE_BONJOUR", "1");
-    await writeDiagnosticSupportExport({ outputPath });
-
-    const entries = await readZipTextEntries(outputPath);
-    const configShape = readJsonEntry(entries, "config/shape.json");
-    expect(configShape).toHaveProperty("discovery", {
-      mdnsMode: "minimal",
-      bonjourEnvOverride: "force-disabled",
-    });
-
-    const diagnostics = readJsonEntry(entries, "diagnostics.json");
-    expect(diagnostics).toHaveProperty("bonjour", {
-      count: 2,
-      warnings: 2,
-      last: {
-        time: "2026-04-22T12:00:00.500Z",
-        level: "warn",
-        kind: "disabled",
-      },
-      flags: {
-        disabled: true,
-        restarted: false,
-        ciaoSuppressed: true,
-      },
-    });
-  });
+          kind: "disabled",
+        },
+        flags: {
+          disabled: true,
+          restarted: false,
+          ciaoSuppressed: true,
+        },
+      });
+    },
+  );
 
   it("keeps writing when status and health snapshots fail", async () => {
     const fakeToken = "sk-test-support-export-secret-token-1234567890";
