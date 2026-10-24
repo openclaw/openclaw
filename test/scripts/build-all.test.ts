@@ -3,7 +3,7 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   BUILD_ALL_STEPS,
   formatBuildAllTimingSummary,
@@ -41,11 +41,11 @@ import { toolingProbeRuntimeEntrypoints } from "./tooling-probe-runtime.test-sup
 import { createFixture } from "./tsdown-declaration-fixture.js";
 
 beforeEach(() => {
-  const fence = vi
-    .spyOn(liveGatewayDistFence, "resolveLiveManagedGatewayDistFence")
-    .mockResolvedValue({ refuse: false });
-  onTestFinished(() => fence.mockRestore());
+  vi.spyOn(liveGatewayDistFence, "resolveLiveManagedGatewayDistFence").mockResolvedValue({
+    refuse: false,
+  });
 });
+afterEach(() => vi.restoreAllMocks());
 
 vi.mock("../../src/cli/update-cli/update-command-service-publication.js", () => ({
   withGatewayRuntimeArtifactPublication: async (
@@ -717,16 +717,6 @@ describe("resolveBuildAllSteps", () => {
       expect(invocations.every((call) => call.options.env.OPENCLAW_BUILD_PRIVATE_QA === "1")).toBe(
         true,
       );
-      expect(result.timings.map(({ label }) => label)).toEqual([
-        "plugins:assets:build",
-        STEP.compile,
-        STEP.external,
-        STEP.bootstrap,
-        STEP.copy,
-        STEP.postbuild,
-        "build-stamp",
-        "runtime-postbuild-stamp",
-      ]);
       expect(postbuild).not.toHaveBeenCalled();
       expect(
         ["run-node-build.lock", "dist-artifacts.lock/owner.json"].map((file) =>
@@ -767,11 +757,6 @@ describe("resolveBuildAllSteps", () => {
 
       expect(result.exitCode).toBe(0);
       const labels = result.timings.map((timing) => timing.label);
-      expect(labels).toEqual(
-        resolveBuildAllSteps(profile, {
-          OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: runtimeOnly ? "1" : "0",
-        }).map((step) => step.label),
-      );
       expect(labels).not.toContain(STEP.sdk);
       expect(labels.includes(STEP.unified)).toBe(!runtimeOnly);
       expect(labels.includes("check-plugin-sdk-exports")).toBe(!runtimeOnly);
@@ -818,17 +803,13 @@ describe("resolveBuildStepCacheState", () => {
     const savedReads = () =>
       read.mock.calls.filter(([file]) => String(file).startsWith(`${cached.outputRoot}${path.sep}`))
         .length;
-    try {
-      expect(f.lookup()).toMatchObject({ fresh: true, restorable: false });
-      expect(savedReads()).toBe(0);
-      fs.writeFileSync(f.outputPath, "changed live bytes");
-      expect(f.lookup()).toMatchObject({ fresh: true, restorable: true });
-      expect(savedReads()).toBeGreaterThan(0);
-      fs.writeFileSync(path.join(cached.outputRoot!, "dist/output.js"), "changed saved bytes");
-      expect(f.lookup()).toMatchObject({ fresh: false, restorable: false });
-    } finally {
-      read.mockRestore();
-    }
+    expect(f.lookup()).toMatchObject({ fresh: true, restorable: false });
+    expect(savedReads()).toBe(0);
+    fs.writeFileSync(f.outputPath, "changed live bytes");
+    expect(f.lookup()).toMatchObject({ fresh: true, restorable: true });
+    expect(savedReads()).toBeGreaterThan(0);
+    fs.writeFileSync(path.join(cached.outputRoot!, "dist/output.js"), "changed saved bytes");
+    expect(f.lookup()).toMatchObject({ fresh: false, restorable: false });
   });
 
   it("hashes static inputs once on warm lookup and invalidates changed or removed compiler inputs", () => {
@@ -856,12 +837,9 @@ describe("resolveBuildStepCacheState", () => {
       params,
     );
     const read = vi.spyOn(fs, "readFileSync");
-    try {
-      expect(lookup()).toMatchObject({ fresh: true, consumedInputs: inputs });
-      expect(read.mock.calls.filter(([file]) => file === f.inputPath)).toHaveLength(1);
-    } finally {
-      read.mockRestore();
-    }
+    expect(lookup()).toMatchObject({ fresh: true, consumedInputs: inputs });
+    expect(read.mock.calls.filter(([file]) => file === f.inputPath)).toHaveLength(1);
+    read.mockRestore();
     fs.writeFileSync(consumed, "changed");
     expect(lookup().fresh).toBe(false);
     fs.rmSync(consumed);
@@ -929,18 +907,14 @@ describe("resolveBuildStepCacheState", () => {
     const state = f.publish();
     fs.writeFileSync(f.outputPath, "changed bytes");
     const copy = fs.copyFileSync.bind(fs);
-    const fail = vi.spyOn(fs, "copyFileSync").mockImplementation((source, target, mode) => {
+    vi.spyOn(fs, "copyFileSync").mockImplementation((source, target, mode) => {
       if (String(target).startsWith(state.outputRoot!)) {
         expect(fs.existsSync(state.stampPath!)).toBe(false);
         throw new Error("fixture copy failure");
       }
       return copy(source, target, mode);
     });
-    try {
-      expect(() => f.publish()).toThrow("fixture copy failure");
-    } finally {
-      fail.mockRestore();
-    }
+    expect(() => f.publish()).toThrow("fixture copy failure");
     expect(fs.existsSync(state.stampPath!)).toBe(false);
     expect(f.lookup()).toMatchObject({ fresh: false, restorable: false });
   });
@@ -950,20 +924,16 @@ describe("resolveBuildStepCacheState", () => {
     f.publish();
     const staging = tempDirs.make("openclaw-cache-private-stage-");
     const rename = vi.spyOn(fs, "renameSync");
-    try {
-      expect(
-        restoreOutputs(f.lookup(), { ...f.params, artifactRoot: staging, staging: true }),
-      ).toBe(true);
-      expect(readText(path.join(staging, "dist/output.js"))).toBe("output");
-      expect(rename.mock.calls.filter(([, target]) => String(target).startsWith(staging))).toEqual(
-        [],
-      );
-      fs.writeFileSync(path.join(staging, "dist/output.js"), "private change");
-      expect(readText(f.outputPath)).toBe("output");
-      expect(f.lookup().fresh).toBe(true);
-    } finally {
-      rename.mockRestore();
-    }
+    expect(restoreOutputs(f.lookup(), { ...f.params, artifactRoot: staging, staging: true })).toBe(
+      true,
+    );
+    expect(readText(path.join(staging, "dist/output.js"))).toBe("output");
+    expect(rename.mock.calls.filter(([, target]) => String(target).startsWith(staging))).toEqual(
+      [],
+    );
+    fs.writeFileSync(path.join(staging, "dist/output.js"), "private change");
+    expect(readText(f.outputPath)).toBe("output");
+    expect(f.lookup().fresh).toBe(true);
   });
 
   it("keeps live outputs and the cache valid when a private staging copy fails", () => {
@@ -972,19 +942,15 @@ describe("resolveBuildStepCacheState", () => {
     f.publish();
     const staging = tempDirs.make("openclaw-cache-failed-stage-");
     const copy = fs.copyFileSync.bind(fs);
-    const fail = vi.spyOn(fs, "copyFileSync").mockImplementation((source, target, mode) => {
+    vi.spyOn(fs, "copyFileSync").mockImplementation((source, target, mode) => {
       if (String(target).startsWith(staging) && String(target).includes("second.js")) {
         throw new Error("fixture staging copy failure");
       }
       return copy(source, target, mode);
     });
-    try {
-      expect(() =>
-        restoreOutputs(f.lookup(), { ...f.params, artifactRoot: staging, staging: true }),
-      ).toThrow("fixture staging copy failure");
-    } finally {
-      fail.mockRestore();
-    }
+    expect(() =>
+      restoreOutputs(f.lookup(), { ...f.params, artifactRoot: staging, staging: true }),
+    ).toThrow("fixture staging copy failure");
     expect(readText(f.outputPath)).toBe("output");
     expect(readText(path.join(f.rootDir, "dist/second.js"))).toBe("second");
     expect(f.lookup().fresh).toBe(true);

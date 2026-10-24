@@ -635,11 +635,13 @@ describe("ClawHub prepared publication", () => {
   it.each(["selected", "all-publishable"])(
     "retains the %s prepared roster when an exact version is adopted on resume",
     async (selectionMode) => {
-      const f = preparedFixture(selectionMode);
+      const f = preparedFixture(selectionMode, "cloudflare");
       const [entry] = await resolvePreparedClawHubMatrix(f.resolveOptions);
       expect(entry.alreadyPublished).toBe(true);
+      expect(entry.family).toBe("bundle-plugin");
+      expect(entry.publication).toEqual({ state: "published" });
       await restorePreparedClawHubPackage({ ...f.restoreOptions, entry: entry.prepared });
-      expect(readFileSync(join(f.restoreOptions.outputDir, "example.tgz"))).toEqual(f.tarball);
+      expect(readFileSync(join(f.restoreOptions.outputDir, "cloudflare.tgz"))).toEqual(f.tarball);
       const readback = await verifyPublishedClawHubPackage({
         expectedArtifactDir: f.restoreOptions.outputDir,
         packageName: entry.packageName,
@@ -652,14 +654,7 @@ describe("ClawHub prepared publication", () => {
     },
   );
 
-  it("restores established package families in prepared promotion matrices", async () => {
-    const f = preparedFixture("selected", "cloudflare");
-    const [entry] = await resolvePreparedClawHubMatrix(f.resolveOptions);
-    expect(entry.family).toBe("bundle-plugin");
-  });
-
   it.each([
-    { publication: { state: "published" } },
     { publication: { state: "absent" } },
     { publication: { state: "pending", stage: "staging" } },
     { publication: { state: "pending", stage: "checks", attemptId: "attempt_checks" } },
@@ -693,7 +688,6 @@ describe("ClawHub prepared publication", () => {
     const [entry] = await resolvePreparedClawHubMatrix({ ...f.resolveOptions, fetchImpl });
     expect(entry).toMatchObject({
       packageName: f.entry.name,
-      publication,
       alreadyPublished: publication.state === "published",
       prepared: { tarballSha256: f.entry.artifactSha256 },
     });
