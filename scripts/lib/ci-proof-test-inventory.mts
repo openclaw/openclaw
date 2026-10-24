@@ -4912,7 +4912,6 @@ const PR_EXEMPT_RUNTIME_TEST_FILES = [
   "ui/src/e2e/control-ui-shell-routing.e2e.test.ts",
   "ui/src/e2e/cron-descriptions.e2e.test.ts",
   "ui/src/e2e/cron-filters.e2e.test.ts",
-  "ui/src/e2e/cron-heartbeat-scratch.e2e.test.ts",
   "ui/src/e2e/cron-loading.e2e.test.ts",
   "ui/src/e2e/cron-remove.e2e.test.ts",
   "ui/src/e2e/cron-run-feedback.e2e.test.ts",

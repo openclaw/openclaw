@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { sanitizeAgentRunTerminalReply } from "../../agents/agent-run-terminal-reply.js";
 import type { AgentCommandDeliveryResult } from "../../agents/command/delivery-result.js";
 import type { AgentCommandOpts } from "../../agents/command/types.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
@@ -508,6 +509,8 @@ describe("Gateway dispatch run ownership", () => {
     },
   );
   it("keeps one logical owner across yield and delivers only the admitted successor reply", async () => {
+    const fullReply = "B_YIELD_DONE ".repeat(400) + "SUCCESSOR_END…";
+    const terminalReply = sanitizeAgentRunTerminalReply(fullReply);
     const { f, owner, dispatch } = createFollowupDispatch();
     const settlement = createGate();
     const finishExecution = vi.spyOn(owner, "finishExecution");
@@ -562,15 +565,18 @@ describe("Gateway dispatch run ownership", () => {
         await opts.onExecutionStarted?.();
         return {
           payloads: [{ text: "not canonical", mediaUrl: null }],
-          meta: { terminalReply: { disposition: "visible", text: "B_YIELD_DONE" } },
+          meta: {
+            terminalReply,
+            finalAssistantVisibleText: fullReply,
+          },
         };
       });
       successorDispatch = dispatch(successor.runId, successorEntry);
       await successorDispatch;
       await expect(owner.take()).resolves.toMatchObject({
         status: "ok",
-        replyText: "B_YIELD_DONE",
-        terminalReply: { disposition: "visible", text: "B_YIELD_DONE" },
+        replyText: fullReply,
+        terminalReply,
       });
       expect(mocks.agentCommand).toHaveBeenCalledTimes(2);
     } finally {
