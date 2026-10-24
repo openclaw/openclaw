@@ -56,7 +56,7 @@ import {
   sendMessageFeishu,
   sendStructuredCardFeishu,
 } from "./send.js";
-import { FeishuStreamingSession, mergeStreamingText } from "./streaming-card.js";
+import { FeishuStreamingSession } from "./streaming-card.js";
 import { queueFeishuStreamingUpdate } from "./streaming-update.js";
 import { resolveReceiveIdType } from "./targets.js";
 import { addTypingIndicator, removeTypingIndicator, type TypingIndicatorState } from "./typing.js";
@@ -262,7 +262,6 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let statusLine = "";
   let modelWaitLine = "";
   let snapshotBaseText = "";
-  let lastSnapshotTextLength = 0;
   // Partial previews are replaceable; only committed final text may precede an error notice.
   let hasStreamingFinalText = false;
   const deliveredFinalTexts = new Set<string>();
@@ -335,20 +334,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     if (mode === "delta") {
       streamText = `${streamText}${nextText}`;
     } else {
-      const currentSnapshotText = snapshotBaseText
-        ? streamText.slice(snapshotBaseText.length)
-        : streamText;
-      const startsNewSnapshotBlock =
-        lastSnapshotTextLength >= 20 &&
-        nextText.length < lastSnapshotTextLength * 0.5 &&
-        !currentSnapshotText.includes(nextText);
-      if (startsNewSnapshotBlock) {
-        snapshotBaseText = streamText;
-        streamText = `${snapshotBaseText}${nextText}`;
-      } else {
-        streamText = `${snapshotBaseText}${mergeStreamingText(currentSnapshotText, nextText)}`;
-      }
-      lastSnapshotTextLength = nextText.length;
+      streamText = `${snapshotBaseText}${nextText}`;
     }
     flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText));
   };
@@ -423,7 +409,6 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     statusLine = "";
     modelWaitLine = "";
     snapshotBaseText = "";
-    lastSnapshotTextLength = 0;
     hasStreamingFinalText = false;
   };
 
@@ -1095,7 +1080,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         info?.kind === "final" && !hasIndependentPresentation
           ? mergeStreamingFinalText(
               streamText,
-              reply.text,
+              payload.isError ? reply.text : `${snapshotBaseText}${reply.text}`,
               payload.isError === true && hasStreamingFinalText,
             )
           : reply.text;
@@ -1253,8 +1238,6 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               // notices. Preserve both when the latter arrives after an answer.
               streamText = text;
               hasStreamingFinalText = true;
-              snapshotBaseText = "";
-              lastSnapshotTextLength = text.length;
               flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText));
             }
           }
@@ -1327,6 +1310,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     replyOptions: {
       onModelSelected,
       disableBlockStreaming: !coreBlockStreamingEnabled,
+      preserveProgressCallbackStartOrder: previewStreamingEnabled ? true : undefined,
       onPartialReply: previewStreamingEnabled
         ? (payload: ReplyPayload) => {
             if (!payload.text) {
@@ -1392,6 +1376,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         : undefined,
       onAssistantMessageStart: previewStreamingEnabled
         ? () => {
+            // Snapshots cover one assistant message. Freeze earlier prose at the
+            // source boundary so tool continuations cannot replace it.
+            snapshotBaseText = streamText ? `${streamText}\n\n` : "";
+            lastPartial = "";
             modelWaitLine = "";
             return updateStreamingStatusLine("", false);
           }
