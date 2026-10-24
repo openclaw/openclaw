@@ -83,8 +83,8 @@ profiled promotion separate. The synchronous owner phases omit HTTP transport; u
 include it. Neither mode measures Gateway
 event-loop delay.
 
-The store encodes its fixed prefixes as UTF-8 once and copies them into a fresh
-response buffer with ASCII-formatted numbers. `scrape.bufferByteLength` records
+The store retains fixed prefix text and its UTF-8 byte length, then encodes it
+into a fresh response buffer with ASCII-formatted numbers. `scrape.bufferByteLength` records
 that transient allocation; it is not included in sampled V8 heap allocation.
 There is no rendered-series cache. After consuming a render in an owner phase,
 the benchmark releases its private backing store, matching the successful HTTP
@@ -152,3 +152,22 @@ If it gates the decision, run a third pair and decide on the absolute mean; do
 not reject on a relative mean dominated by a tiny baseline. Whole-Gateway
 confirmation must additionally compare matching work/reset counts and properly
 sampled event-loop delay under the same host rules.
+
+## Prefix backing-store retention
+
+Add `--pool-churn` to interleave a disposable 8 KiB `Buffer.from`
+allocation between new series. This models series accumulating between unrelated
+Buffer traffic; compare post-GC `retained.populated` and `retained.warmed`, then
+`retained.afterReset`. It changes fixture construction only, not the timed render
+loops. Run at full capacity (omit `--shape`) and with the same observed shape on
+both sides. Report heap and ArrayBuffer deltas separately, since moving bytes
+between them is not a total-memory saving.
+
+For a separate synthetic retention-only pass, use `--render-only` with
+`--heap-snapshot <path>`.
+This captures the live store after warmup and skips the large measured render
+phases; do not compare its CPU with ordinary runs or combine it with HTTP.
+Count `ArrayBuffer` objects and native `system / JSArrayBufferData` backing
+stores in the snapshot. Use the runtime's actual pool allocation size rather
+than assuming 8 KiB: Node 26.12.1 reports `Buffer.poolSize = 65536` and a
+65,600-byte backing allocation for small pooled buffers.
