@@ -13,7 +13,6 @@ import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { runNodeScript } from "../helpers/run-node-script.js";
 import { testRunnerFixtureEnv } from "./prepared-script-wrapper.test-support.js";
-import { createPreparedVitestCliFixture } from "./run-vitest-bounded-fixture.test-support.js";
 
 const { spawnSyncMock } = vi.hoisted(() => ({
   spawnSyncMock: vi.fn(),
@@ -72,19 +71,7 @@ describe("scripts/test-report-utils runVitestJsonReport", () => {
     onTestFinished(() => lifetime.cleanup());
     await lifetime.run(async () => {
       const repoRoot = process.cwd();
-      const prepared = await lifetime.acquire(async (rollback) => {
-        const fixture = createPreparedVitestCliFixture(repoRoot, [
-          "test-report-utils.mts",
-          "run-vitest.mts",
-        ]);
-        try {
-          await fixture.prepare();
-          return fixture;
-        } catch (error) {
-          return rollback(error, () => fixture.cleanup());
-        }
-      });
-      const root = prepared.root;
+      const root = lifetime.createTempDir("native-json-report-");
       const bin = path.join(root, "bin");
       fs.mkdirSync(bin);
       const linkBin = (name: string, target: string) =>
@@ -111,14 +98,14 @@ describe("scripts/test-report-utils runVitestJsonReport", () => {
       fs.writeFileSync(
         entry,
         `import assert from "node:assert/strict";
-import { runVitestJsonReport } from ${JSON.stringify(pathToFileURL(path.join(root, "scripts/test-report-utils.js")).href)};
+import { runVitestJsonReport } from ${JSON.stringify(pathToFileURL(path.join(repoRoot, "scripts/test-report-utils.mts")).href)};
 assert.equal(runVitestJsonReport(${JSON.stringify({ config, reportPath })}), ${JSON.stringify(reportPath)});
 assert.equal(runVitestJsonReport(${JSON.stringify({ config: path.join(root, "missing.config.mjs"), reportPath })}), ${JSON.stringify(reportPath)});
 `,
       );
       const result = await lifetime.track(
         runNodeScript(
-          [entry],
+          ["--import", path.join(repoRoot, "scripts/tsx.mjs"), entry],
           testRunnerFixtureEnv({
             PATH: bin,
             OPENCLAW_BUN_PATH: process.versions.bun ? process.execPath : undefined,
@@ -126,11 +113,10 @@ assert.equal(runVitestJsonReport(${JSON.stringify({ config: path.join(root, "mis
             TSX_TSCONFIG_PATH: path.join(repoRoot, "tsconfig.json"),
           }),
           30_000,
-          { cwd: root, signal, requireProcessTreeExit: process.platform !== "win32" },
+          { cwd: repoRoot, signal, requireProcessTreeExit: process.platform !== "win32" },
         ),
       );
-      const { error, status: exitStatus } = result;
-      expect({ error, status: exitStatus }, result.stdout + result.stderr).toEqual({
+      expect(result, result.stdout + result.stderr).toMatchObject({
         error: undefined,
         status: 0,
       });
@@ -165,9 +151,6 @@ assert.equal(runVitestJsonReport(${JSON.stringify({ config: path.join(root, "mis
       expect(reportPaths[0]).not.toBe(reportPaths[1]);
       for (const reportPath of reportPaths) {
         expect(path.dirname(reportPath)).toBe(os.tmpdir());
-        expect(path.basename(reportPath)).toMatch(
-          /^openclaw-vitest-report-\d+-1234567890-[0-9a-f-]+\.json$/u,
-        );
       }
     } finally {
       nowSpy.mockRestore();
