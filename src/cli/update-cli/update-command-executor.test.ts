@@ -577,8 +577,6 @@ describe("candidate executor delegation", () => {
 
   const program = `
     import fs from "node:fs";
-    import {spawn} from "node:child_process";
-    import {once} from "node:events";
     import {setTimeout} from "node:timers/promises";
     import {json} from "node:stream/consumers";
     import {withDelegatedUpdateCommandExecutor} from ${JSON.stringify(moduleUrl)};
@@ -592,12 +590,6 @@ describe("candidate executor delegation", () => {
       }
       fence.assertCurrent();
       fs.writeFileSync(input.output,"owned");
-      const helper=spawn(process.execPath,['-e',"process.send('ready');setTimeout(()=>{},2000)"],{
-        stdio:['ignore','ignore','ignore','ipc']
-      });
-      await once(helper,'message');
-      helper.disconnect();
-      helper.unref();
     });
   `;
   it.each([false, "original", "service", "candidate"] as const)(

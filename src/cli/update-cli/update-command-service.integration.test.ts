@@ -663,105 +663,62 @@ describe("preserved update activation with real version guards", () => {
     expectUncalled(mocks.restart, mocks.listenerPids, mocks.signal);
   });
 
-  it.each([
-    "loaded",
-    "unloaded demand",
-    "start demand",
-    "handoff",
-    "bootstrap denied",
-    "parent recovery refusal",
-    "parent late unknown",
-    "stale retry",
-  ])("checks actual LaunchAgent artifacts during %s activation", async (scenario) => {
-    mockProcessPlatform("darwin");
-    const label = "ai.openclaw.gateway";
-    const plistPath = resolveLaunchAgentPlistPath(process.env);
-    const envPath = resolveLaunchAgentEnvironmentReadOptions(
-      process.env,
-      label,
-    ).expectedEnvironmentFilePath;
-    const wrapperPath = resolveLaunchAgentEnvWrapperPath(process.env, label);
-    const demandOnly = scenario.endsWith("demand");
-    let plist = buildLaunchAgentPlist({
-      label,
-      programArguments: gatewayArgs(),
-      stdoutPath: path.join(root, "gateway.log"),
-      stderrPath: path.join(root, "gateway.err"),
-      environment: {
-        HOME: root,
-        OPENCLAW_GATEWAY_TOKEN: "fixture-inline-token",
-        OPENCLAW_SERVICE_VERSION: "legacy",
-      },
-    });
-    if (demandOnly) {
-      plist = plist.replace(/(<key>(?:RunAtLoad|KeepAlive)<\/key>\s*)<true\s*\/>/g, "$1<false/>");
-      expect(plist.match(/<key>(?:RunAtLoad|KeepAlive)<\/key>\s*<false\s*\/>/g)).toHaveLength(2);
-    }
-    const plistMode = scenario === "bootstrap denied" ? 0o400 : 0o444;
-    for (const [file, content, mode] of [
-      [plistPath, plist, plistMode],
-      [envPath, "EXISTING=env\n", 0o600],
-      [wrapperPath, "#!/bin/sh\n# existing wrapper\n", 0o700],
-    ] as const) {
-      await fs.mkdir(path.dirname(file), { recursive: true });
-      await fs.writeFile(file, content, { mode });
-    }
-    const snapshot = async () =>
-      Promise.all(
-        [plistPath, envPath, wrapperPath, configPath].map(async (file) => ({
-          file,
-          bytes: await fs.readFile(file),
-          mode: (await fs.stat(file)).mode,
-        })),
-      );
-    const before = await snapshot();
-    const writeFile = vi.spyOn(fs, "writeFile");
-    const chmod = vi.spyOn(fs, "chmod");
-    const rename = vi.spyOn(fs, "rename");
-    mocks.inLaunchd = scenario === "handoff";
-    let loaded = ["loaded", "handoff", "stale retry"].includes(scenario);
-    let nativeRunning = loaded;
-    if (loaded) {
-      await servingOwner.publish("launchd");
-    }
-    mocks.launchctl.mockImplementation(async (args) => {
-      if (args[0] === "bootstrap") {
-        if (scenario === "bootstrap denied" || scenario === "parent recovery refusal") {
+  // Native start/restart policy and handoff cases live in daemon/launchd*.test.ts.
+  it.each(["recovery refusal", "late unknown"])(
+    "preserves LaunchAgent artifacts during parent %s activation",
+    async (scenario) => {
+      mockProcessPlatform("darwin");
+      const label = "ai.openclaw.gateway";
+      const plistPath = resolveLaunchAgentPlistPath(process.env);
+      const envPath = resolveLaunchAgentEnvironmentReadOptions(
+        process.env,
+        label,
+      ).expectedEnvironmentFilePath;
+      const wrapperPath = resolveLaunchAgentEnvWrapperPath(process.env, label);
+      const plist = buildLaunchAgentPlist({
+        label,
+        programArguments: gatewayArgs(),
+        stdoutPath: path.join(root, "gateway.log"),
+        stderrPath: path.join(root, "gateway.err"),
+        environment: {
+          HOME: root,
+          OPENCLAW_GATEWAY_TOKEN: "fixture-inline-token",
+          OPENCLAW_SERVICE_VERSION: "legacy",
+        },
+      });
+      for (const [file, content, mode] of [
+        [plistPath, plist, 0o444],
+        [envPath, "EXISTING=env\n", 0o600],
+        [wrapperPath, "#!/bin/sh\n# existing wrapper\n", 0o700],
+      ] as const) {
+        await fs.mkdir(path.dirname(file), { recursive: true });
+        await fs.writeFile(file, content, { mode });
+      }
+      const snapshot = async () =>
+        Promise.all(
+          [plistPath, envPath, wrapperPath, configPath].map(async (file) => ({
+            file,
+            bytes: await fs.readFile(file),
+            mode: (await fs.stat(file)).mode,
+          })),
+        );
+      const before = await snapshot();
+      const writeFile = vi.spyOn(fs, "writeFile");
+      const chmod = vi.spyOn(fs, "chmod");
+      const rename = vi.spyOn(fs, "rename");
+      mocks.launchctl.mockImplementation(async (args) => {
+        if (args[0] === "bootstrap") {
           return { code: 13, stdout: "", stderr: "permission denied", termination: "exit" };
         }
-        loaded = true;
-        nativeRunning = !demandOnly;
-      }
-      if ((args[0] === "print" || args[0] === "kickstart") && !loaded) {
-        return { code: 113, stdout: "", stderr: "Could not find service", termination: "exit" };
-      }
-      if (args[0] === "kickstart") {
-        await servingOwner.restart();
-        nativeRunning = true;
-      }
-      const state = nativeRunning ? "running" : "stopped";
-      return {
-        code: 0,
-        stdout: args[0] === "print" ? `${args[1]} = {\n\tstate = ${state}\n}` : "",
-        stderr: "",
-        termination: "exit",
-      };
-    });
-    if (demandOnly) {
-      mocks.health.mockImplementation(async ({ port }) => recoveryHealth(port, nativeRunning));
-    }
-    if (scenario === "stale retry") {
-      mocks.health.mockResolvedValueOnce(recoveryHealth(19305, false, [4242], true));
-    }
-    let result: boolean | Awaited<ReturnType<typeof maybeRestartService>>;
-    if (scenario === "start demand") {
-      await resolveGatewayService().start({ env: process.env, stdout: process.stdout });
-      result = nativeRunning;
-    } else if (scenario.startsWith("parent")) {
-      if (scenario === "parent recovery refusal") {
+        if (args[0] === "print" || args[0] === "kickstart") {
+          return { code: 113, stdout: "", stderr: "Could not find service", termination: "exit" };
+        }
+        return { code: 0, stdout: "", stderr: "", termination: "exit" };
+      });
+      if (scenario === "recovery refusal") {
         mocks.configSnapshot.mockResolvedValueOnce(undefined);
       }
-      const lateDenial = scenario.startsWith("parent late");
+      const lateDenial = scenario === "late unknown";
       const verdict = lateDenial
         ? await revalidateManagedGatewayServiceAfterUpdate({
             state: await readGatewayServiceState(resolveGatewayService(), {
@@ -780,7 +737,7 @@ describe("preserved update activation with real version guards", () => {
         );
       }
       mocks.health.mockImplementation(async ({ port }) => recoveryHealth(port));
-      result = await activate({
+      const result = await activate({
         refreshServiceEnv: lateDenial,
         serviceUpdateVerdict: verdict,
         serviceEnv: process.env,
@@ -789,57 +746,24 @@ describe("preserved update activation with real version guards", () => {
       expect(mocks.error.mock.calls.flat().join("\n")).toContain("did not become healthy");
       expect(mocks.health.mock.calls.every(([args]) => args.port === 19305)).toBe(true);
       expect(mocks.doctor).not.toHaveBeenCalled();
-    } else {
-      result = await runDaemonRestart({ json: true, preserveDefinition: true });
-    }
-    expect(result).toBe(
-      scenario === "parent recovery refusal"
-        ? "failed"
-        : scenario.startsWith("parent")
-          ? "restart-health-failed"
-          : scenario !== "bootstrap denied",
-    );
-    if (scenario === "parent recovery refusal") {
-      // Writable recovery migrates legacy service metadata before native bootstrap.
-      expect((await snapshot()).at(-1)).toEqual(before.at(-1));
-      expect(writeFile).toHaveBeenCalled();
-    } else {
-      expect(await snapshot()).toEqual(before);
-      expectUncalled(writeFile, chmod, rename);
-    }
-    expect(mocks.configSnapshot).toHaveBeenCalledTimes(
-      scenario === "parent recovery refusal" ? 1 : 0,
-    );
-    if (demandOnly) {
-      const calls = mocks.launchctl.mock.calls.map(([args]) => args);
-      const afterBootstrap = calls.slice(calls.findIndex((args) => args[0] === "bootstrap") + 1);
-      const target = `gui/${process.getuid?.() ?? 501}/${label}`;
-      expect(afterBootstrap).toContainEqual(["kickstart", target]);
-      expect(afterBootstrap).not.toContainEqual(["kickstart", "-k", target]);
-    }
-    if (scenario === "stale retry") {
-      expectStaleCleanup();
-      expect(mocks.launchctl.mock.calls.filter(([args]) => args[0] === "kickstart")).toHaveLength(
-        2,
-      );
-      expect(mocks.health).toHaveBeenCalledTimes(2);
-    }
-    if (scenario === "parent recovery refusal") {
-      expect(mocks.launchctl.mock.calls.some(([args]) => args[0] === "bootstrap")).toBe(true);
-      expect(mocks.child).toHaveBeenCalledOnce();
-    } else if (scenario.startsWith("parent")) {
-      expect(mocks.launchctl.mock.calls.every(([args]) => args[0] === "print")).toBe(true);
-    } else if (scenario === "handoff") {
-      expect(mocks.handoff).toHaveBeenCalledWith(expect.objectContaining({ mode: "kickstart" }));
-      // The detached restart follows command completion; join it before fixture cleanup.
-      await servingOwner.restart();
-    } else {
-      expect(mocks.launchctl.mock.calls.some(([args]) => args[0] === "kickstart")).toBe(true);
-      expect(mocks.launchctl.mock.calls.some(([args]) => args[0] === "bootstrap")).toBe(
-        !["loaded", "stale retry"].includes(scenario),
-      );
-    }
-  });
+      expect(result).toBe(lateDenial ? "restart-health-failed" : "failed");
+      if (!lateDenial) {
+        // Writable recovery migrates legacy service metadata before native bootstrap.
+        expect((await snapshot()).at(-1)).toEqual(before.at(-1));
+        expect(writeFile).toHaveBeenCalled();
+      } else {
+        expect(await snapshot()).toEqual(before);
+        expectUncalled(writeFile, chmod, rename);
+      }
+      expect(mocks.configSnapshot).toHaveBeenCalledTimes(lateDenial ? 0 : 1);
+      if (!lateDenial) {
+        expect(mocks.launchctl.mock.calls.some(([args]) => args[0] === "bootstrap")).toBe(true);
+        expect(mocks.child).toHaveBeenCalledOnce();
+      } else {
+        expect(mocks.launchctl.mock.calls.every(([args]) => args[0] === "print")).toBe(true);
+      }
+    },
+  );
 
   it("fresh restart still rejects config newer than its own binary", async () => {
     await writeConfig("9999.1.1");
