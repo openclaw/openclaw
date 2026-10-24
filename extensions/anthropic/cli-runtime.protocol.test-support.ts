@@ -112,6 +112,9 @@ for await (const line of createInterface({ input: process.stdin })) {
     turn++;
     user = message.message.content;
     writeFileSync("user.received", user);
+    if (turn === 1 && process.env.CLAUDE_FIXTURE_MCP_SERVERS) {
+      system("init", { mcp_servers: JSON.parse(process.env.CLAUDE_FIXTURE_MCP_SERVERS) });
+    }
     if ((capturedStopped || backgroundAgent) && turn > 1) {
       result();
       continue;
