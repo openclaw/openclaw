@@ -2,7 +2,6 @@ import {
   ConnectErrorDetailCodes,
   gatewayCredentialScope,
   isRetryableGatewayStartupUnavailableError,
-  readControlUiBuildMismatchId,
 } from "@openclaw/gateway-client/browser";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { registerListener } from "../../../src/shared/listeners.js";
@@ -28,6 +27,7 @@ import { createGatewayCanvasSurfaceLease } from "./gateway-canvas-surface.ts";
 import {
   createGatewayControlUiReloadOptions,
   isSameOriginGateway,
+  readGatewayRejectionReload,
 } from "./gateway-control-ui-reload.ts";
 import { createGatewayMessageBodyInterest } from "./gateway-message-bodies.ts";
 import {
@@ -395,9 +395,10 @@ export function createApplicationGateway(
     canvasSurface.stop();
     client?.stop();
 
-    const scheduleReload = (buildId: string) => {
+    const scheduleReload = (buildId: string, reloadOnce = false) => {
       void scheduleStaleChunkReload({
         buildId,
+        reloadOnce,
         ...createGatewayControlUiReloadOptions(
           gateway,
           () => isCurrentClient(nextClient) && isSameOriginGateway(nextConnection.gatewayUrl),
@@ -537,19 +538,19 @@ export function createApplicationGateway(
           everConnected = false;
           credentials.retire(false);
         }
-        const mismatchedBuildId = readControlUiBuildMismatchId(error?.details);
-        if (mismatchedBuildId) {
-          scheduleReload(mismatchedBuildId);
+        const lastErrorCode = resolveGatewayErrorDetailCode(error) ?? error?.code ?? null;
+        const { buildId, buildMismatch } = readGatewayRejectionReload(error);
+        if (buildId) {
+          scheduleReload(buildId, true);
         }
         const startupPending =
-          mismatchedBuildId === null &&
+          !buildMismatch &&
           !everConnected &&
           willRetry &&
           isRetryableGatewayStartupUnavailableError(error);
         if (startupPending && snapshot.phase === "starting") {
           return;
         }
-        const lastErrorCode = resolveGatewayErrorDetailCode(error) ?? error?.code ?? null;
         if (lastErrorCode === ConnectErrorDetailCodes.AUTH_BOOTSTRAP_TOKEN_INVALID) {
           connection = { ...connection, bootstrapToken: "", bootstrapProfile: undefined };
         }
@@ -570,18 +571,17 @@ export function createApplicationGateway(
           // Retained capabilities describe this client, never its live dispatch authority.
           hello: retainPresentation ? snapshot.hello : null,
           pluginCapabilities: retainPresentation ? snapshot.pluginCapabilities : null,
-          phase:
-            mismatchedBuildId !== null
-              ? "reload-required"
-              : startupPending
-                ? "starting"
-                : everConnected
-                  ? willRetry
-                    ? "reconnecting"
-                    : "offline"
-                  : willRetry
-                    ? "connecting"
-                    : "stopped",
+          phase: buildMismatch
+            ? "reload-required"
+            : startupPending
+              ? "starting"
+              : everConnected
+                ? willRetry
+                  ? "reconnecting"
+                  : "offline"
+                : willRetry
+                  ? "connecting"
+                  : "stopped",
           // Retain only established profileless display identity through transport loss.
           // Rejected admission and unresolved/replaced identities must stay fail-closed.
           selfUser:

@@ -63,7 +63,7 @@ suite.define(() => {
     { serviceWorker: "normal", serviceWorkers: "allow" as const },
     { serviceWorker: "blocked", serviceWorkers: "block" as const },
   ] as const)(
-    "rearms one bounded build recovery after the visible refresh action with $serviceWorker service-worker state",
+    "keeps repeated build rejection stopped until the visible refresh action with $serviceWorker service-worker state",
     async ({ serviceWorker, serviceWorkers }) => {
       const proofServer = suite.server;
       const context = await suite.browser.newContext({
@@ -353,21 +353,13 @@ suite.define(() => {
       await waitForConnect();
       await page.clock.install();
       await pauseVirtualClock(page);
-      // Manual refresh preserves the shared build target, so this document
-      // defers its automatic reload until that target's 30-second guard expires.
-      const guardRemainingMs = await page.evaluate(() => {
-        const guard = JSON.parse(
-          sessionStorage.getItem("openclaw.controlUi.staleChunkReloadBuildId")!,
-        ) as { at: number };
-        return guard.at + 30_000 - Date.now();
-      });
-      expect(guardRemainingMs).toBeGreaterThan(0);
+      // A repeated rejection must remain actionable instead of reloading forever.
       await gateway.rejectDeferred("connect", mismatch);
-      await page.clock.runFor(guardRemainingMs - 1);
+      await page.clock.runFor(120_000);
       expect(documentRequests).toHaveLength(3);
-      await page.clock.runFor(1);
-      await expect.poll(() => documentRequests.length).toBe(4);
       await page.clock.resume();
+      await recovery.tap();
+      await expect.poll(() => documentRequests.length).toBe(4);
       await waitForConnect();
       await gateway.resolveDeferred("connect");
 

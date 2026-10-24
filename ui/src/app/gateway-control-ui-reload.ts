@@ -1,6 +1,31 @@
+import {
+  ConnectErrorDetailCodes,
+  readConnectErrorDetailCode,
+  readControlUiBuildMismatchId,
+  type ErrorShape,
+} from "@openclaw/gateway-client/browser";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { CONTROL_UI_BOOTSTRAP_PROFILE_FRAGMENT_PARAM } from "../../../src/gateway/control-ui-bootstrap-contract.js";
+import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
 import type { ApplicationGateway } from "./gateway.ts";
 import { reloadControlUiDocument } from "./stale-chunk-reload.ts";
+
+export function readGatewayRejectionReload(error: ErrorShape | undefined) {
+  const mismatchId = readControlUiBuildMismatchId(error?.details);
+  const protocolMismatch =
+    readConnectErrorDetailCode(error?.details) === ConnectErrorDetailCodes.PROTOCOL_MISMATCH;
+  const serverBuildId = asOptionalRecord(error?.details)?.gatewayBuildId;
+  const buildId =
+    mismatchId ??
+    (protocolMismatch
+      ? typeof serverBuildId === "string" && serverBuildId.trim()
+        ? serverBuildId.trim()
+        : CONTROL_UI_BUILD_INFO.buildId
+      : null);
+  // Range rejection keeps the compatibility panel visible; build-only skew
+  // retains the existing fenced-shell refresh presentation.
+  return { buildId, buildMismatch: mismatchId !== null && error?.code !== "INVALID_REQUEST" };
+}
 
 export function createGatewayControlUiReloadOptions(
   gateway: ApplicationGateway,

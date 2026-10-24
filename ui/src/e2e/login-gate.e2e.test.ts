@@ -1,8 +1,12 @@
 // Control UI tests cover the responsive disconnected login gate.
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { BrowserContextOptions, Page } from "playwright";
 import { assert, expect, it } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import {
@@ -106,6 +110,65 @@ suite.define(() => {
     await page.locator("openclaw-app-shell").waitFor();
     expect(await page.locator("openclaw-login-gate").count()).toBe(0);
     expect(await gateway.getRequests("connect")).toHaveLength(1);
+  });
+
+  it("reloads a protocol mismatch once, then keeps visible manual recovery", async () => {
+    const page = await newPage();
+    const artifactDir = createControlUiE2eArtifactDir("protocol-mismatch-recovery");
+    const documents: string[] = [];
+    page.on("request", (request) => {
+      if (request.isNavigationRequest() && request.frame() === page.mainFrame()) {
+        documents.push(request.url());
+      }
+    });
+    const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
+    const mismatch = {
+      code: "INVALID_REQUEST",
+      message: "protocol mismatch",
+      details: {
+        code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
+        gatewayBuildId: "protocol-build",
+        reloadRequired: true,
+      },
+    };
+    await page.goto(suite.server.baseUrl);
+    await gateway.waitForRequest("connect");
+    const reloaded = page.waitForEvent("domcontentloaded");
+    await gateway.rejectDeferred("connect", mismatch);
+    await reloaded;
+    await expect.poll(() => documents.length).toBe(2);
+    expect(new URL(documents[1]!).searchParams.has("openclaw_mount_recovery")).toBe(true);
+
+    await gateway.waitForRequest("connect");
+    await page.clock.install();
+    await gateway.rejectDeferred("connect", mismatch);
+    const failure = page.locator('.login-gate__failure[data-kind="protocol-mismatch"]');
+    await failure.waitFor();
+    expect((await failure.textContent())?.toLowerCase()).toContain("supported connection protocol");
+    const refresh = failure.locator(".login-gate__failure-refresh");
+    expect(await refresh.isVisible()).toBe(true);
+    await page.clock.runFor(120_000);
+    expect(documents).toHaveLength(2);
+    expect(await gateway.getRequests("connect")).toHaveLength(1);
+    await page.clock.resume();
+    const before = await takeControlUiScreenshotFrame(page, failure, [refresh], {
+      animations: "disabled",
+    });
+    await writeFile(path.join(artifactDir, "before-manual-recovery.png"), before.png);
+
+    const refreshed = page.waitForEvent("domcontentloaded");
+    await refresh.click();
+    await refreshed;
+    await expect.poll(() => documents.length).toBe(3);
+    await gateway.waitForRequest("connect");
+    await gateway.resolveDeferred("connect");
+    const shell = page.locator("openclaw-app-shell");
+    await shell.waitFor();
+    await expect.poll(() => page.locator("openclaw-login-gate").count()).toBe(0);
+    const after = await takeControlUiScreenshotFrame(page, shell, [page.locator(".shell")], {
+      animations: "disabled",
+    });
+    await writeFile(path.join(artifactDir, "after-manual-recovery.png"), after.png);
   });
 
   it("lets reload-required recovery outrank a manually pinned login gate", async () => {
