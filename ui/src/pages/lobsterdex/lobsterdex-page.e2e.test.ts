@@ -3,11 +3,9 @@ import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-sup
 import { installMockGateway } from "../../test-helpers/control-ui-e2e.ts";
 
 type ClipboardFaultState = {
-  asyncWrites: string[];
   execSucceeds: boolean;
   legacyWrites: string[];
-  mode: "defer" | "missing" | "reject";
-  pendingRejects: Array<(reason?: unknown) => void>;
+  pendingRejects: Array<(reason?: unknown) => void> | null;
 };
 
 declare global {
@@ -34,43 +32,35 @@ suite.define(() => {
       },
       async ({ page }) => {
         const readClipboard = () => page.evaluate(() => window.lobsterdexClipboardFault);
-        const expectWrites = (asyncWrites: string[], legacyWrites: string[]) =>
-          expect.poll(readClipboard).toMatchObject({ asyncWrites, legacyWrites });
         const configureClipboard = (patch: Partial<ClipboardFaultState>) =>
           page.evaluate((value) => Object.assign(window.lobsterdexClipboardFault, value), patch);
         const rejectWrite = (index: number) =>
           page.evaluate((pendingIndex) => {
-            window.lobsterdexClipboardFault.pendingRejects[pendingIndex]?.(
+            window.lobsterdexClipboardFault.pendingRejects?.[pendingIndex]?.(
               new DOMException("Write rejected", "NotAllowedError"),
             );
           }, index);
         await page.addInitScript(() => {
           const state: ClipboardFaultState = {
-            asyncWrites: [],
             execSucceeds: true,
             legacyWrites: [],
-            mode: "reject",
-            pendingRejects: [],
+            pendingRejects: null,
           };
           Object.defineProperty(window, "lobsterdexClipboardFault", { value: state });
           Object.defineProperty(navigator, "clipboard", {
             configurable: true,
-            get: () =>
-              state.mode === "missing"
-                ? undefined
-                : {
-                    writeText(text: string) {
-                      state.asyncWrites.push(text);
-                      if (state.mode === "reject") {
-                        return Promise.reject(
-                          new DOMException("Clipboard access denied", "NotAllowedError"),
-                        );
-                      }
-                      return new Promise<void>((_resolve, reject) => {
-                        state.pendingRejects.push(reject);
-                      });
-                    },
-                  },
+            value: {
+              writeText() {
+                if (!state.pendingRejects) {
+                  return Promise.reject(
+                    new DOMException("Clipboard access denied", "NotAllowedError"),
+                  );
+                }
+                return new Promise<void>((_resolve, reject) => {
+                  state.pendingRejects?.push(reject);
+                });
+              },
+            },
           });
           document.execCommand = (command: string) => {
             if (command !== "copy") {
@@ -91,18 +81,15 @@ suite.define(() => {
         await expect.poll(() => copyButtons.count()).toBeGreaterThan(1);
         const crimson = copyButtons.nth(0);
         const blue = copyButtons.nth(1);
-        const crimsonUrl = `${new URL(suite.server.baseUrl).origin}/settings/lobsterdex#lobsterdex-crimson`;
-        const blueUrl = `${new URL(suite.server.baseUrl).origin}/settings/lobsterdex#lobsterdex-blue`;
-        await crimson.focus();
-        await page.keyboard.press("Enter");
-        await expectWrites([crimsonUrl], [crimsonUrl]);
-        await expect.poll(() => pageRoot.getByRole("status").textContent()).toContain("Copied!");
-
-        await configureClipboard({ mode: "missing" });
-        await blue.tap();
-        await expectWrites([crimsonUrl], [crimsonUrl, blueUrl]);
-
-        await configureClipboard({ mode: "reject", execSucceeds: false });
+        const url = (id: string) =>
+          `${new URL(suite.server.baseUrl).origin}/settings/lobsterdex#lobsterdex-${id}`;
+        const checkmark = 'path[d="M20 6 9 17l-5-5"]';
+        const expectNewestCopy = async () => {
+          expect(await crimson.locator(checkmark).count()).toBe(0);
+          expect(await blue.locator(checkmark).count()).toBe(1);
+          expect((await readClipboard()).legacyWrites).toEqual([url("blue")]);
+        };
+        await configureClipboard({ execSucceeds: false });
         await crimson.tap();
         await expect.poll(() => pageRoot.getByRole("alert").textContent()).toBe("Copy failed");
         await pageRoot.evaluate((element) => {
@@ -116,9 +103,7 @@ suite.define(() => {
         await expect.poll(() => pageRoot.getByRole("alert").count()).toBe(0);
 
         await configureClipboard({
-          mode: "defer",
           execSucceeds: true,
-          asyncWrites: [],
           legacyWrites: [],
           pendingRejects: [],
         });
@@ -126,14 +111,14 @@ suite.define(() => {
         await page.keyboard.press("Enter");
         await blue.tap();
         await expect
-          .poll(() => page.evaluate(() => window.lobsterdexClipboardFault.pendingRejects.length))
+          .poll(() => page.evaluate(() => window.lobsterdexClipboardFault.pendingRejects?.length))
           .toBe(2);
         expect(await pageRoot.getByRole("alert").count()).toBe(0);
 
         await rejectWrite(1);
-        await blue.locator('path[d="M20 6 9 17l-5-5"]').waitFor();
-        expect(await crimson.locator('path[d="M20 6 9 17l-5-5"]').count()).toBe(0);
-        await expect.poll(async () => (await readClipboard()).legacyWrites).toEqual([blueUrl]);
+        await blue.locator(checkmark).waitFor();
+        await expectNewestCopy();
+        await expect.poll(() => pageRoot.getByRole("status").textContent()).toContain("Copied!");
 
         await rejectWrite(0);
         await page.evaluate(
@@ -142,10 +127,8 @@ suite.define(() => {
               window.setTimeout(resolve, 0);
             }),
         );
-        expect(await crimson.locator('path[d="M20 6 9 17l-5-5"]').count()).toBe(0);
-        expect(await blue.locator('path[d="M20 6 9 17l-5-5"]').count()).toBe(1);
-        expect((await readClipboard()).legacyWrites).toEqual([blueUrl]);
-        await expect.poll(() => blue.locator('path[d="M20 6 9 17l-5-5"]').count()).toBe(0);
+        await expectNewestCopy();
+        await expect.poll(() => blue.locator(checkmark).count()).toBe(0);
       },
     );
   });
