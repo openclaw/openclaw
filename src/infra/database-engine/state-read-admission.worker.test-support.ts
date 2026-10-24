@@ -3,10 +3,22 @@ import { once } from "node:events";
 import { MessagePort, parentPort, workerData } from "node:worker_threads";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { legacySessionMigrationReadOperations } from "../../config/sessions/legacy-main-session-ledger.read.worker.js";
+import {
+  ensureStatePostgresFragment,
+  openExistingStatePostgresConnection,
+} from "../../state/openclaw-state-db-engine.js";
 import { withOpenClawStateReadOnlyLocation } from "../../state/openclaw-state-db-read-connection.js";
 import { PostgresSchemaAdmissionUnavailableError } from "../../state/openclaw-state-db-schema-version.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../../state/openclaw-state-db.js";
 import { postgresStateReadSnapshot } from "../../state/openclaw-state-postgres-snapshot-context.js";
+import { ensureUserBackgroundSchema } from "../../state/user-background.store.js";
+import { isPostgresSqlConnection } from "../sql-connection.js";
 import { withSqliteDatabaseAdmissionExchange } from "../sqlite-database-admission-context.js";
+import { isSqliteDatabaseAdmissionFactCurrent } from "../sqlite-database-admission-record.js";
 import {
   installSqliteDatabaseAdmissions,
   type SqliteDatabaseAdmissions,
@@ -32,6 +44,7 @@ const input = workerData as {
   admissionTimeoutMs?: number;
   observeRefresh?: boolean;
   cancellable?: boolean;
+  operation?: "open" | "ensure" | "raw-fragment";
 };
 if (!parentPort) {
   throw new Error("State admission fixture requires a worker");
@@ -50,24 +63,34 @@ let refreshed = false;
 let admissionRefreshes = 0;
 let readStartedAt: number | undefined;
 const gate = new Int32Array(input.gate);
+const wait = (index: number) => {
+  if (Atomics.wait(gate, index, 0, 30_000) === "timed-out") {
+    throw new Error("State admission fixture was not released");
+  }
+};
 const listener = (message: unknown) => {
   const event = message as { engine?: string; sql?: string; outcome?: string };
-  if (
-    event.engine !== "postgres" ||
-    event.sql !== "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY" ||
-    event.outcome !== "ok"
-  ) {
+  if (event.engine !== "postgres" || event.outcome !== "ok") {
     return;
   }
-  transactions++;
+  if (event.sql?.startsWith("BEGIN")) {
+    transactions++;
+  }
+  const checkpoint =
+    input.operation === "raw-fragment"
+      ? event.sql === "SELECT ? AS fixture_checkpoint"
+      : input.operation === "ensure"
+        ? event.sql?.startsWith("BEGIN ISOLATION LEVEL READ COMMITTED;")
+        : !input.operation && event.sql === "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY";
+  if (!checkpoint) {
+    return;
+  }
   if (paused) {
     return;
   }
   paused = true;
   port.postMessage({ phase: "reader-begun" });
-  if (Atomics.wait(gate, 0, 0, 30_000) === "timed-out") {
-    throw new Error("State admission fixture was not released");
-  }
+  wait(0);
   readStartedAt = Date.now();
 };
 
@@ -75,7 +98,6 @@ try {
   installSqliteDatabaseAdmissions(input.admissions);
   installDatabaseEngineSelection(input.selection);
   bindSqliteDatabaseAdmissionUpstream(admissionPort);
-  statements.subscribe(listener);
   const read = () =>
     withSqliteDatabaseAdmissionWait(
       {
@@ -103,6 +125,19 @@ try {
               location,
               create,
             );
+            if (
+              input.operation === "open" &&
+              !paused &&
+              admissions.some((record) => {
+                const fact = record.facts.get("database.engine.schema");
+                return fact && isSqliteDatabaseAdmissionFactCurrent(record, fact);
+              })
+            ) {
+              paused = true;
+              port.postMessage({ phase: "opener-admitted" });
+              wait(1);
+              readStartedAt = Date.now();
+            }
             if (input.observeRefresh && paused && !refreshed) {
               refreshed = true;
               port.postMessage({ phase: "reader-refreshed" });
@@ -111,8 +146,40 @@ try {
           },
           () =>
             withEngineStoreAdmission(() =>
-              runWithSqliteWorkerStateContext({ environment: input.environment }, () =>
-                withOpenClawStateReadOnlyLocation(
+              runWithSqliteWorkerStateContext({ environment: input.environment }, () => {
+                if (input.operation === "open") {
+                  port.postMessage({ phase: "opener-ready" });
+                  wait(0);
+                  const connection = openExistingStatePostgresConnection(input.path)!;
+                  try {
+                    return connection.database.db.prepare("SELECT 1 AS admitted").get();
+                  } finally {
+                    connection.close();
+                  }
+                }
+                if (input.operation) {
+                  const database = openOpenClawStateDatabase({ env: input.environment });
+                  statements.subscribe(listener);
+                  if (input.operation === "ensure") {
+                    ensureUserBackgroundSchema({ env: input.environment });
+                    return database.db
+                      .prepare("SELECT COUNT(*) AS count FROM user_background_images")
+                      .get();
+                  }
+                  return runOpenClawStateWriteTransaction(
+                    ({ db }) => {
+                      callbackCalls++;
+                      db.prepare("SELECT 1 AS fixture_checkpoint").get();
+                      if (!isPostgresSqlConnection(db)) {
+                        throw new Error("Fragment fixture requires PostgreSQL");
+                      }
+                      ensureStatePostgresFragment(db, "user_background_images");
+                    },
+                    { database, env: input.environment },
+                  );
+                }
+                statements.subscribe(listener);
+                return withOpenClawStateReadOnlyLocation(
                   ({ db }) => {
                     callbackCalls++;
                     if (input.throwFromCallback) {
@@ -131,8 +198,8 @@ try {
                   },
                   input.path,
                   input.path,
-                ),
-              ),
+                );
+              }),
             ),
         ),
     );
@@ -159,10 +226,12 @@ try {
       (cause) => cause instanceof PostgresSchemaAdmissionUnavailableError,
     ),
     errors: causes.flatMap((cause) => (cause instanceof Error ? [cause.message] : [])),
+    stack: error instanceof Error ? error.stack : undefined,
     elapsedMs: Date.now() - (readStartedAt ?? Date.now()),
   });
 } finally {
   statements.unsubscribe(listener);
+  closeOpenClawStateDatabaseForTest();
   admissionPort.close();
   port.close();
 }

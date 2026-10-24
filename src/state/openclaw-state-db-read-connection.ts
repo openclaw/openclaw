@@ -1,7 +1,6 @@
 import path from "node:path";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { getSqliteRuntimeCapabilities } from "../infra/bun-sqlite-library.js";
-import { getPostgresPhysicalFacts } from "../infra/database-engine/physical-facts.js";
 import { enableNodeSqliteKyselyStatementCache } from "../infra/kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
@@ -20,11 +19,6 @@ import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { acquireSqliteSnapshotReadToken } from "../infra/sqlite-snapshot-staging.js";
 import { assertTransactionUsable } from "../infra/sqlite-transaction.js";
 import { registerSqliteCacheExitClose } from "../infra/sqlite-wal.js";
-import {
-  assertSqliteDatabaseAdmissionWaitActive,
-  readSqliteDatabaseAdmissionDeadline,
-  withSqliteDatabaseAdmissionWait,
-} from "../infra/sqlite-worker-database-admission-relay.js";
 import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
@@ -51,9 +45,9 @@ import { assertStateReadSchemaForPolicy } from "./openclaw-state-db-read-schema.
 import { isExistingOpenClawStateSchema } from "./openclaw-state-db-schema-policy.js";
 import {
   admitStateSchemaFacts,
-  PostgresSchemaAdmissionUnavailableError,
   type StateSchemaContentVersionRowReader,
 } from "./openclaw-state-db-schema-version.js";
+import { withPostgresSchemaAdmissionRetry } from "./openclaw-state-postgres-admission.js";
 import { postgresStateReadSnapshot } from "./openclaw-state-postgres-snapshot-context.js";
 import type { OpenClawStateReadOnlyDatabase } from "./openclaw-state-read.types.js";
 
@@ -302,62 +296,11 @@ export function readOpenClawStateReadOnlyLocation<T>(
               true,
             )
           : read();
-      let value: T;
-      try {
-        value = readTransaction();
-      } catch (error) {
-        if (
-          !(error instanceof PostgresSchemaAdmissionUnavailableError) ||
-          operationStarted ||
-          snapshot?.path === pathname ||
-          !isPostgresSqlConnection(opened.database.db) ||
-          !opened.database.db.isOpen ||
-          opened.database.db.isTransaction
-        ) {
-          throw error;
-        }
-        const database = opened.database.db;
-        const deadlineAtMs = Math.min(
-          Date.now() + 1000,
-          readSqliteDatabaseAdmissionDeadline() ?? Infinity,
-        );
-        const deadline = performance.now() + Math.max(0, deadlineAtMs - Date.now());
-        const pause = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
-        // Committed schema facts can still be in transit. Longer gaps fail visibly
-        // with the original error; cancellation and owner loss still win.
-        value = withSqliteDatabaseAdmissionWait({ deadlineAtMs }, () => {
-          for (let delayMs = 10; ; delayMs = Math.min(delayMs * 2, 100)) {
-            assertSqliteDatabaseAdmissionWaitActive();
-            const remaining = Math.min(deadline - performance.now(), deadlineAtMs - Date.now());
-            if (remaining <= 0) {
-              throw error;
-            }
-            Atomics.wait(pause, 0, 0, Math.min(delayMs, remaining));
-            assertSqliteDatabaseAdmissionWaitActive();
-            if (performance.now() >= deadline || Date.now() >= deadlineAtMs) {
-              throw error;
-            }
-            if (!database.isOpen || database.isTransaction) {
-              throw error;
-            }
-            if (!getPostgresPhysicalFacts(database, { refresh: true })) {
-              continue;
-            }
-            try {
-              return readTransaction();
-            } catch (retryError) {
-              if (
-                !(retryError instanceof PostgresSchemaAdmissionUnavailableError) ||
-                operationStarted ||
-                !database.isOpen ||
-                database.isTransaction
-              ) {
-                throw retryError;
-              }
-            }
-          }
-        });
-      }
+      const value = withPostgresSchemaAdmissionRetry(
+        opened.database.db,
+        readTransaction,
+        () => !operationStarted && snapshot?.path !== pathname,
+      );
       result = { status: "available", value };
     } catch (error) {
       if (!isPostgresSqlConnection(opened.database.db) && isSqliteCorruptionError(error)) {

@@ -70,13 +70,15 @@ and the agent's
 The lifecycle owner closes its read scope and drains accepted writes before
 retiring the store.
 
-If PostgreSQL schema publication invalidates a shared-state reader's admission
-before its callback starts, the reader rolls back and retries admission with
-brief backoff for at most one second, bounded by its caller's deadline and
-cancellation. Each retry asks the owner for current facts; ordinary reads do not
-poll. A longer publication gap still fails visibly. The reader never retries
-caller work or refreshes an imported snapshot. Schema validation and live
-ownership checks remain in force.
+If PostgreSQL schema publication invalidates admission, connection opening,
+shared-state reads before their callback, and standalone feature-schema ensures
+share a brief backoff retry for at most one second, bounded by the caller's
+deadline and cancellation. Transaction retries require a completed rollback;
+feature-schema ensures only replay their own schema work. Each retry asks the
+owner for current facts; ordinary reads do not poll. A longer publication gap
+still fails visibly. Readers never replay caller work or refresh an imported
+snapshot, and fragment checks inside a caller's transaction do not retry.
+Schema validation and live ownership checks remain in force.
 
 Startup client credential preparation uses the existing credential worker and
 its native custody admission. The admission's receipt postimage also decides

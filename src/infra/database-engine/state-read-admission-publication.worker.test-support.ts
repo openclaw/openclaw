@@ -6,6 +6,7 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { ensureUserBackgroundSchema } from "../../state/user-background.store.js";
+import { ensureUserProfilesSchema } from "../../state/user-profiles-schema.js";
 import { withSqliteDatabaseAdmissionExchange } from "../sqlite-database-admission-context.js";
 import {
   installSqliteDatabaseAdmissions,
@@ -24,6 +25,8 @@ const input = workerData as {
   selection: DatabaseEngineSelection;
   admissions: SqliteDatabaseAdmissions;
   gate: SharedArrayBuffer;
+  twoPublications?: boolean;
+  pauseCommit?: boolean;
 };
 if (!parentPort) {
   throw new Error("Publication fixture requires a worker");
@@ -41,11 +44,16 @@ const wait = (index: number) => {
   }
 };
 let committed = false;
-let held = false;
+let publication = 0;
+let held = -1;
 const statements = channel("openclaw.database.statement");
 const listener = (message: unknown) => {
   const event = message as { engine?: string; sql?: string; outcome?: string };
   if (event.engine === "postgres" && event.sql === "COMMIT" && event.outcome === "ok") {
+    if (input.pauseCommit) {
+      port.postMessage({ phase: "publisher-committed" });
+      wait(2);
+    }
     committed = true;
   }
 };
@@ -55,10 +63,10 @@ try {
   bindSqliteDatabaseAdmissionUpstream(admissionPort);
   withSqliteDatabaseAdmissionExchange(
     (admissions, location, create) => {
-      if (committed && !held) {
-        held = true;
-        port.postMessage({ phase: "publication-pending" });
-        wait(1);
+      if (committed && held !== publication) {
+        held = publication;
+        port.postMessage({ phase: "publication-pending", publication });
+        wait(publication === 0 ? 1 : 3);
       }
       return exchangeSqliteDatabaseAdmissions(admissionPort, admissions, location, create);
     },
@@ -69,7 +77,18 @@ try {
           port.postMessage({ phase: "publisher-ready" });
           wait(0);
           statements.subscribe(listener);
-          ensureUserBackgroundSchema({ env: input.environment });
+          if (input.twoPublications) {
+            ensureUserProfilesSchema({ env: input.environment });
+            port.postMessage({ phase: "first-published" });
+            wait(2);
+            publication++;
+            committed = false;
+          }
+          if (input.pauseCommit) {
+            ensureUserProfilesSchema({ env: input.environment });
+          } else {
+            ensureUserBackgroundSchema({ env: input.environment });
+          }
           port.postMessage({ phase: "published" });
           closeOpenClawStateDatabaseForTest();
         }),
