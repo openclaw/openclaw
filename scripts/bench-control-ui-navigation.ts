@@ -183,7 +183,9 @@ const allScenarios: Scenario[] = [
         ? ".claws-catalog-header"
         : routeId === "activity"
           ? "openclaw-activity-page .content-header"
-          : `openclaw-${routeId}-page`,
+          : routeId === "dashboards"
+            ? "openclaw-dashboards-page .dashboard-preview openclaw-board-document .board-document__content"
+            : `openclaw-${routeId}-page`,
   })),
   {
     id: "new-session",
