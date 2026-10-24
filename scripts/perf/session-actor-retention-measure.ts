@@ -63,7 +63,7 @@ const lifetime = { assertCurrent() {}, assertReadable() {} };
 const entryBytes: number[] = [];
 const readMs: number[] = [];
 const writeMs: number[] = [];
-const runId = randomUUID();
+const runId = values["start-at"] ?? randomUUID();
 type Worker = { prefix: string; commandPath: string };
 const command = async (worker: Worker, operation: string) => {
   const id = `${operation}-${Date.now()}`;
