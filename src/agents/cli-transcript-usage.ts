@@ -13,7 +13,7 @@ const CLI_TRANSCRIPT_UNAVAILABLE_USAGE = {
   cacheWrite: 0,
   total: 0,
   contextUsage: { state: "unavailable" },
-} as const;
+} as const satisfies CliTranscriptUsage;
 
 /**
  * Transcript counters account for the whole turn; `contextUsage` stays the latest call's
