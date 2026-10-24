@@ -317,7 +317,9 @@ function remainingMs(deadline: number): number {
 
 async function withOllama(owner: "node" | "gateway", run: (server: FakeOllama) => Promise<void>) {
   const chatRequests: Record<string, unknown>[] = [];
-  const send = (response: ServerResponse, body: unknown) => response.end(JSON.stringify(body));
+  const send = (response: ServerResponse, body: unknown): void => {
+    response.end(JSON.stringify(body));
+  };
   const handle = async (request: IncomingMessage, response: ServerResponse) => {
     response.setHeader("content-type", "application/json");
     if (request.url === "/api/tags") {

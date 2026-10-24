@@ -98,17 +98,14 @@ async function rowAction(page: Page, name: string, action: "edit" | "delete") {
 }
 
 suite.define(() => {
-  it.each([
-    { width: 1000, hasTouch: false },
-    { width: 1000, hasTouch: true },
-    { width: 390, hasTouch: true },
-  ])("contains names and actions at $width px (touch: $hasTouch)", async ({ width, hasTouch }) => {
-    await suite.withPage({ viewport: { width, height: 900 }, hasTouch }, async ({ page }) => {
-      const phone = width === 390;
-      await openStore(page, { list: { entries: [longNameSecretEntry] } }, ["secrets.store.set"]);
-      const row = page.getByRole("row", { name: longNameSecretEntry.name });
-      const name = row.locator(".secrets-store__name");
-      const trigger = button(row, `Actions: ${longNameSecretEntry.name}`);
+  it.each([false, true])("keeps narrow row actions visible (touch: %s)", async (hasTouch) => {
+    await suite.withPage({ viewport: { width: 1000, height: 900 }, hasTouch }, async ({ page }) => {
+      await openStore(page, { list: { entries: [secretEntry] } }, [
+        "secrets.store.set",
+        "secrets.store.delete",
+      ]);
+      const row = page.getByRole("row", { name: secretEntry.name });
+      const trigger = row.getByRole("button", { name: `Actions: ${secretEntry.name}` });
       await trigger.waitFor({ state: "visible" });
       await row.hover();
       await page.evaluate(() => document.fonts.ready);
@@ -117,9 +114,20 @@ suite.define(() => {
         page.locator(".secrets-store__table-wrap").boundingBox(),
       ]);
       if (!buttonBox || !tableBox) {
-        throw new Error("Missing action or table layout box");
+        throw new Error("Expected row actions and table to have layout boxes");
       }
       expect(buttonBox.x + buttonBox.width).toBeLessThanOrEqual(tableBox.x + tableBox.width);
+    });
+  });
+
+  it.each([
+    { width: 1440, height: 900, phone: false },
+    { width: 390, height: 844, phone: true },
+  ])("contains long secret names (phone: $phone)", async ({ width, height, phone }) => {
+    await suite.withPage({ viewport: { width, height } }, async ({ page }) => {
+      await openStore(page, { list: { entries: [longNameSecretEntry] } });
+      const row = page.getByRole("row", { name: longNameSecretEntry.name });
+      const name = row.locator(".secrets-store__name");
       if (phone) {
         expect(await name.textContent()).toBe(longNameSecretEntry.name);
       } else {
@@ -134,15 +142,27 @@ suite.define(() => {
         expect(nameBox.x + nameBox.width).toBeLessThanOrEqual(accessBox.x);
       }
       const layout = await name.evaluate((element) => {
+        const style = getComputedStyle(element);
         const text = document.createRange();
         text.selectNodeContents(element);
         return {
+          overflowX: style.overflowX,
+          textOverflow: style.textOverflow,
+          overflowWrap: style.overflowWrap,
+          whiteSpace: style.whiteSpace,
           fitsHorizontally: element.scrollWidth <= element.clientWidth,
           wraps: text.getClientRects().length > 1,
         };
       });
       expect(layout).toMatchObject(
-        phone ? { fitsHorizontally: true, wraps: true } : { fitsHorizontally: false, wraps: false },
+        phone
+          ? { overflowWrap: "anywhere", whiteSpace: "normal", fitsHorizontally: true, wraps: true }
+          : {
+              overflowX: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              fitsHorizontally: false,
+            },
       );
       if (phone) {
         for (const selector of ["html", ".secrets-store__table-wrap", ".secrets-store__table"]) {
