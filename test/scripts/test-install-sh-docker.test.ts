@@ -563,6 +563,14 @@ describe("test-install-sh-docker", () => {
       const { root, bin } = fixturePaths("install-same-version");
       const ready = join(root, "server-ready");
       const receipts = join(root, "served.jsonl");
+      const dockerCalls = join(root, "docker.jsonl");
+      const controls = {
+        OPENCLAW_INSTALL_ALLOW_LEGACY_SAME_VERSION_APPLY: "1",
+        OPENCLAW_INSTALL_SMOKE_COMMAND_TIMEOUT: "60",
+        OPENCLAW_INSTALL_SMOKE_HEARTBEAT_INTERVAL: "1",
+        OPENCLAW_INSTALL_SMOKE_PREVIOUS: "2026.9.5",
+        OPENCLAW_INSTALL_SMOKE_SKIP_PREVIOUS: "1",
+      };
       symlinkSync(testNodeExecPath, join(bin, "node"));
       expect(spawnSync("mkfifo", [ready]).status).toBe(0);
       writeCommands(bin, {
@@ -603,6 +611,7 @@ http.createServer((request, response) => {
 const fs = require("node:fs");
 const args = process.argv.slice(2);
 if (args[0] !== "run") throw new Error("Unexpected Docker invocation");
+fs.appendFileSync(process.env.DOCKER_CALLS, JSON.stringify(args) + "\\n");
 const env = new Map();
 for (let index = 0; index < args.length; index++) {
   if (args[index] === "-e") {
@@ -636,13 +645,13 @@ for (let index = 0; index < args.length; index++) {
           TMPDIR: root,
           SERVER_READY: ready,
           SERVED_RECEIPTS: receipts,
+          DOCKER_CALLS: dockerCalls,
+          ...controls,
           npm_config_userconfig: "/dev/null",
           npm_config_globalconfig: "/dev/null",
           OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS: "1",
           OPENCLAW_INSTALL_SMOKE_GROUP: "update",
           OPENCLAW_INSTALL_SMOKE_SKIP_IMAGE_BUILD: "1",
-          OPENCLAW_INSTALL_SMOKE_SKIP_NPM_GLOBAL: "1",
-          OPENCLAW_INSTALL_SMOKE_SKIP_FRESHNESS: "1",
           OPENCLAW_INSTALL_SMOKE_UPDATE_BASELINE: "2026.9.6",
           OPENCLAW_INSTALL_SMOKE_UPDATE_PACKAGE_SPEC: "candidate-fixture",
           OPENCLAW_INSTALL_SMOKE_UPDATE_HOST: "127.0.0.1",
@@ -658,9 +667,21 @@ for (let index = 0; index < args.length; index++) {
         { kind: "fresh", bytes: "candidate build" },
         { kind: "baseline", bytes: "published baseline" },
         { kind: "update", bytes: "candidate build" },
+        { kind: "baseline", bytes: "published baseline" },
+        { kind: "update", bytes: "candidate build" },
       ]);
       expect(served[0]?.url).toBe(served[2]?.url);
       expect(served[1]?.url).not.toBe(served[2]?.url);
+      const calls: string[][] = readFileSync(dockerCalls, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(calls).toHaveLength(4);
+      for (const args of calls) {
+        for (const key of Object.keys(controls)) {
+          expect(args.some((arg, index) => arg === "-e" && args[index + 1] === key)).toBe(true);
+        }
+      }
     },
   );
 
@@ -682,7 +703,11 @@ for (let index = 0; index < args.length; index++) {
       `#!${process.execPath}\nprocess.stdout.write(JSON.stringify({ args: process.argv.slice(2), policy: Object.fromEntries(Object.entries(process.env).filter(([key]) => ["npm_config_before", "npm_config_min_release_age", "npm_config_min-release-age"].includes(key.toLowerCase()))) }));\n`,
     );
 
-    const runNpmFixture = (source: string, cwd: string, env: NodeJS.ProcessEnv) =>
+    const runNpmFixture = (
+      source: string,
+      env: NodeJS.ProcessEnv = process.env,
+      cwd = process.cwd(),
+    ) =>
       runCommand(
         "bash",
         [
@@ -694,37 +719,25 @@ for (let index = 0; index < args.length; index++) {
         { cwd, env },
       );
 
-    const noPolicyResult = runCommand(
-      "bash",
-      [
-        "-c",
-        "set -euo pipefail; source scripts/docker/install-sh-common/version-parse.sh; run_npm_without_freshness_policy bash -c 'printf ok'",
-      ],
-      {
-        cwd: process.cwd(),
-        env: Object.fromEntries(
-          Object.entries(process.env).filter(
-            ([key]) =>
-              ![
-                "npm_config_before",
-                "npm_config_globalconfig",
-                "npm_config_min_release_age",
-                "npm_config_min-release-age",
-                "npm_config_userconfig",
-              ].includes(key.toLowerCase()),
-          ),
+    const noPolicyResult = runNpmFixture(
+      "set -euo pipefail; source scripts/docker/install-sh-common/version-parse.sh; run_npm_without_freshness_policy bash -c 'printf ok'",
+      Object.fromEntries(
+        Object.entries(process.env).filter(
+          ([key]) =>
+            ![
+              "npm_config_before",
+              "npm_config_globalconfig",
+              "npm_config_min_release_age",
+              "npm_config_min-release-age",
+              "npm_config_userconfig",
+            ].includes(key.toLowerCase()),
         ),
-      },
+      ),
     );
     expect(noPolicyResult, noPolicyResult.stderr).toMatchObject({ status: 0, stdout: "ok" });
 
-    const noHomeResult = runCommand(
-      "bash",
-      [
-        "-c",
-        "unset HOME; source scripts/docker/install-sh-common/version-parse.sh; resolve_npm_config_path_value '~/.npmrc'",
-      ],
-      { cwd: process.cwd(), env: process.env },
+    const noHomeResult = runNpmFixture(
+      "unset HOME; source scripts/docker/install-sh-common/version-parse.sh; resolve_npm_config_path_value '~/.npmrc'",
     );
     expect(noHomeResult.status, noHomeResult.stderr).toBe(0);
     const nativeHomeResult = runCommand(
@@ -735,27 +748,20 @@ for (let index = 0; index < args.length; index++) {
     expect(nativeHomeResult.status, nativeHomeResult.stderr).toBe(0);
     expect(noHomeResult.stdout).toBe(join(nativeHomeResult.stdout, ".npmrc"));
 
-    const result = runCommand(
-      "bash",
-      [
-        "-c",
-        "source scripts/docker/install-sh-common/version-parse.sh; quiet_npm view openclaw@2026.8.32 version",
-      ],
+    const result = runNpmFixture(
+      "source scripts/docker/install-sh-common/version-parse.sh; quiet_npm view openclaw@2026.8.32 version",
       {
-        cwd: process.cwd(),
-        env: {
-          ...process.env,
-          NPM_CONFIG_BEFORE: "2026-09-17T23:07:28.000Z",
-          NPM_CONFIG_GLOBALCONFIG: join(root, "missing-global.npmrc"),
-          NPM_CONFIG_before: "2026-09-17T23:07:28.000Z",
-          "NPM_CONFIG_MIN-RELEASE-AGE": "10080",
-          NPM_CONFIG_MIN_RELEASE_AGE: "10080",
-          Npm_Config_Min_Release_Age: "10080",
-          PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
-          npm_config_before: "2026-09-17T23:07:28.000Z",
-          npm_config_min_release_age: "10080",
-          "npm_config_min-release-age": "10080",
-        },
+        ...process.env,
+        NPM_CONFIG_BEFORE: "2026-09-17T23:07:28.000Z",
+        NPM_CONFIG_GLOBALCONFIG: join(root, "missing-global.npmrc"),
+        NPM_CONFIG_before: "2026-09-17T23:07:28.000Z",
+        "NPM_CONFIG_MIN-RELEASE-AGE": "10080",
+        NPM_CONFIG_MIN_RELEASE_AGE: "10080",
+        Npm_Config_Min_Release_Age: "10080",
+        PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
+        npm_config_before: "2026-09-17T23:07:28.000Z",
+        npm_config_min_release_age: "10080",
+        "npm_config_min-release-age": "10080",
       },
     );
 
@@ -794,7 +800,7 @@ for (let index = 0; index < args.length; index++) {
       cwd = nestedProjectDir,
       env: NodeJS.ProcessEnv = { ...process.env, HOME: root },
     ) => {
-      const configResult = runNpmFixture(`source "$1"; ${command}`, cwd, env);
+      const configResult = runNpmFixture(`source "$1"; ${command}`, env, cwd);
       expect(configResult.status, configResult.stderr).toBe(0);
       expect(configResult.stdout.trim().split("\n")).toEqual(expected);
     };
@@ -1633,33 +1639,6 @@ fs.readFileSync = (file, ...args) => {
     } else {
       expect(result.status, result.stderr).toBe(0);
     }
-  });
-
-  it("forwards smoke-runner control knobs into Docker containers", () => {
-    const script = readFileSync(SCRIPT_PATH, "utf8");
-
-    expect(script).toContain("SMOKE_RUNNER_ENV_ARGS=()");
-    for (const envName of [
-      "OPENCLAW_INSTALL_ALLOW_LEGACY_SAME_VERSION_APPLY",
-      "OPENCLAW_INSTALL_SMOKE_COMMAND_TIMEOUT",
-      "OPENCLAW_INSTALL_SMOKE_HEARTBEAT_INTERVAL",
-      "OPENCLAW_INSTALL_SMOKE_PREVIOUS",
-      "OPENCLAW_INSTALL_SMOKE_SKIP_PREVIOUS",
-    ]) {
-      expect(script).toContain(envName);
-    }
-    expect(script).toMatch(
-      /Run installer smoke test[\s\S]*\$\{SMOKE_RUNNER_ENV_ARGS\[@\]\+"\$\{SMOKE_RUNNER_ENV_ARGS\[@\]\}"\}/u,
-    );
-    expect(script).toMatch(
-      /Run update smoke[\s\S]*\$\{SMOKE_RUNNER_ENV_ARGS\[@\]\+"\$\{SMOKE_RUNNER_ENV_ARGS\[@\]\}"\}/u,
-    );
-    expect(script).toMatch(
-      /Run direct npm global smoke[\s\S]*\$\{SMOKE_RUNNER_ENV_ARGS\[@\]\+"\$\{SMOKE_RUNNER_ENV_ARGS\[@\]\}"\}/u,
-    );
-    expect(script).toMatch(
-      /Run installer npm freshness smoke[\s\S]*\$\{SMOKE_RUNNER_ENV_ARGS\[@\]\+"\$\{SMOKE_RUNNER_ENV_ARGS\[@\]\}"\}/u,
-    );
   });
 });
 

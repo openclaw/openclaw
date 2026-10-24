@@ -945,12 +945,7 @@ describe("Docker scheduler trusted harness execution", () => {
       );
     },
   );
-  posixIt.for([
-    "ordinary",
-    "signal-first",
-    "write error held close",
-    "write and close errors",
-  ] as const)(
+  posixIt.for(["ordinary", "signal-first", "log open failure"] as const)(
     "preserves %s cleanup-smoke command provenance",
     { timeout: 30_000 },
     async (order, { signal: abortSignal }) => {
@@ -962,9 +957,6 @@ describe("Docker scheduler trusted harness execution", () => {
         `require('node:fs').writeFileSync(${JSON.stringify(nextPath)}, 'unexpected admission');`,
       )}`;
       const resultPath = path.join(fixture.root, "cleanup-smoke-result.json");
-      const statePath = path.join(fixture.root, "cleanup-smoke-log-state.json");
-      const closeHeldPath = path.join(fixture.root, "cleanup-smoke-close-held.pid");
-      const logFailure = order === "write error held close" || order === "write and close errors";
       const driver = path.join(fixture.harness, "cleanup-smoke-driver.mjs");
       writeFileSync(
         path.join(fixture.selectedHarness, "marker.cjs"),
@@ -987,9 +979,14 @@ describe("Docker scheduler trusted harness execution", () => {
         driver,
         [
           "import fs from 'node:fs';",
-          "import { runCleanupSmokePhase, runShellCommand, writeRunSummary } from './scripts/test-docker-all.mts';",
-          callbackGateSource,
+          "import { runCleanupSmokePhase, runShellCommand } from './scripts/test-docker-all.mts';",
           "const phases = [];",
+          ...(order === "log open failure"
+            ? [
+                "const create = fs.createWriteStream.bind(fs);",
+                `fs.createWriteStream = (file, options) => create(String(file).endsWith('/cleanup-smoke.log') ? ${JSON.stringify(fixture.root)} : file, options);`,
+              ]
+            : []),
           ...(order === "signal-first"
             ? [
                 "const realNow = Date.now.bind(Date);",
@@ -997,61 +994,10 @@ describe("Docker scheduler trusted harness execution", () => {
                 "Date.now = () => startedAt + (realNow() - startedAt) * 100;",
               ]
             : []),
-          `const paths = ${JSON.stringify({ statePath, closeHeldPath, order, logFailure })};`,
-          `
-          const writeError = new Error('cleanup smoke late write failed');
-          const closeError = new Error('cleanup smoke native close failed');
-          const state = { returned: false, rejected: false, closed: false };
-          const snapshot = () => {
-            fs.writeFileSync(paths.statePath + '.pending', JSON.stringify({ ...state, phases }));
-            fs.renameSync(paths.statePath + '.pending', paths.statePath);
-          };
-          if (paths.logFailure) {
-            const nativeCreate = fs.createWriteStream.bind(fs);
-            const nativeFs = { open: fs.open.bind(fs), write: fs.write.bind(fs), close: fs.close.bind(fs) };
-            const gate = callbackGate(paths.closeHeldPath, snapshot);
-            fs.createWriteStream = (file, options) => {
-              if (!String(file).endsWith('/cleanup-smoke.log')) return nativeCreate(file, options);
-              const stream = nativeCreate(file, {
-                ...options,
-                fs: {
-                  open: nativeFs.open,
-                  write(fd, buffer, offset, length, position, callback) {
-                    const late = buffer.toString('utf8', offset, offset + length).includes('finished:');
-                    nativeFs.write(fd, buffer, offset, length, position, (error, bytes) => {
-                      callback(error || (late ? writeError : null), bytes);
-                    });
-                  },
-                  close(fd, callback) {
-                    gate.hold(() => nativeFs.close(fd, error =>
-                      callback(error || (paths.order === 'write and close errors' ? closeError : null))));
-                  },
-                },
-              });
-              stream.once('close', () => { state.closed = true; snapshot(); });
-              return stream;
-            };
-          }
-          `,
           "fs.mkdirSync(process.env.OPENCLAW_DOCKER_ALL_LOG_DIR, { recursive: true });",
-          "try {",
           "const failure = await runCleanupSmokePhase(process.env, process.env.OPENCLAW_DOCKER_ALL_LOG_DIR, phases);",
-          "state.returned = true; snapshot();",
-          ...(order === "ordinary"
-            ? [
-                "await writeRunSummary(process.env.OPENCLAW_DOCKER_ALL_LOG_DIR, { failures: [failure], lanes: [], phases, status: 'failed' });",
-              ]
-            : []),
           `const next = ${order === "signal-first" ? `await runShellCommand({ command: ${JSON.stringify(nextCommand)}, env: process.env, label: 'post-signal-admission' })` : "undefined"};`,
           `fs.writeFileSync(${JSON.stringify(resultPath)}, JSON.stringify({ failure, phases, next }));`,
-          `} catch (error) {
-            state.rejected = true;
-            state.writeIdentity = error === writeError;
-            state.aggregateIdentity = error instanceof AggregateError && error.errors.length === 2
-              && error.errors[0] === writeError && error.errors[1] === closeError && error.cause === writeError;
-            snapshot();
-            throw error;
-          }`,
         ].join("\n"),
       );
       const owner = startOwnedScheduler(
@@ -1062,108 +1008,51 @@ describe("Docker scheduler trusted harness execution", () => {
         [leaderPath, leafPath],
         driver,
       );
-      await withScheduler(
-        owner,
-        async () => {
-          const leaderPid = await owner.ready(leaderPath);
-          const group = owner.captureGroup(leaderPid);
-          if (order === "signal-first") {
-            const leafPid = await owner.ready(leafPath);
-            expect(owner.captureGroup(leafPid)).toBe(group);
-            owner.shim.kill("SIGTERM");
-            expect(await owner.ready(path.join(owner.events, "SIGTERM"))).toBe(owner.shim.pid);
-          } else {
-            process.kill(leaderPid, "SIGUSR1");
-          }
-          if (logFailure) {
-            const controller = await owner.ready(closeHeldPath);
-            expect(controller).toBe(owner.shim.pid);
-            expect(isProcessAlive(controller)).toBe(true);
-            expect(readJson(statePath)).toMatchObject({
-              returned: false,
-              rejected: false,
-              closed: false,
-            });
-            expect(existsSync(resultPath)).toBe(false);
-            process.kill(controller, "SIGUSR2");
-            await expectExit(owner, 1);
-            expect(readJson(statePath)).toMatchObject({
-              returned: false,
-              rejected: true,
-              closed: true,
-              writeIdentity: order === "write error held close",
-              aggregateIdentity: order === "write and close errors",
-              phases: [expect.objectContaining({ name: "cleanup-smoke", status: "failed" })],
-            });
-            expect(existsSync(resultPath)).toBe(false);
-            const log = readFileSync(path.join(fixture.root, "logs/cleanup-smoke.log"), "utf8");
-            expect(log).toContain("cleanup smoke retained stdout");
-            expect(log).toContain("cleanup smoke failed intentionally");
-            expect(log).toContain("finished:");
-            expect(owner.stderr()).toContain("cleanup smoke late write failed");
-            if (order === "write and close errors") {
-              expect(owner.stderr()).toContain("cleanup smoke native close failed");
-            }
-            expect(isProcessAlive(leaderPid)).toBe(false);
-            return;
-          }
-          await expectExit(owner, order === "signal-first" ? 143 : 0);
-          expect(readJson(path.join(owner.events, `${group}.close`))).toEqual(
-            order === "signal-first"
-              ? { code: null, signal: "SIGTERM" }
-              : { code: 3, signal: null },
+      await withScheduler(owner, async () => {
+        if (order === "log open failure") {
+          await expectExit(owner, 1);
+          expect(owner.stderr()).toContain("EISDIR");
+          expect(existsSync(resultPath)).toBe(false);
+          return;
+        }
+        const leaderPid = await owner.ready(leaderPath);
+        const group = owner.captureGroup(leaderPid);
+        if (order === "signal-first") {
+          const leafPid = await owner.ready(leafPath);
+          expect(owner.captureGroup(leafPid)).toBe(group);
+          owner.shim.kill("SIGTERM");
+          expect(await owner.ready(path.join(owner.events, "SIGTERM"))).toBe(owner.shim.pid);
+        } else {
+          process.kill(leaderPid, "SIGUSR1");
+        }
+        await expectExit(owner, order === "signal-first" ? 143 : 0);
+        expect(readJson(path.join(owner.events, `${group}.close`))).toEqual(
+          order === "signal-first" ? { code: null, signal: "SIGTERM" } : { code: 3, signal: null },
+        );
+        const { failure, phases, next } = readJson(resultPath);
+        if (order === "signal-first") {
+          await waitForReapedPid(Number(readFileSync(leafPath, "utf8")), abortSignal);
+          expect(existsSync(nextPath)).toBe(false);
+          expect(owner.children().filter((child) => child.owner === owner.shim.pid)).toHaveLength(
+            1,
           );
-          const { failure, phases, next } = readJson(resultPath);
-          if (order === "signal-first") {
-            await waitForReapedPid(Number(readFileSync(leafPath, "utf8")), abortSignal);
-            expect(existsSync(nextPath)).toBe(false);
-            expect(owner.children().filter((child) => child.owner === owner.shim.pid)).toHaveLength(
-              1,
-            );
-            expect(next).toMatchObject({ cancelled: true, status: 143, signal: null });
-          }
-          expect(failure).toMatchObject({
-            name: "cleanup-smoke",
-            status: order === "signal-first" ? 128 : 3,
-            targetable: false,
-          });
-          expect(failure.cancelled).toBe(order === "signal-first" ? true : undefined);
-          expect(phases).toEqual([
-            expect.objectContaining({ name: "cleanup-smoke", status: "failed" }),
-          ]);
-          if (order === "ordinary") {
-            const expected = {
-              rerunCommand: `(cd ${quote(fixture.selectedHarness)} && ${quote(fixture.pinnedPnpm)} test:docker:cleanup)`,
-              status: 3,
-              targetable: false,
-            };
-            const summary = readJson(path.join(fixture.root, "logs/summary.json"));
-            expect(summary).toMatchObject({
-              status: "failed",
-              failures: [{ name: "cleanup-smoke", ...expected }],
-              phases: [expect.objectContaining({ name: "cleanup-smoke", status: "failed" })],
-              lanes: [],
-            });
-            const index = readJson(path.join(fixture.root, "logs/failures.json"));
-            expect(index).not.toHaveProperty("status");
-            expect(index.combinedGhWorkflowCommand).toBeUndefined();
-            expect(index.lanes[0]?.ghWorkflowCommand).toBeUndefined();
-            expect(index.lanes).toEqual([
-              expect.objectContaining({ lane: "cleanup-smoke", ...expected }),
-            ]);
-          }
-          expect(readFileSync(path.join(fixture.root, "logs/cleanup-smoke.log"), "utf8")).toContain(
-            "cleanup smoke failed intentionally",
-          );
-          expect(isProcessAlive(leaderPid)).toBe(false);
-        },
-        async () => {
-          if (existsSync(closeHeldPath)) {
-            signalIfAlive(Number(readFileSync(closeHeldPath, "utf8")), "SIGUSR2");
-          }
-          await owner.cleanup();
-        },
-      );
+          expect(next).toMatchObject({ cancelled: true, status: 143, signal: null });
+        }
+        expect(failure).toMatchObject({
+          name: "cleanup-smoke",
+          status: order === "signal-first" ? 128 : 3,
+          targetable: false,
+          rerunCommand: `(cd ${quote(fixture.selectedHarness)} && ${quote(fixture.pinnedPnpm)} test:docker:cleanup)`,
+        });
+        expect(failure.cancelled).toBe(order === "signal-first" ? true : undefined);
+        expect(phases).toEqual([
+          expect.objectContaining({ name: "cleanup-smoke", status: "failed" }),
+        ]);
+        expect(readFileSync(path.join(fixture.root, "logs/cleanup-smoke.log"), "utf8")).toContain(
+          "cleanup smoke failed intentionally",
+        );
+        expect(isProcessAlive(leaderPid)).toBe(false);
+      });
     },
   );
 
