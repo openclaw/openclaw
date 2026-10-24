@@ -2107,13 +2107,6 @@ button.chat-reply-attribution__target:disabled {
   background: var(--bg-elevated);
 }
 
-.chat-bubble-activity__label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .chat.chat--bubbles .chat-group.assistant .chat-bubble--activity-only {
   padding: 0;
   border: 0;
@@ -2140,7 +2133,6 @@ button.chat-reply-attribution__target:disabled {
 }
 
 .chat-bubble-dots {
-  flex-shrink: 0;
   display: inline-flex;
   align-items: center;
   gap: 4px;

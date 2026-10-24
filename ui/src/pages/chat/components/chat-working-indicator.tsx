@@ -263,11 +263,13 @@ export function ChatWorkingIndicator(props: WorkingProps) {
               when={attention()}
               fallback={
                 taskLabel() ? (
-                  <span class="chat-bubble-activity__label">{taskLabel()}</span>
+                  <span class="chat-activity-group__label chat-activity-group__label--live">
+                    {taskLabel()}
+                  </span>
                 ) : undefined
               }
             >
-              <span class="chat-bubble-activity__label">
+              <span class="chat-activity-group__label chat-activity-group__label--live">
                 <Show
                   when={props.options.waitingApproval}
                   fallback={<ChatRetryStatus retryAt={props.options.retryAt ?? null} />}
