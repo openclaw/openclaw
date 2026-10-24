@@ -271,7 +271,9 @@ The first connected, presented transcript commit renders two neighboring rows be
 viewport edge. The next animation frame restores the six-row scrolling buffer;
 pending navigation, focus, or anchor reconciliation uses that full buffer immediately,
 including neighboring controls such as folded-work headers. Focused and anchored
-rows remain retained independently. Link-preview discovery
+rows remain retained independently. The first automatic Details body waits for the
+pane's existing post-paint hydration boundary; explicit opens remain immediate, and
+an already mounted body stays retained during later hydration. Link-preview discovery
 waits for browser idle time, then follows transcript mutations instead of rescanning
 unchanged content on every pane update. Hiding or retiring the pane cancels pending
 discovery.
