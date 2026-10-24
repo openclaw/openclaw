@@ -21,8 +21,10 @@ afterEach(() => {
 const TERMINAL_EVENT_DATA = "terminal.data";
 const TERMINAL_EVENT_EXIT = "terminal.exit";
 const OPERATOR_INTRO = composeTerminalIntroBanner();
+type ManagerOptions = Partial<ConstructorParameters<typeof TerminalSessionManager>[0]>;
+const agentOwner = agentTerminalOwner("agent:main:main");
 
-function fixture(options: Partial<ConstructorParameters<typeof TerminalSessionManager>[0]> = {}) {
+function fixture(options: ManagerOptions = {}) {
   const { emit: observe, ...settings } = options;
   const emit = vi.fn(observe);
   const fake = makeFakePty();
@@ -105,7 +107,6 @@ describe("TerminalSessionManager", () => {
     const frames = emit.mock.calls
       .filter(([, event]) => event === TERMINAL_EVENT_DATA)
       .map((call) => call[2] as { seq: number; data: string });
-    expect(frames.length).toBeLessThan(10);
     expect(frames.map(({ seq }) => seq)).toEqual([
       OPERATOR_INTRO.length + 65_536,
       OPERATOR_INTRO.length + 80_000,
@@ -223,8 +224,6 @@ describe("TerminalSessionManager", () => {
 });
 
 describe("TerminalSessionManager agent ownership", () => {
-  const agentOwner = agentTerminalOwner("agent:main:main");
-
   it.each([
     ["none", "close", false],
     ["none", "disconnect", false],
@@ -372,8 +371,7 @@ describe("TerminalSessionManager agent session lifecycle", () => {
       const owner = agentTerminalOwner("agent:main:archive-target");
       const firstPty = makeFakePty();
       const secondPty = makeFakePty();
-      const pendingPty = makeFakePty();
-      const pendingBackend = createDeferred<FakeTerminalPty>();
+      const pending = heldPty();
       let current = true;
       let bufferedAmount = Number.MAX_SAFE_INTEGER;
       const killFirst = firstPty.kill.bind(firstPty);
@@ -409,7 +407,7 @@ describe("TerminalSessionManager agent session lifecycle", () => {
           expect(beginDrain).toThrow("deletion superseded");
           expect(firstPty.paused).toBe(true);
         } else {
-          opening = start(manager, { owner, createBackend: () => pendingBackend.promise });
+          opening = start(manager, { owner, createBackend: pending.spawn });
           drain = beginDrain();
           const settled = vi.fn((error?: unknown) => error);
           const outcome = drain.drained.then(() => settled(), settled);
@@ -419,11 +417,11 @@ describe("TerminalSessionManager agent session lifecycle", () => {
           firstPty.emitExit(0);
           await Promise.resolve();
           expect(settled).not.toHaveBeenCalled();
-          pendingBackend.resolve(pendingPty);
+          pending.release();
           await expect(opening).resolves.toMatchObject({ ok: false, code: "closed" });
-          expect(pendingPty.killed).toBe(true);
+          expect(pending.fake.killed).toBe(true);
           expect(settled).not.toHaveBeenCalled();
-          pendingPty.emitExit(0);
+          pending.fake.emitExit(0);
           expect(await outcome).toEqual(new Error("deletion superseded"));
           expect(drain.hasWork()).toBe(false);
           drain.release();
@@ -449,10 +447,10 @@ describe("TerminalSessionManager agent session lifecycle", () => {
         }
         await expect(start(manager, { owner })).resolves.toMatchObject({ ok: true });
       } finally {
-        pendingBackend.resolve(pendingPty);
+        pending.release();
         await opening;
         firstPty.emitExit(0);
-        pendingPty.emitExit(0);
+        pending.fake.emitExit(0);
         await drain?.drained.catch(() => {});
         drain?.release();
       }
@@ -479,25 +477,23 @@ describe("TerminalSessionManager agent session lifecycle", () => {
 
   it("drains one agent incarnation while admitting its same-key replacement", async () => {
     const oldPty = makeFakePty();
-    const pendingPty = makeFakePty();
-    const { promise: pendingBackend, resolve: resolvePending } =
-      createDeferred<ReturnType<typeof makeFakePty>>();
+    const pending = heldPty();
     const { manager } = fixture({ spawn: async () => makeFakePty() });
     const oldOwner = agentTerminalOwner("agent:main:archive-target", "old-session");
     const replacementOwner = agentTerminalOwner("agent:main:archive-target", "replacement-session");
     await openSession(manager, { owner: oldOwner, createBackend: async () => oldPty });
-    const pending = start(manager, { owner: oldOwner, createBackend: () => pendingBackend });
+    const opening = start(manager, { owner: oldOwner, createBackend: pending.spawn });
 
     const drain = manager.beginAgentSessionDrain(oldOwner);
     expect(oldPty.killed).toBe(true);
     expect(drain.hasWork()).toBe(true);
-    resolvePending(pendingPty);
-    await expect(pending).resolves.toMatchObject({ ok: false, code: "closed" });
-    expect(pendingPty.killed).toBe(true);
+    pending.release();
+    await expect(opening).resolves.toMatchObject({ ok: false, code: "closed" });
+    expect(pending.fake.killed).toBe(true);
     expect(drain.hasWork()).toBe(true);
     oldPty.emitExit(0);
     expect(drain.hasWork()).toBe(true);
-    pendingPty.emitExit(0);
+    pending.fake.emitExit(0);
     await expect(drain.drained).resolves.toBeUndefined();
     expect(drain.hasWork()).toBe(false);
     await expect(start(manager, { owner: oldOwner })).resolves.toMatchObject({
@@ -596,7 +592,6 @@ describe("TerminalSessionManager output ring", () => {
   });
 });
 
-type ManagerOptions = Partial<ConstructorParameters<typeof TerminalSessionManager>[0]>;
 describe("TerminalSessionManager detach/reattach", () => {
   beforeEach(() => vi.useFakeTimers());
   async function openDetachable(options: ManagerOptions = {}, title?: string) {
@@ -707,32 +702,25 @@ describe("TerminalSessionManager detach/reattach", () => {
     expect(manager.write("conn-2", sessionId, "x")).toBe(true);
   });
 
-  it("caps detached sessions by killing the oldest", async () => {
-    const { manager, ptys, open } = await openDetachable({ maxDetachedSessions: 1 });
-    await open("conn-2");
-    manager.handleDisconnect("conn-1");
-    vi.advanceTimersByTime(1);
-    manager.handleDisconnect("conn-2");
-    expect(ptys).toMatchObject([{ killed: true }, { killed: false }]);
-    expect(manager.size).toBe(1);
-  });
-
-  it("lists sessions with attachment state, oldest first", async () => {
-    const { manager, sessionId, open } = await openDetachable();
+  it("lists attachment state oldest first and evicts the oldest detached session", async () => {
+    const { manager, ptys, sessionId, open } = await openDetachable({ maxDetachedSessions: 1 });
     vi.advanceTimersByTime(5);
     const second = await open("conn-2");
     manager.handleDisconnect("conn-2");
     const listed = manager.list();
-    expect(listed.map((s) => s.sessionId)).toEqual([sessionId, second.sessionId]);
-    expect(listed[0]).toMatchObject({ attached: true, agentId: "main", shell: "/bin/zsh" });
-    expect(listed[1]).toMatchObject({ attached: false });
+    expect(listed).toMatchObject([
+      { sessionId, attached: true, agentId: "main", shell: "/bin/zsh" },
+      { sessionId: second.sessionId, attached: false },
+    ]);
     expect(expectDefined(listed[1], "second session").createdAtMs).toBeGreaterThan(
       expectDefined(listed[0], "first session").createdAtMs,
     );
+    vi.advanceTimersByTime(1);
+    manager.handleDisconnect("conn-1");
+    expect(ptys).toMatchObject([{ killed: false }, { killed: true }]);
+    expect(manager.size).toBe(1);
   });
 });
-
-const agentOwner = agentTerminalOwner("agent:main:main");
 
 function trackingManager(maxSessions: number, spawn = async () => makeFakePty()) {
   const ptys: FakeTerminalPty[] = [];
@@ -806,31 +794,27 @@ describe("TerminalSessionManager idle eviction", () => {
   });
 
   it("holds the cap when concurrent opens complete out of order", async () => {
-    const gates: Array<(pty: FakeTerminalPty) => void> = [];
-    const { manager, open } = trackingManager(
-      2,
-      () =>
-        new Promise<FakeTerminalPty>((resolve) => {
-          gates.push(resolve);
-        }),
-    );
+    const [seed, first, second] = [heldPty(), heldPty(), heldPty()];
+    const spawn = vi
+      .fn()
+      .mockImplementationOnce(seed.spawn)
+      .mockImplementationOnce(first.spawn)
+      .mockImplementationOnce(second.spawn);
+    const { manager, open } = trackingManager(2, spawn);
     const seeded = open();
-    await vi.waitFor(() => expect(gates).toHaveLength(1));
-    gates[0]?.(makeFakePty());
+    seed.release();
     expectTerminalOpen(await seeded);
 
     // A reserves the free slot; B sees the reservation and an idle eviction
     // candidate. B's spawn completes first.
     const openA = open();
-    await vi.waitFor(() => expect(gates).toHaveLength(2));
     const openB = open();
-    await vi.waitFor(() => expect(gates).toHaveLength(3));
     const excess = open();
-    expect(gates).toHaveLength(3);
+    expect(spawn).toHaveBeenCalledTimes(3);
     await expect(excess).resolves.toMatchObject({ ok: false, code: "limit" });
-    gates[2]?.(makeFakePty());
+    second.release();
     const outcomeB = await openB;
-    gates[1]?.(makeFakePty());
+    first.release();
     const outcomeA = await openA;
 
     expect([outcomeA.ok, outcomeB.ok]).toEqual([true, true]);
