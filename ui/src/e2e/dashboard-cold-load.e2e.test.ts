@@ -1,4 +1,3 @@
-import path from "node:path";
 import { expect, it } from "vitest";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -305,13 +304,11 @@ suite.define(() => {
             }
             const skeleton = page.locator("[data-panel-skeleton=board]");
             await skeleton.waitFor();
-            await page.screenshot({ path: path.join(suite.artifactDir, "before-hello.png") });
             expect(
               await page.getByText("Synthetic mission briefing.", { exact: true }).isVisible(),
             ).toBe(true);
             expect(await page.locator("[data-panel-skeleton=chat]").count()).toBe(0);
             const frames = await page.evaluate(() => Reflect.get(window, "dashboardPaints"));
-            console.log("Dashboard reload first painted frame", JSON.stringify(frames[0]));
             expect(frames.length).toBeGreaterThan(0);
             for (const frame of frames) {
               const { transcript, ...layout } = frame;
@@ -334,7 +331,6 @@ suite.define(() => {
             await documentRequested.promise;
             expect(await gateway.getRequests("board.get")).toHaveLength(0);
             expect(await skeleton.count()).toBe(1);
-            await page.screenshot({ path: path.join(suite.artifactDir, "before-widget.png") });
             documentRelease.resolve();
             await page
               .frameLocator(".board-widget__frame")
@@ -355,7 +351,6 @@ suite.define(() => {
               await frame.evaluate((current, expected) => current === expected, warmFrame),
             ).toBe(true);
             expect(boardDocumentRequests).toBe(1);
-            await page.screenshot({ path: path.join(suite.artifactDir, "widget-ready.png") });
             if (reference === "mission-control") {
               const pendingBoard = {
                 ...board,

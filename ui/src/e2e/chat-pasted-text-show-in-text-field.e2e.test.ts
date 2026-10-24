@@ -1,12 +1,10 @@
-import { readFile, writeFile } from "node:fs/promises";
-import path from "node:path";
+import { readFile } from "node:fs/promises";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import {
   buildControlUiCspHeader,
   computeInlineScriptHashes,
 } from "../../../src/gateway/control-ui-csp.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { waitForCommittedComposerDraft } from "./settle.test-support.ts";
@@ -108,10 +106,6 @@ suite.define(() => {
           const input = document.querySelector<HTMLTextAreaElement>(inputSelector);
           return Boolean(input?.value || document.querySelector("openclaw-chat-pasted-text"));
         }, selector);
-        const frame = await takeControlUiScreenshotFrame(page, composer, [composer], {
-          animations: "disabled",
-        });
-        await writeFile(path.join(suite.artifactDir, `${route}-empty-long-paste.png`), frame.png);
         await expect.poll(() => composer.inputValue()).toBe(pastedText);
         expect(
           await page.locator(".chat-attachments-preview openclaw-chat-pasted-text").count(),
