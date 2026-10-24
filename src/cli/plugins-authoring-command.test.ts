@@ -11,11 +11,11 @@ import { defaultRuntime } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { VERSION } from "../version.js";
 import {
-  loadToolPlugin,
   runPluginsBuildCommand,
   runPluginsInitCommand,
   runPluginsValidateCommand,
 } from "./plugins-authoring-command.js";
+import { loadToolPlugin } from "./plugins-authoring-loader.js";
 import {
   buildToolPluginManifest,
   buildToolPluginPackageManifest,

@@ -7,6 +7,7 @@ import { after as afterAll, afterEach, describe, it } from "node:test";
 import { pathToFileURL } from "node:url";
 import { build } from "esbuild";
 import { extract } from "tar";
+import { resolvePluginModuleExport } from "../plugins/module-export.js";
 import {
   validatePackageExtensionEntriesForInstall,
   resolvePackageRuntimeExtensionSources,
@@ -15,13 +16,14 @@ import {
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { getCachedPluginModuleLoader } from "../plugins/plugin-module-loader-cache.js";
 import { buildPluginLoaderAliasMap } from "../plugins/sdk-alias.js";
+import type { AnyAgentTool } from "../plugins/types.js";
 import { defaultRuntime } from "../runtime.js";
 import {
   collectPluginsValidationResult,
-  loadToolPlugin,
   runPluginsBuildCommand,
   runPluginsInitCommand,
 } from "./plugins-authoring-command.js";
+import { loadToolPlugin } from "./plugins-authoring-loader.js";
 import {
   createPluginImportFixture,
   unresolvedPluginImportCases,
@@ -101,7 +103,161 @@ function hasMessage(message: string) {
   return (error: unknown) => error instanceof Error && error.message.includes(message);
 }
 
+async function manifestFixture(entryExport: string, runtimeEntry?: string) {
+  const parent = await fs.realpath(
+    await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-manifest-pack-")),
+  );
+  directories.push(parent);
+  const rootDir = path.join(parent, "project");
+  await fs.mkdir(path.join(rootDir, "dist"), { recursive: true });
+  await fs.symlink(path.resolve("node_modules"), path.join(rootDir, "node_modules"), "dir");
+  await fs.writeFile(
+    path.join(rootDir, "package.json"),
+    JSON.stringify({
+      name: "manifest-tools",
+      version: "1.0.0",
+      type: "module",
+      openclaw: {
+        extensions: ["./dist/index.js"],
+        ...(runtimeEntry ? { runtimeExtensions: ["./dist/compiled.js"] } : {}),
+      },
+    }),
+  );
+  const manifest = `${JSON.stringify(
+    {
+      id: "manifest-tools",
+      name: "Authored manifest",
+      configSchema: { type: "object", properties: { label: { type: "string" } } },
+      contracts: { tools: ["manifest_echo"] },
+      toolMetadata: { manifest_echo: { optional: true } },
+    },
+    null,
+    2,
+  )}\n`;
+  await fs.writeFile(path.join(rootDir, "openclaw.plugin.json"), manifest);
+  await fs.writeFile(
+    path.join(rootDir, "dist/message.js"),
+    'export const message = "Packed ordinary plugin";',
+  );
+  const entry = (
+    value: string,
+  ) => `import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import { message } from "./message.js";
+export const registrationState = { calls: 0 };
+function register(api) {
+  registrationState.calls++;
+  if (!api) throw new Error("Registration must not execute while packing");
+  api.registerTool({ name: "manifest_echo", label: "Echo", description: "Echo bundled content", parameters: { type: "object", properties: {} }, execute: async () => ({ content: [{ type: "text", text: message }] }) });
+}
+export default ${value};\n`;
+  await fs.writeFile(path.join(rootDir, "dist/index.js"), entry(entryExport));
+  if (runtimeEntry) {
+    await fs.writeFile(path.join(rootDir, "dist/compiled.js"), entry(runtimeEntry));
+  }
+  return { rootDir, parent, manifest };
+}
+
+function loadManifestFixture(entryPath: string): unknown {
+  return getCachedPluginModuleLoader({
+    modulePath: entryPath,
+    importerUrl: import.meta.url,
+    loaderFilename: entryPath,
+    aliasMap: buildPluginLoaderAliasMap(entryPath, process.argv[1], import.meta.url),
+  })(entryPath);
+}
+
 void describe("plugin artifact authoring", () => {
+  runCases(
+    [
+      {
+        name: "definePluginEntry",
+        entry:
+          'definePluginEntry({ id: "manifest-tools", name: "Manifest tools", description: "Ordinary plugin fixture", register })',
+      },
+      { name: "object registration", entry: '{ id: "manifest-tools", register }' },
+      { name: "function registration", entry: "register" },
+    ],
+    ({ name }) =>
+      `packs ${name} without invoking registration or requiring generated tool metadata`,
+    async ({ entry }) => {
+      const { rootDir, parent, manifest } = await manifestFixture(entry);
+      const sourceEntry = loadManifestFixture(path.join(rootDir, "dist/index.js"));
+      const archive = path.join(parent, "ordinary.tgz");
+      defaultRuntime.writeJson = () => {};
+      await runPluginsPackCommand({ root: rootDir, out: archive, json: true });
+      assert.ok(sourceEntry && typeof sourceEntry === "object");
+      const sourceState: unknown = Reflect.get(sourceEntry, "registrationState");
+      assert.ok(sourceState && typeof sourceState === "object");
+      assert.equal(Reflect.get(sourceState, "calls"), 0);
+      await fs.rm(rootDir, { recursive: true, force: true });
+      const extracted = path.join(parent, "extracted");
+      await fs.mkdir(extracted);
+      await extract({ file: archive, cwd: extracted, strict: true });
+      const packageRoot = path.join(extracted, "package");
+      assert.equal(
+        await fs.readFile(path.join(packageRoot, "openclaw.plugin.json"), "utf8"),
+        manifest,
+      );
+      await assert.rejects(fs.stat(path.join(packageRoot, "node_modules")), { code: "ENOENT" });
+      await assert.rejects(fs.stat(path.join(packageRoot, "src")), { code: "ENOENT" });
+      const loaded = loadManifestFixture(path.join(packageRoot, "dist/index.js"));
+      const { register } = resolvePluginModuleExport(loaded);
+      assert.equal(typeof register, "function");
+      const tools: AnyAgentTool[] = [];
+      register!({
+        registerTool(tool: AnyAgentTool) {
+          tools.push(tool);
+        },
+      } as Parameters<NonNullable<typeof register>>[0]);
+      assert.ok(loaded && typeof loaded === "object");
+      const loadedState: unknown = Reflect.get(loaded, "registrationState");
+      assert.ok(loadedState && typeof loadedState === "object");
+      assert.equal(Reflect.get(loadedState, "calls"), 1);
+      assert.equal(tools.length, 1);
+      assert.equal(tools[0]!.name, "manifest_echo");
+      assert.deepEqual(await tools[0]!.execute("manifest-pack-test", {}), {
+        content: [{ type: "text", text: "Packed ordinary plugin" }],
+      });
+    },
+  );
+
+  runCases(
+    [
+      {
+        name: "mismatched runtime entry identity despite a valid source entry",
+        entry: '{ id: "manifest-tools", register }',
+        runtimeEntry: '{ id: "other-plugin", register }',
+        error: /id.*(?:mismatch|match)/i,
+      },
+      {
+        name: "missing registration",
+        entry: '{ id: "manifest-tools" }',
+        error: /register|registration/i,
+      },
+    ],
+    ({ name }) => `rejects ordinary plugins with ${name} before writing an artifact`,
+    async ({ entry, runtimeEntry, error }) => {
+      const { rootDir, parent } = await manifestFixture(entry, runtimeEntry);
+      const archive = path.join(parent, "invalid.tgz");
+      await assert.rejects(runPluginsPackCommand({ root: rootDir, out: archive }), error);
+      await assert.rejects(fs.stat(archive), { code: "ENOENT" });
+    },
+  );
+
+  void it("still rejects stale generated tool metadata when packing", async () => {
+    const { rootDir, parent } = await fixture();
+    const manifestPath = path.join(rootDir, "openclaw.plugin.json");
+    const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+    manifest.contracts.tools = ["stale_tool"];
+    await fs.writeFile(manifestPath, JSON.stringify(manifest));
+    const archive = path.join(parent, "stale-tools.tgz");
+    await assert.rejects(
+      runPluginsPackCommand({ root: rootDir, out: archive }),
+      hasMessage("generated metadata is stale"),
+    );
+    await assert.rejects(fs.stat(archive), { code: "ENOENT" });
+  });
+
   void it("packs CommonJS dependencies into a self-contained artifact bound to its exact digest", async () => {
     const { rootDir, parent } = await fixture();
     await fs.appendFile(
