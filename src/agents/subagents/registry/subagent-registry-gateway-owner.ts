@@ -222,8 +222,20 @@ async function restoreSubagentCompletionSource(
     const source = entry.operatorRecoverySource;
     const missingSourceReason =
       "The original operator source was not saved for this requester continuation";
+    const childAuthority = resolveSubagentChildAuthority(entry);
+    // A fresh human follow-up carries its own child-targeted source. Parent
+    // delivery identity remains unchanged, and restart successors retain taskRunId.
+    const childSource =
+      source !== undefined &&
+      childAuthority.status === "verified" &&
+      source.agentId === childAuthority.childAgentId &&
+      source.sessionKey === entry.childSessionKey &&
+      source.sessionId === childAuthority.sessionIdentity.sessionId &&
+      source.lifecycleRevision === childAuthority.sessionIdentity.lifecycleRevision &&
+      source.sourceRunId === (entry.taskRunId ?? entry.runId);
     if (
       source &&
+      !childSource &&
       (source.agentId !== entry.requesterAgentId ||
         source.sessionKey !== entry.requesterSessionKey ||
         source.sessionId !== entry.completionRequesterSessionId ||
@@ -235,7 +247,9 @@ async function restoreSubagentCompletionSource(
       );
     }
     const gateway = resolver();
-    const storePath = entry.requesterStorePath;
+    const storePath = childSource
+      ? resolveSubagentChildSessionOwner(entry, getRuntimeConfig()).storePath
+      : entry.requesterStorePath;
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
     const context = captureOpenClawStateWorkerContext();
     const assertGatewayCurrent = () => {

@@ -109,7 +109,6 @@
     .session-progress-card__body,
     .chat-queue__scroll,
     .agent-chat__goal-detail-objective,
-    .chat-swarm__tasks,
     .chat-error__diagnostic
   ) {
   overscroll-behavior: auto;

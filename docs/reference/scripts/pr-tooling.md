@@ -132,6 +132,23 @@ the merge outcome without repeating publication, comments, or cleanup.
 
 ## Reconcile a completed CI review
 
+If native landing rejects an older Security Review publisher because its sources
+no longer match protected main, a human with repository `maintain` or `admin`
+access can post a new PR comment containing only:
+
+```text
+/refresh-security-review <full-current-head-sha>
+```
+
+Use the full 40-character lowercase commit SHA. The command rechecks the comment
+author's current repository role and selects only that open, non-draft PR while
+its head still matches. Edited or deleted refresh comments do not trigger a
+refresh. The new `issue_comment` review uses protected-main publisher sources and
+the existing head-only review job, including for older native workflow bindings.
+It reevaluates current CI and security requirements; it does not rerun CI, approve
+changes, alter a workflow binding, or waive a failed check. Keep refresh and
+approval commands in separate comments; a mixed comment grants no approval.
+
 If CI completed but its combined `openclaw/ci-gate` commit status remains pending,
 maintainers can replay Security Review for that exact CI run:
 

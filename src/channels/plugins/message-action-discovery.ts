@@ -2,7 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { Type, type TSchema } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { formatErrorMessage } from "../../infra/errors.js";
+import { formatErrorMessage, formatErrorStackWithMessage } from "../../infra/errors.js";
 import {
   getPreparedMessageToolCatalog,
   type PreparedMessageToolCatalog,
@@ -94,9 +94,10 @@ function reportDiscoveryError(pluginId: string, error: unknown) {
   // Discovery runs while building tool schemas, so report each plugin/error pair once.
   if (!loggedMessageActionErrors.has(key)) {
     loggedMessageActionErrors.add(key);
-    const stack = error instanceof Error && error.stack ? error.stack : null;
+    const detail =
+      error instanceof Error && error.stack ? formatErrorStackWithMessage(error) : message;
     defaultRuntime.error?.(
-      `[message-action-discovery] ${pluginId}.actions.describeMessageTool failed: ${stack ?? message}`,
+      `[message-action-discovery] ${pluginId}.actions.describeMessageTool failed: ${detail}`,
     );
   }
 }

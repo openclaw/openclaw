@@ -18,6 +18,12 @@ The workspace is the **default cwd**, not a hard sandbox. Tools resolve relative
 When sandboxing is enabled and `workspaceAccess` is not `"rw"`, tools operate inside a sandbox workspace under `~/.openclaw/sandboxes`, not your host workspace.
 </Warning>
 
+On the host, workspace-contained OpenClaw file tools also allow registered Git
+linked worktrees of the workspace's repository. Each write checks the current
+registration and resolves filesystem aliases; a copied `.git` file alone grants
+no access. Other repositories and Git metadata remain outside this scope.
+Container sandbox mounts keep their own boundaries.
+
 ## Default location
 
 - Default: `~/.openclaw/workspace`

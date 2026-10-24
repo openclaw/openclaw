@@ -11,7 +11,6 @@ import {
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
-import { isSubagentSessionKey } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv, withoutRuntimeOutput } from "../runtime.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
 import { withSessionTurn } from "../sessions/session-controller.admission.js";
@@ -302,12 +301,9 @@ async function agentCommandInternalOwned(
         }
       };
 
-      if (
-        sessionStore &&
-        sessionKey &&
-        !suppressVisibleSessionEffects &&
-        !isSubagentSessionKey(sessionKey)
-      ) {
+      // Native children need the same retained requester source for registry recovery.
+      // The main-session recovery owner independently excludes delegated sessions.
+      if (sessionStore && sessionKey && !suppressVisibleSessionEffects) {
         const now = Date.now();
         const currentStoreEntry = sessionStore[sessionKey];
         const allowCreate = currentStoreEntry === undefined && sessionEntry === undefined;

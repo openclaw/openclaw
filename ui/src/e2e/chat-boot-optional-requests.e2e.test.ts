@@ -25,7 +25,7 @@ suite.define(() => {
         const mediaRequests = () =>
           requested.filter((path) => mediaModules.some((module) => module.test(path)));
         const swarmModule = controlUiE2eBuiltModuleRequest(
-          "ui/src/pages/chat/components/chat-swarm-progress.solid.tsx",
+          "ui/src/pages/chat/components/chat-delegation.tsx",
         );
         const activityPillsModule = controlUiE2eBuiltModuleRequest(
           "ui/src/pages/chat/components/chat-activity-pills.tsx",

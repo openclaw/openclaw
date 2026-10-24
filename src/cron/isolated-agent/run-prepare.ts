@@ -244,7 +244,10 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
 
   async function prepareAdmittedSession() {
     const now = Date.now();
-    const sandbox = resolveCreatorSandbox(runtimeCfg, { actor: input.job.createdActor });
+    // A child run never runs looser than its parent.
+    const sandbox =
+      resolveCreatorSandbox(runtimeCfg, { actor: input.job.createdActor }) ??
+      input.occurrence.childParent?.sandbox;
     const usesExactRunSession = usesDetachedRunSession || baseSessionKey.startsWith("cron:");
     const cronSession = await prepareCronSession({
       cfg: runtimeCfg,
@@ -305,6 +308,7 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
         defaultWorkspaceDir: modelOwner.workspaceDir,
         sessionPreparationEffect,
         isFastTestEnv: params.isFastTestEnv,
+        childParent: input.occurrence.childParent,
       });
       workspaceLease = selectedWorkspace.lease;
       const workspaceDir = selectedWorkspace.workspaceDir;

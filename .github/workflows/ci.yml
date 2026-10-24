@@ -108,7 +108,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  IOS_SCREENSHOT_FASTLANE_VERSION: "2.241.0"
+  IOS_SCREENSHOT_FASTLANE_VERSION: "2.241.1"
   IOS_SCREENSHOT_NODE_VERSION: "24.22.1"
   IOS_SCREENSHOT_XCODE_VERSION: "Xcode 27.1 Build version 27A9275"
   NODE_VERSION: "24.22.1"
@@ -1743,7 +1743,7 @@ jobs:
       - name: Install security scanners
         id: security_scanners
         if: ${{ !cancelled() && steps.workflow_scope.outputs.changed == 'true' }}
-        run: python3 --version && python3 -m pip install --disable-pip-version-check pre-commit==4.6.2 zizmor==1.30.1
+        run: python3 --version && python3 -m pip install --disable-pip-version-check pre-commit==4.7.0 zizmor==1.31.1
 
       - name: Audit changed GitHub workflows with zizmor
         if: ${{ !cancelled() && steps.security_scanners.outcome == 'success' && steps.scanner_config.outcome == 'success' && steps.workflow_scope.outputs.changed == 'true' }}
@@ -5932,16 +5932,16 @@ jobs:
         uses: ruby/setup-ruby@651ff0d62c5c79bed6d53ec518387aae20e72c1a # v1.329.0
         with:
           ruby-version: "4.0.7"
-          bundler: "4.0.22"
+          bundler: "4.0.23"
           bundler-cache: false
           working-directory: apps/ios
 
       - name: Install locked Fastlane bundle
         working-directory: apps/ios
         run: |
-          bundle _4.0.22_ install --jobs 4 --retry 3
-          bundle _4.0.22_ check
-          bundle _4.0.22_ exec fastlane --version
+          bundle _4.0.23_ install --jobs 4 --retry 3
+          bundle _4.0.23_ check
+          bundle _4.0.23_ exec fastlane --version
 
       - *select_xcode_step
 

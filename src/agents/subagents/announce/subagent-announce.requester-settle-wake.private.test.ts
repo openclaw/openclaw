@@ -107,7 +107,8 @@ describe("maybeWakeRequesterAfterAllChildrenSettled private batches", () => {
       expect(trigger).toContain("must go through the message tool, send your answer with it");
       expect(trigger).toContain("avoid repeating an update already delivered");
     } else if (!yielded) {
-      expect(trigger).toContain("send it through an available, permitted messaging tool");
+      expect(trigger).not.toContain("messaging tool");
+      expect(trigger).toContain("Your final reply is recorded in this session for the requester");
       expect(trigger).toContain("briefly record the reviewed outcome and any remaining work");
       expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams())).toBe(false);
       expect(deliverSpy).toHaveBeenCalledOnce();
@@ -116,4 +117,31 @@ describe("maybeWakeRequesterAfterAllChildrenSettled private batches", () => {
       );
     }
   });
+
+  it.each([
+    { name: "channel-less", origin: undefined, canDeliver: false },
+    {
+      name: "internal session target",
+      origin: { channel: "internal", to: "agent:main:main" },
+      canDeliver: false,
+    },
+    { name: "channel", origin: { channel: "discord", to: "channel:123" }, canDeliver: true },
+    { name: "WebChat", origin: { channel: "webchat" }, canDeliver: true },
+  ])(
+    "guides private $name settles according to the requester route",
+    async ({ origin, canDeliver }) => {
+      settledPrivateChildren({});
+      expect(
+        await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ requesterOrigin: origin })),
+      ).toBe(true);
+      const trigger = String(deliveredCallArg().triggerMessage);
+      if (canDeliver) {
+        expect(trigger).toContain("send it through an available, permitted messaging tool");
+      } else {
+        expect(trigger).not.toContain("messaging tool");
+        expect(trigger).toContain("Your final reply is recorded in this session for the requester");
+        expect(trigger).toContain("no messaging send is needed");
+      }
+    },
+  );
 });

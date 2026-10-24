@@ -114,6 +114,7 @@ export function createWorkerInferenceServiceStub(): WorkerEnvironmentServiceCont
     prepare: unexpected,
     create: unexpected,
     destroy: unexpected,
+    reclaim: unexpected,
     destroyUnattached: unexpected,
     observeDesktop: unexpected,
     launchDesktopApp: unexpected,

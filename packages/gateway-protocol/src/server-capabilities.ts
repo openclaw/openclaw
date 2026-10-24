@@ -20,6 +20,7 @@ export const GATEWAY_SERVER_CAPS = {
   WORKTREES_RETIRE_SNAPSHOT_OWNER: "worktrees-retire-snapshot-owner-v1",
   MODEL_CATALOG_SNAPSHOT: "model-catalog-snapshot",
   NODE_PERMISSION_ERRORS: "node-permission-errors",
+  NODE_WORKER_BUNDLE_PREFETCH: "node-worker-bundle-prefetch-v1",
   NODE_WORKER_BUNDLE_RETENTION: "node-worker-bundle-retention-v1",
   NODE_WORKER_BUNDLE_STATUS: "node-worker-bundle-status-v1",
   NODE_WORKER_CAPTURED_EXEC_POLICY: "node-worker-captured-exec-policy",

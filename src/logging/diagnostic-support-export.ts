@@ -127,20 +127,6 @@ function safeScalar(value: unknown): unknown {
   return undefined;
 }
 
-function resolveBonjourEnvOverride(
-  env: NodeJS.ProcessEnv,
-): NonNullable<ConfigShape["discovery"]>["bonjourEnvOverride"] {
-  const raw = env.OPENCLAW_DISABLE_BONJOUR?.trim();
-  if (!raw) {
-    return "unset";
-  }
-  const disabled = parseBooleanValue(raw);
-  if (disabled === true) {
-    return "force-disabled";
-  }
-  return disabled === false ? "force-enabled" : "unrecognized";
-}
-
 function sortedConfigEntryKeys(value: unknown): string[] {
   return Object.keys(asOptionalRecord(value) ?? {})
     .filter((key) => key !== INCLUDE_KEY)
@@ -219,7 +205,15 @@ function readConfigExport(configPath: string, options: SupportRedactionContext):
       };
     }
 
-    const bonjourEnvOverride = resolveBonjourEnvOverride(env);
+    const raw = env.OPENCLAW_DISABLE_BONJOUR?.trim();
+    const disabled = raw ? parseBooleanValue(raw) : undefined;
+    const bonjourEnvOverride = !raw
+      ? "unset"
+      : disabled === true
+        ? "force-disabled"
+        : disabled === false
+          ? "force-enabled"
+          : "unrecognized";
     if (mdns || bonjourEnvOverride !== "unset") {
       shape.discovery = {
         mdnsMode: safeScalar(mdns?.mode),
@@ -428,62 +422,30 @@ function summarizeBonjourLogs(logTail: SanitizedLogTail): BonjourLogSummary {
   return summary;
 }
 
-function describeStabilityForDiagnostics(
-  stability: ReadDiagnosticStabilityBundleResult,
-  redaction: SupportRedactionContext,
-) {
-  if (stability.status === "found") {
-    return {
-      status: "found" as const,
-      path: redactPathForSupport(stability.path, redaction),
-      mtimeMs: stability.mtimeMs,
-      eventCount: stability.bundle.snapshot.count,
-      reason: stability.bundle.reason,
-      generatedAt: stability.bundle.generatedAt,
-    };
-  }
-
-  if (stability.status === "missing") {
-    return {
-      status: "missing" as const,
-      dir: redactPathForSupport(stability.dir, redaction),
-    };
-  }
-
-  return {
-    status: "failed" as const,
-    path: stability.path ? redactPathForSupport(stability.path, redaction) : undefined,
-    error: redactErrorForSupport(stability.error, redaction),
-  };
-}
-
-function resolveOutputPath(options: { outputPath?: string; stateDir: string; now: Date }): string {
-  const filename = `${SUPPORT_EXPORT_PREFIX}${formatDiagnosticFilenameTimestamp(options.now)}-${process.pid}${SUPPORT_EXPORT_SUFFIX}`;
-  const raw = options.outputPath?.trim();
-  if (!raw) {
-    return path.join(options.stateDir, "logs", "support", filename);
-  }
-  const resolved =
-    path.isAbsolute(raw) || raw.startsWith("~") ? resolveHomeRelativePath(raw) : path.resolve(raw);
-  try {
-    if (fs.statSync(resolved).isDirectory()) {
-      return path.join(resolved, filename);
-    }
-  } catch {
-    // Non-existing output paths are treated as files.
-  }
-  return resolved;
-}
-
 export async function writeDiagnosticSupportExport(options: DiagnosticSupportExportOptions) {
   const env = process.env;
   const stateDir = resolveStateDir(env);
   const now = new Date();
-  const outputPath = resolveOutputPath({
-    outputPath: options.outputPath,
-    stateDir,
-    now,
-  });
+  const configuredOutputPath = options.outputPath;
+  const filename = `${SUPPORT_EXPORT_PREFIX}${formatDiagnosticFilenameTimestamp(now)}-${process.pid}${SUPPORT_EXPORT_SUFFIX}`;
+  const raw = configuredOutputPath?.trim();
+  let outputPath: string;
+  if (!raw) {
+    outputPath = path.join(stateDir, "logs", "support", filename);
+  } else {
+    const resolved =
+      path.isAbsolute(raw) || raw.startsWith("~")
+        ? resolveHomeRelativePath(raw)
+        : path.resolve(raw);
+    outputPath = resolved;
+    try {
+      if (fs.statSync(resolved).isDirectory()) {
+        outputPath = path.join(resolved, filename);
+      }
+    } catch {
+      // Non-existing output paths are treated as files.
+    }
+  }
   const generatedAt = now.toISOString();
   const configPath = resolveConfigPath(env, stateDir);
   const stability = readStabilityBundle(options.stabilityBundle, stateDir);
@@ -532,7 +494,26 @@ export async function writeDiagnosticSupportExport(options: DiagnosticSupportExp
       truncated: logTail.truncated,
       reset: logTail.reset,
     },
-    stability: describeStabilityForDiagnostics(stability, redaction),
+    stability:
+      stability.status === "found"
+        ? {
+            status: "found" as const,
+            path: redactPathForSupport(stability.path, redaction),
+            mtimeMs: stability.mtimeMs,
+            eventCount: stability.bundle.snapshot.count,
+            reason: stability.bundle.reason,
+            generatedAt: stability.bundle.generatedAt,
+          }
+        : stability.status === "missing"
+          ? {
+              status: "missing" as const,
+              dir: redactPathForSupport(stability.dir, redaction),
+            }
+          : {
+              status: "failed" as const,
+              path: stability.path ? redactPathForSupport(stability.path, redaction) : undefined,
+              error: redactErrorForSupport(stability.error, redaction),
+            },
     bonjour: summarizeBonjourLogs(logTail),
     status: statusSnapshot.summary,
     health: healthSnapshot.summary,
