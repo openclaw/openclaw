@@ -260,6 +260,37 @@ it.each([
   await expect(runInteractiveAuth({ prompter })).rejects.toThrow(WizardCancelledError);
 });
 
+it.each(["not-a-url", "localhost:4000", "ftp://litellm.example"])(
+  "rejects --custom-base-url %s after resolving the setup key",
+  async (customBaseUrl) => {
+    const runtime = createRuntimeSpies();
+    const resolveApiKey = vi.fn(async () => ({ key: "litellm-test-key", source: "flag" as const }));
+    const result = await runNonInteractiveAuth(
+      {},
+      "unused",
+      { customBaseUrl, litellmApiKey: "litellm-test-key" },
+      {
+        runtime,
+        resolveApiKey,
+        toApiKeyCredential: () => {
+          throw new Error("Invalid proxy setup must not store credentials");
+        },
+      },
+    );
+    expect(result).toBeNull();
+    expect(resolveApiKey).toHaveBeenCalledExactlyOnceWith({
+      provider: "litellm",
+      flagValue: "litellm-test-key",
+      flagName: "--litellm-api-key",
+      envVar: "LITELLM_API_KEY",
+    });
+    expect(runtime.error).toHaveBeenCalledExactlyOnceWith(
+      "The LiteLLM proxy URL must be a full http:// or https:// URL, such as http://localhost:4000.",
+    );
+    expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
+  },
+);
+
 it.each([
   [undefined, "http://localhost:4000/v1/models"],
   ["https://litellm.example", `${PROXY_URL}/models`],
