@@ -1,8 +1,7 @@
 import { createMemo } from "solid-js";
 import type { ApplicationContext } from "../../app/context-types.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
-import type { JSX } from "../../types/solid-elements.js";
-import { CustomEndpoints } from "./custom-endpoints.tsx";
+import { CustomProviderEditor, type CustomProviderEditorActions } from "./custom-endpoints.tsx";
 import { ModelProviderAccountRecovery, ModelProviderLoginView } from "./login-view.tsx";
 import { createModelProviders, type ModelProvidersOwner } from "./model-providers-controller.ts";
 import type { ModelProvidersRouteData } from "./route.ts";
@@ -14,7 +13,7 @@ import {
 
 export function ModelProvidersContent(props: {
   controller: ModelProvidersOwner;
-  customEndpoints?: JSX.Element;
+  customProvider?: CustomProviderEditorActions;
 }) {
   const current = createMemo(() => props.controller.viewProps());
   let initialLoadComplete = false;
@@ -30,7 +29,12 @@ export function ModelProvidersContent(props: {
     return initialLoadComplete || !snapshot.props.connected;
   });
   const Recovery = () => <ModelProviderAccountRecovery controller={props.controller.login} />;
-  const Login = () => <ModelProviderLoginView controller={props.controller.login} />;
+  const Login = () => (
+    <ModelProviderLoginView
+      controller={props.controller.login}
+      customProvider={props.customProvider}
+    />
+  );
   const cards = createMemo(() => current().cards);
   const discoveryData = createMemo(() => current().discovery);
   const InstalledAgents = () =>
@@ -42,7 +46,7 @@ export function ModelProvidersContent(props: {
       body={
         <ModelProviders
           {...current().props}
-          customEndpoints={props.customEndpoints}
+          customProvider={props.customProvider}
           apiKeySaving={props.controller.mutations.apiKeySaving()}
           defaultsSaving={props.controller.mutations.defaultsSaving()}
           logoutSaving={props.controller.logoutSaving()}
@@ -72,12 +76,9 @@ export function ModelProvidersPageBody(props: ModelProvidersPageProps) {
   const context: ApplicationContext = useApplication();
   const controller = createModelProviders(context, props);
   return (
-    <ModelProvidersContent
-      controller={controller}
-      customEndpoints={
-        <CustomEndpoints onRefresh={controller.refresh} onInvalidate={controller.clearProbe} />
-      }
-    />
+    <CustomProviderEditor onRefresh={controller.refresh} onInvalidate={controller.clearProbe}>
+      {(actions) => <ModelProvidersContent controller={controller} customProvider={actions} />}
+    </CustomProviderEditor>
   );
 }
 

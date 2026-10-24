@@ -1,12 +1,14 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { splitTrailingAuthProfile } from "../../../../src/agents/model-ref-profile.js";
+import { isBuiltInModelProviderOverlayId } from "../../../../src/config/model-provider-overlay-ids.js";
 import type { AgentModelConfig } from "../../../../src/config/types.agents-shared.js";
 import type {
   ProviderUsageSnapshot,
   UsageSummary,
 } from "../../../../src/infra/provider-usage.types.js";
 import { isSecretRef } from "../../../../src/secrets/ref-contract.js";
+import { CUSTOM_ENDPOINT_APIS } from "../../../../src/shared/custom-endpoint.js";
 import type {
   AgentsListResult,
   FastMode,
@@ -60,6 +62,8 @@ export type ModelProviderCard = {
   /** Exact config map key; provider ids are otherwise normalized for display/runtime use. */
   configKey?: string;
   configAuthMode?: string;
+  customEndpoint?: { editable: boolean };
+  logo?: string;
   apiKeySupported?: boolean;
   /** Provider ids that own credentials merged into this card. */
   credentialProviderIds: string[];
@@ -93,6 +97,9 @@ type ConfiguredModelProvider = {
   hasApiKey: boolean;
   apiKeyReference?: boolean;
   authMode?: string;
+  name?: string;
+  logo?: string;
+  customEndpoint?: { editable: boolean };
 };
 
 type ModelProviderCardsInput = {
@@ -389,9 +396,19 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
     )
     .map((draft) => {
       const apiKeySupported = apiKeyCapabilities.get(draft.card.id);
+      const configured = input.configProviders?.find(({ key }) => key === draft.card.configKey);
       return Object.assign(
         {},
         draft.card,
+        configured
+          ? {
+              displayName: configured.name || draft.card.displayName,
+              logo: configured.logo,
+              customEndpoint: apiKeyCapabilities.has(draft.card.id)
+                ? undefined
+                : configured.customEndpoint,
+            }
+          : {},
         draft.catalogOutcome ? { catalogStatus: draft.catalogOutcome.status } : {},
         apiKeySupported === undefined ? {} : { apiKeySupported },
       );
@@ -536,6 +553,17 @@ export function readModelProviderConfig(config: Record<string, unknown> | null):
         hasApiKey: provider ? Object.hasOwn(provider, "apiKey") && provider.apiKey != null : false,
         apiKeyReference: isSecretRef(provider?.apiKey),
       };
+      if (!isBuiltInModelProviderOverlayId(key)) {
+        entry.customEndpoint = {
+          editable: CUSTOM_ENDPOINT_APIS.some((api) => api === provider?.api),
+        };
+      }
+      if (typeof provider?.name === "string") {
+        entry.name = provider.name;
+      }
+      if (typeof provider?.logo === "string") {
+        entry.logo = provider.logo;
+      }
       if (typeof provider?.auth === "string") {
         entry.authMode = provider.auth;
       }

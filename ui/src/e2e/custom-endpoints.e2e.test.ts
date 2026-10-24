@@ -1,4 +1,4 @@
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
@@ -16,6 +16,155 @@ const suite = createControlUiE2eSuite({
   startServer: startControlUiE2eServer,
 });
 suite.define(() => {
+  it("connects a custom provider, edits branding, and refreshes the unified list with safe logo fallbacks", async () => {
+    await suite.withPage(providerPageOptions(1200, 1125), async ({ page }) => {
+      const logoBytes = await readFile(path.resolve("ui/public/favicon-32.png"));
+      const logo = "data:image/png;base64," + logoBytes.toString("base64");
+      const defaults = { agents: { defaults: { model: "openai/official" } } };
+      const provider = {
+        name: "Lobster Lab",
+        logo,
+        baseUrl: "https://inference.example/v1",
+        api: "openai-completions",
+        auth: "none",
+        models: [{ id: "chat", name: "Lab Chat" }],
+      };
+      const configured = (entry: typeof provider) => ({
+        ...defaults,
+        models: { providers: { "lab-inference": entry } },
+      });
+      const gateway = await installMockGateway(page, {
+        featureMethods: ["config.get", "config.patch", "config.customEndpoint"],
+        methodResponses: {
+          "config.get": configSnapshot(defaults, "base"),
+          "models.list": { models: [catalogModel("openai", "official", "Official model")] },
+          "models.authStatus": { ts: 1, providers: [], providerCapabilities: [] },
+          "config.customEndpoint": { ok: true },
+          ...emptyUsage(1),
+        },
+      });
+      const capture = async (name: string, element: ReturnType<typeof page.locator>) => {
+        const frame = await takeControlUiScreenshotFrame(page, page.locator(".shell"), [element], {
+          animations: "disabled",
+        });
+        await writeFile(path.join(suite.artifactDir, name + ".png"), frame.png);
+      };
+      await page.goto(suite.server.baseUrl + "settings/model-providers");
+      await page.getByRole("button", { name: "Connect provider", exact: true }).first().click();
+      const search = page.locator("[data-models-login-search]");
+      await search.fill("custom");
+      const option = page.getByRole("button", { name: "Custom Provider", exact: false });
+      await expect.poll(() => option.count()).toBe(1);
+      await capture("after-picker", page.locator(".model-provider-login"));
+      await option.click();
+      const form = page.locator(".custom-endpoint-editor");
+      await form.getByLabel("Provider ID", { exact: false }).fill("lab-inference");
+      await form.getByLabel("Provider name (optional)", { exact: true }).fill(provider.name);
+      await form
+        .getByLabel("Choose logo image", { exact: true })
+        .setInputFiles({ name: "public-logo.png", mimeType: "image/png", buffer: logoBytes });
+      await expect
+        .poll(() => form.getByLabel("Logo image data URL (optional)", { exact: true }).inputValue())
+        .toBe(logo);
+      await form.getByLabel("API base URL", { exact: true }).fill(provider.baseUrl);
+      await form.getByLabel("No authentication", { exact: false }).check();
+      await form.getByLabel("Model ID", { exact: true }).fill("chat");
+      await form.getByLabel("Display name", { exact: true }).fill("Lab Chat");
+      await gateway.setMethodResponse(
+        "config.get",
+        configSnapshot(configured(provider), "created"),
+      );
+      await form.getByRole("button", { name: "Save", exact: true }).click();
+      expect((await gateway.waitForRequest("config.customEndpoint")).params).toMatchObject({
+        action: "create",
+        name: provider.name,
+        logo,
+      });
+      await expect
+        .poll(() => form.getByRole("button", { name: "Save", exact: true }).isEnabled())
+        .toBe(true);
+      await form.getByRole("button", { name: "Close", exact: true }).click();
+      const row = page.locator('[data-provider-id="lab-inference"]');
+      await expect.poll(() => row.count()).toBe(1);
+      await expect.poll(() => row.textContent()).toContain("Lobster Lab");
+      await expect
+        .poll(() => row.locator("img").evaluate((image: HTMLImageElement) => image.naturalWidth))
+        .toBe(32);
+      expect(await page.locator('[data-provider-id="openai"]').count()).toBe(1);
+      expect(await page.locator("[data-custom-endpoints]").count()).toBe(0);
+      expect(await row.getByRole("button", { name: "Set API key", exact: true }).isDisabled()).toBe(
+        true,
+      );
+      await capture("after-unified-list", row);
+      await row.getByRole("button", { name: "Edit endpoint", exact: true }).click();
+      expect(await form.getByLabel("Provider ID", { exact: false }).isDisabled()).toBe(true);
+      await form.getByLabel("Provider name (optional)", { exact: true }).fill("Research Studio");
+      await form.locator(".custom-endpoint-editor__body").evaluate((element) => {
+        element.scrollTop = 0;
+      });
+      await capture("after-branded-config", form);
+      await page.emulateMedia({ colorScheme: "dark" });
+      const mobileBranding = await takeControlUiScreenshotFrame(
+        page,
+        page.locator(".shell"),
+        [form],
+        { animations: "disabled", viewport: { width: 390, height: 844 } },
+      );
+      await writeFile(
+        path.join(suite.artifactDir, "after-mobile-dark-branding.png"),
+        mobileBranding.png,
+      );
+      expect(
+        await form
+          .locator(".custom-endpoint-editor__body")
+          .evaluate((element) => element.scrollWidth <= element.clientWidth),
+      ).toBe(true);
+      await page.emulateMedia({ colorScheme: "light" });
+      await page.setViewportSize({ width: 1200, height: 1125 });
+      const renamed = { ...provider, name: "Research Studio" };
+      await gateway.setMethodResponse("config.get", configSnapshot(configured(renamed), "renamed"));
+      await form.getByRole("button", { name: "Save", exact: true }).click();
+      await expect
+        .poll(() => form.getByRole("button", { name: "Save", exact: true }).isEnabled())
+        .toBe(true);
+      await form.getByRole("button", { name: "Close", exact: true }).click();
+      await page.reload();
+      await expect.poll(() => row.textContent()).toContain("Research Studio");
+      await row.getByRole("button", { name: "Edit endpoint", exact: true }).click();
+      expect(
+        await form.getByLabel("Logo image data URL (optional)", { exact: true }).inputValue(),
+      ).toBe(logo);
+      await form.getByLabel("Provider name (optional)", { exact: true }).fill("");
+      await form.getByLabel("Logo image data URL (optional)", { exact: true }).fill("");
+      const cleared = { ...provider, name: "", logo: "" };
+      await gateway.setMethodResponse("config.get", configSnapshot(configured(cleared), "cleared"));
+      await form.getByRole("button", { name: "Save", exact: true }).click();
+      expect((await gateway.waitForRequest("config.customEndpoint")).params).toMatchObject({
+        name: null,
+        logo: null,
+      });
+      await expect
+        .poll(() => form.getByRole("button", { name: "Save", exact: true }).isEnabled())
+        .toBe(true);
+      await form.getByRole("button", { name: "Close", exact: true }).click();
+      await page.reload();
+      await expect
+        .poll(() => row.locator(".provider-row__name").textContent())
+        .toBe("Lab Inference");
+      expect(await row.locator("img").count()).toBe(0);
+      // A syntactically valid but undecodable image must not leave a broken image glyph.
+      await gateway.setMethodResponse(
+        "config.get",
+        configSnapshot(
+          configured({ ...provider, logo: "data:image/png;base64,iVBORw0KGgo=" }),
+          "unloadable",
+        ),
+      );
+      await page.reload();
+      await expect.poll(() => row.locator(".model-provider-logo.is-fallback").count()).toBe(1);
+      expect(await gateway.getRequests("config.patch")).toHaveLength(0);
+    });
+  });
   it("creates, edits and deletes independent endpoints with separate credential outcomes", async () => {
     await suite.withPage(providerPageOptions(1200, 1125), async ({ page }) => {
       const config = { agents: { defaults: { model: "openai/official" } } };
@@ -39,8 +188,9 @@ suite.define(() => {
         },
       });
       await page.goto(suite.server.baseUrl + "settings/model-providers");
-      const section = page.locator("[data-custom-endpoints]");
-      await section.getByRole("button", { name: "Add custom endpoint", exact: true }).click();
+      await page.getByRole("button", { name: "Connect provider", exact: true }).first().click();
+      await page.locator("[data-models-login-search]").fill("custom");
+      await page.getByRole("button", { name: "Custom Provider", exact: false }).click();
       const form = page.locator(".custom-endpoint-editor");
       await form.getByLabel("Provider ID", { exact: false }).fill("lab-inference");
       await form.getByLabel("API base URL", { exact: true }).fill("http://lab.lan:8000/v1");
@@ -161,7 +311,7 @@ suite.define(() => {
           },
         });
         await page.goto(suite.server.baseUrl + "settings/model-providers");
-        const section = page.locator("[data-custom-endpoints]");
+        const section = page.locator('[data-provider-id="lab-existing"]');
         await section.getByRole("button", { name: "Edit endpoint", exact: true }).click();
         const form = page.locator(".custom-endpoint-editor");
         expect(await form.getByLabel("Context window", { exact: true }).first().inputValue()).toBe(
@@ -185,6 +335,8 @@ suite.define(() => {
         expect(urlEdit.params).toEqual({
           action: "edit",
           provider: "lab-existing",
+          name: null,
+          logo: null,
           baseHash: "existing-base",
           baseUrl: "https://after.example/v1",
           api: "openai-completions",
@@ -240,10 +392,9 @@ suite.define(() => {
           },
         });
         await page.goto(suite.server.baseUrl + "settings/model-providers");
-        await page
-          .locator("[data-custom-endpoints]")
-          .getByRole("button", { name: "Add custom endpoint", exact: true })
-          .click();
+        await page.getByRole("button", { name: "Connect provider", exact: true }).first().click();
+        await page.locator("[data-models-login-search]").fill("custom");
+        await page.getByRole("button", { name: "Custom Provider", exact: false }).click();
         const form = page.locator(".custom-endpoint-editor");
         await form.getByLabel("Provider ID", { exact: false }).fill("lab-discovery");
         await form.getByLabel("API base URL", { exact: true }).fill("http://lab.lan/v1");

@@ -21,6 +21,8 @@ export function readEndpointDraft(
 ): CustomEndpointDraft {
   return {
     provider,
+    name: typeof entry.name === "string" ? entry.name : "",
+    logo: typeof entry.logo === "string" ? entry.logo : "",
     baseUrl: typeof entry.baseUrl === "string" ? entry.baseUrl : "",
     api: customEndpointApi(entry.api) ?? "openai-completions",
     noAuth: entry.auth === "none",

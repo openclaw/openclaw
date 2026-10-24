@@ -1,4 +1,5 @@
 import type { JSX } from "../../types/solid-elements.js";
+import type { CustomProviderEditorActions } from "./custom-endpoints.tsx";
 import type { DefaultModelSelection } from "./data.ts";
 import type { DefaultModelsViewProps } from "./default-models-view.tsx";
 import type { ModelProvidersOwner } from "./model-providers-controller.ts";
@@ -26,7 +27,7 @@ export type ModelProvidersViewProps = SharedModelProvidersProps & {
   apiKeySaving?: Record<string, boolean>;
   installedAgents: JSX.Element | typeof undefined;
   providerScope?: JSX.Element;
-  customEndpoints?: JSX.Element;
+  customProvider?: CustomProviderEditorActions;
   accountRecovery?: JSX.Element | typeof undefined;
   providerQuery?: string;
 };

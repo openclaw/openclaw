@@ -4,6 +4,7 @@ import { z } from "zod";
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
 import { normalizeExactAllowedHost } from "../secrets/exact-hostname.js";
 import { ENV_SECRET_REF_ID_RE, SECRET_PROVIDER_ALIAS_PATTERN } from "../secrets/ref-contract.js";
+import { isRenderableAvatarImageDataUrl } from "../shared/avatar-limits.js";
 import { MODEL_APIS } from "./model-config-vocabulary.js";
 import { isBuiltInModelProviderOverlayId } from "./model-provider-overlay-ids.js";
 import { AgentRuntimePolicySchema } from "./zod-schema.agent-entry-base.js";
@@ -319,6 +320,12 @@ const ModelProviderLocalServiceSchema = z
   .optional();
 
 const ModelProviderSchema = z.strictObject({
+  /** Optional display branding; provider IDs and credential ownership do not change. */
+  name: z.string().trim().min(1).optional(),
+  logo: z
+    .string()
+    .refine(isRenderableAvatarImageDataUrl, "Use a bounded image data URL.")
+    .optional(),
   // Bundled provider overlays are materialized with an empty-string sentinel.
   // ModelProvidersSchema below still rejects empty baseUrl values for custom providers.
   baseUrl: z.string().optional(),

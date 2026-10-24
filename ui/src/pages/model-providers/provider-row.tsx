@@ -1,9 +1,14 @@
 // Provider access keeps account credentials and plan limits together in each row.
-import { createSignal, For, Show } from "solid-js";
+import { createMemo, createSignal, For, Show } from "solid-js";
+import { isRenderableAvatarImageDataUrl } from "../../../../src/shared/avatar-limits.js";
 import type { ModelsProbeResult } from "../../api/types.ts";
 import { providerDisplayLabel } from "../../components/provider-icon.ts";
 import { Icon } from "../../components/solid/icon.tsx";
-import { ProviderBrandIcon } from "../../components/solid/provider-icon.tsx";
+import {
+  IdentityAvatarImage,
+  createIdentityAvatarPresentation,
+} from "../../components/solid/identity-avatar-image.tsx";
+import { ProviderBrandIcon, ProviderFallbackIcon } from "../../components/solid/provider-icon.tsx";
 import {
   hasProviderUsageDetails,
   ProviderUsageChips,
@@ -209,6 +214,40 @@ function removalPlan(card: ModelProviderCard): {
   };
 }
 
+function ProviderCardIcon(props: { card: ModelProviderCard }) {
+  const view = createMemo(() => ({
+    imageUrl:
+      props.card.logo && isRenderableAvatarImageDataUrl(props.card.logo) ? props.card.logo : null,
+    pending: false,
+  }));
+  const image = createIdentityAvatarPresentation(view);
+  return (
+    <Show
+      when={view().imageUrl}
+      fallback={
+        <ProviderBrandIcon
+          provider={props.card.id}
+          class="provider-row__icon model-providers__icon"
+        />
+      }
+    >
+      <span
+        class={[
+          "provider-row__icon",
+          "model-providers__icon",
+          "model-provider-logo",
+          image.classes(),
+        ]}
+      >
+        <Show when={image.state() !== "loaded"}>
+          <ProviderFallbackIcon label={props.card.displayName} />
+        </Show>
+        <IdentityAvatarImage view={view()} onStateChange={image.onStateChange} ariaHidden />
+      </span>
+    </Show>
+  );
+}
+
 function ProviderActions(props: ModelProvidersViewProps & { card: ModelProviderCard }) {
   const authModeBlocked = () =>
     Boolean(props.card.configAuthMode && props.card.configAuthMode !== "api-key");
@@ -251,6 +290,24 @@ function ProviderActions(props: ModelProvidersViewProps & { card: ModelProviderC
               ? "modelProviders.profiles.addAccount"
               : "modelProviders.login.action",
           )}
+        </button>
+      </Show>
+      <Show when={props.card.customEndpoint}>
+        <button
+          class="btn btn--sm"
+          disabled={
+            !props.customProvider ||
+            props.customProvider.disabled ||
+            !props.card.customEndpoint?.editable
+          }
+          title={
+            !props.card.customEndpoint?.editable
+              ? t("modelProviders.endpoints.unsupportedAdapter")
+              : undefined
+          }
+          onClick={() => props.customProvider?.edit(props.card.configKey ?? props.card.id)}
+        >
+          {t("modelProviders.endpoints.editConnection")}
         </button>
       </Show>
       <Show when={isProviderUsable(props.card)}>
@@ -342,7 +399,11 @@ export function ProviderRow(props: ProviderRowProps) {
   const open = () => expanded() || pinned();
   const detailId = () => `provider-detail-${card().id.replace(/[^a-z0-9-]/giu, "-")}`;
   const meta = () =>
-    [modelsText(card()), credentialLine(card())].filter((part): part is string => Boolean(part));
+    [
+      ...(card().customEndpoint ? [card().configKey ?? card().id] : []),
+      modelsText(card()),
+      credentialLine(card()),
+    ].filter((part): part is string => Boolean(part));
   return (
     <li
       class={["provider-row model-providers__row", { "provider-row--open": open() }]}
@@ -355,7 +416,7 @@ export function ProviderRow(props: ProviderRowProps) {
         aria-controls={detailId()}
         onClick={() => setExpanded(!open())}
       >
-        <ProviderBrandIcon provider={card().id} class="provider-row__icon model-providers__icon" />
+        <ProviderCardIcon card={card()} />
         <span class="provider-row__identity">
           <span class="provider-row__name">
             {providerName(card())}
@@ -410,7 +471,7 @@ export function UnconnectedProviderRow(props: ProviderRowProps) {
   return (
     <li class="provider-row provider-row--quiet model-providers__row" data-provider-id={card().id}>
       <div class="provider-row__summary model-providers__head">
-        <ProviderBrandIcon provider={card().id} class="provider-row__icon model-providers__icon" />
+        <ProviderCardIcon card={card()} />
         <span class="provider-row__identity">
           <span class="provider-row__name">{providerName(card())}</span>
           <span class="provider-row__meta settings-row__desc">

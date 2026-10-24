@@ -942,6 +942,15 @@ const enSettings = {
   },
   modelProviders: {
     endpoints: {
+      customProvider: "Custom Provider",
+      unsupportedAdapter:
+        "This adapter is not supported by the endpoint editor. Use configuration settings.",
+      providerName: "Provider name (optional)",
+      providerNameHint: "Display label only. The provider ID and credentials stay unchanged.",
+      logo: "Logo image data URL (optional)",
+      logoFile: "Choose logo image",
+      logoHint:
+        "Choose an image up to 2 MB or paste an image data URL. Clear the data URL to use the fallback icon. No remote image is fetched.",
       text: "Text input",
       unspecified: "Not specified",
       editConnection: "Edit endpoint",
@@ -951,9 +960,6 @@ const enSettings = {
       keyRemoved:
         "Stored API key removal completed. Endpoint retained; external secret references were not deleted.",
       route: "Effective route: {api} · {url}",
-      title: "Custom endpoints",
-      description:
-        "Independent API endpoints. Official provider sign-in and OAuth remain under Provider access.",
       add: "Add custom endpoint",
       edit: "Edit custom endpoint",
       localOnly: "Endpoint changes require an administrator connected locally on the Gateway host.",
@@ -991,9 +997,6 @@ const enSettings = {
       deleted: "Endpoint deleted. Stored credentials were not removed.",
       keyFailed:
         "Endpoint saved, but the API key was not saved. Retry the key under Provider access.",
-      test: "Test saved connection",
-      testResult:
-        "Saved endpoint inference probe: {status}. This does not verify every model or advertised capability.",
       delete: "Delete endpoint",
       deleteConfirm:
         "Delete {provider}? Configured model references must be resolved first. Stored credentials are retained; remove them separately under Provider access.",

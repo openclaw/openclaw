@@ -7,6 +7,8 @@ export const MODEL_FIELD_LABELS: Record<string, string> = {
   "models.catalogRefresh.enabled": "Model Catalog Refresh Enabled",
   "models.catalogRefresh.url": "Model Catalog Refresh URL",
   "models.providers": "Model Providers",
+  "models.providers.*.name": "Model Provider Name",
+  "models.providers.*.logo": "Model Provider Logo",
   "models.providers.*.baseUrl": "Model Provider Base URL",
   "models.providers.*.apiKey": "Model Provider API Key", // pragma: allowlist secret
   "models.providers.*.auth": "Model Provider Auth Mode",

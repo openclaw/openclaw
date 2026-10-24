@@ -810,6 +810,11 @@
 }
 .custom-endpoint-editor__connection > .field {
   align-self: start;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr);
+}
+.custom-endpoint-editor__connection input {
+  min-width: 0;
 }
 .custom-endpoint-editor__heading {
   display: flex;
@@ -832,6 +837,20 @@
 }
 @media (max-width: 640px) {
   .custom-endpoint-editor__connection {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
+}
+
+.model-provider-logo {
+  position: relative;
+  overflow: hidden;
+}
+.model-provider-logo img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.model-provider-logo.is-fallback img,
+.model-provider-logo.is-pending img {
+  display: none;
 }

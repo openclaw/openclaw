@@ -11,6 +11,10 @@ title: "Custom providers and local runtimes"
 
 Use `models.providers` (or `models.json`) to add **custom** providers or OpenAI/Anthropic-compatible proxies.
 
+In the Control UI, choose **Connect provider → Custom Provider** to open the custom endpoint editor. Saved endpoints appear in the same **Provider access** list as other providers. **Edit endpoint** reopens connection settings and model definitions; API-key removal and endpoint deletion remain separate actions. Management requires a local admin connection on the Gateway host.
+
+The connection section accepts an optional provider name and logo. These are Gateway-wide `models.providers.<id>.name` and `models.providers.<id>.logo` settings, not browser preferences. The provider ID remains immutable and continues to own model references and credential scope. Choose an image file (up to 2 MB) or paste an image data URL; logos render as images, never HTML, and no remote logo URL is fetched. Clear the name or logo to restore the ID/default-icon fallback. Existing configurations need no migration.
+
 Many of the bundled provider plugins below already publish a default catalog. Use explicit `models.providers.<id>` entries only when you want to override the default base URL, headers, or model list.
 
 Bundled and catalog-known routes take their `compat` capabilities from the owning provider plugin. A config `compat` block is for a custom provider/model or a different `api`/`baseUrl` route whose endpoint contract you have verified; see the [custom-provider capability guide](/gateway/config-tools#custom-provider-capability-declarations). Doctor removes legacy values that merely repeat the catalog and leaves divergent values visible for operator review.

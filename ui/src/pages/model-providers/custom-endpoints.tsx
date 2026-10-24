@@ -1,6 +1,9 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { createMemo, createSignal, For, Show } from "solid-js";
-import { isBuiltInModelProviderOverlayId } from "../../../../src/config/model-provider-overlay-ids.js";
+import {
+  AVATAR_MAX_BYTES,
+  isRenderableAvatarImageDataUrl,
+} from "../../../../src/shared/avatar-limits.js";
 import {
   CUSTOM_ENDPOINT_APIS,
   customEndpointModelInputs,
@@ -15,11 +18,7 @@ import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { ModalDialog } from "../../components/modal-dialog.tsx";
-import {
-  SettingsGroup,
-  SettingsRow,
-  SettingsSection,
-} from "../../components/solid/settings-ui.tsx";
+import { readBlobAsDataUrl } from "../../lib/blob-data-url.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { invalidateModelAuthStatusRequests } from "../../lib/model-auth-request-state.ts";
@@ -28,6 +27,7 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { observeState } from "../../lib/reactive/observe-state.ts";
+import type { JSX } from "../../types/solid-elements.js";
 import {
   customEndpointApi as api,
   newEndpointModel as newModel,
@@ -46,7 +46,13 @@ type Scope = {
   hello: ApplicationGatewaySnapshot["hello"];
   agentId: string;
 };
-export function CustomEndpoints(props: {
+export type CustomProviderEditorActions = {
+  disabled: boolean;
+  create: () => void;
+  edit: (provider: string) => void;
+};
+export function CustomProviderEditor(props: {
+  children: (actions?: CustomProviderEditorActions) => JSX.Element;
   onRefresh: () => Promise<void>;
   onInvalidate: (provider: string) => void;
 }) {
@@ -67,10 +73,11 @@ export function CustomEndpoints(props: {
     },
   );
   return (
-    <Show when={scope()} keyed>
+    <Show when={scope()} keyed fallback={props.children()}>
       {(owner) => (
         <EndpointEditor
           scope={owner}
+          children={props.children}
           onRefresh={() => props.onRefresh()}
           onInvalidate={(provider) => props.onInvalidate(provider)}
         />
@@ -80,6 +87,7 @@ export function CustomEndpoints(props: {
 }
 
 function EndpointEditor(props: {
+  children: (actions?: CustomProviderEditorActions) => JSX.Element;
   scope: Scope;
   onRefresh: () => Promise<void>;
   onInvalidate: (provider: string) => void;
@@ -91,14 +99,6 @@ function EndpointEditor(props: {
       asNullableRecord(
         asNullableRecord(currentConfigObject(config.read().state)?.models)?.providers,
       ) ?? {},
-  );
-  const entries = createMemo(() =>
-    Object.entries(providers()).flatMap(([provider, value]) => {
-      const entry = asNullableRecord(value);
-      return entry && !isBuiltInModelProviderOverlayId(provider)
-        ? [{ provider, entry, baseUrl: typeof entry.baseUrl === "string" ? entry.baseUrl : "" }]
-        : [];
-    }),
   );
   const [draft, setDraft] = createSignal<CustomEndpointDraft | null>(null);
   const [editing, setEditing] = createSignal(false);
@@ -239,6 +239,8 @@ function EndpointEditor(props: {
             : {
                 action,
                 ...value,
+                name: value.name?.trim() || null,
+                logo: value.logo?.trim() || null,
                 models: value.models.map((row): CustomEndpointModelUpdate => ({
                   id: row.id,
                   ...(row.existingId ? { existingId: row.existingId } : {}),
@@ -380,300 +382,301 @@ function EndpointEditor(props: {
       (!result.refresh.ok ? " " + result.refresh.error : "");
     await props.onRefresh();
   }
-  async function test(scope: Scope, provider: string) {
-    const result = await scope.client.request<{ status: string; error?: string }>("models.probe", {
-      provider,
-      agentId: scope.agentId,
-    });
-    if (isCurrent(scope)) {
-      operation.state.message =
-        t("modelProviders.endpoints.testResult", { status: result.status }) +
-        (result.error ? " " + result.error : "");
-    }
-  }
+  const actions: CustomProviderEditorActions = {
+    get disabled() {
+      return disabled();
+    },
+    create: () => begin(),
+    edit: (provider) => {
+      const entry = asNullableRecord(providers()[provider]);
+      if (entry) {
+        begin(provider, entry);
+      }
+    },
+  };
   return (
-    <SettingsSection
-      title={t("modelProviders.endpoints.title")}
-      description={t("modelProviders.endpoints.description")}
-    >
-      <div data-custom-endpoints>
-        <SettingsGroup>
-          <For each={entries()} keyed={(item) => item.provider}>
-            {(item) => (
-              <SettingsRow
-                title={item().provider}
-                description={item().baseUrl}
-                control={
-                  <>
-                    <button
-                      class="btn btn--sm"
-                      disabled={disabled() || !api(item().entry.api)}
-                      onClick={() => begin(item().provider, item().entry)}
-                    >
-                      {t("modelProviders.endpoints.editConnection")}
-                    </button>
-                    <button
-                      class="btn btn--sm"
-                      disabled={disabled()}
-                      onClick={() => void run((scope) => test(scope, item().provider))}
-                    >
-                      {t("modelProviders.endpoints.test")}
-                    </button>
-                    <button
-                      class="btn btn--sm"
-                      disabled={disabled()}
-                      onClick={() => void run((scope) => removeKey(scope, item().provider))}
-                    >
-                      {t("modelProviders.endpoints.removeKey")}
-                    </button>
-                  </>
-                }
-              />
-            )}
-          </For>
-          <SettingsRow
-            title={t("modelProviders.endpoints.add")}
-            description={t("modelProviders.endpoints.localOnly")}
-            control={
-              <button class="btn btn--sm" disabled={disabled()} onClick={() => begin()}>
-                {t("modelProviders.endpoints.add")}
-              </button>
-            }
-          />
-        </SettingsGroup>
-        <Show when={status().message && !draft()}>
-          <p role="status">{status().message}</p>
-        </Show>
-        <Show when={draft()}>
-          {(value) => (
-            <ModalDialog
-              class="custom-endpoint-dialog"
-              label={t(
-                editing() ? "modelProviders.endpoints.edit" : "modelProviders.endpoints.add",
-              )}
-              onModal-cancel={(event: Event) => {
-                if (event.target !== event.currentTarget) {
-                  return;
-                }
+    <>
+      {props.children(actions)}
+      <Show when={draft()}>
+        {(value) => (
+          <ModalDialog
+            class="custom-endpoint-dialog"
+            label={t(editing() ? "modelProviders.endpoints.edit" : "modelProviders.endpoints.add")}
+            onModal-cancel={(event: Event) => {
+              if (event.target !== event.currentTarget) {
+                return;
+              }
+              event.preventDefault();
+              if (!status().busy) {
+                setDraft(null);
+                setKey("");
+              }
+            }}
+          >
+            <form
+              class="custom-endpoint-editor"
+              onSubmit={(event) => {
                 event.preventDefault();
-                if (!status().busy) {
-                  setDraft(null);
-                  setKey("");
-                }
+                void run((scope) => save(scope));
               }}
             >
-              <form
-                class="custom-endpoint-editor"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  void run((scope) => save(scope));
-                }}
-              >
-                <header class="custom-endpoint-editor__header">
-                  <h2>
-                    {t(
-                      editing() ? "modelProviders.endpoints.edit" : "modelProviders.endpoints.add",
-                    )}
-                  </h2>
-                </header>
-                <div class="custom-endpoint-editor__body">
-                  <p class="muted">{t("modelProviders.endpoints.gatewayConnects")}</p>
-                  <div class="custom-endpoint-editor__connection">
-                    <label class="field">
-                      <span>{t("modelProviders.endpoints.providerId")}</span>
-                      <input
-                        required
-                        pattern="[a-z0-9]+(-[a-z0-9]+)*"
-                        value={value().provider}
-                        disabled={editing() || status().busy}
-                        placeholder="lab-inference"
-                        onInput={(event) => update({ provider: event.currentTarget.value })}
-                      />
-                    </label>
-                    <label class="field">
-                      <span>{t("modelProviders.endpoints.baseUrl")}</span>
-                      <input
-                        type="url"
-                        required
-                        value={value().baseUrl}
-                        disabled={status().busy}
-                        placeholder="http://inference.lan:8000/v1"
-                        onInput={(event) => {
-                          update({ baseUrl: event.currentTarget.value });
-                          setDiscovered([]);
-                        }}
-                      />
-                    </label>
-                    <label class="field">
-                      <span>{t("modelProviders.endpoints.adapter")}</span>
-                      <select
-                        aria-label={t("modelProviders.endpoints.adapter")}
-                        value={value().api}
-                        disabled={status().busy}
-                        onChange={(event) => {
-                          const next = api(event.currentTarget.value);
-                          if (next) {
-                            update({
-                              api: next,
-                              noAuth: next === "openai-completions" && value().noAuth,
-                            });
-                          }
-                          setDiscovered([]);
-                        }}
-                      >
-                        <For each={CUSTOM_ENDPOINT_APIS}>
-                          {(entry) => <option value={entry}>{apiLabels[entry]}</option>}
-                        </For>
-                      </select>
-                    </label>
-                    <label class="field">
-                      <span>{t("modelProviders.endpoints.key")}</span>
-                      <input
-                        type="password"
-                        aria-label={t("modelProviders.endpoints.key")}
-                        autocomplete="new-password"
-                        value={key()}
-                        disabled={status().busy || value().noAuth}
-                        onInput={(event) => setKey(event.currentTarget.value)}
-                      />
-                      <small>
-                        {t("modelProviders.endpoints.keyHint", { agent: props.scope.agentId })}
-                      </small>
-                    </label>
-                  </div>
-                  <label>
+              <header class="custom-endpoint-editor__header">
+                <h2>
+                  {t(editing() ? "modelProviders.endpoints.edit" : "modelProviders.endpoints.add")}
+                </h2>
+              </header>
+              <div class="custom-endpoint-editor__body">
+                <p class="muted">{t("modelProviders.endpoints.gatewayConnects")}</p>
+                <div class="custom-endpoint-editor__connection">
+                  <label class="field">
+                    <span>{t("modelProviders.endpoints.providerId")}</span>
                     <input
-                      type="checkbox"
-                      checked={value().noAuth}
-                      disabled={status().busy || value().api !== "openai-completions"}
-                      onChange={(event) => {
-                        update({ noAuth: event.currentTarget.checked });
-                        setKey("");
-                      }}
-                    />{" "}
-                    {t("modelProviders.endpoints.noAuth")}
+                      required
+                      pattern="[a-z0-9]+(-[a-z0-9]+)*"
+                      value={value().provider}
+                      disabled={editing() || status().busy}
+                      placeholder="lab-inference"
+                      onInput={(event) => update({ provider: event.currentTarget.value })}
+                    />
                   </label>
-                  <p class="muted">{t("modelProviders.endpoints.preserve")}</p>
-                  <div class="custom-endpoint-editor__heading">
-                    <h3>{t("modelProviders.endpoints.models")}</h3>
-                    <button
-                      type="button"
-                      class="btn btn--sm"
-                      disabled={
-                        status().busy ||
-                        value().api === "anthropic-messages" ||
-                        !value().baseUrl ||
-                        !value().provider
-                      }
-                      onClick={() => void run(discover)}
-                    >
-                      {t("modelProviders.endpoints.discover")}
-                    </button>
-                  </div>
-                  <For each={value().models} keyed={false}>
-                    {(row, index) => (
-                      <EndpointModel
-                        model={row()}
-                        number={index + 1}
-                        provider={value().provider}
-                        route={modelRoute(value(), row())}
-                        disabled={status().busy}
-                        canRemove={value().models.length > 1}
-                        onEdit={(edits) => editModel(index, edits)}
-                        onIdChange={(id) => renameModel(index, id)}
-                        onRemove={() =>
-                          update({ models: value().models.filter((_, i) => i !== index) })
+                  <label class="field">
+                    <span>{t("modelProviders.endpoints.providerName")}</span>
+                    <input
+                      aria-label={t("modelProviders.endpoints.providerName")}
+                      value={value().name ?? ""}
+                      disabled={status().busy}
+                      placeholder={value().provider}
+                      onInput={(event) => update({ name: event.currentTarget.value })}
+                    />
+                    <small>{t("modelProviders.endpoints.providerNameHint")}</small>
+                  </label>
+                  <label class="field">
+                    <span>{t("modelProviders.endpoints.logo")}</span>
+                    <input
+                      aria-label={t("modelProviders.endpoints.logo")}
+                      value={value().logo ?? ""}
+                      disabled={status().busy}
+                      onInput={(event) => update({ logo: event.currentTarget.value })}
+                    />
+                    <small>{t("modelProviders.endpoints.logoHint")}</small>
+                  </label>
+                  <label class="field">
+                    <span>{t("modelProviders.endpoints.logoFile")}</span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      disabled={status().busy}
+                      onChange={(event) => {
+                        const file = event.currentTarget.files?.[0];
+                        const current = draft();
+                        if (file) {
+                          void run(async () => {
+                            if (file.size > AVATAR_MAX_BYTES) {
+                              throw new Error(t("modelProviders.endpoints.logoHint"));
+                            }
+                            const logo = await readBlobAsDataUrl(file);
+                            if (!isRenderableAvatarImageDataUrl(logo)) {
+                              throw new Error(t("modelProviders.endpoints.logoHint"));
+                            }
+                            if (draft() === current) {
+                              update({ logo });
+                            }
+                          });
                         }
-                      />
-                    )}
-                  </For>
+                      }}
+                    />
+                  </label>
+                  <label class="field">
+                    <span>{t("modelProviders.endpoints.baseUrl")}</span>
+                    <input
+                      type="url"
+                      required
+                      value={value().baseUrl}
+                      disabled={status().busy}
+                      placeholder="http://inference.lan:8000/v1"
+                      onInput={(event) => {
+                        update({ baseUrl: event.currentTarget.value });
+                        setDiscovered([]);
+                      }}
+                    />
+                  </label>
+                  <label class="field">
+                    <span>{t("modelProviders.endpoints.adapter")}</span>
+                    <select
+                      aria-label={t("modelProviders.endpoints.adapter")}
+                      value={value().api}
+                      disabled={status().busy}
+                      onChange={(event) => {
+                        const next = api(event.currentTarget.value);
+                        if (next) {
+                          update({
+                            api: next,
+                            noAuth: next === "openai-completions" && value().noAuth,
+                          });
+                        }
+                        setDiscovered([]);
+                      }}
+                    >
+                      <For each={CUSTOM_ENDPOINT_APIS}>
+                        {(entry) => <option value={entry}>{apiLabels[entry]}</option>}
+                      </For>
+                    </select>
+                  </label>
+                  <label class="field">
+                    <span>{t("modelProviders.endpoints.key")}</span>
+                    <input
+                      type="password"
+                      aria-label={t("modelProviders.endpoints.key")}
+                      autocomplete="new-password"
+                      value={key()}
+                      disabled={status().busy || value().noAuth}
+                      onInput={(event) => setKey(event.currentTarget.value)}
+                    />
+                    <small>
+                      {t("modelProviders.endpoints.keyHint", { agent: props.scope.agentId })}
+                    </small>
+                  </label>
+                </div>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={value().noAuth}
+                    disabled={status().busy || value().api !== "openai-completions"}
+                    onChange={(event) => {
+                      update({ noAuth: event.currentTarget.checked });
+                      setKey("");
+                    }}
+                  />{" "}
+                  {t("modelProviders.endpoints.noAuth")}
+                </label>
+                <p class="muted">{t("modelProviders.endpoints.preserve")}</p>
+                <div class="custom-endpoint-editor__heading">
+                  <h3>{t("modelProviders.endpoints.models")}</h3>
                   <button
                     type="button"
                     class="btn btn--sm"
-                    disabled={status().busy}
-                    onClick={() => update({ models: [...value().models, newModel()] })}
+                    disabled={
+                      status().busy ||
+                      value().api === "anthropic-messages" ||
+                      !value().baseUrl ||
+                      !value().provider
+                    }
+                    onClick={() => void run(discover)}
                   >
-                    {t("modelProviders.endpoints.addModel")}
+                    {t("modelProviders.endpoints.discover")}
                   </button>
-                  <Show when={discovered().length}>
-                    <fieldset>
-                      <legend>{t("modelProviders.endpoints.discovered")}</legend>
-                      <For each={discovered()}>
-                        {(id) => (
-                          <label class="custom-endpoint-editor__discovered">
-                            <input
-                              type="checkbox"
-                              checked={selected().includes(id)}
-                              onChange={(event) =>
-                                setSelected((ids) =>
-                                  event.currentTarget.checked
-                                    ? [...ids, id]
-                                    : ids.filter((entry) => entry !== id),
-                                )
-                              }
-                            />{" "}
-                            {id}
-                          </label>
-                        )}
-                      </For>
-                      <button
-                        type="button"
-                        class="btn btn--sm"
-                        disabled={!selected().length || status().busy}
-                        onClick={() => {
-                          update({
-                            models: [
-                              ...value().models.filter((row) => row.id),
-                              ...selected()
-                                .filter((id) => !value().models.some((row) => row.id === id))
-                                .map(newModel),
-                            ],
-                          });
-                          setSelected([]);
-                        }}
-                      >
-                        {t("modelProviders.endpoints.addSelected")}
-                      </button>
-                    </fieldset>
-                  </Show>
                 </div>
-                <div class="custom-endpoint-editor__footer">
-                  <p>{t("modelProviders.endpoints.defaultUnchanged")}</p>
-                  <Show when={status().message}>
-                    <p role={status().failed ? "alert" : "status"}>{status().message}</p>
-                  </Show>
-                  <openclaw-modal-actions>
-                    <Show when={editing()}>
-                      <button
-                        type="button"
-                        class="btn danger"
-                        disabled={status().busy}
-                        onClick={() => void run((scope) => save(scope, true))}
-                      >
-                        {t("modelProviders.endpoints.delete")}
-                      </button>
-                    </Show>
+                <For each={value().models} keyed={false}>
+                  {(row, index) => (
+                    <EndpointModel
+                      model={row()}
+                      number={index + 1}
+                      provider={value().provider}
+                      route={modelRoute(value(), row())}
+                      disabled={status().busy}
+                      canRemove={value().models.length > 1}
+                      onEdit={(edits) => editModel(index, edits)}
+                      onIdChange={(id) => renameModel(index, id)}
+                      onRemove={() =>
+                        update({ models: value().models.filter((_, i) => i !== index) })
+                      }
+                    />
+                  )}
+                </For>
+                <button
+                  type="button"
+                  class="btn btn--sm"
+                  disabled={status().busy}
+                  onClick={() => update({ models: [...value().models, newModel()] })}
+                >
+                  {t("modelProviders.endpoints.addModel")}
+                </button>
+                <Show when={discovered().length}>
+                  <fieldset>
+                    <legend>{t("modelProviders.endpoints.discovered")}</legend>
+                    <For each={discovered()}>
+                      {(id) => (
+                        <label class="custom-endpoint-editor__discovered">
+                          <input
+                            type="checkbox"
+                            checked={selected().includes(id)}
+                            onChange={(event) =>
+                              setSelected((ids) =>
+                                event.currentTarget.checked
+                                  ? [...ids, id]
+                                  : ids.filter((entry) => entry !== id),
+                              )
+                            }
+                          />{" "}
+                          {id}
+                        </label>
+                      )}
+                    </For>
+                    <button
+                      type="button"
+                      class="btn btn--sm"
+                      disabled={!selected().length || status().busy}
+                      onClick={() => {
+                        update({
+                          models: [
+                            ...value().models.filter((row) => row.id),
+                            ...selected()
+                              .filter((id) => !value().models.some((row) => row.id === id))
+                              .map(newModel),
+                          ],
+                        });
+                        setSelected([]);
+                      }}
+                    >
+                      {t("modelProviders.endpoints.addSelected")}
+                    </button>
+                  </fieldset>
+                </Show>
+              </div>
+              <div class="custom-endpoint-editor__footer">
+                <p>{t("modelProviders.endpoints.defaultUnchanged")}</p>
+                <Show when={status().message}>
+                  <p role={status().failed ? "alert" : "status"}>{status().message}</p>
+                </Show>
+                <openclaw-modal-actions>
+                  <Show when={editing()}>
                     <button
                       type="button"
                       class="btn"
                       disabled={status().busy}
-                      onClick={() => {
-                        setDraft(null);
-                        setKey("");
-                      }}
+                      onClick={() => void run((scope) => removeKey(scope, value().provider))}
                     >
-                      {t("common.close")}
+                      {t("modelProviders.endpoints.removeKey")}
                     </button>
-                    <button class="btn primary" disabled={disabled()}>
-                      {status().busy ? t("modelProviders.saving") : t("common.save")}
+                    <button
+                      type="button"
+                      class="btn danger"
+                      disabled={status().busy}
+                      onClick={() => void run((scope) => save(scope, true))}
+                    >
+                      {t("modelProviders.endpoints.delete")}
                     </button>
-                  </openclaw-modal-actions>
-                </div>
-              </form>
-            </ModalDialog>
-          )}
-        </Show>
-      </div>
-    </SettingsSection>
+                  </Show>
+                  <button
+                    type="button"
+                    class="btn"
+                    disabled={status().busy}
+                    onClick={() => {
+                      setDraft(null);
+                      setKey("");
+                    }}
+                  >
+                    {t("common.close")}
+                  </button>
+                  <button class="btn primary" disabled={disabled()}>
+                    {status().busy ? t("modelProviders.saving") : t("common.save")}
+                  </button>
+                </openclaw-modal-actions>
+              </div>
+            </form>
+          </ModalDialog>
+        )}
+      </Show>
+    </>
   );
 }

@@ -14,6 +14,10 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
     "Fetch hosted model catalog updates in the background (default: true). Set to false to disable all remote model catalog traffic.",
   "models.catalogRefresh.url":
     "Override the hosted model catalog URL for a self-hosted HTTPS mirror (localhost HTTP is allowed for testing). A running Gateway stops using the previous source's catalog and adopts the mirror's at its next catalog check, without restarting.",
+  "models.providers.*.name":
+    "Optional provider display label in Provider access. Does not change the provider ID, model references, or credential scope.",
+  "models.providers.*.logo":
+    "Optional image data URL, up to the shared 2 MB avatar limit, for Provider access. Rendered as an image with a fallback icon; no remote logo is fetched. Omit to use the default icon.",
   "models.providers.*.baseUrl":
     "Base URL for the provider endpoint used to serve model requests for that provider entry. Use HTTPS endpoints and keep URLs environment-specific through config templating where needed.",
   "models.providers.*.apiKey":
