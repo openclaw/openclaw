@@ -499,6 +499,14 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
 
     public var id: UUID = .init()
     public var transcriptMessageID: String?
+    /// Expanded tool-result rows have presentation IDs, but branch ancestry
+    /// must retain the carrier's opaque gateway transcript ID across cache reads.
+    var toolResultCarrierTranscriptMessageID: String?
+
+    var canonicalTranscriptMessageID: String? {
+        self.toolResultCarrierTranscriptMessageID ?? self.transcriptMessageID
+    }
+
     public var activity: [OpenClawAgentActivityItem]?
     public internal(set) var transcriptRunID: String?
     public var isTruncated = false
@@ -564,6 +572,7 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
         case timestamp
         case idempotencyKey
         case openClaw = "__openclaw"
+        case toolResultCarrierTranscriptMessageID
         case provenance
         case toolCallId
         case tool_call_id
@@ -663,6 +672,8 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
         self.steerTargetRunID = decodedOpenClaw?.steerTargetRunId
         self.streamFallback = try? container.decode(OpenClawChatStreamFallback.self, forKey: .streamFallback)
         self.transcriptMessageID = decodedOpenClaw?.id
+        self.toolResultCarrierTranscriptMessageID = try container.decodeIfPresent(
+            String.self, forKey: .toolResultCarrierTranscriptMessageID)
         self.transcriptRunID = decodedOpenClaw?.runId
         self.historyMarker = decodedOpenClaw?.kind.map {
             OpenClawChatHistoryMarker(
@@ -767,6 +778,8 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
         try container.encodeIfPresent(self.phase, forKey: .phase)
         try container.encodeIfPresent(self.streamFallback, forKey: .streamFallback)
         try container.encodeIfPresent(self.timestamp, forKey: .timestamp)
+        try container.encodeIfPresent(
+            self.toolResultCarrierTranscriptMessageID, forKey: .toolResultCarrierTranscriptMessageID)
         if self.transcriptMessageID != nil || self.transcriptRunID != nil || self.isTruncated || self
             .historyMarker != nil || self.turnBoundary != nil || self.steerTargetRunID != nil || self
             .sourceMetadata != nil

@@ -22,7 +22,7 @@ public enum OpenClawChatHistoryPresentation {
         submittedAtMs: Int64? = nil,
         inputConsumptions: [OpenClawChatHistoryPayload.InputConsumption]? = nil) -> String?
     {
-        let entries = rawMessages.compactMap(Self.decodeMessage)
+        let entries = rawMessages.flatMap(Self.decodeMessages)
         return Self.replyEntry(
             from: entries,
             runID: runID,
@@ -38,7 +38,7 @@ public enum OpenClawChatHistoryPresentation {
         inputConsumptions: [OpenClawChatHistoryPayload.InputConsumption]?) -> OpenClawChatMessage?
     {
         self.replyEntry(
-            from: rawMessages.compactMap(self.decodeMessage),
+            from: rawMessages.flatMap(self.decodeMessages),
             runID: runID,
             inputConsumptions: inputConsumptions,
             isTerminal: { $0.message.isCompletedReply && !$0.text.isEmpty })?.message
@@ -123,16 +123,25 @@ public enum OpenClawChatHistoryPresentation {
         return stopReason != "tooluse" && stopReason != "tool_use" && stopReason != "tool_calls"
     }
 
+    private nonisolated static func decodeMessages(_ raw: OpenClawKit.AnyCodable) -> [MessageEntry] {
+        guard let entry = decodeMessage(raw) else { return [] }
+        return entry.message.ingestedMessages.map { message in
+            MessageEntry(
+                message: message,
+                text: ChatMessageVisibleText.visibleText(in: message)
+                    .trimmingCharacters(in: .whitespacesAndNewlines),
+                isMessageToolMirror: entry.isMessageToolMirror)
+        }
+    }
+
     private nonisolated static func decodeMessage(_ raw: OpenClawKit.AnyCodable) -> MessageEntry? {
         guard let message = try? GatewayPayloadDecoding.decode(raw, as: OpenClawChatMessage.self)
         else { return nil }
-        let text = ChatMessageVisibleText.visibleText(in: message)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let fields = raw.dictionaryValue
         return MessageEntry(
             message: message,
-            text: text,
-            isMessageToolMirror: fields?["openclawMessageToolMirror"]?.dictionaryValue != nil)
+            text: ChatMessageVisibleText.visibleText(in: message)
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+            isMessageToolMirror: raw.dictionaryValue?["openclawMessageToolMirror"]?.dictionaryValue != nil)
     }
 
     private nonisolated static func fallbackKey(_ entry: MessageEntry) -> String {
