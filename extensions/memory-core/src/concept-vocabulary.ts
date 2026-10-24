@@ -146,6 +146,7 @@ const LANGUAGE_STOP_WORDS = {
     "einen",
     "einer",
     "für",
+    "ich",
     "im",
     "in",
     "mit",

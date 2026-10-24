@@ -1,6 +1,6 @@
 // Memory Core tests cover concept vocabulary plugin behavior.
 import { describe, expect, it } from "vitest";
-import { deriveConceptTags, summarizeConceptTagScriptCoverage } from "./concept-vocabulary.js";
+import { deriveConceptTags, normalizeConceptToken, summarizeConceptTagScriptCoverage } from "./concept-vocabulary.js";
 
 describe("concept vocabulary", () => {
   it("respects astral letter boundaries around short glossary terms", () => {
@@ -48,5 +48,20 @@ describe("concept vocabulary", () => {
       mixedEntryCount: 1,
       otherEntryCount: 1,
     });
+  });
+
+  it("filters the German personal pronoun 'ich' as a stopword (#178481)", () => {
+    expect(normalizeConceptToken("ich")).toBeNull();
+    expect(normalizeConceptToken("Ich")).toBeNull();
+  });
+
+  it("does not surface 'ich' as a concept tag from German text (#178481)", () => {
+    const tags = deriveConceptTags({
+      path: "memory/2026-10-19.md",
+      snippet: "Ich habe die Konfiguration der Datenbank geprüft.",
+    });
+    expect(tags).not.toContain("ich");
+    // Legitimate German concepts are still extracted.
+    expect(tags).toContain("konfiguration");
   });
 });
