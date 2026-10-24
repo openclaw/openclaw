@@ -107,6 +107,8 @@ export type SubscribeEmbeddedAgentSessionParams = Pick<
   currentAccountId?: string;
   /** Current transport thread resolved for this run. */
   currentThreadId?: string;
+  /** Admitted source conversation must remain in its transport thread, including bound sessions. */
+  sameChannelThreadRequired?: boolean;
   /** Ephemeral session UUID — regenerated on /new and /reset. */
   sessionId?: string;
   /**

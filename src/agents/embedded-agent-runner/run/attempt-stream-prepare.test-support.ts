@@ -51,6 +51,7 @@ export function prepareCatalogExecutor(options?: {
   toolProgressDetail?: "explain" | "raw";
   onAgentEvent?: (event: { stream: string; data: Record<string, unknown> }) => void;
   trustedLocalMediaToolNames?: ReadonlySet<string>;
+  sameChannelThreadRequired?: boolean;
   streamReplies?: boolean;
 }) {
   const runAbortController = options?.runAbortController ?? new AbortController();
@@ -80,6 +81,7 @@ export function prepareCatalogExecutor(options?: {
       clientToolCallSlots: [],
       hasDeliveredSourceReply: () => false,
       markSourceReplyDelivered: vi.fn(),
+      sameChannelThreadRequired: options?.sameChannelThreadRequired ?? false,
       builtinToolNames: new Set(),
       sourceReplyCapableToolNames: new Set(),
       coreBuiltinToolNames: new Set(),

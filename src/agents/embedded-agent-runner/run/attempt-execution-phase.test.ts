@@ -603,6 +603,7 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
     expect(fixture.runAbort).toHaveBeenCalledWith(true, expect.any(Error));
     const streamInput = mocks.prepareStream.mock.calls[0]?.[0];
     expect(streamInput.agentSession.activeSession).toBe(fixture.activeSession);
+    expect(streamInput.agentSession.sameChannelThreadRequired).toBe(true);
     expect(streamInput.agentSession.trustedLocalMediaToolNames).toEqual(new Set(["read"]));
     expect(streamInput.getRunState()).toEqual({
       aborted: true,

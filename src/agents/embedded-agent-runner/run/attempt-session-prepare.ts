@@ -1,9 +1,11 @@
 import { isAnthropicOAuthApiKey, isDirectAnthropicModel } from "@openclaw/ai/internal/anthropic";
 import { supportsClaudeInHistorySystemMessages } from "@openclaw/llm-core";
+import * as sourceTurn from "../../../auto-reply/reply/source-turn-id.js";
 import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.js";
 import { getOwnedSessionTranscriptReader } from "../../../config/sessions/transcript-write-context.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
+import { resolveMessageActionTurnCapability } from "../../../gateway/message-action-turn-capability.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
 import {
@@ -25,16 +27,13 @@ import { bootstrapHarnessContextEngine } from "../../harness/context-engine-life
 import { relocateCurrentRuntimeContextCarrierToTail } from "../../internal-runtime-context.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
-import {
-  type AgentSession,
-  type CreateAgentSessionOptions,
-  SessionManager,
-} from "../../sessions/index.js";
+import type { AgentSession } from "../../sessions/agent-session.js";
 import { DefaultResourceLoader } from "../../sessions/resource-loader.js";
-import { createAgentSession } from "../../sessions/sdk.js";
+import { createAgentSession, type CreateAgentSessionOptions } from "../../sessions/sdk.js";
 import { withSessionManagerAppend } from "../../sessions/session-manager-append-admission.js";
 import { isOutOfTurnHistoryEntry } from "../../sessions/session-manager-codec.js";
 import { sessionManagerOpenTranscriptCohort } from "../../sessions/session-manager-core.js";
+import { SessionManager } from "../../sessions/session-manager.js";
 import { wrapToolDefinition } from "../../sessions/tools/tool-definition-wrapper.js";
 import { resolveToolSearchCatalogTool } from "../../tool-search.js";
 import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
@@ -240,6 +239,18 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
   const markSourceReplyDelivered = () => {
     didDeliverSourceReplyViaMessageTool = true;
   };
+  const sameChannelThreadRequired =
+    resolveMessageActionTurnCapability({
+      token: attempt.messageActionTurnCapability,
+      agentId: input.sessionAgentId,
+      runId: attempt.runId,
+      sessionKey:
+        input.clientToolPreparation.sandboxSessionKey ?? attempt.sessionKey ?? attempt.sessionId,
+      sessionId: attempt.sessionId,
+    })?.toolContext?.sameChannelThreadRequired ??
+    (sourceTurn.readChannelSourceTurnId(attempt)
+      ? sourceTurn.readChannelSourceTurnSameThreadRequired(attempt)
+      : undefined);
   installMessageToolTerminalHook({
     agent: activeSession.agent,
     sourceReplyDeliveryMode: attempt.sourceReplyDeliveryMode,
@@ -251,6 +262,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
     currentChannelId: attempt.currentChannelId,
     currentMessagingTarget: attempt.currentMessagingTarget,
     currentThreadId: attempt.currentThreadTs,
+    sameChannelThreadRequired,
     currentMessageId: attempt.currentMessageId,
     replyToMode: attempt.replyToMode,
     hasRepliedRef: attempt.hasRepliedRef,
@@ -266,6 +278,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
     hasDeliveredSourceReply: () => didDeliverSourceReplyViaMessageTool,
     hookRunner,
     markSourceReplyDelivered,
+    sameChannelThreadRequired,
     setActiveSessionSystemPrompt,
     settingsManager,
     refreshTools: () => {

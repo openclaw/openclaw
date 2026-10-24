@@ -379,6 +379,7 @@ export function isDeliveredMessagingToolSendToCurrentSource(params: {
   currentChannelId?: string;
   currentMessagingTarget?: string;
   currentThreadId?: string;
+  sameChannelThreadRequired?: boolean;
   sessionKey?: string;
   deliveredPayload?: unknown;
 }): boolean {
@@ -406,6 +407,7 @@ export function isDeliveredMessagingToolSendToCurrentSource(params: {
       currentChannelId: params.currentChannelId,
       currentMessagingTarget: params.currentMessagingTarget,
       currentThreadTs: params.currentThreadId,
+      sameChannelThreadRequired: params.sameChannelThreadRequired,
     },
     deliveredPayload: params.deliveredPayload,
   });

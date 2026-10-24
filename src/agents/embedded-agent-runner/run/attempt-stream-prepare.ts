@@ -91,6 +91,7 @@ type PrepareEmbeddedAttemptStreamInput = {
     | "clientToolCallSlots"
     | "hasDeliveredSourceReply"
     | "markSourceReplyDelivered"
+    | "sameChannelThreadRequired"
     | "builtinToolNames"
     | "coreBuiltinToolNames"
     | "replaySafeToolNames"
@@ -393,6 +394,7 @@ function prepareStream(
     providerOwner: getModelProviderRuntimePluginHandle(attempt.model)?.plugin,
     currentAccountId: attempt.agentAccountId,
     currentThreadId: attempt.currentThreadTs,
+    sameChannelThreadRequired: agentSession.sameChannelThreadRequired,
     agentId: input.hookAgentId,
   });
   const unsubscribe = admission.bindStreamUnsubscribe(streamSubscription.unsubscribe);
