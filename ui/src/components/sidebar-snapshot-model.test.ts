@@ -27,6 +27,29 @@ function displayRow(key: string, label: string, pinned = false) {
   );
 }
 
+it("keeps unread and state presentation at the cached-to-live handoff", () => {
+  const row = {
+    ...displayRow("agent:main:work", "Work"),
+    unread: true,
+    status: "failed" as const,
+    hasAutomation: true,
+    runningChildCount: 2,
+    failedChildCount: 1,
+    unreadChildCount: 3,
+  };
+  const captured = snapshotSessions([row]);
+  const saved = parseSidebarSnapshot(JSON.parse(JSON.stringify({ ...model, sessions: captured })));
+  expect(saved).not.toBeNull();
+  expect(restoreSnapshotSession(saved!.sessions[0]!, "")).toMatchObject({
+    unread: true,
+    status: "failed",
+    hasAutomation: true,
+    runningChildCount: 2,
+    failedChildCount: 1,
+    unreadChildCount: 3,
+  });
+});
+
 it("roundtrips hidden-run child queries without retaining incognito parent keys", () => {
   const parent = displayRow("agent:main:parent", "Parent");
   const child = displayRow("agent:main:child", "Child");

@@ -19,16 +19,25 @@ export function snapshotSessions(
   rows: readonly SidebarRecentSession[],
   presentation?: (
     row: SidebarRecentSession,
-  ) => Pick<SidebarSnapshotSession, "snapshotSubtitle" | "childrenDisplayMode">,
+  ) => Pick<
+    SidebarSnapshotSession,
+    "snapshotSubtitle" | "childrenDisplayMode" | "snapshotPresentation" | "participants"
+  >,
 ): SidebarSnapshotSession[] {
   return rows
     .filter((row) => !row.incognito && !isIncognitoSessionKey(row.key))
     .map((row) => {
       const display = presentation?.(row);
+      const privateChildren = containsIncognito([
+        ...row.children,
+        ...(row.unreadHiddenRuns ?? []),
+        ...(row.subagentSummary?.unreadHiddenRuns ?? []),
+      ]);
       return {
         key: row.key,
         label: row.label,
         agentId: row.agentId,
+        worktreeId: row.worktreeId,
         subtitle: row.subtitle,
         icon: row.icon,
         color: row.color,
@@ -37,10 +46,25 @@ export function snapshotSessions(
         category: row.category,
         archived: row.archived,
         boardFace: row.boardFace,
+        unread: row.unread,
+        hasActiveRun: row.hasActiveRun,
+        isRunVisuallyActive: row.isRunVisuallyActive,
+        status: row.status,
+        hasAutomation: row.hasAutomation,
+        runningChildCount: privateChildren ? 0 : row.runningChildCount,
+        failedChildCount: privateChildren ? 0 : row.failedChildCount,
+        unreadChildCount: privateChildren ? undefined : row.unreadChildCount,
+        queuedChildCount: privateChildren ? undefined : row.queuedChildCount,
+        attention: privateChildren ? row.ownAttention : row.attention,
+        ownAttention: row.ownAttention,
+        subagentSummary: privateChildren ? undefined : row.subagentSummary,
+        participants: display?.participants ?? row.participants,
+        participantCount: row.participantCount,
+        snapshotPresentation: display?.snapshotPresentation,
         childrenDisplayMode: display?.childrenDisplayMode,
         childLoadParentKeys: row.childLoadParentKeys?.filter((key) => !isIncognitoSessionKey(key)),
         // Parent attention can summarize private descendants even after their rows are omitted.
-        snapshotSubtitle: containsIncognito(row.children) ? undefined : display?.snapshotSubtitle,
+        snapshotSubtitle: privateChildren ? undefined : display?.snapshotSubtitle,
         children: snapshotSessions(row.children, presentation),
       };
     });
@@ -103,19 +127,46 @@ export function restoreSnapshotSession(
     renameValue: row.label,
     active: row.key === selected,
     visuallyActive: row.key === selected,
-    hasActiveRun: false,
+    hasActiveRun: row.hasActiveRun ?? false,
     modelSelectionLocked: true,
     pinnable: false,
     cloudWorkerStopAction: null,
-    hasAutomation: false,
-    unread: false,
-    attention: { kind: "none" },
+    hasAutomation: row.hasAutomation ?? false,
+    unread: row.unread ?? false,
+    attention: row.attention ?? { kind: "none" },
     childSessionKeys: row.children.map((child) => child.key),
     childLoadParentKeys: row.childLoadParentKeys ?? [],
     children: row.children.map((child) => restoreSnapshotSession(child, selected)),
     loadingChildren: false,
     containsActiveDescendant: false,
-    runningChildCount: 0,
-    failedChildCount: 0,
+    runningChildCount: row.runningChildCount ?? 0,
+    failedChildCount: row.failedChildCount ?? 0,
   };
+}
+
+export function sidebarSnapshotAvatarUrls(model: SidebarSnapshotModel): string[] {
+  const urls = [
+    model.brand.avatar,
+    model.footer?.avatarUrl,
+    ...model.cards.map((card) => card.avatar),
+    ...(model.avatarAgents ?? []).map((agent) => agent.avatar),
+    ...[...model.onlineUsers, ...model.offlineUsers, ...(model.ownerOptions ?? [])].map(
+      (user) => user.avatarUrl,
+    ),
+  ];
+  const rows = [
+    ...model.sessions,
+    ...model.pages,
+    ...model.pinnedSessions,
+    ...model.sections.flatMap((section) => section.rows),
+  ];
+  for (const row of rows) {
+    urls.push(
+      row.snapshotPresentation?.owner?.avatarUrl,
+      ...(row.participants ?? []).map((person) => person.avatarUrl),
+      ...(row.snapshotPresentation?.viewers ?? []).map((user) => user.avatarUrl),
+    );
+    rows.push(...row.children);
+  }
+  return urls.filter((url): url is string => Boolean(url));
 }

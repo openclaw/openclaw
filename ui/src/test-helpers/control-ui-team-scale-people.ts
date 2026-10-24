@@ -43,7 +43,10 @@ export function createTeamScalePeople(
     updatedAt: now,
   }));
   const sharingPeople = options.sharing ? people.slice(34, 82) : [];
-  const avatarAssets = new Map<string, { body: Buffer; contentType: string }>();
+  const avatarAssets = new Map<
+    string,
+    { body: string | Buffer; contentType: string; status?: number; delayMs?: number }
+  >();
   if (options.sharing) {
     const asset = {
       contentType: "image/png",
@@ -56,6 +59,19 @@ export function createTeamScalePeople(
       profile.hasAvatar = true;
       profile.avatarMime = "image/png";
       avatarAssets.set(`/api/users/${profile.id}/avatar`, asset);
+    }
+  }
+  if (avatars) {
+    for (const [index, person] of people.entries()) {
+      avatarAssets.set(`/api/users/${person.id}/avatar`, {
+        contentType: "image/svg+xml",
+        body:
+          index % 6 === 2
+            ? "synthetic invalid image"
+            : `<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"><rect width="40" height="40" fill="hsl(${(index * 37) % 360} 55% 45%)"/><text x="20" y="26" fill="white" text-anchor="middle" font-size="17">${index + 1}</text></svg>`,
+        ...(index % 6 === 1 ? { status: 404 } : {}),
+        ...(index % 6 === 3 ? { delayMs: 600 } : {}),
+      });
     }
   }
   const sharingMembers = options.sharing

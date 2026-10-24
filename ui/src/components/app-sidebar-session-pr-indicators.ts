@@ -216,9 +216,11 @@ export function createSessionPullRequestIndicators(options: SessionPullRequestIn
     options.getPresented,
   );
   return {
-    count(sessionKey: string) {
+    count(sessionKey: string, initial?: number) {
       const current = presentation();
-      return current.readable ? current.entries.get(sessionKey)?.count : undefined;
+      return current.readable
+        ? (current.entries.get(sessionKey)?.count ?? (current.broad ? initial : undefined))
+        : undefined;
     },
     summary(sessionKey: string, worktreeId: string, initial?: SessionCatalogPullRequestSummary) {
       const current = presentation();

@@ -193,6 +193,7 @@ it("keeps session-only viewers passive and shows only their own conversation's c
   const initial = { numbers: [42], state: "open" as const };
   expect(host.indicators.summary(row.key, "", initial)).toEqual(initial);
   expect(summary(host, row, initial)).toBeUndefined();
+  expect(host.indicators.count(row.key, 3)).toBeUndefined();
 
   const store = sessionPullRequestsForGateway(harness.gateway);
   const conversation = {};
@@ -215,6 +216,7 @@ it("keeps session-only viewers passive and shows only their own conversation's c
   await host.updateComplete;
   expect(summary(host, row)).toBeUndefined();
   expect(host.indicators.count(row.key)).toBe(0);
+  expect(host.indicators.count(row.key, 3)).toBe(0);
 });
 it("keeps empty rows idle across sidebar updates", async () => {
   vi.useFakeTimers();
@@ -237,6 +239,7 @@ it("observes visible rows and keeps the pushed merged summary through backoff", 
   const { harness, row, host } = mountRow();
   await settle(host);
   expectSubscription(harness, [row.key]);
+  expect(host.indicators.count(row.key, 3)).toBe(3);
   const store = sessionPullRequestsForGateway(harness.gateway);
   const activeOwner = {};
   store.watch(activeOwner, [row.key], { foreground: true });
@@ -270,6 +273,7 @@ it("observes visible rows and keeps the pushed merged summary through backoff", 
   expect(store.get(row.key)?.pullRequests).toEqual([]);
   expect(host.textContent).toBe("");
   expect(host.indicators.count(row.key)).toBe(0);
+  expect(host.indicators.count(row.key, 3)).toBe(0);
   expect(summary(host, row, { numbers: [99], state })).toBeUndefined();
 
   harness.publish(row.key);
@@ -301,6 +305,34 @@ it("counts cold task receipts without a worktree or an invented state", async ()
   harness.publish(row.key, { taskPullRequests: [], taskPullRequestCount: 0 });
   await host.updateComplete;
   expect(host.indicators.count(row.key)).toBe(0);
+});
+
+it("commits independently arriving badges together when the sidebar is presented", async () => {
+  vi.useFakeTimers();
+  const harness = createGatewayHarness();
+  const rows = [1, 2, 3].map((number) => sessionRow(`agent:main:demo-${number}`, `wt-${number}`));
+  const host = mountLifecycleHost(harness.gateway, () => rows);
+  await settle(host);
+  host.setInputs({ presented: false });
+  await host.updateComplete;
+  const commits: string[] = [];
+  const observer = new MutationObserver(() => commits.push(host.textContent ?? ""));
+  observer.observe(host, { childList: true, characterData: true, subtree: true });
+  try {
+    for (const [index, row] of rows.entries()) {
+      harness.publish(row.key, { pullRequests: [{ number: index + 1, state: "open" }] });
+      await host.updateComplete;
+      expect(host.textContent).toBe("");
+    }
+    expect(commits).toEqual([]);
+
+    host.setInputs({ presented: true });
+    await host.updateComplete;
+    expect(host.textContent).toBe("123");
+    expect(commits).toEqual(["123"]);
+  } finally {
+    observer.disconnect();
+  }
 });
 
 it("preserves catalog branch facts only while receipt-only hydration leaves the branch unread", async () => {
@@ -424,6 +456,7 @@ it("hides the row's saved PR summary after a same-client read-scope revocation",
   await setScopes(host, ["operator.sessions.read", "operator.sessions.write"]);
   expect(host.textContent).not.toContain("42");
   expect(host.indicators.summary(row.key, row.worktreeId!, row.pullRequest)).toBeUndefined();
+  expect(host.indicators.count(row.key, 3)).toBeUndefined();
 
   await setScopes(host, ["operator.read"]);
   expect(host.textContent).toContain("42");

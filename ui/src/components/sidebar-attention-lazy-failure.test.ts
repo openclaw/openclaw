@@ -39,7 +39,7 @@ afterEach(() => {
   vi.mocked(showToast).mockClear();
 });
 
-async function mountAttention() {
+async function mountAttention(snapshot?: { visible: boolean; count: number }) {
   const sources = {
     gateway: {
       snapshot: { phase: "connected", client: null, hello: null },
@@ -64,11 +64,27 @@ async function mountAttention() {
     sidebarAttention: store,
   } as unknown as ApplicationContext);
   const element = document.createElement("openclaw-sidebar-attention");
+  Object.assign(element, { snapshot });
   provider.append(element);
   document.body.append(provider);
   await waitForSolid(() => expect(element.querySelector("button")).not.toBeNull());
   return { element, trigger: element.querySelector<HTMLButtonElement>(".sidebar-issues-button")! };
 }
+
+it("holds the cached Inbox count without opening it until the live handoff", async () => {
+  const { element, trigger } = await mountAttention({ visible: true, count: 7 });
+  expect(trigger.querySelector(".sidebar-issues-button__count")?.textContent).toBe("7");
+  expect(trigger.hasAttribute("inert")).toBe(true);
+  trigger.click();
+  expect(loadFailure).not.toHaveBeenCalled();
+  expect(element.querySelector(".sidebar-issues-panel")).toBeNull();
+
+  Object.assign(element, { snapshot: undefined });
+  await waitForSolid(() =>
+    expect(trigger.querySelector(".sidebar-issues-button__count")).toBeNull(),
+  );
+  expect(trigger.hasAttribute("inert")).toBe(false);
+});
 
 it("reports a rejected Inbox import and lets the same trigger retry", async () => {
   const failure = new Error("Inbox module unavailable. Try again.");

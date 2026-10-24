@@ -47,6 +47,7 @@ import {
   captureSidebarSnapshotModel,
   isSidebarSnapshotSettled,
 } from "./sidebar-snapshot-capture.ts";
+import { SidebarSnapshotContext } from "./sidebar-snapshot-context.ts";
 import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 import { createSidebarSnapshot } from "./sidebar-snapshot.ts";
 import { SidebarViewBoundary } from "./sidebar-view-boundary.tsx";
@@ -590,9 +591,11 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
       );
     };
     return (
-      <Show when={!snapshot.pending()}>
-        <SidebarFrame />
-      </Show>
+      <SidebarSnapshotContext value={() => this.sidebarSnapshot}>
+        <Show when={!snapshot.pending()}>
+          <SidebarFrame />
+        </Show>
+      </SidebarSnapshotContext>
     );
   }
 }

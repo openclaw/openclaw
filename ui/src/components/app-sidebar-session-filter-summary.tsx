@@ -13,6 +13,9 @@ import { renderSessionOwnerAvatar } from "./solid/session-presentation.tsx";
 /** The Sessions title owns the sidebar owner choice. */
 function SidebarOwnerPicker(props: { host: SessionListHost }) {
   const owners = createMemo(() => {
+    if (props.host.sidebarSnapshot?.ownerOptions) {
+      return props.host.sidebarSnapshot.ownerOptions;
+    }
     // The row projection resolves the owner facet before its visibility is read.
     const options = props.host.sessionOwnerOptions;
     return props.host.sessionOwnershipVisibility.filters ? options : [];
