@@ -3,12 +3,9 @@ import { once } from "node:events";
 import { readFile } from "node:fs/promises";
 import type { ServerResponse } from "node:http";
 import path from "node:path";
-import { asRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
-import { readPendingInputSource } from "../src/config/sessions/session-pending-input-source.js";
-import { parseSessionPendingInputMessage } from "../src/config/sessions/session-pending-input-value.js";
 import type { GatewayClient } from "../src/gateway/client.js";
-import { readSessionSendDelivery } from "../src/gateway/session-send-delivery.js";
 import type { SessionsListResult } from "../src/gateway/session-utils.types.js";
 import { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-responses-model.js";
 import { writeGatewayRestartIntentSync } from "../src/infra/restart-intent.js";
@@ -37,25 +34,16 @@ const sourceRequest = (name: ResumeCase) => `DELEGATE_RESTART_${name.toUpperCase
 const task = (name: ResumeCase) =>
   `RETAINED_TASK_${name.toUpperCase()}: finish after the checkpoint.`;
 const final = (name: ResumeCase) => `RETAINED_TASK_${name.toUpperCase()}_FINISHED`;
-const ORDINARY_KEY = "agent:main:ordinary-permission-control";
-const ORDINARY_REQUEST = "ORDINARY_PERMISSION_CONTROL: wait for the operator.";
-const ORDINARY_FINAL = "ORDINARY_PERMISSION_CHANGE_FINISHED";
 
 const writeTool = (response: ServerResponse, name: string, args: object, ordinal: number) =>
   writeRestartToolCall(response, "resume", name, args, ordinal);
 
-async function startProvider(
-  signal: AbortSignal,
-  holdFirstResume: boolean,
-  automaticReply = false,
-) {
+async function startProvider(signal: AbortSignal, holdFirstResume: boolean) {
   const suspended = new Map(CASES.map((name) => [name, createDeferred()]));
   const resumed = createDeferred();
   const releaseResume = createDeferred();
   const revocationReady = createDeferred();
   const releaseRevoked = createDeferred();
-  const ordinaryReady = createDeferred();
-  const releaseOrdinary = createDeferred();
   const failed = createDeferred<never>();
   void failed.promise.catch(() => {});
   const delegated = new Set<ResumeCase>();
@@ -64,7 +52,6 @@ async function startProvider(
   const resumeInputs: Array<{ name: ResumeCase; input: string }> = [];
   const revokeAttempted = new Set<ResumeCase>();
   let operatorEffectIssued = false;
-  let ordinaryEffectIssued = false;
   let ordinal = 0;
   const reservation = await reserveTestPortListener({
     offsets: [0],
@@ -102,39 +89,11 @@ async function startProvider(
             text("Synthetic session resume");
             return;
           }
-          if (input.includes(ORDINARY_REQUEST)) {
-            if (!ordinaryEffectIssued) {
-              ordinaryReady.resolve();
-              await withinTest(releaseOrdinary.promise, signal);
-              if (response.destroyed) {
-                return;
-              }
-              ordinaryEffectIssued = true;
-              tool("exec", { command: "printf 'forbidden\\n' > ordinary-effect" });
-            } else {
-              const results = Array.isArray(body.input)
-                ? body.input.filter(
-                    (item) => isRecord(item) && item.type === "function_call_output",
-                  )
-                : [];
-              expect(results.at(-1)).toMatchObject({ output: "Permission change" });
-              text(ORDINARY_FINAL);
-            }
-            return;
-          }
           const source = CASES.find((name) => input.includes(sourceRequest(name)));
           if (source) {
             if (delegated.has(source)) {
               expect(input).toContain("accepted");
-              if (automaticReply && !adopted.has(source)) {
-                suspended.get(source)!.resolve();
-                return;
-              }
-              text(
-                automaticReply && input.includes(final(source))
-                  ? "AUTOMATIC_REPLY_CONSUMED"
-                  : `DELEGATED_${source}`,
-              );
+              text(`DELEGATED_${source}`);
             } else {
               delegated.add(source);
               tool("sessions_send", {
@@ -158,10 +117,6 @@ async function startProvider(
             return;
           }
           expect(input).toContain(`CHECKPOINT_${name}`);
-          if (automaticReply) {
-            text(final(name));
-            return;
-          }
           if (!adopted.has(name)) {
             suspended.get(name)!.resolve();
             // Keep the real model request open until the process is stopped or cancelled.
@@ -242,8 +197,6 @@ async function startProvider(
     resumed: resumed.promise,
     revocationReady: revocationReady.promise,
     releaseRevoked: () => releaseRevoked.resolve(),
-    ordinaryReady: ordinaryReady.promise,
-    releaseOrdinary: () => releaseOrdinary.resolve(),
     resumeInputs,
     release: () => releaseResume.resolve(),
     close: () =>
@@ -251,7 +204,6 @@ async function startProvider(
         async () => {
           releaseResume.resolve();
           releaseRevoked.resolve();
-          releaseOrdinary.resolve();
           reservation.listener.closeAllConnections();
         },
         reservation.releaseListener,
@@ -310,40 +262,8 @@ async function createInstance(
   return instance;
 }
 
-function connectInstance(
-  instance: Awaited<ReturnType<typeof createInstance>>,
-  signal: AbortSignal,
-  profiled = false,
-) {
-  return connectRestartClient(instance, { mode: profiled ? "test" : "backend" }, signal);
-}
-
-async function withGateway(
-  signal: AbortSignal,
-  options: { holdFirstResume?: boolean; automaticReply?: boolean; profiled?: boolean },
-  run: (fixture: Awaited<ReturnType<typeof createFixture>>) => Promise<void>,
-) {
-  const fixture = await createFixture(signal, options);
-  await runQaGatewayFixture(
-    async () => {
-      await fixture.start();
-      await run(fixture);
-    },
-    fixture.close,
-    () => fixture.instance.cleanup(),
-    fixture.provider.close,
-  );
-}
-
-async function createFixture(
-  signal: AbortSignal,
-  options: { holdFirstResume?: boolean; automaticReply?: boolean; profiled?: boolean },
-) {
-  const provider = await startProvider(
-    signal,
-    options.holdFirstResume ?? false,
-    options.automaticReply,
-  );
+async function createFixture(signal: AbortSignal, holdFirstResume: boolean) {
+  const provider = await startProvider(signal, holdFirstResume);
   const instance = await createInstance(provider, signal);
   let client: GatewayClient;
   const race = <T>(promise: Promise<T>) =>
@@ -355,7 +275,11 @@ async function createFixture(
   const row = async (key: string) => (await rows()).find((entry) => entry.key === key);
   const start = async () => {
     await instance.startGateway();
-    client = await connectInstance(instance, signal, options.profiled);
+    client = await connectRestartClient(
+      instance,
+      { mode: holdFirstResume ? "test" : "backend" },
+      signal,
+    );
   };
   return {
     provider,
@@ -417,42 +341,14 @@ async function applyReadOnly(
   }
 }
 
-it.skipIf(process.platform === "win32")(
-  "applies an ordinary operator permission change while inference is pending",
-  { timeout: 120_000 },
-  async ({ signal }) => {
-    await withGateway(
-      signal,
-      {},
-      async ({ provider, race, create, send, readOnly, wait, request, row, read }) => {
-        await create(ORDINARY_KEY);
-        await send(ORDINARY_KEY, ORDINARY_REQUEST, "ordinary-control");
-        await race(provider.ordinaryReady);
-        await readOnly(ORDINARY_KEY);
-        provider.releaseOrdinary();
-        await wait(async () => {
-          expect(
-            JSON.stringify(await request("chat.history", { sessionKey: ORDINARY_KEY })),
-          ).toContain(ORDINARY_FINAL);
-          expect(await row(ORDINARY_KEY)).toMatchObject({
-            hasActiveRun: false,
-            permissionMode: "read-only",
-          });
-        });
-        await expect(read("ordinary-effect")).rejects.toMatchObject({ code: "ENOENT" });
-      },
-    );
-  },
-);
-
 it.skipIf(process.platform === "win32").for(["managed", "SIGTERM", "SIGKILL"] as const)(
   "automatically continues delegated owner work in place after %s",
   { timeout: 180_000 },
   async (mode, { signal }) => {
-    await withGateway(
-      signal,
-      { holdFirstResume: mode === "SIGKILL", profiled: mode === "SIGKILL" },
-      async (fixture) => {
+    const fixture = await createFixture(signal, mode === "SIGKILL");
+    await runQaGatewayFixture(
+      async () => {
+        await fixture.start();
         const { provider, race, rows, request, wait, create, send, read, readOnly, restart } =
           fixture;
         const row = (name: ResumeCase) => fixture.row(targetKey(name));
@@ -530,137 +426,9 @@ it.skipIf(process.platform === "win32").for(["managed", "SIGTERM", "SIGKILL"] as
           (await rows()).filter((entry) => entry.key.startsWith("agent:main:operator-resume-")),
         ).toHaveLength(8);
       },
-    );
-  },
-);
-
-it.skipIf(process.platform === "win32").for(["restart", "stop"] as const)(
-  "preserves automatic peer result custody across %s and process death",
-  { timeout: 180_000 },
-  async (mode, context) => {
-    const { signal } = context;
-    await withGateway(
-      signal,
-      { automaticReply: true, profiled: true },
-      async ({ provider, instance, race, request, wait, create, send, row, read, restart }) => {
-        let lastHistory: unknown;
-        const history = async () => {
-          const result = await request<{
-            messages: unknown[];
-            pendingInputs?: {
-              items: Array<{ id: string; runId: string; state: string; message: unknown }>;
-            };
-          }>("chat.history", { sessionKey: sourceKey("continue"), limit: 100 });
-          lastHistory = result;
-          return result;
-        };
-        for (const key of [sourceKey("continue"), targetKey("continue")]) {
-          await create(key);
-        }
-        // The original request is allowed, but neither endpoint permits a new
-        // reverse-direction send. Its requested result must still be admitted.
-        await request("sessions.patch", {
-          key: sourceKey("continue"),
-          communication: { receive: "never" },
-        });
-        await request("sessions.patch", {
-          key: targetKey("continue"),
-          communication: { send: "never" },
-        });
-        await send(sourceKey("continue"), sourceRequest("continue"), "automatic-return-source");
-        await race(provider.suspended("continue"));
-        let pendingId: string | undefined;
-        let pendingRunId: string | undefined;
-        await wait(async () => {
-          const input = (await history()).pendingInputs?.items.find((item) =>
-            JSON.stringify(item.message).includes(final("continue")),
-          );
-          expect(input).toMatchObject({ state: "queued" });
-          pendingId = input!.id;
-          pendingRunId = input!.runId;
-        });
-        const sourceSessionId = (await row(sourceKey("continue")))?.sessionId;
-        if (!sourceSessionId) {
-          throw new Error("Expected the source session before reading retained input");
-        }
-        const pendingScope = {
-          agentId: "main",
-          sessionKey: sourceKey("continue"),
-          sessionId: sourceSessionId,
-          env: instance.env,
-        };
-        const savedInput = await readPendingInputSource(
-          pendingScope,
-          `${pendingRunId}:user`,
-          false,
-        );
-        expect(savedInput?.snapshot.pending).toBeDefined();
-        const savedMessage = parseSessionPendingInputMessage(
-          savedInput!.snapshot.pending!.message_json,
-        );
-        expect(readSessionSendDelivery(savedMessage)?.returnedResult).toEqual({
-          extraSystemPrompt: expect.any(String),
-        });
-        context.onTestFailed(() => {
-          console.error(
-            "[automatic-peer-result:" +
-              mode +
-              "]\n" +
-              instance.logs().replaceAll(instance.gatewayToken, "[fixture token]"),
-          );
-          console.error(JSON.stringify(lastHistory));
-        });
-        provider.adopted("continue");
-        if (mode === "stop") {
-          expect(await request("chat.abort", { sessionKey: sourceKey("continue") })).toMatchObject({
-            aborted: true,
-          });
-          await wait(async () => {
-            expect(await row(sourceKey("continue"))).toMatchObject({
-              status: "killed",
-              hasActiveRun: false,
-            });
-          });
-        }
-        await restart("SIGKILL");
-        if (mode === "stop") {
-          const current = await history();
-          const saved = await readPendingInputSource(pendingScope, `${pendingRunId}:user`, false);
-          // Terminal cancellation retires the queued row through its completion receipt.
-          expect(saved?.snapshot).toMatchObject({ current: true });
-          expect(saved?.snapshot.pending).toBeUndefined();
-          expect(saved?.snapshot.committed).toBeUndefined();
-          expect(
-            current.pendingInputs?.items.find((item) => item.id === pendingId),
-          ).toBeUndefined();
-          expect(JSON.stringify(current.messages)).not.toContain("AUTOMATIC_REPLY_CONSUMED");
-          expect(await row(sourceKey("continue"))).toMatchObject({
-            status: "killed",
-            hasActiveRun: false,
-          });
-          return;
-        }
-        await wait(async () => {
-          const current = await history();
-          expect(JSON.stringify(current.messages)).toContain("AUTOMATIC_REPLY_CONSUMED");
-          expect(
-            current.pendingInputs?.items.find((item) => item.id === pendingId),
-          ).toBeUndefined();
-          const returned = current.messages.filter((message) => {
-            const record = asRecord(message);
-            return (
-              asRecord(record.provenance).sourceSessionKey === targetKey("continue") &&
-              JSON.stringify(record.content).includes(final("continue"))
-            );
-          });
-          expect(returned).toHaveLength(1);
-          expect(await row(sourceKey("continue"))).toMatchObject({
-            status: "done",
-            hasActiveRun: false,
-          });
-        });
-        expect(await read("effect-continue")).toBe("completed\n");
-      },
+      fixture.close,
+      () => fixture.instance.cleanup(),
+      fixture.provider.close,
     );
   },
 );

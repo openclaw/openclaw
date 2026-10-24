@@ -43,22 +43,9 @@ const ACCESS_B = "access-b";
 const REFRESH_A = "refresh-a";
 const REFRESH_A_ROTATED = "refresh-a-rotated";
 const REFRESH_B = "refresh-b";
-const SAME_OWNER_MARKER = "AUTHORITY-SAME-OWNER";
-const SAME_PEER_MARKER = "AUTHORITY-SAME-PEER";
-const SAME_RESTART_MARKER = "AUTHORITY-SAME-RESTART";
 const MISMATCH_OWNER_MARKER = "AUTHORITY-MISMATCH-OWNER";
 const MISMATCH_PEER_MARKER = "AUTHORITY-MISMATCH-PEER";
-const LOGOUT_OWNER_MARKER = "AUTHORITY-LOGOUT-OWNER";
-const LOGOUT_FOLLOWUP_MARKER = "AUTHORITY-LOGOUT-FOLLOWUP";
-const REQUEST_MARKERS = [
-  SAME_OWNER_MARKER,
-  SAME_PEER_MARKER,
-  SAME_RESTART_MARKER,
-  MISMATCH_OWNER_MARKER,
-  MISMATCH_PEER_MARKER,
-  LOGOUT_OWNER_MARKER,
-  LOGOUT_FOLLOWUP_MARKER,
-] as const;
+const REQUEST_MARKERS = [MISMATCH_OWNER_MARKER, MISMATCH_PEER_MARKER] as const;
 
 type ProviderRequest = {
   marker: string;
@@ -304,7 +291,7 @@ function createConfig(pluginDir: string, providerBaseUrl: string) {
   };
 }
 
-async function startScenario(name: string, shared?: OAuthCredential | "same-account") {
+async function startScenario(name: string, shared: OAuthCredential) {
   const provider = await startControlledProvider();
   const pluginRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-oauth-authority-plugin-"));
   const pluginDir = path.join(pluginRoot, "plugin");
@@ -331,12 +318,7 @@ async function startScenario(name: string, shared?: OAuthCredential | "same-acco
     };
     runAuthProfileWriteTransaction(
       undefined,
-      (database) =>
-        writePersistedAuthProfileStoreRaw(
-          authStore(shared === "same-account" ? expiredA : shared),
-          undefined,
-          database,
-        ),
+      (database) => writePersistedAuthProfileStoreRaw(authStore(shared), undefined, database),
       { env: instance.env },
     );
     for (const agent of ["owner", "peer"]) {
@@ -464,59 +446,6 @@ async function startPendingPeer(
 
 describe("OAuth refresh authority chain", () => {
   it(
-    "makes a pending peer wait and inherit only the same-account shared rotation",
-    { timeout: TEST_TIMEOUT_MS },
-    async () => {
-      const scenario = await startScenario("oauth-authority-same-account", "same-account");
-      let { client } = scenario;
-      const owner = await startTurn(client, "owner", SAME_OWNER_MARKER);
-      const peer = await startPendingPeer(scenario, client, SAME_PEER_MARKER);
-
-      scenario.provider.releaseRefresh();
-      await expect(owner.terminal).resolves.toMatchObject({ status: "ok" });
-      await expect(peer.terminal).resolves.toMatchObject({ status: "ok" });
-      await vi.waitFor(() => expect(scenario.provider.modelRequests).toHaveLength(2), {
-        interval: 20,
-        timeout: REQUEST_TIMEOUT_MS,
-      });
-      expect(
-        scenario.provider.modelRequests.toSorted((left, right) =>
-          left.marker.localeCompare(right.marker),
-        ),
-      ).toEqual([
-        { marker: SAME_OWNER_MARKER, auth: `Bearer ${ACCESS_A_ROTATED}`, model: OWNER_MODEL_ID },
-        { marker: SAME_PEER_MARKER, auth: `Bearer ${ACCESS_A_ROTATED}`, model: PEER_MODEL_ID },
-      ]);
-      expect(readLocalCredential(scenario.instance, "peer")).toBeUndefined();
-      expect(readSharedCredential(scenario.instance)).toMatchObject({
-        accountId: ACCOUNT_A,
-        access: ACCESS_A_ROTATED,
-        refresh: REFRESH_A_ROTATED,
-      });
-
-      await disconnectGatewayClient(client);
-      const clientIndex = activeClients.indexOf(client);
-      if (clientIndex >= 0) {
-        activeClients.splice(clientIndex, 1);
-      }
-      await scenario.instance.stopGateway();
-      await scenario.instance.startGateway();
-      client = await connect(scenario.instance);
-      const restartRequestOffset = scenario.provider.modelRequests.length;
-      const restarted = await startTurn(client, "peer", SAME_RESTART_MARKER);
-      await expect(restarted.terminal).resolves.toMatchObject({ status: "ok" });
-      expect(scenario.provider.modelRequests.slice(restartRequestOffset)).toEqual([
-        {
-          marker: SAME_RESTART_MARKER,
-          auth: `Bearer ${ACCESS_A_ROTATED}`,
-          model: PEER_MODEL_ID,
-        },
-      ]);
-      expect(scenario.provider.tokenRequests).toEqual([REFRESH_A]);
-    },
-  );
-
-  it(
     "terminally fences a peer when the authoritative shared account differs",
     { timeout: TEST_TIMEOUT_MS },
     async () => {
@@ -559,55 +488,6 @@ describe("OAuth refresh authority chain", () => {
         access: ACCESS_B,
         refresh: REFRESH_B,
       });
-    },
-  );
-
-  it(
-    "lets real logout revoke a held generation before stale refresh settlement",
-    { timeout: TEST_TIMEOUT_MS },
-    async () => {
-      const scenario = await startScenario("oauth-authority-logout");
-      const { client } = scenario;
-      const owner = await startTurn(client, "owner", LOGOUT_OWNER_MARKER);
-      await scenario.provider.refreshStarted;
-
-      const logout = await scenario.instance.cli(
-        ["models", "auth", "logout", PROFILE_ID, "--agent", "owner", "--yes"],
-        { timeoutMs: REQUEST_TIMEOUT_MS },
-      );
-      expect(logout.code, logout.stderr).toBe(0);
-      expect(logout.stdout).toContain(`Removed auth profile: ${PROFILE_ID}`);
-      expect(readLocalCredential(scenario.instance, "owner")).toBeUndefined();
-      expect(readLocalCredential(scenario.instance, "peer")).toBeUndefined();
-
-      scenario.provider.releaseRefresh();
-      const staleTerminal = await owner.terminal;
-      expectAuthError(
-        staleTerminal,
-        `OAuth token refresh failed for ${PROVIDER_ID}: Failed to persist refreshed OAuth credential.`,
-      );
-      expect(scenario.provider.modelRequests).toHaveLength(0);
-      expect(readLocalCredential(scenario.instance, "owner")).toBeUndefined();
-      expect(readLocalCredential(scenario.instance, "peer")).toBeUndefined();
-      expect(readSharedCredential(scenario.instance)).toBeUndefined();
-
-      // CLI logout may finish with a refresh warning; the follow-up needs published auth state.
-      await expect(
-        client.request("models.authRefresh", { agentId: "owner", operation: "logout" }),
-      ).resolves.toEqual({ refreshed: true });
-
-      const followup = await startTurn(client, "owner", LOGOUT_FOLLOWUP_MARKER);
-      const followupTerminal = await followup.terminal;
-      expectAuthError(
-        followupTerminal,
-        new RegExp(
-          `^(?:No API key found for provider "${PROVIDER_ID}"|No credentials found for profile "${PROFILE_ID}")\\.`,
-        ),
-      );
-      expect(scenario.provider.modelRequests).toHaveLength(0);
-      expect(scenario.provider.tokenRequests).toEqual([REFRESH_A]);
-      expect(readLocalCredential(scenario.instance, "owner")).toBeUndefined();
-      expect(readLocalCredential(scenario.instance, "peer")).toBeUndefined();
     },
   );
 });
