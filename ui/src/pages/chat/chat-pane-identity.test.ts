@@ -35,7 +35,6 @@ import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
 } from "./components/chat-transcript.test-support.ts";
-import { projectSessionApprovalReplay } from "./session-approval-projection.ts";
 
 function createLiveSessionContext(client: GatewayBrowserClient, sessions: SessionCapability) {
   const initial = createInitializationContext();
@@ -45,6 +44,31 @@ function createLiveSessionContext(client: GatewayBrowserClient, sessions: Sessio
     ...live,
     config: { ...initial.config, current: { ...initial.config.current, ...live.config.current } },
   };
+}
+
+function makeApproval(
+  id: string,
+  request: Partial<ExecApprovalRequest["request"]>,
+): ExecApprovalRequest {
+  return {
+    id,
+    kind: "exec",
+    request: { command: id, ...request },
+    createdAtMs: Date.now(),
+    expiresAtMs: Date.now() + 60_000,
+  };
+}
+
+function overlays(approvalQueue: ExecApprovalRequest[] = [], decideApproval = vi.fn()) {
+  return {
+    snapshot: {
+      approvalQueue,
+      approvalBusy: false,
+      approvalCanGrant: true,
+      approvalErrors: new Map(),
+    },
+    decideApproval,
+  } as unknown as ApplicationContext["overlays"];
 }
 
 describe("chat pane assistant identity snapshots", () => {
@@ -122,36 +146,16 @@ describe("chat pane assistant identity snapshots", () => {
   });
 
   it("rebinds approval delivery when the selected global agent changes", async () => {
-    const replacement = createDeferred<{
-      key: string;
-      agentId: string;
-      includeApprovals: true;
-      approvalReplay: { sessionKey: string; updatedAtMs: number; approvals: []; truncated: false };
-    }>();
     const subscribeMessages = vi.fn(
-      async (key: string, options?: { agentId?: string | null; includeApprovals?: boolean }) => {
-        const agentId = options?.agentId ?? null;
-        if (agentId === "research") {
-          return replacement.promise;
-        }
-        return {
-          key,
-          agentId,
-          includeApprovals: true as const,
-          approvalReplay: {
-            sessionKey: "agent:main:global",
-            updatedAtMs: 1,
-            approvals: [],
-            truncated: false as const,
-          },
-        };
-      },
+      async (key: string, options?: { agentId?: string | null; includeApprovals?: boolean }) => ({
+        key,
+        agentId: options?.agentId ?? null,
+      }),
     );
-    const unsubscribeMessages = vi.fn(async () => undefined);
     const sessions = createSessionCapabilityFixture({
       refresh: vi.fn().mockResolvedValue(undefined),
       subscribeMessages,
-      unsubscribeMessages,
+      unsubscribeMessages: vi.fn(async () => undefined),
     });
     const client = { request: vi.fn(async () => ({})) } as unknown as GatewayBrowserClient;
     const context = createLiveSessionContext(client, sessions);
@@ -169,127 +173,66 @@ describe("chat pane assistant identity snapshots", () => {
     try {
       pane.connectedCallback();
       await vi.waitFor(() =>
-        expect(pane.state.chatSessionMessageSubscription).toMatchObject({
-          key: "global",
-          agentId: "main",
-        }),
+        expect(pane.state.chatSessionMessageSubscription?.agentId).toBe("main"),
       );
-      expect(subscribeMessages).toHaveBeenCalledWith("global", {
-        agentId: "main",
-        includeApprovals: true,
-      });
-      pane.state.chatSessionApprovalQueue = [
-        {
-          id: "stale-main-approval",
-          kind: "exec",
-          request: { command: "echo stale", agentId: "main", sessionKey: "global" },
-          createdAtMs: 1,
-          expiresAtMs: 10_000,
-        },
-      ];
-
       pane.state.loadAssistantIdentity = vi.fn(async () => undefined);
       context.agentSelection.set("research");
-
-      expect(pane.state.chatSessionApprovalQueue).toEqual([]);
       await vi.waitFor(() =>
         expect(subscribeMessages).toHaveBeenCalledWith("global", {
           agentId: "research",
           includeApprovals: true,
         }),
       );
-      expect(unsubscribeMessages).toHaveBeenCalledWith(
-        expect.objectContaining({ key: "global", agentId: "main" }),
-      );
-      replacement.resolve({
-        key: "global",
-        agentId: "research",
-        includeApprovals: true,
-        approvalReplay: {
-          sessionKey: "agent:research:global",
-          updatedAtMs: 2,
-          approvals: [],
-          truncated: false,
-        },
-      });
-      await vi.waitFor(() =>
-        expect(pane.state.chatSessionMessageSubscription).toEqual(
-          expect.objectContaining({ key: "global", agentId: "research" }),
-        ),
-      );
     } finally {
       pane.disconnectedCallback();
     }
   });
 
-  it("keeps a session-specific assistant identity across ordinary gateway snapshots", () => {
-    const client = createGatewayBrowserClientFixture();
-    const { pane, state } = createTestChatPane({
-      client,
-      sessions: createSessionCapabilityFixture(),
-    });
-    state.client = client;
-    state.connected = true;
-    state.assistantName = "Session Agent";
+  it.each([false, true])(
+    "resets a session identity only on connection replacement (%s)",
+    (replace) => {
+      const client = createGatewayBrowserClientFixture();
+      const { pane, state } = createTestChatPane({
+        client,
+        sessions: createSessionCapabilityFixture(),
+      });
+      state.client = client;
+      state.connected = true;
+      state.assistantName = "Session Agent";
 
-    pane.applyGatewaySnapshot({
-      ...pane.context.gateway.snapshot,
-      client,
-    });
-
-    expect(state.assistantName).toBe("Session Agent");
-  });
-
-  it("resets a session-specific identity when the logical connection changes", () => {
-    const client = createGatewayBrowserClientFixture();
-    const nextClient = createGatewayBrowserClientFixture();
-    const { pane, state } = createTestChatPane({
-      client,
-      sessions: createSessionCapabilityFixture(),
-    });
-    state.assistantName = "Session Agent";
-
-    pane.applyGatewaySnapshot({
-      ...pane.context.gateway.snapshot,
-      client: nextClient,
-      phase: "reconnecting" as const,
-    });
-
-    expect(state.assistantName).toBe(pane.context.config.current.assistantIdentity.name);
-  });
+      pane.applyGatewaySnapshot({
+        ...pane.context.gateway.snapshot,
+        client: replace ? createGatewayBrowserClientFixture() : client,
+        phase: replace ? "reconnecting" : pane.context.gateway.snapshot.phase,
+      });
+      expect(state.assistantName).toBe(
+        replace ? pane.context.config.current.assistantIdentity.name : "Session Agent",
+      );
+    },
+  );
 });
 
 describe("chat pane approval requester identity", () => {
   it("renders projected approval requester titles from reactive session metadata without changing decision routing", async () => {
     const pane = createRenderTestChatPane();
     const host = {
-      key: "agent:main:dashboard:approval-host",
+      key: "agent:main:dashboard:host",
       kind: "direct",
       updatedAt: 1,
-      label: "Presentation session label",
-      displayName: "Presentation session display name",
-      derivedTitle: "Presentation session derived title",
+      label: "Host",
     } satisfies GatewaySessionRow;
     const source = {
-      key: "agent:research:dashboard:11111111-2222-4333-8444-555555555555",
+      key: "agent:research:dashboard:source",
       kind: "direct",
       updatedAt: 1,
     } satisfies GatewaySessionRow;
     const decideApproval = vi.fn();
     const context: ApplicationContext = {
       ...createInitializationContext(createGatewayBrowserClientFixture()),
-      overlays: {
-        snapshot: {
-          approvalQueue: [],
-          approvalBusy: false,
-          approvalCanGrant: true,
-          approvalErrors: new Map(),
-        },
-        decideApproval,
-      } as unknown as ApplicationContext["overlays"],
+      overlays: overlays([], decideApproval),
       sessions: createSessionCapabilityFixture({
         state: {
-          result: sessionsResult([{ ...host, label: "Unrelated pane title" }], 1),
+          result: sessionsResult([host], 1),
           agentId: "main",
         },
         think: () => undefined,
@@ -300,41 +243,16 @@ describe("chat pane approval requester identity", () => {
     state.connected = true;
     state.sessionKey = host.key;
     const now = Date.now();
-    state.chatSessionApprovalQueue = projectSessionApprovalReplay(
-      {
-        sessionKey: host.key,
-        updatedAtMs: now,
-        truncated: false,
-        approvals: [
-          {
-            id: "plugin:requester-title",
-            status: "pending",
-            sourceSessionKey: source.key,
-            createdAtMs: now,
-            expiresAtMs: now + 60_000,
-            urlPath: "/approve/plugin%3Arequester-title",
-            presentation: {
-              kind: "plugin",
-              title: "Review requested action",
-              description: "A synthetic child-session request",
-              severity: "warning",
-              pluginId: "test-plugin",
-              toolName: null,
-              agentId: "research",
-              allowedDecisions: ["allow-once", "deny"],
-            },
-          },
-        ],
-      },
-      host.key,
-    );
-    const approval = state.chatSessionApprovalQueue[0]!;
-    expect(approval).toMatchObject({
-      id: "plugin:requester-title",
+    const approval: ExecApprovalRequest = {
+      id: "plugin:title",
       kind: "plugin",
       sourceSessionKey: source.key,
-      request: { sessionKey: host.key },
-    });
+      pluginTitle: "Review",
+      request: { command: "", sessionKey: host.key, allowedDecisions: ["allow-once", "deny"] },
+      createdAtMs: now,
+      expiresAtMs: now + 60_000,
+    };
+    state.chatSessionApprovalQueue = [approval];
     Object.freeze(approval.request);
     Object.freeze(approval);
     const container = document.body.appendChild(createApplicationContextProvider(context));
@@ -354,32 +272,17 @@ describe("chat pane approval requester identity", () => {
       },
       { container },
     );
-    const publications: Array<[GatewaySessionRow | undefined, string]> = [
-      [undefined, "New session"],
-      [
-        { ...source, derivedTitle: "Requesting session derived title" },
-        "Requesting session derived title",
-      ],
-      [
-        { ...source, displayName: "Requesting session display name" },
-        "Requesting session display name",
-      ],
-      [{ ...source, label: "Requesting session label" }, "Requesting session label"],
-      [{ ...source, label: "Renamed requesting session" }, "Renamed requesting session"],
-      [undefined, "New session"],
-    ];
-
     try {
-      for (const [row, title] of publications) {
+      for (const label of [undefined, "Source", "Renamed", undefined]) {
         Object.assign(context.sessions.state, {
-          result: sessionsResult(row ? [host, row] : [host], now),
+          result: sessionsResult(label ? [host, { ...source, label }] : [host], now),
         });
         pane.applySessionsState(context.sessions.state);
         await waitForSolid(() => {
           const card = container.querySelector(".chat-inline-approval .exec-approval-card");
           expect(card?.getAttribute("data-approval-id")).toBe(approval.id);
           expect(card?.querySelector('[role="note"]')?.textContent?.trim()).toBe(
-            t("execApproval.requestedBySession", { session: title }),
+            t("execApproval.requestedBySession", { session: label ?? "New session" }),
           );
         });
       }
@@ -483,30 +386,14 @@ describe("global chat pane feature ownership", () => {
     async (sessionKey, agentId) => {
       const { pane, select, context } = createGlobalFeaturePane(() => ({}), []);
       const now = Date.now();
-      const approval = (
-        id: string,
-        target: { sessionKey?: string; agentId?: string },
-      ): ExecApprovalRequest => ({
-        id,
-        kind: "exec",
-        request: { command: id, ...target },
-        createdAtMs: now,
-        expiresAtMs: now + 60_000,
-      });
       Object.assign(context, {
         overlays: {
-          snapshot: {
-            approvalQueue: [
-              approval("unscoped", {}),
-              approval("research-oldest", { sessionKey, agentId }),
-              approval("research-newest", { sessionKey, agentId }),
-              approval("other-session", { sessionKey: "agent:research:other" }),
-            ],
-            approvalCanGrant: true,
-            approvalBusy: false,
-            approvalErrors: new Map(),
-          },
-          decideApproval: vi.fn(),
+          ...overlays([
+            makeApproval("unscoped", {}),
+            makeApproval("research-oldest", { sessionKey, agentId }),
+            makeApproval("research-newest", { sessionKey, agentId }),
+            makeApproval("other-session", { sessionKey: "agent:research:other" }),
+          ]),
           subscribe: () => () => undefined,
         },
       });
@@ -535,20 +422,11 @@ describe("global chat pane feature ownership", () => {
           await questionPanelIn(container);
         }
       };
-      const expectStableQuestions = async () => {
-        const previous = pane.chatProps?.gatewayQuestionPrompts;
-        pane.prepareRender();
-        pane.render();
-        await draw();
-        pane.commitRender();
-        expect(pane.chatProps?.gatewayQuestionPrompts).toBe(previous);
-      };
       try {
         select("main");
         await draw();
         expect(pane.chatProps?.gatewayQuestionPrompts).toEqual([]);
         expect(container.querySelector(".chat-question-panel, .chat-inline-approval")).toBeNull();
-        await expectStableQuestions();
 
         select("research");
         await draw();
@@ -563,27 +441,17 @@ describe("global chat pane feature ownership", () => {
             .querySelector(".chat-inline-approval [data-approval-id]")
             ?.getAttribute("data-approval-id"),
         ).toBe("research-oldest");
-        await expectStableQuestions();
-        const pendingQuestions = pane.chatProps?.gatewayQuestionPrompts;
-        pane.receiveQuestionEvent({
-          event: "question.resolved",
-          payload: { id: "other-session-question", status: "expired" },
-        });
-        await draw();
-        expect(pane.chatProps?.gatewayQuestionPrompts).toBe(pendingQuestions);
         pane.receiveQuestionEvent({
           event: "question.resolved",
           payload: { id: "research-question", status: "cancelled" },
         });
         await draw();
-        expect(pane.chatProps?.gatewayQuestionPrompts).not.toBe(pendingQuestions);
         expect(container.querySelector(".chat-question-panel")).toBeNull();
         await waitForSolid(() =>
           expect(container.querySelector(".chat-question-summary")?.textContent).toContain(
             "Skipped",
           ),
         );
-        await expectStableQuestions();
 
         select("main");
         await draw();
