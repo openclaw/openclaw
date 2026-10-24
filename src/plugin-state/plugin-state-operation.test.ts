@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import * as admission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { preparePluginStateRead } from "../plugin-sdk/plugin-state-runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
@@ -16,6 +17,8 @@ import { PluginStateOperationInvalidatedError } from "./plugin-state-operation-e
 import type { FixtureOperations } from "./plugin-state-operation.test-support.js";
 import { pluginStatePublication } from "./plugin-state-publication.js";
 import {
+  createCorePluginStateKeyedStore,
+  replaceCorePluginStateEntry,
   createPluginStateKeyedStore,
   createPluginStateSyncKeyedStore,
 } from "./plugin-state-store.js";
@@ -128,6 +131,73 @@ describe("plugin state worker operations", () => {
       cause: { message: "Plugin state operation source does not exist" },
     });
     expect(existsSync(resolveOpenClawStateSqlitePath(env))).toBe(false);
+  });
+
+  it("leaves the writer free during initial admission and preserves replacement revocation", async () => {
+    const first = open("admission-first");
+    const second = open("admission-second");
+    await first.register("key", "original");
+    const operation = first.createOperation<FixtureOperations>([first, second], handler);
+    const replacement = {
+      ownerId: "core:admission-test" as const,
+      namespace: "replacement",
+      maxEntries: 10,
+      env: state.env,
+    };
+    const core = createCorePluginStateKeyedStore<string>(replacement);
+    await core.register("key", "original");
+    using contention = sqliteWorkerOwnerProbe.writerLock(resolveOpenClawStateSqlitePath(state.env));
+    let transactions = 0;
+    let revokeAt = Number.POSITIVE_INFINITY;
+    let current = true;
+    sqliteWorkerOwnerProbe.admission(admission, (request, grant, admit) => {
+      contention.observe(request.stage);
+      if (request.stage === "transaction" && ++transactions === revokeAt) {
+        current = false;
+      }
+      admit(request, grant);
+    });
+    await first.register("key", "updated");
+    const moved = await operation.execute(
+      { type: "move", input: { value: "moved" } },
+      { writeStores: [0, 1] },
+    );
+    await replaceCorePluginStateEntry(replacement, "key", "replacement");
+    expect(contention.observed).toEqual([
+      "transaction:free",
+      "commit:held",
+      "transaction:free",
+      "commit:held",
+      "transaction:free",
+      "commit:held",
+      "transaction:free",
+      "commit:held",
+    ]);
+    expect(moved.value).toMatchObject({
+      before: ["updated", undefined],
+      after: [undefined, "moved"],
+    });
+    moved.assertCurrent();
+    expect(await first.lookup("key")).toBeUndefined();
+    expect(await second.lookup("key")).toBe("moved");
+    expect(await core.lookup("key")).toBe("replacement");
+    const offset = contention.observed.length;
+    revokeAt = transactions + 2;
+    await expect(
+      replaceCorePluginStateEntry(replacement, "key", "forbidden", {
+        assertCurrent() {
+          if (!current) {
+            throw new Error("replacement owner retired");
+          }
+        },
+      }),
+    ).rejects.toMatchObject({ code: "PLUGIN_STATE_WRITE_FAILED" });
+    expect(contention.observed.slice(offset)).toEqual([
+      "transaction:free",
+      "commit:held",
+      "transaction:free",
+    ]);
+    expect(await core.lookup("key")).toBeUndefined();
   });
 
   it("invalidates receipts before asynchronous writes queue and after synchronous adapter writes", async () => {
