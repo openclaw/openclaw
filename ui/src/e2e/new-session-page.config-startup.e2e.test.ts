@@ -49,8 +49,10 @@ suite.define(() => {
           ]);
         await page.goto(`${suite.server.baseUrl}new?agent=main`, { waitUntil: "commit" });
         const message = page.locator(".new-session-page__message");
-        await message.fill("Keep the warm draft");
-        expect(await message.inputValue()).toBe("Keep the warm draft");
+        const draft = "Keep the warm draft";
+        const expectDraft = () => expect(message.inputValue()).resolves.toBe(draft);
+        await message.fill(draft);
+        await expectDraft();
         expect(await gateway.getRequests("config.get")).toHaveLength(0);
         await gateway.waitForRequest("connect");
         await gateway.resolveDeferred("connect");
@@ -62,15 +64,19 @@ suite.define(() => {
         expect(await workspaceOption.count()).toBe(0);
         await page.keyboard.press("Escape");
         const start = page.getByRole("button", { name: "Start session", exact: true });
-        expect(await start.getAttribute("aria-disabled")).toBe("true");
-        await start.click({ force: true });
-        await message.press("Enter");
-        expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+        const expectBlocked = async () => {
+          expect(await start.getAttribute("aria-disabled")).toBe("true");
+          await expectDraft();
+          await start.click({ force: true });
+          await message.press("Enter");
+          expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+        };
+        await expectBlocked();
 
         await gateway.resolveDeferred("agents.list", roster("/workspace-a"));
         await expect.poll(() => start.getAttribute("aria-disabled")).not.toBe("true");
         await gateway.waitForRequest("config.get");
-        expect(await message.inputValue()).toBe("Keep the warm draft");
+        await expectDraft();
         if (explicit) {
           await page.locator("#new-session-project-trigger").click();
           await workspaceOption.click();
@@ -80,21 +86,18 @@ suite.define(() => {
         await gateway.setOnline(false);
         await waitForControlUiGatewayReconnecting(page);
         await expect.poll(() => start.getAttribute("aria-disabled")).toBe("true");
-        expect(await message.inputValue()).toBe("Keep the warm draft");
-        await start.click({ force: true });
-        await message.press("Enter");
-        expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+        await expectBlocked();
         await gateway.deferNext("agents.list");
         await gateway.setOnline(true);
         await waitForControlUiGatewayReady(page);
         await gateway.waitForRequest("agents.list", { after: rosterReads });
         await expect.poll(() => start.getAttribute("aria-disabled")).not.toBe("true");
-        expect(await message.inputValue()).toBe("Keep the warm draft");
+        await expectDraft();
         expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
 
         await gateway.resolveDeferred("agents.list", roster("/workspace-b"));
         await expect.poll(() => start.getAttribute("aria-disabled")).not.toBe("true");
-        expect(await message.inputValue()).toBe("Keep the warm draft");
+        await expectDraft();
         await start.click();
         const create = await gateway.waitForRequest("sessions.create");
         expect(create.params).toMatchObject({ agentId: "main", message: "Keep the warm draft" });
