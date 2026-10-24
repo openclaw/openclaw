@@ -37,7 +37,10 @@ import {
   isValidExecSecretRefId,
   secretRefKey,
 } from "../secrets/ref-contract.js";
-import { discoverConfigSecretTargets } from "../secrets/target-registry.js";
+import {
+  discoverConfigSecretTargetsByIds,
+  listSecretTargetRegistryEntries,
+} from "../secrets/target-registry.js";
 import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import { shortenHomePath } from "../utils.js";
 import type { ConfigMutationOptions, ConfigSetOperation } from "./config-cli-input.js";
@@ -116,7 +119,11 @@ function pathContains(parent: readonly string[], child: readonly string[]): bool
   return parent.length <= child.length && parent.every((part, index) => part === child[index]);
 }
 
-function selectConfigMutationSecrets(config: OpenClawConfig, operations: ConfigSetOperation[]) {
+function selectConfigMutationSecrets(
+  config: OpenClawConfig,
+  operations: ConfigSetOperation[],
+  databaseOnly?: true,
+) {
   const paths = operations.map(({ setPath }) => setPath);
   const changedProviders = new Set<string>();
   const changedDefaults = new Set<string>();
@@ -144,7 +151,13 @@ function selectConfigMutationSecrets(config: OpenClawConfig, operations: ConfigS
   const ownedPaths: string[][] = [];
   const overlaps = (targetPath: string[]) =>
     paths.some((path) => pathContains(path, targetPath) || pathContains(targetPath, path));
-  for (const target of discoverConfigSecretTargets(config)) {
+  // database.* targets are core-owned; plugin target discovery would read the state database.
+  const targetIds = databaseOnly
+    ? listSecretTargetRegistryEntries({ configPath: ["database"] })
+        .filter((entry) => entry.pathPattern.startsWith("database."))
+        .map((entry) => entry.id)
+    : undefined;
+  for (const target of discoverConfigSecretTargetsByIds(config, targetIds)) {
     ownedPaths.push(target.pathSegments);
     if (target.refPathSegments) {
       ownedPaths.push(target.refPathSegments);
@@ -318,7 +331,7 @@ export async function validateConfigMutation(params: {
   const policyIssues = formatConfigIssueLines(collectUnsupportedSecretRefPolicyIssues(config), "", {
     normalizeRoot: true,
   }).map((line) => line.trim());
-  const selection = selectConfigMutationSecrets(config, operations);
+  const selection = selectConfigMutationSecrets(config, operations, params.databaseOnly);
   const providerErrors = formatConfigIssueLines(
     await collectConfigSecretProviderErrors({ config, selection }),
     "",

@@ -233,6 +233,17 @@ it("preserves configured providers without loading their shared metadata", async
   await f.checkState();
 });
 
+it("repairs database config with plugin entries without opening shared state", async () => {
+  const f = await fixture(true);
+  const plugins = { entries: { brave: { enabled: true } } };
+  await writeJson(f.configPath, { database, gateway: { mode: "local" }, plugins });
+  await f.run(schemaRepair);
+  const config = await readJson(f.configPath);
+  expect(config).toMatchObject({ database: { postgres: { schemaPrefix: "repaired" } } });
+  expect(config.plugins).toEqual(plugins);
+  await f.checkState();
+});
+
 it("repairs an included database config without shared state", async () => {
   const f = await fixture();
   const includePath = path.join(f.root, "database.json");
