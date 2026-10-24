@@ -292,14 +292,21 @@ updater is affected.
 
 ## Extended-stable 2026.9.33 to development builds
 
-When updating an installed **2026.9.33** directly to current development builds,
-activation can fail with `SQLite migration source changed after update capture`.
-The older updater and the candidate use different database fingerprint formats.
+Direct updates from **2026.9.33** work when the candidate contains the legacy
+database fingerprint adapter. The first release containing this fix supports
+both activation and automatic rollback without an intermediate update. The
+candidate recognizes the older updater's physical fingerprints and retains
+that format through migration and rollback verification; changed databases
+still refuse automatic restoration.
+
+For older candidates without the adapter, activation can fail with
+`SQLite migration source changed after update capture`. The older updater and
+the candidate use different database fingerprint formats.
 This error alone does not establish that another process changed the database.
 The failed update preserves current databases and recovery snapshots, but may
 leave the Gateway stopped with the candidate package installed.
 
-Before switching to development, create a
+Before switching to an older development candidate without this fix, create a
 [verified backup](/install/updating#before-updating-create-a-verified-backup),
 then update through **2026.10.5**:
 
@@ -337,8 +344,8 @@ openclaw gateway status --deep
 ```
 
 Do not delete update records, change schema markers, or discard recovery files
-to bypass the refusal. The fingerprint incompatibility needs support across
-migration and rollback receipts; ignoring the mismatch would lose that protection.
+to bypass the refusal. Candidates with the adapter verify both fingerprint
+formats; ignoring a mismatch would lose that protection.
 
 ## Candidate migration rehearsal timeouts
 

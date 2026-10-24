@@ -526,7 +526,12 @@ export function runOneShotSqliteInspection<T>(params: {
 export function runSqliteReadOnlyWorkerSync(
   pathname: string,
   stagingRoot: string | undefined,
-  mode: "sync" | "content-version" | "file-generation" | "update-generation" = "sync",
+  mode:
+    | "sync"
+    | "content-version"
+    | "file-generation"
+    | "update-generation"
+    | "update-generation-legacy" = "sync",
   expectedSourceIdentity?: DatabaseFileIdentity,
 ): string {
   assertChildRuntimeAvailable();

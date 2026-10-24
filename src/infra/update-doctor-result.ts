@@ -217,19 +217,21 @@ export function createUpdateDoctorDatabaseWriteCapture(
   let expectedGenerations: UpdateDatabaseGenerations | undefined = { ...input };
   let fromGenerations: UpdateDatabaseGenerations | undefined;
   let unchanged = true;
+  let legacyPhysical = false;
+  let admitted = false;
   let receipt: UpdateDatabaseWriteReceipt | undefined;
   const historicalScans = createUpdateDoctorHistoricalScanCapture(options);
-  const read = async () => {
+  const read = async (physical = legacyPhysical) => {
     if (!expectedGenerations) {
       return undefined;
     }
     let generations: UpdateDatabaseGenerations;
     try {
       const { readUpdateDatabaseGenerationsIsolated } = await import("./update-candidate-state.js");
-      generations = await readUpdateDatabaseGenerationsIsolated(
-        Object.keys(expectedGenerations),
-        options,
-      );
+      generations = await readUpdateDatabaseGenerationsIsolated(Object.keys(expectedGenerations), {
+        ...options,
+        legacyPhysical: physical,
+      });
     } catch (error) {
       if (hasCommandProcessCleanupError(error)) {
         throw error;
@@ -252,6 +254,7 @@ export function createUpdateDoctorDatabaseWriteCapture(
     run<T>(operation: () => T): T {
       return runWithUpdateDoctorMigrationCapture(
         {
+          legacyPhysical: () => legacyPhysical,
           expected: (pathname) => expectedGenerations?.[pathname],
           assertCurrent: () => options.assertCurrent?.(),
           accept(pathname, before, after) {
@@ -276,14 +279,21 @@ export function createUpdateDoctorDatabaseWriteCapture(
     async admit() {
       receipt = undefined;
       historicalScans.observe(Object.keys(expectedGenerations ?? {}));
-      const generations = await read();
+      let generations = await read();
+      if (!admitted && generations && !isDeepStrictEqual(generations, expectedGenerations)) {
+        // Both shipped formats are unversioned: select legacy only on an exact source match.
+        const physical = await read(true);
+        if (physical && isDeepStrictEqual(physical, expectedGenerations)) {
+          legacyPhysical = true;
+          generations = physical;
+        }
+      }
+      admitted = true;
       if (generations && expectedGenerations) {
         historicalScans.admit(generations);
         fromGenerations ??= generations;
         // Earlier receipts or another process's writes must never become our baseline.
-        unchanged &&= Object.entries(expectedGenerations).every(
-          ([pathname, generation]) => generations[pathname] === generation,
-        );
+        unchanged &&= isDeepStrictEqual(generations, expectedGenerations);
       }
     },
     async settle() {
@@ -297,9 +307,7 @@ export function createUpdateDoctorDatabaseWriteCapture(
       if (generations && expectedGenerations) {
         // Only native migration publications advance the expected generation.
         // Unattributed writes, including independent SQLite writers, remain unknown.
-        unchanged &&= Object.entries(expectedGenerations).every(
-          ([pathname, generation]) => generations[pathname] === generation,
-        );
+        unchanged &&= isDeepStrictEqual(generations, expectedGenerations);
         receipt = {
           unchanged,
           fromGenerations,

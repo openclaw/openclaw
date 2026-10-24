@@ -19,6 +19,7 @@ export type SqliteReadOnlyWorkerMode =
   | "content-version"
   | "file-generation"
   | "update-generation"
+  | "update-generation-legacy"
   | "async"
   | "metadata"
   | "consolidated"
@@ -184,7 +185,8 @@ export function readSqliteReadOnlyWorkerValue(
     | "consolidated"
     | "content-version"
     | "file-generation"
-    | "update-generation",
+    | "update-generation"
+    | "update-generation-legacy",
 ): string;
 export function readSqliteReadOnlyWorkerValue(
   params: SqliteReadOnlyWorkerOutput,
@@ -247,7 +249,12 @@ export function readSqliteReadOnlyWorkerValue(
   if (mode === "content-version" && "contentVersion" in result) {
     return result.contentVersion;
   }
-  if ((mode === "file-generation" || mode === "update-generation") && "generation" in result) {
+  if (
+    (mode === "file-generation" ||
+      mode === "update-generation" ||
+      mode === "update-generation-legacy") &&
+    "generation" in result
+  ) {
     return result.generation;
   }
   if (mode === "reclaim" && "warnings" in result) {

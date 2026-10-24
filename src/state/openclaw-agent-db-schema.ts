@@ -30,6 +30,7 @@ import { migrateSqliteSchemaToStrictInTransaction } from "../infra/sqlite-strict
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { configureSqlitePreSchemaPragmas } from "../infra/sqlite-wal.js";
+import { runUpdateSqliteMigration } from "../infra/update-doctor-migration-attribution.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { assertAgentDeletionRecoveryAllowsMutation } from "./agent-deletion-journal-recovery.js";
@@ -557,11 +558,13 @@ function ensureAgentSchema(
       }
       finishStorageMigration();
     };
-    runSqliteImmediateTransactionSync(db, mutate, {
-      databaseLabel: pathname,
-      operationLabel: "agent.schema.ensure",
-      withCommit,
-    });
+    runUpdateSqliteMigration(db, pathname, () =>
+      runSqliteImmediateTransactionSync(db, mutate, {
+        databaseLabel: pathname,
+        operationLabel: "agent.schema.ensure",
+        withCommit,
+      }),
+    );
   } finally {
     if (db.isOpen) {
       db.exec("PRAGMA foreign_keys = ON;");
@@ -605,15 +608,23 @@ export function* ensureOpenClawAgentDatabaseSchemaSteps(
   const databaseOptions = { ...options, agentId };
   // The opened file owns its identity; lexical resolution can change a symlink/.. locator.
   const pathname = db.location() ?? resolveOpenClawAgentSqlitePath(databaseOptions);
-  // The version prelude already revoked and verified this source under the same custody.
-  if (!options.versionMigrationOnly) {
-    revokeSqliteDatabaseAdmissions(db);
-  }
-  assertExistingAgentSchemaOwner(readExistingAgentSchemaMeta(db), agentId, pathname);
-  const version = assertSupportedAgentSchemaVersion(db, pathname);
-  if (version < OPENCLAW_AGENT_SCHEMA_VERSION) {
-    assertSupportedAgentMigrationSchemas(db, pathname, version);
-  }
+  // Retain native custody before the first schema read can create a WAL index.
+  runUpdateSqliteMigration(
+    db,
+    pathname,
+    () => {
+      // The version prelude already revoked and verified this source under the same custody.
+      if (!options.versionMigrationOnly) {
+        revokeSqliteDatabaseAdmissions(db);
+      }
+      assertExistingAgentSchemaOwner(readExistingAgentSchemaMeta(db), agentId, pathname);
+      const version = assertSupportedAgentSchemaVersion(db, pathname);
+      if (version < OPENCLAW_AGENT_SCHEMA_VERSION) {
+        assertSupportedAgentMigrationSchemas(db, pathname, version);
+      }
+    },
+    { retainExclusive: true },
+  );
   const deletionFence =
     databaseOptions.register === true &&
     isPersistentOpenClawAgentDatabasePath(pathname, databaseOptions.env)

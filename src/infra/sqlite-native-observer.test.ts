@@ -2,10 +2,22 @@ import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
-import { hasPendingSqliteNativeExecution } from "./sqlite-native-observer.js";
+import {
+  hasPendingSqliteNativeExecution,
+  observeSqliteNativeClose,
+} from "./sqlite-native-observer.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const open = (location = ":memory:") => openNodeSqliteDatabase(location);
+
+it("notifies close observers registered after a using binding", () => {
+  const closed: boolean[] = [];
+  {
+    using db = open();
+    observeSqliteNativeClose(db, () => closed.push(!db.isOpen));
+  }
+  expect(closed).toEqual([true]);
+});
 
 function outcome(operation: () => unknown) {
   try {

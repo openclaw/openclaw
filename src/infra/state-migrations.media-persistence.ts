@@ -98,6 +98,7 @@ import {
   migrateCanonicalTranscriptArchives,
 } from "./state-migrations.transcript-directives-archives.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
+import { runUpdateSqliteMigration } from "./update-doctor-migration-attribution.js";
 import { decodeUtf8Input, Utf8InputError } from "./utf8-input.js";
 import { resolveZstdCodec } from "./zstd-codec.js";
 
@@ -140,7 +141,12 @@ async function migrateAgentDatabase(params: {
       beforeResume: () => assertAgentDatabaseMaintenanceAuthority(params.maintenance),
     });
   try {
-    configureSqliteMaintenanceCache(database);
+    runUpdateSqliteMigration(
+      database,
+      params.pathname,
+      () => configureSqliteMaintenanceCache(database),
+      { retainExclusive: true },
+    );
     database.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
     enableNodeSqliteKyselyStatementCache(database);
     let metadata = assertOpenClawAgentDatabaseOwner(database, params);
@@ -164,8 +170,7 @@ async function migrateAgentDatabase(params: {
         allowStartupIndexRepair: true,
       })
     ) {
-      // Unchanged stores keep their clean-close proof. Explicit Doctor owns
-      // content repairs; an update only prepares stores needing migration.
+      // Updates defer content repairs on unchanged stores to explicit Doctor.
       registerOpenClawAgentDatabase(schemaOptions);
       return {
         deferred: true,
@@ -196,10 +201,8 @@ async function migrateAgentDatabase(params: {
         );
       }
       if (userVersion >= AGENT_MEDIA_SCHEMA_VERSION) {
-        // The canonical owner admits supported versions and converges additive schema.
         if (params.migratedFromVersion !== undefined) {
-          // The version phase verified this file under the same Doctor custody.
-          // Only ordinary additive maintenance remains before readers can open it.
+          // The version phase verified this file; only additive maintenance remains.
           ensureOpenClawAgentSchema(database, params.agentId, params.pathname);
           const admittedDb = nativeVersionMigration
             ? admitOpenClawAgentDatabaseSchema(database, schemaOptions)
@@ -453,11 +456,9 @@ function migrateTranscriptArchive(filePath: string): boolean {
   if (!transformed.changed) {
     return false;
   }
-  const codec = compressed ? "zstd" : "identity";
-  const encoded = encodeArchiveContent(transformed.content, codec, filePath);
   replaceFileAtomicSync({
     filePath,
-    content: encoded,
+    content: encodeArchiveContent(transformed.content, compressed ? "zstd" : "identity", filePath),
     preserveExistingMode: true,
     syncParentDir: true,
     syncTempFile: true,
@@ -634,8 +635,7 @@ export async function migrateLegacyMediaPersistence(
           );
         }
         // Only a version-only advance postpones the following Doctor repairs.
-        const preparedForRepair = !result.deferred || !schemaAdvanced;
-        if (preparedForRepair) {
+        if (!result.deferred || !schemaAdvanced) {
           preparedRepairTargets.push(entry);
         }
       } catch (error) {

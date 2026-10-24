@@ -15,6 +15,7 @@ import { truncateSqliteWal } from "./sqlite-wal-checkpoint.js";
 import { readMatchingUpdateDatabaseGeneration } from "./update-database-generations.js";
 
 export type UpdateDoctorMigrationCapture = {
+  legacyPhysical?(): boolean;
   expected(pathname: string): string | null | undefined;
   assertCurrent(): void;
   accept(pathname: string, before: string | null, after: string | null): void;
@@ -113,9 +114,16 @@ function migrationAuthority(
   };
 }
 
-function readSqliteGeneration(pathname: string): string | null {
+function readSqliteGeneration(
+  pathname: string,
+  capture: UpdateDoctorMigrationCapture,
+): string | null {
   const value: unknown = JSON.parse(
-    runSqliteReadOnlyWorkerSync(pathname, undefined, "update-generation"),
+    runSqliteReadOnlyWorkerSync(
+      pathname,
+      undefined,
+      capture.legacyPhysical?.() ? "update-generation-legacy" : "update-generation",
+    ),
   );
   if (value !== null && (typeof value !== "string" || !/^[a-f0-9]{64}$/u.test(value))) {
     throw new Error("Database generation child returned an invalid generation.");
@@ -153,7 +161,7 @@ function observeMigrationClose(
         throw new Error("SQLite migration close lost its maintenance scope.");
       }
       assertCurrent();
-      const after = readSqliteGeneration(pathname);
+      const after = readSqliteGeneration(pathname, capture);
       assertCurrent();
       capture.accept(pathname, expected, after);
     } catch (error) {
@@ -239,8 +247,12 @@ export function runUpdateSqliteMigration<T>(
           expected === null
             ? null
             : mode === "exclusive"
-              ? readSqliteGeneration(pathname)
-              : readMatchingUpdateDatabaseGeneration(pathname, expected);
+              ? readSqliteGeneration(pathname, capture)
+              : readMatchingUpdateDatabaseGeneration(
+                  pathname,
+                  expected,
+                  capture.legacyPhysical?.(),
+                );
         assertCurrent();
         if (before === undefined || (mode === "exclusive" && before !== expected)) {
           throw new Error("SQLite migration source changed after update capture.");
@@ -269,7 +281,7 @@ export function runUpdateSqliteMigration<T>(
           assertCurrent();
           // Checkpoint under native exclusion so this postimage survives the source handle closing.
           truncateSqliteWal(db, pathname);
-          const after = readSqliteGeneration(pathname);
+          const after = readSqliteGeneration(pathname, capture);
           assertCurrent();
           capture.accept(pathname, before, after);
           observeMigrationClose(db, pathname, capture, after, assertCurrent);
@@ -301,7 +313,7 @@ export function beginUpdateSqliteCompanion(db: DatabaseSync, pathname: string, c
   if (mode !== "exclusive") {
     throw new Error("Migration companion requires its exclusive native owner.");
   }
-  const before = created && expected === null ? null : readSqliteGeneration(pathname);
+  const before = created && expected === null ? null : readSqliteGeneration(pathname, capture);
   assertCurrent();
   if (before !== expected) {
     capture.refuse("Migration companion changed after update capture.");
@@ -313,7 +325,7 @@ export function beginUpdateSqliteCompanion(db: DatabaseSync, pathname: string, c
       if (!db.isOpen || db.isTransaction) {
         throw new Error("Migration companion publication requires its committed native owner.");
       }
-      const after = readSqliteGeneration(pathname);
+      const after = readSqliteGeneration(pathname, capture);
       assertCurrent();
       capture.accept(pathname, before, after);
     },

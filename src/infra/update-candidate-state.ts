@@ -72,8 +72,10 @@ import {
   UpdateStateSchemaVersionsSchema,
   type UpdateStateSchemaVersion,
 } from "./update-candidate-state.versions.js";
-import type { UpdateDatabaseGenerations } from "./update-database-generations.js";
-import type { UpdateRecoveryCaptureAcquisition } from "./update-recovery-capture-acquisition.js";
+import type {
+  UpdateDatabaseGenerations,
+  UpdateDatabaseGenerationOptions,
+} from "./update-database-generations.js";
 
 export type { UpdateStateSchemaVersion } from "./update-candidate-state.versions.js";
 export const UpdateCandidateStateSnapshotSchema = z.object({
@@ -427,15 +429,7 @@ export async function readUpdateStateDatabaseInventory(input: StateInput) {
 /** Raw fingerprint reads need their own process so descriptor closes cannot release caller locks. */
 export async function readUpdateDatabaseGenerationsIsolated(
   paths: readonly string[],
-  options: {
-    env?: NodeJS.ProcessEnv;
-    root?: string;
-    timeoutMs?: number;
-    signal?: AbortSignal;
-    acquisition?: UpdateRecoveryCaptureAcquisition;
-    retryAdvice?: boolean;
-    pluginOwners?: import("./database-engine/port-descriptor.js").DatabasePortPluginOwners;
-  } = {},
+  options: UpdateDatabaseGenerationOptions = {},
 ): Promise<UpdateDatabaseGenerations> {
   const scope = getOpenClawDatabaseMaintenanceScope();
   const maintenanceOwner =
@@ -461,6 +455,7 @@ export async function readUpdateDatabaseGenerationsIsolated(
         input: {
           mode: "database-generations",
           paths,
+          legacyPhysical: options.legacyPhysical ?? false,
           ...(options.pluginOwners ? { pluginOwners: options.pluginOwners } : {}),
           stateDir: resolveStateDir(sourceEnv),
           config: {},

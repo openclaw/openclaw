@@ -5,6 +5,7 @@ import * as diskSpace from "../infra/disk-space.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import * as sqliteIntegrity from "../infra/sqlite-integrity.js";
+import * as sqliteSnapshot from "../infra/sqlite-snapshot-source.js";
 import { configureSqliteWalMaintenance } from "../infra/sqlite-wal.js";
 import type { AgentDatabaseMigrationTarget } from "../infra/state-migrations.media-persistence-targets.js";
 import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js";
@@ -127,11 +128,34 @@ it("converts legacy stores once, preserves canonical rowids/search, and enables 
     } finally {
       agent.close();
     }
-    const compactedBytes = paths.map((pathname) => fs.readFileSync(pathname));
+    // A native read-only WAL open can recreate sidecars without changing the main file.
+    for (const pathname of paths) {
+      const cold = openNodeSqliteDatabase(pathname);
+      cold.prepare("PRAGMA schema_version").get();
+      cold.close();
+      expect(fs.existsSync(`${pathname}-wal`)).toBe(false);
+      expect(fs.existsSync(`${pathname}-shm`)).toBe(false);
+    }
+    const physicalFamily = () =>
+      paths.flatMap((pathname) =>
+        [pathname, `${pathname}-wal`, `${pathname}-shm`, `${pathname}-journal`].map((file) => {
+          const stat = fs.statSync(file, { bigint: true, throwIfNoEntry: false });
+          return stat
+            ? {
+                dev: stat.dev,
+                ino: stat.ino,
+                size: stat.size,
+                mtime: stat.mtimeNs,
+                bytes: fs.readFileSync(file),
+              }
+            : null;
+        }),
+      );
+    const compactedFamily = physicalFamily();
     const log = vi.fn();
     await expect(convert(state, { agents, log })).resolves.toEqual({ warnings: [] });
     expect(log).not.toHaveBeenCalled();
-    expect(paths.map((pathname) => fs.readFileSync(pathname))).toEqual(compactedBytes);
+    expect(physicalFamily()).toEqual(compactedFamily);
 
     const db = openNodeSqliteDatabase(shared);
     const maintenance = configureSqliteWalMaintenance(db, {
@@ -180,20 +204,34 @@ it.each([
       }
       const open = nodeSqlite.openNodeSqliteDatabase;
       let replaced = false;
+      const replaceOnClose = (database: ReturnType<typeof open>) => {
+        const close = database.close.bind(database);
+        vi.spyOn(database, "close").mockImplementation(() => {
+          close();
+          fs.renameSync(shared, original);
+          fs.renameSync(replacement, shared);
+          replaced = true;
+        });
+      };
+      const openReadOnly = sqliteSnapshot.openSqliteReadOnlyDatabase;
+      vi.spyOn(sqliteSnapshot, "openSqliteReadOnlyDatabase").mockImplementation(
+        (pathname, options) => {
+          const database = openReadOnly(pathname, options);
+          if (replaceAfter === "read" && pathname === shared && !replaced) {
+            replaceOnClose(database);
+          }
+          return database;
+        },
+      );
       vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((pathname, options) => {
         const database = open(pathname, options);
-        const replace =
-          replaceAfter === "read"
-            ? options?.readOnly && pathname === shared
-            : replaceAfter === "write" && !options?.readOnly && pathname.startsWith("file:");
-        if (replace && !replaced) {
-          const close = database.close.bind(database);
-          vi.spyOn(database, "close").mockImplementation(() => {
-            close();
-            fs.renameSync(shared, original);
-            fs.renameSync(replacement, shared);
-            replaced = true;
-          });
+        if (
+          replaceAfter === "write" &&
+          !options?.readOnly &&
+          database.location() === shared &&
+          !replaced
+        ) {
+          replaceOnClose(database);
         }
         return database;
       });

@@ -44,6 +44,10 @@ const pending = resolveGlobalSingleton(
   Symbol.for("openclaw.sqliteNativeExecution"),
   () => new WeakMap<DatabaseSync, number>(),
 );
+const closeObservers = resolveGlobalSingleton(
+  Symbol.for("openclaw.sqliteNativeCloseObservers"),
+  () => new WeakMap<DatabaseSync, { notify: () => void }>(),
+);
 
 /** Execution custody is not evidence of COMMIT or complete authority write-set coverage. */
 export function hasPendingSqliteNativeExecution(database: DatabaseSync): boolean {
@@ -113,6 +117,21 @@ const bindingMutation: SqliteNativeMutation = {
 
 /** Dispose callbacks may refuse close; native custody expires only after SQLite has closed. */
 export function observeSqliteNativeClose(database: DatabaseSync, onClose: () => void): void {
+  const registered = closeObservers.get(database);
+  if (registered) {
+    const previous = registered.notify;
+    registered.notify = () => {
+      try {
+        previous();
+      } finally {
+        onClose();
+      }
+    };
+    return;
+  }
+  // A using binding captures its disposer once; later observers share this dispatcher.
+  const observer = { notify: onClose };
+  closeObservers.set(database, observer);
   for (const method of ["close", Symbol.dispose] as const) {
     if (typeof database[method] !== "function") {
       continue;
@@ -123,7 +142,7 @@ export function observeSqliteNativeClose(database: DatabaseSync, onClose: () => 
         close();
       } finally {
         if (!database.isOpen) {
-          onClose();
+          observer.notify();
         }
       }
     };

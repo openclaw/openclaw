@@ -37,6 +37,7 @@ import {
 import { SqliteWorkerOpenRefusedError } from "../infra/sqlite-worker-contract.js";
 import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
 import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
+import { runUpdateSqliteMigration } from "../infra/update-doctor-migration-attribution.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
   assertAgentCreationClaimAccess,
@@ -390,10 +391,17 @@ function* openOpenClawAgentDatabaseSteps(
         isValidatedReopen = true;
         reusedSchema = true;
       } else {
-        reusedSchema = adoptOpenClawAgentDatabaseSchema(
-          validationDatabase,
-          reuseAdmittedIntegrity,
-          pending?.workerPrepared,
+        // Admission itself can create a WAL index before a schema migration runs.
+        reusedSchema = runUpdateSqliteMigration(
+          db,
+          pathname,
+          () =>
+            adoptOpenClawAgentDatabaseSchema(
+              validationDatabase,
+              reuseAdmittedIntegrity,
+              pending?.workerPrepared,
+            ),
+          { retainExclusive: true },
         );
         if (!reusedSchema) {
           admitSqliteSchema(db, (userVersion) => {

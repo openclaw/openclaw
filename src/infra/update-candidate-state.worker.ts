@@ -41,6 +41,8 @@ async function snapshotCandidateState(): Promise<unknown> {
     | {
         mode: "database-generations";
         paths: string[];
+        stateDir: string;
+        legacyPhysical?: boolean;
         pluginOwners?: import("./database-engine/port-descriptor.js").DatabasePortPluginOwners;
       };
   if (input.mode === "runtime-retention") {
@@ -63,9 +65,17 @@ async function snapshotCandidateState(): Promise<unknown> {
       return prepareUpdateDatabaseRestoreSourceInProcess(input);
     }
     case "database-generations": {
-      const { readUpdatePhysicalDatabaseGenerations } =
+      const { readUpdatePhysicalDatabaseGenerations, isLegacyUpdateGenerationRequest } =
         await import("./update-physical-database-generations.js");
-      return readUpdatePhysicalDatabaseGenerations(input.paths, input.pluginOwners);
+      return readUpdatePhysicalDatabaseGenerations(
+        input.paths,
+        input.pluginOwners,
+        input.legacyPhysical ??
+          (await isLegacyUpdateGenerationRequest({
+            ...process.env,
+            OPENCLAW_STATE_DIR: input.stateDir,
+          })),
+      );
     }
     case "inventory": {
       const { resolveDatabaseFamilyEngines } = await import("./database-engine/registry.js");

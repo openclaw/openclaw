@@ -7,6 +7,7 @@ import {
   createSqliteFileGenerationReader,
   readStableSqliteFileGeneration,
   sameSqliteFileGeneration,
+  serializeSqliteFileGeneration,
   type SqliteFileGeneration,
 } from "./sqlite-file-generation.js";
 import { runWithSqliteCleanup } from "./sqlite-lifecycle-errors.js";
@@ -19,6 +20,16 @@ import {
 } from "./sqlite-worker-identity.js";
 
 export type UpdateDatabaseGenerations = Record<string, string | null>;
+export type UpdateDatabaseGenerationOptions = {
+  env?: NodeJS.ProcessEnv;
+  root?: string;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+  acquisition?: import("./update-recovery-capture-acquisition.js").UpdateRecoveryCaptureAcquisition;
+  retryAdvice?: boolean;
+  pluginOwners?: import("./database-engine/port-descriptor.js").DatabasePortPluginOwners;
+  legacyPhysical?: boolean;
+};
 export type UpdateDatabaseWriteReceipt = {
   unchanged: boolean;
   fromGenerations?: UpdateDatabaseGenerations;
@@ -108,6 +119,7 @@ type DatabaseGenerationObservation = {
 function readDatabaseGeneration(
   pathname: string,
   inspectImage?: (imagePath: string, sourcePath: string) => void,
+  legacyPhysical = false,
 ): DatabaseGenerationObservation {
   const entry = fs.lstatSync(pathname, { bigint: true, throwIfNoEntry: false });
   if (!entry) {
@@ -137,6 +149,19 @@ function readDatabaseGeneration(
     (generation.wal && generation.wal.size > 0n && after?.[12] !== 1)
   ) {
     throw new Error(`SQLite WAL commit publication could not be verified: ${pathname}`);
+  }
+  // 2026.9.33 receipts bind the physical family and all 96 WAL-header bytes.
+  if (legacyPhysical) {
+    return {
+      generation: sha256Hex(
+        JSON.stringify([
+          serializeSqliteFileGeneration(
+            current.wal?.size === 0n ? { ...current, wal: undefined } : current,
+          ),
+          after?.toString("hex") ?? null,
+        ]),
+      ),
+    };
   }
   const identity = [
     generation.database.dev.toString(),
@@ -173,9 +198,13 @@ function readDatabaseGeneration(
 export function readUpdateDatabaseGenerations(
   paths: readonly string[],
   inspectImage?: (imagePath: string, sourcePath: string) => void,
+  legacyPhysical = false,
 ): UpdateDatabaseGenerations {
   return Object.fromEntries(
-    paths.map((pathname) => [pathname, readDatabaseGeneration(pathname, inspectImage).generation]),
+    paths.map((pathname) => [
+      pathname,
+      readDatabaseGeneration(pathname, inspectImage, legacyPhysical).generation,
+    ]),
   );
 }
 
@@ -183,8 +212,9 @@ export function readUpdateDatabaseGenerations(
 export function readMatchingUpdateDatabaseGeneration(
   pathname: string,
   expected: string,
+  legacyPhysical = false,
 ): string | undefined {
-  const observed = readDatabaseGeneration(pathname);
+  const observed = readDatabaseGeneration(pathname, undefined, legacyPhysical);
   return observed.generation === expected || observed.emptyReaderAlternate === expected
     ? (observed.generation ?? undefined)
     : undefined;
