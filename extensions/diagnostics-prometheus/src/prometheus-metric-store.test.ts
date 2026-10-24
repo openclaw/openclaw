@@ -1,3 +1,5 @@
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { queryObjects } from "node:v8";
 import { expect, it } from "vitest";
 import {
   PROMETHEUS_FAMILY_RESERVES,
@@ -151,4 +153,29 @@ it("renders exact UTF-8 exposition bytes, including help, all sample kinds, and 
     "",
   ].join("\n");
   expect(store.render()).toEqual(Buffer.from(expected));
+});
+
+it("does not retain unrelated pool slabs between scrapes while series stay live", async () => {
+  const store = createPrometheusMetricStore();
+  const churn = "x".repeat(Buffer.poolSize / 2 - 8);
+  const markSeries = (index: number) => {
+    Buffer.from(churn);
+    Buffer.from(churn);
+    const before = Buffer.from("marker");
+    store.gauge("openclaw_worker_queue_depth", "Depth.", { index: String(index) }, index);
+    store.render().buffer.transfer(0);
+    const after = Buffer.from("marker");
+    return [new WeakRef(before.buffer), new WeakRef(after.buffer)];
+  };
+  const references = Array.from({ length: 32 }, (_, index) => markSeries(index)).flat();
+  // Move Node's current pool past all marked slabs before checking store retention.
+  for (let index = 0; index < 3; index++) {
+    Buffer.from(churn);
+  }
+  const control = new WeakRef({});
+  await nextTurn();
+  queryObjects(WeakRef);
+  expect(control.deref()).toBeUndefined();
+  expect(references.filter((reference) => reference.deref() !== undefined)).toHaveLength(0);
+  expect(store.render().toString()).toContain('openclaw_worker_queue_depth{index="31"} 31\n');
 });
