@@ -91,6 +91,7 @@ export type WorkspaceStageInput<Raw = Uint8Array<ArrayBuffer>> = WorkspaceStageI
   stagedResultRef: string;
   buildCacheInputs?: string[];
   gitHistory?: WorkerWorkspaceGitHistory;
+  parentCommit?: string;
 };
 
 export type WorkspaceManifestValueOutputs = {

@@ -1,4 +1,5 @@
 import { isMainThread } from "node:worker_threads";
+import { assertRuntimeSupportsPluginModule } from "../infra/runtime-profile.js";
 import { toSafeImportPath } from "../shared/import-specifier.js";
 import { VERSION } from "../version.js";
 import { runPluginRegistration } from "./api-lifecycle.js";
@@ -15,7 +16,10 @@ import { withProfile } from "./plugin-load-profile.js";
 import { getCachedPluginModuleLoader } from "./plugin-module-loader-cache.js";
 import { nativeAdmissionStateFor } from "./plugin-native-admission-state.js";
 import { installOpenClawPluginSdkNativeResolver } from "./plugin-sdk-native-resolver.js";
-import { getPluginRegistryInspectionResources } from "./registry-inspection-resources.js";
+import {
+  getPluginRegistryInspectionResources,
+  type PluginRegistryInspectionResources,
+} from "./registry-inspection-resources.js";
 import { isPluginRegistryRetired } from "./registry-lifecycle.js";
 import type { PluginRecord, PluginRegistry } from "./registry-types.js";
 import { withPluginRegistrationContext } from "./runtime.js";
@@ -194,6 +198,7 @@ export function createPluginModuleLoader(options: {
     });
   return Object.assign(load, {
     async prepare(modulePath: string, owner: Owner): Promise<void> {
+      assertRuntimeSupportsPluginModule(modulePath);
       // Compute workers already own retained native-ESM source captures. Keep their
       // inline acquisition path so a prepared artifact cannot compete with that owner.
       // An inspection that joins a retained native ESM artifact binds it synchronously;
@@ -271,8 +276,10 @@ export function createLazyPluginRuntime(params: {
   devSourceRoot?: string | null;
   pluginSdkResolution?: PluginSdkResolutionPreference;
   runtimeOptions?: CreatePluginRuntimeOptions;
+  inspectionResources?: PluginRegistryInspectionResources;
 }): PluginRuntime {
-  const cache = getPluginCache();
+  // Inspections own their cache through physical disposal; raw runtime views retain theirs.
+  const cache = params.inspectionResources ? new WeakRef(getPluginCache()) : getPluginCache();
   type RuntimeModule = {
     createPluginRuntime?: PluginRuntimeFactory;
   };
@@ -290,30 +297,35 @@ export function createLazyPluginRuntime(params: {
       );
     }
     const resolvedPath = resolution.resolvedPath;
-    return withPluginCache(cache, () =>
-      withProfile({ source: resolvedPath }, "runtime-module", () => {
-        const native = tryNativeRequireModule(resolvedPath, {
-          aliasMap: preparePluginLoaderAliases({
-            modulePath: resolvedPath,
-            moduleUrl: import.meta.url,
-            devSourceRoot: params.devSourceRoot,
-            pluginSdkResolution: params.pluginSdkResolution,
-          }).resolveAlias,
-        });
-        if (!native.ok) {
-          throw new Error(
-            `Unable to load host plugin runtime natively: ${resolvedPath}. Use a supported native TypeScript loader for a source host, or rebuild the host runtime.`,
-          );
-        }
-        return native.moduleExport as RuntimeModule;
-      }),
-    );
+    return withProfile({ source: resolvedPath }, "runtime-module", () => {
+      const native = tryNativeRequireModule(resolvedPath, {
+        aliasMap: preparePluginLoaderAliases({
+          modulePath: resolvedPath,
+          moduleUrl: import.meta.url,
+          devSourceRoot: params.devSourceRoot,
+          pluginSdkResolution: params.pluginSdkResolution,
+        }).resolveAlias,
+      });
+      if (!native.ok) {
+        throw new Error(
+          `Unable to load host plugin runtime natively: ${resolvedPath}. Use a supported native TypeScript loader for a source host, or rebuild the host runtime.`,
+        );
+      }
+      return native.moduleExport as RuntimeModule;
+    });
   };
 
   const base = createRuntimeBase();
   let resolvedRuntime: PluginRuntime | null = null;
   const resolveRuntime = (): PluginRuntime => {
-    resolvedRuntime ??= withPluginCache(cache, () => {
+    if (resolvedRuntime) {
+      return resolvedRuntime;
+    }
+    const owner = cache instanceof WeakRef ? cache.deref() : cache;
+    if (!owner) {
+      throw new PluginInventoryRetiredError();
+    }
+    resolvedRuntime = withPluginCache(owner, () => {
       const { createPluginRuntime } = resolveRuntimeModule();
       if (typeof createPluginRuntime !== "function") {
         throw new Error("Plugin runtime module missing createPluginRuntime export");

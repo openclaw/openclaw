@@ -16,6 +16,9 @@ minimumReleaseAgeExclude:
   # Solid itself is exempt from the release-age gate (Peter, 2026-10-11).
   - "solid-js"
   - "@solidjs/*"
+  # Peter approved 2026-10-24: solid-js rc.18 transitive SSR/hydration serialization dependencies.
+  - "seroval@1.7.0"
+  - "seroval-plugins@1.7.0"
   # Reviewed pnpm security bump (#179992); remove after 2026-10-28T11:16:18.199Z.
   - "pnpm@12.15.0"
   - "@pnpm/exe.android-arm64@12.15.0"
@@ -34,18 +37,18 @@ minimumReleaseAgeExclude:
   - "@pnpm/exe.win32-x64@12.15.0"
   # Reviewed Edge TTS 403 fix; remove after 2026-10-19T16:27:27.581Z.
   - "node-edge-tts@1.2.11"
-  # Reviewed fs-safe 0.26.11 release and native helpers; remove after 2026-10-30T19:34:12.293Z.
-  - "@openclaw/fs-safe@0.26.11"
-  - "@openclaw/fs-safe-darwin-arm64@0.26.11"
-  - "@openclaw/fs-safe-darwin-x64@0.26.11"
-  - "@openclaw/fs-safe-freebsd-arm64@0.26.11"
-  - "@openclaw/fs-safe-freebsd-x64@0.26.11"
-  - "@openclaw/fs-safe-linux-arm64-gnu@0.26.11"
-  - "@openclaw/fs-safe-linux-arm64-musl@0.26.11"
-  - "@openclaw/fs-safe-linux-x64-gnu@0.26.11"
-  - "@openclaw/fs-safe-linux-x64-musl@0.26.11"
-  - "@openclaw/fs-safe-win32-arm64-msvc@0.26.11"
-  - "@openclaw/fs-safe-win32-x64-msvc@0.26.11"
+  # Reviewed fs-safe 0.26.13 release and native helpers; remove after 2026-10-31T07:48:44.970Z.
+  - "@openclaw/fs-safe@0.26.13"
+  - "@openclaw/fs-safe-darwin-arm64@0.26.13"
+  - "@openclaw/fs-safe-darwin-x64@0.26.13"
+  - "@openclaw/fs-safe-freebsd-arm64@0.26.13"
+  - "@openclaw/fs-safe-freebsd-x64@0.26.13"
+  - "@openclaw/fs-safe-linux-arm64-gnu@0.26.13"
+  - "@openclaw/fs-safe-linux-arm64-musl@0.26.13"
+  - "@openclaw/fs-safe-linux-x64-gnu@0.26.13"
+  - "@openclaw/fs-safe-linux-x64-musl@0.26.13"
+  - "@openclaw/fs-safe-win32-arm64-msvc@0.26.13"
+  - "@openclaw/fs-safe-win32-x64-msvc@0.26.13"
   # Reviewed proc-safe 0.4.2 release and native helpers; remove after 2026-10-26T00:51:31.079Z.
   - "@openclaw/proc-safe@0.4.2"
   - "@openclaw/proc-safe-darwin-arm64@0.4.2"
@@ -162,5 +165,5 @@ patchedDependencies:
   vitest@5.0.5: patches/vitest@5.0.5.patch
   ghostty-web@0.4.0: patches/ghostty-web@0.4.0.patch
   chrome-devtools-mcp@1.11.0: patches/chrome-devtools-mcp@1.11.0.patch
-  "@solidjs/web@2.0.0-rc.16": patches/@solidjs__web@2.0.0-rc.16.patch
-  "@solidjs/signals@2.0.0-rc.16": patches/@solidjs__signals@2.0.0-rc.16.patch
+  "@solidjs/web@2.0.0-rc.18": patches/@solidjs__web@2.0.0-rc.18.patch
+  "@solidjs/signals@2.0.0-rc.18": patches/@solidjs__signals@2.0.0-rc.18.patch

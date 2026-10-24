@@ -270,6 +270,10 @@ authentication.
 
 <AccordionGroup>
   <Accordion title="Gemini">
+    Set `provider: "gemini"` or its alias `provider: "google"`. Both use the
+    same Google credentials and canonical Gemini index identity; switching
+    between these names does not require reindexing.
+
     | Key                    | Type     | Default                | Description                                |
     | ---------------------- | -------- | ---------------------- | ------------------------------------------- |
     | `model`                | `string` | `gemini-embedding-001` | Also supports `gemini-embedding-2`         |

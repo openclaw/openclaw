@@ -5,6 +5,10 @@ import { pathToFileURL } from "node:url";
 import type { NodePath } from "@babel/traverse";
 import type { CallExpression, Program, Statement } from "@babel/types";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
+import {
+  assertRuntimeSupportsDynamicExecution,
+  assertRuntimeSupportsPluginModule,
+} from "../infra/runtime-profile.js";
 import { toSafeImportPath } from "../shared/import-specifier.js";
 import { createJiti } from "./jiti-factory.js";
 import {
@@ -236,6 +240,7 @@ function createPluginModuleLoader(
     return target;
   };
   const getLoadWithSourceTransform = () => {
+    assertRuntimeSupportsDynamicExecution("Plugin source transformation");
     if (loadWithSourceTransform) {
       return loadWithSourceTransform;
     }
@@ -291,6 +296,7 @@ function createPluginModuleLoader(
   };
   // Prefer native compiled JS, but preserve caller-requested transforms for alias rewrites.
   return (target) => {
+    assertRuntimeSupportsPluginModule(target);
     const source = getPluginCacheSource(target, params.cache);
     const cached = source.variants.get(params.scopedCacheKey)?.exports;
     if (cached) {
@@ -388,6 +394,7 @@ function resolvePublicSurfaceInstance(params: PluginModuleBoundaryParams) {
 
 /** Validates an entry once per generation without changing its module export shape. */
 export function preparePluginModule(params: PluginModuleBoundaryParams) {
+  assertRuntimeSupportsPluginModule(params.modulePath);
   const cache = getPluginCache();
   let source = getPluginCacheSource(params.modulePath, cache);
   const boundaryKey = `${getPluginCacheRoot(params.boundaryRoot).rootDir}\0${params.rejectHardlinks}`;

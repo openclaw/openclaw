@@ -251,7 +251,7 @@
      second texture. Foreground/menu tokens retain their opaque surface color. */
   background: color-mix(in srgb, var(--chat-composer-surface) 78%, transparent);
 
-  &:where(.shell[data-background-managed] *) {
+  :where(.shell[data-background-managed]) & {
     /* Personal artwork never changes the writing surface's readability. */
     --chat-composer-fill: color-mix(in srgb, var(--chat-composer-surface) 78%, transparent);
     background:

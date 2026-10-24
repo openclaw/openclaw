@@ -350,8 +350,8 @@ describe("Google speech provider", () => {
       providerOverrides: {
         model: "google/gemini-3.1-pro-tts",
         voiceName: "Puck",
-        audioProfile: "Speak brightly.",
-        speakerName: "Override speaker",
+        audioProfile: "  Speak brightly.  ",
+        speakerName: "  Override speaker  ",
       },
     });
     expect(recorded()).toMatchObject({
@@ -447,9 +447,9 @@ describe("Google speech provider", () => {
       text,
       providerConfig: config({
         model,
-        audioProfile: "Calm.",
-        speakerName: "Alex",
-        personaPrompt: "Soft.",
+        audioProfile: "  Calm.  ",
+        speakerName: "  Alex  ",
+        personaPrompt: "  Soft.  ",
       }),
     });
     expectInteractions([speechContent(text, "Alex", "Calm.\n\nSoft.")], [{ voice: "Kore" }], {

@@ -296,6 +296,8 @@ it("keeps the scroll position when the pointer highlights a clipped edge row", a
   const list = element.querySelector<HTMLElement>(".multi-select__menu")!;
   await waitForSolid(() => expect(list.scrollHeight).toBeGreaterThan(list.clientHeight));
   const rows = [...element.querySelectorAll<HTMLElement>(".multi-select__option")];
+  // Opening reveals the initial highlight; finish that scroll before simulating a wheel scroll.
+  await waitForSolid(() => expect(rows[0]!.getAttribute("aria-selected")).toBe("true"));
   const bounds = list.getBoundingClientRect();
   const rowHeight = rows[1]!.offsetTop - rows[0]!.offsetTop;
   // Leave half a row clipped at the bottom edge, as a wheel or trackpad scroll does.
@@ -304,6 +306,7 @@ it("keeps the scroll position when the pointer highlights a clipped edge row", a
   await settle();
   const top = list.scrollTop;
   const rect = edgeRow.getBoundingClientRect();
+  expect(rect.top).toBeLessThan(bounds.bottom);
   expect(rect.bottom).toBeGreaterThan(bounds.bottom);
   // Hover the menu at the clipped row's visible sliver; hovering the row
   // itself would let Playwright scroll it into view before moving.

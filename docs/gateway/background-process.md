@@ -208,8 +208,12 @@ Portable workers use the native helper supplied by their admitted Node host; the
 portable archive does not acquire native dependencies. Use matching current host
 and worker builds in environments that prohibit process-group signaling. An
 unsupported ownership contract fails before launch instead of downgrading to
-transport-only cleanup. Source installations must build their process helpers; a
-source loader with an independent child reaper cannot share this ownership.
+transport-only cleanup. A source loader with an independent child reaper cannot
+share this ownership; source installations using one must build their process helpers.
+Admission uses the runtime's standalone identity and startup hooks, including
+`--import`, `--require`, and loader flags in argv or `NODE_OPTIONS`. A TypeScript
+filename alone does not require a source loader: native TypeScript execution and
+compiled helpers can retain their source filenames without installing one.
 
 The node journal records Linux descendant extinction separately from older
 lineage receipts. A surviving owner can publish that fact after its host stops.

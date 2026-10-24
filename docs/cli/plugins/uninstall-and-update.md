@@ -184,6 +184,9 @@ compiled installations. Updating code embedded in an executable requires a new
 executable. External plugins loaded from disk pick up their captured source changes
 without restarting the Gateway.
 
+AOT hosts admit embedded plugins only. See
+[Runtime execution profiles](/concepts/runtime-profiles#plugins-fetched-after-the-build).
+
 Busy plugins admit replacement and fence new retained work on the old instance.
 Existing agent runs keep their original callbacks while new runs wait for the
 replacement. Before stopping services or channels, replacement waits up to

@@ -132,6 +132,8 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   submitPending?: boolean;
   disabledReason: string | null;
   disabledReasonTone?: "info" | "danger";
+  /** Optional route that resolves the disabled reason, shown beside it. */
+  disabledReasonAction?: { label: string; href: string; onNavigate: () => void };
   disabledReasonBusy?: boolean;
   disabledBanner?: ChatComposerDisabledBanner;
   runError?: ChatRunError | null;

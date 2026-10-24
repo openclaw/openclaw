@@ -57,8 +57,11 @@ merging a nested value such as voice settings.
     });
     ```
 
-    Declare the same id in `contracts.embeddingProviders`. This is the
-    general embedding contract for reusable vector generation, including
+    Declare the same id in `contracts.embeddingProviders`. Optional `aliases`
+    on the adapter provide alternate lookup ids; declare those in the manifest
+    too so cold startup can locate the plugin. Keep the created provider and
+    index identity canonical. Exact provider ids take precedence over aliases.
+    This is the general embedding contract for reusable vector generation, including
     memory search. The retired memory-specific registrar and manifest
     contract are no longer accepted.
 

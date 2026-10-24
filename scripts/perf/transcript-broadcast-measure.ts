@@ -67,6 +67,7 @@ const { values } = parseArgs({
     "broadcast-timing": { type: "boolean", default: false },
     "session-projection-counts": { type: "boolean", default: false },
     "session-projection-source": { type: "string" },
+    "disable-inlining": { type: "boolean", default: false },
     "transport-counts": { type: "boolean", default: false },
     compressed: { type: "boolean", default: false },
     "distinct-viewers": { type: "boolean", default: false },
@@ -147,6 +148,9 @@ const { values } = parseArgs({
     "session-census": { type: "boolean", default: false },
     "fingerprint-retention": { type: "boolean", default: false },
     "session-row-deltas": { type: "boolean", default: false },
+    "session-capability-clients": { type: "string" },
+    "roster-body-optional-clients": { type: "string" },
+    "session-event-ancestors": { type: "string" },
     "presence-deltas": { type: "boolean", default: false },
     "session-envelope-refs": { type: "boolean", default: false },
     "start-at": { type: "string" },
@@ -345,6 +349,58 @@ const exactClients = integer(
 );
 if (exactClients > clientCount) {
   throw new Error("--exact-clients must not exceed --clients");
+}
+function parseCapabilityCounts(raw: string | undefined, label: string) {
+  if (raw === undefined) {
+    return undefined;
+  }
+  const counts = raw.split(",");
+  if (counts.length !== 3 || counts.some((count) => !count.trim())) {
+    throw new Error(`${label} requires three explicit counts`);
+  }
+  return counts.map((count) => integer(count, label, 0));
+}
+const sessionCapabilityCounts = parseCapabilityCounts(
+  values["session-capability-clients"],
+  "--session-capability-clients",
+);
+if (
+  sessionCapabilityCounts &&
+  (sessionCapabilityCounts.reduce((sum, count) => sum + count, 0) !== clientCount ||
+    values["session-row-deltas"] ||
+    values["session-envelope-refs"])
+) {
+  throw new Error(
+    "--session-capability-clients requires legacy,delta,field-reference counts totaling --clients, without uniform session capability flags",
+  );
+}
+const rosterBodyOptionalCounts = parseCapabilityCounts(
+  values["roster-body-optional-clients"],
+  "--roster-body-optional-clients",
+);
+if (
+  rosterBodyOptionalCounts &&
+  (!sessionCapabilityCounts ||
+    rosterBodyOptionalCounts.some((count, index) => count > sessionCapabilityCounts[index]!))
+) {
+  throw new Error(
+    "--roster-body-optional-clients requires --session-capability-clients and cannot exceed each cohort count",
+  );
+}
+const sessionEventAncestors =
+  values["session-event-ancestors"] === undefined
+    ? undefined
+    : integer(values["session-event-ancestors"], "--session-event-ancestors", 0);
+if (
+  sessionEventAncestors !== undefined &&
+  (![0, 2].includes(sessionEventAncestors) ||
+    !turnScenario ||
+    historyTurns ||
+    values["activity-summaries"])
+) {
+  throw new Error(
+    "--session-event-ancestors requires 0 or 2 with fresh turn sessions, without history or activity summaries",
+  );
 }
 const runCount = integer(values.runs ?? (scenario === "chat.send" ? "1" : "20"), "--runs");
 const sessionCount = idleScenario ? integer(values.sessions, "--sessions") : runCount;
@@ -574,6 +630,9 @@ if (values["session-projection-counts"]) {
 const sessionProjectionSource = values["session-projection-source"]
   ? realpathSync(path.resolve(values["session-projection-source"]))
   : undefined;
+if (values["disable-inlining"] && !values.allocations) {
+  throw new Error("--disable-inlining requires --allocations for a separate attribution capture");
+}
 if (values["poll-seed"] !== undefined && !listIntervalMs) {
   throw new Error("--poll-seed requires --list-interval-ms");
 }
@@ -747,6 +806,10 @@ const viewerIdentity = (index: number) =>
   `broadcast-viewer-${values["distinct-viewers"] ? index : 0}@example.invalid`;
 const viewerProfiles = new Set<string>();
 const cfg = JSON.parse(readFileSync(path.join(root, "openclaw.json"), "utf8"));
+if (sessionEventAncestors !== undefined) {
+  // Explicit fixture lineage must not acquire sessions.create's implicit main-session parent.
+  cfg.session = { ...cfg.session, dmScope: "per-channel-peer" };
+}
 if (scenario === "sessions.cleanup") {
   // Exercise live preservation admission repeatedly without consuming the fixture inventory.
   cfg.session = {
@@ -1998,6 +2061,8 @@ const representativeFrames = new Map<string, FrameSizes>();
 let initialFullFrame: FrameSizes | undefined;
 const perClientCounters: Map<string, number>[] = [];
 let measuring = false;
+let measuringWholeSoakAllocation = false;
+let wholeSoakDeliveredSessionEvents = 0;
 let capturingColdSetup = values["dashboard-rpc"];
 const coldSetupRpc: Array<{
   phase: "setup/preflight";
@@ -2100,6 +2165,12 @@ const env = {
   OPENCLAW_SYSTEMD_UNIT: `openclaw-gateway-team-shape-${port}`,
   ...(values["prep-trace"] ? { OPENCLAW_LOG_LEVEL: "trace" } : {}),
   ...(idleScenario ? { OPENCLAW_BENCH_FIRST_TEXT: "1" } : {}),
+  ...(process.env.OPENCLAW_BENCH_RETAIN_TOOL_CONTEXT === "1"
+    ? { OPENCLAW_BENCH_RETAIN_TOOL_CONTEXT: "1" }
+    : {}),
+  ...(process.env.OPENCLAW_BENCH_TOOL_EXECUTION_SOURCE
+    ? { OPENCLAW_BENCH_TOOL_EXECUTION_SOURCE: process.env.OPENCLAW_BENCH_TOOL_EXECUTION_SOURCE }
+    : {}),
   ...(values["broadcast-timing"] ? { OPENCLAW_BENCH_BROADCAST_TIMING: "1" } : {}),
   ...(process.env.OPENCLAW_BENCH_WORKER_ATTRIBUTION === "1"
     ? { OPENCLAW_BENCH_WORKER_ATTRIBUTION: "1" }
@@ -2109,6 +2180,7 @@ const env = {
     ? { OPENCLAW_PERF_FSYNC_DELAY_MS: process.env.OPENCLAW_PERF_FSYNC_DELAY_MS }
     : {}),
   ...(values["session-projection-counts"] ? { OPENCLAW_BENCH_SESSION_PROJECTION_COUNTS: "1" } : {}),
+  ...(values["disable-inlining"] ? { OPENCLAW_BENCH_DISABLE_INLINING: "1" } : {}),
   ...(sessionProjectionSource
     ? { OPENCLAW_BENCH_SESSION_PROJECTION_SOURCE: sessionProjectionSource }
     : {}),
@@ -2578,12 +2650,50 @@ const connectParams = {
   caps: [
     "session-scoped-events",
     "chat-only-assistant-text",
-    ...(exactClients < clientCount ? ["roster-message-bodies-optional"] : []),
-    ...(values["session-row-deltas"] ? ["session-row-deltas"] : []),
+    ...(!rosterBodyOptionalCounts && exactClients < clientCount
+      ? ["roster-message-bodies-optional"]
+      : []),
     ...(values["presence-deltas"] ? ["presence-deltas"] : []),
-    ...(values["session-envelope-refs"] ? ["session-event-field-refs"] : []),
   ],
 };
+const sessionCapabilityCohorts = [
+  [],
+  ["session-row-deltas"],
+  ["session-row-deltas", "session-event-field-refs"],
+].map((caps, index) => {
+  const cohortClientCount =
+    sessionCapabilityCounts?.[index] ??
+    (index === (values["session-envelope-refs"] ? 2 : values["session-row-deltas"] ? 1 : 0)
+      ? clientCount
+      : 0);
+  return {
+    caps,
+    clients: cohortClientCount,
+    exactClients: 0,
+    rosterBodyOptionalClients:
+      rosterBodyOptionalCounts?.[index] ?? (exactClients < clientCount ? cohortClientCount : 0),
+  };
+});
+const clientConnectParams: (typeof connectParams)[] = [];
+for (let offset = 0; clientConnectParams.length < clientCount; offset++) {
+  for (const capabilityCohort of sessionCapabilityCohorts) {
+    if (offset < capabilityCohort.clients) {
+      if (clientConnectParams.length < exactClients) {
+        capabilityCohort.exactClients++;
+      }
+      clientConnectParams.push({
+        ...connectParams,
+        caps: [
+          ...connectParams.caps,
+          ...capabilityCohort.caps,
+          ...(rosterBodyOptionalCounts && offset < capabilityCohort.rosterBodyOptionalClients
+            ? ["roster-message-bodies-optional"]
+            : []),
+        ],
+      });
+    }
+  }
+}
 async function controlAuthorityCounters(child: ChildProcess, action: "start" | "stop") {
   const id = randomUUID();
   const response = Promise.withResolvers<unknown>();
@@ -3706,6 +3816,12 @@ async function connectClient(index: number) {
       : {}),
     onEvent: (event) => {
       lastSubscriberEventAt = performance.now();
+      if (
+        measuringWholeSoakAllocation &&
+        (event.event === "session.message" || event.event === "sessions.changed")
+      ) {
+        wholeSoakDeliveredSessionEvents++;
+      }
       if (event.seq !== undefined) {
         if (previousSeq !== undefined && event.seq !== previousSeq + 1) {
           subscriberFailure ??= new Error(
@@ -3827,7 +3943,7 @@ async function connectClient(index: number) {
   });
   clients[index] = client;
   await client.waitOpen();
-  const hello = await rpc(client, "connect", connectParams);
+  const hello = await rpc(client, "connect", clientConnectParams[index]);
   const handshakeElapsedMs = performance.now() - started;
   if (
     !Value.Check(HelloOkSchema, hello) ||
@@ -3969,7 +4085,7 @@ try {
   for (let index = 0; index < clientCount; index++) {
     const client = await connectClient(index);
     if (index === 0) {
-      // Operator-created roots parent to main; a missing root suppresses ancestor envelopes.
+      // Keep the full parent chain present, including the ordinary default main-session link.
       await rpc(client, "sessions.create", {
         key: "agent:main:main",
         visibility: "shared",
@@ -3978,6 +4094,7 @@ try {
       if (!historyTurns) {
         const created = await rpc(client, "sessions.create", {
           key: parentKey,
+          ...(sessionEventAncestors === 2 ? { parentSessionKey: "agent:main:main" } : {}),
           ...(stressWorktree ? { cwd: stressWorktree } : {}),
           ...(values["github-options-connected"]
             ? { worktree: true, worktreeBaseRef: "refs/heads/main" }
@@ -4007,7 +4124,9 @@ try {
         await rpc(client, "sessions.create", {
           key,
           ...(stressWorktree ? { cwd: stressWorktree } : {}),
-          ...(values["activity-summaries"] ? {} : { parentSessionKey: parentKey, spawnDepth: 1 }),
+          ...(values["activity-summaries"] || sessionEventAncestors === 0
+            ? {}
+            : { parentSessionKey: parentKey, spawnDepth: 1 }),
           fork: false,
           ...(values["attempt-setup-image"]
             ? { worktree: true, worktreeBaseRef: "refs/heads/main" }
@@ -4026,6 +4145,33 @@ try {
   const sender = clients[0];
   if (!sender) {
     throw new Error("no sender client");
+  }
+  const sessionEventLineage: Array<{ key: string; parentSessionKey?: string }> = [];
+  const verifySessionEventLineage = async (key: string) => {
+    const described = await rpc(sender, "sessions.describe", { key });
+    const expectedParent =
+      sessionEventAncestors === 0 || key === "agent:main:main"
+        ? undefined
+        : key === parentKey
+          ? "agent:main:main"
+          : parentKey;
+    if (
+      !isRecord(described) ||
+      !isRecord(described.session) ||
+      described.session.key !== key ||
+      described.session.parentSessionKey !== expectedParent
+    ) {
+      throw new Error(`sessions.describe did not verify the requested ancestor shape for ${key}`);
+    }
+    sessionEventLineage.push({
+      key,
+      ...(expectedParent ? { parentSessionKey: expectedParent } : {}),
+    });
+  };
+  if (sessionEventAncestors !== undefined) {
+    for (const key of ["agent:main:main", parentKey, ...keys]) {
+      await verifySessionEventLineage(key);
+    }
   }
   for (const target of diffTargets) {
     if (target.sessionKey !== parentKey) {
@@ -4056,7 +4202,7 @@ try {
       trackClientFrames(client);
       await client.waitOpen();
       const hello = await rpc(client, "connect", {
-        ...connectParams,
+        ...clientConnectParams[index],
         scopes: ["operator.sessions.read"],
       });
       if (
@@ -4450,7 +4596,18 @@ try {
       ),
     );
   }
-  console.log("PHASE warmed");
+  // Retained-memory baselines may force GC; finish them before the shared warm-start release.
+  const initialMemoryCollected = reasoningScenario && (!soakScenario || !values.allocations);
+  const initialRetainedResources = reasoningScenario
+    ? await readGatewayResources(gateway, {
+        includeWorkers: true,
+        collectGarbage: initialMemoryCollected,
+        sessionCensus: values["session-census"],
+        ...(idleScenario && values["heap-snapshot"]
+          ? { snapshotPath: path.join(output, "initial.heapsnapshot") }
+          : {}),
+      })
+    : undefined;
   if (values["worker-retained-heap"]) {
     const resources = await readGatewayResources(gateway, { includeWorkers: true });
     const live = [
@@ -4482,6 +4639,8 @@ try {
       }
     }
   }
+  const warmReadyAtEpochMs = Date.now();
+  console.log("PHASE warmed");
   if (values["start-file"]) {
     while (!existsSync(values["start-file"])) {
       assertGatewayAlive();
@@ -4495,16 +4654,7 @@ try {
     }
     await delay(startAt - Date.now());
   }
-  const initialRetainedResources = reasoningScenario
-    ? await readGatewayResources(gateway, {
-        includeWorkers: true,
-        collectGarbage: !soakScenario || !values.allocations,
-        sessionCensus: values["session-census"],
-        ...(idleScenario && values["heap-snapshot"]
-          ? { snapshotPath: path.join(output, "initial.heapsnapshot") }
-          : {}),
-      })
-    : undefined;
+  const warmStartReleasedAtEpochMs = Date.now();
   const soakAllocationPath =
     soakScenario && values.allocations
       ? path.join(output, "allocation-soak.heapprofile")
@@ -4513,6 +4663,7 @@ try {
   const soakSamplingIntervalBytes = heapSamplingIntervalBytes ?? 512 * 1024;
   if (soakAllocationPath) {
     // Reading or stopping a V8 sampling profile forces GC; keep one window for the entire soak.
+    measuringWholeSoakAllocation = true;
     await controlGatewayProfile(gateway, "heap", "start", soakAllocationPath, {
       samplingIntervalBytes: soakSamplingIntervalBytes,
       includeWorkers: values["worker-allocations"],
@@ -4582,7 +4733,15 @@ try {
     };
     memorySamples.push(sample);
     appendFileSync(path.join(output, "memory-samples.jsonl"), `${JSON.stringify(sample)}\n`);
-    console.log(`MEMORY ${JSON.stringify(sample)}`);
+    console.log(
+      `MEMORY ${JSON.stringify({
+        elapsedMs: sample.elapsedMs,
+        completedRounds: sample.completedRounds,
+        collectedGarbage: collectGarbage,
+        heapUsed: resources.memory.heapUsed,
+        rss: resources.memory.rss,
+      })}`,
+    );
     return resources;
   };
   const idleHistories = new Map<string, { messages: number; digest: string }>();
@@ -4652,12 +4811,14 @@ try {
           ...(values["attempt-setup-image"]
             ? { worktree: true, worktreeBaseRef: coldBaseRefs[round * runCount + index] }
             : {}),
-          parentSessionKey: parentKey,
-          spawnDepth: 1,
+          ...(sessionEventAncestors === 0 ? {} : { parentSessionKey: parentKey, spawnDepth: 1 }),
           fork: false,
           visibility: "shared",
           displayName: "Synthetic cold setup",
         });
+        if (sessionEventAncestors !== undefined) {
+          await verifySessionEventLineage(key);
+        }
         for (const client of clients.slice(0, exactClients)) {
           await rpc(client, "sessions.messages.unsubscribe", {
             key: previous,
@@ -4800,7 +4961,12 @@ try {
                     trackClientFrames(peer);
                     try {
                       await peer.waitOpen();
-                      const hello = await rpc(peer, "connect", connectParams, onResponse);
+                      const hello = await rpc(
+                        peer,
+                        "connect",
+                        clientConnectParams[clientIndex],
+                        onResponse,
+                      );
                       if (!Value.Check(HelloOkSchema, hello)) {
                         throw new Error("fresh connect did not return hello-ok");
                       }
@@ -5296,10 +5462,17 @@ try {
       sessionEventsPerSecond: (sourceEvents / cpu.wallMs) * 1000,
     };
     samples.push(sample);
+    const samplePath = path.join(output, `round-${round}.json`);
+    writeFileSync(samplePath, JSON.stringify(sample));
     console.log(
-      JSON.stringify(sample, (key, value) =>
-        key === "representativeResponse" ? undefined : value,
-      ),
+      `ROUND ${JSON.stringify({
+        round,
+        scenario,
+        samplePath,
+        deliveredSessionEvents,
+        primaryStreamRequests,
+        sessionResets,
+      })}`,
     );
     if (idleScenario) {
       await verifyIdleHistories(round === 0 ? "touched" : "reopened");
@@ -5363,6 +5536,13 @@ try {
         `Workers outside measured census: ${JSON.stringify(late.map(({ script, threadId }) => ({ script, threadId })))}`,
       );
     }
+  }
+  if (
+    soakScenario &&
+    (completedSoakRounds !== warmupRoundCount + samples.length ||
+      (soakRounds !== undefined && samples.length !== soakRounds))
+  ) {
+    throw new Error("Memory-soak completion did not match the declared warmup and measured work");
   }
   let fingerprintRetention;
   if (values["fingerprint-retention"]) {
@@ -5428,6 +5608,7 @@ try {
   if (soakAllocationPath) {
     // Stop after the GC/loop window so the profiler's forced collection cannot affect acceptance.
     await controlGatewayProfile(gateway, "heap", "stop", soakAllocationPath);
+    measuringWholeSoakAllocation = false;
     const profile = readGatewayHeapProfile(soakAllocationPath, {
       samplingIntervalBytes: soakSamplingIntervalBytes,
     });
@@ -5435,6 +5616,9 @@ try {
     wholeSoakAllocation = {
       ...profile,
       completedTurns,
+      deliveredSessionEvents: wholeSoakDeliveredSessionEvents,
+      deliveryCountScope:
+        "controller session-event receipts from allocation-start request through allocation-stop acknowledgment, including idle gaps and control edges",
       allocatedMbPerTurn: profile.sampledAllocatedBytes / 1_000_000 / completedTurns,
       ...(values["worker-allocations"]
         ? { workerManifestPath: `${soakAllocationPath}.workers.json` }
@@ -5621,6 +5805,8 @@ try {
     sessionResets,
     warmupOperations: turnScenario ? undefined : warmupOperations,
     scheduledStartAtEpochMs: startAt,
+    warmReadyAtEpochMs,
+    warmStartReleasedAtEpochMs,
     rpcConcurrency,
     rpcIntervalMs,
     reconnectStaggerMs,
@@ -5637,6 +5823,7 @@ try {
     limit,
     rowMode,
     sessionRowDeltas: values["session-row-deltas"],
+    sessionCapabilityCohorts: sessionCapabilityCohorts.filter((value) => value.clients > 0),
     presenceDeltas: values["presence-deltas"],
     sessionEnvelopeRefs: values["session-envelope-refs"],
     listIntervalMs,
@@ -5717,6 +5904,7 @@ try {
     workerAttribution: process.env.OPENCLAW_BENCH_WORKER_ATTRIBUTION === "1",
     sessionProjectionCounts: values["session-projection-counts"],
     sessionProjectionSource,
+    inliningDisabled: values["disable-inlining"],
     transportCounts: values["transport-counts"],
     compressed: proxyViewers,
     distinctViewers: values["distinct-viewers"],
@@ -5745,6 +5933,7 @@ try {
     initialFullFrame,
     clientCount,
     exactClients,
+    ...(sessionEventAncestors !== undefined ? { sessionEventAncestors, sessionEventLineage } : {}),
     activitySummaries: values["activity-summaries"],
     recapBurstRepeats,
     recapBurstIntervalMs,
@@ -5845,8 +6034,10 @@ try {
           historyLastTurns,
           historyPayloadBytes,
           completedSoakRounds,
+          warmupCompletedRounds: warmupRoundCount,
+          completedTurns: samples.length * runCount,
           initialRetainedResources,
-          initialMemoryCollected: !values.allocations,
+          initialMemoryCollected,
           memorySamples,
           retainedProfile,
           wholeSoakAllocation,

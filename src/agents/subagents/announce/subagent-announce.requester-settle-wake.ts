@@ -622,9 +622,11 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
             controllerInput,
             onAccepted: () => {
               dispatchAccepted = true;
+              params.onAccepted?.();
             },
             onExecutionStarted: () => {
               dispatchAccepted = true;
+              params.onAccepted?.();
             },
             onBeforeDispatch: async () => {
               await params.transitionBatch(

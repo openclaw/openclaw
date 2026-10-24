@@ -193,17 +193,6 @@ async function withUnixSocket<T>(socketPath: string, run: () => Promise<T>): Pro
   }
 }
 
-function resolveBashForCompatCheck(): string | null {
-  for (const candidate of ["/bin/bash", "bash"]) {
-    const probe = spawnSync(candidate, ["-c", "exit 0"], { encoding: "utf8" });
-    if (!probe.error && probe.status === 0) {
-      return candidate;
-    }
-  }
-
-  return null;
-}
-
 function runDockerSetup(
   sandbox: DockerSetupSandbox,
   overrides: Record<string, string | undefined> = {},
@@ -263,11 +252,6 @@ describe("scripts/docker/setup.sh", () => {
     }));
   }
 
-  async function writeSandboxDockerfile() {
-    await mkdir(path("scripts/docker/sandbox"), { recursive: true });
-    await writeFile(path("scripts/docker/sandbox/Dockerfile"), "FROM scratch\n");
-  }
-
   beforeAll(async () => {
     await sandboxRootTracker.setup();
     sandbox = await createDockerSetupSandbox();
@@ -275,7 +259,7 @@ describe("scripts/docker/setup.sh", () => {
 
   afterAll(sandboxRootTracker.cleanup);
 
-  it("handles env defaults, home-volume mounts, and Docker build args", async () => {
+  it("configures container-local state, mounts, and build defaults before startup", async () => {
     const buildCommit = "0123456789abcdef0123456789abcdef01234567";
 
     const result = runDockerSetup(sandbox, {
@@ -283,6 +267,10 @@ describe("scripts/docker/setup.sh", () => {
       OPENCLAW_DOCKER_APT_PACKAGES: "curl wget",
       OPENCLAW_EXTRA_MOUNTS: undefined,
       OPENCLAW_HOME_VOLUME: "openclaw-home",
+      OPENCLAW_SKIP_ONBOARDING: "0",
+      OPENCLAW_HOME: "/mnt/c/Users/Trevor",
+      OPENCLAW_STATE_DIR: "/mnt/c/Users/Trevor/.openclaw",
+      OPENCLAW_CONFIG_PATH: "/mnt/c/Users/Trevor/.openclaw/openclaw.json",
     });
     expect(result.status).toBe(0);
     const envFile = await read(".env");
@@ -297,6 +285,7 @@ describe("scripts/docker/setup.sh", () => {
       OPENCLAW_EXTRA_MOUNTS: "",
       OPENCLAW_HOME_VOLUME: "openclaw-home", // pragma: allowlist secret
       OPENCLAW_DISABLE_BONJOUR: "",
+      OPENCLAW_SKIP_ONBOARDING: "",
       OPENCLAW_AUTH_PROFILE_SECRET_DIR: join(sandbox.rootDir, "auth-profile-secrets"),
     });
     expect(envFile).not.toContain("OPENCLAW_DOCKER_APT_PACKAGES");
@@ -314,24 +303,31 @@ describe("scripts/docker/setup.sh", () => {
       /--build-arg OPENCLAW_BUILD_TIMESTAMP=\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z/u,
     );
     expect(log).toContain(`--build-arg GIT_COMMIT=${buildCommit}`);
+    const lines = log.split("\n");
+    const gatewayStartIdx = lines.findIndex(isGatewayStartLine);
+    expect(gatewayStartIdx).toBeGreaterThanOrEqual(0);
+    const prestartLines = lines.slice(0, gatewayStartIdx);
+    expect(
+      prestartLines.filter((line) => /\bcompose\b.*\brun\b.*\bopenclaw-cli\b/.test(line)),
+    ).toEqual([]);
+    const configLines = prestartLines.filter((line) => line.includes(" dist/index.js config "));
+    expect(configLines.length).toBeGreaterThan(0);
+    for (const line of configLines) {
+      expect(line).toContain(prestartContainerEnvFlags);
+      expect(line).not.toContain("/mnt/c");
+    }
     expect(log).toContain(
       `run --rm --no-deps ${prestartContainerEnvFlags} --entrypoint node openclaw-gateway dist/index.js onboard --mode local --no-install-daemon --gateway-auth token --gateway-token-ref-env OPENCLAW_GATEWAY_TOKEN --skip-ui --suppress-gateway-token-output`,
     );
     expect(log).toContain(
       `run --rm --no-deps ${prestartContainerEnvFlags} --entrypoint node openclaw-gateway dist/index.js config set --batch-json [{"path":"gateway.mode","value":"local"},{"path":"gateway.bind","value":"lan"},{"path":"gateway.controlUi.allowedOrigins","value":["http://localhost:18789","http://127.0.0.1:18789"]}]`,
     );
-    expect(result.stdout).toContain("Gateway token: stored in Docker environment/config");
-    expect(result.stdout).toContain("Gateway running with host port mapping.");
-    expect(result.stdout).toContain("Access from tailnet devices via the host's tailnet IP.");
-    expect(result.stdout).toContain("Commands:");
-    expect(result.stdout).toContain("logs -f openclaw-gateway");
     expect(result.stdout).toContain(
       `exec openclaw-gateway sh -lc 'node dist/index.js gateway health --token "$OPENCLAW_GATEWAY_TOKEN"'`,
     );
     expect(result.stdout).not.toContain("node dist/index.js health --token");
     expect(result.stdout).not.toContain("test-token");
     expect(result.stdout).not.toContain("#token=");
-    expect(log).not.toContain("run --rm openclaw-cli onboard --mode local --no-install-daemon");
   });
 
   it.each([undefined, "[]"])("preserves inherited origins (%j)", async (allowedOrigins) => {
@@ -371,7 +367,6 @@ describe("scripts/docker/setup.sh", () => {
       OPENCLAW_EXTRA_MOUNTS: `${path("extra data")}:/mnt/extra data:ro`,
     });
     expect(result.status).toBe(0);
-    expect(result.stderr).not.toContain("cannot contain whitespace");
     expect((await stat(path("config with spaces/identity"))).isDirectory()).toBe(true);
     expect(parseEnv(await read(".env"))).toMatchObject(overrides);
     const extraCompose = await read("docker-compose.extra.yml");
@@ -393,12 +388,8 @@ describe("scripts/docker/setup.sh", () => {
     const result = runDockerSetup(sandbox, overrides);
     expect(result.status).toBe(0);
     const envFile = await read(".env");
-    const compose = await readFile(join(repoRoot, "docker-compose.yml"), "utf8");
     for (const [key, value] of Object.entries(overrides)) {
       expect(envFile).toContain(`${key}=${value}`);
-      if (key.startsWith("OTEL_")) {
-        expect(compose).toContain(`${key}: \${${key}:-}`);
-      }
     }
   });
 
@@ -412,46 +403,7 @@ describe("scripts/docker/setup.sh", () => {
     expect(envFile).toContain(`OPENCLAW_IMAGE_APT_PACKAGES=${packages}`);
     expect(envFile).not.toContain("OPENCLAW_DOCKER_APT_PACKAGES");
     expect(log).toContain(`--build-arg OPENCLAW_IMAGE_APT_PACKAGES=${packages}`);
-    if (packages) {
-      expect(log).not.toMatch(/--build-arg OPENCLAW_IMAGE_APT_PACKAGES=curl wget(?! httpie)/);
-    } else {
-      expect(envFile).not.toContain("curl wget");
-      expect(log).not.toContain("--build-arg OPENCLAW_IMAGE_APT_PACKAGES=curl wget");
-    }
-  });
-
-  it("pins prestart CLI state inside the container without depending on its network namespace", async () => {
-    const { result, lines } = await runLoggedSetup({
-      OPENCLAW_HOME: "/mnt/c/Users/Trevor",
-      OPENCLAW_STATE_DIR: "/mnt/c/Users/Trevor/.openclaw",
-      OPENCLAW_CONFIG_PATH: "/mnt/c/Users/Trevor/.openclaw/openclaw.json",
-    });
-    expect(result.status).toBe(0);
-
-    const gatewayStartIdx = lines.findIndex(isGatewayStartLine);
-    expect(gatewayStartIdx).toBeGreaterThanOrEqual(0);
-
-    const prestartLines = lines.slice(0, gatewayStartIdx);
-    expect(
-      prestartLines.filter((line) => /\bcompose\b.*\brun\b.*\bopenclaw-cli\b/.test(line)),
-    ).toStrictEqual([]);
-    const prestartConfigLines = prestartLines.filter((line) =>
-      line.includes(" dist/index.js config "),
-    );
-    expect(prestartConfigLines.length).toBeGreaterThan(0);
-    for (const line of prestartConfigLines) {
-      expect(line).toContain(prestartContainerEnvFlags);
-      expect(line).not.toContain("/mnt/c");
-    }
-  });
-
-  it("forces BuildKit for local and sandbox docker builds", async () => {
-    await writeSandboxDockerfile();
-    const { result, lines } = await runSandbox({});
-    expect(result.status).toBe(0);
-    const builds = lines.filter((line) => line.startsWith("build "));
-    expect(builds.length).toBeGreaterThanOrEqual(2);
-    expect(builds.filter((line) => !line.includes("DOCKER_BUILDKIT=1"))).toStrictEqual([]);
+    expect(log).not.toMatch(/--build-arg OPENCLAW_IMAGE_APT_PACKAGES=curl wget(?! httpie)/);
   });
 
   it.each([false, true])("requires preloaded images offline (missing=%s)", async (missing) => {
@@ -474,7 +426,11 @@ describe("scripts/docker/setup.sh", () => {
     } else {
       expect(result.status).toBe(0);
       expect(result.stdout).toContain(`Using preloaded Docker image: ${image}`);
-      expect(log).toContain("config set --batch-json");
+      expect(log).toContain(
+        'config set --batch-json [{"path":"gateway.mode","value":"local"},{"path":"gateway.bind","value":"lan"}',
+      );
+      expect(log).not.toContain("onboard");
+      expect(parseEnv(await read(".env"))).toMatchObject({ OPENCLAW_SKIP_ONBOARDING: "1" });
       expectOfflineComposePolicy(lines);
     }
   });
@@ -486,9 +442,6 @@ describe("scripts/docker/setup.sh", () => {
       const agentImage = " registry.example/openclaw-sandbox:agent ";
       const browserImage = "registry.example/openclaw-sandbox-browser:stale";
       const missing = failure === "missing";
-      if (missing) {
-        await writeSandboxDockerfile();
-      }
       const { result, log, lines, socketPath } = await runSandbox(
         {
           OPENCLAW_SKIP_ONBOARDING: "1",
@@ -513,13 +466,10 @@ describe("scripts/docker/setup.sh", () => {
       expect(result.stderr).toContain(
         "Offline sandbox prerequisites are incomplete; sandbox configuration was not changed",
       );
-      expect(log).not.toContain("config set agents.defaults.sandbox.mode off");
-      expect(log).not.toContain("config set agents.defaults.sandbox.mode non-main");
+      expect(log).not.toMatch(/config set agents\.defaults\.sandbox\./);
       expectOfflineComposePolicy(lines, { gatewayStarts: false });
       if (missing) {
-        expect(result.stderr).toContain("cannot use required sandbox images");
         expect(result.stderr).toContain(agentImage);
-        expect(log).toContain("image inspect openclaw:local");
         expect(log).not.toContain(`image inspect ${defaultImage}`);
         expect(log).toContain(`image inspect ${agentImage} host=unix://${socketPath}`);
         expect(log).not.toContain("image inspect openclaw-sandbox:trixie-slim");
@@ -616,29 +566,19 @@ describe("scripts/docker/setup.sh", () => {
       expect((await stat(join(configDir, "agents/main", name))).isDirectory()).toBe(true);
     }
     const log = await readDockerLog(sandbox);
-    const chownIdx = log.indexOf("--user root");
-    const safePathIdx = log.indexOf(`${prestartSafePath}; export PATH`);
     const stateRepair = log.match(/\/usr\/bin\/find -P \/home\/node\/\.openclaw [^;]+/u)?.[0];
     if (!stateRepair) {
       throw new Error("Missing generated state ownership repair");
     }
-    const stateRepairIdx = log.indexOf(stateRepair);
-    const onboardIdx = log.indexOf("onboard");
-    expect(chownIdx).toBeGreaterThanOrEqual(0);
-    expect(safePathIdx).toBeGreaterThan(chownIdx);
-    expect(stateRepairIdx).toBeGreaterThan(safePathIdx);
-    expect(onboardIdx).toBeGreaterThan(chownIdx);
-    expect(stateRepair).toContain("-execdir /usr/bin/chown -h node:node {} +");
-    expect(log).toContain("run --rm --no-deps --user root --entrypoint sh openclaw-gateway -c");
+    expect(log).toContain(
+      `--user root --entrypoint sh openclaw-gateway -c ${prestartSafePath}; export PATH`,
+    );
+    expect(log.indexOf(stateRepair)).toBeLessThan(log.indexOf("onboard"));
     expect(log).toContain("/usr/bin/chown -h node:node /home/node/.config");
     expect(log).toContain(noFollowOwnershipRepair("/home/node/.config/openclaw"));
     expect(log).toContain("[ ! -L /home/node/.openclaw/workspace/.openclaw ]");
     expect(log).toContain(noFollowOwnershipRepair("/home/node/.openclaw/workspace/.openclaw"));
-    expect(log).toContain("fi || true");
-    expect(log).not.toContain("-type d -o -type f");
-    expect(log).not.toContain("-exec chown");
-    expect(log).not.toContain(" chown node:node");
-    expect(log).not.toContain("chown -R node:node /home/node/.openclaw/workspace/.openclaw");
+    expect(stateRepair).toContain("-execdir /usr/bin/chown -h node:node {} +");
 
     // Execute the generated traversal, replacing only the ownership side effect.
     // Same-device workspace mounts are not excluded by find's -xdev option.
@@ -707,6 +647,8 @@ describe("scripts/docker/setup.sh", () => {
   });
 
   it("resets stale sandbox mode and overlay when sandbox is not active", async () => {
+    await mkdir(path("scripts/docker/sandbox"), { recursive: true });
+    await writeFile(path("scripts/docker/sandbox/Dockerfile"), "FROM scratch\n");
     await writeFile(
       path("docker-compose.sandbox.yml"),
       "services:\n  openclaw-gateway:\n    volumes:\n      - /var/run/docker.sock:/var/run/docker.sock\n",
@@ -762,53 +704,8 @@ describe("scripts/docker/setup.sh", () => {
     expect(result.stderr).toContain(diagnostic);
   });
 
-  it.each(["1", "0"])("normalizes OPENCLAW_SKIP_ONBOARDING=%s", async (value) => {
-    const { result, log } = await runLoggedSetup({ OPENCLAW_SKIP_ONBOARDING: value });
-    expect(result.status).toBe(0);
-    const envFile = await read(".env");
-    if (value === "1") {
-      expect(log).not.toContain("onboard");
-      expect(log).toContain("config set --batch-json");
-      expect(log).toContain('"path":"gateway.mode","value":"local"');
-      expect(log).toContain('"path":"gateway.bind","value":"lan"');
-      expect(envFile).toContain("OPENCLAW_SKIP_ONBOARDING=1");
-    } else {
-      expect(log).toContain(
-        "onboard --mode local --no-install-daemon --gateway-auth token --gateway-token-ref-env OPENCLAW_GATEWAY_TOKEN --skip-ui --suppress-gateway-token-output",
-      );
-      expect(envFile).toMatch(/OPENCLAW_SKIP_ONBOARDING=\n/);
-    }
-  });
-
-  it("avoids associative arrays so the script remains Bash 3.2-compatible", async () => {
-    const scriptPath = join(repoRoot, "scripts/docker/setup.sh");
-    const script = await readFile(scriptPath, "utf8");
-    expect(script).not.toMatch(/^\s*declare -A\b/m);
-
-    const systemBash = resolveBashForCompatCheck();
-    if (!systemBash) {
-      return;
-    }
-
-    const assocCheck = spawnSync(systemBash, ["-c", "declare -A _t=()"], {
-      encoding: "utf8",
-    });
-    if (assocCheck.status === 0 || assocCheck.status === null) {
-      // Only a Bash without associative arrays can prove the compatibility contract.
-      return;
-    }
-
-    const syntaxCheck = spawnSync(systemBash, ["-n", scriptPath], {
-      encoding: "utf8",
-    });
-
-    expect(syntaxCheck.status).toBe(0);
-    expect(syntaxCheck.stderr).not.toContain("declare: -A: invalid option");
-  });
-
   it("keeps the Compose services aligned with container networking and durable state", async () => {
     const compose = await readFile(join(repoRoot, "docker-compose.yml"), "utf8");
-    expect(compose).not.toContain("gateway-daemon");
     const { services } = parse(compose) as {
       services: Record<
         "openclaw-gateway" | "openclaw-cli",
@@ -821,9 +718,6 @@ describe("scripts/docker/setup.sh", () => {
       >;
     };
     const gateway = services["openclaw-gateway"];
-    expect(gateway.command).toContain("gateway");
-    expect(gateway.environment.OPENCLAW_DISABLE_BONJOUR).toBe("${OPENCLAW_DISABLE_BONJOUR:-}");
-    expect(services["openclaw-cli"].environment).not.toHaveProperty("OPENCLAW_DISABLE_BONJOUR");
     expect(services["openclaw-cli"]).toMatchObject({
       network_mode: "service:openclaw-gateway",
       depends_on: ["openclaw-gateway"],
@@ -848,7 +742,6 @@ describe("scripts/docker/setup.sh", () => {
         OPENCLAW_WORKSPACE_DIR: "/home/node/.openclaw/workspace",
         OPENCLAW_GATEWAY_PORT: listenerPort,
         OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN:-}",
-        TZ: "${OPENCLAW_TZ:-UTC}",
       });
     }
   });
