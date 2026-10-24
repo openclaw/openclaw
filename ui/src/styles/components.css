@@ -3944,10 +3944,6 @@ td.data-table-key-col {
   .cmd-palette__input::-webkit-scrollbar-thumb:hover {
     background: var(--scrollbar-thumb-hover);
   }
-
-  .cmd-palette__input::-webkit-scrollbar-track {
-    background: transparent;
-  }
 }
 
 /* Fades cover only text, never the native far-right scrollbar or actions. */
