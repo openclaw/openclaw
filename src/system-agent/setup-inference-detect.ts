@@ -38,6 +38,7 @@ import {
   toSavedAuthSetupKind,
 } from "./setup-inference-core.js";
 import { rankSetupInferenceCandidates } from "./setup-inference-ranking.js";
+import { resolveCurrentModelRefForSavedAuth } from "./setup-inference-saved-model.js";
 import {
   listSetupNativeSessionCatalogs,
   requiresSetupNativeSessionCatalogConsent,
@@ -189,6 +190,7 @@ async function prepareSetupInferenceOptions(agentId?: string) {
     detectionRequiredProviders,
     manual,
     pluginMetadataSnapshot,
+    snapshot,
   };
 }
 
@@ -232,6 +234,7 @@ export async function detectSetupInference(agentId?: string): Promise<SetupInfer
           detectionRequiredProviders,
           manual,
           pluginMetadataSnapshot,
+          snapshot,
         } = prepared;
         const signal = controller.signal;
         const { workspace } = manual;
@@ -325,11 +328,32 @@ export async function detectSetupInference(agentId?: string): Promise<SetupInfer
             const agentDir = resolveAgentDir(params.cfg, params.agentId);
             const store = await loadAuthProfileStoreWithoutExternalProfilesAsync(agentDir);
             const candidates: SetupInferenceCandidate[] = [];
+            const currentModelRefs = new Map<string, Promise<string | undefined>>();
+            const currentModelRefFor = (provider: string, modelTarget: "primary" | "utility") => {
+              const key = `${provider}\0${modelTarget}`;
+              let currentModelRef = currentModelRefs.get(key);
+              if (!currentModelRef) {
+                currentModelRef = resolveCurrentModelRefForSavedAuth({
+                  config: params.cfg,
+                  agentId: targetAgentId,
+                  credentialProvider: provider,
+                  modelTarget,
+                  configSnapshot: snapshot,
+                });
+                currentModelRefs.set(key, currentModelRef);
+              }
+              return currentModelRef;
+            };
             for (const [profileId, credential] of Object.entries(store.profiles)) {
               params.signal.throwIfAborted();
               const saved = credential.setup;
               const choice = findSetupCredentialChoice(params.choices, credential);
-              let modelRef = saved?.modelRef;
+              const currentModelRef = await currentModelRefFor(
+                credential.provider,
+                choice?.modelTarget ?? "primary",
+              );
+              params.signal.throwIfAborted();
+              let modelRef = currentModelRef ?? saved?.modelRef;
               if (!modelRef && choice) {
                 const loaded = await withSetupProviderAuthMethod(
                   { ...params, choice },

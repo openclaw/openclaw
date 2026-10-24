@@ -43,6 +43,7 @@ import {
   waitForProviderAuth,
 } from "./setup-inference-core.js";
 import { prepareCustomSetupCredentials } from "./setup-inference-custom.js";
+import { resolveCurrentModelRefForSavedAuth } from "./setup-inference-saved-model.js";
 import {
   mergeSavedSetupInferenceConfig,
   prepareSetupModelRuntime,
@@ -337,7 +338,19 @@ export async function stageSavedAuthCandidate(
           "Choose this provider's endpoint and model again. Your saved sign-in is still available.",
       };
     }
-    const modelRef = saved?.modelRef ?? loaded?.method.starterModel;
+    const currentModelRef = await resolveCurrentModelRefForSavedAuth({
+      config: ctx.cfg,
+      agentId: ctx.routeAgentId,
+      credentialProvider: credential.provider,
+      modelTarget: choice?.modelTarget ?? "primary",
+      configSnapshot: ctx.snapshot,
+    });
+    const savedModelRef = saved?.modelRef ?? loaded?.method.starterModel;
+    const savedProvider = resolveProviderIdForAuth(credential.provider, {
+      config: ctx.cfg,
+      storedCredential: true,
+    });
+    const modelRef = ctx.params.modelRef?.trim() || currentModelRef || savedModelRef;
     const { validateConfigObjectRaw } = await import("../config/validation-core.js");
     const storedConfig = saved
       ? validateConfigObjectRaw(
@@ -355,7 +368,8 @@ export async function stageSavedAuthCandidate(
       result: { profiles: [{ profileId, credential }] },
     });
     if (saved?.apiKeyHeader && credential.type === "api_key") {
-      const providerConfig = config.models?.providers?.[parseInferenceRef(saved.modelRef).provider];
+      const modelProvider = modelRef ? parseInferenceRef(modelRef).provider : savedProvider;
+      const providerConfig = config.models?.providers?.[modelProvider];
       const key = credential.keyRef ?? credential.key;
       if (providerConfig && key) {
         (providerConfig.headers ??= {})["api-key"] = key;

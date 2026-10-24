@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { resolveAgentDir } from "../agents/agent-scope-config.js";
 import { buildAuthHealthSummary } from "../agents/auth-health.js";
 import { resolveApiKeyForProfile } from "../agents/auth-profiles/oauth.js";
@@ -28,44 +28,26 @@ import {
   computeDeclaredSurfaceHash,
   mergePluginDeclaredSurfaces,
 } from "../plugins/capability-summary.js";
-import { persistProviderAuthProfilesAfterLogin } from "../plugins/provider-auth-persistence.js";
 import { WizardCancelledError, WizardNavigationError } from "../wizard/prompts.js";
 import { listSystemAgentAuditEntriesForTests } from "./audit.test-support.js";
 import { resolveSystemAgentConfiguredRouteFromConfig as resolveConfiguredRoute } from "./inference-route.js";
-import { credential, fixture, modelRef } from "./setup-inference-activate.test-support.js";
+import {
+  credential,
+  expectActivateCalls as expectCalls,
+  fixture,
+  modelRef,
+  saveActivateProfile as saveProfile,
+  writeActivateConfig as writeConfig,
+} from "./setup-inference-activate.test-support.js";
 import {
   SetupInferenceActivationIndeterminateError,
   SetupInferenceActivationUnavailableError,
 } from "./setup-inference-core.js";
 import * as credentialActivation from "./setup-inference-credential-access.js";
 import { saveSetupCredential } from "./setup-inference-credentials.js";
-import { resetSetupInferenceState } from "./setup-inference-state.test-support.js";
 import * as activationTransition from "./setup-inference-transition.js";
 import { codexRuntimeArtifactAuth, pluginRecord } from "./verified-inference.test-support.js";
-
-type Setup = Awaited<ReturnType<typeof fixture>>;
-function expectCalls(setup: Setup, logins: number, probes: number) {
-  expect(setup.login).toHaveBeenCalledTimes(logins);
-  expect(setup.run).toHaveBeenCalledTimes(probes);
-}
-function saveProfile(
-  setup: Setup,
-  profileId: string,
-  config = setup.config,
-  value: AuthProfileCredential = credential,
-) {
-  return persistProviderAuthProfilesAfterLogin({
-    config,
-    agentDir: setup.agentDir,
-    profiles: [{ profileId, credential: value }],
-  });
-}
-async function writeConfig(setup: Setup, value: Setup["config"] | string) {
-  await fs.writeFile(setup.configPath, typeof value === "string" ? value : JSON.stringify(value));
-  clearConfigCache();
-}
-
-afterEach(resetSetupInferenceState);
+import "./setup-inference-activate-cleanup.test-support.js";
 
 describe("setup activation credentials and configuration", () => {
   it.each([
@@ -680,6 +662,53 @@ describe("setup activation credentials and configuration", () => {
     expectCalls(setup, 0, 1);
     expect(setup.readProfile()?.[1]).toMatchObject(credential);
   });
+
+  it.each([modelRef, "openai/Fast"])(
+    "preserves the current agent model when activating saved auth (%s)",
+    async (primaryRef) => {
+      const setup = await fixture({ authMethod: "api_key" });
+      const starterModelRef = "openai/starter-model";
+      const configured = structuredClone(setup.config);
+      assert(configured.agents?.defaults);
+      assert(configured.models?.providers?.openai?.models);
+      configured.agents.defaults.model = { primary: primaryRef };
+      if (primaryRef !== modelRef) {
+        configured.agents.defaults.models = { [modelRef]: { alias: "Fast" } };
+      }
+      configured.models.providers.openai.models.push(
+        buildCatalogModel("starter-model", { name: "Starter model" }),
+      );
+      await writeConfig(setup, configured);
+      const saved = await saveSetupCredential({
+        profile: { profileId: "openai:saved", credential },
+        config: configured,
+        baseConfig: configured,
+        agentDir: setup.agentDir,
+        modelRef: starterModelRef,
+        authChoice: "fixture-login",
+        pluginId: "openai",
+      });
+      const profileId = saved.profile.profileId;
+
+      const detection = await setup.detect();
+      const candidate = detection.candidates.find(
+        ({ kind }) => kind === `saved-auth:${encodeURIComponent(profileId)}`,
+      );
+      assert.ok(candidate, "Setup did not discover the saved sign-in");
+      expect(candidate.modelRef).toBe(modelRef);
+
+      const result = await setup.activate(candidate.kind, true, { modelRef: candidate.modelRef });
+
+      expect(result).toMatchObject({ ok: true, modelRef });
+      expect(setup.run.mock.calls[0]?.[0]).toMatchObject({
+        authProfileId: profileId,
+        model: "gpt-5.4-mini",
+      });
+      const persisted = (await readSnapshot()).sourceConfig;
+      expect(primaryModel(persisted.agents?.defaults?.model)).toBe(`${modelRef}@${profileId}`);
+      expect(persisted.agents?.entries?.main?.model).toBeUndefined();
+    },
+  );
 
   it("replaces a removed account without changing agent models", async () => {
     const setup = await fixture({ authMethod: "api_key", primaryModel: "stable/global-model" });
