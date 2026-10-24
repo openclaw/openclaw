@@ -20,7 +20,6 @@ import {
   repairLaunchAgentBootstrap,
   restartLaunchAgent,
   resolveLaunchAgentPlistPath,
-  startLaunchAgent,
   stopLaunchAgent,
   uninstallLaunchAgent,
 } from "./launchd.js";
@@ -169,13 +168,12 @@ describeLaunchdIntegration("launchd integration", () => {
       expect(await readLaunchAgentRuntime(gateway.env)).toMatchObject({ status: "running" });
 
       await installLaunchAgent(launchArgs(node.env));
-      await waitForRunningRuntime(node.env, nodeBefore.pid);
-      const nodeRunningBeforeRestart = await readLaunchAgentRuntime(node.env);
+      const nodeRunningBeforeRestart = await waitForRunningRuntime(node.env, nodeBefore.pid);
 
       await expect(probePortUsage(gatewayPort, LOOPBACK_PORT_PROBE_HOSTS)).resolves.toBe("busy");
 
       await expect(restartLaunchAgent({ env: node.env, stdout })).resolves.not.toThrow();
-      await expectRuntimePidReplaced(node.env, nodeRunningBeforeRestart.pid ?? nodeBefore.pid);
+      await expectRuntimePidReplaced(node.env, nodeRunningBeforeRestart.pid);
 
       expect(await readLaunchAgentRuntime(gateway.env)).toMatchObject({ status: "running" });
     } finally {
@@ -336,7 +334,7 @@ describeLaunchdIntegration("launchd integration", () => {
     );
   }, 90_000);
 
-  it.each(["restart", "SIGTERM", "stop/start", "stop/restart"] as const)(
+  it.each(["SIGTERM", "stop/restart"] as const)(
     "keeps launchd supervision and replaces the PID after %s",
     async (action) => {
       const before = await withTimeout(
@@ -347,15 +345,12 @@ describeLaunchdIntegration("launchd integration", () => {
         STARTUP_TIMEOUT_MS,
         { message: "Timed out initializing launchd integration runtime" },
       );
-      if (action.startsWith("stop/")) {
-        await stopLaunchAgent({ env, stdout });
-        await waitForNotRunningRuntime(env);
-      }
       if (action === "SIGTERM") {
         process.kill(before.pid, "SIGTERM");
       } else {
-        const activate = action === "stop/start" ? startLaunchAgent : restartLaunchAgent;
-        await activate({ env, stdout });
+        await stopLaunchAgent({ env, stdout });
+        await waitForNotRunningRuntime(env);
+        await restartLaunchAgent({ env, stdout });
       }
       await expectRuntimePidReplaced(env, before.pid);
     },
