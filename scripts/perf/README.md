@@ -4258,11 +4258,14 @@ threshold and the remainder target 16 KiB of text (JSON escaping adds bytes).
 
 ```sh
 node --import ./scripts/tsx.mjs scripts/perf/ws-compression-measure.ts \
-  --clients 70 --profiles 1 --batches 3000 --port 41649
+  --clients 70 --profiles 70 --batches 30000 --port 41649
 ```
 
-Use `--profiles 70` for distinct recipient envelopes, and `--size 512` or
-`--size 2048` for smaller payloads. `--warm-start-at <epoch-ms>` synchronizes the
+Use `--profiles 1` for matching recipient envelopes, and `--size 512` or
+`--size 2048` for smaller payloads. Sequence counters start aligned; matching
+profiles therefore exercise the best case for whole-frame sharing. Distinct
+profiles exercise separate envelopes even with aligned counters.
+`--warm-start-at <epoch-ms>` synchronizes the
 100-broadcast warmup; `--start-at <epoch-ms>` synchronizes measurement after it.
 A missed deadline fails the run. `--ready-file <path>` records completed fixture
 and connection preparation. Run baseline and candidate with separate state,
