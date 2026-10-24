@@ -424,13 +424,12 @@ export function resolveAttachmentSidebarSource(
     : { status: "unavailable", onRetry: next.onRetry };
 }
 
-/** Resolve fresh authorization at the media owner, then read within the caller's attachment budget. */
-export async function readAttachmentSource(
+/** Wait for the same media owner used by byte readers and mounted text readers. */
+export async function resolveAttachmentSourceAsync(
   attachment: AttachmentItem["attachment"],
   options: ImageRenderOptions,
   signal: AbortSignal,
-  maxBytes: number,
-): Promise<Blob | null> {
+) {
   if (signal.aborted) {
     return null;
   }
@@ -471,10 +470,24 @@ export async function readAttachmentSource(
   if (resolved.status !== "available") {
     throw new Error(resolved.reason ?? t("chat.attachments.unavailable"));
   }
+  return resolved.source;
+}
+
+/** Resolve fresh authorization at the media owner, then read within the caller's attachment budget. */
+export async function readAttachmentSource(
+  attachment: AttachmentItem["attachment"],
+  options: ImageRenderOptions,
+  signal: AbortSignal,
+  maxBytes: number,
+): Promise<Blob | null> {
+  const source = await resolveAttachmentSourceAsync(attachment, options, signal);
+  if (!source) {
+    return null;
+  }
   const url =
     attachment.kind === "audio" || attachment.kind === "video"
-      ? safeMediaAttachmentHref(resolved.source.src, attachment.kind)
-      : safePlainTextAttachmentHref(resolved.source.src);
+      ? safeMediaAttachmentHref(source.src, attachment.kind)
+      : safePlainTextAttachmentHref(source.src);
   if (!url) {
     throw new Error(t("chat.attachments.unavailable"));
   }

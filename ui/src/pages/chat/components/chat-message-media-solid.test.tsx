@@ -11,7 +11,7 @@ import { loadAssistantAttachmentAvailability } from "./chat-message-attachment-a
 import { AssistantAttachments, MessageAttachment } from "./chat-message-attachments-solid.tsx";
 import { MessageImages } from "./chat-message-images-solid.tsx";
 import { managedSource, stubObjectUrls } from "./chat-message-media.test-helpers.ts";
-import type { AttachmentItem, ImageBlock } from "./chat-message-media.ts";
+import type { AttachmentItem, ImageBlock, ImageRenderOptions } from "./chat-message-media.ts";
 import { MessageVideoPreview } from "./chat-message-video-preview-solid.tsx";
 import { SentCommentAttachments } from "./chat-sent-comments.tsx";
 
@@ -55,7 +55,7 @@ it.each([
       .mockReturnValueOnce(second.promise);
     vi.stubGlobal("fetch", fetchMock);
     const initialComments = ["first", "second"].map((name) =>
-      attachment("document", name, `https://example.test/${name}.txt`),
+      attachment("document", name, `/__openclaw__/fixtures/${name}.txt`),
     );
     const [comments, setComments] = createSignal(initialComments);
     const [presentation, setPresentation] = createSignal({ inline });
@@ -64,11 +64,7 @@ it.each([
         inline={presentation().inline}
         comments={comments()}
         options={{}}
-        resolve={(item) => ({
-          identity: item.attachment.url,
-          src: item.attachment.url,
-          fallback: () => <span>Unavailable</span>,
-        })}
+        fallback={() => <span>Unavailable</span>}
       />
     ));
     if (!inline) {
@@ -104,6 +100,216 @@ it.each([
     expect(document.body.textContent).not.toContain("first source");
   },
 );
+
+it.each(["same send", "session", "auth", "policy", "connection", "different send", "denied"])(
+  "keeps annotation admission and isolates retained text for %s",
+  async (change) => {
+    let reveal: (() => void) | undefined;
+    vi.stubGlobal(
+      "IntersectionObserver",
+      class {
+        constructor(callback: IntersectionObserverCallback) {
+          reveal = () =>
+            callback(
+              [{ isIntersecting: true } as IntersectionObserverEntry],
+              this as unknown as IntersectionObserver,
+            );
+        }
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    const canonicalRead = createDeferred<Response>();
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(commentResponse("Original passage"))
+      .mockResolvedValueOnce(
+        Response.json(
+          change === "denied"
+            ? {
+                available: false,
+                reason: "Unavailable annotation",
+                retryable: false,
+              }
+            : {
+                available: true,
+                mediaTicket: "test-ticket",
+                mediaTicketExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+              },
+        ),
+      )
+      .mockReturnValueOnce(canonicalRead.promise);
+    vi.stubGlobal("fetch", fetchMock);
+    const local = attachment("document", "selection-comment.txt", "blob:local-annotation");
+    const canonical = attachment(
+      "document",
+      "selection-comment.txt",
+      "media://inbound/annotation.txt",
+    );
+    const [comments, setComments] = createSignal([local]);
+    const initialOptions: ImageRenderOptions = {
+      sessionKey: "agent:main:first",
+      agentId: "main",
+      connectionEpoch: 1,
+      authToken: "test-token",
+      policyKey: "first-policy",
+      localSubmission: true,
+      messageSendId: "same-send",
+    };
+    const [options, setOptions] = createSignal(initialOptions);
+    const view = mountSolid(() => (
+      <SentCommentAttachments
+        inline
+        comments={comments()}
+        options={options()}
+        fallback={() => <span>Unavailable annotation</span>}
+      />
+    ));
+    await waitForSolid(() => expect(view.container.textContent).toContain("Original passage"));
+    setOptions({
+      ...initialOptions,
+      localSubmission: undefined,
+      canonicalMessageKey: "canonical-message",
+      ...(change === "session" ? { sessionKey: "agent:main:second" } : {}),
+      ...(change === "auth" ? { authToken: "replacement-test-token" } : {}),
+      ...(change === "policy" ? { policyKey: "second-policy" } : {}),
+      ...(change === "connection" ? { connectionEpoch: 2 } : {}),
+      ...(change === "different send" ? { messageSendId: "another-send" } : {}),
+    });
+    setComments([canonical]);
+    flush();
+    await waitForSolid(() => expect(reveal).toBeDefined());
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const retains = change === "same send" || change === "denied";
+    expect(view.container.textContent?.includes("Original passage")).toBe(retains);
+    reveal!();
+    if (change === "denied") {
+      await waitForSolid(() =>
+        expect(view.container.textContent).toContain("Unavailable annotation"),
+      );
+      expect(view.container.textContent).not.toContain("Original passage");
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } else {
+      await waitForSolid(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+      expect(view.container.textContent?.includes("Original passage")).toBe(retains);
+      canonicalRead.resolve(commentResponse("Confirmed passage"));
+      await waitForSolid(() => expect(view.container.textContent).toContain("Confirmed passage"));
+    }
+  },
+);
+
+it("rechecks the byte limit when annotation metadata changes under the same URL", async () => {
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(commentResponse("Original passage"));
+  vi.stubGlobal("fetch", fetchMock);
+  const item = attachment("document", "selection-comment.txt", "blob:annotation-metadata");
+  const [comments, setComments] = createSignal([item]);
+  const view = mountSolid(() => (
+    <SentCommentAttachments
+      inline
+      comments={comments()}
+      options={{ messageSendId: "metadata-send" }}
+      fallback={() => <span>Unavailable annotation</span>}
+    />
+  ));
+  await waitForSolid(() => expect(view.container.textContent).toContain("Original passage"));
+  setComments([{ ...item, attachment: { ...item.attachment, sizeBytes: 256 * 1024 + 1 } }]);
+  await waitForSolid(() => expect(view.container.textContent).toContain("Unavailable annotation"));
+  expect(view.container.textContent).not.toContain("Original passage");
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+});
+
+it.each(["removed", "reordered"])(
+  "preserves ordered canonical comments and clears the old set when %s",
+  async (change) => {
+    const firstRead = createDeferred<Response>();
+    const secondRead = createDeferred<Response>();
+    const replacement = createDeferred<Response>();
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(commentResponse("First passage"))
+      .mockResolvedValueOnce(commentResponse("Second passage"))
+      .mockReturnValueOnce(firstRead.promise)
+      .mockReturnValueOnce(secondRead.promise)
+      .mockImplementation(() => replacement.promise);
+    vi.stubGlobal("fetch", fetchMock);
+    const labels = ["first-comment.txt", "second-comment.txt"];
+    const [comments, setComments] = createSignal(
+      labels.map((label, index) => attachment("document", label, `blob:local-comment-${index}`)),
+    );
+    const view = mountSolid(() => (
+      <SentCommentAttachments
+        inline
+        comments={comments()}
+        options={{ messageSendId: "ordered-send" }}
+        fallback={() => <span>Unavailable annotation</span>}
+      />
+    ));
+    const selected = () =>
+      Array.from(view.container.querySelectorAll(".chat-sent-comments-inline__selection")).map(
+        (element) => element.textContent,
+      );
+    try {
+      await waitForSolid(() => expect(selected()).toEqual(["First passage", "Second passage"]));
+      const canonical = labels.map((label, index) =>
+        attachment("document", label, `/__openclaw__/fixtures/canonical-comment-${index}.txt`),
+      );
+      setComments(canonical);
+      await waitForSolid(() => expect(fetchMock).toHaveBeenCalledTimes(4));
+      expect(selected()).toEqual(["First passage", "Second passage"]);
+      firstRead.resolve(commentResponse("First canonical passage"));
+      await waitForSolid(() =>
+        expect(selected()).toEqual(["First canonical passage", "Second passage"]),
+      );
+      secondRead.resolve(commentResponse("Second canonical passage"));
+      await waitForSolid(() =>
+        expect(selected()).toEqual(["First canonical passage", "Second canonical passage"]),
+      );
+      setComments(change === "removed" ? canonical.slice(1) : canonical.toReversed());
+      flush();
+      expect(selected()).toEqual([]);
+    } finally {
+      firstRead.resolve(commentResponse("First canonical passage"));
+      secondRead.resolve(commentResponse("Second canonical passage"));
+      replacement.resolve(commentResponse("Replacement passage"));
+      view.unmount();
+    }
+  },
+);
+
+it("does not read a cold hidden annotation or admit it after removal", async () => {
+  let show: (() => void) | undefined;
+  vi.stubGlobal(
+    "IntersectionObserver",
+    class {
+      constructor(callback: IntersectionObserverCallback) {
+        show = () =>
+          callback(
+            [{ isIntersecting: true } as IntersectionObserverEntry],
+            this as unknown as IntersectionObserver,
+          );
+      }
+      observe() {}
+      disconnect() {}
+    },
+  );
+  const fetchMock = vi.fn<typeof fetch>();
+  vi.stubGlobal("fetch", fetchMock);
+  const view = mountSolid(() => (
+    <SentCommentAttachments
+      inline
+      comments={[attachment("document", "selection-comment.txt", "media://inbound/hidden.txt")]}
+      options={{ sessionKey: "agent:main:hidden", messageId: "hidden-message" }}
+      fallback={() => <span>Unavailable annotation</span>}
+    />
+  ));
+  await waitForSolid(() => expect(show).toBeDefined());
+  expect(fetchMock).not.toHaveBeenCalled();
+  view.unmount();
+  show!();
+  await Promise.resolve();
+  expect(fetchMock).not.toHaveBeenCalled();
+});
 
 it("keeps the focused native image control and decoded node when gallery metadata changes", () => {
   const source = "data:image/png;base64,cG5n";

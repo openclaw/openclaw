@@ -26,7 +26,7 @@ ui/src/pages/chat/chat-viewer-presence.ts	1
 ui/src/pages/chat/components/chat-attachment-download.ts	1
 ui/src/pages/chat/components/chat-composer-prediction.ts	1
 ui/src/pages/chat/components/chat-file-copy.ts	1
-ui/src/pages/chat/components/chat-message-attachments-solid.tsx	2
+ui/src/pages/chat/components/chat-message-attachments-solid.tsx	1
 ui/src/pages/chat/components/chat-message-images-solid.tsx	1
 ui/src/pages/chat/components/chat-model-picker-search.ts	1
 ui/src/pages/chat/components/chat-position-rail-controller.ts	1

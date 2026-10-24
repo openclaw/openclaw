@@ -2,6 +2,7 @@ import type { JSX as SolidJSX } from "@solidjs/web";
 import { createMemo, createSignal, For, Loading, onCleanup, Show } from "solid-js";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
+import { isCrossOriginHttpSource, safePlainTextAttachmentHref } from "./chat-attachment-href.ts";
 import { readAttachmentText } from "./chat-attachment-text-reader.ts";
 import { parseCommentAttachment, type CommentPreview } from "./chat-comment-preview.ts";
 import { CommentPreviewChip, CommentPreviewRow } from "./chat-comment-preview.tsx";
@@ -9,59 +10,84 @@ import {
   needsAttachmentSourceAdmission,
   type AttachmentAdmission,
 } from "./chat-message-attachment-admission-model.ts";
-import { ChatAttachmentAdmission } from "./chat-message-attachment-admission-solid.tsx";
+import { createChatAttachmentAdmission } from "./chat-message-attachment-admission-solid.tsx";
+import { resolveAttachmentSourceAsync } from "./chat-message-attachment-source.ts";
 import type { AttachmentItem, ImageRenderOptions } from "./chat-message-media.ts";
 
 registerEnglishCatalog(registerChatComposerEnglish);
 
 type SentCommentSource = {
   identity: string;
-  src?: string;
-  sizeBytes?: number;
-  pending?: boolean;
+  read: (signal: AbortSignal) => Promise<CommentPreview | null>;
   fallback: () => SolidJSX.Element;
 };
 type Props = {
   comments: AttachmentItem[];
   inline?: boolean;
   options: ImageRenderOptions;
-  resolve: (item: AttachmentItem) => SentCommentSource;
+  fallback: (item: AttachmentItem) => SolidJSX.Element;
 };
 
 export function SentCommentAttachments(props: Props) {
-  const renderComments = (admission?: AttachmentAdmission) => (
-    <SentComments
-      inline={props.inline}
-      sources={props.comments.map((item) =>
-        admission?.observeElement
-          ? { identity: item.attachment.url, pending: true, fallback: () => undefined }
-          : props.resolve(item),
-      )}
-      scope={JSON.stringify([
-        props.options.sessionKey,
-        props.options.agentId,
-        props.options.messageId,
-        props.options.connectionEpoch,
-        props.options.resourceBasePath,
-        props.options.authToken,
-        props.options.policyKey,
-      ])}
-      admission={admission}
-    />
+  const authority = () =>
+    JSON.stringify([
+      props.options.sessionKey,
+      props.options.agentId,
+      props.options.connectionEpoch,
+      props.options.resourceBasePath,
+      props.options.authToken,
+      props.options.policyKey,
+      props.comments.map(({ attachment }) => [attachment.kind, attachment.label]),
+      props.options.messageSendId ??
+        props.options.canonicalMessageKey ??
+        props.options.messageId ??
+        props.comments.map((item) => item.attachment.url),
+    ]);
+  return (
+    <Show when={props.comments.length && authority()} keyed>
+      {(_authority) => <AdmittedComments {...props} />}
+    </Show>
+  );
+}
+
+function AdmittedComments(props: Props) {
+  const admission = createChatAttachmentAdmission(
+    () =>
+      JSON.stringify(
+        props.comments.map((item) => [item.attachment.url, item.attachment.artifactId]),
+      ),
+    () => !props.comments.some((item) => needsAttachmentSourceAdmission(item.attachment)),
   );
   return (
-    <Show when={props.comments.length}>
-      <Show
-        when={props.comments.some((item) => needsAttachmentSourceAdmission(item.attachment))}
-        fallback={renderComments()}
-      >
-        <ChatAttachmentAdmission
-          attachments={props.comments.map((item) => item.attachment)}
-          options={props.options}
-          render={renderComments}
-        />
-      </Show>
-    </Show>
+    <SentComments
+      inline={props.inline}
+      sources={props.comments.map((item) => {
+        const options = { ...props.options };
+        return {
+          identity: JSON.stringify([
+            item.attachment.url,
+            item.attachment.artifactId,
+            item.attachment.label,
+            item.attachment.sizeBytes,
+          ]),
+          read: async (signal: AbortSignal) => {
+            const source = await resolveAttachmentSourceAsync(item.attachment, options, signal);
+            if (!source) {
+              return null;
+            }
+            const src = safePlainTextAttachmentHref(source.src);
+            if (!src || isCrossOriginHttpSource(src)) {
+              return null;
+            }
+            return parseCommentAttachment(await readAttachmentText(src, source.sizeBytes, signal));
+          },
+          fallback: () => props.fallback(item),
+        };
+      })}
+      scope={JSON.stringify([props.options.messageId, props.options.canonicalMessageKey])}
+      admission={admission}
+      admitted={admission.admitted}
+    />
   );
 }
 
@@ -70,6 +96,7 @@ function SentComments(props: {
   inline?: boolean;
   scope: string;
   admission?: AttachmentAdmission;
+  admitted: boolean;
 }) {
   const sources = () => props.sources;
   const inline = createMemo(() => Boolean(props.inline));
@@ -81,40 +108,41 @@ function SentComments(props: {
       return {
         key: JSON.stringify([
           props.scope,
-          current.map(({ fallback: _fallback, ...source }) => source),
+          current.map(({ fallback: _fallback, read: _read, ...source }) => source),
         ]),
         sources: current,
       };
     },
     { equals: (before, next) => before.key === next.key },
   );
-  const comments = createMemo(() => {
+  const comments = createMemo<Array<CommentPreview | null | undefined>>((previous) => {
     const current = request().sources;
-    let values: Array<CommentPreview | null | undefined> = current.map((source) =>
-      !source.src && !source.pending ? null : undefined,
+    let values: Array<CommentPreview | null | undefined> = current.map(
+      (_, index) => previous?.[index],
     );
     if (!inline() && !revealed()) {
       return values;
+    }
+    if (!props.admitted) {
+      return previous ?? values;
     }
     const controller = new AbortController();
     onCleanup(() => controller.abort());
     const pending = new Map<number, Promise<{ index: number; comment: CommentPreview | null }>>();
     current.forEach((source, index) => {
-      if (source.src) {
-        pending.set(
-          index,
-          readAttachmentText(source.src, source.sizeBytes, controller.signal)
-            .then(
-              (text) => parseCommentAttachment(text),
-              () => null,
-            )
-            .then((comment) => ({ index, comment })),
-        );
-      }
+      pending.set(
+        index,
+        source
+          .read(controller.signal)
+          .catch(() => null)
+          .then((comment) => ({ index, comment })),
+      );
     });
-    // Publish each completed attachment independently while retaining cancellation at this read.
+    // A source handoff retains the committed quote until its replacement read settles.
     return (async function* () {
-      yield values;
+      if (!previous || previous.every((value) => value === undefined)) {
+        yield values;
+      }
       while (pending.size) {
         const { index, comment } = await Promise.race(pending.values());
         pending.delete(index);
@@ -144,16 +172,12 @@ function SentComments(props: {
               >
                 <ol class="chat-comment-preview__list" role="list">
                   <For each={sources()} keyed={false}>
-                    {(source, index) => (
+                    {(_source, index) => (
                       <Show
                         when={comments()[index]}
                         fallback={
                           comments()[index] === null ? undefined : (
-                            <li class="chat-comment-preview__item muted">
-                              {source().src || source().pending
-                                ? t("common.loading")
-                                : t("chat.attachments.textPreviewUnavailable")}
-                            </li>
+                            <li class="chat-comment-preview__item muted">{t("common.loading")}</li>
                           )
                         }
                       >

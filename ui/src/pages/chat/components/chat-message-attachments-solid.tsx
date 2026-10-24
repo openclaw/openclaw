@@ -91,43 +91,6 @@ export function AssistantAttachments(
     props.attachments.filter(
       (item) => props.inlinePlayback !== false || !isSentCommentAttachment(item),
     );
-  const refreshComments = () => void refresh(commentSources);
-  const resolveComment = (item: AttachmentItem) => {
-    observeChatMediaResourceSubscriber(props.options.mediaOwner, refreshComments);
-    const resolved = resolveAttachmentSource(item.attachment, {
-      ...props.options,
-      onMediaChange: refreshComments,
-    });
-    return {
-      identity: item.attachment.url,
-      ...(resolved.status === "available"
-        ? {
-            src:
-              /^data:text\/plain;base64,[a-z0-9+/]*={0,2}$/i.test(resolved.source.src) ||
-              (safeAttachmentHref(resolved.source.src) &&
-                !isCrossOriginHttpSource(resolved.source.src))
-                ? resolved.source.src
-                : undefined,
-            sizeBytes: resolved.source.sizeBytes,
-          }
-        : { pending: resolved.status === "checking" }),
-      fallback: () => (
-        <MessageAttachment
-          item={item}
-          options={props.options}
-          onOpenSidebar={props.onOpenSidebar}
-          onAssistantAttachmentLoaded={props.onAssistantAttachmentLoaded}
-          presentation="card"
-        />
-      ),
-    };
-  };
-  const commentSources = createMemo(
-    () => new Map(comments().map((item) => [item, resolveComment(item)])),
-    { lazy: true },
-  );
-  // Comment resolution can acquire resources during rendering, before settled setup runs.
-  onCleanup(() => releaseChatMediaResourceOwner(refreshComments));
   return (
     <Show when={props.attachments.length}>
       <div
@@ -144,7 +107,15 @@ export function AssistantAttachments(
           comments={comments()}
           inline={props.inlineComments && files().length === 0}
           options={props.options}
-          resolve={(item) => commentSources().get(item)!}
+          fallback={(item) => (
+            <MessageAttachment
+              item={item}
+              options={props.options}
+              onOpenSidebar={props.onOpenSidebar}
+              onAssistantAttachmentLoaded={props.onAssistantAttachmentLoaded}
+              presentation="card"
+            />
+          )}
         />
         <For each={files()} keyed={false}>
           {(item) => {
