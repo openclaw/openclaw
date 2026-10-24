@@ -32,7 +32,10 @@ export async function readSessionCatalogJsonlActivity(params: {
     }
     // An inaccessible transcript is not evidence that its upstream link was
     // removed. Keep the probe retryable, but make the persistent failure visible.
-    log.warn(`failed to read session catalog transcript ${filePath}: ${String(error)}`);
+    log.warn(
+      `failed to read session catalog transcript ${filePath}: ${String(error)}. ` +
+        "Check that the transcript path exists and the Gateway can read it; the probe will retry automatically.",
+    );
     return undefined;
   }
   try {

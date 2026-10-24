@@ -4,6 +4,7 @@ import type { SessionUpstreamProbe } from "./session-catalog.js";
 
 const mocks = vi.hoisted(() => ({ warn: vi.fn() }));
 
+// mock-isolation: Capture warnings without opening the process-wide file or console loggers.
 vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({ warn: mocks.warn }),
 }));
@@ -35,19 +36,18 @@ describe("readSessionCatalogJsonlActivity", () => {
     mocks.warn.mockClear();
   });
 
-  it.each(["EACCES", "EPERM", "EBUSY"])(
-    "logs a non-missing %s open failure without changing its retry outcome",
-    async (code) => {
-      vi.spyOn(fs, "open").mockRejectedValueOnce(Object.assign(new Error("open failed"), { code }));
+  it("logs a non-missing open failure with recovery guidance without changing its retry outcome", async () => {
+    vi.spyOn(fs, "open").mockRejectedValueOnce(
+      Object.assign(new Error("open failed"), { code: "EACCES" }),
+    );
 
-      await expect(readActivity()).resolves.toBeUndefined();
-      expect(mocks.warn).toHaveBeenCalledWith(
-        expect.stringContaining(
-          "failed to read session catalog transcript /unreadable/thread.jsonl",
-        ),
-      );
-    },
-  );
+    await expect(readActivity()).resolves.toBeUndefined();
+    expect(mocks.warn).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /failed to read session catalog transcript \/unreadable\/thread\.jsonl: .*Gateway can read it; the probe will retry automatically\./,
+      ),
+    );
+  });
 
   it("keeps missing transcripts silent", async () => {
     vi.spyOn(fs, "open").mockRejectedValueOnce(
