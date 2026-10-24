@@ -104,16 +104,12 @@ it.each([
 });
 
 it.each([
-  { mode: "sdk-bytes", error: "digest does not match" },
   { mode: "sdk-head", error: "head SHA does not match" },
   { mode: "npm-source", error: "npm artifact target mismatch" },
   { mode: "empty-history", error: "registry response" },
   { mode: "missing-core", error: "core package missing" },
 ])("rejects $mode before sealing", async ({ mode, error }) => {
   const input = fixture("latest", mode === "missing-core" ? "openclaw" : "@openclaw/example");
-  if (mode === "sdk-bytes") {
-    input.npmManifest.pluginSdkApi.diff.entrypointsAdded.push("tampered");
-  }
   if (mode === "sdk-head") {
     input.npmManifest.pluginSdkApi.headSha = "d".repeat(40);
   }

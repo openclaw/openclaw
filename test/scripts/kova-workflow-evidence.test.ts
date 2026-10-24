@@ -11,25 +11,6 @@ const MODEL = "gpt-5.6";
 const INCLUDE_FILTERS = ["scenario:scenario-a", "scenario:scenario-b"];
 const tempRoots = useAutoCleanupTempDirTracker(afterEach);
 
-function record(id: string, index: number, total: number, authMode: "live" | "mock") {
-  const live = authMode === "live";
-  return {
-    scenario: `scenario-${id}`,
-    state: { id: `state-${id}` },
-    status: "PASS",
-    repeat: { index, total },
-    auth: { mode: authMode, environmentDependent: live },
-    providerEvidence: {
-      authMode,
-      available: true,
-      environmentDependent: live,
-      requestCount: 1,
-      ...(live ? { models: [{ value: MODEL, count: 1 }] } : {}),
-      source: live ? "openclaw-timeline" : "mock-provider-log",
-    },
-  };
-}
-
 function fixture(authMode: "live" | "mock" = "mock") {
   const live = authMode === "live";
   const pairs = live ? ["a"] : ["a", "b"];
@@ -45,8 +26,22 @@ function fixture(authMode: "live" | "mock" = "mock") {
     schemaVersion: "kova.report.v1",
     mode: "execution",
     auth: { requestedMode: authMode, live: { environmentDependent: live } },
-    records: pairs.flatMap((pair) =>
-      Array.from({ length: repeat }, (_, index) => record(pair, index + 1, repeat, authMode)),
+    records: pairs.flatMap((id) =>
+      Array.from({ length: repeat }, (_, index) => ({
+        scenario: `scenario-${id}`,
+        state: { id: `state-${id}` },
+        status: "PASS",
+        repeat: { index: index + 1, total: repeat },
+        auth: { mode: authMode, environmentDependent: live },
+        providerEvidence: {
+          authMode,
+          available: true,
+          environmentDependent: live,
+          requestCount: 1,
+          ...(live ? { models: [{ value: MODEL, count: 1 }] } : {}),
+          source: live ? "openclaw-timeline" : "mock-provider-log",
+        },
+      })),
     ),
   };
   return {
@@ -91,7 +86,7 @@ it("accepts live timeline evidence with observed provider requests", () => {
   });
 });
 
-it.each<[Partial<ReturnType<typeof record>["providerEvidence"]>, string]>([
+it.each([
   [{ source: "mock-provider-log" }, "provider source was mock-provider-log"],
   [{ models: [{ value: "gpt-5.5", count: 1 }] }, "provider model did not match gpt-5.6"],
   [
@@ -116,21 +111,16 @@ it("rejects malformed JSON through the CLI", () => {
   const planPath = join(root, "plan.json");
   const reportPath = join(root, "report.json");
   writeFileSync(planPath, "{not-json");
-  writeFileSync(reportPath, JSON.stringify(fixture().laneReport));
+  writeFileSync(reportPath, "{}");
   const result = spawnSync(
     process.execPath,
     [
       "scripts/lib/kova-workflow-evidence.mts",
-      ...Object.entries({
-        plan: planPath,
-        report: reportPath,
-        profile: PROFILE,
-        target: TARGET,
-        repeat: "2",
-        include: INCLUDE_FILTERS.join(","),
-        model: MODEL,
-        auth: "mock",
-      }).flatMap(([key, value]) => [`--${key}`, value]),
+      "--plan",
+      planPath,
+      "--report",
+      reportPath,
+      ..."--profile p --target t --repeat 1 --include s --model m --auth mock".split(" "),
     ],
     { cwd: process.cwd(), encoding: "utf8" },
   );
