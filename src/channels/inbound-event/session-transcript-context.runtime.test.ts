@@ -251,9 +251,7 @@ describe("session transcript inbound context", () => {
       SessionTranscriptContext: { chatWindow: true, historyLimit: 5 },
     });
     const identity = conversationIdentityFromMsgContext({ ctx });
-    expect(identity).toEqual(
-      expect.objectContaining({ channel: "telegram", accountId: "acct-1" }),
-    );
+    expect(identity).toEqual(expect.objectContaining({ channel: "telegram", accountId: "acct-1" }));
     const cutTransportId = buildChannelSourceTurnId({
       provider: identity?.channel,
       accountId: identity?.accountId,
