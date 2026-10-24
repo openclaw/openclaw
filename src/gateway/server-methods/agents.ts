@@ -46,6 +46,7 @@ import {
   resolveOperatorRolePolicy,
 } from "../operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import type { PreparedGatewayModelCatalog } from "../server-model-catalog.types.js";
 import { reviveAgentDatabasesAfterConfigCommit } from "../server-reload-agent-databases.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { listAgentsForGateway } from "../session-utils.js";
@@ -119,20 +120,23 @@ export const agentsHandlers: GatewayRequestHandlers = {
     validateAgentsListParams,
     async ({ params, respond, context, client }) => {
       const cfg = context.getRuntimeConfig();
+      const emptyAgentAllowlist = resolveOperatorRolePolicy(client, cfg)?.agents?.length === 0;
       const agentIds = listAgentIds(cfg);
-      const modelCatalogByAgentId = context.readPreparedGatewayModelCatalogBatch
-        ? await readPreparedServerMethodModelCatalogs(context, agentIds)
-        : new Map(
-            await Promise.all(
-              agentIds.map(
-                async (agentId) =>
-                  [
-                    agentId,
-                    await readPreparedServerMethodModelCatalog(context, { agentId }),
-                  ] as const,
+      const modelCatalogByAgentId = emptyAgentAllowlist
+        ? new Map<string, PreparedGatewayModelCatalog | undefined>()
+        : context.readPreparedGatewayModelCatalogBatch
+          ? await readPreparedServerMethodModelCatalogs(context, agentIds)
+          : new Map(
+              await Promise.all(
+                agentIds.map(
+                  async (agentId) =>
+                    [
+                      agentId,
+                      await readPreparedServerMethodModelCatalog(context, { agentId }),
+                    ] as const,
+                ),
               ),
-            ),
-          );
+            );
       const projectionOptions = {
         modelCatalogByAgentId,
         includeSystem: hasGatewayClientCap(client?.connect.caps, GATEWAY_CLIENT_CAPS.AGENT_KIND),
@@ -141,10 +145,10 @@ export const agentsHandlers: GatewayRequestHandlers = {
             ? (cfg.gateway?.controlUi?.basePath ?? "")
             : undefined,
       };
-      const initialAllowedAgents = resolveOperatorRolePolicy(
-        client,
-        context.getRuntimeConfig(),
-      )?.agents;
+      // An empty captured roster needs no catalog; later grants appear on the next request.
+      const initialAllowedAgents = emptyAgentAllowlist
+        ? []
+        : resolveOperatorRolePolicy(client, context.getRuntimeConfig())?.agents;
       const selectedAgentIds =
         initialAllowedAgents && initialAllowedAgents !== "*"
           ? new Set(initialAllowedAgents)
