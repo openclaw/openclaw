@@ -6,34 +6,53 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as pidAlive from "../shared/pid-alive.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import * as sleep from "../utils/sleep.js";
+import { readGatewayLockProcessCmdline } from "./gateway-lock-process.js";
+import {
+  findVerifiedGatewayListenerPidsOnPortSync,
+  signalVerifiedGatewayPidSync,
+} from "./gateway-processes.js";
 import {
   cleanStaleGatewayProcessesSync,
   findGatewayPidsOnPortSync,
   terminateStaleGatewayPids,
 } from "./restart-stale-pids.js";
 
-type WindowsProcesses = typeof import("./windows-port-pids.js");
-const mocks = vi.hoisted(() => ({
-  identity: vi.fn(),
-  ancestry: vi.fn<typeof import("@openclaw/proc-safe/identity").readProcessAncestry>(),
-  spawn: vi.fn(),
-  port: vi.fn(() => 18789),
-  warn: vi.fn(),
-  owner: vi.fn<typeof import("./gateway-owner-lease.js").readGatewayOwnerLease>(),
-  windowsPids: vi.fn<WindowsProcesses["readWindowsListeningPidsOnPortSync"]>(),
-  windowsListeners: vi.fn<WindowsProcesses["readWindowsListeningPidsResultSync"]>(),
-  windowsArgs: vi.fn<WindowsProcesses["readWindowsProcessArgsSync"]>(),
-  windowsArgsResult: vi.fn<WindowsProcesses["readWindowsProcessArgsResultSync"]>(),
-  readFile: vi.fn(),
-  readlink: vi.fn(),
-  darwin: vi.fn(),
-  argv: new Map<number, string[]>(),
-}));
+const readProcessIdentity = vi.hoisted(() => vi.fn());
+const readProcessAncestry = vi.hoisted(() =>
+  vi.fn<typeof import("@openclaw/proc-safe/identity").readProcessAncestry>(),
+);
 vi.mock("@openclaw/proc-safe/identity", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@openclaw/proc-safe/identity")>()),
-  readProcessAncestry: mocks.ancestry,
-  readProcessIdentity: mocks.identity,
+  readProcessAncestry,
+  readProcessIdentity,
 }));
+
+const mockSpawnSync = vi.hoisted(() => vi.fn());
+const mockResolveGatewayPort = vi.hoisted(() => vi.fn(() => 18789));
+const mockRestartWarn = vi.hoisted(() => vi.fn());
+const mockReadGatewayOwnerLease = vi.hoisted(() =>
+  vi.fn<typeof import("./gateway-owner-lease.js").readGatewayOwnerLease>(),
+);
+const mockReadWindowsListeningPids = vi.hoisted(() =>
+  vi.fn((_port: number, _timeoutMs?: number): number[] => []),
+);
+const mockReadWindowsListeningPidsResult = vi.hoisted(() =>
+  vi.fn<(_port: number, _timeoutMs?: number) => MockWindowsListeningPidsResult>(
+    (_port: number, _timeoutMs?: number) => ({ ok: true, pids: [] }),
+  ),
+);
+const mockReadWindowsProcessArgs = vi.hoisted(() =>
+  vi.fn((_pid: number, _timeoutMs?: number): string[] | null => null),
+);
+const mockReadWindowsProcessArgsResult = vi.hoisted(() =>
+  vi.fn<(_pid: number, _timeoutMs?: number) => MockWindowsProcessArgsResult>(
+    (_pid: number, _timeoutMs?: number) => ({ ok: true, args: null }),
+  ),
+);
+const mockReadFileSync = vi.hoisted(() => vi.fn());
+const mockReadlinkSync = vi.hoisted(() => vi.fn());
+const mockDarwinCommand = vi.hoisted(() => vi.fn());
+const observedArgv = vi.hoisted(() => new Map<number, string[]>());
 
 vi.mock("node:fs", async () => {
   const { mockNodeBuiltinModule } = await import("openclaw/plugin-sdk/test-node-mocks");
@@ -41,11 +60,11 @@ vi.mock("node:fs", async () => {
     () => vi.importActual<typeof import("node:fs")>("node:fs"),
     (actual) => ({
       readlinkSync: new Proxy(actual.readlinkSync, {
-        apply: (_target, _receiver, args) => mocks.readlink(...args),
+        apply: (_target, _receiver, args) => mockReadlinkSync(...args),
       }),
       readFileSync: ((pathname: unknown, encoding?: unknown) => {
         const pid = Number(/^\/proc\/(\d+)\/cmdline$/.exec(String(pathname))?.[1]);
-        return mocks.argv.get(pid)?.join("\0") ?? mocks.readFile(pathname, encoding);
+        return observedArgv.get(pid)?.join("\0") ?? mockReadFileSync(pathname, encoding);
       }) as typeof actual.readFileSync,
     }),
     { mirrorToDefault: true },
@@ -57,14 +76,14 @@ vi.mock("node:child_process", async () => {
   return mockNodeBuiltinModule(
     () => vi.importActual<typeof import("node:child_process")>("node:child_process"),
     {
-      spawnSync: (...args: unknown[]) => mocks.spawn(...args),
+      spawnSync: (...args: unknown[]) => mockSpawnSync(...args),
       execFileSync: vi.fn(),
     },
   );
 });
 
 vi.mock("../config/paths.js", () => ({
-  resolveGatewayPort: () => mocks.port(),
+  resolveGatewayPort: () => mockResolveGatewayPort(),
 }));
 
 vi.mock("./ports-lsof.js", () => ({
@@ -72,23 +91,23 @@ vi.mock("./ports-lsof.js", () => ({
 }));
 
 vi.mock("../logging/subsystem.js", () => ({
-  createSubsystemLogger: () => ({ warn: mocks.warn }),
+  createSubsystemLogger: () => ({ warn: mockRestartWarn }),
 }));
 
 vi.mock("../process/supervisor/darwin-process-command.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../process/supervisor/darwin-process-command.js")>()),
-  readDarwinProcessCommand: mocks.darwin,
+  readDarwinProcessCommand: mockDarwinCommand,
 }));
 
 vi.mock("./gateway-owner-lease.js", () => ({
-  readGatewayOwnerLease: mocks.owner,
+  readGatewayOwnerLease: mockReadGatewayOwnerLease,
 }));
 
 vi.mock("./windows-port-pids.js", () => ({
-  readWindowsListeningPidsOnPortSync: mocks.windowsPids,
-  readWindowsListeningPidsResultSync: mocks.windowsListeners,
-  readWindowsProcessArgsSync: mocks.windowsArgs,
-  readWindowsProcessArgsResultSync: mocks.windowsArgsResult,
+  readWindowsListeningPidsOnPortSync: mockReadWindowsListeningPids,
+  readWindowsListeningPidsResultSync: mockReadWindowsListeningPidsResult,
+  readWindowsProcessArgsSync: mockReadWindowsProcessArgs,
+  readWindowsProcessArgsResultSync: mockReadWindowsProcessArgsResult,
 }));
 
 vi.mock("./windows-install-roots.js", () => ({
@@ -105,70 +124,13 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function gatewayLsofOutput(pids: number[]): string {
   for (const pid of pids) {
-    mocks.argv.set(pid, ["openclaw-gateway"]);
+    observedArgv.set(pid, ["openclaw-gateway"]);
   }
   return pids.map((pid) => `p${pid}\ncopenclaw-gateway\n`).join("");
 }
 
 function processIdentity(pid: number, parentPid: number) {
   return { pid, parentPid, startTimeMicros: 100, startTimeResolutionMicros: 1, exited: false };
-}
-
-function gatewayPackage(root: string, name = "openclaw") {
-  const script = path.join(root, "dist", "index.js");
-  fs.mkdirSync(path.dirname(script), { recursive: true });
-  fs.writeFileSync(script, "");
-  fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name }));
-  return script;
-}
-
-function windowsGateway(pid: number) {
-  mocks.windowsListeners.mockReturnValue({ ok: true, pids: [pid] });
-  mocks.windowsArgsResult.mockReturnValue({ ok: true, args: ["openclaw", "gateway"] });
-}
-
-function mockNativeListeners(
-  entries: Array<{ pid: number; argv: string[]; cwd?: string }>,
-  procfs = true,
-) {
-  const listeners = new Map(entries.map((entry) => [entry.pid, entry]));
-  mocks.darwin.mockImplementation((pid: number) => ({ argv: listeners.get(pid)?.argv }));
-  mocks.readFile.mockImplementation((file: string) => {
-    if (file.startsWith("/proc/")) {
-      const pid = Number(/^\/proc\/(\d+)\/cmdline$/.exec(file)?.[1]);
-      if (procfs && listeners.has(pid)) {
-        return listeners.get(pid)!.argv.join("\0");
-      }
-      throw Object.assign(new Error("procfs unavailable"), { code: "ENOENT" });
-    }
-    return actualFs.readFileSync(file, "utf8");
-  });
-  mocks.readlink.mockImplementation((file: unknown) => {
-    const pid = Number(/^\/proc\/(\d+)\/cwd$/.exec(String(file))?.[1]);
-    const cwd = listeners.get(pid)?.cwd;
-    if (!cwd) {
-      throw Object.assign(new Error("working directory unavailable"), { code: "EACCES" });
-    }
-    return cwd;
-  });
-  mocks.spawn.mockImplementation((command: string, args: string[]) => {
-    if (command === "lsof") {
-      return lsof({
-        stdout: entries.map(({ pid }) => `p${pid}\ncnode\n`).join(""),
-      });
-    }
-    const pid = Number(args[2]);
-    const entry = listeners.get(pid);
-    if (command === "/usr/sbin/lsof") {
-      return entry?.cwd
-        ? lsof({ stdout: `p${pid}\0\nfcwd\0n${entry.cwd}\0\n` })
-        : lsof({ status: 1 });
-    }
-    return lsof({
-      stdout:
-        args[0] === "-ww" ? (entry?.argv.map((arg) => JSON.stringify(arg)).join(" ") ?? "") : "",
-    });
-  });
 }
 
 type MockLsofResult = {
@@ -182,7 +144,11 @@ type MockWindowsListeningPidsResult =
   | { ok: true; pids: number[] }
   | { ok: false; permanent: boolean };
 
-function lsof(overrides: Partial<MockLsofResult> = {}): MockLsofResult {
+type MockWindowsProcessArgsResult =
+  | { ok: true; args: string[] | null }
+  | { ok: false; permanent: boolean };
+
+function createLsofResult(overrides: Partial<MockLsofResult> = {}): MockLsofResult {
   return {
     error: null,
     status: 0,
@@ -192,28 +158,28 @@ function lsof(overrides: Partial<MockLsofResult> = {}): MockLsofResult {
   };
 }
 
-function busy(pids: number | number[]) {
-  return lsof({ stdout: gatewayLsofOutput(typeof pids === "number" ? [pids] : pids) });
+function createOpenClawBusyResult(pid: number) {
+  return createLsofResult({ stdout: gatewayLsofOutput([pid]) });
 }
 
-function lsofError(code: string, message: string) {
-  return lsof({ error: Object.assign(new Error(message), { code }), status: null });
+function createErrnoResult(code: string, message: string) {
+  return createLsofResult({ error: Object.assign(new Error(message), { code }), status: null });
 }
 
-function pollAfterScan(
+function installInitialBusyPoll(
   stalePids: number | number[],
-  resolvePoll: (call: number) => MockLsofResult = () => lsof({ status: 1 }),
-  onScan?: () => void,
+  resolvePoll: (call: number) => MockLsofResult = () => createLsofResult({ status: 1 }),
 ): () => number {
   let call = 0;
-  mocks.spawn.mockImplementation((command: unknown) => {
+  mockSpawnSync.mockImplementation((command: unknown) => {
     if (command !== "lsof") {
-      return lsof();
+      return createLsofResult();
     }
     call += 1;
     if (call === 1) {
-      onScan?.();
-      return busy(stalePids);
+      return createLsofResult({
+        stdout: gatewayLsofOutput(typeof stalePids === "number" ? [stalePids] : stalePids),
+      });
     }
     return resolvePoll(call);
   });
@@ -223,7 +189,7 @@ function pollAfterScan(
 function mockWindowsPoll(initial: MockWindowsListeningPidsResult, poll = initial): void {
   let now = 0;
   vi.spyOn(Date, "now").mockImplementation(() => now);
-  mocks.windowsListeners.mockImplementation((_port, timeoutMs) => {
+  mockReadWindowsListeningPidsResult.mockImplementation((_port, timeoutMs) => {
     if (timeoutMs === 400) {
       now += 2001;
       return poll;
@@ -233,7 +199,7 @@ function mockWindowsPoll(initial: MockWindowsListeningPidsResult, poll = initial
 }
 
 function expectWarningContaining(text: string): void {
-  expect(mocks.warn).toHaveBeenCalledWith(expect.stringContaining(text));
+  expect(mockRestartWarn).toHaveBeenCalledWith(expect.stringContaining(text));
 }
 
 function recordedOwner(pid: number, state: "live" | "dead" = "live", expired = true) {
@@ -251,26 +217,26 @@ function recordedOwner(pid: number, state: "live" | "dead" = "live", expired = t
 }
 
 beforeEach(() => {
-  mocks.ancestry.mockReset().mockReturnValue(null);
+  readProcessAncestry.mockReset().mockReturnValue(null);
   // These liveness fixtures drive process.kill independently of a native process table.
-  mocks.identity.mockReset().mockImplementation(() => {
+  readProcessIdentity.mockReset().mockImplementation(() => {
     throw new ProcSafeError("helper-unavailable", "fixture uses signal probes");
   });
-  mocks.spawn.mockReset();
-  mocks.argv.clear();
-  mocks.readlink.mockReset().mockImplementation(actualFs.readlinkSync);
-  mocks.darwin.mockReset().mockImplementation((pid: number) => {
-    const argv = mocks.argv.get(pid);
+  mockSpawnSync.mockReset();
+  observedArgv.clear();
+  mockReadlinkSync.mockReset().mockImplementation(actualFs.readlinkSync);
+  mockDarwinCommand.mockReset().mockImplementation((pid: number) => {
+    const argv = observedArgv.get(pid);
     return argv ? { argv } : undefined;
   });
-  mocks.owner.mockReset().mockReturnValue(undefined);
-  mocks.port.mockReset().mockReturnValue(18789);
-  mocks.warn.mockReset();
-  mocks.windowsPids.mockReset().mockReturnValue([]);
-  mocks.windowsListeners.mockReset().mockReturnValue({ ok: true, pids: [] });
-  mocks.windowsArgs.mockReset().mockReturnValue(null);
-  mocks.windowsArgsResult.mockReset().mockReturnValue({ ok: true, args: null });
-  mocks.readFile.mockReset().mockImplementation(() => {
+  mockReadGatewayOwnerLease.mockReset().mockReturnValue(undefined);
+  mockResolveGatewayPort.mockReset().mockReturnValue(18789);
+  mockRestartWarn.mockReset();
+  mockReadWindowsListeningPids.mockReset().mockReturnValue([]);
+  mockReadWindowsListeningPidsResult.mockReset().mockReturnValue({ ok: true, pids: [] });
+  mockReadWindowsProcessArgs.mockReset().mockReturnValue(null);
+  mockReadWindowsProcessArgsResult.mockReset().mockReturnValue({ ok: true, args: null });
+  mockReadFileSync.mockReset().mockImplementation(() => {
     throw Object.assign(new Error("ENOENT: test default"), { code: "ENOENT" });
   });
   vi.spyOn(Atomics, "wait").mockReturnValue("timed-out");
@@ -295,66 +261,53 @@ describe.skipIf(process.platform === "win32")("restart-stale-pids", () => {
   }
 
   it.each([
-    [lsof({ status: 1 }), null],
-    [lsof({ status: 2, stderr: "lsof error" }), "lsof exited with status 2"],
-    [lsofError("ENOENT", "lsof not found"), null],
+    [createLsofResult({ status: 1 }), null],
+    [createLsofResult({ status: 2, stderr: "lsof error" }), "lsof exited with status 2"],
+    [createErrnoResult("ENOENT", "lsof not found"), null],
     [
-      lsofError("EACCES", "permission denied"),
+      createErrnoResult("EACCES", "permission denied"),
       "lsof failed during initial stale-pid scan for port 18789: EACCES",
     ],
     [
-      lsof({ error: new Error("lsof unavailable"), status: null }),
+      createLsofResult({ error: new Error("lsof unavailable"), status: null }),
       "lsof failed during initial stale-pid scan for port 18789: lsof unavailable",
     ],
   ] as const)("handles failed initial scan %j", (result, warning) => {
-    mocks.spawn.mockReturnValue(result);
+    mockSpawnSync.mockReturnValue(result);
     expect(findGatewayPidsOnPortSync(18789)).toStrictEqual([]);
     if (warning) {
       expectWarningContaining(warning);
     } else {
-      expect(mocks.warn).not.toHaveBeenCalled();
+      expect(mockRestartWarn).not.toHaveBeenCalled();
     }
   });
 
-  it.each([
-    ...(["linux", "darwin", "freebsd", "win32"] as const).map((platform) => ({
-      platform,
-      native: true,
-    })),
-    { platform: "win32", native: false },
-  ] as const)(
-    "excludes ancestors on $platform (native walker: $native)",
-    ({ platform, native }) => {
+  it.each(["linux", "darwin", "freebsd", "win32"] as const)(
+    "excludes the native ancestor chain on %s",
+    (platform) => {
       const parentPid = process.pid + 2003;
       const grandparentPid = process.pid + 2004;
       const stalePid = process.pid + 2005;
-      mocks.ancestry.mockReturnValue(
-        native
-          ? {
-              chain: [
-                processIdentity(process.pid, parentPid),
-                processIdentity(parentPid, grandparentPid),
-                processIdentity(grandparentPid, 1),
-              ],
-              complete: true,
-              stoppedBy: "root",
-            }
-          : null,
+      readProcessAncestry.mockReturnValue({
+        chain: [
+          processIdentity(process.pid, parentPid),
+          processIdentity(parentPid, grandparentPid),
+          processIdentity(grandparentPid, 1),
+        ],
+        complete: true,
+        stoppedBy: "root",
+      });
+      const output = gatewayLsofOutput([parentPid, grandparentPid, stalePid]);
+      mockSpawnSync.mockImplementation((command: string) =>
+        createLsofResult({ stdout: command === "ps" ? "openclaw gateway" : output }),
       );
-      const listeners = [parentPid, ...(native ? [grandparentPid] : []), stalePid];
-      const output = gatewayLsofOutput(listeners);
-      mocks.spawn.mockImplementation((command: string) =>
-        lsof({ stdout: command === "ps" ? "openclaw gateway" : output }),
-      );
-      mocks.windowsPids.mockReturnValue(listeners);
-      mocks.windowsArgs.mockReturnValue(["openclaw", "gateway"]);
+      mockReadWindowsListeningPids.mockReturnValue([parentPid, grandparentPid, stalePid]);
+      mockReadWindowsProcessArgs.mockReturnValue(["openclaw", "gateway"]);
       withMockedPlatform(platform, () => {
         const pids = withStubbedPpid(parentPid, () => findGatewayPidsOnPortSync(18789));
         expect(pids).toEqual([stalePid]);
       });
-      if (!native) {
-        expect(mocks.windowsArgs).not.toHaveBeenCalledWith(parentPid);
-      }
+      expect(readProcessAncestry).toHaveBeenCalledWith(process.pid, { maxDepth: 34 });
     },
   );
 
@@ -362,7 +315,7 @@ describe.skipIf(process.platform === "win32")("restart-stale-pids", () => {
     const { inspectSelfAndAncestorPidsSync } = await import("./restart-stale-pids.js");
     const parentPid = process.pid + 2003;
     const unknownPid = process.pid + 2004;
-    mocks.ancestry.mockReturnValue({
+    readProcessAncestry.mockReturnValue({
       chain: [processIdentity(process.pid, parentPid), processIdentity(parentPid, unknownPid)],
       complete: false,
       stoppedBy: "unreadable-parent",
@@ -379,6 +332,19 @@ describe.skipIf(process.platform === "win32")("restart-stale-pids", () => {
     });
   });
 
+  it("excludes ancestor pids on Windows too — #68451 regression mirror for the win32 path", () => {
+    const parentGatewayPid = process.pid + 2101;
+    const unrelatedStalePid = process.pid + 2102;
+    withMockedPlatform("win32", () => {
+      mockReadWindowsListeningPids.mockReturnValue([parentGatewayPid, unrelatedStalePid]);
+      mockReadWindowsProcessArgs.mockReturnValue(["openclaw", "gateway"]);
+      const pids = withStubbedPpid(parentGatewayPid, () => findGatewayPidsOnPortSync(18789));
+      expect(pids).not.toContain(parentGatewayPid);
+      expect(pids).toContain(unrelatedStalePid);
+      expect(mockReadWindowsProcessArgs).not.toHaveBeenCalledWith(parentGatewayPid);
+    });
+  });
+
   it("returns each verified gateway once from mixed lsof records", () => {
     const first = process.pid + 700;
     const second = process.pid + 701;
@@ -387,16 +353,16 @@ describe.skipIf(process.platform === "win32")("restart-stale-pids", () => {
     const stdout = `p0\ncopenclaw-gateway\np${unknown}\nf8\np${foreign}\ncnode\n${gatewayLsofOutput(
       [first, process.pid, second, first],
     )}`;
-    mocks.argv.set(second, ["openclaw", "gateway"]);
-    mocks.argv.set(foreign, ["python", "server.py"]);
-    mocks.spawn.mockImplementation(
+    observedArgv.set(second, ["openclaw", "gateway"]);
+    observedArgv.set(foreign, ["python", "server.py"]);
+    mockSpawnSync.mockImplementation(
       (command: unknown, _args: unknown, options: { timeout?: number }) => {
         if (command !== "lsof") {
-          return lsof();
+          return createLsofResult();
         }
         return (options.timeout ?? 0) >= 3000
-          ? lsof({ stdout })
-          : lsofError("ETIMEDOUT", "lsof timed out");
+          ? createLsofResult({ stdout })
+          : createErrnoResult("ETIMEDOUT", "lsof timed out");
       },
     );
     expect(findGatewayPidsOnPortSync(18789)).toEqual([first, second]);
@@ -408,42 +374,40 @@ describe.skipIf(process.platform === "win32")("restart-stale-pids", () => {
       () => {
         throw new Error("lsof unavailable");
       },
-      () => lsof({ error: new Error("timeout"), status: null }),
-      () => lsof({ status: 2, stderr: "permission denied" }),
-      () => lsof({ stdout: "p111abc\ncopenclaw-gateway\n" }),
-      () => lsof({ status: 1, stdout: "p123\nccaddy\n" }),
-      () => lsof({ status: 1 }),
+      () => createLsofResult({ error: new Error("timeout"), status: null }),
+      () => createLsofResult({ status: 2, stderr: "permission denied" }),
+      () => createLsofResult({ stdout: "p111abc\ncopenclaw-gateway\n" }),
+      () => createLsofResult({ status: 1, stdout: "p123\nccaddy\n" }),
+      () => createLsofResult({ status: 1 }),
     ];
-    const calls = pollAfterScan(stalePid, (call) => polls[call - 2]!());
+    const calls = installInitialBusyPoll(stalePid, (call) => polls[call - 2]!());
     const kill = vi.spyOn(process, "kill").mockReturnValue(true);
     expect(cleanStaleGatewayProcessesSync(19999)).toEqual([stalePid]);
-    expect(mocks.port).not.toHaveBeenCalled();
+    expect(mockResolveGatewayPort).not.toHaveBeenCalled();
+    expect(mockSpawnSync).toHaveBeenNthCalledWith(
+      1,
+      "lsof",
+      ["-nP", "-iTCP:19999", "-sTCP:LISTEN", "-Fpc"],
+      expect.objectContaining({ encoding: "utf8", timeout: 5000 }),
+    );
     expect(calls()).toBe(1 + polls.length);
     expect(kill).toHaveBeenCalledWith(stalePid, "SIGTERM");
     expect(kill).toHaveBeenCalledWith(stalePid, "SIGKILL");
   });
 
   it.each([
-    ["darwin", "owner", "start"],
-    ["darwin", "owner", "scan"],
-    ["darwin", "owner", "SIGTERM"],
-    ["win32", "owner", "SIGTERM"],
-    ["darwin", "authority", "scan"],
-    ["darwin", "authority", "SIGTERM"],
-  ] as const)("stops cleanup on %s when %s changes at %s", (platform, guard, boundary) => {
+    { platform: "darwin", boundary: "before scan" },
+    { platform: "darwin", boundary: "after scan" },
+    { platform: "darwin", boundary: "before escalation" },
+    { platform: "win32", boundary: "before escalation" },
+  ] as const)("protects a recorded owner $boundary on $platform", ({ platform, boundary }) => {
     const pid = process.pid + 7100;
     const env = { OPENCLAW_STATE_DIR: "/tmp/openclaw-synchronous-cleanup" };
     const events: string[] = [];
-    let revoked = boundary === "start";
+    let ownerAvailable = boundary === "before scan";
     let scanned = false;
-    const record = (event: string) => {
-      events.push(event);
-      if (event === boundary) {
-        revoked = true;
-      }
-    };
-    mocks.owner.mockImplementation((params) =>
-      guard === "owner" && revoked && params?.env?.OPENCLAW_STATE_DIR === env.OPENCLAW_STATE_DIR
+    mockReadGatewayOwnerLease.mockImplementation((params) =>
+      ownerAvailable && params?.env?.OPENCLAW_STATE_DIR === env.OPENCLAW_STATE_DIR
         ? recordedOwner(pid)
         : undefined,
     );
@@ -452,50 +416,78 @@ describe.skipIf(process.platform === "win32")("restart-stale-pids", () => {
         return false;
       }
       scanned = true;
-      record("scan");
+      events.push("scan");
+      if (boundary === "after scan") {
+        ownerAvailable = true;
+      }
       return true;
     };
-    mocks.spawn.mockImplementation((command: string, args: string[]) => {
+    const recordSignal = (signal: string) => {
+      events.push(signal);
+      if (signal === "SIGTERM" && boundary === "before escalation") {
+        ownerAvailable = true;
+      }
+    };
+    mockSpawnSync.mockImplementation((command: string, args: string[]) => {
       if (command === "lsof") {
-        return scan() ? busy(pid) : lsof({ status: 1 });
+        return scan() ? createOpenClawBusyResult(pid) : createLsofResult({ status: 1 });
       }
       if (command.endsWith("taskkill.exe")) {
-        record(args.includes("/F") ? "SIGKILL" : "SIGTERM");
+        recordSignal(args.includes("/F") ? "SIGKILL" : "SIGTERM");
       }
-      return lsof();
+      return createLsofResult();
     });
-    mocks.windowsListeners.mockImplementation(() => ({ ok: true, pids: scan() ? [pid] : [] }));
-    mocks.windowsArgsResult.mockReturnValue({ ok: true, args: ["openclaw", "gateway"] });
-    const kill = vi.spyOn(process, "kill").mockImplementation((_pid, signal) => {
+    mockReadWindowsListeningPidsResult.mockImplementation(() => ({
+      ok: true,
+      pids: scan() ? [pid] : [],
+    }));
+    mockReadWindowsProcessArgsResult.mockReturnValue({ ok: true, args: ["openclaw", "gateway"] });
+    vi.spyOn(process, "kill").mockImplementation((_pid, signal) => {
       if (typeof signal === "string") {
-        record(signal);
+        recordSignal(signal);
       }
       return true;
     });
-    withMockedPlatform(platform, () =>
-      withStubbedPpid(0, () =>
-        cleanStaleGatewayProcessesSync(18789, {
-          env,
-          assertCurrent: () => {
-            if (guard === "authority" && revoked) {
-              throw new Error("update owner revoked");
-            }
-          },
-        }),
-      ),
-    );
-    expect(events).toEqual(
-      boundary === "start" ? [] : boundary === "scan" ? ["scan"] : ["scan", "SIGTERM"],
-    );
-    if (boundary !== "SIGTERM") {
-      expect(kill).not.toHaveBeenCalled();
-    }
-  });
 
+    withMockedPlatform(platform, () =>
+      withStubbedPpid(0, () => cleanStaleGatewayProcessesSync(18789, { env })),
+    );
+
+    expect(events).toEqual(
+      boundary === "before scan" ? [] : boundary === "after scan" ? ["scan"] : ["scan", "SIGTERM"],
+    );
+  });
+  it.each(["after inspection", "before escalation"] as const)(
+    "rechecks signal authority %s",
+    (boundary) => {
+      const stalePid = process.pid + 100;
+      installInitialBusyPoll(stalePid, () => createLsofResult({ status: 1 }));
+      let current = boundary !== "after inspection";
+      const killSpy = vi.spyOn(process, "kill").mockImplementation((_pid, signal) => {
+        if (signal === "SIGTERM") {
+          current = false;
+        }
+        return true;
+      });
+      cleanStaleGatewayProcessesSync(18789, {
+        assertCurrent: () => {
+          if (!current) {
+            throw new Error("update owner revoked");
+          }
+        },
+      });
+      expect(killSpy).not.toHaveBeenCalledWith(stalePid, "SIGKILL");
+      if (boundary === "after inspection") {
+        expect(killSpy).not.toHaveBeenCalled();
+      } else {
+        expect(killSpy).toHaveBeenCalledWith(stalePid, "SIGTERM");
+      }
+    },
+  );
   it("continues cleanup and port polling when individual process signals fail", () => {
     const termDeniedPid = process.pid + 198;
     const killDeniedPid = process.pid + 199;
-    const calls = pollAfterScan([termDeniedPid, killDeniedPid]);
+    const calls = installInitialBusyPoll([termDeniedPid, killDeniedPid]);
 
     const killSpy = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
       if (pid === termDeniedPid && signal === "SIGTERM") {
@@ -517,50 +509,65 @@ describe.skipIf(process.platform === "win32")("restart-stale-pids", () => {
     expect(calls()).toBe(2);
   });
 
-  it.each(["fixed", "replacement", "unreadable"] as const)(
-    "protects managed PIDs with a %s identity",
-    (mode) => {
-      const oldPid = process.pid + 4100;
-      const protectedPid = oldPid + 1;
-      const stalePid = oldPid + 2;
-      let scanned = false;
-      pollAfterScan([1, protectedPid, stalePid], undefined, () => {
-        scanned = true;
-      });
-      const kill = vi.spyOn(process, "kill").mockReturnValue(true);
-      const resolveProtectedPid =
-        mode === "fixed"
-          ? undefined
-          : () => {
-              expect(scanned).toBe(true);
-              if (mode === "unreadable") {
-                throw new Error("launchctl print failed");
-              }
-              return protectedPid;
-            };
-      const result = withStubbedPpid(1, () =>
-        cleanStaleGatewayProcessesSync(18789, {
-          protectedPid: mode === "fixed" ? protectedPid : oldPid,
-          resolveProtectedPid,
-        }),
-      );
-      expect(result).toEqual(mode === "unreadable" ? [] : [stalePid]);
-      if (mode === "unreadable") {
-        expectWarningContaining("launchctl print failed");
-        expect(kill).not.toHaveBeenCalled();
-      } else {
-        expect(kill).toHaveBeenCalledWith(stalePid, "SIGTERM");
-        for (const pid of [1, oldPid, protectedPid]) {
-          expect(kill).not.toHaveBeenCalledWith(pid, expect.anything());
-        }
+  it("does not kill a protected gateway pid after reparenting", () => {
+    const protectedPid = process.pid + 4001;
+    const stalePid = process.pid + 4002;
+    installInitialBusyPoll([1, protectedPid, stalePid]);
+    const killSpy = vi.spyOn(process, "kill").mockReturnValue(true);
+
+    const result = withStubbedPpid(1, () =>
+      cleanStaleGatewayProcessesSync(18789, { protectedPid }),
+    );
+
+    expect(result).toEqual([stalePid]);
+    expect(killSpy).toHaveBeenCalledWith(stalePid, "SIGTERM");
+    expect(killSpy).not.toHaveBeenCalledWith(protectedPid, expect.anything());
+    expect(killSpy).not.toHaveBeenCalledWith(1, expect.anything());
+  });
+
+  it("refreshes the protected pid after listener enumeration before filtering", () => {
+    const oldManagedPid = process.pid + 4100;
+    const replacementPid = process.pid + 4101;
+    const stalePid = process.pid + 4102;
+    let listenerSnapshotCaptured = false;
+    let lsofCall = 0;
+    mockSpawnSync.mockImplementation((command: unknown) => {
+      if (command !== "lsof") {
+        return createLsofResult({ status: 1 });
       }
-    },
-  );
+      lsofCall += 1;
+      if (lsofCall === 1) {
+        listenerSnapshotCaptured = true;
+        return createLsofResult({
+          stdout: gatewayLsofOutput([replacementPid, stalePid]),
+        });
+      }
+      return createLsofResult({ status: 1 });
+    });
+    const resolveProtectedPid = vi.fn(() => {
+      expect(listenerSnapshotCaptured).toBe(true);
+      return replacementPid;
+    });
+    const killSpy = vi.spyOn(process, "kill").mockReturnValue(true);
+
+    const result = withStubbedPpid(0, () =>
+      cleanStaleGatewayProcessesSync(18789, {
+        protectedPid: oldManagedPid,
+        resolveProtectedPid,
+      }),
+    );
+
+    expect(result).toEqual([stalePid]);
+    expect(resolveProtectedPid).toHaveBeenCalledOnce();
+    expect(killSpy).toHaveBeenCalledWith(stalePid, "SIGTERM");
+    expect(killSpy).not.toHaveBeenCalledWith(replacementPid, expect.anything());
+    expect(killSpy).not.toHaveBeenCalledWith(oldManagedPid, expect.anything());
+  });
 
   it("reports the raw owner lease read failure without scanning or signaling processes", () => {
     const cause =
       "EACCES: permission denied reading gateway owner lease password=synthetic-review-only-abcdefghijk";
-    mocks.owner.mockImplementationOnce(() => {
+    mockReadGatewayOwnerLease.mockImplementationOnce(() => {
       throw new Error(cause);
     });
     const killSpy = vi.spyOn(process, "kill").mockReturnValue(true);
@@ -568,13 +575,31 @@ describe.skipIf(process.platform === "win32")("restart-stale-pids", () => {
     expect(cleanStaleGatewayProcessesSync(18789)).toEqual([]);
     expectWarningContaining("stale gateway process cleanup failed:");
     expectWarningContaining(cause);
-    expect(mocks.spawn).not.toHaveBeenCalled();
+    expect(mockSpawnSync).not.toHaveBeenCalled();
+    expect(killSpy).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when the refreshed protected pid cannot be resolved", () => {
+    const listenerPid = process.pid + 4301;
+    mockSpawnSync.mockReturnValue(createOpenClawBusyResult(listenerPid));
+    const resolveProtectedPid = vi.fn(() => {
+      throw new Error("launchctl print failed");
+    });
+    const killSpy = vi.spyOn(process, "kill").mockReturnValue(true);
+
+    const result = withStubbedPpid(0, () =>
+      cleanStaleGatewayProcessesSync(18789, { resolveProtectedPid }),
+    );
+
+    expect(result).toEqual([]);
+    expect(resolveProtectedPid).toHaveBeenCalledOnce();
+    expectWarningContaining("launchctl print failed");
     expect(killSpy).not.toHaveBeenCalled();
   });
 
   it("stops polling after permanent EPERM", () => {
     const stalePid = process.pid + 300;
-    const calls = pollAfterScan(stalePid, () => lsofError("EPERM", "unavailable"));
+    const calls = installInitialBusyPoll(stalePid, () => createErrnoResult("EPERM", "unavailable"));
     vi.spyOn(process, "kill").mockReturnValue(true);
     expect(cleanStaleGatewayProcessesSync()).toEqual([stalePid]);
     expect(calls()).toBe(2);
@@ -582,7 +607,7 @@ describe.skipIf(process.platform === "win32")("restart-stale-pids", () => {
 
   it("still polls when stale pids exit before SIGTERM", () => {
     const stalePid = process.pid + 304;
-    const calls = pollAfterScan(stalePid, () => lsof({ status: 1 }));
+    const calls = installInitialBusyPoll(stalePid, () => createLsofResult({ status: 1 }));
     vi.spyOn(process, "kill").mockImplementation(() => {
       throw Object.assign(new Error("ESRCH"), { code: "ESRCH" });
     });
@@ -592,7 +617,7 @@ describe.skipIf(process.platform === "win32")("restart-stale-pids", () => {
 
   it("does not force-kill a stale PID that canonical liveness reports dead", () => {
     const stalePid = process.pid + 499;
-    pollAfterScan(stalePid);
+    installInitialBusyPoll(stalePid);
     vi.spyOn(pidAlive, "isPidAlive").mockReturnValue(false);
     const killSpy = vi.spyOn(process, "kill").mockReturnValue(true);
 
@@ -601,35 +626,55 @@ describe.skipIf(process.platform === "win32")("restart-stale-pids", () => {
     expect(killSpy).not.toHaveBeenCalledWith(stalePid, "SIGKILL");
   });
 
-  it.each(["after cleanup", "listener scan", "argv inspection"] as const)(
-    "waits on inconclusive Windows probes at %s",
-    (stage) =>
-      withMockedPlatform("win32", () => {
-        const pid = process.pid + 910;
-        const failure = { ok: false, permanent: false } as const;
-        windowsGateway(pid);
-        mocks.spawn.mockReturnValue(lsof());
-        const initial: MockWindowsListeningPidsResult =
-          stage === "listener scan" ? failure : { ok: true, pids: [pid] };
-        mockWindowsPoll(initial, stage === "after cleanup" ? failure : initial);
-        if (stage === "argv inspection") {
-          mocks.windowsArgsResult.mockReturnValue(failure);
-        }
-        let aliveChecks = 0;
-        const kill = vi.spyOn(process, "kill").mockImplementation((target, signal) => {
-          if (stage === "after cleanup" && signal === 0 && target === pid && ++aliveChecks >= 3) {
-            throw Object.assign(new Error("ESRCH"), { code: "ESRCH" });
+  it("treats failed Windows port probes as inconclusive, not free", () => {
+    const stalePid = process.pid + 910;
+    withMockedPlatform("win32", () => {
+      mockReadWindowsProcessArgsResult.mockReturnValue({
+        ok: true,
+        args: ["openclaw", "gateway"],
+      });
+      mockSpawnSync.mockReturnValue(createLsofResult());
+      mockWindowsPoll({ ok: true, pids: [stalePid] }, { ok: false, permanent: false });
+      let aliveChecks = 0;
+      const killSpy = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+        if (signal === 0 && pid === stalePid) {
+          aliveChecks += 1;
+          if (aliveChecks < 3) {
+            return true;
           }
-          return true;
-        });
-        expect(cleanStaleGatewayProcessesSync()).toEqual(stage === "after cleanup" ? [pid] : []);
-        expectWarningContaining("port 18789 still in use after 2000ms");
-        if (stage === "after cleanup") {
-          expect(kill).toHaveBeenCalledWith(pid, 0);
-        } else {
-          expect(kill).not.toHaveBeenCalled();
+          throw Object.assign(new Error("ESRCH"), { code: "ESRCH" });
         }
-      }),
+        return true;
+      });
+
+      expect(cleanStaleGatewayProcessesSync()).toEqual([stalePid]);
+      expect(mockReadWindowsListeningPidsResult).toHaveBeenCalledWith(18789, 400);
+      expectWarningContaining("port 18789 still in use after 2000ms");
+      expect(killSpy).toHaveBeenCalledWith(stalePid, 0);
+    });
+  });
+
+  it.each(["listener scan", "argv inspection"])(
+    "waits for port release when Windows %s is inconclusive",
+    (stage) => {
+      const stalePid = process.pid + 913;
+      withMockedPlatform("win32", () => {
+        mockWindowsPoll(
+          stage === "listener scan"
+            ? { ok: false, permanent: false }
+            : { ok: true, pids: [stalePid] },
+        );
+        mockReadWindowsProcessArgsResult.mockReturnValue({ ok: false, permanent: false });
+        const killSpy = vi.spyOn(process, "kill").mockReturnValue(true);
+        expect(cleanStaleGatewayProcessesSync()).toStrictEqual([]);
+        expect(mockReadWindowsListeningPidsResult).toHaveBeenCalledWith(18789, 400);
+        if (stage === "argv inspection") {
+          expect(mockReadWindowsProcessArgsResult).toHaveBeenCalledWith(stalePid);
+        }
+        expectWarningContaining("port 18789 still in use after 2000ms");
+        expect(killSpy).not.toHaveBeenCalled();
+      });
+    },
   );
   it("treats Windows EPERM liveness checks as alive and still forces taskkill", () => {
     const stalePid = process.pid + 912;
@@ -637,8 +682,12 @@ describe.skipIf(process.platform === "win32")("restart-stale-pids", () => {
     withMockedPlatform("win32", () => {
       let fakeNow = 0;
       vi.spyOn(Date, "now").mockImplementation(() => fakeNow);
-      windowsGateway(stalePid);
-      mocks.spawn.mockImplementation((command: string) => {
+      mockReadWindowsListeningPidsResult.mockReturnValue({ ok: true, pids: [stalePid] });
+      mockReadWindowsProcessArgsResult.mockReturnValue({
+        ok: true,
+        args: ["openclaw", "gateway"],
+      });
+      mockSpawnSync.mockImplementation((command: string) => {
         if (
           command.endsWith("\\powershell.exe") ||
           command === "C:\\Windows\\System32\\taskkill.exe"
@@ -659,18 +708,28 @@ describe.skipIf(process.platform === "win32")("restart-stale-pids", () => {
       });
 
       expect(cleanStaleGatewayProcessesSync()).toStrictEqual([]);
-      expect(mocks.spawn.mock.calls.map(([command, args]) => [command, args])).toEqual([
-        ["C:\\Windows\\System32\\taskkill.exe", ["/T", "/PID", String(stalePid)]],
-        ["C:\\Windows\\System32\\taskkill.exe", ["/F", "/T", "/PID", String(stalePid)]],
-      ]);
+      expect(
+        mockSpawnSync.mock.calls.filter(
+          (call) => call[0] === "C:\\Windows\\System32\\taskkill.exe",
+        ),
+      ).toEqual(
+        [
+          ["/T", "/PID", String(stalePid)],
+          ["/F", "/T", "/PID", String(stalePid)],
+        ].map((args) => [
+          "C:\\Windows\\System32\\taskkill.exe",
+          args,
+          { stdio: "ignore", timeout: 5000, windowsHide: true },
+        ]),
+      );
     });
   });
 });
 
 it("reports an unclassified Windows listener without reclaiming its process", () => {
   const pid = process.pid + 901;
-  mocks.windowsListeners.mockReturnValue({ ok: true, pids: [pid] });
-  mocks.windowsArgsResult.mockReturnValue({
+  mockReadWindowsListeningPidsResult.mockReturnValue({ ok: true, pids: [pid] });
+  mockReadWindowsProcessArgsResult.mockReturnValue({
     ok: true,
     args: ["node", "dist/index.js", "gateway"],
   });
@@ -678,7 +737,7 @@ it("reports an unclassified Windows listener without reclaiming its process", ()
   withMockedPlatform("win32", () => {
     expect(cleanStaleGatewayProcessesSync(18789)).toEqual([]);
   });
-  expect(mocks.warn).toHaveBeenCalledWith(
+  expect(mockRestartWarn).toHaveBeenCalledWith(
     expect.stringContaining(`Could not classify PID ${pid}:`),
   );
   expect(kill).not.toHaveBeenCalled();
@@ -691,39 +750,132 @@ it.each(["linux", "darwin"] as const)(
     const ownedPid = process.pid + 401;
     const unrelatedPid = process.pid + 402;
     const unknownPid = process.pid + 403;
-    const entries = (
-      [
-        [ownedPid, "openclaw"],
-        [unrelatedPid, "other-service"],
-      ] as const
-    ).map(([pid, name]) => {
-      const cwd = path.join(
+    const directories = new Map<number, string>();
+    mockDarwinCommand.mockReturnValue({ argv: ["node", "dist/index.js", "gateway"] });
+    for (const [pid, name] of [
+      [ownedPid, "openclaw"],
+      [unrelatedPid, "other-service"],
+    ] as const) {
+      const directory = path.join(
         root,
         platform === "darwin" && process.platform !== "win32"
           ? `${pid}\nworking directory`
           : String(pid),
       );
-      gatewayPackage(cwd, name);
-      return { pid, cwd, argv: ["node", "dist/index.js", "gateway"] };
+      fs.mkdirSync(path.join(directory, "dist"), { recursive: true });
+      fs.writeFileSync(path.join(directory, "dist", "index.js"), "");
+      fs.writeFileSync(path.join(directory, "package.json"), JSON.stringify({ name }));
+      directories.set(pid, directory);
+    }
+    mockReadFileSync.mockImplementation((file: string) => {
+      if (/^\/proc\/\d+\/cmdline$/.test(file)) {
+        return "node\0dist/index.js\0gateway\0";
+      }
+      if (file.startsWith("/proc/")) {
+        throw Object.assign(new Error("ancestor unavailable"), { code: "ENOENT" });
+      }
+      return actualFs.readFileSync(file, "utf8");
     });
-    mockNativeListeners([
-      ...entries,
-      { pid: unknownPid, argv: ["node", "dist/index.js", "gateway"] },
-    ]);
+    mockReadlinkSync.mockImplementation((file: unknown) => {
+      const pid = Number(/^\/proc\/(\d+)\/cwd$/.exec(String(file))?.[1]);
+      const directory = directories.get(pid);
+      if (!directory) {
+        throw Object.assign(new Error("working directory unavailable"), { code: "EACCES" });
+      }
+      return directory;
+    });
+    mockSpawnSync.mockImplementation((command: string, args: string[]) => {
+      const result = { error: null, status: 0, stdout: "", stderr: "" };
+      if (command === "lsof") {
+        return {
+          ...result,
+          stdout: [ownedPid, unrelatedPid, unknownPid].map((pid) => `p${pid}\ncnode\n`).join(""),
+        };
+      }
+      if (command === "/usr/sbin/lsof") {
+        const pid = Number(args[2]);
+        const directory = directories.get(pid);
+        return directory
+          ? { ...result, stdout: `p${pid}\0\nfcwd\0n${directory}\0\n` }
+          : { ...result, status: 1 };
+      }
+      return { ...result, stdout: args[0] === "-ww" ? "node dist/index.js gateway\n" : "" };
+    });
     withMockedPlatform(platform, () => {
       expect(findGatewayPidsOnPortSync(18789)).toEqual([ownedPid]);
     });
   },
 );
 
-it("uses quoted ps argv when Linux procfs is unavailable", () => {
-  const root = path.join(tempDirs.make("gateway-native-argv-"), "application with spaces");
-  const pid = process.pid + 701;
-  mockNativeListeners([{ pid, argv: ["node", gatewayPackage(root), "gateway"] }], false);
-  withMockedPlatform("linux", () => {
-    expect(findGatewayPidsOnPortSync(18789)).toEqual([pid]);
-  });
-});
+it.each([
+  { platform: "darwin", packageName: "openclaw", command: "node", verified: true },
+  {
+    platform: "darwin",
+    packageName: "unrelated-indexer",
+    command: "openclaw-indexer",
+    verified: false,
+  },
+  { platform: "linux", packageName: "openclaw", command: "node", verified: true },
+] as const)(
+  "classifies the $platform $command listener from argv and package ownership",
+  async ({ platform, packageName, command, verified }) => {
+    const root = path.join(tempDirs.make("gateway-native-argv-"), "application with spaces");
+    const script = path.join(root, "dist", "index.js");
+    fs.mkdirSync(path.dirname(script), { recursive: true });
+    fs.writeFileSync(script, "");
+    fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: packageName }));
+    const pid = process.pid + 701;
+    const argv = ["node", script, "gateway"];
+    mockReadFileSync.mockImplementation((file: string) => {
+      if (platform === "linux" && file.startsWith("/proc/")) {
+        throw Object.assign(new Error("procfs unavailable"), { code: "ENOENT" });
+      }
+      return actualFs.readFileSync(file, "utf8");
+    });
+    mockDarwinCommand.mockReturnValue({ argv });
+    mockSpawnSync.mockImplementation((executable: string, args: string[]) => ({
+      error: null,
+      status: 0,
+      stderr: "",
+      stdout:
+        executable === "lsof"
+          ? `${platform === "linux" ? "p111abc\ncnode\n" : ""}p${pid}\nc${command}\n`
+          : platform === "linux" && args[0] === "-ww"
+            ? `node "${script}" gateway\n`
+            : "",
+    }));
+    const kill = vi.spyOn(process, "kill").mockReturnValue(true);
+    withMockedPlatform(platform, () => {
+      expect(findGatewayPidsOnPortSync(18789)).toEqual(verified ? [pid] : []);
+      if (platform !== "darwin") {
+        return;
+      }
+      expect(findVerifiedGatewayListenerPidsOnPortSync(18789)).toEqual(verified ? [pid] : []);
+      if (verified) {
+        signalVerifiedGatewayPidSync(pid, "SIGTERM");
+        expect(kill).toHaveBeenCalledWith(pid, "SIGTERM");
+      } else {
+        expect(() => signalVerifiedGatewayPidSync(pid, "SIGTERM")).toThrow(
+          "refusing to signal non-gateway process",
+        );
+        expect(kill).not.toHaveBeenCalled();
+      }
+      expect(readGatewayLockProcessCmdline(pid, "darwin", 1000)).toEqual(argv);
+    });
+    if (platform === "linux") {
+      const psCall = mockSpawnSync.mock.calls.find(
+        (call) => call[0] === "ps" && call[1]?.[0] === "-ww",
+      );
+      expect(psCall?.[1]).toEqual(["-ww", "-p", String(pid), "-o", "command="]);
+      expect(psCall?.[2]).toEqual({
+        env: expect.any(Object),
+        encoding: "utf8",
+        killSignal: "SIGKILL",
+        timeout: 2000,
+      });
+    }
+  },
+);
 
 describe("stale Gateway process-group escalation", () => {
   const starts = new Map<number, number | null>();
@@ -733,7 +885,6 @@ describe("stale Gateway process-group escalation", () => {
   const leader = 5760;
   const child = 5761;
   const unrelated = 5762;
-  let members: () => string;
 
   beforeEach(() => {
     vi.spyOn(pidAlive, "getFileLockProcessStartTime").mockImplementation(
@@ -750,14 +901,13 @@ describe("stale Gateway process-group escalation", () => {
     starts.set(unrelated, 1002);
     wait.mockReset();
     wait.mockResolvedValue(undefined);
-    members = () => `${leader} ${leader}\n${child} ${leader}\n${unrelated} 1\n`;
-    mocks.spawn.mockReset();
-    mocks.spawn.mockImplementation((command: string, args: string[]) => {
+    mockSpawnSync.mockReset();
+    mockSpawnSync.mockImplementation((command: string, args: string[]) => {
       if (command === "ps" && args[0] === "-p") {
         return { status: 0, stdout: `${leader}\n` };
       }
       if (command === "ps" && args[0] === "-axo") {
-        return { status: 0, stdout: members() };
+        return { status: 0, stdout: `${leader} ${leader}\n${child} ${leader}\n${unrelated} 1\n` };
       }
       throw new Error(`Unexpected process command: ${command}`);
     });
@@ -777,7 +927,7 @@ describe("stale Gateway process-group escalation", () => {
     "does not signal a PID with %s",
     async (reason) => {
       if (reason === "recorded owner") {
-        mocks.owner.mockReturnValue(recordedOwner(leader, "dead"));
+        mockReadGatewayOwnerLease.mockReturnValue(recordedOwner(leader, "dead"));
       } else if (reason === "missing start identity") {
         starts.set(leader, null);
       } else {
@@ -791,36 +941,53 @@ describe("stale Gateway process-group escalation", () => {
     },
   );
 
-  it.each(["survivor", "capture-recycle", "grace-recycle", "new-owner"] as const)(
-    "escalates only the original surviving group members: %s",
-    async (scenario) => {
-      if (scenario === "capture-recycle") {
-        let snapshots = 0;
-        members = () => {
-          starts.set(child, 2000);
-          return `${leader} ${leader}\n${child} ${++snapshots === 1 ? leader : 1}\n`;
-        };
-      } else if (scenario !== "survivor") {
-        wait.mockImplementation(async () => {
-          if (scenario === "grace-recycle") {
-            starts.set(child, 2000);
-          } else {
-            mocks.owner.mockReturnValue(recordedOwner(unrelated, "live", false));
-          }
-        });
+  it("kills a surviving child after the group leader exits on SIGTERM", async () => {
+    await withMockedPlatform("darwin", async () => {
+      expect(await terminateStaleGatewayPids([leader])).toEqual([leader]);
+      expect(starts.has(leader)).toBe(false);
+      expect(starts.has(child)).toBe(false);
+      expect(starts.has(unrelated)).toBe(true);
+      expect(kill).toHaveBeenCalledWith(child, "SIGKILL");
+    });
+  });
+
+  it("does not adopt a child PID recycled outside the group during identity capture", async () => {
+    let snapshots = 0;
+    mockSpawnSync.mockImplementation((command: string, args: string[]) => {
+      if (command === "ps" && args[0] === "-p") {
+        return { status: 0, stdout: `${leader}\n` };
       }
+      if (command === "ps" && args[0] === "-axo") {
+        snapshots += 1;
+        starts.set(child, 2000);
+        return {
+          status: 0,
+          stdout: `${leader} ${leader}\n${child} ${snapshots === 1 ? leader : 1}\n`,
+        };
+      }
+      throw new Error(`Unexpected process command: ${command}`);
+    });
+    await withMockedPlatform("darwin", async () => {
+      expect(await terminateStaleGatewayPids([leader])).toEqual([leader]);
+      expect(starts.get(child)).toBe(2000);
+      expect(kill).not.toHaveBeenCalledWith(child, "SIGKILL");
+    });
+  });
+
+  it.each(["recycled-child", "replacement-owner"])(
+    "preserves a captured child after %s appears during the TERM grace period",
+    async (replacement) => {
+      wait.mockImplementation(async () => {
+        if (replacement === "recycled-child") {
+          starts.set(child, 2000);
+        } else {
+          mockReadGatewayOwnerLease.mockReturnValue(recordedOwner(unrelated, "live", false));
+        }
+      });
       await withMockedPlatform("darwin", async () => {
         expect(await terminateStaleGatewayPids([leader])).toEqual([leader]);
-        expect(starts.has(leader)).toBe(false);
-        expect(starts.has(unrelated)).toBe(true);
-        expect(starts.get(child)).toBe(
-          scenario === "survivor" ? undefined : scenario === "new-owner" ? 1001 : 2000,
-        );
-        if (scenario === "survivor") {
-          expect(kill).toHaveBeenCalledWith(child, "SIGKILL");
-        } else {
-          expect(kill).not.toHaveBeenCalledWith(child, "SIGKILL");
-        }
+        expect(starts.has(child)).toBe(true);
+        expect(kill).not.toHaveBeenCalledWith(child, "SIGKILL");
       });
     },
   );

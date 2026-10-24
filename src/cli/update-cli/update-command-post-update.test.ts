@@ -1,5 +1,7 @@
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -13,6 +15,7 @@ import {
 import { loadUpdateRecovery } from "../../infra/update-run-recovery.js";
 import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { registerMaintenanceCommands } from "../program/register.maintenance.js";
 import { registerCurrentCoreServiceReceiptTests } from "./update-command-current-core-service-receipt.test-support.js";
 import {
   createManagedServiceIdentityFixture,
@@ -22,6 +25,7 @@ import {
   expectUpdateFailure,
   managedServiceState,
   mockVerifiedGatewayRun,
+  programArguments,
   registerForegroundFinalizationTests,
   registerVerifiedActivationFailureTests,
   registerManagedInstallEnvironmentTest,
@@ -130,7 +134,6 @@ import * as rollbackModule from "./update-command-rollback.js";
 import { registerStaleSessionReceiptUpdateTest } from "./update-command-stale-session-receipt.test-support.js";
 
 type FinishUpdateParams = Parameters<typeof finishUpdate>[0];
-const { objectContaining: partial, arrayContaining: containing } = expect;
 const stdinIsTTYDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
 
 type OrderedMock = { mock: { invocationCallOrder: number[] } };
@@ -142,7 +145,7 @@ function expectBefore(first: OrderedMock, second: OrderedMock, firstIndex = 0, s
 
 function expectReportedFailure(reason: string) {
   expect(mocks.printResult).toHaveBeenCalledOnce();
-  expectFailureReport(mocks.printResult, reason, partial({ json: true }));
+  expectFailureReport(mocks.printResult, reason, expect.objectContaining({ json: true }));
   expect(mocks.writeSentinel.mock.lastCall?.[0].result).toEqual(
     mocks.printResult.mock.lastCall?.[0],
   );
@@ -198,6 +201,24 @@ describe("successful update finalization ordering", () => {
     mocks,
   });
   registerServiceInstallationConvergenceTests(() => tempDirs.make("update-install-drift-"), mocks);
+
+  it("refuses same-schema finalization after requester revocation", async () => {
+    const env = { OPENCLAW_STATE_DIR: tempDirs.make("finalizer-revoked-requester-") };
+    const record = createUpdateRun({ trigger: "cli" }, { env });
+    await expect(
+      finishSuccessfulPackageSwitch({
+        run: {
+          runId: record.runId,
+          env,
+          executorFence: { assertCurrent() {} },
+          requesterAuthority: { requester: {}, isCurrent: () => false },
+        },
+      }),
+    ).rejects.toThrow("requester-revoked");
+    expect(mocks.updatePlugins).not.toHaveBeenCalled();
+    expect(mocks.restartService).not.toHaveBeenCalled();
+    expect(getUpdateRun(record.runId, { env })?.status).toBe("running");
+  });
 
   it("does not finalize or clean an active durable run without its live executor", async () => {
     const home = tempDirs.make("finalizer-pending-recovery-");
@@ -396,10 +417,22 @@ describe("successful update finalization ordering", () => {
   });
 
   it.each([
-    ["retires the wrapper before persisting and printing success", false, false],
-    ["recovers and retains the package before reporting failed wrapper retirement", true, false],
-    ["keeps a verified target successful when wrapper retirement fails", true, true],
-  ] as const)("%s", async (_name, denied, verified) => {
+    {
+      name: "retires the wrapper before persisting and printing success",
+      denied: false,
+      verified: false,
+    },
+    {
+      name: "recovers and retains the package before reporting failed wrapper retirement",
+      denied: true,
+      verified: false,
+    },
+    {
+      name: "keeps a verified target successful when wrapper retirement fails",
+      denied: true,
+      verified: true,
+    },
+  ])("$name", async ({ denied, verified }) => {
     const home = tempDirs.make("openclaw-finalize-wrapper-");
     const previousRoot = path.join(home, "old-root");
     const wrapper = path.join(home, ".local", "bin", "openclaw");
@@ -457,12 +490,12 @@ describe("successful update finalization ordering", () => {
       expect(mocks.printResult).toHaveBeenCalledOnce();
       expect(mocks.printResult.mock.lastCall?.[0]).toMatchObject({
         status: "error",
-        steps: containing([retained]),
+        steps: expect.arrayContaining([retained]),
       });
       expect(mocks.writeSentinel).toHaveBeenCalledOnce();
       expectFailureReport(mocks.printResult, "wrapper-retirement-failed");
       expect(mocks.markSentinelFailure).toHaveBeenCalledWith(
-        partial({ reason: "wrapper-retirement-failed" }),
+        expect.objectContaining({ reason: "wrapper-retirement-failed" }),
       );
     } else {
       await finishing;
@@ -470,8 +503,8 @@ describe("successful update finalization ordering", () => {
       if (verified) {
         expect(mocks.printResult.mock.lastCall?.[0]).toMatchObject({
           status: "ok",
-          steps: containing([
-            partial({
+          steps: expect.arrayContaining([
+            expect.objectContaining({
               advisory: {
                 kind: "recoverable-maintenance",
                 message: expect.stringContaining("unlink denied"),
@@ -502,15 +535,14 @@ describe("successful update finalization ordering", () => {
     });
 
     it.each([
-      ["unchanged", 10_700],
-      ["rolled-back", 11_500],
-      ["unverified", null],
+      { outcome: "unchanged", stoppedAtMs: 500, downtimeMs: 10_700 },
+      { outcome: "rolled-back", stoppedAtMs: 500, downtimeMs: 11_500 },
+      { outcome: "unverified", stoppedAtMs: 500, downtimeMs: null },
     ] as const)(
-      "measures the stopped interval through %s verification",
-      async (outcome, downtimeMs) => {
+      "keeps plugin convergence stopped and measures the full interval through verification ($outcome, initial stop=$stoppedAtMs)",
+      async ({ outcome, stoppedAtMs, downtimeMs }) => {
         const changed = outcome !== "unchanged";
-        const restartFailed = changed;
-        const rolledBack = outcome === "rolled-back";
+        const restartFailed = outcome === "rolled-back" || outcome === "unverified";
         const packageRoot = tempDirs.make("update-downtime-installed-runtime-");
         await fs.writeFile(
           path.join(packageRoot, "package.json"),
@@ -528,13 +560,18 @@ describe("successful update finalization ordering", () => {
         const clock = { origin: Date.now(), elapsed: 1_000 };
         vi.spyOn(Date, "now").mockImplementation(() => clock.origin + clock.elapsed);
         const events: string[] = [];
-        const oldRecovery = taskRecovery();
+        const windowsEvents: string[] = [];
+        const oldRecovery = taskRecovery((phase) => {
+          if (phase === "complete") {
+            windowsEvents.push("old-complete");
+          }
+        });
         mocks.readServiceState.mockResolvedValue(
           managedServiceState(serviceEnv, { environment: serviceEnv }),
         );
         mocks.restartService.mockImplementation(async (params) => {
           events.push("start");
-          clock.elapsed += 200;
+          clock.elapsed += events.length === 1 ? 500 : 200;
           if (restartFailed && events.length > 1) {
             recordUpdateRunVerification(run.runId, { serviceRunning: false }, { env: serviceEnv });
             return "restart-health-failed";
@@ -554,7 +591,7 @@ describe("successful update finalization ordering", () => {
             if (changed) {
               await params.beforeDoctor?.();
               events.push("doctor");
-              expect(oldRecovery.complete).not.toHaveBeenCalled();
+              expect(windowsEvents).toEqual([]);
               clock.elapsed += 300;
             }
             return { pluginUpdate: plugins, configSnapshot: validConfigSnapshot };
@@ -566,7 +603,7 @@ describe("successful update finalization ordering", () => {
             events.push("rollback");
             expect(getUpdateRun(run.runId, { env: serviceEnv })?.confirmedAtMs).toBeNull();
             clock.elapsed = 12_000;
-            if (rolledBack) {
+            if (outcome === "rolled-back") {
               await fs.writeFile(
                 path.join(packageRoot, "package.json"),
                 JSON.stringify({ version: "2026.4.23" }),
@@ -577,16 +614,22 @@ describe("successful update finalization ordering", () => {
               result: {
                 ...result,
                 after: result.before,
-                recovery: {
-                  serviceRestartSafe: rolledBack,
-                  packageRollbackVerified: true,
-                  ...(rolledBack
-                    ? { version: "2026.4.23", service: "healthy" as const }
-                    : { reason: "runtime-verification-failed" }),
-                },
+                recovery:
+                  outcome === "rolled-back"
+                    ? {
+                        serviceRestartSafe: true,
+                        version: "2026.4.23",
+                        packageRollbackVerified: true,
+                        service: "healthy",
+                      }
+                    : {
+                        serviceRestartSafe: false,
+                        packageRollbackVerified: true,
+                        reason: "runtime-verification-failed",
+                      },
               },
-              rolledBack,
-              ...(rolledBack ? { verifiedAtMs: Date.now() } : {}),
+              rolledBack: outcome === "rolled-back",
+              ...(outcome === "rolled-back" ? { verifiedAtMs: Date.now() } : {}),
             };
           },
         );
@@ -598,7 +641,7 @@ describe("successful update finalization ordering", () => {
             packageRoot,
             restartEnvironment: serviceEnv,
             sealed: true,
-            stoppedAtMs: clock.origin + 500,
+            stoppedAtMs: clock.origin + stoppedAtMs,
             run,
             windowsTaskAutoStartRecovery: oldRecovery,
           },
@@ -616,7 +659,7 @@ describe("successful update finalization ordering", () => {
           await expect(finishing).rejects.toMatchObject({
             result: {
               status: "error",
-              recovery: { serviceRestartSafe: rolledBack },
+              recovery: { serviceRestartSafe: outcome === "rolled-back" },
             },
           });
         } else {
@@ -629,16 +672,48 @@ describe("successful update finalization ordering", () => {
           ...(restartFailed ? ["rollback"] : []),
         ]);
         expect(mocks.stopService).not.toHaveBeenCalled();
+        expect(oldRecovery.restore.mock.lastCall?.slice(0, 2)).toEqual([
+          true,
+          expect.any(Function),
+        ]);
         expect(oldRecovery.complete).toHaveBeenLastCalledWith(outcome !== "unverified");
+        expect(windowsEvents.at(-1)).toBe("old-complete");
         expect(getUpdateRun(run.runId, { env: serviceEnv })).toMatchObject({
-          status: rolledBack ? "rolled-back" : restartFailed ? "failed" : "succeeded",
+          status:
+            outcome === "rolled-back" ? "rolled-back" : restartFailed ? "failed" : "succeeded",
           downtimeMs,
         });
-        if (rolledBack) {
+        if (outcome === "rolled-back") {
           expect(complete).toHaveBeenCalledOnce();
         }
       },
     );
+
+    it("skips unsafe metadata refresh for unknown ownership", async () => {
+      const portArguments = [...programArguments, "--port", "19305"];
+      mocks.readServiceState.mockResolvedValueOnce(
+        managedServiceState(
+          {},
+          {
+            programArguments: portArguments,
+            managedDefinition: { programArguments: portArguments },
+            managedOverrides: { environment: true },
+          },
+        ),
+      );
+
+      await finishSuccessfulPackageSwitch();
+
+      expect(mocks.restartService).toHaveBeenCalledWith(
+        expect.objectContaining({
+          shouldRestart: true,
+          refreshServiceEnv: false,
+          serviceInstallEnv: null,
+          serviceUpdateVerdict: expect.objectContaining({ refreshDefinition: false }),
+        }),
+      );
+      expect(mocks.restartService.mock.lastCall?.[0].gatewayPort).toBe(19305);
+    });
 
     it.each(["inspection", "revalidation"] as const)(
       "does not restart a stopped sealed service when fresh %s fails",
@@ -672,6 +747,86 @@ describe("successful update finalization ordering", () => {
       },
     );
 
+    it.each([
+      {
+        name: "marks failed activation without finalizing success",
+        activated: false,
+        unloaded: false,
+      },
+      {
+        name: "preserves the native context of an unloaded git service",
+        activated: true,
+        unloaded: true,
+      },
+    ])("canonical sealed post-update $name", async ({ activated, unloaded }) => {
+      const serviceEnv = { MANAGED_VALUE: "revalidated" };
+      const env = { OPENCLAW_STATE_DIR: tempDirs.make("update-retention-fact-") };
+      const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
+      mocks.readServiceState.mockResolvedValueOnce(
+        managedServiceState(serviceEnv, { environment: serviceEnv }, unloaded),
+      );
+      mocks.restartService.mockImplementationOnce(async (params) => {
+        if (!activated) {
+          params.onVerificationFailure?.("readyz-unhealthy");
+        }
+        return activated ? "ok" : "failed";
+      });
+      const finishing = finishSuccessfulPackageSwitch({
+        restartEnvironment: { ...process.env },
+        sealed: true,
+        updateMode: unloaded ? "git" : "npm",
+        stoppedForUpdate: !unloaded,
+        run,
+      });
+      if (activated) {
+        await finishing;
+      } else {
+        await expectUpdateFailure(finishing, "readyz-unhealthy");
+      }
+
+      expect(mocks.restartService).toHaveBeenCalledOnce();
+      expect(mocks.restartService).toHaveBeenCalledWith(
+        expect.objectContaining({
+          refreshServiceEnv: false,
+          serviceEnv,
+          serviceUpdateVerdict: {
+            kind: "owned",
+            root: "/tmp/openclaw-update",
+            refreshDefinition: false,
+            fingerprint: "sealed",
+          },
+          result: expect.objectContaining({
+            after: { version: "2026.4.24", ...(unloaded ? { buildId: "new-build" } : {}) },
+          }),
+          requireRunningServiceAfterRestart: !unloaded,
+        }),
+      );
+      expectBefore(mocks.revalidateService, mocks.restartService);
+      if (activated) {
+        expect(mocks.writeSentinel).toHaveBeenCalledTimes(2);
+        expectBefore(mocks.restartService, mocks.writeSentinel, 0, 1);
+      } else {
+        expect(mocks.writeSentinel).toHaveBeenCalledOnce();
+        expect(mocks.printResult).toHaveBeenCalledOnce();
+        expectFailureReport(mocks.printResult, "readyz-unhealthy");
+        expect(mocks.markSentinelFailure).toHaveBeenCalledWith(
+          expect.objectContaining({ reason: "readyz-unhealthy" }),
+        );
+        expect(getUpdateRun(run.runId, { env })).toMatchObject({
+          status: "failed",
+          reason: "readyz-unhealthy",
+          steps: expect.arrayContaining([
+            expect.objectContaining({
+              step: "package rollback",
+              status: "skipped",
+              detail:
+                "No retained previous package transaction is available; automatic package restoration was not attempted.",
+            }),
+          ]),
+        });
+      }
+    });
+
     it("leaves native service management blocked when HOME is relocated", async () => {
       const home = tempDirs.make("openclaw-post-update-relocated-home-");
       process.env.HOME = home;
@@ -686,7 +841,7 @@ describe("successful update finalization ordering", () => {
       expect(mocks.readServiceState).not.toHaveBeenCalled();
       expect(mocks.revalidateService).not.toHaveBeenCalled();
       expect(mocks.restartService).toHaveBeenCalledWith(
-        partial({
+        expect.objectContaining({
           shouldRestart: false,
           serviceMutationSkipMessage: expect.stringContaining("HOME set to the OS account home"),
         }),
@@ -695,22 +850,41 @@ describe("successful update finalization ordering", () => {
   });
 
   it.each([
+    // owner, candidate runtime, adopted finalization, parent marker, inspections run, ready
     ["original updater", false, undefined, false, true, true],
     ["migrated worker with the marker", true, undefined, true, true, true],
     ["unadopted worker from a shipped updater", true, undefined, false, false, true],
     ["adopted worker from a shipped updater", true, true, false, true, true],
     ["unverified Gateway", false, undefined, false, true, false],
   ] as const)(
-    "runs deferred inspections only after verified activation for the %s",
+    "runs deferred Doctor inspections after the restart for the %s",
     async (_owner, candidateRuntime, adoptedFinalization, marker, runs, ready) => {
       const root = tempDirs.make("post-activation-inspections-");
       const lintLog = path.join(root, "lint.json");
+      const findings = [
+        ...(!candidateRuntime || adoptedFinalization
+          ? [
+              {
+                checkId: "core/doctor/runtime-tool-schemas",
+                severity: "warning",
+                message: "Plugin drift.",
+              },
+            ]
+          : []),
+        {
+          checkId: "core/doctor/command-owner",
+          severity: "info",
+          message: "No command owner is configured.",
+        },
+      ];
       await fs.mkdir(path.join(root, "dist"));
       await fs.writeFile(
-        path.join(root, "dist/index.js"),
+        path.join(root, "dist", "index.js"),
         `import { writeFileSync } from "node:fs";
 writeFileSync(${JSON.stringify(lintLog)}, JSON.stringify({ argv: process.argv.slice(2), inProgress: process.env.OPENCLAW_UPDATE_IN_PROGRESS ?? null }));
-process.stdout.write('{"ok":true,"checksRun":1,"findings":[]}');`,
+process.stdout.write(${JSON.stringify(JSON.stringify({ ok: false, checksRun: 3, findings }))});
+process.exitCode = 1;
+`,
       );
       vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
       if (marker) {
@@ -725,60 +899,102 @@ process.stdout.write('{"ok":true,"checksRun":1,"findings":[]}');`,
         );
         return { pluginUpdate: plugins, configSnapshot: validConfigSnapshot };
       });
+      const events: string[] = [];
       mocks.restartService.mockImplementation(async ({ onVerified }) => {
-        await expect(fs.stat(lintLog)).rejects.toMatchObject({ code: "ENOENT" });
+        events.push(
+          await fs.stat(lintLog).then(
+            () => "restart after lint",
+            () => "restart",
+          ),
+        );
         if (ready) {
           onVerified?.(Date.now());
         }
         return "ok";
       });
-      const initialSteps = [
-        {
-          name: "openclaw doctor",
-          command: "openclaw doctor --fix",
-          cwd: root,
-          durationMs: 1,
-          exitCode: 0,
-          deferredInspectionCheckIds: ["core/doctor/hooks-model"],
-        },
-      ];
+      const doctorStep = {
+        name: "openclaw doctor",
+        command: "openclaw doctor --fix",
+        cwd: root,
+        durationMs: 1,
+        exitCode: 0,
+        deferredInspectionCheckIds: [
+          "core/doctor/hooks-model",
+          "core/doctor/runtime-tool-schemas",
+          "core/doctor/provider-catalog-projection",
+        ],
+      };
+      const initialSteps = [doctorStep];
+
       await finishSuccessfulPackageSwitch(
-        { packageRoot: root, restartEnvironment: process.env, stoppedForUpdate: true },
+        {
+          packageRoot: root,
+          restartEnvironment: process.env,
+          sealed: false,
+          stoppedForUpdate: true,
+        },
         {
           result: { status: "ok", mode: "npm", root, steps: initialSteps, durationMs: 1 },
           packageUpdateNodeRunner: process.execPath,
         },
         { candidateRuntime, adoptedFinalization },
       );
-      const result = mocks.printResult.mock.lastCall?.[0];
-      expect(result.status).toBe("ok");
-      if (runs && ready) {
-        const lint = JSON.parse(await fs.readFile(lintLog, "utf8"));
-        expect(lint).toEqual({
-          argv: [
-            "doctor",
-            "--lint",
-            "--json",
-            "--only=core/doctor/hooks-model",
-            "--severity-min",
-            "info",
-          ],
-          inProgress: null,
-        });
-        expect(result.steps.at(-1)).toMatchObject({
-          name: "post-activation doctor inspections",
-          exitCode: 0,
-        });
-      } else {
-        await expect(fs.stat(lintLog)).rejects.toMatchObject({ code: "ENOENT" });
-        if (!runs) {
-          expect(result.steps).toEqual(initialSteps);
-        } else {
-          expect(result.steps.at(-1)).toMatchObject({
-            advisory: { message: expect.stringContaining("Gateway readiness was not verified") },
-          });
-        }
+
+      expect(events).toEqual(["restart"]);
+      const steps = mocks.printResult.mock.lastCall?.[0].steps;
+      if (!runs) {
+        await expect(fs.stat(lintLog)).rejects.toThrow();
+        expect(steps).toEqual(initialSteps);
+        return;
       }
+      if (!ready) {
+        await expect(fs.stat(lintLog)).rejects.toThrow();
+        expect(steps).toEqual([
+          ...initialSteps,
+          expect.objectContaining({
+            name: "post-activation doctor inspections",
+            advisory: expect.objectContaining({
+              kind: "recoverable-maintenance",
+              message: expect.stringContaining("Gateway readiness was not verified"),
+            }),
+          }),
+        ]);
+        expect(mocks.printResult.mock.lastCall?.[0].status).toBe("ok");
+        return;
+      }
+      const lint = JSON.parse(await fs.readFile(lintLog, "utf8"));
+      const program = new Command();
+      registerMaintenanceCommands(program);
+      const doctor = program.commands.find((command) => command.name() === "doctor");
+      assert(doctor);
+      doctor.parseOptions(lint.argv.slice(1));
+      const options = doctor.opts();
+      expect(options.severityMin).toBe("info");
+      expect(options.only).toHaveLength(3);
+      expect(options.only).toEqual(
+        expect.arrayContaining([
+          "core/doctor/hooks-model",
+          "core/doctor/runtime-tool-schemas",
+          "core/doctor/provider-catalog-projection",
+        ]),
+      );
+      expect(lint.inProgress).toBeNull();
+      expect(steps).toEqual([
+        ...initialSteps,
+        expect.objectContaining({
+          name: "post-activation doctor inspections",
+          exitCode: 1,
+          ...(!candidateRuntime || adoptedFinalization
+            ? { warnings: ["core/doctor/runtime-tool-schemas: Plugin drift."] }
+            : {}),
+          doctorLintFindings: findings,
+          advisory: {
+            kind: "recoverable-maintenance",
+            message: expect.stringContaining("openclaw doctor --lint --all --severity-min info"),
+          },
+        }),
+      ]);
+      expect(mocks.printResult.mock.lastCall?.[0].status).toBe("ok");
     },
   );
 });
