@@ -14,10 +14,7 @@ import {
 } from "../../../../src/agents/bash-tools.lifecycle.test-support.js";
 import { withinTest } from "../../../helpers/promise.js";
 
-type ExecTool = ReturnType<typeof createExecTool>;
 type ProcessTool = ReturnType<typeof createProcessTool>;
-type ToolResult = Awaited<ReturnType<ExecTool["execute"]>>;
-type ProcessAction = ReturnType<typeof processActions>;
 type ProcessDetails = {
   pid?: number;
   sessionId?: string;
@@ -42,16 +39,6 @@ afterEach(async () => {
   await cleanupProcesses?.();
   cleanupProcesses = undefined;
 });
-
-function requireSession(result: ToolResult): { pid: number; sessionId: string } {
-  const details = result.details as ProcessDetails;
-  expect(details).toMatchObject({
-    status: "running",
-    sessionId: expect.any(String),
-    pid: expect.any(Number),
-  });
-  return { pid: details.pid as number, sessionId: details.sessionId as string };
-}
 
 function pidExists(pid: number): boolean {
   try {
@@ -97,20 +84,6 @@ function injectKillPermissionError(child: ChildProcess): void {
   }
 }
 
-async function pollTerminal(action: ProcessAction, sessionId: string) {
-  let terminal: Awaited<ReturnType<ProcessTool["execute"]>> | undefined;
-  await expect
-    .poll(async () => {
-      terminal = await action("poll", sessionId);
-      return (terminal.details as ProcessDetails).status;
-    }, POLL_OPTIONS)
-    .not.toBe("running");
-  if (!terminal) {
-    throw new Error(`process ${sessionId} never produced a terminal result`);
-  }
-  return terminal;
-}
-
 test("real child kill errors stay nonterminal until cancellation disposes its listeners", async ({
   signal,
   onTestFinished,
@@ -125,26 +98,19 @@ test("real child kill errors stay nonterminal until cancellation disposes its li
     backgroundMs: 20,
   });
   const action = processActions(createProcessTool({ scopeKey }));
-  const cleanupPids = new Set<number>();
-  const track = (result: ToolResult) => {
-    const session = requireSession(result);
-    cleanupPids.add(session.pid);
-    return session;
-  };
+  let pid: number | undefined;
   let cleanupPromise: Promise<void> | undefined;
   const cleanup = () =>
     (cleanupPromise ??= (async () => {
       for (const session of listRunningSessions().filter((entry) => entry.scopeKey === scopeKey)) {
         await action("remove", session.id);
       }
-      for (const pid of cleanupPids) {
-        if (pidExists(pid)) {
-          process.kill(pid, "SIGKILL");
-        }
+      if (pid !== undefined && pidExists(pid)) {
+        process.kill(pid, "SIGKILL");
       }
       // Body cancellation must not cancel the physical-extinction join or let
       // registry reset forget children whose SIGKILL has not settled yet.
-      await waitForExitedPids([...cleanupPids]);
+      await waitForExitedPids(pid === undefined ? [] : [pid]);
       resetProcessRegistryForTests();
     })());
   cleanupProcesses = cleanup;
@@ -164,7 +130,7 @@ test("real child kill errors stay nonterminal until cancellation disposes its li
       }
       return originalEmit.call(this, event, ...args);
     });
-    let killTarget: ToolResult;
+    let killTarget: Awaited<ReturnType<typeof execTool.execute>>;
     try {
       const childCommand = nodeCommand("setInterval(() => {}, 1000);");
       killTarget = await execTool.execute("kill-background", {
@@ -174,10 +140,17 @@ test("real child kill errors stay nonterminal until cancellation disposes its li
     } finally {
       captureSpawn.mockRestore();
     }
-    const killedSession = track(killTarget);
-    const child = spawnedChildren.get(killedSession.pid);
+    const details = killTarget.details as ProcessDetails;
+    expect(details).toMatchObject({
+      status: "running",
+      sessionId: expect.any(String),
+      pid: expect.any(Number),
+    });
+    const sessionId = details.sessionId!;
+    pid = details.pid!;
+    const child = spawnedChildren.get(pid);
     if (!child) {
-      throw new Error(`missing spawned child ${killedSession.pid}`);
+      throw new Error(`missing spawned child ${pid}`);
     }
     expect(child.listenerCount("error")).toBeGreaterThan(0);
     const observedErrors: Array<NodeJS.ErrnoException> = [];
@@ -192,27 +165,29 @@ test("real child kill errors stay nonterminal until cancellation disposes its li
       expect(observedErrors[attempt]).toMatchObject({ code: "EPERM", syscall: "kill" });
       await Promise.resolve();
       expect(listRunningSessions()).toContainEqual(
-        expect.objectContaining({ id: killedSession.sessionId, exited: false }),
+        expect.objectContaining({ id: sessionId, exited: false }),
       );
       expect(getActiveBackgroundExecSessionCount()).toBe(1);
-      expect(pidExists(killedSession.pid)).toBe(true);
+      expect(pidExists(pid)).toBe(true);
     }
 
-    const killed = await action("kill", killedSession.sessionId);
+    const killed = await action("kill", sessionId);
     expect(killed.details).toMatchObject({ status: "completed" });
-    expect((await pollTerminal(action, killedSession.sessionId)).details).toMatchObject({
+    await expect
+      .poll(async () => (await action("poll", sessionId)).details, POLL_OPTIONS)
+      .toMatchObject({
+        status: "completed",
+        exitReason: "manual-cancel",
+      });
+    expect((await action("clear", sessionId)).details).toMatchObject({
       status: "completed",
-      exitReason: "manual-cancel",
     });
-    expect((await action("clear", killedSession.sessionId)).details).toMatchObject({
-      status: "completed",
-    });
-    await waitForExitedPids([killedSession.pid], signal);
-    expect(pidExists(killedSession.pid)).toBe(false);
+    await waitForExitedPids([pid], signal);
+    expect(pidExists(pid)).toBe(false);
     for (const event of ["error", "exit", "close"]) {
       expect(child.listenerCount(event)).toBe(0);
     }
-    cleanupPids.delete(killedSession.pid);
+    pid = undefined;
     const finalList = await action("list");
     expect((finalList.details as ProcessDetails).sessions).toEqual([]);
     expect(listRunningSessions().filter((session) => session.scopeKey === scopeKey)).toEqual([]);

@@ -1890,7 +1890,6 @@
     "test/e2e/qa-lab/runtime/telegram-command-menu-gateway.e2e.test.ts": 17,
     "test/e2e/qa-lab/runtime/telegram-emoji-list-gateway.e2e.test.ts": 22,
     "test/e2e/qa-lab/runtime/telegram-inherited-policy-gateway.e2e.test.ts": 98,
-    "test/e2e/qa-lab/runtime/telegram-join-intro-gateway.e2e.test.ts": 13,
     "test/e2e/qa-lab/runtime/telegram-message-tool-failure-settlement.e2e.test.ts": 21,
     "test/e2e/qa-lab/runtime/telegram-model-picker-prepared-gateway.e2e.test.ts": 40,
     "test/e2e/qa-lab/runtime/telemetry-runtime-boundaries.e2e.test.ts": 14,

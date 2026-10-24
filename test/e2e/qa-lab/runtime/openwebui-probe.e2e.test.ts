@@ -78,31 +78,29 @@ function expectFailure(result: Awaited<ReturnType<typeof runProbe>>, message: st
   expect(result.stderr).toContain(message);
 }
 
-it("uses a short control-plane timeout for stalled sign-in requests", async () => {
-  const startedAt = Date.now();
-  const result = await probe(
-    { "/api/v1/auths/signin": () => {} },
-    { OPENWEBUI_CONTROL_TIMEOUT_MS: "25", OPENWEBUI_FETCH_TIMEOUT_MS: "5000" },
-    2_000,
-  );
-  expectFailure(result, "Open WebUI signin timed out after 25ms");
-  expect(Date.now() - startedAt).toBeLessThan(1500);
-});
-
-it("keeps the control-plane timeout active while reading sign-in bodies", async () => {
-  const result = await probe(
-    {
-      "/api/v1/auths/signin": (_request, response) => {
-        response.writeHead(200, { "content-type": "application/json" });
-        response.flushHeaders();
-        response.write("{");
+it.each([false, true])(
+  "bounds stalled sign-in before/after headers (headers=%s)",
+  async (headers) => {
+    const startedAt = Date.now();
+    const result = await probe(
+      {
+        "/api/v1/auths/signin": (_request, response) => {
+          if (headers) {
+            response.writeHead(200, { "content-type": "application/json" });
+            response.flushHeaders();
+            response.write("{");
+          }
+        },
       },
-    },
-    { OPENWEBUI_CONTROL_TIMEOUT_MS: "25", OPENWEBUI_FETCH_TIMEOUT_MS: "5000" },
-    2_000,
-  );
-  expectFailure(result, "Open WebUI signin timed out after 25ms");
-});
+      { OPENWEBUI_CONTROL_TIMEOUT_MS: "25", OPENWEBUI_FETCH_TIMEOUT_MS: "5000" },
+      2_000,
+    );
+    expectFailure(result, "Open WebUI signin timed out after 25ms");
+    if (!headers) {
+      expect(Date.now() - startedAt).toBeLessThan(1500);
+    }
+  },
+);
 
 it("bounds sign-in error response bodies", async () => {
   const result = await probe(
