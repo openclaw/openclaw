@@ -16,7 +16,7 @@ import { cancelUnreadResponseBody, readResponseWithLimit } from "../infra/http-b
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { logWarn } from "../logger.js";
 import type { DocumentExtractionMetadata } from "../plugins/document-extractor-types.js";
-import { convertHeicToJpeg } from "./media-services.js";
+import { convertHeicToJpeg, convertImageToJpeg } from "./media-services.js";
 import { extractPdfContent, type PdfExtractedImage } from "./pdf-extract.js";
 
 type InputFileExtractResult = {
@@ -97,7 +97,7 @@ const DEFAULT_INPUT_PDF_MAX_PIXELS = 4_000_000;
 /** Default text threshold before PDF extraction keeps text-only output. */
 const DEFAULT_INPUT_PDF_MIN_TEXT_CHARS = 200;
 const NORMALIZED_INPUT_IMAGE_MIME = "image/jpeg";
-const HEIC_INPUT_IMAGE_MIMES = new Set(["image/heic", "image/heif"]);
+const CONVERTIBLE_INPUT_IMAGE_MIMES = new Set(["image/avif", "image/heic", "image/heif"]);
 
 function parseContentType(value: string | undefined): {
   mimeType?: string;
@@ -235,7 +235,7 @@ function decodeTextContent(buffer: Buffer, charset: string | undefined, maxChars
   }
 }
 
-/** Validates image bytes and converts HEIC/HEIF to JPEG, keeping the original Buffer otherwise. */
+/** Validates image bytes and converts AVIF/HEIC/HEIF to JPEG, keeping the original Buffer otherwise. */
 export async function normalizeInputImageBuffer(params: {
   buffer: Buffer;
   mimeType?: string;
@@ -261,15 +261,18 @@ export async function normalizeInputImageBuffer(params: {
     throw new Error(`Unsupported image MIME type: ${sourceMime}`);
   }
 
-  if (!HEIC_INPUT_IMAGE_MIMES.has(sourceMime)) {
+  if (!CONVERTIBLE_INPUT_IMAGE_MIMES.has(sourceMime)) {
     return { buffer: params.buffer, mimeType: sourceMime };
   }
 
-  // Normalize HEIC/HEIF to JPEG because downstream model and channel surfaces expect common images.
-  const normalizedBuffer = await convertHeicToJpeg(params.buffer);
+  // Normalize AVIF/HEIC/HEIF to JPEG because downstream model and channel surfaces expect common images.
+  const normalizedBuffer =
+    sourceMime === "image/avif"
+      ? await convertImageToJpeg(params.buffer)
+      : await convertHeicToJpeg(params.buffer);
   if (normalizedBuffer.byteLength > params.limits.maxBytes) {
     throw new Error(
-      `Image too large after HEIC conversion: ${normalizedBuffer.byteLength} bytes (limit: ${params.limits.maxBytes} bytes)`,
+      `Image too large after ${sourceMime} conversion: ${normalizedBuffer.byteLength} bytes (limit: ${params.limits.maxBytes} bytes)`,
     );
   }
   return { buffer: normalizedBuffer, mimeType: NORMALIZED_INPUT_IMAGE_MIME };

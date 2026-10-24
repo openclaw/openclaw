@@ -28,6 +28,7 @@ const hasAvailableAuthForProviderMock = vi.hoisted(() =>
 const readRemoteMediaBufferMock = vi.hoisted(() => vi.fn());
 const runFfmpegMock = vi.hoisted(() => vi.fn());
 const convertHeicToJpegMock = vi.hoisted(() => vi.fn());
+const convertImageToJpegMock = vi.hoisted(() => vi.fn());
 const runExecMock = vi.hoisted(() => vi.fn());
 const extractFileContentFromBufferMock = vi.hoisted(() => vi.fn());
 const mockDeliverOutboundPayloads = vi.hoisted(() => vi.fn());
@@ -205,9 +206,11 @@ describe("applyMediaUnderstanding", () => {
         readRemoteMediaBufferWithHeaders: readRemoteMediaBufferMock,
       };
     });
+    // mock-isolation: External media commands and header probes are fixture-supplied; no host codecs run.
     vi.doMock("../media/media-services.js", () => ({
       runFfmpeg: runFfmpegMock,
       convertHeicToJpeg: convertHeicToJpegMock,
+      convertImageToJpeg: convertImageToJpegMock,
       readImageMetadataFromHeader: () => null,
     }));
     // mock-isolation: All external media commands are supplied by the test fixture.
@@ -253,6 +256,7 @@ describe("applyMediaUnderstanding", () => {
     readRemoteMediaBufferMock.mockClear();
     runFfmpegMock.mockReset();
     convertHeicToJpegMock.mockReset().mockResolvedValue(Buffer.from("jpeg-normalized"));
+    convertImageToJpegMock.mockReset().mockResolvedValue(Buffer.from("jpeg-normalized"));
     runExecMock.mockReset();
     // Extraction stays real unless a case overrides it; the mock exists so
     // scanned-PDF render outcomes can be produced without the extract plugin.
@@ -492,6 +496,32 @@ describe("applyMediaUnderstanding", () => {
       }
     },
   );
+
+  it("describes avif images through the image provider", async () => {
+    const fileName = "photo.avif";
+    // Minimal ftyp box with the avif brand; real byte sniffing classifies it as image/avif.
+    const content = Buffer.from("0000000c667479706176696600000000", "hex");
+    const mediaPath = await createTempMediaFile(fileName, content);
+    const describeImage = vi.fn(async () => ({ text: "normalized avif image" }));
+    const ctx = mediaCtx([{ path: mediaPath, contentType: "image/avif" }]);
+    await applyMediaUnderstanding({
+      ctx,
+      cfg: createImageConfig(),
+      agentDir: "/tmp/openclaw-agent",
+      workspaceDir: undefined,
+      providers: imageProviders(describeImage),
+    });
+    expect(ctx.Body).toBe("[Image]\nDescription:\nnormalized avif image");
+    expect(describeImage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        buffer: Buffer.from("jpeg-normalized"),
+        fileName,
+        mime: "image/jpeg",
+      }),
+    );
+    expect(convertImageToJpegMock).toHaveBeenCalledWith(content);
+    expect(convertHeicToJpegMock).not.toHaveBeenCalled();
+  });
 
   it("renders recorded outcomes for every image candidate when no model is configured", async () => {
     const ctx: MsgContext = {
