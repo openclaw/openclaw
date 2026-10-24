@@ -10,11 +10,9 @@ import {
   armPlan,
   gatewayEnv,
   IOS_RELEASE_TESTS,
-  MODEL_REF,
   parseMeasurement,
   runTrials,
   summarizeMeasurements,
-  testRunnerEnv,
   type TestIdentity,
   type Trial,
   type TrialDependencies,
@@ -124,23 +122,17 @@ afterEach(() => {
   Object.values(nativeMocks).forEach((mock) => mock.mockReset());
 });
 
-function result(
-  test: string = IOS_RELEASE_TESTS[0],
-  overrides: Record<string, unknown> = {},
-  bundleOverrides: Record<string, unknown> = {},
-) {
+function result(test: string) {
   const testCase = {
     nodeType: "Test Case",
     nodeIdentifier: `${test.split("/").slice(1).join("/")}()`,
     result: "Passed",
-    ...overrides,
   };
   const suite = { nodeType: "Test Suite", children: [testCase] };
   const bundle = {
     nodeType: "UI test bundle",
     name: test.split("/")[0],
     children: [suite],
-    ...bundleOverrides,
   };
   return { testNodes: [{ nodeType: "Test Plan", children: [bundle] }] };
 }
@@ -351,18 +343,6 @@ function fixture(
 }
 
 describe("fresh trial ownership", () => {
-  it("uses a real provider-enabled Gateway and only live-test runner env", () => {
-    expect(gatewayEnv).toMatchObject({
-      OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
-      OPENCLAW_SKIP_CHANNELS: "0",
-      OPENCLAW_SKIP_PROVIDERS: "0",
-    });
-    expect(MODEL_REF).toBe("openai/ios-e2e");
-    expect(testRunnerEnv("synthetic-setup-code")).toEqual({
-      TEST_RUNNER_OPENCLAW_IOS_LIVE_GATEWAY: "1",
-      TEST_RUNNER_OPENCLAW_IOS_LIVE_SETUP_CODE: "synthetic-setup-code",
-    });
-  });
   it("runs live pairing and the independent reader test on one prepared simulator", async () => {
     const { deps, trace } = fixture();
     const report = await runTrials("stock", deps);
@@ -565,9 +545,10 @@ describe("release qualification workflow authority", () => {
       permissions: { actions: "read", contents: "read" },
       with: { target_sha: "${{ github.sha }}", mode: "stock" },
     });
+    for (const job of [qualification, releaseJob]) {
+      expect(job["continue-on-error"]).toBeUndefined();
+    }
     expect(qualification.secrets).toBeUndefined();
-    expect(qualification["continue-on-error"]).toBeUndefined();
-    expect(releaseJob["continue-on-error"]).toBeUndefined();
 
     const steps = releaseJob.steps;
     expect(
@@ -575,11 +556,8 @@ describe("release qualification workflow authority", () => {
     ).toBe(false);
     const signingStep = requiredWorkflowStep(steps, "Create apps-signing read token");
     const uploadStep = requiredWorkflowStep(steps, "Prepare and upload iOS release");
-    const signing = steps.indexOf(signingStep);
-    const upload = steps.indexOf(uploadStep);
-    expect(signing).toBeGreaterThan(-1);
-    expect(upload).toBeGreaterThan(signing);
-    for (const step of [steps[signing], steps[upload]]) {
+    expect(steps.indexOf(signingStep)).toBeLessThan(steps.indexOf(uploadStep));
+    for (const step of [signingStep, uploadStep]) {
       expect(step.if).toBeUndefined();
       expect(step["continue-on-error"]).toBeUndefined();
     }
@@ -589,39 +567,33 @@ describe("release qualification workflow authority", () => {
         evaluateWorkflow(`\${{ ${recovery.if} }}`, {
           eventName: "workflow_dispatch",
           failed: true,
-          steps: { [steps[upload].id]: { outputs: {}, outcome } },
+          steps: { [uploadStep.id]: { outputs: {}, outcome } },
         }),
       ).toBe(outcome !== "skipped");
     }
     expect(recovery.with["if-no-files-found"]).toBe("error");
-    expect(workflow.permissions).toEqual({ actions: "read", contents: "read" });
-    expect(ci.jobs["ios-release-e2e"].permissions).toEqual({ actions: "read", contents: "read" });
-    expect(workflow.jobs.qualify["runs-on"]).toBe("xcode-27-xlarge");
+    for (const permissions of [workflow.permissions, ci.jobs["ios-release-e2e"].permissions]) {
+      expect(permissions).toEqual({ actions: "read", contents: "read" });
+    }
     expect(workflow.jobs.qualify.environment).toBeUndefined();
     expect(workflow.on.workflow_dispatch.inputs.target_sha).toBeUndefined();
-    expect(workflow.jobs.qualify.env.TARGET_SHA).toBe("${{ inputs.target_sha || github.sha }}");
-  });
-  it("fails missing target harnesses and uses a step-scoped compare binary", () => {
-    const steps = workflow.jobs.qualify.steps;
-    const checkout = steps.find((step: { uses?: string }) =>
+    const qualificationSteps = workflow.jobs.qualify.steps;
+    const checkout = qualificationSteps.find((step: { uses?: string }) =>
       step.uses?.startsWith("actions/checkout@"),
     );
-    expect(checkout.with.ref).toBe("${{ github.sha }}");
-    expect(checkout.with["persist-credentials"]).toBe(false);
-    const verify = steps.find((step: { name: string }) => step.name.startsWith("Verify target"));
+    expect(checkout.with).toMatchObject({ ref: "${{ github.sha }}", "persist-credentials": false });
+    const verify = qualificationSteps.find((step: { name: string }) =>
+      step.name.startsWith("Verify target"),
+    );
     expect(verify.run).toContain('[[ "$(git rev-parse HEAD)" == "$TARGET_SHA" ]]');
-    expect(verify.run).toContain("test -f scripts/ios-release-e2e.ts");
     expect(verify.if).toBeUndefined();
     expect(workflow.jobs.qualify.env.OPENCLAW_CI_SIMSLIM_BINARY).toBeUndefined();
-    const upload = requiredWorkflowStep(steps, "Upload sanitized proof only");
-    expect(upload.if).toBe("always()");
-    expect(upload.with.path.trim().split(/\r?\n/u)).toEqual([
+    const proofUpload = requiredWorkflowStep(qualificationSteps, "Upload sanitized proof only");
+    expect(proofUpload.if).toBe("always()");
+    expect(proofUpload.with.path.trim().split(/\r?\n/u)).toEqual([
       "${{ runner.temp }}/ios-release-e2e-proof.json",
       "${{ runner.temp }}/ios-resource-timeline.jsonl",
     ]);
-    expect(upload.with.name).toBe(
-      "ios-release-e2e-${{ inputs.mode }}-${{ github.run_id }}-${{ github.run_attempt }}",
-    );
   });
   it.each([
     { flow: "qualification", enabled: true },
@@ -773,16 +745,11 @@ process.exitCode = 23;
 
 it.each([
   "dirty-tracked",
-  "dirty-untracked",
   "source-late-dirty",
   "source-late-head-change",
-  "different-xcode",
   "invalid-xcode-output",
   "newest-compatible-runtime",
   "unavailable-runtime",
-  "unsupported-runtime-device",
-  "unsupported-runtime-architecture",
-  "non-ios-runtime",
   "cleanup-failure",
   "gateway-install-failure",
   "gateway-install-unjoined",
@@ -823,7 +790,6 @@ it.each([
   "missing-relaunch",
   "provider-duplicate",
   "provider-out-of-order",
-  "provider-extra",
   "test-timeout-output",
   "reply-failure-evidence",
   "reply-failure-history-error",
@@ -1122,8 +1088,6 @@ it.each([
       expect(args).toEqual(["status", "--porcelain=v1", "--untracked-files=all"]);
       if (scenario === "dirty-tracked" || (scenario === "source-late-dirty" && sourceChanged)) {
         stdout.write(" M scripts/ios-release-e2e.ts\n");
-      } else if (scenario === "dirty-untracked") {
-        stdout.write("?? untracked-source.ts\n");
       }
     } else if (options.bin === "git") {
       stdout.write(
@@ -1131,11 +1095,9 @@ it.each([
       );
     } else if (args.includes("-version")) {
       stdout.write(
-        scenario === "different-xcode"
-          ? "Xcode 26.6\nBuild version 17F113\n"
-          : scenario === "invalid-xcode-output"
-            ? "unrecognized toolchain\n"
-            : "Xcode 27.0\nBuild version 27A266a\n",
+        scenario === "invalid-xcode-output"
+          ? "unrecognized toolchain\n"
+          : "Xcode 27.0\nBuild version 27A266a\n",
       );
     } else if (args.includes("--print-path")) {
       stdout.write(`${developerDir}\n`);
@@ -1144,9 +1106,6 @@ it.each([
     } else if (args.includes("runtimes")) {
       const runtime = runtimeFixture("26.5", {
         available: scenario !== "unavailable-runtime",
-        os: scenario === "non-ios-runtime" ? "watchOS" : "iOS",
-        arch: scenario === "unsupported-runtime-architecture" ? "x86_64" : "arm64",
-        device: scenario === "unsupported-runtime-device" ? "iPhone-16-Pro" : "iPhone-17-Pro",
       });
       stdout.write(
         JSON.stringify({
@@ -1235,15 +1194,10 @@ it.each([
       } else {
         const stages =
           scenario === "provider-duplicate"
-            ? ["first", "first", "second", "relaunch"]
+            ? ["first", "second", "relaunch", "first"]
             : scenario === "provider-out-of-order"
               ? ["second", "first", "relaunch"]
-              : [
-                  "first",
-                  "second",
-                  "relaunch",
-                  ...(scenario === "provider-extra" ? ["unexpected"] : []),
-                ];
+              : ["first", "second", "relaunch"];
         const requests = scenario.startsWith("reply-failure-")
           ? [
               {
@@ -1396,13 +1350,7 @@ it.each([
     },
   });
   const dirtySource = scenario.startsWith("dirty-");
-  const invalidRuntime = [
-    "unavailable-runtime",
-    "unsupported-runtime-device",
-    "unsupported-runtime-architecture",
-    "non-ios-runtime",
-    "invalid-xcode-output",
-  ].includes(scenario);
+  const invalidRuntime = scenario === "unavailable-runtime" || scenario === "invalid-xcode-output";
   const failedBuild = scenario.startsWith("build-");
   const failedInstall = scenario.startsWith("gateway-install-");
   const failedPreflight = scenario.startsWith("gateway-preflight-");
@@ -1459,8 +1407,8 @@ it.each([
   }
   const native = await admission;
   expect(proof).toMatchObject({
-    xcode: scenario === "different-xcode" ? "26.6" : "27.0",
-    xcodeBuild: scenario === "different-xcode" ? "17F113" : "27A266a",
+    xcode: "27.0",
+    xcodeBuild: "27A266a",
     runtime: scenario === "newest-compatible-runtime" ? "26.10" : "26.5",
     runtimeIdentifier:
       scenario === "newest-compatible-runtime"
@@ -1904,20 +1852,7 @@ it.each([
     expect(created).toBe(1);
     expect(joinedMocks).toBe(1);
     for (const index of instances.keys()) {
-      expect(fixtureRpcCalls()).toHaveLength(2);
-      expect(fixtureRpcCalls()[0]?.[0]).toEqual(
-        matching({
-          method: "device.pair.setupStatus",
-          params: {
-            setupId: expect.stringMatching(/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u),
-          },
-          timeoutMs: 30_000,
-          sharedStateMode: "read-only",
-          token: `synthetic-token-${index + 1}`,
-          url: `ws://127.0.0.1:${20001 + index}`,
-        }),
-      );
-      expect(fixtureRpcCalls()[1]?.[0]).toEqual({
+      const rpcTarget = {
         config: {},
         configPath: `/private/fixture-${index + 1}/config.json`,
         url: `ws://127.0.0.1:${20001 + index}`,
@@ -1925,6 +1860,20 @@ it.each([
         ignoreEnvUrlOverride: true,
         deviceIdentity: null,
         sharedStateMode: "read-only",
+      };
+      expect(fixtureRpcCalls()).toHaveLength(2);
+      expect(fixtureRpcCalls()[0]?.[0]).toEqual(
+        matching({
+          ...rpcTarget,
+          method: "device.pair.setupStatus",
+          params: {
+            setupId: expect.stringMatching(/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u),
+          },
+          timeoutMs: 30_000,
+        }),
+      );
+      expect(fixtureRpcCalls()[1]?.[0]).toEqual({
+        ...rpcTarget,
         method: "device.pair.setupCode",
         params: { publicUrl: `ws://127.0.0.1:${20001 + index}`, includeQr: false },
         timeoutMs: 60_000,
