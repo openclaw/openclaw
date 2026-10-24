@@ -17,6 +17,8 @@ import {
 } from "../../../config/sessions/session-accessor.js";
 import type { GatewayOperatorRoleDefinition } from "../../../config/types.gateway.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../../../gateway/agent-runtime-approval-authority.js";
+import { readAgentRuntimeExecutionLineage } from "../../../gateway/agent-runtime-execution-lineage.js";
+import type { AgentRuntimeIdentity } from "../../../gateway/agent-runtime-identity-token.js";
 import { callGateway } from "../../../gateway/call.js";
 import { createGatewayInstanceRuntime } from "../../../gateway/server-instance-runtime.js";
 import { createRequestGatewayMethodRegistry } from "../../../gateway/server-methods.js";
@@ -27,6 +29,10 @@ import {
 } from "../../../gateway/server-model-catalog.js";
 import { dispatchGatewayMethodInProcess } from "../../../gateway/server-plugin-in-process-dispatch.js";
 import { createSyntheticPluginRuntimeClient } from "../../../gateway/server-plugin-runtime-client.js";
+import {
+  claimAgentRunDelegatedAuthority,
+  releaseAgentRunDelegatedAuthority,
+} from "../../../infra/agent-run-registry.js";
 import { withTimeout } from "../../../infra/fs-safe.js";
 import { getActivePluginRegistry } from "../../../plugins/runtime.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
@@ -42,8 +48,8 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../../test-utils/openclaw-test-state.js";
-import { normalizeAcceptedSessionSpawnResult as acceptedSpawn } from "../../accepted-session-spawn.js";
 import {
+  createOperationalRunInstanceRef,
   getAdmittedRunDelegatedAuthority,
   resolvePreparedRunAdmission,
   type AdmittedRunOperatorAuthority,
@@ -63,7 +69,13 @@ import { observeRootWork } from "../registry/subagent-registry.browser-cleanup.t
 import { settleSubagentRegistryPersistenceWork } from "../registry/subagent-registry.persistence.test-support.js";
 import { resetSubagentRegistryForTests } from "../registry/subagent-registry.test-helpers.js";
 import { resolveSubagentSessionStatus } from "../registry/subagent-session-metrics.js";
-import { holdQueuedSwarmRun, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
+import {
+  activateSwarmRun,
+  closeSwarmScheduler,
+  holdQueuedSwarmRun,
+  releaseSwarmRun,
+  reserveSwarmRun,
+} from "../swarm/swarm-scheduler.js";
 import { cleanupProvisionalSession } from "./subagent-spawn-cleanup.js";
 import { callSubagentGateway } from "./subagent-spawn-gateway.js";
 import { registerNativeCancellationCases } from "./subagent-spawn.cancellation.test-support.js";
@@ -72,6 +84,7 @@ import { visibleResult } from "./subagent-spawn.fixtures.test-support.js";
 import { registerGuestSpawnCases } from "./subagent-spawn.guest.test-support.js";
 import { registerParticipantSpawnCases } from "./subagent-spawn.participants.test-support.js";
 import { registerNativePluginSpawnCases } from "./subagent-spawn.plugin-native.test-support.js";
+import { readBoundExecutionState } from "./subagent-spawn.production-boundary.diagnostics.test-support.js";
 import {
   createBoundSpawnInvocation,
   createBoundWorker,
@@ -237,7 +250,12 @@ async function createBoundGateway(bound: Awaited<ReturnType<typeof createBoundPa
     (await context.loadGatewayModelCatalogSnapshot(request)).entries;
   context.readPreparedGatewayModelCatalog = (request) =>
     readPreparedGatewayModelCatalog({ ...request, getConfig: () => bound.cfg });
-  context.validateAgentRuntimeApprovalAuthority = createAgentRuntimeApprovalAuthorityValidator();
+  const validateRuntimeAuthority = createAgentRuntimeApprovalAuthorityValidator();
+  const identities: AgentRuntimeIdentity[] = [];
+  context.validateAgentRuntimeApprovalAuthority = (identity) => {
+    identities.push(identity);
+    return validateRuntimeAuthority(identity);
+  };
   const methodRegistry = createRequestGatewayMethodRegistry();
   const runtime = createGatewayInstanceRuntime({
     getContext: () => context,
@@ -248,7 +266,7 @@ async function createBoundGateway(bound: Awaited<ReturnType<typeof createBoundPa
   context.recoveryRuntime = runtime.recovery;
   vi.spyOn(runtime.recovery, "waitForAgent").mockResolvedValue({ status: "pending" });
   context.getGatewayMethodRegistry = () => methodRegistry;
-  return { context, runtime };
+  return { context, runtime, identities, readAgentRuntimeExecutionLineage };
 }
 
 const waitForEmbeddedRun = createEmbeddedRunWaiter(runEmbeddedAgent);
@@ -301,9 +319,10 @@ async function closeBoundGateway(
   bound: Awaited<ReturnType<typeof createBoundParent>>,
   runtime: Awaited<ReturnType<typeof createBoundGateway>>["runtime"],
   childRunId?: string,
+  releaseQueuedAuthority?: () => void,
 ) {
   const failures: unknown[] = [];
-  await collectFailures(failures, async () => {
+  try {
     bound.execution.beginClose();
     await vi.waitFor(
       () => {
@@ -316,9 +335,17 @@ async function closeBoundGateway(
       },
       { timeout: 15_000 },
     );
-  });
+  } catch (cause) {
+    failures.push(
+      new Error(
+        `Gateway fixture cleanup failed: ${JSON.stringify(readBoundExecutionState(bound, childRunId))}`,
+        { cause },
+      ),
+    );
+  }
   for (const close of [
     () => runtime.close(),
+    ...(releaseQueuedAuthority ? [releaseQueuedAuthority] : []),
     () => bound.admission.close(),
     () => bound.parent.cleanup(),
   ]) {
@@ -403,10 +430,23 @@ describe("recursive spawn production boundary", () => {
     );
     const primaryModel = expectDefined(customProvider.models[0], "primary model fixture");
     const childModel = { ...primaryModel, id: "child-model", name: "Child model", reasoning: true };
-    expectDefined(runtimeConfig.agents?.defaults, "agent defaults").modelPolicy = {
-      allow: ["custom/manual-only"],
+    runtimeConfig = {
+      ...runtimeConfig,
+      agents: {
+        ...runtimeConfig.agents,
+        defaults: {
+          ...runtimeConfig.agents?.defaults,
+          modelPolicy: { allow: ["custom/manual-only"] },
+        },
+      },
+      models: {
+        ...runtimeConfig.models,
+        providers: {
+          ...runtimeConfig.models?.providers,
+          custom: { ...customProvider, models: [primaryModel, childModel] },
+        },
+      },
     };
-    customProvider.models = [primaryModel, childModel];
     const catalog = [primaryModel, childModel].map((model) =>
       Object.assign({}, model, {
         provider: "custom",
@@ -431,12 +471,12 @@ describe("recursive spawn production boundary", () => {
         modelOverrideSource: "user",
       },
     );
-    const { runtime } = await createBoundGateway(bound);
+    const { runtime, identities } = await createBoundGateway(bound);
     const childProof = await prepareIsolatedChildAdmissionProof(bound);
     const modelRun = holdModelRun(bound, "descendant complete");
     let childRunId: string | undefined;
     const failures: unknown[] = [];
-    await collectFailures(failures, async () => {
+    try {
       // Model-facing owner fields cannot clear the trusted host identity.
       const request = {
         context: "isolated" as const,
@@ -450,11 +490,18 @@ describe("recursive spawn production boundary", () => {
         { provider: "custom", model: "child-model" },
         true,
       )();
-      const details = expectDefined(acceptedSpawn(result), JSON.stringify(result));
+      expect(result.details, JSON.stringify(result)).toMatchObject({
+        status: "accepted",
+        childSessionKey: expect.any(String),
+        runId: expect.any(String),
+      });
+      const details = result.details as { childSessionKey: string; runId: string };
       childRunId = details.runId;
       await waitForEmbeddedRun(bound, details.runId, modelRun.started);
       const embeddedRun = runEmbeddedAgent.mock.calls[0]?.[0];
       expect(embeddedRun).toMatchObject({
+        runId: details.runId,
+        sessionKey: details.childSessionKey,
         provider: "custom",
         model: "child-model",
       });
@@ -466,40 +513,81 @@ describe("recursive spawn production boundary", () => {
       expect(source.adapter).toMatchObject({
         operationalRunInstance: { runId: details.runId },
       });
+      const observedRuntimeIdentity = identities.at(-1);
+      expect(observedRuntimeIdentity).toMatchObject({
+        kind: "agentRuntime",
+        agentId: "main",
+        sessionKey: parentSessionKey,
+      });
+      expect(
+        readAgentRuntimeExecutionLineage(observedRuntimeIdentity?.sessionSpawnContext),
+      ).toMatchObject({
+        relation: "sessions_spawn",
+        requesterRef: parentSessionKey,
+        controllerRef: parentSessionKey,
+        depth: 2,
+        applicableGrantRefs: ["tool:sessions_spawn"],
+        runtimeAssuranceRefs: ["spawn-runtime:subagent"],
+      });
       const admittedChild = childProof.assertAdmitted(details.childSessionKey, embeddedRun);
       expect(admittedChild).toMatchObject({
         spawnedBy: parentSessionKey,
         spawnedBySessionId: "parent-session",
         spawnedBySenderIsOwner: true,
         spawnDepth: 2,
+        providerOverride: "custom",
+        modelOverride: "child-model",
+        modelOverrideSource: "auto",
+        modelOverrideFallbackOriginProvider: "custom",
+        modelOverrideFallbackOriginModel: "child-model",
       });
       // The receipt's parent id stays out of navigation fields that sessions.list projects.
       expect(admittedChild.parentSessionId).toBeUndefined();
       expect(admittedChild.groupId).toBeUndefined();
-    });
-    childProof.restore();
-    modelRun.finish();
-    failures.push(...(await closeBoundGateway(bound, runtime, childRunId)));
-    throwBoundFailures(failures);
+      expect(subagentRuns.get(details.runId)).toMatchObject({
+        childSessionKey: details.childSessionKey,
+        requesterSessionKey: parentSessionKey,
+      });
+    } catch (error) {
+      failures.push(error);
+    } finally {
+      childProof.restore();
+      modelRun.finish();
+      failures.push(...(await closeBoundGateway(bound, runtime, childRunId)));
+      throwBoundFailures(failures);
+    }
   });
 
-  // System completion/cancellation are covered by in-process-gateway and authority tests.
-  it.each(["operator-completed", "operator-revoked", "operator-stopped"] as const)(
+  it.each([
+    "completed",
+    "stopped",
+    "operator-completed",
+    "operator-revoked",
+    "operator-stopped",
+  ] as const)(
     "keeps queued collector effects with their original parent when it is %s",
     async (parentState) => {
-      const source = createSpawnOperatorSource();
-      runtimeConfig = { ...runtimeConfig, logging: { audit: { enabled: false } } };
-      await state.writeConfig(runtimeConfig);
-      clearConfigCache();
-      clearRuntimeConfigSnapshot();
-      const bound = await createBoundParent(source.authority);
-      const { context, runtime } = await createBoundGateway(bound);
+      const source = parentState.startsWith("operator-") ? createSpawnOperatorSource() : undefined;
+      const operatorAuthority = source?.authority;
+      if (operatorAuthority) {
+        runtimeConfig = { ...runtimeConfig, logging: { audit: { enabled: false } } };
+        await state.writeConfig(runtimeConfig);
+        clearConfigCache();
+        clearRuntimeConfigSnapshot();
+      }
+      const bound = await createBoundParent(operatorAuthority);
+      const { context, runtime, identities } = await createBoundGateway(bound);
       const groupId = "production-boundary-queued";
       await holdSpawnCapacity(
         JSON.stringify(["main", parentSessionKey, groupId]),
         "production-boundary-capacity",
       );
+      const releaserInstance = createOperationalRunInstanceRef("capacity-releasing-run");
+      const releaserAuthority = claimAgentRunDelegatedAuthority(releaserInstance);
       const modelRun = holdModelRun(bound, "collector complete", async (runParams) => {
+        if (!operatorAuthority) {
+          return;
+        }
         const admitted = await resolvePreparedRunAdmission({
           runId: runParams.runId,
           runtimeKind: "embedded",
@@ -540,27 +628,38 @@ describe("recursive spawn production boundary", () => {
               { resolveGatewayContext: bound.resolveGatewayContext },
             ),
         );
-      await collectFailures(failures, async () => {
+      try {
         const result = await createBoundSpawnInvocation(bound, {
           collect: true,
           groupId,
           context: "isolated",
         })();
-        const details = expectDefined(acceptedSpawn(result), JSON.stringify(result));
+        expect(result.details, JSON.stringify(result)).toMatchObject({
+          status: "accepted",
+          runId: expect.any(String),
+          childSessionKey: expect.any(String),
+        });
+        const details = result.details as { runId: string; childSessionKey: string };
         childRunId = details.runId;
         expect(subagentRuns.get(childRunId)).toMatchObject({
           requesterTurnRunId: parentRunId,
           execution: { status: "queued" },
         });
         expect(runEmbeddedAgent).not.toHaveBeenCalled();
-        if (parentState !== "operator-stopped") {
+        if (
+          parentState === "completed" ||
+          parentState === "operator-completed" ||
+          parentState === "operator-revoked"
+        ) {
           bound.admission.close();
           bound.parent.cleanup();
-          source.closeRequest();
+          source?.closeRequest();
           expect(bound.parent.controller.signal.aborted).toBe(false);
           expect(getAdmittedRunDelegatedAuthority(bound.admitted)).toBeUndefined();
-          expect(source.holds).toBeGreaterThan(0);
-        } else {
+          if (operatorAuthority) {
+            expect(source?.holds ?? 0).toBeGreaterThan(0);
+          }
+        } else if (parentState === "stopped" || parentState === "operator-stopped") {
           await expect(abortParent()).resolves.toMatchObject({
             aborted: true,
             runIds: [parentRunId],
@@ -569,23 +668,42 @@ describe("recursive spawn production boundary", () => {
         }
         if (parentState === "operator-revoked") {
           const queued = expectDefined(holdQueuedSwarmRun(childRunId), "queued collector");
-          source.revoke();
-          // Revocation removes the reservation; release joins its physical cleanup.
-          await queued.release();
-          const collector = subagentRuns.get(childRunId);
-          if (collector) {
-            expect(collector.execution.status).toBe("terminal");
-            expect(collector.queuedLaunch).toBeUndefined();
-            expect(collector.collectorLaunchCleanupPending).toBe(false);
+          expectDefined(source, "operator source").revoke();
+          try {
+            // Revocation removes the reservation synchronously; release joins its physical cleanup.
+            await queued.release();
+            const collector = subagentRuns.get(childRunId);
+            if (collector) {
+              expect(collector.execution.status).toBe("terminal");
+              expect(collector.queuedLaunch).toBeUndefined();
+              expect(collector.collectorLaunchCleanupPending).toBe(false);
+            }
+            expect(readSession(bound, details.childSessionKey)).toBeUndefined();
+            expect(source?.holds ?? 0).toBe(0);
+          } catch (cause) {
+            throw new Error(
+              `Revoked collector cleanup did not settle: ${JSON.stringify({
+                ...readBoundExecutionState(bound, childRunId),
+                sourceHolds: source?.holds,
+              })}`,
+              { cause },
+            );
           }
-          expect(readSession(bound, details.childSessionKey)).toBeUndefined();
-          expect(source.holds).toBe(0);
           expect(runEmbeddedAgent).not.toHaveBeenCalled();
           expect(getRpcSource(childRunId)).toBeUndefined();
           expect(readSession(bound)).toMatchObject({ sessionId: "parent-session" });
         }
-        expect(releaseSwarmRun("production-boundary-capacity")).toBe(true);
-        if (parentState === "operator-stopped") {
+        identities.length = 0;
+        await withGatewayToolCallerIdentity(
+          {
+            agentId: "main",
+            sessionKey: "agent:main:subagent:capacity-releaser",
+            operationalRunInstance: releaserInstance,
+            gatewayContextResolver: () => context,
+          },
+          () => expect(releaseSwarmRun("production-boundary-capacity")).toBe(true),
+        );
+        if (parentState === "stopped" || parentState === "operator-stopped") {
           await Promise.resolve();
           expect(runEmbeddedAgent).not.toHaveBeenCalled();
           expect(getRpcSource(childRunId)).toBeUndefined();
@@ -594,6 +712,10 @@ describe("recursive spawn production boundary", () => {
           });
         } else if (parentState !== "operator-revoked") {
           await waitForEmbeddedRun(bound, childRunId, modelRun.started);
+          expect(runEmbeddedAgent.mock.calls[0]?.[0]).toMatchObject({
+            runId: childRunId,
+            sessionKey: details.childSessionKey,
+          });
           const childSource = expectDefined(getRpcSource(childRunId), "started child source");
           expect(getRpcSourceIdentity(childSource)).toMatchObject({
             sessionKey: details.childSessionKey,
@@ -609,134 +731,206 @@ describe("recursive spawn production boundary", () => {
             spawnedBy: parentSessionKey,
             spawnDepth: 2,
           });
+          expect(
+            identities.some((identity) => identity.operationalRunInstance === releaserInstance),
+          ).toBe(false);
         }
-      });
-      await collectFailures(
-        failures,
-        () => releaseSwarmRun("production-boundary-capacity"),
-        async () => {
-          if (childRunId && subagentRuns.get(childRunId)?.execution.status === "queued") {
-            await withTimeout(abortParent(), 15_000, "queued parent fixture cancellation");
-          }
-        },
-      );
-      modelRun.finish();
-      failures.push(...(await closeBoundGateway(bound, runtime, childRunId)));
-      await collectFailures(failures, () => {
-        expect(source.holds).toBe(0);
-      });
-      throwBoundFailures(failures);
+      } catch (error) {
+        failures.push(error);
+      } finally {
+        await collectFailures(
+          failures,
+          () => releaseSwarmRun("production-boundary-capacity"),
+          async () => {
+            if (childRunId && subagentRuns.get(childRunId)?.execution.status === "queued") {
+              await withTimeout(abortParent(), 15_000, "queued parent fixture cancellation");
+            }
+          },
+        );
+        modelRun.finish();
+        failures.push(
+          ...(await closeBoundGateway(bound, runtime, childRunId, () =>
+            releaseAgentRunDelegatedAuthority(releaserAuthority),
+          )),
+        );
+        await collectFailures(failures, () => {
+          expect(source?.holds ?? 0).toBe(0);
+        });
+        throwBoundFailures(failures);
+      }
     },
   );
 
-  // Scheduler context retention: swarm-scheduler.context.test.ts. Exercise deletion authority here.
   it.each([
+    "current",
+    "replaced-session",
     "replaced-gateway",
     "worker-current",
     "worker-reassigned",
     "worker-reassigned-during-delete",
-  ] as const)(
-    "fences retained cleanup at the real session deletion boundary: %s",
-    async (target) => {
-      const bound = await createBoundParent();
-      const { context, runtime } = await createBoundGateway(bound);
-      const childSessionKey = "agent:main:subagent:queued-cleanup";
-      const childScope = { storePath: bound.storePath, sessionKey: childSessionKey };
-      const original = {
-        sessionId: "queued-cleanup-session",
-        lifecycleRevision: "queued-cleanup-generation",
-      };
-      await upsertSessionEntryCore(childScope, original);
-      const expectedEntry = loadSessionEntry(childScope);
-      const worker = target.startsWith("worker-") ? await createBoundWorker(bound) : undefined;
-      let replacementClaim:
-        | Awaited<ReturnType<NonNullable<typeof worker>["store"]["claimTurn"]>>
-        | undefined;
-      const failures: unknown[] = [];
-      const interrupted = createDeferred();
-      let work: Awaited<ReturnType<typeof beginSessionEffect>> | undefined;
-      const caller = expectDefined(
-        createAdmittedGatewayToolCallerIdentity({
-          admittedRunContext: bound.admitted,
-          agentId: "main",
-          sessionKey: parentSessionKey,
-        }),
-        "admitted cleanup caller",
-      );
-      const reassignWorker = async () => {
-        const current = expectDefined(worker, "worker to reassign");
-        await current.store.releaseTurn(current.claim);
-        replacementClaim = await current.store.claimTurn({
-          ...current.session,
-          owner: current.claim.owner,
-          claimId: "replacement-claim",
-          runId: "replacement-run",
-        });
-      };
-      const bindCleanup = (identity: typeof caller) => () =>
-        withPluginRuntimeGatewayRequestScope({ context, isWebchatConnect: () => false }, () =>
-          withGatewayToolCallerIdentity(identity, () =>
-            cleanupProvisionalSession(childSessionKey, {
-              expectedSessionId: original.sessionId,
-              expectedLifecycleRevision: original.lifecycleRevision,
-              callGateway: callSubagentGateway,
-            }),
-          ),
-        );
-      await collectFailures(failures, async () => {
-        if (target === "worker-reassigned-during-delete") {
-          work = await beginSessionEffect({
-            scope: bound.storePath,
-            identities: [childSessionKey, original.sessionId],
-            assertAllowed: () => {},
-            onInterrupt: () => interrupted.resolve(),
-          });
-        }
-        const cleanup = worker
-          ? await worker.capability.run((identity) =>
-              bindCleanup({
-                ...caller,
-                workerTurnClaim: identity.turnClaim,
-                workerTurnExecutionIdentityCapability: worker.capability,
-                executionIdentityToken: identity.executionIdentityToken,
-              }),
-            )
-          : bindCleanup(caller);
-        if (target === "replaced-gateway") {
-          bound.gatewayBinding.current = { ...context };
-        } else if (target === "worker-reassigned" && worker) {
-          await reassignWorker();
-        }
-        const removal = cleanup();
-        if (target === "worker-reassigned-during-delete" && worker) {
-          await Promise.race([
-            interrupted.promise,
-            removal.then(() => {
-              throw new Error("cleanup ended before the session mutation barrier");
-            }),
-          ]);
-          await reassignWorker();
-          work?.release();
-        }
-        const deleted = target === "worker-current";
-        expect(await removal).toBe(deleted);
-        expect(loadSessionEntry(childScope)).toEqual(deleted ? undefined : expectedEntry);
-        if (replacementClaim && worker) {
-          expect(worker.store.validateTurnClaim(replacementClaim)).toBe(true);
-        }
-        expect(runEmbeddedAgent).not.toHaveBeenCalled();
+  ] as const)("fences queued cleanup at the real session deletion boundary: %s", async (target) => {
+    const bound = await createBoundParent();
+    const { context, runtime } = await createBoundGateway(bound);
+    const childSessionKey = "agent:main:subagent:queued-cleanup";
+    const childScope = { storePath: bound.storePath, sessionKey: childSessionKey };
+    const original = {
+      sessionId: "queued-cleanup-session",
+      lifecycleRevision: "queued-cleanup-generation",
+      updatedAt: 1,
+      label: "original",
+    };
+    await upsertSessionEntryCore(childScope, original);
+    let expectedEntry = loadSessionEntry(childScope);
+    const worker = target.startsWith("worker-") ? await createBoundWorker(bound) : undefined;
+    let replacementClaim:
+      | Awaited<ReturnType<NonNullable<typeof worker>["store"]["claimTurn"]>>
+      | undefined;
+    const results: boolean[] = [];
+    const errors: unknown[] = [];
+    const failures: unknown[] = [];
+    const interrupted = createDeferred();
+    let work: Awaited<ReturnType<typeof beginSessionEffect>> | undefined;
+    const caller = expectDefined(
+      createAdmittedGatewayToolCallerIdentity({
+        admittedRunContext: bound.admitted,
+        agentId: "main",
+        sessionKey: parentSessionKey,
+      }),
+      "admitted cleanup caller",
+    );
+    const reassignWorker = async () => {
+      const current = expectDefined(worker, "worker to reassign");
+      await current.store.releaseTurn(current.claim);
+      replacementClaim = await current.store.claimTurn({
+        ...current.session,
+        owner: current.claim.owner,
+        claimId: "replacement-claim",
+        runId: "replacement-run",
       });
+    };
+    reserveSwarmRun({
+      groupId: "queued-cleanup",
+      runId: "queued-cleanup",
+      maxConcurrent: 1,
+      activeRunIds: ["cleanup-capacity"],
+    });
+    const activate = (identity: typeof caller) =>
+      withPluginRuntimeGatewayRequestScope({ context, isWebchatConnect: () => false }, () =>
+        withGatewayToolCallerIdentity(identity, () =>
+          activateSwarmRun({
+            groupId: "queued-cleanup",
+            runId: "queued-cleanup",
+            start: async () => {},
+            onStartFailure: () => true,
+            onRemoved: async () => {
+              results.push(
+                await cleanupProvisionalSession(childSessionKey, {
+                  expectedSessionId: original.sessionId,
+                  expectedLifecycleRevision: original.lifecycleRevision,
+                  callGateway: async (request) => {
+                    try {
+                      return await callSubagentGateway(request);
+                    } catch (error) {
+                      errors.push(error);
+                      throw error;
+                    }
+                  },
+                }),
+              );
+            },
+          }),
+        ),
+      );
+    try {
+      if (target === "worker-reassigned-during-delete") {
+        work = await beginSessionEffect({
+          scope: bound.storePath,
+          identities: [childSessionKey, original.sessionId],
+          assertAllowed: () => {},
+          onInterrupt: () => interrupted.resolve(),
+        });
+      }
+      if (worker) {
+        expect(bound.admitted.executionIdentityToken).toBeDefined();
+        await worker.capability.run((identity) =>
+          activate({
+            ...caller,
+            workerTurnClaim: identity.turnClaim,
+            workerTurnExecutionIdentityCapability: worker.capability,
+            executionIdentityToken: identity.executionIdentityToken,
+          }),
+        );
+      } else {
+        await activate(caller);
+      }
+      if (target === "replaced-session") {
+        await upsertSessionEntryCore(childScope, {
+          ...original,
+          sessionId: "replacement-session",
+          lifecycleRevision: "replacement-generation",
+          label: "replacement",
+        });
+        expectedEntry = loadSessionEntry(childScope);
+      } else if (target === "replaced-gateway") {
+        bound.gatewayBinding.current = { ...context };
+      } else if (target === "worker-reassigned" && worker) {
+        await reassignWorker();
+      }
+      const removal = withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey: "agent:main:subagent:cleanup-remover",
+          gatewayContextResolver: () => context,
+        },
+        async () => {
+          const hold = expectDefined(holdQueuedSwarmRun("queued-cleanup"), "cleanup reservation");
+          expect(hold.withdraw()).toBe(true);
+          await hold.release();
+        },
+      );
+      if (target === "worker-reassigned-during-delete" && worker) {
+        await Promise.race([
+          interrupted.promise,
+          removal.then(() => {
+            throw new Error("cleanup ended before the session mutation barrier");
+          }),
+        ]);
+        await reassignWorker();
+        work?.release();
+      }
+      await removal;
+      const deleted = target === "current" || target === "worker-current";
+      expect(results, errors.map(String).join("\n")).toEqual([deleted]);
+      if (deleted) {
+        expect(errors).toEqual([]);
+        expect(loadSessionEntry(childScope)).toBeUndefined();
+      } else {
+        expect(errors).toHaveLength(1);
+        expect(loadSessionEntry(childScope)).toEqual(expectedEntry);
+      }
+      if (replacementClaim && worker) {
+        expect(worker.store.validateTurnClaim(replacementClaim)).toBe(true);
+      }
+      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    } catch (error) {
+      failures.push(error);
+    } finally {
       await collectFailures(failures, () => {
         work?.release();
       });
       bound.gatewayBinding.current = context;
-      await collectFailures(failures, async () => {
-        if (worker && worker.store.validateTurnClaim(replacementClaim ?? worker.claim)) {
-          await worker.store.releaseTurn(replacementClaim ?? worker.claim);
-        }
-      });
+      await collectFailures(
+        failures,
+        () => closeSwarmScheduler(),
+        () => releaseSwarmRun("cleanup-capacity"),
+        async () => {
+          if (worker && worker.store.validateTurnClaim(replacementClaim ?? worker.claim)) {
+            await worker.store.releaseTurn(replacementClaim ?? worker.claim);
+          }
+        },
+      );
       failures.push(...(await closeBoundGateway(bound, runtime)));
       throwBoundFailures(failures);
-    },
-  );
+    }
+  });
 });

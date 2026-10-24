@@ -6,6 +6,7 @@ import {
   registerSingleProviderPlugin,
   resolveProviderPluginChoice,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { omitNullRequestHeaders } from "openclaw/plugin-sdk/provider-request-headers";
 import {
   expectPassthroughReplayPolicy,
   expectUnifiedModelCatalogProviderRegistration,
@@ -198,7 +199,7 @@ describe("openrouter provider hooks", () => {
     for (const [choice, id, kind] of [
       ["openrouter", "api-key", "api_key"],
       ["openrouter-oauth", "oauth", "oauth"],
-    ]) {
+    ] as const) {
       expect(resolveProviderPluginChoice({ providers: [provider], choice })?.method).toMatchObject({
         id,
         kind,
@@ -387,7 +388,9 @@ describe("openrouter provider hooks", () => {
       payload: {},
       options: { apiKey: "or-test-key" },
     });
-    expect(new Headers(options?.headers).get("authorization")).toBe("Bearer or-test-key");
+    expect(new Headers(omitNullRequestHeaders(options?.headers)).get("authorization")).toBe(
+      "Bearer or-test-key",
+    );
   });
 
   it("merges resolved OpenRouter model params into transport params", async () => {
@@ -442,7 +445,7 @@ describe("openrouter provider hooks", () => {
     for (const [level, effort] of [
       ["minimal", "high"],
       ["max", "xhigh"],
-    ]) {
+    ] as const) {
       const payload = { reasoning: { effort: "high" }, messages: [] };
       await capturePayload(`openrouter/${DEEPSEEK}`, level, payload);
       expectReasoning(payload, effort);

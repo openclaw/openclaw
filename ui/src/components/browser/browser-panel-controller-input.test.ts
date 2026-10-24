@@ -552,7 +552,9 @@ describe("BrowserPanel capture and input ownership", () => {
     const elementFromPoint = vi.fn(() => null);
     const { controller, request } = scenario("tab-a", undefined, {
       "/act": async (envelope) => {
-        expect(envelope.body?.kind).toBe("evaluate");
+        if (envelope.body?.kind !== "evaluate") {
+          throw new Error("Unexpected browser inspection");
+        }
         runInNewContext(`(${String(envelope.body.fn)})()`, { document: { elementFromPoint } });
         inspectionCount += 1;
         if (inspectionCount === 1) {

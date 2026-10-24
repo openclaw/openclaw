@@ -1,8 +1,14 @@
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { buildCallBriefInstructions } from "../call-brief.js";
 import { normalizeVoiceCallConfig } from "../config.js";
+import { CallManager } from "../manager.js";
 import { EVENT_MANAGER_REPLAY_KEY_LIMIT } from "../manager.test-harness.js";
-import type { AnswerCallInput, CallRecord, HangupCallInput } from "../types.js";
+import { MockProvider } from "../providers/mock.js";
+import { getOptionalVoiceCallStateRuntime } from "../runtime-state.js";
+import type { AnswerCallInput, CallRecord, HangupCallInput, NormalizedEvent } from "../types.js";
 import type { CallManagerContext } from "./context.js";
 import { processEvent } from "./events.js";
 import {
@@ -18,6 +24,7 @@ import {
   fixture,
 } from "./events.test-support.js";
 import { speakInitialMessage } from "./outbound.js";
+import { MAX_CALL_REPLAY_KEYS } from "./replay-keys.js";
 import { persistCallRecord } from "./store.js";
 import * as callStore from "./store.js";
 import { waitForFinalTranscript } from "./timers.js";
@@ -68,19 +75,16 @@ function inboundContext(
   return createContext({ config: inboundConfig(config), ...options });
 }
 
-function delayedOperation() {
-  const result = createDeferred<void>();
-  const started = createDeferred<void>();
-  const invoke = vi.fn(() => {
-    started.resolve();
-    return result.promise;
-  });
-  return { ...result, started: started.promise, invoke };
-}
-
-it.each(["carrier", "finalization"])("reports %s cleanup failure", async (failure) => {
+it.each([
+  ["machine_start", "voicemail", "carrier"],
+  ["fax", "failed", "carrier"],
+  ["machine_end_beep", "error", "carrier"],
+  ["machine_start", "voicemail", "finalization"],
+] as const)("reports failed %s cleanup during %s/%s", async (answeredBy, reason, failure) => {
   let failPersistence = false;
-  installStateRuntime(() => failPersistence);
+  if (failure === "finalization") {
+    installStateRuntime(() => failPersistence);
+  }
   const hangupCall = vi.fn(async () => {
     if (failure === "carrier") {
       throw new Error("synthetic private carrier response");
@@ -88,20 +92,31 @@ it.each(["carrier", "finalization"])("reports %s cleanup failure", async (failur
     failPersistence = true;
   });
   const { ctx, call, send, work } = amdContext(
-    {},
+    {
+      pendingNotifyAmd: answeredBy === "fax",
+      brief: { voicemailMessage: "Please call back." },
+    },
     {
       config: normalizeVoiceCallConfig({
-        voicemail: { detection: "twilio", onMachine: "hang-up" },
+        voicemail: {
+          detection: "twilio",
+          onMachine: answeredBy === "machine_start" ? "hang-up" : "leave-message",
+        },
       }),
     },
-    { hangupCall },
+    {
+      hangupCall,
+      playMessageAndHangup: async () => {
+        throw new Error("synthetic playback failure");
+      },
+    },
   );
-  await send({ type: "call.amd", answeredBy: "machine_start" });
+  await expect(send({ type: "call.amd", answeredBy })).resolves.toEqual({ kind: "processed" });
   await Promise.all(work);
   expect(hangupCall).toHaveBeenCalledExactlyOnceWith({
     callId: call.callId,
     providerCallId: "provider-1",
-    reason: "voicemail",
+    reason,
   });
   expect(logSpy.logEntries).toEqual([
     "Detected-call cleanup failed for " + call.callId + "; inspect voice-call status and logs.",
@@ -110,15 +125,41 @@ it.each(["carrier", "finalization"])("reports %s cleanup failure", async (failur
   expect(call.endedAt).toBeUndefined();
 });
 
-it.each(["speech", "terminal", "fatal-error"] as const)(
+it.each([false, true])("finalizes after transcript drain (failure=%s)", async (failure) => {
+  const { ctx, call, send } = fixture();
+  ctx.beforeCallEnd = async () => {
+    if (failure) {
+      throw new Error("bridge close failed");
+    }
+    await send({ type: "call.assistant-speech", transcript: "The plumber will call back." });
+  };
+  await expect(send({ type: "call.ended", reason: "completed" })).resolves.toEqual({
+    kind: "processed",
+  });
+  expect(call).toMatchObject({
+    endReason: "completed",
+    transcript: failure ? [] : [{ speaker: "bot", text: "The plumber will call back." }],
+  });
+  expect(ctx.activeCalls.size).toBe(0);
+});
+
+it.each(["speech", "answered", "terminal", "fatal-error"] as const)(
   "publishes %s effects only after persistence",
   async (kind) => {
     let failPersistence = true;
     installStateRuntime(() => failPersistence);
-    const { ctx, call, event, send } = fixture();
+    const onCallAnswered = vi.fn();
+    const { ctx, call, event } = fixture(
+      {
+        providerCallId: "provider-before",
+        state: kind === "answered" ? "ringing" : "active",
+      },
+      { onCallAnswered },
+    );
     const terminal = kind === "terminal" || kind === "fatal-error";
     const endReason = kind === "fatal-error" ? "error" : "hangup-user";
-    const { resolve, reject } = transcriptWaiter(ctx, call);
+    const terminalLog = `[voice-call] Call finalized callId=${call.callId} providerCallId=provider-before endReason=${endReason}`;
+    const { resolve, reject } = transcriptWaiter(ctx, call, kind !== "answered");
     if (terminal) {
       ctx.maxDurationTimers.set(
         call.callId,
@@ -128,41 +169,44 @@ it.each(["speech", "terminal", "fatal-error"] as const)(
     const input = event(
       kind === "speech"
         ? { type: "call.speech", transcript: "durable", isFinal: true }
-        : kind === "fatal-error"
-          ? { type: "call.error", error: "carrier failure", retryable: false }
-          : { type: "call.ended", reason: "hangup-user" },
+        : kind === "answered"
+          ? { type: "call.answered", providerCallId: "provider-after" }
+          : kind === "fatal-error"
+            ? { type: "call.error", error: "carrier failure", retryable: false }
+            : { type: "call.ended", reason: "hangup-user" },
     );
     await expect(processEvent(ctx, input)).rejects.toThrow("synthetic SQLite persistence failure");
     expect(ctx.processedEventIds.has(input.id)).toBe(false);
     expect(call).toMatchObject({
       processedEventIds: [],
       transcript: [],
+      providerCallId: "provider-before",
     });
+    expect(ctx.providerCallIdMap.has("provider-after")).toBe(false);
     expect(resolve).not.toHaveBeenCalled();
     expect(reject).not.toHaveBeenCalled();
     expect(ctx.maxDurationTimers.has(call.callId)).toBe(terminal);
+    expect(logSpy.logEntries).not.toContain(terminalLog);
     failPersistence = false;
-    ctx.beforeCallEnd = async () => {
-      if (kind === "fatal-error") {
-        throw new Error("bridge close failed");
-      }
-      await send({ type: "call.assistant-speech", transcript: "The plumber will call back." });
-    };
     await processEvent(ctx, input);
     expect(ctx.processedEventIds.has(input.id)).toBe(true);
     expect(resolve).toHaveBeenCalledTimes(kind === "speech" ? 1 : 0);
     expect(reject).toHaveBeenCalledTimes(terminal ? 1 : 0);
+    expect(onCallAnswered).toHaveBeenCalledTimes(kind === "answered" ? 1 : 0);
+    if (kind === "answered") {
+      expect(onCallAnswered).toHaveBeenCalledWith(call);
+    }
     expect(ctx.activeCalls.has(call.callId)).toBe(!terminal);
     if (terminal) {
       expect(call).toMatchObject({ state: endReason, endReason, endedAt: input.timestamp });
-      expect(call.transcript).toMatchObject(
-        kind === "fatal-error" ? [] : [{ speaker: "bot", text: "The plumber will call back." }],
-      );
       expect(reject).toHaveBeenCalledWith(
         new Error(
           kind === "fatal-error" ? "Call error: carrier failure" : "Call ended: hangup-user",
         ),
       );
+      expect(logSpy.logEntries.filter((entry) => entry === terminalLog)).toHaveLength(1);
+    } else {
+      expect(logSpy.logEntries).not.toContain(terminalLog);
     }
   },
 );
@@ -176,7 +220,14 @@ it.each(["request-uuid", "call-1"])(
       metadata: {},
     });
     await persistCallRecord(ctx.storePath, call);
+    const assertIdentity = () => {
+      expect(call.providerCallId).toBe("call-uuid");
+      expect(ctx.providerCallIdMap.get("call-uuid")).toBe(call.callId);
+      expect(ctx.providerCallIdMap.has("request-uuid")).toBe(false);
+    };
     await send({ type: "call.answered", providerCallId: "call-uuid" });
+    expect(ctx.activeCalls.get(call.callId)).toBe(call);
+    assertIdentity();
     const result = await send({
       type: "call.speech",
       callId: aliasCallId,
@@ -185,10 +236,48 @@ it.each(["request-uuid", "call-1"])(
       transcript: "Continue the existing call.",
       isFinal: true,
     });
-    expect(result.kind === "final-speech" ? result.call : undefined).toBe(call);
+    expect(result).toMatchObject({ kind: "final-speech" });
+    if (result.kind !== "final-speech") {
+      throw new Error("expected live speech");
+    }
+    expect(result.call).toBe(call);
     expect(ctx.activeCalls.size).toBe(1);
-    expect(call.providerCallId).toBe("call-uuid");
-    expect(ctx.providerCallIdMap).toEqual(new Map([["call-uuid", call.callId]]));
+    assertIdentity();
+  },
+);
+
+it.each(["admission", "status"] as const)(
+  "surfaces history read failure during %s",
+  async (operation) => {
+    const provider = createProvider(),
+      ctx = createContext({ provider });
+    const manager = new CallManager(ctx.config, ctx.storePath);
+    await manager.initialize(provider, "https://example.com/voice/webhook");
+    const state = expectDefined(getOptionalVoiceCallStateRuntime()?.state, "fixture state");
+    const openStore = state.openKeyedStoreV2.bind(state);
+    const fault = vi
+      .spyOn(state, "openKeyedStoreV2")
+      .mockImplementation(<T>(options: OpenAsyncKeyedStoreOptions) => {
+        const store = openStore<T>(options);
+        store.entries = async () => {
+          throw new Error("synthetic call history read failure");
+        };
+        return store;
+      });
+    try {
+      const result =
+        operation === "status"
+          ? manager.getCallFromMemoryOrStore("provider-unknown")
+          : manager.processEvent({
+              ...inboundEvent("unreadable", "provider-unknown", "+15550000001"),
+              direction: "outbound",
+            });
+      await expect(result).rejects.toThrow("synthetic call history read failure");
+    } finally {
+      fault.mockRestore();
+    }
+    expect(manager.getActiveCalls()).toEqual([]);
+    expect(await manager.getCallHistory()).toEqual([]);
   },
 );
 
@@ -212,48 +301,52 @@ it("leaves unknown events replayable until the call is registered", async () => 
 });
 
 it.each([
-  [{ type: "call.speaking", text: "hello" }, "speaking", []],
-  [
-    { type: "call.assistant-speech", transcript: "hello" },
-    "speaking",
-    [{ speaker: "bot", text: "hello" }],
-  ],
-  [
-    { type: "call.speech", transcript: "hello", isFinal: true },
-    "listening",
-    [{ speaker: "user", text: "hello" }],
-  ],
-  [null, "speaking", [{ speaker: "bot", text: "hello" }]],
-] as const)("starts duration before answered: %j", async (input, state, transcript) => {
+  ["call.speaking", "speaking", []],
+  ["call.assistant-speech", "speaking", [{ speaker: "bot", text: "hello" }]],
+  ["call.speech", "listening", [{ speaker: "user", text: "hello" }]],
+  ["initial-message", "speaking", [{ speaker: "bot", text: "hello" }]],
+] as const)("enforces duration when %s precedes answered", async (type, state, transcript) => {
   const now = Date.parse("2026-03-22T12:00:00.000Z");
   vi.useFakeTimers({ now });
+  const streaming = type === "initial-message";
   const hangupCall = vi.fn(async (_input: HangupCallInput) => {});
-  const provider = {
-    ...createProvider({ name: "twilio", hangupCall }),
-    isConversationStreamConnectEnabled: () => true,
-  };
+  const provider = Object.assign(
+    createProvider({ name: streaming ? "twilio" : "plivo", hangupCall }),
+    {
+      isConversationStreamConnectEnabled: () => true,
+    },
+  );
   const { ctx, call, send } = fixture(
     {
+      provider: provider.name,
       direction: "inbound",
+      state: streaming ? "active" : "ringing",
       startedAt: now - 120_000,
-      metadata: { initialMessage: "hello", mode: "conversation" },
+      metadata: streaming ? { initialMessage: "hello", mode: "conversation" } : {},
     },
     {
       provider,
       config: inboundConfig({
         maxDurationSeconds: 1,
         provider: provider.name,
-        streaming: { enabled: true },
+        ...(streaming ? { streaming: { enabled: true } } : {}),
       }),
     },
   );
-  if (input) {
-    await send({ ...input, timestamp: now + 250 });
-  } else {
+  if (streaming) {
     await speakInitialMessage(ctx, "provider-1");
+  } else {
+    await send(
+      type === "call.speaking"
+        ? { type, text: "hello", timestamp: now + 250 }
+        : type === "call.speech"
+          ? { type, transcript: "hello", isFinal: true, timestamp: now + 250 }
+          : { type, transcript: "hello", timestamp: now + 250 },
+    );
   }
-  expect(call).toMatchObject({ state, answeredAt: input ? now + 250 : now });
+  expect(call).toMatchObject({ state, answeredAt: streaming ? now : now + 250 });
   expect(call.transcript.map(({ speaker, text }) => ({ speaker, text }))).toEqual(transcript);
+  expect(ctx.maxDurationTimers.has(call.callId)).toBe(true);
   await vi.advanceTimersByTimeAsync(1_000);
   await Promise.all(ctx.endCallOperations.values());
   expect(hangupCall).toHaveBeenCalledExactlyOnceWith({
@@ -283,37 +376,88 @@ it("admits external outbound calls despite disabled inbound policy", async () =>
   });
 });
 
+it("deduplicates distinct event IDs by their stable key", async () => {
+  const { ctx, call, event } = fixture({ state: "answered", metadata: {} });
+  const input = event({
+    type: "call.speech",
+    dedupeKey: "stable-key-1",
+    transcript: "hello",
+    isFinal: true,
+  });
+  const first = await processEvent(ctx, input);
+  const replay = await processEvent(ctx, {
+    ...input,
+    id: "redelivery",
+    timestamp: input.timestamp + 1,
+  });
+  expect(ctx.activeCalls.get(call.callId)).toBe(call);
+  expect(call.transcript).toHaveLength(1);
+  expect([...ctx.processedEventIds]).toEqual(["stable-key-1"]);
+  expect(first).toMatchObject({
+    kind: "final-speech",
+    transcript: "hello",
+    waiterResolved: false,
+  });
+  expect(replay).toEqual({ kind: "ignored" });
+});
+
 it.each([
-  ["hello", false],
   ["", false],
   [" \t\n", true],
-] as const)(
-  "commits final speech %j once without consuming blank turns (waiter=%s)",
-  async (transcript, withWaiter) => {
-    const { ctx, call, event } = fixture();
-    const { resolve, reject, timeout } = transcriptWaiter(ctx, call, withWaiter);
-    const input = event({ type: "call.speech", transcript, isFinal: true, dedupeKey: "speech" });
-    const result = await processEvent(ctx, input);
-    clearTimeout(timeout);
-    expect(result).toMatchObject(
-      transcript.trim()
-        ? { kind: "final-speech", transcript: "hello", waiterResolved: false }
-        : { kind: "processed" },
-    );
-    expect(call.state).toBe("listening");
-    expect(call.transcript).toEqual(
-      transcript.trim() ? [expect.objectContaining({ speaker: "user", text: "hello" })] : [],
-    );
-    expect([...ctx.processedEventIds]).toEqual(["speech"]);
-    expect(resolve).not.toHaveBeenCalled();
-    expect(reject).not.toHaveBeenCalled();
-    expect(ctx.transcriptWaiters.has(call.callId)).toBe(withWaiter);
-    expect(
-      await processEvent(ctx, { ...input, id: "redelivery", timestamp: input.timestamp + 1 }),
-    ).toEqual({ kind: "ignored" });
-    expect(call.transcript).toHaveLength(transcript.trim() ? 1 : 0);
-  },
-);
+] as const)("treats blank speech %j as a non-turn (waiter=%s)", async (transcript, withWaiter) => {
+  const { ctx, call, send } = fixture({
+    provider: "telnyx",
+    direction: "inbound",
+    metadata: {},
+  });
+  const { resolve, reject, timeout } = transcriptWaiter(ctx, call, withWaiter);
+  const result = await send({
+    type: "call.speech",
+    transcript,
+    isFinal: true,
+    dedupeKey: "blank",
+  });
+  clearTimeout(timeout);
+  expect(result).toEqual({ kind: "processed" });
+  expect(ctx.activeCalls.get(call.callId)).toMatchObject({
+    transcript: [],
+    state: "listening",
+  });
+  expect(ctx.processedEventIds.has("blank")).toBe(true);
+  expect(resolve).not.toHaveBeenCalled();
+  expect(reject).not.toHaveBeenCalled();
+  expect(ctx.transcriptWaiters.has(call.callId)).toBe(withWaiter);
+});
+
+it("bounds committed manager and call replay keys", async () => {
+  const { ctx, call, event } = fixture(
+    {
+      processedEventIds: Array.from({ length: MAX_CALL_REPLAY_KEYS }, (_, i) => "call-" + i),
+      metadata: {},
+    },
+    {
+      processedEventIds: new Set(
+        Array.from({ length: EVENT_MANAGER_REPLAY_KEY_LIMIT }, (_, i) => "manager-" + i),
+      ),
+    },
+  );
+  const input = event({
+    id: "new",
+    type: "call.dtmf",
+    providerCallId: "provider-1",
+    digits: "1",
+  });
+  expect(await processEvent(ctx, input)).toEqual({ kind: "processed" });
+  expect(ctx.processedEventIds.size).toBe(EVENT_MANAGER_REPLAY_KEY_LIMIT);
+  expect(ctx.processedEventIds.has("manager-0")).toBe(false);
+  expect(ctx.processedEventIds.has("new")).toBe(true);
+  expect(call.processedEventIds).toHaveLength(MAX_CALL_REPLAY_KEYS);
+  expect(call.processedEventIds[0]).toBe("call-1");
+  expect(call.processedEventIds.at(-1)).toBe("new");
+  expect(await processEvent(ctx, { ...input, timestamp: input.timestamp + 1 })).toEqual({
+    kind: "ignored",
+  });
+});
 
 it("keeps retryable provider errors replayable", async () => {
   const { ctx, call, event } = fixture({ metadata: {} });
@@ -386,10 +530,12 @@ it.each([false, true])(
       answeredAt: Date.now(),
     });
     ctx.config.transcriptTimeoutMs = 30;
-    const gate = delayedOperation();
+    const entered = createDeferred<void>();
+    const release = createDeferred<void>();
     const persist = callStore.persistCallRecord;
     vi.spyOn(callStore, "persistCallRecord").mockImplementationOnce(async (...args) => {
-      await gate.invoke();
+      entered.resolve();
+      await release.promise;
       await persist(...args);
     });
     const waiting = waitForFinalTranscript(ctx, call.callId);
@@ -402,7 +548,7 @@ it.each([false, true])(
     });
     let replacementSettled = false;
     try {
-      await gate.started;
+      await entered.promise;
       await vi.advanceTimersByTimeAsync(30);
       await timedOut;
       if (replacement) {
@@ -416,14 +562,14 @@ it.each([false, true])(
           ),
         );
       }
-      gate.resolve();
+      release.resolve();
       await expect(pending).resolves.toMatchObject({ kind: "final-speech", waiterResolved: false });
       expect(replacementSettled).toBe(false);
       expect(ctx.transcriptWaiters.has(call.callId)).toBe(replacement);
       expect(call.transcript.at(-1)?.text).toBe("Persist this utterance");
       expect(ctx.processedEventIds.has("speech-before-timeout")).toBe(true);
     } finally {
-      gate.resolve();
+      release.resolve();
       await pending;
     }
   },
@@ -443,36 +589,43 @@ function inboundConfig(overrides: Record<string, unknown>) {
   });
 }
 
+function parseMockEvent(overrides: Partial<NormalizedEvent> = {}): NormalizedEvent {
+  const [event] = new MockProvider().parseWebhookEvent({
+    headers: {},
+    method: "POST",
+    url: "http://localhost/voice/webhook",
+    query: {},
+    rawBody: JSON.stringify({
+      event: {
+        ...inboundEvent("mock-inbound", "mock-provider-inbound", "+15552222222"),
+        to: "+15553333333",
+        ...overrides,
+      },
+    }),
+  }).events;
+  if (!event) {
+    throw new Error("expected a parsed mock event");
+  }
+  return event;
+}
+
 it.each([
-  ["call.initiated", "ringing", "main"],
-  ["call.ringing", "ringing", "per-call"],
-  ["call.active", "active", "per-call"],
-] as const)("routes inbound %s events (%s/%s)", async (type, state, sessionScope) => {
-  const ctx = inboundContext(
-    {
-      sessionScope,
-      inboundGreeting: "Global greeting",
-      numbers: { "+15550002222": { agentId: "cards", inboundGreeting: "Cards greeting" } },
-    },
-    { provider: createProvider(), coreSession: { mainKey: "work" } },
-  );
-  await processEvent(ctx, {
-    ...inboundEvent("inbound", "provider-inbound", "+15552222222"),
-    type,
-    to: "+1 (555) 000-2222",
-  });
-  const call = requireFirstActiveCall(ctx);
-  expect(call).toMatchObject({
-    provider: "plivo",
-    providerCallId: "provider-inbound",
+  ["call.initiated", "ringing"],
+  ["call.ringing", "ringing"],
+  ["call.active", "active"],
+] as const)("admits mock %s webhooks with their caller and destination", async (type, state) => {
+  const ctx = createContext({ provider: new MockProvider() });
+  ctx.config.inboundPolicy = "open";
+
+  expect(await processEvent(ctx, parseMockEvent({ type }))).toEqual({ kind: "processed" });
+
+  expect(requireFirstActiveCall(ctx)).toMatchObject({
+    provider: "mock",
+    providerCallId: "mock-provider-inbound",
     direction: "inbound",
     from: "+15552222222",
-    to: "+1 (555) 000-2222",
+    to: "+15553333333",
     state,
-    agentId: "cards",
-    metadata: { initialMessage: "Cards greeting", numberRouteKey: "+15550002222" },
-    sessionKey:
-      sessionScope === "main" ? "agent:cards:work" : `agent:cards:voice:call:${call.callId}`,
   });
 });
 
@@ -516,6 +669,8 @@ it.each([
         initialMessage: "I can take a message.",
         brief: {},
       });
+      expect(buildCallBriefInstructions(requireFirstActiveCall(ctx))).toMatch(/take a message/i);
+      expect(buildCallBriefInstructions(requireFirstActiveCall(ctx))).not.toContain("Book plumber");
     }
   },
 );
@@ -545,11 +700,64 @@ it.each(["created", "rejected"] as const)(
 
 it("answers accepted inbound calls when the provider requires an answer command", async () => {
   const answerCall = vi.fn<(_: AnswerCallInput) => Promise<void>>().mockResolvedValue(undefined);
-  const ctx = inboundContext({}, { provider: createProvider({ answerCall }) });
-  await processEvent(ctx, inboundEvent("evt-answer", "call-control-1"));
+  const provider = createProvider({ answerCall });
+  const ctx = inboundContext(
+    {
+      provider: "telnyx",
+      telnyx: {
+        apiKey: "KEY123",
+        connectionId: "CONN456",
+      },
+      skipSignatureVerification: true,
+    },
+    { provider },
+  );
+  const event = inboundEvent("evt-answer", "call-control-1", "+15552222222");
+
+  await processEvent(ctx, event);
+
+  const call = requireFirstActiveCall(ctx);
   expect(answerCall).toHaveBeenCalledExactlyOnceWith({
-    callId: requireFirstActiveCall(ctx).callId,
+    callId: call.callId,
     providerCallId: "call-control-1",
+  });
+});
+
+it.each([
+  ["per-call", undefined],
+  ["main", { mainKey: "work" }],
+] as const)("assigns %s session keys to inbound calls", async (sessionScope, coreSession) => {
+  const ctx = inboundContext({ sessionScope }, { coreSession });
+  await processEvent(ctx, inboundEvent("session", "provider-session"));
+
+  const call = requireFirstActiveCall(ctx);
+  expect(call.sessionKey).toBe(
+    sessionScope === "main" ? "agent:main:work" : `agent:main:voice:call:${call.callId}`,
+  );
+});
+
+it("applies per-number inbound greeting and stores the matched route key", async () => {
+  const ctx = inboundContext({
+    inboundGreeting: "Hello from global.",
+    numbers: {
+      "+15550002222": {
+        agentId: "cards",
+        inboundGreeting: "Silver Fox Cards, how can I help?",
+      },
+    },
+  });
+  await processEvent(ctx, {
+    ...inboundEvent("evt-inbound-number-route", "CA-inbound-number-route"),
+    to: "+1 (555) 000-2222",
+  });
+
+  const call = requireFirstActiveCall(ctx);
+  expect(call).toMatchObject({
+    metadata: {
+      initialMessage: "Silver Fox Cards, how can I help?",
+      numberRouteKey: "+15550002222",
+    },
+    agentId: "cards",
   });
 });
 
@@ -598,83 +806,100 @@ function amdContext(
   return { ...context, work, hangup, playMessageAndHangup };
 }
 
-it.each([false, true])("waits for realtime voicemail (failure=%s)", async (failed) => {
-  const playback = delayedOperation();
-  const beforeCarrierPlayback = vi.fn();
-  const { call, send, work, hangup, playMessageAndHangup } = amdContext(
-    { brief: { voicemailMessage: "We will call again later." } },
-    { playRealtimeVoicemail: playback.invoke, beforeCarrierPlayback },
+it("retains first classification through terminal callbacks without restarting playback", async () => {
+  const playMessageAndHangup = vi.fn(async () => {});
+  const { call, send } = fixture(
+    { provider: "twilio", metadata: {} },
+    { provider: createProvider({ playMessageAndHangup }) },
   );
-  await send({ type: "call.amd", answeredBy: "machine_end_beep" });
-  await playback.started;
-  expect(playback.invoke).toHaveBeenCalledWith(
-    call.callId,
-    expect.stringContaining("We will call again later."),
-  );
+  await send({ type: "call.amd", answeredBy: "machine_start", id: "first" });
+  await send({ type: "call.amd", answeredBy: "machine_end_other", id: "last" });
+  expect(call.metadata).toMatchObject({
+    answeredByFirst: "machine_start",
+    answeredBy: "machine_end_other",
+  });
+  await send({
+    type: "call.ended",
+    reason: "completed",
+    id: "ended",
+    answeredBy: "machine_end_beep",
+  });
+  expect(call.metadata).toMatchObject({
+    answeredByFirst: "machine_start",
+    answeredBy: "machine_end_beep",
+  });
+  expect(call.endReason).toBe("completed");
   expect(playMessageAndHangup).not.toHaveBeenCalled();
-  expect(beforeCarrierPlayback).not.toHaveBeenCalled();
-  expect(hangup).not.toHaveBeenCalled();
-  if (failed) {
-    playback.reject(new Error("No audible voicemail"));
-  } else {
-    playback.resolve();
-  }
-  await Promise.all(work);
-  expect(hangup).toHaveBeenCalledTimes(1);
-  expect(call.endReason).toBe(failed ? "error" : "voicemail");
-  expect(call.metadata?.voicemailStatus).toBe(failed ? "failed" : "left");
 });
 
-it.each(["human", "unknown", "machine_end_beep"])(
-  "hands off %s playback once after bridge preparation",
-  async (answeredBy) => {
-    const machine = answeredBy === "machine_end_beep";
-    const message = machine ? "Please call me back." : "Your parcel is ready.";
-    const prepared = delayedOperation();
+it.each([false, true])(
+  "uses realtime voicemail and waits before hangup (failure=%s)",
+  async (failed) => {
+    const playback = createDeferred<void>();
+    const started = createDeferred<void>();
+    const beforeCarrierPlayback = vi.fn();
+    const playRealtimeVoicemail = vi.fn(() => {
+      started.resolve();
+      return playback.promise;
+    });
     const { call, send, work, hangup, playMessageAndHangup } = amdContext(
-      {
-        mode: "notify",
-        pendingNotifyAmd: true,
-        initialMessage: "Your parcel is ready.",
-        brief: { task: "Arrange a plumber", voicemailMessage: "Please call me back." },
-      },
-      { beforeCarrierPlayback: prepared.invoke },
+      { brief: { voicemailMessage: "We will call again later." } },
+      { playRealtimeVoicemail, beforeCarrierPlayback },
     );
-    playMessageAndHangup.mockImplementation(async () => {
-      expect(call.metadata?.[machine ? "voicemailStatus" : "notifyStatus"]).toBe("playing");
-      expect(call.transcript).toMatchObject([{ speaker: "bot", text: message }]);
-    });
-    if (machine) {
-      await send({ type: "call.amd", answeredBy: "machine_start" });
-      expect(playMessageAndHangup).not.toHaveBeenCalled();
-    }
-    await send({ type: "call.amd", answeredBy });
-    await send({ type: "call.amd", answeredBy, id: "redelivery" });
-    expect(call.metadata).toMatchObject({
-      answeredByFirst: machine ? "machine_start" : answeredBy,
-      answeredBy,
-    });
-    await prepared.started;
-    expect(prepared.invoke).toHaveBeenCalledExactlyOnceWith(call.callId);
+    await send({ type: "call.amd", answeredBy: "machine_end_beep" });
+    await started.promise;
+    expect(playRealtimeVoicemail).toHaveBeenCalledWith(
+      call.callId,
+      expect.stringContaining("We will call again later."),
+    );
     expect(playMessageAndHangup).not.toHaveBeenCalled();
-    prepared.resolve();
-    await Promise.all(work);
-    expect(playMessageAndHangup).toHaveBeenCalledExactlyOnceWith({
-      callId: call.callId,
-      providerCallId: "provider-1",
-      text: message,
-    });
+    expect(beforeCarrierPlayback).not.toHaveBeenCalled();
     expect(hangup).not.toHaveBeenCalled();
-    expect(call.endReason).toBeUndefined();
-    await send({ type: "call.ended", reason: "completed", answeredBy });
-    expect(call.metadata).toMatchObject({
-      [machine ? "voicemailStatus" : "notifyStatus"]: "left",
-      answeredByFirst: machine ? "machine_start" : answeredBy,
-      answeredBy,
-    });
-    expect(call.endReason).toBe(machine ? "voicemail" : "completed");
+    if (failed) {
+      playback.reject(new Error("No audible voicemail"));
+    } else {
+      playback.resolve();
+    }
+    await Promise.all(work);
+    expect(hangup).toHaveBeenCalledTimes(1);
+    expect(call.endReason).toBe(failed ? "error" : "voicemail");
+    expect(call.metadata?.voicemailStatus).toBe(failed ? "failed" : "left");
   },
 );
+
+it("prepares the bridge once and persists the intended message before carrier playback", async () => {
+  const prepared = createDeferred<void>();
+  const preparing = createDeferred<void>();
+  const beforeCarrierPlayback = vi.fn(() => {
+    preparing.resolve();
+    return prepared.promise;
+  });
+  const { call, send, work, hangup, playMessageAndHangup } = amdContext(
+    { brief: { task: "Arrange a plumber", voicemailMessage: "Please call me back." } },
+    { beforeCarrierPlayback },
+  );
+  playMessageAndHangup.mockImplementation(async () => {
+    expect(call.metadata?.voicemailStatus).toBe("playing");
+    expect(call.transcript).toMatchObject([{ speaker: "bot", text: "Please call me back." }]);
+  });
+  await send({ type: "call.amd", answeredBy: "machine_end_beep" });
+  await send({ type: "call.amd", answeredBy: "machine_end_beep", id: "redelivery" });
+  await preparing.promise;
+  expect(beforeCarrierPlayback).toHaveBeenCalledExactlyOnceWith(call.callId);
+  expect(playMessageAndHangup).not.toHaveBeenCalled();
+  prepared.resolve();
+  await Promise.all(work);
+  expect(playMessageAndHangup).toHaveBeenCalledExactlyOnceWith({
+    callId: call.callId,
+    providerCallId: "provider-1",
+    text: "Please call me back.",
+  });
+  expect(hangup).not.toHaveBeenCalled();
+  expect(call.endReason).toBeUndefined();
+  await send({ type: "call.ended", reason: "completed" });
+  expect(call.metadata?.voicemailStatus).toBe("left");
+  expect(call.endReason).toBe("voicemail");
+});
 
 it.each(["prepare", "request"])(
   "records %s failure without claiming voicemail was left",
@@ -702,24 +927,42 @@ it.each(["prepare", "request"])(
   },
 );
 
-it.each(["off", "hang-up", "fax"] as const)(
-  "handles AMD policy %s without speaking",
-  async (mode) => {
-    const { call, send, work, hangup, playMessageAndHangup } = amdContext(
-      { pendingNotifyAmd: mode === "fax" },
-      {
-        config: normalizeVoiceCallConfig({
-          voicemail: { detection: mode === "off" ? "off" : "twilio", onMachine: "hang-up" },
-        }),
-      },
-    );
-    await send({ type: "call.amd", answeredBy: mode === "fax" ? "fax" : "machine_start" });
+it.each(["human", "unknown", "machine_end_beep"])(
+  "holds notify speech until classification %s, then plays the right message once",
+  async (answeredBy) => {
+    const { call, send, work, hangup, playMessageAndHangup } = amdContext({
+      mode: "notify",
+      pendingNotifyAmd: true,
+      initialMessage: "Your parcel is ready.",
+      brief: { voicemailMessage: "Please collect your parcel." },
+    });
+    await send({ type: "call.amd", answeredBy });
+    await send({ type: "call.amd", answeredBy, id: "redelivery" });
     await Promise.all(work);
-    expect(playMessageAndHangup).not.toHaveBeenCalled();
-    expect(hangup).toHaveBeenCalledTimes(mode === "off" ? 0 : 1);
-    expect(call.metadata?.voicemailStatus).toBe(mode === "hang-up" ? "hang-up" : undefined);
-    expect(call.endReason).toBe(
-      mode === "off" ? undefined : mode === "fax" ? "failed" : "voicemail",
-    );
+    expect(playMessageAndHangup).toHaveBeenCalledExactlyOnceWith({
+      callId: call.callId,
+      providerCallId: "provider-1",
+      text:
+        answeredBy === "machine_end_beep" ? "Please collect your parcel." : "Your parcel is ready.",
+    });
+    expect(hangup).not.toHaveBeenCalled();
+    await send({ type: "call.ended", reason: "completed" });
+    expect(call.endReason).toBe(answeredBy === "machine_end_beep" ? "voicemail" : "completed");
   },
 );
+
+it.each(["off", "hang-up"] as const)("handles AMD policy %s without speaking", async (mode) => {
+  const { call, send, work, hangup, playMessageAndHangup } = amdContext(
+    {},
+    {
+      config: normalizeVoiceCallConfig({
+        voicemail: { detection: mode === "off" ? "off" : "twilio", onMachine: "hang-up" },
+      }),
+    },
+  );
+  await send({ type: "call.amd", answeredBy: "machine_start" });
+  await Promise.all(work);
+  expect(playMessageAndHangup).not.toHaveBeenCalled();
+  expect(hangup).toHaveBeenCalledTimes(mode === "off" ? 0 : 1);
+  expect(call.metadata?.voicemailStatus).toBe(mode === "off" ? undefined : "hang-up");
+});
