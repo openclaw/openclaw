@@ -1,5 +1,6 @@
 // Keep bundled plugins enabled: disabling them hid a startup stall from UI e2e proof.
 import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
@@ -17,6 +18,7 @@ import {
   getSkillsSnapshotVersion,
   resetSkillsRefreshStateForTest,
 } from "../skills/runtime/refresh-state.js";
+import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
 import { getFreePort } from "../test-utils/ports.js";
 import { createStartupTestState, gatewayStartupOptions } from "./server-startup.test-support.js";
 
@@ -44,6 +46,7 @@ it("suppresses ambient channel triggers and awaits subagent recovery", async ({ 
     plugins: {},
   });
   state.applyEnv();
+  vi.stubEnv("OPENCLAW_STATE_DIR", undefined);
 
   await expect(
     writeGatewayRestartHandoff({
@@ -97,6 +100,20 @@ it("suppresses ambient channel triggers and awaits subagent recovery", async ({ 
     const bootstrap = await waitingBootstrap;
     expect(publish).toHaveBeenCalled();
     expect(bootstrap.ambientEnvTriggers).toBe("suppress");
+    const resolve = vi.spyOn(path, "resolve");
+    const join = vi.spyOn(path, "join");
+    try {
+      for (let index = 0; index < 10; index++) {
+        expect(readAgentDatabaseAdmissionRefusal("main")).toBeUndefined();
+      }
+      if (process.platform !== "win32") {
+        expect(resolve).not.toHaveBeenCalled();
+      }
+      expect(join).not.toHaveBeenCalled();
+    } finally {
+      resolve.mockRestore();
+      join.mockRestore();
+    }
     expect(
       sql.queries.filter((query) => /\bfrom\s+"?gateway_restart_handoff\b/iu.test(query)),
     ).toEqual([]);

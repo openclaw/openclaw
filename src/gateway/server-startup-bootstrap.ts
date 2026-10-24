@@ -12,7 +12,7 @@ import {
   readConfigFileSnapshotWithPluginMetadata,
   setAppliedRuntimeConfigSnapshot,
 } from "../config/io.js";
-import { normalizeStateDirEnv } from "../config/paths.js";
+import { resolveStateDir } from "../config/paths.js";
 import { copyConfigResolutionFacts } from "../config/resolution-facts.js";
 import { captureConfigOverrideApplier } from "../config/runtime-overrides.js";
 import { resolveSystemMainSessionTarget } from "../config/sessions.js";
@@ -137,7 +137,8 @@ async function prepareGatewayServerBootstrapSelected(input: {
     return read;
   });
   const inspectStateOwnership = async (signal?: AbortSignal) => {
-    normalizeStateDirEnv(process.env);
+    // Config environment selection is complete; admission reads reuse this process root.
+    process.env.OPENCLAW_STATE_DIR = resolveStateDir(process.env);
     await assertOpenClawStateWriteAllowedAtPath({
       databasePath: resolveOpenClawStateSqlitePath(process.env),
       env: process.env,

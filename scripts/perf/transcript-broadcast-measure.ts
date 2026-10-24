@@ -121,6 +121,7 @@ const { values } = parseArgs({
     limit: { type: "string", default: "100" },
     "row-mode": { type: "string", default: "compact" },
     entry: { type: "string", default: "dist/entry.js" },
+    "default-state-dir": { type: "boolean", default: false },
     port: { type: "string", default: "41033" },
     "mock-port": { type: "string" },
     clients: { type: "string", default: "60" },
@@ -2366,9 +2367,14 @@ function measureFrameFields(
   return result;
 }
 const ownedListeners = new Set<ChildProcess>();
+if (values["default-state-dir"] && path.basename(root) !== ".openclaw") {
+  throw new Error("--default-state-dir requires a fixture rooted at <synthetic-home>/.openclaw");
+}
 const env = {
   ...createGatewayBenchEnv(path.join(root, "home"), configPath, { startupTrace: false }),
-  OPENCLAW_STATE_DIR: root,
+  ...(values["default-state-dir"]
+    ? { OPENCLAW_HOME: path.dirname(root), OPENCLAW_STATE_DIR: undefined }
+    : { OPENCLAW_STATE_DIR: root }),
   ...(values["attempt-setup-image"] && process.env.CONTAINERS_STORAGE_CONF
     ? { CONTAINERS_STORAGE_CONF: process.env.CONTAINERS_STORAGE_CONF }
     : {}),
@@ -2392,7 +2398,7 @@ const env = {
         GIT_CONFIG_VALUE_0: "never",
       }
     : {}),
-  OPENCLAW_PROFILE: `team-shape-${port}`,
+  OPENCLAW_PROFILE: values["default-state-dir"] ? "default" : `team-shape-${port}`,
   OPENCLAW_SYSTEMD_UNIT: `openclaw-gateway-team-shape-${port}`,
   ...(values["prep-trace"] ? { OPENCLAW_LOG_LEVEL: "trace" } : {}),
   ...(idleScenario ? { OPENCLAW_BENCH_FIRST_TEXT: "1" } : {}),
@@ -6117,6 +6123,7 @@ try {
           },
         }
       : {}),
+    defaultStateDir: values["default-state-dir"],
     verifyHistoryReplay,
     revision: values.revision ?? null,
     operationsPerRound: turnScenario ? sessionCount : operations,
