@@ -218,19 +218,13 @@ describe("CodeQL language selection", () => {
           }),
         },
       });
-      expect(
-        matrix?.include
-          .map(({ category, language, config_file }) => ({ category, language, config_file }))
-          .toSorted((a, b) => String(a.category).localeCompare(String(b.category))),
-      ).toEqual(
-        expected
-          .map((category) => ({
-            category,
-            language: category === "actions" ? "actions" : "javascript-typescript",
-            config_file: `./.github/codeql/codeql-${category}-critical-security.yml`,
-          }))
-          .toSorted((a, b) => String(a.category).localeCompare(String(b.category))),
-      );
+      expect(matrix?.include.map((row) => row.category).toSorted()).toEqual(expected.toSorted());
+      for (const row of matrix!.include) {
+        expect(row).toMatchObject({
+          language: row.category === "actions" ? "actions" : "javascript-typescript",
+          config_file: `./.github/codeql/codeql-${row.category}-critical-security.yml`,
+        });
+      }
     },
   );
 

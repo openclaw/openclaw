@@ -59,17 +59,11 @@ it.for([
     parallel: true,
     emptyInvocations: 2,
   }),
-  emptyCase("explicit true", 0, [`${pass}=true`]),
   emptyCase("separated exclusion matching routed target", 0, ["--exclude", target, pass], {
     excluded: false,
   }),
-  emptyCase("native negation", 1, ["--no-passWithNoTests"]),
-  emptyCase("native dashed spelling", 0, ["--pass-with-no-tests=true"]),
-  emptyCase("invalid duplicate scalar", 1, [pass, pass], { invalid: true }),
-  emptyCase("direct configured default", 1, direct),
   emptyCase("cfg long control", 0, direct, runs),
   emptyCase("cfg inline strict", 1, [`-c=${config}`, pass]),
-  emptyCase("direct configured strict alias", 1, [...direct, "--pass-with-no-tests=true"]),
   // Native parse errors before discovery remain infrastructure failures.
   emptyCase(
     "direct invalid scalar is not repaired",

@@ -93,20 +93,20 @@ describe("plugin index SQLite E2E helpers", () => {
     });
   });
 
-  it("keeps malformed legacy install JSON as an empty fallback", async () => {
-    writeLegacyIndex(root, "{not-json");
+  const sources = [
+    ["legacy JSON", writeLegacyIndex, "JSON artifact"],
+    ["current SQLite", writeCurrentSqliteIndex, "value_json"],
+    ["pre-v13 SQLite", writePreV13SqliteIndex, "install_records_json"],
+  ] as const;
+  it.each(sources)("keeps malformed %s as an empty fallback", async (_name, write) => {
+    write(root, "{not-json");
     expect(await readRecords()).toEqual({});
   });
-
-  it("rejects oversized legacy install JSON before parsing it", async () => {
-    writeLegacyIndex(root, JSON.stringify({ records: {}, filler: "x".repeat(128) }));
-
-    const { readPluginInstallRecords } = await loadPluginIndex({
-      OPENCLAW_PLUGIN_INDEX_JSON_MAX_BYTES: "64",
-    });
-
-    expect(() => readPluginInstallRecords(options)).toThrow(
-      "plugin index JSON artifact exceeded 64 bytes",
+  it.each(sources)("rejects oversized %s before parsing it", async (_name, write, column) => {
+    write(root, JSON.stringify({ filler: "x".repeat(128) }));
+    const index = await loadPluginIndex({ OPENCLAW_PLUGIN_INDEX_JSON_MAX_BYTES: "64" });
+    expect(() => index.readPluginInstallIndex(options)).toThrow(
+      `plugin index ${column} exceeded 64 bytes`,
     );
   });
 
@@ -126,36 +126,6 @@ describe("plugin index SQLite E2E helpers", () => {
   ] as const)("never cross-reads another schema's table for v%s", async (schema, write, value) => {
     write(root, value, schema);
     expect(await readRecords()).toEqual({});
-  });
-
-  it.each([
-    ["current", writeCurrentSqliteIndex],
-    ["pre-v13", writePreV13SqliteIndex],
-  ] as const)("keeps malformed %s SQLite state as an empty fallback", async (_name, write) => {
-    write(root, "{not-json");
-
-    expect(await readRecords()).toEqual({});
-  });
-
-  it.each([
-    {
-      name: "current",
-      expected: "plugin index value_json exceeded 64 bytes",
-      write: () => writeCurrentSqliteIndex(root, currentValueJson({ filler: "x".repeat(128) })),
-    },
-    {
-      name: "pre-v13",
-      expected: "plugin index install_records_json exceeded 64 bytes",
-      write: () => writePreV13SqliteIndex(root, JSON.stringify({ filler: "x".repeat(128) })),
-    },
-  ])("rejects oversized $name SQLite state before parsing it", async ({ expected, write }) => {
-    write();
-
-    const { readPluginInstallIndex } = await loadPluginIndex({
-      OPENCLAW_PLUGIN_INDEX_JSON_MAX_BYTES: "64",
-    });
-
-    expect(() => readPluginInstallIndex(options)).toThrow(expected);
   });
 
   it.each([12, 13])("bounds only required summary fields in schema v%s", async (schema) => {
