@@ -96,9 +96,9 @@ it.each([true, false])(
       {
         agentId: params.agentId,
         sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
+        sessionKey: params.sessionKey!,
         workspaceDir: params.workspaceDir,
-        config: params.config,
+        config: params.config!,
         mcpServerNames: ["demo"],
         assertCurrent: () => params.hostCapabilities.assertActive(),
         prepareSession: async () => preparation,
