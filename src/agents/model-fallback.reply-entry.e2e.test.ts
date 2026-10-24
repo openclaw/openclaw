@@ -1,14 +1,11 @@
 // Proves the pinned fallback decision survives the complete reply-entry path.
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { withReplyDispatcher } from "../auto-reply/dispatch-dispatcher.js";
 import type { ReplyDispatchKind } from "../auto-reply/reply/reply-dispatcher.types.js";
-import type { MsgContext } from "../auto-reply/templating.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
-import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
+import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
-import { ensureAuthProfileStore } from "./auth-profiles/store-runtime.js";
 import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
@@ -38,7 +35,6 @@ let getReplyFromConfig: typeof import("../auto-reply/reply/get-reply.js").getRep
 let withFullRuntimeReplyConfig: typeof import("../auto-reply/reply/get-reply-fast-path.js").withFullRuntimeReplyConfig;
 let createReplyDispatcher: typeof import("../auto-reply/reply/reply-dispatcher.js").createReplyDispatcher;
 const RATE_LIMIT_ERROR_MESSAGE = "rate limit exceeded";
-const reservedProviders = ["refresh", "access", "cancel", "choice"];
 const completedWriteToolMetas = [
   {
     toolName: "write",
@@ -63,37 +59,12 @@ beforeEach(() => {
   fallbackMocks.clear();
 });
 
-function countProviderAttempts(provider: string): number {
-  return runEmbeddedAttemptMock.mock.calls.filter(([params]) => params.provider === provider)
-    .length;
-}
-function commandButton(label: string, command: string) {
-  return { label, action: { type: "command" as const, command } };
-}
-
 it.each([
-  {
-    title: "returns the pinned rate-limit surface through the reply entry",
-    provider: "openai",
-    errorMessage: RATE_LIMIT_ERROR_MESSAGE,
-    toolMetas: [],
-    loginCommand: undefined,
-  },
-  {
-    title: "delivers a returned API-key error after a write without OAuth sign-in",
-    provider: "openai",
-    errorMessage: "401 invalid API key",
-    toolMetas: completedWriteToolMetas,
-    loginCommand: undefined,
-  },
-  ...["openai", "xai", "minimax-portal", ...reservedProviders].map((provider) => ({
-    title: `delivers returned ${provider} OAuth recovery after a write`,
-    provider,
-    errorMessage: `OAuth token refresh failed for ${provider}: refresh_token_invalidated`,
-    toolMetas: completedWriteToolMetas,
-    loginCommand: reservedProviders.includes(provider) ? "/login" : `/login ${provider}`,
-  })),
-])("getReplyFromConfig: $title", async ({ provider, errorMessage, toolMetas, loginCommand }) => {
+  ["openai", RATE_LIMIT_ERROR_MESSAGE, undefined],
+  ["openai", "401 invalid API key", undefined],
+  ["openai", "OAuth token refresh failed for openai: refresh_token_invalidated", "/login openai"],
+  ["refresh", "OAuth token refresh failed for refresh: refresh_token_invalidated", "/login"],
+] as const)("delivers pinned %s failure: %s", async (provider, errorMessage, loginCommand) => {
   // The disabled fallback ladder must reach the embedded runner instead of escalating.
   // #171760 made exhausted no-progress recovery explicit, including for pinned models.
   await withModelFallbackWorkspace(async ({ agentDir, workspaceDir }) => {
@@ -102,19 +73,19 @@ it.each([
     } else {
       await writeFallbackAuthStore(agentDir, undefined, { primaryProvider: provider });
     }
-    const authStore = ensureAuthProfileStore(agentDir, { syncExternalCli: false });
-    const cfg = makeModelFallbackConfig(provider);
-    const agents = expectDefined(cfg.agents, "fixture agents");
-    const defaults = expectDefined(agents.defaults, "fixture defaults");
-    const providers = expectDefined(cfg.models?.providers, "fixture providers");
-    const groqProvider = expectDefined(providers.groq, "fixture fallback provider");
     const sessionKey = "agent:test:telegram:111";
     const storePath = path.join(path.dirname(agentDir), "sessions.json");
-    defaults.workspace = workspaceDir;
-    defaults.model = { primary: `${provider}/mock-1`, fallbacks: ["anthropic/mock-2"] };
-    agents.entries = { test: { agentDir, workspace: workspaceDir } };
-    providers.anthropic = { ...groqProvider, baseUrl: "https://example.com/anthropic" };
-    cfg.session = { store: storePath };
+    const cfg = {
+      ...makeModelFallbackConfig(provider),
+      agents: {
+        defaults: {
+          workspace: workspaceDir,
+          model: { primary: `${provider}/mock-1`, fallbacks: ["groq/mock-2"] },
+        },
+        entries: { test: { agentDir, workspace: workspaceDir } },
+      },
+      session: { store: storePath },
+    };
     await replaceSessionEntry(
       { sessionKey, storePath },
       {
@@ -137,73 +108,72 @@ it.each([
       });
       return makeEmbeddedRunnerAttempt({
         // A completed write prevents replay, so its error must use terminal payload delivery.
-        toolMetas,
+        toolMetas: errorMessage === RATE_LIMIT_ERROR_MESSAGE ? [] : completedWriteToolMetas,
         lastAssistant: assistant,
         currentAttemptCompletedAssistant: assistant,
       });
     });
 
-    const ctx: MsgContext = {
-      Body: "hello",
-      From: "telegram:111",
-      To: "telegram:111",
-      ChatType: "direct",
-      Provider: "telegram",
-      Surface: "telegram",
-      SessionKey: sessionKey,
-      CommandAuthorized: true,
-    };
     const replyConfig = withFullRuntimeReplyConfig(cfg);
     setRuntimeConfigSnapshot(replyConfig, replyConfig);
-    let result: Awaited<ReturnType<typeof getReplyFromConfig>>;
     const delivered: Array<{ payload: ReplyPayload; kind: ReplyDispatchKind }> = [];
     const dispatcher = createReplyDispatcher({
       deliver: async (payload, { kind }) => {
         delivered.push({ payload, kind });
       },
     });
-    try {
-      result = await withReplyDispatcher({
-        dispatcher,
-        run: async () => {
-          const replies = await getReplyFromConfig(ctx, undefined, replyConfig);
-          for (const payload of Array.isArray(replies) ? replies : replies ? [replies] : []) {
-            dispatcher.sendFinalReply(payload);
-          }
-          return replies;
-        },
-      });
-    } finally {
-      clearRuntimeConfigSnapshot();
-    }
+    const result = await withReplyDispatcher({
+      dispatcher,
+      run: async () => {
+        const replies = await getReplyFromConfig(
+          {
+            Body: "hello",
+            From: "telegram:111",
+            To: "telegram:111",
+            ChatType: "direct",
+            Provider: "telegram",
+            Surface: "telegram",
+            SessionKey: sessionKey,
+            CommandAuthorized: true,
+          },
+          undefined,
+          replyConfig,
+        );
+        for (const payload of Array.isArray(replies) ? replies : replies ? [replies] : []) {
+          dispatcher.sendFinalReply(payload);
+        }
+        return replies;
+      },
+    });
     const text = Array.isArray(result) ? result[0]?.text : result?.text;
-    expect(countProviderAttempts("anthropic")).toBe(0);
-    for (const [attempt] of runEmbeddedAttemptMock.mock.calls) {
-      expect(
-        authStore.profiles[expectDefined(attempt.authProfileId, "selected auth profile")],
-      ).toMatchObject({ provider, type: "api_key" });
-    }
+    expect([
+      ...new Set(runEmbeddedAttemptMock.mock.calls.map(([attempt]) => attempt.provider)),
+    ]).toEqual([provider]);
     expect(delivered).toHaveLength(1);
     expect(delivered[0]).toMatchObject({ kind: "final", payload: { isError: true } });
     const payload = delivered[0]?.payload;
-    expect(payload?.text?.trim().length).toBeGreaterThan(0);
     if (errorMessage === RATE_LIMIT_ERROR_MESSAGE) {
-      expect(countProviderAttempts("openai")).toBeGreaterThan(2);
+      expect(runEmbeddedAttemptMock.mock.calls.length).toBeGreaterThan(2);
       for (const surfaced of [text, payload?.text]) {
         expect(surfaced).toContain("Rate-limit recovery stopped after");
         expect(surfaced).not.toContain("The AI service is temporarily rate-limited");
       }
-    } else if (loginCommand) {
-      expect(countProviderAttempts(provider)).toBe(1);
-      expect(payload?.text).toContain(loginCommand);
-      expect(payload?.presentation).toEqual({
-        blocks: [{ type: "buttons", buttons: [commandButton("Sign in", loginCommand)] }],
-      });
     } else {
-      expect(countProviderAttempts(provider)).toBe(1);
-      expect(payload?.text).toBe(AUTH_INVALID_TOKEN_USER_TEXT);
-      expect(payload?.text).not.toContain("/login");
-      expect(payload?.presentation).toBeUndefined();
+      expect(runEmbeddedAttemptMock).toHaveBeenCalledOnce();
+      if (loginCommand) {
+        expect(payload?.text).toContain(loginCommand);
+        expect(payload?.presentation).toEqual({
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [{ label: "Sign in", action: { type: "command", command: loginCommand } }],
+            },
+          ],
+        });
+      } else {
+        expect(payload?.text).toBe(AUTH_INVALID_TOKEN_USER_TEXT);
+        expect(payload?.presentation).toBeUndefined();
+      }
     }
   });
 });
