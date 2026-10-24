@@ -1014,18 +1014,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ["chat"],
     ["ui/src/pages/chat/chat-pane.ts", "ui/src/pages/chat/route-draft-focus-handoff.ts"],
   ),
-  pageWatch(
-    "ui/src/e2e/cron-agent-ownership.e2e.test.ts",
-    ["cron"],
-    [
-      "ui/src/components/agent-select-registration.ts",
-      "ui/src/components/select-picker.ts",
-      "ui/src/lib/cron/types.ts",
-      "ui/src/pages/cron/cron-page.tsx",
-      "ui/src/pages/cron/cron-page-controller.ts",
-    ],
-    ["ui/src/styles/select-picker.css"],
-  ),
   pageWatch("ui/src/e2e/cron-descriptions.e2e.test.ts", ["cron"], ["ui/src/lib/cron/types.ts"]),
   pageWatch(
     "ui/src/e2e/cron-filters.e2e.test.ts",

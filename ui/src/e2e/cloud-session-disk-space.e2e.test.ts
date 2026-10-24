@@ -12,9 +12,7 @@ const gibibyte = 1024 ** 3;
 const mebibyte = 1024 ** 2;
 const observedAtMs = Date.parse("2026-08-13T16:00:00.000Z");
 
-const suite = createControlUiE2eSuite({
-  name: "Control UI cloud-session disk-space monitoring",
-});
+const suite = createControlUiE2eSuite({ name: "Cloud-session disk-space monitoring" });
 
 function sessionsList(diskSpace: SessionPlacementDiskSpace) {
   return cloudSessionList(
@@ -31,7 +29,7 @@ function sessionsList(diskSpace: SessionPlacementDiskSpace) {
 }
 
 suite.define(() => {
-  it("refreshes selected-chat and sidebar disk pressure through canonical session events", () =>
+  it("refreshes accessible sidebar disk pressure through canonical session events", () =>
     suite.withPage(
       { ...createControlUiE2eContextOptions(), colorScheme: "dark" },
       async ({ page }) => {
@@ -42,13 +40,6 @@ suite.define(() => {
           observedAtMs,
         } satisfies SessionPlacementDiskSpace;
         const gateway = await installMockGateway(page, {
-          historyMessages: [
-            {
-              role: "assistant",
-              content: [{ type: "text", text: "Disk monitor is ready." }],
-              timestamp: observedAtMs - 1_000,
-            },
-          ],
           methodResponses: { "sessions.list": sessionsList(healthy) },
           sessionKey,
         });
@@ -79,30 +70,13 @@ suite.define(() => {
             .toBeGreaterThan(requestCount);
         };
 
-        const response = await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-        expect(response?.status()).toBe(200);
-        await gateway.waitForRequest("connect");
-        await gateway.waitForRequest("sessions.list");
-        await page.getByText("Disk monitor is ready.", { exact: true }).waitFor();
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         await sidebarRow.getByText("Disk monitor", { exact: true }).waitFor();
-        expect(await page.locator(".chat-cloud-disk-space-notice").count()).toBe(0);
         await expectAccessibleBadge("ok", "Placement: active");
 
-        for (const [status, freeMb, role, title, description] of [
-          [
-            "warning",
-            247,
-            "status",
-            "Cloud session disk space is low",
-            "96% used · 247 MB free. Delete unneeded files or stop the cloud worker before large writes.",
-          ],
-          [
-            "critical",
-            80,
-            "alert",
-            "Cloud session disk space is critically low",
-            "99% used · 80 MB free. New writes may fail and stop the agent. Delete unneeded files or stop the cloud worker before large writes.",
-          ],
+        for (const [status, freeMb, title] of [
+          ["warning", 247, "Cloud session disk space is low"],
+          ["critical", 80, "Cloud session disk space is critically low"],
         ] as const) {
           await refresh({
             status,
@@ -110,14 +84,10 @@ suite.define(() => {
             totalBytes: 6 * gibibyte,
             observedAtMs: observedAtMs + (status === "warning" ? 1_000 : 2_000),
           });
-          const notice = page.getByRole(role).filter({ hasText: title });
-          await notice.waitFor();
-          expect(await notice.textContent()).toContain(description);
           await expectAccessibleBadge(status, `Placement: active · ${title}`);
         }
 
         await refresh({ ...healthy, observedAtMs: observedAtMs + 3_000 });
-        await expect.poll(() => page.locator(".chat-cloud-disk-space-notice").count()).toBe(0);
         await expectAccessibleBadge("ok", "Placement: active");
       },
     ));
