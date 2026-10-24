@@ -683,13 +683,13 @@ export async function executeWorkerTurn(
       await releaseClaimIfOwned(params.placements, params.turnClaim);
       return blockedResult;
     }
-    assertInputAdmitted();
     return await finalizeWorkerTurnResult({
       ...params,
       turn,
       transcriptTarget,
       tunnel,
       processResult,
+      assertInputAdmitted,
       modelRef,
       baseLeafId,
       promptContext,

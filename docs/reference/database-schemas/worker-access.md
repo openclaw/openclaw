@@ -173,8 +173,10 @@ transaction. Placement and journal reads retain their multi-statement snapshots.
 
 Gateway startup binds existing auth-file observers to its read-only scope and
 spawn broker, including observations retained across an in-process restart.
-New observers capture those resources when admitting a directory. File scans
-publish through the current binding, including scans spanning a restart.
+New observers reuse that binding even when a temporary request admits their
+directory later. Without a Gateway binding, observers capture their caller's
+resources. File scans publish through the current binding, including scans
+spanning a restart.
 Filesystem notifications retire physical replacements and changed legacy sources;
 ordinary database and WAL contents changes do not reload auth rows. Scope retirement
 stops change publications, and the next Gateway generation rebinds retained observers

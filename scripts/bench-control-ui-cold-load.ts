@@ -3,6 +3,7 @@
 // --thread-cpu-time excludes renderer descheduling from CDP duration metrics.
 // --cpu-profile-compare <baseline cpu-profile.json>: profile and diff against that report.
 // --selector-stats: ranked boot CSS selectors (instrumentation overhead included).
+// --viewport desktop|mobile: 1719×1179 (default) or 390×844 browser viewport.
 // --allocations --untraced --live-events: collected-object renderer bytes per event.
 // --streaming-allocations: sampled allocation bytes including collected objects during deltas.
 // Sampling inflates timings: never compare profiled runs with unprofiled runs.
@@ -249,6 +250,7 @@ const { values } = parseArgs({
     "history-validator-delay-ms": { type: "string", default: "0" },
     "dashboard-paint-marker": { type: "boolean", default: false },
     "color-scheme": { type: "string" },
+    viewport: { type: "string", default: "desktop" },
     "probe-dir": { type: "string" },
     "live-events": { type: "boolean", default: false },
     "streaming-reply": { type: "boolean", default: false },
@@ -351,6 +353,12 @@ const colorScheme = values["color-scheme"];
 if (colorScheme !== undefined && colorScheme !== "light" && colorScheme !== "dark") {
   throw new Error("Expected color-scheme light or dark");
 }
+const viewportName = values.viewport;
+if (viewportName !== "desktop" && viewportName !== "mobile") {
+  throw new Error("Expected viewport desktop or mobile");
+}
+const viewport =
+  viewportName === "mobile" ? { width: 390, height: 844 } : { width: 1719, height: 1179 };
 if (values["filmstrip-only"] && cpuProfile) {
   throw new Error("filmstrip-only excludes CPU profiling");
 }
@@ -667,7 +675,7 @@ try {
     args: chromiumArgs,
   });
   const context = await browser.newContext({
-    viewport: { width: 1719, height: 1179 },
+    viewport,
     ...(colorScheme ? { colorScheme } : {}),
     serviceWorkers: "block",
     permissions: ["local-network-access"],
@@ -984,22 +992,28 @@ try {
         });
         return;
       }
-      await page.locator(".chat-pane__header").first().waitFor();
-      if (values["session-event-ancestor-refs"]) {
+      await page
+        .locator(viewportName === "mobile" ? ".agent-chat__header--mobile" : ".chat-pane__header")
+        .first()
+        .waitFor();
+      // A closed mobile drawer parks its sidebar rows; they are not part of responsive boot.
+      if (viewportName === "desktop") {
+        if (values["session-event-ancestor-refs"]) {
+          await page
+            .locator(
+              `.sidebar-recent-session[data-session-key="${fixture.scenario.sessions![2]!.key}"]`,
+            )
+            .waitFor({ state: "visible" });
+        }
         await page
           .locator(
-            `.sidebar-recent-session[data-session-key="${fixture.scenario.sessions![2]!.key}"]`,
+            `[data-session-section="pinned"] [data-session-key="${fixture.pinnedKeys.at(-1)}"]`,
           )
-          .waitFor({ state: "visible" });
-      }
-      await page
-        .locator(
-          `[data-session-section="pinned"] [data-session-key="${fixture.pinnedKeys.at(-1)}"]`,
-        )
-        .waitFor({ state: "attached" });
-      await page.locator('[data-sidebar-entry="plugin:team-scale-7/overview"]').waitFor();
-      if (sidebarView === "online") {
-        await page.locator('[data-online-user-id="team-person-120"]').waitFor();
+          .waitFor({ state: "attached" });
+        await page.locator('[data-sidebar-entry="plugin:team-scale-7/overview"]').waitFor();
+        if (sidebarView === "online") {
+          await page.locator('[data-online-user-id="team-person-120"]').waitFor();
+        }
       }
       if (face === "dashboard") {
         await page
@@ -2350,6 +2364,7 @@ try {
         historyValidatorDelayMs,
         dashboardPaintMarker: values["dashboard-paint-marker"],
         colorScheme,
+        viewport: { name: viewportName, ...viewport },
         chromiumArgs,
         isolatedSandboxOrigin,
         cpuProfile,

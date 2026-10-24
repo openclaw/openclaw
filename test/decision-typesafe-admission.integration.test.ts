@@ -118,6 +118,7 @@ it("lets admitted TypeSafe work finish after opt-out while preserving independen
               agentDir: resolveAgentDir(initial, "main"),
               workspaceDir,
               loadRuntimePlugins: true,
+              runtimePluginPurpose: "isolated-completion",
               runtimePluginSelections: [
                 { provider: "typesafe", modelId: "kev-latest", agentId: "main" },
               ],
