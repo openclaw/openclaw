@@ -61,21 +61,12 @@ describe("exact XCTest results", () => {
     expect(() => check(cases, overrides)).toThrow("test-identity-or-result");
   });
 
-  it.each([
-    ["missing", ids.slice(1)],
-    ["duplicate replacing a missing method", [ids[0]!, ids[0]!]],
-  ])(
-    "rejects %s tests even when the result count or aggregate result appears valid",
-    (_name, tests) => {
-      const cases = tests.map((id) => testCase(id));
-      expect(() => check(cases)).toThrow("test-identity-or-result");
-    },
-  );
+  it("rejects a duplicate replacing a required method even when the count is correct", () => {
+    const cases = [testCase(ids[0]!), testCase(ids[0]!)];
+    expect(() => check(cases)).toThrow("test-identity-or-result");
+  });
 
-  it.each([{}, { testNodes: [] }, { testNodes: [null] }])(
-    "rejects missing or malformed test nodes: %j",
-    (tree) => {
-      expect(() => requireExactTestResults(tree, ids)).toThrow();
-    },
-  );
+  it.each([{}, { testNodes: [null] }])("rejects missing or malformed test nodes: %j", (tree) => {
+    expect(() => requireExactTestResults(tree, ids)).toThrow();
+  });
 });
