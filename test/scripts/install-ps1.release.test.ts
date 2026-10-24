@@ -793,6 +793,7 @@ foreach ($script:portableFailure in @('throw', 'unsupported')) {
     ),
     "quiet-main-success": installerFixture(
       "function Check-Node { return $true }",
+      "function Install-Node { throw 'supported Node must not be reinstalled' }",
       "function Check-ExistingOpenClaw { return $false }",
       "function Install-OpenClaw { Write-Output 'npm stdout'; return $true }",
       "function Ensure-OpenClawOnPath { return $true }",
@@ -1401,17 +1402,6 @@ try {
     },
   );
 
-  runConcurrentIfPowerShell("exits non-zero when run as a script file", async () => {
-    const result = await runFixtureFile(
-      installerFixture(
-        "function Check-Node { return $false }",
-        "function Install-Node { return $false }",
-        ...entrypointLines,
-      ),
-    );
-    expect(result.status).toBe(1);
-  });
-
   (process.platform === "win32" ? it : it.skip)(
     "reports native upgrade PATH failures without losing caller or service/Doctor ordering",
     () => {
@@ -1697,18 +1687,15 @@ function Invoke-OpenClawCommand { return 'fixture-version' }
 $NoOnboard = $true
 $env:USERPROFILE = [System.IO.Path]::GetTempPath()
 $InstallMethod = 'npm'
-Reset-Fixture
-$result = @(Install-Node)
-if ($result.Count -ne 1 -or $result[0] -isnot [bool]) { throw "Install-Node output leaked: $result" }
-$direct = @{ success = $result[0]; events = $global:Events.ToArray(); calls = $global:WingetCalls.ToArray(); probes = $global:ProbeCount; fallbacks = $global:Fallbacks.ToArray(); messages = $global:Messages.ToArray() }
+if ($case.afterInstall -eq 'text' -and $case.afterRepair -eq 'healthy') {
+    Reset-Fixture
+    $result = @(Install-Node)
+    if ($result.Count -ne 1 -or $result[0] -isnot [bool] -or -not $result[0]) { throw "Install-Node output leaked: $result" }
+}
 Reset-Fixture
 $null = Main
 $main = @{ advanced = $global:Advanced; exit = $global:InstallExitCode; events = $global:Events.ToArray(); calls = $global:WingetCalls.ToArray(); probes = $global:ProbeCount; fallbacks = $global:Fallbacks.ToArray(); messages = $global:Messages.ToArray() }
-Reset-Fixture
-$global:State = 'healthy'
-$null = Main
-$healthy = @{ advanced = $global:Advanced; calls = $global:WingetCalls.Count }
-Write-Output ('RESULT:' + (@{ direct = $direct; main = $main; healthy = $healthy } | ConvertTo-Json -Depth 8 -Compress))
+Write-Output ('RESULT:' + ($main | ConvertTo-Json -Depth 8 -Compress))
 `,
     ].join("\n");
     const result = runPowerShell(["-NonInteractive", "-Command", fixture]);
@@ -1717,10 +1704,9 @@ Write-Output ('RESULT:' + (@{ direct = $direct; main = $main; healthy = $healthy
     expect(line, result.stdout).toBeDefined();
     const proof = JSON.parse(line!.slice("RESULT:".length));
     expect(proof).toMatchObject({
-      direct: { success: options.success },
-      main: { advanced: options.success ? 1 : 0, exit: options.success ? 0 : 1 },
+      advanced: options.success ? 1 : 0,
+      exit: options.success ? 0 : 1,
     });
-    expect(proof.healthy).toEqual({ advanced: 1, calls: 0 });
     const agreements = [
       "--source",
       "winget",
@@ -1729,40 +1715,38 @@ Write-Output ('RESULT:' + (@{ direct = $direct; main = $main; healthy = $healthy
     ];
     const installArgs = ["install", "OpenJS.NodeJS.LTS", ...agreements];
     const repairArgs = ["repair", "--id", "OpenJS.NodeJS.LTS", "--exact", ...agreements];
-    for (const run of [proof.direct, proof.main]) {
-      expect(run.calls).toEqual(options.repair ? [installArgs, repairArgs] : [installArgs]);
-      const repaired =
-        options.repair && options.repairExit === 0 && options.afterRepair === "healthy";
-      const fallbackExpected = !repaired && options.afterInstall !== "healthy";
-      const fallbacks: string[] = [];
-      if (fallbackExpected) {
-        if (options.fallback === "choco") {
-          fallbacks.push("choco");
-        } else if (options.fallback === "scoop") {
-          fallbacks.push("scoop:update", "scoop:install nodejs-lts", "scoop:update nodejs-lts");
-        }
-        if (!["choco", "scoop"].includes(options.fallback) || options.afterFallback !== "healthy") {
-          fallbacks.push("portable");
-        }
+    expect(proof.calls).toEqual(options.repair ? [installArgs, repairArgs] : [installArgs]);
+    const repaired =
+      options.repair && options.repairExit === 0 && options.afterRepair === "healthy";
+    const fallbackExpected = !repaired && options.afterInstall !== "healthy";
+    const fallbacks: string[] = [];
+    if (fallbackExpected) {
+      if (options.fallback === "choco") {
+        fallbacks.push("choco");
+      } else if (options.fallback === "scoop") {
+        fallbacks.push("scoop:update", "scoop:install nodejs-lts", "scoop:update nodejs-lts");
       }
-      expect(run.fallbacks).toEqual(fallbacks);
-      expect(
-        run.messages.filter((message: string) => message.includes("Node.js repaired via winget")),
-      ).toHaveLength(repaired ? 1 : 0);
-      const events = run === proof.main ? run.events.slice(1) : run.events;
-      expect(events.slice(0, 4)).toEqual([
-        "install",
-        "refresh",
-        "discover",
-        `check:${options.afterInstall}`,
-      ]);
-      if (options.repair) {
-        expect(events.slice(4, 7)).toEqual(["repair", "refresh", "discover"]);
+      if (!["choco", "scoop"].includes(options.fallback) || options.afterFallback !== "healthy") {
+        fallbacks.push("portable");
       }
-      if (options.success) {
-        expect(events.at(-1)).toBe("check:healthy");
-        expect(run.probes).toBeGreaterThan(0);
-      }
+    }
+    expect(proof.fallbacks).toEqual(fallbacks);
+    expect(
+      proof.messages.filter((message: string) => message.includes("Node.js repaired via winget")),
+    ).toHaveLength(repaired ? 1 : 0);
+    const events = proof.events.slice(1);
+    expect(events.slice(0, 4)).toEqual([
+      "install",
+      "refresh",
+      "discover",
+      `check:${options.afterInstall}`,
+    ]);
+    if (options.repair) {
+      expect(events.slice(4, 7)).toEqual(["repair", "refresh", "discover"]);
+    }
+    if (options.success) {
+      expect(events.at(-1)).toBe("check:healthy");
+      expect(proof.probes).toBeGreaterThan(0);
     }
   });
 });

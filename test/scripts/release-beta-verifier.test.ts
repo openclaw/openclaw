@@ -32,6 +32,26 @@ import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { writePublishablePluginFixture } from "../helpers/publishable-plugin-fixture.js";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
 
+function writeJson(file: string, value: unknown) {
+  writeFileSync(file, JSON.stringify(value));
+}
+
+function readJson(file: string) {
+  return JSON.parse(readFileSync(file, "utf8"));
+}
+
+const bootstrapRun = {
+  id: 34,
+  name: "Plugin ClawHub New",
+  event: "workflow_dispatch",
+  head_branch: "main",
+  head_sha: "b".repeat(40),
+  path: ".github/workflows/plugin-clawhub-new.yml@refs/heads/main",
+  run_attempt: 2,
+  status: "completed",
+  conclusion: "success",
+};
+
 const tempDirs = createTempDirTracker();
 const testNodeExecPath = resolveTestNodeExecPath();
 type CommandError = Error & {
@@ -114,7 +134,7 @@ describe("verifyBetaRelease workflow outcomes", () => {
   };
 
   function readDiagnostic(rootDir: string) {
-    return JSON.parse(readFileSync(join(rootDir, "release-postpublish-diagnostics.json"), "utf8"));
+    return readJson(join(rootDir, "release-postpublish-diagnostics.json"));
   }
 
   function historicalFixture(conclusion: string, overrides: Record<string, unknown> = {}) {
@@ -123,19 +143,16 @@ describe("verifyBetaRelease workflow outcomes", () => {
     vi.stubEnv("OPENCLAW_NPM_EXPECTED_WORKFLOW_REF", `refs/tags/${originalRef}`);
     vi.stubEnv("OPENCLAW_NPM_EXPECTED_WORKFLOW_SHA", "a".repeat(40));
     vi.stubEnv("OPENCLAW_NPM_EXPECTED_RUN_ATTEMPT", "1");
-    const original = JSON.parse(readFileSync(join(fixture.binDir, "run.json"), "utf8"));
-    writeFileSync(
-      join(fixture.binDir, "attempt.json"),
-      JSON.stringify({
-        ...original,
-        databaseId: 44,
-        attempt: 1,
-        headSha: "a".repeat(40),
-        conclusion: "success",
-        url: "https://example.invalid/runs/44/attempts/1",
-        ...overrides,
-      }),
-    );
+    const original = readJson(join(fixture.binDir, "run.json"));
+    writeJson(join(fixture.binDir, "attempt.json"), {
+      ...original,
+      databaseId: 44,
+      attempt: 1,
+      headSha: "a".repeat(40),
+      conclusion: "success",
+      url: "https://example.invalid/runs/44/attempts/1",
+      ...overrides,
+    });
     return fixture;
   }
 
@@ -174,11 +191,10 @@ describe("verifyBetaRelease workflow outcomes", () => {
 
       await verifyBetaRelease(fixture.args, { rootDir: fixture.rootDir });
 
-      expect(
-        JSON.parse(readFileSync(join(fixture.rootDir, "evidence.json"), "utf8")).workflowRuns,
-      ).toEqual([
+      expect(readJson(join(fixture.rootDir, "evidence.json")).workflowRuns).toEqual([
         expect.objectContaining({
           id: "44",
+          label: "OpenClaw NPM Release",
           runAttempt: 1,
           url: "https://example.invalid/runs/44/attempts/1",
         }),
@@ -218,18 +234,6 @@ describe("verifyBetaRelease workflow outcomes", () => {
     },
   );
 
-  it("retains the original npm publisher when a recovery parent uses newer tooling", async () => {
-    const originalRef = "release-publish/aaaaaaaaaaaa-123";
-    const fixture = workflowFixture({ headBranch: originalRef }, false);
-    vi.stubEnv("OPENCLAW_NPM_EXPECTED_WORKFLOW_REF", `refs/tags/${originalRef}`);
-
-    await verifyBetaRelease(fixture.args, { rootDir: fixture.rootDir });
-
-    expect(
-      JSON.parse(readFileSync(join(fixture.rootDir, "evidence.json"), "utf8")).workflowRuns,
-    ).toEqual([expect.objectContaining({ id: "44", label: "OpenClaw NPM Release" })]);
-  });
-
   function workflowFixture(
     overrides: Record<string, unknown> = {},
     telegram = true,
@@ -253,22 +257,19 @@ describe("verifyBetaRelease workflow outcomes", () => {
     const binDir = join(rootDir, "bin");
     mkdirSync(binDir);
     mkdirSync(join(rootDir, "extensions"));
-    writeFileSync(
-      join(rootDir, "package.json"),
-      JSON.stringify({ version: npm.version, dependencies: npm.dependencies }),
-    );
-    writeFileSync(join(binDir, "npm.json"), JSON.stringify(npm));
+    writeJson(join(rootDir, "package.json"), {
+      version: npm.version,
+      dependencies: npm.dependencies,
+    });
+    writeJson(join(binDir, "npm.json"), npm);
     for (const name of npm.corePackages ?? []) {
       const directory = join(rootDir, "packages", name.slice("@openclaw/".length));
       mkdirSync(directory, { recursive: true });
-      writeFileSync(
-        join(directory, "package.json"),
-        JSON.stringify({
-          name,
-          version: npm.version,
-          openclaw: { release: { publishToNpm: true } },
-        }),
-      );
+      writeJson(join(directory, "package.json"), {
+        name,
+        version: npm.version,
+        openclaw: { release: { publishToNpm: true } },
+      });
     }
     for (const name of Object.keys(npm.tags).filter((packageName) => packageName !== "openclaw")) {
       if (npm.corePackages?.includes(name)) {
@@ -293,7 +294,7 @@ describe("verifyBetaRelease workflow outcomes", () => {
       jobs: [],
       ...overrides,
     };
-    writeFileSync(join(binDir, "run.json"), JSON.stringify(run));
+    writeJson(join(binDir, "run.json"), run);
     const command = `#!${testNodeExecPath}
 const fs = require("node:fs");
 const path = require("node:path");
@@ -553,20 +554,17 @@ if (path.basename(process.argv[1]) === "npm" && args[0] === "view") {
       writeFileSync(join(fixture.binDir, "git"), `#!/bin/sh\nprintf '%s\\n' '${releaseSha}'\n`, {
         mode: 0o755,
       });
-      writeFileSync(
-        join(fixture.binDir, "bootstrap.json"),
-        JSON.stringify({
-          id: bound ? 34 : 35,
-          name: "Plugin ClawHub New",
-          event: "workflow_dispatch",
-          head_branch: "main",
-          head_sha: "b".repeat(40),
-          run_attempt: 3,
-          path: ".github/workflows/plugin-clawhub-new.yml",
-          status: "completed",
-          conclusion: "success",
-        }),
-      );
+      writeJson(join(fixture.binDir, "bootstrap.json"), {
+        id: bound ? 34 : 35,
+        name: "Plugin ClawHub New",
+        event: "workflow_dispatch",
+        head_branch: "main",
+        head_sha: "b".repeat(40),
+        run_attempt: 3,
+        path: ".github/workflows/plugin-clawhub-new.yml",
+        status: "completed",
+        conclusion: "success",
+      });
       const result = runCli(fixture, [
         "--release-sha",
         releaseSha,
@@ -604,15 +602,12 @@ if (path.basename(process.argv[1]) === "npm" && args[0] === "view") {
         });
         fixture.npm.tags[`@openclaw/${extensionId}`] = { beta: version };
       }
-      writeFileSync(join(fixture.binDir, "npm.json"), JSON.stringify(fixture.npm));
+      writeJson(join(fixture.binDir, "npm.json"), fixture.npm);
       // The collector's order is alphabetical: first, last, middle.
       if (surface === "npm") {
-        writeFileSync(
-          join(fixture.binDir, "npm-failures.json"),
-          JSON.stringify({
-            [`@openclaw/last@${version}`]: "EACCES: synthetic-secret",
-          }),
-        );
+        writeJson(join(fixture.binDir, "npm-failures.json"), {
+          [`@openclaw/last@${version}`]: "EACCES: synthetic-secret",
+        });
       } else {
         fixture.args.skipClawHub = false;
         vi.stubGlobal(
@@ -663,7 +658,7 @@ syncBuiltinESMExports();
     expect(result.stderr).not.toContain("synthetic-secret");
     const diagnosticPath = join(fixture.rootDir, "release-postpublish-diagnostics.json");
     expect(readFileSync(diagnosticPath)).toEqual(readFileSync(`${diagnosticPath}.original`));
-    expect(JSON.parse(readFileSync(diagnosticPath, "utf8")).verification).toBe("unattempted");
+    expect(readJson(diagnosticPath).verification).toBe("unattempted");
     expect(existsSync(join(fixture.rootDir, "evidence.json"))).toBe(false);
   });
 
@@ -692,7 +687,7 @@ syncBuiltinESMExports();
 
   it("initializes bounded, redacted diagnostics before checkout verification", () => {
     const fixture = workflowFixture({}, false);
-    writeFileSync(join(fixture.rootDir, "package.json"), JSON.stringify({ version: "2026.1.1" }));
+    writeJson(join(fixture.rootDir, "package.json"), { version: "2026.1.1" });
     const names = Array.from({ length: 300 }, (_, i) => `@openclaw/plugin-${i}`);
     const result = runCli(fixture, [
       "--plugins",
@@ -1177,15 +1172,7 @@ describe("validateClawHubBootstrapEvidence", () => {
   const packageSha = "c".repeat(64);
   const readbackSha = "d".repeat(64);
   const run = {
-    id: 34,
-    name: "Plugin ClawHub New",
-    event: "workflow_dispatch",
-    head_branch: "main",
-    head_sha: workflowSha,
-    path: ".github/workflows/plugin-clawhub-new.yml@refs/heads/main",
-    run_attempt: 2,
-    status: "completed",
-    conclusion: "success",
+    ...bootstrapRun,
     html_url: "https://github.com/openclaw/openclaw/actions/runs/34",
     created_at: "2026-07-10T00:00:00Z",
     updated_at: "2026-07-10T00:02:00Z",
@@ -1251,10 +1238,10 @@ describe("validateClawHubBootstrapEvidence", () => {
 
   function validate(
     overrides: {
-      run?: unknown;
-      readbackArtifact?: unknown;
-      packageArtifact?: unknown;
-      evidence?: unknown;
+      run?: Partial<typeof run>;
+      readbackArtifact?: Partial<typeof readbackArtifact>;
+      packageArtifact?: Partial<typeof packageArtifact>;
+      evidence?: Partial<typeof evidence>;
       expectedPackages?: string[];
     } = {},
   ) {
@@ -1264,11 +1251,11 @@ describe("validateClawHubBootstrapEvidence", () => {
       releaseSha,
       expectedVersion: "2026.7.1-beta.3",
       expectedPackages: overrides.expectedPackages ?? ["@openclaw/meta"],
-      run: overrides.run ?? run,
-      readbackArtifact: overrides.readbackArtifact ?? readbackArtifact,
+      run: { ...run, ...overrides.run },
+      readbackArtifact: { ...readbackArtifact, ...overrides.readbackArtifact },
       readbackArchiveSha256: readbackSha,
-      packageArtifact: overrides.packageArtifact ?? packageArtifact,
-      evidence: overrides.evidence ?? evidence,
+      packageArtifact: { ...packageArtifact, ...overrides.packageArtifact },
+      evidence: { ...evidence, ...overrides.evidence },
     });
   }
 
@@ -1301,46 +1288,40 @@ describe("validateClawHubBootstrapEvidence", () => {
       "first beta release package evidence",
     );
     const cases: [Parameters<typeof validate>[0], string][] = [
-      [{ run: { ...run, head_branch: "release/2026.7.1" } }, "not dispatched from trusted main"],
+      [{ run: { head_branch: "release/2026.7.1" } }, "not dispatched from trusted main"],
       [
-        { run: { ...run, path: ".github/workflows/not-plugin-clawhub-new.yml" } },
+        { run: { path: ".github/workflows/not-plugin-clawhub-new.yml" } },
         "unexpected workflow path",
       ],
-      [{ evidence: { ...evidence, targetSha: "e".repeat(40) } }, "target SHA mismatch"],
+      [{ evidence: { targetSha: "e".repeat(40) } }, "target SHA mismatch"],
       [{ expectedPackages: ["@openclaw/other"] }, "requested package set mismatch"],
       [
-        { readbackArtifact: { ...readbackArtifact, name: "clawhub-bootstrap-readback-34-1" } },
+        { readbackArtifact: { name: "clawhub-bootstrap-readback-34-1" } },
         "does not bind the run attempt",
       ],
+      [{ evidence: { terminalRunAttempt: "1" } }, "readback evidence run tuple mismatch"],
       [
-        { evidence: { ...evidence, terminalRunAttempt: "1" } },
-        "readback evidence run tuple mismatch",
-      ],
-      [
-        { evidence: { ...evidence, producerRunAttempt: "3" } },
+        { evidence: { producerRunAttempt: "3" } },
         "producer attempt is newer than its terminal attempt",
       ],
       [
         {
           packageArtifact: {
-            ...packageArtifact,
             name: `clawhub-bootstrap-${releaseSha.slice(0, 12)}-34-2`,
           },
           evidence: {
-            ...evidence,
             artifactName: `clawhub-bootstrap-${releaseSha.slice(0, 12)}-34-2`,
           },
         },
         "package artifact name does not bind the target and attempt",
       ],
       [
-        { packageArtifact: { ...packageArtifact, digest: `sha256:${"e".repeat(64)}` } },
+        { packageArtifact: { digest: `sha256:${"e".repeat(64)}` } },
         "package artifact digest mismatch",
       ],
       [
         {
           evidence: {
-            ...evidence,
             packages: [
               {
                 ...packageEvidence,
@@ -1354,10 +1335,7 @@ describe("validateClawHubBootstrapEvidence", () => {
         },
         "artifact metadata does not match downloaded bytes",
       ],
-      [
-        { evidence: { ...evidence, clawhubToolchainSha256: "e".repeat(64) } },
-        "clawhubToolchainSha256 mismatch",
-      ],
+      [{ evidence: { clawhubToolchainSha256: "e".repeat(64) } }, "clawhubToolchainSha256 mismatch"],
     ];
     for (const [overrides, error] of cases) {
       expect(() => validate(overrides)).toThrow(error);
@@ -1366,27 +1344,10 @@ describe("validateClawHubBootstrapEvidence", () => {
 });
 
 describe("downloadClawHubBootstrapReadback", () => {
-  const workflowSha = "b".repeat(40);
-  const run = {
-    id: 34,
-    name: "Plugin ClawHub New",
-    event: "workflow_dispatch",
-    head_branch: "main",
-    head_sha: workflowSha,
-    path: ".github/workflows/plugin-clawhub-new.yml@refs/heads/main",
-    run_attempt: 2,
-    status: "completed",
-    conclusion: "success",
-  };
+  const run = bootstrapRun;
   const workflowAttempt = {
-    id: 34,
-    run_attempt: 2,
-    head_sha: workflowSha,
-    head_branch: "main",
-    event: "workflow_dispatch",
+    ...bootstrapRun,
     path: ".github/workflows/plugin-clawhub-new.yml",
-    status: "completed",
-    conclusion: "success",
     repository: { full_name: "openclaw/openclaw" },
     head_repository: { full_name: "openclaw/openclaw" },
   };
@@ -1407,7 +1368,7 @@ describe("downloadClawHubBootstrapReadback", () => {
       workflow_run: {
         id: 34,
         head_branch: "main",
-        head_sha: workflowSha,
+        head_sha: bootstrapRun.head_sha,
       },
     };
     const artifactMetadata = {
