@@ -8,15 +8,10 @@ import { createProcessSupervisor } from "./supervisor.js";
 import { createStubChildAdapter, type StubChildAdapter } from "./supervisor.test-support.js";
 import type { SpawnInput } from "./types.js";
 
-const { child, pty, open } = vi.hoisted(() => ({
+const { child, pty, readFile } = vi.hoisted(() => ({
   child: vi.fn(),
   pty: vi.fn(),
-  open: vi.fn<
-    (path: string) => Promise<{
-      read: (buffer: Buffer) => Promise<{ bytesRead: number }>;
-      close: () => Promise<void>;
-    }>
-  >(),
+  readFile: vi.fn<(path: string) => Promise<Buffer>>(),
 }));
 vi.mock("./adapters/child.js", () => ({
   createChildAdapter: async (
@@ -29,7 +24,7 @@ vi.mock("./adapters/child.js", () => ({
 vi.mock("./adapters/pty.js", () => ({ createPtyAdapter: pty }));
 vi.mock("node:fs/promises", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:fs/promises")>()),
-  open,
+  readFile,
   readdir: vi.fn(),
 }));
 
@@ -83,7 +78,7 @@ async function expectRejectedReplacement(input: SpawnInput, error: string, cance
 beforeEach(() => {
   child.mockReset();
   pty.mockReset();
-  open.mockReset();
+  readFile.mockReset();
   vi.mocked(fs.readdir).mockReset();
   supervisor = createProcessSupervisor();
 });
@@ -99,17 +94,7 @@ describe("process supervisor", () => {
     async (mode) => {
       vi.useFakeTimers();
       mockProcessPlatform("linux");
-      open.mockImplementation(async () => {
-        let read = false;
-        return {
-          read: async (buffer) => {
-            const bytesRead = read ? 0 : buffer.write("VmRSS:\t256 kB\n");
-            read = true;
-            return { bytesRead };
-          },
-          close: async () => {},
-        };
-      });
+      readFile.mockResolvedValue(Buffer.from("VmRSS:\t256 kB\n"));
       vi.mocked(fs.readdir).mockResolvedValue([]);
       const adapter = terminating();
       adapter.memoryRootPid = 4321;
@@ -126,11 +111,11 @@ describe("process supervisor", () => {
       });
       await vi.advanceTimersByTimeAsync(1000);
       if (mode === "external") {
-        expect(open).not.toHaveBeenCalled();
+        expect(readFile).not.toHaveBeenCalled();
         adapter.settle(0);
       } else {
         expect(adapter.killMock).toHaveBeenCalledExactlyOnceWith("SIGKILL");
-        expect(open).toHaveBeenCalledWith("/proc/4321/status", "r");
+        expect(readFile).toHaveBeenCalledWith("/proc/4321/status");
         await expect(run.wait()).resolves.toMatchObject({
           reason: "memory-limit",
           timedOut: false,
@@ -139,9 +124,9 @@ describe("process supervisor", () => {
       }
       await run.wait();
       await supervisor.shutdown();
-      const reads = open.mock.calls.length;
+      const reads = readFile.mock.calls.length;
       await vi.advanceTimersByTimeAsync(5000);
-      expect(open).toHaveBeenCalledTimes(reads);
+      expect(readFile).toHaveBeenCalledTimes(reads);
     },
   );
 
