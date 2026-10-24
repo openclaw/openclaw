@@ -1,10 +1,12 @@
 // Site allocation proof, not a Gateway/GC benchmark. Run with node --expose-gc.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { Session } from "node:inspector/promises";
 import { stripTypeScriptTypes } from "node:module";
+import { tmpdir } from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 const [baselineRoot, candidateRoot] = process.argv.slice(2);
 assert(
@@ -14,6 +16,8 @@ assert(
 assert(globalThis.gc, "--expose-gc is required for cleanup outside measured windows");
 const samples = 6;
 const interval = 1024;
+const generatedRoot = mkdtempSync(path.join(tmpdir(), "private-array-copies-"));
+process.once("exit", () => rmSync(generatedRoot, { recursive: true, force: true }));
 const paths = {
   task: "src/gateway/control-ui-session-task-prs.ts",
   topology: "src/agents/subagents/registry/subagent-registry-read-topology.ts",
@@ -65,7 +69,13 @@ export function taskSort(input) {
 }
 export function canonicalScopes(client) { return ${scopes[0]}; }
 `);
-  const url = `data:text/javascript;base64,${Buffer.from(code).toString("base64")}`;
+  // Heap sampling truncates data URLs; short file URLs retain exact owner attribution.
+  const generatedFile = path.join(
+    generatedRoot,
+    `${createHash("sha256").update(code).digest("hex")}.mjs`,
+  );
+  writeFileSync(generatedFile, code);
+  const url = pathToFileURL(generatedFile).href;
   return { ...(await import(url)), url, hashes };
 }
 const owners = { baseline: await load(baselineRoot), candidate: await load(candidateRoot) };
