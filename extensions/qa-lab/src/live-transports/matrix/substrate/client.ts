@@ -102,6 +102,14 @@ function buildRegisteredAccount(params: {
   } satisfies MatrixQaRegisteredAccount;
 }
 
+function resolveMatrixQaLoginUser(params: { localpart?: string; userId?: string }) {
+  const user = params.userId?.trim() || params.localpart?.trim();
+  if (!user) {
+    throw new Error("Matrix password login requires a localpart or userId.");
+  }
+  return user;
+}
+
 export function createMatrixQaClient(params: {
   accessToken?: string;
   baseUrl: string;
@@ -210,14 +218,19 @@ export function createMatrixQaClient(params: {
         `Matrix registration for ${opts.localpart} did not complete after 4 attempts.`,
       );
     },
-    async loginWithPassword(opts: { deviceName: string; password: string; userId: string }) {
+    async loginWithPassword(opts: {
+      deviceName: string;
+      localpart?: string;
+      password: string;
+      userId?: string;
+    }) {
       const result = await request<MatrixQaRegisterResponse>({
         accessToken: undefined,
         body: {
           type: "m.login.password",
           identifier: {
             type: "m.id.user",
-            user: opts.userId.trim(),
+            user: resolveMatrixQaLoginUser(opts),
           },
           initial_device_display_name: opts.deviceName,
           password: opts.password,
@@ -227,7 +240,7 @@ export function createMatrixQaClient(params: {
         timeoutMs: 30_000,
       });
       return buildRegisteredAccount({
-        localpart: opts.userId,
+        localpart: opts.localpart ?? opts.userId ?? "",
         password: opts.password,
         response: result.body,
       });

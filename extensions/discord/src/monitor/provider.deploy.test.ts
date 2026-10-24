@@ -33,7 +33,8 @@ it("passes non-command REST traffic through without deploy labels", async () => 
     requestOptions: {
       queueRequests: false,
       fetch: async (input) => {
-        if (String(input).includes("/voice-states/")) {
+        const url = input instanceof Request ? input.url : input.toString();
+        if (url.includes("/voice-states/")) {
           throw voiceError;
         }
         started.resolve();

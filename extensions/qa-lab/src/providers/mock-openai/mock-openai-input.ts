@@ -415,6 +415,13 @@ function extractInputText(content: unknown): string {
     .trim();
 }
 
+export function extractAllUserTexts(input: ResponsesInputItem[]) {
+  return input
+    .filter((item) => item.role === "user")
+    .map((item) => extractInputText(item.content))
+    .filter(Boolean);
+}
+
 export function extractUserTurnTexts(input: ResponsesInputItem[]) {
   // Runtime carriers are transparent, but empty user turns must fence older scenarios.
   return input.filter(isUserTurn).map((item) => extractInputText(item.content));

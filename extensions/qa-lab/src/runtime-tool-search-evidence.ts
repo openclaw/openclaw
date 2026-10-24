@@ -107,11 +107,12 @@ export async function requireToolSearchDiscoveryEvidence(
     toolName: string;
     expectedCallId: string | undefined;
     expectedSuccess: boolean;
+    phase?: string;
   },
 ): Promise<QaToolSearchDiscoveryReceipt> {
   const normalizedSessionKey = params.sessionKey.trim();
   const normalizedToolName = params.toolName.trim();
-  const phase = params.expectedSuccess ? "happy-path" : "failure-path";
+  const phase = params.phase ?? (params.expectedSuccess ? "happy-path" : "failure-path");
   if (!normalizedSessionKey || !normalizedToolName || !params.expectedCallId?.trim()) {
     throw new Error(
       "tool_search discovery evidence requires a session key, tool name, and call ID",
