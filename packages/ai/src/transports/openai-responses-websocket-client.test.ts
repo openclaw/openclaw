@@ -18,11 +18,15 @@ import {
   type ResponsesServiceTierObservation,
 } from "./openai-responses-contracts.js";
 import type { SdkResponse } from "./openai-responses-sdk.test-support.js";
+import { message as responseMessage, tool } from "./openai-responses-stream-parity.test-helpers.js";
 import {
-  message as responseMessage,
+  argumentDelta,
+  collectEventTypes,
+  completedResponse,
   outputItem,
-  tool,
-} from "./openai-responses-stream-parity.test-helpers.js";
+  userMessage as user,
+  wireUser,
+} from "./openai-stream-cases.test-support.js";
 import {
   withProviderAcceptanceObserver,
   type ProviderAcceptance,
@@ -41,7 +45,6 @@ const transport = vi.hoisted(() => ({
   sdkOutcomes: [] as Array<Error | SdkResponse>,
   sdkRequests: [] as Array<Record<string, unknown>>,
   closeCount: 0,
-  wsClients: [] as Array<{ apiKey?: string; baseURL?: string }>,
   wsOptions: [] as Array<{ headers?: Record<string, string> }>,
   wsRequests: [] as Array<Record<string, unknown>>,
 }));
@@ -60,10 +63,9 @@ vi.mock("openai/resources/responses/ws.js", () => ({
     private responseMessages: StreamMessage[] = [];
 
     constructor(
-      client: { apiKey?: string; baseURL?: string },
+      _client: { apiKey?: string; baseURL?: string },
       options: { headers?: Record<string, string> },
     ) {
-      transport.wsClients.push(client);
       transport.wsOptions.push(options);
     }
 
@@ -108,19 +110,12 @@ import { createOpenAIResponsesWebSocketStream as createSocketStream } from "./op
 
 const initialHost = getAiTransportHost();
 const model = makeProviderModel("openai-responses", "openai", "gpt-5.6-luna", {
-  name: "GPT-5.6 Luna",
   baseUrl: "https://api.openai.com/v1",
-  reasoning: true,
   contextWindow: 200_000,
-  maxTokens: 8192,
 });
 
 function history(...messages: Context["messages"]): Context {
   return { messages, tools: [] };
-}
-
-function user(text: string, timestamp: number) {
-  return { role: "user" as const, content: text, timestamp };
 }
 
 function completedEvent(responseId: string, content?: string | Array<Record<string, unknown>>) {
@@ -128,19 +123,7 @@ function completedEvent(responseId: string, content?: string | Array<Record<stri
     typeof content === "string"
       ? [responseMessage(`msg_${responseId}`, content, "final_answer")]
       : (content ?? []);
-  return {
-    type: "response.completed",
-    response: {
-      id: responseId,
-      status: "completed",
-      output,
-      usage: {
-        input_tokens: 5,
-        output_tokens: output.length > 0 ? 3 : 0,
-        total_tokens: output.length > 0 ? 8 : 5,
-      },
-    },
-  };
+  return completedResponse(responseId, output);
 }
 
 function message(event: Record<string, unknown>): StreamMessage {
@@ -194,11 +177,7 @@ function toolCallResponse(responseId: string): StreamMessage[] {
   const position = { output_index: 0, item_id: functionCall.id };
   return [
     message(outputItem("added", { ...functionCall, arguments: "", status: "in_progress" }, 0)),
-    message({
-      type: "response.function_call_arguments.delta",
-      ...position,
-      delta: functionCall.arguments,
-    }),
+    message(argumentDelta(functionCall.id, functionCall.arguments)),
     message({
       type: "response.function_call_arguments.done",
       ...position,
@@ -297,21 +276,18 @@ describe("native OpenAI Responses WebSocket client integration", () => {
         param: "service_tier",
         message: "Invalid service_tier argument",
       };
+      const prelude =
+        shape === "active-hook"
+          ? { type: "response.created", response: { id: "resp_active" } }
+          : shape === "after-output"
+            ? outputItem("added", {
+                type: "web_search_call",
+                id: "ws_started",
+                status: "in_progress",
+              })
+            : undefined;
       transport.responseBatches.push([
-        ...(shape === "active-hook"
-          ? [message({ type: "response.created", response: { id: "resp_active" } })]
-          : []),
-        ...(shape === "after-output"
-          ? [
-              message(
-                outputItem(
-                  "added",
-                  { type: "web_search_call", id: "ws_started", status: "in_progress" },
-                  0,
-                ),
-              ),
-            ]
-          : []),
+        ...(prelude ? [message(prelude)] : []),
         message(failedResponse("resp_tier_error", rejection)),
       ]);
       transport.sdkOutcomes.push(sdkCompletion("resp_tier_recovered"));
@@ -336,13 +312,11 @@ describe("native OpenAI Responses WebSocket client integration", () => {
       );
       const result = await stream.result();
       expect(onActiveResponse).toHaveBeenCalledTimes(shape === "active-hook" ? 1 : 0);
-      if (shape === "after-output" || shape === "active-hook") {
-        expect(result.stopReason).toBe("error");
-        expect(transport.sdkRequests).toHaveLength(0);
-        expect(observations).not.toContainEqual({ requestedTier: "ultrafast", rejected: true });
-      } else {
-        expect(result.stopReason).toBe("stop");
-        expect(transport.sdkRequests).toHaveLength(1);
+      const recovered = shape === "registered-hook";
+      expect(result.stopReason).toBe(recovered ? "stop" : "error");
+      expect(transport.sdkRequests).toHaveLength(recovered ? 1 : 0);
+      expect(observations.some((entry) => entry.rejected)).toBe(recovered);
+      if (recovered) {
         expect(transport.sdkRequests[0]?.service_tier).toBe("priority");
         expect(observations).toContainEqual({ requestedTier: "ultrafast", rejected: true });
       }
@@ -442,11 +416,7 @@ describe("native OpenAI Responses WebSocket client integration", () => {
       transport: "auto",
       onResponse,
     });
-    const consume = (async () => {
-      for await (const event of responseStream) {
-        order.push(event.type);
-      }
-    })();
+    const consume = collectEventTypes(responseStream, order);
 
     await vi.waitFor(() => expect(onResponse).toHaveBeenCalledOnce());
     expect(order).toEqual(["hook:start"]);
@@ -509,7 +479,6 @@ describe("native OpenAI Responses WebSocket client integration", () => {
     const first = await run(history(firstUser), options);
     if (compact) {
       expect(first.providerReplay).toMatchObject({ type: "openai-responses-compaction" });
-      transport.wsRequests.length = 0;
     }
     const secondUser = user(compact ? "continue after compaction" : "second question", 2);
     const context = history(firstUser, first, secondUser);
@@ -527,7 +496,7 @@ describe("native OpenAI Responses WebSocket client integration", () => {
         data: "rejected",
       });
       expect(onCompactionRejected).toHaveBeenCalledOnce();
-      const checkpointInput = JSON.stringify(transport.wsRequests[0]?.input);
+      const checkpointInput = JSON.stringify(transport.wsRequests[1]?.input);
       const fullInput = JSON.stringify(transport.sdkRequests[0]?.input);
       expect(checkpointInput).toContain('"type":"compaction"');
       expect(checkpointInput).not.toContain("full history before compaction");
@@ -536,13 +505,7 @@ describe("native OpenAI Responses WebSocket client integration", () => {
     } else {
       expect(transport.wsRequests[1]).toMatchObject({
         previous_response_id: "resp_1",
-        input: [
-          {
-            type: "message",
-            role: "user",
-            content: [{ type: "input_text", text: "second question" }],
-          },
-        ],
+        input: [wireUser("second question")],
       });
       expect(transport.closeCount).toBe(1);
       expect(transport.sdkRequests[0]).not.toHaveProperty("previous_response_id");
@@ -559,12 +522,9 @@ describe("native OpenAI Responses WebSocket client integration", () => {
       { ...options, ...(compact ? { observations } : {}) },
     );
     expect(third.stopReason).toBe("stop");
+    expectCounts(3, 1, compact ? 3 : 2);
     if (compact) {
-      expect(transport.wsRequests).toHaveLength(2);
-      expect(transport.sdkRequests).toHaveLength(1);
-      expect(JSON.stringify(transport.wsRequests[1]?.input)).not.toContain('"type":"compaction"');
-    } else {
-      expectCounts(3, 1, 2);
+      expect(JSON.stringify(transport.wsRequests[2]?.input)).not.toContain('"type":"compaction"');
     }
     expect(promptPaths(observations)).toEqual([
       { egress: "responses-websocket", payloadVariant: "initial" },
@@ -731,8 +691,7 @@ describe("native OpenAI Responses WebSocket client integration", () => {
       transport.sdkOutcomes.push(sdkCompletion("resp_sse"));
       const result = await run(history(user("hello", 1)), { model: requestModel });
       expect(result.stopReason).toBe("stop");
-      expect(transport.wsClients).toEqual([]);
-      expect(transport.sdkRequests).toHaveLength(1);
+      expectCounts(0, 1, 0);
     },
   );
 });
