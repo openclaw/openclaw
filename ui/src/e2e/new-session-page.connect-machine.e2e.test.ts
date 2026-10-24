@@ -32,7 +32,8 @@ async function openConnection(scenario: ControlUiMockGatewayScenario) {
   await page.goto(`${suite.server.baseUrl}new`);
   await page.locator("#new-session-where-trigger").click();
   await page.getByRole("button", { name: "Connect a device" }).click();
-  await gateway.waitForRequest("device.pair.setupCode");
+  const request = await gateway.waitForRequest("device.pair.setupCode");
+  expect(request.params).toEqual({ includeQr: false, joinUrl: true });
   const dialog = page.locator('openclaw-modal-dialog[label="Connect a machine"]');
   return { page, gateway, dialog };
 }
@@ -41,7 +42,7 @@ suite.define(() => {
   it("shows bounded commands, command-only access, and the refreshed build warning", async () => {
     const first = setupCode("first-code?label=alpha&next=$(whoami)");
     const second = setupCode("second-code", "The exact npm release could not be confirmed.");
-    const { dialog } = await openConnection({
+    const { dialog, gateway } = await openConnection({
       methodResponses: { "device.pair.setupCode": { sequence: [first, second] } },
     });
     const command = dialog.locator(".login-gate__command code").first();
@@ -60,6 +61,12 @@ suite.define(() => {
     await commandOnly.click();
     await dialog.getByRole("button", { name: "Mint fresh code" }).click();
     await expect.poll(() => command.textContent()).toBe(second.command);
+    expect(
+      (await gateway.getRequests("device.pair.setupCode")).map(({ params }) => params),
+    ).toEqual([
+      { includeQr: false, joinUrl: true },
+      { includeQr: false, joinUrl: true },
+    ]);
     expect(await installed.textContent()).toBe(second.installedCommand);
     await dialog.getByText(second.versionNote!, { exact: true }).waitFor();
     expect(await dialog.getByText(first.command, { exact: true }).count()).toBe(0);

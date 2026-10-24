@@ -1,4 +1,3 @@
-import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -59,9 +58,6 @@ const gatewayScenario = {
   },
 };
 
-const option = (picker: Locator, value: string) =>
-  picker.locator(`[role="option"][data-value="${value}"]`);
-
 suite.define(() => {
   it.each([1440, 1100, 768, 640, 390])(
     "Models page keeps controls separate during discovery at %ipx",
@@ -71,7 +67,6 @@ suite.define(() => {
         async ({ page }) => {
           const gateway = await installMockGateway(page, gatewayScenario);
           await page.goto(`${suite.server.baseUrl}settings/model-providers`);
-          const defaults = page.locator(".model-providers__defaults");
           const primary = page.getByRole("button", { name: /^Model: GPT-5.5/ });
           await primary.waitFor();
           expect(await primary.textContent()).not.toContain("alex@example.com");
