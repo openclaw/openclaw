@@ -2078,7 +2078,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/commands/onboard-channels.post-write.test.ts",
   "src/commands/onboard-guided-memory-import.test.ts",
   "src/commands/onboard-guided.custodian.test.ts",
-  "src/commands/onboard-guided.inference.e2e.test.ts",
   "src/commands/onboard-guided.skip.test.ts",
   "src/commands/onboard-non-interactive.migration.test.ts",
   "src/commands/onboard-non-interactive/local.default-agent.test.ts",
