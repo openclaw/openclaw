@@ -250,7 +250,7 @@ async function populate(count: number) {
           : {}),
       };
       const result = await (await parent(model, context, options)).result();
-      assert.equal(result.stopReason, "stop", result.errorMessage);
+      assert.equal(result.stopReason, "stop", result.errorMessage ?? "Synthetic request failed");
       if (expectSteer) {
         assert.equal(await admission, true, "the selected model must support native steering");
       }
