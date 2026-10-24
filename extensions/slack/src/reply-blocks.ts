@@ -625,6 +625,22 @@ export function resolveSlackReplyBlockResolution(
         : renderSlackAuthoredTextFragments(segment.blocks),
     ),
   });
+  if (authoredTextPlacement === "outside-blocks" && !/[*_~`<[\]\\#>|]/u.test(authoredText ?? "")) {
+    // Plain fallbacks and chart/table summaries retain source list markers.
+    // Compare their exact bytes too, without treating literal markup as styling.
+    authoredTextPlacement = resolveSlackAuthoredTextPlacement({
+      text: authoredText,
+      renderedTextFragments: segments.flatMap((segment) =>
+        segment.kind === "text"
+          ? [segment.text]
+          : segment.blocks.map((block) =>
+              hasSlackNativeDataBlock([block])
+                ? (renderSlackBlockFallbackText(block, { nativeDataFormat: "plain" }) ?? null)
+                : null,
+            ),
+      ),
+    });
+  }
   if (options.materializeAuthoredText && authoredTextPlacement === "outside-blocks") {
     // Decide from the final rendered content, then use the same packing owner
     // to insert only missing prose after raw blocks and before the presentation.

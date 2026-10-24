@@ -247,7 +247,10 @@ describe("Slack action adapter", () => {
       );
       expect(firstAction(invoke)).toMatchObject({
         action: "editMessage",
-        content: paddedMarkdownTable,
+        content:
+          tables === "off"
+            ? paddedMarkdownTable
+            : Array.from({ length: 20 }, () => "*x*\n• Value: 2").join("\n\n"),
       });
     },
   );

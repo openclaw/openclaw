@@ -166,7 +166,7 @@ export function createSlackActions(
       const accountId = ctx.accountId ?? undefined;
       const invokeSlackAction = async (
         request: Record<string, unknown>,
-        toolContext = ctx.toolContext,
+        toolContext: SlackActionContext | undefined = ctx.toolContext,
       ) => {
         const requestAction = { ...request, accountId };
         const actionContext = resolveSlackActionContext(ctx, toolContext);

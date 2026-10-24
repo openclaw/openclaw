@@ -1,9 +1,15 @@
 // Slack tests cover outbound payload plugin behavior.
 import { installChannelOutboundPayloadContractSuite } from "openclaw/plugin-sdk/channel-contract-testing";
+import {
+  createTestRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-import { assert, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSlackSendTestClient } from "./blocks.test-helpers.js";
+import { slackSetupPlugin } from "./channel.setup.js";
 import { slackOutbound } from "./outbound-adapter.js";
 import { createSlackOutboundPayloadHarness as createHarness } from "./outbound-payload.test-harness.js";
 import type { SlackReplyBlockSegment } from "./reply-blocks.js";
@@ -189,6 +195,13 @@ function createMixedPresentationPayload(): ReplyPayload {
 }
 
 describe("slackOutbound sendPayload", () => {
+  beforeEach(() => {
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "slack", source: "test", plugin: slackSetupPlugin }]),
+    );
+  });
+  afterEach(() => resetPluginRuntimeStateForTest());
+
   it.each<{ name: string; payload: ReplyPayload; expected: string[] }>([
     {
       name: "represented authored Markdown",

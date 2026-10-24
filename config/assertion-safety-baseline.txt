@@ -731,7 +731,7 @@ extensions/slack/src/outbound-adapter.ts	5
 extensions/slack/src/probe.ts	2
 extensions/slack/src/progress-blocks.ts	1
 extensions/slack/src/reply-action-ids.ts	1
-extensions/slack/src/reply-blocks.ts	5
+extensions/slack/src/reply-blocks.ts	4
 extensions/slack/src/security-audit.ts	6
 extensions/slack/src/send.ts	1
 extensions/slack/src/setup-core.ts	4
