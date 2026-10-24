@@ -87,7 +87,7 @@ it("retires only the failed command's legacy final and retains terminal delivery
   await withOpenClawTestState({ label: "legacy-final-cleanup" }, async (state) => {
     await captureRuntimeConfigAsyncReader()();
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
-    for (const scenario of ["failed", "replaced", "identified", "restart"] as const) {
+    for (const scenario of ["failed", "foreground", "replaced", "identified", "restart"] as const) {
       const target = {
         agentId: "main",
         sessionKey: `agent:main:cleanup-${scenario}`,
@@ -114,6 +114,16 @@ it("retires only the failed command's legacy final and retains terminal delivery
         restartRecoveryDeliverySourceRunId: "original-source",
         restartRecoveryRuns: [{ runId, lifecycleGeneration }],
         pendingFinalDelivery: currentPending,
+        ...(scenario === "foreground"
+          ? {
+              mainRestartRecovery: {
+                cycleId: "queued-cycle",
+                revision: 1,
+                chargedAttempts: 1,
+                foregroundClaims: { lifecycleGeneration, tokens: ["queued-foreground"] },
+              },
+            }
+          : {}),
       };
       await replaceSessionEntry(target, entry);
       const beforeCleanup = loadSessionEntry(target);
@@ -146,8 +156,12 @@ it("retires only the failed command's legacy final and retains terminal delivery
       });
       const settled = loadSessionEntry(target);
       expect(settled?.pendingFinalDelivery, scenario).toEqual(
-        scenario === "failed" ? undefined : currentPending,
+        scenario === "failed" || scenario === "foreground" ? undefined : currentPending,
       );
+      if (scenario === "foreground") {
+        expect(settled?.mainRestartRecovery).toEqual(beforeCleanup?.mainRestartRecovery);
+        expect(settled?.restartRecoveryTerminalRunIds).toContain(runId);
+      }
       if (scenario === "restart") {
         expect(settled).toEqual(beforeCleanup);
       } else {

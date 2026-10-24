@@ -77,6 +77,7 @@ async function settleInterruptedRestartRecovery(params: {
   terminalRunId?: string;
   terminalStatus?: "failed" | "timeout" | "killed";
   terminalDeliveryEvidence?: RestartRecoveryTerminalDeliveryEvidenceResult;
+  clearRecoveryState?: boolean;
 }): Promise<{ outcome: "settled" | "changed" | "failed" }> {
   const { entry, reason } = params;
   // Legacy interrupted inputs can lack both run IDs. The recovery cycle still
@@ -115,6 +116,7 @@ async function settleInterruptedRestartRecovery(params: {
         recordTerminalSource: true,
         terminalRunId,
         terminalDeliveryEvidence: params.terminalDeliveryEvidence,
+        clearRecoveryState: params.clearRecoveryState,
       }),
       status: params.terminalStatus ?? "interrupted",
       pendingFinalDelivery: undefined,
@@ -181,6 +183,9 @@ export async function settleTerminalPendingFinalRecovery(
     entry,
     terminalRunId: params.runId,
     terminalStatus: params.status,
+    // Queued foreground inputs can own the cycle before registering a run fence.
+    clearRecoveryState:
+      !entry.mainRestartRecovery?.foregroundClaims && !entry.mainRestartRecovery?.reservation,
     reason: "the recovery turn ended without completing the saved final reply",
   });
   return result.outcome === "settled";
