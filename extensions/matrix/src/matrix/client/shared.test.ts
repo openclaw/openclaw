@@ -19,8 +19,6 @@ import type { MatrixAuth } from "./types.js";
 const resolveMatrixAuthMock = vi.hoisted(() => vi.fn());
 const createMatrixClientMock = vi.hoisted(() => vi.fn());
 
-const TEST_CFG = {};
-
 // mock-isolation: These shared-client fixtures supply resolved auth without loading disk config.
 vi.mock("./config.js", () => ({
   resolveMatrixAuth: resolveMatrixAuthMock,
@@ -37,10 +35,8 @@ function acquireStoppedClient(auth: MatrixAuth, role?: "monitor" | "transient") 
 }
 
 function createTaskRunner() {
-  return createMatrixMonitorTaskRunner({
-    logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-    logVerboseMessage: vi.fn(),
-  });
+  const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+  return { ...createMatrixMonitorTaskRunner({ logger, logVerboseMessage: vi.fn() }), logger };
 }
 
 function clients(callOrder: string[] = [], accountId = "main", replace = true) {
@@ -62,6 +58,11 @@ function expectCalls(count: number, ...mocks: MockCall[]) {
 }
 const calledOnce = (mock: MockCall) => vi.waitFor(() => expectCalls(1, mock));
 const monitorCleanup = ["close-admission", "detach-listeners", "wait-tasks", "monitor-cleanup"];
+
+function expectShutdown(client: ReturnType<typeof createMockClient>, mode: "persist" | "discard") {
+  expectCalls(1, mode === "persist" ? client.stopAndPersist : client.stopWithoutPersist);
+  expectCalls(0, mode === "persist" ? client.stopWithoutPersist : client.stopAndPersist);
+}
 
 async function expectReplacement(
   acquisition: ReturnType<typeof acquireStoppedClient>,
@@ -229,14 +230,13 @@ describe("shared Matrix client generations", () => {
   });
 
   it("shares one client generation across duplicate module identities", async () => {
-    const moduleA = await importFreshModule<typeof import("./shared.js")>(
-      import.meta.url,
-      "./shared.js?scope=duplicate-a",
-    );
-    const moduleB = await importFreshModule<typeof import("./shared.js")>(
-      import.meta.url,
-      "./shared.js?scope=duplicate-b",
-    );
+    const fresh = (scope: string) =>
+      importFreshModule<typeof import("./shared.js")>(
+        import.meta.url,
+        `./shared.js?scope=${scope}`,
+      );
+    const moduleA = await fresh("duplicate-a");
+    const moduleB = await fresh("duplicate-b");
     const auth = authFor("main");
     const client = createMockClient("shared");
     createMatrixClientMock.mockResolvedValue(client);
@@ -330,8 +330,7 @@ describe("shared Matrix client generations", () => {
 
     await expect(transient.release()).rejects.toBe(cause);
     expect(await releaseError).toBe(cause);
-    expect(timedOutClient.stopWithoutPersist).toHaveBeenCalledOnce();
-    expect(timedOutClient.stopAndPersist).not.toHaveBeenCalled();
+    expectShutdown(timedOutClient, "discard");
 
     await expectReplacement(acquireStoppedClient(auth), replacementClient, 2);
   });
@@ -396,8 +395,7 @@ describe("shared Matrix client generations", () => {
     const releaseError = expect(lease.release({ mode: "persist" })).rejects.toBe(persistFailure);
     persist.reject(persistFailure);
     await calledOnce(firstClient.stopWithoutPersist);
-    const blockedAcquire = acquireStoppedClient(auth);
-    await expect(blockedAcquire).rejects.toBe(persistFailure);
+    await expect(acquireStoppedClient(auth)).rejects.toBe(persistFailure);
     expect(createMatrixClientMock).toHaveBeenCalledOnce();
     const forcedRetirement = stopSharedClientForAccount(auth);
     await expectPending(forcedRetirement);
@@ -428,8 +426,7 @@ describe("shared Matrix client generations", () => {
     expect(firstClient.stopWithoutPersist).not.toHaveBeenCalled();
     drained.resolve();
     await expect(release).rejects.toBe(cause);
-    expect(firstClient.stopWithoutPersist).toHaveBeenCalledOnce();
-    expect(firstClient.stopAndPersist).not.toHaveBeenCalled();
+    expectShutdown(firstClient, "discard");
     await expect(stopSharedClientForAccount(auth)).resolves.toBeUndefined();
 
     await expectReplacement(acquireStoppedClient(auth), replacementClient);
@@ -482,8 +479,7 @@ describe("shared Matrix client generations", () => {
       const monitor = await acquireStoppedClient(auth, "monitor");
       const transient =
         operation === "release" ? await acquireStoppedClient(auth, "transient") : undefined;
-      const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
-      const tasks = createMatrixMonitorTaskRunner({ logger, logVerboseMessage: vi.fn() });
+      const tasks = createTaskRunner();
       const sendFinished = createDeferred<void>();
       const releaseTestDrain = createDeferred<void>();
       const taskAdmissionClosed = createDeferred<void>();
@@ -527,9 +523,8 @@ describe("shared Matrix client generations", () => {
           expect(acquisitionError).toMatchObject({ name: "AbortError" });
           expect(lateLease).toBeUndefined();
         }
-        expect(client.stopAndPersist).toHaveBeenCalledOnce();
-        expect(client.stopWithoutPersist).not.toHaveBeenCalled();
-        expect(logger.warn).not.toHaveBeenCalled();
+        expectShutdown(client, "persist");
+        expect(tasks.logger.warn).not.toHaveBeenCalled();
       } finally {
         releaseTestDrain.resolve();
         await Promise.all([task, retirement]);
@@ -585,10 +580,7 @@ describe("shared Matrix client generations", () => {
       }
       let retained: ReturnType<typeof acquireSharedMatrixClient> | undefined;
       const task = tasks.runDetachedTask("retained acquisition", async () => {
-        retained = acquireSharedMatrixClient({
-          cfg: TEST_CFG,
-          accountId: "main",
-        });
+        retained = acquireSharedMatrixClient({ cfg: {}, accountId: "main" });
         await allowOwnerSettlement.promise;
       });
       const taskAdmissionClosed = createDeferred<void>();
@@ -643,30 +635,25 @@ describe("shared Matrix client generations", () => {
     const tasks = createTaskRunner();
     const caller = new AbortController();
     let lease: Awaited<ReturnType<typeof acquireSharedMatrixClient>> | undefined;
-    let acquisitionError: unknown;
-    const task = tasks.runDetachedTask("pending acquisition", async () => {
-      try {
-        lease = await acquireSharedMatrixClient({
-          cfg: TEST_CFG,
-          accountId: "main",
-          abortSignal: caller.signal,
-        });
-      } catch (error) {
-        acquisitionError = error;
-      }
+    const task = tasks.runTask(async () => {
+      lease = await acquireSharedMatrixClient({
+        cfg: {},
+        accountId: "main",
+        abortSignal: caller.signal,
+      });
     });
+    const rejected = expect(task).rejects.toMatchObject({ name: "AbortError" });
     try {
       await calledOnce(createMatrixClientMock);
       caller.abort();
       clientReady.resolve(client);
-      await task;
-      expect(acquisitionError).toMatchObject({ name: "AbortError" });
+      await rejected;
       expect(lease).toBeUndefined();
       expect(client.start).not.toHaveBeenCalled();
       expect(client.stopWithoutPersist).toHaveBeenCalledOnce();
     } finally {
       clientReady.resolve(client);
-      await task;
+      await task.catch(() => undefined);
       await lease?.release();
     }
   });
@@ -779,8 +766,7 @@ describe("shared Matrix client runtime ownership", () => {
     await firstOwner.dispose();
 
     expect([first.abortSignal.aborted, shared.abortSignal.aborted]).toEqual([true, true]);
-    expect(firstClient.stopAndPersist).toHaveBeenCalledOnce();
-    expect(firstClient.stopWithoutPersist).not.toHaveBeenCalled();
+    expectShutdown(firstClient, "persist");
     expect(other.abortSignal.aborted).toBe(false);
     expect(otherClient.quiesceSync).not.toHaveBeenCalled();
     await expect(first.start()).rejects.toThrow("released");
