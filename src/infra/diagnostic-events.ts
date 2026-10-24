@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { formatErrorStackWithMessage } from "@openclaw/normalization-core/error-coercion";
-import type { ExecProcessFailureKind } from "../agents/bash-tools.exec-types.js";
+import type { ExecProcessFailureKind } from "../agents/bash-tools.exec-output.js";
 import type { EmbeddedAgentExecutionPhaseInfo } from "../agents/embedded-agent-runner/execution-phase.js";
 import type { IsolatedCompletionPurpose } from "../agents/isolated-completion-purpose.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";

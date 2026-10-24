@@ -4,7 +4,44 @@
  */
 import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
 import type { RunExit, TerminationReason } from "../process/supervisor/types.js";
-import type { ExecExitFailureKind, ExecProcessOutcome } from "./bash-tools.exec-types.js";
+
+export type ExecProcessFailureKind =
+  | "shell-command-not-found"
+  | "shell-not-executable"
+  | "overall-timeout"
+  | "no-output-timeout"
+  | "memory-limit"
+  | "signal"
+  | "aborted"
+  | "runtime-error";
+
+export type ExecExitFailureKind = Exclude<ExecProcessFailureKind, "runtime-error">;
+
+/** Normalized result of a spawned exec process. */
+export type ExecProcessOutcome =
+  | {
+      status: "completed";
+      exitCode: number;
+      exitSignal: NodeJS.Signals | number | null;
+      exitReason?: TerminationReason;
+      durationMs: number;
+      aggregated: string;
+      timedOut: false;
+      noOutputTimedOut?: boolean;
+    }
+  | {
+      status: "failed";
+      exitCode: number | null;
+      exitSignal: NodeJS.Signals | number | null;
+      exitReason?: TerminationReason;
+      durationMs: number;
+      aggregated: string;
+      timedOut: boolean;
+      noOutputTimedOut?: boolean;
+      failureKind: ExecProcessFailureKind;
+      oomScoreWrapperSelected?: boolean;
+      reason: string;
+    };
 
 export const EXEC_NO_OUTPUT_PLACEHOLDER = "(no output)";
 // Keep launch and later process observations consistent without naming an aliased tool.

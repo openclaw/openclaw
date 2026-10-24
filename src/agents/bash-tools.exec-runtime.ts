@@ -61,10 +61,11 @@ import {
   buildExecExitOutcome,
   buildExecRuntimeErrorOutcome,
   joinExecFailureOutput,
+  type ExecProcessOutcome,
   renderExecUpdateText,
 } from "./bash-tools.exec-output.js";
 import { settleExecProcessExit } from "./bash-tools.exec-settlement.js";
-import type { ExecProcessOutcome, ExecToolDetails } from "./bash-tools.exec-types.js";
+import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import { chunkString, clampWithDefault, readEnvInt } from "./bash-tools.shared.js";
 import { recordAgentCleanupFailure } from "./run-cleanup-timeout.js";
