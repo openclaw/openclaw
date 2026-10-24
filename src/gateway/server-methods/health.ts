@@ -72,6 +72,7 @@ export const healthHandlers: GatewayRequestHandlers = {
     // Topology changes and clock rollback use ordinary cache expiry or an explicit probe.
     if (
       !wantsProbe &&
+      !includeSensitive &&
       cached &&
       !cachedDiffersFromRuntime &&
       now - cached.ts < HEALTH_REFRESH_INTERVAL_MS
