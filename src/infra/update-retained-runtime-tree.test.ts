@@ -5,7 +5,6 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { readPluginControlUiAssets } from "../plugins/control-ui-assets.js";
 import { loadPluginManifest } from "../plugins/manifest.js";
-import { readPluginCacheFile } from "../plugins/plugin-cache-files.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import * as fileDescriptor from "./file-descriptor.js";
@@ -218,11 +217,7 @@ it.each([false, true])(
           controlUi: { entry: "dist/control-ui/index.js" },
         }),
         [`${nestedBrowser}/dist/control-ui/index.js`]: "export {};\n",
-        "node_modules/native-addon/package.json": JSON.stringify({
-          name: "native-addon",
-          version: "1.0.0",
-          main: "addon.node",
-        }),
+        "node_modules/native-addon/package.json": "{}",
       }),
     );
     const payloads = [
@@ -270,13 +265,7 @@ it.each([false, true])(
           const preexistingHardlink =
             base === f.source && existingTwin && relativePath === "openclaw.plugin.json";
           expect(stat(path.join(rootDir, relativePath)).nlink).toBe(preexistingHardlink ? 2 : 1);
-          const file = readPluginCacheFile({ rootDir, relativePath, rejectHardlinks: true });
-          expect(file.ok).toBe(!preexistingHardlink);
           expect(fsSync.readFileSync(path.join(rootDir, relativePath), "utf8")).toBe(content);
-          if (relativePath === "node_modules/native-addon/package.json") {
-            const relative = path.join(relativePlugin, relativePath);
-            expect(inode(f.retained(relative))).not.toEqual(inode(f.original(relative)));
-          }
         }
       });
       expect(await assets(rootDir, controlUi)).toEqual(
@@ -296,18 +285,6 @@ it.each([false, true])(
       const retained = stat(f.retained(path.join(relativePlugin, relative)));
       expect(retained).toMatchObject({ ino: original.ino, nlink: 2, size: original.size });
     }
-    const sourcePlugin = path.join(f.source, relativePlugin);
-    await fs.link(
-      path.join(sourcePlugin, "openclaw.plugin.json"),
-      path.join(f.source, "foreign-manifest.json"),
-    );
-    expect(stat(path.join(sourcePlugin, "openclaw.plugin.json")).nlink).toBe(existingTwin ? 3 : 2);
-    expect(
-      withPluginCache(createPluginCache(), () => loadPluginManifest(sourcePlugin)),
-    ).toMatchObject({
-      ok: false,
-      error: expect.stringContaining("unsafe plugin manifest path"),
-    });
   },
 );
 

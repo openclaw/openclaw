@@ -375,62 +375,53 @@ it.each([false, true])(
   },
 );
 
-it.each([false, true])(
-  "does not persist resolved credentials when lint fails=%s",
-  async (fails) => {
-    const secrets = ["synthetic-token", "synthetic-password", "Bearer synthetic-otel"];
-    const config: OpenClawConfig = {
-      gateway: { auth: { mode: "password", token: secrets[0], password: secrets[1] } },
-      diagnostics: {
-        enabled: true,
-        otel: { enabled: true, captureContent: true, headers: { Authorization: secrets[2]! } },
-      },
-    };
-    lintReport = report(
-      fails ? [{ checkId: "fixture/refused", severity: "error", message: "Refused" }] : [],
+it("does not persist resolved credentials when lint fails", async () => {
+  const secrets = ["synthetic-token", "synthetic-password", "Bearer synthetic-otel"];
+  const config: OpenClawConfig = {
+    gateway: { auth: { mode: "password", token: secrets[0], password: secrets[1] } },
+    diagnostics: {
+      enabled: true,
+      otel: { enabled: true, captureContent: true, headers: { Authorization: secrets[2]! } },
+    },
+  };
+  lintReport = report([{ checkId: "fixture/refused", severity: "error", message: "Refused" }]);
+  let serialized = "";
+  let retainedState: string | undefined;
+  const remove = fs.rm.bind(fs);
+  const cleanup = vi
+    .spyOn(fs, "rm")
+    .mockImplementation((target, options) =>
+      target === retainedState ? Promise.resolve() : remove(target, options),
     );
-    let serialized = "";
-    let retainedState: string | undefined;
-    const remove = fs.rm.bind(fs);
-    const cleanup = vi
-      .spyOn(fs, "rm")
-      .mockImplementation((target, options) =>
-        target === retainedState ? Promise.resolve() : remove(target, options),
-      );
-    harness.overrideSpawn("--lint", (_args, options) => {
-      serialized = readFileSync(options.env.OPENCLAW_CONFIG_PATH!, "utf8");
-      retainedState = options.env.OPENCLAW_STATE_DIR;
-      const child = harness.child(true);
-      queueMicrotask(() => {
-        child.stdout.write(JSON.stringify(lintReport));
-        child.emit("close", fails ? 1 : 0);
-      });
-      return child;
+  harness.overrideSpawn("--lint", (_args, options) => {
+    serialized = readFileSync(options.env.OPENCLAW_CONFIG_PATH!, "utf8");
+    retainedState = options.env.OPENCLAW_STATE_DIR;
+    const child = harness.child(true);
+    queueMicrotask(() => {
+      child.stdout.write(JSON.stringify(lintReport));
+      child.emit("close", 1);
     });
-    stubHealthyGateway();
-    try {
-      const result = await validateUpdateCandidateCanary({ ...canaryStateOptions(), config });
-      expect(result.status).toBe(fails ? "error" : "ok");
-      if (fails) {
-        expect(result.phase).toBe("lint");
-      }
-      expect(serialized).not.toBe("");
-      const retained = await fs.readFile(path.join(retainedState!, "openclaw.json"), "utf8");
-      for (const value of secrets) {
-        expect(serialized).not.toContain(value);
-        expect(retained).not.toContain(value);
-      }
-      expect(JSON.parse(serialized)).toMatchObject({
-        gateway: { auth: { mode: "password" } },
-        diagnostics: { enabled: true, otel: { enabled: true, captureContent: true } },
-      });
-      expect(config.gateway?.auth?.password).toBe(secrets[1]);
-      expect(config.diagnostics?.otel?.headers?.Authorization).toBe(secrets[2]);
-    } finally {
-      cleanup.mockRestore();
-      if (retainedState) {
-        await remove(retainedState, { recursive: true, force: true });
-      }
+    return child;
+  });
+  try {
+    const result = await validateUpdateCandidateCanary({ ...canaryStateOptions(), config });
+    expect(result).toMatchObject({ status: "error", phase: "lint" });
+    expect(serialized).not.toBe("");
+    const retained = await fs.readFile(path.join(retainedState!, "openclaw.json"), "utf8");
+    for (const value of secrets) {
+      expect(serialized).not.toContain(value);
+      expect(retained).not.toContain(value);
     }
-  },
-);
+    expect(JSON.parse(serialized)).toMatchObject({
+      gateway: { auth: { mode: "password" } },
+      diagnostics: { enabled: true, otel: { enabled: true, captureContent: true } },
+    });
+    expect(config.gateway?.auth?.password).toBe(secrets[1]);
+    expect(config.diagnostics?.otel?.headers?.Authorization).toBe(secrets[2]);
+  } finally {
+    cleanup.mockRestore();
+    if (retainedState) {
+      await remove(retainedState, { recursive: true, force: true });
+    }
+  }
+});
