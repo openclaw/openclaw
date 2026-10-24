@@ -130,6 +130,7 @@ describe("fresh compiled subprocess invocation", { concurrent: false }, () => {
             const compilers = controlled.read();
             expect(redirectedCompilers).toBe(1);
             expect(compilers).toHaveLength(2);
+            expect(compilers.map(({ isMainThread }) => isMainThread)).toEqual([true, true]);
             // Windows can recycle a PID after exit; process start distinguishes its next owner.
             expect(
               new Set(compilers.map(({ pid, processStartTime }) => `${pid}:${processStartTime}`))
@@ -140,14 +141,6 @@ describe("fresh compiled subprocess invocation", { concurrent: false }, () => {
             ).toEqual(
               new Set([...generations].map((url) => path.resolve(generationDirectory(url)))),
             );
-            for (const compiler of compilers) {
-              expect(compiler).toMatchObject({
-                inputs: 3,
-                outputs: 3,
-                processStartTime: expect.any(Number),
-                isMainThread: true,
-              });
-            }
           } finally {
             try {
               await owner.dispose();

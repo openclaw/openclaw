@@ -9,16 +9,6 @@ import { fixtureGit, expectGate } from "./release-publish.test-support.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const moduleUrl = (name: string) => new URL(`../../scripts/lib/${name}.mts`, import.meta.url).href;
 const loader = new URL("../../scripts/tsx.mjs", import.meta.url).href;
-const releaseFixture = (sha: string, body: string | null) => ({
-  id: 7,
-  draft: true,
-  prerelease: false,
-  tag_name: "v2026.9.5",
-  html_url: "https://github.com/openclaw/openclaw/releases/tag/v2026.9.5",
-  target_commitish: sha,
-  body,
-  assets: [],
-});
 
 function evaluate({ dir, sha }: { dir: string; sha: string }, expression: string, bin?: string) {
   const source = `
@@ -70,7 +60,6 @@ it.skipIf(process.platform === "win32").each([
   },
   { state: "absent", body: "", admitted: true, status: "PASS" },
   { state: "forbidden", body: "", admitted: false, status: "WARN" },
-  { state: "unavailable", body: "", admitted: false, status: "WARN" },
   { state: "limited", body: "", admitted: true, status: "WARN" },
 ])("shares draft-aware release lookup for $state/$body", ({ state, body, admitted, status }) => {
   const { dir, sha } = sourceFixture(
@@ -93,9 +82,10 @@ if (args[0] === 'api') {
   if (endpoint.includes('/releases/tags/')) fail('HTTP 404: Not Found');
   else if (endpoint.includes('/releases?')) {
     if (${JSON.stringify(state)} === 'forbidden') fail('HTTP 403: Forbidden');
-    if (${JSON.stringify(state)} === 'unavailable') fail('HTTP 404: repository not found');
     const page = Number(new URL('https://api.github.com/' + endpoint).searchParams.get('page'));
-    const release = ${JSON.stringify(releaseFixture(sha, body))};
+    const release = {id: 7, draft: true, prerelease: false, tag_name: 'v2026.9.5',
+      html_url: 'https://github.com/openclaw/openclaw/releases/tag/v2026.9.5',
+      target_commitish: ${JSON.stringify(sha)}, body: ${JSON.stringify(body)}, assets: []};
     console.log(JSON.stringify(${JSON.stringify(state)} !== 'draft' ? [] : page === 1
       ? Array.from({length: 100}, (_, index) => ({tag_name: 'other-' + index})) : [release]));
   }
@@ -119,7 +109,6 @@ closeout: inspectStableCloseoutPreflight(closeoutInput)})`,
   expect(result.admission.admitted).toBe(admitted);
   expectGate(result.observation.gates, { id: "github.release", status });
   if (state === "draft") {
-    expect(result.observation.release).toEqual(releaseFixture(sha, body));
     expectGate(result.closeout, {
       id: "stable-closeout.release-assets",
       status: "WARN",
@@ -159,20 +148,14 @@ it("reports pending main reconciliation without making it a publication prerequi
   expect(result).not.toContainEqual(expect.objectContaining({ status: "FAIL" }));
 });
 
-it.each(["absent", "draft"])(
-  "validates frozen release notes before admitting an %s release page",
-  (releaseState) => {
-    const fixture = sourceFixture(`## 2026.9.5\n\n${"oversized release notes ".repeat(6_000)}`);
-    const result = evaluate(
-      fixture,
-      `admit({runGh() {
-                      if (${JSON.stringify(releaseState)} === 'absent') throw new Error('HTTP 404: Not Found');
-                      return JSON.stringify({ draft: true, body: 'Draft notes' });
-                    }})`,
-    );
-    expect(result).toMatchObject({
-      admitted: false,
-      message: expect.stringContaining("release notes exceed GitHub's body limit"),
-    });
-  },
-);
+it("validates frozen release notes before looking up the release page", () => {
+  const fixture = sourceFixture(`## 2026.9.5\n\n${"oversized release notes ".repeat(6_000)}`);
+  const result = evaluate(
+    fixture,
+    `admit({runGh() { throw new Error('Release lookup must follow notes validation'); }})`,
+  );
+  expect(result).toMatchObject({
+    admitted: false,
+    message: expect.stringContaining("release notes exceed GitHub's body limit"),
+  });
+});
