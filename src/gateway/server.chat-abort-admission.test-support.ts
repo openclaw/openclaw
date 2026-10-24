@@ -1,7 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, test, vi } from "vitest";
-import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import { loadSessionEntry, loadTranscriptEventsSync } from "../config/sessions/session-accessor.js";
 import { requestRpcSourceCancellation } from "../sessions/session-controller.rpc-sources.js";
 import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
@@ -17,7 +16,6 @@ type ChatScope = { agentId: string; sessionId: string; sessionKey: string; store
 
 export function registerChatAbortAdmissionRetryTests(harness: {
   withCommittedChatSession: (run: (scope: ChatScope) => Promise<void>) => Promise<void>;
-  waitForSessionWork: () => Promise<void> | undefined;
   sendControlUiChat: (params: {
     context: GatewayRequestContext;
     idempotencyKey: string;
@@ -141,31 +139,16 @@ export function registerChatAbortAdmissionRetryTests(harness: {
         );
 
         const retryContext = createDirectChatContext();
-        if (retryable) {
-          dispatchInboundMessageMock.mockResolvedValueOnce(undefined);
-        }
         const retryResponses = await send(retryContext);
         expect(retryResponses).toEqual([
           {
             ok: true,
-            payload: retryable
-              ? expect.objectContaining({ runId, status: "started" })
-              : { runId, status: "ok" },
+            payload: { runId, status: "ok", messageSeq: 1 },
           },
         ]);
-        if (retryable) {
-          await harness.waitForSessionWork();
-          expect(retryContext.removeChatRun).toHaveBeenCalledTimes(1);
-          expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
-          const retryOptions = (
-            dispatchInboundMessageMock.mock.calls[0]?.[0] as
-              | { replyOptions?: GetReplyOptions }
-              | undefined
-          )?.replyOptions;
-          expect(retryOptions?.suppressNextUserMessagePersistence).toBe(true);
-        } else {
-          expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-        }
+        expect(retryContext.removeChatRun).not.toHaveBeenCalled();
+        expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+        expect(loadSessionEntry(scope)).toEqual(stored);
         expect(loadTranscriptEventsSync(scope).filter(userInput)).toHaveLength(1);
       } finally {
         stopListening?.();
