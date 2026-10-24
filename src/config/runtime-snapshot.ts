@@ -236,8 +236,11 @@ function publishRuntimeConfigSnapshot(
     sourceUnchanged: sourceMatchesPublished,
     previousEditedInPlace: previousEditedInPlace || previousSourceEditedInPlace,
   });
-  // Retain publication-time values even if the caller later mutates its live config.
-  const captured = captureRuntimeConfigWithSource(config, sourceConfig ?? config);
+  // SDK setters also accept opaque values; only proven plain revisions capture eagerly.
+  const captured =
+    configFact.value && sourceFact.value
+      ? captureRuntimeConfigWithSource(config, sourceConfig ?? config)
+      : null;
   prepareRuntimePluginsConfig(config);
   clearExecutablePathCache();
   runtimeConfigSnapshot = config;
@@ -366,7 +369,13 @@ export function clearRuntimeConfigSnapshot(): void {
 }
 
 export function getRuntimeConfigSnapshot(options?: { capture?: boolean }): OpenClawConfig | null {
-  return options?.capture ? runtimeConfigCapturedSnapshot : runtimeConfigSnapshot;
+  if (options?.capture && runtimeConfigSnapshot) {
+    return (runtimeConfigCapturedSnapshot ??= captureRuntimeConfigWithSource(
+      runtimeConfigSnapshot,
+      runtimeConfigSourceSnapshot ?? runtimeConfigSnapshot,
+    ));
+  }
+  return runtimeConfigSnapshot;
 }
 
 /** Read the config published by runtime preparation without cold-loading storage. */
