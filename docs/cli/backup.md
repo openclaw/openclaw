@@ -801,6 +801,10 @@ Symbolic links are archived as link entries, including absolute and dangling tar
 
 Absolute links retain their original location after restore, including links to separately backed-up config or credentials. They are no longer rewritten to relative targets. Review these links before activating a restored tree on another host or at another path. Older releases, including v2026.9.4, reject archives with absolute or escaping link targets; use the current release to restore those archives. Existing archives remain readable.
 
+Older backups with source-relative hardlink targets remain restorable when each
+target resolves unambiguously to an archived regular file. Missing or ambiguous
+targets are rejected instead of selecting different recovery data.
+
 Installer-managed and rebuildable runtime roots under the state directory are
 also skipped: `dev/`, `git/`, `npm/`, legacy `npm-runtime/`, `tmp/`, and
 `tools/`. These contain managed checkouts, package trees, compiler caches,
