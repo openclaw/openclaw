@@ -46,11 +46,13 @@ struct ChatAssistantRunGroup: Identifiable {
     var parts: [Part]
     var includesLive = false
 
-    var answerID: UUID? {
-        self.parts.reversed().compactMap { part -> UUID? in
-            if case let .row(.message(message)) = part, message.isCompletedReply { return message.id }
-            return nil
-        }.first
+    /// ScrollViewReader resolves the lazy group's root, not an unmeasured nested row.
+    static func scrollTargets(_ groups: [Self]) -> [UUID: ID] {
+        groups.reduce(into: [:]) { targets, group in
+            for case let .row(row) in group.parts {
+                targets[row.id] = group.id
+            }
+        }
     }
 
     static func build(
@@ -149,39 +151,4 @@ extension ChatTranscriptRow {
             return nil
         }
     }
-}
-
-struct ChatAssistantRunFrame<Content: View>: View {
-    let assistantName: String?
-    let assistantAvatarText: String?
-    let assistantAvatarTint: Color?
-    let showsAssistantAvatar: Bool
-    let isClean: Bool
-    @ViewBuilder let content: () -> Content
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 8) {
-            if self.showsAssistantAvatar {
-                ChatAgentAvatar(
-                    text: self.assistantAvatarText,
-                    name: self.assistantName,
-                    tint: self.assistantAvatarTint)
-                    .padding(.top, 5)
-            }
-            VStack(alignment: .leading, spacing: 8, content: self.content)
-                .environment(\.openClawAssistantRunContent, true)
-                .padding(self.isClean ? 4 : 12)
-                .assistantBubbleContainerStyle(isClean: self.isClean)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        // Include disclosure and action rows in the container's accessibility bounds.
-        .contentShape(.accessibility, Rectangle())
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("chat-assistant-run")
-        .assistantSpeakerLabel(self.assistantName, avatarHidden: !self.showsAssistantAvatar)
-    }
-}
-
-extension EnvironmentValues {
-    @Entry var openClawAssistantRunContent: Bool = false
 }
