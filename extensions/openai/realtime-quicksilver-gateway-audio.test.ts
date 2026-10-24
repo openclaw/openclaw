@@ -40,6 +40,10 @@ it.each(["direct", "webrtc"] as const)(
     try {
       bridge.sendAudio(Buffer.alloc(160, 0x80));
       await bridge.connect();
+      const socket = getSocket();
+      if (transport === "webrtc") {
+        emitSideband(socket, { type: "session.started", session: {} });
+      }
       const captured = input[0];
       if (!captured) {
         throw new Error("Missing converted microphone audio");
@@ -57,11 +61,9 @@ it.each(["direct", "webrtc"] as const)(
       for (let offset = 0; offset < pcm.length; offset += 2) {
         pcm.writeInt16LE(10_000, offset);
       }
-      const socket = getSocket();
       if (transport === "direct") {
         emitSideband(socket, { type: "output_audio.delta", audio: pcm.toString("base64") });
       } else {
-        emitSideband(socket, { type: "session.started", session: {} });
         callbacks?.onAudio(pcm);
       }
       const carrierAudio = Buffer.concat(output);
