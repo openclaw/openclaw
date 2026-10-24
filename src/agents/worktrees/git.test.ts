@@ -7,6 +7,7 @@ import {
   withinTest,
 } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { gitMaintenanceEnvironment } from "../../infra/git-maintenance-env.js";
 import * as execRunner from "../../process/exec-runner.js";
 import * as processExec from "../../process/exec.js";
 import type { SpawnResult } from "../../process/exec.js";
@@ -62,16 +63,19 @@ describe("Git ref mutation ownership", () => {
     "disables automatic maintenance on an unregistered repository (sourceOnly=%s)",
     async (sourceOnly) => {
       const root = await repository();
-      await requireGit(root, ["config", "--local", "maintenance.auto", "true"]);
-      await requireGit(root, ["config", "--local", "gc.auto", "1"]);
-      await withWorktreeGitConfig(root, sourceOnly, {}, async (git) => {
-        expect(await git.require(root, ["config", "--get", "maintenance.auto"])).toBe("false");
-        expect(await git.require(root, ["config", "--get", "gc.auto"])).toBe("0");
-      });
-      expect(await requireGit(root, ["config", "--local", "--get", "maintenance.auto"])).toBe(
-        "true",
-      );
-      expect(await requireGit(root, ["config", "--local", "--get", "gc.auto"])).toBe("1");
+      const policy = gitMaintenanceEnvironment();
+      for (const [envKey, key] of Object.entries(policy)) {
+        if (!envKey.startsWith("GIT_CONFIG_KEY_") || !key) {
+          continue;
+        }
+        const disabled = policy[envKey.replace("_KEY_", "_VALUE_")]!;
+        const enabled = disabled === "0" ? "1" : "true";
+        await requireGit(root, ["config", "--local", key, enabled]);
+        await withWorktreeGitConfig(root, sourceOnly, {}, async (git) => {
+          expect(await git.require(root, ["config", "--get", key])).toBe(disabled);
+        });
+        expect(await requireGit(root, ["config", "--local", "--get", key])).toBe(enabled);
+      }
     },
   );
 

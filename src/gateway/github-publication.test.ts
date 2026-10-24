@@ -2,6 +2,7 @@ import os from "node:os";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { loadTranscriptEvents } from "../config/sessions/session-accessor.js";
+import { appendGitConfig, gitMaintenanceEnvironment } from "../infra/git-maintenance-env.js";
 import { withPluginRuntimePluginScope } from "../plugins/runtime/gateway-request-scope.js";
 import { githubPublicationReceipts } from "../state/github-publication-receipts.js";
 import * as publicationLifecycles from "../state/github-publication-session-lifecycles.js";
@@ -228,15 +229,9 @@ describe("Gateway GitHub publication", () => {
       draft: false,
     });
     for (const [, options] of mocks.runCommand.mock.calls) {
-      expect(options?.env).toMatchObject({
-        GIT_CONFIG_COUNT: "3",
-        GIT_CONFIG_KEY_0: "core.hooksPath",
-        GIT_CONFIG_VALUE_0: os.devNull,
-        GIT_CONFIG_KEY_1: "maintenance.auto",
-        GIT_CONFIG_VALUE_1: "false",
-        GIT_CONFIG_KEY_2: "gc.auto",
-        GIT_CONFIG_VALUE_2: "0",
-      });
+      expect(options?.env).toMatchObject(
+        appendGitConfig(gitMaintenanceEnvironment(), [["core.hooksPath", os.devNull]]),
+      );
     }
     const persisted = database.db
       .prepare("SELECT * FROM github_publication_requests WHERE session_id = ?")

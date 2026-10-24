@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 import { runInNewContext } from "node:vm";
 import { afterEach, assert, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { appendGitConfig, gitMaintenanceEnvironment } from "../../infra/git-maintenance-env.js";
 import { NodeWorkerWorkspaceRuntime } from "../../node-host/node-worker-workspace.js";
 import { runCommandWithTimeout, type SpawnResult } from "../../process/exec.js";
 import {
@@ -70,13 +71,12 @@ it.each(["win32", "linux", "darwin"] as const)(
               GIT_TERMINAL_PROMPT: "0",
               GIT_ASKPASS: "",
               SSH_ASKPASS: "",
-              GIT_CONFIG_COUNT: "3",
-              GIT_CONFIG_KEY_0: `http.${ORIGIN}.extraheader`,
-              GIT_CONFIG_VALUE_0: `Authorization: Basic ${Buffer.from(`x-access-token:${FIXTURE_TOKEN}`).toString("base64")}`,
-              GIT_CONFIG_KEY_1: "maintenance.auto",
-              GIT_CONFIG_VALUE_1: "false",
-              GIT_CONFIG_KEY_2: "gc.auto",
-              GIT_CONFIG_VALUE_2: "0",
+              ...appendGitConfig(gitMaintenanceEnvironment(), [
+                [
+                  `http.${ORIGIN}.extraheader`,
+                  `Authorization: Basic ${Buffer.from(`x-access-token:${FIXTURE_TOKEN}`).toString("base64")}`,
+                ],
+              ]),
             },
           },
         );
