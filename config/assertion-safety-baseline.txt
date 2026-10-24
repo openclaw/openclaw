@@ -993,7 +993,7 @@ packages/model-catalog-core/src/model-catalog-types.ts	1
 packages/model-catalog-core/src/remote-catalog-bundle.ts	2
 packages/net-policy/src/ip.ts	1
 packages/normalization-core/src/error-coercion.ts	1
-packages/normalization-core/src/json-schema.ts	2
+packages/normalization-core/src/json-schema.ts	1
 packages/normalization-core/src/promise-like.ts	1
 packages/normalization-core/src/record-coerce.ts	1
 packages/normalization-core/src/stable-stringify.ts	1
