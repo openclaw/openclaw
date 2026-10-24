@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { performance } from "node:perf_hooks";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.ts";
 
 const STALL_MS = 250;
 const MAX_PENDING_STALLS = 8;

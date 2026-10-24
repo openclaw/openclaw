@@ -656,16 +656,8 @@ it.each([
   async (kind, preexisting) => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "gateway-worker-profile-"));
     const profilePath = path.join(directory, kind);
-    const { child } = spawnFixture(
-      [
-        "--import",
-        new URL("../../scripts/tsx.mjs", import.meta.url).href,
-        "-e",
-        workload,
-        preloadUrl,
-      ],
-      directory,
-    );
+    // Benchmark Gateway children load the preload natively, without a TypeScript resolver.
+    const { child } = spawnFixture(["-e", workload, preloadUrl], directory);
     await waitMessage(child, "ready");
     if (preexisting) {
       expect(await sendMessage(child, { prepare: true })).toMatchObject({ prepared: true });
@@ -676,8 +668,9 @@ it.each([
     await controlGatewayProfile(child, kind, "stop", profilePath, { includeWorkers: true });
     const manifest = await readJson<WorkerProfileManifest>(`${profilePath}.workers.json`);
     // Direct workers created before the registry remain explicitly unregistered.
+    // Native children have no off-thread loader worker, so none exist unless prepared.
     const preexistingWorkers = manifest.workers.filter((worker) => !worker.script);
-    expect(preexistingWorkers.length).toBeGreaterThan(0);
+    expect(preexistingWorkers.length > 0).toBe(preexisting);
     expect(preexistingWorkers.every((worker) => worker.unregisteredWhileLive)).toBe(true);
     manifest.workers = manifest.workers.filter((worker) =>
       worker.title.includes("profile-workload"),

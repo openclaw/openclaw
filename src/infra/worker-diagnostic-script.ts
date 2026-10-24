@@ -1,6 +1,6 @@
 import { basename } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createRuntimeProcessEntrypoints } from "./runtime-process-manifest.js";
+import { createRuntimeProcessEntrypoints } from "./runtime-process-manifest.ts";
 
 export const MAX_DIAGNOSTIC_WORKER_SLOTS = 64;
 

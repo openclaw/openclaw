@@ -1,5 +1,5 @@
 import { threadId } from "node:worker_threads";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord } from "../../packages/normalization-core/src/record-coerce.ts";
 
 export type PostgresBridgeCounter = {
   threadId: number;

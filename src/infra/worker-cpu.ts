@@ -1,31 +1,31 @@
 import "../../worker-heap-flag.mjs";
 import { channel } from "node:diagnostics_channel";
 import { isMainThread, MessagePort, receiveMessageOnPort, Worker } from "node:worker_threads";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { WorkerRetirementReason } from "@openclaw/worker-runtime";
-import { createRetainedOperation } from "@openclaw/worker-runtime/lifecycle";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { isRecord } from "../../packages/normalization-core/src/record-coerce.ts";
+import { createRetainedOperation } from "../../packages/worker-runtime/src/retained-operation.ts";
+import { resolveGlobalSingleton } from "../shared/global-singleton.ts";
 import type {
   DiagnosticMemoryUsage,
   WorkerGcStorm,
   WorkerMemorySample,
 } from "./diagnostic-process-types.js";
 import type { GcSample } from "./gc-observer.js";
-import { runWithMainThreadTask } from "./main-thread-stall.js";
-import { MAX_DIAGNOSTIC_WORKER_SLOTS, workerScriptName } from "./worker-diagnostic-script.js";
+import { runWithMainThreadTask } from "./main-thread-stall.ts";
+import { MAX_DIAGNOSTIC_WORKER_SLOTS, workerScriptName } from "./worker-diagnostic-script.ts";
 import {
   canObserveWorkerMessages,
   recordWorkerMessage,
   observeWorkerMessage,
   workerMessagePayloadBytes,
-} from "./worker-message-metrics.js";
+} from "./worker-message-metrics.ts";
 import type { WorkerPoolClass } from "./worker-pool-sizing.js";
 import {
   collectPostgresBridgeCounters,
   countPostgresBridges,
   readPostgresBridgeCounters,
   type PostgresBridgeCounter,
-} from "./worker-postgres-bridge-census.js";
+} from "./worker-postgres-bridge-census.ts";
 
 const gcStorm = channel("openclaw.code-mode.gc-storm");
 
