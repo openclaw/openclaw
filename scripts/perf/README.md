@@ -73,7 +73,10 @@ execution during the workload. Coverage can retain code and change optimization;
 its timings and code residency are not uninstrumented performance evidence.
 Use `--idle-minutes 5` without coverage to stop workload traffic while leaving
 normal Gateway maintenance active, sample code statistics each minute, and
-capture a final idle snapshot. Census inspectors disconnect after each capture.
+capture a final idle snapshot. Use `--snapshot-minutes none` for paired timing
+and natural-GC observations without heap exports; it also skips the idle snapshot.
+Run retained-size captures separately and serially to avoid concurrent bulk writes.
+Census inspectors disconnect after each capture.
 Source bytes and V8 code statistics are not dominator-retained bytes: use the
 heap snapshot analyzer for retained-size attribution. All fixtures and mock
 provider responses are synthetic; this workload does not reproduce a private

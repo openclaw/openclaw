@@ -77,9 +77,12 @@ if (!values.root) {
 }
 const root = path.resolve(values.root);
 const build = JSON.parse(readFileSync("dist/build-info.json", "utf8"));
-const snapshotMinutes = (values["snapshot-minutes"] ?? `10,${minutes}`)
-  .split(",")
-  .map((v) => positiveInteger(v, "snapshot-minutes"));
+const snapshotMinutes =
+  values["snapshot-minutes"] === "none"
+    ? []
+    : (values["snapshot-minutes"] ?? `10,${minutes}`)
+        .split(",")
+        .map((v) => positiveInteger(v, "snapshot-minutes"));
 if (snapshotMinutes.some((v, i) => v > minutes || (i > 0 && v - snapshotMinutes[i - 1] < 2))) {
   throw new Error("snapshot minutes must increase by at least two and fit the duration");
 }
@@ -622,7 +625,9 @@ try {
       }
       await census("stats", `idle-${minute}`);
     }
-    await snapshot(minutes + idleMinutes);
+    if (snapshotMinutes.length > 0) {
+      await snapshot(minutes + idleMinutes);
+    }
     await census("capture", "idle");
   }
   record({
