@@ -33,11 +33,14 @@ const mocks = vi.hoisted(() => ({
   proxy: vi.fn(),
   pool: vi.fn(),
 }));
+// mock-isolation: Harness lifecycle tests must not execute a real Copilot attempt.
 vi.mock("./src/attempt.js", () => ({
   runCopilotAttempt: mocks.attempt,
   resolvePoolAcquire: mocks.acquire,
 }));
+// mock-isolation: Supply a synthetic proxy without starting a network listener.
 vi.mock("./src/byok-proxy.js", () => ({ createCopilotByokProxy: mocks.proxy }));
+// mock-isolation: Keep client acquisition and disposal in the fixture-owned pool.
 vi.mock("./src/runtime.js", () => ({ createCopilotClientPool: mocks.pool }));
 
 const RESULT = asCompleteAttemptResult({ ok: true });

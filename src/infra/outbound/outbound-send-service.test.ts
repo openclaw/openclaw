@@ -17,10 +17,13 @@ const mocks = vi.hoisted(() => ({
     vi.fn<typeof import("../../media/read-capability.js").resolveAgentScopedOutboundMediaAccess>(),
   mirror: vi.fn(async () => ({ ok: true })),
 }));
+// mock-isolation: Exercise send-service routing without invoking real channel actions.
 vi.mock("../../channels/plugins/message-action-dispatch.js", () => ({
   dispatchChannelMessageAction: mocks.dispatch,
 }));
+// mock-isolation: Capture outbound sends and polls without contacting a provider.
 vi.mock("./message.js", () => ({ sendMessage: mocks.send, sendPoll: mocks.poll }));
+// mock-isolation: Use fixture-owned media access without reading host files.
 vi.mock("../../media/read-capability.js", () => ({
   createAgentScopedHostMediaReadFile: () => mocks.access.readFile,
   resolveAgentScopedOutboundMediaAccess: mocks.resolveAccess,
