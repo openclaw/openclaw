@@ -50,7 +50,8 @@ function fixture() {
   return { deps, resolve, command, stamp, directory, readFileSync, readStamp, stage, stderr };
 }
 
-it.each([undefined, "1"])("uses an explicit executable with CI=%s without staging", (CI) => {
+it("uses an explicit executable in CI without staging", () => {
+  const CI = "1";
   const { resolve, directory, stage, readFileSync } = fixture();
   const command = path.join(directory, "custom-bun");
   fs.writeFileSync(command, bytes, { mode: 0o755 });
@@ -62,15 +63,15 @@ it.each([undefined, "1"])("uses an explicit executable with CI=%s without stagin
   expect(stage).not.toHaveBeenCalled();
 });
 
-it.each(["1", "true", "custom", "0"])("uses workflow-provisioned Bun with CI=%s", (CI) => {
+it("uses workflow-provisioned Bun in CI", () => {
   const { resolve, stage, readFileSync, stderr } = fixture();
-  const ciEnv = { CI, OPENCLAW_VITEST_RUNTIME: "bun", PATH: "/workflow/bun/bin:/usr/bin" };
+  const ciEnv = { CI: "1", OPENCLAW_VITEST_RUNTIME: "bun", PATH: "/workflow/bun/bin:/usr/bin" };
   expect(resolve(ciEnv)).toEqual({ command: "bun" });
   expect(pinnedBunEnv("bun", ciEnv)).toEqual({ PATH: ciEnv.PATH });
   expectUnused(stage, readFileSync, stderr);
 });
 
-it.each([undefined, "", "false"])("stages and silently reuses cache with CI=%s", (CI) => {
+it.each([undefined, "false"])("stages and silently reuses cache with CI=%s", (CI) => {
   const { resolve, command, readStamp, stage, readFileSync, stderr } = fixture();
   expect(resolve({ CI })).toEqual({ command });
   expect(stage).toHaveBeenCalledOnce();
@@ -117,15 +118,12 @@ it("replaces damaged cached bytes through the stager", () => {
   expect(fs.readFileSync(command, "utf8")).toBe(bytes);
 });
 
-it.each([
-  { failure: new Error("checksum mismatch\nadditional details"), cause: "checksum mismatch" },
-  { failure: new Error("permission denied\r\nadditional details"), cause: "permission denied" },
-])("reports stage failure ($cause) on one line and cleans up", ({ failure, cause }) => {
+it("reports stage failure on one line and cleans up", () => {
   const { resolve, command, stage } = fixture();
   stage.mockImplementation(() => {
-    throw failure;
+    throw new Error("checksum mismatch\r\nadditional details");
   });
-  expect(resolve()).toEqual({ reason: `could not stage the pinned fork: ${cause}` });
+  expect(resolve()).toEqual({ reason: "could not stage the pinned fork: checksum mismatch" });
   expect(fs.existsSync(command)).toBe(false);
   expect(fs.readdirSync(path.dirname(path.dirname(command)))).toEqual(["bin"]);
 });

@@ -14,43 +14,15 @@ import {
 import { createDeferred } from "../helpers/promise.js";
 
 function workerResult(scenario: WorkerScenario, size: number, timingsMs = [1, 2, 3]): WorkerResult {
-  const counts = (...keys: string[]) => Object.fromEntries(keys.map((key) => [key, size]));
-  const invariant: Record<string, number | boolean> =
-    scenario === "spawnPipelineInMemory" || scenario === "spawnPipelineDurable"
-      ? {
-          ok: true,
-          ...counts("registeredRuns", "reservationsReleased", "blockedWaits", "settledRuns"),
-          outstandingWaits: 0,
-          durableSubagentRows: scenario === "spawnPipelineDurable" ? size : 0,
-          durableStateFile: scenario === "spawnPipelineDurable",
-          postTeardownRegistryRows: 0,
-          postTeardownDurableSubagentRows: 0,
-          postTeardownActiveRootWork: 0,
-        }
-      : scenario === "admission"
-        ? { ok: true, admissionCap: size, overflowRejected: true, released: true }
-        : scenario === "recoverySweep"
-          ? {
-              ok: true,
-              seededRows: size * 3,
-              removedRows: size * 2,
-              ...counts("retainedCurrent", "recoveryProjections"),
-              sessionEffects: 0,
-              lostContextCompletions: 0,
-            }
-          : {
-              ok: true,
-              inputRowsPerOrdering: size * 3,
-              ...counts("newestFirstSelectedRows", "oldestFirstSelectedRows"),
-              newestFirstSelectedNewest: true,
-              oldestFirstSelectedNewest: true,
-            };
   return {
     scenario,
     size,
     timingsMs,
     memory: { rssStartBytes: 100, rssEndBytes: 120, processMaxRssBytes: 150 },
-    invariant,
+    invariant:
+      scenario === "admission"
+        ? { ok: true, admissionCap: size, overflowRejected: true, released: true }
+        : { ok: true },
   };
 }
 

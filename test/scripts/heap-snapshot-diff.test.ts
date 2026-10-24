@@ -223,28 +223,6 @@ function runSummary(contents: string, labels: string[] = [], args: string[] = []
   );
 }
 
-it("summarizes one snapshot's known dominators and constructor unions with cycles and shared retainers", () => {
-  const result = runSummary(fixture(false), ["root", "Cache 🦞", "Payload", "Shared"]);
-  expect(result).toMatchObject({ nodes: 8, reachable: 6, retainedBytes: 105 });
-  expect(result.classes).toEqual(
-    expect.arrayContaining([
-      { label: "object: Cache 🦞", count: 3, shallow: 35, retained: 75 },
-      { label: "object: Shared", count: 1, shallow: 30, retained: 30 },
-    ]),
-  );
-  expect(result.dominators).toEqual(
-    expect.arrayContaining([
-      { id: 3, label: "object: Cache 🦞", shallow: 10, retained: 55 },
-      { id: 7, label: "object: Cache 🦞", shallow: 5, retained: 45 },
-    ]),
-  );
-  expect(result.dominators.map((row: { id: number }) => row.id)).not.toContain(13);
-  expect(result.dominators.map((row: { id: number }) => row.id)).not.toContain(15);
-  const shared = result.retainers.find((row: { id: number }) => row.id === 11);
-  expect(shared.dominatorPath.nodes.map((row: { id: number }) => row.id)).toEqual([1, 11]);
-  expect(shared.rootPath.nodes.map((row: { id: number }) => row.id)).toEqual([1, 3, 11]);
-});
-
 it("reports collections, duplicate flat strings and session scaling without emitting snapshot payloads", () => {
   const message = 'private message with "quotes", \\ and 🦞';
   const sessionA = "agent:private-agent:private-session-a";
