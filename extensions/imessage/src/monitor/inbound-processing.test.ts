@@ -132,6 +132,27 @@ describe("resolveIMessageInboundDecision echo detection", () => {
     expect(decision.kind).toBe("dispatch");
   });
 
+  it("matches direct self-chat echoes through the chat_id scope", async () => {
+    const echoHas = vi.fn<EchoHas>(
+      (scope, lookup) => scope === "default:chat_id:123" && lookup.messageId === "9001",
+    );
+
+    const decision = await resolveDecision({
+      message: {
+        id: 9001,
+        chat_id: 123,
+        chat_identifier: "+15555550123",
+        destination_caller_id: "+15555550123",
+        is_from_me: true,
+        text: "agent reply",
+      },
+      echoCache: { has: echoHas },
+    });
+
+    expect(decision).toEqual({ kind: "drop", reason: "agent echo in self-chat" });
+    expect(echoHas).toHaveBeenCalledWith("default:chat_id:123", { messageId: "9001" });
+  });
+
   it("logs reflected duplicate drops without message content", async () => {
     const selfChatCache = new SelfChatCache();
     const logVerbose = await captureDropLog();
