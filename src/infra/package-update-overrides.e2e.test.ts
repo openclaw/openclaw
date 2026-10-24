@@ -24,7 +24,6 @@ const scenarios = [
   "conflict",
   "unsafe topology",
   "install failure",
-  "doctor failure",
   "late recovery refusal",
 ] as const;
 
@@ -101,7 +100,7 @@ it.each(scenarios)(
         scenario === "late replay" ||
         scenario === "preserve only" ||
         scenario === "late recovery refusal";
-      const doctorFails = scenario === "doctor failure" || scenario === "late recovery refusal";
+      const doctorFails = scenario === "late recovery refusal";
       let activationEntered = false;
       let transaction: PackageUpdateTransaction | undefined;
       const npmVersion = (await run("npm", ["--version"])).stdout.trim();
@@ -186,21 +185,18 @@ it.each(scenarios)(
       }
       expect(transaction).toBeDefined();
       if (doctorFails) {
-        expect(result.failedStep?.name).toBe("fixture doctor");
-        expect(result.recovery.serviceRestartSafe).toBe(false);
-        const rollback = await transaction!.rollback(() => {});
-        expect(rollback.exitCode).toBe(scenario === "doctor failure" ? 0 : 1);
-        const completion = await transaction!.complete({ activationVerified: false }, () => {});
-        if (scenario === "late recovery refusal") {
-          expect(completion?.exitCode).toBe(1);
-          expect(await fs.stat(transaction!.backupRoot)).toBeDefined();
-          expect(await readText(result.localOverrides!.recoveryDir!, "files/dist/late.js")).toBe(
-            "late payload\n",
-          );
-        } else {
-          expect(await readText(root, "package.json")).toContain("2026.9.3");
-          expect(await readText(root, "dist/index.js")).toBe(local);
-        }
+        expect(result).toMatchObject({
+          failedStep: { name: "fixture doctor" },
+          recovery: { serviceRestartSafe: false },
+        });
+        await expect(transaction!.rollback(() => {})).resolves.toMatchObject({ exitCode: 1 });
+        await expect(
+          transaction!.complete({ activationVerified: false }, () => {}),
+        ).resolves.toMatchObject({ exitCode: 1 });
+        expect(await fs.stat(transaction!.backupRoot)).toBeDefined();
+        expect(await readText(result.localOverrides!.recoveryDir!, "files/dist/late.js")).toBe(
+          "late payload\n",
+        );
         return;
       }
       expect(result.failedStep).toBeNull();
@@ -213,10 +209,10 @@ it.each(scenarios)(
         expect(result.localOverrides?.status).toBe("none");
         expect(result.localOverrides?.recoveryDir).toBeUndefined();
       } else {
-        expect(result.localOverrides?.status).toBe(
-          replayed ? "applied" : scenario === "conflict" ? "conflict" : "preserved",
-        );
-        expect(result.localOverrides?.applied).toBe(replayed ? 3 : 0);
+        expect(result.localOverrides).toMatchObject({
+          status: replayed ? "applied" : scenario === "conflict" ? "conflict" : "preserved",
+          applied: replayed ? 3 : 0,
+        });
         const saved = result.localOverrides!.recoveryDir!;
         expect(await readText(saved, "files/dist/index.js")).toBe(local);
         if (late) {

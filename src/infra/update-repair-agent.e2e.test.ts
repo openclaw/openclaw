@@ -58,6 +58,8 @@ type TurnDelegation = {
   executor: { grant: UpdateCommandChildGrant; bindChild?: (pid: number) => void } | "unowned";
 };
 const requester = { channel: "synthetic", senderId: "owner" };
+const expectMissing = (file: string) =>
+  expect(fs.stat(file)).rejects.toMatchObject({ code: "ENOENT" });
 
 type RepairDiagnostics = {
   stdoutTail: string;
@@ -90,12 +92,10 @@ async function runRepairEnvelope(
       stdio: ["ignore", "pipe", "pipe", "ipc"],
     },
   );
-  const controller = new AbortController();
   let failure: unknown;
   let result: UpdateRepairResult | UpdateRepairTurnResult | undefined;
   const timer = setTimeout(() => {
     failure = new Error("Repair worker timed out.");
-    controller.abort(failure);
     child.kill("SIGKILL");
   }, 90_000);
   for (const [stream, field] of [
@@ -156,15 +156,11 @@ async function runRepairEnvelope(
               context: {},
               budget: updateRepairBudgetSchema.parse({ ...params.budget, maxTurns: 1 }),
             });
-          } else if (message.type === "validate") {
-            const validation = await params.validate(controller.signal);
-            child.send({ type: "validation-result", id: message.id, validation });
           } else if (message.type === "result" || message.type === "turn-result") {
             result = message.result;
           }
         })().catch((error: unknown) => {
           failure = error;
-          controller.abort(error);
           child.kill("SIGKILL");
         });
       });
@@ -351,12 +347,7 @@ async function exerciseRepair(
       const run =
         entry === "manual" || entry.endsWith("turn")
           ? createUpdateRun(
-              entry === "manual"
-                ? { trigger: "cli" }
-                : {
-                    trigger: "chat",
-                    origin: { requester },
-                  },
+              entry === "manual" ? { trigger: "cli" } : { trigger: "chat", origin: { requester } },
               { env: ledgerEnv },
             )
           : undefined;
@@ -415,14 +406,13 @@ async function exerciseRepair(
               fence,
               params.target.installRoot,
               async (grant, bindChild) => {
-                const envelope = (receiver?: {
-                  grant: UpdateCommandChildGrant;
-                  bindChild?: (pid: number) => void;
-                }) =>
+                const envelope = (
+                  receiver: Exclude<TurnDelegation["executor"], "unowned"> = { grant, bindChild },
+                ) =>
                   runRepairEnvelope(params, diagnostics, {
                     runId: entry === "unidentified-turn" ? undefined : run.runId,
                     admissionEnv: ledgerEnv,
-                    executor: receiver ?? { grant, bindChild },
+                    executor: receiver,
                   });
                 if (entry !== "wrong-receiver-turn") {
                   return envelope();
@@ -454,9 +444,6 @@ async function exerciseRepair(
         );
       };
       if (entry === "unowned-turn" || entry === "unidentified-turn") {
-        if (entry === "unowned-turn" && !run) {
-          throw new Error("Unowned repair requires an update run.");
-        }
         await expect(
           entry === "unowned-turn"
             ? runRepairEnvelope(params, diagnostics, {
@@ -467,7 +454,7 @@ async function exerciseRepair(
             : runTurn(),
         ).rejects.toThrow("worker exited 1");
         expect(requests).toEqual([]);
-        await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
+        await expectMissing(marker);
         return;
       }
       if (entry === "revoked-turn" || entry === "wrong-receiver-turn") {
@@ -481,7 +468,7 @@ async function exerciseRepair(
         } else {
           expect(requests).toEqual([]);
         }
-        await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
+        await expectMissing(marker);
         return;
       }
       const result =
@@ -502,7 +489,7 @@ async function exerciseRepair(
         });
         expect(params.validate).not.toHaveBeenCalled();
         expect(providerCalls).toEqual([]);
-        await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
+        await expectMissing(marker);
         expect(JSON.parse(await fs.readFile(targetConfigPath, "utf8"))).toEqual(config);
         return;
       }
@@ -517,9 +504,7 @@ async function exerciseRepair(
       );
       expect(requests.some((body) => body.tools?.some((tool) => tool.name === "exec"))).toBe(true);
       expect(issued.write).toBe(true);
-      await expect(
-        fs.stat(path.join(state.workspaceDir, "..", "outside-repair.txt")),
-      ).rejects.toMatchObject({ code: "ENOENT" });
+      await expectMissing(path.join(state.workspaceDir, "..", "outside-repair.txt"));
       expect(await fs.readFile(marker, "utf8")).toBe(expected);
     },
   );
