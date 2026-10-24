@@ -94,11 +94,12 @@ registerHooks({
 
 // Preserve canonical module identity and normal worker/admission paths on both arms.
 const { SessionManager } = await import("../../src/agents/sessions/session-manager.js");
-const { sessionManagerReadInitialContext } =
-  await import("../../src/agents/sessions/session-manager-current-turn.js");
+const sessionManagerReadInitialContext: typeof import("../../src/agents/sessions/session-manager-current-turn.js").sessionManagerReadInitialContext =
+  (await import("../../src/agents/sessions/session-manager-current-turn.js"))
+    .sessionManagerReadInitialContext;
 const { closeOpenClawAgentDatabaseByPathAsync } =
   await import("../../src/state/openclaw-agent-db.js");
-type Manager = InstanceType<typeof SessionManager>;
+type Manager = Awaited<ReturnType<typeof SessionManager.openBoundedAsync>>;
 type Context = Awaited<ReturnType<Manager[typeof sessionManagerReadInitialContext]>>;
 type Root = { manager: Manager; context?: Context };
 const target = {
