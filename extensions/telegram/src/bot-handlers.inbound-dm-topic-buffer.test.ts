@@ -35,7 +35,7 @@ function inboundContext(message: Message, updateId: number): Context {
     getFile: async () => {
       throw new Error("text messages do not download files");
     },
-  } as Context;
+  } as unknown as Context;
 }
 
 describe("private DM topic inbound debounce", () => {
@@ -134,7 +134,7 @@ describe("private DM topic inbound debounce", () => {
     const { handle } = createTelegramInboundPipeline({
       params,
       message,
-      authorization: { authorizeInboundMessage } as TelegramHandlerAuthorization,
+      authorization: { authorizeInboundMessage } as unknown as TelegramHandlerAuthorization,
     });
     let messageId = 0;
     const send = (threadId: number | undefined, text: string) => {
