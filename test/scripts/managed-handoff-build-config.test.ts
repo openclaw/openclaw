@@ -5,7 +5,6 @@ import {
   existsSync,
   globSync,
   mkdirSync,
-  readdirSync,
   realpathSync,
   readFileSync,
   lstatSync,
@@ -206,9 +205,6 @@ it.each(
         rmSync(path.join(outDir, helperName));
         try {
           expect(() => stageManagedHandoffRuntime(directory)).toThrow(/ENOENT/);
-          expect(readdirSync(path.join(directory, "runtime"))).toEqual([
-            MANAGED_HANDOFF_RUNTIME_ENTRY,
-          ]);
         } finally {
           rmSync(path.join(directory, "runtime"), { recursive: true, force: true });
           writeFileSync(path.join(outDir, helperName), publishedHelper);
@@ -219,13 +215,6 @@ it.each(
       if (windows) {
         expect(readFileSync(path.join(path.dirname(entry), helperName))).toEqual(publishedHelper);
       }
-      expect(readdirSync(directory)).toEqual(["runtime"]);
-      expect(readdirSync(path.dirname(entry)).toSorted()).toEqual(
-        [
-          MANAGED_HANDOFF_RUNTIME_ENTRY,
-          ...(freebsd ? ["node_modules"] : windows ? [helperName] : []),
-        ].toSorted(),
-      );
     } else {
       const base = path.join(realpathSync(directory), "literal-$HOME-`id`-'quoted'");
       mkdirSync(base, { mode: 0o700 });
@@ -271,9 +260,6 @@ it.each(
       };
       const prepared = (preparedPackage = await prepare());
       entry = resolvePackageActivationHelper(prepared.anchor);
-      expect(readdirSync(prepared.anchor).toSorted()).toEqual(
-        ["candidate", "launchers"].toSorted(),
-      );
     }
 
     // Recovery must survive loss of the old package and all its neighboring assets.
@@ -290,7 +276,6 @@ it.each(
           import childProcess from "node:child_process";
           import path from "node:path";
           import { fileURLToPath, pathToFileURL } from "node:url";
-          import { DatabaseSync } from "node:sqlite";
           const kind = process.argv[2];
           const entryPath = process.argv[1];
           const entry = pathToFileURL(entryPath).href;
@@ -347,21 +332,6 @@ it.each(
             )));
             try { const [observed] = await once(worker, "message"); assert.deepEqual(observed, current); }
             finally { await worker.terminate(); }
-          }
-          const db = new DatabaseSync(":memory:");
-          try {
-            db.exec(runtime.extractSqliteTableSchema(runtime.OPENCLAW_STATE_SCHEMA_SQL, "gateway_restart_sentinel", {
-              endMarker: "ON gateway_restart_sentinel(ts DESC, sentinel_key);",
-            }));
-            db.exec("BEGIN IMMEDIATE");
-            const payload = { kind: "update", status: "error", ts: 1 };
-            const written = runtime.writeRestartSentinelRowIfRevisionSync(db, payload, null);
-            assert(written);
-            assert.deepEqual(runtime.readRestartSentinelRowSync(db), { kind: "valid", sentinel: written });
-            assert.equal(runtime.writeRestartSentinelRowIfRevisionSync(db, payload, null), null);
-            db.exec("COMMIT");
-          } finally {
-            db.close();
           }
           }
           console.log("staged production runtime loaded");

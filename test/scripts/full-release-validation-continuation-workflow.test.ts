@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { cpSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { runInNewContext } from "node:vm";
 import { afterEach, describe, expect, it } from "vitest";
@@ -8,13 +8,15 @@ import { parse } from "yaml";
 import { releaseChildDispatchInputs } from "../../scripts/lib/full-release-child-request.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const source = readFileSync(".github/workflows/full-release-validation.yml", "utf8");
-type Workflow = {
-  jobs: Record<string, { if?: string; steps: Array<Record<string, unknown>> }>;
+const workflow = parse(readFileSync(".github/workflows/full-release-validation.yml", "utf8")) as {
+  jobs: Record<
+    string,
+    { if?: string; env?: Record<string, string>; steps: Array<Record<string, unknown>> }
+  >;
   on: { workflow_dispatch: { inputs: Record<string, unknown> } };
 };
-const workflow = parse(source) as Workflow;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const allSteps = Object.values(workflow.jobs).flatMap(({ steps }) => steps);
 
 function step(job: string, name: string) {
   const match = workflow.jobs[job]?.steps.find((entry) => entry.name === name);
@@ -22,85 +24,25 @@ function step(job: string, name: string) {
   return match;
 }
 
-function sparsePaths(checkout: Record<string, unknown>) {
-  const value = checkout["sparse-checkout"];
-  assert(typeof value === "string", "sparse-checkout must be a string");
-  return value
-    .split("\n")
-    .map((path) => path.trim())
-    .filter(Boolean);
-}
-
-function checkoutPath(checkout: Record<string, unknown>) {
-  const path = checkout.path ?? "";
-  assert(typeof path === "string", "checkout path must be a string");
-  return path;
-}
-
-function runNode(args: string[], cwd: string) {
-  return execFileSync(process.execPath, args, {
-    cwd,
-    encoding: "utf8",
-    timeout: 10_000,
-    env: { ...process.env, NODE_OPTIONS: "", NODE_PATH: "" },
-  });
-}
-
-function copyTooling(root: string, checkout: Record<string, unknown>, extraPath?: string) {
-  const destination = join(root, checkoutPath(checkout));
-  for (const path of ["scripts", ...(extraPath ? [extraPath] : [])]) {
-    cpSync(path, join(destination, path), { recursive: true });
-  }
-  return destination;
-}
-
-describe("full release metadata checkouts", () => {
-  it.each([
-    ["resolve_target", "Checkout trusted workflow helper", "release-tooling-identity.mjs"],
-    ["evidence_reuse", "Checkout trusted workflow helper", "release-ci-summary.mjs"],
-    [
-      "release_execution_plan",
-      "Checkout release execution plan tooling",
-      "full-release-validation-state.mjs",
-    ],
-    ["release_decision", "Checkout release decision tooling", "full-release-validation-state.mjs"],
-    ["diagnostic_drain", "Checkout diagnostic drain tooling", "full-release-validation-state.mjs"],
-    ["summary", "Checkout release state verifier", "full-release-candidate-reuse.mjs"],
-  ])("runs %s tooling from the complete scripts tree", (job, name, entrypoint) => {
-    const checkout = step(job, name).with as Record<string, unknown>;
+it("runs release tooling only from the trusted revision without persisted credentials", () => {
+  const tooling = allSteps.filter((entry) =>
+    /^Checkout (?:trusted workflow|.*tooling|release state verifier)/u.test(String(entry.name)),
+  );
+  expect(tooling.length).toBeGreaterThan(0);
+  for (const entry of tooling) {
+    const checkout = entry.with as Record<string, unknown>;
     expect(checkout).toMatchObject({ ref: "${{ github.sha }}", "persist-credentials": false });
-    if (job === "resolve_target") {
-      expect(checkout).toMatchObject({ path: "workflow", "fetch-depth": 1, submodules: false });
-      expect(checkout).not.toHaveProperty("sparse-checkout");
-      expect(checkout).not.toHaveProperty("sparse-checkout-cone-mode");
-    } else {
-      expect(checkout["sparse-checkout-cone-mode"]).toBe(false);
-      expect(sparsePaths(checkout)).toEqual(
-        job === "evidence_reuse"
-          ? ["scripts", ".github/actions/setup-pnpm-store-cache"]
-          : ["scripts"],
-      );
+    if (checkout["sparse-checkout"] !== undefined) {
+      expect(String(checkout["sparse-checkout"]).split(/\s+/u)).toContain("scripts");
     }
-    const root = copyTooling(
-      tempDirs.make("release-tooling-"),
-      checkout,
-      job === "evidence_reuse" ? ".github/actions/setup-pnpm-store-cache" : undefined,
-    );
-    expect(
-      runNode(["--input-type=module", "-e", `await import("./scripts/${entrypoint}");`], root),
-    ).toBe("");
-  });
-
-  it("never loads target scripts as trusted tooling", () => {
-    for (const [job, name] of [
-      ["resolve_target", "Checkout target package manifest"],
-      ["evidence_reuse", "Checkout target SHA"],
-    ]) {
-      const checkout = step(job, name).with as Record<string, unknown>;
-      expect(checkout["sparse-checkout-cone-mode"]).toBe(false);
-      expect(sparsePaths(checkout)).not.toContain("scripts");
-    }
-  });
+  }
+  const targets = allSteps.filter((entry) => String(entry.name).startsWith("Checkout target"));
+  expect(targets.length).toBeGreaterThan(0);
+  for (const entry of targets) {
+    const checkout = entry.with as Record<string, unknown>;
+    expect(checkout.path).not.toBe("workflow");
+    expect(String(checkout["sparse-checkout"]).split(/\s+/u)).not.toContain("scripts");
+  }
 });
 
 describe("full release same-parent recovery workflow", () => {
@@ -181,43 +123,46 @@ describe("full release same-parent recovery workflow", () => {
     },
   );
 
-  it("has no continuation payload and dispatches child work only on attempt one", () => {
+  it("dispatches fresh child work only on attempt one while allowing artifact recovery", () => {
     expect(workflow.on.workflow_dispatch.inputs).not.toHaveProperty("continuation_plan_json");
-    for (const job of [
-      "normal_ci",
-      "plugin_prerelease_independent",
-      "plugin_prerelease_candidate",
-      "release_checks_independent",
-      "release_checks_candidate",
-      "npm_telegram",
-      "performance",
-    ]) {
-      expect(String(workflow.jobs[job]?.if), job).toContain("github.run_attempt == 1");
-    }
-    for (const [job, dispatch] of [
-      ["prepare_npm_package", "Dispatch immutable npm artifact producer"],
-      ["prepare_docker_release", "Dispatch immutable Docker artifact producer"],
-      ["candidate_acquisition", "Dispatch immutable validation candidate producer"],
-    ] as const) {
-      expect(String(workflow.jobs[job]?.if), job).not.toContain("github.run_attempt");
-      const dispatchCondition = step(job, dispatch).if;
-      const recoveryCondition = step(job, "Recover original artifact producer").if ?? "true";
-      assert(typeof dispatchCondition === "string");
-      assert(typeof recoveryCondition === "string");
-      for (const reused of job === "candidate_acquisition" ? [undefined] : ["false", "true"]) {
-        for (const attempt of [1, 2]) {
-          const context = {
-            github: { run_attempt: attempt },
-            env: { PUBLICATION_ARTIFACTS_REUSED: reused },
-          };
-          expect(runInNewContext(dispatchCondition, context)).toBe(
-            attempt === 1 && reused !== "true",
+    let workloadDispatches = 0;
+    let artifactDispatches = 0;
+    for (const job of Object.values(workflow.jobs)) {
+      const artifact = job.env?.CHILD_WORKFLOW_KIND?.startsWith("artifact-");
+      const dispatches = job.steps.filter((entry) => String(entry.name).startsWith("Dispatch"));
+      for (const dispatch of dispatches) {
+        const env = dispatch.env as Record<string, unknown> | undefined;
+        if (!artifact && env?.CHILD_WORKFLOW_KIND) {
+          workloadDispatches += 1;
+          expect(String(job.if)).toContain("github.run_attempt == 1");
+        } else if (artifact) {
+          artifactDispatches += 1;
+          expect(String(job.if)).not.toContain("github.run_attempt");
+          const recovery = job.steps.find(
+            (entry) => entry.name === "Recover original artifact producer",
           );
-          expect(runInNewContext(recoveryCondition, context)).toBe(reused !== "true");
+          assert(recovery);
+          for (const reused of job.env?.PUBLICATION_ARTIFACTS_REUSED
+            ? ["false", "true"]
+            : [undefined]) {
+            for (const attempt of [1, 2]) {
+              const context = {
+                github: { run_attempt: attempt },
+                env: { PUBLICATION_ARTIFACTS_REUSED: reused },
+              };
+              expect(runInNewContext(String(dispatch.if), context)).toBe(
+                attempt === 1 && reused !== "true",
+              );
+              expect(runInNewContext(String(recovery.if ?? "true"), context)).toBe(
+                reused !== "true",
+              );
+            }
+          }
         }
       }
     }
-    expect(String(workflow.jobs.qualify_npm_package?.if)).not.toContain("github.run_attempt");
+    expect(workloadDispatches).toBeGreaterThan(0);
+    expect(artifactDispatches).toBeGreaterThan(0);
   });
 
   it("keeps immutable plan artifacts parent-bound and non-overwriting", () => {

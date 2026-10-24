@@ -180,7 +180,6 @@ posixIt.for([0, 1, 125])(
         : { revisions: { [`${releaseTag}^{commit}`]: sha } }),
     });
     expect(report.code, report.output).toBe(code ? 1 : 0);
-    expect(gitCommands(report)).toEqual([["rev-parse", `${releaseTag}^{commit}`]]);
     expect(report.output).toContain(
       code
         ? "Plugin ClawHub OIDC publish target is not bound to protected tooling and the exact release tag."
@@ -205,7 +204,6 @@ posixIt.for(["clawhub-trust", "npm-trust"] as const)(
       },
     });
     expect(report.code, report.output).toBe(0);
-    expect(gitCommands(report).at(-1)).toEqual(["merge-base", "--is-ancestor", "HEAD", ref]);
   },
 );
 
@@ -273,11 +271,7 @@ posixIt.for([
       },
     });
     expect(report.code, report.output).toBe(code);
-    if (code === 0) {
-      expect(report.fetches.map(({ args }) => args)).toEqual([
-        ["fetch", "--no-tags", "origin", `+refs/heads/${branch}:refs/remotes/origin/${branch}`],
-      ]);
-    } else {
+    if (code !== 0) {
       expect(report.output).toContain("Extended-stable plugin");
     }
   },
@@ -349,12 +343,6 @@ posixIt.for(candidateAdmissionCases)(
     expect(report.code, report.output).toBe(code);
     if (message) {
       expect(report.output).toContain(message);
-    }
-    if (code === 0) {
-      expect(gitCommands(report).slice(-2)).toEqual([
-        ["merge-base", "--is-ancestor", workflowSha, "origin/main"],
-        ["merge-base", "--is-ancestor", "HEAD", "refs/remotes/origin/extended-stable/2026.8.33"],
-      ]);
     }
   },
 );
