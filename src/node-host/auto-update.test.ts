@@ -2,6 +2,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import type { PreparedNodeRuntimeUpdate } from "./auto-update-install.js";
 import { startNodeHostAutoUpdate } from "./auto-update.js";
 import { useNodeUpdateRuntime } from "./auto-update.test-support.js";
@@ -314,14 +315,7 @@ describe("node auto-update discovery runtime", () => {
         vi.stubEnv("NPM_CONFIG_REGISTRY", registryUrl);
         mocks.fetch.mockResolvedValue(new Response(stdout));
       } else {
-        mocks.exec.mockResolvedValue({
-          stdout,
-          stderr: "",
-          code: 0,
-          signal: null,
-          killed: false,
-          termination: "exit",
-        });
+        mocks.exec.mockResolvedValue(createCommandResult({ stdout }));
       }
       start();
       await vi.advanceTimersByTimeAsync(0);

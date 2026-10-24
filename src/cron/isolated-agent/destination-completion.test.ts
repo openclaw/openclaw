@@ -1,5 +1,6 @@
 import path from "node:path";
 import { assert, expect, it, vi } from "vitest";
+import { projectAgentHarnessTranscriptMessageForDisplay } from "../../agents/harness/transcript-visibility.js";
 import { makeZeroUsageSnapshot } from "../../agents/usage.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
@@ -360,16 +361,20 @@ it.each(["persistent", "threaded", "stable", "tool-commit-failure", "cross-agent
           updateMode: "none",
           messages: [
             {
-              message: {
-                role: "assistant",
-                content: [{ type: "text", text: "Final destination report" }],
-                api: "openai-completions",
-                provider: "test",
-                model: "test",
-                stopReason: "stop",
-                usage: makeZeroUsageSnapshot(),
-                timestamp: 1000,
-              },
+              message: projectAgentHarnessTranscriptMessageForDisplay({
+                hidden: false,
+                inputProvenance: { kind: "internal_system", sourceTool: "cron_execution" },
+                message: {
+                  role: "assistant",
+                  content: [{ type: "text", text: "Final destination report" }],
+                  api: "openai-completions",
+                  provider: "test",
+                  model: "test",
+                  stopReason: "stop",
+                  usage: makeZeroUsageSnapshot(),
+                  timestamp: 1000,
+                },
+              }),
             },
           ],
         });
@@ -479,8 +484,20 @@ it.each(["persistent", "threaded", "stable", "tool-commit-failure", "cross-agent
           if (commitFailure) {
             expect(messages).toEqual([]);
           } else {
-            expect(messages).toHaveLength(1);
-            expect(readTranscriptEventMessage(messages[0])?.content).toEqual([
+            const transcriptMessages = messages.map(readTranscriptEventMessage);
+            // Keep scheduled execution in audit history, with one settled visible result.
+            expect(transcriptMessages).toHaveLength(mode === "persistent" ? 2 : 1);
+            if (mode === "persistent") {
+              expect(transcriptMessages[0]).toMatchObject({
+                display: false,
+                content: [{ type: "text", text: "Final destination report" }],
+              });
+            }
+            const visibleMessages = transcriptMessages.filter(
+              (message) => message && Reflect.get(message, "display") !== false,
+            );
+            expect(visibleMessages).toHaveLength(1);
+            expect(visibleMessages[0]?.content).toEqual([
               { type: "text", text: "Final destination report" },
             ]);
           }

@@ -21,6 +21,7 @@ import {
 } from "../api.js";
 import {
   matrixArtifactOptions,
+  matrixResult,
   matrixSourceIdentity,
 } from "./code-mode-model-matrix.test-support.js";
 
@@ -632,74 +633,62 @@ describe("Code Mode model matrix artifacts", () => {
         buildCliArtifacts: async () => {},
         readBuildSha256: async () => "build123",
         readSourceIdentity: matrixSourceIdentity("abc123"),
-        runCell: async (params) => ({
-          ...params.cell,
-          buildSha256: params.buildSha256,
-          gitSha: params.gitSha,
-          sourceDirty: false,
-          sourcePatchSha256: null,
-          codeModeEngaged: true,
-          elapsedMs: 10,
-          expected: "CM-EXPECTED",
-          final: "CM-EXPECTED",
-          failureCategory: null,
-          observedModel: "fixture",
-          observedProvider: "ollama",
-          oracle: {
-            answer: true,
-            effect: true,
-            engagement: true,
-            identity: true,
-            toolExecution: true,
-          },
-          passed: true,
-          status: "ok",
-          timestamp: "2026-07-28T12:00:00.000Z",
-          // This envelope models mixed outer/nested terminals, not nine outer calls.
-          ...(calls !== undefined
-            ? {
-                toolSummary: { calls, tools: ["exec", "read", "write"] },
-                bridgeCalls: { search: 0, describe: 0, call: 5 },
-              }
-            : {}),
-          ...(outerCalls !== undefined
-            ? {
-                gateway: {
-                  outerCalls,
-                  promptSha256: "prompt123",
-                  fixtureSha256: "fixture123",
-                  settings: {
-                    executor: "node",
-                    thinking: "off",
-                    timeoutSeconds: 10,
-                    execTimeoutMs: 10,
-                    maxOutputBytes: 1024,
-                    maxModelOutputTokens: 128,
-                    runtime: "openclaw",
-                    fast: false,
-                    allowedTools: ["read"],
+        runCell: async (params) =>
+          matrixResult(params.cell, {
+            buildSha256: params.buildSha256,
+            gitSha: params.gitSha,
+            codeModeEngaged: true,
+            elapsedMs: 10,
+            expected: "CM-EXPECTED",
+            final: "CM-EXPECTED",
+            observedModel: "fixture",
+            observedProvider: "ollama",
+            timestamp: "2026-07-28T12:00:00.000Z",
+            // This envelope models mixed outer/nested terminals, not nine outer calls.
+            ...(calls !== undefined
+              ? {
+                  toolSummary: { calls, tools: ["exec", "read", "write"] },
+                  bridgeCalls: { search: 0, describe: 0, call: 5 },
+                }
+              : {}),
+            ...(outerCalls !== undefined
+              ? {
+                  gateway: {
+                    outerCalls,
+                    promptSha256: "prompt123",
+                    fixtureSha256: "fixture123",
+                    settings: {
+                      executor: "node",
+                      thinking: "off",
+                      timeoutSeconds: 10,
+                      execTimeoutMs: 10,
+                      maxOutputBytes: 1024,
+                      maxModelOutputTokens: 128,
+                      runtime: "openclaw",
+                      fast: false,
+                      allowedTools: ["read"],
+                    },
+                    behavior: {},
+                    startupMs: 0,
+                    traceAvailable: true,
+                    interview: {
+                      traceAvailable: false,
+                      answer: null,
+                      rationaleReview: "required",
+                      checks: {},
+                    },
+                    artifacts: {
+                      taskTrace: "task.json",
+                      interviewTrace: "interview.json",
+                      receipts: "receipts.json",
+                      taskReceipts: "task-receipts.json",
+                      interviewReceipts: "interview-receipts.json",
+                      log: "gateway.log",
+                    },
                   },
-                  behavior: {},
-                  startupMs: 0,
-                  traceAvailable: true,
-                  interview: {
-                    traceAvailable: false,
-                    answer: null,
-                    rationaleReview: "required",
-                    checks: {},
-                  },
-                  artifacts: {
-                    taskTrace: "task.json",
-                    interviewTrace: "interview.json",
-                    receipts: "receipts.json",
-                    taskReceipts: "task-receipts.json",
-                    interviewReceipts: "interview-receipts.json",
-                    log: "gateway.log",
-                  },
-                },
-              }
-            : {}),
-        }),
+                }
+              : {}),
+          }),
       },
     );
     expect(result.exitCode).toBe(0);
@@ -752,36 +741,19 @@ describe("Code Mode model matrix artifacts", () => {
             if (cell.repetition === 1) {
               throw new Error("fixture exploded");
             }
-            return {
+            return matrixResult(cell, {
               buildSha256: "build123",
               bridgeCalls: { search: 0, describe: 0, call: 1 },
               codeModeEngaged: true,
               elapsedMs: 10,
               expected: "CM-EXPECTED",
-              failureCategory: null,
               final: "CM-EXPECTED",
               gitSha,
-              id: cell.id,
-              mode: cell.mode,
-              model: cell.model,
               observedModel: "qwen3.5:9b",
               observedProvider: "ollama",
-              oracle: {
-                answer: true,
-                effect: true,
-                engagement: true,
-                identity: true,
-                toolExecution: true,
-              },
-              passed: true,
-              repetition: cell.repetition,
-              sourceDirty: false,
-              sourcePatchSha256: null,
-              status: "ok",
-              task: cell.task,
               timestamp: "2026-07-28T12:00:00.000Z",
               toolSummary: { calls: 1, tools: ["exec"] },
-            } satisfies CodeModeMatrixCellResult;
+            }) satisfies CodeModeMatrixCellResult;
           },
         },
       );

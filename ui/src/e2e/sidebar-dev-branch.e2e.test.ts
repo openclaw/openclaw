@@ -76,7 +76,15 @@ suite.define(() => {
         await body.waitFor();
         await sidebar.locator(".sidebar-identity-card").waitFor();
         await sidebar.getByRole("button", { name: "Show more", exact: true }).click();
-        await sidebar.getByText("CI timer", { exact: true }).waitFor();
+        const last = sidebar.getByText("CI timer", { exact: true });
+        await expect
+          .poll(async () => {
+            await body.evaluate((element) => {
+              element.scrollTop = element.scrollHeight;
+            });
+            return last.isVisible();
+          })
+          .toBe(true);
         await takeControlUiScreenshotFrame(page, sidebar, [body], {
           animations: "disabled",
           scrollTo: sidebar.getByText("CI timer", { exact: true }),

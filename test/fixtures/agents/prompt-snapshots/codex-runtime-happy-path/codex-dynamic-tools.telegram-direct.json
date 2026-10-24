@@ -1019,8 +1019,32 @@
               "type": "integer"
             },
             "outcome": {
-              "enum": ["no_change", "progress", "done", "blocked", "needs_attention"],
-              "type": "string"
+              "anyOf": [
+                {
+                  "const": "no_change",
+                  "type": "string"
+                },
+                {
+                  "anyOf": [
+                    {
+                      "const": "progress",
+                      "type": "string"
+                    },
+                    {
+                      "const": "done",
+                      "type": "string"
+                    },
+                    {
+                      "const": "blocked",
+                      "type": "string"
+                    },
+                    {
+                      "const": "needs_attention",
+                      "type": "string"
+                    }
+                  ]
+                }
+              ]
             },
             "runId": {
               "description": "Run id from action=\"run\" to read with action=\"runs\"",
@@ -1038,6 +1062,7 @@
             "summary": {
               "maxLength": 2000,
               "minLength": 1,
+              "pattern": "\\S",
               "type": "string"
             },
             "text": {

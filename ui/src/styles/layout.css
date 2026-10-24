@@ -1695,6 +1695,7 @@ openclaw-settings-save-indicator:empty {
    when rows stream in or grow a second subtitle line after first layout, so a
    grid list keeps a stale height and the next section paints over its rows. */
 .sidebar-recent-sessions__list,
+.sidebar-session-window,
 .sidebar-session-tree,
 .sidebar-session-tree__children,
 .sidebar-session-tree__list,

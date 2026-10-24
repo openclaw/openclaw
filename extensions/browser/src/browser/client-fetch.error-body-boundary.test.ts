@@ -1,5 +1,6 @@
 import http from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../../test-support/hanging-loopback-server.js";
 
 const authMocks = vi.hoisted(() => ({
   loadConfig: vi.fn(() => ({})),
@@ -117,14 +118,8 @@ describe("fetchHttpJson error body boundary", () => {
       const success = req.url === "/success-large";
       streamBody(res, success, streams[success ? "success-large" : "large"]);
     });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("expected loopback server address");
-    }
-    baseUrl = `http://127.0.0.1:${address.port}`;
+    const port = await listenOnLoopback(server);
+    baseUrl = `http://127.0.0.1:${port}`;
   });
 
   afterEach(async () => {

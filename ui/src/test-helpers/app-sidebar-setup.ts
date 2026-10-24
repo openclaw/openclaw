@@ -25,6 +25,24 @@ export function setupSidebarTest() {
     ].map((name) => [name, Object.getOwnPropertyDescriptor(globalThis, name)]);
     // Settle jsdom frames in microtasks; yield recursive overlay frames to avoid starvation.
     if (!("__vitest_browser__" in globalThis)) {
+      // Domain fixtures inspect the full supplied page. Browser tests own bounded
+      // viewport/scroll proof; jsdom otherwise reports a zero-sized viewport.
+      for (const property of [
+        "clientHeight",
+        "offsetHeight",
+        "clientWidth",
+        "offsetWidth",
+      ] as const) {
+        vi.spyOn(HTMLElement.prototype, property, "get").mockImplementation(function (
+          this: HTMLElement,
+        ) {
+          return this.matches(".sidebar-shell__body")
+            ? property.endsWith("Height")
+              ? 10_000
+              : 320
+            : 0;
+        });
+      }
       // Keep our frame scheduler; jsdom may retire a native timer after fake-clock installation.
       vi.setConfig({
         fakeTimers: {

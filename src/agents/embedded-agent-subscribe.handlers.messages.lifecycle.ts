@@ -115,7 +115,7 @@ export function handleMessageEnd(
   const assistantPhase = resolveAssistantMessagePhase(assistantMessage);
   const suppressVisibleAssistantOutput = assistantPhase === "commentary";
   const suppressDeterministicApprovalOutput = shouldSuppressDeterministicApprovalOutput(ctx.state);
-  const suppressSourceReplyOutput = shouldSuppressSourceReplyOutput(ctx);
+  const suppressSourceReplyOutput = shouldSuppressSourceReplyOutput(ctx, assistantMessage);
   const canEmitReply = () =>
     !ctx.params.silentExpected &&
     !suppressDeterministicApprovalOutput &&

@@ -237,11 +237,7 @@ describe("device-pair notify persistence", () => {
       ["chat-123", "persistent"],
       ["missing", "off"],
     ]) {
-      const status = await handleNotifyCommand({
-        api,
-        ctx: { channel: "telegram", senderId },
-        action: "status",
-      });
+      const status = await notifyCommand(api, "status", { senderId });
       expect(status.text).toContain(`Mode: ${mode}`);
       expect(status.text).toContain("Subscribers: 1");
       expect(status.text).toContain("Pending requests: 0");
@@ -500,14 +496,7 @@ describe("device-pair notify persistence", () => {
       ts: 2,
     };
     const api = createApi(sendText, storage.openKeyedStore);
-    await handleNotifyCommand({
-      api,
-      ctx: {
-        channel: "telegram",
-        senderId: "chat-123",
-      },
-      action: "on",
-    });
+    await notifyCommand(api, "on");
     listDevicePairingMock.mockResolvedValue({ pending: [firstRequest], paired: [] });
     let service = createNotifier(api);
 
@@ -557,22 +546,8 @@ describe("device-pair notify persistence", () => {
       return firstSend.promise;
     });
     const api = createApi(sendText, storage.openKeyedStore);
-    await handleNotifyCommand({
-      api,
-      ctx: { channel: "telegram", senderId: "old-chat" },
-      action: "on",
-    });
-    listDevicePairingMock.mockResolvedValue({
-      pending: [
-        {
-          requestId: "request-1",
-          deviceId: "device-1",
-          publicKey: "public-key-1",
-          ts: 2_000,
-        },
-      ],
-      paired: [],
-    });
+    await notifyCommand(api, "on", { senderId: "old-chat" });
+    setPendingRequests({});
     const service = createNotifier(api);
 
     service.start();
@@ -607,28 +582,11 @@ describe("device-pair notify persistence", () => {
     });
     const api = createApi(sendText, storage.openKeyedStore);
     api.logger.warn = storage.pollFailed;
-    await handleNotifyCommand({
-      api,
-      ctx: { channel: "telegram", senderId: "chat-123" },
-      action: "once",
-    });
-    listDevicePairingMock.mockResolvedValue({
-      pending: [
-        {
-          requestId: "request-1",
-          deviceId: "device-1",
-          publicKey: "public-key-1",
-          ts: 2_000,
-        },
-        {
-          requestId: "request-2",
-          deviceId: "device-2",
-          publicKey: "public-key-2",
-          ts: 2_001,
-        },
-      ],
-      paired: [],
-    });
+    await notifyCommand(api, "once");
+    setPendingRequests(
+      {},
+      { requestId: "request-2", deviceId: "device-2", publicKey: "public-key-2", ts: 2_001 },
+    );
     const service = createNotifier(api);
 
     try {
@@ -638,11 +596,7 @@ describe("device-pair notify persistence", () => {
       expect(sendText).toHaveBeenCalledTimes(1);
 
       vi.setSystemTime(1_000);
-      await handleNotifyCommand({
-        api,
-        ctx: { channel: "telegram", senderId: "chat-123" },
-        action: "once",
-      });
+      await notifyCommand(api, "once");
       firstSend.resolve({ channel: "telegram", to: "chat-123" });
       await storage.requestStored("request-1");
       await vi.advanceTimersByTimeAsync(0);
@@ -711,23 +665,10 @@ describe("device-pair notify persistence", () => {
     api.logger.warn = storage.pollFailed;
     const subscriber: NotifySubscription = { to: "chat-123", mode: "once", addedAtMs: 1_000 };
     await openSubscriberStore().register(notifySubscriberStoreKey(subscriber), subscriber);
-    listDevicePairingMock.mockResolvedValue({
-      pending: [
-        {
-          requestId: "request-1",
-          deviceId: "device-1",
-          publicKey: "public-key-1",
-          ts: 1_001,
-        },
-        {
-          requestId: "request-2",
-          deviceId: "device-2",
-          publicKey: "public-key-2",
-          ts: 1_002,
-        },
-      ],
-      paired: [],
-    });
+    setPendingRequests(
+      { ts: 1_001 },
+      { requestId: "request-2", deviceId: "device-2", publicKey: "public-key-2", ts: 1_002 },
+    );
     const service = createNotifier(api);
 
     try {

@@ -1,5 +1,4 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
   ProviderRuntimeModel,
   ProviderResolveTransportTurnStateContext,
@@ -16,6 +15,7 @@ import {
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAIImageGenerationProvider } from "./image-generation-provider.js";
+import { openAIImageConfig } from "./image-generation-provider.test-support.js";
 import plugin from "./index.js";
 
 const OPENAI_FRIENDLY_PROMPT_OVERLAY = GPT5_FRIENDLY_CHAT_PROMPT_OVERLAY;
@@ -183,16 +183,7 @@ describe("openai plugin", () => {
         provider: "openai",
         model: "gpt-image-2",
         prompt: "draw a cat",
-        cfg: {
-          models: {
-            providers: {
-              openai: {
-                baseUrl: "http://127.0.0.1:8080/v1",
-                models: [],
-              },
-            },
-          },
-        } satisfies OpenClawConfig,
+        cfg: openAIImageConfig({ baseUrl: "http://127.0.0.1:8080/v1" }),
       }),
     ).rejects.toThrow("Blocked hostname or private/internal/special-use IP address");
 
