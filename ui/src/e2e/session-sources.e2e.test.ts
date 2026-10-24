@@ -80,7 +80,7 @@ suite.define(() => {
     await suite.withPage({}, async ({ page, context }) => {
       await installMockGateway(page, { featureMethods, methodResponses });
       await page.goto(new URL(controlUiSessionPath("agent:main:main"), suite.server.baseUrl).href);
-      const trigger = page.getByRole("button", { name: "Filter & sort", exact: true });
+      const trigger = page.getByRole("button", { name: /^Filter & sort · /, exact: true });
       const item = page.getByRole("link", { name: "Session sources", exact: true });
       await trigger.click();
       const originalUrl = page.url();
@@ -137,7 +137,7 @@ suite.define(() => {
     await suite.withPage({ viewport: { width: 1440, height: 1000 } }, async ({ page }) => {
       const gateway = await installMockGateway(page, { featureMethods, methodResponses });
       await page.goto(`${suite.server.baseUrl}chat`);
-      await page.getByRole("button", { name: "Filter & sort", exact: true }).click();
+      await page.getByRole("button", { name: /^Filter & sort · /, exact: true }).click();
       await page.getByRole("link", { name: "Session sources", exact: true }).click();
       await waitForControlUiSettingsTakeover(page);
       await expect.poll(() => new URL(page.url()).hash).toBe("#settings-session-sources");

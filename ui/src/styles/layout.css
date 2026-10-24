@@ -1298,7 +1298,6 @@ openclaw-settings-save-indicator:empty {
   background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
 }
 
-/* The filter summary names the active filter; the funnel only keeps its dot. */
 .sidebar-session-toolbar__button:hover,
 .sidebar-session-toolbar__button:focus-visible,
 .sidebar-session-toolbar__button[aria-haspopup][aria-expanded="true"],
