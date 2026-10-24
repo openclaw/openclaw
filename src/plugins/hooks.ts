@@ -78,6 +78,7 @@ import type {
   PluginHookResolveExecEnvEvent,
 } from "./hook-types.js";
 import { getPluginValueInstance, runPluginCleanup } from "./plugin-instance-scope.js";
+import { retryAfterPluginReplacement } from "./plugin-replacement-retry.js";
 import {
   type PluginSubagentRequesterContext,
   withPluginSubagentRequesterContext,
@@ -175,6 +176,52 @@ export function getToolHookMatcherScope(
   return createPluginToolMatcherScope(
     getHooksForName(registry, hookName).map((registration) => registration.matcher),
   );
+}
+
+/** One dispatch's selection, and the plugins it has already waited out a reload for. */
+type HookDispatchSelection<K extends PluginHookName> = {
+  dispatched: readonly PluginHookRegistration<K>[];
+  /** Must apply the dispatch's own eligibility and authority filters. */
+  reselect: () => readonly PluginHookRegistration<K>[];
+  replaced: Set<string>;
+};
+
+function selectHookDispatch<K extends PluginHookName>(
+  dispatched: readonly PluginHookRegistration<K>[],
+  reselect: () => readonly PluginHookRegistration<K>[],
+): HookDispatchSelection<K> {
+  return { dispatched, reselect, replaced: new Set() };
+}
+
+/**
+ * Invokes one dispatched hook. When a pending reload refuses it, retries once
+ * with the same plugin's registration at the same position in `reselect()`.
+ * Later registrations of a plugin this dispatch already waited for go straight
+ * to the reselected registration, since their selected instance has retired.
+ */
+function invokeHookAcrossReplacement<K extends PluginHookName, T>(
+  hook: PluginHookRegistration<K>,
+  selection: HookDispatchSelection<K>,
+  invoke: (registration: PluginHookRegistration<K>) => T | PromiseLike<T>,
+): Promise<T | undefined> {
+  const { dispatched, reselect, replaced } = selection;
+  const invokeCurrent = () => {
+    const position = dispatched.filter((entry) => entry.pluginId === hook.pluginId).indexOf(hook);
+    const current = reselect().filter((entry) => entry.pluginId === hook.pluginId)[position];
+    // A replacement that dropped this registration has nothing left to run.
+    return current ? invoke(current) : undefined;
+  };
+  if (replaced.has(hook.pluginId)) {
+    return Promise.resolve(invokeCurrent());
+  }
+  let attempt = 0;
+  return retryAfterPluginReplacement(() => {
+    if (attempt++ === 0) {
+      return invoke(hook);
+    }
+    replaced.add(hook.pluginId);
+    return invokeCurrent();
+  });
 }
 
 function getHooksForNameAndPlugin<K extends PluginHookName>(
@@ -537,17 +584,21 @@ export function createHookRunner(
 
     logger?.debug?.(`[hooks] running ${hookName} (${hooks.length} handlers)`);
 
+    const selection = selectHookDispatch(hooks, () =>
+      getHooksForName(registry, hookName, undefined, matcherToolName),
+    );
     const promises = hooks.map(async (hook) => {
       const projected = projectContext?.(hook, ctx);
       try {
-        const invoke = () =>
-          (hook.handler as (event: unknown, ctx: unknown) => Promise<void> | void)(
+        const invoke = (registration: PluginHookRegistration<K>) =>
+          (registration.handler as (event: unknown, ctx: unknown) => Promise<void> | void)(
             event,
             projected?.context ?? ctx,
           );
-        const handlerPromise = Promise.resolve(
-          hookName === "gateway_stop" ? runPluginCleanup(hook.handler, invoke) : invoke(),
-        );
+        const handlerPromise =
+          hookName === "gateway_stop"
+            ? Promise.resolve(runPluginCleanup(hook.handler, () => invoke(hook)))
+            : invokeHookAcrossReplacement(hook, selection, invoke);
         const promise = projected ? handlerPromise.finally(projected.dispose) : handlerPromise;
         await awaitHook(hook, promise, voidHookTimeoutMsByHook[hookName], {
           unref: optionsValue.unrefTimeout ?? true,
@@ -615,12 +666,15 @@ export function createHookRunner(
 
     let result: HookResult<K> | undefined;
 
+    const selection = selectHookDispatch(selectedHooks, () => {
+      const current = getHooksForName(registry, hookName, undefined, matcherToolName);
+      return policy.includeRegistration ? current.filter(policy.includeRegistration) : current;
+    });
     for (const hook of selectedHooks) {
       policy.assertHandlerBoundaryActive?.();
       readClaimingHookAdmission(ctx)?.assertCurrent?.();
       let shouldStop = false;
       try {
-        const handler = hook.handler as (event: unknown, ctx: unknown) => Promise<HookResult<K>>;
         const handlerEvent = policy.eventForHandler
           ? policy.eventForHandler(dispatchEvent, result)
           : policy.isolateEventPerHandler
@@ -641,7 +695,12 @@ export function createHookRunner(
           : ctx;
         let handlerResult: HookResult<K> | undefined;
         try {
-          const promise = Promise.resolve(handler(handlerEvent, handlerContext));
+          const promise = invokeHookAcrossReplacement(hook, selection, (registration) =>
+            (registration.handler as (event: unknown, ctx: unknown) => Promise<HookResult<K>>)(
+              handlerEvent,
+              handlerContext,
+            ),
+          );
           handlerResult = await awaitHook(hook, promise, modifyingHookTimeoutMsByHook[hookName]);
         } finally {
           // Expiry closes this handler even while its work or a later handler continues.
@@ -652,9 +711,7 @@ export function createHookRunner(
 
         policy.onHandlerResult?.({ hook, result: handlerResult });
 
-        const shouldMergeResult =
-          handlerResult !== undefined && (handlerResult !== null || policy.mergeNullResults);
-        if (shouldMergeResult) {
+        if (handlerResult !== undefined && (handlerResult !== null || policy.mergeNullResults)) {
           if (policy.mergeResults) {
             result = policy.mergeResults(result, handlerResult, hook, dispatchEvent);
           } else {
@@ -722,6 +779,7 @@ export function createHookRunner(
     | { status: "error"; error: string }
   > {
     const admission = readClaimingHookAdmission(ctx);
+    const selection = selectHookDispatch(hooks, () => getHooksForName(registry, hookName, ctx));
     let firstError: string | undefined;
     for (const hook of hooks) {
       // Host admission failures end dispatch; plugin fail-open policy cannot swallow them.
@@ -732,8 +790,11 @@ export function createHookRunner(
       let handlerResult: TResult | void = undefined;
       try {
         const invokeHandler = async (): Promise<TResult | void> => {
-          const promise = Promise.resolve(
-            (hook.handler as (event: unknown, ctx: unknown) => Promise<TResult | void>)(event, ctx),
+          const promise = invokeHookAcrossReplacement(hook, selection, (registration) =>
+            (registration.handler as (event: unknown, ctx: unknown) => Promise<TResult | void>)(
+              event,
+              ctx,
+            ),
           );
           return await awaitHook(hook, promise);
         };
