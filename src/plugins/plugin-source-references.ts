@@ -534,7 +534,7 @@ export function visitPluginSourceReferences(
   for (const reference of staticImports) {
     visitReference(reference, "import");
   }
-  const visit = (node: AnyNode) => {
+  const visit = (node: AnyNode, discardedResult = false) => {
     if (node.type === "ImportExpression") {
       const reference = staticString(node.source);
       if (reference !== undefined) {
@@ -555,7 +555,7 @@ export function visitPluginSourceReferences(
             callee.object.name === "require" &&
             name === "resolve";
       const asset =
-        (node.type === "NewExpression" && name === "URL") ||
+        (node.type === "NewExpression" && name === "URL" && !discardedResult) ||
         ["readFile", "readFileSync", "createReadStream"].includes(name);
       // Trace module references and explicit asset reads. Ordinary strings
       // (labels, descriptions, prompts) never confer ownership of sibling files.
@@ -575,7 +575,11 @@ export function visitPluginSourceReferences(
       }
     }
     for (const child of sourceChildren(node)) {
-      visit(child);
+      // An unused URL or its .href is not an asset read; its arguments still need inspection.
+      const discardedChild =
+        (node.type === "ExpressionStatement" && child === node.expression) ||
+        (discardedResult && node.type === "MemberExpression" && child === node.object);
+      visit(child, discardedChild);
     }
   };
   visit(tree);

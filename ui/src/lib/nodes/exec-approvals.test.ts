@@ -4,11 +4,53 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import {
   createInitialDevicesState,
   loadExecApprovals,
+  removeExecApprovalsFormValue,
   saveExecApprovals,
   updateExecApprovalsFormValue,
 } from "./page-operations.ts";
 
 describe("host-native exec approvals state", () => {
+  it("copies only the edited policy path and keeps earlier receipts immutable", async () => {
+    const first = Object.freeze({ pattern: "old" });
+    const second = Object.freeze({ pattern: "keep" });
+    const file = Object.freeze({
+      version: 1,
+      defaults: Object.freeze({ security: "deny" }),
+      agents: Object.freeze({
+        main: Object.freeze({ allowlist: Object.freeze([first, second]) }),
+        other: Object.freeze({ security: "allowlist" }),
+      }),
+    });
+    const request = vi.fn().mockResolvedValue({
+      path: "/synthetic/approvals",
+      exists: true,
+      hash: "original",
+      file,
+    });
+    const state = createInitialDevicesState({ client: { request }, connected: true });
+    await loadExecApprovals(state);
+    expect(state.execApprovalsForm).toBe(file);
+
+    updateExecApprovalsFormValue(state, ["agents", "main", "allowlist", 0, "pattern"], "edited");
+    const edited = state.execApprovalsForm;
+    expect(edited?.agents?.main?.allowlist).toEqual([{ pattern: "edited" }, { pattern: "keep" }]);
+    expect(edited?.defaults).toBe(file.defaults);
+    expect(edited?.agents?.other).toBe(file.agents.other);
+    expect(edited?.agents?.main?.allowlist?.[1]).toBe(second);
+    expect(first.pattern).toBe("old");
+
+    removeExecApprovalsFormValue(state, ["agents", "main", "allowlist", 0]);
+    expect(state.execApprovalsForm?.agents?.main?.allowlist).toEqual([{ pattern: "keep" }]);
+    expect(edited?.agents?.main?.allowlist).toHaveLength(2);
+    const removed = state.execApprovalsForm;
+    removeExecApprovalsFormValue(state, ["agents", "missing", "allowlist", 0]);
+    updateExecApprovalsFormValue(state, ["version", "invalid"], true);
+    updateExecApprovalsFormValue(state, [], undefined);
+    expect(state.execApprovalsForm).toBe(removed);
+    expect(state.execApprovalsDirty).toBe(true);
+    expect(file.agents.main.allowlist).toEqual([{ pattern: "old" }, { pattern: "keep" }]);
+  });
+
   it("keeps an edited policy on its original base when a refresh sees another writer", async () => {
     let hash = "original";
     const request = vi.fn().mockImplementation(async () => ({

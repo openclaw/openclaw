@@ -472,8 +472,21 @@ export type WorkerProvider = {
     signal: AbortSignal;
     assertCurrent: () => void;
   }) => Promise<void>;
+  /** Opt in to the cleanup-acceptance notification during session reclaim. */
+  supportsCleanupAcceptance?: true;
   /** Idempotent; resolves only after the provider can prove teardown. */
-  destroy: (lease: { leaseId: string; profile: WorkerProfile }) => Promise<void>;
+  destroy: (lease: {
+    leaseId: string;
+    profile: WorkerProfile;
+    /**
+     * Optional notification that cleanup is accepted and no longer needs the session.
+     * The host may reclaim the session, but retains this operation until its promise settles.
+     * Call only after durable provider acceptance (or a claimed, provider-owned capture).
+     * Fulfillment must still prove physical teardown; rejection remains retryable.
+     * Providers without this capability ignore the callback and keep blocking reclaim.
+     */
+    onCleanupAccepted?: () => void;
+  }) => Promise<void>;
   /** Maximum core wait for teardown, including provider-owned checkpointing and cleanup. */
   resolveDestroyTimeoutMs?: (profile: WorkerProfile) => number;
 };

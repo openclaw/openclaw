@@ -66,6 +66,7 @@ async function listAgents(
   expected: string[],
   client = readerClient(),
   catalog: GatewayRequestContext["readPreparedGatewayModelCatalog"] = async () => ({ entries: [] }),
+  batchCatalog?: GatewayRequestContext["readPreparedGatewayModelCatalogBatch"],
 ) {
   const respond = await callAgentHandler(
     expectDefined(agentsHandlers["agents.list"], "agents.list handler"),
@@ -76,6 +77,7 @@ async function listAgents(
       context: {
         getRuntimeConfig: cfg,
         readPreparedGatewayModelCatalog: catalog,
+        readPreparedGatewayModelCatalogBatch: batchCatalog,
       } as GatewayRequestContext,
     },
   );
@@ -96,6 +98,44 @@ test.each([
   "agents.list scopes discovery for agents=$agents system=$system",
   async ({ agents, system, expected }) => {
     await listAgents(() => roleConfig(agents), expected, readerClient(system));
+  },
+);
+
+test.each(["single", "batch"] as const)(
+  "agents.list returns an empty roster without waiting for the %s catalog reader",
+  async (mode) => {
+    const entered = createDeferred();
+    const released = createDeferred();
+    const waitForCatalog = async () => {
+      entered.resolve();
+      await released.promise;
+    };
+    const response = listAgents(
+      () => roleConfig([]),
+      [],
+      readerClient(),
+      async () => {
+        await waitForCatalog();
+        return { entries: [] };
+      },
+      mode === "batch"
+        ? async () => {
+            await waitForCatalog();
+            return [];
+          }
+        : undefined,
+    );
+    try {
+      expect(
+        await Promise.race([
+          response.then(() => "responded"),
+          entered.promise.then(() => "waiting for catalog"),
+        ]),
+      ).toBe("responded");
+    } finally {
+      released.resolve();
+      await response;
+    }
   },
 );
 

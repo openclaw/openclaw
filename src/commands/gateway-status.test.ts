@@ -315,6 +315,10 @@ describe("gateway-status command", () => {
     expect(runtimeLogs.join("\n")).toContain("Gateway Status");
     expect(runtimeLogs.join("\n")).toContain("Discovery (this machine)");
     expect(runtimeLogs.join("\n")).toContain("Targets");
+    expect(stripAnsi(runtimeLogs.join("\n"))).toContain(
+      "Remote (configured) wss://remote.example:18789",
+    );
+    expect(stripAnsi(runtimeLogs.join("\n"))).toContain("Remote over SSH ws://127.0.0.1:18789");
   });
 
   it("warns with diagnostic next steps when no probes or Bonjour discovery find a gateway", async () => {
@@ -725,7 +729,7 @@ describe("gateway-status command", () => {
   });
 
   it("uses local TLS target strategy and fingerprint for local loopback probes", async () => {
-    const { runtime } = createRuntimeCapture();
+    const { runtime, runtimeLogs } = createRuntimeCapture();
     readBestEffortConfig.mockResolvedValueOnce(localGatewayConfig("ltok", true) as never);
 
     await runGatewayStatus(runtime, { timeout: "15000", json: true });
@@ -736,6 +740,9 @@ describe("gateway-status command", () => {
     expect(localProbeCall.tlsFingerprint).toBe("sha256:local-fingerprint");
     expect(localProbeCall.timeoutMs).toBeGreaterThan(0);
     expect(localProbeCall.timeoutMs).toBeLessThanOrEqual(15_000);
+    expect(JSON.parse(runtimeLogs.join("\n")).network.localLoopbackUrl).toBe(
+      "wss://127.0.0.1:18789",
+    );
   });
 
   it("warns when local TLS is enabled but the certificate fingerprint cannot be loaded", async () => {

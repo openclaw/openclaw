@@ -41,9 +41,11 @@ packages/gateway-protocol/src/schema/user-profile-constants.ts
 packages/gateway-protocol/src/schema/worker-admission.ts
 packages/gateway-protocol/src/schema/worker-computer.ts
 packages/gateway-protocol/src/schema/worker-gateway-tool.ts
+packages/gateway-protocol/src/schema/worker-inference.ts
 packages/gateway-protocol/src/schema/worker-protocol-constants.ts
 packages/gateway-protocol/src/schema/worker-protocol-primitives.ts
 packages/gateway-protocol/src/schema/worker-session-tools.ts
+packages/gateway-protocol/src/schema/worker-turn-admission.ts
 packages/gateway-protocol/src/schema/worktrees.ts
 packages/gateway-protocol/src/secret-ref-contract.ts
 packages/gateway-protocol/src/session-agent-status.ts
@@ -250,6 +252,7 @@ scripts/watch-pr-ci.mjs
 scripts/watch-pr-ci.mts
 scripts/windows-cmd-helpers.mjs
 src/acp/event-ledger-bytes.ts
+src/agents/agent-activity-delegation.ts
 src/agents/agent-bundle-mcp-names.ts
 src/agents/agent-create-error.ts
 src/agents/agent-delete-session-store-safety.kernel.ts
@@ -996,6 +999,7 @@ src/infra/gateway-supervision.ts
 src/infra/git-commit.ts
 src/infra/git-content-budget.ts
 src/infra/git-exec.ts
+src/infra/git-maintenance-env.ts
 src/infra/git-network-retry.ts
 src/infra/git-operation-timing.ts
 src/infra/git-operation.worker.ts
@@ -1995,6 +1999,7 @@ src/state/openclaw-state-db-startup-checkpoint.ts
 src/state/openclaw-state-db-table-retirements.ts
 src/state/openclaw-state-db-task-delivery-recovery.ts
 src/state/openclaw-state-db-transaction.ts
+src/state/openclaw-state-postgres-admission.ts
 src/state/openclaw-state-postgres-snapshot-context.ts
 src/state/openclaw-state-postgres-snapshot.ts
 src/state/openclaw-state-schema-retired.ts
@@ -2356,6 +2361,7 @@ packages/gateway-protocol/src/schema/users.ts
 packages/gateway-protocol/src/schema/wizard.ts
 packages/markdown-core/src/fences.ts
 packages/markdown-core/src/image-code-retention.ts
+packages/markdown-core/src/list-code-retention.ts
 packages/markdown-core/src/reference-definition-retention.ts
 packages/markdown-core/src/reasoning-tag-parser.ts
 packages/markdown-core/src/reasoning-tags.ts

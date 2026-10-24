@@ -1,5 +1,6 @@
 // Restart health probes for gateway service restarts and port listener recovery.
 import type { ChildProcess } from "node:child_process";
+import { resolveGatewayStartupTiming } from "../../commands/gateway-startup-timing.js";
 import { resolveGatewayServiceProbeHosts } from "../../daemon/gateway-service-probe-hosts.js";
 import type { GatewayService } from "../../daemon/service.js";
 import { createConfiguredGatewayLocalProbe } from "../../gateway/local-http-probe.js";
@@ -147,7 +148,12 @@ export async function waitForGatewayHealthyRestart(
   const delayMs = params.delayMs ?? DEFAULT_RESTART_HEALTH_DELAY_MS;
   // A longer update budget must not make an old heartbeat count as fresh progress.
   const progressWindowMs = attempts * delayMs;
-  const standardDeadlineMs = timeoutMs ?? progressWindowMs;
+  // Doctor restoration uses this owner without supplying lifecycle-specific budgets.
+  const standardDeadlineMs =
+    timeoutMs ??
+    (params.attempts === undefined && process.platform === "win32"
+      ? resolveGatewayStartupTiming().deadlineMs
+      : progressWindowMs);
   // Native inspection shares the readiness deadline, not a network request's cap.
   const inspectionTimeoutMs = () =>
     params.deadline

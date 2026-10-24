@@ -7,6 +7,7 @@ import { localParticipantIdentityKey } from "../../../lib/chat/sender-label.ts";
 import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
 import { chatItemGroups } from "../chat-agent-run-grouping.ts";
 import { assistantGroupCanOwnActiveRunStatus } from "../chat-assistant-reply.ts";
+import { projectDelegatedTasks } from "../chat-delegation.ts";
 import { resolveTurnRecap, shouldRenderQueuedSendInThread } from "../chat-progress.ts";
 import { projectChatReasoning } from "../chat-reasoning.ts";
 import { projectSubagentStatus } from "../chat-subagent-wait.ts";
@@ -21,12 +22,14 @@ import {
   syncToolCardExpansionState,
 } from "../chat-thread.ts";
 import { readAsyncQuestions } from "./chat-async-question.ts";
+import { projectDelegationRows } from "./chat-delegation-rows.ts";
 import { buildChatArchiveNotice } from "./chat-divider.ts";
 import type { NativeMessageGroupOptions } from "./chat-message-group-frame.ts";
 import { assistantMediaPolicyKey } from "./chat-message-media.ts";
 import type { StreamGroupOptions } from "./chat-message-stream-view.tsx";
 import { projectRealtimeTalkConversation } from "./chat-realtime-controls.ts";
 import { createReplyPreviewResolver } from "./chat-reply-preview.ts";
+import { resolveChatSwarmParent } from "./chat-swarm-progress-parent.ts";
 import { getTranscriptState, type ChatThreadProps } from "./chat-thread-interactions.ts";
 import { projectTranscriptActivity } from "./chat-transcript-activity.ts";
 import { latestTranscriptAnnouncement } from "./chat-transcript-announcement.ts";
@@ -55,7 +58,6 @@ import { projectTranscriptWorkPreviews } from "./chat-transcript-work-previews.t
 import { projectTurnVideoMessages } from "./chat-turn-video-gallery.ts";
 import { resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
 
-type ChatRenderItem = SystemEventRenderItem;
 const questionIndexes = createTranscriptMemo<NonNullable<StreamGroupOptions["questionPrompts"]>>();
 const emptyQuestions: NonNullable<StreamGroupOptions["questionPrompts"]> = new Map();
 
@@ -400,7 +402,7 @@ export function projectChatTranscript(
     presented,
     bubbleActivityGroupKey,
   ]);
-  const liveStatusSignature = (item: ChatRenderItem): string => {
+  const liveStatusSignature = (item: SystemEventRenderItem): string => {
     if (item.kind === "stream-run") {
       return item.parts.some((part) => part.kind === "reading-indicator") ? workingUsageKey : "";
     }
@@ -550,7 +552,17 @@ export function projectChatTranscript(
       overflow: props.typingOverflow,
     });
   }
-  const transcriptRows = projectTranscriptRows(rows, workPreviews, contentRows);
+  const baseRows = projectTranscriptRows(rows, workPreviews, contentRows);
+  const delegation = searchFiltering
+    ? new Map()
+    : projectDelegatedTasks(
+        transcriptItems,
+        props.subagentSessions,
+        (props.swarm ? resolveChatSwarmParent(props.swarm) : props.selectedSession)?.swarm,
+        props.messages,
+      );
+  const delegationRows = projectDelegationRows(baseRows, delegation, props);
+  const transcriptRows = delegationRows.rows;
   // Deferred palettes apply leaf branding after the preference snapshot.
   const appliedBranding = currentThemeBranding();
   trackTranscriptRenderDependencies(state, [
@@ -701,7 +713,9 @@ export function projectChatTranscript(
         (row) =>
           row.kind === "item"
             ? renderItem(row.key === liveItem?.key ? liveItem : row.item)
-            : (contentRows.find((content) => content.key === row.key)?.content ?? row.content),
+            : (delegationRows.content.get(row.key) ??
+              contentRows.find((content) => content.key === row.key)?.content ??
+              row.content),
         latestTranscriptAnnouncement(collapsedItems, liveItem),
         props.announceTranscript !== false && !search.open && !props.loading,
         overlay,

@@ -17,6 +17,7 @@ type WorkspaceResultConflictUnknownReason = "malformed-report" | "session-unavai
 export const WORKSPACE_CONFLICT_TRANSCRIPT_TYPE = "cloud-workspace-conflict";
 export const WORKSPACE_CONFLICT_CLEARED_TRANSCRIPT_TYPE = "cloud-workspace-conflict-cleared";
 export const WORKSPACE_RECOVERY_FAILURE_TRANSCRIPT_TYPE = "cloud-workspace-recovery-failed";
+export const WORKSPACE_HISTORY_NOTE_TRANSCRIPT_TYPE = "cloud-workspace-history-note";
 
 const MAX_PROJECTED_CONFLICT_PATHS = 256;
 const MAX_PROJECTED_CONFLICT_PATH_BYTES = 32 * 1024;

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import type { TimerOptions } from "node:timers";
 import { deserialize } from "node:v8";
 import { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi, type MockInstance } from "vitest";
@@ -8,7 +9,11 @@ import {
   WORKER_LINEAGE_START_PROTOCOL_FEATURE,
   WORKER_NATIVE_PROCESS_OWNER_PROTOCOL_FEATURE,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
-import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE } from "../infra/node-commands.js";
 import type {
   SqliteWorkerCommand,
@@ -20,10 +25,12 @@ import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import type { OpenClawStateWorkerOperations } from "../state/openclaw-state-worker-contract.js";
 import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
+import { NodeWorkerCapacity } from "./node-worker-capacity.js";
 import { NodeWorkerJournalWorker } from "./node-worker-journal-worker.js";
 import { NodeWorkerLaunchStore } from "./node-worker-launch-store.js";
 import type { NodeWorkerChildAdapter } from "./node-worker-launch-transport.js";
 import * as workerProcessIdentity from "./node-worker-process-identity.js";
+import { createNodeWorkerLaunchRecovery } from "./node-worker-supervisor-recovery.js";
 import {
   createNodeWorkerSupervisorFixture,
   observeNodeWorkerAdapters,
@@ -37,6 +44,18 @@ import {
   testWorkerLaunchInput,
 } from "./node-worker-supervisor.test-support.js";
 import * as workerTreeControl from "./node-worker-tree-control.js";
+
+const recoveryClock = vi.hoisted(() => ({
+  wait: undefined as ((ms?: number) => Promise<void> | undefined) | undefined,
+}));
+vi.mock("node:timers/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:timers/promises")>();
+  return {
+    ...actual,
+    setTimeout: (ms?: number, value?: unknown, options?: TimerOptions) =>
+      recoveryClock.wait?.(ms)?.then(() => value) ?? actual.setTimeout(ms, value, options),
+  };
+});
 
 const tempDirs = useStateDatabaseTempDirs();
 
@@ -309,6 +328,92 @@ lines.once("line", line => {
 });
 
 describe("node worker supervisor initialization", () => {
+  it.each(["dead", "reused"] as const)(
+    "holds Windows capacity until the recorded worker is %s and the Job grace expires",
+    async (gone) => {
+      await using f = fixture();
+      const store = f.store();
+      const input = launchInput(f.workspaceDir, "windows-grace", "wait");
+      const claim = {
+        ...testNodeWorkerLaunchIdentity(input),
+        gatewayNamespace: input.gatewayNamespace,
+      };
+      const supervisor = { pid: 2_000_000_001, startTime: 1 };
+      const worker = { pid: 2_000_000_002, startTime: 2 };
+      vi.spyOn(workerProcessIdentity, "getNodeWorkerBootIdentity").mockReturnValue(
+        "win32:test-boot",
+      );
+      await store.claim(claim, supervisor, 1);
+      const receipt = await store.markRunning({
+        ...claim,
+        supervisor,
+        worker,
+        cleanupMode: "windows-job",
+      });
+      const inspect = workerProcessIdentity.inspectNodeWorkerProcessIdentity;
+      let workerState: "live" | "dead" | "reused" = "live";
+      vi.spyOn(workerProcessIdentity, "inspectNodeWorkerProcessIdentity").mockImplementation(
+        (identity) =>
+          identity.pid === supervisor.pid
+            ? "dead"
+            : identity.pid === worker.pid
+              ? workerState
+              : inspect(identity),
+      );
+      const poll = createDeferred();
+      const grace = createDeferred();
+      const exited = createDeferred();
+      const graceExpired = createDeferred();
+      const capacities: Array<{ total: number; available: number }> = [];
+      const capacity = new NodeWorkerCapacity(store, {
+        capacity: 1,
+        onCapacityChanged: (value) => capacities.push(value),
+      });
+      await capacity.initialize(async () => {});
+      capacities.length = 0;
+      let active = true;
+      const recover = createNodeWorkerLaunchRecovery({
+        store,
+        capacity,
+        recoveries: new Map(),
+        isRecoveryActive: () => active,
+      });
+      recoveryClock.wait = (ms) => {
+        if (ms === 25) {
+          poll.resolve();
+          return exited.promise;
+        }
+        if (ms === 1_000) {
+          grace.resolve();
+          return graceExpired.promise;
+        }
+        return undefined;
+      };
+      const recovering = recover(receipt, true, undefined, true);
+      try {
+        await awaitGateBeforeSettlement(poll.promise, recovering, "released a live Windows worker");
+        expect((await store.get(input.launchId))?.state).toBe("running");
+        expect(await store.nonterminalCount()).toBe(1);
+        expect(capacities).toEqual([]);
+        workerState = gone;
+        exited.resolve();
+        await awaitGateBeforeSettlement(grace.promise, recovering, "skipped Windows Job grace");
+        expect((await store.get(input.launchId))?.state).toBe("running");
+        expect(capacities).toEqual([]);
+        graceExpired.resolve();
+        expect(await recovering).toMatchObject({ state: "interrupted", worker });
+        expect(await store.nonterminalCount()).toBe(0);
+        expect(capacities.at(-1)).toEqual({ total: 1, available: 1 });
+      } finally {
+        active = false;
+        recoveryClock.wait = undefined;
+        exited.resolve();
+        graceExpired.resolve();
+        await recovering;
+      }
+    },
+  );
+
   it("keeps the additive table absent until the first stateful operation", async () => {
     await using f = fixture();
     const { bundleRoot, env, supervisor } = f;
@@ -332,7 +437,8 @@ describe("node worker supervisor initialization", () => {
     await active.close();
   });
 
-  it("retains Windows restart capacity when the recorded worker root is reused", async () => {
+  it("keeps older Windows receipts reserved without recorded Job custody", async () => {
+    const cleanupMode = "process-group";
     await using f = fixture();
     const { bundleRoot, env, workspaceDir } = f;
     const store = f.store();
@@ -343,12 +449,13 @@ describe("node worker supervisor initialization", () => {
     };
     const previousSupervisor = { pid: 2_000_000_001, startTime: 1 };
     const worker = { pid: 2_000_000_002, startTime: 2 };
+    vi.spyOn(workerProcessIdentity, "getNodeWorkerBootIdentity").mockReturnValue("win32:test-boot");
     await store.claim(claim, previousSupervisor, 1);
     await store.markRunning({
       ...claim,
       supervisor: previousSupervisor,
       worker,
-      cleanupMode: "process-group",
+      cleanupMode,
     });
 
     const inspectIdentity = workerProcessIdentity.inspectNodeWorkerProcessIdentity;
@@ -380,7 +487,11 @@ describe("node worker supervisor initialization", () => {
     });
     try {
       await recovered.initialize();
-      expect(await store.get(input.launchId)).toMatchObject({ state: "running", worker });
+      expect(await store.get(input.launchId)).toMatchObject({
+        state: "running",
+        worker,
+        workerCleanupMode: cleanupMode,
+      });
       expect(capacities.at(-1)).toEqual({ total: 1, available: 0 });
       expect(await recovered.hasActiveWork()).toBe(true);
       expect(signal).not.toHaveBeenCalled();

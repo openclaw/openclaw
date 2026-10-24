@@ -1,13 +1,17 @@
 import path from "node:path";
+import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { itemNotification, turnCompleted } from "./protocol.test-helpers.js";
 import {
+  assistantMessage,
   createParams,
   createStartedThreadHarness,
   runCodexAppServerAttempt,
   tempDir,
   threadStartResult,
+  userMessage,
 } from "./run-attempt-test-harness.js";
 import {
   readCodexAppServerBinding,
@@ -16,6 +20,7 @@ import {
 } from "./session-binding.test-helpers.js";
 import * as settledTurnContext from "./settled-turn-context.js";
 import { attachSqliteSessionTarget } from "./sqlite-session.test-helpers.js";
+import { attachCodexMirrorIdentity } from "./upstream-prompt-provenance.js";
 
 type SettledFinalizationFixtures = {
   expectResumeRequest: (
@@ -165,6 +170,61 @@ export function registerSettledFinalizationTests({
       ]);
     },
   );
+  it("captures settled evidence for a stranded-reply retry whose prompt is never mirrored", async () => {
+    // The host builds the retry with a suppressed system prompt and no transcript recorder
+    // (src/auto-reply/reply/stranded-reply-recovery.ts), so this turn has no prompt row.
+    const { params, workspaceDir } = await settledParams(
+      "settled-stranded-retry",
+      "Your previous reply was not delivered because you did not call message(action=send).",
+    );
+    params.suppressNextUserMessagePersistence = true;
+    params.userTurnTranscriptRecorder = undefined;
+    const manager = await SessionManager.openAsync(
+      {
+        agentId: params.sessionTarget!.agentId!,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey!,
+        storePath: params.sessionTarget!.storePath!,
+      },
+      workspaceDir,
+    );
+    await manager.appendMessageAsync(
+      attachCodexMirrorIdentity(userMessage("Send the update to Alice.", 1), "turn-0:prompt"),
+    );
+    await manager.appendMessageAsync(assistantMessage("Update: shipped.", 2));
+    const harness = createStartedThreadHarness();
+    const warn = vi.spyOn(embeddedAgentLog, "warn");
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await Promise.all([
+      ...commandEvents(workspaceDir, "sent-to-alice").map((event) => harness.notify(event)),
+      harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" }),
+    ]);
+    const result = await run;
+
+    expect(result.terminal).toEqual({ kind: "ok" });
+    expect(warn).not.toHaveBeenCalledWith(
+      "codex settled-turn finalization context capture failed",
+      expect.anything(),
+    );
+    expect(result.settledTurnFinalizationContext).toMatchObject({
+      source: "harness",
+      data: [
+        {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "Send the update to Alice." }],
+        },
+        {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "Update: shipped." }],
+        },
+        expect.objectContaining({ type: "function_call", call_id: "tool-settled" }),
+        { type: "function_call_output", call_id: "tool-settled", output: "sent-to-alice\n" },
+      ],
+    });
+  });
   it("captures settled tool evidence when an active native compaction fails terminally", async () => {
     const { params, workspaceDir } = await settledParams(
       "settled-compaction-failure",

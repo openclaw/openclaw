@@ -70,14 +70,14 @@ it("BoardSnapshotSchema: accepts optional HTML widget view metadata", () => {
     BoardSnapshotSchema,
     withWidget({
       contentKind: "plugin",
-      pluginKind: "diagrams:diagram",
       contentOwner: "registered",
-      registeredContentKind: "diagram",
+      registeredContentKind: "a2ui",
+      pluginKind: "canvas:a2ui",
+      kindLabel: "A2UI",
     }),
   );
   for (const invalid of [
     { contentOwner: "unknown" },
-    { contentOwner: "registered", registeredContentKind: "Invalid Kind" },
     { frameUrl: 42 },
     { presentation: "floating" },
     { heightMode: "elastic" },

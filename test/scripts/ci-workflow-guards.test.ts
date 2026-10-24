@@ -6177,9 +6177,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       },
       run: "node scripts/pr-crabbox-gate-publisher.mjs --publish",
     });
-    expect(job.steps[2].run).toContain("crabbox_0.77.0_linux_amd64.tar.gz");
+    expect(job.steps[2].run).toContain("crabbox_0.79.2_linux_amd64.tar.gz");
     expect(job.steps[2].run).toContain(
-      "cbf6cb74251a454c65d13d7a92b070cf8c37ee81c300c97123063b9d21206d5f",
+      "316e2d788c9f85d0a7e876a0a91eab5e0a9257b8c572ca2c1372dbe066395dae",
     );
     expect(job.steps.slice(3, 5)).toMatchObject([
       {

@@ -37,12 +37,15 @@ import {
   workspaceResultGitCommand as gitCommand,
   WORKSPACE_RESULT_GIT_TIMEOUT_MS as PATCH_TIMEOUT_MS,
 } from "./workspace-result-git.js";
+import { importWorkerWorkspaceHistory } from "./workspace-result-history.js";
+import type { WorkerWorkspaceGitHistory } from "./workspace-result-inventory.js";
 import {
   requireWorkerResultStorageRef,
   WORKER_RESULT_CANDIDATE_REF_PREFIX,
   WORKER_RESULT_CLEANUP_REF_PREFIX,
   WORKER_RESULT_REF_PREFIX,
 } from "./workspace-result-inventory.js";
+export { adoptStagedWorkerWorkspaceHistory } from "./workspace-result-history.js";
 
 const WORKER_RESULT_CLAIM_ID_PATTERN = /^[A-Za-z0-9-]+$/u;
 const workspaceLog = createSubsystemLogger("gateway/worker-workspace");
@@ -171,6 +174,8 @@ async function stageWorkerWorkspaceResult(
     stagedResultRef: string;
     buildCacheInputs?: string[];
     assertCurrent?: () => void;
+    gitHistory?: WorkerWorkspaceGitHistory;
+    gitPackPath?: string;
   },
 ): Promise<string> {
   const root = await ensureWorkerWorkspaceResultRepository(params.root, params.assertCurrent);
@@ -180,6 +185,7 @@ async function stageWorkerWorkspaceResult(
   );
   try {
     const inputPath = path.join(temporary, "fast-import");
+    await importWorkerWorkspaceHistory({ ...params, root });
     // Preparation owns only a private input file, never the accepted refs.
     params.assertCurrent?.();
     await prepareWorkspaceStageInput({ ...params, inputPath });
@@ -348,6 +354,8 @@ async function prepareRequestedWorkerWorkspaceResult(params: {
   currentManifestRef: string;
   baseManifestRaw: string;
   currentManifestRaw: string;
+  gitHistory?: WorkerWorkspaceGitHistory;
+  gitPackPath?: string;
   unchanged?: WorkerWorkspaceApplyResult;
   additionalPaths?: ReadonlySet<string>;
   publishAcceptedManifest?: (
@@ -371,6 +379,8 @@ async function prepareRequestedWorkerWorkspaceResult(params: {
         currentManifestRef: params.currentManifestRef,
         baseManifestRaw: params.baseManifestRaw,
         currentManifestRaw: params.currentManifestRaw,
+        gitHistory: params.gitHistory,
+        gitPackPath: params.gitPackPath,
         assertCurrent: params.request.assertCurrent,
       });
   const applyPreparedStagedResult = async () => {

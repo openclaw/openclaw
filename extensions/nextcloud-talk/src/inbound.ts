@@ -225,6 +225,13 @@ export async function handleNextcloudTalkInbound(params: {
       },
     });
   let access = await resolveAccess();
+  const logAuthorizationChanged = () => {
+    runtime.log?.(
+      isGroup && access.activationAccess.shouldSkip
+        ? `nextcloud-talk: drop room ${roomToken} (no mention)`
+        : `nextcloud-talk: drop ${isGroup ? "room" : "DM"} ${roomToken} (authorization changed)`,
+    );
+  };
   warnMissingProviderGroupPolicyFallbackOnce({
     providerMissingFallbackApplied,
     providerKey: "nextcloud-talk",
@@ -312,11 +319,7 @@ export async function handleNextcloudTalkInbound(params: {
   access = await resolveAccess(isGroup ? wasMentioned : undefined, contextBinding);
 
   if (access.ingress.admission !== "dispatch") {
-    runtime.log?.(
-      isGroup && access.activationAccess.shouldSkip
-        ? `nextcloud-talk: drop room ${roomToken} (no mention)`
-        : `nextcloud-talk: drop ${isGroup ? "room" : "DM"} ${roomToken} (authorization changed)`,
-    );
+    logAuthorizationChanged();
     return;
   }
 
@@ -456,11 +459,7 @@ export async function handleNextcloudTalkInbound(params: {
             access = await resolveAccess(isGroup ? wasMentioned : undefined, contextBinding);
             throwIfIngressAborted();
             if (access.ingress.admission !== "dispatch") {
-              runtime.log?.(
-                isGroup && access.activationAccess.shouldSkip
-                  ? `nextcloud-talk: drop room ${roomToken} (no mention)`
-                  : `nextcloud-talk: drop ${isGroup ? "room" : "DM"} ${roomToken} (authorization changed)`,
-              );
+              logAuthorizationChanged();
               return;
             }
             try {
@@ -533,11 +532,7 @@ export async function handleNextcloudTalkInbound(params: {
       throwIfIngressAborted();
       if (access.ingress.admission !== "dispatch") {
         await deleteStagedMedia();
-        runtime.log?.(
-          isGroup && access.activationAccess.shouldSkip
-            ? `nextcloud-talk: drop room ${roomToken} (no mention)`
-            : `nextcloud-talk: drop ${isGroup ? "room" : "DM"} ${roomToken} (authorization changed)`,
-        );
+        logAuthorizationChanged();
         return;
       }
     }

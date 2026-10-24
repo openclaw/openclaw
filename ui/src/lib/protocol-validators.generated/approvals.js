@@ -91,7 +91,7 @@ var { isSessionApprovalEvent, isSessionApprovalReplay } = (() => {
       "phase" in value &&
       "approval" in value &&
       Object.getOwnPropertyNames(value).every(
-        (unique_28, unique_29) => External[0].test(unique_28) || check_3(value[unique_28]),
+        (unique_31, unique_32) => External[0].test(unique_31) || check_3(value[unique_31]),
       ) &&
       check_4(value.sessionKey) &&
       (value.sourceSessionKey === void 0 ||
@@ -122,7 +122,7 @@ var { isSessionApprovalEvent, isSessionApprovalReplay } = (() => {
       "presentation" in value &&
       "status" in value &&
       Object.getOwnPropertyNames(value).every(
-        (unique_30, unique_31) => External[1].test(unique_30) || check_3(value[unique_30]),
+        (unique_33, unique_34) => External[1].test(unique_33) || check_3(value[unique_33]),
       ) &&
       check_9(value.id) &&
       check_4(value.urlPath) &&
@@ -146,7 +146,7 @@ var { isSessionApprovalEvent, isSessionApprovalReplay } = (() => {
       "commandText" in value &&
       "allowedDecisions" in value &&
       Object.getOwnPropertyNames(value).every(
-        (unique_32, unique_33) => External[3].test(unique_32) || check_3(value[unique_32]),
+        (unique_35, unique_36) => External[3].test(unique_35) || check_3(value[unique_35]),
       ) &&
       check_12(value.kind) &&
       check_4(value.commandText) &&
@@ -174,7 +174,7 @@ var { isSessionApprovalEvent, isSessionApprovalReplay } = (() => {
       "name" in value &&
       "operation" in value &&
       Object.getOwnPropertyNames(value).every(
-        (unique_34, unique_35) => External[4].test(unique_34) || check_3(value[unique_34]),
+        (unique_37, unique_38) => External[4].test(unique_37) || check_3(value[unique_37]),
       ) &&
       check_4(value.jobId) &&
       check_4(value.name) &&
@@ -192,7 +192,7 @@ var { isSessionApprovalEvent, isSessionApprovalReplay } = (() => {
       "target" in value &&
       "recipientCount" in value &&
       Object.getOwnPropertyNames(value).every(
-        (unique_36, unique_37) => External[5].test(unique_36) || check_3(value[unique_36]),
+        (unique_39, unique_40) => External[5].test(unique_39) || check_3(value[unique_39]),
       ) &&
       check_23(value.kind) &&
       check_24(value.target) &&
@@ -209,7 +209,7 @@ var { isSessionApprovalEvent, isSessionApprovalReplay } = (() => {
       (!(Number.isFinite(value) || typeof value == "bigint") || (value >= 1 && value <= 1e6)),
     check_26 = (value) =>
       Array.isArray(value) &&
-      value.every((unique_38, index) => check_24(unique_38)) &&
+      value.every((unique_41, index) => check_24(unique_41)) &&
       value.length <= 5,
     check_27 = (value) => check_28(value) || check_29(value),
     check_28 = (value) => typeof value == "string" && value === "internal",
@@ -223,7 +223,7 @@ var { isSessionApprovalEvent, isSessionApprovalReplay } = (() => {
       "currency" in value &&
       "target" in value &&
       Object.getOwnPropertyNames(value).every(
-        (unique_39, unique_40) => External[6].test(unique_39) || check_3(value[unique_39]),
+        (unique_42, unique_43) => External[6].test(unique_42) || check_3(value[unique_42]),
       ) &&
       check_31(value.kind) &&
       check_32(value.amount) &&
@@ -246,7 +246,7 @@ var { isSessionApprovalEvent, isSessionApprovalReplay } = (() => {
       "target" in value &&
       "visibility" in value &&
       Object.getOwnPropertyNames(value).every(
-        (unique_41, unique_42) => External[7].test(unique_41) || check_3(value[unique_41]),
+        (unique_44, unique_45) => External[7].test(unique_44) || check_3(value[unique_44]),
       ) &&
       check_35(value.kind) &&
       check_24(value.target) &&
@@ -263,7 +263,7 @@ var { isSessionApprovalEvent, isSessionApprovalReplay } = (() => {
       "automation" in value &&
       "command" in value &&
       Object.getOwnPropertyNames(value).every(
-        (unique_43, unique_44) => External[8].test(unique_43) || check_3(value[unique_43]),
+        (unique_46, unique_47) => External[8].test(unique_46) || check_3(value[unique_46]),
       ) &&
       check_40(value.kind) &&
       check_24(value.automation) &&
@@ -282,8 +282,8 @@ var { isSessionApprovalEvent, isSessionApprovalReplay } = (() => {
     check_43 = (value) =>
       Array.isArray(value) &&
       value.length !== 0 &&
-      value.some((unique_45, _) => check_44(unique_45)) &&
-      value.every((unique_46, index) => check_45(unique_46)) &&
+      value.some((unique_48, _) => check_44(unique_48)) &&
+      value.every((unique_49, index) => check_45(unique_49)) &&
       value.length >= 1 &&
       value.length <= 3 &&
       new Set(value).size === value.length,
@@ -301,7 +301,7 @@ var { isSessionApprovalEvent, isSessionApprovalReplay } = (() => {
       "severity" in value &&
       "allowedDecisions" in value &&
       Object.getOwnPropertyNames(value).every(
-        (unique_47, unique_48) => External[9].test(unique_47) || check_3(value[unique_47]),
+        (unique_50, unique_51) => External[9].test(unique_50) || check_3(value[unique_50]),
       ) &&
       check_49(value.kind) &&
       check_50(value.title) &&
@@ -340,13 +340,13 @@ var { isSessionApprovalEvent, isSessionApprovalReplay } = (() => {
       "label" in value &&
       "decisions" in value &&
       Object.getOwnPropertyNames(value).every(
-        (unique_49, unique_50) => External[10].test(unique_49) || check_3(value[unique_49]),
+        (unique_52, unique_53) => External[10].test(unique_52) || check_3(value[unique_52]),
       ) &&
       check_50(value.label) &&
       check_58(value.decisions),
     check_58 = (value) =>
       Array.isArray(value) &&
-      value.every((unique_51, index) => check_59(unique_51)) &&
+      value.every((unique_54, index) => check_59(unique_54)) &&
       value.length >= 1 &&
       value.length <= 2 &&
       new Set(value).size === value.length,
@@ -361,7 +361,7 @@ var { isSessionApprovalEvent, isSessionApprovalReplay } = (() => {
       "proposalHash" in value &&
       "allowedDecisions" in value &&
       Object.getOwnPropertyNames(value).every(
-        (unique_52, unique_53) => External[11].test(unique_52) || check_3(value[unique_52]),
+        (unique_55, unique_56) => External[11].test(unique_55) || check_3(value[unique_55]),
       ) &&
       check_61(value.kind) &&
       check_50(value.title) &&
@@ -373,7 +373,7 @@ var { isSessionApprovalEvent, isSessionApprovalReplay } = (() => {
     check_62 = (value) => typeof value == "string" && External[12].test(value),
     check_63 = (value) =>
       Array.isArray(value) &&
-      value.every((unique_54, unique_55) => unique_55 < 2 || check_3(unique_54)) &&
+      value.every((unique_57, unique_58) => unique_58 < 2 || check_3(unique_57)) &&
       (value.length <= 0 || check_46(value[0])) &&
       (value.length <= 1 || check_44(value[1])) &&
       value.length >= 2,
@@ -386,7 +386,7 @@ var { isSessionApprovalEvent, isSessionApprovalReplay } = (() => {
       "phase" in value &&
       "approval" in value &&
       Object.getOwnPropertyNames(value).every(
-        (unique_56, unique_57) => External[13].test(unique_56) || check_3(value[unique_56]),
+        (unique_59, unique_60) => External[13].test(unique_59) || check_3(value[unique_59]),
       ) &&
       check_4(value.sessionKey) &&
       (value.sourceSessionKey === void 0 ||
@@ -411,7 +411,7 @@ var { isSessionApprovalEvent, isSessionApprovalReplay } = (() => {
       "decision" in value &&
       "reason" in value &&
       Object.getOwnPropertyNames(value).every(
-        (unique_58, unique_59) => External[14].test(unique_58) || check_3(value[unique_58]),
+        (unique_61, unique_62) => External[14].test(unique_61) || check_3(value[unique_61]),
       ) &&
       check_9(value.id) &&
       check_4(value.urlPath) &&
@@ -429,7 +429,7 @@ var { isSessionApprovalEvent, isSessionApprovalReplay } = (() => {
       value !== null &&
       !Array.isArray(value) &&
       Object.getOwnPropertyNames(value).every(
-        (unique_60, unique_61) => External[15].test(unique_60) || check_3(value[unique_60]),
+        (unique_63, unique_64) => External[15].test(unique_63) || check_3(value[unique_63]),
       ) &&
       (value.agentId === void 0 || !("agentId" in value) || check_5(value.agentId)) &&
       (value.sessionKey === void 0 || !("sessionKey" in value) || check_5(value.sessionKey)),
@@ -439,7 +439,7 @@ var { isSessionApprovalEvent, isSessionApprovalReplay } = (() => {
       !Array.isArray(value) &&
       "kind" in value &&
       Object.getOwnPropertyNames(value).every(
-        (unique_62, unique_63) => External[16].test(unique_62) || check_3(value[unique_62]),
+        (unique_65, unique_66) => External[16].test(unique_65) || check_3(value[unique_65]),
       ) &&
       check_70(value.kind) &&
       (value.id === void 0 || !("id" in value) || check_5(value.id)),
@@ -465,7 +465,7 @@ var { isSessionApprovalEvent, isSessionApprovalReplay } = (() => {
       "decision" in value &&
       "reason" in value &&
       Object.getOwnPropertyNames(value).every(
-        (unique_64, unique_65) => External[17].test(unique_64) || check_3(value[unique_64]),
+        (unique_67, unique_68) => External[17].test(unique_67) || check_3(value[unique_67]),
       ) &&
       check_9(value.id) &&
       check_4(value.urlPath) &&
@@ -496,7 +496,7 @@ var { isSessionApprovalEvent, isSessionApprovalReplay } = (() => {
       "status" in value &&
       "reason" in value &&
       Object.getOwnPropertyNames(value).every(
-        (unique_66, unique_67) => External[18].test(unique_66) || check_3(value[unique_66]),
+        (unique_69, unique_70) => External[18].test(unique_69) || check_3(value[unique_69]),
       ) &&
       check_9(value.id) &&
       check_4(value.urlPath) &&
@@ -524,7 +524,7 @@ var { isSessionApprovalEvent, isSessionApprovalReplay } = (() => {
       "status" in value &&
       "reason" in value &&
       Object.getOwnPropertyNames(value).every(
-        (unique_68, unique_69) => External[19].test(unique_68) || check_3(value[unique_68]),
+        (unique_71, unique_72) => External[19].test(unique_71) || check_3(value[unique_71]),
       ) &&
       check_9(value.id) &&
       check_4(value.urlPath) &&
@@ -550,14 +550,14 @@ var { isSessionApprovalEvent, isSessionApprovalReplay } = (() => {
       "approvals" in value &&
       "truncated" in value &&
       Object.getOwnPropertyNames(value).every(
-        (unique_70, unique_71) => External[20].test(unique_70) || check_3(value[unique_70]),
+        (unique_73, unique_74) => External[20].test(unique_73) || check_3(value[unique_73]),
       ) &&
       check_4(value.sessionKey) &&
       check_6(value.updatedAtMs) &&
       check_95(value.approvals) &&
       check_96(value.truncated),
     check_95 = (value) =>
-      Array.isArray(value) && value.every((unique_72, index) => check_8(unique_72)),
+      Array.isArray(value) && value.every((unique_75, index) => check_8(unique_75)),
     check_96 = (value) => typeof value == "boolean";
   return {
     isSessionApprovalEvent: (value) => check_0(value),

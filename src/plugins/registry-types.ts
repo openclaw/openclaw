@@ -8,7 +8,6 @@ import type {
   AgentToolResultMiddlewareRuntime,
   AgentToolResultMiddlewareScope,
 } from "./agent-tool-result-middleware-types.js";
-import type { PluginBoardWidgetContentKind } from "./board-widget-content-kind.types.js";
 import type { PluginCompatCode } from "./compat/registry.js";
 import type { PluginActivationSource } from "./config-activation-shared.js";
 import type { EmbeddingProviderAdapter } from "./embedding-provider-types.js";
@@ -183,12 +182,6 @@ export type PluginDashboardActionVerbRegistration = PluginManifestDashboardActio
   pluginId: string;
   capabilityId: string;
   handler: GatewayRequestHandlers[string];
-};
-
-export type PluginBoardWidgetContentKindRegistration = {
-  pluginId: string;
-  pluginKind: string;
-  definition: PluginBoardWidgetContentKind;
 };
 
 type PluginCliBackendRegistration = PluginRegistrationOwner & {
@@ -409,7 +402,6 @@ export type PluginRegistry = {
   gatewayMethodDescriptors: GatewayMethodDescriptor[];
   dashboardDataBindings: Map<string, PluginDashboardDataBindingRegistration>;
   dashboardActionVerbs: Map<string, PluginDashboardActionVerbRegistration>;
-  boardWidgetContentKinds: Map<string, PluginBoardWidgetContentKindRegistration>;
   coreGatewayMethodNames: string[];
   httpRoutes: PluginHttpRouteRegistration[];
   widgetPresenters: PluginWidgetPresenterRegistration[];

@@ -84,7 +84,7 @@ var {
       "runtimeLabel" in value &&
       "reason" in value &&
       Object.getOwnPropertyNames(value).every(
-        (unique_73, unique_74) => External[0].test(unique_73) || check_2(value[unique_73]),
+        (unique_76, unique_77) => External[0].test(unique_76) || check_2(value[unique_76]),
       ) &&
       check_3(value.code) &&
       check_4(value.runtimeId) &&
@@ -119,7 +119,7 @@ var {
       "expectedSandboxMode" in value &&
       "expectedNativeRuntimeConsent" in value &&
       Object.getOwnPropertyNames(value).every(
-        (unique_75, unique_76) => External[1].test(unique_75) || check_2(value[unique_75]),
+        (unique_78, unique_79) => External[1].test(unique_78) || check_2(value[unique_78]),
       ) &&
       check_13(value.action) &&
       check_4(value.sessionId) &&
@@ -159,7 +159,7 @@ var {
       "expectedGoalUpdatedAt" in value &&
       "expectedRunId" in value &&
       Object.getOwnPropertyNames(value).every(
-        (unique_77, unique_78) => External[2].test(unique_77) || check_2(value[unique_77]),
+        (unique_80, unique_81) => External[2].test(unique_80) || check_2(value[unique_80]),
       ) &&
       check_4(value.sessionKey) &&
       (value.agentId === void 0 || !("agentId" in value) || check_14(value.agentId)) &&
@@ -195,7 +195,7 @@ var {
       "action" in value &&
       "objective" in value &&
       Object.getOwnPropertyNames(value).every(
-        (unique_79, unique_80) => External[3].test(unique_79) || check_2(value[unique_79]),
+        (unique_82, unique_83) => External[3].test(unique_82) || check_2(value[unique_82]),
       ) &&
       check_4(value.sessionKey) &&
       (value.agentId === void 0 || !("agentId" in value) || check_14(value.agentId)) &&
@@ -216,7 +216,7 @@ var {
       "issuedAtMs" in value &&
       "action" in value &&
       Object.getOwnPropertyNames(value).every(
-        (unique_81, unique_82) => External[4].test(unique_81) || check_2(value[unique_81]),
+        (unique_84, unique_85) => External[4].test(unique_84) || check_2(value[unique_84]),
       ) &&
       check_4(value.sessionKey) &&
       (value.agentId === void 0 || !("agentId" in value) || check_14(value.agentId)) &&
@@ -244,7 +244,7 @@ var {
       "operationId" in value &&
       "issuedAtMs" in value &&
       Object.getOwnPropertyNames(value).every(
-        (unique_83, unique_84) => External[5].test(unique_83) || check_2(value[unique_83]),
+        (unique_86, unique_87) => External[5].test(unique_86) || check_2(value[unique_86]),
       ) &&
       check_4(value.sessionKey) &&
       (value.agentId === void 0 || !("agentId" in value) || check_14(value.agentId)) &&
@@ -262,7 +262,7 @@ var {
       "deviceId" in value &&
       "path" in value &&
       Object.getOwnPropertyNames(value).every(
-        (unique_85, unique_86) => External[6].test(unique_85) || check_2(value[unique_85]),
+        (unique_88, unique_89) => External[6].test(unique_88) || check_2(value[unique_88]),
       ) &&
       check_4(value.deviceId) &&
       check_48(value.path),
@@ -277,7 +277,7 @@ var {
       !Array.isArray(value) &&
       "url" in value &&
       Object.getOwnPropertyNames(value).every(
-        (unique_87, unique_88) => External[7].test(unique_87) || check_2(value[unique_87]),
+        (unique_90, unique_91) => External[7].test(unique_90) || check_2(value[unique_90]),
       ) &&
       check_51(value.url) &&
       (value.ref === void 0 || !("ref" in value) || check_52(value.ref)),
@@ -305,7 +305,7 @@ var {
       value !== null &&
       !Array.isArray(value) &&
       Object.getOwnPropertyNames(value).every(
-        (unique_89, unique_90) => External[8].test(unique_89) || check_2(value[unique_89]),
+        (unique_92, unique_93) => External[8].test(unique_92) || check_2(value[unique_92]),
       ) &&
       (value.mcpServers === void 0 || !("mcpServers" in value) || check_63(value.mcpServers)) &&
       (value.mcpToolsDeny === void 0 ||
@@ -318,17 +318,17 @@ var {
       value !== null &&
       !Array.isArray(value) &&
       Object.entries(value).every(
-        ([unique_91, unique_92], _) => !External[9].test(unique_91) || check_55(unique_92),
+        ([unique_94, unique_95], _) => !External[9].test(unique_94) || check_55(unique_95),
       ),
     check_64 = (value) =>
       typeof value == "object" &&
       value !== null &&
       !Array.isArray(value) &&
       Object.entries(value).every(
-        ([unique_93, unique_94], _) => !External[10].test(unique_93) || check_65(unique_94),
+        ([unique_96, unique_97], _) => !External[10].test(unique_96) || check_65(unique_97),
       ),
     check_65 = (value) =>
-      Array.isArray(value) && value.every((unique_95, index) => check_4(unique_95)),
+      Array.isArray(value) && value.every((unique_98, index) => check_4(unique_98)),
     check_66 = (value) => typeof value == "boolean",
     check_67 = (value) => check_68(value),
     check_68 = (value) =>
@@ -341,7 +341,7 @@ var {
       "voice" in value &&
       "phase" in value &&
       Object.getOwnPropertyNames(value).every(
-        (unique_96, unique_97) => External[11].test(unique_96) || check_2(value[unique_96]),
+        (unique_99, unique_100) => External[11].test(unique_99) || check_2(value[unique_99]),
       ) &&
       check_4(value.changeId) &&
       check_4(value.voiceSessionId) &&
