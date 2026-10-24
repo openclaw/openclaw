@@ -272,7 +272,10 @@ Link the sender to their existing profile with `users.linkChannelIdentity`. For
 Slack, use `channelId: "slack"`, the configured account ID, and the exact
 native user ID (for example, `senderId: "U0123456789"`). Direct Socket Mode and
 signature-verified HTTP delivery authenticate that sender; relay delivery does
-not. Discord's verified native senders use the same profile resolution.
+not. Discord's verified native senders use the same profile resolution. X uses
+`channelId: "x"`, the configured account ID, and the immutable API `author_id`;
+its authenticated polling and Activity streams establish the native sender, not
+a matching handle or allowlist entry.
 
 The next verified message turn includes the primary profile ID and current display
 label as host-generated fields in the per-turn conversation info. The system
@@ -287,8 +290,11 @@ agent turn, the `sessions` tool exposes `assign_owner` for these senders;
 settings, reset/delete, and global group controls still require owner authority.
 Operators with `operator.write` also retain the separate archive, restore, and
 stop controls for sessions they created or are assigned to, subject to session access checks.
-When a newly spawned visible session starts agent-owned, the agent can assign it
-to the trusted requester profile and verify the stored owner with `sessions_list`.
+New visible sessions default to the trusted requester when the parent has no
+different human owner; this includes agent-owned and channel-originated parents.
+Without a trusted requester, they remain agent-owned. The agent can assign an
+existing session to the trusted requester profile and verify the stored owner
+with `sessions_list`.
 This changes responsibility, not creator attribution or access. Unlinked or
 asserted senders receive no requester profile: link the verified sender first
 rather than guessing from a name or pasted ID. An owner-authorized agent can use
