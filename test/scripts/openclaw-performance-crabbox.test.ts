@@ -720,7 +720,7 @@ validate_kova mock-provider "$ROOT" diagnostic 1 scenario:probe - "$GATED" "$HEL
   });
 
   it.each(["openclawSha", "testedRef", "kovaSha", "workflow", "crabbox", "command"])(
-    "rejects a schema-valid payload with the wrong trusted %s",
+    "rejects a payload with the wrong trusted %s",
     (field) => {
       const files = fixture();
       const evidence = readJson(files.evidence);
