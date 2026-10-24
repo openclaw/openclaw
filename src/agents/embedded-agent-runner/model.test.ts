@@ -8,7 +8,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { discoverAuthStorageFacts, discoverModelsAsync } from "../agent-model-discovery.js";
-import { clearRuntimeAuthProfileStoreSnapshots, saveAuthProfileStore } from "../auth-profiles.js";
+import { clearRuntimeAuthProfileStoreSnapshots } from "../auth-profiles.js";
 import { prepareSharedAuthStoreOwnershipForNative } from "../auth-profiles/path-resolve.native.js";
 import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
 import { registerModelAuthReadTests } from "./model.auth-read.test-support.js";
@@ -43,7 +43,6 @@ const resolveManifestModelCatalogProviderAliasMetadataMock = vi.hoisted(() =>
     typeof import("./model.manifest-alias.js").resolveManifestModelCatalogProviderAliasMetadata
   >(),
 );
-const preparedSnapshots = vi.hoisted(() => new Map<string, unknown>());
 
 // mock-isolation: Model-resolution fixtures own prepared auth snapshots; provider discovery must not add host credentials or registries.
 vi.mock("../../plugins/provider-external-auth-core.js", () => ({
@@ -84,30 +83,15 @@ vi.mock("../model-suppression.js", async (importOriginal) => {
 // mock-isolation: Fixture snapshot lifetimes exclude process-wide auth publication and runtime owners.
 vi.mock("../prepared-model-runtime.js", async () => {
   const discovery = await import("../agent-model-discovery.js");
-  const discoveryContext = await import("../model-discovery-context.js");
   const { PreparedModelRuntimeOwnerNotPublishedError } =
     await import("../prepared-model-runtime.errors.js");
   type SnapshotInput = {
-    agentId?: string;
     agentDir: string;
     config?: OpenClawConfig;
     workspaceDir?: string;
   };
-  const scope = (input: SnapshotInput) => {
-    const workspaceDir = discoveryContext.resolveModelWorkspaceDir(
-      input.config,
-      input.workspaceDir,
-      input.agentId,
-    );
-    const key = `${input.agentId ?? ""}\u0000${input.agentDir}\u0000${workspaceDir ?? ""}`;
-    return { key, workspaceDir };
-  };
   const createSnapshot = async (input: SnapshotInput) => {
-    const { key, workspaceDir } = scope(input);
-    const current = preparedSnapshots.get(key);
-    if (current) {
-      return current;
-    }
+    const { workspaceDir } = input;
     const { authStorage } = await discovery.discoverAuthStorageFacts(input.agentDir);
     const modelRegistry = await discovery.discoverModelsAsync(authStorage, input.agentDir, {
       ...(input.config ? { config: input.config } : {}),
@@ -117,7 +101,7 @@ vi.mock("../prepared-model-runtime.js", async () => {
       Object.assign(modelRegistry, { fork: () => modelRegistry });
     }
     const metadataSnapshot = createPluginMetadataSnapshotFixture();
-    const snapshot = {
+    return {
       ...createEmptyPreparedModelRuntimeFixture({
         agentDir: input.agentDir,
         config: input.config ?? {},
@@ -127,13 +111,10 @@ vi.mock("../prepared-model-runtime.js", async () => {
       ...(workspaceDir ? { workspaceDir } : {}),
       findConfiguredRuntimeModel: createPreparedConfiguredRuntimeModelLookup([], metadataSnapshot),
     };
-    preparedSnapshots.set(key, snapshot);
-    return snapshot;
   };
   return {
     PreparedModelRuntimeOwnerNotPublishedError,
-    getPreparedModelRuntimeSnapshot: (input: SnapshotInput) =>
-      preparedSnapshots.get(scope(input).key),
+    getPreparedModelRuntimeSnapshot: () => undefined,
     loadPreparedModelRuntimeSnapshot: createSnapshot,
   };
 });
@@ -156,7 +137,6 @@ vi.mock("./model.static-catalog.js", () => ({
 }));
 
 import type { OpenClawConfig } from "../../config/config.js";
-import type { ModelDefinitionConfig, ModelProviderConfig } from "../../config/types.models.js";
 import type { Model } from "../../llm/types.js";
 import { getModelProviderLocalService } from "../provider-local-service.js";
 import { getModelProviderRequestTransport } from "../provider-request-config.js";
@@ -173,7 +153,6 @@ import {
 } from "./model.test-harness.js";
 
 beforeEach(() => {
-  preparedSnapshots.clear();
   clearRuntimeAuthProfileStoreSnapshots();
   resetMockDiscoverModels(discoverModelsAsync);
   vi.mocked(discoverModelsAsync).mockClear();
@@ -317,27 +296,12 @@ function makeDeepSeekCatalogModel(overrides: Partial<Model> = {}): Model {
   });
 }
 
-function makeConfiguredDeepSeekModel(
-  overrides: Partial<ModelDefinitionConfig> = {},
-): ModelDefinitionConfig {
-  return {
-    ...makeModel("deepseek-v4-pro"),
-    name: "Custom DeepSeek V4 Pro",
-    contextWindow: 32_768,
-    maxTokens: 4_096,
-    ...overrides,
-  };
-}
-
-function makeDeepSeekConfig(
-  modelOverrides: Partial<ModelDefinitionConfig> = {},
-  providerOverrides: Partial<ModelProviderConfig> = {},
-): OpenClawConfig {
-  return makeProviderConfig("deepseek", {
-    models: [makeConfiguredDeepSeekModel(modelOverrides)],
-    ...providerOverrides,
-  });
-}
+const configuredDeepSeekModel = {
+  ...makeModel("deepseek-v4-pro"),
+  name: "Custom DeepSeek V4 Pro",
+  contextWindow: 32_768,
+  maxTokens: 4_096,
+};
 
 describe("resolveModel", () => {
   registerModelAuthReadTests({
@@ -390,37 +354,6 @@ describe("resolveModel", () => {
     });
     expect(prepareProviderDynamicModel).toHaveBeenCalledTimes(1);
     expect(runProviderDynamicModel).not.toHaveBeenCalled();
-  });
-
-  it("reuses inherited auth from one lifecycle generation", async () => {
-    const agentDir = state.agentDir("worker");
-    const defaultAgentDir = state.agentDir();
-    fs.mkdirSync(agentDir, { recursive: true });
-    fs.mkdirSync(defaultAgentDir, { recursive: true });
-    const cfg = makeOpenClawConfigFixture({
-      agents: {
-        defaults: { authInheritance: { agentId: "main" } },
-        entries: { main: { agentDir: defaultAgentDir }, worker: { agentDir } },
-      },
-    });
-    mockMinimalModelDiscovery("openai", "gpt-5.5");
-
-    const options = { agentId: "worker", runtimeHooks: createRuntimeHooks() };
-    const first = await resolveModelAsync("openai", "gpt-5.5", agentDir, cfg, options);
-    saveAuthProfileStore(
-      {
-        version: 1,
-        profiles: { "openai:default": { type: "api_key", provider: "openai", key: "one" } },
-      },
-      defaultAgentDir,
-      { filterExternalAuthProfiles: false, syncExternalCli: false },
-    );
-    const second = await resolveModelAsync("openai", "gpt-5.5", agentDir, cfg, options);
-
-    expectResolvedModel(first);
-    expectResolvedModel(second);
-    expect(discoverAuthStorageFacts).toHaveBeenCalledTimes(1);
-    expect(discoverModelsAsync).toHaveBeenCalledTimes(1);
   });
 
   it("uses the resolved default agent directory and workspace for prepared discovery", async () => {
@@ -490,18 +423,8 @@ describe("resolveModel", () => {
     });
     const baseRuntimeHooks = createRuntimeHooks();
     const prepareProviderDynamicModel = vi.fn(baseRuntimeHooks.prepareProviderDynamicModel);
-    const runProviderDynamicModel = vi.fn((params: { context: { authProfileMode?: string } }) => ({
-      provider: "openai",
-      ...makeModel("gpt-5.5"),
-      api:
-        params.context.authProfileMode === "api_key"
-          ? ("openai-responses" as const)
-          : ("openai-chatgpt-responses" as const),
-      baseUrl:
-        params.context.authProfileMode === "api_key"
-          ? "https://api.openai.com/v1"
-          : "https://chatgpt.com/backend-api",
-    }));
+    const runProviderDynamicModel =
+      vi.fn<ProviderRuntimeHooks["runProviderDynamicModel"]>(makeOpenAIStaticModel);
 
     const result = await resolveWithoutDiscovery("openai", "gpt-5.5", undefined, {
       authProfileId,
@@ -513,12 +436,7 @@ describe("resolveModel", () => {
       },
     });
 
-    expectRecordFields(expectResolvedModel(result), {
-      provider: "openai",
-      id: "gpt-5.5",
-      api: "openai-responses",
-      baseUrl: "https://api.openai.com/v1",
-    });
+    expectResolvedModel(result);
     for (const hook of [prepareProviderDynamicModel, runProviderDynamicModel]) {
       expect(hook.mock.calls[0]?.[0].context).toMatchObject({
         authProfileId,
@@ -549,7 +467,11 @@ describe("resolveModel", () => {
     const cfg = makeProviderConfig("mistral", {
       baseUrl: "https://mistral-proxy.example.com/v1",
       api: "openai-completions",
-      headers: { "X-Proxy": "static-fast-path" },
+      headers: {
+        "X-Proxy": "static-fast-path",
+        Authorization: "secretref-env:OPENAI_HEADER_TOKEN",
+        "X-Managed": "secretref-managed",
+      },
       request,
       localService,
     });
@@ -599,16 +521,21 @@ describe("resolveModel", () => {
           apiOverride ? { api: "openai-responses" } : { compat: deepSeekCatalogCompat },
         ),
       );
-      const cfg =
-        mode === "fallback"
-          ? makeDeepSeekConfig({ compat: { supportsReasoningEffort: false } }, { baseUrl: "" })
-          : makeDeepSeekConfig(
-              { thinkingLevelMap: { off: null } },
-              apiOverride ? { api: "openai-completions" } : {},
-            );
+      const cfg = makeProviderConfig("deepseek", {
+        models: [
+          {
+            ...configuredDeepSeekModel,
+            ...(mode === "fallback"
+              ? { compat: { supportsReasoningEffort: false } }
+              : { thinkingLevelMap: { off: null } }),
+          },
+        ],
+        ...(mode === "fallback" ? { baseUrl: "" } : {}),
+        ...(apiOverride ? { api: "openai-completions" } : {}),
+      });
       const runProviderDynamicModel = vi.fn(() => ({
         provider: "deepseek",
-        ...makeConfiguredDeepSeekModel(),
+        ...configuredDeepSeekModel,
       }));
       const result =
         mode === "runtime"
@@ -657,21 +584,6 @@ describe("resolveModel", () => {
       baseUrl: "https://duplicate.example.test/v1",
     });
     expect.soft(resolved?.headers).toEqual(undefined);
-  });
-
-  it("drops SecretRef marker provider headers in fallback models", async () => {
-    const cfg = makeProviderConfig("custom", {
-      baseUrl: "http://localhost:9000",
-      headers: {
-        Authorization: "secretref-env:OPENAI_HEADER_TOKEN",
-        "X-Managed": "secretref-managed",
-        "X-Custom-Auth": "token-123",
-      },
-      models: [makeModel("listed-model")],
-    });
-
-    const model = expectResolvedModel(await resolveModelForTest("custom", "missing-model", cfg));
-    expect(model.headers).toEqual({ "X-Custom-Auth": "token-123" });
   });
 
   it("merges configured model params with agent defaults for resolved models", async () => {

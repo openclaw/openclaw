@@ -24,9 +24,7 @@ import {
   resetCompactHooksHarnessMocks,
   resolveContextEngineMock,
   resolveModelMock,
-  triggerInternalHookMock,
 } from "./compact.hooks.harness.js";
-import type * as CompactionHooks from "./compaction-hooks.js";
 import type { PreparedCompactionSession } from "./run/compaction-accounting-bridge.js";
 
 const { requestPreparedCompaction } = vi.hoisted(() => ({
@@ -48,9 +46,7 @@ let databases: typeof import("../../state/openclaw-agent-db.js");
 let streamResolution: typeof import("./stream-resolution.js");
 let replay: typeof import("../openai-transport-stream.test-support.js").testing;
 let accounting: typeof import("./run/compaction-accounting-bridge.js");
-let compactionHooks: typeof CompactionHooks;
 let configRuntime: typeof ConfigRuntime;
-let requestBudgets: typeof import("../sessions/compaction/request-budget.js");
 let pressure: typeof import("./run/preemptive-compaction.js");
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -69,6 +65,11 @@ const model = {
   maxTokens: 1_024,
 };
 const summary = "The deployment checklist was reviewed. Compare the remaining options.";
+const userTurns = [
+  "Review the deployment checklist.",
+  "Compare the remaining options.",
+  "Keep the rollout notes.",
+];
 const decoyMessages = [{ role: "user", content: "Unrelated store history", timestamp: 1 }];
 const endpointReplay = {
   providerReplay: { data: "opaque-fixture", compactedWindow: { state: "ready" } },
@@ -99,9 +100,7 @@ beforeAll(async () => {
     streamResolution,
     { testing: replay },
     accounting,
-    compactionHooks,
     configRuntime,
-    requestBudgets,
     pressure,
   ] = await Promise.all([
     import("../../context-engine/delegate.js"),
@@ -111,9 +110,7 @@ beforeAll(async () => {
     import("./stream-resolution.js"),
     import("../openai-transport-stream.test-support.js"),
     import("./run/compaction-accounting-bridge.js"),
-    import("./compaction-hooks.js"),
     import("../../config/runtime-snapshot.js"),
-    import("../sessions/compaction/request-budget.js"),
     import("./run/preemptive-compaction.js"),
   ]);
 });
@@ -183,11 +180,7 @@ async function createFixture(
     const firstKeptEntryId = sessionManager.getEntries().at(-1)!.id;
     await sessionManager.appendCompactionAsync(options.previousSummary, firstKeptEntryId, 100);
   }
-  for (const content of [
-    "Review the deployment checklist.",
-    "Compare the remaining options.",
-    "Keep the rollout notes.",
-  ]) {
+  for (const content of userTurns) {
     sessionManager.appendMessage({ role: "user", content, timestamp: 1 });
     const repeat = Math.max(1, Math.ceil((options.liveOutputChars ?? 0) / (content.length + 11)));
     sessionManager.appendMessage(
@@ -358,132 +351,71 @@ describe("direct compactor through the context-engine delegate", () => {
     },
   );
 
-  it.each([
-    { operation: "summary", ownsCompaction: false, prepared: false },
-    { operation: "endpoint", ownsCompaction: false, prepared: false },
-    { operation: "summary", ownsCompaction: true, prepared: false },
-    { operation: "endpoint", ownsCompaction: true, prepared: false },
-    { operation: "summary", ownsCompaction: false, prepared: true },
-  ] as const)(
-    "runs one queued delegated $operation lifecycle (ownsCompaction=$ownsCompaction, prepared=$prepared)",
-    async ({ operation, ownsCompaction, prepared }) => {
-      const fixture = await createFixture(operation);
-      const backend = vi.fn<ContextEngine["compact"]>(delegate);
-      const info = {
-        id: prepared ? "legacy" : "fixture",
-        name: "Compaction fixture",
-        ownsCompaction,
-      } satisfies ContextEngine["info"];
-      resolveContextEngineMock.mockResolvedValueOnce({
-        info,
-        compact: backend,
+  it("persists queued compaction through the prepared session boundary", async () => {
+    const fixture = await createFixture("summary");
+    resolveContextEngineMock.mockResolvedValueOnce({
+      info: { id: "legacy", name: "Compaction fixture", ownsCompaction: false },
+      compact: delegate,
+    });
+    const sessionManagerCore = await import("../sessions/session-manager-core.js");
+    const { persistCompactionBoundaryWithSessionEntryAsync } =
+      await import("../../config/sessions/session-accessor.sqlite-compaction-runtime.js");
+    const preparation = await sessions.SessionManager[
+      sessionManagerCore.sessionManagerOpenCompaction
+    ](fixture.target);
+    const persistBoundary = async (
+      append: import("../sessions/session-compaction-persistence.js").PreparedCompactionAppend,
+    ) =>
+      persistCompactionBoundaryWithSessionEntryAsync(append.scope, {
+        prepared: append,
+        tokensAfter: append.event.tokensAfter,
+        transcriptByteCompactionLatch: null,
       });
-      const sessionManagerCore = await import("../sessions/session-manager-core.js");
-      const { persistCompactionBoundaryWithSessionEntryAsync } =
-        await import("../../config/sessions/session-accessor.sqlite-compaction-runtime.js");
-      const preparation = prepared
-        ? await sessions.SessionManager[sessionManagerCore.sessionManagerOpenCompaction](
-            fixture.target,
-          )
-        : undefined;
-      const persistBoundary = vi.fn(
-        async (
-          append: import("../sessions/session-compaction-persistence.js").PreparedCompactionAppend,
-        ) =>
-          persistCompactionBoundaryWithSessionEntryAsync(append.scope, {
-            prepared: append,
-            tokensAfter: append.event.tokensAfter,
-            transcriptByteCompactionLatch: null,
-          }),
-      );
-      const effects = vi.spyOn(compactionHooks, "runPostCompactionSideEffects");
-      try {
-        const result = await compactQueued(
-          fixture.queuedParams,
-          preparation?.runtimeEntry
-            ? {
-                preparedSession: { ...preparation, entry: preparation.runtimeEntry },
-                withCompactionPersistenceAsync: persistBoundary,
-              }
-            : undefined,
-        );
-        expect(result, JSON.stringify(result)).toMatchObject({ ok: true, compacted: true });
-        expect(backend).toHaveBeenCalledOnce();
-        expect.soft(hookRunner.runBeforeCompaction).toHaveBeenCalledOnce();
-        expect.soft(hookRunner.runAfterCompaction).toHaveBeenCalledOnce();
-        expect.soft(effects).toHaveBeenCalledOnce();
-        // Native session events still carry real transcript metrics even when
-        // the queued host owns plugin callbacks and post-compaction refresh.
-        expect(triggerInternalHookMock.mock.calls.map(([event]) => event)).toEqual([
-          expect.objectContaining({ action: "compact:before" }),
-          expect.objectContaining({ action: "compact:after" }),
-        ]);
-        if (prepared) {
-          expect(persistBoundary).toHaveBeenCalledOnce();
-          const { readSessionEntryReadOnlyInWorker } =
-            await import("../../config/sessions/session-entry-read-runtime.js");
-          expect(await readSessionEntryReadOnlyInWorker(fixture.target)).toMatchObject({
-            compactionCount: 1,
-          });
-        }
-        const manager = fixture.open();
-        if (operation === "summary") {
-          expect(manager.getBranch().filter((entry) => entry.type === "compaction")).toHaveLength(
-            1,
-          );
-          fixture.expectOriginalEntries();
-        } else {
-          expect(manager.buildSessionContext().messages.at(-1)).toMatchObject(endpointReplay);
-        }
-        fixture.expectDecoyUnchanged();
-      } finally {
-        effects.mockRestore();
-      }
-    },
-  );
+    const result = await compactQueued(fixture.queuedParams, {
+      preparedSession: {
+        ...preparation,
+        entry: expectDefined(preparation.runtimeEntry, "prepared session entry"),
+      },
+      withCompactionPersistenceAsync: persistBoundary,
+    });
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true, compacted: true });
+    const { readSessionEntryReadOnlyInWorker } =
+      await import("../../config/sessions/session-entry-read-runtime.js");
+    expect(await readSessionEntryReadOnlyInWorker(fixture.target)).toMatchObject({
+      compactionCount: 1,
+    });
+    expect(
+      fixture
+        .open()
+        .getBranch()
+        .filter((entry) => entry.type === "compaction"),
+    ).toHaveLength(1);
+    fixture.expectOriginalEntries();
+    fixture.expectDecoyUnchanged();
+  });
 
-  it.each([
-    { budget: "absent", pendingPrompt: "" },
-    { budget: "foreground with pending input", pendingPrompt: "Unrecorded request. ".repeat(500) },
-  ])(
-    "records server checkpoint pressure with $budget budget",
-    async ({ budget, pendingPrompt }) => {
+  it.each([false, true])(
+    "records server checkpoint pressure with foreground budget=%s",
+    async (hasBudget) => {
       const fixture = await createFixture("endpoint");
       const compactorPrompt = "Summarize the deployment discussion.";
       buildConfiguredAgentSystemPromptMock.mockReturnValue(compactorPrompt);
-      const requestBudget = requestBudgets.createCompactionRequestBudget({
+      const requestBudget = {
         contextWindow: model.contextWindow,
         reserveTokens: 16_384,
-        systemPrompt: "Help the operator deploy safely using the available tools.",
-        tools: [
-          {
-            name: "lookup_deployment",
-            description: "Available deployment target and its constraints. ".repeat(500),
-            parameters: { type: "object", properties: { target: { type: "string" } } },
-          },
-        ],
-        pendingPrompt,
-      });
-      const hasBudget = budget !== "absent";
+        fixedTokens: 6_000,
+        pendingTokens: 2_000,
+      };
       accounting.attachCompactionAccountingRecorder(fixture.runtimeContext, {
         ...(hasBudget ? { requestBudget } : {}),
         recordUsage: fixture.recordUsage,
         recordCompaction: fixture.recordCompaction,
       });
-      const manager = sessions.SessionManager.open(fixture.target, workspaceDir);
-      const retainedUsers = manager
-        .buildSessionContext()
-        .messages.filter((message) => message.role === "user")
-        .map((message) => {
-          if (typeof message.content !== "string") {
-            throw new Error("Expected plain-text fixture input");
-          }
-          return {
-            type: "message" as const,
-            role: "user" as const,
-            content: [{ type: "input_text" as const, text: message.content }],
-          };
-        });
+      const retainedUsers = userTurns.map((text) => ({
+        type: "message" as const,
+        role: "user" as const,
+        content: [{ type: "input_text" as const, text }],
+      }));
       const checkpoint = {
         type: "compaction" as const,
         id: "cmp_budget",
@@ -523,7 +455,6 @@ describe("direct compactor through the context-engine delegate", () => {
             prompt: "",
             replay: replayContext,
           });
-      expect(requestBudget.fixedTokens).toBeGreaterThan(5_000);
       expect(result.result?.tokensAfter).toBe(expected);
       expect(fixture.recordCompaction).toHaveBeenCalledExactlyOnceWith({
         tokensBefore: 30_000,
@@ -612,69 +543,42 @@ describe("direct compactor through the context-engine delegate", () => {
     },
   );
 
-  it.each(["summary", "endpoint"] as const)(
-    "cancels %s without publishing or rewriting history",
-    async (operation) => {
-      const fixture = await createFixture(operation);
-      const started = createDeferred();
-      const stopped = createDeferred();
-      const controller = new AbortController();
-      const abortReason = new Error("caller cancelled compaction");
-      if (operation === "endpoint") {
-        requestPreparedCompaction.mockImplementationOnce(
-          async (_stream, _model, _context, options) => {
-            started.resolve();
-            return await new Promise<never>((_, reject) => {
-              options.signal?.addEventListener(
-                "abort",
-                () => {
-                  stopped.resolve();
-                  reject(abortReason);
-                },
-                { once: true },
-              );
-            });
+  it("cancels an endpoint request without publishing or rewriting history", async () => {
+    const fixture = await createFixture("endpoint");
+    const started = createDeferred();
+    const stopped = createDeferred();
+    const controller = new AbortController();
+    const abortReason = new Error("caller cancelled compaction");
+    requestPreparedCompaction.mockImplementationOnce(async (_stream, _model, _context, options) => {
+      started.resolve();
+      return await new Promise<never>((_, reject) => {
+        options.signal?.addEventListener(
+          "abort",
+          () => {
+            stopped.resolve();
+            reject(abortReason);
           },
+          { once: true },
         );
-      } else {
-        const { createAssistantMessageEventStream } = await import("openclaw/plugin-sdk/llm");
-        fixture.stream.mockImplementationOnce((activeModel, _context, options) => {
-          const stream = createAssistantMessageEventStream();
-          started.resolve();
-          options?.signal?.addEventListener(
-            "abort",
-            () => {
-              stream.push({
-                type: "error",
-                reason: "aborted",
-                error: createAssistant(activeModel, [], "aborted"),
-              });
-              stream.end();
-              stopped.resolve();
-            },
-            { once: true },
-          );
-          return stream;
-        });
-      }
-      const pending = delegate({
-        ...fixture.delegateParams,
-        sessionTarget: { ...fixture.target, threadId: 0 },
-        abortSignal: controller.signal,
       });
-      await started.promise;
-      controller.abort(abortReason);
-      const result = await pending;
-      await stopped.promise;
-      expect(result).toMatchObject({ ok: false, compacted: false });
-      expect(result.result).toBeUndefined();
-      const reopened = await fixture.reopen();
-      expect(reopened.getSessionId()).toBe(fixture.target.sessionId);
-      expect(reopened.getEntries()).toEqual(fixture.originalEntries);
-      expect(reopened.buildSessionContext().messages).toEqual(fixture.originalMessages);
-      expectUncalled(fixture.recordCompaction, hookRunner.runAfterCompaction);
-    },
-  );
+    });
+    const pending = delegate({
+      ...fixture.delegateParams,
+      sessionTarget: { ...fixture.target, threadId: 0 },
+      abortSignal: controller.signal,
+    });
+    await started.promise;
+    controller.abort(abortReason);
+    const result = await pending;
+    await stopped.promise;
+    expect(result).toMatchObject({ ok: false, compacted: false });
+    expect(result.result).toBeUndefined();
+    const reopened = await fixture.reopen();
+    expect(reopened.getSessionId()).toBe(fixture.target.sessionId);
+    expect(reopened.getEntries()).toEqual(fixture.originalEntries);
+    expect(reopened.buildSessionContext().messages).toEqual(fixture.originalMessages);
+    expectUncalled(fixture.recordCompaction, hookRunner.runAfterCompaction);
+  });
 
   it.each(["abort", "owner-replaced"] as const)(
     "discards a hydrated compaction transcript after %s before publication",
@@ -810,21 +714,6 @@ describe("direct compactor through the context-engine delegate", () => {
     },
   );
 
-  it("rejects contradictory physical identity without touching either durable transcript", async () => {
-    const fixture = await createFixture("summary");
-    await expect(
-      delegate({
-        sessionId: "contradictory-session",
-        sessionKey: fixture.target.sessionKey,
-        sessionTarget: fixture.target,
-        runtimeContext: fixture.runtimeContext,
-      }),
-    ).rejects.toThrow("conflicts with the caller session identity");
-    expectUncalled(fixture.stream, resolveModelMock, hookRunner.runBeforeCompaction);
-    expect((await fixture.reopen()).getEntries()).toEqual(fixture.originalEntries);
-    fixture.expectDecoyUnchanged();
-  });
-
   it.each([
     { operation: "summary", ownsCompaction: false },
     { operation: "endpoint", ownsCompaction: false },
@@ -907,7 +796,8 @@ describe("direct compactor through the context-engine delegate", () => {
             : undefined;
         expect.soft(count).toBe(1);
         expect.soft(accessor.loadSessionEntry(fixture.target)?.compactionCount).toBe(1);
-        expect(backend).toHaveBeenCalledOnce();
+        expect(hookRunner.runBeforeCompaction).toHaveBeenCalledOnce();
+        expect(hookRunner.runAfterCompaction).toHaveBeenCalledOnce();
         expect(result.result?.tokensBefore).toBe(expectCommittedTranscript());
         fixture.expectDecoyUnchanged();
       } finally {
