@@ -140,3 +140,38 @@ it.each(["production", "development", "observe"])(
     expect(result.alive, "payload, reader root, GC control").toEqual([false, false, false]);
   },
 );
+
+it.each(["production", "development", "observe"])(
+  "%s cleans up the committed frame when its async replacement rejects",
+  async (mode) => {
+    const result = await collectProbe(
+      mode,
+      `
+      import { createMemo, createRoot, createSignal, flush, onCleanup, resolve } from "solid-js";
+      async function retire() {
+        let cleanups = 0;
+        const root = createRoot(dispose => {
+          const [revision, setRevision] = createSignal(0);
+          const read = createMemo(() => {
+            if (revision()) return Promise.reject(new Error("replacement rejected"));
+            onCleanup(() => { cleanups++; });
+            return Promise.resolve("ready");
+          });
+          return { read, setRevision, dispose };
+        });
+        try {
+          await resolve(root.read);
+          root.setRevision(1);
+          flush();
+          await resolve(root.read).catch(() => {});
+          references = [];
+          return cleanups;
+        } finally {
+          root.dispose();
+        }
+      }
+    `,
+    );
+    expect(result.value, "previous committed run cleaned up at rejection").toBe(1);
+  },
+);

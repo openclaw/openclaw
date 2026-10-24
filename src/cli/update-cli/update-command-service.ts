@@ -34,10 +34,7 @@ import { tryWriteCompletionCache, type UpdateCommandOptions } from "./shared.js"
 import { createUpdateConfigSnapshot } from "./update-command-config-snapshot.js";
 import { recordMutableUpdateSignalPhase } from "./update-command-mutable-signals.js";
 import type { PluginUpdateWarning } from "./update-command-plugins-internals.js";
-import {
-  observeUpdateGatewayReadiness,
-  type UpdateGatewayObservationContext,
-} from "./update-command-readiness.js";
+import { observeUpdateGatewayReadiness } from "./update-command-readiness.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import {
   recordServiceReconciliationWarning,
@@ -167,7 +164,7 @@ export async function maybeRestartService(params: {
   timeoutMs: number;
   onVerificationFailure?: (reason: string) => void;
   onPluginWarnings?: (warnings: readonly PluginUpdateWarning[]) => void;
-  onVerified?: (verifiedAtMs: number, observation: UpdateGatewayObservationContext) => void;
+  onVerified?: (verifiedAtMs: number) => void;
   onGatewayStartAttempted?: () => void;
   definitionRecovery?: UpdateServiceDefinitionRecovery;
   expectedGatewayIdentity?: { version: string; buildId?: string };
@@ -231,7 +228,6 @@ export async function maybeRestartService(params: {
   const original = params.originalManagedServiceRuntime;
   let activation = {
     ...params,
-    targetRoot: params.result.root ?? undefined,
     signal: run?.deadline?.signal,
     // A default update step must not truncate a Windows service's cold-start budget.
     timeoutMs:
@@ -251,8 +247,6 @@ export async function maybeRestartService(params: {
     }
     activation.refreshServiceEnv = activation.serviceRuntimeRefreshRequired = false;
     activation.nodeRunner = original.nodeRunner;
-    // Retained A keeps its original observer; it cannot enter candidate-child custody.
-    activation.targetRoot = undefined;
     activation.expectedGatewayIdentity = { version: original.version, buildId: original.buildId };
     activation.serviceUpdateVerdict = original.service.serviceUpdateVerdict;
   }
@@ -356,21 +350,6 @@ export async function maybeRestartService(params: {
   let activationAccepted = false;
   let childReadinessPending = false;
   let updatedInstallRestartNeedsServiceRootProof = false;
-  const recordVerified = (
-    verifiedAtMs: number,
-    expectedVersion?: string,
-    expectedBuildId?: string,
-    requireRunningService?: boolean,
-  ) =>
-    params.onVerified?.(verifiedAtMs, {
-      targetRoot: activation.targetRoot,
-      nodeRunner: activation.nodeRunner,
-      serviceEnv: { ...activation.serviceEnv },
-      gatewayPort: activation.gatewayPort,
-      expectedVersion,
-      expectedBuildId,
-      requireRunningService,
-    });
   const verifyRestartedGateway = async (
     expectedGatewayVersion: string | undefined,
     expectedGatewayBuildId: string | undefined,
@@ -382,8 +361,6 @@ export async function maybeRestartService(params: {
   ) => {
     recordPhase("verifying");
     const verification = await verifyUpdatedGateway({
-      targetRoot: activation.targetRoot,
-      nodeRunner: activation.nodeRunner,
       result: activation.result,
       opts: activation.opts,
       serviceEnv: activation.serviceEnv,
@@ -394,13 +371,7 @@ export async function maybeRestartService(params: {
       expectedBuildId: expectedGatewayBuildId,
       requireRunningService: opts.requireRunningService,
       health: opts.health,
-      onVerified: (verifiedAtMs) =>
-        recordVerified(
-          verifiedAtMs,
-          expectedGatewayVersion,
-          expectedGatewayBuildId,
-          opts.requireRunningService,
-        ),
+      onVerified: params.onVerified,
       assertCurrent,
       recoverHealth: async (initialHealth, reinspect, assertReadinessCurrent) => {
         assertReadinessCurrent();
@@ -440,8 +411,6 @@ export async function maybeRestartService(params: {
           health = await reinspect();
         }
         const recovery = await recoverLaunchAgentAndRecheckGatewayHealth({
-          targetRoot: activation.targetRoot,
-          nodeRunner: activation.nodeRunner,
           onGatewayStartAttempted: params.onGatewayStartAttempted,
           updateRun: params.opts.run,
           assertCurrent: assertReadinessCurrent,
@@ -498,12 +467,6 @@ export async function maybeRestartService(params: {
           expectedVersion: normalizeOptionalString(expectedIdentity?.version),
           expectedBuildId: normalizeOptionalString(expectedIdentity?.buildId),
           waitForStartup: false,
-          onVerified: (verifiedAtMs) =>
-            recordVerified(
-              verifiedAtMs,
-              normalizeOptionalString(expectedIdentity?.version),
-              normalizeOptionalString(expectedIdentity?.buildId),
-            ),
         });
       } catch (error) {
         assertRestartFailureCurrent(error);
@@ -551,9 +514,6 @@ export async function maybeRestartService(params: {
         ) {
           recordPhase("verifying");
           const { health } = await observeUpdateGatewayReadiness({
-            targetRoot: activation.targetRoot,
-            executor: activation.opts.run?.executorFence,
-            nodeRunner: activation.nodeRunner,
             healthOnly: true,
             gatewayPort: activation.gatewayPort,
             timeoutMs: activation.timeoutMs,

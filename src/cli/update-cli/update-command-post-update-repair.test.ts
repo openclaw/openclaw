@@ -31,7 +31,6 @@ import { createPostUpdateRepairFixture } from "./update-command-post-update-repa
 import { registerCurrentCoreRuntimeRefreshTests } from "./update-command-post-update-runtime-refresh.test-support.js";
 import { finishUpdate } from "./update-command-post-update.js";
 import { successfulPluginUpdate, taskRecovery } from "./update-command-post-update.test-support.js";
-import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import { UpdateCommandFailure } from "./update-command-result.js";
 import { inspectManagedGatewayServiceBeforeUpdate } from "./update-command-service-plan.js";
 import { verifyUpdatedGateway } from "./update-command-verification.js";
@@ -137,8 +136,6 @@ vi.mock("./update-command-service.js", async (importOriginal) => ({
 vi.mock("./update-command-service-command.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-service-command.js")>()),
   runUpdatedInstallGatewayCommand: mocks.restartCommand,
-  // The synthetic legacy CLI has no delegated reader; keep the parent recovery owner real.
-  prepareUpdatedInstallGatewayReadiness: async () => undefined,
 }));
 vi.mock("./update-command-convergence.js", () => ({
   convergeUpdatePlugins: mocks.converge,
@@ -253,12 +250,7 @@ describe("post-activation failure settlement without inference", () => {
           { env: run.env },
         );
         if (ready) {
-          onVerified?.(Date.now(), {
-            targetRoot: packageRoot,
-            serviceEnv: run.env,
-            gatewayPort: 19101,
-            expectedVersion: result.after?.version,
-          });
+          onVerified?.(Date.now());
           return "ok";
         }
         result.steps.push({
@@ -322,48 +314,6 @@ describe("post-activation failure settlement without inference", () => {
   );
 
   registerCurrentCoreRuntimeRefreshTests(fixture, mocks);
-
-  it("retains an activated package when observation is pending without an original service", async () => {
-    const params = fixture();
-    const { transaction, packageRoot } = await createRetainedPackageSwap(
-      dirs.make("update-observer-pending-"),
-    );
-    params.root = packageRoot;
-    params.result.root = packageRoot;
-    params.packageTransaction = transaction;
-    params.rollbackBlockedReason = undefined;
-    expect(params.originalManagedServiceRuntime).toBeUndefined();
-    const rollback = vi.spyOn(transaction, "rollback");
-    const complete = vi.spyOn(transaction, "complete");
-    const pending = new UpdateCommandRecoveryPendingError("Target observation did not settle.");
-    mocks.restart.mockRejectedValueOnce(pending);
-
-    await expect(finishUpdate(params)).rejects.toMatchObject({
-      name: "UpdateCommandPendingRecoveryFailure",
-      cause: pending,
-    });
-
-    expect(mocks.restart).toHaveBeenCalledOnce();
-    for (const operation of [
-      mocks.rollback,
-      mocks.restartCommand,
-      mocks.stop,
-      rollback,
-      complete,
-    ]) {
-      expect(operation).not.toHaveBeenCalled();
-    }
-    await expect(fs.readFile(path.join(packageRoot, "package.json"), "utf8")).resolves.toContain(
-      '"version":"2.0.0"',
-    );
-    await expect(
-      fs.readFile(path.join(transaction.backupRoot, "package.json"), "utf8"),
-    ).resolves.toContain('"version":"1.0.0"');
-    expect(getUpdateRun(params.opts.run!.runId, { env: params.opts.run!.env })).toMatchObject({
-      status: "running",
-      confirmedAtMs: null,
-    });
-  });
 
   registerUnverifiedDefinitionRecoveryTests({
     fixture,

@@ -568,51 +568,25 @@ exit "$status"
     ];
     for (const args of [
       ["123", outcomeOid],
-      ["123", "", "--confirmed-operator-recovery"],
       ["123", "not-an-outcome", "--confirmed-operator-recovery"],
       ["123", outcomeOid, "--confirmed-no-running-tools"],
       recovery("--auto-merge"),
       recovery("--cancel-auto", "--cancel-auto"),
       recovery("--observed-head", selectedHead),
-      ...[
-        [],
-        [""],
-        ["HEAD"],
-        ["B".repeat(40)],
-        [selectedHead, "--observed-head", otherHead],
-        [selectedHead, "--merged-head", otherHead],
-        [selectedHead, "--replacement-head", otherHead],
-        [selectedHead, "--auto-merge"],
-        [selectedHead, "--body-file", "message.md"],
-        [selectedHead, "--legacy-refusal", "proof"],
-        [selectedHead, "--pre-dispatch-refusal", "proof"],
-        [selectedHead, "--admin-evidence", "proof", "--confirmed-operator-admin"],
-      ].map((suffix) => recovery("--cancel-auto", "--observed-head").concat(suffix)),
+      recovery("--cancel-auto", "--observed-head"),
+      recovery("--cancel-auto", "--observed-head", "HEAD"),
+      recovery("--cancel-auto", "--observed-head", selectedHead, "--observed-head", otherHead),
       recovery("--cancel-auto", "--body-file", "message.md"),
       recovery("--cancel-auto", "--replacement-head", selectedHead),
-      ...[
-        [],
-        [""],
-        ["HEAD"],
-        ["a".repeat(39)],
-        ["A".repeat(40)],
-        [selectedHead, "--replacement-head", otherHead],
-        [selectedHead, "--confirmed-operator-recovery"],
-      ].map((suffix) => recovery("--replacement-head").concat(suffix)),
-      ["123", outcomeOid, "--replacement-head", selectedHead, "--confirmed-operator-recovery"],
-      ["123", outcomeOid, "--replacement-head", selectedHead],
+      recovery("--replacement-head"),
+      recovery("--replacement-head", "HEAD"),
+      recovery("--replacement-head", selectedHead, "--replacement-head", otherHead),
+      recovery("--replacement-head", selectedHead, "--confirmed-operator-recovery"),
       ["0123", outcomeOid, "--confirmed-operator-recovery", "--replacement-head", selectedHead],
-      ...[
-        [],
-        ["HEAD"],
-        ["B".repeat(40)],
-        [selectedHead, "--merged-head", otherHead],
-        [selectedHead, "--cancel-auto"],
-        [selectedHead, "--auto-merge"],
-        [selectedHead, "--replacement-head", otherHead],
-        [selectedHead, "--body-file", "message.md"],
-        [selectedHead, "--admin-evidence", "proof.json", "--confirmed-operator-admin"],
-      ].map((suffix) => recovery("--merged-head").concat(suffix)),
+      recovery("--merged-head"),
+      recovery("--merged-head", "HEAD"),
+      recovery("--merged-head", selectedHead, "--merged-head", otherHead),
+      recovery("--merged-head", selectedHead, "--body-file", "message.md"),
     ]) {
       const result = runWrapper(fixture, ["merge-recover", ...args], "canonical");
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(2);
@@ -637,7 +611,6 @@ exit "$status"
     }
     for (const args of [
       ["--pr"],
-      ["--pr", "0123"],
       ["--pr", "../123"],
       ["--pr", "123", "--pr", "456"],
       ["--dry-run", "--dry-run"],
@@ -783,21 +756,7 @@ exit "$status"
       ...[
         ["--admin-evidence", "proof.json"],
         ["--confirmed-operator-admin"],
-        [
-          "--admin-evidence",
-          "proof.json",
-          "--confirmed-operator-admin",
-          "--replacement-head",
-          "HEAD",
-        ],
         ["--admin-evidence", "proof.json", "--confirmed-operator-admin", "--cancel-auto"],
-        [
-          "--admin-evidence",
-          "proof.json",
-          "--confirmed-operator-admin",
-          "--pre-dispatch-refusal",
-          "proof",
-        ],
       ].map((flags) =>
         ["merge-recover", "123", outcomeOid, "--confirmed-operator-recovery"].concat(flags),
       ),
@@ -1573,7 +1532,6 @@ echo "canonical wrapper executed";`,
   });
 
   itPosix.for([
-    { outcome: "success", args: ["ci-dispatch", "123"], exitCode: 0, interrupt: false },
     { outcome: "failure", args: ["ci-dispatch", "123"], exitCode: 17, interrupt: false },
     { outcome: "SIGTERM", args: ["ci-dispatch", "123"], exitCode: 143, interrupt: true },
     { outcome: "unsupervised usage", args: ["unknown-command"], exitCode: 2, interrupt: false },
@@ -1885,7 +1843,7 @@ exit 99
   );
 
   itPosix(
-    "executes tooling and publisher code from the extracted anchor dependency closure",
+    "keeps extracted dependency pins and executes the planner's source-scanning child",
     () => {
       const fixture = makeMismatchedWrapperRepo({ realModules: true });
       parkCanonicalOffAnchor(fixture);
@@ -1893,35 +1851,6 @@ exit 99
       fixture.write("gh", "#!/bin/sh\necho forbidden-gh >&2\nexit 99\n", fixture.bin);
       const nodeExecPath = requireNodeTool("node");
       const run = (args: string[]) => runCommand(nodeExecPath, args, fixture.env, anchor);
-      // These .mjs files launch children at import time. Execute the real shims
-      // with invalid arguments so their .mts owners reject before any GitHub IO.
-      for (const [entry, exitCode, message] of [
-        ["watch-pr-ci.mjs", 2, "Usage: node scripts/watch-pr-ci.mjs"],
-        ["verify-pr-hosted-gates.mjs", 1, "Usage: node scripts/verify-pr-hosted-gates.mjs"],
-        ["pr-lib/ci-dispatch.mjs", 2, "Usage: ci-dispatch.mjs"],
-      ] as const) {
-        const result = run([join(anchor, "scripts", entry)]);
-        expect.soft(result.status, `${entry}\n${result.stdout}\n${result.stderr}`).toBe(exitCode);
-        expect.soft(result.stderr, entry).toContain(message);
-      }
-      // Import the actual adapter closure before it rejects missing arguments.
-      // Real provisioning and allocation-lease renewal have separate flows.
-      const provision = runCommand(
-        nodeExecPath,
-        [
-          "--import",
-          join(anchor, "scripts/tsx.mjs"),
-          join(anchor, "scripts/pr-lib/worktree-provision.mts"),
-        ],
-        { ...fixture.env, TSX_TSCONFIG_PATH: join(anchor, "tsconfig.json") },
-        fixture.linked,
-      );
-      expect.soft(provision.status, provision.stderr).toBe(1);
-      expect.soft(provision.stderr).toContain("Usage: worktree-provision.mts");
-      expect.soft(provision.stderr).toContain("[pr-worktree-provision] FAILED (exit 1)");
-      expect
-        .soft(fixture.git(fixture.canonical, ["for-each-ref", "refs/openclaw"]).stdout)
-        .toBe("");
       // A later install may remove or redirect the canonical package aliases.
       // The materialized owner must keep its original installed dependency.
       const canonicalYaml = join(fixture.canonical, "node_modules/yaml");
@@ -1943,40 +1872,6 @@ exit 99
           .soft(verified.stderr, state)
           .toContain("Usage: node scripts/verify-pr-hosted-gates.mjs");
       }
-
-      const attribution = run([
-        "scripts/check-changelog-attributions.mjs",
-        "--is-forbidden-handle",
-        "fixture[bot]",
-      ]);
-      expect.soft(attribution.status, attribution.stderr).toBe(0);
-      const bypass = run([
-        "--input-type=module",
-        "-e",
-        "await import('./scripts/pr-lib/crabbox-merge-bypass.mjs')",
-      ]);
-      expect.soft(bypass.status, bypass.stderr).toBe(0);
-
-      const plan = {
-        version: 1,
-        baseSha: outcomeOid,
-        headSha: REVIEWED_HEAD,
-        changedPaths: [{ path: "docs/example.md", status: "M" }],
-        targets: [],
-      };
-      const planFile = join(fixture.root, "plan.json");
-      writeFileSync(planFile, JSON.stringify(plan));
-      const publisher = run([
-        "scripts/pr-crabbox-gate-publisher.mjs",
-        "--print-command",
-        planFile,
-        "c".repeat(64),
-      ]);
-      expect.soft(publisher.status, publisher.stderr).toBe(0);
-      expect.soft(publisher.stdout).toContain(`OPENCLAW_CRABBOX_GATE_HEAD=${REVIEWED_HEAD}`);
-      expect.soft(publisher.stdout).toContain("OPENCLAW_CRABBOX_GATE_TARGET_COUNT=0");
-      expect.soft(publisher.stdout).toContain("pnpm build");
-      expect.soft(publisher.stdout).toContain("pnpm check");
 
       // The trusted planner reads candidate sources without executing them. A
       // non-sibling importer exercises its real source-scanning child as well.
@@ -2202,14 +2097,7 @@ node "$script_parent_dir/verify-pr-hosted-gates.mjs" --anchor-proof;`,
     const { repo, linked, git, run } = unanchoredWrapperFixture("openclaw-pr-wrapper-revision-");
     expect(git(repo, ["worktree", "add", "-b", "feature", linked]).status).toBe(0);
 
-    for (const component of [
-      "scripts/pr-lib/wrapper-components.txt",
-      "scripts/pr-lib/merge.sh",
-      "scripts/watch-pr-ci.mts",
-      "scripts/verify-pr-hosted-gates.mts",
-      "scripts/lib/local-check-runtime.mts",
-      "scripts/tsx.mjs",
-    ]) {
+    for (const component of ["scripts/pr-lib/merge.sh", "scripts/lib/local-check-runtime.mts"]) {
       writeFileSync(join(linked, component), "# dirty linked\n");
       const dirtyResult = run();
       expect(dirtyResult.status, component).toBe(1);

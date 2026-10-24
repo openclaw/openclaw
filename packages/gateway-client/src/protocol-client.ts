@@ -354,17 +354,12 @@ export class GatewayProtocolClient<TPlan> {
       plan,
     };
     this.recordTiming("connect-plan-ready", generation, plan);
-    let response: Promise<HelloOk>;
-    try {
-      const params = this.opts.buildConnectParams(plan);
-      this.connectRequestSent = true;
-      response = this.request<HelloOk>("connect", params);
-      this.recordTiming("request-sent", generation, plan);
-    } catch (error) {
-      this.handleConnectPlanError(socket, generation, error);
-      return;
-    }
-    void response
+    void this.request<HelloOk>("connect", this.opts.buildConnectParams(plan), {
+      onSent: () => {
+        this.connectRequestSent = true;
+        this.recordTiming("request-sent", generation, plan);
+      },
+    })
       .then((hello) => {
         // Closing transports remain current until their close callback runs;
         // a late response must not publish readiness or reset reconnect backoff.

@@ -45,6 +45,10 @@ import {
 } from "./connect-auth.js";
 import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
 import { resolveModelCatalogConnect } from "./model-catalog-connect.js";
+import {
+  resolveNodeProtocolClientMetadata,
+  shouldNegotiateLegacyNodeProtocol,
+} from "./node-protocol.js";
 import type { GatewayProtocolRequestTiming } from "./pending-request.js";
 import type {
   GatewayClientCloseInfo,
@@ -170,7 +174,7 @@ export type GatewayClientOptions = GatewayWebSocketTargetOptions &
      * this to keep the connect-challenge watchdog aligned with the gateway.
      */
     preauthHandshakeTimeoutMs?: number;
-    /** Revalidate the caller's live authority before credential-bearing transport writes. */
+    /** Synchronously revalidate the caller's live authority before transport writes. */
     assertConnectionCurrent?: () => void;
     tickWatchMinIntervalMs?: number;
     tickWatchTimeoutMs?: number;
@@ -234,7 +238,7 @@ export class GatewayClient {
   private opts: GatewayClientOptions;
   private deps: Required<GatewayClientHostDeps>;
   private stopped = false;
-  private usePreviousNodeProtocol = false;
+  private useLegacyNodeProtocolEnvelope = false;
   private nodeProtocolTransitionPending = false;
   private pendingDeviceTokenRetry = false;
   private deviceTokenRetryBudgetUsed = false;
@@ -311,11 +315,7 @@ export class GatewayClient {
           : null;
         return storedAuth instanceof Promise ? storedAuth.then(assemble) : assemble(storedAuth);
       },
-      buildConnectParams: (assembled) => {
-        // Device-token preparation may have yielded; ownership must still hold at send.
-        this.opts.assertConnectionCurrent?.();
-        return assembled.params;
-      },
+      buildConnectParams: (assembled) => assembled.params,
       onConnectPlanError: (error) => {
         this.stopped = true;
         const marked = markGatewayConnectAssemblyError(error);
@@ -461,14 +461,14 @@ export class GatewayClient {
     // lifecycle and must remove it immediately after the socket is created.
     let unregisterGatewayLoopbackBypass: (() => void) | undefined;
     try {
-      this.opts.assertConnectionCurrent?.();
-      unregisterGatewayLoopbackBypass = this.deps.registerGatewayLoopbackBypass(url);
-    } catch (error) {
-      throw new GatewayClientTransportPolicyError(
-        error instanceof Error ? error.message : String(error),
-      );
-    }
-    try {
+      try {
+        unregisterGatewayLoopbackBypass = this.deps.registerGatewayLoopbackBypass(url);
+        this.opts.assertConnectionCurrent?.();
+      } catch (error) {
+        throw new GatewayClientTransportPolicyError(
+          error instanceof Error ? error.message : String(error),
+        );
+      }
       ws = new WebSocket(url, transport.options);
       ws.binaryType = "nodebuffer";
     } finally {
@@ -539,7 +539,11 @@ export class GatewayClient {
     });
     return {
       isOpen: () => ws.readyState === WebSocket.OPEN,
-      send: (data) => ws.send(data),
+      send: (data) => {
+        // Authentication and startup retries can yield after connection admission.
+        this.opts.assertConnectionCurrent?.();
+        ws.send(data);
+      },
       close: (code, reason) => ws.close(code, reason),
     };
   }
@@ -669,15 +673,15 @@ export class GatewayClient {
       role === "node" &&
       clientMode === GATEWAY_CLIENT_MODES.NODE &&
       clientId === GATEWAY_CLIENT_NAMES.NODE_HOST;
-    const negotiatesNodeProtocol = this.shouldNegotiatePreviousNodeProtocol();
-    const usePreviousNodeProtocol =
+    const negotiatesNodeProtocol = shouldNegotiateLegacyNodeProtocol(this.opts);
+    const useLegacyNodeProtocolEnvelope =
       isBuiltInNodeHost &&
-      (this.usePreviousNodeProtocol ||
+      (this.useLegacyNodeProtocolEnvelope ||
         (this.opts.maxProtocol === MIN_NODE_PROTOCOL_VERSION &&
           (this.opts.minProtocol ?? MIN_NODE_PROTOCOL_VERSION) <= MIN_NODE_PROTOCOL_VERSION));
     // Match server admission: only probes and exact node role+mode identities
     // may advertise specialized floors; every other client stays current-only.
-    const minProtocol = usePreviousNodeProtocol
+    const minProtocol = useLegacyNodeProtocolEnvelope
       ? MIN_NODE_PROTOCOL_VERSION
       : negotiatesNodeProtocol
         ? PROTOCOL_VERSION
@@ -687,13 +691,16 @@ export class GatewayClient {
             : role === "node" && clientMode === GATEWAY_CLIENT_MODES.NODE
               ? MIN_NODE_PROTOCOL_VERSION
               : MIN_CLIENT_PROTOCOL_VERSION));
-    const maxProtocol = usePreviousNodeProtocol
+    const maxProtocol = useLegacyNodeProtocolEnvelope
       ? MIN_NODE_PROTOCOL_VERSION
       : negotiatesNodeProtocol
         ? PROTOCOL_VERSION
         : (this.opts.maxProtocol ?? PROTOCOL_VERSION);
-    const platform = this.opts.platform ?? process.platform;
-    const deviceFamily = this.opts.deviceFamily;
+    const { platform, deviceFamily, modelIdentifier } = resolveNodeProtocolClientMetadata(
+      this.opts,
+      process.platform,
+      useLegacyNodeProtocolEnvelope,
+    );
 
     return {
       params: {
@@ -706,18 +713,18 @@ export class GatewayClient {
           buildId: this.opts.clientBuildId,
           platform,
           deviceFamily,
-          modelIdentifier: this.opts.modelIdentifier,
+          modelIdentifier,
           mode: clientMode,
           instanceId: this.opts.instanceId,
         },
         ...resolveModelCatalogConnect({
           caps: Array.isArray(this.opts.caps) ? this.opts.caps : [],
-          modelCatalog: this.opts.modelCatalog,
+          modelCatalog: useLegacyNodeProtocolEnvelope ? undefined : this.opts.modelCatalog,
           serverCapabilities: params.serverCapabilities,
         }),
         commands: Array.isArray(this.opts.commands) ? this.opts.commands : undefined,
-        computerUse: this.opts.computerUse,
-        workerRuns: this.opts.workerRuns,
+        computerUse: useLegacyNodeProtocolEnvelope ? undefined : this.opts.computerUse,
+        workerRuns: useLegacyNodeProtocolEnvelope ? undefined : this.opts.workerRuns,
         permissions:
           this.opts.permissions && typeof this.opts.permissions === "object"
             ? this.opts.permissions
@@ -746,23 +753,9 @@ export class GatewayClient {
     };
   }
 
-  private shouldNegotiatePreviousNodeProtocol(): boolean {
-    if (
-      this.opts.role !== "node" ||
-      this.opts.mode !== GATEWAY_CLIENT_MODES.NODE ||
-      this.opts.clientName !== GATEWAY_CLIENT_NAMES.NODE_HOST
-    ) {
-      return false;
-    }
-    return (
-      (this.opts.minProtocol ?? MIN_NODE_PROTOCOL_VERSION) === MIN_NODE_PROTOCOL_VERSION &&
-      (this.opts.maxProtocol ?? PROTOCOL_VERSION) === PROTOCOL_VERSION
-    );
-  }
-
   private shouldRetryWithAlternateNodeProtocol(error: GatewayProtocolRequestError): boolean {
     if (
-      !this.shouldNegotiatePreviousNodeProtocol() ||
+      !shouldNegotiateLegacyNodeProtocol(this.opts) ||
       !(error instanceof GatewayClientRequestError)
     ) {
       return false;
@@ -772,7 +765,7 @@ export class GatewayClient {
       ?.expectedProtocol;
     return (
       expectedProtocol ===
-        (this.usePreviousNodeProtocol ? PROTOCOL_VERSION : MIN_NODE_PROTOCOL_VERSION) &&
+        (this.useLegacyNodeProtocolEnvelope ? PROTOCOL_VERSION : MIN_NODE_PROTOCOL_VERSION) &&
       (detailCode === ConnectErrorDetailCodes.PROTOCOL_MISMATCH ||
         normalizeGatewayErrorText(error.message).includes("protocol mismatch"))
     );
@@ -885,11 +878,11 @@ export class GatewayClient {
 
   private completeConnectHello(helloOk: HelloOk): void {
     const reconnectWithCurrentNodeProtocol =
-      this.usePreviousNodeProtocol &&
-      this.shouldNegotiatePreviousNodeProtocol() &&
+      this.useLegacyNodeProtocolEnvelope &&
+      shouldNegotiateLegacyNodeProtocol(this.opts) &&
       helloOk.protocol > MIN_NODE_PROTOCOL_VERSION;
     if (reconnectWithCurrentNodeProtocol) {
-      this.usePreviousNodeProtocol = false;
+      this.useLegacyNodeProtocolEnvelope = false;
     }
     this.nodeProtocolTransitionPending = false;
     this.pendingDeviceTokenRetry = false;
@@ -898,8 +891,8 @@ export class GatewayClient {
     this.tickIntervalMs =
       typeof helloOk.policy?.tickIntervalMs === "number" ? helloOk.policy.tickIntervalMs : 30_000;
     if (reconnectWithCurrentNodeProtocol) {
-      // Reconnect to the current protocol before reporting readiness so node
-      // capabilities do not retain the previous protocol's restrictions.
+      // A v4 Gateway accepted the exact-v3 probe as a legacy session. Reconnect
+      // before reporting readiness so node capabilities are not silently filtered.
       this.protocol.resetReconnectBackoff(250);
       this.protocol.closeSocket(1012, "gateway protocol upgraded");
       return;
@@ -933,13 +926,13 @@ export class GatewayClient {
   ) {
     if (this.shouldRetryWithAlternateNodeProtocol(error)) {
       const resetBackoff = !this.nodeProtocolTransitionPending;
-      this.usePreviousNodeProtocol = !this.usePreviousNodeProtocol;
+      this.useLegacyNodeProtocolEnvelope = !this.useLegacyNodeProtocolEnvelope;
       this.nodeProtocolTransitionPending = true;
       if (resetBackoff) {
         this.protocol.resetReconnectBackoff(250);
       }
       this.logDebug(
-        this.usePreviousNodeProtocol
+        this.useLegacyNodeProtocolEnvelope
           ? `gateway rejected protocol v${PROTOCOL_VERSION}; retrying node host with protocol v${MIN_NODE_PROTOCOL_VERSION}`
           : `gateway rejected protocol v${MIN_NODE_PROTOCOL_VERSION}; retrying node host with protocol v${PROTOCOL_VERSION}`,
       );

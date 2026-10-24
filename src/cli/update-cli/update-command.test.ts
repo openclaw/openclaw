@@ -244,9 +244,6 @@ describe("recoverInstalledLaunchAgentAfterUpdate", () => {
 
 describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
   beforeEach(() => {
-    vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue(
-      createMockGatewayService({ isLoaded: async () => true }),
-    );
     vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(
       tempDirs.make("update-native-repair-locks-"),
     );
@@ -257,6 +254,7 @@ describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
     async (probe) => {
       const env = { OPENCLAW_STATE_DIR: tempDirs.make("update-probe-failure-") };
       const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
+      mockProcessPlatform("darwin");
       const service = createMockGatewayService();
       const readState = vi.spyOn(gatewayService, "readGatewayServiceState");
       const reason = "launchctl denied";
@@ -271,18 +269,6 @@ describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
           command: null,
         });
       }
-      const inspectLaunchAgent = launchAgentRecovery.recoverInstalledLaunchAgentAfterUpdate;
-      vi.spyOn(launchAgentRecovery, "recoverInstalledLaunchAgentAfterUpdate").mockImplementation(
-        (params) => {
-          // Select the LaunchAgent branch synchronously; filesystem owners keep the real OS.
-          const platform = vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
-          try {
-            return inspectLaunchAgent(params);
-          } finally {
-            platform.mockRestore();
-          }
-        },
-      );
       const recover = vi
         .spyOn(nativeLaunchAgentRecovery, "recoverInstalledLaunchAgent")
         .mockResolvedValue(null);
@@ -340,7 +326,7 @@ describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
         OPENCLAW_PORT: "18790",
       };
       const runId = createUpdateRun({ trigger: "cli" }, { env }).runId;
-      const service = gatewayService.resolveGatewayService();
+      const service = {} as never;
       const unhealthy = {
         runtime: { status: "stopped" },
         portUsage: { port: 18790, status: "free", listeners: [], hints: [] },
@@ -391,18 +377,16 @@ describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
       });
 
       if (outcome === "recovered") {
-        expect(waitForHealthy).toHaveBeenCalledWith(
-          expect.objectContaining({
-            service,
-            port: 18790,
-            expectedVersion: "2026.5.3",
-            expectedBuildId: "new-build",
-            env,
-            supervisorKeepsAlive: process.platform === "darwin",
-            requirePluginHealth: false,
-            requireChannelHealth: false,
-          }),
-        );
+        expect(waitForHealthy).toHaveBeenCalledWith({
+          service,
+          port: 18790,
+          expectedVersion: "2026.5.3",
+          expectedBuildId: "new-build",
+          env,
+          supervisorKeepsAlive: true,
+          requirePluginHealth: false,
+          requireChannelHealth: false,
+        });
       } else {
         expect(waitForHealthy).not.toHaveBeenCalled();
       }
@@ -424,7 +408,7 @@ describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
   );
 
   it("keeps the update unhealthy when LaunchAgent repair succeeds but health does not recover", async () => {
-    const service = gatewayService.resolveGatewayService();
+    const service = {} as never;
     const unhealthySnapshot = {
       runtime: { status: "stopped" },
       portUsage: { port: 18790, status: "free", listeners: [], hints: [] },

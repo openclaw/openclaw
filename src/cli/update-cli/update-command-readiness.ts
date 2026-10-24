@@ -7,14 +7,12 @@ import { STARTUP_MIGRATION_LEASE_TTL_MS } from "../../infra/startup-migration-ch
 import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
 import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import type { UpdateRunStep } from "../../infra/update-run-record.js";
-import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
 import { redactSupportDiagnosticLine } from "../../logging/diagnostic-support-redaction.js";
 import {
   CommandProcessCleanupError,
   hasCommandProcessCleanupError,
 } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
-import { formatCliCommand } from "../command-format.js";
 import {
   createGatewayRestartDeadline,
   GatewayRestartDeadlineError,
@@ -33,12 +31,7 @@ import {
 } from "../daemon-cli/restart-health.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import type { PostUpdateLaunchAgentRecoveryResult } from "./update-command-launch-agent-recovery.js";
-import type {
-  UpdateReadinessObservation,
-  UpdateReadinessRequest,
-} from "./update-command-readiness-protocol.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
-import { prepareUpdatedInstallGatewayReadiness } from "./update-command-service-command.js";
 import {
   gatewayServiceCommandUsesRoot,
   resolveUpdatedGatewayRestartPort,
@@ -190,9 +183,6 @@ export function captureUpdateGatewayReadinessOwner(params: {
 }
 
 export type UpdateGatewayReadinessParams = {
-  targetRoot?: string;
-  executor?: UpdateRecoveryFence;
-  nodeRunner?: string;
   serviceEnv: NodeJS.ProcessEnv;
   gatewayPort: number;
   timeoutMs?: number;
@@ -222,17 +212,6 @@ export type UpdateGatewayReadinessParams = {
   }>;
 };
 
-export type UpdateGatewayObservationContext = Pick<
-  UpdateGatewayReadinessParams,
-  | "targetRoot"
-  | "nodeRunner"
-  | "serviceEnv"
-  | "gatewayPort"
-  | "expectedVersion"
-  | "expectedBuildId"
-  | "requireRunningService"
->;
-
 export function gatewayReadinessPending(health: GatewayRestartSnapshot): boolean {
   if (health.waitOutcome === "still-starting") {
     return true;
@@ -251,11 +230,7 @@ export function gatewayReadinessPending(health: GatewayRestartSnapshot): boolean
 }
 
 /** Observe one ready generation before activation or after restart, without recording a verdict. */
-export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadinessParams): Promise<
-  UpdateReadinessObservation & {
-    launchAgentRecovery: PostUpdateLaunchAgentRecoveryResult | null;
-  }
-> {
+export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadinessParams) {
   const waitForStartup = params.waitForStartup !== false;
   const { deadlineMs: timeoutMs } = resolveGatewayStartupTiming(process.platform, {
     timeoutMs: params.timeoutMs,
@@ -276,7 +251,6 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
       : Math.min(remainingMs(), params.probeTimeoutMs ?? GATEWAY_RESTART_PROBE_TIMEOUT_MS);
   const assertCurrent = () => {
     deadline.signal.throwIfAborted();
-    params.executor?.assertCurrent();
     params.assertCurrent?.();
   };
   const service = resolveGatewayService();
@@ -300,8 +274,6 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
     healthy: false,
     staleGatewayPids: [],
   };
-  let targetObservationPending = Boolean(params.targetRoot && params.executor);
-  let targetDiagnostic = "";
   let launchAgentRecovery: PostUpdateLaunchAgentRecoveryResult | null = null;
   let http: Awaited<ReturnType<typeof waitForGatewayHttpReadiness>> | undefined;
   const channelProbeTimeouts = new Map<string, { id: string; error: string }>();
@@ -350,66 +322,6 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
   try {
     const readiness = await deadline.run(async () => {
       assertCurrent();
-      const target =
-        params.targetRoot && params.executor
-          ? await prepareUpdatedInstallGatewayReadiness({
-              root: params.targetRoot,
-              executor: params.executor,
-              serviceEnv: params.serviceEnv,
-              nodeRunner: params.nodeRunner,
-              timeoutMs: Math.max(1, remainingMs()),
-              signal: deadline.signal,
-              assertCurrent,
-              onProgress: params.onProgress,
-              onDiagnostic: (text) => {
-                targetDiagnostic = (targetDiagnostic + text).slice(-8192);
-              },
-            })
-          : undefined;
-      assertCurrent();
-      if (target) {
-        const observe = async (healthOnly = params.healthOnly) => {
-          const observed = await deadline.read("target readiness", () => {
-            assertCurrent();
-            targetObservationPending = true;
-            const request: UpdateReadinessRequest = {
-              gatewayPort: params.gatewayPort,
-              timeoutMs: Math.max(1, remainingMs()),
-              probeTimeoutMs: params.probeTimeoutMs,
-              expectedVersion: params.expectedVersion,
-              expectedBuildId: params.expectedBuildId,
-              requireRunningService: params.requireRunningService,
-              requirePluginHealth: params.requirePluginHealth,
-              waitForStartup: params.waitForStartup,
-              healthOnly,
-            };
-            return target(request);
-          });
-          assertCurrent();
-          targetObservationPending = false;
-          health = observed.health;
-          http = observed.http;
-          retainChannelTimeouts(health);
-          return observed;
-        };
-        let observed = await observe();
-        assertCurrent();
-        const recoverHealth = params.recoverHealth;
-        // Read-only candidate work cannot perform the parent's admitted service recovery.
-        if (!params.healthOnly && recoverHealth && !gatewayReadinessPending(observed.health)) {
-          const recovered = await deadline.read("Gateway recovery", () =>
-            recoverHealth(observed.health, async () => (await observe(true)).health, assertCurrent),
-          );
-          assertCurrent();
-          launchAgentRecovery = recovered.launchAgentRecovery;
-          if (recovered.health !== observed.health) {
-            observed = await observe();
-          }
-        }
-        assertCurrent();
-        return { ...observed, launchAgentRecovery };
-      }
-      targetObservationPending = false;
       health = params.health ?? (await readHealth());
       retainChannelTimeouts(health);
       if (params.healthOnly) {
@@ -507,23 +419,6 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
     }
     if (cleanup === "unknown") {
       throw new CommandProcessCleanupError({ cause: error });
-    }
-    if (targetObservationPending) {
-      // An incomplete target observation is not evidence that the Gateway failed.
-      // Preserve the admitted recovery owner instead of triggering compensation.
-      const diagnostic = redactSupportDiagnosticLine(
-        `${error instanceof Error ? error.message : String(error)} ${targetDiagnostic.trim()}`.slice(
-          -8192,
-        ),
-        {
-          env: params.serviceEnv,
-          stateDir: resolveStateDir(params.serviceEnv),
-        },
-      );
-      throw new UpdateCommandRecoveryPendingError(
-        `Target Gateway readiness remains unverified. Update state is retained; resume with ${formatCliCommand("openclaw update repair", params.serviceEnv)}.${diagnostic ? ` Last target diagnostic: ${diagnostic}` : ""}`,
-        { cause: error },
-      );
     }
     if (!(error instanceof GatewayRestartDeadlineError)) {
       throw error;

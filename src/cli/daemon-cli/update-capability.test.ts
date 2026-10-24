@@ -49,7 +49,6 @@ describe("early service capability routing", () => {
           retainedOwnerBinding: true,
           originalDefinitionBinding: true,
           originalRuntimePinBinding: true,
-          readinessObservation: 1,
         }) + "\nprobe returned",
       );
     } finally {

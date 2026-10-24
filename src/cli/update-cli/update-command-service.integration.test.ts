@@ -176,8 +176,6 @@ vi.mock("./update-command-service-command.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./update-command-service-command.js")>();
   return {
     ...actual,
-    // These simulated native transports model targets without delegated readiness support.
-    prepareUpdatedInstallGatewayReadiness: async () => undefined,
     runUpdatedInstallGatewayCommand: (
       ...[params, action]: Parameters<typeof actual.runUpdatedInstallGatewayCommand>
     ) => actual.runUpdatedInstallGatewayCommand({ ...params, opts: {} }, action),

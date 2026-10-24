@@ -15,7 +15,6 @@ import * as noop from "./update-command-noop.js";
 import { verifyPreviousGatewayForUpdate } from "./update-command-readiness.js";
 import * as commandRun from "./update-command-run.js";
 import * as runtimePlan from "./update-command-runtime-preflight.js";
-import * as serviceCommand from "./update-command-service-command.js";
 import { verifyUpdatedGateway } from "./update-command-verification.js";
 import { updateCommand } from "./update-command.js";
 
@@ -126,8 +125,6 @@ it("forwards an inherited activation budget for already-current updates without 
 
 it("ends an unsettled candidate and unready predecessor within one --timeout budget", async () => {
   prepareTimedUpdate();
-  // The empty legacy target keeps this test at the parent readiness/deadline boundary.
-  vi.spyOn(serviceCommand, "prepareUpdatedInstallGatewayReadiness").mockResolvedValue(undefined);
   const observing = createDeferredCore();
   const health = vi.fn<GatewayService["readRuntime"]>(() => {
     observing.resolve();

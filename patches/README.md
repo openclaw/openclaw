@@ -2,20 +2,20 @@
 
 Keep existing insertion anchors when extending these patches: pnpm 12 can apply a zero-context, zero-length insertion one line early. After regeneration and installation, verify installed files against the patch's target blob hashes before testing.
 
-`@solidjs/web@2.0.0-rc.16` has an approved retention patch in its production,
+`@solidjs/web@2.0.0-rc.18` has an approved retention patch in its production,
 development, and observe browser builds. The lazy select-insertion callback is
 declared at module scope so it cannot retain the first value-bound select through
 V8's shared closure context. Selection, option insertion, change listeners, and
 the same-turn microtask retry are unchanged. Upstream is `solidjs/solid`, branch
 `next`, package `packages/web`; this release was published from
-`b0ad1df505b835058a4b3750ab37d6576bb18c01`.
+`225014bf8757421a2ea0a9c6ddc148b965eed000`.
 
 Remove this patch and its exact-version guard entry when a published upstream
 version passes `scripts/control-ui-retention/dependency-retention.test.ts` without
 the patch. That probe uses a fresh browser document per runtime build and checks
 that the first select and its enclosing form are collectible after disposal.
 
-`@solidjs/signals@2.0.0-rc.16`, from the same upstream revision, has an approved
+`@solidjs/signals@2.0.0-rc.18`, from the same upstream revision, has an approved
 idle-disposal patch in production, development, and observe builds. Disposing a
 computation schedules the existing pending-queue drain when the queue has
 entries, including readers queued by an idle rejection without a staged flag.
@@ -149,3 +149,12 @@ The plugin package owner bundles patched runtime dependencies so installed
 WhatsApp plugins retain the adapter. Remove this patch and its registration
 when an upstream Baileys version accepts the current decoder and passes the
 same voice-note regression.
+
+`playwright-core@1.64.1` has an approved syntax-only normalizer patch. Acorn
+parses serialized callbacks in the same function-body grammar instead of
+constructing a host Function. Execution remains in the target browser; ordinary
+functions, method shorthand, and async methods retain Playwright's normalization.
+The package extension supplies Acorn, and the root and browser plugin packages
+bundle the patched runtime for npm installs. Remove the patch, extension, and
+exact-version guard when upstream passes the browser serialization regression
+with host string compilation disabled.

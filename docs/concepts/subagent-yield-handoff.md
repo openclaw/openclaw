@@ -70,6 +70,18 @@ cannot replace the batch's delivery state; already committed delivery evidence
 remains valid. Restart activation reconciles retained requester-turn bindings
 before resuming child completion.
 
+Restart restores pending completion reservations in requester FIFO order. When a
+restored wave needs no further delivery, the registry releases its unclaimed
+mailbox reservations after its settlement commits. Already delivered waves must
+not hold later yielded cohorts behind an unprepared input. Claimed turns keep
+their existing execution owner.
+
+Restored delivery preparation uses the bounded background budget only until the
+Gateway accepts the input. Waiting for mailbox dispatch or requester completion
+does not hold a preparation slot: earlier FIFO inputs may need that same budget
+to become ready. The registry retains the delivery lifetime and records its
+outcome after the requester finishes.
+
 For a nested requester, settlement persists its paused run together with the
 child wake batch before scheduling the continuation. This also covers a child
 that finishes before the requester yields: successor admission must not depend

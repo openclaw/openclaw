@@ -95,7 +95,11 @@ export async function persistUpdatedJob(params: {
         scheduleChanged,
       });
       try {
-        if (isJobEnabled(previousJob) && !isJobEnabled(nextJob)) {
+        if (
+          params.jobMutation.kind === "update"
+            ? params.jobMutation.patch.enabled === false
+            : isJobEnabled(previousJob) && !isJobEnabled(nextJob)
+        ) {
           requestActiveCronJobCancellation(nextJob.id, "Cron job disabled by operator.");
         }
       } finally {

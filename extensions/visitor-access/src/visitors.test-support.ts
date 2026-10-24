@@ -187,6 +187,7 @@ export function visitorProfileFixture(
     },
     readSessionFacts: unexpected,
     withSessionFacts: unexpected,
+    appendAgentMessage: unexpected,
     openPluginPanel: unexpected,
     withUserProfileIdentity,
     resolveGitHubAccount: async ({ login }) => ({ accountId: 42, login }),

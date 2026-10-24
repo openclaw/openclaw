@@ -47,10 +47,8 @@ import { observeOriginalManagedServiceRuntime } from "./update-command-original-
 import { finishUpdate } from "./update-command-post-update.js";
 import { rollbackFailedUpdate } from "./update-command-rollback.js";
 import { getNodeRuntimeFixture } from "./update-command-runtime-recovery.test-support.js";
-import * as serviceCommand from "./update-command-service-command.js";
 import type { PreManagedServiceStop } from "./update-command-service-context-types.js";
 import { revalidateManagedGatewayServiceAfterUpdate } from "./update-command-service-maintenance.js";
-import { maybeRestartServiceAfterFailedMutableUpdate } from "./update-command-service-recovery.js";
 import { createWindowsTaskAutoStartRecovery } from "./update-command-windows-task.js";
 
 // Real update/state/lease owners; simulated native manager, HTTP, and package transport.
@@ -663,35 +661,6 @@ it("refuses B ledger admission independently from compatible service A state", a
     expect(await fs.readFile(resolveOpenClawStateSqlitePath(parentEnv))).toEqual(parentBytes);
   });
   expect(mocks.restart).not.toHaveBeenCalled();
-});
-
-it("certifies and recovers retained A without a candidate observer under B custody", async () => {
-  const reader = vi.spyOn(serviceCommand, "prepareUpdatedInstallGatewayReadiness");
-  const run = updateRun(state.env);
-  await withOriginalRun(run, async (opts) => {
-    const original = await observeOriginalManagedServiceRuntime({ root: rootB, opts }, before);
-    expect(original).toMatchObject({ root: rootA, verified: true });
-    assert(original);
-    await expect(
-      maybeRestartServiceAfterFailedMutableUpdate({
-        updateRun: run,
-        jsonMode: true,
-        originalManagedServiceRuntime: original,
-        preManagedServiceStop: { ...before, stopped: true },
-        timeoutMs: 30_000,
-      }),
-    ).resolves.toBe("healthy");
-    expect(mocks.nativeRestart).toHaveBeenCalledOnce();
-    expect(mocks.health).toHaveBeenCalledWith(
-      expect.objectContaining({
-        expectedVersion: original.version,
-        expectedBuildId: original.buildId,
-      }),
-    );
-    expect(mocks.readiness).toHaveBeenCalledTimes(2);
-    expect(reader).not.toHaveBeenCalled();
-    expect(mocks.restart).not.toHaveBeenCalled();
-  });
 });
 
 // Component regression: an unavailable A certificate must stop preparation, not A.

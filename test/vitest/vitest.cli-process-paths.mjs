@@ -7,8 +7,6 @@ export const cliProcessTestFiles = [
   "src/cli/directory-cli.test.ts",
   "src/cli/update-cli/update-command-candidate-exit.test.ts",
   "src/cli/update-cli/update-command-candidate-authority.process.test.ts",
-  "src/cli/update-cli/update-command-target-readiness.process.test.ts",
-  "src/cli/update-cli/update-command-readiness-capability.test.ts",
   "src/cli/update-cli/update-command-post-core-admission.process.test.ts",
   "src/cli/update-cli/update-command-fresh-doctor-authority.test.ts",
   "src/cli/update-cli/update-command-fresh-inspection.test.ts",

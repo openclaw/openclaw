@@ -23,6 +23,7 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import { formatCliCommand } from "../command-format.js";
 import {
   renderRestartDiagnostics,
+  waitForGatewayHealthyRestart,
   type GatewayRestartSnapshot,
 } from "../daemon-cli/restart-health.js";
 import type { UpdateCommandOptions } from "./shared.js";
@@ -64,8 +65,6 @@ export { isPackageManagerUpdateMode } from "./update-command-service-command.js"
 const QUIET_SERVICE_STDOUT = createNullWriter();
 
 export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
-  targetRoot?: string;
-  nodeRunner?: string;
   onGatewayStartAttempted?: () => void;
   updateRun?: UpdateCommandOptions["run"];
   assertCurrent?: () => void;
@@ -138,21 +137,21 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
     return { health: params.health, launchAgentRecovery };
   }
 
-  const { health } = await observeUpdateGatewayReadiness({
-    targetRoot: params.targetRoot,
-    executor,
-    nodeRunner: params.nodeRunner,
-    serviceEnv: params.env ?? process.env,
-    gatewayPort: params.port,
+  const health = await waitForGatewayHealthyRestart({
+    service: params.service,
+    port: params.port,
     timeoutMs: params.updateRun?.deadline?.remainingMs() ?? params.timeoutMs,
     deadline: params.updateRun?.deadline,
     signal: params.updateRun?.deadline?.signal,
     expectedVersion: params.expectedVersion,
     ...(params.expectedBuildId ? { expectedBuildId: params.expectedBuildId } : {}),
     requirePluginHealth: false,
-    healthOnly: true,
-    onProgress: params.onProgress,
-    assertCurrent,
+    requireChannelHealth: false,
+    env: params.env,
+    onObservation: params.onProgress
+      ? (snapshot) => params.onProgress?.("recovery", renderRestartDiagnostics(snapshot).join("; "))
+      : undefined,
+    supervisorKeepsAlive: true,
   });
   assertCurrent();
   return { health, launchAgentRecovery };
@@ -520,10 +519,6 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
     }
     assertCurrent();
     const { health } = await observeUpdateGatewayReadiness({
-      // Restored A remains under its retained owner, never the candidate child owner.
-      targetRoot: original ? undefined : verdict.root,
-      executor,
-      nodeRunner: original?.nodeRunner ?? params.nodeRunner,
       serviceEnv: current.env,
       gatewayPort: port,
       timeoutMs: params.timeoutMs,

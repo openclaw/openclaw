@@ -1,7 +1,48 @@
 import { describe, expect, it, vi } from "vitest";
-import { projectDiagnosticValue as project } from "./credential-redaction.js";
+import {
+  createDiagnosticArray,
+  createDiagnosticRecord,
+  projectDiagnosticValue as project,
+} from "./credential-redaction.js";
 
 describe("diagnostic descriptor snapshots", () => {
+  it("projects branded producer records exactly like the descriptor walk", () => {
+    const plain = {
+      name: "apiKey",
+      value: "secret-value",
+      providerReplay: { kept: false },
+      type: "input_image",
+      data: "aGVsbG8=",
+      items: [{ mimeType: "image/png", bytes: new Uint8Array([1, 2, 3]) }, "text", 3],
+      nested: { authorization: "Bearer abcdefghijklmnop", url: "data:image/png;base64,aGk=" },
+    };
+    const brand = (value: unknown): unknown => {
+      if (Array.isArray(value)) {
+        const array = createDiagnosticArray();
+        for (const item of value) {
+          array.push(brand(item));
+        }
+        return array;
+      }
+      if (value && typeof value === "object" && !ArrayBuffer.isView(value)) {
+        const record = createDiagnosticRecord();
+        for (const [key, child] of Object.entries(value)) {
+          record[key] = brand(child);
+        }
+        return record;
+      }
+      return value;
+    };
+    for (const policy of [
+      {},
+      { redactCredentials: false, omitField: (key: string) => key === "providerReplay" },
+    ]) {
+      expect(JSON.stringify(project(brand(plain), policy))).toBe(
+        JSON.stringify(project(structuredClone(plain), policy)),
+      );
+    }
+  });
+
   it("keeps media and credential classification isolated through reentrant policy callbacks", () => {
     const nested: unknown[] = [];
     const value = {

@@ -1,11 +1,9 @@
 import { createHash } from "node:crypto";
 import fsp from "node:fs/promises";
-import type { IncomingMessage } from "node:http";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { createGunzip } from "node:zlib";
 import { withTempWorkspace } from "@openclaw/fs-safe/temp";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { CloudflareAccessCredentials } from "../../packages/gateway-client/src/cloudflare-access.js";
 import { boundedWorkerError } from "../gateway/worker-environments/worker-error.js";
 import {
@@ -13,17 +11,17 @@ import {
   withWorkerWorkspaceHashMemo,
   type WorkspaceHashMemo,
 } from "../gateway/worker-environments/workspace-hash-memo.js";
-import {
-  MAX_WORKSPACE_MANIFEST_BYTES,
-  MAX_WORKSPACE_INVENTORY_TOTAL_BYTES,
-} from "../gateway/worker-environments/workspace-inventory-limits.js";
+import { MAX_WORKSPACE_MANIFEST_BYTES } from "../gateway/worker-environments/workspace-inventory-limits.js";
 import { decodeWorkspaceManifest } from "../gateway/worker-environments/workspace-manifest-worker.js";
 import { absoluteEntryMatches } from "../gateway/worker-environments/workspace-reconcile-fs.js";
+import {
+  restoreWorkerWorkspaceHistory,
+  workerHistoryNotAdopted,
+} from "../gateway/worker-environments/workspace-result-history.js";
 import { workerWorkspaceTransferPaths } from "../gateway/worker-environments/workspace-result-staging.js";
 import { REMOTE_WORKSPACE_MANIFEST_JS } from "../gateway/worker-environments/workspace-sync-scripts.js";
 import { copyFileHandle } from "../infra/file-descriptor.js";
-import { root as fsRoot, FsSafeError, type Root } from "../infra/fs-safe.js";
-import { isPathInside } from "../infra/path-guards.js";
+import { root as fsRoot, FsSafeError } from "../infra/fs-safe.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import {
   ensureStagedInputDirectory,
@@ -36,12 +34,12 @@ import {
   readWorkspaceTransferBody as readResponseBody,
 } from "../worker/node-workspace-transfer-body.js";
 import {
-  isNodeWorkspaceTransferInvalidReason,
   nodeWorkspaceTransferBlobPath,
   NodeWorkerWorkspaceTransferError,
   nodeWorkspaceTransferManifestPath,
   nodeWorkspaceTransferPackPath,
   nodeWorkspaceTransferReconcilePath,
+  MAX_WORKSPACE_RESULT_GIT_PACK_BYTES,
   type NodeWorkerWorkspaceTransferInput,
   type NodeWorkerWorkspaceTransferStage,
 } from "../worker/node-workspace-transfer-protocol.js";
@@ -55,6 +53,9 @@ import {
   withNodeRepositoryPublication,
 } from "./node-worker-repository-transfers.js";
 import {
+  requireNodeWorkerTransferOk as requireOk,
+  downloadNodeWorkerTransferFile as downloadFile,
+  nodeWorkerTransferWorkspacePath as workspacePath,
   NodeWorkerTransferHttpError,
   withNodeWorkerTransferHttpRequest,
   type NodeWorkerTransferHttpRequest,
@@ -108,41 +109,6 @@ type WorkspaceTransferOperation<Direction extends NodeWorkerWorkspaceTransferInp
     setStage: (stage: NodeWorkerWorkspaceTransferStage) => void;
   };
 
-async function requireOk(response: IncomingMessage): Promise<void> {
-  if (response.statusCode === 200) {
-    return;
-  }
-  const body = (await readResponseBody(response, TRANSFER_RESULT_MAX_BYTES)).toString("utf8");
-  let payload: unknown;
-  try {
-    payload = JSON.parse(body);
-  } catch {
-    payload = undefined;
-  }
-  if (
-    response.statusCode === 413 &&
-    isRecord(payload) &&
-    payload.error === "workspace_transfer_limit"
-  ) {
-    throw new NodeWorkerWorkspaceTransferError(
-      "workspace-transfer-limit: gateway rejected workspace transfer caps",
-    );
-  }
-  if (
-    response.statusCode === 400 &&
-    isRecord(payload) &&
-    payload.error === "workspace_transfer_invalid" &&
-    isNodeWorkspaceTransferInvalidReason(payload.reason)
-  ) {
-    throw new NodeWorkerWorkspaceTransferError(
-      `workspace-transfer-invalid: gateway rejected workspace transfer payload (${payload.reason})`,
-    );
-  }
-  throw new NodeWorkerWorkspaceTransferError(
-    `workspace-transfer-failed: gateway returned ${response.statusCode ?? 0}`,
-  );
-}
-
 async function downloadBuffer(params: NodeWorkerTransferHttpRequest, maxBytes: number) {
   return await withNodeWorkerTransferHttpRequest(
     {
@@ -169,52 +135,6 @@ async function downloadBuffer(params: NodeWorkerTransferHttpRequest, maxBytes: n
       );
     },
   );
-}
-
-async function downloadFile(params: {
-  request: NodeWorkerTransferHttpRequest;
-  root: Root;
-  relativePath: string;
-  expectedBytes?: number;
-  expectedSha256?: string;
-  mode?: number;
-}): Promise<void> {
-  await withNodeWorkerTransferHttpRequest(params.request, async (response) => {
-    await requireOk(response);
-    await params.root.create(
-      workspacePath(params.root.rootReal, params.relativePath),
-      (async function* () {
-        const hash = params.expectedSha256 === undefined ? undefined : createHash("sha256");
-        let bytes = 0;
-        for await (const value of response) {
-          const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
-          bytes += chunk.byteLength;
-          hash?.update(chunk);
-          yield chunk;
-        }
-        // Reject invalid content before the completed file is published.
-        if (
-          (params.expectedBytes !== undefined && bytes !== params.expectedBytes) ||
-          (hash && hash.digest("hex") !== params.expectedSha256)
-        ) {
-          throw new Error("workspace transfer blob failed integrity validation");
-        }
-      })(),
-      {
-        mode: params.mode ?? 0o600,
-        maxBytes: Math.min(params.expectedBytes ?? Infinity, MAX_WORKSPACE_INVENTORY_TOTAL_BYTES),
-        signal: params.request.signal,
-      },
-    );
-  });
-}
-
-function workspacePath(root: string, relative: string): string {
-  const candidate = path.join(root, ...relative.split("/"));
-  if (candidate !== root && !isPathInside(root, candidate)) {
-    throw new Error("workspace transfer manifest escaped its workspace");
-  }
-  return candidate;
 }
 
 const workspaceTransferQueue = new KeyedAsyncQueue();
@@ -516,6 +436,35 @@ async function downloadWorkspace(params: WorkspaceTransferOperation<"download">)
     }
     if (params.hashMemo && !overlay && !checkpointBase) {
       replaceWorkerWorkspaceHashMemoEntries(params.hashMemo, [...stagingHashMemo]);
+    }
+    if (params.transfer.checkpointGitHistory) {
+      let gitHistoryNote: string | undefined;
+      const gitPackPath = path.join(staging, "history.pack");
+      try {
+        await downloadFile({
+          request: {
+            ...params.request,
+            routePath: nodeWorkspaceTransferPackPath(
+              params.environmentId,
+              params.transfer.manifestRef,
+            ),
+            method: "GET",
+          },
+          root: stagingRoot,
+          relativePath: "history.pack",
+          maxBytes: MAX_WORKSPACE_RESULT_GIT_PACK_BYTES,
+        });
+        gitHistoryNote = await restoreWorkerWorkspaceHistory({
+          root: params.workspaceDir,
+          gitHistory: params.transfer.checkpointGitHistory,
+          gitPackPath,
+          assertCurrent: () => params.signal?.throwIfAborted(),
+        });
+      } catch (error) {
+        params.signal?.throwIfAborted();
+        gitHistoryNote = workerHistoryNotAdopted(boundedWorkerError(error));
+      }
+      return JSON.stringify({ manifestRef: params.transfer.manifestRef, gitHistoryNote });
     }
     return params.transfer.manifestRef;
   } finally {

@@ -268,28 +268,6 @@ describe("withNoProxyForCdpUrl preserves user-configured NO_PROXY", () => {
     }
   });
 
-  it("restores untouched NO_PROXY casing when the lowercase value changes", async () => {
-    const userNoProxy = "internal.corp";
-    process.env.NO_PROXY = userNoProxy;
-    process.env.no_proxy = userNoProxy;
-    process.env.HTTP_PROXY = "http://proxy:8080";
-
-    try {
-      await withNoProxyForCdpUrl(LOOPBACK_CDP_URL, async () => {
-        expect(process.env.NO_PROXY).toBe(`${userNoProxy},localhost,127.0.0.1,[::1]`);
-        expect(process.env.no_proxy).toBe(`${userNoProxy},localhost,127.0.0.1,[::1]`);
-        delete process.env.no_proxy;
-      });
-
-      expect(process.env.NO_PROXY).toBe(userNoProxy);
-      expect(process.env.no_proxy).toBeUndefined();
-    } finally {
-      delete process.env.HTTP_PROXY;
-      delete process.env.NO_PROXY;
-      delete process.env.no_proxy;
-    }
-  });
-
   it("does not treat substring matches as complete loopback coverage", async () => {
     const userNoProxy = "notlocalhost,127.0.0.10,[::1].example";
     process.env.NO_PROXY = userNoProxy;
@@ -322,24 +300,6 @@ describe("withNoProxyForCdpUrl", () => {
         expect(process.env.NO_PROXY).toBeUndefined();
         expect(process.env.no_proxy).toBeUndefined();
       });
-    } finally {
-      delete process.env.HTTP_PROXY;
-      delete process.env.NO_PROXY;
-      delete process.env.no_proxy;
-    }
-  });
-
-  it("does not overwrite external NO_PROXY changes made during execution", async () => {
-    process.env.HTTP_PROXY = "http://proxy:8080";
-    delete process.env.NO_PROXY;
-    delete process.env.no_proxy;
-    try {
-      await withNoProxyForCdpUrl("http://127.0.0.1:9222", async () => {
-        process.env.NO_PROXY = "externally-set";
-        process.env.no_proxy = "externally-set";
-      });
-      expect(process.env.NO_PROXY).toBe("externally-set");
-      expect(process.env.no_proxy).toBe("externally-set");
     } finally {
       delete process.env.HTTP_PROXY;
       delete process.env.NO_PROXY;

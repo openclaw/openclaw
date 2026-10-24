@@ -43,8 +43,6 @@ vi.mock("./update-command-service-plan.js", async (importOriginal) => ({
 vi.mock("./update-command-service-command.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-service-command.js")>()),
   runUpdatedInstallGatewayCommand: mocks.restart,
-  // This native-manager fixture models a legacy target; real delegated reads have process tests.
-  prepareUpdatedInstallGatewayReadiness: async () => undefined,
 }));
 vi.mock("../daemon-cli/restart-health.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../daemon-cli/restart-health.js")>()),

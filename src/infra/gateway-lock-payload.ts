@@ -131,7 +131,13 @@ export function classifyGatewayOwnerProcessNamespace(
   if (!current) {
     return "unknown";
   }
-  if (owner.host !== current.host || owner.platform !== current.platform) {
+  // macOS hostnames can change within one boot; the kernel UUID still binds
+  // PID inspection to that same kernel. A different host and boot stays unknown.
+  const sameDarwinBoot =
+    owner.platform === "darwin" &&
+    current.platform === "darwin" &&
+    owner.identity === current.identity;
+  if (owner.platform !== current.platform || (owner.host !== current.host && !sameDarwinBoot)) {
     return "unknown";
   }
   // Windows boot observations can disagree within one boot. Local Windows owners

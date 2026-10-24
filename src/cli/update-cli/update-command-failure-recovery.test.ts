@@ -314,8 +314,6 @@ it.each(
         }
         return "accepted";
       });
-    // The empty legacy package simulates native restart, not a delegated readiness receiver.
-    vi.spyOn(serviceCommand, "prepareUpdatedInstallGatewayReadiness").mockResolvedValue(undefined);
     const health = async () => ({
       healthy: running,
       outcome: running ? ("ready" as const) : ("failed" as const),

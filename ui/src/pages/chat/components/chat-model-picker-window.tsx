@@ -7,7 +7,7 @@ import {
   Virtualizer,
   type VirtualItem,
 } from "@tanstack/virtual-core";
-import { createMemo, createSignal, onSettled, Show } from "solid-js";
+import { createProjection, createSignal, onSettled, Show } from "solid-js";
 import { createLayoutMeasurement } from "../../../lib/reactive/layout-measurement.ts";
 
 export type ModelPickerRowRenderer = (key: string, render: () => JSX.Element) => JSX.Element;
@@ -66,7 +66,9 @@ export function createModelPickerWindow(
     },
     { targets: () => [viewport], changeTiming: "sync" },
   );
-  const items = createMemo(() => new Map(window().items.map((item) => [item.key, item])));
+  const items = createProjection<Record<string, VirtualItem | undefined>>(() =>
+    Object.fromEntries(window().items.map((item) => [item.key, item])),
+  );
   function Row(props: { rowKey: string; render: () => JSX.Element }) {
     let element: HTMLDivElement;
     onSettled(() => {
@@ -77,22 +79,22 @@ export function createModelPickerWindow(
       <div
         ref={(node) => (element = node)}
         class="chat-controls__model-virtual-row"
-        data-index={items().get(props.rowKey)?.index}
-        style={{ transform: `translateY(${items().get(props.rowKey)?.start ?? 0}px)` }}
+        data-index={items[props.rowKey]?.index}
+        style={{ transform: `translateY(${items[props.rowKey]?.start ?? 0}px)` }}
       >
         {props.render()}
       </div>
     );
   }
   const renderRow: ModelPickerRowRenderer = (key, render) => (
-    <Show when={items().has(key)}>
+    <Show when={items[key]}>
       <Row rowKey={key} render={render} />
     </Show>
   );
   return {
     bind: (element: HTMLDivElement) => (viewport = element),
     height: () => window().height,
-    has: (key: string) => items().has(key),
+    has: (key: string) => Boolean(items[key]),
     renderRow,
     reveal(key: string) {
       const index = rows().indexOf(key);

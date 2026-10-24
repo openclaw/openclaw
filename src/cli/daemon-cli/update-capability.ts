@@ -10,7 +10,6 @@ export async function writeGatewayServiceUpdateCapability(): Promise<void> {
       retainedOwnerBinding: true,
       originalDefinitionBinding: true,
       originalRuntimePinBinding: true,
-      readinessObservation: 1,
     }),
   );
   // The parent closes stdin only after binding this child's PID and start identity.

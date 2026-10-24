@@ -32,24 +32,7 @@ import {
 import { buildSignalSetupPatch, signalDmPolicy } from "./setup-core.js";
 import * as transportDetectionModule from "./transport-detection.js";
 
-const reactionStores = vi.hoisted(() => new Set<{ clearForTest(): void }>());
-
-vi.mock("openclaw/plugin-sdk/approval-reaction-runtime", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("openclaw/plugin-sdk/approval-reaction-runtime")>();
-  return {
-    ...actual,
-    createApprovalReactionTargetStore: <TTarget>(
-      params: Parameters<typeof actual.createApprovalReactionTargetStore<TTarget>>[0],
-    ) => {
-      const store = actual.createApprovalReactionTargetStore<TTarget>(params);
-      if (params.namespace === "signal.approval-reactions.v2") {
-        reactionStores.add(store);
-      }
-      return store;
-    },
-  };
-});
+const reactionStores = await vi.hoisted(() => import("./approval-reactions.test-support.js"));
 
 function signalConfig(signal: NonNullable<OpenClawConfig["channels"]>["signal"]): OpenClawConfig {
   return { channels: { signal } };
@@ -679,7 +662,7 @@ describe("signal outbound", () => {
   it.each(["explicit account", "resolved default account"])(
     "registers delivered approval reactions under the %s",
     async (mode) => {
-      reactionStores.forEach((store) => store.clearForTest());
+      reactionStores.clearSignalApprovalReactionStoresForTest();
       const useDefault = mode === "resolved default account";
       const cfg: OpenClawConfig = useDefault
         ? {
@@ -738,7 +721,7 @@ describe("signal outbound", () => {
           }),
         ).resolves.toMatchObject({ approvalId: "exec-1", decision: "allow-once" });
         await expect(reactionTarget(messageId)).resolves.toBeNull();
-        reactionStores.forEach((store) => store.clearForTest());
+        reactionStores.clearSignalApprovalReactionStoresForTest();
       } else {
         await expect(reactionTarget(messageId)).resolves.toEqual({
           approvalId: "exec-after-delivery",

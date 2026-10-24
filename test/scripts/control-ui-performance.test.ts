@@ -9,9 +9,9 @@ import {
   CONTROL_UI_PERFORMANCE_BUDGETS,
   collectControlUiPerformanceMetrics as collectMetrics,
   evaluateControlUiPerformanceBudgets as evaluateBudgets,
-  extractControlUiStartupAssetPaths as extractStartupAssets,
   formatControlUiPerformanceReport as formatReport,
 } from "../../scripts/check-control-ui-performance.mts";
+import { extractControlUiStartupAssetPaths as extractStartupAssets } from "../../ui/config/control-ui-startup-assets.ts";
 import { createCommandTest, type CommandFixture } from "../helpers/command-fixture.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createNestedGitEnv } from "../helpers/temp-repo.js";
@@ -19,12 +19,14 @@ import { createNestedGitEnv } from "../helpers/temp-repo.js";
 const tsxImport = new URL("../../scripts/tsx.mjs", import.meta.url).href;
 const performanceSources = [
   "scripts/check-control-ui-performance.mts",
+  "ui/config/control-ui-startup-assets.ts",
   "src/gateway/control-ui-route-preloads.ts",
   ...[
     "check-limits.mts",
     "control-ui-i18n-config.ts",
     "control-ui-i18n-config.json",
     "control-ui-module-attribution.mts",
+    "control-ui-optional-assets.ts",
     "record-shared.mjs",
     "regexp.mjs",
   ].map((name) => `scripts/lib/${name}`),
@@ -217,6 +219,16 @@ describe("Control UI performance budgets", () => {
         <link rel="manifest" href="./manifest.webmanifest">
       `),
     ).toEqual(["assets/index-abc.css", "assets/index-abc.js", "assets/runtime-def.js"]);
+  });
+
+  it("counts identity bytes for each missing compression sidecar", () => {
+    const { distDir } = createStartupFixture();
+    fs.unlinkSync(path.join(distDir, "assets/index-a.js.gz"));
+    fs.unlinkSync(path.join(distDir, "assets/index-c.css.br"));
+    expect(collectMetrics(distDir).startup).toMatchObject({
+      js: { rawBytes: 100, gzipBytes: 100, brotliBytes: 30 },
+      css: { rawBytes: 50, gzipBytes: 15, brotliBytes: 50 },
+    });
   });
 
   it("counts route boot preloads once without changing the initial-entry budget", () => {

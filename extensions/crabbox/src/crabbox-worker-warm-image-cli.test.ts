@@ -31,7 +31,13 @@ function pendingCapture(phase: "scrubbing" | "creating" | "uncertain" = "creatin
   const record = {
     ...warmRecord(),
     image: warmImage("chk_last_good", { createdAtMs: now - 86_400_000, lastDemandAtMs: now }),
-    operation: captureOperation(SELECTOR, { startedAtMs: now - 1_200_000, phase }),
+    operation: captureOperation(SELECTOR, {
+      startedAtMs: now - 1_200_000,
+      phase,
+      ...(phase === "uncertain"
+        ? { checkpointIds: ["chk_interrupted_a", "chk_interrupted_b"] }
+        : {}),
+    }),
   };
   openWarmImageStore().register("profile", record);
   return record;
@@ -135,6 +141,8 @@ it.each(["scrubbing", "uncertain"] as const)(
       expectText(output, [
         `openclaw crabbox warm-images --recover ${SELECTOR} --acknowledge-provider-cleanup`,
         "Stop the owning Gateway and capture processes",
+        "chk_interrupted_a",
+        "chk_interrupted_b",
       ]);
     } else {
       expectText(output, ["may still be"], ["paused", "--recover", "Stop the owning Gateway"]);

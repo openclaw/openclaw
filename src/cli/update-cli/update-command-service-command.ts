@@ -21,11 +21,6 @@ import {
   withUpdateCommandExecutorChild,
   type UpdateCommandChildGrant,
 } from "./update-command-executor.js";
-import {
-  UpdateReadinessObservationSchema,
-  type UpdateReadinessRequest,
-  type UpdateReadinessObservation,
-} from "./update-command-readiness-protocol.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import { withRetainedUpdateServiceAuthority } from "./update-command-retained-service.js";
 import type {
@@ -61,56 +56,18 @@ function formatCommandFailure(stdout: string, stderr: string): string {
   return detail ? detail.split("\n").slice(-3).join("\n") : "command returned a non-zero exit code";
 }
 
-async function runUpdatedGatewayChild(params: {
-  root?: string;
-  entrypoint: string;
-  nodeRunner: string;
-  args: string[];
-  executor?: UpdateRecoveryFence;
-  request?: Record<string, unknown>;
-  onStart?: () => void;
-  options: CommandOptions;
-}) {
-  const run = async (
-    grant?: UpdateCommandChildGrant,
-    bindChild?: CommandOptions["beforeInput"],
-  ) => {
-    const invocation = resolveOpenClawCliInvocation({
-      execPath: params.nodeRunner,
-      entryPath: params.entrypoint,
-      execArgv: [],
-      args: [...params.args, ...(grant && params.request ? ["--update-executor", "run"] : [])],
-    });
-    params.onStart?.();
-    const result = await runCommandWithTimeout([invocation.command, ...invocation.args], {
-      ...params.options,
-      ...(grant
-        ? {
-            input: params.request
-              ? JSON.stringify({
-                  ...params.request,
-                  executor: grant,
-                  targetRoot: resolveUpdateInstallRoot(params.root!),
-                })
-              : "",
-            beforeInput: bindChild,
-          }
-        : {}),
-      cwd: params.root,
-      // Complete owned env and process-tree custody apply equally to reads and mutations.
-      baseEnv: {},
-      killProcessTree: true,
-      requireProcessTreeExtinction: true,
-    });
-    // Reject unsettled cleanup while the child owner still retains its lease.
-    if (result.cleanup === "forced" || result.cleanup === "uncertain") {
-      throw new CommandProcessCleanupError();
-    }
-    return result;
-  };
-  return params.executor
-    ? await withUpdateCommandExecutorChild(params.executor, params.root!, run)
-    : await run();
+async function runSettledGatewayCommand(argv: string[], options: CommandOptions) {
+  const result = await runCommandWithTimeout(argv, {
+    ...options,
+    // The complete owned env must not regain selectors removed during capture.
+    baseEnv: {},
+    killProcessTree: true,
+    requireProcessTreeExtinction: true,
+  });
+  if (result.cleanup === "forced" || result.cleanup === "uncertain") {
+    throw new CommandProcessCleanupError();
+  }
+  return result;
 }
 
 /** Probe the staged target before activation, retaining the original child owner. */
@@ -122,8 +79,6 @@ export async function isUpdatedInstallGatewayExecutorSupported(params: {
   nodeRunner?: string;
   signal?: AbortSignal;
   onDefinitionBackupCapability?: (supported: boolean) => void;
-  onReadinessCapability?: (version: unknown) => void;
-  onDiagnostic?: (text: string) => void;
   requireOriginalDefinitionBinding?: boolean;
 }): Promise<boolean> {
   params.signal?.throwIfAborted();
@@ -132,22 +87,29 @@ export async function isUpdatedInstallGatewayExecutorSupported(params: {
   const entrypoint = await resolveGatewayInstallEntrypoint(params.root);
   params.executor.assertCurrent();
   if (!entrypoint) {
-    params.onDiagnostic?.(`Target CLI entrypoint not found under ${params.root}.`);
     return false;
   }
-  const check = await runUpdatedGatewayChild({
-    root: params.root,
-    executor: params.executor,
-    entrypoint,
-    nodeRunner: params.nodeRunner ?? resolveNodeRunner(),
+  const invocation = resolveOpenClawCliInvocation({
+    execPath: params.nodeRunner ?? resolveNodeRunner(),
+    entryPath: entrypoint,
+    execArgv: [],
     args: ["gateway", "install", "--update-executor", "check", "--json"],
-    options: {
-      env: { ...params.env, OPENCLAW_NO_RESPAWN: "1" },
-      timeoutMs: params.timeoutMs,
-      ...(params.signal ? { signal: params.signal } : {}),
-      maxOutputBytes: 64 * 1024,
-    },
   });
+  const argv = [invocation.command, ...invocation.args];
+  const check = await withUpdateCommandExecutorChild(
+    params.executor,
+    params.root,
+    (_grant, bindChild) =>
+      runSettledGatewayCommand(argv, {
+        input: "",
+        beforeInput: bindChild,
+        cwd: params.root,
+        env: { ...params.env, OPENCLAW_NO_RESPAWN: "1" },
+        timeoutMs: params.timeoutMs,
+        ...(params.signal ? { signal: params.signal } : {}),
+        maxOutputBytes: 64 * 1024,
+      }),
+  );
   params.signal?.throwIfAborted();
   params.executor.assertCurrent();
   const capability = safeParseJsonRecord(check.stdout);
@@ -168,124 +130,8 @@ export async function isUpdatedInstallGatewayExecutorSupported(params: {
       (capability.originalDefinitionBinding === true &&
         capability.originalRuntimePinBinding === true)) &&
     (!requiresRetainedOwner || capability.retainedOwnerBinding === true);
-  if (!supported) {
-    params.onDiagnostic?.(formatCommandFailure(check.stdout, check.stderr));
-  }
   params.onDefinitionBackupCapability?.(supported && capability?.definitionBackup === true);
-  params.onReadinessCapability?.(capability?.readinessObservation);
   return supported;
-}
-
-/** The activated installation owns its config/schema and RPC dialect; the parent owns custody. */
-export async function prepareUpdatedInstallGatewayReadiness(params: {
-  root: string;
-  executor: UpdateRecoveryFence;
-  serviceEnv: NodeJS.ProcessEnv;
-  nodeRunner?: string;
-  timeoutMs: number;
-  signal: AbortSignal;
-  assertCurrent: () => void;
-  onProgress?: (stage: string, reason: string) => void;
-  onDiagnostic?: (text: string) => void;
-}): Promise<
-  ((request: UpdateReadinessRequest) => Promise<UpdateReadinessObservation>) | undefined
-> {
-  params.assertCurrent();
-  const env = stripGatewayServiceMarkerEnv(
-    resolveUpdatedInstallCommandEnv({
-      serviceEnv: params.serviceEnv,
-    }),
-  );
-  env.OPENCLAW_NO_RESPAWN = "1";
-  const nodeRunner = params.nodeRunner ?? resolveNodeRunner();
-  let readinessVersion: unknown;
-  const supported = await isUpdatedInstallGatewayExecutorSupported({
-    ...params,
-    env,
-    nodeRunner,
-    onReadinessCapability: (value) => {
-      readinessVersion = value;
-    },
-  });
-  params.assertCurrent();
-  if (!supported || (readinessVersion !== undefined && readinessVersion !== 1)) {
-    throw new UpdateCommandRecoveryPendingError(
-      "Target runtime cannot fence update-owned readiness observation.",
-    );
-  }
-  // Tagged targets (including v2026.10.6) support channel/tag switches without
-  // this additive capability. Keep their existing installed-driver verification.
-  if (readinessVersion === undefined) {
-    return undefined;
-  }
-  const entrypoint = await resolveGatewayInstallEntrypoint(params.root);
-  params.assertCurrent();
-  if (!entrypoint) {
-    throw new Error(`Updated readiness entrypoint not found under ${params.root}.`);
-  }
-  return async (request) => {
-    params.assertCurrent();
-    params.onProgress?.("readiness", "Observing the Gateway with its installed runtime.");
-    const result = await runUpdatedGatewayChild({
-      root: params.root,
-      executor: params.executor,
-      entrypoint,
-      nodeRunner,
-      args: ["gateway", "status", "--json"],
-      request: {
-        action: "status",
-        readiness: { ...request, deadlineAtMs: Date.now() + request.timeoutMs },
-      },
-      options: {
-        env,
-        timeoutMs: request.timeoutMs,
-        signal: params.signal,
-        maxOutputBytes: 1024 * 1024,
-        onOutputChunk: (chunk, stream) => {
-          // The child's live lease suspends parent mutation; progress is diagnostic only.
-          if (stream === "stderr") {
-            process.stderr.write(chunk);
-            params.onDiagnostic?.(chunk.toString("utf8"));
-          }
-        },
-      },
-    });
-    params.assertCurrent();
-    if (
-      result.code !== 0 ||
-      result.termination !== "exit" ||
-      result.signal !== null ||
-      result.killed ||
-      result.stdoutTruncatedBytes ||
-      result.outputLimitExceeded ||
-      result.outputErrorStream
-    ) {
-      const message = `Updated Gateway readiness observation failed: ${formatCommandFailure(result.stdout, result.stderr)}`;
-      throw new UpdateCommandRecoveryPendingError(message);
-    }
-    const parsed = UpdateReadinessObservationSchema.safeParse(safeParseJsonRecord(result.stdout));
-    if (!parsed.success) {
-      throw new UpdateCommandRecoveryPendingError(
-        "Target readiness returned no valid observation.",
-      );
-    }
-    const observation = parsed.data;
-    if (observation.health.portUsage.port !== request.gatewayPort) {
-      throw new UpdateCommandRecoveryPendingError(
-        "Updated Gateway readiness observed a different port.",
-      );
-    }
-    if (
-      observation.health.healthy &&
-      ((request.expectedVersion && observation.health.gatewayVersion !== request.expectedVersion) ||
-        (request.expectedBuildId && observation.health.gatewayBuildId !== request.expectedBuildId))
-    ) {
-      throw new UpdateCommandRecoveryPendingError(
-        "Updated Gateway readiness did not match the requested runtime identity.",
-      );
-    }
-    return observation;
-  };
 }
 
 // Loaded before package replacement: activation dependencies must stay eager.
@@ -410,30 +256,46 @@ export async function runUpdatedInstallGatewayCommand(
     params.definitionRecovery.unverified = true;
   }
 
-  const childStartedAtMs = Date.now();
-  const res = await runUpdatedGatewayChild({
-    root: params.result.root ?? undefined,
-    executor,
-    entrypoint,
-    nodeRunner,
-    args,
-    request: {
-      action,
-      ...(installing && params.originalManagedServiceRuntime
+  const runChild = async (
+    grant?: UpdateCommandChildGrant,
+    bindChild?: (pid: number, argv?: readonly string[]) => void,
+  ) => {
+    const invocation = resolveOpenClawCliInvocation({
+      execPath: nodeRunner,
+      entryPath: entrypoint,
+      execArgv: [],
+      args: [...args, ...(grant ? ["--update-executor", "run"] : [])],
+    });
+    const argv = [invocation.command, ...invocation.args];
+    params.onGatewayStartAttempted?.(action);
+    return await runSettledGatewayCommand(argv, {
+      ...(grant
         ? {
-            originalDefinition: params.originalManagedServiceRuntime.definition.fingerprint,
-            originalRuntimePin:
-              params.originalManagedServiceRuntime.definition.runtimePin?.revision,
+            input: JSON.stringify({
+              executor: grant,
+              action,
+              ...(installing && params.originalManagedServiceRuntime
+                ? {
+                    originalDefinition: params.originalManagedServiceRuntime.definition.fingerprint,
+                    originalRuntimePin:
+                      params.originalManagedServiceRuntime.definition.runtimePin?.revision,
+                  }
+                : {}),
+              targetRoot: resolveUpdateInstallRoot(params.result.root!),
+            }),
+            beforeInput: bindChild,
           }
         : {}),
-    },
-    onStart: () => params.onGatewayStartAttempted?.(action),
-    options: {
+      cwd: params.result.root,
       env: commandEnv,
       timeoutMs: run?.deadline?.remainingMs() ?? (installing ? installTimeoutMs : params.timeoutMs),
       ...(params.signal ? { signal: params.signal } : {}),
-    },
-  });
+    });
+  };
+  const childStartedAtMs = Date.now();
+  const res = executor
+    ? await withUpdateCommandExecutorChild(executor, params.result.root!, runChild)
+    : await runChild();
   assertCurrent();
   const exited = res.termination === "exit" && res.signal === null && !res.killed;
   const complete = !res.stdoutTruncatedBytes && !res.outputLimitExceeded && !res.outputErrorStream;

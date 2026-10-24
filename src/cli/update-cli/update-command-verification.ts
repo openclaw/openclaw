@@ -223,7 +223,6 @@ export async function verifyUpdatedGateway(
   const { proofOptions, assertCurrent } = captureUpdateGatewayReadinessOwner(params);
   const { health, readyz, http, launchAgentRecovery } = await observeUpdateGatewayReadiness({
     ...params,
-    executor: params.opts.run?.executorFence,
     assertCurrent,
     deadline: params.opts.run?.deadline ?? params.deadline,
   });
@@ -238,6 +237,14 @@ export async function verifyUpdatedGateway(
     verificationWarnings.push(
       redactSupportDiagnosticLine(
         `Gateway RPC authentication rejected (${health.authenticationError}); verified through local HTTP readiness and runtime identity.`,
+        { env: params.serviceEnv, stateDir: resolveStateDir(params.serviceEnv) },
+      ),
+    );
+  }
+  if (health.healthy && health.protocolMismatch) {
+    verificationWarnings.push(
+      redactSupportDiagnosticLine(
+        `Gateway RPC protocol differs from this updater (${health.protocolMismatch}); verified through local HTTP readiness and runtime identity.`,
         { env: params.serviceEnv, stateDir: resolveStateDir(params.serviceEnv) },
       ),
     );

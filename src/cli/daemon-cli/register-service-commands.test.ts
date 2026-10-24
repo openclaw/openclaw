@@ -128,7 +128,6 @@ describe("addGatewayServiceCommands", () => {
   it.each([
     { parent: "gateway", action: "install" },
     { parent: "daemon", action: "stop" },
-    { parent: "gateway", action: "status" },
   ])(
     "probes $parent $action update custody without startup mutation or invoking the action",
     async ({ parent, action }) => {
@@ -146,14 +145,12 @@ describe("addGatewayServiceCommands", () => {
           retainedOwnerBinding: true,
           originalDefinitionBinding: true,
           originalRuntimePinBinding: true,
-          readinessObservation: 1,
         }),
       );
       expect(ensureConfigReady).not.toHaveBeenCalled();
       expect(runDaemonInstall).not.toHaveBeenCalled();
       expect(runDaemonRestart).not.toHaveBeenCalled();
       expect(runDaemonStop).not.toHaveBeenCalled();
-      expect(runDaemonStatus).not.toHaveBeenCalled();
     },
   );
 

@@ -468,7 +468,6 @@ export async function deliverCommentThreadText(
         throw new FeishuReplyCommentError({
           message: response.msg ?? "Feishu Drive reply comment failed",
           feishuCode: response.code,
-          feishuMsg: response.msg,
           feishuLogId: response.log_id,
         });
       } catch (error) {

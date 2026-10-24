@@ -14,7 +14,7 @@ function updateExecutorOption(): Option {
 
 async function runUpdateCommand(
   mode: string | undefined,
-  action: "install" | "stop" | "restart" | "status",
+  action: "install" | "stop" | "restart",
   operation: () => Promise<void>,
 ): Promise<void> {
   if (mode === undefined) {
@@ -59,25 +59,22 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
       false,
     )
     .option("--json", "Output JSON", false)
-    .addOption(updateExecutorOption())
     .action(async (cmdOpts, command) => {
-      await runUpdateCommand(cmdOpts.updateExecutor, "status", async () => {
-        const { runDaemonStatus } = await import("./status.js");
-        await runDaemonStatus({
-          rpc: resolveGatewayRpcOptionsWithLocalPort(
-            {
-              ...cmdOpts,
-              timeout:
-                command.getOptionValueSource("timeout") === "default" ? undefined : cmdOpts.timeout,
-            },
-            command,
-          ),
-          probe: Boolean(cmdOpts.probe),
-          requireRpc: Boolean(cmdOpts.requireRpc),
-          deep: Boolean(cmdOpts.deep),
-          ...(cmdOpts.runtimeIntentOnly ? { runtimeIntentOnly: true } : {}),
-          json: resolveJsonOption(cmdOpts, command),
-        });
+      const { runDaemonStatus } = await import("./status.js");
+      await runDaemonStatus({
+        rpc: resolveGatewayRpcOptionsWithLocalPort(
+          {
+            ...cmdOpts,
+            timeout:
+              command.getOptionValueSource("timeout") === "default" ? undefined : cmdOpts.timeout,
+          },
+          command,
+        ),
+        probe: Boolean(cmdOpts.probe),
+        requireRpc: Boolean(cmdOpts.requireRpc),
+        deep: Boolean(cmdOpts.deep),
+        ...(cmdOpts.runtimeIntentOnly ? { runtimeIntentOnly: true } : {}),
+        json: resolveJsonOption(cmdOpts, command),
       });
     });
 

@@ -104,7 +104,16 @@ export async function readSessionTranscriptAccountingAsync(
   options: SessionTranscriptAccountingOptions,
   signal?: AbortSignal,
 ) {
-  const captured = structuredClone(options);
+  const captured: SessionTranscriptAccountingOptions = {
+    includeByteSize: options.includeByteSize,
+    includeUsage: options.includeUsage,
+    ...(Object.hasOwn(options, "includeTurnTaint")
+      ? { includeTurnTaint: options.includeTurnTaint }
+      : {}),
+    ...(Object.hasOwn(options, "usageEventLimit")
+      ? { usageEventLimit: options.usageEventLimit }
+      : {}),
+  };
   const memory = captureSessionActorTranscriptRead(scope, signal);
   if (memory) {
     return memory.read("session.history.accounting", { options: captured });

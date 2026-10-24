@@ -21,6 +21,11 @@ import {
   WorkerComputerResponseFrameSchema,
 } from "../../packages/gateway-protocol/src/schema/worker-computer.js";
 import {
+  WORKER_EXEC_APPROVAL_METHOD,
+  WorkerExecApprovalResponseFrameSchema,
+  type WorkerExecApprovalParams,
+} from "../../packages/gateway-protocol/src/schema/worker-exec-approval.js";
+import {
   type WorkerGatewayToolInvokeParams,
   type WorkerGatewayToolCancelParams,
   type WorkerGatewayToolUpdateFrame,
@@ -55,6 +60,10 @@ import {
 import { WorkerConnectionInterruptedError } from "./worker-connection-contract.js";
 
 const WORKER_REQUEST_SPECS = {
+  "exec-approval": {
+    method: WORKER_EXEC_APPROVAL_METHOD,
+    validateResponse: lazyCompile(WorkerExecApprovalResponseFrameSchema),
+  },
   "turn-admission": {
     method: WORKER_TURN_ADMISSION_METHOD,
     validateResponse: lazyCompile(WorkerTurnAdmissionResponseFrameSchema),
@@ -95,6 +104,7 @@ const WORKER_REQUEST_SPECS = {
 
 type WorkerRequestKind = keyof typeof WORKER_REQUEST_SPECS;
 type WorkerRequestParams = {
+  "exec-approval": WorkerExecApprovalParams;
   "turn-admission": WorkerTurnAdmissionParams;
   "gateway-tool": WorkerGatewayToolInvokeParams;
   "gateway-tool-cancel": WorkerGatewayToolCancelParams;

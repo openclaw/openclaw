@@ -18,10 +18,14 @@ export function createNodeWorkspaceTransferCommand(
       transfer: input,
       transportRetry: "never",
     });
+    const acknowledgement =
+      input.direction === "download" && input.checkpointGitHistory && result.code === 0
+        ? JSON.parse(result.stdout).manifestRef
+        : result.stdout.trim();
     if (
       result.termination !== "exit" ||
       result.code !== 0 ||
-      (input.direction === "download" && result.stdout.trim() !== input.manifestRef)
+      (input.direction === "download" && acknowledgement !== input.manifestRef)
     ) {
       throw new Error(failure);
     }

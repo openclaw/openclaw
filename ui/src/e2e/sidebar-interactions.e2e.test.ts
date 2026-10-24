@@ -300,6 +300,13 @@ suite.define(() => {
       await researchSwitch.focus();
       await page.keyboard.press("Enter");
       await expectPath(page, controlUiSessionPath("agent:research:main"));
+      const card = sidebar.locator("openclaw-sidebar-agent-card");
+      await expectText(card.locator(".sidebar-agent-card__name"), "Research");
+      const image = card.locator(".sidebar-agent-card__avatar img");
+      await expect.poll(() => image.getAttribute("src")).toBe(pixelAvatar);
+      await expect
+        .poll(() => image.evaluate((element: HTMLImageElement) => element.naturalWidth))
+        .toBe(1);
       await sidebar.locator(".sidebar-agent-card__main").click();
       await menu.getByRole("menuitem", { name: "Show all", exact: true }).click();
       await sidebar.locator(".sidebar-workspace-header__main").click();
@@ -350,31 +357,5 @@ suite.define(() => {
         expect(await duplicateNames.locator(".agent-select__option-description").count()).toBe(0);
       },
     );
-  });
-
-  it("shows a workspace identity avatar in the sidebar agent card", async () => {
-    await suite.withPage(desktop, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        methodResponses: {
-          "agent.identity.get": {
-            agentId: "main",
-            avatar: pixelAvatar,
-            avatarStatus: "data",
-            name: "Workspace Molty",
-          },
-          ...agentResponses([{ id: "main" }]),
-        },
-      });
-
-      await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("agent.identity.get");
-      const card = page.locator("openclaw-app-sidebar openclaw-sidebar-agent-card");
-      await expectText(card.locator(".sidebar-agent-card__name"), "Workspace Molty");
-      const image = card.locator(".sidebar-agent-card__avatar img");
-      await expect.poll(() => image.getAttribute("src")).toBe(pixelAvatar);
-      await expect
-        .poll(() => image.evaluate((element: HTMLImageElement) => element.naturalWidth))
-        .toBe(1);
-    });
   });
 });

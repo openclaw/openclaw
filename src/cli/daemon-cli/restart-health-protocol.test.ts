@@ -1,16 +1,17 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import {
   MIN_CLIENT_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
 } from "../../../packages/gateway-protocol/src/version.js";
 import { resolveReadOnlyLocalGatewayAuth } from "../../gateway/call-device-auth.js";
-import { callGateway } from "../../gateway/call.js";
+import * as gatewayCall from "../../gateway/call.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { withUpdateCommandExecutor } from "../update-cli/update-command-executor.js";
 import { useExecutorFixture } from "../update-cli/update-command-executor.test-support.js";
+import { confirmGatewayReachable } from "./restart-health-probe.js";
 import { withProtocolGateway } from "./restart-health-protocol.test-support.js";
 
 // The old updater's transport must not decide whether the new Gateway is healthy.
@@ -21,14 +22,14 @@ it.each(["none", "token"] as const)(
     await withOpenClawTestState(
       { env: { OPENCLAW_GATEWAY_TOKEN: undefined, OPENCLAW_GATEWAY_PASSWORD: undefined } },
       async (state) =>
-        withProtocolGateway(mode, async ({ port, config, observed, failures }) => {
+        withProtocolGateway(mode, async ({ port, config, observed, failures, httpRequests }) => {
           const controlAuth = await resolveReadOnlyLocalGatewayAuth({
             auth: config.gateway?.auth,
             authNone: mode === "none",
             env: state.env,
           });
           const probe = (protocol: number) =>
-            callGateway({
+            gatewayCall.callGateway({
               config,
               localPortOverride: port,
               ...controlAuth,
@@ -68,6 +69,35 @@ it.each(["none", "token"] as const)(
                 : { id: "cli", mode: "cli" },
             ),
           ]);
+          const actualCallGateway = gatewayCall.callGateway;
+          vi.spyOn(gatewayCall, "callGateway").mockImplementation((options) =>
+            actualCallGateway({
+              ...options,
+              minProtocol: retainedProtocol,
+              maxProtocol: retainedProtocol,
+            }),
+          );
+          await expect(
+            confirmGatewayReachable({
+              port,
+              config,
+              auth: config.gateway.auth,
+              env: state.env,
+              allowHttpVerification: true,
+              timeoutMs: 2_000,
+            }),
+          ).resolves.toMatchObject({
+            reachable: true,
+            gatewayVersion: "2026.10.23",
+            gatewayBuildId: "fixture-target",
+            protocolMismatch: expect.stringContaining("protocol mismatch"),
+          });
+          expect(observed.at(-1)).toMatchObject({
+            minProtocol: retainedProtocol,
+            maxProtocol: retainedProtocol,
+          });
+          expect(failures).toEqual(["protocol-mismatch", "protocol-mismatch"]);
+          expect(httpRequests).toEqual(expect.arrayContaining(["/startupz", "/readyz"]));
         }),
     );
   },
@@ -83,25 +113,18 @@ it("sends no credentials when the admitted updater lease changes before challeng
       withProtocolGateway(
         "token",
         async ({ port, config, observed }) => {
-          const controlAuth = await resolveReadOnlyLocalGatewayAuth({
-            auth: config.gateway.auth,
-            env: state.env,
-          });
           let callError: unknown;
           const outcome = await withUpdateCommandExecutor(randomUUID(), async (owner) => {
             const fence = await owner.enter(root);
-            const options = {
-              config,
-              localPortOverride: port,
-              ...controlAuth,
-              method: "health",
-              scopes: ["operator.read"],
-              timeoutMs: 2_000,
-              assertConnectionCurrent: fence.assertCurrent,
-              assertDispatchCurrent: fence.assertCurrent,
-            };
             try {
-              await callGateway(options);
+              await confirmGatewayReachable({
+                config,
+                auth: config.gateway.auth,
+                env: state.env,
+                port,
+                timeoutMs: 2_000,
+                assertCurrent: fence.assertCurrent,
+              });
             } catch (error) {
               callError = error;
               throw error;
@@ -110,10 +133,12 @@ it("sends no credentials when the admitted updater lease changes before challeng
             () => ({ ok: true }),
             (error: unknown) => ({ error }),
           );
-          expect(revoked).toBe(true);
-          expect(callError).toBeInstanceOf(Error);
-          expect(outcome).toHaveProperty("error");
           expect(observed).toEqual([]);
+          expect(revoked).toBe(true);
+          expect(callError).toMatchObject({
+            message: "Update executor ownership is no longer current.",
+          });
+          expect(outcome).toHaveProperty("error");
         },
         {
           beforeChallenge: async () => {

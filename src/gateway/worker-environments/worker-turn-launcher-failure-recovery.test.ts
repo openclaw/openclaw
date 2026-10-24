@@ -1,8 +1,10 @@
+import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { WORKER_TURN_ADMISSION_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-turn-admission.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import * as rootLogger from "../../logger.js";
@@ -116,12 +118,15 @@ describe("worker turn launcher failure recovery", () => {
     async (source) => {
       await fx.seedActivePlacement();
       const loss = new WorkerNodeLostError();
+      const environment = fx.attachedEnvironment();
+      assert(environment.bootstrapReceipt);
+      environment.bootstrapReceipt.protocolFeatures.push(WORKER_TURN_ADMISSION_PROTOCOL_FEATURE);
       const recovered = vi.fn(() => failPendingWorkspace(loss));
       const provider = createLauncher({
         reconcileActivePlacement: recovered,
         environments: {
           ...fx.unusedEnvironments(),
-          get: () => fx.attachedEnvironment(),
+          get: () => environment,
           acquireTurnCredential: async () => fx.credential(),
           acknowledgeCredentialDelivery: async () => true,
           startTunnel: async () =>

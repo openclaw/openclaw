@@ -35,7 +35,7 @@ export async function withProtocolGateway<T>(
     failures: string[];
     httpRequests: string[];
   }) => Promise<T>,
-  options: { warnings?: boolean; beforeChallenge?: () => Promise<void> } = {},
+  options: { beforeChallenge?: () => Promise<void> } = {},
 ): Promise<T> {
   const auth = mode === "none" ? { mode } : { mode, token: "fixture-protocol-token" };
   const httpRequests: string[] = [];
@@ -43,7 +43,13 @@ export async function withProtocolGateway<T>(
     httpRequests.push(req.url ?? "");
     res
       .writeHead(200, { "content-type": "application/json" })
-      .end(JSON.stringify({ ready: true, coreReady: true }));
+      .end(
+        JSON.stringify(
+          req.url === "/startupz"
+            ? { ok: true, status: "started", version: "2026.10.23", buildId: "fixture-target" }
+            : { ready: true, coreReady: true },
+        ),
+      );
   });
   const gateway = new WebSocketServer({ server: http });
   http.listen(0, "127.0.0.1");
@@ -161,22 +167,8 @@ export async function withProtocolGateway<T>(
       }
       sendMinimalGatewayResponse(socket, request.id, {
         ok: true,
-        plugins: {
-          errors: options.warnings
-            ? [
-                {
-                  id: "fixture-plugin",
-                  origin: "bundled",
-                  activated: true,
-                  error: "fixture plugin unavailable",
-                },
-              ]
-            : [],
-          unavailable: [],
-        },
-        channels: options.warnings
-          ? { fixture: { probe: { ok: false, error: "fixture channel unavailable" } } }
-          : {},
+        plugins: { errors: [], unavailable: [] },
+        channels: {},
       });
     };
     void Promise.resolve()

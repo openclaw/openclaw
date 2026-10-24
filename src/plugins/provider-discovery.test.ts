@@ -55,33 +55,6 @@ function makeModel(id: string): ModelDefinitionConfig {
   };
 }
 
-function expectGroupedProviderIds(
-  providers: readonly ProviderPlugin[],
-  expected: Record<ProviderCatalogOrder | "late", readonly string[]>,
-) {
-  const grouped = groupPluginDiscoveryProvidersByOrder([...providers]);
-  const actual = {
-    simple: grouped.simple.map((provider) => provider.id),
-    profile: grouped.profile.map((provider) => provider.id),
-    paired: grouped.paired.map((provider) => provider.id),
-    late: grouped.late.map((provider) => provider.id),
-  };
-  expect(actual).toEqual(expected);
-}
-
-function expectNormalizedDiscoveryResult(params: {
-  provider: ProviderPlugin;
-  result: Parameters<typeof normalizePluginDiscoveryResult>[0]["result"];
-  expected: Record<string, unknown>;
-}) {
-  const normalized = normalizePluginDiscoveryResult({
-    provider: params.provider,
-    result: params.result,
-  });
-  expect(Object.getPrototypeOf(normalized)).toBe(null);
-  expect(Object.fromEntries(Object.entries(normalized))).toEqual(params.expected);
-}
-
 type NormalizePluginDiscoveryResultCase = {
   name: string;
   provider: ProviderPlugin;
@@ -108,7 +81,14 @@ describe("groupPluginDiscoveryProvidersByOrder", () => {
       },
     },
   ] as const)("$name", ({ providers, expected }) => {
-    expectGroupedProviderIds(providers, expected);
+    const grouped = groupPluginDiscoveryProvidersByOrder([...providers]);
+    const actual = {
+      simple: grouped.simple.map((provider) => provider.id),
+      profile: grouped.profile.map((provider) => provider.id),
+      paired: grouped.paired.map((provider) => provider.id),
+      late: grouped.late.map((provider) => provider.id),
+    };
+    expect(actual).toEqual(expected);
   });
 });
 
@@ -116,9 +96,7 @@ describe("runProviderCatalog", () => {
   it("passes the selected provider identities into the catalog hook", async () => {
     let providerIds: readonly string[] | undefined;
     const provider: ProviderPlugin = {
-      id: "openai",
-      label: "OpenAI",
-      auth: [],
+      ...makeProvider({ id: "openai", label: "OpenAI" }),
       catalog: {
         run: async (ctx) => {
           providerIds = ctx.providerIds;
@@ -147,9 +125,7 @@ describe("runProviderCatalog", () => {
       status: "ready" | "auth-rejected" | "unavailable";
     }> = [];
     const provider: ProviderPlugin = {
-      id: "openai",
-      label: "OpenAI",
-      auth: [],
+      ...makeProvider({ id: "openai", label: "OpenAI" }),
       catalog: {
         run: async () => {
           await Promise.resolve();
@@ -193,9 +169,7 @@ describe("runProviderCatalog", () => {
   it("copies only valid ready model order through the catalog boundary", async () => {
     const outcomes: Array<{ status: string; modelOrder?: readonly string[] }> = [];
     const provider: ProviderPlugin = {
-      id: "demo",
-      label: "Demo",
-      auth: [],
+      ...makeProvider({ id: "demo", label: "Demo" }),
       catalog: {
         run: async () => ({
           providers: {},
@@ -234,9 +208,7 @@ describe("runProviderCatalog", () => {
   it("preserves provider-owned profile outcomes after multiple auth probes", async () => {
     const outcomes: Array<{ profileId?: string; status: string }> = [];
     const provider: ProviderPlugin = {
-      id: "openai",
-      label: "OpenAI",
-      auth: [],
+      ...makeProvider({ id: "openai", label: "OpenAI" }),
       catalog: {
         run: async (ctx) => {
           ctx.resolveProviderAuth("openai");
@@ -287,9 +259,7 @@ describe("runProviderCatalog", () => {
     async ({ providerIds, expected }) => {
       const outcomes: string[] = [];
       const provider: ProviderPlugin = {
-        id: "openai",
-        label: "OpenAI",
-        auth: [],
+        ...makeProvider({ id: "openai", label: "OpenAI" }),
         catalog: {
           run: async () => ({
             providers: {},
@@ -432,7 +402,9 @@ describe("normalizePluginDiscoveryResult", () => {
   ];
 
   it.each(cases)("$name", ({ provider, result, expected }) => {
-    expectNormalizedDiscoveryResult({ provider, result, expected });
+    const normalized = normalizePluginDiscoveryResult({ provider, result });
+    expect(Object.getPrototypeOf(normalized)).toBe(null);
+    expect(Object.fromEntries(Object.entries(normalized))).toEqual(expected);
   });
 });
 

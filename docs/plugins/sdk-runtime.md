@@ -52,7 +52,7 @@ containment. The same ID is advertised in Gateway `hello-ok.features.capabilitie
 - [Agent and sessions](/plugins/sdk-runtime/agent) — agent identity, directories, session store, transcripts, and sandbox authority.
 - [Model helpers](/plugins/sdk-runtime/models) — host-owned completions, model-selection policy, and provider auth resolution.
 - [Background work](/plugins/sdk-runtime/background-work) — hook agent turns, subagent runs, and native harness completion delivery.
-- [Gateway and nodes](/plugins/sdk-runtime/gateway-and-nodes) — in-process Gateway requests, bounded session facts through `gateway.readSessionFacts`, paired node invocation, and Gateway service events.
+- [Gateway and nodes](/plugins/sdk-runtime/gateway-and-nodes) — in-process Gateway requests, bounded session facts through `gateway.readSessionFacts`, plugin-written agent messages through `gateway.appendAgentMessage`, paired node invocation, and Gateway service events.
 - [Media helpers](/plugins/sdk-runtime/media) — speech, media understanding, image/video/music generation, web search, and media utilities.
 - [State and system](/plugins/sdk-runtime/state-and-system) — config snapshot, SQLite-backed plugin state, system utilities, events, and logging.
 - [Channel helpers](/plugins/sdk-runtime/channel) — channel-specific runtime helper groups for chunking, routing, pairing, media, and mentions.
@@ -268,6 +268,12 @@ property contracts, including execution methods supplied by `get` traps.
 plugin mutations cannot alter caller arguments or an approved request. These
 snapshots reject shared memory in the cloned graph; properties omitted by
 structured cloning do not cross this boundary.
+
+`before_prompt_build` and `agent_turn_prepare` receive fresh message arrays and
+envelopes with shared, frozen transcript payload leaves. Treat nested history as
+read-only and return contribution fields instead of mutating message content.
+Non-owned values still receive detached snapshots with shared-memory checks.
+See the [prompt-hook migration](/plugins/sdk-migration#prompt-hook-history-is-read-only).
 
 Host-created request scopes borrow their plugin registry. A direct registry-scope
 callback keeps its registry until its returned operation settles; detached async

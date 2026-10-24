@@ -1829,7 +1829,6 @@
     "test/e2e/qa-lab/runtime/gateway-hosted-web.e2e.test.ts": 1,
     "test/e2e/qa-lab/runtime/gateway-http-apis.e2e.test.ts": 1,
     "test/e2e/qa-lab/runtime/gateway-loopback-lan-access.probe.e2e.test.ts": 3,
-    "test/e2e/qa-lab/runtime/gateway-mcp-app-grant-revalidation.e2e.test.ts": 45,
     "test/e2e/qa-lab/runtime/gateway-node-control-plane.e2e.test.ts": 419,
     "test/e2e/qa-lab/runtime/gateway-node-exec-approvals.e2e.test.ts": 59,
     "test/e2e/qa-lab/runtime/gateway-node-exec-routing.e2e.test.ts": 117,

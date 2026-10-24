@@ -267,6 +267,7 @@ export function createService(
       | "nodePortalCarrier"
       | "placementStore"
       | "workerCredentialTtlMs"
+      | "resolveGatewayContext"
     >
   > = {},
 ) {
@@ -727,5 +728,7 @@ export async function bindPlacementHarness(
       bindWorkerTurnGitHubGrant(executionStore, claim, grant),
     bindToolSurface: (surface: Parameters<typeof bindWorkerTurnCapabilities>[2]["toolSurface"]) =>
       bindWorkerTurnCapabilities(executionStore, claim, { toolSurface: surface }),
+    bindCapabilities: (capabilities: Parameters<typeof bindWorkerTurnCapabilities>[2]) =>
+      bindWorkerTurnCapabilities(executionStore, claim, capabilities),
   };
 }

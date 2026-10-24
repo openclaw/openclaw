@@ -23,7 +23,6 @@ import {
   recordPostUpdateWindowsAutoStartFailure,
   resumePostUpdateWindowsAutoStart,
 } from "./update-command-post-update-maintenance.js";
-import type { UpdateGatewayObservationContext } from "./update-command-readiness.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import { assertUpdateCommandPackageFinalization } from "./update-command-recovery.js";
 import { prepareUpdateRestart } from "./update-command-restart-context.js";
@@ -122,7 +121,6 @@ async function finishSettledUpdate(
   let pendingResult = params.result;
   let resultWithPostUpdate = params.result;
   let activationVerified = false;
-  let verifiedObservation: UpdateGatewayObservationContext | undefined;
   let settledResult: UpdateRunResult | undefined;
   let terminalRecord: UpdateCommandTerminalRecord | undefined;
   let pendingNotify = true;
@@ -199,7 +197,6 @@ async function finishSettledUpdate(
         );
       }
       result = rollback.result;
-      verifiedObservation = undefined;
       originalServiceRecoveryHandled = rollback.originalServiceRecovery !== undefined;
       latestServiceStop = rollback.stoppedForRollback ?? currentServiceStop();
       rolledBack = rollback.rolledBack;
@@ -343,7 +340,6 @@ async function finishSettledUpdate(
     const needsObservation = cleanupFailure || (!rolledBack && finalResult.status === "error");
     if (needsObservation && !originalServiceRecoveryHandled) {
       finalResult = await verifyUpdateFailureRecovery({
-        verifiedObservation,
         result: finalResult,
         root,
         opts: params.opts,
@@ -563,9 +559,8 @@ async function finishSettledUpdate(
             onPluginWarnings: (warnings) => {
               resultWithPostUpdate = appendPluginUpdateWarnings(resultWithPostUpdate, warnings);
             },
-            onVerified: (verifiedAtMs, observation) => {
+            onVerified: (verifiedAtMs) => {
               activationVerified = true;
-              verifiedObservation = observation;
               recordVerifiedDowntime(verifiedAtMs);
             },
           }),
@@ -698,7 +693,10 @@ async function finishSettledUpdate(
 
       return resultWithPostUpdate;
     } catch (error) {
-      if (error instanceof UpdateCommandRecoveryPendingError) {
+      if (
+        params.originalManagedServiceRuntime &&
+        error instanceof UpdateCommandRecoveryPendingError
+      ) {
         throw new UpdateCommandPendingRecoveryFailure(pendingResult, formatErrorMessage(error), {
           cause: error,
         });

@@ -30,15 +30,16 @@ import {
 } from "../../process/gateway-work-admission.js";
 import { safeEqualSecret } from "../../security/secret-equal.js";
 import { extractAssistantTranscriptSourceText } from "../../shared/chat-message-content.js";
-import type { FastMode } from "../../shared/fast-mode.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import { notifyListeners } from "../../shared/listeners.js";
 import type { WorkerConnectionIdentity, WorkerInferenceExecutor } from "./connection-identity.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type { PlacementTurnClaimAuthority } from "./placement-turn-authority.js";
+import type { WorkerExecApprovalOwner } from "./worker-exec-approval-contract.js";
 import type { WorkerGatewayToolRuntime } from "./worker-gateway-tool-contract.js";
 import type { WorkerGitHubBindingGrant } from "./worker-github-binding-contract.js";
 import type { WorkerReplyMediaPreparer } from "./worker-reply-media.types.js";
+import type { WorkerTurnPromptCacheContext } from "./worker-turn-prompt.types.js";
 
 type TurnClaimReleaseWaiter = (error?: Error) => void;
 
@@ -95,14 +96,6 @@ export type WorkerTurnExecutionIdentityCapability = WorkerTurnTranscriptSource &
 
 type WorkerTurnFinishingOutcome = { error?: string; replayInvalid?: true };
 
-export type WorkerTurnPromptCacheContext = Readonly<{
-  boundaryCount: number;
-  promptCacheKey?: string;
-  fastMode?: FastMode;
-  fastModeStartedAtMs?: number;
-  fastModeAutoOnSeconds?: number;
-}>;
-
 type BoundWorkerTurnOwner = {
   capability: WorkerTurnExecutionIdentityCapability;
   claimKey: string;
@@ -111,6 +104,7 @@ type BoundWorkerTurnOwner = {
     toolSurface?: WorkerGatewayToolRuntime;
     inference?: WorkerInferenceExecutor;
     admitTurn?: WorkerTurnAdmission;
+    execApproval?: WorkerExecApprovalOwner;
     inputApproved?: boolean;
     prepareReplyMedia?: WorkerReplyMediaPreparer;
     githubGrant?: WorkerGitHubBindingGrant;
@@ -427,6 +421,7 @@ export function bindWorkerTurnCapabilities(
     prepareReplyMedia?: WorkerReplyMediaPreparer;
     inference?: WorkerInferenceExecutor;
     admitTurn?: WorkerTurnAdmission;
+    execApproval?: WorkerExecApprovalOwner;
   },
 ): () => void {
   const path = store[WORKER_TURN_EXECUTION_IDENTITY_PATH];
@@ -456,6 +451,10 @@ export function captureWorkerReplyMedia(identity: WorkerConnectionIdentity) {
 
 export function getWorkerTurnToolSurface(identity: Parameters<typeof resolveWorkerTurnRuntime>[0]) {
   return resolveWorkerTurnRuntime(identity)?.toolSurface;
+}
+
+export function getWorkerTurnExecApproval(identity: WorkerConnectionIdentity) {
+  return resolveWorkerTurnRuntime(identity)?.execApproval;
 }
 
 /** The exact admitted turn retains the grant; reconnects cannot elect another issuer. */

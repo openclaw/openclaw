@@ -7,7 +7,7 @@ import type {
   ControlUiSettingsComponents,
   DoctorMemoryStatusPayload,
 } from "openclaw/plugin-sdk/control-ui";
-import { flush } from "solid-js";
+import { createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   containerForTest,
@@ -157,6 +157,50 @@ function renderOverview(
 }
 
 describe("MemoryOverview", () => {
+  it("retains overview buttons and dispatches their current refresh and probe callbacks", () => {
+    const container = containerForTest();
+    const context = overviewContext();
+    const MemoryOverview = createMemoryOverview(context, () => context.props);
+    const initial = { refresh: vi.fn(), probe: vi.fn() };
+    const replacement = { refresh: vi.fn(), probe: vi.fn() };
+    let replaceCallbacks!: () => void;
+    const payload = fixturePayload();
+    payload.embedding = { ok: false, checked: false };
+    disposers.push(
+      render(() => {
+        const [callbacks, setCallbacks] = createSignal(initial);
+        replaceCallbacks = () => setCallbacks(replacement);
+        return (
+          <MemoryOverview
+            agentId="main"
+            engineSelection={context.props.engine}
+            engineDisabled={false}
+            status={{ kind: "ready", payload }}
+            probingEmbeddings={false}
+            onRefresh={callbacks().refresh}
+            onProbeEmbeddings={callbacks().probe}
+            onNavigate={context.navigate}
+          />
+        );
+      }, container),
+    );
+    flush();
+    const refresh = findButton(container, /^Refresh status$/)!;
+    const probe = findButton(container, /^Test$/)!;
+    refresh.focus();
+    replaceCallbacks();
+    flush();
+    expect(findButton(container, /^Refresh status$/)).toBe(refresh);
+    expect(findButton(container, /^Test$/)).toBe(probe);
+    expect(document.activeElement).toBe(refresh);
+    refresh.click();
+    probe.click();
+    expect(replacement.refresh).toHaveBeenCalledOnce();
+    expect(replacement.probe).toHaveBeenCalledOnce();
+    expect(initial.refresh).not.toHaveBeenCalled();
+    expect(initial.probe).not.toHaveBeenCalled();
+  });
+
   it("renders the awake reading hero and status cards from one payload", () => {
     const container = renderOverview({ kind: "ready", payload: fixturePayload() });
 
