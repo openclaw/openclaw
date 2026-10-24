@@ -151,6 +151,14 @@ export async function runEmbeddedAttemptExecutionPhase(
   const preparedStream = prepareEmbeddedAttemptStream({
     attempt,
     agentSession: sessionRuntime.agentSession,
+    readSessionForkBoundary: () => ({
+      timezone: sessionRuntime.boundary.boundaryTimezone,
+      includeTimestamp: sessionRuntime.boundary.includeBoundaryTimestamp,
+      projectPersistedSenderContext: sessionRuntime.boundary.includeBoundaryTimestamp,
+      userTranscriptContexts: sessionRuntime.boundary.getUserTranscriptContexts?.(),
+      appendOnlyRuntimeContext: sessionRuntime.transcriptPolicy.appendOnlyRuntimeContext,
+      inHistorySystemUpdates: sessionRuntime.transcriptPolicy.inHistorySystemUpdates,
+    }),
     onModelUsage,
     applyPermissionMode: input.lifecycle.applyPermissionMode,
     runAbortController: input.runAbortController,

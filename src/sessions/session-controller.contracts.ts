@@ -1,8 +1,10 @@
 import type { SessionPermissionMode } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { OperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import type { MessagingToolSend } from "../agents/embedded-agent-messaging.types.js";
+import type { normalizeMessagesForLlmBoundary } from "../agents/embedded-agent-runner/run/attempt-llm-boundary.js";
 import type { ReplyCompletion, ReplyExpectation } from "../agents/reply-completion.types.js";
 import type { RequesterOrigin } from "../agents/requester-origin.js";
+import type { AgentMessage } from "../agents/runtime/index.js";
 import type { resolveAgentTurnExecutionStatus } from "../auto-reply/reply/agent-runner-execution-status.js";
 import type { FollowupQueueDisposition } from "../auto-reply/reply/queue-policy.js";
 import type { FollowupRunPayload } from "../auto-reply/reply/queue/followup-run-payload.types.js";
@@ -17,6 +19,7 @@ import type { SessionEntryCohortReader } from "../config/sessions/session-entry-
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { AgentRunDelegatedAuthority } from "../infra/agent-run-authority.types.js";
 import type { DiagnosticEmbeddedRunOwner } from "../infra/diagnostic-model-request-provenance.js";
+import type { Context, Model } from "../llm/types.js";
 import type { Deferred, createDeferredCore } from "../shared/deferred.js";
 import type { OpenClawAgentDatabaseIdentity } from "../state/openclaw-agent-db-identity.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
@@ -728,6 +731,18 @@ export type EmbeddedAgentQueueHandle = {
   messageInjection?: ReplyBackendMessageInjection;
   messageInjectionV2?: ReplyBackendMessageInjectionV2;
   isStreaming: () => boolean;
+  /** Borrow current model context only while this attempt owns the session. */
+  readSessionForkContext?: () =>
+    | {
+        model: Model;
+        systemPrompt: string;
+        tools: Context["tools"];
+        messages: AgentMessage[];
+        sessionVersion?: number;
+        boundary?: Parameters<typeof normalizeMessagesForLlmBoundary>[1];
+        promptCacheKey?: string;
+      }
+    | undefined;
   isStopped?: () => boolean;
   /** True after this handle has accepted an abort, even while cleanup retains it. */
   isAborted?: () => boolean;

@@ -1,7 +1,4 @@
-import { setImmediate as nextTurn } from "node:timers/promises";
-import { queryObjects } from "node:v8";
-import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
-import { createAssistantMessageEventStream, type AssistantMessage } from "openclaw/plugin-sdk/llm";
+import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
@@ -11,8 +8,6 @@ import { resetSecretRedactionRegistryForTest } from "../../logging/secret-redact
 import { readRuntimePromptMediaFacts } from "../../media/media-facts.js";
 import { finalizeRuntimePromptImages } from "../../media/runtime-prompt-image-provenance.js";
 import { toToolDefinitions } from "../agent-tool-definition-adapter.js";
-import { runEmbeddedSessionFork } from "../embedded-agent-runner/session-fork.js";
-import { resolveEmbeddedAgentStream } from "../embedded-agent-runner/stream-resolution.js";
 import type { AgentTool, AgentMessage } from "../runtime/index.js";
 import { attachInternalToolExecutionPreparer } from "../runtime/internal-hooks.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
@@ -32,7 +27,6 @@ import type {
   ToolDefinition,
   ToolResultEvent,
 } from "./extensions/types.js";
-import { convertToLlm } from "./messages.js";
 import { ModelRegistry } from "./model-registry.js";
 import { createAgentSession } from "./sdk.js";
 import { withSessionState } from "./session-manager-fixtures.test-support.js";
@@ -176,74 +170,6 @@ async function createSettledSession(handlers?: ExtensionFactory) {
   });
   return { session, sessionManager, events };
 }
-
-describe("createAgentSession fork retention", () => {
-  it("collects disposed parents while their native transport remains available for replay", async () => {
-    const model: Model = { ...testModel, provider: "openai", api: "openai-chatgpt-responses" };
-    const modelRegistry = ModelRegistry.inMemory(AuthStorage.inMemory());
-    modelRegistry.registerProvider("fork-retention", {
-      api: model.api,
-      streamSimple: (requestModel, context, options) => {
-        const stream = createAssistantMessageEventStream();
-        void Promise.resolve(options?.onPayload?.({ input: context.messages }, requestModel)).then(
-          () =>
-            stream.end({
-              ...createAssistantError(""),
-              stopReason: "stop",
-              content: [{ type: "text", text: "Answer" }],
-            }),
-        );
-        return stream;
-      },
-    });
-    const references: WeakRef<object>[] = [];
-    const sessionId = "sdk-persisted-content";
-    async function completeParent(run: number) {
-      const sessionManager = createSessionManagerWithPersistedAssistantMessages([
-        { content: [{ type: "text", text: "Oversized parent history. ".repeat(16_384) }] },
-      ]);
-      const { session } = await createSdkSession({
-        model,
-        modelRegistry,
-        sessionManager,
-        cleanupProviderSessionResourcesOnDispose: false,
-      });
-      references.push(new WeakRef(sessionManager), new WeakRef(session));
-      try {
-        const { streamFn } = resolveEmbeddedAgentStream({
-          model,
-          sessionId,
-          currentStreamFn: session.agent.streamFn!,
-          sessionFork: { sessionId, agentId: "main", runId: `parent-${run}` },
-        });
-        await (await streamFn(model, { messages: convertToLlm(session.messages) }, {})).result();
-      } finally {
-        session.dispose();
-      }
-    }
-    try {
-      for (let run = 0; run < 4; run++) {
-        await completeParent(run);
-      }
-      const control = new WeakRef({ unowned: true });
-      await nextTurn();
-      queryObjects(WeakRef);
-      expect(control.deref()).toBeUndefined();
-      expect(references.filter((reference) => reference.deref())).toHaveLength(0);
-      await expect(
-        runEmbeddedSessionFork({
-          sessionId,
-          agentId: "main",
-          model,
-          question: "Side question",
-          assertCurrent() {},
-        }),
-      ).resolves.toBe("Answer");
-    } finally {
-      cleanupSessionResources(sessionId);
-    }
-  });
-});
 
 describe("AgentSession getLastAssistantText", () => {
   it("returns no assistant text for null content", async () => {

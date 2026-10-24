@@ -17,11 +17,7 @@ import { createDeferredCore } from "../../../shared/deferred.js";
 import type { StreamFn } from "../../runtime/index.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import { UNKNOWN_TOOL_THRESHOLD } from "../../tool-loop-detection.js";
-import {
-  clearEmbeddedSessionForkSnapshot,
-  runEmbeddedSessionFork,
-  wrapStreamFnWithSessionFork,
-} from "../session-fork.js";
+import { runEmbeddedSessionFork } from "../session-fork.js";
 import { resolveEmbeddedAgentStream } from "../stream-resolution.js";
 import { wrapStreamFnHandleSensitiveStopReason } from "./attempt-stop-reason-recovery.js";
 import { wrapStreamFnTrimToolCallNames } from "./attempt-tool-call-stream-normalization.js";
@@ -204,8 +200,18 @@ function textFrames(id: string, itemId: string, text: string): Frame[] {
 function runFork(
   identity: { agentId: string; sessionId: string; runId: string },
   question: string,
+  streamFn: StreamFn,
+  assertCurrent = () => {},
 ) {
-  return runEmbeddedSessionFork({ ...identity, model, apiKey, question, assertCurrent: () => {} });
+  return runEmbeddedSessionFork({
+    context,
+    streamFn,
+    options: { sessionId: identity.sessionId, transport: "auto" },
+    model,
+    apiKey,
+    question,
+    assertCurrent,
+  });
 }
 
 function parkConsumer(streamFn: StreamFn, signal: AbortSignal) {
@@ -229,11 +235,8 @@ async function expectIdleDeadline(onIdleTimeout: ReturnType<typeof vi.fn>) {
 
 function forkParent(sessionId: string, runtime = llmRuntime) {
   const identity = { agentId: "main", sessionId, runId: "parent" };
-  const parent = wrapStreamFnWithSessionFork(
-    (requestModel, requestContext, options) =>
-      runtime.streamSimple(requestModel, requestContext, options),
-    identity,
-  );
+  const parent: StreamFn = (requestModel, requestContext, options) =>
+    runtime.streamSimple(requestModel, requestContext, options);
   return { identity, parent };
 }
 
@@ -270,10 +273,17 @@ describe("codex websocket idle watchdog through the embedded runner chain", () =
         .stopReason,
     ).toBe("stop");
     expect(ControlledWebSocket.instances[0]?.sent).toHaveLength(1);
-    ControlledWebSocket.onOpen = () => clearEmbeddedSessionForkSnapshot(identity.sessionId);
-    await expect(runFork(identity, "Review without dispatch after revocation")).rejects.toThrow(
-      "Cache-parity session fork requires a parent turn",
-    );
+    let current = true;
+    ControlledWebSocket.onOpen = () => {
+      current = false;
+    };
+    await expect(
+      runFork(identity, "Review without dispatch after revocation", parent, () => {
+        if (!current) {
+          throw new Error("Session read authority revoked");
+        }
+      }),
+    ).rejects.toThrow("Session read authority revoked");
     expect(ControlledWebSocket.instances).toHaveLength(2);
     expect(ControlledWebSocket.instances[1]?.sent).toEqual([]);
     expect(fetchMock).not.toHaveBeenCalled();
@@ -305,7 +315,9 @@ describe("codex websocket idle watchdog through the embedded runner chain", () =
       transport: "websocket-cached" as const,
     };
     expect((await (await parent(model, context, options)).result()).stopReason).toBe("stop");
-    await expect(runFork(identity, "Review independently")).resolves.toBe("Independent review");
+    await expect(runFork(identity, "Review independently", parent)).resolves.toBe(
+      "Independent review",
+    );
     expect((await (await parent(model, followupContext, options)).result()).stopReason).toBe(
       "stop",
     );
@@ -353,9 +365,9 @@ describe("codex websocket idle watchdog through the embedded runner chain", () =
     const { identity, parent } = forkParent("native-fork-fallback", runtime);
     const options = { apiKey, sessionId: identity.sessionId, transport: "auto" as const };
     expect((await (await parent(model, context, options)).result()).stopReason).toBe("stop");
-    await expect(runFork(identity, "Review with independent transport recovery")).resolves.toBe(
-      "Fallback review",
-    );
+    await expect(
+      runFork(identity, "Review with independent transport recovery", parent),
+    ).resolves.toBe("Fallback review");
     expect((await (await parent(model, followupContext, options)).result()).stopReason).toBe(
       "stop",
     );

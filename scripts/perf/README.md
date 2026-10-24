@@ -64,20 +64,35 @@ promotion, or production GC benchmark.
 
 ## Session-fork snapshots
 
-`node --expose-gc scripts/perf/session-fork-retention-measure.mjs <baseline-root> <candidate-root>`
-compares the fork snapshot owner with 64 near-budget requests, 1,000 requests
-with nested options, and three requests with 22 MiB Blob publications sliced from
-64 MiB backing stores. The roots
-need only the four source files listed in the script. Six alternating samples per
-side each capture and replace the same sessions twice, then verify retained
-prefixes, publications, and opaque-data isolation through public fork calls.
-Run on an approved benchmark host under its shared guard. Acceptance is bounded
-snapshot data within the unchanged 64 MiB budget, with latest-prefix replay and
-replacement cleanup preserved. Output includes source hashes, live-entry counts,
-and post-GC heapUsed, external, and arrayBuffers deltas. Their sum is a conservative
-aggregate because pooled buffers can overlap the external and arrayBuffers counters.
-These whole-process deltas exclude unreported native storage and shared transport runtime ownership; they are not
-exact dominator sizes or whole-Gateway CPU, GC, or promotion measurements.
+`node --expose-gc scripts/perf/session-fork-retention-measure.mjs <source-root>
+--mode timing --output /path/to/result.json` measures
+ordinary turns through the actual stream-selection, historical fork-capture, and
+request-encoding owners. The source root needs only the five files listed in the
+script; no build or install is needed. Provider transport and unrelated host
+services use synthetic adapters. Current sources do no fork capture; historical
+sources retain their original capture and publication behavior.
+
+The default fixed workload is 27,000 requests across 200 sessions, with 256 KiB
+prepared inputs and 75% HTTP continuation suffixes. That represents one hour of
+traffic at 450 requests/minute, compressed into a fixed-work pass. It is not an
+elapsed-hour Gateway soak. Fixture strings remain reachable equally on both sides.
+`--operations`, `--sessions`, `--payload-bytes`, and `--warmup` select the workload.
+
+Run separate modes for untraced CPU/latency/GC/event-loop timing, collected-object
+allocation sampling, JSON/Blob/timer counts, and forced-GC retention. Retention
+reports heapUsed, external, ArrayBuffers, and RSS separately; the external and
+ArrayBuffer counters overlap and must not be summed as exact retained storage.
+Timing never forces collections. There is no promotion or provider-cache claim.
+
+Use concurrent guarded pairs on the benchmark host, counterbalance launch order,
+and swap the slot's interleaved CPUs. `--warm-ready-file`/`--warm-start-file` and
+`--ready-file`/`--start-file` provide separate warmup and measurement barriers;
+write a future Unix epoch in milliseconds after both sides are ready. A missed
+start rejects the run. Acceptance is zero fork-specific capture/publication/expiry
+work on ordinary candidate turns, identical parent request counts and encoded
+bytes, reduced allocation/CPU, and removal of the retained snapshot data. Apply
+the campaign's absolute GC/loop materiality, sample-count, and matched-control
+rules; do not use profiled runs as timing gates.
 
 ## Private-array copies
 
@@ -4796,22 +4811,6 @@ alternating samples per side, counterbalance launch order and CPU placement, and
 keep CPU timing separate from heap inspection and allocation sampling. Compare
 absolute CPU per retain and table bytes; report the owner source hashes, total
 estimated residency, entry counts, and sample counts. Estimates must match exactly.
-
-### Session-fork request closure retention
-
-`session-fork-closure-retention.ts` exercises the real fork wrapper and Responses
-transport with synthetic sockets and fetch responses. Run one fresh Node process
-per sample with `--expose-gc --import ./scripts/tsx.mjs`; supply `--model` with a
-configured model supporting native steering. It makes no provider network calls.
-Use `--sessions 32 --turns 4 --history 128` on both source revisions, alternating
-five samples per side. The final turn in each session accepts steering, leaving
-the cached connection and its continuation alive during four forced collections.
-The script reports surviving request options/contexts, heap bytes per settled
-request and per session, external bytes, and ArrayBuffer bytes separately. Fork
-replay checks run after measurement. `--expect-released` asserts no request graph
-survives; `--snapshot <path>` captures the synthetic heap with non-enumerable
-`__forkClosureProbe` markers for tracing strong retainers. This is owner retention
-evidence, not a Gateway latency, CPU, allocation-rate, or promotion measurement.
 
 ## Plugin invocation scope allocation
 

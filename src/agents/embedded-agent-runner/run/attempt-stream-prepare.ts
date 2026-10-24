@@ -50,6 +50,7 @@ import {
   requiresCompletionRequiredAsyncTaskWait,
   type AsyncStartedToolMeta,
 } from "./attempt-async-tasks.js";
+import type { normalizeMessagesForLlmBoundary } from "./attempt-llm-boundary.js";
 import {
   readAttemptNestedToolActivity,
   type AttemptNestedToolActivityState,
@@ -104,6 +105,7 @@ type PrepareEmbeddedAttemptStreamInput = {
     revokeApprovals: () => void,
   ) => Promise<void>;
   onModelUsage?: Parameters<typeof subscribeEmbeddedAgentSession>[0]["onModelUsage"];
+  readSessionForkBoundary?: () => Parameters<typeof normalizeMessagesForLlmBoundary>[1];
   runtimeChannel?: string;
   hookAgentId: string;
   diagnosticTrace: DiagnosticTraceContext;
@@ -601,6 +603,25 @@ function prepareStream(
     messageInjection,
     messageInjectionV2: messageInjection,
     isStreaming: () => activeSession.isStreaming,
+    readSessionForkContext: () => {
+      if (!isCurrentRegistration()) {
+        return undefined;
+      }
+      return {
+        model: attempt.model,
+        systemPrompt: activeSession.systemPrompt,
+        tools: activeSession.agent.state.tools.map(({ name, description, parameters, async }) => ({
+          name,
+          description,
+          parameters,
+          ...(async === false ? { async } : {}),
+        })),
+        messages: activeSession.messages.slice(),
+        sessionVersion: activeSession.sessionManager.getHeader()?.version,
+        boundary: input.readSessionForkBoundary?.(),
+        promptCacheKey: attempt.promptCacheKey,
+      };
+    },
     isAborted: () => input.getRunState().aborted,
     isStopped: () => !isSteeringAdmissionOpen(),
     isCompacting: () => subscription.isCompacting(),
