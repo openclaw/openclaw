@@ -456,8 +456,10 @@ export function createGatewayHookDispatcher(params: {
         return;
       }
       admissionSettled = true;
-      clearTimeout(admissionTimer);
-      admissionTimer = undefined;
+      if (admissionTimer) {
+        clearTimeout(admissionTimer);
+        admissionTimer = undefined;
+      }
       if (result.ok && value.replayKey) {
         announcedFailureReplays.delete(value.replayKey);
       }

@@ -25,9 +25,7 @@ export function createSessionObserverPreamblePublisher(params: {
 
   const clear = (state: SessionObserverState): void => {
     const entry = entries.get(state);
-    if (entry?.timer) {
-      clearTimeout(entry.timer);
-    }
+    clearTimeout(entry?.timer);
     entries.delete(state);
   };
 
