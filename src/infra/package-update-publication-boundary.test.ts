@@ -27,8 +27,11 @@ import * as packageFilesystem from "./package-update-filesystem.js";
 import { interceptPackageFileHashes } from "./package-update-integrity-hasher.test-support.js";
 import { createPublicationOwner } from "./package-update-publication-owner.js";
 import * as publicationCopy from "./package-update-publication-tree.js";
+import {
+  runPublicationSwap,
+  withPublicationFence,
+} from "./package-update-publication.test-support.js";
 import { createNpmTarget, writePackageRoot } from "./package-update-steps.test-support.js";
-import type { PackageUpdateTransaction } from "./package-update-swap-contract.js";
 import { swapStagedPackageInstall } from "./package-update-swap.js";
 import { createPackageSwapFixture } from "./package-update-swap.test-support.js";
 import * as snapshot from "./sqlite-snapshot.js";
@@ -75,15 +78,7 @@ it.skipIf(process.platform === "win32")(
       const installTarget = createNpmTarget(aliasGlobalRoot);
       await withUpdateCommandExecutor(randomUUID(), async (executor) => {
         const fence = await executor.enter(aliasPackageRoot);
-        let transaction: PackageUpdateTransaction | undefined;
-        const result = await swapStagedPackageInstall({
-          ...f.params,
-          installTarget,
-          activation: { fence, runtime: packageActivationRuntimeForTest(), onPrepared: () => {} },
-          onTransaction: (issued) => {
-            transaction = issued;
-          },
-        });
+        const { result, transaction } = await runPublicationSwap(f, fence, { installTarget });
         expect(result.status, result.step.stderrTail ?? undefined).toBe("committed");
         expect(transaction).toBeDefined();
         await transaction!.complete({ activationVerified: true }, fence.assertCurrent);
@@ -116,16 +111,8 @@ it.skipIf(process.platform === "win32").each(["owned", "replacement"] as const)(
         }
         return next();
       });
-      await withUpdateCommandExecutor(randomUUID(), async (executor) => {
-        const fence = await executor.enter(f.packageRoot);
-        let transaction: PackageUpdateTransaction | undefined;
-        const result = await swapStagedPackageInstall({
-          ...f.params,
-          activation: { fence, runtime: packageActivationRuntimeForTest(), onPrepared: () => {} },
-          onTransaction: (issued) => {
-            transaction = issued;
-          },
-        });
+      await withPublicationFence(f.packageRoot, async (fence) => {
+        const { result, transaction } = await runPublicationSwap(f, fence);
         expect(result.status, result.step.stderrTail ?? undefined).toBe("committed");
         expect(fs.readFileSync(f.launcher, "utf8")).toBe("candidate launcher\n");
         expect(
@@ -182,14 +169,7 @@ it.skipIf(process.platform === "win32").each(["owned", "replacement"] as const)(
             path.join(f.params.stage.layout.binDir, "openclaw"),
             "candidate launcher\n",
           );
-          let nextTransaction: PackageUpdateTransaction | undefined;
-          const next = await swapStagedPackageInstall({
-            ...f.params,
-            activation: { fence, runtime: packageActivationRuntimeForTest(), onPrepared: () => {} },
-            onTransaction: (issued) => {
-              nextTransaction = issued;
-            },
-          });
+          const { result: next, transaction: nextTransaction } = await runPublicationSwap(f, fence);
           expect(next.status, next.step.stderrTail ?? undefined).toBe("committed");
           await expect(
             transaction!.complete({ activationVerified: true }, fence.assertCurrent),
@@ -247,19 +227,12 @@ it.skipIf(process.platform === "win32").each(["activation", "publication", "reti
           change(f.packageRoot);
         }
       });
-      await withUpdateCommandExecutor(randomUUID(), async (executor) => {
-        const fence = await executor.enter(f.packageRoot);
-        let transaction: PackageUpdateTransaction | undefined;
-        const result = await swapStagedPackageInstall({
-          ...f.params,
-          activation: { fence, runtime: packageActivationRuntimeForTest(), onPrepared: () => {} },
+      await withPublicationFence(f.packageRoot, async (fence) => {
+        const { result, transaction } = await runPublicationSwap(f, fence, {
           beforeActivate: async () => {
             if (boundary === "activation") {
               change(path.join(anchor, "candidate"));
             }
-          },
-          onTransaction: (issued) => {
-            transaction = issued;
           },
         });
         expect(result.status, result.step.stderrTail ?? undefined).toBe("committed");
@@ -291,8 +264,7 @@ it.skipIf(process.platform === "win32")(
       await fixtures.writePostCoreCapability(f.params.stage.packageRoot);
       const refusal = new Error("A live sibling still uses this installation");
       const onTransaction = vi.fn();
-      await withUpdateCommandExecutor(randomUUID(), async (executor) => {
-        const fence = await executor.enter(f.packageRoot);
+      await withPublicationFence(f.packageRoot, async (fence) => {
         await expect(
           swapStagedPackageInstall({
             ...f.params,
@@ -320,8 +292,7 @@ it.skipIf(process.platform === "win32")(
       await withRetainedUpdateRuntime(
         pathToFileURL(path.join(f.packageRoot, "dist/index.js")).href,
         async (retain) => {
-          await withUpdateCommandExecutor(randomUUID(), async (executor) => {
-            const fence = await executor.enter(f.packageRoot);
+          await withPublicationFence(f.packageRoot, async (fence) => {
             await retain({
               mutationRoots: [f.packageRoot],
               installTarget: f.params.installTarget,
@@ -361,8 +332,7 @@ it.skipIf(process.platform === "win32")(
       const f = await createPackageSwapFixture(root);
       await fixtures.writePostCoreCapability(f.params.stage.packageRoot);
       const uncertainty = new CommandProcessCleanupError();
-      await withUpdateCommandExecutor(randomUUID(), async (executor) => {
-        const fence = await executor.enter(f.packageRoot);
+      await withPublicationFence(f.packageRoot, async (fence) => {
         await expect(
           swapStagedPackageInstall({
             ...f.params,
@@ -392,8 +362,7 @@ it.skipIf(process.platform === "win32")(
       await fixtures.writePostCoreCapability(f.params.stage.packageRoot);
       const refusal = new Error("A live sibling still uses this installation");
       const previous = path.join(root, "previous-installation");
-      await withUpdateCommandExecutor(randomUUID(), async (executor) => {
-        const fence = await executor.enter(f.packageRoot);
+      await withPublicationFence(f.packageRoot, async (fence) => {
         await expect(
           swapStagedPackageInstall({
             ...f.params,
@@ -446,8 +415,7 @@ it
     fs.writeFileSync(path.join(f.packageRoot, "previous.payload"), "previous bytes");
     fs.symlinkSync("previous.payload", path.join(f.packageRoot, "payload.link"));
     const originalIdentity = packageActivationIdentity(f.packageRoot, true);
-    await withUpdateCommandExecutor(randomUUID(), async (executor) => {
-      const fence = await executor.enter(f.packageRoot);
+    await withPublicationFence(f.packageRoot, async (fence) => {
       const anchor = resolvePackageActivationAnchor(f.packageRoot);
       const rename = fsp.rename.bind(fsp);
       const mkdir = fsp.mkdir.bind(fsp);
@@ -498,14 +466,7 @@ it
         }
         return remove(...args);
       });
-      let transaction: PackageUpdateTransaction | undefined;
-      const result = await swapStagedPackageInstall({
-        ...f.params,
-        activation: { fence, runtime: packageActivationRuntimeForTest(), onPrepared: () => {} },
-        onTransaction: (issued) => {
-          transaction = issued;
-        },
-      });
+      const { result, transaction } = await runPublicationSwap(f, fence);
       expect(attempts).toBe(1);
       const succeeded = outcome === "commit" || outcome === "rollback";
       expect(result.status, result.step.stderrTail ?? undefined).toBe(
@@ -581,8 +542,7 @@ it.skipIf(process.platform === "win32")(
     fixtures.lifetime.run(async () => {
       const f = await createPackageSwapFixture(root);
       await fixtures.writePostCoreCapability(f.params.stage.packageRoot);
-      await withUpdateCommandExecutor(randomUUID(), async (executor) => {
-        const fence = await executor.enter(f.packageRoot);
+      await withPublicationFence(f.packageRoot, async (fence) => {
         const anchor = resolvePackageActivationAnchor(f.packageRoot);
         const rename = fsp.rename.bind(fsp);
         let refused = false;
@@ -593,14 +553,7 @@ it.skipIf(process.platform === "win32")(
           }
           return rename(from, to);
         });
-        let transaction: PackageUpdateTransaction | undefined;
-        const result = await swapStagedPackageInstall({
-          ...f.params,
-          activation: { fence, runtime: packageActivationRuntimeForTest(), onPrepared: () => {} },
-          onTransaction: (issued) => {
-            transaction = issued;
-          },
-        });
+        const { result, transaction } = await runPublicationSwap(f, fence);
         expect(result.status).toBe("failed");
         expect(refused).toBe(true);
         expect(openPackageActivationJournal(anchor).read().phase).toBe("publishing");

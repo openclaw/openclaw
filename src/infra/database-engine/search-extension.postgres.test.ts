@@ -101,9 +101,6 @@ describe.skipIf(!connection)("PostgreSQL search extension admission", () => {
       anchor,
       schema,
       input: { connection: connection!, schemaPrefix: "search_extension_test" },
-      openSqlite: () => {
-        throw new Error("Unexpected SQLite bootstrap");
-      },
     });
     if (!(opened instanceof PostgresSyncConnection)) {
       throw new Error("Expected PostgreSQL");

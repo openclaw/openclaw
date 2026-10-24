@@ -11,6 +11,7 @@ import {
 import type { SessionDiscussionProvider } from "../../plugins/session-discussion-registry.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { sessionDiscussionHandlers } from "./session-discussion.js";
+import { fixedStoreOwnershipConfig } from "./sessions-fixed-store.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   emitSessionTitleChanged: vi.fn(),
@@ -137,14 +138,7 @@ describe("session discussion gateway methods", () => {
   it("admits bare fixed-store keys only through their persisted owner", async () => {
     const registered = provider();
     mockSession({ sessionId: "session-ops-global", updatedAt: 1 });
-    const ownedConfig: OpenClawConfig = {
-      session: { scope: "global", store: "/tmp/shared-sessions.sqlite" },
-      agents: {
-        ownership: "explicit",
-        defaults: { sessionStore: { agentId: "ops" } },
-        entries: { ops: {}, research: {} },
-      },
-    };
+    const ownedConfig: OpenClawConfig = fixedStoreOwnershipConfig("/tmp/shared-sessions.sqlite");
 
     expect(
       await invoke("session.discussion.open", { sessionKey: "global" }, ownedConfig),
