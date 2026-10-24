@@ -117,7 +117,6 @@ export function IdentityAvatarImage(props: IdentityAvatarImageProps) {
       alt={props.alt ?? ""}
       aria-hidden={props.ariaHidden ? "true" : undefined}
       referrerpolicy="no-referrer"
-      loading="lazy"
       decoding="async"
     />
   );
