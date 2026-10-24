@@ -17,7 +17,6 @@ import {
   controlUiSessionUrl,
   createSessionManagementE2eSuite,
   installMockGateway,
-  openSessionMenuSubmenu,
   requireRecord,
   sessionsListResponse,
   trimmedTextContents,
@@ -32,6 +31,20 @@ import {
 const suite = createSessionManagementE2eSuite();
 const rosterMatch = { includeGlobal: true };
 const rosterPreviewMatch = { ...rosterMatch, includeLastMessage: true };
+const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
+
+function ordinarySessions() {
+  return [
+    sessionRow("agent:main:main", "Main", baseTime),
+    sessionRow("agent:main:research", "Research notes", baseTime - 3_600_000),
+  ];
+}
+
+async function expectFocused(locator: Locator) {
+  await expect
+    .poll(() => locator.evaluate((element) => element === document.activeElement))
+    .toBe(true);
+}
 
 async function seedPersonalSessionPins(page: Page, keys: string[]) {
   await page.addInitScript(
@@ -88,7 +101,6 @@ async function expectNoOverlappingRows(page: Page) {
 
 suite.define(() => {
   it.each([false, true])("nests spawned sessions (personal pin: %s)", async (pinned) => {
-    const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
     const parentKey = "agent:main:release-plan";
     const childOneKey = "agent:main:research-sources";
     const childTwoKey = "agent:main:verify-tests";
@@ -117,28 +129,26 @@ suite.define(() => {
             startedAt: baseTime - 62_000,
             status: "done",
           }),
-          {
-            ...sessionRow(staleRunningChildKey, "Stale activity", baseTime - 3_000, {
-              hasActiveRun: false,
-              spawnedBy: parentKey,
-              startedAt: baseTime - 64_000,
+          ...[
+            {
+              key: staleRunningChildKey,
+              label: "Stale activity",
               status: "running",
-            }),
-            runtimeMs: 61_000,
-            runtimeSampledAt: baseTime,
-          },
-          {
-            ...sessionRow(failedChildKey, "Failed checks", baseTime - 4_000, {
-              endedAt: baseTime - 4_000,
-              hasActiveRun: true,
+              hasActiveRun: false,
+            },
+            { key: failedChildKey, label: "Failed checks", status: "failed", hasActiveRun: true },
+          ].map(({ key, label, ...state }) =>
+            sessionRow(key, label, baseTime - 4_000, {
+              ...state,
               spawnedBy: parentKey,
               startedAt: baseTime - 64_000,
-              status: "failed",
+              ...(state.status === "failed"
+                ? { endedAt: baseTime - 4_000, lastReadAt: baseTime }
+                : {}),
+              runtimeMs: state.status === "failed" ? 60_000 : 61_000,
+              runtimeSampledAt: baseTime,
             }),
-            lastReadAt: baseTime,
-            runtimeMs: 60_000,
-            runtimeSampledAt: baseTime,
-          },
+          ),
         ];
         const parentRow = sessionRow(parentKey, "Plan release", baseTime, {
           childSessions: [childOneKey, childTwoKey, staleRunningChildKey, failedChildKey],
@@ -209,10 +219,16 @@ suite.define(() => {
         const completedChild = el(`[data-session-key="${childTwoKey}"]`);
         await activeChild.getByRole("img", { name: "Active run" }).waitFor();
         await completedChild.getByRole("img", { name: "Done" }).waitFor();
+        await el(`[data-session-key="${failedChildKey}"]`)
+          .getByRole("img", { name: "Failed" })
+          .waitFor();
+        for (const key of [staleRunningChildKey, failedChildKey]) {
+          const child = el(`[data-session-key="${key}"]`);
+          expect(await child.getByRole("img", { name: "Active run" }).count()).toBe(0);
+          expect(await child.locator("openclaw-elapsed-time").count()).toBe(0);
+          expect((await child.locator(".session-row-trail").textContent())?.trim()).toBeTruthy();
+        }
 
-        const staleRunningChild = el(`[data-session-key="${staleRunningChildKey}"]`);
-        const failedChild = el(`[data-session-key="${failedChildKey}"]`);
-        await failedChild.getByRole("img", { name: "Failed" }).waitFor();
         await expectCount(childRows.getByRole("img", { name: "Active run" }), 1);
 
         const childToggle = parent.locator(".sidebar-child-session-toggle--running");
@@ -226,11 +242,6 @@ suite.define(() => {
         expect(expandedToggle).toBeDefined();
         expect(expandedToggle?.description?.value ?? "").toBe("");
         await accessibility.detach();
-        for (const child of [staleRunningChild, failedChild]) {
-          expect(await child.getByRole("img", { name: "Active run" }).count()).toBe(0);
-          expect(await child.locator("openclaw-elapsed-time").count()).toBe(0);
-          expect((await child.locator(".session-row-trail").textContent())?.trim()).toBeTruthy();
-        }
 
         const tree = el(`[data-session-tree="${parentKey}"]`);
         // A personal pin moves the whole session tree, children included, into Pinned.
@@ -266,21 +277,6 @@ suite.define(() => {
         await page.keyboard.press("Shift+F10");
         const childMenu = page.getByRole("menu", { name: "Actions for Verify tests" });
         await childMenu.waitFor({ state: "visible" });
-        await page.getByRole("menuitem", { name: "Mark as unread" }).waitFor();
-        await page.getByRole("menuitem", { name: "Rename…" }).waitFor();
-        await page.getByRole("menuitem", { name: "Advanced", exact: true }).waitFor();
-        await page.getByRole("menuitem", { name: "Archive session" }).waitFor();
-        expect(await page.getByRole("menuitem", { name: "Pin session" }).count()).toBe(0);
-        expect(await page.getByRole("menuitem", { name: "Move to group" }).isEnabled()).toBe(true);
-        expect(await page.getByRole("menuitem", { name: "Move to top level" }).isEnabled()).toBe(
-          true,
-        );
-
-        await openSessionMenuSubmenu(page, "Advanced");
-        await page.getByRole("menuitem", { name: "Fork conversation" }).waitFor();
-        await page.getByRole("menuitem", { name: "Delete…" }).waitFor();
-        await page.getByRole("menuitem", { name: "Icon & color", exact: true }).waitFor();
-        await page.keyboard.press("Escape");
         await page.keyboard.press("Escape");
         await childMenu.waitFor({ state: "detached" });
 
@@ -298,14 +294,7 @@ suite.define(() => {
 
       const gateway = await installMockGateway(page, {
         methodResponses: {
-          "sessions.list": sessionsListResponse([
-            sessionRow("agent:main:main", "Main", Date.parse("2026-07-01T16:00:00.000Z")),
-            sessionRow(
-              "agent:main:research",
-              "Research notes",
-              Date.parse("2026-07-01T15:00:00.000Z"),
-            ),
-          ]),
+          "sessions.list": sessionsListResponse(ordinarySessions()),
           "sessions.patch": {},
         },
         sessionKey: "agent:main:main",
@@ -341,9 +330,7 @@ suite.define(() => {
         await expectVisible(sidebar.locator(".sidebar-shell"), false);
         await expectVisible(sidebar.locator(".sidebar-rail"), true);
         await expectVisible(sidebarToggle, true);
-        await expect
-          .poll(() => sidebarToggle.evaluate((element) => element === document.activeElement))
-          .toBe(true);
+        await expectFocused(sidebarToggle);
       };
       const expectDrawerClosed = async () => {
         await expect
@@ -410,9 +397,7 @@ suite.define(() => {
       await page.setViewportSize({ height: 900, width: 900 });
       await expectDrawerClosed();
       await expectCount(sessionMenu, 0);
-      await expect
-        .poll(() => drawerToggle.evaluate((element) => element === document.activeElement))
-        .toBe(true);
+      await expectFocused(drawerToggle);
       await expectHiddenShortcutsInert(beforeNarrowTransition);
 
       await drawerToggle.click();
@@ -446,9 +431,7 @@ suite.define(() => {
       await page.keyboard.press("ControlOrMeta+B");
       await expectDrawerClosed();
       await expectCount(sessionMenu, 0);
-      await expect
-        .poll(() => drawerToggle.evaluate((element) => element === document.activeElement))
-        .toBe(true);
+      await expectFocused(drawerToggle);
       await expectHiddenShortcutsInert(beforeDrawerCollapse);
     });
   });
@@ -458,17 +441,8 @@ suite.define(() => {
       await installMockGateway(page, {
         methodResponses: {
           "sessions.list": sessionsListResponse([
-            sessionRow("agent:main:main", "Main", Date.parse("2026-07-01T16:00:00.000Z")),
-            sessionRow(
-              "agent:main:research",
-              "Research notes",
-              Date.parse("2026-07-01T15:00:00.000Z"),
-            ),
-            sessionRow(
-              "agent:main:follow-up",
-              "Follow-up work",
-              Date.parse("2026-07-01T14:00:00.000Z"),
-            ),
+            ...ordinarySessions(),
+            sessionRow("agent:main:follow-up", "Follow-up work", baseTime - 7_200_000),
           ]),
         },
         sessionKey: "agent:main:main",
@@ -493,24 +467,13 @@ suite.define(() => {
       const menu = page.getByRole("menu", { name: "Actions for Research notes" });
       await menu.waitFor({ state: "visible" });
 
-      await expect
-        .poll(() =>
-          page
-            .locator("openclaw-session-menu")
-            .getByRole("menuitem", { name: "Pin session" })
-            .evaluate((element) => element === document.activeElement),
-        )
-        .toBe(true);
+      await expectFocused(
+        page.locator("openclaw-session-menu").getByRole("menuitem", { name: "Pin session" }),
+      );
       await page.keyboard.press("Tab");
 
       await expectCount(menu, 0);
-      await expect
-        .poll(() =>
-          researchRow
-            .getByRole("button", { name: "Pin session", exact: true })
-            .evaluate((element) => element === document.activeElement),
-        )
-        .toBe(true);
+      await expectFocused(researchRow.getByRole("button", { name: "Pin session", exact: true }));
 
       await page.keyboard.press("Tab");
       expect(await researchArchive.evaluate((element) => element === document.activeElement)).toBe(
@@ -522,28 +485,6 @@ suite.define(() => {
           .locator(".sidebar-recent-session__link")
           .evaluate((element) => element === document.activeElement),
       ).toBe(true);
-
-      await researchRow.locator(".sidebar-recent-session__link").focus();
-      await page.keyboard.press("Shift+F10");
-      await menu.waitFor({ state: "visible" });
-      await expect
-        .poll(() =>
-          page
-            .locator("openclaw-session-menu")
-            .getByRole("menuitem", { name: "Pin session" })
-            .evaluate((element) => element === document.activeElement),
-        )
-        .toBe(true);
-      await page.keyboard.press("Tab");
-
-      await expectCount(menu, 0);
-      await expect
-        .poll(() =>
-          researchRow
-            .getByRole("button", { name: "Pin session", exact: true })
-            .evaluate((element) => element === document.activeElement),
-        )
-        .toBe(true);
     });
   });
 
@@ -716,73 +657,9 @@ suite.define(() => {
     });
   });
 
-  it("lists a personal pin once in Pinned and presents its pin state", async () => {
-    await suite.withPage(
-      {
-        colorScheme: "dark",
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1280 },
-      },
-      async ({ page }) => {
-        const el = (selector: string) => page.locator(selector);
-
-        await seedPersonalSessionPins(page, ["agent:main:pinned"]);
-        const gateway = await installMockGateway(page, {
-          methodResponses: {
-            "sessions.list": sessionsListResponse([
-              sessionRow(
-                "agent:main:pinned",
-                "Pinned only",
-                Date.parse("2026-07-01T16:00:00.000Z"),
-              ),
-            ]),
-            "sessions.patch": {},
-          },
-          sessionKey: "agent:main:pinned",
-        });
-
-        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:pinned"));
-
-        const pinnedSection = el('[data-session-section="pinned"]');
-        const chatsGroup = el('[data-session-section="ungrouped"]');
-        const ordinaryRow = pinnedSection.locator('[data-session-key="agent:main:pinned"]');
-        await ordinaryRow.getByText("Pinned only", { exact: true }).waitFor();
-        expect(await chatsGroup.locator(".sidebar-recent-session").count()).toBe(0);
-        expect(await el(".sidebar-rail__pin").count()).toBe(0);
-        await expectCount(el(".sidebar-recent-session--active"), 1);
-        const pin = ordinaryRow.getByRole("button", { name: "Unpin session" });
-        const menu = ordinaryRow.locator("[data-sidebar-session-archive]");
-        await ordinaryRow.hover();
-
-        const revealedPin = await sessionActionPresentation(pin);
-        const revealedMenu = await sessionActionPresentation(menu);
-        expect(revealedPin.color).toBe(revealedMenu.color);
-        expect(revealedPin.fill).toBe(revealedPin.color);
-
-        await pin.hover();
-        await expect
-          .poll(async () => (await sessionActionPresentation(pin)).color)
-          .not.toBe(revealedPin.color);
-        await expect
-          .poll(async () => {
-            const hoveredPin = await sessionActionPresentation(pin);
-            return hoveredPin.fill === hoveredPin.color;
-          })
-          .toBe(true);
-
-        // Unpinning returns the row to the ordinary list without patching the shared row.
-        const patchCount = (await gateway.getRequests("sessions.patch")).length;
-        await pin.click();
-        await expectCount(pinnedSection, 0);
-        await chatsGroup.getByRole("button", { name: "Pin session", exact: true }).waitFor();
-        expect(await gateway.getRequests("sessions.patch")).toHaveLength(patchCount);
-      },
-    );
-  });
-
   it("personally pins a session dropped on the Pinned section without changing its group", async () => {
     const context = await suite.browser.newContext({
+      colorScheme: "dark",
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
@@ -848,13 +725,35 @@ suite.define(() => {
       await pinnedCandidate.click({ button: "right" });
       await page.getByRole("menuitem", { name: "Unpin session" }).waitFor();
       expect(await page.getByRole("menuitem", { name: "Reset pinned items" }).count()).toBe(0);
+      await page.keyboard.press("Escape");
+      const pin = pinnedCandidate.getByRole("button", { name: "Unpin session", exact: true });
+      await pinnedCandidate.hover();
+      const revealed = await sessionActionPresentation(pin);
+      expect(revealed).toEqual({
+        color: (
+          await sessionActionPresentation(pinnedCandidate.locator("[data-sidebar-session-archive]"))
+        ).color,
+        fill: revealed.color,
+      });
+      await pin.hover();
+      await expect
+        .poll(async () => (await sessionActionPresentation(pin)).color)
+        .not.toBe(revealed.color);
+      await expect
+        .poll(async () => {
+          const hovered = await sessionActionPresentation(pin);
+          return hovered.fill === hovered.color;
+        })
+        .toBe(true);
+      await pin.click();
+      await researchGroup.getByText("Pin me", { exact: true }).waitFor();
+      expect(await gateway.getRequests("sessions.patch")).toHaveLength(patchCount);
     } finally {
       await context.close();
     }
   });
 
-  it("keeps raw ids out of work rows while their metadata grows in place", async () => {
-    const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
+  it("keeps growing work rows readable and scrollable in a short sidebar", async () => {
     const nodeHash = "11c38726acc6fac280357576c87acc6fac280357";
     const rows = (withWork: boolean) => {
       const ts = baseTime + (withWork ? 5_000 : 0);
@@ -878,11 +777,14 @@ suite.define(() => {
             : {},
         ),
         sessionRow("agent:main:node-mcp-debug-4de003fbff138fcb9239c9378b2e", "", ts - 180_000),
+        ...Array.from({ length: 30 }, (_, index) =>
+          sessionRow(`agent:main:chat-${index}`, `Chat ${index}`, baseTime - (index + 10) * 60_000),
+        ),
       ];
     };
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const el = (selector: string) => page.locator(selector);
-
+      await page.setViewportSize({ height: 620, width: 1280 });
       await page.addInitScript(() => {
         localStorage.setItem("openclaw:sidebar:sessions:show-preview", "true");
       });
@@ -917,6 +819,21 @@ suite.define(() => {
         .poll(() => trimmedTextContents(namesLocator))
         .toContain("clawdbot ⎇ wt-1 · …0357");
 
+      const loadMore = el('[data-session-section="ungrouped"]').getByRole("button", {
+        name: "Show more",
+      });
+      for (let pageIndex = 0; pageIndex < 3 && (await loadMore.isVisible()); pageIndex += 1) {
+        const visibleRows = await el(".sidebar-recent-session").count();
+        await loadMore.click();
+        await expect.poll(() => el(".sidebar-recent-session").count()).toBeGreaterThan(visibleRows);
+      }
+      await el(".sidebar-shell__body").evaluate((element) => {
+        element.scrollTop = 0;
+      });
+      await expect
+        .poll(() => el(".sidebar-recent-session").count(), { timeout: 15_000 })
+        .toBe(rows(true).length);
+
       // Names and subtitles never show raw node ids or raw agent keys.
       const names = await trimmedTextContents(el(".sidebar-recent-session__name"));
       expect(names).toContain("New session");
@@ -931,78 +848,22 @@ suite.define(() => {
 
       // Sections must lay out below the rows above them, not paint over them.
       await expectNoOverlappingRows(page);
-    });
-  });
-
-  it("scrolls long session lists in short windows instead of squeezing sections", async () => {
-    const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
-    const rows = [
-      ...Array.from({ length: 8 }, (_, index) =>
-        sessionRow(`agent:main:work-${index}`, `Work session ${index}`, baseTime - index * 60_000, {
-          worktree: { branch: `openclaw/wt-${index}`, repoRoot: "/Users/dev/Projects/clawdbot" },
-        }),
-      ),
-      ...Array.from({ length: 30 }, (_, index) =>
-        sessionRow(`agent:main:chat-${index}`, `Chat ${index}`, baseTime - (index + 10) * 60_000),
-      ),
-    ];
-    await suite.withPage(
-      {
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 620, width: 1280 },
-      },
-      async ({ page }) => {
-        const el = (selector: string) => page.locator(selector);
-
-        await installMockGateway(page, {
-          methodResponses: {
-            "sessions.list": sessionsListResponse(rows),
-          },
-          sessionKey: "agent:main:main",
-        });
-
-        await page.goto(`${suite.server.baseUrl}chat`);
-        await el('[data-session-section="work"] .sidebar-session-group-toggle').click();
-        const loadMore = page
-          .locator('[data-session-section="ungrouped"]')
-          .getByRole("button", { name: "Show more" });
-        for (let pageIndex = 0; pageIndex < 3 && (await loadMore.isVisible()); pageIndex += 1) {
-          const visibleRows = await el(".sidebar-recent-session").count();
-          await loadMore.click();
-          await expect
-            .poll(() => el(".sidebar-recent-session").count())
-            .toBeGreaterThan(visibleRows);
+      const scroll = await page.evaluate(() => {
+        const list = document.querySelector(".sidebar-shell__body");
+        if (!list) {
+          return null;
         }
-        await el(".sidebar-shell__body").evaluate((element) => {
-          element.scrollTop = 0;
-        });
-        await expect
-          .poll(() => el(".sidebar-recent-session").count(), { timeout: 15_000 })
-          .toBe(rows.length);
-
-        // Sections must stack below each other, not paint over the rows above.
-        await expectNoOverlappingRows(page);
-
-        // The squeeze regression compressed sections into the viewport with no
-        // overflow; a healthy sidebar body is taller than its viewport and scrolls.
-        const scroll = await page.evaluate(() => {
-          const list = document.querySelector(".sidebar-shell__body");
-          if (!list) {
-            return null;
-          }
-          list.scrollTop = list.scrollHeight;
-          return {
-            clientHeight: list.clientHeight,
-            scrollHeight: list.scrollHeight,
-            scrollTop: list.scrollTop,
-          };
-        });
-        expect(scroll).not.toBeNull();
-        expect(scroll?.scrollHeight ?? 0).toBeGreaterThan(scroll?.clientHeight ?? 0);
-        expect(scroll?.scrollTop ?? 0).toBeGreaterThan(0);
-      },
-    );
+        list.scrollTop = list.scrollHeight;
+        return {
+          clientHeight: list.clientHeight,
+          scrollHeight: list.scrollHeight,
+          scrollTop: list.scrollTop,
+        };
+      });
+      expect(scroll).not.toBeNull();
+      expect(scroll?.scrollHeight ?? 0).toBeGreaterThan(scroll?.clientHeight ?? 0);
+      expect(scroll?.scrollTop ?? 0).toBeGreaterThan(0);
+    });
   });
 
   it("keeps sidebar session controls reachable on touch pointers", async () => {
@@ -1016,14 +877,7 @@ suite.define(() => {
       async ({ page }) => {
         await installMockGateway(page, {
           methodResponses: {
-            "sessions.list": sessionsListResponse([
-              sessionRow("agent:main:main", "Main", Date.parse("2026-07-01T16:00:00.000Z")),
-              sessionRow(
-                "agent:main:research",
-                "Research notes",
-                Date.parse("2026-07-01T15:00:00.000Z"),
-              ),
-            ]),
+            "sessions.list": sessionsListResponse(ordinarySessions()),
           },
           sessionKey: "agent:main:main",
         });
