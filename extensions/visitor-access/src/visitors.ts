@@ -21,6 +21,7 @@ import {
   type VisitorOnboardingCompareAndSet,
   type VisitorOnboardingUpdate,
 } from "./grant-record.js";
+import { expiryText, visitorInviteResult } from "./invite-result.js";
 import type {
   VisitorInviteDetails,
   VisitorListDetails,
@@ -31,16 +32,11 @@ import { grantIdSchema, inviteSchema, parseVisitorInput, revokeSchema } from "./
 const DAY_MS = 86_400_000;
 const LIST_MAX_CHARS = 12_000;
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
-const SIGN_IN_URL = "https://team.openclaw.ai";
 
 type LiveVisitorGrant = {
   grant: VisitorGrant;
   controller: AbortController;
 };
-
-function expiryText(expiresAt: number | null): string {
-  return expiresAt === null ? "never (explicit forever grant)" : new Date(expiresAt).toISOString();
-}
 
 export class VisitorAccessService {
   private pending: Promise<unknown> = Promise.resolve();
@@ -357,7 +353,7 @@ export class VisitorAccessService {
 
   invite(
     raw: unknown,
-    { invitedVia, invitedBy, assertCurrent }: VisitorInvitationContext,
+    { invitedVia, invitedBy, signInUrl, assertCurrent }: VisitorInvitationContext,
   ): Promise<{ text: string; details: VisitorInviteDetails }> {
     return this.serialize(async () => {
       const store = this.actionStore(assertCurrent);
@@ -433,24 +429,14 @@ export class VisitorAccessService {
             })
           : store,
       );
-      const who =
-        typeof target === "number"
-          ? `@${grant.githubLogin} (GitHub account ${target})`
-          : grant.githubLogin
-            ? `@${grant.githubLogin} (${target})`
-            : target;
-      return {
-        text: `${previous ? "Renewed" : "Invited"} ${who}. Invitation ID: ${grantId}. Visitor grant expires: ${expiryText(grant.expiresAt)}. ${gatewayAccess}. Sign in at ${SIGN_IN_URL} using Team's existing login with ${typeof target === "number" ? "this GitHub account" : "this email"}. The link itself does not grant access.`,
-        details: {
-          outcome: previous ? "renewed" : "invited",
-          grantId,
-          ...(typeof target === "string" ? { email: target } : { githubAccountId: target }),
-          ...(grant.githubLogin ? { githubLogin: grant.githubLogin } : {}),
-          expiresAt: grant.expiresAt === null ? null : new Date(grant.expiresAt).toISOString(),
-          gatewayAccess,
-          signInUrl: SIGN_IN_URL,
-        },
-      };
+      return visitorInviteResult({
+        renewed: previous !== undefined,
+        target,
+        grant: { ...grant, grantId },
+        gatewayAccess,
+        signInUrl,
+        noteSupplied: input.note !== undefined,
+      });
     }, assertCurrent);
   }
 

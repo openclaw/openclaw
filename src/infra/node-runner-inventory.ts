@@ -27,6 +27,7 @@ export const NODE_WORKER_INFERENCE_SETUP_ERROR =
   "If the node runs an older OpenClaw version, update it first.";
 export const NODE_WORKER_PROMPT_CONTEXT_VERSION = 1;
 export const NODE_WORKER_HOST_DISABLED_REASON_MAX_LENGTH = 1_024;
+export const NODE_WORKSPACE_RESULT_VERSION = 2;
 // Couples the lease owner with foreground tree ownership; neither rolls out alone.
 export const NODE_WORKER_WORKSPACE_QUIESCENCE_VERSION = 1;
 
@@ -92,6 +93,7 @@ const WorkerHost = z
       deviceFolders: z.literal(true).optional(),
       preparedWorkspace: z.literal(NODE_WORKER_PREPARED_WORKSPACE_VERSION).optional(),
       capturedExecPolicy: z.literal(true).optional(),
+      workspaceResultVersion: z.literal(NODE_WORKSPACE_RESULT_VERSION).optional(),
       workspaceQuiescence: z.literal(NODE_WORKER_WORKSPACE_QUIESCENCE_VERSION).optional(),
       launchToolNames: LaunchToolNames.optional(),
       idleRetention: z.literal(true).optional(),

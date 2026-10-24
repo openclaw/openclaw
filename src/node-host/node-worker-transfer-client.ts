@@ -65,7 +65,10 @@ import {
   readWorkspaceManifest,
   runWorkspaceCommand,
 } from "./node-worker-workspace-commands.js";
-import { initializeNodeWorkerGitWorkspace } from "./node-worker-workspace-git.js";
+import {
+  initializeNodeWorkerGitWorkspace,
+  prepareNodeWorkerGitResult,
+} from "./node-worker-workspace-git.js";
 import {
   recoverWorkspaceReplacement,
   replaceNodeWorkerDirectory,
@@ -602,11 +605,18 @@ async function uploadWorkspace(params: WorkspaceTransferOperation<"upload">): Pr
         }
         files.push({ name, size: entry.size });
       }
+      const gitResult = await prepareNodeWorkerGitResult({
+        ...params,
+        resultVersion: params.transfer.resultVersion,
+        baseCommit: base.baseCommit,
+        packPath: workspace.path("worker-history.pack"),
+      });
       const contentLength =
         8 +
         baseBytes.byteLength +
         manifestBytes.byteLength +
-        files.reduce((total, file) => total + 8 + file.size, 0);
+        files.reduce((total, file) => total + 8 + file.size, 0) +
+        (gitResult?.byteLength ?? 0);
       params.setStage("reconcile");
       return await withNodeWorkerTransferHttpRequest(
         {
@@ -617,7 +627,7 @@ async function uploadWorkspace(params: WorkspaceTransferOperation<"upload">): Pr
           ),
           method: "POST",
           headers: {
-            "content-type": "application/vnd.openclaw.worker-workspace-reconcile-v1",
+            "content-type": `application/vnd.openclaw.worker-workspace-reconcile-v${params.transfer.resultVersion ?? 1}`,
             "content-length": String(contentLength),
           },
           writeBody: async (write, signal) => {
@@ -638,6 +648,7 @@ async function uploadWorkspace(params: WorkspaceTransferOperation<"upload">): Pr
                 await write(Buffer.isBuffer(value) ? value : Buffer.from(value));
               }
             }
+            await gitResult?.write(write, signal);
           },
         },
         async (response) => {

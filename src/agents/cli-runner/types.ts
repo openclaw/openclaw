@@ -126,6 +126,8 @@ export type RunCliAgentParams = Pick<
   restoreCliSessionFork?: () => Promise<void>;
   /** Persist the successor ID as soon as the CLI reports the forked session. */
   persistCliSessionForkSuccessor?: (sessionId: string) => Promise<void>;
+  /** Bind a directly stopped first turn's flushed native session into an empty binding. */
+  persistStoppedFirstCliSession?: (binding: CliSessionBinding) => Promise<void>;
   /** Atomically arm a cache-preserving fork before retrying a stalled resumed session. */
   onBeforeForkedCliSessionRetry?: (params: CliSessionRetryParams) => boolean | Promise<boolean>;
   /** Private seam: report the credential/runtime owner only after a successful real turn. */

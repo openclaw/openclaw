@@ -3371,7 +3371,6 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
     ["test/e2e/qa-lab/runtime/openai-web-search-minimal.e2e.test.ts"],
   ],
   ["scripts/e2e/qr-import-docker.sh", [dockerBuild]],
-  ["scripts/bundle-a2ui.mts", ["bundled-plugin-assets"]],
 ]);
 
 const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [

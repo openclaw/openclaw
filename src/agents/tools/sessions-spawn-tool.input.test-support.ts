@@ -104,6 +104,34 @@ export function registerSessionsSpawnInputTests({
     expect(hoisted.inProcessCreationMock).not.toHaveBeenCalled();
   });
 
+  it.each([false, true])(
+    "rejects branch-prefixed worktree names before dispatch (visible=%s)",
+    async (visible) => {
+      const tool = createTool();
+      const input = { task: "inspect", visible, worktree: true };
+      for (const worktreeName of [
+        "codex/qa-telemetry-prompt-cache-20261016",
+        " padded ",
+        "",
+        "a".repeat(65),
+      ]) {
+        const invalid = { ...input, worktreeName };
+        expect(Value.Check(tool.parameters, invalid)).toBe(false);
+        await expect(tool.execute("invalid-worktree-name", invalid)).rejects.toThrow(
+          "worktree name must match [a-z0-9][a-z0-9-]{0,63}",
+        );
+      }
+      expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+      expect(hoisted.inProcessCreationMock).not.toHaveBeenCalled();
+      expect(
+        Value.Check(tool.parameters, {
+          ...input,
+          worktreeName: "qa-telemetry-prompt-cache-20261016",
+        }),
+      ).toBe(true);
+    },
+  );
+
   it("gives an executable visible retry for visible-only parameters on a hidden spawn", async () => {
     const callGateway = mockGateway({
       key: "agent:main:dashboard:child",

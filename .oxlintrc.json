@@ -229,7 +229,6 @@
     "dist-runtime/",
     // Intentional negative-test corpora contain parser and lint violations by contract.
     "test/fixtures/oxlint-boundary-guards/**",
-    "**/a2ui.bundle.js",
     "extensions/diffs/assets/viewer-runtime.js",
     "extensions/diffs-language-pack/assets/viewer-runtime.js",
     "node_modules/",
@@ -254,8 +253,7 @@
         "ui/src/components/solid/**/*.ts",
         "ui/src/test-helpers/**/*.ts",
         "extensions/*/browser/**/*.tsx",
-        "extensions/*/src/**/*.tsx",
-        "extensions/canvas/src/host/**/*.jsx"
+        "extensions/*/src/**/*.tsx"
       ],
       "jsPlugins": ["./tools/solid-lint/index.mjs"],
       // Component analysis stays scoped to renderers and explicitly reactive helpers.
@@ -293,8 +291,7 @@
       "files": [
         "ui/**/*.{ts,tsx}",
         "extensions/*/browser/**/*.{ts,tsx}",
-        "extensions/*/src/**/*.tsx",
-        "extensions/canvas/src/host/**/*.{js,jsx}"
+        "extensions/*/src/**/*.tsx"
       ],
       "jsPlugins": ["./tools/solid-lint/index.mjs"],
       // Primitive contracts apply to domain helpers too, without treating props-named data as components.

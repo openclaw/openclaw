@@ -2,7 +2,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { isCoreCanvasHostEnabled } from "../canvas/config.js";
 import {
   createShowWidgetTool,
-  hasRegisteredShowWidgetKinds,
   resolveCurrentChannelWidgetPresenter,
 } from "../canvas/widget-tool.js";
 import { getRuntimeConfig, selectApplicableRuntimeConfig } from "../config/config.js";
@@ -534,9 +533,7 @@ function* createOpenClawToolsSteps(
         })
       : []),
     includeMessageTool ? messageTool : null,
-    !isCoreCanvasHostEnabled(resolvedConfig) &&
-    !hasRegisteredShowWidgetKinds() &&
-    !currentChannelWidgetPresenter
+    !isCoreCanvasHostEnabled(resolvedConfig) && !currentChannelWidgetPresenter
       ? null
       : createShowWidgetTool({
           sessionId: options?.sessionId,

@@ -28,6 +28,11 @@ import {
   validateWorkerInferenceCancelParams,
   validateWorkerInferenceStartParams,
 } from "../../../../packages/gateway-protocol/src/schema/worker-inference.js";
+import {
+  WORKER_TURN_ADMISSION_METHOD,
+  WORKER_TURN_ADMISSION_PROTOCOL_FEATURE,
+  validateWorkerTurnAdmissionParams,
+} from "../../../../packages/gateway-protocol/src/schema/worker-turn-admission.js";
 import type { WorkerConnectionIdentity } from "../../worker-environments/connection-identity.js";
 import type { createWorkerTurnRpc } from "../../worker-environments/worker-turn-rpc.js";
 import {
@@ -60,6 +65,7 @@ export type WorkerConnectionService = Pick<
       | "cancelGatewayTool"
       | "startInference"
       | "cancelInference"
+      | "admitTurn"
       | "refreshGitHubBinding"
     >
   >;
@@ -139,6 +145,16 @@ export async function dispatchWorkerRequest(params: {
     ok: false as const,
     closeReason: "method-not-allowed" as const,
   });
+  if (params.request.method === WORKER_TURN_ADMISSION_METHOD) {
+    const operation = service.admitTurn;
+    return execute(
+      WORKER_TURN_ADMISSION_PROTOCOL_FEATURE,
+      validateWorkerTurnAdmissionParams,
+      operation && ((request) => operation.call(service, params.identity, request)),
+      "invalid-frame",
+      () => workerProtocolError("gateway-unavailable"),
+    );
+  }
   if (params.request.method === WORKER_GATEWAY_TOOL_METHODS.invoke) {
     const operation = service.invokeGatewayTool;
     return execute(

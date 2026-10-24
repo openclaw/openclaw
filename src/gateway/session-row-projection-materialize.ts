@@ -607,12 +607,23 @@ export function lookupSessionRow(
     : undefined;
   let key = query.key;
   do {
-    const candidates = owner.byKey.get(`key:${key}`);
-    if (candidates) {
+    const candidates = owner.byKey.get(records.logicalSessionRowIdentity(agentId, key));
+    if (candidates?.size === 1) {
+      const row = owner.rows.get(candidates.values().next().value!);
+      if (
+        row &&
+        (paths
+          ? paths.includes(row.storeTarget.storePath)
+          : owner.stores.has(row.storeTarget.storePath))
+      ) {
+        return row;
+      }
+    } else if (candidates) {
+      // Physical duplicates (including sentinels) retain the topology's store precedence.
       for (const storePath of paths ?? owner.stores.keys()) {
         for (const id of candidates) {
           const row = owner.rows.get(id);
-          if (row?.agentId === agentId && row.storeTarget.storePath === storePath) {
+          if (row?.storeTarget.storePath === storePath) {
             return row;
           }
         }

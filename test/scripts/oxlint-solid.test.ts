@@ -22,7 +22,7 @@ const componentDiagnostics = [
   "solid(no-single-arg-create-effect):error",
 ];
 
-it("enforces Solid 2 rules across UI helpers, plugin views, and Canvas JSX", () => {
+it("enforces Solid 2 rules across UI helpers and plugin views", () => {
   // Exercise the actual path-scoped config, including non-UI negative controls.
   const scopes = [
     { root: "ui/src/lib/reactive", extension: "ts", diagnostics: helperDiagnostics },
@@ -53,26 +53,6 @@ it("enforces Solid 2 rules across UI helpers, plugin views, and Canvas JSX", () 
     "export function readLabel(props: { label: string }) { return props.label; }",
   );
   expected.set(path.relative(process.cwd(), dataFile).replaceAll("\\", "/"), []);
-  const canvasDirectory = tempDirs.make(
-    "solid-lint-test-",
-    path.resolve("extensions/canvas/src/host"),
-  );
-  const canvasFile = path.join(canvasDirectory, "invalid.jsx");
-  fs.writeFileSync(
-    canvasFile,
-    [
-      'import { createEffect, onMount } from "solid-js";',
-      "export function Broken() {",
-      "  createEffect(() => {});",
-      "  onMount(() => {});",
-      "  return <div />;",
-      "}",
-    ].join("\n"),
-  );
-  expected.set(path.relative(process.cwd(), canvasFile).replaceAll("\\", "/"), [
-    "solid(no-single-arg-create-effect):error",
-    "solid(removed-api):error",
-  ]);
   const result = spawnSync(
     process.execPath,
     ["scripts/run-oxlint.mjs", "--openclaw-focused-config", "--format", "json", ...expected.keys()],
