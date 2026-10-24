@@ -4,7 +4,7 @@ import { resolveConfigWidePluginManifestRegistry } from "../config/io.plugin-met
 import { createMergePatch } from "../config/merge-patch.js";
 import { resolveIsConfigReadOnly } from "../config/paths.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
-import { buildRuntimeConfigSchemaFromRegistry } from "../config/runtime-schema.js";
+import { buildRuntimeConfigRedactionHintsFromRegistry } from "../config/runtime-schema.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
 
@@ -28,7 +28,7 @@ export async function reportDoctorExternalConfigRepairs(
     config: ctx.cfg,
     env: ctx.env ?? process.env,
   });
-  const { uiHints } = buildRuntimeConfigSchemaFromRegistry(registry, ctx.cfg);
+  const uiHints = buildRuntimeConfigRedactionHintsFromRegistry(registry, ctx.cfg);
   ctx.runtime.log(
     [
       `Config repairs pending in externally managed ${snapshot.path}; no config files were changed.`,
