@@ -25,6 +25,7 @@ import {
   replaceSessionEntry,
 } from "../src/config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
+import { readUserTurnCompletionForTest } from "../src/gateway/pending-input-commit.test-support.js";
 import type { SessionsListResult } from "../src/gateway/session-utils.types.js";
 import { disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
 import { writeGatewayRestartIntentSync } from "../src/infra/restart-intent.js";
@@ -111,7 +112,7 @@ describe("Gateway restored requester settlement", () => {
             "Its result is saved. Use Resume in WebChat to continue in this session.",
           ),
         );
-      const restart = async (settled: boolean) => {
+      const restart = async (settledRunId?: string) => {
         await disconnectGatewayClient(client);
         const process = expectDefined(instance.child, "running Gateway process");
         const closed = once(process, "close", { signal });
@@ -131,8 +132,18 @@ describe("Gateway restored requester settlement", () => {
             sessionId: original.sessionId,
             lifecycleRevision: original.lifecycleRevision,
           });
-          if (settled) {
+          if (settledRunId) {
             expect(retained?.requesterSettleWake).toBeUndefined();
+            expect(loadSessionEntryReadOnly(scope)?.lastRunId).toBe(settledRunId);
+            expect(
+              await readUserTurnCompletionForTest(
+                { ...scope, sessionId: original.sessionId },
+                settledRunId,
+              ),
+            ).toMatchObject({
+              run_id: settledRunId,
+              outcome: { status: "ok", reason: "completed" },
+            });
           } else {
             expect(retained?.requesterSettleWake?.batchRunIds).toEqual([runId]);
             expect(loadSessionEntryReadOnly(scope)?.mainRestartRecovery?.tombstone).toBeDefined();
@@ -148,7 +159,7 @@ describe("Gateway restored requester settlement", () => {
           timeout: 30_000,
         });
         expect(modelServer.requestCount(), instance.logs()).toBe(0);
-        await restart(false);
+        await restart();
         expect(await session()).toMatchObject({
           sessionId: original.sessionId,
           hasActiveRun: false,
@@ -168,6 +179,9 @@ describe("Gateway restored requester settlement", () => {
           sessionId: original.sessionId,
           continuation: { status: "started" },
         });
+        if (recovered.continuation.status !== "started") {
+          throw new Error("In-place recovery did not start");
+        }
         await vi.waitFor(() => expect(modelServer.requestCount()).toBe(1), { timeout: 30_000 });
         modelServer.release(0);
         await vi.waitFor(
@@ -184,18 +198,25 @@ describe("Gateway restored requester settlement", () => {
             expect(await session()).toMatchObject({ status: "done", hasActiveRun: false }),
           { timeout: 30_000 },
         );
-        const finalReplies = (messages: unknown[]) =>
+        const completedRunId = expectDefined(
+          (await session())?.lastRunId,
+          "completed settlement run",
+        );
+        expect(completedRunId).not.toBe(recovered.continuation.runId);
+        const privateReplies = (messages: unknown[]) =>
           messages.filter(
             (message) => extractAssistantPhaseText(message) === "restored requester response 1",
           );
-        await vi.waitFor(async () => expect(finalReplies(await history())).toHaveLength(1));
-        await restart(true);
+        // Parent-only consumption has a durable processing receipt, not a public assistant reply.
+        expect(privateReplies(await history())).toHaveLength(0);
+        await restart(completedRunId);
         expect(await session()).toMatchObject({
           sessionId: original.sessionId,
+          lastRunId: completedRunId,
           status: "done",
           hasActiveRun: false,
         });
-        expect(finalReplies(await history())).toHaveLength(1);
+        expect(privateReplies(await history())).toHaveLength(0);
         expect(resumeNotices(await history())).toHaveLength(1);
         expect(modelServer.requestCount(), instance.logs()).toBe(2);
       } finally {
