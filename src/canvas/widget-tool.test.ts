@@ -370,18 +370,18 @@ it("wraps SVG widgets with the stable result and sandbox contracts", async () =>
     presentation: { target: "assistant_message", title: "<Status>", sandbox: "scripts" },
     text: `Widget hosted at ${url}`,
   });
-  const html = await readFile(documentFile(viewId), "utf8");
-  expect(html).toContain(
+  const documentHtml = await readFile(documentFile(viewId), "utf8");
+  expect(documentHtml).toContain(
     `Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline' https://cdnjs.cloudflare.com`,
   );
-  expect(html).toContain("font-src data:");
-  expect(html).toContain("img-src data:; media-src data: https: blob:; connect-src 'none'");
-  expect(html).toContain("<title>&lt;Status&gt;</title>");
-  expect(html).toContain("--accent:#bd4531");
-  expect(html).toContain("--accent:#ff5c5c");
-  expect(html).toContain("--accent-fill:#d13c3c");
-  expect(html).toContain('<body class="svg-widget"><script>');
-  expect(html).toContain("openclaw:widget-size");
+  expect(documentHtml).toContain("font-src data:");
+  expect(documentHtml).toContain("img-src data:; media-src data: https: blob:; connect-src 'none'");
+  expect(documentHtml).toContain("<title>&lt;Status&gt;</title>");
+  expect(documentHtml).toContain("--accent:#bd4531");
+  expect(documentHtml).toContain("--accent:#ff5c5c");
+  expect(documentHtml).toContain("--accent-fill:#d13c3c");
+  expect(documentHtml).toContain('<body class="svg-widget"><script>');
+  expect(documentHtml).toContain("openclaw:widget-size");
   const manifest = JSON.parse(await readFile(documentFile(viewId, "manifest.json"), "utf8")) as {
     cspSandbox?: string;
   };
