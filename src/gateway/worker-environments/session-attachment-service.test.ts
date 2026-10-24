@@ -6,7 +6,6 @@ import {
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { createEnteredGate as barrier } from "../../agents/entered-gate.test-support.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
-import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   ensureSessionEntrySync,
   replaceSessionEntrySync,
@@ -25,7 +24,9 @@ import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-cli
 import { makeGatewayClient } from "../server-request-context.test-support.js";
 import * as support from "./service.test-support.js";
 
-support.setupWorkerEnvironmentServiceSuite();
+support.setupWorkerEnvironmentServiceSuite((config, root) => {
+  config.session = { store: path.join(root, "sessions.json") };
+});
 const state = support.testState;
 const identity = {
   sessionId: "conversation-one",
@@ -124,8 +125,6 @@ function expectReply(
 
 beforeEach(() => {
   provision = vi.fn(async () => ({ leaseId: "lease-1", ssh: support.SSH_ENDPOINT }));
-  state.config.session = { store: path.join(state.root, "sessions.json") };
-  setRuntimeConfigSnapshot(state.config);
   ensureSessionEntrySync(scope(), { sessionId: identity.sessionId, updatedAt: 1 });
   makeService();
 });
