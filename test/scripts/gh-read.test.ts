@@ -12,6 +12,7 @@ import {
   resolveGitHubFetchTimeoutMs,
 } from "../../scripts/gh-read.js";
 import { normalizeGitHubRepo as normalizeRepo } from "../../scripts/lib/github-repo.js";
+import { createDeferred } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -85,21 +86,18 @@ describe("gh-read helpers", () => {
 
   it("aborts stalled GitHub API fetches at the request timeout", async () => {
     let signal: AbortSignal | undefined;
-    let markFetchStarted!: () => void;
-    const fetchStarted = new Promise<void>((resolve) => {
-      markFetchStarted = resolve;
-    });
+    const fetchStarted = createDeferred();
 
     vi.useFakeTimers();
     const request = githubJson("/app", "token", undefined, {
       timeoutMs: 5,
       fetchImpl: ((_url, init) => {
         signal = init?.signal ?? undefined;
-        markFetchStarted();
+        fetchStarted.resolve();
         return new Promise(() => {});
       }) as typeof fetch,
     });
-    await fetchStarted;
+    await fetchStarted.promise;
     await expectTimeout(request, /GitHub API GET \/app exceeded timeout/u);
     expect(signal?.aborted).toBe(true);
   });

@@ -14,13 +14,12 @@ function git(root: string, args: string[]): string {
   }).trim();
 }
 
-function write(root: string, path: string, value: string): void {
-  const target = join(root, path);
-  mkdirSync(dirname(target), { recursive: true });
-  writeFileSync(target, value, "utf8");
-}
-
-function commit(root: string, message: string): string {
+function commit(root: string, message: string, files: Record<string, string>): string {
+  for (const [path, value] of Object.entries(files)) {
+    const target = join(root, path);
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, value, "utf8");
+  }
   git(root, ["add", "."]);
   git(root, [
     "-c",
@@ -34,37 +33,35 @@ function commit(root: string, message: string): string {
   return git(root, ["rev-parse", "HEAD"]);
 }
 
+function audit(root: string, args: string[]) {
+  return spawnSync(process.execPath, [script, ...args], { cwd: root, encoding: "utf8" });
+}
+
 function fixture() {
   const root = tempDirs.make("release-backport-companions-");
   git(root, ["init", "-q", "--initial-branch=main"]);
-  write(root, "src/metrics.ts", "export const metrics = true;\n");
-  write(root, "scripts/registry.mjs", "export const producers = [];\n");
-  const baseline = commit(root, "baseline");
-
-  write(root, "src/metrics.ts", "export const metrics = { ipc: true };\n");
-  write(root, "scripts/prometheus-ipc-producer.mjs", "export const producer = true;\n");
-  const selected = commit(root, "fix: add Prometheus IPC producer (#101)");
-
-  write(
-    root,
-    "scripts/registry.mjs",
-    'import "./prometheus-ipc-producer.mjs";\nexport const producers = ["ipc"];\n',
-  );
-  write(root, "src/metrics.ts", "export const metrics = { ipc: true, registered: true };\n");
-  const samePathFollowup = commit(root, "fix: register Prometheus IPC producer (#102)");
-
-  write(
-    root,
-    "test/metrics.test.ts",
-    'import { metrics } from "../src/metrics.js";\nvoid metrics;\n',
-  );
-  const prMentionFollowup = commit(root, "test: cover the #101 producer contract");
-  const scanEnd = git(root, ["rev-parse", "HEAD"]);
+  const baseline = commit(root, "baseline", {
+    "src/metrics.ts": "export const metrics = true;\n",
+    "scripts/registry.mjs": "export const producers = [];\n",
+  });
+  const selected = commit(root, "fix: add Prometheus IPC producer (#101)", {
+    "src/metrics.ts": "export const metrics = { ipc: true };\n",
+    "scripts/prometheus-ipc-producer.mjs": "export const producer = true;\n",
+  });
+  const samePathFollowup = commit(root, "fix: register Prometheus IPC producer (#102)", {
+    "scripts/registry.mjs": 'import "./prometheus-ipc-producer.mjs";\n',
+    "src/metrics.ts": "export const metrics = { ipc: true, registered: true };\n",
+  });
+  const prMentionFollowup = commit(root, "test: cover the #101 producer contract", {
+    "test/metrics.test.ts": 'import "../src/metrics.js";\n',
+  });
+  const scanEnd = prMentionFollowup;
 
   git(root, ["switch", "-q", "-c", "candidate", baseline]);
-  write(root, "src/metrics.ts", 'export const metrics = { ipc: "adapted" };\n');
-  write(root, "release-note.md", "candidate-only resolution\n");
-  const candidate = commit(root, "prepare candidate with incomplete selected file set");
+  const candidate = commit(root, "prepare candidate with incomplete selected file set", {
+    "src/metrics.ts": 'export const metrics = { ipc: "adapted" };\n',
+    "release-note.md": "candidate-only resolution\n",
+  });
 
   return { baseline, candidate, prMentionFollowup, root, samePathFollowup, scanEnd, selected };
 }
@@ -72,24 +69,20 @@ function fixture() {
 describe("release-backport-companions", () => {
   it("accepts the package-manager separator and finds companion gaps", () => {
     const repo = fixture();
-    const output = execFileSync(
-      process.execPath,
-      [
-        script,
-        "--",
-        "--baseline",
-        repo.baseline,
-        "--candidate",
-        repo.candidate,
-        "--scan-end",
-        repo.scanEnd,
-        "--selected",
-        repo.selected,
-        "--json",
-      ],
-      { cwd: repo.root, encoding: "utf8" },
-    );
-    const report = JSON.parse(output);
+    const result = audit(repo.root, [
+      "--",
+      "--baseline",
+      repo.baseline,
+      "--candidate",
+      repo.candidate,
+      "--scan-end",
+      repo.scanEnd,
+      "--selected",
+      repo.selected,
+      "--json",
+    ]);
+    expect(result.status, result.stderr).toBe(0);
+    const report = JSON.parse(result.stdout);
 
     expect(report.schema).toBe("openclaw.release-backport-companions.v1");
     expect(report.selection[0].laterSamePath).toContainEqual(
@@ -112,39 +105,29 @@ describe("release-backport-companions", () => {
     const metricsDifference = report.comparison.contentDifferences.find(
       (item: { path: string }) => item.path === "src/metrics.ts",
     );
-    expect(metricsDifference).toEqual(
-      expect.objectContaining({ path: "src/metrics.ts", selectedSha: repo.selected }),
-    );
+    expect(metricsDifference).toMatchObject({ path: "src/metrics.ts", selectedSha: repo.selected });
     expect(metricsDifference.candidateObject).not.toBe(metricsDifference.object);
     expect(report.comparison.extraCandidatePaths).toEqual(["release-note.md"]);
   });
 
   it("rejects a selected commit already included in the pinned baseline", () => {
     const repo = fixture();
-    const result = spawnSync(
-      process.execPath,
-      [
-        script,
-        "--baseline",
-        repo.selected,
-        "--scan-end",
-        repo.scanEnd,
-        "--selected",
-        repo.selected,
-        "--json",
-      ],
-      { cwd: repo.root, encoding: "utf8" },
-    );
+    const result = audit(repo.root, [
+      "--baseline",
+      repo.selected,
+      "--scan-end",
+      repo.scanEnd,
+      "--selected",
+      repo.selected,
+      "--json",
+    ]);
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("already reachable from the pinned baseline");
   });
 
   it("requires pinned audit bounds and a selected commit", () => {
     const root = tempDirs.make("release-backport-companions-args-");
-    const result = spawnSync(process.execPath, [script, "--json"], {
-      cwd: root,
-      encoding: "utf8",
-    });
+    const result = audit(root, ["--json"]);
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("usage: release-backport-companions");
   });

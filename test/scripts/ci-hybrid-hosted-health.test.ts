@@ -131,10 +131,7 @@ const evidence: Evidence[] = [
     (job) => [hostedJobs(job), { healthy: false, reason: "hosted-health-unavailable" }] as const,
   ),
 ];
-it.each(evidence.map((args) => ({ args })))(
-  "evaluates hosted assignment evidence (%#)",
-  ({ args }) => check(...args),
-);
+it.each(evidence)("evaluates hosted assignment evidence (%#)", check);
 
 it.each([
   () => Promise.reject(new Error("private request diagnostics")),
