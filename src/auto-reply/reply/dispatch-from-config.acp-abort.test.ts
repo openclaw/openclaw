@@ -853,6 +853,12 @@ describe("dispatchReplyFromConfig ACP abort", () => {
       const operation = getSessionControllerOperation("agent:main:resolver-abort");
       try {
         expect(operation?.[abort]()).toBe(true);
+        if (abort === "supersede") {
+          expect(operation?.result).toMatchObject({
+            kind: "aborted",
+            code: "aborted_for_supersession",
+          });
+        }
         await expect(dispatchPromise).resolves.toMatchObject(expectedNoQueuedReplyResult());
         expect(runState.agentTurnOwner).toBe(operation);
         expect(resolveReplyOperationAgentTurn(runState)).toBe(expected);

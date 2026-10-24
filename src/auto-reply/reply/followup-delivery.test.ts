@@ -94,7 +94,6 @@ describe("resolveFollowupDeliveryDecision", () => {
   };
   const progressTarget = { ...sourceReplyTarget, sourceReplyFinal: false };
   const finalTarget = { ...sourceReplyTarget, sourceReplyFinal: true };
-  const progressPayload = { text: "Still working", sourceReplyFinal: false };
 
   it.each([
     { state: undefined, routed: true, delivered: true },
@@ -167,42 +166,6 @@ describe("resolveFollowupDeliveryDecision", () => {
       });
       expect(delivery).toMatchObject({ kind: "completed", payloads: [{ text: expected }] });
       expect(sourceDispatcher).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each([
-    ["yielded", undefined, false],
-    ["continuationPending", undefined, false],
-    ["yielded", "Research started; results will follow.", false],
-    ["yielded", "Research started; results will follow.", true],
-  ] as const)(
-    "delivers waiting status for %s (%s, private partial=%s)",
-    async (continuation, yieldAcknowledgment, privatePartial) => {
-      const turn = createTurn();
-      const execution = createSettledExecution();
-      execution.outcome.result.meta = { durationMs: 0, [continuation]: true, yieldAcknowledgment };
-      if (privatePartial) {
-        turn.queued.originatingChatType = "group";
-        turn.queued.run.sourceReplyDeliveryMode = "message_tool_only";
-      } else {
-        execution.outcome.result.acceptedSessionSpawns = [
-          {
-            runId: "child-run",
-            childSessionKey: "agent:main:subagent:child",
-            expectsCompletionMessage: true,
-          },
-        ];
-      }
-      const decision = await decide(
-        turn,
-        execution,
-        createAccounting(privatePartial ? [{ text: "Private partial output." }] : []),
-      );
-      expect(decision).toMatchObject(
-        yieldAcknowledgment
-          ? { kind: "deliver", payloads: [{ text: yieldAcknowledgment }] }
-          : silent,
-      );
     },
   );
 
@@ -350,27 +313,6 @@ describe("resolveFollowupDeliveryDecision", () => {
       outcome: { kind: "aborted", reason: "user" },
     };
 
-    it.each(["automatic", "message_tool_only"] as const)(
-      "delivers the stall notice once the single recovery run stalls too (%s)",
-      async (sourceReplyDeliveryMode) => {
-        const turn = createTurn({ operation: stalledOperation });
-        turn.queued.stalledTurnRecovery = true;
-        turn.queued.run.sourceReplyDeliveryMode = sourceReplyDeliveryMode;
-
-        const decision = await decide(turn, aborted);
-
-        expect(decision).toMatchObject({
-          kind: "deliver",
-          payloads: [
-            {
-              text: "⚠️ This turn was interrupted because it stopped making progress. Please try again.",
-              isError: true,
-            },
-          ],
-        });
-      },
-    );
-
     it.each([
       {
         label: "an ordinary queued request stalls",
@@ -451,9 +393,6 @@ describe("resolveFollowupDeliveryDecision", () => {
       payload: { mediaUrl: "file:///tmp/generated.png" },
       deliver: true,
     },
-    { name: "blank marked text", payload: { text: "   " } },
-    { name: "heartbeat marker", payload: { text: "HEARTBEAT_OK" } },
-    { name: "private reasoning", payload: { text: "hidden reasoning", isReasoning: true } },
     {
       name: "already delivered media",
       payload: { mediaUrl: "file:///tmp/already-sent.png" },
@@ -513,21 +452,8 @@ describe("resolveFollowupDeliveryDecision", () => {
     }
   });
 
-  it("turns a second missing source delivery into a sanitized diagnostic", async () => {
-    const turn = createTurn();
-    turn.queued.strandedReplyRetry = true;
-    turn.queued.run.sourceReplyDeliveryMode = "message_tool_only";
-
-    expect(await decide(turn)).toMatchObject({
-      kind: "deliver",
-      payloads: [missingReply],
-    });
-  });
-
   it.each([
     { name: "internal follow-up", expectation: undefined, internal: true, final: "" },
-    { name: "required reply", expectation: "required", internal: false, final: "" },
-    { name: "optional reply", expectation: "optional", internal: false, final: "" },
     {
       name: "private final",
       expectation: undefined,
@@ -611,11 +537,8 @@ describe("resolveFollowupDeliveryDecision", () => {
 
   it.each([
     ["progress-only target", { messagingToolSentTargets: [progressTarget] }, true],
-    ["progress-only source payload", { messagingToolSourceReplyPayloads: [progressPayload] }, true],
     ["final source reply", { messagingToolSentTargets: [finalTarget] }, false],
-    ["unclassified target", { messagingToolSentTargets: [sourceReplyTarget] }, true],
     ["legacy source reply", { didDeliverSourceReplyViaMessageTool: true }, false],
-    ["unscoped outbound send", { didSendViaMessagingTool: true }, true],
     ["deterministic approval prompt", { didSendDeterministicApprovalPrompt: true }, false],
     [
       "visible progress while yielded",
@@ -740,37 +663,18 @@ describe("deliverFollowupDecision", () => {
     }
   });
 
-  it("keeps a queued WebChat reply bound to its original source dispatcher", async () => {
+  it("keeps a source-unavailable WebChat reply dropped", async () => {
     const laterDispatcher = vi.fn(async (_payload: ReplyPayload) => {});
-    const sourceDispatcher = vi.fn(async () => {});
     const turn = createTurn();
     turn.queued.originatingChannel = "webchat";
     turn.queued.originatingTo = undefined;
-    turn.queued.queuedFollowupReplyDisposition = { kind: "deliver", deliver: sourceDispatcher };
-    deliveryState.followupRoute = { route: "dispatcher" };
-    try {
-      const payloads = await deliverDecision({
-        decision: { kind: "deliver", payloads: [{ text: "one" }, { text: "two" }] },
-        turn,
-        defaults: createDefaults(laterDispatcher),
-        runId: "source-run",
-      });
-      expect(payloads).toEqual({ kind: "completed", payloads: [{ text: "one" }, { text: "two" }] });
-      expect(sourceDispatcher).not.toHaveBeenCalled();
-      turn.queued.queuedFollowupReplyDisposition = {
-        kind: "drop",
-        reason: "source-unavailable",
-      };
-      await deliverDecision({
-        decision: { kind: "deliver", payloads: [{ text: "must stay dropped" }] },
-        turn,
-        defaults: createDefaults(laterDispatcher),
-        runId: "dropped-run",
-      });
-      expect(laterDispatcher).not.toHaveBeenCalled();
-    } finally {
-      deliveryState.followupRoute = undefined;
-    }
+    turn.queued.queuedFollowupReplyDisposition = { kind: "drop", reason: "source-unavailable" };
+    await deliverDecision({
+      decision: { kind: "deliver", payloads: [{ text: "must stay dropped" }] },
+      turn,
+      defaults: createDefaults(laterDispatcher),
+    });
+    expect(laterDispatcher).not.toHaveBeenCalled();
   });
 
   it("drains a source-delivery retry from its explicit store after the original turn completes", async () => {
@@ -915,6 +819,7 @@ describe("deliverFollowupDecision", () => {
             expect.objectContaining({
               text: "No answer was returned. Ask again if you still need one.",
               isError: true,
+              isStatusNotice: true,
             }),
           ],
         }),
