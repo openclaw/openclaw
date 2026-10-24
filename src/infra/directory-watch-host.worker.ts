@@ -42,4 +42,5 @@ process.stdin.setEncoding("utf8").on("data", (chunk: string) => {
     }
   }
 });
-process.stdin.on("end", () => process.exit(0));
+// Skip FSEvents cleanup without entering V8's forced-exit worker join.
+process.stdin.on("end", () => process.kill(process.pid, "SIGKILL"));

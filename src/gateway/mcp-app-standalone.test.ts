@@ -173,25 +173,31 @@ describe("MCP App standalone host", () => {
   );
 
   it("bounds the built browser fetch when runtime function source is unavailable", async () => {
-    const functionSource = vi.spyOn(runStandaloneMcpAppHost, "toString").mockImplementation(() => {
-      throw new Error("Runtime function source is unavailable");
+    Object.defineProperty(runStandaloneMcpAppHost, "toString", {
+      configurable: true,
+      value() {
+        throw new Error("Runtime function source is unavailable");
+      },
     });
-    const timeoutError = Object.assign(new Error("timed out"), { name: "TimeoutError" });
-    const initialSignal = AbortSignal.abort(timeoutError);
-    const initialBody = createDeferred<unknown>();
-    const host = await createSerializedHost({ initialBody, initialSignal });
-    functionSource.mockRestore();
-    initialBody.reject(timeoutError);
-    await vi.waitFor(() =>
-      expect(host.replaceChildren).toHaveBeenCalledWith(
-        expect.objectContaining({ textContent: "MCP App view timed out; reload to try again" }),
-      ),
-    );
-    expect(host.timeout).toHaveBeenCalledWith(30_000);
-    expect(host.fetch).toHaveBeenCalledWith(
-      "/__openclaw__/mcp-app/view",
-      expect.objectContaining({ signal: initialSignal }),
-    );
+    try {
+      const timeoutError = Object.assign(new Error("timed out"), { name: "TimeoutError" });
+      const initialSignal = AbortSignal.abort(timeoutError);
+      const initialBody = createDeferred<unknown>();
+      const host = await createSerializedHost({ initialBody, initialSignal });
+      initialBody.reject(timeoutError);
+      await vi.waitFor(() =>
+        expect(host.replaceChildren).toHaveBeenCalledWith(
+          expect.objectContaining({ textContent: "MCP App view timed out; reload to try again" }),
+        ),
+      );
+      expect(host.timeout).toHaveBeenCalledWith(30_000);
+      expect(host.fetch).toHaveBeenCalledWith(
+        "/__openclaw__/mcp-app/view",
+        expect.objectContaining({ signal: initialSignal }),
+      );
+    } finally {
+      Reflect.deleteProperty(runStandaloneMcpAppHost, "toString");
+    }
   });
 
   it("returns capabilities only for handlers installed on the live view", async () => {
