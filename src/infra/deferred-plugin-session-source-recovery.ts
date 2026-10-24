@@ -12,12 +12,12 @@ import {
   collectArchivedSources,
   existingSessionSourcePaths,
 } from "./deferred-plugin-session-artifacts.js";
-import type { DeferredPluginSessionImport } from "./deferred-plugin-session-import-schema.js";
+import type {
+  DeferredPluginSessionImport,
+  SessionImportSource,
+} from "./deferred-plugin-session-import-schema.js";
 import { readDeferredPluginSessionImportReceipt } from "./deferred-plugin-session-source-read.js";
-import {
-  resolveVerifiedSessionSource,
-  type SessionImportSource,
-} from "./deferred-plugin-session-sources.js";
+import { resolveVerifiedSessionSource } from "./deferred-plugin-session-sources.js";
 import {
   databaseIdentity,
   preservesRecordedIndexValue,

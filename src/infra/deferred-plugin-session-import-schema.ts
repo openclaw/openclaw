@@ -1,4 +1,6 @@
 import { z } from "zod";
+import type { LegacySessionStoreTarget } from "../config/sessions/legacy-store-inspection.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { MigrationArtifactSchema } from "./session-sqlite-migration-artifact.js";
 
 export const DeferredPluginSessionImportSchema = z.object({
@@ -19,3 +21,10 @@ export const DeferredPluginSessionImportSchema = z.object({
     .optional(),
 });
 export type DeferredPluginSessionImport = z.infer<typeof DeferredPluginSessionImportSchema>;
+
+export type SessionImportSource = {
+  cfg: OpenClawConfig;
+  target: LegacySessionStoreTarget;
+  sqlitePath: string;
+  env: NodeJS.ProcessEnv;
+};

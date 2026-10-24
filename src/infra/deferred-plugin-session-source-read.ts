@@ -3,8 +3,10 @@ import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-sta
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import { resolveRealpathOrAbsolute } from "./boundary-path.js";
 import { collectArchivedSources } from "./deferred-plugin-session-artifacts.js";
-import { DeferredPluginSessionImportSchema } from "./deferred-plugin-session-import-schema.js";
-import type { SessionImportSource } from "./deferred-plugin-session-sources.js";
+import {
+  DeferredPluginSessionImportSchema,
+  type SessionImportSource,
+} from "./deferred-plugin-session-import-schema.js";
 import type { SessionSqliteMigrationTargetInput as SessionImportTarget } from "./session-sqlite-migration-manifest.js";
 import type { EngineConnection } from "./sql-connection.js";
 import {

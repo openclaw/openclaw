@@ -18,7 +18,10 @@ import {
   existingSessionSourcePaths,
   type ArchivedSessionSources,
 } from "./deferred-plugin-session-artifacts.js";
-import type { DeferredPluginSessionImport } from "./deferred-plugin-session-import-schema.js";
+import type {
+  DeferredPluginSessionImport,
+  SessionImportSource,
+} from "./deferred-plugin-session-import-schema.js";
 import {
   DEFERRED_PLUGIN_SESSION_IMPORT_RECEIPT_KIND,
   resolveDeferredPluginSessionSourceKey,
@@ -45,14 +48,10 @@ import {
   type LegacyMigrationReceipt,
 } from "./state-migrations.receipts.js";
 
-export type { DeferredPluginSessionImport } from "./deferred-plugin-session-import-schema.js";
-
-export type SessionImportSource = {
-  cfg: OpenClawConfig;
-  target: LegacySessionStoreTarget;
-  sqlitePath: string;
-  env: NodeJS.ProcessEnv;
-};
+export type {
+  DeferredPluginSessionImport,
+  SessionImportSource,
+} from "./deferred-plugin-session-import-schema.js";
 /** Transient reuse within one synchronous receipt verification and counting phase. */
 export type SessionSourceVerification = Map<
   string,

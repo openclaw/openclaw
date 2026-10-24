@@ -181,14 +181,6 @@ function sanitizeSessionText(text: string, role: "user" | "assistant"): string |
   return normalized;
 }
 
-function isRecalledMemoryMessage(message: { provenance?: unknown }): boolean {
-  const provenance = message.provenance as { kind?: unknown; sourceTool?: unknown } | undefined;
-  return (
-    provenance?.kind === "internal_system" &&
-    (provenance.sourceTool === "memory_search" || provenance.sourceTool === "memory_get")
-  );
-}
-
 function resolveSessionEntryParseYieldLines(opts: BuildSessionEntryOptions): number {
   const configured = opts.parseYieldEveryLines;
   if (typeof configured === "number" && Number.isFinite(configured)) {
@@ -322,37 +314,30 @@ export async function renderSessionEntry(
       messageTimestampsMs.length = 0;
       lineProvenance.length = 0;
     }
-    if (
-      !record ||
-      typeof record !== "object" ||
-      (record as { type?: unknown }).type !== "message"
-    ) {
+    const candidate = asOptionalRecord(record);
+    if (candidate?.type !== "message") {
       continue;
     }
-    const message = (record as { message?: unknown }).message as
-      | { role?: unknown; content?: unknown; provenance?: unknown }
-      | undefined;
+    const message = asOptionalRecord(candidate.message);
     if (!message || typeof message.role !== "string") {
       continue;
     }
     if (message.role !== "user" && message.role !== "assistant") {
       continue;
     }
-    const timestampMs = parseSessionTimestampMs(
-      record as { timestamp?: unknown },
-      message as { timestamp?: unknown },
-    );
+    const timestampMs = parseSessionTimestampMs(candidate, message);
     opts.onTranscriptMessage?.(message, Math.max(0, Math.floor(timestampMs || mtimeMs)));
-    const inputProvenance = message.provenance as
-      | { kind?: unknown; sourceTool?: unknown }
-      | undefined;
+    const inputProvenance = asOptionalRecord(message.provenance);
     const isHeartbeatUser =
       message.role === "user" &&
       inputProvenance?.kind === "internal_system" &&
       inputProvenance.sourceTool === "heartbeat";
     if (message.role === "user") {
       insideHeartbeatTurn = isHeartbeatUser;
-      insideRecalledMemoryTurn = isRecalledMemoryMessage(message);
+      insideRecalledMemoryTurn =
+        inputProvenance?.kind === "internal_system" &&
+        (inputProvenance.sourceTool === "memory_search" ||
+          inputProvenance.sourceTool === "memory_get");
       turnOrigin = classifySessionMessageOrigin(message, turnOrigin);
     }
     if (message.role === "user" && hasInterSessionUserProvenance(message)) {
