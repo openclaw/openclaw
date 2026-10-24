@@ -13,15 +13,17 @@ export function createSubagentSessionListReadIndex(
 ) {
   let identity = source.snapshotIdentity();
   let index = buildSubagentSessionListReadIndex(now, undefined, source.runs());
-  let memory = new Map(
-    Array.from(subagentRuns, ([id, entry]) => [
-      id,
-      copySubagentRunRuntimeOwner(
-        entry,
-        Object.freeze({ ...immutableSubagentRunSessionList(entry) }),
-      ),
-    ]),
-  );
+  const snapshotMemory = () =>
+    new Map(
+      Array.from(subagentRuns, ([id, entry]) => [
+        id,
+        copySubagentRunRuntimeOwner(
+          entry,
+          Object.freeze({ ...immutableSubagentRunSessionList(entry) }),
+        ),
+      ]),
+    );
+  let memory = snapshotMemory();
   let revision = 0;
   let replaced = false;
   const changedChildren = new Set<string>();
@@ -52,15 +54,7 @@ export function createSubagentSessionListReadIndex(
         for (const key of index.runsByChildSessionKey.keys()) {
           changedChildren.add(key);
         }
-        memory = new Map(
-          Array.from(subagentRuns, ([id, entry]) => [
-            id,
-            copySubagentRunRuntimeOwner(
-              entry,
-              Object.freeze({ ...immutableSubagentRunSessionList(entry) }),
-            ),
-          ]),
-        );
+        memory = snapshotMemory();
         revision++;
       } else if (pending.size) {
         const rows = source.runs(pending);

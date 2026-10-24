@@ -341,16 +341,15 @@ export function createGatewayPluginRequestHandler(params: {
       ? controlUiPluginGrant.scopes
       : dispatchContext?.gatewayRequestOperatorScopes;
 
+    const grantedRoutes = controlUiPluginGrant
+      ? matchedRoutes.filter(
+          (route) => route.auth !== "gateway" || route.pluginId === controlUiPluginGrant.pluginId,
+        )
+      : matchedRoutes;
+
     // Fail closed before invoking any handlers when matched gateway routes are
     // missing the runtime auth/scope context they require.
-    for (const route of matchedRoutes) {
-      if (
-        controlUiPluginGrant &&
-        route.auth === "gateway" &&
-        route.pluginId !== controlUiPluginGrant.pluginId
-      ) {
-        continue;
-      }
+    for (const route of grantedRoutes) {
       const missingRuntimeContext = getMissingPluginRouteRuntimeContext(route, {
         gatewayRequestAuth,
         gatewayRequestOperatorScopes,
@@ -369,14 +368,7 @@ export function createGatewayPluginRequestHandler(params: {
       return true;
     }
 
-    for (const route of matchedRoutes) {
-      if (
-        controlUiPluginGrant &&
-        route.auth === "gateway" &&
-        route.pluginId !== controlUiPluginGrant.pluginId
-      ) {
-        continue;
-      }
+    for (const route of grantedRoutes) {
       try {
         const runRoute = async () => {
           if (isLegacyPluginRouteHandoff(req, route)) {

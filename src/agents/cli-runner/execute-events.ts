@@ -39,6 +39,8 @@ export function createCliEventHandlers(params: {
 }) {
   const context = params.context;
   const runParams = context.params;
+  const applyOutputReplacements = (text: string) =>
+    applyPluginTextReplacements(text, context.backendResolved.textTransforms?.output);
   const emitLiveEvents = runParams.executionMode !== "side-question";
   const emitLiveEvent = (stream: AgentEventStream, data: () => Record<string, unknown>) => {
     if (emitLiveEvents) {
@@ -386,10 +388,7 @@ export function createCliEventHandlers(params: {
       return;
     }
     const prepared = prepareAgentRunTerminalReply({ rawText: text });
-    const visibleText = applyPluginTextReplacements(
-      prepared.text,
-      context.backendResolved.textTransforms?.output,
-    );
+    const visibleText = applyOutputReplacements(prepared.text);
     if (!visibleText) {
       return;
     }
@@ -427,17 +426,11 @@ export function createCliEventHandlers(params: {
       ? sourceText.slice(assistantVisibleText.length)
       : sourceText;
     assistantVisibleText = sourceText;
-    const preparedText = applyPluginTextReplacements(
-      sourceText,
-      context.backendResolved.textTransforms?.output,
-    );
+    const preparedText = applyOutputReplacements(sourceText);
     emitLiveEvent("assistant", () => ({
       itemId: cliAssistantItemId(runParams.runId),
       text: preparedText,
-      delta: applyPluginTextReplacements(
-        sourceDelta,
-        context.backendResolved.textTransforms?.output,
-      ),
+      delta: applyOutputReplacements(sourceDelta),
     }));
   };
   const emitCliCompletedReply = (text: string, assistantMessageIndex: number) => {
@@ -450,10 +443,7 @@ export function createCliEventHandlers(params: {
     }
     assistantVisibleText = "";
     const prepared = prepareAgentRunTerminalReply({ rawText: text });
-    const visibleText = applyPluginTextReplacements(
-      prepared.text,
-      context.backendResolved.textTransforms?.output,
-    );
+    const visibleText = applyOutputReplacements(prepared.text);
     if (!visibleText) {
       return;
     }

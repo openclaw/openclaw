@@ -49,6 +49,16 @@ function decodeOpenClawStateReadReply(reply: OpenClawStateReadReply): OpenClawSt
   };
 }
 
+function throwReadCleanupErrors(
+  results: readonly PromiseSettledResult<unknown>[],
+  message: string,
+): void {
+  throwSqliteLifecycleErrors(
+    results.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
+    message,
+  );
+}
+
 type ReadOperation = { close(): Promise<void> };
 type ReadRuntime = {
   nativeSource: RetainedNativeWorkerSource;
@@ -76,10 +86,7 @@ async function closeReadPool(state: ReadRuntime): Promise<void> {
         await pool.close();
       }),
     );
-    throwSqliteLifecycleErrors(
-      results.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
-      "Shared-state reader pools cleanup failed",
-    );
+    throwReadCleanupErrors(results, "Shared-state reader pools cleanup failed");
     state.pool = undefined;
     state.awaitedPool = undefined;
   })();
@@ -103,21 +110,13 @@ function readRuntimes() {
               const resources = await Promise.allSettled(
                 stateReadPools(state).map((pool) => closeReadResources(pool, identity.key)),
               );
-              throwSqliteLifecycleErrors(
-                resources.flatMap((result) =>
-                  result.status === "rejected" ? [result.reason] : [],
-                ),
-                "Shared-state reader resources cleanup failed",
-              );
+              throwReadCleanupErrors(resources, "Shared-state reader resources cleanup failed");
             } else {
               await closeReadPool(state);
             }
           }),
         );
-        throwSqliteLifecycleErrors(
-          results.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
-          "Shared-state reader source cleanup failed",
-        );
+        throwReadCleanupErrors(results, "Shared-state reader source cleanup failed");
       },
     });
     registerOpenClawStateDatabaseLifecycleListener((event) => {
@@ -128,10 +127,7 @@ function readRuntimes() {
             stateReadPools(state).map((pool) => closeReadResources(pool, identity.key)),
           )
             .then((results) =>
-              throwSqliteLifecycleErrors(
-                results.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
-                "Shared-state reader invalidation failed",
-              ),
+              throwReadCleanupErrors(results, "Shared-state reader invalidation failed"),
             )
             .catch((error: unknown) => {
               // The worker retains failed cleanup; canonical path close retries it.
@@ -198,10 +194,7 @@ export function captureOpenClawStateReadSource() {
                 Promise.resolve().then(() => operation.close()),
               ),
             );
-            throwSqliteLifecycleErrors(
-              results.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
-              "Shared-state reader source cleanup failed",
-            );
+            throwReadCleanupErrors(results, "Shared-state reader source cleanup failed");
             await closeReadPool(created);
             sources.delete(nativeSource);
           })
@@ -437,10 +430,7 @@ function createReadTransport(
           chunksDrained = resolve;
         });
       }
-      throwSqliteLifecycleErrors(
-        releases.flatMap((release) => (release.status === "rejected" ? [release.reason] : [])),
-        "Shared-state reader task cleanup failed",
-      );
+      throwReadCleanupErrors(releases, "Shared-state reader task cleanup failed");
     })().finally(() => {
       chunksDrained = undefined;
       closing = undefined;

@@ -16,6 +16,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { cancelUnreadResponseBody } from "../../infra/http-body.js";
 import { sqlitePrimaryResultCode } from "../../infra/sqlite-error-diagnostics.js";
+import { throwSqliteLifecycleErrors } from "../../infra/sqlite-lifecycle-errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { resolveProviderModelAuthPolicy } from "../model-auth-policy.js";
@@ -496,11 +497,7 @@ export async function maybeReprobeWhamBlockedProfiles(params: {
   );
   // Join peer work before reporting failure. Storage, admission and incomplete
   // refresh cleanup cannot authorize another account or model attempt.
-  if (failures.length > 0) {
-    throw failures.length === 1
-      ? failures[0]
-      : new AggregateError(failures, "Quota reconciliation failed", { cause: failures[0] });
-  }
+  throwSqliteLifecycleErrors(failures, "Quota reconciliation failed");
   // Both failed refreshes and unavailable credentials belong to normal auth
   // selection. Neither a stale profile list nor quota state can replace it.
   return results.some((result) => result.status === "fulfilled" && result.value)

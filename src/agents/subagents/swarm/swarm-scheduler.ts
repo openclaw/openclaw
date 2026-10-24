@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
+import { throwSettledAggregate } from "../../../infra/error-graph-internal.js";
 import { notifyGatewayWorkMetricsChanged } from "../../../infra/gateway-work-metrics-events.js";
 import { hasRetainedPluginRuntimeCloseError } from "../../../plugins/runtime-close-error.js";
 import { SWARM_LANE_PREFIX, type CommandLaneConfiguration } from "../../../process/lanes.js";
@@ -411,10 +412,7 @@ export async function closeSwarmScheduler(lifecycleOwner?: object): Promise<void
       pendingRemovals.delete(item);
     }
   }
-  const errors = settled.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
-  if (errors.length > 0) {
-    throw new AggregateError(errors, "Swarm launch cleanup failed");
-  }
+  throwSettledAggregate(settled, "Swarm launch cleanup failed");
 }
 
 /** True only after launch was invoked (or an already-running slot was restored). */

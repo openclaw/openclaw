@@ -4,6 +4,7 @@ import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { assertSessionEntryCurrentAdmission } from "../../../config/sessions/session-entry-current-admission.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
+import { throwSqliteLifecycleErrors } from "../../../infra/sqlite-lifecycle-errors.js";
 import {
   SqliteWorkerError,
   hasSqliteWorkerOutcomeUnknown,
@@ -204,14 +205,7 @@ function publishRows(
   } catch (error) {
     failures.push(error);
   }
-  if (failures.length === 1) {
-    throw failures[0];
-  }
-  if (failures.length > 1) {
-    throw new AggregateError(failures, "Subagent registry acknowledgement settlement failed", {
-      cause: failures[0],
-    });
-  }
+  throwSqliteLifecycleErrors(failures, "Subagent registry acknowledgement settlement failed");
 }
 
 type SubagentRunMutationReceipt<T> = SubagentRunMutation<T> & {

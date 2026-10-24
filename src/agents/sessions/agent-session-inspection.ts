@@ -11,6 +11,7 @@ import {
   withSessionTranscriptWriteAssertion,
   type SessionMetadataCommit,
 } from "../../config/sessions/transcript-write-context.js";
+import { throwSqliteLifecycleErrors } from "../../infra/sqlite-lifecycle-errors.js";
 import type { Model, AssistantMessage } from "../../llm/types.js";
 import { assertionSucceeds } from "../../shared/assertion.js";
 import {
@@ -112,14 +113,7 @@ export abstract class AgentSessionInspection extends AgentSessionPrompting {
       const failures = notifications.flatMap((result): unknown[] =>
         result.status === "rejected" ? [result.reason] : [],
       );
-      if (failures.length === 1) {
-        throw failures[0];
-      }
-      if (failures.length > 1) {
-        throw new AggregateError(failures, "Session metadata notifications failed", {
-          cause: failures[0],
-        });
-      }
+      throwSqliteLifecycleErrors(failures, "Session metadata notifications failed");
     } catch (cause) {
       this.failAfterMetadataCommit(cause, committedMetadata);
     }
