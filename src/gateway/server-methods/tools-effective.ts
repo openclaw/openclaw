@@ -53,6 +53,7 @@ import { getConnectedNodePluginToolsVersion } from "../node-plugin-tool-snapshot
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { withGatewaySessionEntryReadOnly } from "../session-utils-read-lifetime.js";
 import { resolveSessionModelRef, type GatewaySessionEntryRead } from "../session-utils.js";
+import { respondError } from "./response.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { defineValidatedGatewayHandler } from "./validation.js";
@@ -470,10 +471,10 @@ async function resolveTrustedToolsEffectiveContext(
   // The effective tools request is read-only but security-sensitive. Derive
   // routing/account/model context from the persisted session, not client params.
   if (!loaded.entry) {
-    params.respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, `unknown session key "${params.sessionKey}"`),
+    respondError(
+      params.respond,
+      ErrorCodes.INVALID_REQUEST,
+      `unknown session key "${params.sessionKey}"`,
     );
     return null;
   }
@@ -485,13 +486,10 @@ async function resolveTrustedToolsEffectiveContext(
     ...(params.requestedAgentId ? { agentId: params.requestedAgentId } : {}),
   });
   if (params.requestedAgentId && params.requestedAgentId !== sessionAgentId) {
-    params.respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        `agent id "${params.requestedAgentId}" does not match session agent "${sessionAgentId}"`,
-      ),
+    respondError(
+      params.respond,
+      ErrorCodes.INVALID_REQUEST,
+      `agent id "${params.requestedAgentId}" does not match session agent "${sessionAgentId}"`,
     );
     return null;
   }
@@ -565,11 +563,7 @@ export const toolsEffectiveHandlers: GatewayRequestHandlers = {
       const knownAgents = listAgentIds(cfg);
       const requestedAgentId = normalizeOptionalString(params.agentId);
       if (requestedAgentId && !knownAgents.includes(requestedAgentId)) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, `unknown agent id "${requestedAgentId}"`),
-        );
+        respondError(respond, ErrorCodes.INVALID_REQUEST, `unknown agent id "${requestedAgentId}"`);
         return;
       }
       const sessionOwner = resolveRequestedSessionAgentId(cfg, params.sessionKey, requestedAgentId);

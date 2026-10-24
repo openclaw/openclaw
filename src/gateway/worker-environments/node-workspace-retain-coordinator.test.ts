@@ -165,6 +165,7 @@ function createHarness(
     invokeError?: string;
     beforeDispatch?: () => void;
     onInvoke?: (index: number) => void;
+    isCurrent?: () => boolean;
   } = {},
 ) {
   const results = [...(params.results ?? [retainResult()])];
@@ -194,7 +195,7 @@ function createHarness(
     listCurrentNodes: async () => [params.node ?? node],
     getBundleStatus: () => currentBundleStatus,
     acceptBundleStatus,
-    isCurrent: () => true,
+    isCurrent: params.isCurrent ?? (() => true),
     async invoke(request) {
       params.beforeDispatch?.();
       if (
@@ -665,7 +666,7 @@ describe("node workspace retain coordinator", () => {
     }
   });
 
-  it("retains the current build without installing it or keeping unreferenced older builds", async () => {
+  it("retains current and live builds without prefetch on an old node", async () => {
     const artifact = receipt(currentHash, "2026.8.10");
     const input = {
       environments: [environment()],
@@ -698,6 +699,81 @@ describe("node workspace retain coordinator", () => {
       RETAIN_COMMAND,
       RETAIN_COMMAND,
     ]);
+  });
+
+  it("prefetches the pinned build once after retention and preserves normal cleanup", async () => {
+    const prefetch = vi.fn(async () => {});
+    const { coordinator, invoke } = await startHarness({
+      environments: [],
+      placements: [],
+      node: { ...node, workerHost: { ...node.workerHost, bundlePrefetch: 1 } },
+      bundleRetention: { ...bundleRetention(), prefetch },
+    });
+    expect(prefetch).toHaveBeenCalledOnce();
+    expect(invoke.mock.calls[0]?.[0].params).toMatchObject({ bundleHashes: [currentHash] });
+    await coordinator.schedule(node.nodeId);
+    expect(prefetch).toHaveBeenCalledOnce();
+    expect(invoke.mock.calls[1]?.[0].params).toMatchObject({ bundleHashes: [currentHash] });
+  });
+
+  it.each(["old-node", "cloud-owned"])("keeps %s on session-owned installation", async (kind) => {
+    const prefetch = vi.fn(async () => {});
+    await startHarness({
+      environments: [],
+      placements: [],
+      node:
+        kind === "old-node"
+          ? node
+          : { ...node, workerHost: { ...node.workerHost, bundlePrefetch: 1 } },
+      bundleRetention: { ...bundleRetention(undefined, kind === "cloud-owned"), prefetch },
+    });
+    expect(prefetch).not.toHaveBeenCalled();
+  });
+
+  it("warns once on prefetch failure without blocking subsequent maintenance", async () => {
+    const failed = createDeferredCore();
+    const prefetch = vi.fn(async () => {
+      failed.resolve();
+      throw new Error("disk full");
+    });
+    const { coordinator, invoke, warn } = await startHarness({
+      environments: [],
+      placements: [],
+      node: { ...node, workerHost: { ...node.workerHost, bundlePrefetch: 1 } },
+      bundleRetention: { ...bundleRetention(), prefetch },
+    });
+    await failed.promise;
+    await coordinator.schedule(node.nodeId);
+    expect(warn).toHaveBeenCalledWith("Node bundle prefetch failed (node-1): disk full");
+    expect(prefetch).toHaveBeenCalledOnce();
+    expect(invoke).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["disconnect", "enrollment", "shutdown"])("cancels prefetch on %s", async (reason) => {
+    let connected = true;
+    let owned = false;
+    const cancelled = createDeferredCore();
+    const prefetch = vi.fn(async (_node: NodeProof, signal: AbortSignal) => {
+      signal.addEventListener("abort", () => cancelled.resolve(), { once: true });
+      await cancelled.promise;
+    });
+    const { coordinator } = await startHarness({
+      environments: [],
+      placements: [],
+      isCurrent: () => connected,
+      node: { ...node, workerHost: { ...node.workerHost, bundlePrefetch: 1 } },
+      bundleRetention: { ...bundleRetention(), isEnvironmentOwnedNode: () => owned, prefetch },
+    });
+    expect(prefetch).toHaveBeenCalledOnce();
+    if (reason === "shutdown") {
+      await coordinator.stop();
+    } else {
+      connected = reason !== "disconnect";
+      owned = reason === "enrollment";
+      await coordinator.schedule(node.nodeId);
+    }
+    await cancelled.promise;
+    expect(prefetch.mock.calls[0]?.[1].aborted).toBe(true);
   });
 
   it("retains the current build until live cloud environments record it", async () => {

@@ -15,6 +15,8 @@ const workRequest = { method: "chat.send" };
 const subscribeRequest = { method: "sessions.messages.subscribe", params: { key: "session" } };
 const independentReads = [
   "chat.history",
+  "board.get",
+  "sessions.resolve",
   "sessions.list",
   "cron.list",
   "push.web.vapidPublicKey",
@@ -37,7 +39,9 @@ function requestStart(
   return permission;
 }
 
-function holdPreparations(request = { method: "models.list" }) {
+function holdPreparations(
+  request: Parameters<typeof scheduleGatewayRequestStart>[1] = { method: "models.list" },
+) {
   const held = Array.from({ length: 4 }, heldCompletion);
   return {
     held,
@@ -62,7 +66,7 @@ afterEach(async () => {
 describe("Gateway request start fairness", () => {
   it("bounds concurrent reconnect preparations through settlement and yields before each start", async () => {
     const methods = [
-      { method: "sessions.subscribe" },
+      { method: "sessions.subscribe", params: { limit: 100 } },
       { method: "models.list" },
       { method: "sessions.messages.subscribe", params: { includeApprovals: true } },
     ];
@@ -125,22 +129,99 @@ describe("Gateway request start fairness", () => {
     expect(starts).toEqual([...independentReads, "sessions.create"]);
     held[0]!.resolve();
     await Promise.all([subscription, unsubscribe, mutation]);
-    expect(starts.slice(8)).toEqual([
+    expect(starts.slice(independentReads.length + 1)).toEqual([
       "sessions.messages.subscribe",
       "sessions.messages.unsubscribe",
       "chat.send",
     ]);
   });
 
+  it("starts event-only roster subscriptions while snapshot preparation is saturated", async () => {
+    const { held, start } = holdPreparations();
+    await start();
+    const starts: string[] = [];
+    const eventOnly = requestStart(
+      100,
+      { method: "sessions.subscribe", params: {} },
+      "events",
+    ).then(() => starts.push("events"));
+    const messageBodies = requestStart(
+      100,
+      { method: "sessions.subscribe", params: { includeMessageBodies: true } },
+      "bodies",
+    ).then(() => starts.push("bodies"));
+    const snapshot = requestStart(
+      100,
+      { method: "sessions.subscribe", params: { limit: 100 } },
+      "snapshot",
+    ).then(() => starts.push("snapshot"));
+    await nextTurn();
+    expect(starts).toEqual(["events", "bodies"]);
+    held[0]!.resolve();
+    await Promise.all([eventOnly, messageBodies, snapshot]);
+    expect(starts.at(-1)).toBe("snapshot");
+  });
+
+  it.each([
+    "sessions.describe",
+    "users.list",
+    "agents.list",
+    "agent.identity.get",
+    "plugins.controlUi.list",
+    "workboard.boards.list",
+  ])("starts %s past a parked snapshot without admitting connection mutations", async (method) => {
+    const { held, start } = holdPreparations();
+    await start();
+    const starts: string[] = [];
+    const requests = [
+      { method: "sessions.subscribe", params: { limit: 100 } },
+      { method: "chat.send" },
+      { method },
+      { method: "sessions.patch" },
+    ].map((request) =>
+      requestStart(100, request, "viewer").then(() => starts.push(request.method)),
+    );
+    await nextTurn();
+    expect(starts).toEqual([method]);
+    held[0]!.resolve();
+    await Promise.all(requests);
+    expect(starts).toEqual([method, "sessions.subscribe", "chat.send", "sessions.patch"]);
+  });
+
+  it("keeps a parked catalog read from blocking later connection work", async () => {
+    const { held, start } = holdPreparations();
+    await start();
+    const starts: string[] = [];
+    const requests = [
+      { method: "models.list" },
+      { method: "sessions.subscribe", params: {} },
+      subscribeRequest,
+      { method: "sessions.messages.unsubscribe", params: { key: "session" } },
+      workRequest,
+    ].map((request) =>
+      requestStart(100, request, "viewer").then(() => starts.push(request.method)),
+    );
+    await nextTurn();
+    expect(starts).toEqual([
+      "sessions.subscribe",
+      "sessions.messages.subscribe",
+      "sessions.messages.unsubscribe",
+      "chat.send",
+    ]);
+    held[0]!.resolve();
+    await Promise.all(requests);
+    expect(starts.at(-1)).toBe("models.list");
+  });
+
   it("prioritizes lifecycle starts while preserving same-connection mutation order", async () => {
     const { held, start: startHeld } = holdPreparations();
     const events: string[] = [];
-    const start = (method: string, connId: string) =>
-      requestStart(100, { method }, connId).then(() => events.push(`${connId}:${method}`));
+    const start = (method: string, connId: string, params = {}) =>
+      requestStart(100, { method, params }, connId).then(() => events.push(`${connId}:${method}`));
     await startHeld();
     // The parked preparation wakes the queue, but unrelated lifecycle starts
     // must reach their handlers before the ordinary backlog resumes.
-    const parked = start("models.list", "blocked");
+    const parked = start("sessions.subscribe", "blocked", { limit: 100 });
     const mutation = start("chat.send", "blocked");
     const resume = start("gateway.suspend.resume", "blocked");
     const ordinary = start("chat.send", "ordinary");
@@ -157,19 +238,22 @@ describe("Gateway request start fairness", () => {
     held[0]!.resolve();
     await Promise.all([parked, mutation, resume, status, update, handoff, ordinary]);
     expect(events.slice(4)).toEqual([
-      "blocked:models.list",
+      "blocked:sessions.subscribe",
       "blocked:chat.send",
       "blocked:gateway.suspend.resume",
     ]);
   });
 
   it("releases a cancelled preparation waiter while earlier requests still own capacity", async () => {
-    const { held, start } = holdPreparations({ method: "sessions.subscribe" });
+    const { held, start } = holdPreparations({
+      method: "sessions.subscribe",
+      params: { limit: 100 },
+    });
     const started = start();
     const controller = new AbortController();
     const cancelled = scheduleGatewayRequestStart(
       100,
-      { method: "sessions.subscribe" },
+      { method: "sessions.subscribe", params: { limit: 100 } },
       "cancelled",
       Promise.resolve(),
       controller.signal,

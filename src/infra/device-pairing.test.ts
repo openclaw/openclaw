@@ -1,5 +1,5 @@
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { afterAll, beforeAll, beforeEach, describe, expect, test } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { PAIRING_SETUP_BOOTSTRAP_PROFILE } from "../shared/device-bootstrap-profile.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
@@ -164,6 +164,7 @@ describe("device pairing tokens", () => {
   });
 
   beforeEach(async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", baseDir);
     await withDevicePairingLock(async () => {});
     persistDevicePairingStoreState({ pendingById: {}, pairedByDeviceId: {} }, baseDir, "both");
     persistDeviceBootstrapTokenRecords({}, baseDir);
@@ -576,7 +577,7 @@ describe("device pairing tokens", () => {
 
   test("binds shared-auth browser tokens to their issuing generation through upgrades and rotation", async () => {
     await pairDevice(["operator.read"], browserIdentity);
-    const params = { deviceId: "browser-device-1", role: "operator", baseDir };
+    const params = { deviceId: "browser-device-1", role: "operator" };
     const verify = (token: string, generation: string, scopes = ["operator.read"]) =>
       verifyDeviceToken({
         ...params,
@@ -653,7 +654,7 @@ describe("device pairing tokens", () => {
 
   test("keeps ambiguous legacy device tokens valid across shared gateway auth rotation", async () => {
     const token = await setupOperatorToken(["operator.read"]);
-    const params = { deviceId: "device-1", role: "operator", scopes: ["operator.read"], baseDir };
+    const params = { deviceId: "device-1", role: "operator", scopes: ["operator.read"] };
     const verify = (bearer: string) =>
       verifyDeviceToken({
         ...params,
@@ -800,7 +801,6 @@ describe("device pairing tokens", () => {
         deviceId: "device-1",
         role: "operator",
         scopes: ["operator.admin"],
-        baseDir,
       }),
     ).resolves.toBeNull();
     expect(await getPairedDevice("device-1", baseDir)).toEqual(paired);
@@ -830,7 +830,6 @@ describe("device pairing tokens", () => {
         deviceId: "device-1",
         role: "operator",
         scopes: ["operator.admin"],
-        baseDir,
       }),
     ).resolves.toBeNull();
   });
@@ -860,7 +859,6 @@ describe("device pairing tokens", () => {
         deviceId: "device-1",
         role: "operator",
         scopes: ["operator.admin"],
-        baseDir,
       };
       const result =
         operation === "verification"

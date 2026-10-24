@@ -169,7 +169,7 @@ it.each([undefined, "quick", "full"] as const)(
         .map(([sql]) => sql)
         .filter((sql) => /^PRAGMA (?:quick_check|integrity_check|foreign_key_check)\b/u.test(sql)),
     ).toEqual([
-      integrityCheck === "quick" ? "PRAGMA quick_check;" : "PRAGMA integrity_check;",
+      `PRAGMA ${integrityCheck === "quick" ? "quick" : "integrity"}_check(2147483647);`,
       "PRAGMA foreign_key_check;",
     ]);
     using retained = new DatabaseSync(backup.databases[0]!.snapshotPath, { readOnly: true });

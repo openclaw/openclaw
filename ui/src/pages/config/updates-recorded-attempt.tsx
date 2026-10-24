@@ -7,8 +7,11 @@ import {
 import type { UpdateFailureReportNotice } from "../../app/overlays-types.ts";
 import { SettingsRow, SettingsSection } from "../../components/solid/settings-ui.tsx";
 import { UpdateRunView } from "../../components/update-run-view.tsx";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerUpdateActionsEnglish } from "../../i18n/locales/en-update-actions.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import type { UpdatesCommandPresentation, UpdatesViewProps } from "./updates-types.ts";
+
+registerEnglishCatalog(registerUpdateActionsEnglish);
 
 export function RecordedAttempt(
   props: UpdatesViewProps & { confirming: boolean; checking: boolean },

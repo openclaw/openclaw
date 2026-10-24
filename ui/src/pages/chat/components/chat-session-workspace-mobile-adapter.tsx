@@ -21,125 +21,6 @@ registerEnglishCatalog(registerChatSessionEnglish);
 
 type File = SessionWorkspaceListResult["files"][number];
 
-/** Mobile keeps native groups; desktop's tree is a different presentation of the same owner. */
-type MobileWorkspaceProjection = Pick<
-  SessionWorkspaceProps,
-  | "transcriptAttachments"
-  | "list"
-  | "sessionKey"
-  | "browserPath"
-  | "browserSearch"
-  | "filter"
-  | "connected"
-  | "mobileNavigation"
-  | "onRetry"
-> & { cachedBrowser?: SessionWorkspaceListResult["browser"] };
-
-function projectMobileWorkspace(workspace: MobileWorkspaceProjection): {
-  groups: SessionWorkspaceMobileGroup[];
-  status: SessionWorkspaceMobileStatus;
-} {
-  const list = workspace.list;
-  const query = workspace.browserSearch.trim().toLowerCase();
-  const path = workspace.browserPath;
-  const listed = list?.browser;
-  const browser = query
-    ? listed?.search?.trim().toLowerCase() === query
-      ? listed
-      : undefined
-    : listed && !listed.search && listed.path === path
-      ? listed
-      : workspace.cachedBrowser;
-  const matches = (...values: (string | undefined)[]) =>
-    !query || values.some((value) => value?.toLowerCase().includes(query));
-  const groups: SessionWorkspaceMobileGroup[] = [];
-  const expanded = workspace.mobileNavigation?.expandedGroups;
-  if (!path) {
-    for (const kind of ["changed", "read"] as const) {
-      if (workspace.filter !== "all" && workspace.filter !== kind) {
-        continue;
-      }
-      const files = new Map<string, File>();
-      for (const file of list?.files ?? []) {
-        if (
-          file.kind !== (kind === "changed" ? "modified" : "read") ||
-          !matches(file.path, file.workspacePath, file.name)
-        ) {
-          continue;
-        }
-        const key =
-          file.workspacePath === undefined
-            ? `file:${file.path}`
-            : sessionWorkspaceFileKey(workspace.sessionKey, list?.root, file.workspacePath);
-        if (!files.has(key)) {
-          files.set(key, file);
-        }
-      }
-      if (files.size) {
-        groups.push({
-          kind,
-          files: [...files.values()],
-          expanded: expanded?.[kind] ?? kind === "changed",
-        });
-      }
-    }
-    const artifacts = list?.artifacts?.filter((artifact) => matches(artifact.title)) ?? [];
-    if (artifacts.length && (workspace.filter === "all" || workspace.filter === "artifacts")) {
-      groups.push({ kind: "artifacts", artifacts, expanded: expanded?.artifacts ?? false });
-    }
-  }
-  if (browser && (path || workspace.filter === "all")) {
-    // Native search is bounded and global. Restrict real results to this folder;
-    // retain its truncation warning instead of claiming a complete subtree search.
-    const entries =
-      path && query
-        ? browser.entries.filter((entry) => entry.path.startsWith(`${path}/`))
-        : browser.entries;
-    if (entries.length || browser.truncated) {
-      groups.push({
-        kind: "workspace",
-        entries,
-        truncated: browser.truncated === true,
-        expanded: expanded?.workspace ?? true,
-      });
-    }
-  }
-  let status: SessionWorkspaceMobileStatus;
-  if (workspace.connected === false && !list) {
-    status = {
-      kind: "unavailable",
-      message: t("chat.workspaceFiles.mobile.disconnected"),
-      onRetry: workspace.onRetry,
-    };
-  } else if (!list || (!browser && listed && query)) {
-    status = { kind: "loading" };
-  } else if (
-    groups.length ||
-    (!path &&
-      workspace.filter === "all" &&
-      hasTranscriptAttachments(workspace.transcriptAttachments, query))
-  ) {
-    status = { kind: "ready", refreshing: false };
-  } else if (!browser && (path || workspace.filter === "all")) {
-    status = {
-      kind: "unavailable",
-      message: t(
-        path ? "chat.workspaceFiles.folderUnavailable" : "chat.workspaceFiles.mobile.unavailable",
-      ),
-      onRetry: workspace.onRetry,
-    };
-  } else {
-    status = {
-      kind: "empty",
-      heading: t("chat.sidePanel.files"),
-      description: t(
-        query ? "chat.workspaceFiles.noSearchResults" : "chat.workspaceFiles.mobile.empty",
-      ),
-    };
-  }
-  return { groups, status };
-}
-
 export function MobileWorkspaceContents(props: {
   workspace: SessionWorkspaceProps & Pick<SessionWorkspaceMobileProps, "onScrollPortRef">;
 }) {
@@ -161,8 +42,9 @@ export function MobileWorkspaceContents(props: {
     workspace: createMemo(() => props.workspace.mobileNavigation?.expandedGroups.workspace ?? true),
   };
   const onRetry = () => props.workspace.onRetry?.();
-  const model = createMemo(() =>
-    projectMobileWorkspace({
+  /** Mobile keeps native groups; desktop's tree is a different presentation of the same owner. */
+  const model = createMemo(() => {
+    const workspace = {
       sessionKey: sessionKey(),
       list: list(),
       transcriptAttachments: attachments(),
@@ -181,8 +63,114 @@ export function MobileWorkspaceContents(props: {
         },
         scrollTop: 0,
       },
-    }),
-  );
+    };
+    const workspaceList = workspace.list;
+    const searchQuery = workspace.browserSearch.trim().toLowerCase();
+    const browserPath = workspace.browserPath;
+    const listed = workspaceList?.browser;
+    const browser = searchQuery
+      ? listed?.search?.trim().toLowerCase() === searchQuery
+        ? listed
+        : undefined
+      : listed && !listed.search && listed.path === browserPath
+        ? listed
+        : workspace.cachedBrowser;
+    const matches = (...values: (string | undefined)[]) =>
+      !searchQuery || values.some((value) => value?.toLowerCase().includes(searchQuery));
+    const groups: SessionWorkspaceMobileGroup[] = [];
+    const expandedGroups = workspace.mobileNavigation?.expandedGroups;
+    if (!browserPath) {
+      for (const kind of ["changed", "read"] as const) {
+        if (workspace.filter !== "all" && workspace.filter !== kind) {
+          continue;
+        }
+        const files = new Map<string, File>();
+        for (const file of workspaceList?.files ?? []) {
+          if (
+            file.kind !== (kind === "changed" ? "modified" : "read") ||
+            !matches(file.path, file.workspacePath, file.name)
+          ) {
+            continue;
+          }
+          const key =
+            file.workspacePath === undefined
+              ? `file:${file.path}`
+              : sessionWorkspaceFileKey(
+                  workspace.sessionKey,
+                  workspaceList?.root,
+                  file.workspacePath,
+                );
+          if (!files.has(key)) {
+            files.set(key, file);
+          }
+        }
+        if (files.size) {
+          groups.push({
+            kind,
+            files: [...files.values()],
+            expanded: expandedGroups?.[kind] ?? kind === "changed",
+          });
+        }
+      }
+      const artifacts =
+        workspaceList?.artifacts?.filter((artifact) => matches(artifact.title)) ?? [];
+      if (artifacts.length && (workspace.filter === "all" || workspace.filter === "artifacts")) {
+        groups.push({ kind: "artifacts", artifacts, expanded: expandedGroups?.artifacts ?? false });
+      }
+    }
+    if (browser && (browserPath || workspace.filter === "all")) {
+      // Native search is bounded and global. Restrict real results to this folder;
+      // retain its truncation warning instead of claiming a complete subtree search.
+      const entries =
+        browserPath && searchQuery
+          ? browser.entries.filter((entry) => entry.path.startsWith(`${browserPath}/`))
+          : browser.entries;
+      if (entries.length || browser.truncated) {
+        groups.push({
+          kind: "workspace",
+          entries,
+          truncated: browser.truncated === true,
+          expanded: expandedGroups?.workspace ?? true,
+        });
+      }
+    }
+    let status: SessionWorkspaceMobileStatus;
+    if (workspace.connected === false && !workspaceList) {
+      status = {
+        kind: "unavailable",
+        message: t("chat.workspaceFiles.mobile.disconnected"),
+        onRetry: workspace.onRetry,
+      };
+    } else if (!workspaceList || (!browser && listed && searchQuery)) {
+      status = { kind: "loading" };
+    } else if (
+      groups.length ||
+      (!browserPath &&
+        workspace.filter === "all" &&
+        hasTranscriptAttachments(workspace.transcriptAttachments, searchQuery))
+    ) {
+      status = { kind: "ready", refreshing: false };
+    } else if (!browser && (browserPath || workspace.filter === "all")) {
+      status = {
+        kind: "unavailable",
+        message: t(
+          browserPath
+            ? "chat.workspaceFiles.folderUnavailable"
+            : "chat.workspaceFiles.mobile.unavailable",
+        ),
+        onRetry: workspace.onRetry,
+      };
+    } else {
+      status = {
+        kind: "empty",
+        heading: t("chat.sidePanel.files"),
+        description: t(
+          searchQuery ? "chat.workspaceFiles.noSearchResults" : "chat.workspaceFiles.mobile.empty",
+        ),
+      };
+    }
+    return { groups, status };
+  });
   const onBrowsePath = (next: string) => props.workspace.onBrowsePath(next);
   const onBack = () => onBrowsePath(path().slice(0, Math.max(0, path().lastIndexOf("/"))));
   const location = createMemo<SessionWorkspaceMobileLocation>(() => {

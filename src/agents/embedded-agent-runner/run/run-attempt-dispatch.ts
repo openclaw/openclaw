@@ -322,12 +322,10 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
   // Resolve after the last fallible preparation so the attempt's finally owns the leases.
   const { memoryAudience, release: releaseMemoryAudience } =
     await resolveEmbeddedAttemptMemoryAudience({
-      memoryAudience: params.memoryAudience,
-      config: params.config,
+      run: params,
       agentId: workspaceResolution.agentId,
       sessionKey: resolvedSessionKey,
       sessionId,
-      senderIsOwner: params.senderIsOwner,
       admission: runInput.sessionAdmission,
       assertCallerCurrent: assertActiveRun,
     });
@@ -385,7 +383,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     pluginRuntimeRefreshMessages: params.pluginRuntimeRefreshMessages,
     continuation: sessionPromptState.continuation,
     runCleanupSettlement: params.runCleanupSettlement,
-    executionSelection: params.executionSelection,
+    joinObservation: params.joinObservation,
     permissionChange: input.permissionChange,
     admittedRunContext: params.admittedRunContext,
     startedAtMs: runInput.startedAtMs,

@@ -387,6 +387,43 @@ describe("read tool", () => {
     );
   });
 
+  it("renders sanitized text and a visible fallback when inline images are hidden", () => {
+    const tool = createReadToolDefinition("/workspace");
+    const component = tool.renderResult?.(
+      {
+        content: [
+          { type: "text", text: "alpha\u0000\r\n" },
+          { type: "image", data: ONE_PIXEL_PNG_BASE64, mimeType: "image/png" },
+          { type: "text", text: "beta\tend" },
+        ],
+        details: { kind: "text", content: "alpha\u0000\r\n\nbeta\tend" },
+      },
+      { expanded: true, isPartial: false },
+      plainTheme,
+      {
+        args: { path: "notes.txt" },
+        toolCallId: "read-render",
+        invalidate: () => {},
+        lastComponent: undefined,
+        state: {},
+        cwd: "/workspace",
+        executionStarted: true,
+        argsComplete: true,
+        isPartial: false,
+        expanded: true,
+        showImages: false,
+        isError: false,
+      },
+    );
+    expect(
+      component
+        ?.render(120)
+        .map((line) => line.trimEnd())
+        .join("\n")
+        .trim(),
+    ).toBe("alpha\\x00\n\nbeta   end\n[Image: [image/png] 1x1]");
+  });
+
   it("rejects offset zero before accessing the file", async () => {
     const access = vi.fn(async () => {});
     const detectImageMimeType = vi.fn(async () => null);

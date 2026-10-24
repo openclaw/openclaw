@@ -163,11 +163,8 @@ export function providerSupportsNativePdfDocument(params: {
   providerId: string;
   cfg?: OpenClawConfig;
   workspaceDir?: string;
-  providerRegistry?: Map<string, MediaUnderstandingProvider>;
 }): boolean {
-  const registry =
-    params.providerRegistry ??
-    buildMediaUnderstandingManifestMetadataRegistry(params.cfg, params.workspaceDir);
+  const registry = buildMediaUnderstandingManifestMetadataRegistry(params.cfg, params.workspaceDir);
   const provider = registry.get(normalizeMediaProviderId(params.providerId));
   return provider?.nativeDocumentInputs?.includes("pdf") ?? false;
 }

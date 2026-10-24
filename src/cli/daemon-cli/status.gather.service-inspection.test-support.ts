@@ -31,6 +31,10 @@ export function createStatusCommand() {
 
 export function registerServiceInspectionStatusTests(params: {
   serviceFixture: { useSystemdCommand: boolean };
+  setDaemonConfig: (config: Record<string, unknown>) => void;
+  resolveGatewayBindHost: {
+    mockImplementationOnce(implementation: () => Promise<string>): unknown;
+  };
   setCliConfig: (config: Record<string, unknown>) => void;
   isGatewayExternallySupervised: { mockReturnValue(value: boolean): unknown };
   findSystemdGatewayInstallation: { mockRejectedValueOnce(error: unknown): unknown };
@@ -60,6 +64,28 @@ export function registerServiceInspectionStatusTests(params: {
     inspectGatewayRestart,
     gatherStatus,
   } = params;
+
+  it("uses fallback network details when interface discovery throws during status inspection", async () => {
+    params.setDaemonConfig({
+      gateway: {
+        bind: "tailnet",
+        tls: { enabled: true },
+        auth: { token: "daemon-token" },
+      },
+    });
+    params.resolveGatewayBindHost.mockImplementationOnce(async () => {
+      throw new Error("uv_interface_addresses failed");
+    });
+
+    const status = await gatherStatus();
+
+    expect(status.gateway?.bindMode).toBe("tailnet");
+    expect(status.gateway?.bindHost).toBe("127.0.0.1");
+    expect(status.gateway?.probeUrl).toBe("wss://127.0.0.1:19001");
+    expect(status.gateway?.probeNote).toBe(
+      "Status is using fallback network details because interface discovery failed: uv_interface_addresses failed.",
+    );
+  });
 
   it("keeps registered gateway status available after systemd discovery fails", async () => {
     serviceFixture.useSystemdCommand = true;

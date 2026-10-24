@@ -7,7 +7,6 @@ import { GatewayTransportError } from "../gateway/transport-error.js";
 import type { HookStatusEntry, HookStatusReport } from "../hooks/hooks-status.js";
 import { makeHookStatusEntry } from "./cli-fixtures.test-support.js";
 import { ExpectedCliError } from "./failure-output.js";
-import { createCliRuntimeCapture } from "./test-runtime-capture.js";
 
 const mocks = vi.hoisted(() => ({
   foreignOwner: false,
@@ -45,7 +44,10 @@ vi.mock("../state/openclaw-state-db-async-lifecycle.js", async (importOriginal) 
   }),
 }));
 
-const capture = createCliRuntimeCapture();
+const capture = await vi.hoisted(async () => {
+  const { createCliRuntimeCapture } = await import("./test-runtime-capture.js");
+  return createCliRuntimeCapture();
+});
 const readConfigMachineStateMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../state/config-machine-state.js", () => ({
@@ -452,6 +454,23 @@ describe("hooks CLI metadata config keys", () => {
     expect(mocks.buildWorkspaceHookStatus).not.toHaveBeenCalled();
     expect(capture.defaultRuntime.writeStdout).not.toHaveBeenCalled();
     expect(mocks.requestExitAfterOneShotOutput).not.toHaveBeenCalled();
+  });
+
+  it("keeps multi-line remote failures on separate human lines without controls", async () => {
+    mocks.getRuntimeConfig.mockReturnValue({ ...sourceConfig, gateway: { mode: "remote" } });
+    const message = [
+      "gateway remote mode misconfigured: gateway.remote.url missing",
+      "Fix: set gateway.remote.url\u001b]0;untrusted-title\u0007",
+    ].join("\n");
+    mocks.callGateway.mockRejectedValue(new Error(message));
+
+    await expect(runHooks("list", "--json")).rejects.toMatchObject({
+      humanOutput: [
+        "Error: gateway remote mode misconfigured: gateway.remote.url missing",
+        "Fix: set gateway.remote.url",
+      ].join("\n"),
+      machineOutput: message,
+    });
   });
 
   it.each([

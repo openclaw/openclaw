@@ -487,7 +487,7 @@ function makeDecryptFixture(cryptoApi: unknown = {}) {
   const emitMessage = vi.fn();
   const emitFailedDecryption = vi.fn();
   const bridge = new MatrixDecryptBridge({
-    client: { getCrypto: () => cryptoApi },
+    client: { getCrypto: () => cryptoApi, decryptEventIfNeeded: vi.fn(async () => {}) },
     toRaw: (event) => ({ event_id: event.getId() ?? "" }),
     emitDecryptedEvent: vi.fn(),
     emitMessage,

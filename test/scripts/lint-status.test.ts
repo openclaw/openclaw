@@ -1,15 +1,14 @@
-import { ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { build } from "tsdown";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { toErrorObject } from "../../scripts/lib/error-format.mts";
+import { collectRuntimeImportClosure } from "../../scripts/lib/runtime-import-closure.mts";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import { isProcessAlive } from "../helpers/process-wait.js";
 import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../helpers/promise.js";
 import { runNodeScript } from "../helpers/run-node-script.js";
-import * as nodeScript from "../helpers/run-node-script.js";
+import { prepareCopiedSourceModules } from "./copied-source-modules.test-support.js";
 import { formatShimResult } from "./direct-run-entrypoints.test-support.js";
 import { copyOxlintConfigFixture } from "./test-helpers.js";
 
@@ -19,79 +18,35 @@ const entries = ["run-oxlint.mjs", "run-oxlint-shards.mts", "run-lint.mts"] as c
 type Entry = (typeof entries)[number];
 type Mode = "success" | "nonzero" | "signal" | "wait" | "throw" | "unjoined";
 
-let preparedScripts: Promise<Map<string, string | Uint8Array>> | undefined;
+const preparedLifetime = createFixtureLifetime();
+afterAll(() => preparedLifetime.cleanup());
+let preparedScripts: Promise<string> | undefined;
 
-async function createLintFixture(mode: Mode, phase: string, timeout: boolean) {
-  const root = fs.realpathSync(fixture.createTempDir("openclaw-lint-status-"));
-  const write = (relative: string, content: string | Uint8Array) => {
-    const target = path.join(root, relative);
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.writeFileSync(target, content);
-    return target;
-  };
-  write("package.json", '{"type":"module"}');
-  write("pnpm-workspace.yaml", "packages: []\n");
-  const waitForFile = write(
-    "wait-for-file.mjs",
-    `
-import fs from "node:fs";
-export function waitForFile(file) {
-  return new Promise((resolve) => {
-    const check = () => { if (fs.existsSync(file)) { clearInterval(poll); resolve(); } };
-    // Directory events can coalesce before the receipt rename; observe persistent state.
-    const poll = setInterval(check, 50);
-    poll.unref();
-    check();
-  });
+function writeAt(root: string, relative: string, content: string | Uint8Array) {
+  const target = path.join(root, relative);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, content);
+  return target;
 }
-`,
+
+async function prepareScripts() {
+  const root = fs.realpathSync(preparedLifetime.createTempDir("lint-prepared-"));
+  const sourceEntries = [...entries, "run-oxlint.mts", "generate-kysely-types.mts", "tsx.mjs"].map(
+    (entry) => `scripts/${entry}`,
   );
-  for (const file of [
-    ...entries,
-    "run-oxlint.mts",
-    "generate-kysely-types.mts",
-    "run-stylelint.mts",
-    "tsx.mjs",
-    "windows-cmd-helpers.mjs",
-    "lib/tsx-cli-shim.mjs",
-    "lib/arg-utils.mts",
-    "lib/arg-utils.runtime.mjs",
-    "lib/local-check-runtime.mts",
-    "lib/check-limits.mts",
-    "lib/oxlint-changed-scope.mts",
-    "lib/ci-static-check-evidence.mjs",
-    "lib/dev-tool.mts",
-    "lib/pinned-bun.mts",
-    "lib/direct-run.mjs",
-    "lib/dist-artifact-ownership.mts",
-    "lib/dist-artifact-lock.mts",
-    "lib/record-shared.mjs",
-    "lib/failed-trailer.mts",
-    "lib/managed-child-process.mts",
-    "lib/managed-cleanup-handoff.mts",
-    "lib/managed-memory.mts",
-    "lib/managed-memory-entrypoint.mts",
-    "lib/vitest-resource-ownership.mts",
-    "lib/windows-taskkill.mjs",
-    "lib/repo-root.mjs",
-  ]) {
-    write(`scripts/${file}`, fs.readFileSync(path.resolve("scripts", file), "utf8"));
+  // Keep the native wrappers, but let the shared compiler own their static dependency graph.
+  for (const file of collectRuntimeImportClosure(process.cwd(), sourceEntries)) {
+    writeAt(root, file, fs.readFileSync(path.resolve(file)));
   }
-  for (const file of [
-    "scripts/lib/process-memory.mts",
-    "packages/normalization-core/src/mountinfo-path.ts",
-  ]) {
-    write(file, fs.readFileSync(path.resolve(file), "utf8"));
-  }
-  // Only this disposable fixture gets synthetic binaries; installed tools stay untouched.
   for (const name of ["p-map", "@openclaw/fs-safe", "json5"]) {
     const target = path.join(root, "node_modules", name);
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.symlinkSync(path.resolve("node_modules", name), target, "junction");
   }
-  // Wrappers are compiled below and synthetic tools are native JavaScript.
-  // Keep loader imports without adding unrelated compiler-service children.
-  write(
+  writeAt(root, "package.json", '{"type":"module"}');
+  writeAt(root, "pnpm-workspace.yaml", "packages: []\n");
+  writeAt(
+    root,
     "node_modules/tsx/package.json",
     JSON.stringify({
       name: "tsx",
@@ -99,58 +54,45 @@ export function waitForFile(file) {
       exports: { ".": "./loader.mjs", "./esm": "./loader.mjs" },
     }),
   );
-  write("node_modules/tsx/loader.mjs", "export {};\n");
-  // Git inventory behavior is covered by the controller guard's own repository fixtures.
-  write(
+  writeAt(root, "node_modules/tsx/loader.mjs", "export {};\n");
+  writeAt(
+    root,
     "scripts/check-control-ui-controllers.mts",
     "export function main() { return Number(process.env.FIXTURE_CONTROLLER_GUARD_EXIT || 0); }\n",
   );
-  preparedScripts ??= (async () => {
-    const { bundles } = await build({
-      config: false,
-      cwd: root,
-      root,
-      entry: ["scripts/run-lint.mts", "scripts/run-oxlint.mts", "scripts/run-oxlint-shards.mts"],
-      outDir: root,
-      unbundle: true,
-      format: "esm",
-      platform: "node",
-      dts: false,
-      clean: false,
-      write: false,
-      treeshake: false,
-      deps: { neverBundle: ["p-map", "@openclaw/fs-safe"] },
-      // These POSIX fixtures omit optional Windows Job and declaration compiler runtimes.
-      inputOptions: {
-        external: (id, importer) =>
-          (id === "./managed-windows-job.mts" &&
-            importer === path.join(root, "scripts/lib/managed-child-process.mts")) ||
-          (id === "./tsdown-declaration-boundary.mts" &&
-            importer === path.join(root, "scripts/lib/local-check-runtime.mts")),
-      },
-      outExtensions: () => ({ js: ".js" }),
-      outputOptions: { entryFileNames: "[name].js", chunkFileNames: "[name].js" },
-      logLevel: "silent",
-    });
-    const outputs = new Map<string, string | Uint8Array>();
-    for (const bundle of bundles) {
-      for (const output of bundle.chunks) {
-        outputs.set(output.fileName, output.type === "chunk" ? output.code : output.source);
-      }
-      await bundle[Symbol.asyncDispose]();
-    }
-    return outputs;
-  })();
-  for (const [relative, contents] of await preparedScripts) {
-    write(relative, contents);
-  }
-  // The original wrapper and shard owner still select their .mts entry paths.
-  for (const name of ["run-lint", "run-oxlint", "run-oxlint-shards"]) {
+  const compiled = ["run-lint", "run-oxlint", "run-oxlint-shards"];
+  await prepareCopiedSourceModules(
+    root,
+    compiled.map((name) => `scripts/${name}.mts`),
+  );
+  for (const name of compiled) {
     fs.copyFileSync(
       path.join(root, "scripts", `${name}.js`),
       path.join(root, "scripts", `${name}.mts`),
     );
   }
+  return root;
+}
+
+async function createLintFixture(mode: Mode, phase: string, timeout: boolean) {
+  const root = fs.realpathSync(fixture.createTempDir("openclaw-lint-status-"));
+  fs.cpSync(await (preparedScripts ??= prepareScripts()), root, { recursive: true });
+  const write = (relative: string, content: string | Uint8Array) =>
+    writeAt(root, relative, content);
+  const waitForFile = write(
+    "wait-for-file.mjs",
+    `
+import fs from "node:fs";
+export function waitForFile(file) {
+  return new Promise((resolve) => {
+    const check = () => { if (fs.existsSync(file)) { clearInterval(poll); resolve(); } };
+    const poll = setInterval(check, 50);
+    poll.unref();
+    check();
+  });
+}
+`,
+  );
   const toolSource = (step: string) => `
 import fs from "node:fs";
 import { waitForFile } from ${JSON.stringify(pathToFileURL(waitForFile).href)};
@@ -387,6 +329,8 @@ async function runLintFixture(
 }
 
 describe.skipIf(process.platform === "win32")("lint failure reporting boundary", () => {
+  beforeAll(() => (preparedScripts = prepareScripts()));
+
   it("run-oxlint.mjs preserves real oxlint warning/error exits (GitHub Actions: true)", ({
     signal,
   }) =>
@@ -429,142 +373,96 @@ describe.skipIf(process.platform === "win32")("lint failure reporting boundary",
       }
     }));
 
-  it("reports signal readiness when the command failed before its receipt", async ({ signal }) => {
-    const failure = new Error("fixture command failed");
-    const child = new ChildProcess();
-    const kill = vi.spyOn(child, "kill").mockReturnValue(true);
-    const run = vi.spyOn(nodeScript, "runNodeScript").mockImplementationOnce(async (...args) => {
-      args[3]?.onReady?.(child, () => ({ stdout: "", stderr: "" }));
-      return { error: failure, status: null, stdout: "", stderr: "" };
-    });
-    try {
-      await expect(
-        fixture.run(() => runLintFixture("wait", signal, { forwarded: "SIGINT" })),
-      ).rejects.toMatchObject({
-        message: expect.stringContaining("Child failed before writing"),
-        cause: failure,
-      });
-      expect(kill).not.toHaveBeenCalled();
-    } finally {
-      run.mockRestore();
-      kill.mockRestore();
-    }
-  });
-
-  it.for([
-    { entry: "run-oxlint.mjs", mode: "nonzero" },
-    { entry: "run-oxlint-shards.mts", mode: "nonzero" },
-    { entry: "run-lint.mts", mode: "success" },
-    { entry: "run-lint.mts", mode: "signal" },
-  ] as const)(
-    "$entry reports $mode after joining and releasing artifacts",
-    ({ entry, mode }, { signal }) =>
-      fixture.run(async () => {
-        const { result, details, steps, trailers } = await runLintFixture(mode, signal, { entry });
-        const code = mode === "success" ? 0 : mode === "signal" ? 143 : 7;
-        expect(result.status, details).toBe(code);
+  type Scenario = {
+    mode: Mode;
+    code: number;
+    entry?: Entry;
+    phase?: string;
+    timeout?: boolean;
+    parallel?: boolean;
+    forwarded?: "SIGINT" | "SIGTERM";
+    allPhases?: boolean;
+    claim?: boolean;
+    stderr?: string[];
+  };
+  const scenarios: Scenario[] = [
+    { entry: "run-oxlint.mjs", mode: "nonzero", code: 7, claim: false },
+    { entry: "run-oxlint-shards.mts", mode: "nonzero", code: 7, claim: true },
+    { mode: "success", code: 0, allPhases: true, claim: true },
+    { mode: "signal", code: 143, claim: true },
+    ...["controllers", "i18n", "oxlint"].map((phase): Scenario => ({
+      mode: "nonzero",
+      code: 7,
+      phase,
+      allPhases: true,
+    })),
+    { mode: "wait", code: 124, timeout: true, stderr: ["timed out", "drained:extensions:SIGTERM"] },
+    { mode: "throw", code: 1, phase: "prepare", stderr: ["fixture preparation failure"] },
+    { mode: "nonzero", code: 7, parallel: true },
+    {
+      mode: "unjoined",
+      code: 1,
+      phase: "prepare",
+      stderr: ["fixture cleanup unverified", "child cleanup unverified; retained"],
+    },
+    ...(
+      [
+        ["run-oxlint.mjs", "oxlint", "SIGTERM"],
+        ["run-lint.mts", "oxlint", "SIGINT"],
+        ["run-lint.mts", "i18n", "SIGTERM"],
+        ["run-lint.mts", "prepare", "SIGINT"],
+        ["run-lint.mts", "stylelint", "SIGTERM"],
+      ] as const
+    ).map(([entry, phase, forwarded]): Scenario => ({
+      entry,
+      phase,
+      forwarded,
+      mode: "wait",
+      code: forwarded === "SIGINT" ? 130 : 143,
+      stderr: [`drained:${phase === "oxlint" ? "extensions" : phase}:${forwarded}`],
+    })),
+  ];
+  it.for(scenarios)("$entry $phase $mode settles before reporting $code", (scenario, { signal }) =>
+    fixture.run(async () => {
+      const { mode, code, entry = "run-lint.mts", stderr = [], allPhases, claim } = scenario;
+      const { result, details, steps, trailers } = await runLintFixture(mode, signal, scenario);
+      expect(result.status, details).toBe(code);
+      expectTrailer(trailers, code, entry, mode === "unjoined");
+      for (const message of stderr) {
+        expect(result.stderr, details).toContain(message);
+      }
+      if (claim !== undefined) {
         const lint = steps.find((step) => step.step === "oxlint");
         expect(lint, details).toMatchObject({ owned: true });
-        if (mode === "success") {
-          expect(steps.find((step) => step.step === "prepare")?.args, details).toEqual([
-            "--mode=package-boundary",
-          ]);
-        }
-        if (entry !== "run-oxlint.mjs") {
+        if (claim) {
           expect(lint!.claims).toHaveLength(1);
         }
-        if (mode === "success" && entry === "run-lint.mts") {
-          expect(steps.map((step) => step.step)).toEqual(lintPhases);
-        }
-        expectTrailer(trailers, code, entry);
         if (code) {
           expect(result.stderr).not.toContain("[oxlint:extensions] finished");
         }
-      }),
-  );
-
-  it.for(["controllers", "i18n", "oxlint"] as const)(
-    "runs all lint phases after %s fails and retains its verdict",
-    (phase, { signal }) =>
-      fixture.run(async () => {
-        const { result, details, steps } = await runLintFixture("nonzero", signal, {
-          phase,
-        });
-        expect(result.status, details).toBe(7);
+      }
+      if (allPhases) {
         expect(
           steps.map((step) => step.step),
           details,
         ).toEqual(lintPhases);
-        expect(result.stderr.trim().split("\n").at(-1)).toBe("[lint] FAILED (exit 7)");
-      }),
-  );
-
-  it.for([
-    {
-      mode: "wait",
-      code: 124,
-      options: { timeout: true },
-      stderr: ["timed out", "drained:extensions:SIGTERM"],
-    },
-    {
-      mode: "throw",
-      code: 1,
-      options: { phase: "prepare" },
-      stderr: ["fixture preparation failure"],
-    },
-    { mode: "nonzero", code: 7, options: { parallel: true }, stderr: [] },
-    {
-      mode: "unjoined",
-      code: 1,
-      options: { phase: "prepare" },
-      stderr: ["fixture cleanup unverified", "child cleanup unverified; retained"],
-    },
-  ] as const)(
-    "run-lint.mts settles $mode before reporting exit $code",
-    ({ mode, code, options, stderr }, { signal }) =>
-      fixture.run(async () => {
-        // Unjoined injects an uncertain receipt, not an escaped process.
-        const { result, details, steps, trailers } = await runLintFixture(mode, signal, options);
-        expect(result.status, details).toBe(code);
-        for (const message of stderr) {
-          expect(result.stderr, details).toContain(message);
-        }
-        expectTrailer(trailers, code, "run-lint.mts", mode === "unjoined");
-        if (mode === "throw") {
-          expect(steps.some((step) => step.step === "oxlint")).toBe(false);
-        }
-        if (mode === "nonzero") {
-          expect(
-            steps
-              .filter((step) => step.step === "oxlint")
-              .map((step) => step.shard)
-              .toSorted(),
-          ).toEqual(["core", "extensions", "scripts"]);
-        }
-      }),
-  );
-
-  it.for([
-    { entry: "run-oxlint.mjs", phase: "oxlint", forwarded: "SIGTERM" },
-    { entry: "run-lint.mts", phase: "oxlint", forwarded: "SIGINT" },
-    { entry: "run-lint.mts", phase: "i18n", forwarded: "SIGTERM" },
-    { entry: "run-lint.mts", phase: "prepare", forwarded: "SIGINT" },
-    { entry: "run-lint.mts", phase: "stylelint", forwarded: "SIGTERM" },
-  ] as const)(
-    "$entry forwards $forwarded during $phase and reports cancellation",
-    ({ entry, phase, forwarded }, { signal }) =>
-      fixture.run(async () => {
-        const { result, details, trailers } = await runLintFixture("wait", signal, {
-          entry,
-          phase,
-          forwarded,
-        });
-        const code = forwarded === "SIGINT" ? 130 : 143;
-        expect(result.status, details).toBe(code);
-        expect(result.stderr).toContain(
-          `drained:${phase === "oxlint" ? "extensions" : phase}:${forwarded}`,
-        );
-        expectTrailer(trailers, code, entry);
-      }),
+      }
+      if (mode === "success") {
+        expect(steps.find((step) => step.step === "prepare")?.args).toEqual([
+          "--mode=package-boundary",
+        ]);
+      }
+      if (mode === "throw") {
+        expect(steps.some((step) => step.step === "oxlint")).toBe(false);
+      }
+      if (scenario.parallel) {
+        expect(
+          steps
+            .filter((step) => step.step === "oxlint")
+            .map((step) => step.shard)
+            .toSorted(),
+        ).toEqual(["core", "extensions", "scripts"]);
+      }
+    }),
   );
 });

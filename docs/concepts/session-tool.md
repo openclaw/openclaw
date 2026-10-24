@@ -80,9 +80,10 @@ do not yield expecting one.
   succeeds but startup fails, `runError` reports the failure and the session remains
   available. Inspect that session before retrying creation.
 
-Creation is exposed only with live admitted `operator.sessions.write` authority.
-The existing `sessions` management tool does not create sessions, and senderless
-runs do not gain the separate creation capability. The default sandbox surface for an
+The `sessions_create` definition stays in the session's tool catalog across turns;
+execution requires live admitted `operator.sessions.write` authority. The existing
+`sessions` management tool does not create sessions, and senderless runs do not
+gain creation authority. The default sandbox surface for an
 admitted non-owner with session-write authority includes creation and renaming.
 Tool policy and execution-time authority checks still apply.
 
@@ -532,6 +533,21 @@ cross-agent access or use `allow` to restrict permitted agent pairs; requester-o
 access, or `tree` for current plus spawned scope; its primary main-session
 exception still covers all same-agent sessions. Set `self` for strict
 current-session access, including main.
+
+A retained native child keeps its verified parent relationship after its run
+finishes, including beyond the 30-minute recent-run display window. Under `tree`,
+that relationship supports listing, history, transcript search, status, and
+follow-up messages without making unrelated sessions visible. Recency filters and
+active-run status remain separate from this durable relationship. Archiving still
+hides a child from ordinary lists; it does not erase its parent relationship.
+
+Current execution control is not inherited from old run records. A parent cannot
+steer, resume, or continue a child controlled by another active session. Modern
+explicit parent lineage remains readable during that work; a legacy
+`spawnedBy`-only link yields to the verified active controller. When that work
+ends, the retained parent can continue the child under its current authority.
+Incognito, sharing revocation, sandbox, agent-policy, and exact-session identity
+checks still apply. Watching requires status visibility independently of send access.
 
 These scopes remain the read and control boundary. An explicit per-agent
 `tools.agentToAgent.send` match can permit only cross-agent sends under `self`,

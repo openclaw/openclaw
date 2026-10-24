@@ -37,7 +37,7 @@ it("does not advertise hidden Lobsterdex choices while retaining the rest of tab
   setCurrentThemeBranding(resolveThemeBranding({ lobsterdex: true }));
   expect(search("Lobsterdex")).toContainEqual(expect.objectContaining({ routeId: "appearance" }));
 });
-it("loads Settings English only when cold search opens, before the config page", async () => {
+it("keeps target metadata cold and loads Settings English when search opens", async () => {
   const testApiKey = Symbol.for("openclaw.i18nManagerTestApi");
   const previousTestApi = Object.getOwnPropertyDescriptor(globalThis, testApiKey);
   vi.resetModules();
@@ -57,6 +57,7 @@ it("loads Settings English only when cold search opens, before the config page",
     "modelProviders.title",
   ];
   try {
+    await import("./settings-targets.ts");
     for (const key of lazyKeys) {
       expect(runtime.t(key), key).toBe(key);
     }
@@ -64,6 +65,16 @@ it("loads Settings English only when cold search opens, before the config page",
     const find = (query: string) => coldSearch({ query, schema: null, value: null, uiHints: {} });
 
     expectBlocks(find("check for updates"), { routeId: "updates", label: "Updates" });
+    expectBlocks(
+      coldSearch({
+        query: "attribution",
+        schema: null,
+        value: null,
+        uiHints: {},
+        identityAvailable: true,
+      }),
+      { routeId: "profile", hash: "#settings-profile-identity" },
+    );
     expectBlocks(find("collapse task progress"), { routeId: "appearance", label: "Chat" });
     expect(en.configView).toBe(configView);
     expect(en.updates).toBe(updates);

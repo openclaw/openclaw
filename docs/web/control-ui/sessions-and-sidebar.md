@@ -118,9 +118,12 @@ when hover or keyboard focus reveals pin and archive actions.
 
 The owner filter is the only control for this selection. Its saved value belongs
 to the current Gateway and your profile in this browser. A signed-in profile
-without a saved choice starts with **My sessions**. Before a profile is identified,
+without a saved choice starts with **My sessions**, except guests: a role that can
+only view other people's sessions and has no general read access (the role
+[Visitor Access](/gateway/team-server#invite-guests) requires) starts with **Involving me**.
+A saved choice always wins. Before a profile is identified,
 or when the connection has no durable profile, the list shows **All owners**.
-Identifying the profile restores its saved choice or the **My sessions** default.
+Identifying the profile restores its saved choice or the default for that role.
 During reconnection, a known profile's title and filter stay in place until identity
 resolves or the connection changes.
 The filtered session list loads before custom group metadata, so a slow group
@@ -608,7 +611,9 @@ If an owner assignment fails on the Sessions page, the page keeps the session an
 shows the Gateway's error. Resolve the reported problem, then reopen **Assign to**
 to retry. A late failure from a previous connection does not replace the current page's state.
 The **Assign to** menu marks the session's current owner and disables that choice,
-including while the team directory is loading or unavailable.
+including while the team directory is loading or unavailable. Once its submenu is open,
+typing filters people and agents without first clicking the search field. Escape clears
+the search; Arrow Down and Enter let you select a matching owner.
 
 ### Share a session publicly
 

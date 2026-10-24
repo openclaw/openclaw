@@ -4,7 +4,7 @@
   "description": "OpenClaw Signal channel plugin",
   "type": "module",
   "dependencies": {
-    "@openclaw/fs-safe": "0.26.8",
+    "@openclaw/fs-safe": "0.26.13",
     "zod": "4.6.7"
   },
   "devDependencies": {

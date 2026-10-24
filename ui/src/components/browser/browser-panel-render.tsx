@@ -1,6 +1,6 @@
 import { createMemo } from "@solidjs/signals";
 import type { JSX } from "@solidjs/web";
-import { Match, onSettled, Switch } from "solid-js";
+import { For, Match, onSettled, Switch } from "solid-js";
 import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
@@ -71,22 +71,18 @@ function AnnotateBar(props: ControllerProps) {
   return (
     <div class="bp-annotatebar">
       <span class="bp-annotatebar__hint">{t("browser.annotateHint")}</span>
-      <button
-        class="bp-btn"
-        type="button"
-        disabled={props.controller.strokes.length === 0}
-        onClick={() => props.controller.input.undoStroke()}
-      >
-        {t("browser.annotateUndo")}
-      </button>
-      <button
-        class="bp-btn"
-        type="button"
-        disabled={props.controller.strokes.length === 0}
-        onClick={() => props.controller.input.clearStrokes()}
-      >
-        {t("browser.annotateClear")}
-      </button>
+      <For each={["undoStroke", "clearStrokes"] as const}>
+        {(action) => (
+          <button
+            class="bp-btn"
+            type="button"
+            disabled={props.controller.strokes.length === 0}
+            onClick={() => props.controller.input[action]()}
+          >
+            {t(action === "undoStroke" ? "browser.annotateUndo" : "browser.annotateClear")}
+          </button>
+        )}
+      </For>
       <button
         class="bp-btn"
         type="button"
@@ -191,13 +187,13 @@ function ViewportContent(
       </Match>
       <Match when={props.emptyError}>
         <PanelEmptyState
-          presentation="desktop"
+          presentation={props.mobilePresentation ? "mobile" : "desktop"}
           icon={<Icon name="globe" />}
           heading={t("browser.loadFailed")}
           description={props.controller.errorText!}
           action={
             <button
-              class="bp-btn bp-empty-action"
+              class="btn"
               type="button"
               disabled={props.controller.loading}
               onClick={() => void props.controller.retryEmptyError()}
@@ -222,14 +218,14 @@ function ViewportContent(
         }
       >
         <PanelEmptyState
-          presentation={props.mobilePresentation ? undefined : "desktop"}
+          presentation={props.mobilePresentation ? "mobile" : "desktop"}
           icon={<Icon name="globe" />}
           heading={t("chat.sidePanel.browser")}
           description={t("browser.notRunning")}
           action={
             props.controller.host.fixedTab ? undefined : (
               <button
-                class={["bp-btn", { "bp-empty-action": !props.mobilePresentation }]}
+                class="btn"
                 type="button"
                 onClick={() => void props.controller.startBrowserNow()}
               >
@@ -246,7 +242,7 @@ function ViewportContent(
           </div>
         ) : (
           <PanelEmptyState
-            presentation="desktop"
+            presentation={props.mobilePresentation ? "mobile" : "desktop"}
             icon={<Icon name="globe" />}
             heading={t("chat.sidePanel.browser")}
             description={props.controller.unavailableTabText!}
@@ -254,11 +250,11 @@ function ViewportContent(
         )}
       </Match>
       <Match when={!props.controller.view && props.controller.loading}>
-        <PanelLoadingSkeleton variant="browser" label={t("browser.loading")} />
+        <PanelLoadingSkeleton variant="browser-viewport" label={t("browser.loading")} />
       </Match>
       <Match when={!props.controller.view}>
         <PanelEmptyState
-          presentation={props.mobilePresentation ? undefined : "desktop"}
+          presentation={props.mobilePresentation ? "mobile" : "desktop"}
           icon={<Icon name="globe" />}
           heading={t("chat.sidePanel.browser")}
           description={t("chat.sidePanel.browserEmpty")}

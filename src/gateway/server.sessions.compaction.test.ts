@@ -51,7 +51,7 @@ import {
   expectNoSessionQueueCleanup,
 } from "./test/server-sessions.test-helpers.js";
 import { loseSessionSignalAcknowledgement } from "./test/session-signal-failure.test-support.js";
-import { registerWorkerInferenceSessionControl } from "./worker-environments/inference-control-internal.js";
+import { createWorkerInferenceDrainService } from "./worker-environments/inference-control.test-helpers.js";
 // Load after the fixture mocks, during collection rather than the first RPC deadline.
 import "./server-methods/sessions-compact.js";
 
@@ -791,15 +791,13 @@ test("sessions.compact preserves summary-elided queued follow-up work", async ()
 test("sessions.compact refuses real compaction while a worker inference owns the session", async () => {
   const { storePath, sessionId } = await createCompactionSession("sess-compact-worker-inference");
   const hasSession = vi.fn((candidateSessionId: string) => candidateSessionId === sessionId);
-  const workerEnvironmentService = {};
-  registerWorkerInferenceSessionControl(workerEnvironmentService, {
-    hasSession,
-    reserveSessionDrain: () => {
+  const workerEnvironmentService = createWorkerInferenceDrainService(
+    () => {
       throw new Error("Compaction must reject active inference before draining");
     },
-    captureSessionCancellation: () => ({ runIds: [], cancel: async () => [] }),
-    resolveSessionTargetForRunId: () => undefined,
-  });
+    undefined,
+    hasSession,
+  );
   const runtimeConfig = {
     agents: { entries: { main: {} } },
     session: { store: storePath },

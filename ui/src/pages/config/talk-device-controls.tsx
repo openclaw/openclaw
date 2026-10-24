@@ -35,10 +35,8 @@ const voiceToggles = [
 ] as const;
 
 type VoiceToggle = (typeof voiceToggles)[number];
-type VoiceSetting = `voice.${VoiceToggle}` | "voice.microphone";
-type VoiceScope = { capability: NativeDeviceSettingsCapability; retired: Promise<void> };
 type VoiceControlProps = {
-  scope: VoiceScope;
+  scope: { capability: NativeDeviceSettingsCapability; retired: Promise<void> };
   snapshot: NativeDeviceSettingsSnapshot;
   isCurrent: () => boolean;
   presentationRetired: () => Promise<void>;
@@ -64,7 +62,7 @@ export function voiceControlErrorFallback(retry: () => void) {
 
 function createVoiceEdit<T extends boolean | string | null>(
   props: VoiceControlProps,
-  key: () => VoiceSetting,
+  key: () => `voice.${VoiceToggle}` | "voice.microphone",
   read: () => T,
 ) {
   const [value, setValue] = createOptimistic(read);

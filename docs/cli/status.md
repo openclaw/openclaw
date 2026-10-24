@@ -166,6 +166,23 @@ and the last update run, or run `openclaw update` again. `openclaw status --deep
 also fetches for that check; it does not change the ledger. See
 [Release channels](/install/development-channels#checking-current-status).
 
+## Recovery-copy disk usage
+
+The **Recovery copies (local)** row and JSON `recoveryCopies` report logical bytes
+and copy counts in `total` and `byKind.updateCaptures`, `doctorCaptures`, and
+`migrationOriginals`. Each contains `retirable`, `protected`, and
+`unmanifestedOrOrphan` counts and logical bytes. This is local to the CLI's selected
+state, even when its Gateway target is remote; it never deletes anything.
+
+The scan bounds filesystem entries, metadata bytes, and elapsed time. When any
+bound or unreadable input prevents a complete inventory, `incomplete: true`,
+`measurement: "partial"`, and `incompleteReasons` identify an estimate of observed
+bytes, not a full accounting. Eligibility that could not be checked remains
+protected. Large history databases are not copied just for status. Limits never
+make the command fail. Use `openclaw update cleanup --dry-run` for the detailed
+inventory and [explicit retirement](/cli/update/repair-and-recovery#explicitly-retire-an-unmanifested-original).
+Logical bytes do not measure physical blocks or guarantee reclaimed space.
+
 ## Status timing
 
 Use the existing diagnostic timeline to locate time spent outside Gateway RPCs:

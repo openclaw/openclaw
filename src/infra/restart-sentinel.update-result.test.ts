@@ -10,7 +10,11 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
-import { readRestartSentinel, writeRestartSentinel } from "./restart-sentinel.js";
+import {
+  formatRestartSentinelMessage,
+  readRestartSentinel,
+  writeRestartSentinel,
+} from "./restart-sentinel.js";
 import {
   buildControlPlaneUpdateRestartHealthPendingResult,
   isPendingControlPlaneUpdateRestartSentinel,
@@ -69,6 +73,17 @@ async function withRestartSentinelStateDir(run: () => Promise<void>): Promise<vo
 }
 
 describe("control-plane update restart sentinel", () => {
+  it("tells the heartbeat agent that stop-requiring repair needs an external terminal", () => {
+    const payload = buildUpdateRestartSentinelPayload({
+      result: { status: "error", reason: "doctor-failed", mode: "npm", steps: [], durationMs: 1 },
+      meta: { sessionKey: "agent:main:main" },
+    });
+    const message = formatRestartSentinelMessage(payload);
+    expect(message).toContain("openclaw update repair");
+    expect(message).toContain("terminal outside the Gateway process tree");
+    expect(message).toContain("Do not run this repair through the Gateway's exec tool");
+  });
+
   it.each([
     { status: "ok", reason: undefined, eligible: true },
     { status: "error", reason: "doctor-failed", eligible: false },

@@ -1066,26 +1066,6 @@ describe("gatherDaemonStatus", () => {
     },
   );
 
-  it("uses fallback network details when interface discovery throws during status inspection", async () => {
-    daemonLoadedConfig = {
-      gateway: {
-        bind: "tailnet",
-        tls: { enabled: true },
-        auth: { token: "daemon-token" },
-      },
-    };
-    resolveGatewayBindHost.mockImplementationOnce(async () => {
-      throw new Error("uv_interface_addresses failed");
-    });
-
-    const status = await gatherStatus();
-
-    expect(status.gateway?.bindMode).toBe("tailnet");
-    expect(status.gateway?.bindHost).toBe("127.0.0.1");
-    expect(status.gateway?.probeUrl).toBe("wss://127.0.0.1:19001");
-    expect(status.gateway?.probeNote).toContain("interface discovery failed");
-  });
-
   registerStatusTimeoutTests({
     gatherStatus,
     serviceIsLoaded,
@@ -1096,6 +1076,10 @@ describe("gatherDaemonStatus", () => {
   });
 
   registerServiceInspectionStatusTests({
+    setDaemonConfig: (config) => {
+      daemonLoadedConfig = config;
+    },
+    resolveGatewayBindHost,
     serviceFixture,
     setCliConfig: (config) => {
       cliLoadedConfig = config;

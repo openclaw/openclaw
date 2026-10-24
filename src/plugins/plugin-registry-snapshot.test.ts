@@ -4,6 +4,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveConfigWidePluginMetadataSnapshot } from "../config/io.plugin-metadata.js";
+import { captureRuntimeConfig } from "../config/runtime-source-projection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata.test-support.js";
 import type { PluginCandidate } from "./discovery.js";
@@ -972,7 +973,7 @@ it("checks shared persisted files once per fleet while discovering every workspa
   expect(fs.existsSync(shared.runtimeMarker)).toBe(false);
 });
 
-it("keeps persisted package plugins when file hashes match", async () => {
+it.each([false, true])("retains package source admissions (rebuilt: %s)", async (rebuilt) => {
   const { rootDir, stateDir, env, config } = configuredRegistry();
   writeRegistryPackagePlugin(rootDir);
   const index = loadInstalledPluginIndex({ config, env });
@@ -996,9 +997,26 @@ it("keeps persisted package plugins when file hashes match", async () => {
   };
   await writePersistedInstalledPluginIndex(index, { stateDir });
 
-  const result = loadPluginRegistrySnapshotWithMetadata({ config, env, stateDir });
+  if (rebuilt) {
+    const manifestPath = path.join(rootDir, "openclaw.plugin.json");
+    writeJson(manifestPath, {
+      ...JSON.parse(fs.readFileSync(manifestPath, "utf8")),
+      name: "Updated metadata",
+    });
+    clearPluginMetadataLifecycleCaches();
+  }
 
-  expect(result.source).toBe("persisted");
-  expect(result.diagnostics).toStrictEqual([]);
+  const result = loadPluginRegistrySnapshotWithMetadata({
+    config: captureRuntimeConfig(config),
+    env,
+    stateDir,
+  });
+
+  expect(result.source).toBe(rebuilt ? "derived" : "persisted");
+  if (rebuilt) {
+    expectDiagnosticsContainCode(result.diagnostics, "persisted-registry-stale-source");
+  } else {
+    expect(result.diagnostics).toStrictEqual([]);
+  }
   expect(result.snapshot.plugins[0]?.sourceAdmissions).toEqual(record.sourceAdmissions);
 });

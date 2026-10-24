@@ -6,7 +6,7 @@ import {
   resolveLifecyclePrimaryEntry,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
-import { loadTranscriptEventsFromDatabase } from "./session-accessor.sqlite-read.js";
+import { readTranscriptEventsFromDatabase } from "./session-accessor.sqlite-read.js";
 import type {
   RestartTombstoneRecoveryInput,
   RestartTombstoneRecoveryResult,
@@ -80,8 +80,11 @@ export function recoverRestartTombstoneInDatabase(
     return { result: { status: "conflict", reason: "target-exists" } };
   }
 
-  const sourceEvents = loadTranscriptEventsFromDatabase(database, source.sessionId);
-  const header = findSessionTranscriptHeader(sourceEvents);
+  const header = readTranscriptEventsFromDatabase(
+    database,
+    source.sessionId,
+    findSessionTranscriptHeader,
+  );
   if (!header) {
     return { result: { status: "conflict", reason: "transcript-missing" } };
   }
@@ -92,25 +95,31 @@ export function recoverRestartTombstoneInDatabase(
     sessionId: source.sessionId,
     sessionKey: normalizeStoreSessionKey(sourceTarget.canonicalKey),
   });
-  appendTranscriptEventsInTransaction(
-    database,
-    {
-      ...resolved,
-      sessionId: successorSessionId,
-      sessionKey: normalizeStoreSessionKey(successorTarget.canonicalKey),
-    },
-    [
+  readTranscriptEventsFromDatabase(database, source.sessionId, (sourceEvents) =>
+    appendTranscriptEventsInTransaction(
+      database,
       {
-        ...createSessionTranscriptHeader({
-          cwd: typeof header.cwd === "string" ? header.cwd : undefined,
-          sessionId: successorSessionId,
-          version: header.version ?? MIN_READABLE_SESSION_VERSION,
-        }),
-        parentSession,
+        ...resolved,
+        sessionId: successorSessionId,
+        sessionKey: normalizeStoreSessionKey(successorTarget.canonicalKey),
       },
-      ...sourceEvents.filter((event) => !(isRecord(event) && event.type === "session")),
-    ],
-    { scheduleProjectionReconcile: false },
+      (function* () {
+        yield {
+          ...createSessionTranscriptHeader({
+            cwd: typeof header.cwd === "string" ? header.cwd : undefined,
+            sessionId: successorSessionId,
+            version: header.version ?? MIN_READABLE_SESSION_VERSION,
+          }),
+          parentSession,
+        };
+        for (const event of sourceEvents) {
+          if (!(isRecord(event) && event.type === "session")) {
+            yield event;
+          }
+        }
+      })(),
+      { scheduleProjectionReconcile: false },
+    ),
   );
 
   const now = Date.now();

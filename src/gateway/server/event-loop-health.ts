@@ -43,23 +43,6 @@ export type GatewayEventLoopHealth = SchemaContract<Static<typeof GatewayEventLo
 
 type GatewayEventLoopHealthReason = GatewayEventLoopHealth["reasons"][number];
 
-type GatewayEventLoopHealthMonitor = {
-  snapshot: () => GatewayEventLoopHealth | undefined;
-  persistentDegradationSnapshot: () => GatewayEventLoopHealth | undefined;
-  reset: () => void;
-  stop: () => void;
-};
-
-type GatewayEventLoopHealthMonitorDeps = {
-  scheduler: GatewayScheduler;
-  isIdle?: () => boolean;
-};
-
-type GatewayEventLoopHealthMetrics = Pick<
-  GatewayEventLoopHealth,
-  "intervalMs" | "delayP99Ms" | "delayMaxMs" | "utilization" | "cpuCoreRatio"
->;
-
 function nanosecondsToMilliseconds(value: number): number {
   return roundMetric(value / 1_000_000, 1);
 }
@@ -128,7 +111,10 @@ function hostCpuUtilization(
 }
 
 function classifyGatewayEventLoopHealthReasons(
-  metrics: GatewayEventLoopHealthMetrics,
+  metrics: Pick<
+    GatewayEventLoopHealth,
+    "intervalMs" | "delayP99Ms" | "delayMaxMs" | "utilization" | "cpuCoreRatio"
+  >,
 ): GatewayEventLoopHealthReason[] {
   const reasons: GatewayEventLoopHealthReason[] = [];
 
@@ -160,9 +146,15 @@ function classifyGatewayEventLoopHealthReasons(
   return reasons;
 }
 
-export function createGatewayEventLoopHealthMonitor(
-  deps: GatewayEventLoopHealthMonitorDeps,
-): GatewayEventLoopHealthMonitor {
+export function createGatewayEventLoopHealthMonitor(deps: {
+  scheduler: GatewayScheduler;
+  isIdle?: () => boolean;
+}): {
+  snapshot: () => GatewayEventLoopHealth | undefined;
+  persistentDegradationSnapshot: () => GatewayEventLoopHealth | undefined;
+  reset: () => void;
+  stop: () => void;
+} {
   const { scheduler } = deps;
   const nowMs = performance.now.bind(performance);
   const readCpuUsage = process.cpuUsage.bind(process);

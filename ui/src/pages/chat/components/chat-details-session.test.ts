@@ -153,6 +153,46 @@ it("keeps immutable creator, mutable owner and participants distinct without cla
   expect(element.querySelector<HTMLDetailsElement>(".chat-details__participants")?.open).toBe(
     false,
   );
+  const replaceOwner = async (actor: NonNullable<GatewaySessionRow["owner"]>["actor"]) => {
+    element.props = {
+      ...element.props!,
+      selectedSession: { ...element.props!.selectedSession!, owner: { actor } },
+    };
+    await element.updateComplete;
+  };
+  for (const desktop of [false, true]) {
+    element.desktop = desktop;
+    element.props = {
+      ...element.props!,
+      desktopPresentation: desktop
+        ? { peopleLabel: "People", outputsLabel: "Outputs", subagentsWorkingLabel: "Working" }
+        : undefined,
+      desktopDisclosures: { expanded: { people: true }, onExpandedChange() {} },
+    };
+    await element.updateComplete;
+    const owners: NonNullable<GatewaySessionRow["owner"]>["actor"][] = [
+      { type: "human", id: "replacement", label: "Replacement owner" },
+      { type: "agent", id: "fallback-id" },
+      { type: "system" },
+    ];
+    for (const actor of owners) {
+      await replaceOwner(actor);
+      expect(element.querySelector(".chat-details__person")?.textContent).toBe(
+        `Owner${actor.label || actor.id || actor.type}`,
+      );
+      expect(element.querySelector(".chat-details__creator")?.textContent).toContain(
+        "Original creator",
+      );
+    }
+  }
+  await replaceOwner({
+    type: "human",
+    id: "projected",
+    label: "Projected owner",
+    identity: { type: "profile", id: "projected" },
+  });
+  expect(element.querySelector(".chat-details-people")?.textContent).toContain("Projected owner");
+  expect(element.querySelector(".chat-details__person")).toBeNull();
 });
 it("shows participant controls only while the session has participants", async () => {
   const element = await mount();

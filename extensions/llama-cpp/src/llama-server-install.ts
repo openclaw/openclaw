@@ -596,6 +596,14 @@ async function installLlamaServer(
       asset.executable,
     );
     const extractedRoot = path.dirname(extractedCommand);
+    const stageDependency = (dependency: LlamaServerDependency, index: number) =>
+      stageLlamaServerDependency({
+        dependency,
+        index,
+        extractDir,
+        extractedRoot,
+        options,
+      });
     const dependencies = asset.dependencies ?? [];
     const windowsRuntimeDependencies: Array<{
       dependency: LlamaServerDependency;
@@ -605,13 +613,7 @@ async function installLlamaServer(
       if (dependency.archive === "vc-redist") {
         windowsRuntimeDependencies.push({ dependency, index });
       } else {
-        await stageLlamaServerDependency({
-          dependency,
-          index,
-          extractDir,
-          extractedRoot,
-          options,
-        });
+        await stageDependency(dependency, index);
       }
     }
     options.signal?.throwIfAborted();
@@ -624,13 +626,7 @@ async function installLlamaServer(
         options.signal?.throwIfAborted();
         try {
           for (const { dependency, index } of windowsRuntimeDependencies) {
-            await stageLlamaServerDependency({
-              dependency,
-              index,
-              extractDir,
-              extractedRoot,
-              options,
-            });
+            await stageDependency(dependency, index);
           }
         } catch (stagingError) {
           options.signal?.throwIfAborted();

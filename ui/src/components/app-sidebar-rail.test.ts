@@ -169,7 +169,7 @@ describe("personal navigation rail", () => {
       [false, false],
     );
     await click(sidebar, '[data-navigation-view="pages"]');
-    expect(dom.query(".sidebar-pages")).not.toBeNull();
+    await waitForSolid(() => expect(dom.query(".sidebar-pages")).not.toBeNull());
     expect(dom.query(".sidebar-session-content")).toBeNull();
     expect(dom.query("aside.sidebar")).toBe(frame);
     expect(dom.query(".sidebar-rail__bottom")).toBe(bottom);

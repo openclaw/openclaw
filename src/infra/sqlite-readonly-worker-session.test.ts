@@ -149,6 +149,14 @@ it("does not mark a runnable runtime unavailable after an ordinary worker abort"
   expect(readChildRuntimeViability().available).toBe(true);
 });
 
+it("leaves inspection budgeting to the caller that owns the deadline", async () => {
+  const { session, child, readBudget } = createSession();
+  const result = session.run("/fixture/caller-owned.sqlite", { mode: "staging-create" });
+  reply(child, { ok: true, location: "/fixture/staged" });
+  await expect(result).resolves.toBe("/fixture/staged");
+  expect(readBudget).not.toHaveBeenCalled();
+});
+
 it("reuses its child after a well-formed staging refusal", async () => {
   const mode = "staging-create";
   const { session, child } = createSession();

@@ -77,13 +77,7 @@ function findTextCheckpoint(
       (!inFence && !state.fenceChar && /\[|^ {0,3}=+[ \t]*\r?\n$/.test(line))
     ) {
       const ownership = resolveOwnership(text);
-      // Normalization can expand a label beyond CommonMark's 999-character source limit.
-      // Such definitions stay in source instead of being serialized as carried context.
-      const retain = ownership.definitions.reduce(
-        (offset, { identifier, start }) =>
-          identifier.length > 999 ? Math.min(offset, start) : offset,
-        ownership.retainStart,
-      );
+      const retain = ownership.retainStart;
       const start = retain === 0 ? 0 : text.lastIndexOf("\n", retain - 1) + 1;
       const completeEnd = text.lastIndexOf("\n") + 1;
       if (
@@ -126,7 +120,12 @@ function createCheckpointTransform(
   let ownershipSource = "";
   let ownership: ReturnType<typeof findCodeOwnership> | undefined;
   const resolveOwnership = (text: string) => {
-    if (ownership && canReuseMarkdownOwnership(ownershipSource, text, ownership)) {
+    // Code ranges can stay unchanged while a completed list item advances settlement.
+    if (
+      ownership &&
+      !text.includes("\n", ownershipSource.length) &&
+      canReuseMarkdownOwnership(ownershipSource, text, ownership)
+    ) {
       ownershipSource = text;
       return ownership;
     }

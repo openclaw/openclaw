@@ -16,6 +16,7 @@ import { assertCronStoreCanPersist } from "../../src/cron/store/row-codec.js";
 import { saveCronStoreInDatabase } from "../../src/cron/store/save.kernel.js";
 import type { CronStoredJob } from "../../src/cron/types.js";
 import { insertOperatorApprovalInDatabase } from "../../src/gateway/operator-approval-store.kernel.worker.js";
+import { ensureLocal } from "../../src/gateway/worker-environments/placement-row-codec.js";
 import { insertProjectRegistryInDatabase } from "../../src/projects/project-registry.kernel.js";
 import { runOpenClawAgentWriteTransaction } from "../../src/state/openclaw-agent-db.js";
 import { runOpenClawStateWriteTransaction } from "../../src/state/openclaw-state-db.js";
@@ -34,10 +35,16 @@ export type TeamShapeExtrasOptions = {
   stateDir: string;
   sessions: FixtureSession[];
   retainedRuns: number;
+  settledRuns?: boolean;
   approvals: number;
   cronJobs: number;
+  cronAnnounceLast?: boolean;
   projects: number;
+  localPlacements?: number;
   worktreeFiles?: number;
+  worktreeFileBytes?: number;
+  worktreeInstallFailure?: boolean;
+  worktreeColdCommits?: number;
   nestedRepository?: boolean;
   githubOptionsConnected?: boolean;
   now: number;
@@ -55,8 +62,9 @@ function retainedRun(index: number, options: TeamShapeExtrasOptions): SubagentRu
   const startedAt = endedAt - 30_000 - (index % 100) * 1_000;
   const slot = index % 20;
   const failed = slot >= 12 && slot < 15;
-  const pending = slot >= 15 && slot < 18 && index + childCount >= options.retainedRuns;
-  const interrupted = slot >= 18;
+  const pending =
+    !options.settledRuns && slot >= 15 && slot < 18 && index + childCount >= options.retainedRuns;
+  const interrupted = !options.settledRuns && slot >= 18;
   const outcome = failed
     ? { status: "error" as const, error: "Synthetic tool exited with status 1" }
     : { status: "ok" as const };
@@ -123,6 +131,7 @@ async function seedProjects(options: TeamShapeExtrasOptions) {
     path: string;
     id: string;
     branch: string;
+    coldBaseRefs?: string[];
   }> = [];
   const gitEnv = {
     ...process.env,
@@ -149,6 +158,22 @@ async function seedProjects(options: TeamShapeExtrasOptions) {
     }
     await fs.writeFile(path.join(repoRoot, "README.md"), `# Synthetic project ${index}\n`);
     await git("add", "README.md");
+    if (index === 0 && options.worktreeInstallFailure) {
+      await fs.writeFile(
+        path.join(repoRoot, "package.json"),
+        JSON.stringify({
+          name: "synthetic-attempt-setup",
+          private: true,
+          packageManager: "pnpm@12.0.0",
+          scripts: { preinstall: "exit 1" },
+        }),
+      );
+      await fs.writeFile(
+        path.join(repoRoot, "pnpm-lock.yaml"),
+        "lockfileVersion: '9.0'\nimporters:\n  .: {}\n",
+      );
+      await git("add", "package.json", "pnpm-lock.yaml");
+    }
     await git("-c", "commit.gpgSign=false", "commit", "-m", "test: seed synthetic project");
     await fs.mkdir(path.dirname(worktreePath), { recursive: true });
     const branch = `fixture/task-${index}`;
@@ -164,7 +189,13 @@ async function seedProjects(options: TeamShapeExtrasOptions) {
           await waitForTeamShapeWriteBudget();
           await fs.mkdir(bucket, { recursive: true });
         }
-        await fs.writeFile(path.join(bucket, `${file}.txt`), "");
+        const content = Buffer.alloc(options.worktreeFileBytes ?? 0);
+        let random = file + 1;
+        for (let offset = 0; offset < content.length; offset++) {
+          random = (Math.imul(random, 1664525) + 1013904223) >>> 0;
+          content[offset] = random >>> 24;
+        }
+        await fs.writeFile(path.join(bucket, `${file}.txt`), content);
       }
       await git("-C", worktreePath, "add", "inventory");
       await git(
@@ -198,6 +229,19 @@ async function seedProjects(options: TeamShapeExtrasOptions) {
         "test: seed nested synthetic repository",
       );
     }
+    const coldBaseRefs: string[] = [];
+    if (index === 0 && options.worktreeColdCommits) {
+      const tree = (await git("rev-parse", "refs/heads/main^{tree}")).stdout.trim();
+      const parent = (await git("rev-parse", "refs/heads/main")).stdout.trim();
+      for (let cold = 0; cold < options.worktreeColdCommits; cold++) {
+        const ref = `refs/heads/benchmark-cold-${cold}`;
+        const commit = (
+          await git("commit-tree", tree, "-p", parent, "-m", `test: cold template ${cold}`)
+        ).stdout.trim();
+        await git("update-ref", ref, commit);
+        coldBaseRefs.push(ref);
+      }
+    }
     const repository = await resolveRepositoryIdentity(repoRoot);
     const project = runOpenClawStateWriteTransaction(({ db }) => {
       const registered = insertProjectRegistryInDatabase(db, {
@@ -226,6 +270,7 @@ async function seedProjects(options: TeamShapeExtrasOptions) {
       projectId: project.id,
       repoRoot,
       path: worktreePath,
+      ...(coldBaseRefs.length ? { coldBaseRefs } : {}),
       id: projectId,
       branch,
     });
@@ -243,6 +288,13 @@ export async function seedTeamShapeExtras(options: TeamShapeExtrasOptions) {
     throw new Error("Retained runs require a parent and at least one child session");
   }
   const projectWorktrees = await seedProjects(options);
+  if (options.localPlacements) {
+    runOpenClawStateWriteTransaction(({ db }) => {
+      for (const session of options.sessions.slice(0, options.localPlacements)) {
+        ensureLocal(db, { ...session, agentId: "main" }, options.now);
+      }
+    });
+  }
   const records = Array.from({ length: options.retainedRuns }, (_, index) =>
     retainedRun(index, options),
   );
@@ -368,9 +420,19 @@ export async function seedTeamShapeExtras(options: TeamShapeExtrasOptions) {
       index % 2 === 0
         ? { kind: "every", everyMs: 3_600_000, anchorMs: options.now }
         : { kind: "cron", expr: "0 8 * * *", tz: "UTC" },
-    sessionTarget: "main",
     wakeMode: "next-heartbeat",
-    payload: { kind: "systemEvent", text: `Synthetic inspection ${index}` },
+    ...(options.cronAnnounceLast
+      ? {
+          sessionTarget: "isolated" as const,
+          sessionKey: options.sessions[1]!.sessionKey,
+          payload: { kind: "agentTurn" as const, message: `Synthetic inspection ${index}` },
+          delivery: { mode: "announce" as const, channel: "last" },
+          failureAlert: false as const,
+        }
+      : {
+          sessionTarget: "main" as const,
+          payload: { kind: "systemEvent" as const, text: `Synthetic inspection ${index}` },
+        }),
     state: { lastRunAtMs: options.now - DAY_MS, lastRunStatus: index % 5 === 0 ? "error" : "ok" },
   }));
   if (jobs.length > 0) {
@@ -383,12 +445,18 @@ export async function seedTeamShapeExtras(options: TeamShapeExtrasOptions) {
   }
   return {
     retainedRuns: runs.length,
+    settledRuns: options.settledRuns ?? false,
     retainedRunStates,
     approvals: options.approvals,
     cronJobs: jobs.length,
+    cronAnnounceLast: options.cronAnnounceLast ?? false,
     projects: projectWorktrees.length,
+    localPlacements: options.localPlacements ?? 0,
     githubOptionsConnected: options.githubOptionsConnected ?? false,
     worktreeFiles: options.worktreeFiles ?? 0,
+    worktreeFileBytes: options.worktreeFileBytes ?? 0,
+    worktreeInstallFailure: options.worktreeInstallFailure ?? false,
+    worktreeColdCommits: options.worktreeColdCommits ?? 0,
     nestedRepository: options.nestedRepository ?? false,
     projectWorktrees,
     extrasGenerationMs: performance.now() - started,

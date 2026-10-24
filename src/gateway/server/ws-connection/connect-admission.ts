@@ -32,6 +32,7 @@ import {
   isBrowserOperatorUiClient,
   isOperatorUiClient,
 } from "../../../utils/message-channel.js";
+import { resolveRuntimeServiceBuildId } from "../../../version.js";
 import { isGatewayAuthPolicyCurrent } from "../../auth-policy.js";
 import {
   getRemoteControlUiIngressContext,
@@ -249,12 +250,23 @@ export async function admitGatewayConnect(context: GatewayConnectPhaseContext) {
       `protocol mismatch conn=${connId} peer=${formatForLog(peerLabel)} remote=${remoteAddr ?? "?"} remotePort=${remotePort ?? "?"} client=${formatForLog(clientLabel)} ${connectParams.client.mode} v${formatForLog(connectParams.client.version)} min=${minProtocol} max=${maxProtocol} expected=${PROTOCOL_VERSION} probeMin=${MIN_PROBE_PROTOCOL_VERSION} instance=${formatForLog(connectParams.client.instanceId ?? "n/a")}`,
     );
     sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, "protocol mismatch", {
+      retryable: false,
       details: {
         code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
         clientMinProtocol: minProtocol,
         clientMaxProtocol: maxProtocol,
         expectedProtocol: PROTOCOL_VERSION,
         minimumProbeProtocol: MIN_PROBE_PROTOCOL_VERSION,
+        minProtocol: isNodeClient
+          ? MIN_NODE_PROTOCOL_VERSION
+          : connectParams.client.mode === GATEWAY_CLIENT_MODES.PROBE
+            ? MIN_PROBE_PROTOCOL_VERSION
+            : PROTOCOL_VERSION,
+        maxProtocol: PROTOCOL_VERSION,
+        gatewayBuildId: resolveRuntimeServiceBuildId(),
+        ...(connectParams.client.id === GATEWAY_CLIENT_IDS.CONTROL_UI
+          ? { reloadRequired: true }
+          : {}),
       },
     });
     close(1002, "protocol mismatch");

@@ -190,6 +190,58 @@ describe("database port command custody and inspection", () => {
   });
 });
 
+it("captures prefixed destination names and preserves them when rolling back before staging", async () => {
+  await fixture(async ({ state, source }) => {
+    const config = JSON.parse(fs.readFileSync(state.configPath, "utf8"));
+    config.database.postgres.schemaPrefix = "rehearsal";
+    await state.writeConfig(config);
+    openOpenClawStateDatabase({ env: state.env });
+    await closeOpenClawStateDatabaseAsync();
+    const shared = state.statePath("state", "openclaw.sqlite");
+    {
+      using db = openNodeSqliteDatabase(shared);
+      db.exec("CREATE TABLE fleet_cells (tenant_id TEXT PRIMARY KEY) STRICT");
+    }
+    const original = hash(source);
+    const run = tasks.runDatabasePortTask;
+    vi.spyOn(tasks, "runDatabasePortTask").mockImplementation(async (...args) => {
+      if (args[0].operation === "preflight") {
+        return;
+      }
+      if (args[0].operation === "migrate") {
+        throw new Error(injected);
+      }
+      return await run(...args);
+    });
+    await expect(
+      doctorDatabasePort({ family: "state", to: "postgres", dryRun: true }),
+    ).resolves.toMatchObject({
+      notes: [`${shared}: Skipped empty retained SQLite table fleet_cells`],
+    });
+    await expect(doctorDatabasePort({ to: "postgres" })).rejects.toThrow("private migrate");
+    const saved = manifest(state);
+    expect(saved.targets).toHaveLength(2);
+    for (const target of saved.targets) {
+      assert(target.original.engine === "sqlite");
+      const family = target.original.path === shared ? "state" : "workboard";
+      expect(target.intended).toMatchObject({
+        engine: "postgres",
+        namespace: `rehearsal_${family}_${target.storeId.replaceAll("-", "").slice(0, 16)}`,
+      });
+    }
+    const inspection = saved.artifacts.find((artifact) =>
+      artifact.path.endsWith("/inspection.json"),
+    );
+    assert(inspection);
+    expect(JSON.parse(fs.readFileSync(inspection.path, "utf8"))).toEqual({
+      notes: ["Skipped empty retained SQLite table fleet_cells"],
+    });
+    expect(hash(source)).toBe(original);
+    await doctorDatabasePort({ rollback: recovery.databasePortManifestPath(state.stateDir) });
+    expect(hash(source)).toBe(original);
+  });
+});
+
 describe.skipIf(!connection)("database port command PostgreSQL conformance", () => {
   it("privately adds the first-use deletion phase when porting a current-schema journal", async () => {
     await fixture(async ({ state, client }) => {

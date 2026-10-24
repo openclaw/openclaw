@@ -111,8 +111,9 @@ export default defineSingleProviderPluginEntry({
     buildReplayPolicy: () => ({ preserveSignatures: false }),
     normalizeResolvedModel: ({ model }) => {
       const normalizedId = normalizeKimiCodingModelId(model.id);
-      if (model.api === "openai-completions" && isKimiK3ModelId(normalizedId)) {
-        // Session setup clamps before the stream wrapper can map the selected effort.
+      if (isKimiK3ModelId(normalizedId)) {
+        // Session setup clamps before the stream wrapper can map the selected effort, and
+        // hosted catalog rows such as K3.1 do not carry the bundled K3 map.
         return {
           ...model,
           id: normalizedId,

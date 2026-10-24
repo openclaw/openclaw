@@ -134,27 +134,12 @@ export function createPluginGenerationFileCapture({
 }) {
   const { additions } = sourceCapture;
   const ancestors = new Set<string>();
-  // Canonical paths of walked input directories and the captured directories already
-  // created. Windows realpathSync lstats every path component, once per file.
-  const realDirectories = new Map<string, string>();
-  const createdDirectories = new Set<string>();
-  let depth = 0;
-  const resolveInput = (input: string) => {
-    const parent = realDirectories.get(path.dirname(input));
-    if (parent !== undefined) {
-      const entry = fs.lstatSync(input, { bigint: true });
-      // A non-link child of a canonical directory is canonical under that directory.
-      if (!entry.isSymbolicLink()) {
-        return { real: path.join(parent, path.basename(input)), stat: entry };
-      }
-    }
-    return { real: fs.realpathSync(input), stat: undefined };
-  };
   const copy = (
     source: string,
     target: string,
     copyFile: RootFileCopyBatchSync["copyFile"],
     openFile: RootFileOpenBatchSync["openFile"],
+    realParent?: string,
   ) => {
     // Metadata can precede its package body; promotion never replaces those captured bytes.
     if (capturedPaths.get(path.resolve(source)) === target || hostModuleLinks.has(target)) {
@@ -163,8 +148,10 @@ export function createPluginGenerationFileCapture({
     const prepared = nativeAdmission.resolvePreparedSource(source);
     const input = prepared?.path ?? source;
     const inputBoundary = prepared?.boundary ?? boundary;
-    const resolved = resolveInput(input);
-    const { real } = resolved;
+    // Directory recursion already resolved the parent; only links need another path walk.
+    const entry = !prepared && realParent ? fs.lstatSync(input, { bigint: true }) : undefined;
+    const ordinary = entry && !entry.isSymbolicLink();
+    const real = ordinary ? path.join(realParent!, path.basename(input)) : fs.realpathSync(input);
     const retainedNative = nativeAdmission.isRetainedReference(source, real);
     if (!isPathInside(inputBoundary, real) && !retainedNative) {
       throw new Error(
@@ -174,7 +161,7 @@ export function createPluginGenerationFileCapture({
     if (!prepared && outputRoot && isPathInside(outputRoot, real)) {
       return;
     }
-    const stat = resolved.stat ?? fs.statSync(real, { bigint: true });
+    const stat = ordinary ? entry : fs.statSync(real, { bigint: true });
     const captured = capturedPaths.get(real);
     capturedPaths.set(path.resolve(source), target);
     originalSources.set(target, path.resolve(source));
@@ -193,8 +180,6 @@ export function createPluginGenerationFileCapture({
       }
       ancestors.add(real);
       fs.mkdirSync(target, { recursive: true, mode: 0o700 });
-      createdDirectories.add(target);
-      realDirectories.set(input, real);
       for (const name of readPluginSourceDirectory(real)) {
         if (
           !(
@@ -203,7 +188,7 @@ export function createPluginGenerationFileCapture({
             sourceLinks.defer(path.join(input, name), inputBoundary, path.join(source, name))
           )
         ) {
-          copy(path.join(source, name), path.join(target, name), copyFile, openFile);
+          copy(path.join(source, name), path.join(target, name), copyFile, openFile, real);
         }
       }
       ancestors.delete(real);
@@ -211,7 +196,7 @@ export function createPluginGenerationFileCapture({
       if (stat.nlink > 1n) {
         hardlinkedSources.add(target);
       }
-      if (!createdDirectories.has(path.dirname(target))) {
+      if (!realParent) {
         fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
       }
       // Register before copying or admission can fail: known aliases must remain
@@ -267,15 +252,6 @@ export function createPluginGenerationFileCapture({
     using batch = createRootFileCopyBatchSync();
     // Retained roots never outlive this synchronous capture or reach tree retirement.
     using opened = createRootFileOpenBatchSync();
-    depth += 1;
-    try {
-      return copy(source, target, batch.copyFile.bind(batch), opened.openFile.bind(opened));
-    } finally {
-      // Later lazy captures resolve the then-current tree instead of this walk's view.
-      if ((depth -= 1) === 0) {
-        realDirectories.clear();
-        createdDirectories.clear();
-      }
-    }
+    return copy(source, target, batch.copyFile.bind(batch), opened.openFile.bind(opened));
   };
 }

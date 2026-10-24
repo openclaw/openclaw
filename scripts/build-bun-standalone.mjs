@@ -18,7 +18,6 @@ import { createStandaloneCodegenAdapter } from "./lib/bun-standalone-codegen.mjs
 import {
   assertStandaloneCompiler,
   assertStandalonePlatform,
-  createStandaloneManifest,
   parseStandaloneArguments,
   relativeStandaloneEntry,
   resolveStandaloneBuildIdentity,
@@ -43,6 +42,14 @@ import {
 } from "./lib/bun-standalone-sidecar.mjs";
 import { copyStandaloneRuntime, STANDALONE_RUNTIME_ROOTS } from "./lib/bun-standalone-snapshot.mjs";
 import { stageStandaloneSqlite } from "./lib/bun-standalone-sqlite.mjs";
+import {
+  assertStandaloneDestinations,
+  describeStandaloneNativeModules,
+  compileStandaloneArtifacts,
+  publishStandaloneArtifacts,
+  STANDALONE_BUILD_MARKER,
+} from "./lib/bun-standalone-support.mjs";
+import { prepareStandaloneWasm } from "./lib/bun-standalone-wasm.mjs";
 import {
   discoverStandaloneWorkers,
   prepareStandaloneWorkers,
@@ -71,24 +78,28 @@ if (mode === "aot") {
   assertStandaloneCompiler(mode, help.stdout ?? "");
 }
 const destinationRoot = path.resolve(options.outputDirectory);
+const supportDestination =
+  options.supportOutputDirectory && path.resolve(options.supportOutputDirectory);
+const destinations = [destinationRoot, ...(supportDestination ? [supportDestination] : [])];
+assertStandaloneDestinations(destinations);
 if (
-  STANDALONE_RUNTIME_ROOTS.some((entry) => {
-    const relative = path.relative(path.join(sourceRoot, entry), destinationRoot);
-    return (
-      relative === "" ||
-      (!relative.startsWith(".." + path.sep) && relative !== ".." && !path.isAbsolute(relative))
-    );
-  })
+  destinations.some((destination) =>
+    STANDALONE_RUNTIME_ROOTS.some((entry) => {
+      const relative = path.relative(path.join(sourceRoot, entry), destination);
+      return (
+        relative === "" ||
+        (!relative.startsWith(".." + path.sep) && relative !== ".." && !path.isAbsolute(relative))
+      );
+    }),
+  )
 ) {
   throw new Error(`Choose an output directory outside ${STANDALONE_RUNTIME_ROOTS.join(", ")}.`);
-}
-if (fs.existsSync(destinationRoot)) {
-  throw new Error(`Output already exists: ${destinationRoot}. Choose a fresh output directory.`);
 }
 if (!fs.existsSync(path.join(sourceRoot, "dist/cli-startup-metadata.json"))) {
   throw new Error("Run pnpm build before building a standalone executable.");
 }
 const plugins = planStandalonePlugins(sourceRoot, options.pluginIds);
+const buildId = randomUUID();
 fs.mkdirSync(path.dirname(destinationRoot), { recursive: true });
 const outputRoot = fs.mkdtempSync(path.join(path.dirname(destinationRoot), ".standalone-build-"));
 const runtimeRoot = path.join(outputRoot, "runtime");
@@ -325,7 +336,7 @@ const artifacts = createStandaloneArtifactAdapter({
   runtimeRoot,
   embeddedPaths,
   parse,
-  buildIdentity: randomUUID(),
+  buildIdentity: buildId,
 });
 const metadata = createStandaloneMetadataAdapter({ runtimeRoot, embeddedPaths, parse });
 const requireAdapter = createStandaloneRequireAdapter({ runtimeRoot, embeddedPaths });
@@ -336,6 +347,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { isMainThread } from "node:worker_threads";
 const root = path.join(path.dirname(process.execPath), "runtime");
 globalThis.__openclawStandaloneRootUrl = pathToFileURL(root + "/").href;
+globalThis.__openclawStandaloneBuildInfo = Object.freeze(${JSON.stringify(STANDALONE_BUILD_MARKER)});
 ${mode === "aot" ? "globalThis.__zod_globalConfig = { ...globalThis.__zod_globalConfig, jitless: true };" : ""}
 const entries = ${JSON.stringify(embeddedPaths)};
 const embeddedEntries = new Set(Object.values(entries));
@@ -558,6 +570,11 @@ const compiledEntries = result.outputs
   .filter((output) => output.path.endsWith(".js"))
   .map((output) => output.path);
 const nativeResources = native.finalize({ metafile: result.metafile, embeddedPaths });
+const nativeModules = describeStandaloneNativeModules({
+  runtimeRoot,
+  resources: nativeResources.files,
+  sqlite: sqlite.manifest,
+});
 const packageManager = planStandalonePackageManager(runtimeRoot);
 const resourcePlan = planStandaloneRuntime(
   runtimeRoot,
@@ -565,6 +582,14 @@ const resourcePlan = planStandaloneRuntime(
   declaredPluginAssets,
   metadata.directories,
 );
+const wasm =
+  mode === "aot"
+    ? prepareStandaloneWasm({
+        resources: resourcePlan.files,
+        outputRoot: path.join(outputRoot, "modules"),
+        parse,
+      })
+    : undefined;
 fs.writeFileSync(
   path.join(outputRoot, "native-resources.json"),
   JSON.stringify(nativeResources.files, null, 2),
@@ -576,10 +601,12 @@ for (const filename of compiledEntries) {
     nativeTables += 1;
     fs.writeFileSync(
       filename,
-      contents.replaceAll(
-        nativeResources.bootstrapReplacement.search,
-        nativeResources.bootstrapReplacement.replacement,
-      ),
+      // Every embedded worker imports this bootstrap before its library loaders.
+      (wasm?.registrationPath ? `import ${JSON.stringify(wasm.registrationPath)};\n` : "") +
+        contents.replaceAll(
+          nativeResources.bootstrapReplacement.search,
+          nativeResources.bootstrapReplacement.replacement,
+        ),
     );
   }
 }
@@ -669,63 +696,56 @@ fs.writeFileSync(
 );
 // Shorter relative names keep the full graph below macOS's exec argument limit.
 const compileCwd = path.join(compileRoot, "runtime/dist");
-const executable = path.join(outputRoot, "openclaw");
-const compiled = spawnSync(
-  process.execPath,
-  [
-    "build",
-    "--compile",
-    "--splitting",
-    "--format=esm",
-    `--root=${compileRoot}`,
-    "--compile-autoload-package-json",
-    "--no-compile-autoload-dotenv",
-    "--no-compile-autoload-bunfig",
-    ...compileFlags,
-    ...external.map((specifier) => `--external=${specifier}`),
-    path.relative(compileCwd, mainEntry),
-    ...compiledEntries
-      .filter((entry) => entry !== mainEntry && compileEntries.has(entry))
-      .map((entry) => path.relative(compileCwd, entry)),
-    `--outfile=${executable}`,
-  ],
-  { stdio: "inherit", cwd: compileCwd },
-);
-if (compiled.status !== 0) {
-  throw new Error(`Standalone compilation failed (${compiled.status})`);
-}
-const pruning = pruneStandaloneRuntime(resourcePlan);
-const manifest = await createStandaloneManifest({
+const bunIdentity = {
+  version: Bun.version,
+  revision: compilerIdentity.stdout.trim(),
+  commit: Bun.revision,
+  executableSha256: await sha256File(process.execPath),
+};
+const artifactsToPublish = compileStandaloneArtifacts({
+  runtimeRoot,
   outputRoot,
+  destination: destinationRoot,
+  supportDestination,
   mode,
-  bun: {
-    version: Bun.version,
-    revision: compilerIdentity.stdout.trim(),
-    commit: Bun.revision,
-    executableSha256: await sha256File(process.execPath),
-  },
+  compileFlags,
+  compileRoot,
+  compileCwd,
+  mainEntry,
+  compiledEntries,
+  compileEntries,
+  external,
+  bunExecutable: process.execPath,
+  bun: bunIdentity,
   openclaw: openclawIdentity,
   plugins,
-  embedded: {
-    workers: workerEntries.length,
-    plugins: new Set(
-      Object.keys(embeddedPaths)
-        .filter((entry) => entry.startsWith("dist/extensions/"))
-        .map((entry) => entry.split("/")[2]),
-    ).size,
-    modules: Object.keys(embeddedPaths).length,
-    inlineWorkers: workers.inlineWorkers.length,
-  },
-  pruning,
+  nativeModules,
   sqlite: sqlite.manifest,
-  packageManager: packageManager.manifest,
+  buildId,
 });
-fs.mkdirSync(destinationRoot);
-fs.renameSync(executable, path.join(destinationRoot, "openclaw"));
-fs.renameSync(runtimeRoot, path.join(destinationRoot, "runtime"));
-fs.writeFileSync(
-  path.join(destinationRoot, "manifest.json"),
-  JSON.stringify(manifest, null, 2) + "\n",
-);
+const pruning = pruneStandaloneRuntime(resourcePlan);
+await publishStandaloneArtifacts({
+  artifacts: artifactsToPublish,
+  runtimeRoot,
+  manifestInputs: {
+    bun: bunIdentity,
+    openclaw: openclawIdentity,
+    plugins,
+    nativeModules,
+    embedded: {
+      ...(wasm ? { webAssembly: wasm.assets } : {}),
+      workers: workerEntries.length,
+      plugins: new Set(
+        Object.keys(embeddedPaths)
+          .filter((entry) => entry.startsWith("dist/extensions/"))
+          .map((entry) => entry.split("/")[2]),
+      ).size,
+      modules: Object.keys(embeddedPaths).length,
+      inlineWorkers: workers.inlineWorkers.length,
+    },
+    pruning,
+    sqlite: sqlite.manifest,
+    packageManager: packageManager.manifest,
+  },
+});
 fs.rmSync(outputRoot, { recursive: true });
-console.log(`Standalone ready: ${path.join(destinationRoot, "openclaw")}`);

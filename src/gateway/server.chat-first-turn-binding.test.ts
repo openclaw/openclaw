@@ -2,10 +2,12 @@ import { createServer, type ServerResponse } from "node:http";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
+import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
   loadExactSessionEntryReadOnly,
   loadTranscriptEvents,
+  patchSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { activeExecRequestOwners } from "../infra/exec-request-context.js";
@@ -26,7 +28,7 @@ import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.
 import { KERNEL_TEST_ENV } from "./test-helpers.env.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
-it("binds a first native chat.send before streaming and persists its stopped partial", async () => {
+it("binds native chat.send, preserves its stopped partial, and resumes terminal recovery residue", async () => {
   const state = await createOpenClawTestState({
     label: "first-turn-binding",
     env: {
@@ -50,6 +52,14 @@ it("binds a first native chat.send before streaming and persists its stopped par
   const providerServer = createServer((request, response) => {
     void (async () => {
       requestBodies.push(await readProviderBody(request));
+      if (requestBodies.length > 1) {
+        writeOpenAiResponsesText(response, {
+          text: "The same conversation resumed.",
+          messageId: `resumed-message-${requestBodies.length}`,
+          responseId: `resumed-response-${requestBodies.length}`,
+        });
+        return;
+      }
       response.once("close", () => providerClosed.resolve());
       providerResponse.resolve(response);
     })().catch((error: unknown) => response.writeHead(500).end(String(error)));
@@ -277,4 +287,61 @@ it("binds a first native chat.send before streaming and persists its stopped par
     }),
   );
   expect(requestBodies).toHaveLength(1);
+  for (const nextRunId of [
+    "resume-after-stop",
+    "stale-terminal-generation",
+    "killed-unfinished-fence",
+    "continue-again",
+  ]) {
+    if (nextRunId === "stale-terminal-generation") {
+      // Older interrupted runs can leave terminal fences on an otherwise stopped row.
+      await patchSessionEntryCore(transcriptScope, (entry) => ({
+        status: "killed",
+        abortedLastRun: false,
+        providerOverride: provider.providerId,
+        modelOverride: provider.modelId,
+        mainRestartRecovery: { cycleId: "old-cycle", revision: 1, chargedAttempts: 0 },
+        restartRecoveryRuns: [{ runId: "stopped-old-run", lifecycleGeneration: "old-generation" }],
+        restartRecoveryTerminalRunIds: [
+          ...(entry.restartRecoveryTerminalRunIds ?? []),
+          "stopped-old-run",
+        ],
+      }));
+    }
+    if (nextRunId === "killed-unfinished-fence") {
+      await patchSessionEntryCore(transcriptScope, () => ({
+        status: "killed",
+        abortedLastRun: false,
+        mainRestartRecovery: undefined,
+        pendingFinalDelivery: undefined,
+        restartRecoveryDeliveryRunId: undefined,
+        restartRecoveryHarnessCompletion: undefined,
+        restartRecoveryRuns: [{ runId: "killed-old-run", lifecycleGeneration: "dead-generation" }],
+        restartRecoveryTerminalRunIds: Array.from(
+          { length: 8 },
+          (_, index) => `other-run-${index}`,
+        ),
+      }));
+    }
+    const currentHistory = await gateway.client.request<{
+      sessionId: string;
+      sessionInfo: { activeLeafEntryId: string | null };
+    }>("chat.history", { sessionKey });
+    expect(currentHistory.sessionId).toBe(sessionId);
+    expect(
+      await gateway.client.request("chat.send", {
+        sessionKey,
+        sessionId,
+        expectedLeafEntryId: currentHistory.sessionInfo.activeLeafEntryId,
+        message: "Continue this conversation.",
+        idempotencyKey: nextRunId,
+      }),
+    ).toMatchObject({ runId: nextRunId, status: "started" });
+    expect(await gateway.client.request("agent.wait", { runId: nextRunId })).toMatchObject({
+      status: "ok",
+    });
+  }
+  expect(requestBodies).toHaveLength(5);
+  expect(await loadTranscriptEvents(transcriptScope)).toEqual(expect.arrayContaining(events));
+  expect(loadExactSessionEntryReadOnly({ sessionKey })?.entry).toMatchObject({ sessionId });
 });

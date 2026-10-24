@@ -11,9 +11,11 @@ import {
   onDiagnosticEvent,
   onInternalDiagnosticEvent,
 } from "../plugin-sdk/diagnostic-runtime.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   createPluginCache,
+  getPluginCache,
   getPluginCacheRetirementSignal,
   retirePluginCache,
   withPluginCache,
@@ -22,6 +24,8 @@ import { bindPluginInstanceModuleLoader } from "./plugin-instance-module-loader.
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import { PluginInstance } from "./plugin-instance.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { PluginRegistryInspectionResources } from "./registry-inspection-resources.js";
+import { PluginRuntimeCloseRetainedError } from "./runtime-close-error.js";
 import { disposePluginRegistryInstances, waitForPluginRegistryRetirement } from "./runtime.js";
 import { createPluginRecord } from "./status.test-helpers.js";
 
@@ -57,6 +61,16 @@ function writeManifest(root: string, additionalProperties?: false) {
   );
 }
 
+function fixtureConfig(entry: string) {
+  return {
+    plugins: {
+      allow: ["retention-fixture"],
+      load: { paths: [entry] },
+      slots: { memory: "none" },
+    },
+  };
+}
+
 function loadFixture(
   loadOpenClawPlugins: (typeof import("./loader.js"))["loadOpenClawPlugins"],
   entry: string,
@@ -65,13 +79,7 @@ function loadFixture(
   const cache = createPluginCache();
   const registry = withPluginCache(cache, () =>
     loadOpenClawPlugins({
-      config: {
-        plugins: {
-          allow: ["retention-fixture"],
-          load: { paths: [entry] },
-          slots: { memory: "none" },
-        },
-      },
+      config: fixtureConfig(entry),
       pluginSdkResolution: "src",
       activate: false,
       cache: false,
@@ -188,6 +196,48 @@ async function retireCapturedSource() {
   return { instance, reference };
 }
 
+function createInspectionRetirement(
+  failure: "none" | "completed" | "retained" | "rollback-retained",
+) {
+  const cache = createPluginCache();
+  const registry = createEmptyPluginRegistry();
+  const cleanupCapture = { label: "registration cleanup" };
+  const entered = createDeferredCore();
+  const finish = createDeferredCore();
+  const resources = new PluginRegistryInspectionResources(async () => {
+    entered.resolve();
+    await finish.promise;
+    await retirePluginCache(cache);
+    if (failure === "retained") {
+      throw new PluginRuntimeCloseRetainedError(new Error("Unfinished disposal"));
+    }
+    if (failure === "completed") {
+      throw new Error("Completed disposal callback failed");
+    }
+  });
+  resources.attach(registry);
+  resources.runRegistration(
+    "fixture",
+    () => {},
+    async (run) => {
+      assert.equal(cleanupCapture.label, "registration cleanup");
+      await run();
+    },
+  );
+  if (failure === "rollback-retained") {
+    resources.rollback("fixture", async () => {
+      throw new PluginRuntimeCloseRetainedError(new Error("Unfinished rollback"));
+    });
+  }
+  return {
+    resources,
+    borrowed: resources.retain(),
+    entered,
+    finish,
+    references: [cache, registry, cleanupCapture].map((value) => new WeakRef(value)),
+  };
+}
+
 async function loadReplacement(root: string) {
   const { loadOpenClawPlugins } = await import("./loader.js");
   const previous = createEmptyPluginRegistry();
@@ -274,6 +324,50 @@ async function recoverOwner(root: string, kind: "source" | "bundled-cjs" | "bund
 }
 
 switch (process.argv[2]) {
+  case "inspection": {
+    const generations = Array.from({ length: 3 }, () => createInspectionRetirement("none"));
+    generations.push(createInspectionRetirement("completed"));
+    const retained = [
+      createInspectionRetirement("retained"),
+      createInspectionRetirement("rollback-retained"),
+    ];
+    for (const generation of [...generations, ...retained]) {
+      await generation.resources.release().catch(() => {});
+      const value = {};
+      assert.equal(generation.resources.wrapAdoptedValue(value), value);
+      await collect();
+      assert.ok(
+        generation.references.every((reference) => reference.deref() !== undefined),
+        "Logical release must preserve borrowed inspection resources",
+      );
+      const release = generation.borrowed.release();
+      const outcome = release.catch((error: unknown) => error);
+      await generation.entered.promise;
+      await collect();
+      assert.ok(
+        generation.references.every((reference) => reference.deref() !== undefined),
+        "Pending physical disposal must preserve inspection resources",
+      );
+      generation.finish.resolve();
+      await outcome;
+      assert.equal(generation.borrowed.release(), release);
+    }
+    await collect(...generations.flatMap(({ references }) => references));
+    for (const [index, generation] of generations.entries()) {
+      assert.throws(() => generation.resources.wrapAdoptedValue({}), /have been released/);
+      for (const [field, reference] of generation.references.entries()) {
+        assert.ok(!reference.deref(), `Released inspection ${index} retained resource ${field}`);
+      }
+      await generation.resources.release();
+    }
+    for (const generation of retained) {
+      assert.ok(
+        generation.references.every((reference) => reference.deref() !== undefined),
+        "Incomplete disposal must preserve retained custody",
+      );
+    }
+    break;
+  }
   case "diagnostics": {
     // openclaw-temp-dir: allow -- standalone GC child joins registry cleanup below.
     const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "diagnostic-retention-")));
@@ -349,8 +443,10 @@ switch (process.argv[2]) {
     );
     break;
   }
+  case "inspection-loader":
   case "loader": {
     const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "plugin-retention-")));
+    const captureKey = Symbol.for("openclaw.test.inspection-retention");
     try {
       writeManifest(root, false);
       fs.writeFileSync(
@@ -358,6 +454,7 @@ switch (process.argv[2]) {
         `module.exports = {
         id: "retention-fixture",
         register(api) {
+          globalThis[Symbol.for("openclaw.test.inspection-retention")]?.();
           api.registerTool({ name: "retention_fixture", label: "Retention fixture", description: "Returns a marker",
             parameters: { type: "object", properties: {} },
             execute: async () => ({ content: [{ type: "text", text: "current generation" }] }) });
@@ -365,6 +462,31 @@ switch (process.argv[2]) {
       };`,
       );
       await withFixtureEnvironment(root, async () => {
+        if (process.argv[2] === "inspection-loader") {
+          const { acquirePluginRegistryForInspection } = await import("./loader.js");
+          const references: WeakRef<object>[] = [];
+          Reflect.set(globalThis, captureKey, () => references.push(new WeakRef(getPluginCache())));
+          const handles = [];
+          for (let generation = 0; generation < 3; generation++) {
+            const handle = await acquirePluginRegistryForInspection({
+              config: fixtureConfig(root),
+              pluginSdkResolution: "src",
+              throwOnLoadError: true,
+            });
+            assert.equal(handle.registry.plugins[0]?.status, "loaded");
+            handles.push(handle);
+            await handle.release();
+          }
+          assert.equal(references.length, 3);
+          await collect(...references);
+          for (const reference of references) {
+            assert.ok(!reference.deref(), "Public inspection handle retained its retired cache");
+          }
+          for (const handle of handles) {
+            await handle.release();
+          }
+          return;
+        }
         const { registry, cache, reference } = await loadReplacement(root);
         try {
           await collect();
@@ -380,6 +502,7 @@ switch (process.argv[2]) {
         }
       });
     } finally {
+      Reflect.deleteProperty(globalThis, captureKey);
       fs.rmSync(root, { recursive: true, force: true });
     }
     break;

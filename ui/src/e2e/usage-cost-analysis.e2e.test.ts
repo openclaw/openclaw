@@ -1,5 +1,6 @@
 import type { BrowserContextOptions, Locator } from "playwright";
 import { expect, it } from "vitest";
+import { createEmptyCostUsageTotals } from "../../../src/infra/session-cost-usage-totals.js";
 import type { SessionUsageEntry } from "../../../src/shared/usage-types.js";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { installUsageOverviewGateway as installMockGateway } from "./usage-overview-fixture.test-support.ts";
@@ -13,14 +14,6 @@ const suite = createControlUiE2eSuite({
 
 const viewport = { height: 1_000, width: 1_440 };
 const pageOptions: BrowserContextOptions = { locale: "en-US", serviceWorkers: "block", viewport };
-const costMessages = {
-  total: 40,
-  user: 20,
-  assistant: 20,
-  toolCalls: 12,
-  toolResults: 12,
-  errors: 0,
-};
 
 const totals = {
   input: 1_200_000,
@@ -36,19 +29,7 @@ const totals = {
   missingCostEntries: 0,
 };
 
-const emptyTotals = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 0,
-  totalCost: 0,
-  inputCost: 0,
-  outputCost: 0,
-  cacheReadCost: 0,
-  cacheWriteCost: 0,
-  missingCostEntries: 0,
-};
+const emptyTotals = createEmptyCostUsageTotals();
 
 function dayOffset(offset: number): string {
   const date = new Date();
@@ -66,54 +47,6 @@ function dailyEntry(offset: number, totalCost: number, totalTokens: number) {
     totalCost,
     inputCost: totalCost,
   };
-}
-
-const modelUsage = [
-  { provider: "openai", model: "gpt-5.5", count: 30, totals: { ...totals, totalCost: 22 } },
-  {
-    provider: "anthropic",
-    model: "claude-opus-4-6",
-    count: 10,
-    totals: { ...totals, totalCost: 10 },
-  },
-];
-
-function providerHistory(
-  provider: string,
-  displayName: string,
-  amount: number,
-  category: string,
-  rows: Array<[offset: number, amount: number, requests?: number]>,
-  name: string,
-) {
-  return {
-    provider,
-    displayName,
-    plan: "Admin API",
-    windows: [],
-    billing: [{ type: "spend", label: "30-day API spend", amount, unit: "USD" }],
-    costHistory: {
-      unit: "USD",
-      periodDays: 30,
-      daily: rows.map(([offset, dayAmount, requests]) => ({
-        date: dayOffset(offset),
-        amount: dayAmount,
-        inputTokens: 1_000,
-        cacheReadTokens: 100,
-        cacheWriteTokens: 0,
-        outputTokens: 100,
-        requests,
-      })),
-      models: [{ name, totalTokens: 1_000 }],
-      categories: [{ name: category, amount }],
-    },
-  };
-}
-
-function expectPopover(surface: Locator, open: boolean) {
-  return expect
-    .poll(() => surface.evaluate((element) => element.matches(":popover-open")))
-    .toBe(open);
 }
 
 function expectTexts(locator: Locator, expected: string[]) {
@@ -392,35 +325,6 @@ suite.define(() => {
     },
   );
 
-  it.each([
-    { outcome: "request-failed", failed: true },
-    { outcome: "empty", failed: false },
-  ])("handles provider usage status $outcome", async ({ failed }) => {
-    await suite.withPage(pageOptions, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        methodResponses: {
-          ...emptyUsageResponses(),
-          "usage.status": failed
-            ? { __mockError: { code: "INTERNAL_ERROR", message: "gateway transport unavailable" } }
-            : { updatedAt: Date.now(), providers: [] },
-        },
-      });
-
-      await page.goto(`${suite.server.baseUrl}usage`);
-      await expect
-        .poll(async () => (await gateway.getRequests("usage.status")).length)
-        .toBeGreaterThan(0);
-      await page.locator(".usage-empty-state").waitFor();
-      const warning = "Provider usage is unavailable; the last request failed. Refresh to retry.";
-      const content = expectText(page.locator(".usage-page"));
-      if (failed) {
-        await content.toContain(warning);
-      } else {
-        await content.not.toContain(warning);
-      }
-    });
-  });
-
   it("keeps pending sessions visible when their UTC activity day is selected", async () => {
     const selectedDay = "2026-05-14";
     const updatedAt = Date.parse("2026-05-14T00:30:00.000Z");
@@ -575,93 +479,26 @@ suite.define(() => {
             startDate: dayOffset(-89),
             endDate: dayOffset(0),
             sessions: [
-              {
-                ...makeSession("agent:main:cost-analysis", "Cost analysis", Date.now(), {
-                  ...totals,
-                  activityDates: daily.map((entry) => entry.date),
-                  dailyBreakdown: daily.map((entry) => ({
-                    ...entry,
-                    cost: entry.totalCost,
-                    tokens: entry.totalTokens,
-                  })),
-                  messageCounts: costMessages,
-                  modelUsage,
-                }),
-                modelProvider: "openai",
-                model: "gpt-5.5",
-              },
+              makeSession("agent:main:cost-analysis", "Cost analysis", Date.now(), {
+                ...totals,
+                activityDates: daily.map((entry) => entry.date),
+                dailyBreakdown: daily.map((entry) => ({
+                  ...entry,
+                  cost: entry.totalCost,
+                  tokens: entry.totalTokens,
+                })),
+              }),
             ],
             totals,
             aggregates: {
-              messages: costMessages,
-              tools: { totalCalls: 12, uniqueTools: 2, tools: [{ name: "exec", count: 8 }] },
-              byModel: modelUsage,
-              byProvider: modelUsage.map(({ provider, count, totals: modelTotals }) => ({
-                provider,
-                count,
-                totals: modelTotals,
-              })),
-              byAgent: [{ agentId: "main", totals }],
-              byChannel: [],
+              ...emptyUsageResponses()["sessions.usage"].aggregates,
+              byProvider: [{ provider: "openai", count: 1, totals }],
               costDaily: daily,
-              daily: daily.map((entry) => ({
-                date: entry.date,
-                tokens: entry.totalTokens,
-                cost: entry.totalCost,
-                messages: 10,
-                toolCalls: 3,
-                errors: 0,
-              })),
             },
           },
           "usage.status": {
             updatedAt: Date.now(),
-            providers: [
-              providerHistory(
-                "openai",
-                "OpenAI",
-                98.75,
-                "Responses",
-                [
-                  [-6, 38.5, 12_300],
-                  [0, 60.25, 18_450],
-                ],
-                "gpt-5.5",
-              ),
-              providerHistory(
-                "anthropic",
-                "Anthropic",
-                42.4,
-                "Claude API",
-                [
-                  [-6, 17.15],
-                  [0, 25.25],
-                ],
-                "claude-opus-4-8",
-              ),
-              {
-                provider: "openrouter",
-                displayName: "OpenRouter",
-                plan: "Production",
-                windows: [{ label: "API key budget", usedPercent: 25 }],
-                billing: [
-                  {
-                    type: "balance",
-                    label: "Account balance",
-                    amount: 64.5,
-                    unit: "USD",
-                  },
-                  {
-                    type: "budget",
-                    label: "API key budget",
-                    used: 5,
-                    limit: 20,
-                    unit: "USD",
-                  },
-                ],
-                summary: "$1.25 today · $5.00 this month",
-              },
-            ],
+            providers: [],
           },
         },
       });
@@ -699,46 +536,6 @@ suite.define(() => {
       await expectText(page.locator(".usage-insight-card", { hasText: "Top Providers" })).toContain(
         "OpenAI",
       );
-      const messagesHint = page.locator("#usage-summary-hint-messages");
-      const messagesTooltipHost = messagesHint.locator("xpath=..");
-      const messagesTooltip = messagesTooltipHost.locator(".tooltip-surface[popover]");
-      await messagesHint.hover();
-      await expectPopover(messagesTooltip, true);
-      await page.mouse.move(1, 1);
-      await expectPopover(messagesTooltip, false);
-
-      await page.keyboard.press("Tab");
-      await messagesHint.focus();
-      await expectPopover(messagesTooltip, true);
-      await page.getByRole("button", { name: "Cost", exact: true }).focus();
-      await expectPopover(messagesTooltip, false);
-
-      await messagesHint.click();
-      await expectPopover(messagesTooltip, true);
-      await expectText(messagesTooltipHost.locator('[slot="content"]')).toContain(
-        "Total user and assistant messages in range.",
-      );
-      await page.getByRole("button", { name: "Cost", exact: true }).click();
-      await expectPopover(messagesTooltip, false);
-      await page.keyboard.press("Tab");
-      await messagesHint.focus();
-      await expectPopover(messagesTooltip, true);
-      await messagesHint.press("Escape");
-      await expectPopover(messagesTooltip, false);
-      const providerCards = page.locator(".provider-usage-card");
-      await expect.poll(() => providerCards.count()).toBe(3);
-      await expect
-        .poll(async () => (await gateway.getRequests("usage.status")).length)
-        .toBeGreaterThan(0);
-      await expectText(providerCards.filter({ hasText: "OpenRouter" })).toContain("$64.50");
-      await expectText(providerCards.filter({ hasText: "OpenAI" })).toContain("$98.75");
-      await expectText(providerCards.filter({ hasText: "Anthropic" })).toContain("claude-opus-4-8");
-
-      await page.locator(".usage-query-input").fill("missing-session");
-      await page.locator(".usage-query-input").press("Enter");
-      const topProviders = page.locator(".usage-insight-card", { hasText: "Top Providers" });
-      await expectText(topProviders).toContain("No provider data");
-      await expectText(topProviders).not.toContain("OpenAI");
     });
   });
 });

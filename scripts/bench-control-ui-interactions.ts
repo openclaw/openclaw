@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 // Production-renderer warm interactions. Trace once for attribution; compare untraced AB pairs.
+// --thread-cpu-time excludes renderer descheduling from duration metrics.
 import { createHash } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -21,7 +22,10 @@ import {
 } from "./lib/control-ui-interaction-scenarios.ts";
 import {
   clipInteractionCpuProfile,
+  summarizeInteractionSelectors,
   summarizeInteractionTrace,
+  summarizeLongTaskCpuProfiles,
+  type InteractionStyleSheet,
 } from "./lib/control-ui-interaction-trace.ts";
 
 const { values } = parseArgs({
@@ -33,9 +37,18 @@ const { values } = parseArgs({
     viewport: { type: "string", default: "both" },
     pairs: { type: "string", default: "1" },
     trace: { type: "boolean", default: false },
+    "selector-stats": { type: "boolean", default: false },
+    theme: { type: "string", default: "light" },
+    "thread-cpu-time": { type: "boolean", default: false },
+    "first-pair-screenshots": { type: "boolean", default: false },
     "invalidation-tracking": { type: "boolean", default: false },
   },
 });
+const trace = values.trace || values["selector-stats"];
+if (values.theme !== "light" && values.theme !== "dark") {
+  throw new Error("theme must be light or dark");
+}
+const theme = values.theme;
 const pairs = Number(values.pairs);
 if (!Number.isInteger(pairs) || pairs < 1) {
   throw new Error("pairs must be a positive integer");
@@ -91,19 +104,32 @@ type Result = {
   bundle: number;
   pair: number;
   status: "passed" | "failed";
+  hostLoadAverage: number[];
   wallMs?: number;
   scriptMs?: number;
   taskMs?: number;
   layoutMs?: number;
   styleMs?: number;
   requests?: Record<string, number>;
-  domBefore?: { nodes: number; menuItems: number };
-  domAfter?: { nodes: number; menuItems: number };
+  domBefore?: { nodes: number; menuItems: number; namedAnchors: number };
+  domAfter?: { nodes: number; menuItems: number; namedAnchors: number };
+  rowIdentity?: { initial: number; created: number; retained: number; final: number };
   trace?: ReturnType<typeof summarizeInteractionTrace>;
+  longTaskDetails?: ReturnType<typeof summarizeLongTaskCpuProfiles>;
+  selectorStats?: { artifact: string; stylePasses: number; selectorCount: number };
   error?: string;
   artifactPrefix: string;
 };
 const results: Result[] = [];
+const pairHostObservations: Array<{
+  step: string;
+  viewport: string;
+  pair: number;
+  startedAt: string;
+  startLoad: number[];
+  endedAt: string;
+  endLoad: number[];
+}> = [];
 const servers: Array<{
   directory: string;
   build: { buildId: string; version: string };
@@ -144,10 +170,15 @@ try {
           cpus: os.cpus().length,
           load: os.loadavg(),
         },
-        collection: values.trace
+        collection: trace
           ? "CDP trace + 1ms CPU profiler (overhead included)"
           : "untraced CDP metrics",
-        invalidationTracking: values.trace && values["invalidation-tracking"],
+        metricTimeDomain: values["thread-cpu-time"] ? "threadTicks" : "timeTicks",
+        screenshots: values["first-pair-screenshots"] ? "first pair per cell" : "all",
+        invalidationTracking:
+          trace && (values["invalidation-tracking"] || values["selector-stats"]),
+        selectorStats: values["selector-stats"],
+        theme,
         fixture: { sessions: 1000, messagesPerSession: 400, models: 1000, cronJobs: 500 },
         acceptance:
           "For fixed steps: >=10 serial AB pairs per viewport, all median/p95/min/max cells reviewed; any >20% regression stops landing. No boot growth beyond 64 B.",
@@ -171,10 +202,13 @@ try {
   for (const viewport of viewports) {
     for (const scenario of scenarios) {
       for (let pair = 0; pair < pairs; pair++) {
+        const startedAt = new Date().toISOString();
+        const startLoad = os.loadavg();
         for (const [bundle, slot] of servers.entries()) {
           const context = await browser.newContext({
             viewport: { width: viewport.width, height: viewport.height },
             serviceWorkers: "block",
+            colorScheme: theme,
           });
           const page = await context.newPage();
           page.setDefaultTimeout(15_000);
@@ -182,19 +216,21 @@ try {
           await page.addInitScript("globalThis.__name = (fn) => fn");
           const errors: string[] = [];
           page.on("pageerror", (error) => errors.push(error.message));
-          const artifactPrefix = `${viewport.name}-${scenario.id}-${pair + 1}-${bundle}`;
+          const artifactPrefix = `${viewport.name}-${theme}-${scenario.id}-${pair + 1}-${bundle}`;
           const result: Result = {
             step: scenario.id,
             viewport: viewport.name,
             pair,
             bundle,
             status: "failed",
+            hostLoadAverage: os.loadavg(),
             artifactPrefix,
           };
           let cdp: CDPSession | undefined;
           let tracing = false;
           let profiling = false;
           const events: unknown[] = [];
+          const styleSheets = new Map<string, InteractionStyleSheet>();
           try {
             const fixture = createInteractionFixture(slot.build.buildId, slot.build.version);
             const sessions = createTeamScaleSidebarListOwner({
@@ -218,17 +254,41 @@ try {
             await scenario.prepare(page, gateway);
             await page.evaluate(() => document.fonts.ready.then(() => undefined));
             await settle(page);
+            await page.locator(`html[data-theme-mode="${theme}"]`).waitFor({ state: "attached" });
             cdp = await context.newCDPSession(page);
-            await cdp.send("Performance.enable");
-            if (values.trace) {
+            await cdp.send("Performance.enable", {
+              timeDomain: values["thread-cpu-time"] ? "threadTicks" : "timeTicks",
+            });
+            if (values["selector-stats"]) {
+              cdp.on(
+                "CSS.styleSheetAdded",
+                ({ header }: { header: InteractionStyleSheet & { styleSheetId: string } }) =>
+                  styleSheets.set(header.styleSheetId, {
+                    sourceURL: header.sourceURL,
+                    origin: header.origin,
+                    title: header.title,
+                    startLine: header.startLine,
+                    startColumn: header.startColumn,
+                  }),
+              );
+              await cdp.send("DOM.enable");
+              await cdp.send("CSS.enable");
+            }
+            if (trace) {
               cdp.on("Tracing.dataCollected", ({ value }: { value: unknown[] }) =>
                 events.push(...value),
               );
               await cdp.send("Tracing.start", {
                 categories: [
                   "toplevel,blink.user_timing,devtools.timeline",
-                  ...(values["invalidation-tracking"]
+                  ...(values["invalidation-tracking"] || values["selector-stats"]
                     ? ["disabled-by-default-devtools.timeline.invalidationTracking"]
+                    : []),
+                  ...(values["selector-stats"]
+                    ? [
+                        "disabled-by-default-devtools.timeline.css",
+                        "disabled-by-default-blink.debug",
+                      ]
                     : []),
                 ].join(","),
                 transferMode: "ReportEvents",
@@ -244,8 +304,39 @@ try {
               page.evaluate(() => ({
                 nodes: document.querySelectorAll("*").length,
                 menuItems: document.querySelectorAll('[role^="menuitem"]').length,
+                namedAnchors: [...document.querySelectorAll<HTMLElement>("[style]")].filter(
+                  (element) => element.style.getPropertyValue("anchor-name"),
+                ).length,
               }));
             result.domBefore = await countDom();
+            const rowProbe = scenario.rowSelector
+              ? await page.evaluateHandle((selector) => {
+                  const original = [...document.querySelectorAll(selector)];
+                  const seen = new WeakSet(original);
+                  const state = { original, created: 0 };
+                  const observer = new MutationObserver((records) => {
+                    for (const record of records) {
+                      for (const node of record.addedNodes) {
+                        if (!(node instanceof Element)) {
+                          continue;
+                        }
+                        const rows = [...node.querySelectorAll(selector)];
+                        if (node.matches(selector)) {
+                          rows.push(node);
+                        }
+                        for (const row of rows) {
+                          if (!seen.has(row)) {
+                            seen.add(row);
+                            state.created++;
+                          }
+                        }
+                      }
+                    }
+                  });
+                  observer.observe(document.body, { childList: true, subtree: true });
+                  return { state, observer };
+                }, scenario.rowSelector)
+              : undefined;
             const before = await metrics(cdp);
             await page.evaluate(() => performance.mark("interaction:start"));
             const start = performance.now();
@@ -255,6 +346,19 @@ try {
             await page.evaluate(() => performance.mark("interaction:end"));
             const after = await metrics(cdp);
             result.domAfter = await countDom();
+            if (rowProbe && scenario.rowSelector) {
+              result.rowIdentity = await rowProbe.evaluate(({ state, observer }, selector) => {
+                observer.disconnect();
+                const current = new Set(document.querySelectorAll(selector));
+                return {
+                  initial: state.original.length,
+                  created: state.created,
+                  retained: state.original.filter((row) => current.has(row)).length,
+                  final: current.size,
+                };
+              }, scenario.rowSelector);
+              await rowProbe.dispose();
+            }
             for (const [key, name] of [
               ["scriptMs", "ScriptDuration"],
               ["taskMs", "TaskDuration"],
@@ -315,6 +419,23 @@ try {
                       start: "interaction:start",
                       end: "interaction:end",
                     });
+                    if (values["selector-stats"]) {
+                      const selectors = summarizeInteractionSelectors(
+                        events,
+                        result.trace,
+                        styleSheets,
+                      );
+                      const artifact = `${artifactPrefix}.selectors.json`;
+                      await writeFile(
+                        path.join(artifactDir, artifact),
+                        JSON.stringify(selectors, null, 2),
+                      );
+                      result.selectorStats = {
+                        artifact,
+                        stylePasses: selectors.stylePasses,
+                        selectorCount: selectors.selectors.length,
+                      };
+                    }
                     if (profile) {
                       const clipped = clipInteractionCpuProfile(
                         profile,
@@ -325,12 +446,21 @@ try {
                         assetBaseUrl: new URL("assets/", slot.server.baseUrl).href,
                         assetDirectory: path.join(slot.directory, "assets"),
                       });
+                      result.longTaskDetails = summarizeLongTaskCpuProfiles(
+                        {
+                          ...mapped.profile,
+                          startTime: clipped.startTime,
+                          endTime: clipped.endTime,
+                        },
+                        result.trace.longTaskIntervals,
+                      );
                       await writeFile(
                         path.join(artifactDir, `${artifactPrefix}.hotspots.json`),
                         JSON.stringify(
                           {
                             mappedFrames: mapped.mappedFrames,
                             unmappedFrames: mapped.unmappedFrames,
+                            longTasks: result.longTaskDetails,
                             ...summarizeCpuProfile(mapped.profile, { includeTables: true }),
                           },
                           null,
@@ -341,9 +471,11 @@ try {
                   }
                 });
               }
-              await capture(() =>
-                page.screenshot({ path: path.join(artifactDir, `${artifactPrefix}.png`) }),
-              );
+              if (!values["first-pair-screenshots"] || pair === 0 || result.status === "failed") {
+                await capture(() =>
+                  page.screenshot({ path: path.join(artifactDir, `${artifactPrefix}.png`) }),
+                );
+              }
             } finally {
               await capture(async () => cdp?.detach());
               await capture(() => context.close());
@@ -361,6 +493,19 @@ try {
           await writeFile(path.join(artifactDir, "results.json"), JSON.stringify(results, null, 2));
           console.log(JSON.stringify(result));
         }
+        pairHostObservations.push({
+          step: scenario.id,
+          viewport: viewport.name,
+          pair,
+          startedAt,
+          startLoad,
+          endedAt: new Date().toISOString(),
+          endLoad: os.loadavg(),
+        });
+        await writeFile(
+          path.join(artifactDir, "pair-host-load.json"),
+          JSON.stringify(pairHostObservations, null, 2),
+        );
       }
     }
   }
@@ -394,7 +539,7 @@ const summary = viewports
               row.status === "failed",
           ).length,
           trace:
-            values.trace && samples.length
+            trace && samples.length
               ? Object.fromEntries(
                   (
                     [
@@ -484,9 +629,8 @@ const rows = summary
       ? [
           "png",
           "status.json",
-          ...(values.trace && representative.trace
-            ? ["trace.json", "hotspots.json", "cpuprofile"]
-            : []),
+          ...(trace && representative.trace ? ["trace.json", "hotspots.json", "cpuprofile"] : []),
+          ...(representative.selectorStats ? ["selectors.json"] : []),
         ]
           .map(
             (suffix) =>
@@ -499,7 +643,7 @@ const rows = summary
   .join("\n");
 await writeFile(
   path.join(artifactDir, "report.html"),
-  `<!doctype html><meta charset="utf-8"><title>Warm interactions</title><style>body{font:15px system-ui;padding:24px}table{border-collapse:collapse}td,th{padding:8px;border:1px solid #bbb;text-align:left}a{margin-right:6px}</style><h1>Production-renderer warm interactions</h1><p>${values.trace ? "Trace and CPU sampling overhead included." : "Untraced CDP metric deltas."} Cells: median / p95 / min–max (ms). Wall time in JSON is automation-to-assertion, not INP. Synthetic Gateway; native clocks. <a href="manifest.json">Manifest</a> <a href="summary.json">Summary</a></p><table><tr><th>Viewport</th><th>Step</th><th>Bundle</th><th>Pass/fail</th><th>Script</th><th>Task</th><th>Layout</th><th>Style</th><th>Long tasks</th><th>Evidence</th></tr>${rows}</table>`,
+  `<!doctype html><meta charset="utf-8"><title>Warm interactions</title><style>body{font:15px system-ui;padding:24px}table{border-collapse:collapse}td,th{padding:8px;border:1px solid #bbb;text-align:left}a{margin-right:6px}</style><h1>Production-renderer warm interactions</h1><p>${trace ? "Trace and CPU sampling overhead included." : "Untraced CDP metric deltas."} ${values["selector-stats"] ? "CSS selector instrumentation overhead included; selectors ranked by elapsed microseconds." : ""} Theme: ${theme}. Cells: median / p95 / min–max (ms). Wall time in JSON is automation-to-assertion, not INP. Synthetic Gateway; native clocks. <a href="manifest.json">Manifest</a> <a href="summary.json">Summary</a></p><table><tr><th>Viewport</th><th>Step</th><th>Bundle</th><th>Pass/fail</th><th>Script</th><th>Task</th><th>Layout</th><th>Style</th><th>Long tasks</th><th>Evidence</th></tr>${rows}</table>`,
 );
 console.log(`Warm interaction artifacts: ${artifactDir}`);
 if (results.some((result) => result.status === "failed")) {

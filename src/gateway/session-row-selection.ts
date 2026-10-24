@@ -21,7 +21,7 @@ import { matchesSessionArchiveFilter } from "./session-utils-core.js";
 const sentinel = (key: string) => key === "global" || key === "unknown";
 type SelectionScope = ReturnType<ReturnType<typeof prepareSessionRowScopes>["select"]>;
 const EMPTY_KEYS: ReadonlySet<string> = new Set();
-type IndexedTarget = { row: SelectionTarget; pair: SessionEntryPair; position: number };
+type IndexedTarget = { row: SelectionTarget; pair: SessionEntryPair };
 
 export function createSessionRowSelection(
   cfg: OpenClawConfig,
@@ -179,13 +179,11 @@ export function createSessionRowSelection(
     }
     changedInvolvements.clear();
   };
-  let position = 0;
   const keyFor = (row: Pick<SelectionTarget, "key" | "agentId">) =>
     sentinel(row.key) && activeOnly ? JSON.stringify([row.key, row.agentId]) : row.key;
   const update = (id: string, key: string, row?: SelectionTarget) => {
     const previous = groups.get(key);
     const oldWinner = winners.get(key);
-    const candidate = previous?.get(id);
     const eligible =
       row &&
       scope.paths.has(row.storeTarget.storePath) &&
@@ -194,7 +192,7 @@ export function createSessionRowSelection(
         isConfiguredGatewaySessionEntry(cfg, scope.configuredAgentIds, row.key, row.entry));
     const group = previous ?? new Map<string, IndexedTarget>();
     if (eligible) {
-      group.set(id, { row, pair: [key, row.entry], position: candidate?.position ?? position++ });
+      group.set(id, { row, pair: [key, row.entry] });
       groups.set(key, group);
     } else {
       group.delete(id);
@@ -306,6 +304,7 @@ export function createSessionRowSelection(
     read(
       sortBy?: SessionsListParams["sortBy"],
       candidates?: Iterable<Pick<SelectionTarget, "key" | "agentId">>,
+      residentOrder?: Iterable<Pick<SelectionTarget, "key" | "agentId" | "storeTarget">>,
     ) {
       assertCanonical();
       if (!candidates && !partitions) {
@@ -325,15 +324,23 @@ export function createSessionRowSelection(
           let entries = !candidates && sortBy && orders.get(orderKey)?.entries;
           if (!entries) {
             const targets = (
-              candidates
-                ? [...new Set(Array.from(candidates, keyFor))].flatMap(
-                    (key) => winners.get(key) ?? [],
-                  )
-                : [...winners.values()]
-            ).filter((target) => matchesSessionArchiveFilter(target.row.entry, archived));
-            if (!sortBy) {
-              targets.sort((a, b) => a.position - b.position);
-            }
+              residentOrder
+                ? Array.from(residentOrder, (row) => {
+                    const target = winners.get(keyFor(row));
+                    return target?.row.agentId === row.agentId &&
+                      target.row.storeTarget.storePath === row.storeTarget.storePath
+                      ? target
+                      : undefined;
+                  })
+                : candidates
+                  ? [...new Set(Array.from(candidates, keyFor))].flatMap(
+                      (key) => winners.get(key) ?? [],
+                    )
+                  : [...winners.values()]
+            ).filter(
+              (target): target is IndexedTarget =>
+                target !== undefined && matchesSessionArchiveFilter(target.row.entry, archived),
+            );
             entries = targets.map((target) => target.pair);
             if (sortBy) {
               entries.sort((a, b) => compareSessionEntryPairs(a, b, sortBy));

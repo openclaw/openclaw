@@ -117,3 +117,46 @@ describe("custom API provider generation ownership", () => {
     });
   });
 });
+
+it.each(["unrelated endpoint", "declared provider owner"] as const)(
+  "does not replace a %s with endpoint hooks",
+  (scenario) => {
+    const config: OpenClawConfig = {
+      models: {
+        providers: {
+          custom: {
+            api: "openai-completions",
+            baseUrl:
+              scenario === "unrelated endpoint"
+                ? "https://unrelated.example/v1"
+                : "https://native.example/v1",
+            models: [],
+          },
+        },
+      },
+      plugins: { slots: { memory: "none" } },
+    };
+    const metadataSnapshot = createPluginMetadataSnapshotFixture({
+      plugins: [
+        {
+          id: "endpoint-owner",
+          providers: ["native"],
+          providerEndpoints: [
+            { endpointClass: "modelstudio-native", baseUrls: ["https://native.example/v1"] },
+          ],
+        },
+        ...(scenario === "declared provider owner"
+          ? [{ id: "direct-owner", providers: ["custom"] }]
+          : []),
+      ],
+    });
+    const plan = resolveAgentRuntimePluginLoadPlan({
+      config,
+      workspaceDir: "/fixture/workspace",
+      basePluginIds: [],
+      selections: [{ provider: "custom", modelId: "model" }],
+      metadataSnapshot,
+    });
+    expect(plan.pluginIds).toEqual(scenario === "declared provider owner" ? ["direct-owner"] : []);
+  },
+);

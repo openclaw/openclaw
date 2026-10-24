@@ -328,14 +328,6 @@ function resolveMatrixAccountConfigSnapshot(
   };
 }
 
-export function resolveMatrixConfigForAccount(
-  cfg: CoreConfig,
-  accountId: string,
-  env: NodeJS.ProcessEnv = process.env,
-): MatrixResolvedConfig {
-  return resolveMatrixAccountConfigSnapshot(cfg, accountId, env).resolved;
-}
-
 function resolveImplicitMatrixAccountId(
   cfg: CoreConfig,
   env: NodeJS.ProcessEnv = process.env,
