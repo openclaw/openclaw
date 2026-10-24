@@ -7,6 +7,7 @@ import { clearBatchAdmittedToolCallsForRun } from "../../agent-tools.before-tool
 import type { HookContext } from "../../agent-tools.before-tool-call.types.js";
 import { normalizeCodeModeExecBeforeHookParams } from "../../code-mode-control-tools.js";
 import type { Agent } from "../../runtime/index.js";
+import { getToolInvocationMetadata } from "../../tool-invocation-metadata.js";
 import { admitToolCallBatch } from "../../tool-loop-admission.js";
 import { hashToolCall, observeRepeatedToolError } from "../../tool-loop-detection.js";
 import { log } from "../logger.js";
@@ -42,6 +43,14 @@ export function createToolLoopBatchAdmission(ctx: HookContext): InternalBeforeTo
       const admission = await admitToolCallBatch(canonicalCalls, ctx);
       const { commitReadyCalls, releaseSkippedCalls, ...result } = admission;
       return attachInternalToolBatchLifecycle(result, {
+        executionMode: canonicalCalls.some(
+          (call) =>
+            !call.validationFailure &&
+            call.tool &&
+            getToolInvocationMetadata(call.tool, call.args).executionMode === "sequential",
+        )
+          ? "sequential"
+          : undefined,
         commitReadyCalls(readyCalls) {
           for (const ready of readyCalls) {
             const call = canonicalCalls.find((entry) => entry.toolCall.id === ready.toolCallId);

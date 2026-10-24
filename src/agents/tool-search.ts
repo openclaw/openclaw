@@ -9,6 +9,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { bindGatewayToolPolicyControl } from "./agent-tool-metadata.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import type { AgentToolResult, AgentToolUpdateCallback } from "./runtime/index.js";
+import { bindToolInvocationResolver } from "./tool-invocation-metadata.js";
 import { resolveToolResultFailureKind } from "./tool-result-error.js";
 import {
   INCOMPLETE_INSTRUCTIONS_HINT,
@@ -301,7 +302,7 @@ function resolveSearchParameters(searchDefaultLimit: number): AnyAgentTool["para
 export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[] {
   const config = resolveToolSearchConfig(ctx.runtimeConfig ?? ctx.config);
   const runtime = new ToolSearchRuntime(ctx, config, { validateInput: true });
-  return [
+  const tools: [AnyAgentTool, AnyAgentTool, AnyAgentTool] = [
     {
       name: TOOL_SEARCH_RAW_TOOL_NAME,
       label: "Tool Search",
@@ -400,8 +401,13 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
         }
       },
     },
-  ].map((tool) => {
+  ];
+  for (const tool of tools) {
     bindGatewayToolPolicyControl(tool);
-    return tool;
+  }
+  bindToolInvocationResolver(tools[2], (args) => {
+    const call = readToolSearchCallArgs(args, resolveCatalog(ctx));
+    return runtime.invocationMetadata(call.id, call.input);
   });
+  return tools;
 }

@@ -29,6 +29,7 @@ import {
   isTrustedToolExecutionPreflightError,
   protectNetworkToolExecutionError,
 } from "./tool-execution-error.js";
+import { getToolInvocationMetadata } from "./tool-invocation-metadata.js";
 import { isAgentToolReplaySafe } from "./tool-replay-safety.js";
 import { isToolResultError } from "./tool-result-error.js";
 import { runWithToolResultDelivery } from "./tool-result-limits.js";
@@ -305,6 +306,13 @@ export class ToolSearchRuntime {
       this.observeNetworkContent(options.parentToolCallId);
     }
     return describeToolSearchCatalogEntry(entry);
+  };
+
+  invocationMetadata = (id: string, input: unknown) => {
+    const entry = findEntry(resolveCatalog(this.ctx), id, {
+      codeModeSkills: this.ctx.codeModeSkills,
+    });
+    return getToolInvocationMetadata(entry.tool, input);
   };
 
   call = async (id: string, input?: unknown, options?: ToolSearchCallOptions) =>

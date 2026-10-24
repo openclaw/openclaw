@@ -68,17 +68,17 @@ describe("wrapToolWithAbortSignal", () => {
   });
 
   it.each(["direct", "prepared"] as const)(
-    "only preserves explicit tool handoffs through %s execution",
+    "rejects a plugin-name lookalike handoff through %s execution",
     async (mode) => {
-      for (const [name, args, yields] of [
-        ["plugins", { action: "reloadAndResume" }, true],
-        ["plugins", { action: "reload" }, false],
-        ["plugins", { action: "list" }, false],
-        ["github_publish", { action: "prepare_pr" }, true],
-        ["github_publish", { workspacePath: "/task" }, true],
-        ["github_publish", { action: "publish", workspacePath: "/task" }, true],
-        ["github_publish", { action: "publish" }, false],
-        ["github_publish", { action: "edit", workspacePath: "/task" }, false],
+      for (const [name, args] of [
+        ["plugins", { action: "reloadAndResume" }],
+        ["plugins", { action: "reload" }],
+        ["plugins", { action: "list" }],
+        ["github_publish", { action: "prepare_pr" }],
+        ["github_publish", { workspacePath: "/task" }],
+        ["github_publish", { action: "publish", workspacePath: "/task" }],
+        ["github_publish", { action: "publish" }],
+        ["github_publish", { action: "edit", workspacePath: "/task" }],
       ] as const) {
         const runAbort = new AbortController();
         const result = emptyResult();
@@ -107,11 +107,7 @@ describe("wrapToolWithAbortSignal", () => {
         } else {
           execution = wrapped.execute("handoff", args);
         }
-        if (yields) {
-          await expect(execution).resolves.toBe(result);
-        } else {
-          await expect(execution).rejects.toMatchObject(abortError);
-        }
+        await expect(execution).rejects.toMatchObject(abortError);
       }
     },
   );

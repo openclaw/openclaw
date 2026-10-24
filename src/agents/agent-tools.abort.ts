@@ -1,4 +1,3 @@
-import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   attachInternalToolExecutionPreparer,
   getInternalToolExecutionPreparer,
@@ -12,6 +11,7 @@ import { copyAgentToolMetadata } from "./agent-tool-metadata.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { isCodeModeControlTool } from "./code-mode-control-tools.js";
 import { markToolExecutionNotStarted as registerTrustedToolNoStartError } from "./tool-effect-receipt.js";
+import { getToolInvocationMetadata } from "./tool-invocation-metadata.js";
 
 export type ToolTurnHandoff = { readonly code: "sessions_yield"; readonly turnHandoff: true };
 type ToolTurnHandoffReceipt = { status: "started"; async: true; yielded?: true; message: string };
@@ -89,17 +89,7 @@ export function raceWithAbortSignal<T>(
   });
 }
 
-function isTurnYieldCall(tool: AnyAgentTool, args: unknown): boolean {
-  const input = asOptionalObjectRecord(args);
-  return (
-    tool.name === "sessions_yield" ||
-    (tool.name === "plugins" && input?.action === "reloadAndResume") ||
-    (tool.name === "github_publish" &&
-      (input?.action === "prepare_pr" ||
-        ((input?.action ?? "publish") === "publish" && typeof input?.workspacePath === "string")))
-  );
-}
-
+/** Wrap a tool so every execute call observes the supplied run abort signal. */
 export function wrapToolWithAbortSignal(
   tool: AnyAgentTool,
   abortSignal?: AbortSignal,
@@ -119,16 +109,15 @@ export function wrapToolWithAbortSignal(
       if (combinedSignal.aborted) {
         throwAbortError();
       }
+      const yieldRunSignal = getToolInvocationMetadata(tool, params).ownsTurnHandoff
+        ? abortSignal
+        : undefined;
       const execution = execute(toolCallId, params, combinedSignal, onUpdate);
       // Code Mode cancels its worker and bridges itself. Racing that owner loses
       // completed output and turns an intentional permission change into unknown dispatch.
       return ownsCancellationOutcome
         ? await execution
-        : await raceWithAbortSignal(
-            execution,
-            combinedSignal,
-            isTurnYieldCall(tool, params) ? abortSignal : undefined,
-          );
+        : await raceWithAbortSignal(execution, combinedSignal, yieldRunSignal);
     },
   };
   copyAgentToolMetadata(tool, wrappedTool, (source) =>
@@ -143,7 +132,9 @@ export function wrapToolWithAbortSignal(
       if (combinedSignal.aborted) {
         throwAbortError();
       }
-      const yieldRunSignal = tool.name === "sessions_yield" ? abortSignal : undefined;
+      const yieldRunSignal = getToolInvocationMetadata(tool, params.args).ownsTurnHandoff
+        ? abortSignal
+        : undefined;
       const sourcePreparation = sourcePreparer({ ...params, signal: combinedSignal });
       let prepared;
       try {
@@ -165,14 +156,14 @@ export function wrapToolWithAbortSignal(
           if (combinedSignal.aborted) {
             throwAbortError();
           }
+          const preparedYieldRunSignal = getToolInvocationMetadata(tool, prepared.args)
+            .ownsTurnHandoff
+            ? abortSignal
+            : undefined;
           const execution = prepared.execute(onImplementationStart);
           return ownsCancellationOutcome
             ? execution
-            : raceWithAbortSignal(
-                execution,
-                combinedSignal,
-                isTurnYieldCall(tool, prepared.args) ? abortSignal : undefined,
-              );
+            : raceWithAbortSignal(execution, combinedSignal, preparedYieldRunSignal);
         },
         dispose: prepared.dispose,
       };

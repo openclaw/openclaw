@@ -43,6 +43,7 @@ import { projectAgentToolDefinition } from "./prepared-tool-surface.js";
 import type { AgentTool as AnyAgentTool, AgentToolResult } from "./runtime/index.js";
 import type { ToolDefinition } from "./sessions/index.js";
 import { ToolInputError } from "./tool-input-error.js";
+import { copyToolInvocationMetadata } from "./tool-invocation-metadata.js";
 import { readToolOperatorHint } from "./tool-operator-hint.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
 import { copyAgentToolReplaySafety } from "./tool-replay-safety.js";
@@ -282,6 +283,7 @@ export function toToolDefinitions(
     } satisfies ToolDefinition;
     toolDefinitionSources.set(definition, tool);
     copyCodeModeControlToolIdentity(tool, definition);
+    copyToolInvocationMetadata(tool, definition);
     copyAgentToolReplaySafety(tool, definition);
     if (!sourcePreparer) {
       return beforeHookWrapped ? definition : attachAdapterExecutionPreparer(definition);
