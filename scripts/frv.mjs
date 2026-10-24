@@ -3488,6 +3488,9 @@ function print(value, json) {
       `plan: ${value.childRerun.mode} ${value.childRerun.producer ?? value.childRerun.failed.join(", ")}`,
     );
   }
+  for (const rerun of value.payloadReruns ?? []) {
+    console.log(`plan: ${rerun.child} ${rerun.mode} ${rerun.producer ?? rerun.failed.join(", ")}`);
+  }
   if (value.action) {
     console.log(`action: ${value.action}`);
   }

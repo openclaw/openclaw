@@ -2192,6 +2192,12 @@ describe("FRV child rerun", () => {
       rerunFailed: vi.fn(),
       rerunRun: vi.fn(async () => scenario.client.rerunFailed()),
     };
+    await expect(
+      continueFailed(plan([scenario.selected]), "77", client, { dryRun: true }),
+    ).resolves.toMatchObject({
+      action: "would-rerun",
+      payloadReruns: [{ child: "normalCi", failed: failed.toSorted(), mode: "all-jobs" }],
+    });
     const log = vi.fn();
     await withFastPolling(() =>
       expect(
