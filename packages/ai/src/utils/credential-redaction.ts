@@ -290,7 +290,6 @@ export function projectDiagnosticValue(
     }
     const keys = Reflect.ownKeys(value);
     const maxKeys = policy.maxKeys ?? 64;
-    const record = value as Record<string, unknown>;
     // Branded producer output holds only own enumerable data properties in native key order,
     // so reading it directly matches the descriptor snapshot without allocating one per key.
     const trusted =
@@ -300,7 +299,7 @@ export function projectDiagnosticValue(
     let descriptors: PropertyDescriptorMap | undefined;
     if (!trusted) {
       // Snapshot descriptors before recursion; the map restores numeric key order from proxies.
-      descriptors = Object.create(null) as PropertyDescriptorMap;
+      const snapshot: PropertyDescriptorMap = Object.create(null);
       for (let index = 0; index < Math.min(keys.length, maxKeys); index += 1) {
         const key = keys[index];
         if (typeof key !== "string") {
@@ -308,12 +307,13 @@ export function projectDiagnosticValue(
         }
         const descriptor = Object.getOwnPropertyDescriptor(value, key);
         if (descriptor) {
-          descriptors[key] = descriptor;
+          snapshot[key] = descriptor;
         }
       }
+      descriptors = snapshot;
     }
     const field = (key: string): unknown =>
-      descriptors ? descriptors[key]?.value : Object.hasOwn(record, key) ? record[key] : undefined;
+      descriptors ? descriptors[key]?.value : Object.hasOwn(value, key) ? Reflect.get(value, key) : undefined;
     state.changed ||= keys.length > maxKeys;
     seen.add(value);
     const out = (Array.isArray(value) ? [] : {}) as Record<string, unknown>;
@@ -342,7 +342,7 @@ export function projectDiagnosticValue(
         }
         child = descriptor.value;
       } else {
-        child = record[key];
+        child = Reflect.get(value, key);
       }
       const normalized = policy.omitField?.(key) ? undefined : normalizeDiagnosticFieldName(key);
       if (
