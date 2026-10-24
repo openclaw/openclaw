@@ -1,7 +1,13 @@
+import { isRouteId, type RouteId } from "../app-route-paths.ts";
 import { listen } from "../lib/reactive/listener.ts";
-import { canPreload } from "../lib/route-preload.ts";
 import type { ApplicationContext } from "./context.ts";
 import type { ControlUiReadinessOutlet } from "./control-ui-readiness.ts";
+
+function canPreload(): boolean {
+  // SAFETY: Network Information is optional and is not in TypeScript's DOM library.
+  const connection = (navigator as Navigator & { connection?: { saveData?: boolean } }).connection;
+  return navigator.onLine && !connection?.saveData && document.visibilityState === "visible";
+}
 
 /** Fetch and compile code without evaluating modules or applying route styles. */
 export function connectNavigationPrefetch(options: {
@@ -11,19 +17,18 @@ export function connectNavigationPrefetch(options: {
   outlet: () => Pick<ControlUiReadinessOutlet, "presentationSettled"> | undefined;
   resourceBasePath: string;
   transcriptsReady: () => boolean;
+  preloadRoute: (routeId: RouteId) => Promise<void>;
 }): () => void {
   const descriptor = document
     .getElementById("openclaw-navigation-preloads")
     ?.getAttribute("content");
-  if (!descriptor) {
-    return () => {};
-  }
   const base = new URL(`${options.resourceBasePath.replace(/\/$/u, "")}/`, location.origin);
   const pending = new Set<string>();
   const seen = new Set(performance.getEntriesByType("resource").map((entry) => entry.name));
   const links = new Map<HTMLLinkElement, () => void>();
+  const intentTimers = new Map<Element, ReturnType<typeof setTimeout>>();
   const abort = new AbortController();
-  let manifest: Record<string, string[]> | undefined;
+  let manifest: Record<string, string[]> | undefined = descriptor ? undefined : {};
   let active = true;
   let running = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -75,7 +80,7 @@ export function connectNavigationPrefetch(options: {
     }
     running = true;
     try {
-      if (!manifest) {
+      if (!manifest && descriptor) {
         const response = await fetch(new URL(descriptor, base), {
           signal: abort.signal,
           priority: "low",
@@ -141,11 +146,68 @@ export function connectNavigationPrefetch(options: {
       schedule();
     }
   };
+  const prioritize = (key: string) => {
+    if (!manifest || pending.has(key)) {
+      intent = key;
+      if (!running && ready()) {
+        cancel();
+        void warm();
+      }
+    }
+  };
+  const preloadRoute = async (target: Element, routeId: RouteId) => {
+    intentTimers.delete(target);
+    if (
+      !target.isConnected ||
+      !ready() ||
+      options.router.getState().matches[0]?.routeId === routeId
+    ) {
+      return;
+    }
+    prioritize(routeId === "config" ? "appearance" : routeId);
+    try {
+      await options.preloadRoute(routeId);
+    } catch {
+      // Actual navigation owns route-load failures.
+    }
+  };
   const onIntent = (event: Event) => {
     if (!(event.target instanceof Element)) {
       return;
     }
-    const key = event.target.closest(".topbar-search")
+    const routeTarget = event.target.closest("[data-openclaw-preload-route]");
+    const leaving = event.type === "pointerout" || event.type === "focusout";
+    if (routeTarget) {
+      const related =
+        event instanceof MouseEvent || event instanceof FocusEvent ? event.relatedTarget : null;
+      if (related instanceof Node && routeTarget.contains(related)) {
+        return;
+      }
+      if (leaving) {
+        clearTimeout(intentTimers.get(routeTarget));
+        intentTimers.delete(routeTarget);
+        return;
+      }
+      const routeId = routeTarget.getAttribute("data-openclaw-preload-route");
+      if (routeId && isRouteId(routeId)) {
+        if (event.type === "touchstart") {
+          clearTimeout(intentTimers.get(routeTarget));
+          void preloadRoute(routeTarget, routeId);
+        } else if (!intentTimers.has(routeTarget)) {
+          intentTimers.set(
+            routeTarget,
+            setTimeout(() => void preloadRoute(routeTarget, routeId), 50),
+          );
+        }
+      }
+      return;
+    }
+    if (leaving) {
+      return;
+    }
+    const key = event.target.closest(
+      ".topbar-search, .sidebar-brand__search, .shell-chrome-controls__search",
+    )
       ? "palette"
       : event.target.closest(".chat-controls__model-trigger")
         ? "model-picker"
@@ -154,19 +216,18 @@ export function connectNavigationPrefetch(options: {
           : event.target.closest('[data-value="command:debug-overlay"]')
             ? "debug"
             : undefined;
-    if (key && (!manifest || pending.has(key))) {
-      intent = key;
-      if (!running && ready()) {
-        cancel();
-        void warm();
-      }
+    if (key) {
+      prioritize(key);
     }
   };
   const stops = [
     options.router.subscribe(schedule),
     options.gateway.subscribe(schedule),
     listen(options.shell, "pointerover", onIntent),
+    listen(options.shell, "pointerout", onIntent),
     listen(options.shell, "focusin", onIntent),
+    listen(options.shell, "focusout", onIntent),
+    listen(options.shell, "touchstart", onIntent, { passive: true }),
     listen(document, "visibilitychange", schedule),
     listen(window, "online", schedule),
   ];
@@ -175,6 +236,8 @@ export function connectNavigationPrefetch(options: {
     active = false;
     cancel();
     abort.abort();
+    intentTimers.forEach((intentTimer) => clearTimeout(intentTimer));
+    intentTimers.clear();
     stops.forEach((stop) => stop());
     links.forEach((finish, link) => {
       finish();

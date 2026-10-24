@@ -22,6 +22,7 @@ export function connectShellIdle(
     gateway: context.gateway,
     outlet: () => host.routeOutlet,
     resourceBasePath: context.resourceBasePath,
+    preloadRoute: context.preload,
     transcriptsReady: () => {
       const panes = host
         .queryRenderedElements("openclaw-chat-pane")

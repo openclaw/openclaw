@@ -1,5 +1,6 @@
 import { createRoot, createSignal } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
+import type { NavigationRouteId } from "../app-navigation.ts";
 import { i18n } from "../i18n/index.ts";
 import { de } from "../i18n/locales/de.ts";
 import { createIdentityAvatars } from "../lib/identity-avatar-loader.ts";
@@ -111,14 +112,9 @@ it("keeps modified sidebar links native and handles ordinary navigation", () => 
   expect(navigate).toHaveBeenCalledOnce();
 });
 
-it("uses the current preload callbacks without replacing a sidebar link", () => {
+it("exposes current preload eligibility without replacing a sidebar link", () => {
   const SidebarNavLink = renderSidebarNavLink;
-  const preload = vi.fn();
-  const cancel = vi.fn();
-  const [handlers, setHandlers] = createSignal<{
-    onPreload?: (event: Event, immediate?: boolean) => void;
-    onCancelPreload?: (event: Event) => void;
-  }>({});
+  const [preloadRoute, setPreloadRoute] = createSignal<NavigationRouteId | undefined>(undefined);
   const view = render(() => (
     <SidebarNavLink
       href="/sessions"
@@ -126,27 +122,17 @@ it("uses the current preload callbacks without replacing a sidebar link", () => 
       icon={<span />}
       label="Sessions"
       onNavigate={vi.fn()}
-      {...handlers()}
+      preloadRoute={preloadRoute()}
     />
   ));
   const link = view.getByRole("link", { name: "Sessions" });
-  setHandlers({ onPreload: preload, onCancelPreload: cancel });
+  expect(link.hasAttribute("data-openclaw-preload-route")).toBe(false);
+  setPreloadRoute("sessions");
   flush();
-  for (const type of ["focus", "pointerenter", "touchstart", "blur", "pointerleave"]) {
-    link.dispatchEvent(new Event(type, { bubbles: true }));
-  }
-  expect(preload.mock.calls.map(([event, immediate]) => [event.type, immediate])).toEqual([
-    ["focus", undefined],
-    ["pointerenter", undefined],
-    ["touchstart", true],
-  ]);
-  expect(cancel.mock.calls.map(([event]) => event.type)).toEqual(["blur", "pointerleave"]);
-  setHandlers({});
+  expect(link.getAttribute("data-openclaw-preload-route")).toBe("sessions");
+  setPreloadRoute(undefined);
   flush();
-  link.dispatchEvent(new Event("touchstart", { bubbles: true }));
-  link.dispatchEvent(new Event("blur", { bubbles: true }));
-  expect(preload).toHaveBeenCalledTimes(3);
-  expect(cancel).toHaveBeenCalledTimes(2);
+  expect(link.hasAttribute("data-openclaw-preload-route")).toBe(false);
   expect(view.getByRole("link", { name: "Sessions" })).toBe(link);
 });
 

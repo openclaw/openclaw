@@ -33,6 +33,7 @@ export function renderNewSessionLink(params: {
       href={disabled() ? undefined : href()}
       aria-label={params.label}
       aria-disabled={disabled() ? "true" : undefined}
+      data-openclaw-preload-route={disabled() ? undefined : "new-session"}
       tabindex={disabled() ? -1 : undefined}
       onContextMenu={(event: MouseEvent) => {
         // Section menus must not replace the browser's Open Link in New Tab actions.

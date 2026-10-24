@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ApplicationRouter } from "../app-routes.ts";
-import { scheduleRoutePreload } from "../lib/route-preload.ts";
 import { connectNavigationPrefetch } from "./navigation-prefetch.ts";
 
 const cleanups: Array<() => void> = [];
@@ -57,6 +56,7 @@ function setup() {
   const outlet = { presentationSettled: false };
   const transcript = { ready: false };
   const shell = document.body.appendChild(document.createElement("div"));
+  const preloadRoute = vi.fn(async () => {});
   const stop = connectNavigationPrefetch({
     shell,
     resourceBasePath: "/control",
@@ -83,9 +83,10 @@ function setup() {
     },
     outlet: () => outlet,
     transcriptsReady: () => transcript.ready,
+    preloadRoute,
   });
   cleanups.push(stop, () => shell.remove());
-  return { state, outlet, transcript, shell, stop, notify: () => notify() };
+  return { state, outlet, transcript, shell, stop, preloadRoute, notify: () => notify() };
 }
 
 const hints = () =>
@@ -133,56 +134,91 @@ it("waits for presentation, preloads inert assets serially, and yields to naviga
   expect(hints()).toHaveLength(0);
 });
 
-it("prioritizes keyboard intent without mounting a dialog and rechecks Save-Data at effect time", async () => {
+it.each(["topbar-search", "sidebar-brand__search", "shell-chrome-controls__search"])(
+  "prioritizes %s intent without mounting and rechecks Save-Data at effect time",
+  async (searchClass) => {
+    const fixture = setup();
+    fixture.outlet.presentationSettled = true;
+    fixture.transcript.ready = true;
+    const trigger = fixture.shell.appendChild(document.createElement("button"));
+    trigger.className = searchClass;
+    connection.saveData = true;
+    trigger.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+    await idle();
+    expect(fetch).not.toHaveBeenCalled();
+    connection.saveData = false;
+    trigger.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(hints().map((link) => link.href)).toEqual([
+      new URL("/control/assets/palette-1234abcd.js", location.origin).href,
+    ]);
+    expect(fixture.shell.children).toHaveLength(1);
+
+    trigger.className = "chat-controls__model-trigger";
+    trigger.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+    hints().forEach((link) => link.dispatchEvent(new Event("load")));
+    await idle();
+    expect(hints().map((link) => link.href)).toContain(
+      new URL("/control/assets/model-picker-1234abcd.js", location.origin).href,
+    );
+
+    trigger.className = "";
+    trigger.dataset.value = "command:settings";
+    trigger.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+    hints().forEach((link) => link.dispatchEvent(new Event("load")));
+    await idle();
+    expect(hints().map((link) => link.href)).toContain(
+      new URL("/control/assets/appearance-1234abcd.js", location.origin).href,
+    );
+
+    trigger.dataset.value = "command:debug-overlay";
+    trigger.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+    hints().forEach((link) => link.dispatchEvent(new Event("load")));
+    await idle();
+    expect(hints().map((link) => link.href)).toContain(
+      new URL("/control/assets/debug-1234abcd.js", location.origin).href,
+    );
+
+    delete trigger.dataset.value;
+    trigger.dataset.openclawPreloadRoute = "sessions";
+    trigger.dispatchEvent(new Event("pointerover", { bubbles: true }));
+    connection.saveData = true;
+    await vi.advanceTimersByTimeAsync(50);
+    expect(fixture.preloadRoute).not.toHaveBeenCalled();
+
+    connection.saveData = false;
+    trigger.dispatchEvent(new Event("focusin", { bubbles: true }));
+    trigger.dispatchEvent(new Event("focusout", { bubbles: true }));
+    await vi.advanceTimersByTimeAsync(50);
+    expect(fixture.preloadRoute).not.toHaveBeenCalled();
+    trigger.dispatchEvent(new Event("focusin", { bubbles: true }));
+    await vi.advanceTimersByTimeAsync(50);
+    expect(fixture.preloadRoute).toHaveBeenCalledExactlyOnceWith("sessions");
+    fixture.state.status = "loading";
+    trigger.dispatchEvent(new Event("touchstart", { bubbles: true }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fixture.preloadRoute).toHaveBeenCalledTimes(1);
+    fixture.state.status = "success";
+    trigger.dispatchEvent(new Event("touchstart", { bubbles: true }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fixture.preloadRoute).toHaveBeenCalledTimes(2);
+  },
+);
+
+it("keeps native route intent in development without a built asset descriptor", async () => {
+  document.getElementById("openclaw-navigation-preloads")?.remove();
   const fixture = setup();
   fixture.outlet.presentationSettled = true;
   fixture.transcript.ready = true;
-  const trigger = fixture.shell.appendChild(document.createElement("button"));
-  trigger.className = "topbar-search";
-  connection.saveData = true;
-  trigger.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
-  await idle();
-  expect(fetch).not.toHaveBeenCalled();
-  connection.saveData = false;
-  trigger.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
-  await vi.advanceTimersByTimeAsync(0);
-  expect(hints().map((link) => link.href)).toEqual([
-    new URL("/control/assets/palette-1234abcd.js", location.origin).href,
-  ]);
-  expect(fixture.shell.children).toHaveLength(1);
-
-  trigger.className = "chat-controls__model-trigger";
-  trigger.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
-  hints().forEach((link) => link.dispatchEvent(new Event("load")));
-  await idle();
-  expect(hints().map((link) => link.href)).toContain(
-    new URL("/control/assets/model-picker-1234abcd.js", location.origin).href,
-  );
-
-  trigger.className = "";
-  trigger.dataset.value = "command:settings";
-  trigger.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
-  hints().forEach((link) => link.dispatchEvent(new Event("load")));
-  await idle();
-  expect(hints().map((link) => link.href)).toContain(
-    new URL("/control/assets/appearance-1234abcd.js", location.origin).href,
-  );
-
-  trigger.dataset.value = "command:debug-overlay";
-  trigger.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
-  hints().forEach((link) => link.dispatchEvent(new Event("load")));
-  await idle();
-  expect(hints().map((link) => link.href)).toContain(
-    new URL("/control/assets/debug-1234abcd.js", location.origin).href,
-  );
-
-  const timers = new Map();
-  const preload = vi.fn();
-  trigger.addEventListener("pointerenter", (event) =>
-    scheduleRoutePreload(timers, "sessions", event, preload),
-  );
-  trigger.dispatchEvent(new Event("pointerenter"));
-  connection.saveData = true;
+  const trigger = fixture.shell.appendChild(document.createElement("a"));
+  trigger.dataset.openclawPreloadRoute = "cron";
+  trigger.dispatchEvent(new Event("focusin", { bubbles: true }));
   await vi.advanceTimersByTimeAsync(50);
-  expect(preload).not.toHaveBeenCalled();
+  expect(fixture.preloadRoute).toHaveBeenCalledExactlyOnceWith("cron");
+  expect(fetch).not.toHaveBeenCalled();
+  expect(hints()).toHaveLength(0);
+  trigger.dispatchEvent(new Event("pointerover", { bubbles: true }));
+  fixture.stop();
+  await vi.advanceTimersByTimeAsync(50);
+  expect(fixture.preloadRoute).toHaveBeenCalledTimes(1);
 });
