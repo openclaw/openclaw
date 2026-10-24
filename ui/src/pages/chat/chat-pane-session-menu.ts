@@ -3,7 +3,6 @@ import type {
   WorktreesBranchesResult,
   WorktreesListResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
-import "../../lib/sessions/session-mutation-operations.runtime.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { serializeSidebarEntry } from "../../app-navigation.ts";

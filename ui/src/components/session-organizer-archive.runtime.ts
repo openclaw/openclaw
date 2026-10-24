@@ -270,7 +270,9 @@ export async function archiveSessionWithUndo(
   try {
     result = await patchSession(
       {
-        ...host,
+        sessionData: host.sessionData,
+        selectSession: (key) => host.selectSession(key),
+        sidebarSessionStatusFilter: () => host.sidebarSessionStatusFilter(),
         pruneSidebarSessionEntry: (key) =>
           undoPins.prune(key, () => host.pruneSidebarSessionEntry(key)),
       },

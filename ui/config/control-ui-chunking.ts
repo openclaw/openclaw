@@ -72,7 +72,6 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/lib/sessions/session-patch-row-facts.ts":
     case "src/shared/session-unread.ts":
     case "ui/src/lib/sessions/session-delete-operation.ts":
-    case "ui/src/i18n/locales/en-session-organization.ts":
       // Session actions must not import whole route chunks through earlier boot captures.
       return "session-mutation-runtime";
     case "ui/src/lib/chat/emoji.ts":

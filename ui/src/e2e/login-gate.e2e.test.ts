@@ -213,12 +213,19 @@ suite.define(() => {
 
   it("keeps offline session actions and layout controls available while reconnecting", async () => {
     const page = await newPage();
+    const mutations = await holdModuleResponse(
+      page,
+      controlUiE2eBuiltModuleRequest("ui/src/lib/sessions/session-mutation-operations.runtime.ts"),
+    );
     const sessionKey = "agent:main:offline-actions";
     const gateway = await installMockGateway(page, { sessionKey });
 
-    await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"));
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"), {
+      waitUntil: "commit",
+    });
     const header = page.locator(".chat-pane__header");
     await header.waitFor({ state: "visible" });
+    mutations.release();
     const actions = header.locator(".chat-header-session-menu__trigger");
     await actions.click();
     const split = page.getByRole("menuitem", { name: "Open split view", exact: true });

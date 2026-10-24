@@ -8,12 +8,12 @@ import { formatUiError } from "../format-error.ts";
 import { showToast } from "../toast.ts";
 import {
   requestSessionCreate,
-  resolveSessionCreateParams,
   type SessionCreateParams,
   type SessionCreateRequestOptions,
 } from "./create.ts";
 import type { SessionPatch, SessionPatchOptions, SessionPatchRoute } from "./patch.ts";
 import { projectSessionArchiveFields } from "./session-archive-state.ts";
+import { resolveSessionCreateParams } from "./session-create-params.ts";
 import type { Deletion, SessionDeferredDeletionHost } from "./session-deletions.ts";
 import type { createSessionModelOverrides } from "./session-model-overrides.ts";
 import {
