@@ -49,7 +49,7 @@ export function noteRuntimeDynamicExecution(feature: RuntimeDynamicExecutionFeat
     process.emitWarning(
       `${label} runs interpreted in this AOT build; use a JIT build for full speed.`,
       {
-        code: "OPENCLAW_AOT_INTERPRETED",
+        code: "AOT_INTERPRETED",
       },
     );
   }
