@@ -86,26 +86,80 @@ try {
   delete env.GIT_ALTERNATE_OBJECT_DIRECTORIES;
   delete env.GIT_SHALLOW_FILE;
   function git(args, options = {}) {
-    const { encoding, phase = args[0], ...spawnOptions } = options;
+    const { encoding, phase = args[0], statusOnly = false, ...spawnOptions } = options;
     const result = spawnSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", ...args],
       { cwd, env, maxBuffer: 64 * 1024 * 1024, ...spawnOptions });
+    if (statusOnly && (result.status === 0 || result.status === 1)) return result.status;
     if (result.status !== 0) fail("source Git operation failed: " + JSON.stringify(gitFailure(phase, result)));
     if (encoding === "buffer") return result.stdout;
     if (result.stdout === null) return "";
     if (!isUtf8(result.stdout)) fail("unsupported non-UTF-8 Git metadata");
     return result.stdout.toString("utf8");
   }
-  git(["init", "-q"]);
-  git(["remote", "add", "origin", "https://github.com/openclaw/openclaw.git"]);
   const preparedGit = path.join(cwd, ".git");
-  const reuseBase = stat(preparedGit)?.isDirectory() &&
+  const preparedEnv = {
+    ...env,
+    GIT_DIR: preparedGit,
+    GIT_INDEX_FILE: path.join(preparedGit, "index"),
+  };
+  const preparedBase = stat(preparedGit)?.isDirectory() ?
     git(["for-each-ref", "--format=%(objectname)", "refs/remotes/origin/main"], {
-      env: { ...env, GIT_DIR: preparedGit, GIT_INDEX_FILE: path.join(preparedGit, "index") }
-    }).trim() === expected.baseSha;
-  // A reused lease already owns this exact base. Fetch its objects into the new
-  // private Git directory; no alternates may survive replacement of preparedGit.
-  git(["fetch", "-q", "--depth=2", reuseBase ? preparedGit : "origin",
-    expected.baseSha + ":refs/remotes/origin/main"], { phase: "base-fetch" });
+      env: preparedEnv,
+    }).trim() : "";
+  const reuseBase = preparedBase === expected.baseSha;
+  const preparedExpectedBase = preparedBase &&
+    git(["cat-file", "--batch-check=%(objectname) %(objecttype)"], {
+      env: preparedEnv, input: expected.baseSha + "\n",
+    }).trim() === expected.baseSha + " commit";
+  const reusePreparedBase = reuseBase || preparedExpectedBase &&
+    git(["merge-base", "--is-ancestor", expected.baseSha, "refs/remotes/origin/main"], {
+      env: preparedEnv, statusOnly: true,
+    }) === 0;
+  const preparedPromisorConfig = Boolean(preparedBase) &&
+    git(["config", "--get-regexp", "^remote\\.origin\\.(promisor|partialclonefilter)$"], {
+      env: preparedEnv, statusOnly: true,
+    }) === 0 ? git(["config", "--get-regexp",
+      "^remote\\.origin\\.(promisor|partialclonefilter)$"], { env: preparedEnv }).trim().split("\n") : [];
+  const preparedPromisor = preparedPromisorConfig.includes("remote.origin.promisor true") &&
+    preparedPromisorConfig.includes("remote.origin.partialclonefilter blob:none");
+  const preparedUsesPromisor = Boolean(preparedBase) &&
+    git(["config", "--get-regexp", "^(extensions\\.partialclone|remote\\..*\\.promisor)$"], {
+      env: preparedEnv, statusOnly: true,
+    }) === 0;
+  const preparedBorrowsObjects = Boolean(preparedBase) &&
+    (stat(path.join(preparedGit, "objects", "info", "alternates")) ||
+      preparedUsesPromisor && !preparedPromisor);
+  const reuseHistory = reusePreparedBase && !preparedBorrowsObjects &&
+    git(["rev-parse", "--is-shallow-repository"], { env: preparedEnv }).trim() === "false";
+  // Pack only commit/tree history reachable from the prepared base into the new owner.
+  // Historical blobs remain promised to the fixed origin, matching native hydration;
+  // direct object-store reuse would also expose dangling prior payload objects.
+  if (reuseHistory) {
+    git(["init", "-q"]);
+    git(["remote", "add", "origin", "https://github.com/openclaw/openclaw.git"]);
+    git(["config", "remote.origin.promisor", "true"]);
+    git(["config", "remote.origin.partialclonefilter", "blob:none"]);
+    const historyPack = git(["pack-objects", "--revs", "--filter=blob:none",
+      "--missing=allow-promisor", "--use-bitmap-index",
+      path.join(gitDir, "objects", "pack", "pack")], {
+      env: { ...preparedEnv, GIT_NO_LAZY_FETCH: "1" },
+      input: expected.baseSha + "\n", phase: "history-pack",
+    }).trim();
+    if (!/^[a-f0-9]{40}$/u.test(historyPack)) fail("invalid history pack identity");
+    fs.writeFileSync(
+      path.join(gitDir, "objects", "pack", "pack-" + historyPack + ".promisor"),
+      "",
+      { flag: "wx", mode: 0o600 },
+    );
+    git(["update-ref", "refs/remotes/origin/main", expected.baseSha]);
+  } else {
+    git(["init", "-q"]);
+    git(["remote", "add", "origin", "https://github.com/openclaw/openclaw.git"]);
+    const baseFetchOptions = reuseBase ? ["--depth=2", "--no-tags"] : ["--depth=2"];
+    git(["fetch", "-q", ...baseFetchOptions,
+      reuseBase ? preparedGit : "origin", expected.baseSha + ":refs/remotes/origin/main"],
+      { phase: "base-fetch" });
+  }
   if (git(["rev-parse", "refs/remotes/origin/main"]).trim() !== expected.baseSha)
     fail("source base mismatch");
   git(["fetch", "-q", bundle, "refs/openclaw/source-capsule:refs/heads/openclaw-source"],
