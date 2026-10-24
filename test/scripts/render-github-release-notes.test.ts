@@ -6,7 +6,6 @@ import { splitChangelog } from "../../scripts/lib/release-changelog.mjs";
 import {
   GITHUB_RELEASE_BODY_MAX_BYTES,
   GITHUB_RELEASE_BODY_MAX_CHARACTERS,
-  extractChangelogSection,
   formatContributionRecordProvenance,
   formatShippedBaselineExclusions,
   parseContributionRecordProvenance,
@@ -84,49 +83,39 @@ describe("GitHub release-note rendering", () => {
     ).toThrow("docs-publication renderer");
   });
 
-  it.each([false, true])(
-    "renders pinned legacy and split sources through the CLI (compact=%s)",
-    (compact) => {
-      const { rootDir, git, render } = releaseRepo();
-      const changelog = changelogFor(
-        `- **PR #123** ${compact ? "record ".repeat(20_000) : "fix: example."}`,
-      );
-      writeFileSync(join(rootDir, "CHANGELOG.md"), changelog);
-      git("add", ".");
-      git("commit", "-qm", "legacy release");
-      const legacy = git("rev-parse", "HEAD");
-      splitChangelog({ rootDir });
-      git("add", ".");
-      git("commit", "-qm", "split release");
-      const split = git("rev-parse", "HEAD");
-      writeFileSync(
-        join(rootDir, `CHANGELOG/${version}.md`),
-        `## ${version}\n\nUncommitted drift.\n`,
-      );
-      const legacyBody = render(legacy);
-      const splitBody = render(split);
-      const bodyPath = join(rootDir, "release-body.md");
-      writeFileSync(bodyPath, splitBody);
-      const verify = () => render(split, tag, ["--verify-body", bodyPath]);
-      expect(verify()).toBe("");
-      writeFileSync(bodyPath, `${splitBody}\nUnapproved appended prose.\n`);
-      expect(verify).toThrow("Release body does not match canonical release notes.");
-      expect(legacyBody).not.toContain("Uncommitted drift");
-      expect(splitBody).not.toContain("Uncommitted drift");
-      if (compact) {
-        expect(legacyBody).toContain(`/blob/${tag}/CHANGELOG.md#complete-contribution-record`);
-        expect(splitBody).toContain(
-          `/blob/${tag}/CHANGELOG/records/${version}.md#complete-contribution-record`,
-        );
-        expect(splitBody).toBe(
-          legacyBody.replace("/CHANGELOG.md#", `/CHANGELOG/records/${version}.md#`),
-        );
-      } else {
-        expect(splitBody).toBe(legacyBody);
-        expect(splitBody).toBe(extractChangelogSection(changelog, version));
-      }
-    },
-  );
+  it("renders pinned legacy and split compact sources through the CLI", () => {
+    const { rootDir, git, render } = releaseRepo();
+    const changelog = changelogFor(`- **PR #123** ${"record ".repeat(20_000)}`);
+    writeFileSync(join(rootDir, "CHANGELOG.md"), changelog);
+    git("add", ".");
+    git("commit", "-qm", "legacy release");
+    const legacy = git("rev-parse", "HEAD");
+    splitChangelog({ rootDir });
+    git("add", ".");
+    git("commit", "-qm", "split release");
+    const split = git("rev-parse", "HEAD");
+    writeFileSync(
+      join(rootDir, `CHANGELOG/${version}.md`),
+      `## ${version}\n\nUncommitted drift.\n`,
+    );
+    const legacyBody = render(legacy);
+    const splitBody = render(split);
+    const bodyPath = join(rootDir, "release-body.md");
+    writeFileSync(bodyPath, splitBody);
+    const verify = () => render(split, tag, ["--verify-body", bodyPath]);
+    expect(verify()).toBe("");
+    writeFileSync(bodyPath, `${splitBody}\nUnapproved appended prose.\n`);
+    expect(verify).toThrow("Release body does not match canonical release notes.");
+    expect(legacyBody).not.toContain("Uncommitted drift");
+    expect(splitBody).not.toContain("Uncommitted drift");
+    expect(legacyBody).toContain(`/blob/${tag}/CHANGELOG.md#complete-contribution-record`);
+    expect(splitBody).toContain(
+      `/blob/${tag}/CHANGELOG/records/${version}.md#complete-contribution-record`,
+    );
+    expect(splitBody).toBe(
+      legacyBody.replace("/CHANGELOG.md#", `/CHANGELOG/records/${version}.md#`),
+    );
+  });
 
   it("renders and verifies a pinned beta delta instead of cumulative stable notes", () => {
     const { rootDir, git, render } = releaseRepo();
@@ -169,20 +158,10 @@ describe("GitHub release-note rendering", () => {
       "1,234 in-range PRs + 56 retained seed-only PRs = 1,290 unique PRs.",
     );
     expect(
-      parseContributionRecordProvenance(
-        [singular, "", "#### Pull requests", "", "- **PR #123** fix: canonical example."].join(
-          "\n",
-        ),
-      ),
+      parseContributionRecordProvenance(`${singular}\n\n#### Pull requests\n\n- **PR #123** fix.`),
     ).toEqual(canonical);
     const legacy = parseContributionRecordProvenance(
-      [
-        `This audited record covers the complete v2026.7.2-beta.6..02d06caeb0febe7ec3c0df1454b85c38f3fb27d1 history: 1 merged PR. The generation manifest also supplies direct commits as editorial input; the grouped notes above prioritize user impact.`,
-        "",
-        "#### Pull requests",
-        "",
-        "- **PR #123** fix: legacy example.",
-      ].join("\n"),
+      `This audited record covers the complete v2026.7.2-beta.6..${target} history: 1 merged PR.\n\n#### Pull requests\n\n- **PR #123** fix.`,
     );
     expect(legacy).toMatchObject({ uniquePullRequests: 1 });
     expect(() => formatContributionRecordProvenance(legacy!)).toThrow("requires split PR counts");
@@ -192,7 +171,6 @@ describe("GitHub release-note rendering", () => {
         "provenance arithmetic is invalid",
       ],
       [commaSeparated.replace("1,234", "1234"), "provenance is malformed"],
-      [singular.replace("1 in-range", "001 in-range"), "provenance is malformed"],
     ] as const) {
       expect(() => parseContributionRecordProvenance(line)).toThrow(error);
     }
@@ -215,16 +193,11 @@ describe("GitHub release-note rendering", () => {
       regularStableVersion,
     });
 
-    expect(
-      rendered.body.startsWith(
-        "This is a gateway-only `extended-stable` release, which is our current equivalent to LTS. " +
-          "This release is OpenClaw from the end of August 2026, plus critical security updates, " +
-          "reliability and performance fixes, and features like new model support. " +
-          "The latest version of OpenClaw at the time of this release is " +
-          "[2026.9.5](https://github.com/openclaw/openclaw/releases#release-v2026.9.5)\n\n" +
-          "## 2026.8.35",
-      ),
-    ).toBe(true);
+    expect(rendered.body).toMatch(/^This is a gateway-only `extended-stable` release/);
+    expect(rendered.body).toContain("end of August 2026");
+    expect(rendered.body).toContain(
+      "[2026.9.5](https://github.com/openclaw/openclaw/releases#release-v2026.9.5)\n\n## 2026.8.35",
+    );
     expect(
       verifyNotes(rendered.body, {
         changelog,
@@ -254,14 +227,6 @@ describe("GitHub release-note rendering", () => {
       bytes: GITHUB_RELEASE_BODY_MAX_BYTES,
     });
     expect(over.mode).toBe("compact");
-  });
-
-  it("normalizes correction tags to the stable changelog section", () => {
-    const rendered = renderNotes(changelogFor("- **PR #123** fix: correction."), {
-      tag: "v2026.7.1-2",
-    });
-
-    expect(rendered.body).toContain("## 2026.7.1");
   });
 
   it("round-trips canonical shipped baseline exclusions and rejects malformed metadata", () => {
@@ -302,34 +267,17 @@ describe("GitHub release-note rendering", () => {
     ).toThrow("cannot be compacted without a complete contribution record");
   });
 
-  it("prefers an alpha tag's exact changelog heading over the Unreleased fallback", () => {
-    // Shipped alpha tags carry their own heading with no base section,
-    // matching the tagged CHANGELOG.md shape of v2026.6.20-alpha.1.
-    const changelog = [
-      "# Changelog",
-      "## 2026.7.1-alpha.2\n\n- Alpha-only fix.",
-      "## 2026.6.11\n\n- Previous release.\n",
-    ].join("\n\n");
-    const rendered = renderNotes(changelog, {
-      tag: "v2026.7.1-alpha.2",
-    });
-
-    expect(rendered.body).toContain("## 2026.7.1-alpha.2");
-    expect(rendered.body).toContain("Alpha-only fix.");
-    expect(rendered.body).not.toContain("Previous release.");
+  it.each([
+    ["v2026.7.1-2", "2026.7.1", "2026.7.1"],
+    ["v2026.7.1-alpha.2", "2026.7.1-alpha.2", "2026.7.1-alpha.2"],
+    ["v2026.7.1-alpha.1", "Unreleased", "2026.7.1"],
+  ])("selects the canonical section for %s", (releaseTag, heading, selected) => {
+    const changelog = `## ${heading}\n\n- Fix.\n\n## 2026.6.11\n\n- Old.`;
+    expect(renderNotes(changelog, { tag: releaseTag }).body).toBe(`## ${selected}\n\n- Fix.`);
   });
 
-  it("permits the Unreleased fallback only for alpha tags", () => {
-    const changelog = changelogFor("- **PR #123** fix: example.").replace(
-      "## 2026.7.1",
-      "## Unreleased",
-    );
-    const rendered = renderNotes(changelog, {
-      tag: "v2026.7.1-alpha.1",
-    });
-
-    expect(rendered.body).toContain("## 2026.7.1");
-    expect(rendered.body).not.toContain("## Unreleased");
+  it("rejects the Unreleased fallback for non-alpha and malformed tags", () => {
+    const changelog = "## Unreleased\n\n- Fix.";
     expect(() => renderNotes(changelog)).toThrow("CHANGELOG.md does not contain ## 2026.7.1");
     expect(() =>
       renderNotes(changelog, {

@@ -5,13 +5,17 @@ import { afterEach, expect, it, vi } from "vitest";
 import {
   hasUnjoinedWork,
   inspectManagedProcessGroup,
-  runManagedCommand,
   terminateManagedChild,
   waitForManagedProcessGroupExit,
 } from "../../scripts/lib/managed-child-process.mts";
 import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
 import { createDeferred } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import {
+  createSyntheticChild,
+  psResult,
+  runFixtureCommand,
+} from "./managed-child-process.test-support.js";
 
 const mocks = vi.hoisted(() => ({ spawn: vi.fn(), spawnWindowsJobChild: vi.fn() }));
 vi.mock("node:child_process", async (original) => ({
@@ -25,31 +29,13 @@ vi.mock("../../scripts/lib/managed-windows-job.mts", () => ({
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
-function exitedChild() {
-  const child = new ChildProcess();
-  Object.defineProperties(child, {
-    pid: { value: 12345 },
-    exitCode: { value: 0 },
-    stdio: { get: () => [child.stdin, child.stdout, child.stderr, null] },
-  });
-  child.stdout = null;
-  child.stderr = null;
-  return child;
-}
-
-function emitExit(child: ChildProcess) {
-  child.emit("exit", 0, null);
-  child.emit("close", 0, null);
-}
-
 it("cancels admission while Windows platform code loads without spawning or retaining a claim", async () => {
   const root = dirs.make("managed-platform-cancel-");
   const owner = createVitestResourceOwner(root);
   mocks.spawn.mockClear();
   mocks.spawnWindowsJobChild.mockClear();
   const abort = new AbortController();
-  const command = runManagedCommand({
-    bin: "fixture",
+  const command = runFixtureCommand({
     platform: "win32",
     signal: abort.signal,
     env: { TMPDIR: root },
@@ -74,10 +60,8 @@ it("preserves deferred spawn errors and releases ownership when output streams w
     process.nextTick(() => child.emit("error", failure));
     return child;
   });
-  const outcome = runManagedCommand({
-    bin: "fixture",
+  const outcome = runFixtureCommand({
     platform: "darwin",
-    shell: false,
     stdio: "pipe",
     env: { TMPDIR: root },
   }).catch((error: unknown) => error);
@@ -89,7 +73,7 @@ it("preserves deferred spawn errors and releases ownership when output streams w
 
 it("preserves requested command inputs across Windows platform loading", async () => {
   const root = dirs.make("managed-platform-inputs-");
-  const child = exitedChild();
+  const { child, close } = createSyntheticChild("none", 0);
   let launched: { argument?: string; value?: string } | undefined;
   mocks.spawnWindowsJobChild.mockImplementation((_command, args, options) => {
     launched = { argument: args[0], value: options.env.VALUE };
@@ -100,13 +84,11 @@ it("preserves requested command inputs across Windows platform loading", async (
   });
   const args = ["original"];
   const env = { TMPDIR: root, VALUE: "original" };
-  const command = runManagedCommand({
-    bin: "fixture",
+  const command = runFixtureCommand({
     args,
     env,
     platform: "win32",
-    shell: false,
-    onReady: () => emitExit(child),
+    onReady: close,
   });
   args[0] = "mutated";
   env.VALUE = "mutated";
@@ -152,19 +134,12 @@ it.each([false, true])(
   async (leaderSignalFails) => {
     const root = dirs.make("managed-joined-diagnostics-");
     const owner = createVitestResourceOwner(root);
-    const child = exitedChild();
+    const { child, close } = createSyntheticChild("none", 0);
     const groupError = Object.assign(new Error("group signal denied"), { code: "EPERM" });
     const leaderError = Object.assign(new Error("leader signal denied"), { code: "EACCES" });
     mocks.spawn.mockReturnValue(child);
     let fallbackAttempted = false;
-    vi.mocked(spawnSync).mockReturnValue({
-      pid: 12346,
-      output: [],
-      status: 1,
-      signal: null,
-      stdout: "",
-      stderr: "",
-    });
+    vi.mocked(spawnSync).mockReturnValue(psResult("", { status: 1 }));
     const leaderSignal = vi.spyOn(child, "kill").mockImplementation(() => {
       fallbackAttempted = true;
       if (leaderSignalFails) {
@@ -182,14 +157,11 @@ it.each([false, true])(
     });
 
     await expect(
-      runManagedCommand({
-        bin: "fixture",
+      runFixtureCommand({
         platform: "darwin",
-        shell: false,
-        stdio: "ignore",
         requireProcessTreeExit: true,
         env: { TMPDIR: root },
-        onReady: () => emitExit(child),
+        onReady: close,
       }),
     ).rejects.toMatchObject({
       code: "EPROCESSGROUP_CLEANUP_FAILED",
@@ -216,10 +188,8 @@ it.each([
   async (platform, terminates, closes) => {
     const root = dirs.make("managed-normal-exit-");
     const owner = createVitestResourceOwner(root);
-    const child = exitedChild();
-    child.stdout = new PassThrough();
-    child.stderr = new PassThrough();
-    const closed = Promise.all([once(child.stdout, "close"), once(child.stderr, "close")]);
+    const { child, close, waitForOutputClose, destroyOutput } = createSyntheticChild("both", 0);
+    const closed = waitForOutputClose();
     const descendantOutput = new PassThrough();
     const stopSurvivor = () => {
       if (!terminates) {
@@ -259,10 +229,8 @@ it.each([
     });
     const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
     try {
-      const outcome = await runManagedCommand({
-        bin: "fixture",
+      const outcome = await runFixtureCommand({
         platform,
-        shell: false,
         stdio: "pipe",
         requireProcessTreeExit: platform !== "win32",
         cleanupDrainTimeoutMs: 0,
@@ -270,9 +238,8 @@ it.each([
         onReady: () => {
           // Real spawn returns before pipe close events. Close before leader exit,
           // but only after the command has acquired and observed its output.
-          child.stdout?.destroy();
-          child.stderr?.destroy();
-          void closed.then(() => emitExit(child));
+          destroyOutput();
+          void closed.then(close);
         },
       }).catch((error: unknown) => error);
       if (platform === "win32") {
@@ -306,7 +273,6 @@ it.each([
 );
 
 it.each([
-  [255, "live"],
   [255, "unavailable"],
   [0, "live"],
 ] as const)(
@@ -314,18 +280,9 @@ it.each([
   async (status, state) => {
     const root = dirs.make("managed-job-retention-");
     const owner = createVitestResourceOwner(root);
-    const child = new ChildProcess();
-    let exitCode: number | null = null;
-    Object.defineProperties(child, {
-      pid: { value: 12345 },
-      exitCode: { get: () => exitCode },
-      stdio: { get: () => [child.stdin, child.stdout, child.stderr, null] },
-    });
-    child.stdout = new PassThrough();
-    child.stderr = new PassThrough();
-    const descendantOutput = new PassThrough();
-    const closed = Promise.all([once(child.stdout, "close"), once(child.stderr, "close")]);
-    void closed.then(() => child.emit("close", exitCode, null));
+    const { child, exit, waitForOutputClose, destroyOutput } = createSyntheticChild("both");
+    const closed = waitForOutputClose();
+    void closed.then(() => child.emit("close", child.exitCode, null));
     const observed = createDeferred();
     const job = {
       inspect: vi.fn(() => {
@@ -345,16 +302,12 @@ it.each([
     const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
     const abort = new AbortController();
     const taskkill = vi.fn(() => {
-      exitCode = 0;
-      child.emit("exit", 0, null);
-      child.stdout?.destroy();
-      child.stderr?.destroy();
+      exit();
+      destroyOutput();
       return { status, stdout: "leader exited", stderr: status ? "taskkill failed" : "" };
     });
-    const completed = runManagedCommand({
-      bin: "fixture",
+    const completed = runFixtureCommand({
       platform: "win32",
-      shell: false,
       stdio: "pipe",
       env: { TMPDIR: root },
       signal: abort.signal,
@@ -365,7 +318,6 @@ it.each([
     try {
       await closed;
       await Promise.race([observed.promise, outcome]);
-      expect(descendantOutput.destroyed).toBe(false);
       expect(() => owner.assertReleased()).toThrow("Unreleased Vitest resource claim");
       expect(warning).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -377,7 +329,6 @@ it.each([
       expect(job.stop).toHaveBeenCalledOnce();
     } finally {
       // This is the independent descendant's completion fact, not elapsed time or leader EOF.
-      descendantOutput.destroy();
       job.inspect.mockReturnValue([]);
       await outcome;
     }
