@@ -1853,7 +1853,8 @@ describe("WorkboardStore", () => {
 
     expect(diagnostics.count).toBeGreaterThanOrEqual(4);
     const diagnosedReady = await store.get(ready.id);
-    expect(diagnosedReady?.updatedAt).toBeGreaterThan(ready.updatedAt);
+    // A diagnostics refresh is observability-only: it must not reset activity age.
+    expect(diagnosedReady?.updatedAt).toBe(ready.updatedAt);
     expect(diagnosedReady).toMatchObject({
       metadata: { diagnostics: [{ kind: "stranded_ready" }] },
     });

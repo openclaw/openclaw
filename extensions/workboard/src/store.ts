@@ -2,7 +2,6 @@ import type {
   WorkboardAttachment,
   WorkboardBoardMetadata,
   WorkboardCard,
-  WorkboardDiagnostic,
   WorkboardExecution,
   WorkboardExecutionStatus,
   WorkboardLaunchState,
@@ -580,22 +579,25 @@ export class WorkboardStore extends WorkboardNotificationStore {
       const cards = await this.list();
       const rows: WorkboardDiagnosticsResult["diagnostics"] = [];
       for (const card of cards) {
-        let diagnostics: WorkboardDiagnostic[] = [];
-        const result = await this.updateLatestCard(card.id, (current) => {
+        let skipped = false;
+        const result = await this.recordCardDiagnostics(card.id, (current) => {
           if (current.metadata?.archivedAt) {
+            skipped = true;
             return undefined;
           }
-          diagnostics = mergeDiagnostics(
+          const merged = mergeDiagnostics(
             current.metadata?.diagnostics,
             computeCardDiagnostics(current, now),
           );
-          if (diagnostics.length === 0 && !current.metadata?.diagnostics?.length) {
+          if (merged.length === 0 && !current.metadata?.diagnostics?.length) {
+            skipped = true;
             return undefined;
           }
-          return { metadata: { ...current.metadata, diagnostics } };
+          return merged;
         });
-        if (diagnostics.length > 0) {
-          rows.push({ card: result.card, diagnostics });
+        const stored = result.card.metadata?.diagnostics;
+        if (!skipped && stored?.length) {
+          rows.push({ card: result.card, diagnostics: stored });
         }
       }
       return {

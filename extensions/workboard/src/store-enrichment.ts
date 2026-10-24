@@ -21,7 +21,7 @@ import {
   MAX_CARD_PROOF,
   MAX_CARD_WORKER_LOGS,
 } from "./store-constants.js";
-import { WorkboardCoreStore } from "./store-core.js";
+import { WorkboardDiagnosticsStore } from "./store-diagnostics.js";
 import type {
   WorkboardArtifactInput,
   WorkboardAttachmentInput,
@@ -41,7 +41,7 @@ import {
   workerLogEntry,
 } from "./store-normalizers.js";
 
-export class WorkboardEnrichmentStore extends WorkboardCoreStore {
+export class WorkboardEnrichmentStore extends WorkboardDiagnosticsStore {
   protected finishRun(
     card: WorkboardCard,
     status: "done" | "blocked",
