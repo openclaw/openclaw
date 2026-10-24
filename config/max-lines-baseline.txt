@@ -375,7 +375,6 @@ src/plugins/clawhub.ts
 src/plugins/commands.test.ts
 src/plugins/contracts/host-hooks.contract.test.ts
 src/plugins/contracts/tts-contract-suites.ts
-src/plugins/discovery.test.ts
 src/plugins/discovery.ts
 src/plugins/hook-types.ts
 src/plugins/hooks.ts
