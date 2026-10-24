@@ -293,15 +293,18 @@ export function hasRegisteredSessionPendingInputOwner(
   // Display reconciliation may hold an older page from before this exact input was recovered.
   row: Pick<SessionPendingInputRow, "input_id" | "session_key" | "session_id"> &
     Partial<Pick<SessionPendingInputRow, "lifecycle_generation">>,
+  /** `settling` matches only an owner still persisting its terminal disposition. */
+  options?: { settling?: boolean },
 ): boolean {
   const owner = owners.live.get(row.input_id);
   return (
     owner?.workerDatabasePath === databasePath &&
     owner.sessionId === row.session_id &&
     owner.sessionKey === row.session_key &&
-    (row.lifecycle_generation === undefined ||
-      owner.lifecycleGeneration === row.lifecycle_generation) &&
-    (owner.settling || isAgentEventLifecycleGenerationCurrent(owner.lifecycleGeneration))
+    // An older page may omit the generation; the column itself is never null.
+    owner.lifecycleGeneration === (row.lifecycle_generation ?? owner.lifecycleGeneration) &&
+    (owner.settling ||
+      (!options?.settling && isAgentEventLifecycleGenerationCurrent(owner.lifecycleGeneration)))
   );
 }
 

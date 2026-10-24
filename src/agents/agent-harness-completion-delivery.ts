@@ -4,7 +4,10 @@ import {
   hasRestartRecoveryTerminalRun,
 } from "../config/sessions/restart-recovery-state.js";
 import type { HarnessCompletionRecovery } from "../config/sessions/restart-recovery-types.js";
-import { readSessionSubmittedInput } from "../config/sessions/session-accessor.js";
+import {
+  readSessionPendingInputInterruption,
+  readSessionSubmittedInput,
+} from "../config/sessions/session-accessor.js";
 import {
   captureSessionActorStorageOwner,
   withSessionActorStorage,
@@ -133,7 +136,7 @@ export async function reconcileHarnessCompletionDelivery(
     sourceRunId: string;
     taskRunId?: string;
   },
-): Promise<"unowned" | "pending" | "delivered" | "blocked"> {
+): Promise<"unowned" | "pending" | "delivered" | "blocked" | "orphaned" | "unavailable"> {
   const memory = captureSessionActorStorageOwner(params, { assertCurrent() {}, authorize() {} });
   if (memory) {
     return (
@@ -197,7 +200,7 @@ function reconcileMemoryHarnessCompletionDelivery(
 
 async function reconcileCurrentHarnessCompletionDelivery(
   params: CompletionTarget & { sourceRunId: string; taskRunId?: string },
-): Promise<"unowned" | "pending" | "delivered" | "blocked"> {
+): Promise<"unowned" | "pending" | "delivered" | "blocked" | "orphaned" | "unavailable"> {
   const entry = await readCurrent(params);
   if (!entry) {
     // No saved claim means this reconciler owns nothing; normal admission still
@@ -218,11 +221,35 @@ async function reconcileCurrentHarnessCompletionDelivery(
     ) {
       return "blocked";
     }
-    const submitted = await readSessionSubmittedInput(
-      { ...params, sessionId: entry.sessionId },
-      `${params.sourceRunId}:user`,
-    );
-    return submitted ? "blocked" : "unowned";
+    const inputScope = { ...params, sessionId: entry.sessionId };
+    const inputKey = `${params.sourceRunId}:user`;
+    const submitted = await readSessionSubmittedInput(inputScope, inputKey);
+    if (!submitted) {
+      return "unowned";
+    }
+    // Admission can accept the input and then fail before any claim or transcript
+    // commit (e.g. SESSION_WORK_START_CHANGED). That interrupted, unowned input can
+    // never run: this identity is spent but owns nothing, so the caller may re-admit
+    // the completion under a successor identity. Unreadable evidence is neither
+    // proof of that nor of ownership; the caller must keep custody and retry.
+    const interruption = await readSessionPendingInputInterruption(inputScope, inputKey);
+    if (interruption === "not-orphaned") {
+      return "blocked";
+    }
+    // Spent-or-unknown is reported only while the requester entry is unchanged.
+    const current = await readCurrent(params);
+    if (
+      !current ||
+      current.sessionId !== entry.sessionId ||
+      current.lifecycleRevision !== entry.lifecycleRevision ||
+      current.restartRecoveryDeliverySourceRunId === params.sourceRunId ||
+      current.restartRecoveryHarnessCompletion?.sourceRunId === params.sourceRunId ||
+      hasRestartRecoveryTerminalRun(current, params.sourceRunId) ||
+      getRestartRecoveryTerminalDeliveryEvidence(current, params.sourceRunId)?.harnessCompletion
+    ) {
+      return "blocked";
+    }
+    return interruption;
   }
   const classified = classifyCompletionClaim(params, entry, claim);
   if (classified) {

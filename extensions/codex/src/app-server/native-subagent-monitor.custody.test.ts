@@ -306,6 +306,37 @@ describe("native completion custody and host recovery", () => {
     }
   });
 
+  it.each([true, false])(
+    "retries unavailable custody evidence on the bounded ladder (recovers=%s)",
+    async (recovers) => {
+      vi.useFakeTimers();
+      const client = createClient();
+      let monitor: InstanceType<typeof CodexNativeSubagentMonitor> | undefined;
+      try {
+        const runtime = createRuntime();
+        const deliver = runtime.deliverAgentHarnessCompletion;
+        deliver.mockResolvedValue({ delivered: false, path: "none", recoveryUnavailable: true });
+        monitor = new CodexNativeSubagentMonitor(client as never, runtime);
+        await registerDetachedChild(client, monitor);
+        await client.notify(nativeCompletionNotification());
+        expect(deliver).toHaveBeenCalledTimes(1);
+        if (recovers) {
+          deliver.mockResolvedValue({ delivered: true, path: "direct" });
+        }
+        // Retried rather than dropped: the first retry follows the 5 s ladder step.
+        await vi.advanceTimersByTimeAsync(5_000);
+        expect(deliver).toHaveBeenCalledTimes(2);
+        // Then delivered, or charged through the bounded ladder exactly once.
+        await vi.advanceTimersByTimeAsync(530_000);
+        expect(deliver).toHaveBeenCalledTimes(recovers ? 2 : 7);
+      } finally {
+        await monitor?.dispose();
+        client.close();
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it("does not exhaust delivery retries while the host recovery owns completion", async () => {
     vi.useFakeTimers();
     const client = createClient();
