@@ -6,8 +6,15 @@ on:
       - scripts/audit-compiler-comparison.mts
       - scripts/collect-compiler-comparison.mjs
       - scripts/lib/compiler-comparison-io.mts
+      - scripts/lib/compiler-comparison-cache.mts
+      - scripts/lib/compiler-comparison-rows.mts
+      - scripts/lib/compiler-comparison-row-supervisor.mts
+      - scripts/lib/compiler-comparison-row-files.py
+      - test/scripts/compiler-comparison-rows.test.ts
+      - test/scripts/compiler-comparison-cache.test.ts
       - test/scripts/compiler-comparison.test.ts
       - test/scripts/compiler-comparison-canaries.test.ts
+      - test/scripts/compiler-comparison-network.fixtures.ts
       - test/fixtures/compiler-comparison.json
       - .github/workflows/compiler-qualification.yml
   workflow_dispatch:
@@ -15,7 +22,17 @@ on:
       scope:
         description: Canonical graph coverage
         type: choice
-        options: [representative, all]
+        options:
+          [
+            representative,
+            all,
+            remaining,
+            memory-diagnostic,
+            capacity-control,
+            isolation-diagnostic,
+            cache-correctness,
+            wrapper-admission,
+          ]
         default: representative
 
 permissions:
@@ -53,13 +70,34 @@ jobs:
           import { TSGO_CI_GRAPHS, expandTsgoExecutionGraphs } from "./scripts/lib/tsgo-core-test-shards.mts";
           const inventory = expandTsgoExecutionGraphs(TSGO_CI_GRAPHS);
           const selected = new Set(["core", "ui", "extensions", "scripts", "test-root-e2e"]);
-          const include = inventory.flatMap((graph, group) =>
-            process.env.QUALIFICATION_SCOPE === "all" || selected.has(graph.name)
-              ? [{ graph: graph.name, group, groups: inventory.length }] : []);
+          const include = process.env.QUALIFICATION_SCOPE === "wrapper-admission"
+            ? [{ graph: "canonical-ci-rows", group: 0, groups: 1, wrapperAdmission: true }]
+            : process.env.QUALIFICATION_SCOPE === "cache-correctness"
+            ? [{ graph: "cache-contract", group: 0, groups: 1, cacheCorrectness: true }]
+            : inventory.flatMap((graph, group) => {
+            const entry = { graph: graph.name, group, groups: inventory.length };
+            if (process.env.QUALIFICATION_SCOPE === "isolation-diagnostic") {
+              return graph.name === "extensions"
+                ? [{ ...entry, capacityControl: true, isolationOnly: true }] : [];
+            }
+            if (process.env.QUALIFICATION_SCOPE === "remaining") {
+              return ["extensions", "extensions-test"].includes(graph.name) ? [] : [entry];
+            }
+            if (process.env.QUALIFICATION_SCOPE === "capacity-control") {
+              return ["extensions", "extensions-test"].includes(graph.name)
+                ? [{ ...entry, capacityControl: true }] : [];
+            }
+            if (process.env.QUALIFICATION_SCOPE === "memory-diagnostic") {
+              return graph.name === "extensions-test"
+                ? ["3GiB", "10GiB"].map(memoryTarget => ({ ...entry, memoryTarget })) : [];
+            }
+            return process.env.QUALIFICATION_SCOPE === "all" || selected.has(graph.name)
+              ? [entry] : [];
+          });
           fs.appendFileSync(process.env.GITHUB_OUTPUT, "matrix=" + JSON.stringify({ include }) + "\n");
           JS
       - name: Test artifact and metric boundaries
-        run: node scripts/run-vitest.mjs test/scripts/compiler-comparison.test.ts test/scripts/compiler-comparison-canaries.test.ts --maxWorkers=1
+        run: node scripts/run-vitest.mjs test/scripts/compiler-comparison.test.ts test/scripts/compiler-comparison-canaries.test.ts test/scripts/compiler-comparison-cache.test.ts test/scripts/compiler-comparison-rows.test.ts --maxWorkers=1
       - name: Check tooling types
         run: |
           node scripts/generate-kysely-types.mts
@@ -67,43 +105,85 @@ jobs:
           node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.test.root.scripts.json --noEmit
       - name: Lint and format qualification tooling
         run: |
-          node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.scripts.json scripts/audit-compiler-comparison.mts scripts/collect-compiler-comparison.mjs scripts/lib/compiler-comparison-io.mts
-          pnpm format:check scripts/audit-compiler-comparison.mts scripts/collect-compiler-comparison.mjs scripts/lib/compiler-comparison-io.mts test/scripts/compiler-comparison.test.ts test/scripts/compiler-comparison-canaries.test.ts test/fixtures/compiler-comparison.json .github/workflows/compiler-qualification.yml
+          node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.scripts.json scripts/audit-compiler-comparison.mts scripts/collect-compiler-comparison.mjs scripts/lib/compiler-comparison-io.mts scripts/lib/compiler-comparison-cache.mts scripts/lib/compiler-comparison-rows.mts scripts/lib/compiler-comparison-row-supervisor.mts
+          pnpm format:check scripts/audit-compiler-comparison.mts scripts/collect-compiler-comparison.mjs scripts/lib/compiler-comparison-io.mts scripts/lib/compiler-comparison-cache.mts scripts/lib/compiler-comparison-rows.mts scripts/lib/compiler-comparison-row-supervisor.mts test/scripts/compiler-comparison.test.ts test/scripts/compiler-comparison-canaries.test.ts test/scripts/compiler-comparison-cache.test.ts test/scripts/compiler-comparison-rows.test.ts test/scripts/compiler-comparison-network.fixtures.ts test/fixtures/compiler-comparison.json .github/workflows/compiler-qualification.yml
+          python3 -c 'import ast,pathlib; ast.parse(pathlib.Path("scripts/lib/compiler-comparison-row-files.py").read_text())'
           pnpm check:workflows
 
   compare:
-    name: Compiler comparison (${{ matrix.graph }})
+    name: Compiler comparison (${{ matrix.graph }}${{ matrix.memoryTarget && format(', memory {0}', matrix.memoryTarget) || matrix.capacityControl && ', capacity 24GiB' || '' }})
     needs: proof
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    if: github.event_name == 'workflow_dispatch'
+    permissions:
+      actions: read
+      contents: read
+    runs-on: ${{ (inputs.scope == 'capacity-control' || inputs.scope == 'isolation-diagnostic' || inputs.scope == 'wrapper-admission') && 'blacksmith-32vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    timeout-minutes: ${{ inputs.scope == 'wrapper-admission' && 300 || 60 }}
     strategy:
       fail-fast: false
-      max-parallel: 2
+      max-parallel: ${{ inputs.scope == 'capacity-control' && 1 || 2 }}
       matrix: ${{ fromJSON(needs.proof.outputs.matrix) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+      - name: Bind package-manager staging store
+        if: matrix.wrapperAdmission
+        run: echo "PNPM_CONFIG_STORE_DIR=$GITHUB_WORKSPACE/.cache/openclaw-pnpm-store" >> "$GITHUB_ENV"
       - uses: ./.github/actions/setup-node-env
         with:
-          node-version: 24.x
+          node-version: ${{ (matrix.cacheCorrectness || matrix.wrapperAdmission) && '24.16.0' || '24.x' }}
           install-bun: "false"
           cache-mode: off
+      - name: Checkout immutable wrapper workload
+        if: matrix.wrapperAdmission
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: 37ceb90e289b181af83c0c58a74caa1dceec2a5a
+          path: .artifacts/compiler-workload
+          persist-credentials: false
       - name: Prepare pinned isolation image
         run: docker pull ubuntu@sha256:a2d43bffc46670d7108bb3c0468c67c5557c4c92e83e1e34cbff1322ad1b94dc
+      # Immutable CI candidate, expiring 2026-11-23. Never fall back to a moving
+      # build or the older npm release; the collector pins tar and binary hashes.
+      - name: Stage pinned fork native compiler
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          repository: vincentkoc/tsc-ts
+          run-id: 40055744106
+          artifact-ids: 12545079224
+          github-token: ${{ github.token }}
+          digest-mismatch: error
+          path: ${{ runner.temp }}/compiler-candidate
       - name: Collect diagnostics and resource measurements
         env:
           COMPILER_GROUP: ${{ matrix.group }}
           COMPILER_GROUP_COUNT: ${{ matrix.groups }}
           COMPILER_CANARIES: ${{ matrix.graph == 'core' }}
+          COMPILER_MEMORY_TARGET: ${{ matrix.memoryTarget || '' }}
+          COMPILER_CAPACITY_CONTROL: ${{ matrix.capacityControl || false }}
+          COMPILER_ISOLATION_ONLY: ${{ matrix.isolationOnly || false }}
+          COMPILER_CACHE_CORRECTNESS: ${{ matrix.cacheCorrectness || false }}
+          COMPILER_WRAPPER_ADMISSION: ${{ matrix.wrapperAdmission || false }}
+          COMPILER_REPEATS: ${{ (matrix.memoryTarget || matrix.cacheCorrectness || matrix.wrapperAdmission) && '1' || '3' }}
         run: |
-          args=(--group "$COMPILER_GROUP" --repeats 3)
+          args=(--group "$COMPILER_GROUP" --repeats "$COMPILER_REPEATS")
           if [[ -n "$COMPILER_GROUP_COUNT" ]]; then args+=(--groups "$COMPILER_GROUP_COUNT"); fi
           if [[ "$COMPILER_CANARIES" == true ]]; then args+=(--canaries); fi
-          node scripts/collect-compiler-comparison.mjs "${args[@]}"
+          if [[ -n "$COMPILER_MEMORY_TARGET" ]]; then args+=(--memory-diagnostic "$COMPILER_MEMORY_TARGET"); fi
+          if [[ "$COMPILER_ISOLATION_ONLY" == true ]]; then args+=(--isolation-diagnostic); fi
+          if [[ "$COMPILER_CACHE_CORRECTNESS" == true ]]; then args+=(--cache-correctness); fi
+          if [[ "$COMPILER_WRAPPER_ADMISSION" == true ]]; then args+=(--wrapper-admission); fi
+          if [[ "$COMPILER_CAPACITY_CONTROL" == true ]]; then args+=(--capacity-control); fi
+          if [[ "$COMPILER_CAPACITY_CONTROL" == true || "$COMPILER_WRAPPER_ADMISSION" == true ]]; then
+            python3 -c 'import os,sys; cpus=sorted(os.sched_getaffinity(0)); assert len(cpus)>=4; os.sched_setaffinity(0,cpus[:4]); os.execvp(sys.argv[1],sys.argv[1:])' \
+              node scripts/collect-compiler-comparison.mjs "${args[@]}"
+          else
+            node scripts/collect-compiler-comparison.mjs "${args[@]}"
+          fi
       - name: Audit qualification independently
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && !matrix.memoryTarget && !matrix.isolationOnly }}
         env:
           COMPILER_GROUP: ${{ matrix.group }}
         run: |
@@ -114,7 +194,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: compiler-qualification-${{ matrix.group }}
+          name: compiler-${{ matrix.wrapperAdmission && 'wrapper-admission' || matrix.cacheCorrectness && 'cache-correctness' || matrix.isolationOnly && 'isolation-diagnostic' || matrix.memoryTarget && format('memory-{0}', matrix.memoryTarget) || matrix.capacityControl && 'capacity-control' || 'qualification' }}-${{ matrix.group }}
           path: |
             .artifacts/compiler-comparison/group-${{ matrix.group }}/
             !.artifacts/compiler-comparison/**/native/**

@@ -8,9 +8,11 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { auditCompilerComparison } from "../../scripts/audit-compiler-comparison.mts";
 import {
+  assertCompilerNetworkIsolation,
   captureCompilerComparisonOutput,
   readCompilerComparisonMetrics,
 } from "../../scripts/lib/compiler-comparison-io.mts";
+import { networkFixture } from "./compiler-comparison-network.fixtures.js";
 
 const temporary: string[] = [];
 afterEach(() => {
@@ -21,6 +23,74 @@ afterEach(() => {
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 const diagnostic =
   "src/commands/backup-record.ts(39,48): error TS2345: Argument of type 'string' is not assignable to parameter of type '\"failed\" | \"ok\"'.\n";
+
+describe("compiler network isolation", () => {
+  it.each([false, true])("accepts observed inactive fallback devices: %s", (fallbacks) => {
+    expect(assertCompilerNetworkIsolation(networkFixture(fallbacks))).toEqual({
+      policy: "linux-none-with-inactive-fallbacks-v1",
+      inactiveFallbackDevices: fallbacks ? 4 : 0,
+    });
+  });
+
+  it.each([
+    ["gre0", "778", "0x80"],
+    ["gretap0", "1", "0x1002"],
+    ["erspan0", "1", "0x1002"],
+    ["ip_vti0", "768", "0x80"],
+    ["ip6_vti0", "769", "0x80"],
+  ])("covers the documented inactive sibling %s", (name, type, flags) => {
+    const evidence = networkFixture();
+    evidence.probe += `sysfs\t${name}\t${type}\t${flags}\tdown\nproc\t${name}\n`;
+    expect(assertCompilerNetworkIsolation(evidence).inactiveFallbackDevices).toBe(1);
+  });
+
+  it("accepts mixed fallback names whose locale and code-unit ordering differ", () => {
+    const evidence = networkFixture(true);
+    evidence.probe += "sysfs\tip_vti0\t768\t0x80\tdown\nproc\tip_vti0\n";
+    expect(assertCompilerNetworkIsolation(evidence).inactiveFallbackDevices).toBe(5);
+  });
+
+  it.each([
+    ["unknown down device", "tunl0", "unrecognized-device"],
+    ["wrong tunnel type", "sysfs\ttunl0\t768", "sysfs\ttunl0\t1"],
+    ["administratively up tunnel", "sysfs\ttunl0\t768\t0x80", "sysfs\ttunl0\t768\t0x81"],
+    [
+      "unknown operational state",
+      "sysfs\ttunl0\t768\t0x80\tdown",
+      "sysfs\ttunl0\t768\t0x80\tunknown",
+    ],
+    ["invalid flags", "sysfs\ttunl0\t768\t0x80", "sysfs\ttunl0\t768\tn/a"],
+    ["missing loopback", "sysfs\tlo\t772\t0x9\tunknown\n", ""],
+    ["inactive loopback", "sysfs\tlo\t772\t0x9", "sysfs\tlo\t772\t0x8"],
+    ["inventory mismatch", "proc\ttunl0\n", ""],
+    ["duplicate device", "proc\tlo\n", "proc\tlo\nproc\tlo\n"],
+    ["missing IPv4 read completion", "routes4\tcomplete\n", ""],
+    ["unreadable IPv6 routes", "routes6\tcomplete", "routes6\tunreadable"],
+    ["nonloopback IPv4 route", "routes4\tcomplete", "route4\ttunl0\nroutes4\tcomplete"],
+    ["nonloopback IPv6 route", "route6\tlo", "route6\tip6tnl0"],
+    ["shared network namespace", "namespace\tnet:[2]", "namespace\tnet:[1]"],
+    ["missing network namespace", "namespace\tnet:[2]\n", ""],
+    ["missing capability", "capability\tCapPrm\t0000000000000000\n", ""],
+    ["privilege escalation", "no-new-privs\t1", "no-new-privs\t0"],
+    ["successful TCP connection", "tcp\tENETUNREACH", "tcp\tconnected"],
+    ["refused TCP connection", "tcp\tENETUNREACH", "tcp\tECONNREFUSED"],
+    ["TCP timeout", "tcp\tENETUNREACH", "tcp\ttimeout"],
+    ["missing TCP proof", "tcp\tENETUNREACH\n", ""],
+  ])("rejects %s", (_name, before, after) => {
+    const evidence = networkFixture(true);
+    evidence.probe = evidence.probe.replaceAll(before, after);
+    expect(() => assertCompilerNetworkIsolation(evidence)).toThrow();
+  });
+
+  it.each(["CapInh", "CapPrm", "CapEff", "CapBnd", "CapAmb"])("rejects retained %s", (name) => {
+    const evidence = networkFixture();
+    evidence.probe = evidence.probe.replace(
+      "capability\t" + name + "\t0000000000000000",
+      "capability\t" + name + "\t0000000000001000",
+    );
+    expect(() => assertCompilerNetworkIsolation(evidence)).toThrow("retained capabilities");
+  });
+});
 
 describe("compiler-controlled metrics", () => {
   it("bounds combined output before writing artifacts and preserves split UTF-8", () => {
@@ -90,6 +160,7 @@ function fixture(
   const write = (name: string, value: unknown) =>
     fs.writeFileSync(path.join(directory, name), JSON.stringify(value));
   const graphs = [{ name: "core", config: "tsconfig.json" }];
+  write("network-isolation.json", networkFixture());
   write("metadata.json", {
     sourceHead: "a".repeat(40),
     repeats: 2,
@@ -172,6 +243,51 @@ function fixture(
 }
 
 describe("compiler comparison artifact audit", () => {
+  it("rejects absent or invalid isolation evidence even with passing compiler outcomes", () => {
+    const evidence = fixture();
+    const network = networkFixture();
+    network.probe = network.probe.replace("no-new-privs\t1", "no-new-privs\t0");
+    evidence.write("network-isolation.json", network);
+    expect(() => auditCompilerComparison(evidence.directory)).toThrow("Privilege escalation");
+    fs.unlinkSync(path.join(evidence.directory, "network-isolation.json"));
+    expect(() => auditCompilerComparison(evidence.directory)).toThrow("ENOENT");
+  });
+  it.each([
+    { cpus: 4, memoryGiB: 24, swapBytes: 0, error: null },
+    { cpus: 8, memoryGiB: 24, swapBytes: 0, error: "four CPUs" },
+    { cpus: 4, memoryGiB: 12, swapBytes: 0, error: "24 GiB" },
+    { cpus: 4, memoryGiB: 24, swapBytes: 1, error: "forbids swap" },
+  ])("keeps the capacity control distinct and checks its declared limits: %j", (profile) => {
+    const evidence = fixture();
+    const metadata = JSON.parse(
+      fs.readFileSync(path.join(evidence.directory, "metadata.json"), "utf8"),
+    );
+    evidence.write("metadata.json", {
+      ...metadata,
+      capacityControl: true,
+      cpus: profile.cpus,
+      limits: { memoryBytes: profile.memoryGiB * 1024 ** 3, swapBytes: profile.swapBytes },
+    });
+    if (profile.error) {
+      expect(() => auditCompilerComparison(evidence.directory)).toThrow(profile.error);
+    } else {
+      const result = auditCompilerComparison(evidence.directory);
+      expect(result.scope.capacityControl).toBe(true);
+      expect(result.qualificationPassed).toBe(true);
+    }
+  });
+
+  it("rejects a diagnostic memory profile even when all compiler outcomes pass", () => {
+    const evidence = fixture();
+    const metadata = JSON.parse(
+      fs.readFileSync(path.join(evidence.directory, "metadata.json"), "utf8"),
+    );
+    evidence.write("metadata.json", { ...metadata, memoryDiagnostic: "10GiB" });
+    expect(() => auditCompilerComparison(evidence.directory)).toThrow(
+      "Memory diagnostics are not qualification evidence",
+    );
+  });
+
   it("does not lose a declared profile or reference when its entire batch is missing", () => {
     const evidence = fixture();
     const metadata = JSON.parse(

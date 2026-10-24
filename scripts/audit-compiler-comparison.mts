@@ -3,6 +3,12 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { auditCompilerCache } from "./lib/compiler-comparison-cache.mts";
+import {
+  assertCompilerNetworkIsolation,
+  type CompilerNetworkEvidence,
+} from "./lib/compiler-comparison-io.mts";
+import { auditCompilerRows } from "./lib/compiler-comparison-rows.mts";
 
 type Graph = { name: string; config: string };
 type Canary = Graph & {
@@ -39,6 +45,9 @@ const hashPattern = /^[a-f0-9]{64}$/u;
 /** Audit one collector group. Completion covers its declared graphs, not all CI. */
 export function auditCompilerComparison(directory: string) {
   const read = (name: string) => fs.readFileSync(path.join(directory, name), "utf8");
+  const networkIsolation = assertCompilerNetworkIsolation(
+    JSON.parse(read("network-isolation.json")) as CompilerNetworkEvidence,
+  );
   const metadata = JSON.parse(read("metadata.json")) as {
     sourceHead: string;
     repeats: number;
@@ -48,14 +57,32 @@ export function auditCompilerComparison(directory: string) {
     libraryManifest: { name: string; sha256: string }[];
     expectedSamples?: string[];
     canaries?: Canary[];
+    memoryDiagnostic?: unknown;
+    capacityControl?: unknown;
+    cacheCorrectness?: unknown;
+    cacheWrapperSmoke?: unknown;
+    ciPolicy?: { args: string[]; env: Record<string, string> };
+    cpus?: number;
+    limits?: { memoryBytes: number; swapBytes: number };
   };
+  assert.equal(
+    metadata.memoryDiagnostic,
+    undefined,
+    "Memory diagnostics are not qualification evidence",
+  );
+  assert(metadata.capacityControl === undefined || metadata.capacityControl === true);
+  if (metadata.capacityControl) {
+    assert.equal(metadata.cpus, 4, "Capacity control requires four CPUs");
+    assert.equal(metadata.limits?.memoryBytes, 24 * 1024 ** 3, "Capacity control requires 24 GiB");
+    assert.equal(metadata.limits?.swapBytes, 0, "Capacity control forbids swap");
+  }
   const inventory = JSON.parse(read("inventory.json")) as {
     inventory: Graph[];
     graphs: Graph[];
     group: number;
     groups: number;
   };
-  const parity = JSON.parse(read("input-parity.json")) as {
+  const parity = (metadata.cacheCorrectness ? [] : JSON.parse(read("input-parity.json"))) as {
     graph: string;
     proofs: Record<Compiler, Record<"config" | "files", { sha256: string }>>;
   }[];
@@ -105,6 +132,33 @@ export function auditCompilerComparison(directory: string) {
   for (const entry of metadata.libraryManifest) {
     assert.match(entry.name, /^lib(?:\.[\w.-]+)?\.d\.ts$/u);
     assert.match(entry.sha256, hashPattern);
+  }
+  if (metadata.cacheCorrectness !== undefined) {
+    assert.deepEqual(inventory.inventory, [
+      { name: "cache-contract", config: "/case/tsconfig.json" },
+    ]);
+    assert.deepEqual(canaries, []);
+    return {
+      sourceHead: metadata.sourceHead,
+      binarySha256: metadata.binarySha256,
+      libraryManifestSha256: digest(JSON.stringify(metadata.libraryManifest)),
+      scope: {
+        purpose: "synthetic-cache-correctness",
+        networkIsolation,
+        graphs: inventory.graphs,
+        capacityControl: false,
+        group: 0,
+        groups: 1,
+        canaries: [],
+        plannedSamples: 56,
+        referenceInputsVerified: false,
+      },
+      typecheckPassed: null,
+      canariesPassed: null,
+      missing: [],
+      comparisons: [] as typeof comparisons,
+      ...auditCompilerCache(directory, metadata),
+    };
   }
 
   const missing: string[] = [];
@@ -322,6 +376,8 @@ export function auditCompilerComparison(directory: string) {
       JSON.stringify(metadata.libraryManifest.toSorted((a, b) => (a.name < b.name ? -1 : 1))),
     ),
     scope: {
+      networkIsolation,
+      capacityControl: metadata.capacityControl === true,
       group: metadata.group,
       groups: metadata.groups,
       graphs: inventory.graphs,
@@ -351,7 +407,20 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
     );
     const directory = process.argv[2];
     assert(directory);
-    const verdict = auditCompilerComparison(directory);
+    const metadata = JSON.parse(fs.readFileSync(path.join(directory, "metadata.json"), "utf8")) as {
+      wrapperAdmission?: unknown;
+    };
+    const verdict =
+      metadata.wrapperAdmission === undefined
+        ? auditCompilerComparison(directory)
+        : {
+            networkIsolation: assertCompilerNetworkIsolation(
+              JSON.parse(
+                fs.readFileSync(path.join(directory, "network-isolation.json"), "utf8"),
+              ) as CompilerNetworkEvidence,
+            ),
+            ...auditCompilerRows(directory),
+          };
     console.log(JSON.stringify(verdict, null, 2));
     process.exitCode = verdict.qualificationPassed ? 0 : 1;
   } catch (error) {

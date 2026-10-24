@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { auditCompilerComparison } from "../../scripts/audit-compiler-comparison.mts";
+import { networkFixture } from "./compiler-comparison-network.fixtures.js";
 
 const temporary: string[] = [];
 afterEach(() => {
@@ -97,6 +98,7 @@ function fixture(outcomes: { pinned: Outcome; candidate: Outcome; reference: Out
     ),
   };
   write("metadata.json", metadata);
+  write("network-isolation.json", networkFixture());
   write("inventory.json", { inventory: [core], graphs: [core], group: 0, groups: 1 });
   write("input-parity.json", parity);
   write("measurements.json", rows);
