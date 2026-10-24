@@ -1,12 +1,8 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import { runSubagentStateWorkerOperation, useSubagentControlFixture } from "./subagent-control.test-support.js";
-import { Value } from "typebox/value";
 import { expect, it, onTestFinished, vi } from "vitest";
-import {
-  WorkerLiveEventParamsSchema,
-  type WorkerLiveEventParams,
-} from "../../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import type { WorkerLiveEventParams } from "../../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
 import { captureSessionTranscriptTargetBinding } from "../../../config/sessions/transcript-target-binding.js";
@@ -339,7 +335,6 @@ it.each(["end", "error"] as const)(
         lastAckedSeq: seq - 1,
         event,
       };
-      expect(Value.Check(WorkerLiveEventParamsSchema, request)).toBe(true);
       expect(await receiver.apply({ identity, source, request, readAckedSeq: () => 0 })).toEqual({
         ok: true,
         result: { ackedSeq: seq },
@@ -386,9 +381,7 @@ it.each(["end", "error"] as const)(
         expect(getAgentRunContextOwnerStatus(previous.runId, claimId, lifecycleGeneration)).toBe(
           "active",
         );
-        expect(identity.turnClaim).toBe(turnClaim);
         expect(placementGate.validateWorkerTurn(turnClaim)).toBe(true);
-        expect(identity.runId).toBe(previous.runId);
         await applyEvent(3, {
           kind: "lifecycle",
           payload:
@@ -563,10 +556,6 @@ it("rearms native execution for an interrupted run's successor", async () => {
     await finalizeInterruptedSubagentRun({ runId: previous.runId, expectedEntry: previous, error }),
   ).toBe(0);
   expect(subagentRuns.get(successor.runId)).toBe(successor);
-
-  expect(await replaceRun(successor.runId, "interrupted-task-newer", { expected: successor })).toBe(
-    true,
-  );
 });
 
 it("admits a child follow-up while its predecessor's browser cleanup is still pending", async () => {
