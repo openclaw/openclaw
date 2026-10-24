@@ -4954,6 +4954,35 @@ and swap the interleaved CPU placements in the second pair. Keep maintenance
 settings identical. Apply the campaign's absolute-delta and sample-count rules;
 run matched identical-source controls before interpreting adverse GC or promotion.
 
+## Session replica listener installation
+
+`session-actor-listener-measure.ts` sends 32 prepared, immutable full-entry
+postimages through the real row-change dispatcher and replica installation owner.
+Each entry has a saved instruction snapshot and nested plugin results. It checks
+content, frozen nested values, and mutation rejection, and reports full-entry
+clones separately from other clones during a separate 32-install diagnostic pass.
+Serialized clone bytes describe copied payload size, not V8 allocation.
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/session-actor-listener-measure.ts \
+  --state-dir /path/to/private-state --iterations 100000 \
+  --start-at <shared-future-epoch-ms> --output listener.json
+```
+
+Save an unchanged owner beside the current source and select it with
+`--replica-owner src/config/sessions/session-actor-replica.baseline.ts` for the
+baseline. Run concurrent pairs under one quiet lock and the shared guard, with
+separate state directories, synchronized warm starts, and swapped interleaved
+CPUs in the second pair. Default runs measure untraced CPU, installation latency,
+event-loop delay, and per-kind GC totals/tails/maxima with sample counts. Use
+`--allocations` in separate paired runs to sample allocation including collected
+objects; do not gate timing on those instrumented runs. Apply the campaign's
+absolute-delta and sample-count rules, including matched identical-source
+controls before interpreting adverse GC. Acceptance is unchanged immutable
+contents and reduced copying/allocation without a material CPU or tail regression.
+This measures prepared native-style notification installation, excluding producer
+decoding, worker cold-freezing, Gateway traffic, and RPC latency.
+
 ## Native worker CPU sampling
 
 `worker-cpu-measure.ts` exercises the registered CPU source of 50 real, idle
