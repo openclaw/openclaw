@@ -267,6 +267,7 @@ export async function finishGatewayStartup(params: {
           defaultWorkspaceDir,
           deps,
           startChannels,
+          recoverDurableQuestionInteractions: runtime.recoverDurableQuestionInteractions,
           resolveGatewayContext: gatewayRequestContext.resolveGatewayContext!,
           logHooks,
           logChannels,

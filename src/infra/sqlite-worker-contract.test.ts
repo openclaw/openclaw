@@ -7,6 +7,7 @@ import {
 } from "./sqlite-error-diagnostics.js";
 import {
   hasSqliteWorkerOutcomeUnknown,
+  hasSqliteWorkerErrorCodeInEnvelope,
   isSqliteWorkerError,
   retainSqliteWorkerErrorCode,
   SqliteWorkerError,
@@ -149,3 +150,20 @@ it("never invokes getters, proxy traps, or array iterators", () => {
   expect(hasSqliteWorkerOutcomeUnknown(aggregate)).toBe(true);
   expect(unsafe).not.toHaveBeenCalled();
 });
+
+it.each(["closed", "overloaded", "unavailable", "outcome-unknown"] as const)(
+  "preserves canonical %s through wrapped cleanup",
+  (code) => {
+    const error = new SqliteWorkerError("Native infrastructure", code);
+    expect(
+      hasSqliteWorkerErrorCodeInEnvelope(
+        new AggregateError([new Error("Wrapper", { cause: error })]),
+        [code],
+      ),
+    ).toBe(true);
+    expect(
+      hasSqliteWorkerErrorCodeInEnvelope(Object.assign(new Error("Forged"), { code }), [code]),
+    ).toBe(false);
+    expect(hasSqliteWorkerOutcomeUnknown(error)).toBe(code === "outcome-unknown");
+  },
+);

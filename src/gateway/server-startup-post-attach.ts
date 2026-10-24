@@ -98,6 +98,7 @@ export async function startGatewayPostAttachRuntime(params: {
   trackStartupWork: <T>(run: (signal: AbortSignal) => Promise<T>) => Promise<T>;
   startWorkerEnvironmentRuntime?: () => Awaitable<GatewayPostReadySidecarHandle | null>;
   onSidecarsReady?: () => void;
+  recoverDurableQuestionInteractions?: () => Promise<void>;
   getReadiness: ReadinessChecker;
   isClosing?: () => boolean;
   startupTrace?: GatewayStartupTrace;
@@ -441,6 +442,7 @@ export async function startGatewayPostAttachRuntime(params: {
       }
       params.onSidecarsReady?.();
       await runGatewayStartupObservers({
+        recoverDurableQuestionInteractions: params.recoverDurableQuestionInteractions,
         registry: sidecarRegistry,
         signal,
         resolveGatewayContext: params.resolveGatewayContext,

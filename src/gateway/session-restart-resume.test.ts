@@ -572,3 +572,42 @@ it("resumes recent interrupted legacy cycles once and settles crash inputs", () 
       await live!.settled?.();
     }
   }));
+
+it("leaves a question-owned source to its durable continuation instead of adding a generic resume", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
+    const target = { agentId: "main", sessionKey: "agent:main:question-owned" };
+    replaceSessionEntrySync(target, {
+      sessionId: "question-owned",
+      lifecycleRevision: "question-generation",
+      lifecycleRunId: "question-source",
+      updatedAt: 1,
+      resumeAfterRestart: { queuedInputIds: [] },
+      durableQuestionOwners: [
+        {
+          questionId: "q1",
+          sourceRunId: "question-source",
+          sessionId: "question-owned",
+          lifecycleRevision: "question-generation",
+        },
+      ],
+    });
+    const context = createContext([], () => cfg);
+    context.resolveGatewayContext = () => context;
+    const enqueue = vi.spyOn(sessionEvents, "enqueueSessionEventForHost");
+    try {
+      await resumeMarkedSessions({
+        context,
+        signal: new AbortController().signal,
+        log: { warn: () => {} },
+      });
+      expect(enqueue).not.toHaveBeenCalled();
+      const entry = loadExactSessionEntry(target)?.entry;
+      expect(entry?.resumeAfterRestart).toBeUndefined();
+      expect(entry?.lifecycleRunId).toBe("question-source");
+      expect(entry?.durableQuestionOwners).toHaveLength(1);
+    } finally {
+      enqueue.mockRestore();
+    }
+  }));

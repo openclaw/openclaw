@@ -16,6 +16,7 @@ import {
   interruptOrphanedSessionPendingInputs,
   listOrphanedSessionPendingInputTargets,
 } from "../config/sessions/session-pending-input-withdrawal.js";
+import { hasQuestionOwnerNativeReference } from "../config/sessions/session-question-recovery-owner.js";
 import {
   derivePersistedSessionLifecyclePatch,
   restartResumeSkipReason,
@@ -515,6 +516,7 @@ async function resumeRestartStore(
     for (const { sessionKey, entry: snapshotEntry } of entries) {
       let authority: Awaited<ReturnType<typeof prepareSessionSystemTurnAuthority>> | undefined;
       let interrupted = false;
+      let questionOwned = false;
       try {
         const resumed = await applySessionEntryReplacements<
           | {
@@ -531,6 +533,23 @@ async function resumeRestartStore(
             const selected = current.find((row) => row.sessionKey === sessionKey)?.entry;
             if (!selected) {
               return { result: undefined };
+            }
+            // Durable questions retain their exact source; a generic resume would repeat its work.
+            if (
+              selected.durableQuestionOwners?.some((owner) =>
+                hasQuestionOwnerNativeReference(selected, owner),
+              )
+            ) {
+              questionOwned = true;
+              return {
+                result: {
+                  entry: selected,
+                  marker: selected.resumeAfterRestart ?? { queuedInputIds: [] },
+                },
+                replacements: [
+                  { sessionKey, entry: { ...selected, resumeAfterRestart: undefined } },
+                ],
+              };
             }
             const orphanedRun =
               selected.lifecycleRunId &&
@@ -590,6 +609,19 @@ async function resumeRestartStore(
           continue;
         }
         const { entry, marker } = resumed;
+        if (questionOwned) {
+          // Independently accepted senders keep their own ordinary FIFO admission.
+          await continueSessionQueuedInputs(
+            context,
+            { ...target, sessionKey, sessionId: entry.sessionId },
+            {
+              signal,
+              queuedInputIds: marker.queuedInputIds,
+              assertCurrent: () => signal.throwIfAborted(),
+            },
+          );
+          continue;
+        }
         const agentId = parseAgentSessionKey(sessionKey)?.agentId ?? target.agentId;
         const runId = snapshotEntry.lifecycleRunId ?? entry.lastRunId;
         let admissionStage = "principal";

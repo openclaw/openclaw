@@ -17,6 +17,7 @@ import type { GatewayCronCreatorAuthorityAdmission } from "../server-methods/cro
 import type { AgentDeliveryPhaseResult } from "./agent-delivery-phase.js";
 import type { RestoredCronContinuation } from "./agent-handler-helpers.js";
 import type { PreparedAgentRunUserTurn, prepareAgentRunUserTurn } from "./agent-run-user-turn.js";
+import type { AgentTurnAdmissionCommit } from "./internal-facade.types.js";
 import type { AgentTurnIo } from "./types.js";
 
 export type PreparedAgentRunModelRuntime =
@@ -69,6 +70,7 @@ export type PrepareAgentRunDispatchParams = Omit<
   | "freshChildStorePath"
 > & {
   sourceWork: Promise<void>;
+  commitAdmission?: AgentTurnAdmissionCommit;
   needsImageUnderstanding?: boolean;
   /** Consumed host-bound child creation facts, never a wire-request option. */
   freshChild?: boolean;

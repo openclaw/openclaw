@@ -38,6 +38,7 @@ export async function runGatewayStartupObservers(params: {
     ...args: Parameters<typeof createHookRunner>
   ) => ReturnType<typeof createHookRunner> | Promise<ReturnType<typeof createHookRunner>>;
   refreshLatestUpdateRestartSentinel: () => Promise<unknown>;
+  recoverDurableQuestionInteractions?: () => Promise<void>;
   startDurableProcesses?: () => Promise<void>;
 }): Promise<void> {
   if (params.signal.aborted || params.isClosing?.()) {
@@ -64,6 +65,7 @@ export async function runGatewayStartupObservers(params: {
       if (params.signal.aborted || params.isClosing?.()) {
         return;
       }
+      await params.recoverDurableQuestionInteractions?.();
       const { resumeMarkedSessions } = await import("./session-restart-resume.js");
       try {
         await resumeMarkedSessions({ context, signal: params.signal, log: params.log });

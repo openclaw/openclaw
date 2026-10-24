@@ -55,6 +55,7 @@ export function createAgentTurnService(
 ) {
   const startTurn = async ({
     controllerInput,
+    commitAdmission,
     privateCompletion,
     replyExpectation,
     settleWakeReplay,
@@ -597,6 +598,7 @@ export function createAgentTurnService(
             preparedOffloadedRefs = [];
           },
           privateCompletion,
+          commitAdmission,
           replyExpectation,
           settleWakeReplay,
           acquireGatewayWorkAdmission: admissionController.acquire,
