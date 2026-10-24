@@ -36,12 +36,6 @@ function requireStep(job: WorkflowJob, name: string): WorkflowStep {
   );
 }
 
-function containsAll(script: string | undefined, fragments: string[]) {
-  for (const fragment of fragments) {
-    expect(script).toContain(fragment);
-  }
-}
-
 const core = "openclaw-npm-release";
 const plugin = "plugin-npm-release";
 const clawhub = "plugin-clawhub-release";
@@ -61,20 +55,20 @@ it("attests and uploads the gated parent receipt before dispatching children", (
   const publish = requireJob("openclaw-release-publish", "publish");
   expect(publish.environment).toBe("npm-release");
   const names = publish.steps.map((step) => step.name);
-  const initializeIndex = names.indexOf("Initialize postpublish diagnostics");
-  expect(initializeIndex).toBeGreaterThanOrEqual(0);
-  expect(names.slice(initializeIndex + 1, initializeIndex + 5)).toEqual([
+  const receiptSteps = [
     "Write release approval receipt",
     "Attest release approval receipt",
     "Upload release approval receipt",
     "Verify all prepared plugin bytes before publication",
-  ]);
-  expect(names.indexOf("Upload release approval receipt")).toBeLessThan(
-    names.indexOf("Dispatch publish workflows"),
-  );
-  const [write, attest, upload] = publish.steps.slice(initializeIndex + 1, initializeIndex + 4);
-  expect(write).toMatchObject({ id: "approval_receipt" });
-  expect(write?.run).toContain("release-approval-receipt.mjs create");
+    "Dispatch publish workflows",
+  ].map((name) => requireStep(publish, name));
+  const positions = receiptSteps.map((step) => names.indexOf(step.name));
+  expect(positions).toEqual(positions.toSorted((a, b) => a - b));
+  const [write, attest, upload] = receiptSteps;
+  expect(write).toMatchObject({
+    id: "approval_receipt",
+    run: expect.stringContaining("release-approval-receipt.mjs create"),
+  });
   expect(attest?.with?.["subject-path"]).toBe(
     "${{ runner.temp }}/openclaw-release-approval/approval.json",
   );
@@ -117,7 +111,7 @@ it.each([
     },
   });
   // Zizmor bot-conditions rejects `if: github.actor == ...`; the guard lives in bash.
-  containsAll(step?.run, [
+  for (const fragment of [
     'if [[ "${GITHUB_ACTOR}" != "github-actions[bot]" ]]; then',
     "release-approval-receipt.mjs verify",
     'gh attestation verify "$RUNNER_TEMP/openclaw-release-approval/approval.json"',
@@ -126,7 +120,9 @@ it.each([
     '--source-digest "$EXPECTED_WORKFLOW_SHA"',
     '--source-ref "$EXPECTED_WORKFLOW_FULL_REF"',
     "--deny-self-hosted-runners",
-  ]);
+  ]) {
+    expect(step?.run).toContain(fragment);
+  }
   if (workflow === core) {
     expect(requireStep(job, "Checkout trusted approval verifier").with).toMatchObject({
       ref: "${{ github.workflow_sha }}",

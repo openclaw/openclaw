@@ -46,13 +46,15 @@ function mockCompiler(overrides: Parameters<typeof buildAll.runBuildAllSteps>[1]
     }),
   );
 }
-function mockPreparation(runtime: boolean) {
-  vi.spyOn(sourceRunner, "resolveRunNodePreparation").mockReturnValue({
-    build: false,
+function mockPreparation(runtime: boolean, build = false) {
+  return vi.spyOn(sourceRunner, "resolveRunNodePreparation").mockReturnValue({
+    build,
     runtime,
     immutable: false,
   });
 }
+
+const prepareAi = () => prepareTestRuntime(root, env, undefined, { withAiPackage: true });
 
 beforeEach(async () => {
   root = tempDirs.make("test-runtime-preparation-");
@@ -99,11 +101,7 @@ it.each([undefined, "0", "1"])(
   "admits E2E readers after one equivalent AI writer: caller DTS=%s",
   async (dts) => {
     env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD = dts;
-    vi.spyOn(sourceRunner, "resolveRunNodePreparation").mockReturnValue({
-      build: true,
-      runtime: true,
-      immutable: false,
-    });
+    mockPreparation(true, true);
     const writers: string[] = [];
     // Keep the real qaRuntime planner, completion records, and dist ownership;
     // only terminal workloads are fixtures, not evidence of actual compilation.
@@ -149,12 +147,7 @@ it.each(["warm", "postbuild", "locked recheck"])(
   "retains the original-environment AI writer after %s preparation",
   async (preparation) => {
     env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD = "1";
-    const resolvePreparation = vi.spyOn(sourceRunner, "resolveRunNodePreparation");
-    resolvePreparation.mockReturnValue({
-      build: false,
-      runtime: preparation === "postbuild",
-      immutable: false,
-    });
+    const resolvePreparation = mockPreparation(preparation === "postbuild");
     if (preparation === "locked recheck") {
       resolvePreparation.mockReturnValueOnce({ build: true, runtime: true, immutable: false });
     }
@@ -166,7 +159,7 @@ it.each(["warm", "postbuild", "locked recheck"])(
       await claim.release();
       return 0;
     });
-    expect(await prepareTestRuntime(root, env, undefined, { withAiPackage: true })).toBe(0);
+    expect(await prepareAi()).toBe(0);
     expect(commands.prepare).toHaveBeenCalledOnce();
     expect(build).not.toHaveBeenCalled();
   },
@@ -175,17 +168,13 @@ it.each(["warm", "postbuild", "locked recheck"])(
 it("propagates the joined standalone AI writer's failure", async () => {
   mockPreparation(false);
   commands.prepare.mockResolvedValue(23);
-  expect(await prepareTestRuntime(root, env, undefined, { withAiPackage: true })).toBe(23);
+  expect(await prepareAi()).toBe(23);
 });
 
 it("does not start another writer after a failed compiler generation", async () => {
-  vi.spyOn(sourceRunner, "resolveRunNodePreparation").mockReturnValue({
-    build: true,
-    runtime: true,
-    immutable: false,
-  });
+  mockPreparation(true, true);
   mockCompiler({ steps: undefined, runStep: async () => ({ status: 7 }) });
-  expect(await prepareTestRuntime(root, env, undefined, { withAiPackage: true })).toBe(7);
+  expect(await prepareAi()).toBe(7);
   expect(commands.prepare).not.toHaveBeenCalled();
 });
 

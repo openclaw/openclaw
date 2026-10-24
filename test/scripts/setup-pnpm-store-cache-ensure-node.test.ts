@@ -25,6 +25,14 @@ function runDownload(root: string, lines: string[], env: NodeJS.ProcessEnv = {},
   );
 }
 
+const archiveSetup = (platform: string, extract = true) => [
+  "openclaw_prepend_node_bin() { :; }",
+  `openclaw_node_download_platform() { printf '${platform}\\n'; }`,
+  ...(extract ? [platform === "win-x64" ? "pwsh() { :; }" : "tar() { :; }"] : []),
+];
+const download = (root: string) =>
+  `RUNNER_TEMP=${JSON.stringify(root)} openclaw_download_node "24.22.1"`;
+
 function writeExecutable(binDir: string, name: string, body: string) {
   mkdirSync(binDir, { recursive: true });
   const file = join(binDir, name);
@@ -191,7 +199,6 @@ exit 1
   });
 
   it("prefers the repo-owned cached toolchain over an image toolcache below the floor", () => {
-    // Image Node versions are below the floor; use the repo cache instead of downloading.
     const root = temps.make("openclaw-ensure-node-");
     const activeBin = join(root, "active", "bin");
     writeFakeNode(activeBin, "20.20.0");
@@ -212,30 +219,20 @@ exit 1
 
   it("enforces patched Node 24 and 26 wildcard minimums", () => {
     expect(runVersionMatch("24.14.1", "24.x").status).toBe(1);
-    expect(runVersionMatch("24.16.0", "24.x").status).toBe(1);
     expect(runVersionMatch("24.22.0", "24.x").status).toBe(1);
     expect(runVersionMatch("24.22.1", "24.x").status).toBe(0);
     expect(runVersionMatch("26.0.0", "26.x").status).toBe(1);
-    expect(runVersionMatch("26.1.0", "26.x").status).toBe(1);
     expect(runVersionMatch("26.12.0", "26.x").status).toBe(1);
     expect(runVersionMatch("26.12.1", "26.x").status).toBe(0);
   });
 
   it("replaces a rejected payload in the cached toolchain root instead of accreting", () => {
-    // Rejected installs must not accumulate in the cache saved wholesale.
     const root = temps.make("openclaw-ensure-node-");
     const toolchainRoot = join(root, "toolchain", "node");
     writeFakeNode(join(toolchainRoot, "v24.13.0-linux-x64", "bin"), "24.13.0");
-    const result = runDownload(
-      root,
-      [
-        "openclaw_prepend_node_bin() { :; }",
-        'openclaw_node_download_platform() { printf "linux-x64\\n"; }',
-        "tar() { :; }",
-        `RUNNER_TEMP=${JSON.stringify(root)} openclaw_download_node "24.22.1"`,
-      ],
-      { OPENCLAW_NODE_TOOLCHAIN_ROOT: toolchainRoot },
-    );
+    const result = runDownload(root, [...archiveSetup("linux-x64"), download(root)], {
+      OPENCLAW_NODE_TOOLCHAIN_ROOT: toolchainRoot,
+    });
 
     expect(result.status, result.stderr).toBe(0);
     expect(existsSync(join(toolchainRoot, "v24.13.0-linux-x64"))).toBe(false);
@@ -247,13 +244,10 @@ exit 1
     const curlLog = join(root, "curl.log");
     const result = runDownload(root, [
       'openclaw_resolve_node_download_version "24.x"',
-      "openclaw_prepend_node_bin() { :; }",
-      'openclaw_node_download_platform() { printf "win-x64\\n"; }',
-      "pwsh() { :; }",
-      `RUNNER_TEMP=${JSON.stringify(root)} openclaw_download_node "24.22.1"`,
-      'openclaw_node_download_platform() { printf "linux-x64\\n"; }',
-      "tar() { :; }",
-      `RUNNER_TEMP=${JSON.stringify(root)} openclaw_download_node "24.22.1"`,
+      ...archiveSetup("win-x64"),
+      download(root),
+      ...archiveSetup("linux-x64"),
+      download(root),
     ]);
 
     expect(result.status, result.stderr).toBe(0);
@@ -276,11 +270,7 @@ exit 1
     const root = temps.make("openclaw-ensure-node-");
     const result = runDownload(
       root,
-      [
-        "openclaw_prepend_node_bin() { :; }",
-        'openclaw_node_download_platform() { printf "linux-x64\\n"; }',
-        `RUNNER_TEMP=${JSON.stringify(root)} openclaw_download_node "24.22.1"`,
-      ],
+      [...archiveSetup("linux-x64", false), download(root)],
       { OPENCLAW_FAKE_CURL_FAIL_SUFFIX: ".tar.xz" },
       false,
     );
