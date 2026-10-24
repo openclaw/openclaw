@@ -542,12 +542,11 @@ export async function callInProcessGatewayToolWithCreation<T = Record<string, un
   creation: TrustedSessionCreation,
   options: Omit<InProcessGatewayCallOptions, "onExecution"> = {},
 ): Promise<T> {
-  const requesterOrigin = getGatewayToolCallerIdentity()?.requesterOrigin;
+  // Selected operators retain responsibility; linked nonadmins contribute identity, not authority.
   const requesterProfileId =
+    resolveGatewayToolOperatorSelection().operatorAuthority?.profileId ??
     creation.requesterProfileId ??
-    (requesterOrigin
-      ? requesterCreatorProfileId(requesterOrigin)
-      : resolveGatewayToolOperatorSelection().operatorAuthority?.profileId);
+    requesterCreatorProfileId(getGatewayToolCallerIdentity()?.requesterOrigin);
   const trustedCreation =
     creation.via === "spawn" && requesterProfileId ? { ...creation, requesterProfileId } : creation;
   return await callInProcessGatewayToolBound(method, params, {
