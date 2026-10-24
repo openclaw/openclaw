@@ -16,6 +16,9 @@ minimumReleaseAgeExclude:
   # Solid itself is exempt from the release-age gate (Peter, 2026-10-11).
   - "solid-js"
   - "@solidjs/*"
+  # Peter approved 2026-10-24: solid-js rc.18 transitive SSR/hydration serialization dependencies.
+  - "seroval@1.7.0"
+  - "seroval-plugins@1.7.0"
   # Reviewed pnpm security bump (#179992); remove after 2026-10-28T11:16:18.199Z.
   - "pnpm@12.15.0"
   - "@pnpm/exe.android-arm64@12.15.0"
@@ -162,5 +165,5 @@ patchedDependencies:
   vitest@5.0.5: patches/vitest@5.0.5.patch
   ghostty-web@0.4.0: patches/ghostty-web@0.4.0.patch
   chrome-devtools-mcp@1.11.0: patches/chrome-devtools-mcp@1.11.0.patch
-  "@solidjs/web@2.0.0-rc.16": patches/@solidjs__web@2.0.0-rc.16.patch
-  "@solidjs/signals@2.0.0-rc.16": patches/@solidjs__signals@2.0.0-rc.16.patch
+  "@solidjs/web@2.0.0-rc.18": patches/@solidjs__web@2.0.0-rc.18.patch
+  "@solidjs/signals@2.0.0-rc.18": patches/@solidjs__signals@2.0.0-rc.18.patch
