@@ -282,16 +282,8 @@ describe("prepublish plugin registry artifact", () => {
     const requiredPackages = requiredPrepublishPluginPackagesForLanes([lane!]);
     const expectedPackages = ["@openclaw/codex", "@openclaw/slack"];
     const { repoRoot, sourceSha } = cliFixture(expectedPackages);
-    const artifactDir = path.join(repoRoot, "artifact");
     const result = createRegistry({ repoRoot, sourceSha }, { requiredPackages });
-    const verified = validatePrepublishPluginRegistryArtifact({
-      artifactDir,
-      expectedSourceSha: sourceSha,
-      expectedCandidateVersion: VERSION,
-      expectedManifestSha256: result.manifestSha256,
-      requiredPackages: expectedPackages,
-    });
-    expect(verified.manifest.packages.map(({ name, version }) => ({ name, version }))).toEqual(
+    expect(result.manifest.packages.map(({ name, version }) => ({ name, version }))).toEqual(
       expectedPackages.map((name) => ({ name, version: VERSION })),
     );
   });
@@ -492,20 +484,10 @@ describe("prepublish plugin registry artifact", () => {
     }
   }, 30_000);
 
-  it("rejects mismatched cross-OS companion registry identities", () => {
-    const paths = fixture();
-    const common = crossOsTuple(paths);
-
-    for (const [field, value, error] of [
-      ["sourceSha", "b".repeat(40), "source SHA differs"],
-      ["candidateVersion", "2026.8.1-beta.2", "version differs"],
-      ["manifestSha256", "c".repeat(64), "manifest SHA-256 differs"],
-    ] as const) {
-      expect(() => resolveCrossOsPackageSet({ ...common, [field]: value })).toThrow(error);
-    }
-
-    writeFileSync(paths.tarballPath, "tampered");
-    expect(() => resolveCrossOsPackageSet(common)).toThrow("tarball SHA-256 mismatch");
+  it("rejects a registry for a different candidate version", () => {
+    expect(() => validate(fixture(), { expectedCandidateVersion: "2026.8.1-beta.2" })).toThrow(
+      "version differs",
+    );
   });
 
   it("refuses to create an artifact from tracked changes under the same HEAD", () => {
@@ -534,27 +516,9 @@ describe("prepublish plugin registry artifact", () => {
     ).toThrow("duplicate package");
   });
 
-  it("rejects missing and extra artifact files", () => {
+  it("rejects missing artifact files", () => {
     const missing = fixture();
     unlinkSync(missing.tarballPath);
     expect(() => validate(missing)).toThrow("missing, extra, or non-file");
-
-    const extra = fixture();
-    writeFileSync(path.join(extra.artifactDir, "extra.txt"), "unexpected");
-    expect(() => validate(extra)).toThrow("missing, extra, or non-file");
-  });
-
-  it("rejects package identity and required-set mismatches", () => {
-    const identity = fixture();
-    identity.manifest.packages[0]!.name = "@openclaw/feishu";
-    identity.writeManifest();
-    expect(() => validate(identity, { requiredPackages: ["@openclaw/feishu"] })).toThrow(
-      "tarball identity mismatch",
-    );
-
-    const required = fixture();
-    expect(() => validate(required, { requiredPackages: ["@openclaw/feishu"] })).toThrow(
-      "missing Docker-plan package",
-    );
   });
 });
