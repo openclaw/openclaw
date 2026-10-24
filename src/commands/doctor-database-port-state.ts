@@ -5,7 +5,10 @@ import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveStateClientCredentialEnvironment } from "../infra/client-credential-paths.js";
 import { readClientCredentialFileIdentity } from "../infra/client-credential-receipt.js";
-import { capturePortClientCredentialBinding } from "../infra/client-credential-restore.js";
+import {
+  capturePortClientCredentialBinding,
+  PortClientCredentialMismatchError,
+} from "../infra/client-credential-restore.js";
 import { resolveDatabaseEngineInput } from "../infra/database-engine/config.js";
 import { withDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import {
@@ -32,18 +35,29 @@ export function assertLocalCredentialPortCompanion(
   privatePaths(ctx, [file]);
   const sourceFile = readClientCredentialFileIdentity(sharedPath);
   const env = resolveStateClientCredentialEnvironment({ path: sharedPath, env: ctx.env });
-  if (
-    sharedFamily !== "state" ||
-    readBackupEngine(file).engine !== "sqlite" ||
-    !sourceFile ||
-    !env ||
-    !capturePortClientCredentialBinding({ env, sourcePath: sharedPath, sourceFile })
-  ) {
-    refuse(
-      ctx,
-      "unmatched local credentials",
-      "an admitted shared target and its bound local store",
-    );
+  try {
+    if (
+      sharedFamily !== "state" ||
+      readBackupEngine(file).engine !== "sqlite" ||
+      !sourceFile ||
+      !env ||
+      !capturePortClientCredentialBinding({ env, sourcePath: sharedPath, sourceFile })
+    ) {
+      refuse(
+        ctx,
+        "unmatched local credentials",
+        "an admitted shared target and its bound local store",
+      );
+    }
+  } catch (error) {
+    if (error instanceof PortClientCredentialMismatchError) {
+      refuse(
+        ctx,
+        "a local credential receipt not bound to this state database file",
+        "a complete local credential receipt for this exact state database file; restore archives with openclaw backup restore",
+      );
+    }
+    throw error;
   }
 }
 
