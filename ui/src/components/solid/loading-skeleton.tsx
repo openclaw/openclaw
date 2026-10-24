@@ -48,7 +48,9 @@ export function ConnectingSplash(props: { status?: string }) {
         </aside>
         <div class="connect-splash__main">
           <LoadingSkeleton />
-          <span class="connect-splash__status">{props.status ?? t("common.loading")}</span>
+          <span class="connect-splash__status" onMouseDown={(event) => event.stopPropagation()}>
+            {props.status ?? t("common.loading")}
+          </span>
         </div>
       </div>
     </main>
