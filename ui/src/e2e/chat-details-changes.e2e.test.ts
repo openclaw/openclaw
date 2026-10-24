@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { installMockGateway, pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { closeChatDetails, openChatDetails } from "./chat-details.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -9,6 +9,7 @@ const suite = createControlUiE2eSuite({ name: "Details Environment changes" });
 suite.define(() => {
   it("shares read-only Uncommitted demand between Environment and Review and recovers retained counts", async () => {
     await suite.withPage({ viewport: { width: 1180, height: 800 } }, async ({ page }) => {
+      await page.clock.install();
       const result = (additions: number, deletions: number) => ({
         sessionKey: "main",
         branch: "feature/workspace-navigation",
@@ -50,7 +51,10 @@ suite.define(() => {
       expect(await page.locator(".session-diff").count()).toBe(0);
 
       await closeChatDetails(page);
+      await pauseVirtualClock(page);
+      await page.clock.fastForward(60_000);
       await gateway.deferNext("sessions.diff", { scope: "uncommitted" });
+      await page.clock.resume();
       await openChatDetails(page);
       await readCount().toBe(2);
       await gateway.rejectDeferred("sessions.diff", {
@@ -61,8 +65,11 @@ suite.define(() => {
       expect(await action.textContent()).toContain("−61");
 
       await closeChatDetails(page);
+      await pauseVirtualClock(page);
+      await page.clock.fastForward(60_000);
       await gateway.setMethodResponse("sessions.diff", { ...result(12480, 1030), truncated: true });
       await gateway.deferNext("sessions.diff", { scope: "uncommitted" });
+      await page.clock.resume();
       await openChatDetails(page);
       await readCount().toBe(3);
       // Review must join the Environment read, not issue a competing request.
