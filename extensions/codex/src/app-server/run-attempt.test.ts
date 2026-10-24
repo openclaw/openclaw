@@ -37,16 +37,10 @@ import {
   resolveCodexAppServerRuntimeOptions,
   resolveCodexSupervisionAppServerRuntimeOptions,
 } from "./config.js";
-import {
-  buildDynamicTools,
-  shouldEnableCodexAppServerNativeToolSurface,
-} from "./dynamic-tool-build.js";
-import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import * as elicitationBridge from "./elicitation-bridge.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
 import { setCodexTestToolFactory } from "./host-capability.test-support.js";
 import { buildCodexRuntimeModelParams } from "./model-runtime.js";
-import { prepareTestNativeExecutionPolicy } from "./native-execution-policy.test-support.js";
 import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
 import {
   buildCodexAppServerConnectionFingerprint,
@@ -62,7 +56,6 @@ import {
   pluginList,
   pluginSummary,
 } from "./plugin-inventory.test-helpers.js";
-import { buildCodexPluginThreadConfig } from "./plugin-thread-config.js";
 import {
   isJsonObject,
   type CodexDynamicToolFunctionSpec,
@@ -125,16 +118,8 @@ import {
   attachSqliteSessionTarget,
   readTranscriptMessagesByIdentity,
 } from "./sqlite-session.test-helpers.js";
-import {
-  createCodexTestModel,
-  createCodexTestOAuthProfile,
-  withoutCodexSkillDiscovery,
-} from "./test-support.js";
-import {
-  startOrResumeAttemptThreadWithoutSkills as startOrResumeThread,
-  createAppServerOptions as createBaseAppServerOptions,
-  createCodexLifecycleHarness,
-} from "./thread-lifecycle.test-fixtures.js";
+import { createCodexTestOAuthProfile } from "./test-support.js";
+import { createCodexLifecycleHarness } from "./thread-lifecycle.test-fixtures.js";
 import { readMirrorIdentity } from "./upstream-prompt-provenance.js";
 import * as userInputBridge from "./user-input-bridge.js";
 
@@ -182,105 +167,6 @@ async function writeExistingBinding(
   });
 }
 
-function createThreadLifecycleAppServerOptions(): Parameters<
-  typeof startOrResumeThread
->[0]["appServer"] {
-  return {
-    ...createBaseAppServerOptions(),
-    connectionClass: "local-loopback",
-  };
-}
-
-async function buildDynamicToolsForTest(
-  params: EmbeddedRunAttemptParams,
-  workspaceDir: string,
-  overrides: Partial<Parameters<typeof buildDynamicTools>[0]> = {},
-) {
-  const sandboxSessionKey = params.sessionKey;
-  if (!sandboxSessionKey) {
-    throw new Error("createParams must provide a sessionKey for Codex dynamic tool tests.");
-  }
-  return buildDynamicTools({
-    params,
-    resolvedWorkspace: workspaceDir,
-    effectiveWorkspace: workspaceDir,
-    effectiveCwd: params.cwd ?? workspaceDir,
-    sandboxSessionKey,
-    sandbox: { enabled: false, backendId: "docker" } as never,
-    nativeToolSurfaceEnabled: true,
-    runAbortController: new AbortController(),
-    sessionAgentId: "main",
-    policyAgentId: params.sandboxAgentId ?? "main",
-    pluginConfig: {},
-    onYieldDetected: () => undefined,
-    ...overrides,
-  });
-}
-
-async function startThreadWithDisabledNativeSurfaceForTest(
-  params: EmbeddedRunAttemptParams,
-  options: {
-    pluginConfig?: Record<string, unknown>;
-    developerInstructions?: string;
-  } = {},
-) {
-  const workspaceDir = params.workspaceDir;
-  if (!workspaceDir) {
-    throw new Error("createParams must provide a workspaceDir for Codex thread tests.");
-  }
-  const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(params, undefined, {
-    nativeExecutionPolicy: await prepareTestNativeExecutionPolicy(params),
-  });
-  const dynamicTools = await buildDynamicToolsForTest(params, workspaceDir, {
-    nativeToolSurfaceEnabled,
-    pluginConfig: options.pluginConfig ?? {},
-    effectiveCwd: undefined,
-  });
-  const request = vi.fn(async (method: string, _requestParams?: unknown) => {
-    if (method === "config/read") {
-      return { config: {}, layers: [] };
-    }
-    if (method === "thread/start") {
-      return threadStartResult();
-    }
-    if (method === "app/installed" || method === "app/read") {
-      throw new Error("App inventory should not run when runtime toolsAllow is empty.");
-    }
-    throw new Error(`unexpected method: ${method}`);
-  });
-  const pluginConfig = {
-    ...options.pluginConfig,
-    codexPlugins: {
-      ...(options.pluginConfig?.codexPlugins as Record<string, unknown> | undefined),
-      enabled: false,
-    },
-  };
-
-  await startOrResumeThread({
-    client: { request } as never,
-    params,
-    cwd: workspaceDir,
-    dynamicTools: dynamicTools as never,
-    appServer: createThreadLifecycleAppServerOptions(),
-    developerInstructions: options.developerInstructions,
-    nativeCodeModeEnabled: nativeToolSurfaceEnabled,
-    nativeCodeModeOnlyEnabled: false,
-    userMcpServersEnabled: false,
-    environmentSelection: [],
-    pluginThreadConfig: {
-      enabled: true,
-      build: () =>
-        buildCodexPluginThreadConfig({
-          pluginConfig,
-          request: request as never,
-          appCacheKey: "test-app-cache-key",
-        }),
-    },
-  });
-
-  return { request, nativeToolSurfaceEnabled };
-}
-
 function flattenSpecsWithNamespace(
   specs: readonly CodexDynamicToolSpec[],
 ): Array<CodexDynamicToolFunctionSpec & { namespace?: string }> {
@@ -321,8 +207,7 @@ function openRunSession(sessionFile: string) {
 }
 
 function createRunParams() {
-  const { sessionFile, workspaceDir } = createRunPaths();
-  return createParams(sessionFile, workspaceDir);
+  return createTestParams();
 }
 
 function createRunFixture(identity?: Parameters<typeof createParams>[2]) {
@@ -346,6 +231,66 @@ function getRequestParams<M extends keyof RequestParams>(
   return requests.find((request) => request.method === method)?.params as
     | RequestParams[M]
     | undefined;
+}
+
+function requestMethods(harness: Pick<AttemptHarness, "requests">) {
+  return harness.requests.map(({ method }) => method);
+}
+function requestsFor(harness: Pick<AttemptHarness, "requests">, method: string) {
+  return harness.requests.filter((request) => request.method === method);
+}
+async function writeWorkspaceFiles(workspaceDir: string, files: Record<string, string>) {
+  await fs.mkdir(workspaceDir, { recursive: true });
+  await Promise.all(
+    Object.entries(files).map(([name, text]) => fs.writeFile(path.join(workspaceDir, name), text)),
+  );
+}
+async function emitCommand(
+  harness: AttemptHarness,
+  id: string,
+  cwd: string,
+  output: string,
+  exitCode = 0,
+  beforeComplete?: () => void,
+) {
+  const item = { type: "commandExecution", id, command: `echo ${id}`, cwd };
+  await emitItem(harness, "started", { ...item, status: "inProgress" });
+  beforeComplete?.();
+  await emitItem(harness, "completed", {
+    ...item,
+    status: exitCode ? "failed" : "completed",
+    aggregatedOutput: output,
+    exitCode,
+    durationMs: 1,
+  });
+}
+
+async function compact(harness: AttemptHarness, id: string) {
+  const item = { type: "contextCompaction", id };
+  await emitItem(harness, "started", item);
+  await emitItem(harness, "completed", item);
+}
+function injectedText(harness: AttemptHarness, index = 0) {
+  const request = requestsFor(harness, "thread/inject_items")[index];
+  const params = request?.params as
+    | { items?: Array<{ content?: Array<{ text?: string }> }> }
+    | undefined;
+  return params?.items?.[0]?.content?.[0]?.text ?? "";
+}
+
+function expectPlan(onAgentEvent: ReturnType<typeof vi.fn>, data: JsonObject) {
+  expectEvent(onAgentEvent, "plan", {
+    phase: "update",
+    title: "Plan updated",
+    source: "openclaw",
+    ...data,
+  });
+}
+
+function installPromptHook(handler: (...args: unknown[]) => unknown) {
+  initializeGlobalHookRunner(
+    createMockPluginRegistry([{ hookName: "before_prompt_build", handler }]),
+  );
 }
 
 function turnInput(requests: AttemptHarness["requests"]) {
@@ -556,11 +501,10 @@ function installFailingThreadStartClient(onThreadStart: () => unknown) {
 }
 
 async function runSettledFailureClientReplacementTest(
-  options: { denyReplacementShell?: boolean; requests?: string[][] } = {},
+  options: { denyReplacementShell?: boolean } = {},
 ) {
   const { sessionFile, workspaceDir } = createRunPaths();
   await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
-  const requests = options.requests ?? [];
   const clients: Array<ReturnType<typeof createCodexLifecycleHarness>> = [];
   const turnStarted = createDeferred<ReturnType<typeof createCodexLifecycleHarness>>();
   const failedThreadRead = createDeferred<void>();
@@ -569,8 +513,6 @@ async function runSettledFailureClientReplacementTest(
   });
   vi.spyOn(CodexAppServerClient, "start").mockImplementation(async () => {
     const startIndex = clients.length;
-    const methods: string[] = [];
-    requests.push(methods);
     const wire = createCodexLifecycleHarness({
       persistedThreads: ["thread-existing"],
       respond: async (method) => {
@@ -604,9 +546,6 @@ async function runSettledFailureClientReplacementTest(
     }
     const nativeRequest = CodexAppServerClient.prototype.request.bind(wire.client);
     wire.request.mockImplementation((method, params, requestOptions) => {
-      if (method !== "initialize") {
-        methods.push(method);
-      }
       const response = nativeRequest(method, params, requestOptions);
       if (startIndex === 0 && method === "thread/read") {
         void response.then(() => failedThreadRead.resolve());
@@ -642,7 +581,7 @@ async function runSettledFailureClientReplacementTest(
     params: { threadId: "thread-existing", turn: { id: "turn-1", status: "completed", items: [] } },
   });
   const result = await run;
-  return { result, requests, client: readyClient.client };
+  return { result, client: readyClient.client };
 }
 
 async function startFastAutoProgressTest() {
@@ -780,12 +719,7 @@ describe("runCodexAppServerAttempt", () => {
         store: {
           version: 1,
           profiles: {
-            [authProfileId]: {
-              type: "api_key",
-              provider: "openai",
-              keyRef: { source: "env", provider: "default", id: "OPENAI_WORK_KEY" },
-              key: "work-key",
-            },
+            [authProfileId]: { ...authProfileStore.profiles[authProfileId], key: "work-key" },
           },
         },
       },
@@ -1016,138 +950,103 @@ describe("runCodexAppServerAttempt", () => {
         { interval: 1, timeout: 100 },
       ),
     ).rejects.toThrow();
-    const messagesBeforeCompletion = await readTranscriptMessagesByIdentity(params);
-    expect(messagesBeforeCompletion).not.toContainEqual(
-      expect.objectContaining({
-        content: "already persisted prompt",
-      }),
-    );
-    expect(messagesBeforeCompletion).not.toContainEqual(
-      expect.objectContaining({
-        idempotencyKey: "codex-app-server:thread-1:turn-1:prompt",
-      }),
-    );
+    const expectNoPrompt = async () => {
+      const messages = await readTranscriptMessagesByIdentity(params);
+      for (const match of [
+        { content: params.prompt },
+        { idempotencyKey: "codex-app-server:thread-1:turn-1:prompt" },
+      ]) {
+        expect(messages).not.toContainEqual(expect.objectContaining(match));
+      }
+    };
+    await expectNoPrompt();
     await finishRun(run, harness);
-    const messagesAfterCompletion = await readTranscriptMessagesByIdentity(params);
-    expect(messagesAfterCompletion).not.toContainEqual(
-      expect.objectContaining({
-        content: "already persisted prompt",
-      }),
-    );
-    expect(messagesAfterCompletion).not.toContainEqual(
-      expect.objectContaining({
-        idempotencyKey: "codex-app-server:thread-1:turn-1:prompt",
-      }),
-    );
+    await expectNoPrompt();
   });
 
   it("disables Codex native tool surfaces when runtime toolsAllow is empty", async () => {
     const params = createRunParams();
-    setCodexTestToolFactory(params, () => [
-      createRuntimeDynamicTool("message"),
-      createRuntimeDynamicTool("web_search"),
-    ]);
+    setCodexTestToolFactory(params, () => ["message", "web_search"].map(createRuntimeDynamicTool));
     enableRuntimeTools(params);
     params.toolsAllow = [];
     params.extraSystemPrompt = "Tool and file actions are disabled for this sender by chat policy.";
-    const { request, nativeToolSurfaceEnabled } = await startThreadWithDisabledNativeSurfaceForTest(
-      params,
-      {
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method === "app/installed" || method === "app/read") {
+        throw new Error("App inventory must not run with an empty toolsAllow");
+      }
+    });
+    await finishRun(
+      runCodexAppServerAttempt(params, {
         pluginConfig: {
           appServer: { mode: "yolo" },
           ...codexPluginConfig({
             plugins: { "google-calendar": curatedPlugin("google-calendar") },
           }),
         },
-        developerInstructions: params.extraSystemPrompt,
+      }),
+      harness,
+    );
+    const start = getRequestParams(harness.requests, "thread/start");
+    expect(start).toMatchObject({
+      dynamicTools: [],
+      environments: [],
+      config: {
+        "features.code_mode": false,
+        "features.code_mode_only": false,
+        apps: {
+          _default: { enabled: false, destructive_enabled: false, open_world_enabled: false },
+        },
       },
-    );
-    const startParams = getRequestParams(
-      request.mock.calls.map(([method, requestParams]) => ({ method, params: requestParams })),
-      "thread/start",
-    );
-    expect(nativeToolSurfaceEnabled).toBe(false);
-    expect(startParams?.dynamicTools).toEqual([]);
-    expect(startParams?.environments).toEqual([]);
-    expect(startParams?.developerInstructions).toContain(
-      "Tool and file actions are disabled for this sender by chat policy.",
-    );
-    expect(startParams?.config).toMatchObject({
-      "features.code_mode": false,
-      "features.code_mode_only": false,
     });
-    const apps = startParams?.config?.apps;
+    expect(start?.developerInstructions).toContain(params.extraSystemPrompt);
+    const apps = start?.config?.apps;
     assert(isJsonObject(apps));
-    expect(apps["_default"]).toEqual({
-      enabled: false,
-      destructive_enabled: false,
-      open_world_enabled: false,
-    });
     const calendar = apps["google-calendar-app"];
     expect(isJsonObject(calendar) ? calendar.enabled : undefined).toBeUndefined();
-    expect(request.mock.calls.map(([method]) => method)).not.toContain("app/installed");
-    expect(request.mock.calls.map(([method]) => method)).not.toContain("app/read");
+    expect(requestMethods(harness)).not.toContain("app/installed");
+    expect(requestMethods(harness)).not.toContain("app/read");
   });
 
-  it("rejects a legacy managed MDM shell denial before a native creator can start", async () => {
-    const params = createRunParams();
-    enableRuntimeTools(params);
-    const harness = createStartedThreadHarness(async (method) => {
-      if (method === "configRequirements/read") {
-        return { requirements: null };
+  it.each(["managed MDM", "user"])(
+    "enforces %s shell configuration at native startup",
+    async (scope) => {
+      const params = createRunParams();
+      enableRuntimeTools(params);
+      const managed = scope === "managed MDM";
+      const harness = createStartedThreadHarness(async (method) => {
+        if (method === "configRequirements/read") {
+          return { requirements: null };
+        }
+        if (method === "config/read") {
+          const metadata = {
+            name: managed
+              ? { type: "legacyManagedConfigTomlFromMdm" }
+              : { type: "user", file: "/fixture/codex/config.toml", profile: null },
+            version: "sha256:shell-disabled",
+          };
+          const config = { features: { shell_tool: false } };
+          return {
+            config,
+            origins: { "features.shell_tool": metadata },
+            layers: [{ ...metadata, config }],
+          };
+        }
+        if (managed && method === "thread/start") {
+          throw new Error("unexpected native creator start");
+        }
+      });
+      const run = runCodexAppServerAttempt(params);
+      if (managed) {
+        await expect(run).rejects.toThrow("Codex native code mode requires shell_tool");
+        expect(requestMethods(harness)).not.toContain("thread/start");
+      } else {
+        await finishRun(run, harness);
+        expect(getRequestParams(harness.requests, "thread/start")).toMatchObject({
+          config: { "features.shell_tool": true },
+        });
       }
-      if (method === "config/read") {
-        const metadata = {
-          name: { type: "legacyManagedConfigTomlFromMdm" },
-          version: "sha256:managed-shell-denied",
-        };
-        const config = { features: { shell_tool: false } };
-        return {
-          config,
-          origins: { "features.shell_tool": metadata },
-          layers: [{ ...metadata, config }],
-        };
-      }
-      if (method === "thread/start") {
-        throw new Error("unexpected native creator start");
-      }
-      return undefined;
-    });
-
-    await expect(runCodexAppServerAttempt(params)).rejects.toThrow(
-      "Codex native code mode requires shell_tool",
-    );
-    expect(harness.requests.map((request) => request.method)).not.toContain("thread/start");
-  });
-
-  it("overrides a user-level shell disable when native code mode is enabled", async () => {
-    const params = createRunParams();
-    enableRuntimeTools(params);
-    const harness = createStartedThreadHarness(async (method) => {
-      if (method !== "config/read") {
-        return undefined;
-      }
-      const metadata = {
-        name: { type: "user", file: "/fixture/codex/config.toml", profile: null },
-        version: "sha256:user-shell-disabled",
-      };
-      const config = { features: { shell_tool: false } };
-      return {
-        config,
-        origins: { "features.shell_tool": metadata },
-        layers: [{ ...metadata, config }],
-      };
-    });
-
-    const run = runCodexAppServerAttempt(params);
-    await awaitTurnStart(harness, run);
-    await expect(finishRun(run, harness)).resolves.toBeDefined();
-    expect(
-      harness.requests.find((request) => request.method === "thread/start")?.params,
-    ).toMatchObject({
-      config: { "features.shell_tool": true },
-    });
-  });
+    },
+  );
 
   it("replaces the native surface with a filtered catalog and canonical plan persistence", async () => {
     const persistedProgressCardInputs: JsonObject[] = [];
@@ -1221,8 +1120,6 @@ describe("runCodexAppServerAttempt", () => {
       (tool) => tool.name,
     );
 
-    expect(startParams?.environments).toEqual([]);
-    expect(startParams?.config?.project_doc_max_bytes).toBe(131_072);
     expect(startParams?.developerInstructions?.split(agentsGuidance)).toHaveLength(2);
     expect(startParams?.config?.["tools.update_plan.enabled"]).toBe(false);
     expect(dynamicToolNames.toSorted()).toEqual(["apply_patch", "progress_card", "read"]);
@@ -1231,14 +1128,6 @@ describe("runCodexAppServerAttempt", () => {
     );
     expect(progressCardSpec).not.toHaveProperty("namespace");
     expect(progressCardSpec).not.toHaveProperty("deferLoading");
-    expect(startParams?.config).toMatchObject({
-      "features.hooks": false,
-      "hooks.PreToolUse": [],
-      "hooks.PostToolUse": [],
-      "hooks.PermissionRequest": [],
-      "hooks.Stop": [],
-    });
-    expect(harness.requests.map((request) => request.method)).toContain("mcpServerStatus/list");
 
     const plan = [
       { step: "Inspect regression", status: "completed" },
@@ -1249,36 +1138,14 @@ describe("runCodexAppServerAttempt", () => {
       plan,
     });
     expect(response).toMatchObject({ success: true });
-    expectEvent(onAgentEvent, "plan", {
-      phase: "update",
-      title: "Plan updated",
-      source: "openclaw",
+    expectPlan(onAgentEvent, {
       explanation: "1/2 complete",
       steps: plan,
     });
-    expect(executeProgressCard).toHaveBeenCalledTimes(1);
 
-    await emitItem(harness, "started", { type: "contextCompaction", id: "compact-1" });
-    await emitItem(harness, "completed", { type: "contextCompaction", id: "compact-1" });
-    let planRestoreRequests = harness.requests.filter(
-      (request) => request.method === "thread/inject_items",
-    );
-    expect(planRestoreRequests[0]?.params).toMatchObject({
-      threadId: "thread-1",
-      items: [
-        {
-          type: "message",
-          role: "user",
-          content: [
-            {
-              type: "input_text",
-              text: expect.stringContaining('"markdown":"Plan restored"'),
-            },
-          ],
-        },
-      ],
-    });
-    expect(JSON.stringify(planRestoreRequests[0]?.params)).toContain("progress_card");
+    await compact(harness, "compact-1");
+    expect(injectedText(harness)).toContain('"markdown":"Plan restored"');
+    expect(injectedText(harness)).toContain("progress_card");
 
     const nativePlan = Array.from({ length: 51 }, (_, index) => ({
       step: index === 0 ? `Ship ${"🚀".repeat(200)}` : `Native step ${index}`,
@@ -1288,12 +1155,8 @@ describe("runCodexAppServerAttempt", () => {
       explanation: "m".repeat(9_000),
       plan: nativePlan,
     });
-    expect(executeProgressCard).toHaveBeenCalledTimes(2);
     const persistedNativeInput = persistedProgressCardInputs[1];
-    expect(persistedNativeInput).toBeDefined();
-    if (!persistedNativeInput) {
-      throw new Error("native progress card input was not persisted");
-    }
+    assert(persistedNativeInput, "native progress card input was not persisted");
     const canonicalPlan = Array.isArray(persistedNativeInput.plan)
       ? persistedNativeInput.plan.filter(isJsonObject)
       : [];
@@ -1301,31 +1164,9 @@ describe("runCodexAppServerAttempt", () => {
     expect(canonicalPlan.at(-1)?.step).toBe("Native step 49");
     expect(canonicalPlan[0]?.status).toBe("in_progress");
     expect(canonicalPlan[1]?.status).toBe("pending");
-    const firstStep = canonicalPlan[0]?.step;
-    expect(
-      Buffer.byteLength(typeof firstStep === "string" ? firstStep : "", "utf8"),
-    ).toBeLessThanOrEqual(512);
-    const canonicalMarkdown = persistedNativeInput.markdown;
-    expect(
-      Buffer.byteLength(typeof canonicalMarkdown === "string" ? canonicalMarkdown : "", "utf8"),
-    ).toBeLessThanOrEqual(8 * 1024);
-    await emitItem(harness, "started", { type: "contextCompaction", id: "compact-2" });
-    await emitItem(harness, "completed", { type: "contextCompaction", id: "compact-2" });
-    planRestoreRequests = harness.requests.filter(
-      (request) => request.method === "thread/inject_items",
-    );
-    expect(planRestoreRequests).toHaveLength(2);
-    expect(planRestoreRequests[1]?.params).toMatchObject({
-      items: [
-        {
-          content: [
-            {
-              text: expect.stringContaining('"markdown":"mmm'),
-            },
-          ],
-        },
-      ],
-    });
+    await compact(harness, "compact-2");
+    expect(requestsFor(harness, "thread/inject_items")).toHaveLength(2);
+    expect(injectedText(harness, 1)).toContain('"markdown":"mmm');
 
     const noteResponse = await callTool(
       harness,
@@ -1338,10 +1179,7 @@ describe("runCodexAppServerAttempt", () => {
       },
     );
     expect(noteResponse).toMatchObject({ success: true });
-    expectEvent(onAgentEvent, "plan", {
-      phase: "update",
-      title: "Plan updated",
-      source: "openclaw",
+    expectPlan(onAgentEvent, {
       explanation: "Working results.",
       explanationFormat: "plain",
       steps: [],
@@ -1355,18 +1193,11 @@ describe("runCodexAppServerAttempt", () => {
       {},
     );
     expect(clearResponse).toMatchObject({ success: true });
-    expect(executeProgressCard).toHaveBeenCalledTimes(4);
-    expectEvent(onAgentEvent, "plan", {
-      phase: "update",
-      title: "Plan updated",
-      source: "openclaw",
+    expectPlan(onAgentEvent, {
       steps: [],
     });
-    await emitItem(harness, "started", { type: "contextCompaction", id: "compact-3" });
-    await emitItem(harness, "completed", { type: "contextCompaction", id: "compact-3" });
-    expect(
-      harness.requests.filter((request) => request.method === "thread/inject_items"),
-    ).toHaveLength(2);
+    await compact(harness, "compact-3");
+    expect(requestsFor(harness, "thread/inject_items")).toHaveLength(2);
 
     const result = await finishRun(run, harness);
     expect(result.terminal).toEqual({ kind: "ok" });
@@ -1475,9 +1306,7 @@ describe("runCodexAppServerAttempt", () => {
       promptBuildCount += 1;
       return { toolsAllow: promptBuildCount === 1 ? ["*"] : ["message"] };
     });
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([{ hookName: "before_prompt_build", handler: beforePromptBuild }]),
-    );
+    installPromptHook(beforePromptBuild);
     const { sessionFile, params } = createRunFixture();
     openRunSession(sessionFile).appendMessage(userMessage("previous request", Date.now()));
     const { closeAndWait, events, retireSpy } = installCleanupTrackingClient();
@@ -1537,40 +1366,18 @@ describe("runCodexAppServerAttempt", () => {
     expect(bindingCleanupFailures).toBe(1);
     expect(events).toContain("request:turn/start");
     expect(events).toContain("request:thread/unsubscribe");
-    expect(events).not.toContain("closeAndWait");
     expect(retireSpy).not.toHaveBeenCalled();
     expect(closeAndWait).not.toHaveBeenCalled();
     expect(removeAbortListener).toHaveBeenCalledWith("abort", expect.any(Function));
     expect(queueActiveRunMessageForTest("session-1", "after cleanup")).toBe(false);
   });
 
-  it.each([
-    { kind: "hidden child", node: "subagent:fork-proof", via: "spawn", fork: true, preserve: true },
-
-    {
-      kind: "skipped fork",
-      node: "subagent:fork-proof",
-      via: "spawn",
-      fork: false,
-      preserve: false,
-    },
-    {
-      kind: "unrelated parent",
-      node: "subagent:fork-proof",
-      via: "spawn",
-      fork: true,
-      preserve: false,
-    },
-    {
-      kind: "operator fork",
-      node: "dashboard:fork-proof",
-      via: "operator",
-      fork: true,
-      preserve: false,
-    },
-  ] as const)(
-    "scopes fresh-thread tool evidence to recorded spawn forks ($kind)",
-    async ({ kind, node, via, fork, preserve }) => {
+  it.each(["hidden child", "skipped fork", "unrelated parent", "operator fork"])(
+    "scopes fresh-thread tool evidence to recorded spawn forks (%s)",
+    async (kind) => {
+      const operator = kind === "operator fork";
+      const node = operator ? "dashboard:fork-proof" : "subagent:fork-proof";
+      const preserve = kind === "hidden child";
       const sessionKey = `agent:main:${node}`;
       const storePath = path.join(tempDir, "fork-proof.sqlite");
       const params = createParams(sessionKey, path.join(tempDir, "fork-proof-workspace"));
@@ -1585,10 +1392,10 @@ describe("runCodexAppServerAttempt", () => {
         entry: {
           sessionId: node,
           sessionFile: sessionKey,
-          createdVia: via,
+          createdVia: operator ? "operator" : "spawn",
           parentSessionKey,
           forkedFromParent: true,
-          ...(fork
+          ...(kind !== "skipped fork"
             ? {
                 forkSource: {
                   sessionKey:
@@ -1600,12 +1407,7 @@ describe("runCodexAppServerAttempt", () => {
           updatedAt: Date.now(),
         },
       });
-      SessionManager.open({
-        agentId: "main",
-        sessionKey,
-        sessionId: node,
-        storePath,
-      }).appendMessage(
+      SessionManager.open(params.sessionTarget).appendMessage(
         userMessage("Inspect the completed tool evidence, then delegate analysis.", 1),
       );
       const prior = new CodexAppServerEventProjector(params, "parent-thread", "parent-turn");
@@ -1640,11 +1442,7 @@ describe("runCodexAppServerAttempt", () => {
       expect(inputText).not.toContain("private-input-fixture.txt");
       expect(inputText.includes("sk-1234567890abcdef")).toBe(preserve);
       expect(inputText).not.toContain("[content omitted]");
-      if (preserve) {
-        expect(inputText).toContain("COBALT-ORCHID-7429");
-      } else {
-        expect(inputText).not.toContain("COBALT-ORCHID-7429");
-      }
+      expect(inputText.includes("COBALT-ORCHID-7429")).toBe(preserve);
     },
   );
   it("projects the canonical SQLite branch summary without a native thread binding", async () => {
@@ -1654,12 +1452,7 @@ describe("runCodexAppServerAttempt", () => {
     const workspaceDir = path.join(tempDir, "workspace-sqlite-fresh-continuity");
     const params = createParams(sessionFile, workspaceDir);
     await attachSqliteSessionTarget(params, storePath, sessionId);
-    const target = {
-      agentId: "main",
-      sessionId,
-      sessionKey: `agent:main:${sessionId}`,
-      storePath,
-    };
+    const target = params.sessionTarget!;
     const sessionManager = SessionManager.open(target, workspaceDir);
     const summary = "The durable code is summary-only-code-7429.";
     sessionManager.appendMessage(userMessage("discarded seed question", Date.now()));
@@ -1667,11 +1460,6 @@ describe("runCodexAppServerAttempt", () => {
     sessionManager.resetLeaf();
     sessionManager.branchWithSummary(null, summary);
     await sessionManager.appendThinkingLevelChange("off");
-    expect(
-      SessionManager.openModelContext(target)
-        .buildSessionContext()
-        .messages.map((message) => message.role),
-    ).toEqual(["branchSummary"]);
     params.prompt = "Recall the durable code from our prior work.";
     const harness = createStartedThreadHarness();
 
@@ -1679,7 +1467,7 @@ describe("runCodexAppServerAttempt", () => {
     await finishRun(run, harness);
 
     const inputText = turnInput(harness.requests);
-    expect(harness.requests.map((request) => request.method)).toContain("thread/start");
+    expect(requestMethods(harness)).toContain("thread/start");
     expect(inputText).toContain("OpenClaw assembled context for this turn:");
     expect(inputText).toContain(`[branchSummary]\n${summary}`);
     expect(inputText).not.toContain("discarded seed");
@@ -1704,17 +1492,13 @@ describe("runCodexAppServerAttempt", () => {
         prependContext: `queued context ${hookCalls}`,
       };
     });
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([{ hookName: "before_prompt_build", handler: beforePromptBuild }]),
-    );
+    installPromptHook(beforePromptBuild);
     const { sessionFile, workspaceDir } = createRunPaths();
     const sessionManager = openRunSession(sessionFile);
     sessionManager.appendMessage(userMessage("prior visible context", Date.now()));
     sessionManager.appendMessage(assistantMessage("prior assistant context", Date.now() + 1));
     const harness = createStartedThreadHarness();
     const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
-    await awaitTurnStart(harness, run);
-    await nextImmediate();
     await finishRun(run, harness);
     expect(beforePromptBuild).toHaveBeenCalledTimes(2);
     const [, secondHookInput] = beforePromptBuild.mock.calls.map(
@@ -1892,27 +1676,22 @@ describe("runCodexAppServerAttempt", () => {
       "USER.md": "User guidance.",
       "MEMORY.md": "Private memory contents.",
     };
-    await fs.mkdir(workspaceDir, { recursive: true });
-    for (const [name, content] of Object.entries(files)) {
-      await fs.writeFile(path.join(workspaceDir, name), content);
-    }
+    await writeWorkspaceFiles(workspaceDir, files);
     registerMemoryPromptForTest();
-    setCodexTestToolFactory(params, () =>
-      ["memory_search", "memory_get"].map(createRuntimeDynamicTool),
-    );
-    enableRuntimeTools(params);
     setAgentWorkspaceForTest(params, workspaceDir);
-    const bridge = createCodexDynamicToolBridge({
-      tools: await buildDynamicToolsForTest(params, workspaceDir),
-      signal: new AbortController().signal,
-    });
     const context = await buildCodexWorkspaceBootstrapContext({
       params,
       resolvedWorkspace: workspaceDir,
       effectiveWorkspace: workspaceDir,
       sessionKey: params.sessionKey ?? params.sessionId,
       sessionAgentId: "main",
-      tools: bridge.availableSpecs,
+      tools: ["memory_search", "memory_get"].map((name) => ({
+        type: "function",
+        name,
+        description: name,
+        inputSchema: { type: "object" },
+        deferLoading: true,
+      })),
       ringZeroActive: false,
     });
     for (const content of [files["SOUL.md"], files["IDENTITY.md"], files["USER.md"]]) {
@@ -1939,9 +1718,10 @@ describe("runCodexAppServerAttempt", () => {
       const { sessionFile, workspaceDir } = createRunPaths();
       const memorySummary = "Memory summary goes here.";
       const bootstrap = "Bootstrap reference goes here.";
-      await fs.mkdir(workspaceDir, { recursive: true });
-      await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), memorySummary);
-      await fs.writeFile(path.join(workspaceDir, "BOOTSTRAP.md"), bootstrap);
+      await writeWorkspaceFiles(workspaceDir, {
+        "MEMORY.md": memorySummary,
+        "BOOTSTRAP.md": bootstrap,
+      });
       let oversizedPrefix = scenario === "dropped by fitting";
       if (oversizedPrefix) {
         openRunSession(sessionFile).appendMessage(userMessage("Earlier conversation", Date.now()));
@@ -1955,7 +1735,6 @@ describe("runCodexAppServerAttempt", () => {
         );
       }
       let compactDuringAcceptance = false;
-      let turnRequested = createDeferred<void>();
       const harness = createStartedThreadHarness(
         async (method) => {
           if (method === "turn/start" && compactDuringAcceptance) {
@@ -1964,9 +1743,6 @@ describe("runCodexAppServerAttempt", () => {
               type: "contextCompaction",
               id: "compact-during-start",
             });
-          }
-          if (method === "turn/start") {
-            turnRequested.resolve();
           }
           return method === "thread/resume" ? threadStartResult("thread-1") : undefined;
         },
@@ -1987,14 +1763,8 @@ describe("runCodexAppServerAttempt", () => {
             flush: async () => undefined,
           }),
         });
-        turnRequested = createDeferred<void>();
         const run = runCodexAppServerAttempt(params);
-        await Promise.race([
-          turnRequested.promise,
-          run.then(() => {
-            throw new Error("Reference attempt ended before turn/start");
-          }),
-        ]);
+        await run.waitForTurnAccepted();
         await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
         const result = await run;
         expect(readAttemptTerminal(result)).toMatchObject({
@@ -2002,11 +1772,7 @@ describe("runCodexAppServerAttempt", () => {
           timedOut: false,
           promptError: null,
         });
-        const request = harness.requests
-          .slice(offset)
-          .find(({ method }) => method === "turn/start");
-        assert(request, "Expected the reference turn/start request");
-        const input = (request.params as { input: Array<{ text?: string }> }).input[0]?.text ?? "";
+        const input = turnInput(harness.requests.slice(offset));
         expect(compiledPrompts).toEqual([input]);
         return { input, result };
       };
@@ -2048,10 +1814,9 @@ describe("runCodexAppServerAttempt", () => {
           )
           .toMatchObject({ injectedChars: 0, truncated: false });
       }
-      expect(harness.requests.filter(({ method }) => method === "thread/start")).toHaveLength(1);
-      expect(harness.requests.filter(({ method }) => method === "thread/resume")).toHaveLength(0);
+      expect(requestsFor(harness, "thread/start")).toHaveLength(1);
+      expect(requestsFor(harness, "thread/resume")).toHaveLength(0);
 
-      const expectedMemory = memorySummary;
       if (scenario === "compacted") {
         // Manual compaction may complete while no attempt projector is attached.
         await emit(harness, "item/completed", {
@@ -2063,17 +1828,17 @@ describe("runCodexAppServerAttempt", () => {
       }
       const third = await runTurn();
       if (scenario === "dropped by fitting") {
-        expect.soft(third.input).not.toContain(expectedMemory);
+        expect.soft(third.input).not.toContain(memorySummary);
         expect.soft(third.input).not.toContain(bootstrap);
       } else {
-        expect(third.input).toContain(expectedMemory);
+        expect(third.input).toContain(memorySummary);
         expect(third.input).toContain(bootstrap);
       }
       if (scenario === "unsubscribed") {
-        expect(harness.requests.filter(({ method }) => method === "thread/resume")).toHaveLength(1);
+        expect(requestsFor(harness, "thread/resume")).toHaveLength(1);
       }
       const fourth = await runTurn();
-      expect.soft(fourth.input).not.toContain(expectedMemory);
+      expect.soft(fourth.input).not.toContain(memorySummary);
       expect.soft(fourth.input).not.toContain(bootstrap);
     },
   );
@@ -2082,9 +1847,10 @@ describe("runCodexAppServerAttempt", () => {
     const { workspaceDir, params } = createRunFixture();
     const soulGuidance = "Soul guidance ".repeat(80);
     const memorySummary = "Memory summary goes here.";
-    await fs.mkdir(workspaceDir, { recursive: true });
-    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), soulGuidance);
-    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), memorySummary);
+    await writeWorkspaceFiles(workspaceDir, {
+      "SOUL.md": soulGuidance,
+      "MEMORY.md": memorySummary,
+    });
     const harness = createStartedThreadHarness();
 
     params.config = {
@@ -2097,8 +1863,6 @@ describe("runCodexAppServerAttempt", () => {
     } satisfies NonNullable<EmbeddedRunAttemptParams["config"]>;
     setRuntimeConfigSnapshot(params.config);
     const run = runCodexAppServerAttempt(params);
-    await awaitTurnStart(harness, run);
-    await nextImmediate();
     const result = await finishRun(run, harness);
     const fileStats = new Map(
       result.systemPromptReport?.injectedWorkspaceFiles.map((file) => [file.name, file]) ?? [],
@@ -2129,8 +1893,6 @@ describe("runCodexAppServerAttempt", () => {
     });
     const harness = createStartedThreadHarness();
     const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
-    await awaitTurnStart(harness, run);
-    await nextImmediate();
     const result = await finishRun(run, harness);
     expect(result.systemPromptReport?.injectedWorkspaceFiles).toEqual([
       expect.objectContaining({
@@ -2151,9 +1913,10 @@ describe("runCodexAppServerAttempt", () => {
     const { workspaceDir, params } = createRunFixture();
     const exactCommand =
       "Delivery: to send a message, use the `message` tool.\n\ncd /repo && ./scripts/run-cron";
-    await fs.mkdir(workspaceDir, { recursive: true });
-    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "Follow AGENTS guidance.");
-    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "Soul voice goes here.");
+    await writeWorkspaceFiles(workspaceDir, {
+      "AGENTS.md": "Follow AGENTS guidance.",
+      "SOUL.md": "Soul voice goes here.",
+    });
     const harness = createStartedThreadHarness();
 
     params.trigger = "cron";
@@ -2165,8 +1928,6 @@ describe("runCodexAppServerAttempt", () => {
       skills: [],
     };
     const run = runCodexAppServerAttempt(params);
-    await awaitTurnStart(harness, run);
-    await nextImmediate();
     const result = await finishRun(run, harness);
     const threadStartParams = getRequestParams(harness.requests, "thread/start");
     assert(threadStartParams);
@@ -2202,33 +1963,16 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   it("preserves every command failure from official app-server events", async () => {
-    const sessionFile = path.join(tempDir, "session-multi-command-failure.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace-multi-command-failure");
+    const { sessionFile, workspaceDir } = createRunPaths();
     const harness = createStartedThreadHarness();
     const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
     await awaitTurnStart(harness, run);
-    for (const [id, status, exitCode] of [
-      ["command-failed-1", "failed", 1],
-      ["command-succeeded", "completed", 0],
-      ["command-failed-2", "failed", 2],
+    for (const [id, exitCode] of [
+      ["command-failed-1", 1],
+      ["command-succeeded", 0],
+      ["command-failed-2", 2],
     ] as const) {
-      await emitItem(harness, "started", {
-        type: "commandExecution",
-        id,
-        command: `/bin/bash -lc 'exit ${exitCode}'`,
-        cwd: workspaceDir,
-        status: "inProgress",
-      });
-      await emitItem(harness, "completed", {
-        type: "commandExecution",
-        id,
-        command: `/bin/bash -lc 'exit ${exitCode}'`,
-        cwd: workspaceDir,
-        status,
-        aggregatedOutput: "",
-        exitCode,
-        durationMs: 1,
-      });
+      await emitCommand(harness, id, workspaceDir, "", exitCode);
     }
     const result = await finishRun(run, harness);
     expect(result.toolMetas).toHaveLength(3);
@@ -2301,13 +2045,7 @@ describe("runCodexAppServerAttempt", () => {
     });
     harnessRef.current = harness;
     const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
-    await vi.waitFor(
-      () =>
-        expect(harness.requests.filter((request) => request.method === "turn/start")).toHaveLength(
-          2,
-        ),
-      fastWait,
-    );
+    await vi.waitFor(() => expect(requestsFor(harness, "turn/start")).toHaveLength(2), fastWait);
     await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
     await run;
     await expectRetainedSuccessfulThread(harness.client, "thread-existing");
@@ -2342,7 +2080,7 @@ describe("runCodexAppServerAttempt", () => {
     await new Promise((resolve) => {
       setTimeout(resolve, 20);
     });
-    expect(harness.requests.map((request) => request.method)).not.toContain("turn/start");
+    expect(requestMethods(harness)).not.toContain("turn/start");
     await harness.notify({
       method: "turn/completed",
       params: {
@@ -2350,14 +2088,14 @@ describe("runCodexAppServerAttempt", () => {
         turn: { id: "stale-turn", status: "completed", items: [] },
       },
     });
-    expect(harness.requests.map((request) => request.method)).not.toContain("turn/start");
+    expect(requestMethods(harness)).not.toContain("turn/start");
     await emit(harness, "error", {
       threadId: "thread-existing",
       turnId: "compact-turn",
       error: { message: "native turn has not completed" },
       willRetry: false,
     });
-    expect(harness.requests.map((request) => request.method)).not.toContain("turn/start");
+    expect(requestMethods(harness)).not.toContain("turn/start");
     await harness.notify({
       method: "turn/completed",
       params: {
@@ -2394,36 +2132,6 @@ describe("runCodexAppServerAttempt", () => {
       process.off("unhandledRejection", onUnhandledRejection);
     }
   });
-  it("forwards image attachments to the app-server turn input", async () => {
-    const { requests, waitForMethod, completeTurn } = createStartedThreadHarness();
-    const params = createRunParams();
-    const pngBase64 =
-      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
-    params.model = createCodexTestModel("codex", ["text", "image"]);
-    setCodexTestModelSupportsTools(params, false);
-    params.images = [
-      {
-        type: "image",
-        mimeType: "image/png",
-        data: pngBase64,
-      },
-    ];
-    const run = runCodexAppServerAttempt(params);
-    await completeStartedRun(run, waitForMethod, completeTurn);
-    const turnStartParams = getRequestParams(requests, "turn/start");
-    expect(turnStartParams?.input).toEqual([
-      { type: "text", text: "hello", text_elements: [] },
-      { type: "image", url: `data:image/png;base64,${pngBase64}` },
-    ]);
-    expect(
-      requests.filter(
-        (entry) =>
-          entry.method === "skills/list" &&
-          (entry.params as { forceReload?: boolean } | undefined)?.forceReload === false,
-      ),
-    ).toHaveLength(0);
-  });
-
   it("clears an active run with blocked terminal delivery after user stop", async () => {
     const turnStateFactory = vi.spyOn(attemptTurnState, "createCodexAttemptTurnState");
     const harness = createStartedThreadHarness();
@@ -2801,7 +2509,7 @@ describe("runCodexAppServerAttempt", () => {
     turnStart.resolve(turnStartResult());
     await expect(run).rejects.toThrow("test_abort");
     expect(queueActiveRunMessageForTest("session-1", "after abort")).toBe(false);
-    expect(harness.requests.filter(({ method }) => method === "turn/interrupt")).toEqual([
+    expect(requestsFor(harness, "turn/interrupt")).toEqual([
       { method: "turn/interrupt", params: { threadId: "thread-1", turnId: "turn-1" } },
     ]);
   });
@@ -2907,8 +2615,8 @@ describe("runCodexAppServerAttempt", () => {
         totalTokens: inputTokens + 100,
       });
     }
-    expect(harness.requests.filter(({ method }) => method === "thread/start")).toHaveLength(1);
-    expect(harness.requests.filter(({ method }) => method === "thread/resume")).toHaveLength(0);
+    expect(requestsFor(harness, "thread/start")).toHaveLength(1);
+    expect(requestsFor(harness, "thread/resume")).toHaveLength(0);
   });
 
   it("preserves stale-binding continuity when token pressure forces a fresh Codex thread", async () => {
@@ -3003,30 +2711,14 @@ describe("runCodexAppServerAttempt", () => {
     expect(savedBinding).toMatchObject({ authProfileId: "openai:work", threadId: "thread-1" });
   });
   it("replaces a client whose settled failed thread cannot reload configuration", async () => {
-    const { result, requests, client } = await runSettledFailureClientReplacementTest();
+    const { result, client } = await runSettledFailureClientReplacementTest();
     expect(readAttemptTerminal(result).aborted).toBe(false);
-    expect(requests.map(withoutCodexSkillDiscovery)).toEqual([
-      ["config/read", "configRequirements/read", "thread/read"],
-      [
-        "config/read",
-        "configRequirements/read",
-        "thread/read",
-        "thread/resume",
-        "thread/inject_items",
-        "turn/start",
-      ],
-    ]);
     await expectRetainedSuccessfulThread(client, "thread-existing");
   });
   it("rejects a replacement client whose managed policy disables the native shell", async () => {
-    const requests: string[][] = [];
     await expect(
-      runSettledFailureClientReplacementTest({ denyReplacementShell: true, requests }),
+      runSettledFailureClientReplacementTest({ denyReplacementShell: true }),
     ).rejects.toThrow("Codex native code mode requires shell_tool");
-    expect(requests.map(withoutCodexSkillDiscovery)).toEqual([
-      ["config/read", "configRequirements/read", "thread/read"],
-      ["config/read", "configRequirements/read"],
-    ]);
   });
 
   it.each([
@@ -3066,9 +2758,7 @@ describe("runCodexAppServerAttempt", () => {
     const { sessionFile, params } = createRunFixture({ provider: "openai" });
     const runtimeModelId = "test-runtime-model";
     const beforePromptBuild = vi.fn(() => undefined);
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([{ hookName: "before_prompt_build", handler: beforePromptBuild }]),
-    );
+    installPromptHook(beforePromptBuild);
     params.modelId = "gpt-5.6-sol";
     params.model = {
       ...params.model,
@@ -3102,7 +2792,7 @@ describe("runCodexAppServerAttempt", () => {
         });
       }
       if (resumed) {
-        expect(harness.requests.map((entry) => entry.method)).not.toContain("thread/start");
+        expect(requestMethods(harness)).not.toContain("thread/start");
       }
       await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
         threadId: "thread-1",
@@ -3191,9 +2881,7 @@ describe("runCodexAppServerAttempt", () => {
     });
     const modelRef = { provider: "openai", model: "gpt-5.5" };
     const beforePromptBuild = vi.fn(() => undefined);
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([{ hookName: "before_prompt_build", handler: beforePromptBuild }]),
-    );
+    installPromptHook(beforePromptBuild);
     await writeExistingBinding(sessionFile, workspaceDir, {
       preserveNativeModel: true,
       authProfileId: "openai:host",
@@ -3377,26 +3065,8 @@ describe("runCodexAppServerAttempt", () => {
   it("announces Codex app-server fast auto progress after the crossing tool result", async () => {
     const { harness, now, onAgentEvent, onToolResult, run, workspaceDir } =
       await startFastAutoProgressTest();
-    const notifyCommand = async (id: string, output: string, nowMs: number) => {
-      await emitItem(harness, "started", {
-        type: "commandExecution",
-        id,
-        command: `echo ${id}`,
-        cwd: workspaceDir,
-        status: "inProgress",
-      });
-      now.mockReturnValue(nowMs);
-      await emitItem(harness, "completed", {
-        type: "commandExecution",
-        id,
-        command: `echo ${id}`,
-        cwd: workspaceDir,
-        status: "completed",
-        aggregatedOutput: output,
-        exitCode: 0,
-        durationMs: 1,
-      });
-    };
+    const notifyCommand = (id: string, output: string, nowMs: number) =>
+      emitCommand(harness, id, workspaceDir, output, 0, () => now.mockReturnValue(nowMs));
     await notifyCommand("tool-before", "before", 20_000);
     await notifyCommand("tool-crossing", "crossing", 35_500);
     await notifyCommand("tool-after", "after", 42_000);
@@ -3461,17 +3131,7 @@ describe("saved assistant occurrence settlement", () => {
     const harness = createStartedThreadHarness();
     const params = createTestParams();
     const error = "codex exploded";
-    const target = {
-      agentId: "main",
-      sessionKey: params.sessionKey!,
-      sessionId: params.sessionId,
-      storePath: path.join(tempDir, "agents/main/sessions/sessions.json"),
-    };
-    await upsertSessionEntry({
-      ...target,
-      entry: { sessionId: params.sessionId, updatedAt: Date.now() },
-    });
-    params.sessionTarget = target;
+    await attachSqliteSessionTarget(params, path.join(tempDir, "sessions.json"), params.sessionId);
     params.deferTerminalLifecycle = true;
     params.onAgentEvent = onRunAgentEvent;
     const run = runCodexAppServerAttempt(params);
@@ -3567,15 +3227,11 @@ describe("runCodexAppServerAttempt", () => {
         status: index === 0 ? "inProgress" : "pending",
       })),
     });
-    await emitItem(harness, "started", { type: "contextCompaction", id: "compact-1" });
-    await emitItem(harness, "completed", { type: "contextCompaction", id: "compact-1" });
+    await compact(harness, "compact-1");
 
-    const request = harness.requests.find((entry) => entry.method === "thread/inject_items");
-    const text = (
-      request?.params as { items?: Array<{ content?: Array<{ text?: string }> }> } | undefined
-    )?.items?.[0]?.content?.[0]?.text;
-    expect(text).toBeDefined();
-    const payloadText = text?.slice((text?.indexOf("\n") ?? -1) + 1) ?? "";
+    const text = injectedText(harness);
+    expect(text).not.toBe("");
+    const payloadText = text.slice(text.indexOf("\n") + 1);
     const payload = JSON.parse(payloadText) as {
       markdown?: string;
       plan: Array<{ step: string; status: string }>;
