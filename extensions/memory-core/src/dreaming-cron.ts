@@ -141,9 +141,8 @@ function buildManagedDreamingPatch(
   if (normalizeOptionalString(job.description) !== desired.description) {
     patch.description = desired.description;
   }
-  if (job.enabled !== true) {
-    patch.enabled = true;
-  }
+  // Leave enablement alone. Cron and the operator own pauses and auto-disable;
+  // an enabled:true patch would also clear the recorded failure streak.
 
   const scheduleKind = normalizeLowercaseStringOrEmpty(job.schedule?.kind);
   const scheduleExpr = normalizeOptionalString(job.schedule?.expr);
