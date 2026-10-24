@@ -330,9 +330,6 @@ describe("delivery-queue storage", () => {
     const stateDir = tmpDir();
     const id = "cron-direct-delivery:v1:unknown-owner-lease";
     await enqueueStable(id, {
-      channel: "forum",
-      to: "123",
-      payloads: [{ text: "test" }],
       completionRetention,
       requiresProducerClaim: true,
     });
@@ -417,11 +414,7 @@ describe("delivery-queue storage", () => {
   });
 
   it("returns a typed no-op when a status race already moved the row", async () => {
-    const id = await enqueueTextDelivery({
-      channel: "slack",
-      to: "C123",
-      payloads: [{ text: "blocked" }],
-    });
+    const id = await enqueueTextDelivery();
     const entry = await loadPendingDelivery(id, tmpDir());
     assert(entry, "expected pending entry");
     await moveToFailed(id, tmpDir());
