@@ -159,6 +159,8 @@ it("does not retain unrelated pool slabs between scrapes while series stay live"
   const store = createPrometheusMetricStore();
   const churn = "x".repeat(Buffer.poolSize / 2 - 8);
   const markSeries = (index: number) => {
+    // Start beyond the previous pool, which may contain unrelated live buffers.
+    Buffer.from(churn);
     Buffer.from(churn);
     Buffer.from(churn);
     const before = Buffer.from("marker");
