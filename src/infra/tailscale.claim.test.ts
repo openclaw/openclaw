@@ -182,21 +182,6 @@ describe("private Tailscale Serve claims", () => {
     expect(getTailscalePublishedOrigin()).toBeUndefined();
   });
 
-  it("preserves denial and failed cleanup instead of continuing local startup", async () => {
-    queueOwner({
-      failure: serveDenied,
-      stopFailure: retirementFailed,
-    });
-    const error = await startExposure().catch((failure: unknown) => failure);
-    expect(error).toBeInstanceOf(AggregateError);
-    const failure = error as AggregateError;
-    expect(failure.errors.map((cause: Error) => cause.message)).toEqual([
-      serveDenied,
-      retirementFailed,
-    ]);
-    expect(failure.cause).toBe(failure.errors[1]);
-  });
-
   it.each([
     ["policy denial", "serve", "local", "", undefined],
     ["Funnel denial", "funnel", "fatal", "", undefined],
@@ -231,6 +216,12 @@ describe("private Tailscale Serve claims", () => {
         expect(outcome).toBeInstanceOf(Error);
         if (cleanup) {
           expect(outcome).toBeInstanceOf(AggregateError);
+          const failure = outcome as AggregateError;
+          expect(failure.errors.map((cause: Error) => cause.message)).toEqual([
+            serveDenied,
+            retirementFailed,
+          ]);
+          expect(failure.cause).toBe(failure.errors[1]);
         }
       }
       expect(getTailscalePublishedOrigin()).toBeUndefined();
