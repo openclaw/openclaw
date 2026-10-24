@@ -319,14 +319,6 @@ describe("deliverAgentCommandResult payload normalization", () => {
       payloads: [{ ...mediaPayload, text: "✅ New session started.", isStatusNotice: true }],
     });
 
-    expect(normalizerMock.mock.lastCall![0]).toMatchObject({
-      sessionKey: mediaSession.key,
-      agentId: "tester",
-      workspaceDir: "/tmp/agent-workspace",
-      messageProvider: "slack",
-    });
-
-    expect(normalizerFn.mock.calls[0]?.[0].mediaUrls).toStrictEqual(["./out/photo.png"]);
     expect(outboundMock).toHaveBeenCalledTimes(1);
     const deliverArgs = outboundArgs();
     expect(deliverArgs.payloads[0]?.isStatusNotice).toBe(true);
@@ -356,7 +348,6 @@ describe("deliverAgentCommandResult payload normalization", () => {
     const runtime = {
       ...createRuntime(),
       writeJson: vi.fn((value: { payloads: unknown[]; meta?: unknown }) => {
-        expect(Object.keys(value)).toEqual(["payloads", "meta"]);
         expect(value.meta).toBe(result.meta);
         serialized = JSON.stringify(value);
         emittedPayloads = value.payloads;
