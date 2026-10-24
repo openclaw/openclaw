@@ -115,7 +115,7 @@ export function readAgentDatabaseLeaseIds(pathname: string, env?: NodeJS.Process
       "SELECT lease_id FROM agent_database_leases WHERE owner_pid = ? AND path = ? ORDER BY lease_id",
     )
     .all(process.pid, pathname)
-    .map((row) => String(row.lease_id));
+    .map((lease) => String(lease.lease_id));
 }
 
 export function observeCanonicalWriterLeases() {
