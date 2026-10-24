@@ -1,5 +1,4 @@
 import path from "node:path";
-import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -27,7 +26,10 @@ import {
   SessionTranscriptStorageUnavailableError,
 } from "../config/sessions/session-transcript-projection-error.js";
 import { waitForSessionTranscriptProjection } from "../config/sessions/session-transcript-reconcile.js";
-import type { InternalSessionEntry, SessionContextBudgetStatus } from "../config/sessions/types.js";
+import type {
+  InternalSessionEntry as Entry,
+  SessionContextBudgetStatus,
+} from "../config/sessions/types.js";
 import * as transcriptTail from "../gateway/session-transcript-readers.js";
 import * as transcriptUsage from "../gateway/session-transcript-usage.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
@@ -58,6 +60,15 @@ vi.mock(import("../infra/provider-usage.js"), async (original) => ({
 }));
 
 type StatusTextParams = Parameters<typeof buildStatusText>[0];
+const display = {
+  pluginHealthLineOverride: "Plugins: test",
+  primaryModelLabelOverride: "openai/gpt-5.4-mini",
+};
+const oauth = { modelAuthOverride: "oauth", activeModelAuthOverride: "oauth" };
+const usageSummary = (displayName: string) => ({
+  updatedAt: Date.now(),
+  providers: [{ provider: "openai", displayName, windows: [{ label: "5h", usedPercent: 25 }] }],
+});
 
 function statusParams(overrides: Partial<StatusTextParams>): StatusTextParams {
   return {
@@ -80,7 +91,7 @@ function statusParams(overrides: Partial<StatusTextParams>): StatusTextParams {
 }
 
 const render = (overrides: Partial<StatusTextParams>) => buildStatusText(statusParams(overrides));
-const makeEntry = (patch: Partial<NonNullable<StatusTextParams["sessionEntry"]>> = {}) => ({
+const makeEntry = (patch: Partial<Entry> = {}): Entry => ({
   sessionId: "status",
   updatedAt: 0,
   ...patch,
@@ -90,8 +101,7 @@ const renderTelegramStatus = (params: Partial<StatusTextParams>) =>
     sessionEntry: makeEntry(),
     statusChannel: "telegram",
     resolvedHarness: "pi",
-    pluginHealthLineOverride: "Plugins: test",
-    primaryModelLabelOverride: "openai/gpt-5.4-mini",
+    ...display,
     modelAuthOverride: "test",
     activeModelAuthOverride: "test",
     ...params,
@@ -161,7 +171,6 @@ describe("buildStatusText global subagent scope", () => {
 
     const text = await renderTelegramStatus({
       cfg,
-      sessionEntry: makeEntry(),
       sessionKey: "global",
       agentId: "research",
     });
@@ -174,101 +183,66 @@ describe("buildStatusText global subagent scope", () => {
 
 describe("Codex usage after runtime fallback", () => {
   beforeEach(() => {
-    mocks.loadProviderUsageSummary.mockReset();
-    mocks.loadProviderUsageSummary.mockImplementation(async (params) => ({
-      updatedAt: Date.now(),
-      providers: params.auth
-        ? [
-            {
-              provider: "openai",
-              displayName: "Codex",
-              windows: [{ label: "5h", usedPercent: 25 }],
-            },
-          ]
-        : [],
+    mocks.loadProviderUsageSummary.mockReset().mockImplementation(async (params) => ({
+      ...usageSummary("Codex"),
+      ...(!params.auth ? { providers: [] } : {}),
     }));
   });
 
   const renderFallbackStatus = (agentHarnessId: "codex" | "openclaw") =>
     render({
       sessionEntry: makeEntry({ agentRuntimeOverride: "openclaw", agentHarnessId }),
-      pluginHealthLineOverride: "Plugins: test",
-      primaryModelLabelOverride: "openai/gpt-5.4-mini",
-      modelAuthOverride: "oauth",
-      activeModelAuthOverride: "oauth",
+      ...display,
+      ...oauth,
     });
 
-  it("shows Codex rate-limit usage for a Codex-bound session on OpenClaw Default", async () => {
-    const text = await renderFallbackStatus("codex");
-
-    expect(text).toContain("📊 Usage: 5h 75% left");
-    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledWith(
-      expect.objectContaining({
-        providers: ["openai"],
-        auth: [expect.objectContaining({ provider: "openai", hookProvider: "codex" })],
-      }),
-    );
-  });
-
-  it("omits Codex rate-limit usage for a never-Codex session", async () => {
-    const text = await renderFallbackStatus("openclaw");
-
-    expect(text).not.toContain("📊 Usage:");
-    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledWith(
-      expect.not.objectContaining({ auth: expect.anything() }),
-    );
+  it.each(["codex", "openclaw"] as const)("respects the %s usage binding", async (harness) => {
+    const text = await renderFallbackStatus(harness);
+    if (harness === "codex") {
+      expect(text).toContain("📊 Usage: 5h 75% left");
+      expect(mocks.loadProviderUsageSummary).toHaveBeenCalledWith(
+        expect.objectContaining({
+          providers: ["openai"],
+          auth: [expect.objectContaining({ provider: "openai", hookProvider: "codex" })],
+        }),
+      );
+    } else {
+      expect(text).not.toContain("📊 Usage:");
+      expect(mocks.loadProviderUsageSummary).toHaveBeenCalledWith(
+        expect.not.objectContaining({ auth: expect.anything() }),
+      );
+    }
   });
 });
 
 describe("session status cost line", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   let storePath: string;
-  const sessionEntry = {
+  const sessionEntry = makeEntry({
     sessionId: "cost-session",
-    updatedAt: 0,
     sessionFile: formatSqliteSessionFileMarker({
       agentId: "main",
       sessionId: "cost-session",
       storePath: "/tmp/retired-status-cost/agents/main/agent/openclaw-agent.sqlite",
     }),
-  };
+  });
 
   const costSummary = {
-    input: 400_000,
-    output: 56_000,
-    cacheRead: 0,
-    cacheWrite: 0,
     totalTokens: 456_000,
     totalCost: 1.23,
-    inputCost: 1,
-    outputCost: 0.23,
-    cacheReadCost: 0,
-    cacheWriteCost: 0,
   };
 
   beforeEach(() => {
-    storePath = path.join(
-      tempDirs.make("status-cost-"),
-      "agents",
-      "main",
-      "agent",
-      "openclaw-agent.sqlite",
-    );
+    storePath = path.join(tempDirs.make("status-cost-"), "agents/main/agent/openclaw-agent.sqlite");
     mocks.loadSessionCostSummariesFromCache.mockReset();
-    mocks.loadProviderUsageSummary.mockReset().mockResolvedValue({
-      updatedAt: Date.now(),
-      providers: [
-        { provider: "openai", displayName: "OpenAI", windows: [{ label: "5h", usedPercent: 25 }] },
-      ],
-    });
+    mocks.loadProviderUsageSummary.mockReset().mockResolvedValue(usageSummary("OpenAI"));
   });
 
   const renderCostStatus = () =>
     render({
       sessionEntry,
       storePath,
-      modelAuthOverride: "oauth",
-      activeModelAuthOverride: "oauth",
+      ...oauth,
       pluginHealthLineOverride: "Plugins: test",
     });
 
@@ -284,12 +258,7 @@ describe("session status cost line", () => {
     "renders %s cost with %i missing prices",
     async (status, missingCostEntries, expected) => {
       mocks.loadSessionCostSummariesFromCache.mockResolvedValue({
-        cacheStatus: {
-          status,
-          cachedFiles: status === "fresh" ? 1 : 0,
-          pendingFiles: status === "fresh" ? 0 : 1,
-          staleFiles: status === "stale" ? 1 : 0,
-        },
+        cacheStatus: { status },
         summaries: [
           {
             ...costSummary,
@@ -328,37 +297,28 @@ describe("buildStatusText thinking facts", () => {
   it.each([
     { reasoning: true, expected: "think high" },
     { reasoning: false, expected: "think off (requested high; clamped)" },
-  ])(
-    "shows requested and effective thinking for an Ollama model (reasoning=$reasoning)",
-    async ({ reasoning, expected }) => {
-      const text = await render({
-        sessionEntry: makeEntry({
-          thinkingLevel: "high",
-          modelOverride: "glm-5.2:cloud",
-          providerOverride: "ollama",
-        }),
-        statusChannel: "whatsapp",
-        provider: "ollama",
-        model: "glm-5.2:cloud",
-        thinkingCatalog: [
-          {
-            provider: "ollama",
-            id: "glm-5.2:cloud",
-            reasoning,
-          },
-        ],
-        resolvedThinkLevel: "high",
-        resolvedReasoningLevel: "on",
-        resolveDefaultThinkingLevel: async () => "high",
-        pluginHealthLineOverride: "Plugins: test",
-        primaryModelLabelOverride: "ollama/glm-5.2:cloud",
-        modelAuthOverride: "local",
-        activeModelAuthOverride: "local",
-      });
+  ])("renders Ollama thinking (reasoning=$reasoning)", async ({ reasoning, expected }) => {
+    const text = await render({
+      sessionEntry: makeEntry({
+        thinkingLevel: "high",
+        modelOverride: "glm-5.2:cloud",
+        providerOverride: "ollama",
+      }),
+      statusChannel: "whatsapp",
+      provider: "ollama",
+      model: "glm-5.2:cloud",
+      thinkingCatalog: [{ provider: "ollama", id: "glm-5.2:cloud", reasoning }],
+      resolvedThinkLevel: "high",
+      resolvedReasoningLevel: "on",
+      resolveDefaultThinkingLevel: async () => "high",
+      pluginHealthLineOverride: "Plugins: test",
+      primaryModelLabelOverride: "ollama/glm-5.2:cloud",
+      modelAuthOverride: "local",
+      activeModelAuthOverride: "local",
+    });
 
-      expect(text).toContain(expected);
-    },
-  );
+    expect(text).toContain(expected);
+  });
 });
 
 const selected = { provider: "deepseek", model: "deepseek-v4-flash" };
@@ -381,14 +341,12 @@ const assistant = (patch: Record<string, unknown> = {}, runId = "settled-run") =
     },
     runId,
   );
-function expectFallback(
-  parts: Awaited<ReturnType<typeof buildStatusReplyParts>>,
-  context = "45k/128k",
-) {
+type StatusParts = Awaited<ReturnType<typeof buildStatusReplyParts>>;
+function expectFallback(parts: StatusParts, context = "45k/128k") {
   expect(parts.text).toContain("Fallback: fallback/small-model");
   expect(parts.text).toContain(`Context: ${context}`);
 }
-function expectContext(parts: Awaited<ReturnType<typeof buildStatusReplyParts>>, context: string) {
+function expectContext(parts: StatusParts, context: string) {
   expect(parts.text).toContain(`Context: ${context}`);
   const table = parts.presentation.blocks.find((block) => block.type === "table");
   expect(table?.type === "table" ? table.rows : []).toContainEqual([
@@ -418,17 +376,15 @@ describe("buildStatusText prepared context windows", () => {
     totalTokens: 45_000,
     totalTokensFresh: true,
     totalTokensVersion: 1,
-  } satisfies Partial<InternalSessionEntry>;
+  } satisfies Partial<Entry>;
   const fallbackNotice = {
     kind: "active",
     selectedModel: "deepseek/deepseek-v4-flash",
     activeModel: "fallback/small-model",
-  } satisfies NonNullable<InternalSessionEntry["fallbackNotice"]>;
-  const notice = (patch: Partial<NonNullable<InternalSessionEntry["fallbackNotice"]>>) => ({
-    ...fallbackNotice,
-    ...patch,
+  } satisfies NonNullable<Entry["fallbackNotice"]>;
+  const noticeEntry = (patch: Partial<NonNullable<Entry["fallbackNotice"]>>) => ({
+    fallbackNotice: { ...fallbackNotice, ...patch },
   });
-  const noticeEntry = (patch: Parameters<typeof notice>[0]) => ({ fallbackNotice: notice(patch) });
   const catalog = [
     modelLimits(selected.provider, selected.model, 1_000_000),
     modelLimits(active.provider, active.model, 128_000),
@@ -453,7 +409,7 @@ describe("buildStatusText prepared context windows", () => {
       sessionKey: "agent:main:status-worker-usage",
       storePath: state.statePath("status.sqlite"),
     };
-    const entry = { sessionId: target.sessionId, updatedAt: 1 };
+    const entry = makeEntry({ sessionId: target.sessionId, updatedAt: 1 });
     const readUsage = vi.spyOn(transcriptUsage, "readRecentSessionUsageFromTranscriptAsync");
     await replaceSessionEntry(target, entry);
     const appendUsage = async (content: string, input: number, output: number) => {
@@ -479,7 +435,7 @@ describe("buildStatusText prepared context windows", () => {
         reads.push(sql);
       }
     });
-    const renderUsage = (sessionEntry: InternalSessionEntry = entry) =>
+    const renderUsage = (sessionEntry: Entry = entry) =>
       prepared({
         sessionEntry,
         sessionKey: target.sessionKey,
@@ -507,7 +463,7 @@ describe("buildStatusText prepared context windows", () => {
       cacheRead: 0,
       cacheWrite: 0,
       totalTokens: 60,
-    } satisfies InternalSessionEntry;
+    } satisfies Entry;
     await replaceSessionEntry(target, committedEntry);
     readUsage.mockClear();
     const committed = await renderUsage(committedEntry);
@@ -574,7 +530,7 @@ describe("buildStatusText prepared context windows", () => {
       "auto",
       {
         ...modelEntry({ provider: "openai", model: "base-model" }),
-        fallbackNotice: notice({
+        ...noticeEntry({
           selectedModel: "anthropic/selected-model",
           activeModel: "openai/base-model",
           reason: "provider unavailable",
@@ -610,63 +566,62 @@ describe("buildStatusText prepared context windows", () => {
 
   async function terminal(
     params: {
-      entry?: Partial<InternalSessionEntry>;
+      entry?: Partial<Entry>;
       live?: boolean;
       message?: Record<string, unknown>;
       laterMessage?: Record<string, unknown>;
       status?: Partial<StatusTextParams>;
     } = {},
   ) {
-    return await withTempHome(async () => {
-      setRuntimeConfigSnapshot({});
-      const scope = {
-        agentId: "main",
-        sessionId: "terminal-fallback",
-        sessionKey: "agent:main:main",
-        storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
-      };
-      const entry: InternalSessionEntry = {
-        sessionId: scope.sessionId,
-        updatedAt: 1,
-        status: "done",
-        lastRunId: "settled-run",
-        ...modelEntry(selected),
-        agentHarnessId: "openclaw",
-        contextTokens: 1_000_000,
-        contextTokensSource: "runtime",
-        ...tokenUsage,
-        fallbackNotice: { ...fallbackNotice, reason: "provider unavailable" },
-        ...params.entry,
-      };
-      replaceSessionEntrySync(scope, entry);
-      const append = (message: Record<string, unknown>) => {
-        expect(appendTranscriptMessageSync(scope, { message }).ok).toBe(true);
-      };
-      append(assistant(params.message));
-      if (params.laterMessage) {
-        append(params.laterMessage);
-      }
-      const original = loadSessionEntryReadOnly(scope);
-      const runId = "current-live-run";
-      if (params.live) {
-        registerAgentRunContext(runId, { ...scope, projectSessionActive: true });
-      }
-      try {
-        const parts = await prepared({
-          sessionEntry: original,
-          sessionKey: scope.sessionKey,
-          storePath: scope.storePath,
-          contextTokens: 1_000_000,
-          ...params.status,
-        });
-        expect(loadSessionEntryReadOnly(scope)).toEqual(original);
-        return parts;
-      } finally {
-        if (params.live) {
-          clearAgentRunContext(runId);
-        }
-      }
+    // The suite's OpenClawTestState already owns an isolated home and state directory.
+    setRuntimeConfigSnapshot({});
+    const scope = {
+      agentId: "main",
+      sessionId: "terminal-fallback",
+      sessionKey: "agent:main:main",
+      storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+    };
+    const entry = makeEntry({
+      sessionId: scope.sessionId,
+      updatedAt: 1,
+      status: "done",
+      lastRunId: "settled-run",
+      ...modelEntry(selected),
+      agentHarnessId: "openclaw",
+      contextTokens: 1_000_000,
+      contextTokensSource: "runtime",
+      ...tokenUsage,
+      fallbackNotice: { ...fallbackNotice, reason: "provider unavailable" },
+      ...params.entry,
     });
+    replaceSessionEntrySync(scope, entry);
+    const append = (message: Record<string, unknown>) => {
+      expect(appendTranscriptMessageSync(scope, { message }).ok).toBe(true);
+    };
+    append(assistant(params.message));
+    if (params.laterMessage) {
+      append(params.laterMessage);
+    }
+    const original = loadSessionEntryReadOnly(scope);
+    const runId = "current-live-run";
+    if (params.live) {
+      registerAgentRunContext(runId, { ...scope, projectSessionActive: true });
+    }
+    try {
+      const parts = await prepared({
+        sessionEntry: original,
+        sessionKey: scope.sessionKey,
+        storePath: scope.storePath,
+        contextTokens: 1_000_000,
+        ...params.status,
+      });
+      expect(loadSessionEntryReadOnly(scope)).toEqual(original);
+      return parts;
+    } finally {
+      if (params.live) {
+        clearAgentRunContext(runId);
+      }
+    }
   }
 
   it.each([
@@ -801,7 +756,7 @@ describe("buildStatusText prepared context windows", () => {
       { providerOverride: "candidate", modelOverride: "middle" },
       "candidate/middle",
     ],
-  ] satisfies Array<[string, string, Partial<InternalSessionEntry>, string]>)(
+  ] satisfies Array<[string, string, Partial<Entry>, string]>)(
     "preserves typed selection %s/%s",
     async (provider, model, patch, expected) => {
       const aliases = { entry: "middle", middle: "wrong" };
@@ -832,13 +787,13 @@ describe("buildStatusText prepared context windows", () => {
     const readTail = vi
       .spyOn(transcriptTail, "readSessionTranscriptBoundedMessageTailPageAsync")
       .mockRejectedValue(error);
-    const sessionEntry: InternalSessionEntry = {
+    const sessionEntry = makeEntry({
       sessionId: "projection",
       updatedAt: 1,
       status: "done",
       lastRunId: "settled-run",
       fallbackNotice,
-    };
+    });
     const result = prepared({ sessionEntry });
     if (unavailable) {
       expect((await result).text).not.toContain("Fallback:");
@@ -856,21 +811,18 @@ describe("buildStatusText lazy loader retry", () => {
     vi.restoreAllMocks();
   });
 
-  function retryStatusParams(sessionId: string): Parameters<typeof buildStatusText>[0] {
-    return statusParams({
-      sessionEntry: { sessionId, updatedAt: 0 },
-      primaryModelLabelOverride: "openai/gpt-5.4-mini",
-    });
-  }
-
   it("falls back on import failure and retries in the same module instance", async () => {
+    const params = statusParams({
+      sessionEntry: makeEntry({ sessionId: "retry" }),
+      primaryModelLabelOverride: display.primaryModelLabelOverride,
+    });
     vi.doMock("./status-plugin-health.runtime.js", async () => {
       throw new Error("Module load failure");
     });
     vi.resetModules();
 
     const { buildStatusText: firstLoadBuildStatusText } = await import("./status-text.js");
-    const failed = await firstLoadBuildStatusText(retryStatusParams("retry-failure"));
+    const failed = await firstLoadBuildStatusText(params);
     expect(failed).toContain("Plugins: health unavailable");
 
     vi.doMock("./status-plugin-health.runtime.js", () => ({
@@ -883,7 +835,7 @@ describe("buildStatusText lazy loader retry", () => {
       }),
     }));
 
-    const recovered = await firstLoadBuildStatusText(retryStatusParams("retry-recovery"));
+    const recovered = await firstLoadBuildStatusText(params);
     expect(recovered).not.toContain("Plugins: health unavailable");
   });
 });
