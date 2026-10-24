@@ -584,7 +584,9 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     const steer = harness.requests.find((entry) => entry.method === "turn/steer");
     const clientUserMessageId = (steer?.params as { clientUserMessageId?: string } | undefined)
       ?.clientUserMessageId;
-    expect(clientUserMessageId).toBeTypeOf("string");
+    if (!clientUserMessageId) {
+      throw new Error("turn/steer clientUserMessageId missing");
+    }
     await harness.notify(
       itemNotification("item/completed", {
         id: "steered-user-message",
