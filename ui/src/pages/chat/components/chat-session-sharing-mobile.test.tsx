@@ -1,11 +1,8 @@
 /* @vitest-environment jsdom */
 import { createSignal, flush } from "solid-js";
-import { expect, it, onTestFinished, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { GatewaySessionRow, SessionMembersListEvidenceResult } from "../../../api/types.ts";
-import { i18n } from "../../../i18n/index.ts";
-import { captureI18nStateForTesting } from "../../../i18n/lib/translate.test-support.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { createMountedPanes, refreshPane } from "../chat-pane-mounted.test-support.ts";
@@ -284,9 +281,7 @@ it.each(["destination", "session"] as const)(
   },
 );
 
-it("hides members in Shared and restores them when authoritative visibility changes", async () => {
-  onTestFinished(captureI18nStateForTesting());
-  await i18n.setLocale("en");
+it("hides members in Shared and restores them when authoritative visibility changes", () => {
   const initial = prepared();
   const [source, setSource] = createSignal(initial);
   const view = mountSolid(() => {
@@ -318,13 +313,6 @@ it("hides members in Shared and restores them when authoritative visibility chan
   expect(initial.onMemberChange).not.toHaveBeenCalled();
   expect(initial.onVisibilityChange).not.toHaveBeenCalled();
   expect(initial.onPublicShareChange).not.toHaveBeenCalled();
-  const heading = view.getByText("Session access");
-  await i18n.setLocale("de");
-  const germanHeading = t("chat.sessionSharing.sessionAccess");
-  expect(germanHeading).not.toBe("Session access");
-  await waitForSolid(() => expect(heading.textContent).toBe(germanHeading));
-  await i18n.setLocale("en");
-  await waitForSolid(() => expect(heading.textContent).toBe("Session access"));
 });
 
 it("keeps Public confirmed until its owner publishes and preserves membership focus while pending", async () => {

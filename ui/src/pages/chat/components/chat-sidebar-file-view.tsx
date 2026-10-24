@@ -1,15 +1,13 @@
-import { createMemo, createUniqueId, onSettled, Show } from "solid-js";
+import { createMemo, onSettled, Show } from "solid-js";
 import { localEditorFilePath } from "../../../app/native-editor-locality.runtime.ts";
 import { createMarkdownRef } from "../../../components/markdown-dom-ref.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { McpAppCatalog } from "../../../components/mcp-app-catalog.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { Menu } from "../../../components/solid/menu.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { registerCodeBlocksEnglish } from "../../../i18n/locales/en-code-blocks.ts";
-import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
 import "../../../components/tooltip.ts";
-import { EDITOR_IDS, EDITOR_LABELS } from "../../../lib/editor-links.ts";
+import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { createLayoutMeasurement } from "../../../lib/reactive/layout-measurement.ts";
 import { getSafeLocalStorage } from "../../../local-storage.ts";
@@ -20,6 +18,7 @@ import type { FileViewControls } from "./chat-file-reader-controls.ts";
 import { measureFileScroll } from "./chat-file-scroll.ts";
 import { HtmlPreview, HtmlPreviewSourceFallback } from "./chat-html-preview-view.tsx";
 import type { FileSidebarContent, AttachmentSidebarRuntime } from "./chat-sidebar-content-types.ts";
+import { ChatSidebarEditorMenu } from "./chat-sidebar-editor-menu.tsx";
 import { DesktopFileChrome, FileCopyButton, FileTextAction } from "./chat-sidebar-file-chrome.tsx";
 import {
   SidebarFileMobileRail,
@@ -186,7 +185,12 @@ export function SidebarFile(props: {
                     />
                   )}
                 </Show>
-                <ChatSidebarEditorMenu controls={controls()} />
+                <ChatSidebarEditorMenu
+                  absolutePath={localEditorFilePath(props.content, controls().execNode)}
+                  open={controls().editorMenuOpen}
+                  onOpenChange={(open) => controls().onEditorMenuOpenChange(open)}
+                  onOpenEditor={(editor) => controls().onOpenEditor(editor)}
+                />
               </>
             }
           />
@@ -339,37 +343,4 @@ export function SidebarFile(props: {
       </div>
     </section>
   );
-
-  function ChatSidebarEditorMenu(menu: { controls: FileViewControls }) {
-    const id = createUniqueId();
-    return (
-      <Show when={localEditorFilePath(props.content, menu.controls.execNode)}>
-        <div class="sidebar-file-view__editor">
-          <Menu
-            id={`chat-editor-${id}`}
-            class="sidebar-file-view__editor-menu"
-            panelClass="sidebar-file-view__editor-panel"
-            placement="bottom-end"
-            open={menu.controls.editorMenuOpen}
-            onOpenChange={(open) => menu.controls.onEditorMenuOpenChange(open)}
-            label={t("chat.detailPanel.openInEditor")}
-            triggerClass="btn btn--sm sidebar-file-view__action"
-            triggerAttributes={{ title: t("chat.detailPanel.openInEditor") }}
-            trigger={<Icon name="externalLink" />}
-            items={EDITOR_IDS.map((editor) => ({
-              id: editor,
-              label: EDITOR_LABELS[editor],
-              class: "sidebar-file-view__editor-item",
-            }))}
-            onSelect={(item) => {
-              const editor = EDITOR_IDS.find((candidate) => candidate === item.id);
-              if (editor) {
-                menu.controls.onOpenEditor(editor);
-              }
-            }}
-          />
-        </div>
-      </Show>
-    );
-  }
 }

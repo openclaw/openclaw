@@ -1,4 +1,4 @@
-import { createMemo, For, Loading, onSettled } from "solid-js";
+import { createMemo, Loading, onSettled } from "solid-js";
 import type { AgentSelectElement } from "../../components/agent-select.tsx";
 import type { PopoverHandle } from "../../components/solid/popover.tsx";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
@@ -14,6 +14,7 @@ import "../../components/agent-select-registration.ts";
 import { resolveProjectChip } from "./project-chip.ts";
 import { ProjectChip } from "./project-chip.tsx";
 import type { AgentSelectOptions, NewSessionPlaceControlsOptions } from "./target-controls.ts";
+import { NewSessionTerminalHost } from "./terminal-start-view.tsx";
 import { draftWhereChipParams, resolveWhereChip } from "./where-chip.ts";
 import { WhereChip } from "./where-chip.tsx";
 
@@ -176,7 +177,17 @@ export function NewSessionPlaceControls(props: {
       ) : (
         <>
           {view().nativeTerminal ? (
-            <NewSessionTerminalHost />
+            <NewSessionTerminalHost
+              ref={(element) => {
+                terminal = element;
+              }}
+              params={{
+                hosts: props.params.data?.terminalHosts,
+                hostId: props.params.place.terminalHostId,
+                submitting: props.params.submitting,
+                onSelect: (hostId) => props.params.place.selectTerminalHost(hostId),
+              }}
+            />
           ) : (
             <WhereChip
               params={props.params}
@@ -260,58 +271,4 @@ export function NewSessionPlaceControls(props: {
       )}{" "}
     </>
   );
-
-  function NewSessionTerminalHost() {
-    const hostId = () => props.params.place.terminalHostId;
-    const hostValue = liveValue(hostId);
-    const hosts = () => props.params.data?.terminalHosts;
-    const hidden = () => {
-      const available = hosts();
-      return !available || (available.length === 1 && available[0]?.hostId === hostId());
-    };
-    return (
-      <>
-        {hidden() ? undefined : !hosts()?.length ? (
-          <span
-            class="new-session-page__catalog-unavailable"
-            role="status"
-            ref={(element) => {
-              terminal = element;
-            }}
-          >
-            {t("newSession.nativeHostsUnavailable")}
-          </span>
-        ) : (
-          <div
-            class="new-session-page__select new-session-page__menu-field"
-            ref={(element) => {
-              terminal = element;
-            }}
-          >
-            <span>{t("newSession.where")}</span>
-            <select
-              class="new-session-page__trigger"
-              aria-label={t("newSession.where")}
-              ref={hostValue}
-              disabled={props.params.submitting}
-              onChange={(event) => props.params.place.selectTerminalHost(event.currentTarget.value)}
-            >
-              {!hosts()?.some((host) => host.hostId === hostId()) ? (
-                <option value={hostId()} selected disabled>
-                  {t("newSession.chooseNativeHost")}
-                </option>
-              ) : undefined}
-              <For each={hosts()} keyed={(host) => host.hostId}>
-                {(host) => (
-                  <option value={host().hostId} selected={host().hostId === hostId()}>
-                    {host().label}
-                  </option>
-                )}
-              </For>
-            </select>
-          </div>
-        )}
-      </>
-    );
-  }
 }

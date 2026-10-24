@@ -4,6 +4,7 @@ import { expect, it, vi } from "vitest";
 import "../chat-details-mobile-host-content.tsx";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { createActiveSessionPlacement } from "../../../test-helpers/session-placement.ts";
 import { createChatMobileHostFixture } from "../chat-mobile-host.test-support.ts";
 import type { ChatMobileHost, MobileHostDestination } from "../chat-mobile-host.ts";
 import {
@@ -25,6 +26,18 @@ function details(overrides: Partial<ChatDetailsProps> = {}): ChatDetailsProps {
 function rootContent(): Extract<ChatDetailsMobilePage, { kind: "root" }>["content"] {
   return {
     entries: {
+      labels: {
+        people: "People",
+        taskProgress: "Task progress",
+        subagents: "Subagents",
+        processes: "Processes",
+        environment: "Environment",
+        context: "Context",
+        pullRequests: "Pull requests",
+        automations: "Automations",
+        generatedFiles: "Generated files",
+        session: "Session",
+      },
       people: { label: "People" },
       versions: { label: "Versions", metadata: 1 },
       onNavigate: vi.fn(),
@@ -38,19 +51,14 @@ it("shows a real worker without legacy fields and lets the environment owner dec
   const active: GatewaySessionRow = {
     key: "agent:main:details",
     kind: "direct",
-    placement: {
-      state: "active",
-      generation: 1,
+    placement: createActiveSessionPlacement({
       createdAtMs: 100000,
       updatedAtMs: 300000,
       stateChangedAtMs: 300000,
-      environmentId: "worker:device",
-      activeOwnerEpoch: 1,
-      workerBundleHash: "a".repeat(64),
       workspaceBaseManifestRef: "base-manifest",
       remoteWorkspaceDir: "/worker/repo",
       runner: { kind: "device", status: "available" },
-    },
+    }),
   };
   const [presented, setPresented] = createSignal(true);
   const request = vi.fn();
@@ -97,7 +105,9 @@ it("retains Outputs demand across publications and returns navigation origins wi
     dashboard: null,
     dashboardError: null,
     onOpenArtifact: vi.fn(),
+    renderArtifactIcon: () => null,
     onViewAll: vi.fn(),
+    renderViewAllIcon: () => null,
   };
   const [value, setValue] = createSignal(details({ outputs: output, retainOutputs: retain }));
   const [presented, setPresented] = createSignal(true);

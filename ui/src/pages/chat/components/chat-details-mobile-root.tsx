@@ -4,10 +4,6 @@ import type { ControlUiSessionPullRequest } from "../../../../../src/gateway/con
 import type { CronCompactJob } from "../../../api/types.ts";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
 import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
-import { registerChatDetailsEnglish } from "../../../i18n/locales/en-chat-details.ts";
-import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
-import { registerGitHubEnglish } from "../../../i18n/locales/en-github.ts";
-import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import type { ChatSubagentActivity } from "../chat-subagent-wait.ts";
 import { ChatDetailsSubagents, type ChatDetailsSubagentsProps } from "./chat-details-subagents.tsx";
 import {
@@ -17,10 +13,6 @@ import {
 } from "./chat-pull-request-mobile.tsx";
 import { chatPullRequestId } from "./chat-pull-requests.ts";
 import "../../../styles/chat/details-mobile-root.css";
-
-registerEnglishCatalog(registerChatDetailsEnglish);
-registerEnglishCatalog(registerChatSessionEnglish);
-registerEnglishCatalog(registerGitHubEnglish);
 
 /** Presentation supplied by the domain owner; marks/metadata are noninteractive. */
 export type ChatDetailsMobileEntry = {
@@ -67,6 +59,19 @@ type ChatDetailsMobileRootOrigin = {
 export type ChatDetailsMobileRootProps = {
   /** The mobile host owns hidden/inert, mounting, scroll, focus and navigation retention. */
   presented: boolean;
+  labels: Record<
+    | "people"
+    | "taskProgress"
+    | "subagents"
+    | "processes"
+    | "environment"
+    | "context"
+    | "pullRequests"
+    | "automations"
+    | "generatedFiles"
+    | "session",
+    string
+  >;
   people?: ChatDetailsMobileEntry;
   /** The native Sharing control, including its value, glyph and action. */
   sharingOptions?: JSX.Element;
@@ -113,66 +118,67 @@ function RootGroup(props: {
   );
 }
 
+function RootEntry(props: {
+  entry: ChatDetailsMobileEntry;
+  icon?: IconName;
+  destination: ChatDetailsMobileRootDestination;
+  root: ChatDetailsMobileRootProps;
+}) {
+  return (
+    <button
+      type="button"
+      class="chat-details-mobile-root__entry"
+      data-details-destination={props.destination.kind}
+      aria-label={props.entry.accessibleLabel}
+      disabled={!props.root.presented}
+      onClick={(event) => {
+        if (props.root.presented) {
+          props.root.onNavigate(props.destination, {
+            kind: "details-root",
+            trigger: event.currentTarget,
+          });
+        }
+      }}
+    >
+      <Show when={props.entry.leading != null || props.icon}>
+        <span class="chat-details-mobile-root__leading" aria-hidden="true">
+          {props.entry.leading ?? (props.icon && <Icon name={props.icon} />)}
+        </span>
+      </Show>
+      <span class="chat-details-mobile-root__copy">
+        <span
+          ref={createTextOverflow(() => props.entry.label)}
+          class="chat-details-mobile-root__label"
+        >
+          {props.entry.label}
+        </span>
+        <Show when={props.entry.description}>
+          <span class="chat-details-mobile-root__description">
+            {props.entry.descriptionLeading}
+            <span
+              class={[
+                "chat-details-mobile-root__description-text",
+                {
+                  "chat-details-mobile-root__description-text--note":
+                    props.entry.truncateDescription,
+                },
+              ]}
+            >
+              {props.entry.description}
+            </span>
+          </span>
+        </Show>
+      </span>
+      <Show when={props.entry.metadata != null}>
+        <span class="chat-details-mobile-root__metadata">{props.entry.metadata}</span>
+      </Show>
+      <Icon name="chevronRight" class="chat-details-mobile-root__chevron" />
+    </button>
+  );
+}
+
 /** Mobile root only. Domain owners supply facts; the mobile host records every transition. */
 export function ChatDetailsMobileRoot(props: ChatDetailsMobileRootProps) {
-  function RootEntry(entryProps: {
-    entry: ChatDetailsMobileEntry;
-    icon?: IconName;
-    destination: ChatDetailsMobileRootDestination;
-  }) {
-    return (
-      <button
-        type="button"
-        class="chat-details-mobile-root__entry"
-        data-details-destination={entryProps.destination.kind}
-        aria-label={entryProps.entry.accessibleLabel}
-        disabled={!props.presented}
-        onClick={(event) => {
-          if (props.presented) {
-            props.onNavigate(entryProps.destination, {
-              kind: "details-root",
-              trigger: event.currentTarget,
-            });
-          }
-        }}
-      >
-        <Show when={entryProps.entry.leading != null || entryProps.icon}>
-          <span class="chat-details-mobile-root__leading" aria-hidden="true">
-            {entryProps.entry.leading ?? (entryProps.icon && <Icon name={entryProps.icon} />)}
-          </span>
-        </Show>
-        <span class="chat-details-mobile-root__copy">
-          <span
-            ref={createTextOverflow(() => entryProps.entry.label)}
-            class="chat-details-mobile-root__label"
-          >
-            {entryProps.entry.label}
-          </span>
-          <Show when={entryProps.entry.description}>
-            <span class="chat-details-mobile-root__description">
-              {entryProps.entry.descriptionLeading}
-              <span
-                class={[
-                  "chat-details-mobile-root__description-text",
-                  {
-                    "chat-details-mobile-root__description-text--note":
-                      entryProps.entry.truncateDescription,
-                  },
-                ]}
-              >
-                {entryProps.entry.description}
-              </span>
-            </span>
-          </Show>
-        </span>
-        <Show when={entryProps.entry.metadata != null}>
-          <span class="chat-details-mobile-root__metadata">{entryProps.entry.metadata}</span>
-        </Show>
-        <Icon name="chevronRight" class="chat-details-mobile-root__chevron" />
-      </button>
-    );
-  }
-
   const pullRequestsTotal = () => props.pullRequests?.pullRequests.length ?? 0;
   const automationsTotal = () => props.automations?.total ?? props.automations?.items.length ?? 0;
   const automationNotice = children(() => props.automations?.notice);
@@ -180,17 +186,26 @@ export function ChatDetailsMobileRoot(props: ChatDetailsMobileRootProps) {
   return (
     <div class="chat-details-mobile-root">
       <Show when={props.people || props.sharingOptions}>
-        <RootGroup name="people" label={t("chat.mobileDetails.people")} heading={false}>
+        <RootGroup name="people" label={props.labels.people} heading={false}>
           <Show when={props.people}>
-            {(entry) => <RootEntry entry={entry()} icon="users" destination={{ kind: "people" }} />}
+            {(entry) => (
+              <RootEntry
+                entry={entry()}
+                icon="users"
+                destination={{ kind: "people" }}
+                root={props}
+              />
+            )}
           </Show>
           {props.sharingOptions}
         </RootGroup>
       </Show>
       <Show when={props.taskProgress || props.taskProgressNotice}>
-        <RootGroup name="task-progress" label={t("sessionProgressCard.composerTitle")}>
+        <RootGroup name="task-progress" label={props.labels.taskProgress}>
           <Show when={props.taskProgress}>
-            {(entry) => <RootEntry entry={entry()} destination={{ kind: "task-progress" }} />}
+            {(entry) => (
+              <RootEntry entry={entry()} destination={{ kind: "task-progress" }} root={props} />
+            )}
           </Show>
           {props.taskProgressNotice}
         </RootGroup>
@@ -200,9 +215,9 @@ export function ChatDetailsMobileRoot(props: ChatDetailsMobileRootProps) {
           <section
             class="chat-details-mobile-root__section"
             data-details-group="subagents"
-            aria-label={t("chat.sessionDetails.subagents")}
+            aria-label={props.labels.subagents}
           >
-            <h3 class="chat-details-mobile-root__heading">{t("chat.sessionDetails.subagents")}</h3>
+            <h3 class="chat-details-mobile-root__heading">{props.labels.subagents}</h3>
             <ChatDetailsSubagents {...subagents()} mobile />
           </section>
         )}
@@ -216,7 +231,7 @@ export function ChatDetailsMobileRoot(props: ChatDetailsMobileRootProps) {
           props.publicationEntry
         }
       >
-        <RootGroup name="pull-requests" label={t("sessionHovercard.pullRequests")}>
+        <RootGroup name="pull-requests" label={props.labels.pullRequests}>
           <Show when={props.pullRequests}>
             {(collection) => (
               <>
@@ -236,6 +251,7 @@ export function ChatDetailsMobileRoot(props: ChatDetailsMobileRootProps) {
                     entry={collection().summary}
                     icon="gitPullRequest"
                     destination={{ kind: "pull-requests" }}
+                    root={props}
                   />
                 </Show>
                 <ChatPullRequestMobileRecovery {...collection()} collection />
@@ -249,6 +265,7 @@ export function ChatDetailsMobileRoot(props: ChatDetailsMobileRootProps) {
                 entry={entry()}
                 icon="gitPullRequest"
                 destination={{ kind: "publication" }}
+                root={props}
               />
             )}
           </Show>
@@ -256,7 +273,7 @@ export function ChatDetailsMobileRoot(props: ChatDetailsMobileRootProps) {
       </Show>
       <Loading>
         <Show when={automationsTotal() > 0 || automationNotice.toArray().length > 0}>
-          <RootGroup name="automations" label={t("chat.sessionDetails.automations")}>
+          <RootGroup name="automations" label={props.labels.automations}>
             <Show when={props.automations}>
               {(collection) => (
                 <>
@@ -269,6 +286,7 @@ export function ChatDetailsMobileRoot(props: ChatDetailsMobileRootProps) {
                             entry={entry()}
                             icon="clock"
                             destination={{ kind: "automation", jobId: entry().value }}
+                            root={props}
                           />
                         )}
                       </For>
@@ -279,6 +297,7 @@ export function ChatDetailsMobileRoot(props: ChatDetailsMobileRootProps) {
                         entry={collection().summary}
                         icon="clock"
                         destination={{ kind: "automations" }}
+                        root={props}
                       />
                     </Show>
                   </Show>
@@ -291,20 +310,30 @@ export function ChatDetailsMobileRoot(props: ChatDetailsMobileRootProps) {
       </Loading>
       <Show when={props.outputs}>
         {(entry) => (
-          <RootGroup name="outputs" label={t("chat.mobileDetails.generatedFiles")}>
-            <RootEntry entry={entry()} icon="fileText" destination={{ kind: "outputs" }} />
+          <RootGroup name="outputs" label={props.labels.generatedFiles}>
+            <RootEntry
+              entry={entry()}
+              icon="fileText"
+              destination={{ kind: "outputs" }}
+              root={props}
+            />
           </RootGroup>
         )}
       </Show>
       <Show when={props.versions && props.versions.metadata !== 0 && props.versions}>
         {(entry) => (
-          <RootGroup name="session" label={t("chat.sessionDetails.session")}>
-            <RootEntry entry={entry()} icon="history" destination={{ kind: "versions" }} />
+          <RootGroup name="session" label={props.labels.session}>
+            <RootEntry
+              entry={entry()}
+              icon="history"
+              destination={{ kind: "versions" }}
+              root={props}
+            />
           </RootGroup>
         )}
       </Show>
       <Show when={props.processes}>
-        <RootGroup name="processes" label={t("chat.sessionDetails.processes")}>
+        <RootGroup name="processes" label={props.labels.processes}>
           {props.processes}
         </RootGroup>
       </Show>

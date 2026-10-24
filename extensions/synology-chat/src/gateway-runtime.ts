@@ -221,6 +221,7 @@ export async function registerSynologyWebhookRoute(params: {
         log: logAdapter,
         deliver: async (msg, turnAdoptionLifecycle) => {
           const rt = getSynologyRuntime();
+          // SAFETY: Routing and inbound preparation only read the host-validated config snapshot.
           const currentCfg = rt.config.current() as OpenClawConfig;
 
           // The Chat API user_id (for sending) may differ from the webhook

@@ -1,21 +1,20 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
 import { createMemo, Errored, merge, onSettled, Show } from "solid-js";
-import { registerDesktopEnglish } from "../../i18n/locales/en-desktop.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
+import { t } from "../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { createDesktopFullscreen, type DesktopFullscreen } from "../desktop-fullscreen.ts";
 import { DockResizer } from "../dock-layout-solid.tsx";
 import { nativeDockPanelCss as dockStyles } from "../dock-panel-styles.ts";
 import { Icon } from "../solid/icon.tsx";
-import { PanelLoadingSkeleton } from "../solid/panel-loading-skeleton.tsx";
 import "../tooltip.ts";
 import { StrokeIcon } from "../solid/stroke-icon.tsx";
 import { createDesktopAppLauncher } from "./desktop-app-launcher.ts";
 import { DesktopAudioControl, DesktopAudioNotice } from "./desktop-audio-view.tsx";
 import { createDesktopAudio } from "./desktop-audio.ts";
 import { desktopCanvas, DesktopClient } from "./desktop-client.ts";
+import { DesktopDocumentView } from "./desktop-document-view.tsx";
 import { openDesktopFocus } from "./desktop-focus-window.ts";
 import { createDesktopMobileKeyboard } from "./desktop-mobile-keyboard.ts";
 import type {
@@ -25,9 +24,6 @@ import type {
 import { createDesktopPanel, type DesktopPanelOwner } from "./desktop-panel-owner.ts";
 import type { DesktopPanelState } from "./desktop-panel-state.ts";
 import {
-  DesktopPanelContent,
-  DesktopSizing,
-  DesktopSurface,
   DesktopPanelRecovery,
   DesktopCredentials,
   DesktopPicker,
@@ -40,8 +36,6 @@ import {
 } from "./desktop-picture-in-picture.ts";
 import { desktopSourceForEnvironment } from "./desktop-source.ts";
 import desktopStyles from "./desktop-panel.css?inline";
-
-registerEnglishCatalog(registerDesktopEnglish);
 
 type Methods = { handleToggleRequest(event: Event): void };
 type DesktopPanelElement = SolidBridgeElement<DesktopPanelInputs, Methods>;
@@ -436,7 +430,17 @@ function DesktopPresentation(props: {
   return (
     <>
       {props.view.documentMode ? (
-        <DesktopDocumentView />
+        <DesktopDocumentView
+          {...content}
+          surfaceRef={props.view.surfaceRef}
+          controlling={props.view.controlling}
+          sizing={props.view.sizing}
+          keyboard={props.view.mobileKeyboard}
+          pictureInPictureControl={pictureInPictureControl()}
+          audioControl={audioControl()}
+          onControlToggle={props.view.onControlToggle}
+          onClose={props.view.onDocumentClose}
+        />
       ) : (
         <DesktopPanelView
           embedded={props.view.embedded}
@@ -469,85 +473,4 @@ function DesktopPresentation(props: {
       )}
     </>
   );
-
-  function DesktopDocumentView() {
-    return (
-      <section class="desktop-document" aria-label={t("desktop.title")}>
-        <DesktopPanelContent
-          {...content}
-          connection={() => (
-            <div class="desktop-stage">
-              {/* noVNC owns this island; controls remain Solid-owned siblings. */}
-              <DesktopSurface bind={props.view.surfaceRef} />
-              {content.state === "connecting" && (
-                <PanelLoadingSkeleton variant="desktop" label={t("desktop.connecting")} overlay />
-              )}
-              <textarea
-                ref={props.view.mobileKeyboard.inputRef}
-                class="desktop-keyboard-input"
-                inputmode="text"
-                autocomplete="off"
-                autocapitalize="off"
-                spellcheck="false"
-                tabindex={-1}
-                aria-label={t("desktop.keyboardInput")}
-                disabled={content.state !== "connected" || !props.view.controlling}
-                onKeyDown={(event) => props.view.mobileKeyboard.handleKeyboardEvent(event)}
-                onKeyUp={(event) => props.view.mobileKeyboard.handleKeyboardEvent(event)}
-                onInput={(event) => props.view.mobileKeyboard.handleInput(event)}
-              />
-              <nav class="desktop-touch-toolbar" aria-label={t("desktop.touchControls")}>
-                {audioControl()}
-                {pictureInPictureControl()}
-                <button
-                  class="desktop-touch-action"
-                  type="button"
-                  aria-label={t(
-                    props.view.controlling ? "desktop.switchToViewOnly" : "desktop.takeControl",
-                  )}
-                  aria-pressed={props.view.controlling ? "true" : "false"}
-                  disabled={content.state !== "connected"}
-                  onClick={() => props.view.onControlToggle()}
-                >
-                  <span class="desktop-touch-action__icon" aria-hidden="true">
-                    <Icon name={props.view.controlling ? "hand" : "eye"} />
-                  </span>
-                  <span class="desktop-touch-action__label">
-                    {t(props.view.controlling ? "desktop.control" : "desktop.viewOnly")}
-                  </span>
-                </button>
-                <button
-                  class="desktop-touch-action"
-                  type="button"
-                  aria-label={t("desktop.keyboard")}
-                  disabled={content.state !== "connected" || !props.view.controlling}
-                  onClick={(event) => props.view.mobileKeyboard.focus(event)}
-                >
-                  <span class="desktop-touch-action__icon" aria-hidden="true">
-                    <StrokeIcon>
-                      <rect width="20" height="14" x="2" y="5" rx="2" />
-                      <path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M6 13h.01M10 13h.01M14 13h.01M18 13h.01M8 17h8" />
-                    </StrokeIcon>
-                  </span>
-                  <span class="desktop-touch-action__label">{t("desktop.keyboard")}</span>
-                </button>
-                <DesktopSizing {...props.view.sizing} />
-                <button
-                  class="desktop-touch-action"
-                  type="button"
-                  aria-label={t("desktop.back")}
-                  onClick={() => props.view.onDocumentClose()}
-                >
-                  <span class="desktop-touch-action__icon" aria-hidden="true">
-                    <Icon name="arrowLeft" />
-                  </span>
-                  <span class="desktop-touch-action__label">{t("desktop.back")}</span>
-                </button>
-              </nav>
-            </div>
-          )}
-        />
-      </section>
-    );
-  }
 }

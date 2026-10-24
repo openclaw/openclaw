@@ -252,6 +252,18 @@ function MobileHostContent(
     kind: "root",
     content: {
       entries: {
+        labels: {
+          people: t("chat.mobileDetails.people"),
+          taskProgress: t("sessionProgressCard.composerTitle"),
+          subagents: t("chat.sessionDetails.subagents"),
+          processes: t("chat.sessionDetails.processes"),
+          environment: t("chat.sessionDetails.environment"),
+          context: t("chat.sessionDetails.context"),
+          pullRequests: t("sessionHovercard.pullRequests"),
+          automations: t("chat.sessionDetails.automations"),
+          generatedFiles: t("chat.mobileDetails.generatedFiles"),
+          session: t("chat.sessionDetails.session"),
+        },
         people: props.bindings?.people
           ? {
               label: t("chat.sessionHeader.people"),
@@ -377,7 +389,16 @@ function MobileHostContent(
             }
           },
           sharing,
-          viewingNow: t("presence.card.viewingNow"),
+          labels: {
+            people: t("chat.sessionHeader.people"),
+            viewingNow: t("presence.card.viewingNow"),
+            creator: t("chat.sessionSharing.creator"),
+            owner: t("chat.sessionSharing.owner"),
+            participants: t("chat.sessionHeader.peopleParticipants"),
+            mention: t("chat.sessionHeader.mention"),
+            mentionPerson: (name) => t("chat.sessionHeader.mentionPerson", { name }),
+            morePeople: (count) => t("chat.sessionHeader.morePeople", { count: String(count) }),
+          },
         },
       });
     }

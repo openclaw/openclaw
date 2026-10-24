@@ -1,14 +1,19 @@
 import { createMemo } from "solid-js";
+import type { SessionVisibility } from "../../../api/types.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import type {
   ChatSessionAccessMobileProps,
+  ChatSessionSharingMobileLabels,
   ChatSessionSharingMobileProps,
+  ChatSessionSharingModePresentation,
 } from "./chat-session-sharing-mobile.tsx";
 import type { ChatSessionSharingOptionsProps } from "./chat-session-sharing-options.tsx";
 import type { PreparedChatSessionSharing } from "./chat-session-sharing-shared.tsx";
 import {
   canManageChatSessionSharing,
+  CHAT_SESSION_SHARING_DESCRIPTION_KEYS,
+  ChatSessionSharingModeIcon,
   projectChatSessionSharingRoster,
   createChatSessionSharingPresentation,
 } from "./chat-session-sharing-shared.tsx";
@@ -66,6 +71,38 @@ export function createChatSessionSharingMobileAdapter(
       source()?.state?.result?.allowedVisibilities ??
       source()?.allowedVisibilities ?? [visibility()],
   );
+  const mode = (value: SessionVisibility) => ({
+    get description() {
+      return t(CHAT_SESSION_SHARING_DESCRIPTION_KEYS[value]);
+    },
+    icon: () => <ChatSessionSharingModeIcon visibility={value} />,
+  });
+  const modes: ChatSessionSharingModePresentation = {
+    shared: mode("shared"),
+    "read-only": mode("read-only"),
+    suggest: mode("suggest"),
+    draft: mode("draft"),
+  };
+  const labels: ChatSessionSharingMobileLabels = {
+    get sessionAccess() {
+      return t("chat.sessionSharing.sessionAccess");
+    },
+    get linkSharing() {
+      return t("chat.sessionSharing.linkSharing");
+    },
+    get anyoneWithLink() {
+      return t("chat.sessionSharing.anyoneWithLink");
+    },
+    get permissions() {
+      return t("chat.sessionSharing.permissions");
+    },
+    get showSearch() {
+      return t("chat.sessionSharing.searchPeople");
+    },
+    get hideSearch() {
+      return t("chat.sessionSharing.closeSearch");
+    },
+  };
   const prepare = () => {
     if (!unavailable()) {
       source()?.onOpen();
@@ -177,6 +214,8 @@ export function createChatSessionSharingMobileAdapter(
       get visibility() {
         return visibility();
       },
+      modes,
+      labels,
       get accessDisabledReason() {
         return accessReason();
       },
@@ -212,8 +251,12 @@ export function createChatSessionSharingMobileAdapter(
       get visibility() {
         return visibility();
       },
+      modes,
       get allowedVisibilities() {
         return allowed();
+      },
+      get label() {
+        return labels.sessionAccess;
       },
       get pending() {
         return pending();

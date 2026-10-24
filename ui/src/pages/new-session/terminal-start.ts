@@ -122,3 +122,10 @@ export async function submitDraftInTerminal(options: {
     }
   }
 }
+
+export type NewSessionTerminalHostOptions = {
+  hosts: Array<{ hostId: string; label: string }> | undefined;
+  hostId: string;
+  submitting: boolean;
+  onSelect: (hostId: string) => void;
+};

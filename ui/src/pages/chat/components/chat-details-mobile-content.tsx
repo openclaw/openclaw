@@ -69,7 +69,7 @@ type ChatDetailsMobileRegionProps = {
 };
 
 type ChatDetailsMobileRootContent = {
-  /** Navigation belongs to the host; native facts are projected below. */
+  /** Labels and navigation belong to the host; native facts are projected below. */
   entries: Omit<
     ChatDetailsMobileRootProps,
     | "presented"
@@ -149,7 +149,7 @@ function MobileRoot(
     }
     const count = getChatOutputsCount(data);
     return {
-      label: props.content.outputs?.label ?? t("chat.mobileDetails.generatedFiles"),
+      label: props.content.outputs?.label ?? props.content.entries.labels.generatedFiles,
       metadata: count === null ? undefined : count,
     };
   };

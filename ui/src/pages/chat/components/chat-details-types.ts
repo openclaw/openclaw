@@ -69,7 +69,7 @@ type ChatDetailsEnvironmentData = Pick<
   | "placement"
 >;
 
-/** Published assistant-artifact/dashboard facts and real destination operations. */
+/** Published assistant-artifact/dashboard facts and real destination/icon operations. */
 export type ChatDetailsOutputs = ChatOutputsDesktopProps;
 
 // Both the composing view and Details consume this contract; child components

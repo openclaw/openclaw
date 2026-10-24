@@ -1,11 +1,8 @@
 /* @vitest-environment jsdom */
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { i18n } from "../../i18n/index.ts";
-import { captureI18nStateForTesting } from "../../i18n/lib/translate.test-support.ts";
-import { t } from "../../lib/reactive/i18n.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import {
   composerFixture,
   people,
@@ -18,14 +15,25 @@ import type {
   HumanMentionRead,
 } from "./components/chat-composer-mention-menu-state.ts";
 import { ChatMobilePeopleGrid } from "./components/chat-mobile-people-grid.tsx";
-import { ChatMobilePeopleBody } from "./components/chat-mobile-people.tsx";
+import {
+  ChatMobilePeopleBody,
+  type ChatMobilePeopleBodyProps,
+} from "./components/chat-mobile-people.tsx";
 
 afterEach(resetMentionComposerFixture);
 
+const labels: ChatMobilePeopleBodyProps["labels"] = {
+  people: "People",
+  viewingNow: "Viewing now",
+  creator: "Creator",
+  owner: "Owner",
+  participants: "Participants",
+  mention: "Mention",
+  mentionPerson: (name) => "Mention " + name,
+  morePeople: (count) => count + " more people",
+};
+
 it("projects native identities and mentions through the People body without sending or closing on rejection", async () => {
-  const restoreI18n = captureI18nStateForTesting();
-  onTestFinished(restoreI18n);
-  await i18n.setLocale("en");
   const composer = composerFixture("chat", "Review this");
   const mentions = createChatMobilePeopleMentions(composer.mentionAccess);
   const release = mentions.activate();
@@ -90,14 +98,14 @@ it("projects native identities and mentions through the People body without send
       <ChatMobilePeopleGrid
         people={projection()}
         label="Open people"
-        morePeople={(count) => count + " more people"}
+        morePeople={labels.morePeople}
         expanded={false}
         controls="people-page"
         onOpen={open}
       />
       <ChatMobilePeopleBody
         people={projection()}
-        viewingNow="Viewing now"
+        labels={labels}
         sharingOptions={<span>Sharing options</span>}
         onMention={(person) => {
           if (mentions.insert(person.profileId)) {
@@ -113,24 +121,14 @@ it("projects native identities and mentions through the People body without send
   expect(view.getByText("3 more people")).toBeDefined();
   expect(view.getByRole("heading", { name: "Participants" }).textContent).toBe("Participants");
   expect(view.queryByText("Elsewhere")).toBeNull();
-  const participantMention = view
-    .getByRole("region", { name: "Participants" })
-    .querySelector<HTMLButtonElement>('button[aria-label="Mention Alex Rivera"]')!;
-  await i18n.setLocale("de");
-  const germanMention = t("chat.sessionHeader.mentionPerson", { name: "Alex Rivera" });
-  expect(germanMention).not.toBe("Mention Alex Rivera");
-  await waitForSolid(() =>
-    expect(participantMention.getAttribute("aria-label")).toBe(germanMention),
-  );
-  await i18n.setLocale("en");
-  await waitForSolid(() =>
-    expect(participantMention.getAttribute("aria-label")).toBe("Mention Alex Rivera"),
-  );
   const trigger = view.getByRole("button", { name: "Open people" });
   trigger.click();
   expect(open).toHaveBeenCalledExactlyOnceWith(trigger);
   const textarea = composer.container.querySelector<HTMLTextAreaElement>("textarea")!;
   textarea.setSelectionRange(7, 11);
+  const participantMention = view
+    .getByRole("region", { name: "Participants" })
+    .querySelector<HTMLButtonElement>('button[aria-label="Mention Alex Rivera"]')!;
   expect(view.queryByRole("button", { name: "Mention Alex Remote" })).toBeNull();
   participantMention.click();
   composer.refresh();

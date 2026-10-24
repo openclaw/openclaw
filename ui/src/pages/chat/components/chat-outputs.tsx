@@ -16,7 +16,6 @@ import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx
 import { registerChatOutputsEnglish } from "../../../i18n/locales/en-chat-outputs.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import { AttachmentFileIcon } from "./chat-attachment-file-icon-solid.tsx";
 import type { SessionWorkspaceArtifacts } from "./chat-session-workspace-types.ts";
 import "./chat-outputs.css";
 
@@ -45,11 +44,15 @@ type ChatOutputsProps = ChatOutputsData & {
   onRetryDashboard?: () => void;
   /** Use the original filename when the native owner has it; never infer an extension. */
   getArtifactName?: (artifact: ArtifactSummary) => string;
+  /** Native icon owner supplies the document/table geometry for this artifact. */
+  renderArtifactIcon: (artifact: ArtifactSummary) => JSX.Element;
 };
 
 export type ChatOutputsDesktopProps = ChatOutputsProps & {
   /** Select the existing Files catalog, even if a preview is currently active. */
   onViewAll: () => void;
+  /** The approved Folders glyph, supplied by the shared icon owner. */
+  renderViewAllIcon: () => JSX.Element;
 };
 
 /** Shared by the root entry and its interior; unknown is not a zero count. */
@@ -100,13 +103,7 @@ function ArtifactRow(props: {
       class="chat-outputs__row"
       onClick={() => props.outputs.onOpenArtifact(props.artifact.id)}
     >
-      <span class="chat-outputs__icon">
-        <AttachmentFileIcon
-          filename=""
-          mimeType={props.artifact.mimeType}
-          mode="preview-with-favicon"
-        />
-      </span>
+      <span class="chat-outputs__icon">{props.outputs.renderArtifactIcon(props.artifact)}</span>
       <OutputName text={name()} />
       <Show when={props.mobile}>
         <Icon name="chevronRight" class="chat-outputs__chevron" />
@@ -290,9 +287,7 @@ export function ChatOutputsDesktop(props: ChatOutputsDesktopProps) {
                   class="chat-outputs__row chat-outputs__view-all"
                   onClick={() => props.onViewAll()}
                 >
-                  <span class="chat-outputs__icon">
-                    <Icon name="folders" />
-                  </span>
+                  <span class="chat-outputs__icon">{props.renderViewAllIcon()}</span>
                   <span>{t("outputs.viewAll")}</span>
                 </button>
               </Show>

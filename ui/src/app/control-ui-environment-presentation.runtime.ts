@@ -183,74 +183,7 @@ export function syncControlUiFavicon(): void {
       restoreFavicon(icon, [href, type]);
       continue;
     }
-    const composeFavicon = async () => {
-      const source: FaviconSource = image
-        ? { image }
-        : await getOrCreatePromise(
-            faviconSources,
-            JSON.stringify([href, type]),
-            () => loadSource(href, type),
-            { cacheRejections: false },
-          );
-      if ("svg" in source) {
-        const svg = new DOMParser().parseFromString(
-          `<svg xmlns="${SVG_NAMESPACE}" viewBox="0 0 32 32" width="32" height="32"><circle cx="25.5" cy="25.5" r="5" stroke-width="2"/></svg>`,
-          "image/svg+xml",
-        ).documentElement;
-        const dot = svg.firstElementChild!;
-        dot.setAttribute("fill", color);
-        dot.setAttribute("stroke", ring);
-        // Keep SMIL in the favicon document; SVG images cannot load external images.
-        const artwork = document.importNode(source.svg, true);
-        artwork.setAttribute("x", "0");
-        artwork.setAttribute("y", "0");
-        artwork.setAttribute("width", "32");
-        artwork.setAttribute("height", "32");
-        svg.prepend(artwork);
-        return {
-          href: `data:image/svg+xml,${encodeURIComponent(new XMLSerializer().serializeToString(svg))}`,
-          type: "image/svg+xml",
-        };
-      }
-      const canvas = document.createElement("canvas");
-      canvas.width = 32;
-      canvas.height = 32;
-      const context = canvas.getContext("2d");
-      if (!context) {
-        throw new Error("Favicon canvas unavailable");
-      }
-      context.save();
-      if (shape !== "square") {
-        context.beginPath();
-        context.roundRect(0, 0, 32, 32, shape === "circle" ? 16 : 8);
-        context.clip();
-      }
-      const fit = shape === "square" ? Math.min : Math.max;
-      const scale = fit(32 / source.image.naturalWidth, 32 / source.image.naturalHeight);
-      const width = source.image.naturalWidth * scale;
-      const height = source.image.naturalHeight * scale;
-      context.drawImage(source.image, (32 - width) / 2, (32 - height) / 2, width, height);
-      context.restore();
-      if (color) {
-        context.beginPath();
-        context.arc(25.5, 25.5, 5, 0, Math.PI * 2);
-        context.fillStyle = color;
-        context.fill();
-        context.strokeStyle = ring;
-        context.lineWidth = 2;
-        context.stroke();
-      }
-      const png = canvas.toDataURL("image/png");
-      if (!image) {
-        return { href: png, type: "image/png" };
-      }
-      // Firefox batches icon candidates and prefers SVG over PNG, even when that
-      // SVG was a default briefly restored before the personal image decoded. Keep
-      // personal artwork SVG-preferred too; only our rasterized bytes are embedded.
-      const svg = `<svg xmlns="${SVG_NAMESPACE}" viewBox="0 0 32 32" width="32" height="32"><image width="32" height="32" href="${png}"/></svg>`;
-      return { href: `data:image/svg+xml,${encodeURIComponent(svg)}`, type: "image/svg+xml" };
-    };
-    void composeFavicon().then(
+    void composeFavicon(href, type, color, ring, image, shape).then(
       (result) => {
         // Asset decoding may finish after idle, a palette change, or a context teardown.
         if (icon.isConnected && faviconRequests.get(icon) === request) {
@@ -299,4 +232,79 @@ async function loadSource(href: string, type: string | null): Promise<FaviconSou
   image.src = href;
   await image.decode();
   return { image };
+}
+
+async function composeFavicon(
+  href: string,
+  type: string | null,
+  color: string,
+  ring: string,
+  image: HTMLImageElement | null,
+  shape: AgentTabIconShape,
+) {
+  const source: FaviconSource = image
+    ? { image }
+    : await getOrCreatePromise(
+        faviconSources,
+        JSON.stringify([href, type]),
+        () => loadSource(href, type),
+        { cacheRejections: false },
+      );
+  if ("svg" in source) {
+    const svg = new DOMParser().parseFromString(
+      `<svg xmlns="${SVG_NAMESPACE}" viewBox="0 0 32 32" width="32" height="32"><circle cx="25.5" cy="25.5" r="5" stroke-width="2"/></svg>`,
+      "image/svg+xml",
+    ).documentElement;
+    const dot = svg.firstElementChild!;
+    dot.setAttribute("fill", color);
+    dot.setAttribute("stroke", ring);
+    // Keep SMIL in the favicon document; SVG images cannot load external images.
+    const artwork = document.importNode(source.svg, true);
+    artwork.setAttribute("x", "0");
+    artwork.setAttribute("y", "0");
+    artwork.setAttribute("width", "32");
+    artwork.setAttribute("height", "32");
+    svg.prepend(artwork);
+    return {
+      href: `data:image/svg+xml,${encodeURIComponent(new XMLSerializer().serializeToString(svg))}`,
+      type: "image/svg+xml",
+    };
+  }
+  const canvas = document.createElement("canvas");
+  canvas.width = 32;
+  canvas.height = 32;
+  const context = canvas.getContext("2d");
+  if (!context) {
+    throw new Error("Favicon canvas unavailable");
+  }
+  context.save();
+  if (shape !== "square") {
+    context.beginPath();
+    context.roundRect(0, 0, 32, 32, shape === "circle" ? 16 : 8);
+    context.clip();
+  }
+  const fit = shape === "square" ? Math.min : Math.max;
+  const scale = fit(32 / source.image.naturalWidth, 32 / source.image.naturalHeight);
+  const width = source.image.naturalWidth * scale;
+  const height = source.image.naturalHeight * scale;
+  context.drawImage(source.image, (32 - width) / 2, (32 - height) / 2, width, height);
+  context.restore();
+  if (color) {
+    context.beginPath();
+    context.arc(25.5, 25.5, 5, 0, Math.PI * 2);
+    context.fillStyle = color;
+    context.fill();
+    context.strokeStyle = ring;
+    context.lineWidth = 2;
+    context.stroke();
+  }
+  const png = canvas.toDataURL("image/png");
+  if (!image) {
+    return { href: png, type: "image/png" };
+  }
+  // Firefox batches icon candidates and prefers SVG over PNG, even when that
+  // SVG was a default briefly restored before the personal image decoded. Keep
+  // personal artwork SVG-preferred too; only our rasterized bytes are embedded.
+  const svg = `<svg xmlns="${SVG_NAMESPACE}" viewBox="0 0 32 32" width="32" height="32"><image width="32" height="32" href="${png}"/></svg>`;
+  return { href: `data:image/svg+xml,${encodeURIComponent(svg)}`, type: "image/svg+xml" };
 }

@@ -9,7 +9,6 @@ import type { AgentIdentityResult, GatewaySessionRow, SessionRunStatus } from ".
 import { AgentRowChip } from "../../components/agent-row-chip.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
-import { registerSessionOrganizationEnglish } from "../../i18n/locales/en-session-organization.ts";
 import {
   formatThinkingOverrideLabel,
   normalizeThinkingOptionValue,
@@ -34,11 +33,10 @@ import {
 import { formatSessionArchiveReason } from "../../lib/sessions/session-archive-reason.ts";
 import { parseAgentSessionKey, parseSessionKeyParts } from "../../lib/sessions/session-key.ts";
 import type { JSX as SolidJSX } from "../../types/solid-elements.js";
+import { CategoryCell } from "./category-cell.tsx";
 import { categoryDropHandlers } from "./sessions-filters.tsx";
 import type { SessionsProps } from "./view-types.ts";
 import "../../components/tooltip.ts";
-
-registerSessionOrganizationEnglish();
 
 const SESSION_RUN_STATUS_LABELS = {
   queued: "sessionsView.statusQueued",
@@ -363,7 +361,7 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
             )}
           </td>
         ) : undefined}
-        {categoryMode() ? <CategoryCell /> : undefined}
+        {categoryMode() ? <CategoryCell {...props} row={row()} /> : undefined}
         <td>{updated()}</td>
         <td class="session-actions-cell">
           <div class="session-actions">
@@ -403,50 +401,6 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
       {isExpanded() ? <SessionDetails /> : undefined}
     </>
   );
-
-  function CategoryCell() {
-    const current = createMemo(() => normalizeOptionalString(row().category) ?? "");
-    const options = createMemo(() =>
-      current() && !props.knownCategories.includes(current())
-        ? [...props.knownCategories, current()]
-        : props.knownCategories,
-    );
-    return (
-      <td>
-        <select
-          disabled={props.loading || Boolean(props.groupWriteDisabledReason)}
-          title={props.groupWriteDisabledReason ?? undefined}
-          aria-label={t("sessionsView.moveToGroup")}
-          class="session-group-select"
-          onChange={(e) => {
-            if (props.groupWriteDisabledReason) {
-              return;
-            }
-            const select = e.currentTarget;
-            if (select.options[select.selectedIndex]?.dataset.action === "create") {
-              // The page prompts for a name and patches; restore until the refresh lands.
-              select.value = current();
-              props.onRequestNewCategory(row().key);
-              return;
-            }
-            void props.onAssignCategory(row().key, select.value || null);
-          }}
-        >
-          <option value="" selected={!current()}>
-            {t("sessionsView.ungrouped")}
-          </option>
-          <For each={options()}>
-            {(name) => (
-              <option value={name} selected={current() === name}>
-                {name}
-              </option>
-            )}
-          </For>
-          <option data-action="create">{t("sessionsView.newGroup")}</option>
-        </select>
-      </td>
-    );
-  }
 
   function SessionDetails() {
     const readKey = createMemo(() => props.detailsReadKey());

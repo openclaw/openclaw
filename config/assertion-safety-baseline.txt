@@ -740,7 +740,6 @@ extensions/sms/src/status.ts	1
 extensions/sms/src/twilio.ts	1
 extensions/synology-chat/src/accounts.ts	1
 extensions/synology-chat/src/client.ts	1
-extensions/synology-chat/src/inbound-event.ts	1
 extensions/synology-chat/src/outbound-media.ts	1
 extensions/synology-chat/src/setup-surface.ts	3
 extensions/synology-chat/src/test-http-utils.ts	6
