@@ -185,8 +185,9 @@ describe("remote sandbox fs bridge", () => {
     async () => {
       const fixture = await createFixture();
       await fixture.put("source.txt", "streamed");
-      expect(fixture.bridge.copyFile).toBeTypeOf("function");
-      await fixture.bridge.copyFile!({
+      const copyFile = fixture.bridge.copyFile?.bind(fixture.bridge);
+      expect(copyFile).toBeTypeOf("function");
+      await copyFile!({
         sourcePath: "source.txt",
         destinationPath: "nested/copy.txt",
       });
