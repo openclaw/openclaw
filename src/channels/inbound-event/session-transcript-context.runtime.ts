@@ -79,6 +79,7 @@ export async function mergeSessionTranscriptContext(params: {
     sessionKey: params.sessionKey,
     storePath: params.storePath,
     limit,
+    boundReplayBytes: true,
     // A session-generated window must retain delivered close-outs alongside
     // their questions. Native channel windows already own their delivery history.
     ...(windows.length === 0 && options?.chatWindow === true

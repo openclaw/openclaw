@@ -24,6 +24,7 @@ import {
   resolveLiveToolResultMaxChars,
   truncateToolResultMessage,
 } from "./embedded-agent-runner/tool-result-truncation.js";
+import { recordToolResultLocalMediaReplayAuthorization } from "./embedded-agent-tool-media.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "./harness/hook-helpers.js";
 import { projectAgentHarnessTranscriptMessageForDisplay } from "./harness/transcript-visibility.js";
 import type { EmbeddedRunTrigger } from "./run-trigger.js";
@@ -56,6 +57,8 @@ type GuardedSessionManager = SessionManager &
     setTranscriptRunContext?: (options: Parameters<typeof guardSessionManager>[1]) => void;
     /** Retire only this binding after its accepted transcript writes drain. */
     clearTranscriptRunCallbacks?: () => void;
+    /** Replace the tools whose local media this run may authorize for replay. */
+    setTrustedLocalMediaToolNames?: (names: ReadonlySet<string>) => void;
   };
 
 function publishPersistedUserEnvelope(
@@ -94,6 +97,7 @@ type GuardOptions = {
   allowSyntheticToolResults?: boolean;
   missingToolResultText?: string;
   allowedToolNames?: Iterable<string>;
+  trustedLocalMediaToolNames?: ReadonlySet<string>;
   trigger?: EmbeddedRunTrigger;
   preparedUserTurnMessage?: PersistedUserTurnMessage;
   preparedUserTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
@@ -128,6 +132,8 @@ type TranscriptRunContext = ReturnType<
 > & {
   release: () => void;
   setNextUserMessagePersistence: (mode: NextUserMessagePersistence) => void;
+  /** Tools whose local media this run may authorize for replay; unset records no decision. */
+  trustedLocalMediaToolNames: ReadonlySet<string> | undefined;
 };
 
 function createTranscriptRunContext(
@@ -151,6 +157,7 @@ function createTranscriptRunContext(
     onUserMessagePersisted: initialOnUserMessagePersisted,
     onUserMessagePersistenceSuppressed: initialOnUserMessagePersistenceSuppressed,
     onUserMessageBlocked,
+    trustedLocalMediaToolNames,
   }: GuardOptions = {},
   reusing = false,
 ): TranscriptRunContext {
@@ -229,6 +236,14 @@ function createTranscriptRunContext(
     const sanitized = sanitizeTranscriptMessage(message);
     if (sanitized !== message) {
       message = sanitized;
+      changed = true;
+    }
+    if (message.role === "toolResult" && context.trustedLocalMediaToolNames) {
+      message = recordToolResultLocalMediaReplayAuthorization(
+        message,
+        message.toolName,
+        context.trustedLocalMediaToolNames,
+      );
       changed = true;
     }
     const projectedMessage = projectAgentHarnessTranscriptMessageForDisplay({
@@ -335,6 +350,7 @@ function createTranscriptRunContext(
       await onUserMessagePersistenceSuppressed?.(message, runtimeMessage);
     },
     onUserMessageBlocked,
+    trustedLocalMediaToolNames,
     setNextUserMessagePersistence: (mode) => {
       context.nextUserMessagePersistence = mode;
     },
@@ -424,9 +440,20 @@ export function guardSessionManager(
   guardedSessionManager.setNextUserMessagePersistence = context.setNextUserMessagePersistence;
   guardedSessionManager.clearTranscriptRunCallbacks = context.release;
   guardedSessionManager.setTranscriptRunContext = (nextOptions) => {
-    context = createTranscriptRunContext(sessionManager, nextOptions, true);
+    // Same-run helpers such as compaction reuse the manager without a set and keep the run's.
+    const trustedLocalMediaToolNames =
+      nextOptions?.trustedLocalMediaToolNames ?? context.trustedLocalMediaToolNames;
+    context = createTranscriptRunContext(
+      sessionManager,
+      { ...nextOptions, trustedLocalMediaToolNames },
+      true,
+    );
     guardedSessionManager.setNextUserMessagePersistence = context.setNextUserMessagePersistence;
     guardedSessionManager.clearTranscriptRunCallbacks = context.release;
+  };
+  // Writes already accepted keep the trust set of the run context they captured.
+  guardedSessionManager.setTrustedLocalMediaToolNames = (names) => {
+    context.trustedLocalMediaToolNames = names;
   };
   return guardedSessionManager;
 }
