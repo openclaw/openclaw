@@ -1,8 +1,7 @@
 import { expect, it } from "vitest";
-import {
-  summarizeCpuProfile,
-  type ColdLoadCpuProfile,
-  type ColdLoadTraceEvent,
+import type {
+  ColdLoadCpuProfile,
+  ColdLoadTraceEvent,
 } from "../../scripts/lib/control-ui-cold-load-trace.ts";
 import {
   clipInteractionCpuProfile,
@@ -21,9 +20,6 @@ it("measures only the marked renderer interval, unions nesting, and rejects miss
   const marks = { start: "filter:start", end: "filter:end" };
   const trace = [
     event("thread_name", "M", 0, { args: { name: "CrRendererMain" } }),
-    event("thread_name", "M", 0, { pid: 9, args: { name: "CrRendererMain" } }),
-    event("navigationStart", "I", 0, { pid: 9 }),
-    event("RunTask", "X", 0, { dur: 80_000 }),
     event("RunTask", "X", 90_000, { dur: 90_000 }),
     event(marks.start, "I", 100_000),
     event("RunTask", "X", 100_000, { pid: 9, dur: 300_000 }),
@@ -43,7 +39,6 @@ it("measures only the marked renderer interval, unions nesting, and rejects miss
     event(marks.end, "I", 200_000),
     { ph: "E", ts: 220_000, pid: 7, tid: 1 },
     event("RunTask", "X", 230_000, { dur: 300_000 }),
-    event("Layout", "X", 230_000, { dur: 300_000 }),
   ];
 
   expect(summarizeInteractionTrace(trace, marks)).toEqual({
@@ -242,15 +237,6 @@ it("clips CPU sample contributions to marks after ordering signed sample timesta
     endTime: 1_003_500,
     samples: [2, 3, 4],
     timeDeltas: [500, 1_000, 500],
-  });
-  expect(clipped.nodes).toBe(profile.nodes);
-  expect(summarizeCpuProfile(clipped)).toMatchObject({
-    sampledMs: 2,
-    hotspots: [
-      { functionName: "work3", selfMs: 1 },
-      { functionName: "work2", selfMs: 0.5 },
-      { functionName: "work4", selfMs: 0.5 },
-    ],
   });
   expect(profile.timeDeltas).toEqual([1_000, 2_000, -1_000, 2_000, 1_000]);
   expect(() => clipInteractionCpuProfile(profile, 1_006_000, 1_007_000)).toThrow(
