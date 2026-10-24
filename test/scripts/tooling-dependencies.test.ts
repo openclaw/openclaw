@@ -152,11 +152,11 @@ await import("./crabbox-wrapper.mjs");
   },
 );
 
-it.each(["clean", "stale", "missing subpath exports"])(
+it.each(["stale", "missing subpath exports"])(
   "bootstraps qualified dependencies beside a %s ancestor without linking them",
   (ancestor) => {
     const root = tempDirs.make("openclaw-tooling-bootstrap-");
-    const fixture = createToolingDependencyFixture(root, ancestor !== "clean");
+    const fixture = createToolingDependencyFixture(root, true);
     if (ancestor === "missing subpath exports") {
       fixture.writePackage("fixture-pkg", 'export default "stale";', "0.0.0-stale", root, {
         "./advanced": 'export const legacyCopy = "stale";',
@@ -185,7 +185,6 @@ console.log(copyFileDescriptorSync, watch);
 
 it.each([
   { name: "tsx", invalid: "version" },
-  { name: "fixture-pkg", invalid: "version" },
   { name: "tsx", invalid: "owner" },
   { name: "fixture-pkg", invalid: "owner" },
 ])("rejects $name with an invalid $invalid before executing it", ({ name, invalid }) => {

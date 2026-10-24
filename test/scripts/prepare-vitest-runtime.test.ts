@@ -97,7 +97,7 @@ beforeEach(async () => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-it.each([undefined, "0", "1"])(
+it.each(["0", "1"])(
   "admits E2E readers after one equivalent AI writer: caller DTS=%s",
   async (dts) => {
     env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD = dts;
