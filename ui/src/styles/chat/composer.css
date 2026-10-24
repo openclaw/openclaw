@@ -2431,6 +2431,32 @@ html[dir="rtl"] .chat-attachment-loading > span {
   overscroll-behavior: none;
 }
 
+.chat-controls__favorites-editor {
+  padding: 7px;
+  color: var(--muted);
+}
+
+.chat-controls__favorites-editor > div {
+  display: grid;
+  gap: 6px;
+  max-height: 180px;
+  overflow-y: auto;
+  margin-top: 7px;
+}
+
+.chat-controls__favorite-choice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.chat-controls__favorite-choice > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Group/list hosts keep their accessible structure; one window owns row geometry. */
 .chat-controls__model-options[data-chat-model-window] {
   display: block;
