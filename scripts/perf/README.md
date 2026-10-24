@@ -1,5 +1,42 @@
 # Team-shaped synthetic state
 
+## Device pairing publication
+
+`device-pairing-publication-measure.ts` seeds 64 synthetic paired nodes, then
+invalidates and rebuilds the shared node snapshot through the real pairing reader
+and SQLite worker. This forces publication misses without repeated database
+writes. It verifies exact device contents, snapshot reuse, and nested freezing
+before and after measurement. It measures the reader/publication boundary, not
+Gateway RPC latency or a production publication rate.
+
+```sh
+node --expose-gc --import ./scripts/tsx.mjs \
+  scripts/perf/device-pairing-publication-measure.ts \
+  --mode timing --state-dir /path/to/new-state --operations 4000 --devices 64 \
+  --output /path/to/timing.json
+```
+
+Use separate fresh processes for `--mode allocation` (sampling includes collected
+objects) and `--mode promotion`. Promotion additionally requires
+`--trace-gc-nvp --gc-log /path/to/trace.log` with stdout redirected to that log.
+Timing and allocation reject GC trace flags. The report hashes the selected
+publication source and fixture, reports main-thread and process CPU per
+publication, latency and event-loop tails with sample counts, and per-kind GC
+totals, tails, and maximum pauses. Allocation reports bytes attributed to
+`inspectPlainData`; promotion is bounded to the measured main-isolate window.
+The default 200 publications/minute is an explicit allocation projection.
+
+For concurrent pairs, prepare separate state directories, pass distinct
+`--warm-ready-file` and `--ready-file` paths, and common `--warm-start-file` and
+`--start-file` paths. After both sides are ready, atomically publish a future epoch
+in milliseconds into the corresponding start file. `--publication-source` selects
+a saved sibling copy of the publication owner for same-tree comparisons. Use the
+shared quiet-slot lock and guard, counterbalance launch order, and swap the
+interleaved CPU sets per pair. Run at least four identical-source A/A pairs of the
+same mode before interpreting adverse GC, promotion, or pause results. Keep
+maintenance enabled; apply the campaign's paired absolute-delta and sample-count
+rules. Traced timing and allocation-profile timing are not acceptance evidence.
+
 ## Update database generations
 
 Run `node --import ./scripts/tsx.mjs scripts/perf/update-doctor-generation-measure.ts
