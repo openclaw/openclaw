@@ -26,19 +26,21 @@ import { buildTranscriptFollowupRun } from "./transcript-followup-run.js";
 
 export type { GoalContinuation } from "./goal-continuation.types.js";
 
-/** Selects supported placement facts; execution still acquires a fresh turn claim. */
-export async function isSupportedWorkerGoalPlacement(params: {
+/** Selects supported Codex placement facts; execution still acquires a fresh turn claim. */
+export async function resolveCodexGoalPlacement(params: {
   agentId?: string;
   sessionKey: string;
   sessionId: string;
-}): Promise<boolean> {
-  if (getRegisteredAgentHarness("codex")?.harness.cloudPlacement?.mode !== "remote-exec") {
-    return false;
+  requiresWorker?: boolean;
+}): Promise<"local" | "worker" | undefined> {
+  const harness = getRegisteredAgentHarness("codex")?.harness;
+  if (!harness) {
+    return undefined;
   }
   const service = getInProcessGatewayRequestContext()?.workerSessionPlacementService;
   const prepared = await service?.prepareSessionPlacement?.(params.sessionId);
   if (!prepared) {
-    return false;
+    return params.requiresWorker ? undefined : "local";
   }
   try {
     const pending = prepared.prepareRead();
@@ -46,13 +48,23 @@ export async function isSupportedWorkerGoalPlacement(params: {
       await pending;
     }
     const placement = prepared.current();
-    return Boolean(
-      placement &&
-      placement.executionMode === "remote-exec" &&
-      placement.state !== "local" &&
-      placement.agentId === params.agentId &&
-      placement.sessionKey === params.sessionKey,
-    );
+    if (!placement) {
+      return params.requiresWorker ? undefined : "local";
+    }
+    if (
+      placement.agentId !== params.agentId ||
+      placement.sessionKey !== params.sessionKey ||
+      placement.sessionId !== params.sessionId
+    ) {
+      return undefined;
+    }
+    if (placement.state === "local") {
+      return params.requiresWorker ? undefined : "local";
+    }
+    return placement.executionMode === "remote-exec" &&
+      harness.cloudPlacement?.mode === "remote-exec"
+      ? "worker"
+      : undefined;
   } finally {
     prepared.release();
   }
@@ -72,8 +84,36 @@ export function isGoalContinuationCurrent(
     !entry.abortedLastRun &&
     (entry.agentHarnessId === undefined ||
       entry.agentHarnessId === "openclaw" ||
-      (entry.agentHarnessId === "codex" && continuation.workerGoal === true)),
+      (entry.agentHarnessId === "codex" &&
+        (continuation.workerGoal === true || continuation.localCodexGoal === true))),
   );
+}
+
+/** Revalidates Codex placement at admission; built-in runs have no placement marker. */
+export async function isGoalContinuationPlacementCurrent(params: {
+  continuation: GoalContinuation;
+  agentId?: string;
+  sessionKey: string;
+  hasOperatorAuthority: boolean;
+  requiresWorker: boolean;
+}): Promise<boolean> {
+  const { continuation } = params;
+  if (!continuation.workerGoal && !continuation.localCodexGoal) {
+    return true;
+  }
+  if (!params.hasOperatorAuthority) {
+    return false;
+  }
+  if (continuation.localCodexGoal && params.requiresWorker) {
+    return false;
+  }
+  const placement = await resolveCodexGoalPlacement({
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    sessionId: continuation.sessionId,
+    requiresWorker: continuation.workerGoal === true,
+  });
+  return continuation.workerGoal ? placement === "worker" : placement === "local";
 }
 
 function isGoalContinuationOutcome(result: EmbeddedAgentRunResult): boolean {
@@ -140,14 +180,18 @@ export async function enqueueGoalContinuation(params: GoalContinuationParams): P
   if (!eligible() || !entry?.goal) {
     return false;
   }
-  const workerGoal =
-    entry.agentHarnessId === "codex" &&
-    Boolean(params.base.operatorAuthority) &&
-    (await isSupportedWorkerGoalPlacement({
-      agentId: params.base.run.agentId,
-      sessionKey: params.sessionKey,
-      sessionId: params.expectedSession.sessionId,
-    }));
+  const codexPlacement =
+    entry.agentHarnessId === "codex" && params.base.operatorAuthority
+      ? await resolveCodexGoalPlacement({
+          agentId: params.base.run.agentId,
+          sessionKey: params.sessionKey,
+          sessionId: params.expectedSession.sessionId,
+          requiresWorker: Boolean(params.base.run.config?.cloudWorkers?.requiredProfile),
+        })
+      : undefined;
+  if (entry.agentHarnessId === "codex" && !codexPlacement) {
+    return false;
+  }
   params.base.operatorAuthority?.assertCurrent();
   if (!eligible()) {
     return false;
@@ -155,7 +199,8 @@ export async function enqueueGoalContinuation(params: GoalContinuationParams): P
   const continuation: GoalContinuation = {
     ...params.expectedSession,
     goalId: params.initialGoalId ?? entry.goal.id,
-    ...(workerGoal ? { workerGoal: true as const } : {}),
+    ...(codexPlacement === "worker" ? { workerGoal: true as const } : {}),
+    ...(codexPlacement === "local" ? { localCodexGoal: true as const } : {}),
   };
   if (!isGoalContinuationCurrent(continuation, entry)) {
     return false;
