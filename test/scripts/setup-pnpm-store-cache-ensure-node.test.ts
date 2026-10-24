@@ -8,21 +8,23 @@ const ensureNodeScript = resolve(".github/actions/setup-pnpm-store-cache/ensure-
 const temps = useAutoCleanupTempDirTracker(afterEach);
 
 function runShell(lines: string[], env: NodeJS.ProcessEnv = process.env) {
-  return spawnSync("bash", ["-c", lines.join("\n")], { encoding: "utf8", env });
+  const setup = lines[0]?.startsWith("set ") ? lines.slice(0, 1) : [];
+  const script = [...setup, `source "${ensureNodeScript}"`, ...lines.slice(setup.length)];
+  return spawnSync("bash", ["-c", script.join("\n")], {
+    encoding: "utf8",
+    env,
+  });
 }
 
 function runDownload(root: string, lines: string[], env: NodeJS.ProcessEnv = {}, strict = true) {
   const helperBin = join(root, "bin");
   writeFakeCurl(helperBin);
-  return runShell(
-    [strict ? "set -euo pipefail" : "set -uo pipefail", `source "${ensureNodeScript}"`, ...lines],
-    {
-      ...process.env,
-      PATH: `${helperBin}:${process.env.PATH ?? ""}`,
-      OPENCLAW_FAKE_CURL_LOG: join(root, "curl.log"),
-      ...env,
-    },
-  );
+  return runShell([strict ? "set -euo pipefail" : "set -uo pipefail", ...lines], {
+    ...process.env,
+    PATH: `${helperBin}:${process.env.PATH ?? ""}`,
+    OPENCLAW_FAKE_CURL_LOG: join(root, "curl.log"),
+    ...env,
+  });
 }
 
 const archiveSetup = (platform: string, extract = true) => [
@@ -44,16 +46,10 @@ function writeFakeNode(binDir: string, version: string) {
   return writeExecutable(
     binDir,
     "node",
-    `if [[ "$1" == "-p" ]]; then
-  echo "${version}"
-  exit 0
-fi
-if [[ "$1" == "-v" ]]; then
-  echo "v${version}"
-  exit 0
-fi
-exit 0
-`,
+    `case "$1" in
+  -p) echo "${version}" ;;
+  -v) echo "v${version}" ;;
+esac`,
   );
 }
 
@@ -67,17 +63,9 @@ output=""
 url=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    -o)
-      output="$2"
-      shift 2
-      ;;
-    http://* | https://*)
-      url="$1"
-      shift
-      ;;
-    *)
-      shift
-      ;;
+    -o) output="$2"; shift 2 ;;
+    http://* | https://*) url="$1"; shift ;;
+    *) shift ;;
   esac
 done
 if [[ -n "\${OPENCLAW_FAKE_CURL_FAIL_SUFFIX:-}" && "$url" == *"\${OPENCLAW_FAKE_CURL_FAIL_SUFFIX:-}" ]]; then
@@ -102,7 +90,6 @@ function runEnsureNode(root: string, requested: string, extraEnv: NodeJS.Process
     [
       "set -e",
       ...(extraEnv.PATH ? [`export PATH=${JSON.stringify(extraEnv.PATH)}`] : []),
-      `source "${ensureNodeScript}"`,
       `openclaw_ensure_node "${requested}"`,
       "command -v node",
       "node -p 'process.versions.node'",
@@ -115,30 +102,16 @@ function runEnsureNode(root: string, requested: string, extraEnv: NodeJS.Process
   );
 }
 
-function runVersionMatch(actual: string, requested: string) {
-  return runShell([
-    `source "${ensureNodeScript}"`,
-    `openclaw_node_version_matches "${actual}" "${requested}"`,
-  ]);
-}
-
 describe("setup-pnpm-store-cache ensure-node", () => {
   it("handles missing toolcache roots under nounset", () => {
     const root = temps.make("openclaw-ensure-node-");
-    const result = runShell(
-      [
-        "set -euo pipefail",
-        `source "${ensureNodeScript}"`,
-        `openclaw_find_toolcache_node "99.99.99"`,
-      ],
-      {
-        PATH: process.env.PATH ?? "",
-        RUNNER_TOOL_CACHE: join(root, "missing-toolcache"),
-        AGENT_TOOLSDIRECTORY: join(root, "missing-agent-tools"),
-        ACTIONS_RUNNER_TOOL_CACHE: join(root, "missing-actions-cache"),
-        OPENCLAW_CONTAINER_TOOL_CACHE: join(root, "missing-container-cache"),
-      },
-    );
+    const result = runShell(["set -euo pipefail", `openclaw_find_toolcache_node "99.99.99"`], {
+      PATH: process.env.PATH ?? "",
+      RUNNER_TOOL_CACHE: join(root, "missing-toolcache"),
+      AGENT_TOOLSDIRECTORY: join(root, "missing-agent-tools"),
+      ACTIONS_RUNNER_TOOL_CACHE: join(root, "missing-actions-cache"),
+      OPENCLAW_CONTAINER_TOOL_CACHE: join(root, "missing-container-cache"),
+    });
     expect(result.status).toBe(1);
     expect(result.stderr).not.toContain("unbound variable");
   });
@@ -153,23 +126,17 @@ describe("setup-pnpm-store-cache ensure-node", () => {
     writeExecutable(
       helperBin,
       "cygpath",
-      `if [[ "$1" == "-u" ]]; then
-  echo "${toolcacheBin}"
-  exit 0
-fi
-if [[ "$1" == "-w" ]]; then
-  echo "C:\\\\hostedtoolcache\\\\windows\\\\node\\\\24.22.1\\\\x64"
-  exit 0
-fi
-exit 1
-`,
+      `case "$1" in
+  -u) echo "${toolcacheBin}" ;;
+  -w) echo "C:\\\\hostedtoolcache\\\\windows\\\\node\\\\24.22.1\\\\x64" ;;
+  *) exit 1 ;;
+esac`,
     );
     const githubPath = join(root, "github-path");
     const result = runShell([
       "set -e",
       `export PATH=${JSON.stringify(`${helperBin}:${activeBin}:${process.env.PATH ?? ""}`)}`,
       `export GITHUB_PATH=${JSON.stringify(githubPath)}`,
-      `source "${ensureNodeScript}"`,
       `openclaw_prepend_node_bin "C:\\\\hostedtoolcache\\\\windows/node/24.22.1/x64"`,
       "command -v node",
       "node -p 'process.versions.node'",
@@ -218,12 +185,14 @@ exit 1
   });
 
   it("enforces patched Node 24 and 26 wildcard minimums", () => {
-    expect(runVersionMatch("24.14.1", "24.x").status).toBe(1);
-    expect(runVersionMatch("24.22.0", "24.x").status).toBe(1);
-    expect(runVersionMatch("24.22.1", "24.x").status).toBe(0);
-    expect(runVersionMatch("26.0.0", "26.x").status).toBe(1);
-    expect(runVersionMatch("26.12.0", "26.x").status).toBe(1);
-    expect(runVersionMatch("26.12.1", "26.x").status).toBe(0);
+    const match = (actual: string, requested: string) =>
+      runShell([`openclaw_node_version_matches "${actual}" "${requested}"`]).status;
+    expect(match("24.14.1", "24.x")).toBe(1);
+    expect(match("24.22.0", "24.x")).toBe(1);
+    expect(match("24.22.1", "24.x")).toBe(0);
+    expect(match("26.0.0", "26.x")).toBe(1);
+    expect(match("26.12.0", "26.x")).toBe(1);
+    expect(match("26.12.1", "26.x")).toBe(0);
   });
 
   it("replaces a rejected payload in the cached toolchain root instead of accreting", () => {
