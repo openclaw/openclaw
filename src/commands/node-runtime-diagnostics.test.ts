@@ -3,6 +3,10 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveDoctorContributionHealthChecks } from "../flows/doctor-health-contributions.js";
+import {
+  createDoctorHealthFlowContext,
+  resolveDoctorHealthContributions,
+} from "../flows/doctor-health-contributions.test-support.js";
 import * as runtimeGuard from "../infra/runtime-guard.js";
 import { runDoctorLintCli } from "./doctor-lint.js";
 import { statusCommand } from "./status.command.js";
@@ -65,6 +69,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
@@ -152,3 +157,110 @@ it.each([
     }
   },
 );
+
+it.each([
+  ["24.22.1", "2026-10-19T23:59:59.999Z", null, null],
+  ["24.22.1", "2026-10-20T00:00:00.000Z", "info", "maintenance mode"],
+  ["24.22.1", "2028-04-29T23:59:59.999Z", "info", "maintenance mode"],
+  ["24.22.1", "2028-04-30T00:00:00.000Z", "warning", "end-of-life on 2028-04-30"],
+  ["26.12.1", "2027-10-19T23:59:59.999Z", null, null],
+  ["26.12.1", "2027-10-20T00:00:00.000Z", "info", "maintenance mode"],
+] as const)("reports admitted Node %s lifecycle at %s", async (version, date, severity, text) => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date(date));
+  mockCliRuntime(version);
+  mocks.readCommand.mockResolvedValue(null);
+  const check = (await resolveDoctorContributionHealthChecks()).find(
+    (candidate) => candidate.id === "core/doctor/node-runtime",
+  );
+  const findings = await check?.detect({ mode: "doctor", cfg: {}, runtime, env: {} });
+  expect(findings).toEqual(
+    text === null
+      ? []
+      : [expect.objectContaining({ severity, message: expect.stringContaining(text) })],
+  );
+});
+
+it("keeps lifecycle advice out of healthy upgrade lint checks", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-10-20T00:00:00Z"));
+  mockCliRuntime("24.22.1");
+  mocks.readCommand.mockResolvedValue(null);
+  const check = (await resolveDoctorContributionHealthChecks()).find(
+    (candidate) => candidate.id === "core/doctor/node-runtime",
+  );
+  expect(await check?.detect({ mode: "lint", cfg: {}, runtime, env: {} })).toEqual([]);
+});
+
+it.each([
+  ["standalone", {}, true],
+  ["swap", { OPENCLAW_UPDATE_IN_PROGRESS: "1" }, false],
+  ["convergence", { OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1" }, false],
+  ["shipped parent", { OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1" }, false],
+] as const)("keeps registered Node advice scoped to %s Doctor", async (_posture, env, advisory) => {
+  for (const key of [
+    "OPENCLAW_UPDATE_IN_PROGRESS",
+    "OPENCLAW_UPDATE_POST_CORE_CONVERGENCE",
+    "OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE",
+  ]) {
+    vi.stubEnv(key, undefined);
+  }
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2028-04-30T00:00:00Z"));
+  mockCliRuntime("24.22.1");
+  mocks.readCommand.mockResolvedValue(null);
+  const contribution = resolveDoctorHealthContributions().find(
+    (entry) => entry.id === "doctor:node-runtime",
+  );
+  expect(contribution).toBeDefined();
+  const ctx = createDoctorHealthFlowContext({ runtime, env });
+  await contribution!.run(ctx);
+  expect(ctx.updateWarnings ?? []).toEqual(
+    advisory ? [expect.stringContaining("upstream end-of-life on 2028-04-30")] : [],
+  );
+});
+
+it("retains Gateway compatibility warnings during updater Doctor", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2028-04-30T00:00:00Z"));
+  mockCliRuntime("24.22.1");
+  const contribution = resolveDoctorHealthContributions().find(
+    (entry) => entry.id === "doctor:node-runtime",
+  );
+  const ctx = createDoctorHealthFlowContext({
+    runtime,
+    env: { OPENCLAW_UPDATE_IN_PROGRESS: "1" },
+  });
+  await contribution!.run(ctx);
+  expect(ctx.updateWarnings).toEqual([
+    expect.stringContaining("Gateway service Node 22.23.2 is unsupported"),
+  ]);
+});
+
+it("does not add lifecycle advice to healthy status JSON", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-10-20T00:00:00Z"));
+  mockCliRuntime("24.22.1");
+  mocks.readCommand.mockResolvedValue(null);
+  await statusCommand({ json: true }, runtime);
+  expect(runtime.log).not.toHaveBeenCalled();
+  expect(runtime.error).not.toHaveBeenCalled();
+});
+
+it("keeps the recorded service findings while running under Bun", async () => {
+  vi.mocked(runtimeGuard.detectRuntime).mockResolvedValue({
+    kind: "bun",
+    version: "1.4.0",
+    execPath: "/fixture/bun",
+    pathEnv: "/fixture",
+    hasNodeSqlite: true,
+    sqliteVersion: "3.53.4",
+    sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
+  });
+  const check = (await resolveDoctorContributionHealthChecks()).find(
+    (candidate) => candidate.id === "core/doctor/node-runtime",
+  );
+  expect(await check?.detect({ mode: "doctor", cfg: {}, runtime, env: {} })).toEqual([
+    expect.objectContaining({ source: "gateway-service", severity: "warning" }),
+  ]);
+});

@@ -27,6 +27,7 @@ function createDoctorHealthCheckContext<T extends object>(ctx: DoctorHealthFlowC
     cfg: ctx.cfg,
     configPath: ctx.configPath,
     ...input,
+    env: ctx.env,
     agentDatabaseRefusals: ctx.agentDatabaseRefusals,
     ...(ctx.runWithPluginMetadataSnapshot
       ? { runWithPluginMetadataSnapshot: ctx.runWithPluginMetadataSnapshot }
@@ -58,7 +59,6 @@ export async function runStructuredHealthRepairs(
   const result = await runDoctorHealthRepairs(
     createDoctorHealthCheckContext(ctx, {
       mode: "fix" as const,
-      env: ctx.env,
       cwd: workspaceDir,
     }),
     { checks, progress: ctx.options.json !== true },
