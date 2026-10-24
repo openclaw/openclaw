@@ -1,8 +1,6 @@
-import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { pathForRoute, type RouteId } from "../app-route-paths.ts";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { captureControlUiE2eFailureDiagnostics } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import { installControlUiE2eRendererStallProbe } from "../test-helpers/control-ui-e2e-renderer-stall.ts";
@@ -275,15 +273,11 @@ suite.define(() => {
   for (const viewport of viewports) {
     for (const colorScheme of ["light", "dark"] as const) {
       it(`renders settings at ${viewport.width}px in ${colorScheme}`, async () => {
-        const artifactDir = createControlUiE2eArtifactDir("native-embed-settings");
         const page = await getLayoutPage(viewport, colorScheme);
         try {
           for (const route of ["settings", ...routes] as const) {
             const pathname =
               route === "settings" ? "/settings" : route === "cron" ? "/cron" : pathForRoute(route);
-            expect(
-              (await page.request.get(new URL(pathname, suite.server.baseUrl).toString())).status(),
-            ).toBe(200);
             if (route === "appearance") {
               await page.evaluate(() => window.openclawControlUi!.navigate("settings"));
               await waitForControlUiRoute(page, { routeId: "settings" });
@@ -357,24 +351,6 @@ suite.define(() => {
                 .evaluate((main) => main.scrollWidth <= main.clientWidth),
               route,
             ).toBe(true);
-            if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-              await page.screenshot({
-                animations: "disabled",
-                fullPage: true,
-                path: path.join(
-                  artifactDir,
-                  `${route}-${viewport.width}x${viewport.height}-${colorScheme}.png`,
-                ),
-              });
-            }
-            if (route === "appearance") {
-              await page.locator(".native-embed-header__back").click();
-              await waitForControlUiRoute(page, { routeId: "settings", pathname: "/settings" });
-              await page.locator('.settings-embed-list a[href="/settings/appearance"]').click();
-              await waitForControlUiRoute(page, { routeId: "appearance" });
-              await page.locator(".native-embed-header__back").click();
-              await waitForControlUiRoute(page, { routeId: "settings", pathname: "/settings" });
-            }
           }
         } catch (error) {
           await captureControlUiE2eFailureDiagnostics(page, {

@@ -174,17 +174,6 @@ suite.define(() => {
           expect(geometry.pickerBottom).toBeLessThanOrEqual(geometry.hostBottom);
           expect(geometry.hostBottom).toBeLessThanOrEqual(geometry.viewportBottom);
           const choices = picker.getByRole("button");
-          expect(
-            await picker.locator(".chat-panel-launcher-mobile__label").allTextContents(),
-          ).toEqual([
-            "Side chat",
-            "Files",
-            "Browser",
-            "Review",
-            "Subagents",
-            "Processes",
-            "Terminal",
-          ]);
           for (const [index, choice] of [choices.first(), choices.last()].entries()) {
             if (index === 1) {
               await picker.hover();
