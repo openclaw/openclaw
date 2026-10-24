@@ -408,11 +408,21 @@ describe.skipIf(!connection)("PostgreSQL memory search worker", () => {
   it.each([
     { query: "cafe", trips: 1, body: ["memory/lexical.md"], paths: [] },
     { query: "semantic", trips: 1, body: [], paths: ["memory/semantic.md"] },
-    { query: "cafe absentword", trips: 2, body: ["memory/lexical.md"], paths: [] },
-    { query: "absentword", trips: 2, body: [], paths: [] },
+    { query: "cafe absentword", trips: 1, body: ["memory/lexical.md"], paths: [] },
+    { query: "absentword", trips: 1, body: [], paths: [] },
+    {
+      query: "cafe absentword",
+      pathQuery: "semantic",
+      trips: 1,
+      body: [],
+      paths: ["memory/semantic.md"],
+    },
     { query: "cafe", trips: 0, body: [], paths: [], disabled: true },
   ])("bounds keyword round trips for $query (disabled=$disabled)", async (testCase) => {
     const query = keywordQuery(testCase.query);
+    if (testCase.pathQuery) {
+      query.path.query = testCase.pathQuery;
+    }
     if (testCase.disabled) {
       query.body.limit = 0;
       query.path.limit = 0;
