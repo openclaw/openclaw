@@ -1,14 +1,12 @@
-import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import type { ChatSendShortcut } from "../app/settings.ts";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   controlUiBundledSettingsStorageKey,
   installMockGateway,
   type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
-import { captureUiProofEnabled, confirmIme } from "./chat-flow.test-support.ts";
+import { confirmIme } from "./chat-flow.test-support.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -68,15 +66,6 @@ function composerHeight(composer: Locator) {
   return composer.evaluate((element) => element.getBoundingClientRect().height);
 }
 
-function screenshot(page: Page, name: string, animations: "allow" | "disabled" = "allow") {
-  const dir = captureUiProofEnabled ? createControlUiE2eArtifactDir(name) : null;
-  return async (file: string) => {
-    if (dir) {
-      await page.screenshot({ path: path.join(dir, file), animations });
-    }
-  };
-}
-
 suite.define(() => {
   it.each([false, true])(
     "sends Side chat image bytes without main-chat leakage (model recovery=%s)",
@@ -85,19 +74,12 @@ suite.define(() => {
         const side = page.locator("openclaw-chat-session-rail");
         const thumbnails = side.locator(".chat-attachment-thumb");
         const text = (value: string) => side.getByText(value, { exact: true });
-        const capture = screenshot(
-          page,
-          recover ? "side-chat-image-model-retry" : "side-chat-image-drop",
-          "disabled",
-        );
         const question = recover ? "Describe this image" : "What does this image show?";
         const fileName = recover ? "retry-image.png" : "side-chat.png";
         await composer.fill(question);
         const image = await dropSideChatImage(composer, fileName);
         if (recover) {
           await gateway.deferNext(ask);
-        } else {
-          await capture("dropped.png");
         }
         expect(await thumbnails.locator("img").count()).toBe(1);
         expect(
@@ -124,7 +106,6 @@ suite.define(() => {
           expect(await retry.isEnabled()).toBe(true);
           expect(await gateway.getRequests(ask)).toHaveLength(1);
           await composer.fill("Keep my next question");
-          await capture("unsupported-image.png");
           // The mock now represents the operator's recovered image-capable model.
           await gateway.deferNext(ask);
           await retry.click();
@@ -136,7 +117,6 @@ suite.define(() => {
           expect(await retry.count()).toBe(0);
           expect(await composer.inputValue()).toBe("Keep my next question");
           expect(await gateway.getRequests("sessions.companion.reset")).toEqual([]);
-          await capture("recovered-image.png");
         } else {
           await text("The next step is ready.").waitFor();
           expect(
@@ -150,7 +130,6 @@ suite.define(() => {
 
   it("opens composer image previews in Side chat and the main chat", async () => {
     await withSideChat(async (_gateway, composer, page) => {
-      const capture = screenshot(page, "composer-image-preview", "disabled");
       const image = await page.evaluate(() => {
         const canvas = document.createElement("canvas");
         canvas.width = 480;
@@ -176,9 +155,7 @@ suite.define(() => {
 
       const side = page.locator("openclaw-chat-session-rail");
       await dropSideChatImage(composer, "side-chat-preview.png", image);
-      await capture("side-chat-attached.png");
       const sideDialog = await openPreview(side, "side-chat-preview.png");
-      await capture("side-chat-preview.png");
       await page.keyboard.press("Escape");
       await sideDialog.waitFor({ state: "detached" });
       expect(await side.locator(".chat-attachment-thumb").count()).toBe(1);
@@ -190,7 +167,6 @@ suite.define(() => {
         buffer: Buffer.from(image, "base64"),
       });
       const mainDialog = await openPreview(main, "main-chat-preview.png");
-      await capture("main-chat-preview.png");
       await page.keyboard.press("Escape");
       await mainDialog.waitFor({ state: "detached" });
       expect(await main.locator(".chat-attachment-thumb").count()).toBe(1);
@@ -203,16 +179,13 @@ suite.define(() => {
       const plain = shortcut === "Enter";
       await withSideChat(
         async (gateway, composer, page) => {
-          const capture = plain ? screenshot(page, "chat-session-companion-composer") : undefined;
           const empty = plain ? await composerHeight(composer) : null;
-          await capture?.("empty.png");
           const initial = plain
             ? "Explain the next step and remaining checks. ".repeat(6).trim()
             : "Explain the next step.";
           const continuation = plain ? "Include the final verification." : "Include the checks.";
           await composer.fill(initial);
           if (empty !== null) {
-            await capture?.("wrapped.png");
             expect(await composer.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
             expect(await composerHeight(composer)).toBeGreaterThan(empty);
             await composer.press("End");
@@ -224,7 +197,6 @@ suite.define(() => {
           expect(await gateway.getRequests(ask)).toHaveLength(0);
           if (plain) {
             const confirmationConsumed = await confirmIme(composer, "");
-            await capture?.("ime-confirmation.png");
             expect(confirmationConsumed).toBe(false);
             expect(await composer.inputValue()).toBe(question);
             expect(await gateway.getRequests(ask)).toHaveLength(0);
@@ -236,7 +208,6 @@ suite.define(() => {
           await expect.poll(() => composer.inputValue()).toBe("");
           if (empty !== null) {
             await expect.poll(() => composerHeight(composer)).toBe(empty);
-            await capture?.("cleared.png");
           }
         },
         plain ? "enter" : "modifier-enter",

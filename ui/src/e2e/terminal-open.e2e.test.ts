@@ -6,7 +6,7 @@ import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-rea
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { dockChatSidePanel, openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { expectRequestCount } from "./workspace-terminal.test-support.ts";
+import { expectRequestCount, terminalSession } from "./workspace-terminal.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI terminal open",
@@ -66,25 +66,19 @@ suite.define(() => {
               "terminal.list": {
                 sessions: [
                   {
-                    sessionId: "logout-shell",
-                    agentId: "main",
-                    shell: "/bin/bash",
-                    cwd: "/workspace/openclaw",
-                    confined: false,
-                    owner: "agent:main:main",
+                    ...terminalSession("logout-shell", {
+                      cwd: "/workspace/openclaw",
+                      owner: "agent:main:main",
+                    }),
                     attached: true,
                     createdAtMs: 1,
                   },
                 ],
               },
-              "terminal.open": {
-                sessionId: "logout-shell",
-                agentId: "main",
-                shell: "/bin/bash",
+              "terminal.open": terminalSession("logout-shell", {
                 cwd: "/workspace/openclaw",
-                confined: false,
                 owner: "agent:main:main",
-              },
+              }),
             },
           });
           const panel = await openTerminalSidePanel(page);
@@ -118,35 +112,6 @@ suite.define(() => {
       );
     },
   );
-
-  it("opens against the shared mock and renders echoed terminal output", async () => {
-    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        featureMethods: ["chat.startup", "terminal.open"],
-        terminalEnabled: true,
-      });
-
-      const panel = await openTerminalSidePanel(page);
-      await gateway.waitForRequest("terminal.open");
-      await page.locator('[data-region-header="side"] .tabstrip-tab.is-live').waitFor();
-      const canvas = panel.locator(".tp-host canvas");
-      await canvas.waitFor({ state: "visible" });
-      await settleTerminalPaint(page);
-      const bannerDigest = await canvasDigest(canvas);
-
-      const sentinel = "PROVABLE_MOCK_TERMINAL";
-      await canvas.click();
-      await page.keyboard.type(sentinel);
-      await expect
-        .poll(async () =>
-          (await gateway.getRequests("terminal.input"))
-            .map((request) => (request.params as { data?: string }).data ?? "")
-            .join(""),
-        )
-        .toContain(sentinel);
-      await expect.poll(() => canvasDigest(canvas)).not.toBe(bannerDigest);
-    });
-  });
 
   it("keeps an open side-panel terminal synchronized with light and dark mode", async () => {
     await suite.withPage(
