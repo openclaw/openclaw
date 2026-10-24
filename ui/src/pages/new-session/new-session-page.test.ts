@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createOverlay } from "../../components/overlay-lifecycle.ts";
 import { registerModalSurface } from "../../components/overlay-registry.ts";
@@ -42,11 +43,7 @@ async function settle(page: NewSessionElement) {
 }
 
 async function enterMessage(page: NewSessionElement, value: string) {
-  const textarea = page.querySelector<HTMLTextAreaElement>(".new-session-page__message");
-  expect(textarea).not.toBeNull();
-  if (!textarea) {
-    return;
-  }
+  const textarea = expectDefined(page.querySelector<HTMLTextAreaElement>("textarea"), "composer");
   textarea.value = value;
   textarea.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true }));
   await settle(page);
@@ -54,6 +51,19 @@ async function enterMessage(page: NewSessionElement, value: string) {
 
 function message(page: NewSessionElement): string {
   return page.querySelector<HTMLTextAreaElement>(".new-session-page__message")?.value ?? "";
+}
+
+function detail<T extends Element = HTMLElement>(page: NewSessionElement, selector = "") {
+  return page.querySelector<T>(`openclaw-chat-detail-panel${selector && ` ${selector}`}`);
+}
+
+function mockDictation() {
+  let active = false;
+  vi.spyOn(DirectDictationControl.prototype, "active", "get").mockImplementation(() => active);
+  return (value: boolean) => {
+    active = value;
+    document.dispatchEvent(new Event("visibilitychange"));
+  };
 }
 
 afterEach(async () => {
@@ -89,8 +99,7 @@ describe("new session draft route ownership", () => {
 
   it("keeps retained attachment callbacks connected to live draft and lock state", async () => {
     const inputs = vi.spyOn(attachmentInputs, "ChatAttachmentInputs");
-    let dictating = false;
-    vi.spyOn(DirectDictationControl.prototype, "active", "get").mockImplementation(() => dictating);
+    const setDictation = mockDictation();
     const page = await mount(routeData("research"));
     await enterMessage(page, "initial draft");
     const retained = inputs.mock.calls.at(-1)?.[0];
@@ -98,8 +107,7 @@ describe("new session draft route ownership", () => {
     expect(retained?.getDraft?.()).toBe("initial draft");
     await enterMessage(page, "later draft");
     expect(retained?.getDraft?.()).toBe("later draft");
-    dictating = true;
-    document.dispatchEvent(new Event("visibilitychange"));
+    setDictation(true);
     await settle(page);
     expect(retained?.disabled).toBe(true);
   });
@@ -179,12 +187,7 @@ describe("new session draft route ownership", () => {
   it.each(["show in composer", "finish dictation", "change route", "disconnect"] as const)(
     "opens pasted text in the shared side panel and clears it on %s",
     async (transition) => {
-      let dictating = false;
-      if (transition === "finish dictation") {
-        vi.spyOn(DirectDictationControl.prototype, "active", "get").mockImplementation(
-          () => dictating,
-        );
-      }
+      const setDictation = transition === "finish dictation" ? mockDictation() : undefined;
       const page = await mount(routeData("research"));
       await enterMessage(page, "Review the attachment");
       const original = "# Original pasted content\n  preserve indentation 漢字 😀\n".repeat(50);
@@ -203,9 +206,8 @@ describe("new session draft route ownership", () => {
       await expect
         .poll(() => page.querySelector("openclaw-chat-pasted-text .chat-attachment-file__open"))
         .not.toBeNull();
-      if (transition === "finish dictation") {
-        dictating = true;
-        document.dispatchEvent(new Event("visibilitychange"));
+      if (setDictation) {
+        setDictation(true);
         await settle(page);
         expect(page.querySelector<HTMLTextAreaElement>("textarea")?.readOnly).toBe(true);
       }
@@ -214,19 +216,15 @@ describe("new session draft route ownership", () => {
         ?.click();
       await customElements.whenDefined("openclaw-chat-detail-panel");
       await settle(page);
-      await expect.poll(() => page.querySelector("openclaw-chat-detail-panel")).not.toBeNull();
-      await page.querySelector<ChatDetailPanel>("openclaw-chat-detail-panel")?.updateComplete;
+      await expect.poll(() => detail(page)).not.toBeNull();
+      await detail<ChatDetailPanel>(page)?.updateComplete;
       await expect
         .poll(() => {
-          const source = page
-            .querySelector<HTMLAnchorElement>("openclaw-chat-detail-panel a[download]")
-            ?.getAttribute("href");
+          const source = detail<HTMLAnchorElement>(page, "a[download]")?.getAttribute("href");
           return Boolean(source && fetchMock.mock.calls.some(([url]) => url === source));
         })
         .toBe(true);
-      await expect
-        .poll(() => page.querySelector("openclaw-chat-detail-panel pre")?.textContent)
-        .toBe(original);
+      await expect.poll(() => detail(page, "pre")?.textContent).toBe(original);
 
       if (transition === "finish dictation") {
         const actionButtons = () => [
@@ -236,8 +234,7 @@ describe("new session draft route ownership", () => {
         ];
         expect(actionButtons()).toHaveLength(2);
         expect(actionButtons().every((button) => button.disabled)).toBe(true);
-        dictating = false;
-        document.dispatchEvent(new Event("visibilitychange"));
+        setDictation?.(false);
         await expect.poll(() => actionButtons().every((button) => !button.disabled)).toBe(true);
       }
       if (transition === "show in composer" || transition === "finish dictation") {
@@ -258,105 +255,71 @@ describe("new session draft route ownership", () => {
         page.remove();
         await settle(page);
       }
-      expect(page.querySelector("openclaw-chat-detail-panel")).toBeNull();
+      expect(detail(page)).toBeNull();
     },
   );
 
   it("routes every focus-surface and key-class pair by the shared contract", async () => {
     const page = await mount(routeData("research"));
-    const textarea = page.querySelector<HTMLTextAreaElement>(".new-session-page__message");
-    expect(textarea).not.toBeNull();
-    if (!textarea) {
-      return;
-    }
+    const textarea = expectDefined(page.querySelector<HTMLTextAreaElement>("textarea"), "composer");
     const keys = ["x", " ", "Enter", "ArrowDown", "Escape"] as const;
     type Destination = "composer" | "element" | "overlay" | "nothing";
-    type Surface = {
-      name: string;
-      targets: HTMLElement[];
-      expected: readonly Destination[];
-      openDialog?: boolean;
-      openMenu?: boolean;
-    };
-    const append = <T extends HTMLElement>(element: T): T => page.appendChild(element);
-    const main = append(document.createElement("main"));
-    main.tabIndex = -1;
-    const button = append(document.createElement("button"));
-    const link = append(document.createElement("a"));
-    link.href = "#target";
-    const menu = append(document.createElement("div"));
+    type Surface = [string, HTMLElement[], readonly Destination[], ("menu" | "dialog")?];
+    const append = <K extends keyof HTMLElementTagNameMap>(
+      tag: K,
+      properties: Partial<HTMLElementTagNameMap[K]> = {},
+      parent: HTMLElement = page,
+    ) => parent.appendChild(Object.assign(document.createElement(tag), properties));
+    const main = append("main", { tabIndex: -1 });
+    const button = append("button");
+    const link = append("a", { href: "#target" });
+    const menu = append("div", { popover: "manual" });
     menu.setAttribute("role", "menu");
-    menu.popover = "manual";
     const menuOwner = createOverlay("new-session-routing-test", undefined, {
       dismissOutsideFocus: false,
     });
     menuOwner.bindSurface(menu);
-    const menuItem = menu.appendChild(document.createElement("button"));
+    const menuItem = append("button", { tabIndex: -1 }, menu);
     menuItem.setAttribute("role", "menuitemradio");
-    menuItem.tabIndex = -1;
-    const dialog = append(document.createElement("dialog"));
+    const dialog = append("dialog", { open: true });
     const releaseDialog = registerModalSurface(dialog);
-    dialog.open = true;
-    const dialogButton = dialog.appendChild(document.createElement("button"));
-    const details = append(document.createElement("details"));
-    details.open = true;
-    const summary = details.appendChild(document.createElement("summary"));
-    const input = append(document.createElement("input"));
-    const editable = append(document.createElement("div"));
+    const dialogButton = append("button", {}, dialog);
+    const summary = append("summary", {}, append("details", { open: true }));
+    const input = append("input");
+    const editable = append("div", { tabIndex: 0 });
     editable.setAttribute("contenteditable", "true");
-    editable.tabIndex = 0;
     const element = ["element", "element", "element", "element", "element"] as const;
     const overlay = ["overlay", "overlay", "overlay", "overlay", "overlay"] as const;
+    const activation = ["composer", "element", "element", "nothing", "nothing"] as const;
+    const menuKeys = ["composer", "overlay", "overlay", "overlay", "overlay"] as const;
     const routing: Surface[] = [
-      {
-        name: "main",
-        targets: [main],
-        expected: ["composer", "composer", "nothing", "nothing", "nothing"],
-      },
-      { name: "composer", targets: [textarea], expected: element },
-      {
-        name: "button/link",
-        targets: [button, link],
-        expected: ["composer", "element", "element", "nothing", "nothing"],
-      },
-      {
-        name: "menuitem",
-        targets: [menuItem],
-        expected: ["composer", "overlay", "overlay", "overlay", "overlay"],
-        openMenu: true,
-      },
-      {
-        name: "open native menu",
-        targets: [main],
-        expected: ["composer", "overlay", "overlay", "overlay", "overlay"],
-        openMenu: true,
-      },
-      { name: "dialog", targets: [dialogButton], expected: overlay, openDialog: true },
-      {
-        name: "details/summary",
-        targets: [summary],
-        expected: ["composer", "element", "element", "nothing", "nothing"],
-      },
-      { name: "input/contenteditable", targets: [input, editable], expected: element },
+      ["main", [main], ["composer", "composer", "nothing", "nothing", "nothing"]],
+      ["composer", [textarea], element],
+      ["button/link", [button, link], activation],
+      ["menuitem", [menuItem], menuKeys, "menu"],
+      ["open native menu", [main], menuKeys, "menu"],
+      ["dialog", [dialogButton], overlay, "dialog"],
+      ["details/summary", [summary], activation],
+      ["input/contenteditable", [input, editable], element],
     ];
 
     try {
-      for (const row of routing) {
-        for (const target of row.targets) {
+      for (const [name, targets, expected, open] of routing) {
+        for (const target of targets) {
           for (const [index, key] of keys.entries()) {
-            menuOwner.request(row.openMenu === true);
-            dialog.open = row.openDialog === true;
+            menuOwner.request(open === "menu");
+            dialog.open = open === "dialog";
             target.focus();
             target.dispatchEvent(
               new KeyboardEvent("keydown", { key, bubbles: true, composed: true }),
             );
-            const destination = row.expected[index];
-            if (destination === "composer") {
-              expect(document.activeElement, `${row.name} / ${key} -> composer`).toBe(textarea);
-            } else if (destination === "overlay") {
-              expect(document.activeElement, `${row.name} / ${key} -> overlay`).not.toBe(textarea);
+            const destination = expected[index];
+            if (destination === "overlay") {
+              expect(document.activeElement, `${name} / ${key} -> overlay`).not.toBe(textarea);
             } else {
-              expect(document.activeElement, `${row.name} / ${key} -> ${destination}`).toBe(target);
+              expect(document.activeElement, `${name} / ${key} -> ${destination}`).toBe(
+                destination === "composer" ? textarea : target,
+              );
             }
           }
         }

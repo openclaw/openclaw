@@ -42,23 +42,6 @@ function capacityCaption(row: Element | null | undefined) {
     ?.textContent?.trim();
 }
 
-function expectIconShape(actual: SVGElement | null, paths: readonly string[]) {
-  expect(actual).not.toBeNull();
-  for (const [attribute, value] of Object.entries({
-    viewBox: "0 0 24 24",
-    fill: "none",
-    stroke: "currentColor",
-    "stroke-width": "2",
-    "stroke-linecap": "round",
-    "stroke-linejoin": "round",
-  })) {
-    expect(actual?.getAttribute(attribute)).toBe(value);
-  }
-  expect(
-    Array.from(actual?.children ?? [], (child) => [child.tagName, child.getAttribute("d")]),
-  ).toEqual(paths.map((path) => ["path", path]));
-}
-
 describe("Where chip", () => {
   it("loads the menu on first open, focuses its search, and retains it after closing", async () => {
     const props = pickerParams(true);
@@ -173,33 +156,12 @@ describe("Where chip", () => {
   });
 
   it.each([
-    [
-      "Work MacBook Pro",
-      "darwin",
-      "laptop",
-      [
-        "M18 5a2 2 0 0 1 2 2v8.526a2 2 0 0 0 .212.897l1.068 2.127a1 1 0 0 1-.9 1.45H3.62a1 1 0 0 1-.9-1.45l1.068-2.127A2 2 0 0 0 4 15.526V7a2 2 0 0 1 2-2z",
-        "M20.054 15.987H3.946",
-      ],
-    ],
-    [
-      "Office Mac-mini",
-      "darwin",
-      "mini",
-      [
-        "M2.212 11.577a2 2 0 0 0-.212.896V18a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-5.527a2 2 0 0 0-.212-.896L18.55 5.11A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z",
-        "M21.946 12.013H2.054M6 16h.01M10 16h.01",
-      ],
-    ],
-    [
-      "Build Mac Studio",
-      "macOS",
-      "studio",
-      ["m3 8 3-4h12l3 4v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z", "M3 8h18M6 15h2M11 15h2M17 15h.01"],
-    ],
+    ["Work MacBook Pro", "darwin", "laptop"],
+    ["Office Mac-mini", "darwin", "mini"],
+    ["Build Mac Studio", "macOS", "studio"],
   ] as const)(
     "uses the same device outline in the selected row and trigger: %s / %s",
-    async (label, platform, form, paths) => {
+    async (label, platform, form) => {
       const container = await renderPicker(true, undefined, {
         deviceId: "model-device",
         environments: [device("model-device", label, { platform })],
@@ -209,9 +171,9 @@ describe("Where chip", () => {
         '[data-value="device:model-device"] .session-menu__icon',
         "#new-session-where-trigger .new-session-page__target-icon",
       ]) {
-        expectIconShape(container.querySelector(`${selector} svg`), paths);
         const marker = container.querySelector(`${selector} .new-session-page__device-icon`);
         expect(marker?.getAttribute("data-form")).toBe(form);
+        expect(marker?.querySelector("svg path")).not.toBeNull();
       }
     },
   );

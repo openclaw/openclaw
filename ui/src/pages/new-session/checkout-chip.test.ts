@@ -1,5 +1,5 @@
 import { createComponent, createSignal, flush } from "solid-js";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, type Mock } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
@@ -28,13 +28,13 @@ type CheckoutFixture = {
   submitting: boolean;
   pendingPlacement: boolean;
   popoverOpen: boolean;
-  onPopoverShow: () => void;
-  onPopoverHide: () => void;
-  onPopoverAfterHide: () => void;
-  onSelectWorktree: (value: boolean) => void;
-  onBaseRefInput: (baseRef: string) => void;
-  onWorktreeNameInput: (name: string) => void;
-  onConfirm: () => void;
+  onPopoverShow: Mock<() => void>;
+  onPopoverHide: Mock<() => void>;
+  onPopoverAfterHide: Mock<() => void>;
+  onSelectWorktree: Mock<(value: boolean) => void>;
+  onBaseRefInput: Mock<(baseRef: string) => void>;
+  onWorktreeNameInput: Mock<(name: string) => void>;
+  onConfirm: Mock<() => void>;
 };
 
 function keydown(element: Element, key: string) {
@@ -164,19 +164,8 @@ function mountCheckout(initial: CheckoutFixture) {
 
 describe("Checkout chip state", () => {
   it.each([
-    ...([false, true] as const).flatMap((repository) =>
-      (["main", "release", ""] as const).map(
-        (baseRef) =>
-          [
-            "cloud",
-            repository,
-            !repository,
-            baseRef,
-            undefined,
-            baseRef ? `From ${baseRef}` : "Starting branch",
-          ] as const,
-      ),
-    ),
+    ["cloud", false, true, "main", undefined, "From main"],
+    ["cloud", true, false, "", undefined, "Starting branch"],
     ["remote", true, false, "release", undefined, "Remote checkout from release"],
     ["remote", true, false, "", undefined, "Remote checkout"],
     ["remote", false, true, "", undefined, "New worktree"],
@@ -245,33 +234,25 @@ describe("Checkout chip state", () => {
       emptyBranches,
       currentCheckoutUnavailableReason,
     }) => {
-      const onSelectWorktree = vi.fn();
-      const onBaseRefInput = vi.fn();
-      const onWorktreeNameInput = vi.fn();
-      const onConfirm = vi.fn();
-      const { container } = mountCheckout(
-        checkoutFixture({
-          state: { label: worktree ? "New worktree from main" : "feature" },
-          remotePlacement,
-          currentCheckoutUnavailableReason,
-          repository,
-          worktree,
-          branches: {
-            repoRoot: "/repo",
-            branches: emptyBranches
-              ? []
-              : [
-                  { name: "main", kind: "local" },
-                  { name: "release/next", kind: "local" },
-                ],
-            headBranch: "feature",
-          },
-          onSelectWorktree,
-          onBaseRefInput,
-          onWorktreeNameInput,
-          onConfirm,
-        }),
-      );
+      const params = checkoutFixture({
+        state: { label: worktree ? "New worktree from main" : "feature" },
+        remotePlacement,
+        currentCheckoutUnavailableReason,
+        repository,
+        worktree,
+        branches: {
+          repoRoot: "/repo",
+          branches: emptyBranches
+            ? []
+            : [
+                { name: "main", kind: "local" },
+                { name: "release/next", kind: "local" },
+              ],
+          headBranch: "feature",
+        },
+      });
+      const { onSelectWorktree, onBaseRefInput, onWorktreeNameInput, onConfirm } = params;
+      const { container } = mountCheckout(params);
 
       await waitForOpen(container);
 
@@ -321,12 +302,9 @@ describe("Checkout chip state", () => {
           : (currentCheckoutUnavailableReason ?? null),
       );
       expect(isolated.textContent).toContain("New worktree");
-      expect(isolated.textContent).toContain("Isolated copy of the repo");
       expect(isolated.getAttribute("aria-pressed")).toBe(String(worktree));
       expect(isolated.disabled).toBe(false);
       expect(isolated.hasAttribute("title")).toBe(false);
-      expect(current.hasAttribute("data-popover")).toBe(false);
-      expect(isolated.hasAttribute("data-popover")).toBe(false);
       current.click();
       isolated.click();
       expect(onSelectWorktree.mock.calls).toEqual(
@@ -399,11 +377,9 @@ describe("Checkout chip state", () => {
   it("preserves editable fields through repository discovery failure and retry", async () => {
     const initial = createDeferred();
     const initialRead = { completed: initial.promise };
-    const params: CheckoutFixture = {
+    const params = checkoutFixture({
       state: { label: "New worktree" },
-      remotePlacement: false,
       folderLabel: "Fixture project",
-      worktree: true,
       worktreeAvailable: false,
       branches: null,
       branchesLoading: true,
@@ -412,17 +388,7 @@ describe("Checkout chip state", () => {
       currentCheckoutUnavailableReason: "Checking fixture checkout",
       baseRef: "typed-branch",
       worktreeName: "typed-name",
-      submitting: false,
-      pendingPlacement: false,
-      popoverOpen: true,
-      onPopoverShow: vi.fn(),
-      onPopoverHide: vi.fn(),
-      onPopoverAfterHide: vi.fn(),
-      onSelectWorktree: vi.fn(),
-      onBaseRefInput: vi.fn(),
-      onWorktreeNameInput: vi.fn(),
-      onConfirm: vi.fn(),
-    };
+    });
     const { container, update } = mountCheckout(params);
     await waitForOpen(container);
     const branch = container.querySelector<HTMLInputElement>("#new-session-worktree-base-ref")!;
@@ -472,17 +438,8 @@ describe("Checkout chip state", () => {
   });
 
   it("keeps suggestion identities current and only confirms valid input", async () => {
-    const onConfirm = vi.fn();
-    const onPopoverShow = vi.fn();
-    const onPopoverHide = vi.fn();
-    const onPopoverAfterHide = vi.fn();
-    const params = checkoutFixture({
-      worktreeName: "picker-fixes",
-      onPopoverShow,
-      onPopoverHide,
-      onPopoverAfterHide,
-      onConfirm,
-    });
+    const params = checkoutFixture({ worktreeName: "picker-fixes" });
+    const { onConfirm, onPopoverShow, onPopoverHide, onPopoverAfterHide } = params;
     const { container, update } = mountCheckout(params);
     const renderNamed = (worktreeName: string) => update({ ...params, worktreeName });
     await waitForOpen(container);

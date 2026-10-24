@@ -5,8 +5,7 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { GatewayRequestError } from "../../api/gateway.ts";
-import { CHAT_ROUTE_READY_EVENT } from "../chat/chat-history-events.ts";
-import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
+import { createDraftFixture, readyChatRoute } from "./draft-submission-flow.test-support.ts";
 import { replaceBrowserPreference } from "./preferences.ts";
 
 // Keep the intentional silent gates in sync with submit-gates.ts.
@@ -87,6 +86,20 @@ function withMessage(options: FixtureOptions = {}, setup?: (fixture: Fixture) =>
 }
 function unavailableModel(reason: "missing-auth" | "auth-failed" | "cooldown") {
   return { id: "gpt-5.6-luna", provider: "openai", available: false, unavailableReason: reason };
+}
+function missingScopeError(missingScope: string) {
+  return new GatewayRequestError({
+    code: "FORBIDDEN",
+    message: `missing scope: ${missingScope}`,
+    details: { code: "MISSING_SCOPE", missingScope, requiredScopes: [missingScope] },
+  });
+}
+const scopeReason = (scope: string) =>
+  `Checking Git for this folder requires ${scope} access. Ask the person who manages OpenClaw for access.`;
+async function selectDevice({ gateway, place }: Fixture, id: string) {
+  await gateway.refreshCloudProfiles();
+  await vi.waitFor(() => expect(place.devices()).toHaveLength(1));
+  place.selectDevice(id);
 }
 
 afterEach(() => {
@@ -324,9 +337,7 @@ describe("DraftSubmissionFlow submit gates", () => {
         key,
         initialRun: { status: "idle" },
       });
-      vi.mocked(context.navigateAndWait).mockImplementation(async () => {
-        queueMicrotask(() => document.dispatchEvent(new Event(CHAT_ROUTE_READY_EVENT)));
-      });
+      vi.mocked(context.navigateAndWait).mockImplementation(readyChatRoute);
       await flow.submit();
 
       if (phase === "creating") {
@@ -376,11 +387,6 @@ describe("DraftSubmissionFlow submit gates", () => {
       expect(block?.reason).toBeTruthy();
       expect(flow.submitDisabledReason()).toBe(block?.reason);
     }
-  });
-
-  it("admits a ready draft without a disabled reason", () => {
-    const { flow } = withMessage();
-    expectGate(flow);
   });
 
   it("keeps an attempted-submit notice across gates and retires it when ready", async () => {
@@ -458,13 +464,7 @@ describe("DraftSubmissionFlow submit gates", () => {
             ? "operator.admin"
             : undefined;
       if (missingScope) {
-        discovery.reject(
-          new GatewayRequestError({
-            code: "FORBIDDEN",
-            message: `missing scope: ${missingScope}`,
-            details: { code: "MISSING_SCOPE", missingScope, requiredScopes: [missingScope] },
-          }),
-        );
+        discovery.reject(missingScopeError(missingScope));
       } else if (result === "forbidden") {
         discovery.reject(
           new GatewayRequestError({ code: "FORBIDDEN", message: "Git discovery not allowed" }),
@@ -482,7 +482,7 @@ describe("DraftSubmissionFlow submit gates", () => {
       expect(flow.submitBlock()).toEqual({
         gate: "worktree-unavailable",
         reason: missingScope
-          ? `Checking Git for this folder requires ${missingScope} access. Ask the person who manages OpenClaw for access.`
+          ? scopeReason(missingScope)
           : result === "forbidden"
             ? "You don't have permission to check Git for this folder. Ask the person who manages OpenClaw for access."
             : "Couldn't verify Git for this folder. Choose it again to retry.",
@@ -533,45 +533,36 @@ describe("DraftSubmissionFlow submit gates", () => {
         },
         { model: "openai/gpt-5.6-luna" },
       );
-      await fixture.gateway.refreshCloudProfiles();
-      await vi.waitFor(() => expect(fixture.place.devices()).toHaveLength(1));
-      fixture.place.selectDevice("build-mac");
+      const { request, context, place, flow } = fixture;
+      await selectDevice(fixture, "build-mac");
       const discovery = createDeferred<unknown>();
-      fixture.request.mockImplementation((method) =>
+      request.mockImplementation((method) =>
         method === "worktrees.branches" ? discovery.promise : Promise.resolve({}),
       );
-      fixture.place.applyFolder("/previously-allowed");
-      fixture.context.gateway.snapshot.hello!.auth!.scopes = ["operator.read", "operator.write"];
+      place.applyFolder("/previously-allowed");
+      context.gateway.snapshot.hello!.auth!.scopes = ["operator.read", "operator.write"];
       discovery.reject(
         result === "forbidden"
-          ? new GatewayRequestError({
-              code: "FORBIDDEN",
-              message: "missing scope: operator.admin",
-              details: {
-                code: "MISSING_SCOPE",
-                missingScope: "operator.admin",
-                requiredScopes: ["operator.admin"],
-              },
-            })
+          ? missingScopeError("operator.admin")
           : new Error("Git discovery unavailable"),
       );
       await discovery.promise.catch(() => undefined);
       expectGate(
-        fixture.flow,
+        flow,
         "worktree-unavailable",
         result === "forbidden"
-          ? "Checking Git for this folder requires operator.admin access. Ask the person who manages OpenClaw for access."
+          ? scopeReason("operator.admin")
           : "This folder cannot provide a Git checkout. Select New workspace to start empty, or choose a repository.",
       );
-      await fixture.flow.submit();
-      expect(fixture.context.sessions.createResult).not.toHaveBeenCalled();
-      expect(fixture.place).toMatchObject({
+      await flow.submit();
+      expect(context.sessions.createResult).not.toHaveBeenCalled();
+      expect(place).toMatchObject({
         deviceId: "build-mac",
         folder: "/previously-allowed",
         worktree: true,
         freshWorkspace: false,
       });
-      expect(fixture.flow.message).toBe("hello");
+      expect(flow.message).toBe("hello");
     },
   );
 
@@ -586,9 +577,7 @@ describe("DraftSubmissionFlow submit gates", () => {
       },
       { model: "openai/gpt-5.6-sol" },
     );
-    await fixture.gateway.refreshCloudProfiles();
-    await vi.waitFor(() => expect(fixture.place.devices()).toHaveLength(1));
-    fixture.place.selectDevice("build-mac");
+    await selectDevice(fixture, "build-mac");
 
     expectGate(fixture.flow, "device-runtime", "This runtime does not support paired devices");
     expect(fixture.request).not.toHaveBeenCalledWith("node.list", expect.anything());

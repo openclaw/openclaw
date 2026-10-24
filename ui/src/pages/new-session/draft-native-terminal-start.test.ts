@@ -32,11 +32,7 @@ function mountNativeTerminal(context: ApplicationContext) {
     forceReconnect: vi.fn(),
   });
   const panel = createTestTerminalPanel(nativeTerminalElement);
-  panel.client = client;
-  panel.available = true;
-  panel.page = true;
-  panel.fullscreen = true;
-  panel.embedded = true;
+  Object.assign(panel, { client, available: true, page: true, fullscreen: true, embedded: true });
   Object.assign(context, {
     replace: vi.fn((routeId, options) => {
       if (routeId === "terminal") {

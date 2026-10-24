@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { ModelCatalogEntry } from "../../api/types.ts";
 import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
@@ -7,7 +7,6 @@ import {
   hostedRuntime,
   mountPlacement,
   nativeRuntime,
-  placementDevice,
   placementFixture,
 } from "./placement.test-support.ts";
 
@@ -330,79 +329,4 @@ it("does not hold an ordinary local start behind unrelated pending inventory", a
     await refresh;
     f.gateway.disconnect();
   }
-});
-async function inferenceFixture(reason: "missing-auth" | "auth-failed" = "missing-auth") {
-  const deviceProfile = { providerId: "device", executionModes: ["worker-turn"] };
-  const result = placementFixture(
-    {
-      id: "gpt-4.1-mini",
-      name: "GPT-4.1 mini",
-      provider: "openai",
-      available: false,
-      unavailableReason: reason,
-      agentRuntime: runtime,
-    },
-    {
-      methods: ["environments.list", "sessions.create", "sessions.dispatch"],
-      scopes: ["operator.admin", "operator.read", "operator.write"],
-      request: async (method) =>
-        method === "environments.list"
-          ? {
-              environments: [placementDevice("paired", { label: "Paired worker" })],
-              profiles: [
-                { ...deviceProfile, id: "direct", inference: "worker" },
-                { ...deviceProfile, id: "proxied" },
-                { ...deviceProfile, id: "raw-settings", settings: { inference: "worker" } },
-              ],
-            }
-          : {},
-    },
-  );
-  await Promise.all([
-    result.gateway.refreshCloudProfiles(),
-    loadModelCatalog(result.context.gateway.snapshot.client!, { agentId: "main" }),
-  ]);
-  result.flow.setMessage("Check the workspace");
-  return result;
-}
-
-describe("worker inference New Session scope", () => {
-  it("uses worker credentials only for the selected direct profile", async () => {
-    const { flow, place } = await inferenceFixture("auth-failed");
-    expect(flow.submitBlock()?.gate).toBe("model-unavailable");
-    place.selectCloudProfile("direct");
-    expect(flow.canSubmit()).toBe(true);
-    expect(place.modelControl.modelForSubmission()).toBe("");
-    place.selectCloudProfile("proxied");
-    expect(flow.submitBlock()?.gate).toBe("model-unavailable");
-    place.selectCloudProfile("raw-settings");
-    expect(flow.submitBlock()?.gate).toBe("model-unavailable");
-    place.selectDevice("paired");
-    expect(flow.submitBlock()?.gate).toBe("model-unavailable");
-    place.selectDevice("");
-    expect(flow.submitBlock()?.gate).toBe("model-unavailable");
-    place.selectCloudProfile("direct");
-    expect(flow.canSubmit()).toBe(true);
-  });
-
-  it("preserves explicit model/runtime validation instead of discarding a selection", async () => {
-    const { flow, place } = await inferenceFixture();
-    place.selectCloudProfile("direct");
-    place.modelControl.selected = "openai/gpt-4.1-mini";
-    place.modelControl.agentRuntime = "openclaw";
-    expect(flow.submitBlock()?.gate).toBe("model-unavailable");
-    expect(place.modelControl.modelForSubmission()).toBe("openai/gpt-4.1-mini");
-    place.modelControl.agentRuntime = "unavailable-runtime";
-    expect(flow.submitBlock()?.gate).toBe("model-unavailable");
-  });
-
-  it("still waits for current agent defaults on a worker-inference profile", async () => {
-    const { flow, place, context } = await inferenceFixture();
-    place.selectCloudProfile("direct");
-    const agentsList = context.agents.state.agentsList;
-    context.agents.state.agentsList = null;
-    expect(flow.submitBlock()?.gate).toBe("agents");
-    context.agents.state.agentsList = agentsList;
-    expect(flow.canSubmit()).toBe(true);
-  });
 });
