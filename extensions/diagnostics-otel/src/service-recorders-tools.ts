@@ -18,6 +18,8 @@ import {
 } from "./service-genai-content.js";
 import type { DiagnosticsRecorderRuntime } from "./service-recorder-runtime.js";
 
+const TOOL_TERMINAL_REASONS: ReadonlySet<string> = new Set(["failed", "cancelled", "timed_out"]);
+
 export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime) {
   const toolExecutionBaseAttrs = (
     evt: Extract<
@@ -62,8 +64,20 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
     };
     runtime.addRunAttrs(spanAttrs, evt);
     assignOtelToolIdentityAttributes(spanAttrs, evt);
-    if (evt.type === "tool.execution.error" && evt.errorCode) {
-      spanAttrs["openclaw.errorCode"] = normalizeDiagnosticValue(evt.errorCode, "other");
+    if (evt.type === "tool.execution.error") {
+      if (evt.errorCode) {
+        spanAttrs["openclaw.errorCode"] = normalizeDiagnosticValue(evt.errorCode, "other");
+      }
+      // Span-only: why the tool ended, without its output. Plugins can emit this
+      // event, so only the known reasons pass through.
+      if (evt.terminalReason) {
+        spanAttrs["openclaw.tool.terminal_reason"] = TOOL_TERMINAL_REASONS.has(evt.terminalReason)
+          ? evt.terminalReason
+          : "other";
+      }
+      if (typeof evt.exitCode === "number" && Number.isInteger(evt.exitCode)) {
+        spanAttrs["openclaw.tool.exit_code"] = evt.exitCode;
+      }
     }
     assignOtelToolContentAttributes(spanAttrs, toolContent, runtime.captureContent);
     const span =

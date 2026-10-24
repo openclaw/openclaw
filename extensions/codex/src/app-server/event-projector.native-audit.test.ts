@@ -342,6 +342,32 @@ describe("CodexAppServerEventProjector native tool audit projection", () => {
     );
   });
 
+  it("reports a failed command's exit code and terminal reason without its output", async () => {
+    const { events } = await createProjection();
+    const commandItem = createNativeCommandItem({
+      id: "cmd-exit",
+      status: "inProgress",
+      exitCode: null,
+      durationMs: null,
+    });
+
+    await events.started(commandItem);
+    await events.completed({
+      ...commandItem,
+      status: "failed",
+      exitCode: 2,
+      aggregatedOutput: "secret-output",
+      durationMs: 4,
+    });
+    await flushDiagnosticEvents();
+
+    const error = diagnosticEvents.find(
+      (event) => event.type === "tool.execution.error" && event.toolCallId === "cmd-exit",
+    );
+    expect(error).toMatchObject({ terminalReason: "failed", exitCode: 2 });
+    expect(JSON.stringify(error)).not.toContain("secret-output");
+  });
+
   it.each([
     ["completed", "tool.execution.completed", undefined, undefined],
     ["failed", "tool.execution.error", "failed", undefined],

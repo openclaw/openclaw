@@ -269,6 +269,8 @@ export class CodexNativeToolLifecycleProjector {
       typeof params.item.durationMs === "number" ? params.item.durationMs : undefined;
     this.recordTerminal(params.item.id, toolName, auditNativeToolTerminalStatus(params.item), {
       itemDurationMs,
+      // Codex `commandExecution` items carry the process exit code.
+      exitCode: typeof params.item.exitCode === "number" ? params.item.exitCode : undefined,
       sourceTimestampMs: params.sourceTimestampMs,
     });
   }
@@ -341,6 +343,7 @@ export class CodexNativeToolLifecycleProjector {
       itemDurationMs?: number;
       sourceTimestampMs?: number;
       runWasAborted?: boolean;
+      exitCode?: number;
     } = {},
   ): void {
     const runWasAborted = options.runWasAborted ?? this.options.runAbortSignal?.aborted === true;
@@ -388,6 +391,7 @@ export class CodexNativeToolLifecycleProjector {
                     ? "aborted"
                     : "codex_native_tool_error",
               ...(status === "unknown" ? { errorCode: "tool_outcome_unknown" } : {}),
+              ...(options.exitCode !== undefined ? { exitCode: options.exitCode } : {}),
               terminalReason:
                 // An enclosing abort explains unfinished work, but cannot classify
                 // a native terminal whose status is absent or unrecognized.
