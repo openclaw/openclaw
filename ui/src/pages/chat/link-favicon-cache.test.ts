@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { createLinkFaviconReader, type LinkFaviconFetcher } from "./link-favicon-cache.ts";
+import {
+  createLinkFaviconReader,
+  retainLinkFaviconCache,
+  type LinkFaviconFetcher,
+} from "./link-favicon-cache.ts";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -8,6 +12,44 @@ afterEach(() => {
 });
 
 describe("link favicon readers", () => {
+  it("reuses a favicon across row remounts until its transcript is disposed", async () => {
+    const fetcher = vi.fn<LinkFaviconFetcher>().mockResolvedValue("blob:warm-favicon");
+    const releaseTranscript = retainLinkFaviconCache(fetcher);
+    const settled = createDeferred();
+    const first = createLinkFaviconReader(settled.resolve);
+    const revoke = vi.spyOn(URL, "revokeObjectURL");
+    first.read("warm.example.com", fetcher);
+    await settled.promise;
+    first.dispose();
+    expect(revoke).not.toHaveBeenCalled();
+    const remounted = createLinkFaviconReader(() => undefined);
+    expect(remounted.read("warm.example.com", fetcher)).toBe("blob:warm-favicon");
+    expect(fetcher).toHaveBeenCalledOnce();
+    releaseTranscript();
+    expect(revoke).not.toHaveBeenCalled();
+    remounted.dispose();
+    expect(revoke).toHaveBeenCalledExactlyOnceWith("blob:warm-favicon");
+  });
+
+  it("bounds unused warm favicons while keeping displayed images alive", async () => {
+    const fetcher = vi.fn<LinkFaviconFetcher>(async (hostname) => `blob:${hostname}`);
+    const releaseTranscript = retainLinkFaviconCache(fetcher);
+    const revoke = vi.spyOn(URL, "revokeObjectURL");
+    const visible = createLinkFaviconReader(() => undefined);
+    visible.read("visible.example.com", fetcher);
+    for (let index = 0; index < 129; index++) {
+      const settled = createDeferred();
+      const reader = createLinkFaviconReader(settled.resolve);
+      reader.read(`${index}.example.com`, fetcher);
+      await settled.promise;
+      reader.dispose();
+    }
+    expect(revoke).toHaveBeenCalledTimes(2);
+    expect(revoke).not.toHaveBeenCalledWith("blob:visible.example.com");
+    releaseTranscript();
+    visible.dispose();
+    expect(revoke).toHaveBeenCalledTimes(130);
+  });
   it("does not reuse a hostname miss across Gateway credential contexts", async () => {
     const first = vi.fn<LinkFaviconFetcher>().mockResolvedValue(null);
     const firstSettled = createDeferred();

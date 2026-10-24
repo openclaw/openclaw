@@ -8,6 +8,7 @@ import { showToast } from "../../lib/toast.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import {
   createLinkFaviconReader,
+  retainLinkFaviconCache,
   type LinkFaviconFetcher,
 } from "../../pages/chat/link-favicon-cache.ts";
 import { Icon } from "../solid/icon.tsx";
@@ -194,6 +195,12 @@ export function BrowserToolbar(
         }
       }}
     >
+      <Show when={props.fetchFavicon} keyed>
+        {(fetcher) => {
+          onSettled(() => retainLinkFaviconCache(fetcher));
+          return null;
+        }}
+      </Show>
       {!nativeTab() &&
       !props.controller.host.fixedTab &&
       !props.controller.host.dashboardTarget?.sessionScoped &&

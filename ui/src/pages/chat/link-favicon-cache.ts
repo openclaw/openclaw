@@ -7,13 +7,50 @@ type Favicon = {
   timeout: number;
 };
 
-// Share requests and URLs across mounted consumers of the same Gateway context.
-const caches = new WeakMap<LinkFaviconFetcher, Map<string, Favicon>>();
+type FaviconCache = { entries: Map<string, Favicon>; scopes: number };
+const MAX_FAVICONS = 128;
+const caches = new WeakMap<LinkFaviconFetcher, FaviconCache>();
+
+function faviconCache(fetcher: LinkFaviconFetcher): FaviconCache {
+  let cache = caches.get(fetcher);
+  if (!cache) {
+    cache = { entries: new Map(), scopes: 0 };
+    caches.set(fetcher, cache);
+  }
+  return cache;
+}
+
+function trim(cache: FaviconCache) {
+  for (const [hostname, entry] of cache.entries) {
+    if (cache.scopes > 0 && cache.entries.size <= MAX_FAVICONS) {
+      return;
+    }
+    if (entry.subscribers.size > 0) {
+      continue;
+    }
+    cache.entries.delete(hostname);
+    window.clearTimeout(entry.timeout);
+    entry.controller.abort();
+    if (entry.value) {
+      URL.revokeObjectURL(entry.value);
+    }
+  }
+}
+
+/** A transcript or browser retains a bounded warm cache across row/tab remounts. */
+export function retainLinkFaviconCache(fetcher: LinkFaviconFetcher): () => void {
+  const cache = faviconCache(fetcher);
+  cache.scopes += 1;
+  return () => {
+    cache.scopes -= 1;
+    trim(cache);
+  };
+}
 
 export function createLinkFaviconReader(onSettled: () => void) {
   const notify = () => onSettled();
   let current:
-    | { hostname: string; fetcher: LinkFaviconFetcher; cache: Map<string, Favicon>; entry: Favicon }
+    | { hostname: string; fetcher: LinkFaviconFetcher; cache: FaviconCache; entry: Favicon }
     | undefined;
   const dispose = () => {
     const held = current;
@@ -21,16 +58,9 @@ export function createLinkFaviconReader(onSettled: () => void) {
     if (!held) {
       return;
     }
-    const { hostname, cache, entry } = held;
+    const { cache, entry } = held;
     entry.subscribers.delete(notify);
-    if (entry.subscribers.size === 0) {
-      cache.delete(hostname);
-      window.clearTimeout(entry.timeout);
-      entry.controller.abort();
-      if (entry.value) {
-        URL.revokeObjectURL(entry.value);
-      }
-    }
+    trim(cache);
   };
 
   return {
@@ -40,12 +70,8 @@ export function createLinkFaviconReader(onSettled: () => void) {
         return current.entry.value;
       }
       dispose();
-      let cache = caches.get(fetcher);
-      if (!cache) {
-        cache = new Map();
-        caches.set(fetcher, cache);
-      }
-      let entry = cache.get(hostname);
+      const cache = faviconCache(fetcher);
+      let entry = cache.entries.get(hostname);
       if (!entry) {
         const controller = new AbortController();
         entry = {
@@ -55,12 +81,12 @@ export function createLinkFaviconReader(onSettled: () => void) {
           timeout: window.setTimeout(() => controller.abort(), 15_000),
         };
         const pending = entry;
-        cache.set(hostname, entry);
+        cache.entries.set(hostname, entry);
         void fetcher(hostname, controller.signal)
           .catch(() => null)
           .then((url) => {
             // A fetcher may finish after its final reader released the request.
-            if (pending.subscribers.size === 0) {
+            if (cache.entries.get(hostname) !== pending) {
               if (url) {
                 URL.revokeObjectURL(url);
               }
@@ -73,8 +99,11 @@ export function createLinkFaviconReader(onSettled: () => void) {
           })
           .finally(() => window.clearTimeout(pending.timeout));
       }
+      cache.entries.delete(hostname);
+      cache.entries.set(hostname, entry);
       entry.subscribers.add(notify);
       current = { hostname, fetcher, cache, entry };
+      trim(cache);
       return entry.value;
     },
   };

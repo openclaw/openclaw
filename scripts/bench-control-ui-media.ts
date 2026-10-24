@@ -56,9 +56,9 @@ const icon = raster(40, 40);
 async function frames(page: Page) {
   await page.evaluate(
     () =>
-      new Promise<void>((resolve) =>
-        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
-      ),
+      new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      }),
   );
 }
 async function metrics(cdp: CDPSession) {
@@ -132,7 +132,9 @@ try {
     const raw = html.match(
       /globalThis\.OPENCLAW_CONTROL_UI_BUILD_INFO=(\{.*?\});<\/script>/su,
     )?.[1];
-    if (!raw) throw new Error(`Missing build identity: ${directory}`);
+    if (!raw) {
+      throw new Error(`Missing build identity: ${directory}`);
+    }
     servers.push({
       directory: path.resolve(directory),
       build: JSON.parse(raw),
@@ -143,7 +145,7 @@ try {
   for (const profile of profiles) {
     for (let pair = 0; pair < pairs; pair++) {
       // Alternate AB/BA order to avoid consistently charging warming/drift to one side.
-      for (const variant of pair % 2 ? [...servers.keys()].reverse() : servers.keys()) {
+      for (const variant of pair % 2 ? [...servers.keys()].toReversed() : servers.keys()) {
         const slot = servers[variant]!;
         const prefix = `${profile}-${pair + 1}-${variant}`;
         const context = await browser.newContext({
@@ -201,7 +203,9 @@ try {
             };
             URL.revokeObjectURL = (url) => {
               const entry = blobs.get(url);
-              if (entry) entry.revoked = true;
+              if (entry) {
+                entry.revoked = true;
+              }
               revoke(url);
             };
             let shifts: MediaSnapshot["shifts"] = [];
@@ -217,7 +221,7 @@ try {
                     currentRect: DOMRectReadOnly;
                   }>;
                 };
-                if (!shift.hadRecentInput)
+                if (!shift.hadRecentInput) {
                   shifts.push({
                     value: shift.value,
                     sources: shift.sources.map(({ node, previousRect, currentRect }) => ({
@@ -241,6 +245,7 @@ try {
                       ],
                     })),
                   });
+                }
               }
             });
             observer.observe({ type: "layout-shift", buffered: true });
@@ -256,11 +261,12 @@ try {
                 mediaCls: shifts
                   .filter((item) => item.sources.some((source) => source.media))
                   .reduce((sum, item) => sum + item.value, 0),
-                blobs: [...blobs].map(([url, entry]) => ({
-                  ...entry,
-                  live: !entry.revoked,
-                  attached: [...document.images].some((image) => image.src === url),
-                })),
+                blobs: [...blobs].map(([url, entry]) =>
+                  Object.assign({}, entry, {
+                    live: !entry.revoked,
+                    attached: [...document.images].some((image) => image.src === url),
+                  }),
+                ),
               }),
             });
           });
@@ -308,8 +314,9 @@ try {
               // Keep revision/ticket/size queries and auth scopes distinct, without recording credentials.
               const headers = route.request().headers();
               const contextKey = `${headers.authorization ?? ""}\n${headers.cookie ?? ""}`;
-              if (!authContexts.has(contextKey))
+              if (!authContexts.has(contextKey)) {
                 authContexts.set(contextKey, authContexts.size + 1);
+              }
               const resource = `${kind}:${route.request().method()}:context-${authContexts.get(contextKey)}:${url.href}`;
               requests.set(resource, (requests.get(resource) ?? 0) + 1);
               pendingMedia += 1;
@@ -321,7 +328,9 @@ try {
                   mediaTransferAt =
                     Math.max(Date.now() + 100, mediaTransferAt) +
                     (metadata ? 200 : body.length) / 1250;
-                  await new Promise((resolve) => setTimeout(resolve, mediaTransferAt - Date.now()));
+                  await new Promise((resolve) => {
+                    setTimeout(resolve, mediaTransferAt - Date.now());
+                  });
                 }
                 await route.fulfill(
                   metadata
@@ -345,13 +354,14 @@ try {
           );
           await cdp.send("Performance.enable");
           await cdp.send("Network.enable");
-          if (profile === "remote")
+          if (profile === "remote") {
             await cdp.send("Network.emulateNetworkConditions", {
               offline: false,
               latency: 100,
               downloadThroughput: 1_250_000,
               uploadThroughput: 1_250_000,
             });
+          }
           await page.goto(
             new URL(controlUiSessionPath(fixture.selectedSessionKey), slot.server.baseUrl).href,
           );
@@ -363,8 +373,9 @@ try {
           await frames(page);
           // CLS excludes shifts within 500 ms of input; finish the roster click's window.
           await page.waitForTimeout(550);
-          if (pair === 0)
+          if (pair === 0) {
             await page.screenshot({ path: path.join(artifactDir, `${prefix}-pending.png`) });
+          }
           await cdp.send("HeapProfiler.collectGarbage");
           const before = await metrics(cdp);
           if (values.trace) {
@@ -399,8 +410,9 @@ try {
                     rect.top >= innerHeight ||
                     rect.right <= 0 ||
                     rect.left >= innerWidth
-                  )
+                  ) {
                     return false;
+                  }
                   // Unadmitted off-screen placeholders have neither src nor loading state.
                   return (
                     image.dataset.linkFaviconState === "loading" ||
@@ -409,11 +421,16 @@ try {
                 }),
               );
               settledFrames = pendingMedia === 0 && !loading ? settledFrames + 1 : 0;
-              if (Date.now() > deadline)
+              if (Date.now() > deadline) {
                 throw new Error(
                   `Media did not settle: ${pendingMedia} admitted HTTP requests pending`,
                 );
-              if (!settledFrames) await new Promise((resolve) => setTimeout(resolve, 25));
+              }
+              if (!settledFrames) {
+                await new Promise((resolve) => {
+                  setTimeout(resolve, 25);
+                });
+              }
             }
           };
           await page.waitForFunction(
@@ -435,8 +452,9 @@ try {
           const loadMs = performance.now() - started;
           result.loadMs = loadMs;
           const loaded = await metrics(cdp);
-          if (pair === 0)
+          if (pair === 0) {
             await page.screenshot({ path: path.join(artifactDir, `${prefix}-loaded.png`) });
+          }
           const beforeScroll = await metrics(cdp);
           const scrollStarted = performance.now();
           // Descend through the transcript, then remount the starting images.
@@ -460,9 +478,9 @@ try {
           result.scrollMs = scrollMs;
           result.requestSnapshots.scroll = scrollRequests;
           if (tracing) {
-            const complete = new Promise<void>((resolve) =>
-              cdp.once("Tracing.tracingComplete", () => resolve()),
-            );
+            const complete = new Promise<void>((resolve) => {
+              cdp.once("Tracing.tracingComplete", () => resolve());
+            });
             await cdp.send("Tracing.end");
             await complete;
             tracing = false;
@@ -547,7 +565,9 @@ try {
             .catch(() => undefined);
         } finally {
           releaseMedia();
-          if (tracing) await cdp.send("Tracing.end").catch(() => undefined);
+          if (tracing) {
+            await cdp.send("Tracing.end").catch(() => undefined);
+          }
           results.push(result);
           await writeFile(
             path.join(artifactDir, `${prefix}.json`),
@@ -615,4 +635,6 @@ try {
     ),
   );
 }
-if (results.some((row) => row.status !== "passed")) process.exitCode = 1;
+if (results.some((row) => row.status !== "passed")) {
+  process.exitCode = 1;
+}
