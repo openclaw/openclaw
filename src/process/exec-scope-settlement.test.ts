@@ -52,6 +52,19 @@ const emptyResult = {
   isForcefullyTerminated: false,
 };
 const spawnFixture = () => spawnCommand(["fixture"], { reject: false });
+async function expectPending(finished: ReturnType<typeof vi.fn>) {
+  await setImmediate();
+  expect(finished).not.toHaveBeenCalled();
+}
+function abortCommand() {
+  const controller = new AbortController();
+  const pending = runCommandWithTimeout(["fixture"], {
+    signal: controller.signal,
+    killProcessTree: true,
+  });
+  controller.abort();
+  return pending;
+}
 
 function ownScope<T>(
   run: (stop: () => void) => Promise<T>,
@@ -154,8 +167,7 @@ describe("command scope physical settlement", () => {
       } else {
         fixture.finish(false);
       }
-      await setImmediate();
-      expect(finished).not.toHaveBeenCalled();
+      await expectPending(finished);
       expect(reservation.settled).not.toHaveBeenCalled();
       fixture.closed.resolve();
       if (result === "rejected") {
@@ -235,26 +247,18 @@ describe("command scope physical settlement", () => {
     "keeps bounded results pending until %s scope cleanup",
     async (cleanup) => {
       const fixture = commandFixture();
-      const controller = new AbortController();
       const resultSeen = createDeferredCore();
       const scopeFinished = vi.fn();
       const scope = ownScope(async () => {
-        const pending = runCommandWithTimeout(["fixture"], {
-          signal: controller.signal,
-          killProcessTree: true,
-        });
-        controller.abort();
-        expect(await pending).toMatchObject({ termination: "signal", cleanup: "uncertain" });
+        expect(await abortCommand()).toMatchObject({ termination: "signal", cleanup: "uncertain" });
         resultSeen.resolve();
       }).finally(scopeFinished);
       const outcome = scope.catch((error: unknown) => error);
       await resultSeen.promise;
-      await setImmediate();
-      expect(scopeFinished).not.toHaveBeenCalled();
+      await expectPending(scopeFinished);
       fixture.open();
       fixture.finish();
-      await setImmediate();
-      expect(scopeFinished).not.toHaveBeenCalled();
+      await expectPending(scopeFinished);
       fixture.cleanup.resolve(cleanup);
       if (cleanup === "uncertain") {
         expect(await outcome).toMatchObject(uncertainCleanup);
@@ -278,8 +282,7 @@ describe("command scope physical settlement", () => {
         throw failure;
       }).finally(scopeFinished);
       const outcome = scope.catch((error: unknown) => error);
-      await setImmediate();
-      expect(scopeFinished).not.toHaveBeenCalled();
+      await expectPending(scopeFinished);
       fixture.open();
       fixture.finish();
       expect(await outcome).toBe(failure);
@@ -361,13 +364,7 @@ it.each(["forced", "uncertain"] as const)(
     const outerFinished = vi.fn();
     const outer = ownScope(async () => {
       void ownScope(async () => {
-        const controller = new AbortController();
-        const command = runCommandWithTimeout(["fixture"], {
-          signal: controller.signal,
-          killProcessTree: true,
-        });
-        controller.abort();
-        await command;
+        await abortCommand();
         logical.resolve();
         await finishLogical.promise;
         throw original;
@@ -377,12 +374,10 @@ it.each(["forced", "uncertain"] as const)(
     const outcome = outer.catch((error: unknown) => error);
     try {
       await logical.promise;
-      await setImmediate();
-      expect(outerFinished).not.toHaveBeenCalled();
+      await expectPending(outerFinished);
       fixture.open();
       fixture.finish();
-      await setImmediate();
-      expect(outerFinished).not.toHaveBeenCalled();
+      await expectPending(outerFinished);
       fixture.cleanup.resolve(cleanupResult);
       await setImmediate();
       expect(outerFinished).toHaveBeenCalledOnce();
