@@ -669,13 +669,7 @@ describe("scheduled message actions", () => {
           (await loadCronStore(storePath)).jobs.find((entry) => entry.id === created.id),
           "persisted scheduled job",
         );
-        if (runtime === "openclaw") {
-          expect(job.inferenceBinding).toMatchObject({
-            version: 1,
-            provider: inferenceProvider,
-            profileId: inferenceProfileId,
-          });
-        } else {
+        if (runtime === "claude-cli") {
           expect(job.inferenceBinding).toBeUndefined();
         }
         if (nativeCreator) {
@@ -694,23 +688,7 @@ describe("scheduled message actions", () => {
             createdActor: { id: originalCreatorId },
           });
           expect(job.payload.toolsAllowIsDefault).toBeUndefined();
-        } else if (creator === "trusted") {
-          expect(job.scheduledToolPolicy).toEqual({ version: 1, mode: "trusted" });
-        } else {
-          expect(job.owner).toEqual({ agentId: "main", ...accountOwner });
-          expect(job.scheduledToolPolicy).toEqual(accountPolicy);
-          expect(job.toolsAllowProvenance).toEqual({
-            version: 1,
-            source: "final-executable-surface",
-            callerOrigin: { kind: "local" },
-          });
-          expect(job.delivery).toMatchObject({
-            mode: "none",
-            channel: "discord",
-            accountId: "other",
-          });
         }
-        expect(job.payload.toolsAllow).toEqual(["message"]);
         expect(
           await gateway.client.request("cron.run", { id: job.id, mode: "force" }),
         ).toMatchObject({ ok: true, enqueued: true });

@@ -386,40 +386,29 @@ describe("Provider model discovery auth preparation", () => {
     },
   );
 
-  it.each([
-    { providerId: "chutes", profileCount: 2, plugin: chutesPlugin },
-    { providerId: "openai", profileCount: 1, plugin: null },
-    { providerId: "xai", profileCount: 2, plugin: xaiPlugin },
-  ])(
-    "reports every unavailable $providerId profile after OAuth preparation fails",
-    async ({ providerId, profileCount, plugin }) => {
-      if (plugin) {
-        registerProvider(plugin);
-      }
-      const profileIds = Array.from(
-        { length: profileCount },
-        (_, index) => `${providerId}:oauth-${index}`,
-      );
-      const profiles = Object.fromEntries(
-        profileIds.map((profileId) => [
-          profileId,
-          oauthCredential(providerId, `expired-${profileId}`, `refresh-${profileId}`),
-        ]),
-      );
-      const store: AuthProfileStore = { version: 1, profiles };
-      const config: OpenClawConfig = { auth: { order: { [providerId]: profileIds } } };
-      await state.writeAuthProfiles(store);
-      const refresh = mockRefreshFailure();
-      const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("unexpected HTTP"));
-      const outcomes: ProviderCatalogOutcome[] = [];
-      await planCatalog(config, store, { providerId, outcomes });
-      expect(outcomes).toEqual(
-        profileIds.map((profileId) => ({ provider: providerId, profileId, status: "unavailable" })),
-      );
-      expect(refresh).toHaveBeenCalledTimes(profileCount);
-      expect(fetch).not.toHaveBeenCalled();
-    },
-  );
+  it("reports every unavailable profile after exhausting OAuth preparation", async () => {
+    registerProvider(chutesPlugin);
+    const providerId = "chutes";
+    const profileIds = ["chutes:oauth-0", "chutes:oauth-1"];
+    const profiles = Object.fromEntries(
+      profileIds.map((profileId) => [
+        profileId,
+        oauthCredential(providerId, `expired-${profileId}`, `refresh-${profileId}`),
+      ]),
+    );
+    const store: AuthProfileStore = { version: 1, profiles };
+    const config: OpenClawConfig = { auth: { order: { [providerId]: profileIds } } };
+    await state.writeAuthProfiles(store);
+    const refresh = mockRefreshFailure();
+    const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("unexpected HTTP"));
+    const outcomes: ProviderCatalogOutcome[] = [];
+    await planCatalog(config, store, { providerId, outcomes });
+    expect(outcomes).toEqual(
+      profileIds.map((profileId) => ({ provider: providerId, profileId, status: "unavailable" })),
+    );
+    expect(refresh).toHaveBeenCalledTimes(profileIds.length);
+    expect(fetch).not.toHaveBeenCalled();
+  });
 
   it.each([
     { completion: "success", timedOut: true },

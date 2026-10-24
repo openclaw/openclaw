@@ -7,7 +7,6 @@ import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { Agent, EnvHttpProxyAgent, FormData, ProxyAgent } from "undici";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { slackPlugin } from "../extensions/slack/api.js";
-import { createMessageTool } from "../src/agents/tools/message-tool-execution.js";
 import { dispatchChannelMessageAction } from "../src/channels/plugins/message-action-dispatch.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../src/config/config.js";
 import type { OpenClawConfig } from "../src/config/types.js";
@@ -110,11 +109,6 @@ type GatewayResponse = {
   error?: Parameters<RespondFn>[2];
   meta?: Parameters<RespondFn>[3];
 };
-type GatewayMirrorSnapshot = {
-  artifacts: string[];
-  responses: number;
-  cacheWrites: number;
-};
 
 function createOriginatingRun(currentProvider: string, currentChannelId: string) {
   const run = createMessageReadAuthority({
@@ -181,7 +175,6 @@ async function withDownloadFixture(
     invokeGateway: () => Promise<GatewayResponse>;
     gatewayResponses: GatewayResponse[];
     gatewayCacheWrites: DedupeEntry[];
-    gatewayMirrorSnapshots: GatewayMirrorSnapshot[];
     requests: RequestRecord[];
     terminalRequests: URL[];
     phases: Set<Phase>;
@@ -295,7 +288,6 @@ async function withDownloadFixture(
         const pending: Promise<unknown>[] = [];
         const gatewayResponses: GatewayResponse[] = [];
         const gatewayCacheWrites: DedupeEntry[] = [];
-        const gatewayMirrorSnapshots: GatewayMirrorSnapshot[] = [];
         const dedupe = new Map<string, DedupeEntry>();
         const cacheResult = dedupe.set.bind(dedupe);
         vi.spyOn(dedupe, "set").mockImplementation((key, value) => {
@@ -361,13 +353,11 @@ async function withDownloadFixture(
         interleaving.afterGatewayMirror =
           options.phase === "gateway-mirror"
             ? async () => {
-                gatewayMirrorSnapshots.push({
-                  artifacts: (await filesUnder(mediaDir)).filter(
-                    (artifact) => artifact !== preservedPath,
-                  ),
-                  responses: gatewayResponses.length,
-                  cacheWrites: gatewayCacheWrites.length,
-                });
+                expect(gatewayResponses).toEqual([]);
+                expect(gatewayCacheWrites).toEqual([]);
+                expect(
+                  (await filesUnder(mediaDir)).filter((artifact) => artifact !== preservedPath),
+                ).toHaveLength(1);
                 hit("gateway-mirror");
               }
             : undefined;
@@ -468,12 +458,7 @@ async function withDownloadFixture(
                 ProxyAgent,
                 fetch: routeFetch,
               });
-              const tool = run.wrap(
-                createMessageTool({
-                  ...run.options,
-                  config: cfg,
-                }),
-              );
+              const tool = run.createTool(cfg);
               const actionParams = (): Record<string, unknown> => ({
                 fileId: FILE_ID,
                 channelId: TARGET_CHANNEL,
@@ -532,7 +517,6 @@ async function withDownloadFixture(
                 invokeGateway,
                 gatewayResponses,
                 gatewayCacheWrites,
-                gatewayMirrorSnapshots,
                 requests,
                 terminalRequests,
                 phases,
@@ -700,11 +684,6 @@ describe("Gateway message.action Slack download completion", () => {
         const response = await fixture.invokeGateway();
         expect(fixture.phases.has(options.phase)).toBe(true);
         expect(fixture.binaryRequests()).toHaveLength(1);
-        if (options.phase === "gateway-mirror") {
-          expect(fixture.gatewayMirrorSnapshots).toHaveLength(1);
-          expect(fixture.gatewayMirrorSnapshots[0]).toMatchObject({ responses: 0, cacheWrites: 0 });
-          expect(fixture.gatewayMirrorSnapshots[0]?.artifacts).toHaveLength(1);
-        }
         expect(response.ok).toBe(false);
         expect(response.payload).toBeUndefined();
         expect(response.error?.message).toMatch(/no longer active/i);

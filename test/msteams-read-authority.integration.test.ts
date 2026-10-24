@@ -2,31 +2,19 @@ import { createServer } from "node:http";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { msteamsPlugin } from "../extensions/msteams/api.js";
-import { createOperationalRunInstanceRef } from "../src/agents/admitted-run-context.js";
-import { wrapToolWithGatewayCallerIdentity } from "../src/agents/tools/gateway-caller-context.js";
 import { createMessageTool } from "../src/agents/tools/message-tool-execution.js";
 import type { ChannelMessageActionName } from "../src/channels/plugins/message-action-names.js";
 import type { ChannelMessageActionContext } from "../src/channels/plugins/types.core.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../src/config/config.js";
 import type { OpenClawConfig } from "../src/config/types.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../src/gateway/agent-runtime-approval-authority.js";
-import {
-  mintMessageActionTurnCapability,
-  resolveMessageActionTurnCapability,
-  revokeMessageActionTurnCapability,
-} from "../src/gateway/message-action-turn-capability.js";
 import { sendHandlers } from "../src/gateway/server-methods/send.js";
-import type { GatewayClient, GatewayRequestContext } from "../src/gateway/server-methods/types.js";
-import {
-  claimAgentRunDelegatedAuthority,
-  releaseAgentRunDelegatedAuthority,
-  validateAgentRunDelegatedAuthority,
-} from "../src/infra/agent-run-registry.js";
+import type { GatewayRequestContext } from "../src/gateway/server-methods/types.js";
 import { getPluginInstance } from "../src/plugins/plugin-instance-scope.js";
 import { createPluginRegistry } from "../src/plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../src/plugins/runtime.js";
 import type { PluginRuntime } from "../src/plugins/runtime/types.js";
 import { createPluginRecord } from "../src/plugins/status.test-fixtures.js";
+import { createMessageReadAuthority } from "./message-read-authority.test-support.js";
 
 type GraphRequest = { method: string; url: URL; body: unknown };
 type GraphReply = { status?: number; headers?: Record<string, string>; body?: unknown };
@@ -184,8 +172,6 @@ async function createFixture(options: FixtureOptions = {}) {
   setRuntimeConfigSnapshot(cfg, cfg);
 
   const sessionKey = "agent:main:msteams:channel:origin";
-  const operationalRunInstance = createOperationalRunInstanceRef(`teams-read-${++sequence}`);
-  const delegatedAuthority = claimAgentRunDelegatedAuthority(operationalRunInstance);
   const toolContext = {
     currentChannelProvider: "msteams",
     currentChannelId: options.self ? chatId : options.narrowTeam ? targetChannel : currentChannel,
@@ -197,36 +183,18 @@ async function createFixture(options: FixtureOptions = {}) {
           currentGraphChannelId: options.narrowTeam ? target : currentTarget,
         }),
   };
-  const capabilityParams = { agentId: "main", runId: operationalRunInstance.runId, sessionKey };
-  const turnCapability = mintMessageActionTurnCapability({
-    ...capabilityParams,
-    requesterAccountId: "default",
-    requesterSenderId: options.missingRequester ? undefined : requesterId,
+  const run = createMessageReadAuthority({
+    runId: `teams-read-${++sequence}`,
+    sessionKey,
+    // Capability minting normalizes an empty requester to the same absent identity.
+    requesterSenderId: options.missingRequester ? "" : requesterId,
     toolContext,
+    gatewayContext: "resolved",
   });
-  const messageActionContext = resolveMessageActionTurnCapability({
-    ...capabilityParams,
-    token: turnCapability,
-  });
-  if (!messageActionContext) {
-    throw new Error("Expected an admitted Teams turn");
-  }
-  const client = {
-    internal: {
-      agentRuntimeIdentity: {
-        kind: "agentRuntime",
-        agentId: "main",
-        sessionKey,
-        operationalRunInstance,
-        delegatedAuthority: { kind: "local", ...delegatedAuthority },
-        messageActionContext: { ...messageActionContext, turnCapability },
-      },
-    },
-  } as GatewayClient;
   const context = {
     dedupe: new Map(),
     getRuntimeConfig: () => cfg,
-    validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
+    validateAgentRuntimeApprovalAuthority: run.validate,
   } as GatewayRequestContext;
   const requests: string[] = [];
   const nativeRequests: GraphRequest[] = [];
@@ -272,8 +240,7 @@ async function createFixture(options: FixtureOptions = {}) {
     });
   });
   cleanups.push(async () => {
-    revokeMessageActionTurnCapability(turnCapability);
-    releaseAgentRunDelegatedAuthority(delegatedAuthority);
+    run.dispose();
     server.closeAllConnections();
     await new Promise<void>((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()));
@@ -289,21 +256,12 @@ async function createFixture(options: FixtureOptions = {}) {
     throw new Error("Expected loopback server address");
   }
   graph.origin = `http://msteams-proof.invalid:${address.port}`;
-  const tool = wrapToolWithGatewayCallerIdentity(
+  const tool = run.wrap(
     createMessageTool({
-      ...capabilityParams,
-      ...toolContext,
-      agentSessionKey: sessionKey,
-      agentAccountId: "default",
+      ...run.options,
       senderIsOwner: options.senderIsOwner,
-      messageActionTurnCapability: turnCapability,
       config: cfg,
     }),
-    {
-      ...capabilityParams,
-      operationalRunInstance,
-      receiptAuthority: () => validateAgentRunDelegatedAuthority(delegatedAuthority),
-    },
   );
 
   return {
@@ -311,8 +269,8 @@ async function createFixture(options: FixtureOptions = {}) {
     nativeRequests,
     providerSettlements,
     tool,
-    revokeTurn: () => revokeMessageActionTurnCapability(turnCapability),
-    revokeClaim: () => releaseAgentRunDelegatedAuthority(delegatedAuthority),
+    revokeTurn: run.revokeTurn,
+    revokeClaim: run.releaseClaim,
     retirePlugin: () => {
       record.enabled = false;
     },
@@ -344,7 +302,7 @@ async function createFixture(options: FixtureOptions = {}) {
         },
         respond,
         context,
-        client,
+        client: run.client,
         req: { type: "req", id: `teams-rpc-${sequence}`, method: "message.action" },
         isWebchatConnect: () => false,
       });
