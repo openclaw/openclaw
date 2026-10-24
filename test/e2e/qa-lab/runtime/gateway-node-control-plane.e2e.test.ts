@@ -340,11 +340,11 @@ describe("Gateway node control plane", () => {
   );
 
   it(
-    "accepts the N-1 node protocol while requiring current-protocol operators",
+    "captures the default node protocol envelope with a synthetic v3 overlap fixture",
     { timeout: REQUEST_TIMEOUT_MS * 2 },
     async () => {
       expect(MIN_CLIENT_PROTOCOL_VERSION).toBe(PROTOCOL_VERSION);
-      expect(MIN_NODE_PROTOCOL_VERSION).toBe(PROTOCOL_VERSION - 1);
+      expect(MIN_NODE_PROTOCOL_VERSION).toBeLessThan(PROTOCOL_VERSION);
 
       const fixture = await startProtocolEnvelopeFixture();
       let node: GatewayClient | undefined;
@@ -441,15 +441,15 @@ describe("Gateway node control plane", () => {
           },
           {
             clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
-            platform: "macos",
-            deviceFamily: "Mac",
+            platform: "darwin",
             minProtocol: MIN_NODE_PROTOCOL_VERSION,
             maxProtocol: MIN_NODE_PROTOCOL_VERSION,
           },
         ]);
+        expect(fixture.connectFrames[1]).not.toHaveProperty("deviceFamily");
 
         fixture.setProtocol(PROTOCOL_VERSION);
-        fixture.disconnectClients(`Gateway upgraded to protocol v${PROTOCOL_VERSION}`);
+        fixture.disconnectClients("Gateway upgraded to protocol v4");
         await vi.waitFor(
           () => expect(helloProtocols).toEqual([MIN_NODE_PROTOCOL_VERSION, PROTOCOL_VERSION]),
           {
@@ -459,8 +459,7 @@ describe("Gateway node control plane", () => {
         );
         expect(fixture.connectFrames.slice(-2)).toMatchObject([
           {
-            platform: "macos",
-            deviceFamily: "Mac",
+            platform: "darwin",
             minProtocol: MIN_NODE_PROTOCOL_VERSION,
             maxProtocol: MIN_NODE_PROTOCOL_VERSION,
           },
@@ -473,7 +472,7 @@ describe("Gateway node control plane", () => {
         ]);
 
         fixture.setProtocol(MIN_NODE_PROTOCOL_VERSION);
-        fixture.disconnectClients(`Gateway rolled back to protocol v${MIN_NODE_PROTOCOL_VERSION}`);
+        fixture.disconnectClients("Gateway rolled back to protocol v3");
         await vi.waitFor(
           () =>
             expect(helloProtocols).toEqual([
@@ -494,8 +493,7 @@ describe("Gateway node control plane", () => {
             maxProtocol: PROTOCOL_VERSION,
           },
           {
-            platform: "macos",
-            deviceFamily: "Mac",
+            platform: "darwin",
             minProtocol: MIN_NODE_PROTOCOL_VERSION,
             maxProtocol: MIN_NODE_PROTOCOL_VERSION,
           },
@@ -524,9 +522,12 @@ describe("Gateway node control plane", () => {
   });
 
   it(
-    "reconnects the same paired identity across N-1 and current-protocol envelopes",
+    "reconnects the same paired identity across v3-only and v4 envelopes",
     { timeout: TEST_TIMEOUT_MS },
     async () => {
+      expect(MIN_NODE_PROTOCOL_VERSION).toBe(3);
+      expect(PROTOCOL_VERSION).toBe(4);
+
       let operator: GatewayClient | undefined;
       let node: GatewayClient | undefined;
       let proofError: unknown;
@@ -569,35 +570,12 @@ describe("Gateway node control plane", () => {
           },
         });
 
-        // The client is constrained to N-1; hello reports the current server protocol.
+        // The client envelope is constrained to v3; hello reports the v4 server protocol.
         expect(constrainedHello?.protocol).toBe(PROTOCOL_VERSION);
-        const previousSurfaceUrl = constrainedHello?.pluginSurfaceUrls?.[FIXTURE_CAPABILITY];
-        if (!previousSurfaceUrl) {
-          throw new Error("previous-protocol hello omitted the fixture plugin surface URL");
-        }
-        expect(new URL(previousSurfaceUrl).pathname).toMatch(/^\/__openclaw__\/cap\//);
-        const previousSurfaceResponse = await fetch(`${previousSurfaceUrl}${FIXTURE_ROUTE}`, {
-          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-        });
-        expect(previousSurfaceResponse.status).toBe(204);
-        const previousListed = await waitForApprovedNode(operator, identity.deviceId, gateway.logs);
-        expect(previousListed.caps?.toSorted()).toEqual(declaredCaps.toSorted());
-        expect(previousListed.commands?.toSorted()).toEqual(declaredCommands.toSorted());
-
-        const previousPluginParams = { message: "previous-protocol-compatible" };
-        expect(
-          await invokeNodeCommand({
-            operator,
-            nodeId: identity.deviceId,
-            command: FIXTURE_COMMAND,
-            params: previousPluginParams,
-          }),
-        ).toMatchObject({
-          ok: true,
-          nodeId: identity.deviceId,
-          command: FIXTURE_COMMAND,
-          payload: { echoed: previousPluginParams },
-        });
+        expect(constrainedHello?.pluginSurfaceUrls).toBeUndefined();
+        const legacyListed = await waitForApprovedNode(operator, identity.deviceId, gateway.logs);
+        expect(legacyListed.caps).toEqual(["camera"]);
+        expect(legacyListed.commands).toEqual(["camera.list"]);
 
         const cameraParams = { includeUnavailable: false };
         const cameraResult = await invokeNodeCommand({
@@ -647,7 +625,7 @@ describe("Gateway node control plane", () => {
         expect(currentHello?.protocol).toBe(PROTOCOL_VERSION);
         const fixtureSurfaceUrl = currentHello?.pluginSurfaceUrls?.[FIXTURE_CAPABILITY];
         if (!fixtureSurfaceUrl) {
-          throw new Error("current-protocol hello omitted the fixture plugin surface URL");
+          throw new Error("v4 hello omitted the fixture plugin surface URL");
         }
         expect(new URL(fixtureSurfaceUrl).pathname).toMatch(/^\/__openclaw__\/cap\//);
         const fixtureSurfaceResponse = await fetch(`${fixtureSurfaceUrl}${FIXTURE_ROUTE}`, {
@@ -679,11 +657,6 @@ describe("Gateway node control plane", () => {
           },
         });
         expect(invocations).toMatchObject([
-          {
-            nodeId: identity.deviceId,
-            command: FIXTURE_COMMAND,
-            params: previousPluginParams,
-          },
           {
             nodeId: identity.deviceId,
             command: "camera.list",
@@ -1280,13 +1253,13 @@ async function startProtocolEnvelopeFixture(): Promise<{
   });
   const address = server.address();
   if (!address || typeof address === "string") {
-    throw new Error("previous-protocol Gateway fixture did not bind a TCP port");
+    throw new Error("v3 Gateway fixture did not bind a TCP port");
   }
   return {
     connectFrames,
     gateway: {
       wsUrl: `ws://127.0.0.1:${address.port}`,
-      token: "qa-previous-protocol-gateway-token",
+      token: "qa-v3-gateway-token",
       runtimeEnv: {},
       logs: () => JSON.stringify(connectFrames),
     },

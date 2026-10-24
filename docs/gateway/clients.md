@@ -338,10 +338,10 @@ transition racing the list request is neither lost nor resurrected.
 
 ## Track protocol versions
 
-The current wire version is `5`. General operator and WebChat clients must
-negotiate the exact current version with `minProtocol: 5` and `maxProtocol: 5`.
+The current wire version is `4`. General operator and WebChat clients must
+negotiate the exact current version with `minProtocol: 4` and `maxProtocol: 4`.
 Only authenticated node clients and lightweight checks have the N-1 acceptance
-window, currently protocol `4` through `5`.
+window, currently protocol `3` through `4`.
 
 Protocol changes are additive first. `protocol.schema.json` includes `since`
 release-vintage metadata and required scope metadata for core methods, but a wire

@@ -3,7 +3,7 @@
 Typed schemas, inferred TypeScript types, and runtime validators for the OpenClaw
 Gateway WebSocket protocol.
 
-The current wire protocol is version 5. General clients must use v5; authenticated
+The current wire protocol is version 4. General clients must use v4; authenticated
 node clients and lightweight connectivity checks may use the N-1 window during rolling upgrades.
 See the [Gateway protocol specification](https://docs.openclaw.ai/gateway/protocol)
 for transport, authentication, roles, scopes, and complete frame examples.

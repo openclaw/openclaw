@@ -1,11 +1,32 @@
-export type StandaloneRuntimeManifest = {
-  schemaVersion: 1;
+export type StandaloneBuildInfo = {
   mode: "jit" | "bytecode" | "aot";
+  openclaw: { version: string; commit?: string };
+  bun: { version: string; revision?: string; commit?: string; executableSha256?: string };
+  target?: { platform: string; arch: string };
+  build?: {
+    id: string;
+    flavor: "standard" | "support";
+    pluginSetSha256: string;
+    moduleGraphSha256: string;
+    debugEntry?: string;
+  };
+  plugins?: { embedded: string[]; omitted: string[] };
+  nativeModules?: {
+    name: string;
+    version: string;
+    artifacts: string[];
+    qualification: "unverified";
+    backend: string;
+  }[];
+};
+
+export type StandaloneRuntimeManifest = StandaloneBuildInfo & {
+  schemaVersion: 1;
   executable: { path: string; sha256?: string };
   runtime: { path: string; sha256?: string };
-  openclaw: { version: string; commit?: string };
-  bun: { version: string };
 };
+
+export function getStandaloneRuntimeBuild(executable?: string): StandaloneBuildInfo | undefined;
 
 export function readStandaloneRuntimeManifest(
   executable?: string,

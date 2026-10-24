@@ -4,7 +4,7 @@ import path from "node:path";
 import { normalizeBuildCommit } from "../write-build-info.ts";
 
 export const STANDALONE_USAGE =
-  "Usage: bun scripts/build-bun-standalone.mjs <fresh-output-directory> [--bytecode|--compile-aot] [--plugins <id,id,...>]\n" +
+  "Usage: bun scripts/build-bun-standalone.mjs <fresh-output-directory> [--bytecode|--compile-aot] [--plugins <id,id,...>] [--support-output <fresh-directory>]\n" +
   "Default: JIT. --compile-aot is EXPERIMENTAL and requires an AOT-capable Bun.";
 
 /**
@@ -15,6 +15,7 @@ export const STANDALONE_USAGE =
  *   mode: "jit" | "bytecode" | "aot",
  *   compileFlags: string[],
  *   pluginIds?: string[]
+ *   supportOutputDirectory?: string
  * }}
  */
 export function parseStandaloneArguments(args) {
@@ -27,9 +28,22 @@ export function parseStandaloneArguments(args) {
   }
   const compileFlags = [];
   let pluginIds;
+  let supportOutputDirectory;
   for (let index = 0; index < flags.length; index += 1) {
     const flag = flags[index];
-    if (flag === "--plugins") {
+    if (flag === "--target" || flag.startsWith("--target=")) {
+      throw new Error(
+        "Standalone builds use the build process's OS, architecture, and native dependencies. AOT cannot cross-compile; run the matching Bun compiler on each target.",
+      );
+    } else if (flag === "--support-output") {
+      const value = flags[++index];
+      if (supportOutputDirectory !== undefined || !value || value.startsWith("-")) {
+        throw new Error(
+          `Specify --support-output once with a fresh directory.\n${STANDALONE_USAGE}`,
+        );
+      }
+      supportOutputDirectory = value;
+    } else if (flag === "--plugins") {
       if (pluginIds !== undefined) {
         throw new Error(`Specify --plugins once.\n${STANDALONE_USAGE}`);
       }
@@ -41,7 +55,7 @@ export function parseStandaloneArguments(args) {
       }
       pluginIds = [...new Set(value.split(",").map((id) => id.trim()))];
     } else if (["--bytecode", "--compile-aot"].includes(flag) && compileFlags.length === 0) {
-      compileFlags.push(flag);
+      compileFlags.push(flag === "--compile-aot" ? "--aot" : flag);
     } else {
       throw new Error(
         `Unknown option or repeated build mode: ${flag}. Choose at most one build mode.\n${STANDALONE_USAGE}`,
@@ -49,27 +63,37 @@ export function parseStandaloneArguments(args) {
     }
   }
   const mode =
-    compileFlags[0] === "--compile-aot"
-      ? "aot"
-      : compileFlags[0] === "--bytecode"
-        ? "bytecode"
-        : "jit";
-  return { outputDirectory, mode, compileFlags, ...(pluginIds ? { pluginIds } : {}) };
+    compileFlags[0] === "--aot" ? "aot" : compileFlags[0] === "--bytecode" ? "bytecode" : "jit";
+  if (supportOutputDirectory && mode !== "aot") {
+    throw new Error("--support-output requires --compile-aot; it builds a matched JIT companion.");
+  }
+  return {
+    outputDirectory,
+    mode,
+    compileFlags,
+    ...(pluginIds ? { pluginIds } : {}),
+    ...(supportOutputDirectory ? { supportOutputDirectory } : {}),
+  };
 }
 
 export function assertStandaloneCompiler(mode, help) {
-  if (mode === "aot" && !/(?:^|\s)--compile-aot(?:\s|=|$)/m.test(help)) {
+  if (mode === "aot" && !/(?:^|\s)--aot(?:\s|=|$)/m.test(help)) {
     throw new Error(
-      "EXPERIMENTAL AOT builds require a Bun compiler that supports --compile-aot. " +
+      "EXPERIMENTAL AOT builds require a Bun compiler that supports --aot. " +
         "This Bun does not support it. Use the default JIT mode or --bytecode with the production-pinned Bun; " +
         "build an AOT-capable Bun explicitly to experiment with AOT.",
     );
   }
 }
 
-export function assertStandalonePlatform(platform) {
+export function assertStandalonePlatform(platform, arch = process.arch) {
   if (platform !== "darwin" && platform !== "linux") {
     throw new Error("Build on macOS or Linux; Windows standalone artifacts are not supported yet.");
+  }
+  if (arch !== "arm64" && arch !== "x64") {
+    throw new Error(
+      "Standalone builds require an arm64 or x64 compiler process on the target host; AOT cannot cross-compile.",
+    );
   }
 }
 
@@ -193,6 +217,22 @@ export async function describeStandaloneRuntime(root) {
   return { path: "runtime", sizeBytes, sha256: digest.digest("hex"), fileCount, symlinkCount };
 }
 
+/**
+ * @param {{
+ * outputRoot: string,
+ * mode: import("../../cli-invocation.mjs").StandaloneBuildInfo["mode"],
+ * bun: import("../../cli-invocation.mjs").StandaloneBuildInfo["bun"],
+ * openclaw: import("../../cli-invocation.mjs").StandaloneBuildInfo["openclaw"],
+ * embedded: {modules: number, plugins: number, workers: number, inlineWorkers: number},
+ * plugins: {embedded: string[], omitted: string[]},
+ * pruning: {categories: Record<string, {files: number, bytes: number}>, sidecarPlugins: string[], policy?: string, removedFiles?: number, removedBytes?: number, removedSymlinks?: number},
+ * sqlite: {version: string, [key: string]: unknown},
+ * packageManager?: {name: string, version: string, entrypoint: string, fileCount: number, sizeBytes: number},
+ * build?: import("../../cli-invocation.mjs").StandaloneBuildInfo["build"],
+ * nativeModules?: import("../../cli-invocation.mjs").StandaloneBuildInfo["nativeModules"],
+ * debug?: {entry: {path: string, sizeBytes: number, sha256: string}, bootstrap: {path: string, sizeBytes: number, sha256: string}, executable: {path: string, sizeBytes: number, sha256: string}, runtime: Awaited<ReturnType<typeof describeStandaloneRuntime>>}
+ * }} options
+ */
 export async function createStandaloneManifest({
   outputRoot,
   mode,
@@ -203,6 +243,9 @@ export async function createStandaloneManifest({
   pruning,
   sqlite,
   packageManager,
+  build,
+  nativeModules,
+  debug,
 }) {
   const runtime = await describeStandaloneRuntime(path.join(outputRoot, "runtime"));
   const executable = path.join(outputRoot, "openclaw");
@@ -210,6 +253,9 @@ export async function createStandaloneManifest({
   return {
     schemaVersion: 1,
     mode,
+    ...(build ? { build } : {}),
+    ...(nativeModules ? { nativeModules } : {}),
+    ...(debug ? { debug } : {}),
     target: { platform: process.platform, arch: process.arch },
     bun,
     openclaw,

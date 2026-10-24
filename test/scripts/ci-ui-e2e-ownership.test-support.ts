@@ -140,7 +140,7 @@ export function assertControlUiE2eOwnership(
   for (const project of projects.slice(0, 2)) {
     expect(project.test).toMatchObject({
       fileParallelism: sharedVitestConfig.test.fileParallelism,
-      maxWorkers: undefined,
+      maxWorkers: config.test?.maxWorkers,
       sequence: { groupOrder: 0 },
     });
   }

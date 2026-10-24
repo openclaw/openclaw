@@ -456,7 +456,7 @@ export function grantBoardWidgetInDatabase(
   const next = createBoardGrantSnapshot(previous.snapshot, name, decision, revision, instanceId);
   upsertTabs(database, previous, next);
   const widget = next.widgets.find((candidate) => candidate.name === name)!;
-  if (!widget.contentOwner) {
+  if (!widget.contentOwner || widget.contentOwner === "registered") {
     throw new BoardValidationError(
       "invalid_operation",
       `board widget ${name} content ownership is unavailable`,
