@@ -21,7 +21,7 @@ import {
 import { runOpenClawAgentWriteAdmission } from "openclaw/plugin-sdk/sqlite-runtime";
 import { observeHostDataSql } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { makeUserMessage } from "../../../../test/helpers/user-message.js";
+import { makeUserMessage } from "../../../test-support/message-fixtures.test-support.js";
 import { projectContextEngineAssemblyForCodex } from "./context-engine-projection.js";
 import { readCodexNativeHistory } from "./session-history-read.js";
 import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";

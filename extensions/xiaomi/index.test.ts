@@ -11,7 +11,7 @@ import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-trans
 import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
 import { createZeroUsageFixture } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
-import { makeTextToolResult } from "../../test/helpers/text-tool-result.js";
+import { makeTextToolResult } from "../test-support/message-fixtures.test-support.js";
 import { runSingleProviderCatalog } from "../test-support/provider-model-test-helpers.js";
 import xiaomiPlugin from "./index.js";
 

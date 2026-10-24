@@ -3,7 +3,7 @@ import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { loadUserTurnTranscriptRecorderFactoryForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
+import { makeTextToolResult } from "../../../test-support/message-fixtures.test-support.js";
 import { readMirroredSessionHistoryMessages } from "./attempt-context.js";
 import type { CodexTurnStartParams } from "./protocol.js";
 import {

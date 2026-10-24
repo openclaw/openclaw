@@ -14,8 +14,10 @@ import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-ru
 import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
-import { makeTextToolResult } from "../../test/helpers/text-tool-result.js";
-import { makeUserMessage } from "../../test/helpers/user-message.js";
+import {
+  makeTextToolResult,
+  makeUserMessage,
+} from "../test-support/message-fixtures.test-support.js";
 import plugin from "./index.js";
 import { buildMoonshotProvider, MOONSHOT_CN_BASE_URL } from "./provider-catalog.js";
 import { createKimiWebSearchProvider } from "./src/kimi-web-search-provider.js";

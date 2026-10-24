@@ -22,7 +22,7 @@ import {
 } from "openclaw/plugin-sdk/memory-host-core";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, describe, test, expect, vi } from "vitest";
-import { makeUserMessage } from "../../test/helpers/user-message.js";
+import { makeUserMessage } from "../test-support/message-fixtures.test-support.js";
 import { createEmbeddings, isMemoryRecallTimeoutError, runWithTimeout } from "./embeddings.js";
 import memoryPlugin from "./index.js";
 import { looksLikeEnvelopeSludge } from "./memory-capture-sanitization.js";

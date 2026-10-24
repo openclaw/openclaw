@@ -2,12 +2,14 @@
 import { completeSimple, type Model } from "openclaw/plugin-sdk/llm";
 import { extractNonEmptyAssistantText, isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
 import { describe, expect, it } from "vitest";
-import { makeTextToolResult } from "../../test/helpers/text-tool-result.js";
-import { makeUserMessage } from "../../test/helpers/user-message.js";
 import {
   createLiveValueTool,
   requireLiveToolCall,
 } from "../test-support/live-value-tool.test-support.js";
+import {
+  makeTextToolResult,
+  makeUserMessage,
+} from "../test-support/message-fixtures.test-support.js";
 import { buildAbliterationProvider, ABLITERATION_DEFAULT_MODEL_ID } from "./models.js";
 
 const ABLITERATION_API_KEY = process.env.ABLITERATION_API_KEY?.trim() ?? "";

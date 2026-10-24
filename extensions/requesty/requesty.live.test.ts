@@ -4,12 +4,14 @@ import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-ru
 import type { ProviderCatalogContext } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { extractNonEmptyAssistantText, isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
 import { describe, expect, it } from "vitest";
-import { makeTextToolResult } from "../../test/helpers/text-tool-result.js";
-import { makeUserMessage } from "../../test/helpers/user-message.js";
 import {
   createLiveValueTool,
   requireLiveToolCall,
 } from "../test-support/live-value-tool.test-support.js";
+import {
+  makeTextToolResult,
+  makeUserMessage,
+} from "../test-support/message-fixtures.test-support.js";
 import {
   getStaticRequestyModelCatalog,
   REQUESTY_BASE_URL,

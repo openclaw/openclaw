@@ -6,7 +6,7 @@ import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import type { TranscriptTurnAdmission } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterAll, vi, type Mock } from "vitest";
-import { makeUserMessage } from "../../../test/helpers/user-message.js";
+import { makeUserMessage } from "../../test-support/message-fixtures.test-support.js";
 import { createAttemptTranscriptJournal } from "./attempt-transcript-journal.js";
 import type { AttemptParamsLike } from "./attempt-types.js";
 import { attachEventBridge, type SessionLike } from "./event-bridge.js";

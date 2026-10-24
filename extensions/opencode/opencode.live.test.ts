@@ -2,12 +2,14 @@ import { completeSimple, streamSimple, type Model } from "openclaw/plugin-sdk/ll
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { extractNonEmptyAssistantText, isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
 import { describe, expect, it } from "vitest";
-import { makeTextToolResult } from "../../test/helpers/text-tool-result.js";
-import { makeUserMessage } from "../../test/helpers/user-message.js";
 import {
   createLiveValueTool,
   requireLiveToolCall,
 } from "../test-support/live-value-tool.test-support.js";
+import {
+  makeTextToolResult,
+  makeUserMessage,
+} from "../test-support/message-fixtures.test-support.js";
 import plugin from "./index.js";
 import {
   buildOpencodeZenLiveProviderConfig,

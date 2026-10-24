@@ -10,7 +10,7 @@ import {
   createEmptyTransportUsage,
 } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { afterEach, expect, it, vi } from "vitest";
-import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
+import { makeTextToolResult } from "../../test-support/message-fixtures.test-support.js";
 import { createConfiguredOllamaCompatStreamWrapper } from "./stream-compat.js";
 import { createOllamaStreamFn } from "./stream.runtime.js";
 

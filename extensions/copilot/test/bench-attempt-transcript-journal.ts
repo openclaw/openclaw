@@ -17,7 +17,7 @@ import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawStateDatabaseAsync,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
+import { makeTextToolResult } from "../../test-support/message-fixtures.test-support.js";
 import { createAttemptTranscriptJournal } from "../src/attempt-transcript-journal.js";
 import type { AttemptParamsLike } from "../src/attempt-types.js";
 

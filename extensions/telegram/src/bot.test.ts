@@ -46,7 +46,7 @@ import {
   vi,
   type MockInstance,
 } from "vitest";
-import { makeUserMessage } from "../../../test/helpers/user-message.js";
+import { makeUserMessage } from "../../test-support/message-fixtures.test-support.js";
 import { buildTelegramApprovalCallbackData } from "./approval-callback-data.js";
 import type { TelegramBotFixtureMocks } from "./bot-module-mocks.test-support.js";
 import {

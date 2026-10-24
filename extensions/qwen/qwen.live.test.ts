@@ -4,8 +4,10 @@ import { createSolidPngBuffer } from "openclaw/plugin-sdk/test-fixtures";
 import { extractNonEmptyAssistantText, isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
 import { Type } from "typebox";
 import { beforeAll, describe, expect, it } from "vitest";
-import { makeTextToolResult } from "../../test/helpers/text-tool-result.js";
-import { makeUserMessage } from "../../test/helpers/user-message.js";
+import {
+  makeTextToolResult,
+  makeUserMessage,
+} from "../test-support/message-fixtures.test-support.js";
 import { QWEN_STANDARD_GLOBAL_BASE_URL } from "./models.js";
 import { buildQwenProvider } from "./provider-catalog.js";
 import { wrapQwenProviderStream } from "./stream.js";

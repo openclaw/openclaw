@@ -23,7 +23,7 @@ import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-test
 import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterAll, afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
-import { makeUserMessage } from "../../test/helpers/user-message.js";
+import { makeUserMessage } from "../test-support/message-fixtures.test-support.js";
 import { runAgentsApiAttempt, type AgentsApiPromptHistories } from "./agentsapi-attempt.js";
 import { createAttemptParams } from "./agentsapi-attempt.test-helpers.js";
 import type { AgentsApiBinding } from "./agentsapi-bindings.js";

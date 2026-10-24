@@ -16,7 +16,7 @@ import {
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { expect, it, vi } from "vitest";
-import { makeUserMessage } from "../../../test/helpers/user-message.js";
+import { makeUserMessage } from "../../test-support/message-fixtures.test-support.js";
 import { createCopilotAgentHarness } from "../harness.js";
 import { makeCopilotModel, makeUserTurnRecorder } from "./attempt.test-support.js";
 import { createCopilotFaultPeer } from "./catalog-lifetime.test-support.js";

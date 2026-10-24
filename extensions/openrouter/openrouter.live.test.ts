@@ -7,7 +7,7 @@ import {
   requireRegisteredProvider,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it } from "vitest";
-import { makeUserMessage } from "../../test/helpers/user-message.js";
+import { makeUserMessage } from "../test-support/message-fixtures.test-support.js";
 import plugin from "./index.js";
 import { normalizeOpenRouterApiModelId } from "./models.js";
 

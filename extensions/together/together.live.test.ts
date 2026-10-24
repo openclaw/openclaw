@@ -3,7 +3,7 @@ import { completeSimple, type Model } from "openclaw/plugin-sdk/llm";
 import { isTruthyEnvValue } from "openclaw/plugin-sdk/runtime-env";
 import { extractNonEmptyAssistantText as extractAssistantText } from "openclaw/plugin-sdk/test-live";
 import { describe, expect, it } from "vitest";
-import { makeUserMessage } from "../../test/helpers/user-message.js";
+import { makeUserMessage } from "../test-support/message-fixtures.test-support.js";
 import { TOGETHER_BASE_URL, TOGETHER_MODEL_CATALOG } from "./models.js";
 
 const TOGETHER_KEY = process.env.TOGETHER_API_KEY ?? "";

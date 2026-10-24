@@ -12,7 +12,7 @@ import {
   readVisibleSessionTranscriptMessageEntries,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterEach, beforeEach, expect, it, vi, type MockInstance } from "vitest";
-import { makeUserMessage } from "../../../../test/helpers/user-message.js";
+import { makeUserMessage } from "../../../test-support/message-fixtures.test-support.js";
 import {
   HOST_KEY,
   HOST_MODEL,

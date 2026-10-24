@@ -5,7 +5,7 @@ import {
   type AgentMessage,
 } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it } from "vitest";
-import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
+import { makeTextToolResult } from "../../../test-support/message-fixtures.test-support.js";
 import {
   buildCodexContinuityCalibration,
   fitCodexProjectedContextForTurnStart,

@@ -2,7 +2,7 @@ import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-onboard";
 import { makeAgentAssistantMessage } from "openclaw/plugin-sdk/test-fixtures";
-import { makeTextToolResult } from "../../test/helpers/text-tool-result.js";
+import { makeTextToolResult } from "../test-support/message-fixtures.test-support.js";
 import { runSingleProviderCatalog } from "../test-support/provider-model-test-helpers.js";
 import basetenPlugin from "./index.js";
 

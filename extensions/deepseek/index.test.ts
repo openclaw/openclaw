@@ -6,7 +6,7 @@ import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-trans
 import { createProviderUsageFetch, makeResponse } from "openclaw/plugin-sdk/test-env";
 import { createZeroUsageFixture } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
-import { makeTextToolResult } from "../../test/helpers/text-tool-result.js";
+import { makeTextToolResult } from "../test-support/message-fixtures.test-support.js";
 import deepseekPlugin from "./index.js";
 import { buildDeepSeekProvider } from "./provider-catalog.js";
 import { createDeepSeekV4ThinkingWrapper } from "./stream.js";

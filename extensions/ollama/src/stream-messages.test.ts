@@ -1,7 +1,7 @@
 import type { Message } from "openclaw/plugin-sdk/llm";
 import { makeAgentAssistantMessage, makeAgentUserMessage } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
-import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
+import { makeTextToolResult } from "../../test-support/message-fixtures.test-support.js";
 import { convertToOllamaMessages } from "./stream-messages.js";
 
 const opening = "\n<!-- OPENCLAW-RELOCATABLE-BOUNDARY -->\n";

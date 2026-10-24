@@ -5,7 +5,7 @@ import { buildCopilotIdeHeaders } from "openclaw/plugin-sdk/provider-auth";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { createZeroUsageFixture } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
-import { makeTextToolResult } from "../../test/helpers/text-tool-result.js";
+import { makeTextToolResult } from "../test-support/message-fixtures.test-support.js";
 import { wrapCopilotProviderStream } from "./stream.js";
 
 type ResponsesTestPayload = { input: Array<Record<string, unknown>> };
