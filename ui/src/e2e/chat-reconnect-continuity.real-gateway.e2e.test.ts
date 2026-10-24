@@ -229,17 +229,13 @@ suite.define(() => {
           text: group.textContent ?? "",
         })),
       );
-      const index = (role: "user" | "assistant", text: string) =>
-        groups.findIndex((group) => group[role] && group.text.includes(text));
-      const firstUserIndex = index("user", firstPrompt);
-      const firstAssistantIndex = index("assistant", opening.trim());
-      const followUpUserIndex = index("user", followUpPrompt);
-      const followUpAssistantIndex = index("assistant", followUpReply);
-      expect(firstUserIndex).toBeGreaterThanOrEqual(0);
-      expect(firstAssistantIndex).toBeGreaterThan(firstUserIndex);
-      expect(followUpUserIndex).toBeGreaterThan(firstAssistantIndex);
-      expect(followUpAssistantIndex).toBeGreaterThan(followUpUserIndex);
-      expect(groups[followUpAssistantIndex]?.text).not.toContain(offlineTail);
+      expect(groups).toEqual([
+        { assistant: false, user: true, text: expect.stringContaining(firstPrompt) },
+        { assistant: true, user: false, text: expect.stringContaining(opening.trim()) },
+        { assistant: false, user: true, text: expect.stringContaining(followUpPrompt) },
+        { assistant: true, user: false, text: expect.stringContaining(followUpReply) },
+      ]);
+      expect(groups.at(-1)?.text).not.toContain(offlineTail);
       const transcript = groups.flatMap((row) => (row.assistant ? [row.text] : [])).join("\n");
       expect(occurrences(transcript, followUpReply)).toBe(1);
       expect([aborts().length, provider.requests()]).toEqual([1, 2]);

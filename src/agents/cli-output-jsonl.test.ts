@@ -1,12 +1,13 @@
 import { readFileSync } from "node:fs";
 import { calculateUsageCost } from "@openclaw/llm-core";
 import { describe, expect, it } from "vitest";
-import { createCliJsonlStreamingParser } from "./cli-output-stream.js";
 import { parseCliOutput } from "./cli-output.js";
 import {
   claudeMessageStart,
   claudeStreamEvent,
   claudeTextDelta,
+  createClaudeParser,
+  createClaudeBackend,
   joinJsonlFrames,
 } from "./cli-output.test-helpers.js";
 
@@ -36,12 +37,7 @@ describe("parseCliJsonl", () => {
           usage: { input_tokens: 5, output_tokens: 2 },
         },
       ),
-      {
-        command: "local-cli",
-        output: "jsonl",
-        jsonlDialect: "claude-stream-json",
-        sessionIdFields: ["session_id"],
-      },
+      createClaudeBackend("local-cli"),
       "local-cli",
     );
     expect(result).toEqual({
@@ -66,12 +62,7 @@ describe("parseCliJsonl", () => {
         claudeTextDelta("TEST DONE"),
         { type: "result", session_id: "session-reparse", result: "TEST DONE" },
       ),
-      {
-        command: "local-cli",
-        output: "jsonl",
-        jsonlDialect: "claude-stream-json",
-        sessionIdFields: ["session_id"],
-      },
+      createClaudeBackend("local-cli"),
       "local-cli",
     );
 
@@ -234,12 +225,7 @@ describe("parseCliJsonl", () => {
           result: "DONE",
         },
       ),
-      {
-        command: "local-cli",
-        output: "jsonl",
-        jsonlDialect: "claude-stream-json",
-        sessionIdFields: ["session_id"],
-      },
+      createClaudeBackend("local-cli"),
       "local-cli",
     );
 
@@ -627,12 +613,7 @@ describe("parseCliJsonl", () => {
   it("preserves terminal cumulative usage when reparsing completed Claude JSONL", () => {
     const output = parseCliJsonl(
       readFileSync("test/fixtures/cli/claude-2.1-thinking-progress.jsonl", "utf8"),
-      {
-        command: "claude",
-        output: "jsonl",
-        jsonlDialect: "claude-stream-json",
-        sessionIdFields: ["session_id"],
-      },
+      createClaudeBackend("claude"),
       "claude-cli",
     );
 
@@ -665,14 +646,8 @@ describe("parseCliJsonl", () => {
     const toolResults: string[] = [];
     const assistantMessages: unknown[] = [];
     let text = "";
-    const parser = createCliJsonlStreamingParser({
-      backend: {
-        command: "claude",
-        output: "jsonl",
-        jsonlDialect: "claude-stream-json",
-        sessionIdFields: ["session_id"],
-      },
-      providerId: "claude-cli",
+    const parser = createClaudeParser({
+      backend: createClaudeBackend("claude"),
       onAssistantDelta: (delta) => {
         text = delta.text;
       },
@@ -701,15 +676,8 @@ describe("parseCliJsonl", () => {
   it("reports semantic subagent records without admitting them to the parent lane", () => {
     const progress: string[] = [];
     const toolStarts: string[] = [];
-    const parser = createCliJsonlStreamingParser({
-      backend: {
-        command: "claude",
-        output: "jsonl",
-        jsonlDialect: "claude-stream-json",
-        sessionIdFields: ["session_id"],
-      },
-      providerId: "claude-cli",
-      onAssistantDelta: () => {},
+    const parser = createClaudeParser({
+      backend: createClaudeBackend("claude"),
       onToolUseStart: (delta) => toolStarts.push(delta.name),
       onAttributedSubagentProgress: (parentToolUseId) => progress.push(parentToolUseId),
     });

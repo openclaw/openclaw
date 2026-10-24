@@ -17,8 +17,12 @@ import {
 import { normalizeTranscriptForMatch } from "openclaw/plugin-sdk/provider-test-contracts";
 import type { RealtimeVoiceBridge } from "openclaw/plugin-sdk/realtime-voice";
 import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
-import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
+import { createLiveValueTool } from "../test-support/live-value-tool.test-support.js";
+import {
+  makeTextToolResult,
+  makeUserMessage,
+} from "../test-support/message-fixtures.test-support.js";
 import plugin from "./index.js";
 import { buildGoogleLiveCatalogProvider } from "./provider-catalog-runtime.js";
 import { buildGoogleRealtimeVoiceProvider } from "./realtime-voice-provider.js";
@@ -160,13 +164,7 @@ describeLive("google plugin live", () => {
           api: "google-generative-ai",
         } as Model<"google-generative-ai">,
         {
-          messages: [
-            {
-              role: "user",
-              content: "Reply with exactly: OpenClaw live catalog OK",
-              timestamp: Date.now(),
-            },
-          ],
+          messages: [makeUserMessage("Reply with exactly: OpenClaw live catalog OK", Date.now())],
         },
         { apiKey: GOOGLE_API_KEY, maxTokens: 64 },
       );
@@ -207,16 +205,11 @@ describeLive("google plugin live", () => {
     if (!streamFn) {
       throw new Error("registered Google provider did not create its chat transport");
     }
-    const tool = {
-      name: "live_echo",
-      description: "Return the supplied value.",
-      parameters: Type.Object({ value: Type.String() }, { additionalProperties: false }),
-    };
-    const userPrompt = {
-      role: "user" as const,
-      content: "Call live_echo with value argon. Do not answer directly.",
-      timestamp: Date.now(),
-    };
+    const tool = createLiveValueTool("live_echo");
+    const userPrompt = makeUserMessage(
+      "Call live_echo with value argon. Do not answer directly.",
+      Date.now(),
+    );
     const first = await streamFn(
       model,
       { messages: [userPrompt], tools: [tool] },
@@ -244,14 +237,7 @@ describeLive("google plugin live", () => {
         messages: [
           userPrompt,
           { ...first, content: [unsignedCall] },
-          {
-            role: "toolResult",
-            toolCallId: call.id,
-            toolName: call.name,
-            content: [{ type: "text", text: "argon" }],
-            isError: false,
-            timestamp: Date.now(),
-          },
+          makeTextToolResult(call.id, call.name, "argon", false, Date.now()),
           { role: "user", content: "Reply with exactly: argon", timestamp: Date.now() },
         ],
         tools: [tool],

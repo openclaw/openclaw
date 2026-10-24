@@ -21,6 +21,7 @@ import {
 import { runOpenClawAgentWriteAdmission } from "openclaw/plugin-sdk/sqlite-runtime";
 import { observeHostDataSql } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeUserMessage } from "../../../test-support/message-fixtures.test-support.js";
 import { projectContextEngineAssemblyForCodex } from "./context-engine-projection.js";
 import { readCodexNativeHistory } from "./session-history-read.js";
 import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
@@ -176,11 +177,7 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
         });
         await appendSessionTranscriptMessageByIdentity({
           ...sessionTarget,
-          message: {
-            role: "user",
-            content: unreadMarker + "x".repeat(1024 * 1024),
-            timestamp: 205,
-          },
+          message: makeUserMessage(unreadMarker + "x".repeat(1024 * 1024), 205),
         });
       }
       const { upstreamPrompt, settledMessages } = settledFixture();
@@ -332,11 +329,7 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
           }
           await appendSessionTranscriptMessageByIdentity({
             ...target,
-            message: {
-              role: "user",
-              content: "appended while the read was pending",
-              timestamp: 500,
-            },
+            message: makeUserMessage("appended while the read was pending", 500),
           });
         }
         acceptResult.resolve();
@@ -844,11 +837,9 @@ it.each([false, true])(
     });
     const source = await SessionManager.openAsync(fixture.sessionTarget);
     for (let index = 0; index < 30; index += 1) {
-      await source.appendMessageAsync({
-        role: "user",
-        content: `old-${index}:` + "x".repeat(2048),
-        timestamp: index + 3,
-      });
+      await source.appendMessageAsync(
+        makeUserMessage(`old-${index}:` + "x".repeat(2048), index + 3),
+      );
     }
     await source.appendMessageAsync({ role: "user", content: "latest question", timestamp: 40 });
     const target = {
@@ -869,11 +860,7 @@ it.each([false, true])(
     );
     expect(native).toHaveLength(33);
     expect(native?.[2]).toMatchObject({ content: "old-0:" + "x".repeat(2048) });
-    await source.appendMessageAsync({
-      role: "user",
-      content: "oversized latest:" + "x".repeat(2048),
-      timestamp: 41,
-    });
+    await source.appendMessageAsync(makeUserMessage("oversized latest:" + "x".repeat(2048), 41));
     await expect(
       readCodexMirroredSessionHistoryMessages(target, undefined, undefined, 128),
     ).rejects.toThrow(/session's context limit/);

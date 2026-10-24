@@ -102,52 +102,13 @@ const homes: string[] = [];
 const originalHome = process.env.HOME;
 const originalPath = process.env.PATH;
 const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
-const nodeHostMocks = vi.hoisted(() => ({
-  runNodePtyCommand: vi.fn(async () => ({ exitCode: 0 })),
-  userShellPaths: new Map<string, string>(),
-}));
-
-vi.mock("openclaw/plugin-sdk/node-host", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/node-host")>();
-  return {
-    ...actual,
-    runNodePtyCommand: nodeHostMocks.runNodePtyCommand,
-    resolveNodeHostExecutable: (
-      command: string,
-      options: {
-        env?: NodeJS.ProcessEnv;
-        pathEnv?: string;
-        includeExtensionless?: boolean;
-        strategy: "direct" | "fallback" | "prefer";
-      },
-    ) => {
-      const env = options.env ?? process.env;
-      const pathEnv = options.pathEnv ?? env.PATH ?? env.Path ?? "";
-      const direct = actual.resolveNodeHostExecutable(command, {
-        env,
-        pathEnv,
-        includeExtensionless: options.includeExtensionless,
-        strategy: "direct",
-      });
-      if (direct && options.strategy !== "prefer") {
-        return direct;
-      }
-      const shellPath = nodeHostMocks.userShellPaths.get(command);
-      if (!shellPath) {
-        return direct;
-      }
-      const shellExecutable = actual.resolveNodeHostExecutable(command, {
-        env,
-        pathEnv: shellPath,
-        includeExtensionless: options.includeExtensionless,
-        strategy: "direct",
-      });
-      return shellExecutable
-        ? { executable: shellExecutable.executable, pathEnv: shellPath }
-        : direct;
-    },
-  };
+const nodeHostMocks = await vi.hoisted(async () => {
+  const { createNodeHostMocks } = await import("../test-support/node-host.test-support.js");
+  return createNodeHostMocks({ userShellFallback: true });
 });
+
+// mock-isolation: Shared owner preserves real exports with fresh command-resolution mocks.
+vi.mock("openclaw/plugin-sdk/node-host", nodeHostMocks.mockRuntime);
 
 function projectFile(home: string, ...parts: string[]): string {
   return path.join(home, ".claude", "projects", "-workspace", ...parts);

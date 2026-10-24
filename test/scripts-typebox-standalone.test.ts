@@ -1,7 +1,7 @@
 import vm from "node:vm";
 import { build, transform } from "esbuild";
 import { Type } from "typebox";
-import type { XSchema } from "typebox/schema";
+import { Build, type XSchema } from "typebox/schema";
 import { describe, expect, it } from "vitest";
 import {
   compileStandaloneValidators,
@@ -110,6 +110,15 @@ const cases: Array<{
 ];
 
 describe("standalone TypeBox checks", () => {
+  it("emits the same shared module regardless of earlier compilations", async () => {
+    const entries = [{ name: "check", schema: Type.Array(Type.Number(), { minItems: 1 }) }];
+    const options = { shareSchemaFunctions: true, hoistSchemaFunctions: true };
+    const first = await compileStandaloneValidators(entries, options);
+    expect(await compileStandaloneValidators(entries, options)).toBe(first);
+    Build(Type.Object({}, { propertyNames: { type: "string" } }));
+    expect(await compileStandaloneValidators(entries, options)).toBe(first);
+  });
+
   it("lets consumers tree-shake unused checks from a shared schema pool", async () => {
     const marker = "unused-predicate-must-not-load";
     const source = await compileStandaloneValidators(

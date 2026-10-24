@@ -1944,7 +1944,6 @@
 ["src/agents/model-fallback.probe.test.ts","./auth-profiles/usage.js","d400aaf80f6d9682b932882cddd1dd8bd4aca941258fda6c65609e3546eb5bbc",1]
 ["src/agents/model-fallback.probe.test.ts","./provider-model-normalization.runtime.js","4a213e154667ea78b1f705978d4be10e0de8a7705c6636ca80797ba944a915cb",1]
 ["src/agents/model-fallback.probe.test.ts","./session-suspension.js","1770d936796690bec73a7f8176427b998ac11e11749c8e4a27fab83d5301802b",1]
-["src/agents/model-fallback.reply-entry.e2e.test.ts","./models-config.js","9c17d33a89cd4715f38b2b78828d95f2846598f801439af8e4d8f1b0f4dc0e1c",1]
 ["src/agents/model-fallback.run-embedded.e2e.test.ts","./models-config.js","9c17d33a89cd4715f38b2b78828d95f2846598f801439af8e4d8f1b0f4dc0e1c",1]
 ["src/agents/model-fallback.terminal-boundary.test.ts","../plugins/provider-failover.js","1acef943fff10403ed74c3e8cd487076d22dc20b9ea0e5ca20a6310cc8fb5278",1]
 ["src/agents/model-fallback.test.ts","../infra/file-lock.js","01d58d3158c4b2a552594f41bb2d9d6f1dd34798be93583c8493581b580b9b52",1]

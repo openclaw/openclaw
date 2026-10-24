@@ -1,6 +1,7 @@
 /** Covers provider discovery runtime loading from plugin manifests and registries. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginManifestRecord } from "./manifest-registry.js";
+import { createPluginManifestRecordFixture } from "./plugin-metadata.test-support.js";
 import {
   prepareSyntheticAuthWithProvider,
   resolveSyntheticAuthWithProvider,
@@ -47,20 +48,15 @@ vi.mock("./plugin-setup-module.js", () => ({
 import { resolvePluginDiscoveryProvidersRuntime } from "./provider-discovery.runtime.js";
 
 function createManifestPlugin(id: string): PluginManifestRecord {
-  return {
+  return createPluginManifestRecordFixture({
     id,
     enabledByDefault: true,
-    channels: [],
     providers: [id],
-    cliBackends: [],
-    skills: [],
-    hooks: [],
-    origin: "bundled",
-    rootDir: `/tmp/${id}`,
     source: "bundled",
+    rootDir: `/tmp/${id}`,
     manifestPath: `/tmp/${id}/openclaw.plugin.json`,
     providerDiscoverySource: `/tmp/${id}/provider-discovery.ts`,
-  };
+  });
 }
 
 function configureCapturedRuntimeManifest() {

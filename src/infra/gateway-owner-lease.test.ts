@@ -18,6 +18,7 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import * as leaseHeartbeat from "../state/openclaw-state-lease-heartbeat.js";
 import { renewOpenClawStateLeaseInTransaction } from "../state/openclaw-state-lease-store.js";
+import { mockLinuxNamespace } from "./gateway-lock-namespace.test-support.js";
 import {
   GATEWAY_OWNER_HEARTBEAT_STALE_MS,
   readGatewayLockProcessNamespace,
@@ -166,28 +167,6 @@ function captureCoordinator() {
     return coordinator;
   });
   return () => coordinator;
-}
-
-function mockLinuxNamespace(root: string) {
-  if (process.platform !== "linux") {
-    vi.spyOn(bootReader, "createManagedHandoffBootIdentityReader").mockReturnValue(() => ({
-      platform: "linux",
-      identity: "01234567-89ab-cdef-0123-456789abcdef",
-    }));
-    const namespaceLink = `pid:[${fs.statSync(root, { bigint: true }).ino}]`;
-    const readlink = fs.readlinkSync.bind(fs);
-    vi.spyOn(fs, "readlinkSync").mockImplementation((file, options) =>
-      file === "/proc/self/ns/pid" ? namespaceLink : readlink(file, options),
-    );
-    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    readGatewayLockProcessNamespace();
-    platform.mockRestore();
-  }
-  const namespace = readGatewayLockProcessNamespace();
-  if (!namespace || !("pidNsInode" in namespace)) {
-    throw new Error("Expected Linux process namespace identity");
-  }
-  return namespace;
 }
 
 function readFreshProcessNamespace() {

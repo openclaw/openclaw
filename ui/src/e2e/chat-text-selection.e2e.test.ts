@@ -1,5 +1,3 @@
-import { writeFileSync } from "node:fs";
-import path from "node:path";
 import photon from "@silvia-odwyer/photon-node";
 import { expect, it } from "vitest";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
@@ -93,9 +91,6 @@ suite.define(() => {
         expect(allText).toContain(first);
         expect(allText).toContain(last);
         const selected = await capture();
-        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-          writeFileSync(path.join(suite.artifactDir, colorScheme + "-selected.png"), selected.png);
-        }
         const beforeImage = photon.PhotonImage.new_from_byteslice(unselected.elements[0]!.png);
         const afterImage = photon.PhotonImage.new_from_byteslice(selected.elements[0]!.png);
         try {
@@ -205,12 +200,6 @@ suite.define(() => {
         expect(selection).toContain(reasoningText);
         expect(selection).toContain(answerText);
         expect(selection).not.toContain("Just now");
-        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1" && bubbles) {
-          const frame = await takeControlUiScreenshotFrame(page, pane, [reasoning, answer], {
-            animations: "disabled",
-          });
-          writeFileSync(path.join(suite.artifactDir, "reasoning-bubbles-selected.png"), frame.png);
-        }
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       },
     );
