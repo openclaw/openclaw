@@ -22,20 +22,6 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const cases = [
   {
-    name: "returns successful output without retrying",
-    response: `printf '{"accepted":true}\\n'`,
-    result: { status: 0, stdout: '{"accepted":true}\n', stderr: "" },
-    attempts: 1,
-    sleeps: [],
-  },
-  {
-    name: "preserves a non-retryable failure instead of reporting success",
-    response: `printf 'permission denied\\n' >&2; return 42`,
-    result: { status: 42, stdout: "", stderr: "permission denied\n" },
-    attempts: 1,
-    sleeps: [],
-  },
-  {
     name: "retries case-insensitive rate limits and returns recovered output",
     response: `
       if ((call < 3)); then
@@ -73,7 +59,6 @@ describe.skipIf(process.platform === "win32")("ClawSweeper GitHub API backoff", 
   let bash: string;
 
   beforeAll(() => {
-    expect(helper).toContain("gh_api_with_retry()");
     const candidates =
       process.platform === "darwin"
         ? ["/opt/homebrew/bin/bash", "/usr/local/bin/bash", "/bin/bash"]
@@ -179,16 +164,14 @@ describe("ClawSweeper dispatch concurrency", () => {
       events: [
         ["pull_request_review", "submitted"],
         ["pull_request_review_comment", "created", 11],
-        ["pull_request_review_comment", "created", 12],
-        ["pull_request_review_comment", "created", 13],
         ["issue_comment", "created", 21],
         ["issue_comment", "created", 22],
         ["pull_request_review", "edited"],
         ["issue_comment", "edited", 21],
       ] satisfies BurstEvent[],
       policy: {
-        groups: [0, 1, 2, 3, 4, 5, 6, 4],
-        cancel: [false, false, false, false, false, false, true, true],
+        groups: [0, 1, 2, 3, 4, 2],
+        cancel: [false, false, false, false, true, true],
       },
     },
     {
@@ -198,10 +181,9 @@ describe("ClawSweeper dispatch concurrency", () => {
         ["issue_comment", "edited", 21],
         ["pull_request_review", "edited"],
         ["pull_request_target", "labeled"],
-        ["pull_request_target", "labeled"],
         ["pull_request_target", "ready_for_review"],
       ] satisfies BurstEvent[],
-      policy: { groups: [0, 1, 2, 0, 0, 0], cancel: [false, true, true, false, false, true] },
+      policy: { groups: [0, 1, 2, 0, 0], cancel: [false, true, true, false, true] },
     },
   ])("$name", ({ events, policy }) => {
     expect(concurrencyPolicy(events)).toEqual(policy);

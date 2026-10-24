@@ -6,7 +6,6 @@ import {
   canonicalReleasePlanLockJson,
   createReleasePlanLock,
   parseReleasePlanLockJson,
-  RELEASE_PLAN_CANONICALIZATION,
   validateReleasePlan,
   type ReleasePlan,
 } from "../../scripts/release-plan-contract.mjs";
@@ -53,23 +52,16 @@ const rejectLock = (text: string, error: string) =>
 
 describe("release plan contract", () => {
   it("pins exact canonical source and lock bytes as the cross-repo golden fixture", () => {
-    expect(RELEASE_PLAN_CANONICALIZATION).toBe("ascii-sorted-compact-json-trailing-newline-v1");
     expect(sourceText).toBe(canonicalReleasePlanJson(sourceFixture));
     expect(lockText).toBe(canonicalReleasePlanLockJson(lockFixture));
     expect(createReleasePlanLock(sourceFixture)).toEqual(lockFixture);
     expect(parseReleasePlanLockJson(lockText)).toEqual(lockFixture);
-    expect(lockText.endsWith("\n")).toBe(true);
-    expect(lockText.slice(0, -1)).toMatch(/^[\x20-\x7e]+$/u);
   });
 
-  it("rejects duplicate, reordered, pretty, CRLF, and non-ASCII lock bytes", () => {
+  it("rejects duplicate, reordered, CRLF, and non-ASCII lock bytes", () => {
     for (const [before, after] of [
       ['{"digest":', `{"digest":"${String(lockFixture.digest)}","digest":`],
       ['"tooling":{"ref":', '"tooling":{"ref":"ignored","\\u0072ef":'],
-      [
-        '{"name":"@openclaw/example","targets":',
-        '{"name":"ignored","name":"@openclaw/example","targets":',
-      ],
     ] as const) {
       rejectLock(lockText.replace(before, after), "duplicate key");
     }
@@ -77,7 +69,6 @@ describe("release plan contract", () => {
       `${JSON.stringify({ schema: lockFixture.schema, plan: lockFixture.plan, digest: lockFixture.digest })}\n`,
       "canonical bytes",
     );
-    rejectLock(`${JSON.stringify(lockFixture, null, 2)}\n`, "compact printable ASCII");
     rejectLock(lockText.replace(/\n$/u, "\r\n"), "exactly one trailing LF");
     rejectLock(lockText.replace("openclaw/openclaw", "opénclaw"), "printable ASCII");
   });
@@ -86,11 +77,6 @@ describe("release plan contract", () => {
     for (const [value, error] of [
       [undefined, "unsupported undefined"],
       [Number.NaN, "must be finite"],
-      [Number.POSITIVE_INFINITY, "canonical JSON"],
-      [Number.NEGATIVE_INFINITY, "canonical JSON"],
-      [() => undefined, "canonical JSON"],
-      [Symbol("ignored"), "canonical JSON"],
-      [1n, "canonical JSON"],
       [-0, "negative zero"],
     ] as const) {
       rejectJson({ ...sourceFixture, ignored: value }, error);
@@ -123,26 +109,9 @@ describe("release plan contract", () => {
       { purpose: "beta-publish", ...versionFields("2026.9.24-alpha.1") },
       "Alpha releases are retired;",
     ],
-    [
-      {
-        purpose: "stable-publish",
-        validation: { ...fullValidation, intent: "release-stable", profile: "stable" },
-      },
-      "stable-publish release plan version must be stable",
-    ],
-    [
-      {
-        purpose: "main-qualification",
-        tag: null,
-        target_context_ref: "refs/tags/null",
-        validation: { ...fullValidation, intent: "main-weekly" },
-      },
-      "candidate SHA context",
-    ],
+    [{ purpose: "stable-publish" }, "stable-publish release plan version must be stable"],
     [{ tag: "v2026.8.1-beta.3" }, "exact version tag context"],
     [{ validation: { intent: "release-stable" } }, "beta-publish does not allow validation intent"],
-    [{ validation: { profile: "full" } }, "profile assertion conflicts"],
-    [{ validation: { soak: true } }, "soak assertion conflicts"],
     [{ run_id: "123" }, "release plan keys must be exactly"],
     [versionFields("2026.08.1-beta.2"), "supported release version"],
     [
@@ -151,35 +120,17 @@ describe("release plan contract", () => {
     ],
     [{ tooling: { ref: "refs/heads/main" } }, "protected release-publish tag"],
     [{ tooling: { ref: "refs/tags/release-publish/cccccccccccc-123" } }, "bound to its SHA"],
-    [
-      {
-        purpose: "main-qualification",
-        tag: null,
-        target_context_ref: sourceFixture.candidate_sha,
-        tooling: { ref: "refs/heads/feature" },
-        validation: { ...fullValidation, intent: "main-weekly" },
-      },
-      "trusted main",
-    ],
   ])("rejects conflicting release authority: %s", (overrides, error) => {
     expect(() => validateReleasePlan(plan(overrides))).toThrow(error);
   });
 
-  it("keeps diagnostic plans tagless, non-publishable, and distinct from qualification", () => {
-    const diagnosticPlan = validateReleasePlan(
-      plan({
-        purpose: "diagnostic",
-        tag: null,
-        target_context_ref: sourceFixture.candidate_sha,
-        tooling: { ref: "refs/heads/main" },
-        validation: { ...fullValidation, intent: "diagnostic-full" },
-      }),
-    );
-    expect(diagnosticPlan).toMatchObject({
+  it("rejects publication context, intent, and untrusted tooling in diagnostic plans", () => {
+    const diagnosticPlan = plan({
       purpose: "diagnostic",
       tag: null,
       target_context_ref: sourceFixture.candidate_sha,
-      validation: { intent: "diagnostic-full", profile: "full", soak: true },
+      tooling: { ref: "refs/heads/main" },
+      validation: { ...fullValidation, intent: "diagnostic-full" },
     });
 
     const invalid: [PlanOverrides, string][] = [

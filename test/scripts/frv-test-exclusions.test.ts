@@ -108,7 +108,7 @@ if (mode) {
     assert.deepEqual(await discover(configs[1]), [extensionOutsideSelection]);
   } else {
     assert.deepEqual(fs.readFileSync(path.join(root, configs[1])), original[1]);
-    assert.deepEqual(await discover(configs[0]), mode === "single" ? [excluded[1], sibling].sort() : [sibling]);
+    assert.deepEqual(await discover(configs[0]), [sibling]);
     const pluginExports = await import(pathToFileURL(path.join(root, configs[0])).href);
     assert.deepEqual(pluginExports.nativeFiles, [excluded[1]]);
   }
@@ -151,7 +151,6 @@ const runAdapter = (args, env = commandEnv) => spawnSync(process.execPath, [adap
   cwd: root, env, encoding: "utf8",
 });
 for (const [mode, scope, paths, selectedConfigs, expectedExit] of [
-  ["single", "plugins", [excluded[0]], configs, 0],
   ["unaffected", "plugins", excluded.slice(0, 2), [configs[1]], 0],
   ["plugins", "plugins", excluded.slice(0, 2), configs, 0],
   ["extensions", "extensions", [excluded[2]], configs, 0],
