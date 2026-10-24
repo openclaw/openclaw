@@ -441,9 +441,11 @@ export async function runPublicSettleRecoveryCase(
           .map((fragment) => fragment.text)
           .join("\n");
         expect(instructions.split(RESTART_RECOVERY_INTERRUPTION_NOTE)).toHaveLength(2);
-        command.operatorAuthority!.assertCurrent();
-        retainedPrivateAuthority = command.operatorAuthority;
-        releasePrivateAuthority = command.operatorAuthority!.retain();
+        const authority = expectDefined(command.operatorAuthority, "Private operator authority");
+        const retain = expectDefined(authority.retain, "Private operator authority retention");
+        authority.assertCurrent();
+        retainedPrivateAuthority = authority;
+        releasePrivateAuthority = retain();
         await context.prepareVisibleRequesterCommand(command);
         await command.userTurnTranscriptRecorder!.persistApproved();
         await context.markCommandExecutionStarted(command);
