@@ -132,6 +132,7 @@ export function readSessionTranscriptModelContextAsync<T>(
       version: context.version,
       admission: contextAdmission,
       through: capturedThrough,
+      diagnosticStage: "post-worker-anchor-validation" as const,
     });
     const admissionAnchor = source ? contextAdmission : undefined;
     const sharesThroughAnchor =

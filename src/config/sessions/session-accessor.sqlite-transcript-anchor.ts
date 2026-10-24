@@ -4,6 +4,11 @@ import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { getSqliteReadScopeRevision } from "../../infra/sqlite-schema-facts.js";
 import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
 import {
+  annotateContextFailure,
+  type ContextDiagnosticReason,
+  type ContextDiagnosticStage,
+} from "../../infra/transcript-context-diagnostic.js";
+import {
   openOpenClawAgentDatabase,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
@@ -12,6 +17,7 @@ import {
   type CurrentTranscriptProjection,
 } from "./session-accessor.sqlite-projection-read.js";
 import {
+  getSessionKysely,
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
   type ResolvedTranscriptReadScope,
@@ -70,6 +76,7 @@ export function assertSessionTranscriptContextAnchorInDatabase(
   resolved: ResolvedTranscriptReadScope,
   through: TranscriptEntryAnchor,
   expectedAuthority?: TranscriptSourceAuthority,
+  diagnosticStage: ContextDiagnosticStage = "anchor-validation",
 ): void {
   if (
     resolved.agentId !== through.agentId ||
@@ -87,6 +94,7 @@ export function assertSessionTranscriptContextAnchorInDatabase(
     entryId: through.entryId,
   };
   let current: TranscriptEntryAnchor | undefined;
+  let diagnosticReason: ContextDiagnosticReason = "anchor-mismatch";
   if (expectedAuthority) {
     const row = executeSqliteQueryTakeFirstSync(
       database.db,
@@ -116,10 +124,20 @@ export function assertSessionTranscriptContextAnchorInDatabase(
       row: row && { ...row, generation: row.generation ?? null },
     });
   } else {
-    current = readActiveTranscriptEntryAnchorInTransaction(params);
+    current = readActiveTranscriptEntryAnchorInTransaction({
+      ...params,
+      onIndexUnready: () => {
+        diagnosticReason = "transcript-index-unready";
+      },
+    });
   }
   if (!sameTranscriptEntryAnchor(through, current)) {
-    throw new SessionTranscriptReadFenceError("Completed-turn transcript anchor changed");
+    throw annotateContextFailure(
+      new SessionTranscriptReadFenceError("Completed-turn transcript anchor changed"),
+      through,
+      diagnosticReason,
+      diagnosticStage,
+    );
   }
 }
 
@@ -128,6 +146,7 @@ type TranscriptEntryRead = {
   resolved: ResolvedTranscriptScope;
   entryId: string;
   message?: unknown;
+  onIndexUnready?: () => void;
 };
 
 /** Borrow readiness only while the projection owner's synchronous snapshot remains open. */
@@ -167,6 +186,7 @@ function readActiveTranscriptEntryFacts(
       state.hasUnclassifiedEvents ||
       state.indexedSeq !== actor.hot.transcript.version.rawSeq
     ) {
+      params.onIndexUnready?.();
       return undefined;
     }
     const identity = actor.transcript.identities.get(params.entryId);
@@ -186,6 +206,32 @@ function readActiveTranscriptEntryFacts(
       return undefined;
     }
   }
+  if (params.onIndexUnready && !projection) {
+    // Keep readiness even when the identity row is absent, in the same statement as the anchor.
+    // This is the existing readiness predicate, not a second diagnostic read or a retry.
+    const row = executeSqliteQueryTakeFirstSync(
+      params.database.db,
+      getSessionKysely(params.database.db)
+        .selectFrom(
+          selectSessionTranscriptIndexStatus(params.database.db, params.resolved.sessionId).as(
+            "status",
+          ),
+        )
+        .leftJoin(selectTranscriptAnchorIdentity(params).as("anchor"), (join) => join.onTrue())
+        .leftJoin("transcript_rewrite_watermarks as rewrite", (join) =>
+          join.on("rewrite.session_id", "=", params.resolved.sessionId),
+        )
+        .selectAll("anchor")
+        .select(["rewrite.generation", "status.latestSeq", "status.needs_reconcile"]),
+    );
+    if (row?.needs_reconcile) {
+      params.onIndexUnready();
+      return undefined;
+    }
+    return row && row.seq !== null
+      ? { ...row, seq: row.seq, transcriptUpdatedAt: undefined }
+      : undefined;
+  }
   const row = executeSqliteQueryTakeFirstSync(
     params.database.db,
     selectActiveTranscriptEntryAnchor(params, projection, includeVersion),
@@ -199,13 +245,8 @@ function readActiveTranscriptEntryFacts(
     : undefined;
 }
 
-/** Compose final authority predicates into the anchor's single-statement snapshot. */
-function selectActiveTranscriptEntryAnchor(
-  params: TranscriptEntryRead,
-  projection?: CurrentTranscriptProjection,
-  includeVersion = false,
-) {
-  const query = selectActiveTranscriptIdentityRows(params.database)
+function selectTranscriptAnchorIdentity(params: TranscriptEntryRead) {
+  return selectActiveTranscriptIdentityRows(params.database)
     .select([
       "identity.seq",
       "identity.parent_id",
@@ -215,7 +256,15 @@ function selectActiveTranscriptEntryAnchor(
     .where("identity.session_id", "=", params.resolved.sessionId)
     .where("identity.event_id", "=", params.entryId)
     .limit(1);
-  return query.$if(!projection, (selected) =>
+}
+
+/** Compose final authority predicates into the anchor's single-statement snapshot. */
+function selectActiveTranscriptEntryAnchor(
+  params: TranscriptEntryRead,
+  projection?: CurrentTranscriptProjection,
+  includeVersion = false,
+) {
+  return selectTranscriptAnchorIdentity(params).$if(!projection, (selected) =>
     selected
       .innerJoin("transcript_rewrite_watermarks as rewrite", (join) =>
         join.onRef("rewrite.session_id", "=", "identity.session_id"),

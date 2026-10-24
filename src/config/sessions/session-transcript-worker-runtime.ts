@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { runWithSqliteDatabaseAdmissionTurn } from "../../infra/sqlite-database-admission-turn.js";
+import { retainContextDiagnosticReply } from "../../infra/transcript-context-diagnostic.js";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import type { WorkerTaskOptions, WorkerTaskResponse } from "../../infra/worker-task-pool.types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -240,6 +241,9 @@ export function retainSessionHistoryWorkerDatabase(
               );
             });
             await retirement;
+            if (!reply.ok) {
+              retainContextDiagnosticReply(reply.error);
+            }
             const received =
               unwrapSessionTranscriptWorkerReply<SessionHistoryWorkerInput["kind"]>(reply);
             if (

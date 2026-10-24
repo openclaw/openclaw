@@ -39,6 +39,7 @@ import {
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
+import { readContextDiagnostic } from "../../infra/transcript-context-diagnostic.js";
 import { withPluginRuntimePluginScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import {
@@ -792,7 +793,12 @@ it.each(["append", "rewrite"] as const)(
       await withRestoredMocks([spy], async () => {
         const pending = SessionManager.openModelContextAsync(scope, { through: terminal.anchor });
         if (mutation === "rewrite") {
-          await expect(pending).rejects.toThrow(/transcript|anchor/i);
+          const error = await pending.catch((caught: unknown) => caught);
+          expect(error).toBeInstanceOf(Error);
+          expect(error).toMatchObject({ message: "Completed-turn transcript anchor changed" });
+          expect(readContextDiagnostic(error, terminal.anchor)?.stage).toBe(
+            "post-worker-anchor-validation",
+          );
         } else {
           const context = (await pending).buildSessionContext();
           expect(context).toEqual(expected);
@@ -804,3 +810,65 @@ it.each(["append", "rewrite"] as const)(
       });
     }),
 );
+
+it.each([
+  { state: "ready-mismatch", sql: undefined, reason: "anchor-mismatch" },
+  {
+    state: "missing-index",
+    sql: "DELETE FROM session_transcript_index_state WHERE session_id = ?",
+    reason: "transcript-index-unready",
+  },
+  {
+    state: "dirty-index",
+    sql: "UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?",
+    reason: "transcript-index-unready",
+  },
+  {
+    state: "lagging-index",
+    sql: "UPDATE session_transcript_index_state SET indexed_seq = -1 WHERE session_id = ?",
+    reason: "transcript-index-unready",
+  },
+  {
+    state: "unclassified-index",
+    sql: "UPDATE session_transcript_active_events SET context_eligible = NULL WHERE session_id = ?",
+    reason: "transcript-index-unready",
+  },
+])("preserves source-bound detail from the actual context worker (%s)", async (scenario) => {
+  await withSessionState(`context-diagnostic-${scenario.state}`, async ({ scope }) => {
+    const source = await SessionManager.openAsync(scope);
+    const terminal = await source.appendMessageWithTranscriptAnchorAsync(
+      userMessage("original", 1),
+    );
+    assert(terminal.anchor, "Missing synthetic completed-turn anchor");
+    expect(typeof terminal.anchor.generation).toBe("string");
+    await waitForSessionTranscriptProjection(scope);
+    if (!scenario.sql) {
+      await source.removeTrailingEntriesAsync((entry) => entry.type === "message");
+      await source.appendMessageAsync(userMessage("replacement", 2));
+      await waitForSessionTranscriptProjection(scope);
+    }
+    await closeOpenClawAgentDatabaseByPathAsync(scope.storePath, scope.agentId);
+    if (scenario.sql) {
+      // The isolated fixture deliberately exposes an unavailable projection without rewriting
+      // the completed turn. Close managed handles before this offline native fixture mutation.
+      const fixture = new DatabaseSync(scope.storePath);
+      try {
+        fixture.prepare(scenario.sql).run(scope.sessionId);
+      } finally {
+        fixture.close();
+      }
+    }
+    const error = await contextWorker
+      .readSessionTranscriptModelContextInWorker(scope, undefined, undefined, terminal.anchor)
+      .catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(Error);
+    expect(error).toMatchObject({ message: "Completed-turn transcript anchor changed" });
+    expect(readContextDiagnostic(error, terminal.anchor)).toMatchObject({
+      reason: scenario.reason,
+      stage: "snapshot-anchor-validation",
+    });
+    expect(
+      readContextDiagnostic(error, { ...terminal.anchor, sessionId: "other" }),
+    ).toBeUndefined();
+  });
+});

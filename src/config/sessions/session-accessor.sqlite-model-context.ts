@@ -12,6 +12,7 @@ import {
 } from "../../infra/kysely-sync.js";
 import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
+import type { ContextDiagnosticStage } from "../../infra/transcript-context-diagnostic.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -162,6 +163,7 @@ type TranscriptContextValidation = {
   admission?: UserTurnTranscriptAdmissionReceipt;
   through?: TranscriptEntryAnchor;
   expectedAuthority?: TranscriptSourceAuthority;
+  diagnosticStage?: ContextDiagnosticStage;
 };
 
 /** Released validators share admission; only multi-statement version reads need a snapshot. */
@@ -212,6 +214,7 @@ export function validateSessionTranscriptContextInDatabase(
       resolved,
       through,
       validation.expectedAuthority,
+      validation.diagnosticStage,
     );
   }
 }
@@ -301,7 +304,13 @@ function withTranscriptContextSnapshot<T>(
           const fence = resolveSqliteSessionTranscriptReadFence({ database, ...resolved });
           const version = readTranscriptContextVersionInTransaction(database, resolved.sessionId);
           if (through) {
-            assertSessionTranscriptContextAnchorInDatabase(database, resolved, through);
+            assertSessionTranscriptContextAnchorInDatabase(
+              database,
+              resolved,
+              through,
+              undefined,
+              "snapshot-anchor-validation",
+            );
           }
           const base = db
             .selectFrom("transcript_events")

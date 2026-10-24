@@ -1,6 +1,10 @@
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { SqliteJsonlReadBudgetExceededError } from "../../infra/sqlite-jsonl-budget-error.js";
 import {
+  decodeContextDiagnostic,
+  serializeContextDiagnostic,
+} from "../../infra/transcript-context-diagnostic.js";
+import {
   encodeOpenClawStateWorkerError,
   hydrateOpenClawStateWorkerError,
   retainOpenClawStateWorkerErrorPayload,
@@ -50,7 +54,12 @@ export function encodeSessionTranscriptWorkerError(
     };
   }
   if (error instanceof SessionTranscriptReadFenceError) {
-    return { kind: "fence", message: error.message };
+    const contextDiagnostic = serializeContextDiagnostic(error);
+    return {
+      kind: "fence",
+      message: error.message,
+      ...(contextDiagnostic ? { contextDiagnostic } : {}),
+    };
   }
   const payload = encodeOpenClawStateWorkerError(error, { includeOrdinary: true });
   return payload ? { kind: "read-error", message: coerceErrorMessage(error), payload } : undefined;
@@ -122,7 +131,9 @@ export function decodeSessionTranscriptWorkerReadError(
   if (failure.kind === "syntax") {
     return new SyntaxError(failure.message);
   }
-  return new SessionTranscriptReadFenceError(failure.message);
+  // The worker transport binds this domain reply to its task. Observation separately
+  // checks the diagnostic against the caller's original completed-turn anchor.
+  return decodeContextDiagnostic(new SessionTranscriptReadFenceError(failure.message), failure);
 }
 
 /** Keep read and cleanup failures together through the worker error graph. */

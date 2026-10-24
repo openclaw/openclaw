@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { readContextDiagnostic } from "../../infra/transcript-context-diagnostic.js";
 import { createMemoryTestState } from "./session-actor-memory-publication.test-support.js";
 import { readSessionActorTranscriptAnchors } from "./session-actor-transcript-anchors.js";
 import { SessionTranscriptReadFenceError } from "./session-transcript-read-fence-error.js";
@@ -163,4 +164,34 @@ it("leaves incomplete suffixes, reset visibility, and invalidated anchors to the
   expect(
     read(selection, { ...hot, transcript: { ...hot.transcript, anchorsState: "unavailable" } }),
   ).toBeUndefined();
+});
+
+it("classifies the hot actor anchor refusal but not ownership or authority failures", () => {
+  const { user, read } = fixture();
+  const through = { ...user, generation: "old-generation" };
+  const capture = (contextValidation: Parameters<typeof read>[0]["contextValidation"]) => {
+    try {
+      read({ entryIds: [], contextValidation });
+    } catch (error) {
+      return error;
+    }
+    throw new Error("Expected synthetic anchor refusal");
+  };
+  const error = capture({ through });
+  expect(error).toBeInstanceOf(SessionTranscriptReadFenceError);
+  expect(error).toMatchObject({ message: "Completed-turn transcript anchor changed" });
+  expect(readContextDiagnostic(error, through)).toMatchObject({
+    reason: "anchor-mismatch",
+    stage: "anchor-validation",
+  });
+  const ownership = capture({ through: { ...through, sessionId: "other" } });
+  expect(ownership).toMatchObject({
+    message: "Completed-turn anchor belongs to another transcript",
+  });
+  expect(readContextDiagnostic(ownership, through)).toBeUndefined();
+  const authority = capture({ through, expectedAuthority: { permissionMode: "read-only" } });
+  expect(authority).toMatchObject({
+    message: "Session transcript source was deleted, replaced, or changed lifecycle or permissions.",
+  });
+  expect(readContextDiagnostic(authority, through)).toBeUndefined();
 });

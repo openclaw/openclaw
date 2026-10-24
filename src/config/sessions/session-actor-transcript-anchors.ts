@@ -1,4 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { annotateContextFailure } from "../../infra/transcript-context-diagnostic.js";
 import { readSessionTranscriptRunId } from "../../sessions/transcript-events.js";
 import type { SessionActorHotState } from "./session-actor-state.types.js";
 import type { SessionTranscriptAnchorSelection } from "./session-transcript-anchor-read.kernel.js";
@@ -132,7 +133,12 @@ export function readSessionActorTranscriptAnchors(
       return undefined;
     }
     if (!sameTranscriptEntryAnchor(through, retainedAnchor)) {
-      throw new SessionTranscriptReadFenceError("Completed-turn transcript anchor changed");
+      throw annotateContextFailure(
+        new SessionTranscriptReadFenceError("Completed-turn transcript anchor changed"),
+        through,
+        "anchor-mismatch",
+        context.diagnosticStage ?? "anchor-validation",
+      );
     }
   } else if (context && !context.admission) {
     const version = hot.transcript.version;

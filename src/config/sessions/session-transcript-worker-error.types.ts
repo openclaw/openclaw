@@ -5,7 +5,7 @@ export type SessionTranscriptWorkerReadError =
   | { kind: "read-error"; message: string; payload: OpenClawStateWorkerErrorPayload }
   | { kind: "cold"; sessionId: string }
   | { kind: "projection"; sessionId: string; reason?: "window-changed" }
-  | { kind: "fence"; message: string }
+  | { kind: "fence"; message: string; contextDiagnostic?: unknown }
   | { kind: "syntax"; message: string }
   | { kind: "jsonl-budget"; message: string }
   | { kind: "storage"; reason?: SessionTranscriptStorageUnavailableError["reason"] };

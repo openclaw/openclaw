@@ -29,6 +29,12 @@ import {
 } from "../../infra/sqlite-database-admission.js";
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
 import {
+  recordContextDiagnostic,
+  type ContextDiagnosticPhase,
+} from "../../infra/transcript-context-diagnostic.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { isExpectedRunCancellation } from "../../process/expected-run-cancellation.js";
+import {
   getGatewayRestartDrainSignal,
   runWithGatewayDetachedWorkAdmission,
 } from "../../process/gateway-work-admission.js";
@@ -40,6 +46,8 @@ import { listWorkshopChanges } from "./library.js";
 import { assertSkillReviewRunSucceeded, postWorkshopChangeNotice } from "./review-outcome.js";
 import { runSkillWorkshopReview } from "./review-run.js";
 import { workshopReviewRunId } from "./review-undo.js";
+
+const contextDiagnosticLog = createSubsystemLogger("skills/workshop");
 
 /** Admits a queued review only when Workshop is on and the session's policy exposes the tool. */
 export async function prepareSkillExperienceReviewCandidate(
@@ -104,13 +112,28 @@ export async function runSkillExperienceReview(
 ): Promise<void> {
   // The foreground root has closed by the idle timer's callback. Admit this
   // detached review independently; a real Gateway drain still refuses it.
-  await runWithGatewayDetachedWorkAdmission(
-    () => runSkillExperienceReviewInner(candidate),
-    "skills:experience-review",
-  );
+  const diagnostic: { phase: ContextDiagnosticPhase } = { phase: "context-preparation" };
+  try {
+    await runWithGatewayDetachedWorkAdmission(
+      () => runSkillExperienceReviewInner(candidate, diagnostic),
+      "skills:experience-review",
+    );
+  } catch (error) {
+    recordContextDiagnostic(error, candidate.source, diagnostic.phase, (detail) => {
+      if (isExpectedRunCancellation(error)) {
+        contextDiagnosticLog.debug("skill experience review context diagnostic", detail);
+      } else {
+        contextDiagnosticLog.warn("skill experience review context diagnostic", detail);
+      }
+    });
+    throw error;
+  }
 }
 
-async function runSkillExperienceReviewInner(candidate: ExperienceReviewCandidate): Promise<void> {
+async function runSkillExperienceReviewInner(
+  candidate: ExperienceReviewCandidate,
+  diagnostic: { phase: ContextDiagnosticPhase },
+): Promise<void> {
   const abortSignal = getGatewayRestartDrainSignal();
   const { foregroundPromptContext, workspaceDir } = candidate.ctx;
   const { agentId } = foregroundPromptContext;
@@ -147,6 +170,7 @@ async function runSkillExperienceReviewInner(candidate: ExperienceReviewCandidat
       signal: abortSignal,
     });
     assertPreparationCurrent();
+    diagnostic.phase = "pre-review";
     // Deleting, replacing, or resetting the source session must not revive its captured evidence.
     let sourceEntry:
       | Pick<InternalSessionEntry, "sessionId" | "lifecycleRevision" | "permissionMode">
@@ -294,8 +318,9 @@ async function runSkillExperienceReviewInner(candidate: ExperienceReviewCandidat
     },
     assertSourceCurrent,
   });
-  const run = () =>
-    runSkillWorkshopReview({
+  const run = () => {
+    diagnostic.phase = "review-run";
+    return runSkillWorkshopReview({
       ...foregroundPromptContext,
       // This system review inherits prompt context, not the foreground turn's trigger.
       trigger: undefined,
@@ -320,10 +345,12 @@ async function runSkillExperienceReviewInner(candidate: ExperienceReviewCandidat
       runId,
       ...(capability ? { cronCreatorAuthorityCapability: capability } : {}),
     });
+  };
   try {
     const result = capability
       ? await runWithCronCreatorAuthorityCapability(capability, run)
       : await run();
+    diagnostic.phase = "post-review";
     emitInternalRunUsageDiagnostic(result, {
       config,
       agentId,

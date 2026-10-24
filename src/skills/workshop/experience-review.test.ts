@@ -28,6 +28,9 @@ import {
 } from "../../infra/diagnostic-events.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { readSqliteDatabaseScopedWriteTokensForPath } from "../../infra/sqlite-database-admission.js";
+import { readContextDiagnostic, sourceToken } from "../../infra/transcript-context-diagnostic.js";
+import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
+import { testApi as loggerTestApi } from "../../logging/logger.test-support.js";
 import { runBeforeAgentReplyForTurn } from "../../plugins/before-agent-reply.js";
 import {
   initializeGlobalHookRunner,
@@ -431,6 +434,70 @@ it.each([
       }
     } finally {
       stop();
+    }
+  },
+);
+
+it.each(["context-preparation", "review-run"] as const)(
+  "logs the actual %s cancellation at debug before a provider is called",
+  async (phase) => {
+    const logFile = path.join(state.workspaceDir, "context-diagnostic.log");
+    await fs.writeFile(logFile, "");
+    setLoggerOverride({ level: "debug", consoleLevel: "silent", file: logFile });
+    let wrapperEntries = 0;
+    let providerCalls = 0;
+    const rewrite = async () => {
+      const source = await SessionManager.openAsync(candidate.source, state.workspaceDir);
+      // Preserve the captured entry but rotate its transcript generation. This reaches the
+      // real anchor comparison without turning source deletion into a diagnostic classification.
+      const later = await source.appendMessageAsync({
+        role: "user",
+        content: "later",
+        timestamp: 2,
+      });
+      await source.removeTrailingEntriesAsync((entry) => entry.id === later);
+    };
+    try {
+      if (phase === "context-preparation") {
+        await rewrite();
+      } else {
+        await useRealReview();
+        mocks.runEmbeddedAgent.mockImplementation(async (params: ReviewParams) => {
+          wrapperEntries++;
+          await rewrite();
+          await params.preparedRunAdmission.admit("embedded");
+          providerCalls++;
+          return completedReview;
+        });
+      }
+      const error = await runSkillExperienceReview(candidate).catch((caught: unknown) => caught);
+      // These assertions precede the new diagnostic assertions in the tests-only negative control.
+      expect(error).toBeInstanceOf(Error);
+      expect(error).toMatchObject({
+        message:
+          phase === "review-run"
+            ? "source execution authority is no longer active"
+            : "Completed-turn transcript anchor changed",
+      });
+      expect(wrapperEntries).toBe(phase === "review-run" ? 1 : 0);
+      expect(providerCalls).toBe(0);
+      expect(mocks.runSkillWorkshopReview).toHaveBeenCalledTimes(phase === "review-run" ? 1 : 0);
+      expect(readContextDiagnostic(error, candidate.source)?.reason).toBe("anchor-mismatch");
+      await loggerTestApi.flushFileLogQueueForTests();
+      const lines = (await fs.readFile(logFile, "utf8"))
+        .split("\n")
+        .filter((line) => line.includes("skill experience review context diagnostic"));
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toContain('"logLevelName":"DEBUG"');
+      expect(lines[0]).toContain(`"phase":"${phase}"`);
+      expect(lines[0]).not.toContain("model-execution");
+      expect(lines[0]).not.toContain(candidate.source.storePath);
+      expect(lines[0]).not.toContain(candidate.source.sessionId);
+      expect(lines[0]).not.toContain(sourceToken(candidate.source));
+    } finally {
+      await loggerTestApi.flushFileLogQueueForTests();
+      setLoggerOverride(null);
+      resetLogger();
     }
   },
 );
