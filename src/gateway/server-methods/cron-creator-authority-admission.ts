@@ -80,7 +80,9 @@ function resolveDirectOperatorAuthority(
   const isDirectOperator =
     isDirectTurn &&
     hasGatewayAdminScope(params.client) &&
-    (internal?.isLocalClient === true || internal?.controlUiAdmin === true);
+    (internal?.isLocalClient === true ||
+      internal?.controlUiAdmin === true ||
+      internal?.androidAppAdmin === true);
   return isDirectOperator
     ? Object.freeze({
         runId,
@@ -91,14 +93,16 @@ function resolveDirectOperatorAuthority(
             : { kind: "unknown" as const },
         ...(internal?.controlUiAdmin === true
           ? { managementEntitlement: { source: "control-ui-admin" as const } }
-          : {}),
+          : internal?.androidAppAdmin === true
+            ? { managementEntitlement: { source: "android-app-admin" as const } }
+            : {}),
         ...(internal?.isLocalClient !== true ? { callerScopedCreation: true as const } : {}),
         ...(params.isCurrent ? { isCurrent: params.isCurrent } : {}),
       })
     : undefined;
 }
 
-/** Mints cron authority for an admitted local operator or authenticated Control UI admin turn. */
+/** Mints cron authority for an admitted local operator or authenticated UI/app admin turn. */
 export function resolveGatewayCronCreatorAuthorityAdmission(params: {
   runId: string;
   resolvedSessionKey?: string;

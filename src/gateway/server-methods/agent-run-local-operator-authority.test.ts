@@ -194,6 +194,61 @@ it.each([true, undefined] as const)(
   },
 );
 
+it("admits fresh Android admin chat without granting local or Control UI authority", () => {
+  const client = createClient({ isLocalClient: undefined, androidAppAdmin: true });
+  expect(admitChat({ client })).toEqual({
+    runId: "run-local-chat",
+    callerOrigin: { kind: "unknown" },
+    callerScopedCreation: true,
+    managementEntitlement: { source: "android-app-admin" },
+  });
+});
+
+it.each([
+  ["recovered message", { isReconnectResume: true }],
+  ["incognito", { isIncognito: true }],
+  ["explicit origin", { hasExplicitOrigin: true }],
+  ["system-generated", { isSystemGenerated: true }],
+  ["internal entry", { isDirectExternalUser: false }],
+  ["spawned turn", { spawnedBy: "agent:main:parent" }],
+  ["cron continuation", { hasRestoredCronContinuation: true }],
+] as const)("does not promote Android admin authority for %s", (_label, overrides) => {
+  expect(
+    admitChat({
+      client: createClient({ isLocalClient: undefined, androidAppAdmin: true }),
+      ...overrides,
+    }),
+  ).toBeUndefined();
+});
+
+it.each(["operator.read", "operator.write"])("rejects Android admin narrowed to %s", (scope) => {
+  expect(
+    admitChat({
+      client: createClient({ isLocalClient: undefined, androidAppAdmin: true }, [scope]),
+    }),
+  ).toBeUndefined();
+});
+
+it("does not derive Android authority from a claimed client name", () => {
+  const client = createClient({ isLocalClient: undefined });
+  client.connect.client = {
+    id: "openclaw-android",
+    mode: "ui",
+    version: "test",
+    platform: "android",
+  };
+  expect(admitChat({ client })).toBeUndefined();
+});
+
+it("rejects a synthetic Android admin client", () => {
+  const client = createClient({
+    isLocalClient: undefined,
+    androidAppAdmin: true,
+    syntheticClient: true,
+  });
+  expect(admitChat({ client })).toBeUndefined();
+});
+
 it("does not derive Control UI authority from a claimed client name or session route", () => {
   const client = createClient({ isLocalClient: undefined });
   client.connect.client = {

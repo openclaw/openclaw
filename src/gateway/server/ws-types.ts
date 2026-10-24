@@ -88,6 +88,8 @@ export type GatewayWsClient = PluginNodeCapabilityClient & {
     authenticatedControlUi?: true;
     /** Authenticated Control UI admin admission; never accepted from wire params. */
     controlUiAdmin?: true;
+    /** Authenticated Android operator admin admission; never accepted from wire params. */
+    androidAppAdmin?: true;
     approvalRuntime?: boolean;
     agentRuntimeIdentity?: AgentRuntimeIdentity;
     /** Server-attested role-policy actor; never accepted from WebSocket wire params. */

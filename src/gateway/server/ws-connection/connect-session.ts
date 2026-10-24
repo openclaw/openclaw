@@ -352,11 +352,16 @@ export async function attachAuthenticatedGatewayConnect(
   const authenticatedControlUi =
     authenticatedOperator && connectParams.client.id === GATEWAY_CLIENT_IDS.CONTROL_UI;
   const controlUiAdmin = authenticatedControlUi && scopes.includes(ADMIN_SCOPE);
+  const androidAppAdmin =
+    authenticatedOperator &&
+    connectParams.client.id === GATEWAY_CLIENT_IDS.ANDROID_APP &&
+    scopes.includes(ADMIN_SCOPE);
   const internal: NonNullable<GatewayWsClient["internal"]> = {
     ...(isLocalClient ? { isLocalClient: true as const } : {}),
     ...(authenticatedOperator ? { authenticatedOperator: true as const } : {}),
     ...(authenticatedControlUi ? { authenticatedControlUi: true as const } : {}),
     ...(controlUiAdmin ? { controlUiAdmin: true as const } : {}),
+    ...(androidAppAdmin ? { androidAppAdmin: true as const } : {}),
     ...(trustedAgentRuntimeIdentity ? { agentRuntimeIdentity: trustedAgentRuntimeIdentity } : {}),
     ...(remoteIngressPrincipal
       ? {

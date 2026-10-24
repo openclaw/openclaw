@@ -14,6 +14,11 @@ import {
 } from "../gateway/cron-creator-authority-grant.js";
 import type { CronAuthenticatedChannelRequester } from "../gateway/cron-creator-authority-grant.types.js";
 import {
+  bindGatewayDeviceRevocation,
+  readGatewayDeviceSourceAuthority,
+  retainGatewayDeviceRevocation,
+} from "../gateway/device-revocation.js";
+import {
   getAgentRunContext,
   validateAgentRunDelegatedAuthority,
   type AgentRunDelegatedAuthority,
@@ -116,6 +121,7 @@ export function captureActiveCronManagementAuthority(params: {
       lifecycleGeneration: string;
       managementEntitlement: CronManagementEntitlement;
       requesterOwner?: CronCreatorAuthorityCapability["requesterOwner"];
+      retainSource?: () => { isCurrent: () => boolean; release: () => void };
       isActive: () => boolean;
     }
   | undefined {
@@ -135,6 +141,15 @@ export function captureActiveCronManagementAuthority(params: {
     !authority ||
     authority.operationalRunInstance.runId !== params.runId
   ) {
+    return undefined;
+  }
+  // Android continuations retain the authenticated device owner, not the ended
+  // request's lifetime. Without that owner there is no transferable authority.
+  const sourceCurrent =
+    scope.managementEntitlement.source === "android-app-admin"
+      ? readGatewayDeviceSourceAuthority(scope.isCurrent)
+      : undefined;
+  if (scope.managementEntitlement.source === "android-app-admin" && !sourceCurrent) {
     return undefined;
   }
   const isActive = () => {
@@ -160,6 +175,14 @@ export function captureActiveCronManagementAuthority(params: {
         lifecycleGeneration: authority.lifecycleGeneration,
         managementEntitlement: scope.managementEntitlement,
         requesterOwner: scope.requesterOwner,
+        ...(sourceCurrent
+          ? {
+              retainSource: () => ({
+                isCurrent: bindGatewayDeviceRevocation(sourceCurrent, scope.isCurrent),
+                release: retainGatewayDeviceRevocation(scope.isCurrent)!,
+              }),
+            }
+          : {}),
         isActive,
       }
     : undefined;

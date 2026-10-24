@@ -49,6 +49,7 @@ const activeManagement = new AsyncLocalStorage<{
 /** Admission fact, independent of a run lifetime so an authorized yield can transfer it. */
 export type CronManagementEntitlement =
   | Readonly<{ source: "control-ui-admin" }>
+  | Readonly<{ source: "android-app-admin" }>
   | Readonly<{ source: "channel-owner"; isCurrent: () => boolean }>;
 
 export type CronCreatorAuthorityRunScope = {
@@ -413,7 +414,7 @@ export function consumeCronCreatorAuthorityGrant(grant: CronCreatorAuthorityGran
 
 function expiredManagementError(): TypeError {
   return new TypeError(
-    "Automation admin grant is missing, expired, or already used. Retry from a fresh authenticated configured channel owner or Control UI administrator turn, or use the Automations page.",
+    "Automation admin grant is missing, expired, or already used. Retry from a fresh authenticated configured channel owner, Control UI administrator, or Android app administrator turn, or use the Automations page.",
   );
 }
 

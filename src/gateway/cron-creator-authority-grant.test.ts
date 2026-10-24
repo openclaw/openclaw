@@ -31,7 +31,7 @@ afterEach(() => {
 });
 
 const denied =
-  /Retry from a fresh authenticated configured channel owner or Control UI administrator turn/;
+  /Retry from a fresh authenticated configured channel owner, Control UI administrator, or Android app administrator turn/;
 function createScope(...args: Parameters<typeof createCronCreatorAuthorityRunScope>) {
   const scope = createCronCreatorAuthorityRunScope(...args);
   onTestFinished(() => revokeScope(scope));

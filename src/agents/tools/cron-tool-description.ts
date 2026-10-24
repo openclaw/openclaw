@@ -33,7 +33,7 @@ export function buildCronToolDescription(params: {
   }
   const scopeDescription = params.callerScoped
     ? "Gateway policy restricts every model turn to caller-visible automations, including administrator-started conversations. Lists and counts reflect only this scope"
-    : "Authenticated configured channel owners and Control UI administrators can manage any Gateway automation. Other turns see caller-visible jobs and scoped counts only";
+    : "Authenticated configured channel owners, Control UI administrators, and Android app administrators can manage any Gateway automation. Other turns see caller-visible jobs and scoped counts only";
   const adminRecovery = params.callerScoped
     ? "ask an authorized administrator to check through the Automations page"
     : "ask an authorized administrator to check through a fresh authenticated owner/administrator turn or the Automations page";
