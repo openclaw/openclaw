@@ -104,6 +104,13 @@ function runPatch({
 async function patchOk(options: PatchFixture) {
   return expectPatchOk(await runPatch(options));
 }
+async function patchError(options: PatchFixture, message: string) {
+  expectPatchError(await runPatch(options), message);
+}
+
+async function unexpectedCatalog() {
+  throw new Error("Catalog must not be needed for this patch");
+}
 
 type ModelDefaults = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>;
 function agentConfig(
@@ -197,10 +204,7 @@ async function applySubagentModelPatch(cfg: OpenClawConfig, store: Record<string
     store,
     storeKey: KIMI_SUBAGENT_KEY,
     model: SUBAGENT_MODEL,
-    loadGatewayModelCatalog: async () => [
-      { provider: "anthropic", id: ANTHROPIC_SONNET_ID, name: "sonnet" },
-      { provider: "synthetic", id: "hf:moonshotai/Kimi-K2.7-Code", name: "kimi" },
-    ],
+    loadGatewayModelCatalog: loadCatalog(ANTHROPIC_SONNET_MODEL, SUBAGENT_MODEL),
   });
 }
 
@@ -212,12 +216,10 @@ function makeKimiSubagentCfg(params: {
 }): OpenClawConfig {
   return agentConfig(
     {
-      model: { primary: "anthropic/claude-sonnet-4-6" },
+      model: { primary: ANTHROPIC_SONNET_MODEL },
       modelPolicy: { allow: [ANTHROPIC_SONNET_MODEL] },
       subagents: params.defaultsSubagentModel ? { model: params.defaultsSubagentModel } : undefined,
-      models: {
-        "anthropic/claude-sonnet-4-6": { alias: "default" },
-      },
+      models: { [ANTHROPIC_SONNET_MODEL]: { alias: "default" } },
     },
     {
       kimi: {
@@ -549,9 +551,7 @@ describe("gateway sessions patch", () => {
         contextWindow: "extended",
         elevatedLevel: "off",
       });
-      const loadGatewayModelCatalog = vi.fn(async () => {
-        throw new Error("Catalog must not be needed for a clear");
-      });
+      const loadGatewayModelCatalog = vi.fn(unexpectedCatalog);
       const entry = await patchOk({ store, [field]: null, loadGatewayModelCatalog });
       expect(entry[field]).toBeUndefined();
       expect(loadGatewayModelCatalog).not.toHaveBeenCalled();
@@ -582,7 +582,7 @@ describe("gateway sessions patch", () => {
     expect(entry.modelOverride).toBe(OPENAI_GPT_ID);
     expect(entry.liveModelSwitchPending).toBeUndefined();
     expect(entry.responseUsage).toBe("tokens");
-    expect(entry.parentSessionKey).toBe("agent:main:main");
+    expect(entry.parentSessionKey).toBe(MAIN_SESSION_KEY);
     expect(entry.fastMode).toBe(true);
   });
 
@@ -599,13 +599,10 @@ describe("gateway sessions patch", () => {
     expect(cleared[field]).toBeUndefined();
   });
 
-  test.each(["ultrafast"] as const)("sets fastMode to %s", async (fastMode) => {
-    const store: Record<string, SessionEntry> = {
-      [MAIN_SESSION_KEY]: {} as SessionEntry,
-    };
-    const entry = await patchOk({ store, fastMode });
-
-    expect(entry.fastMode).toBe(fastMode);
+  test("sets fastMode to ultrafast on a placeholder", async () => {
+    const store = { [MAIN_SESSION_KEY]: {} as SessionEntry };
+    const entry = await patchOk({ store, fastMode: "ultrafast" });
+    expect(entry.fastMode).toBe("ultrafast");
   });
 
   test("sets, replaces, clears, and normalizes tool overrides", async () => {
@@ -638,37 +635,25 @@ describe("gateway sessions patch", () => {
     expect(cleared.toolOverrides).toBeUndefined();
   });
 
-  test.each([
-    { patch: { verboseLevel: "maybe" }, error: 'invalid verboseLevel (use "on"|"off"|"full")' },
-    { patch: { traceLevel: "maybe" }, error: 'invalid traceLevel (use "on"|"off"|"raw")' },
-    {
-      patch: { verboseLevel: "maybe", traceLevel: "maybe" },
-      error: 'invalid verboseLevel (use "on"|"off"|"full")',
-    },
-    { patch: { elevatedLevel: "maybe" }, error: "invalid elevatedLevel" },
-    {
-      patch: { color: "crimson" },
-      error: "color must be one of: red, blue, green, yellow, purple, orange, pink, cyan",
-    },
-    { patch: { inheritedToolDeny: ["exec"] }, error: "inheritedToolDeny is only supported" },
-    {
-      patch: { inheritedToolPolicyVersion: 1 },
-      error: "inheritedToolPolicyVersion is only supported",
-    },
-    { patch: { inheritedToolAllow: ["read"] }, error: "inheritedToolAllow is only supported" },
-    { patch: { execHost: "edge" }, error: "invalid execHost" },
-    { patch: { sendPolicy: "ask" as unknown as "allow" }, error: "invalid sendPolicy" },
-    {
-      patch: { groupActivation: "never" as unknown as "mention" },
-      error: "invalid groupActivation",
-    },
-  ] satisfies { patch: Omit<ApplySessionsPatchArgs["patch"], "key">; error: string }[])(
-    "rejects $patch: $error",
-    async ({ patch, error }) => {
-      const result = await runPatch({ ...patch });
-      expectPatchError(result, error);
-    },
-  );
+  test.each<[Omit<ApplySessionsPatchArgs["patch"], "key">, string]>([
+    [{ verboseLevel: "maybe" }, 'invalid verboseLevel (use "on"|"off"|"full")'],
+    [{ traceLevel: "maybe" }, 'invalid traceLevel (use "on"|"off"|"raw")'],
+    [
+      { verboseLevel: "maybe", traceLevel: "maybe" },
+      'invalid verboseLevel (use "on"|"off"|"full")',
+    ],
+    [{ elevatedLevel: "maybe" }, "invalid elevatedLevel"],
+    [
+      { color: "crimson" },
+      "color must be one of: red, blue, green, yellow, purple, orange, pink, cyan",
+    ],
+    [{ inheritedToolDeny: ["exec"] }, "inheritedToolDeny is only supported"],
+    [{ inheritedToolPolicyVersion: 1 }, "inheritedToolPolicyVersion is only supported"],
+    [{ inheritedToolAllow: ["read"] }, "inheritedToolAllow is only supported"],
+    [{ execHost: "edge" }, "invalid execHost"],
+    [{ sendPolicy: "ask" as unknown as "allow" }, "invalid sendPolicy"],
+    [{ groupActivation: "never" as unknown as "mention" }, "invalid groupActivation"],
+  ])("rejects %j: %s", patchError);
 
   const anthropicSelection = {
     model: ANTHROPIC_SONNET_MODEL,
@@ -892,9 +877,7 @@ describe("gateway sessions patch", () => {
       modelOverrideSource: "user",
       liveModelSwitchPending: true,
     });
-    const loadGatewayModelCatalog = vi.fn(async () => {
-      throw new Error("Catalog must not be needed for an unqualified reset");
-    });
+    const loadGatewayModelCatalog = vi.fn(unexpectedCatalog);
     const entry = await patchOk({
       store,
       cfg: createAllowlistedAnthropicModelCfg(),
@@ -965,20 +948,14 @@ describe("gateway sessions patch", () => {
   ])(
     "preserves early validation before catalog preparation: $message",
     async ({ patch, message }) => {
-      const loadGatewayModelCatalog = vi.fn(async () => {
-        throw new Error("Catalog failure must not replace early validation");
-      });
+      const loadGatewayModelCatalog = vi.fn(unexpectedCatalog);
       const store = mainStoreEntry({ label: "Original" });
       expectPatchError(
         await runPatch({ store, contextWindow: "extended", ...patch, loadGatewayModelCatalog }),
         message,
       );
       expect(loadGatewayModelCatalog).not.toHaveBeenCalled();
-      expect(store[MAIN_SESSION_KEY]).toEqual({
-        sessionId: "sess",
-        updatedAt: 1,
-        label: "Original",
-      });
+      expect(store).toEqual(mainStoreEntry({ label: "Original" }));
     },
   );
 
@@ -1194,10 +1171,7 @@ describe("gateway sessions patch", () => {
       agent: "main",
       state: "idle",
     });
-    expectPatchError(
-      await runPatch({ mainEntry: {}, agentRuntime: null }),
-      "owned by this ACP session",
-    );
+    await patchError({ mainEntry: {}, agentRuntime: null }, "owned by this ACP session");
   });
 
   test("uses ACP backend metadata on canonical agent keys for thinking validation", async () => {

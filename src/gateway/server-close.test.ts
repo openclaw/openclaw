@@ -60,6 +60,7 @@ const HTTP_CLOSE_FORCE_WAIT_MS = 5_000;
 const GATEWAY_SHUTDOWN_HOOK_TIMEOUT_MS = 5_000;
 const GATEWAY_PRE_RESTART_HOOK_TIMEOUT_MS = 10_000;
 const AGENT_HARNESS_CLOSE_GRACE_MS = 5_000;
+const restartOptions = { reason: "gateway restarting", restartExpectedMs: 123, drainTimeoutMs: 0 };
 
 const closeGateway = createGatewayCloseTestHandlerFactory(await import("./server-close.js"));
 const { isChatAbortMarkerCurrent } = await import("./server-chat-state.js");
@@ -113,6 +114,35 @@ function createHttpServer(
   close = vi.fn((callback: (error?: Error | null) => void) => callback(null)),
 ) {
   return { close, closeIdleConnections: vi.fn() };
+}
+
+async function createSdkFixture(label: string) {
+  const { createOpenClawTestState } = await import("../test-utils/openclaw-test-state.js");
+  const { openOpenClawStateDatabase, closeOpenClawStateDatabaseAsync } =
+    await import("../state/openclaw-state-db.js");
+  const state = await createOpenClawTestState({ label });
+  const database = openOpenClawStateDatabase({ env: state.env });
+  const sdkDatabase = new DatabaseSync(":memory:");
+  const sdkHost = new LegacyPluginSdkResourceHost();
+  const inspection = new PluginRegistryInspectionResources(async () => {});
+  inspection.attach(createEmptyPluginRegistry());
+  const cleanup = async () => {
+    await sdkHost.close().catch(() => undefined);
+    if (sdkDatabase.isOpen) {
+      sdkDatabase.close();
+    }
+    await closeOpenClawStateDatabaseAsync();
+    await state.cleanup();
+  };
+  return { database, sdkDatabase, sdkHost, inspection, cleanup };
+}
+
+function expectOpen(databases: DatabaseSync[], isOpen: boolean) {
+  expect(databases.map((database) => database.isOpen)).toEqual(databases.map(() => isOpen));
+}
+
+async function recordEvent(events: string[], event: string) {
+  events.push(event);
 }
 
 function recoveryRun(
@@ -174,23 +204,16 @@ describe("createGatewayCloseHandler", () => {
   it.each(["shutdown", "pre-restart", "harness", "sdk"] as const)(
     "retains shared SQLite through actual %s cleanup after grace",
     async (owner) => {
-      const { createOpenClawTestState } = await import("../test-utils/openclaw-test-state.js");
-      const { openOpenClawStateDatabase, closeOpenClawStateDatabaseAsync } =
-        await import("../state/openclaw-state-db.js");
       const hooks = await vi.importActual<typeof import("../hooks/internal-hooks.js")>(
         "../hooks/internal-hooks.js",
       );
-      const state = await createOpenClawTestState({ label: "shutdown-actual-sqlite" });
-      const database = openOpenClawStateDatabase({ env: state.env });
-      const sdkDatabase = new DatabaseSync(":memory:");
+      const fixture = await createSdkFixture("shutdown-actual-sqlite");
+      const { database, sdkDatabase, sdkHost, inspection } = fixture;
       const preparedDatabase = new DatabaseSync(":memory:");
       const unregisterPrepared = registerPreparedModelRuntimeClose(async () => {
         preparedDatabase.close();
         unregisterPrepared();
       });
-      const sdkHost = new LegacyPluginSdkResourceHost();
-      const inspection = new PluginRegistryInspectionResources(async () => {});
-      inspection.attach(createEmptyPluginRegistry());
       const sdkDisposalReads: unknown[] = [];
       inspection.register("sdk-provider", {
         id: "native-sdk-borrow",
@@ -271,9 +294,7 @@ describe("createGatewayCloseHandler", () => {
               : GATEWAY_SHUTDOWN_HOOK_TIMEOUT_MS,
         );
         await vi.waitFor(() => expect(httpClose).toHaveBeenCalledOnce());
-        expect(database.db.isOpen).toBe(true);
-        expect(sdkDatabase.isOpen).toBe(true);
-        expect(preparedDatabase.isOpen).toBe(true);
+        expectOpen([database.db, sdkDatabase, preparedDatabase], true);
         expect(sdkDisposalReads).toEqual([]);
         expect(closed).toBe(false);
         expect(sharedStateLifecycle.has("open")).toBe(true);
@@ -292,22 +313,16 @@ describe("createGatewayCloseHandler", () => {
             owner === "sdk" ? [] : [owner === "harness" ? "agent-harnesses" : `gateway:${owner}`],
           );
           expect(sdkDisposalReads).toEqual([{ value: 42 }]);
-          expect(database.db.isOpen).toBe(false);
-          expect(sdkDatabase.isOpen).toBe(false);
-          expect(preparedDatabase.isOpen).toBe(false);
+          expectOpen([database.db, sdkDatabase, preparedDatabase], false);
         } finally {
           await sdkHost.close().catch(() => undefined);
-          if (sdkDatabase.isOpen) {
-            sdkDatabase.close();
-          }
           unregisterPrepared();
           if (preparedDatabase.isOpen) {
             preparedDatabase.close();
           }
           hooks.unregisterInternalHook(eventKey, cleanup);
           vi.useRealTimers();
-          await closeOpenClawStateDatabaseAsync();
-          await state.cleanup();
+          await fixture.cleanup();
         }
       }
       expect(formatGatewayPendingCloseSteps()).toBe("none");
@@ -321,15 +336,8 @@ describe("createGatewayCloseHandler", () => {
   it.each([false, true])(
     "finishes shared state cleanup after actual SDK disposal rejects (global failure: %s)",
     async (globalFailure) => {
-      const { createOpenClawTestState } = await import("../test-utils/openclaw-test-state.js");
-      const { openOpenClawStateDatabase, closeOpenClawStateDatabaseAsync } =
-        await import("../state/openclaw-state-db.js");
-      const state = await createOpenClawTestState({ label: "sdk-disposal-failure-tail" });
-      const database = openOpenClawStateDatabase({ env: state.env });
-      const sdkDatabase = new DatabaseSync(":memory:");
-      const sdkHost = new LegacyPluginSdkResourceHost();
-      const inspection = new PluginRegistryInspectionResources(async () => {});
-      inspection.attach(createEmptyPluginRegistry());
+      const fixture = await createSdkFixture("sdk-disposal-failure-tail");
+      const { database, sdkDatabase, sdkHost, inspection } = fixture;
       const entered = createDeferredCore();
       const resume = createDeferredCore();
       const disposalError = new Error("synthetic SDK disposal failure");
@@ -376,15 +384,13 @@ describe("createGatewayCloseHandler", () => {
       };
       try {
         await entered.promise;
-        expect(database.db.isOpen).toBe(true);
-        expect(sdkDatabase.isOpen).toBe(true);
+        expectOpen([database.db, sdkDatabase], true);
         expect(reset).not.toHaveBeenCalled();
         expect(clearSecretsRuntimeSnapshot).not.toHaveBeenCalled();
         resume.resolve();
         const failure = await outcome;
         expectCleanupFailure(failure);
-        expect(sdkDatabase.isOpen).toBe(false);
-        expect(database.db.isOpen).toBe(false);
+        expectOpen([database.db, sdkDatabase], false);
         expect(reset).toHaveBeenCalledOnce();
         expect(clearSecretsRuntimeSnapshot).toHaveBeenCalledOnce();
         expectCleanupFailure(
@@ -397,12 +403,7 @@ describe("createGatewayCloseHandler", () => {
         resetFailureEnabled = false;
         resume.resolve();
         await outcome;
-        await sdkHost.close().catch(() => undefined);
-        if (sdkDatabase.isOpen) {
-          sdkDatabase.close();
-        }
-        await closeOpenClawStateDatabaseAsync();
-        await state.cleanup();
+        await fixture.cleanup();
       }
     },
   );
@@ -729,14 +730,8 @@ describe("createGatewayCloseHandler", () => {
         events.push("reload:stopped");
       }),
     };
-    const pluginServices = {
-      stop: vi.fn(async () => {
-        events.push("plugins:stopped");
-      }),
-    };
-    const stopChannel = vi.fn(async () => {
-      events.push("channel:stopped");
-    });
+    const pluginServices = { stop: vi.fn(() => recordEvent(events, "plugins:stopped")) };
+    const stopChannel = vi.fn(() => recordEvent(events, "channel:stopped"));
     const close = createGatewayCloseHandler({
       channelIds: ["discord"],
       configReloader,
@@ -786,14 +781,8 @@ describe("createGatewayCloseHandler", () => {
       events.push("acp-sessions");
       await disposal.promise;
     });
-    const pluginServices = {
-      stop: vi.fn(async () => {
-        events.push("plugin-services");
-      }),
-    };
-    const stopChannel = vi.fn(async (channelId: string) => {
-      events.push(`channel:${channelId}`);
-    });
+    const pluginServices = { stop: vi.fn(() => recordEvent(events, "plugin-services")) };
+    const stopChannel = vi.fn((id: string) => recordEvent(events, `channel:${id}`));
     const close = createGatewayCloseHandler({
       channelIds: ["discord"],
       pluginServices: pluginServices as never,
@@ -881,16 +870,14 @@ describe("createGatewayCloseHandler", () => {
     }
   });
 
-  it.each([
-    ["shutdown", true, ["session-A"], undefined, undefined],
-    ["restart", false, ["session-A"], 123, 100],
-  ] as const)(
-    "drains active sessions after replies for %s (timed out: %s, sessions: %j, restart: %s, budget: %s)",
-    async (reason, timedOut, emittedSessionIds, restartExpectedMs, drainTimeoutMs) => {
+  it.each(["shutdown", "restart"] as const)(
+    "drains active sessions after replies for %s",
+    async (reason) => {
+      const timedOut = reason === "shutdown";
       const order: string[] = [];
       const drainActiveSessionsForShutdown = vi.fn<DrainActiveSessionsForShutdown>(async () => {
         order.push("session-end");
-        return { emittedSessionIds: [...emittedSessionIds], timedOut };
+        return { emittedSessionIds: ["session-A"], timedOut };
       });
       const close = createGatewayCloseHandler({
         drainActiveSessionsForShutdown,
@@ -900,13 +887,7 @@ describe("createGatewayCloseHandler", () => {
         },
       });
       const result = await close(
-        reason === "restart"
-          ? {
-              reason: "gateway restarting",
-              restartExpectedMs,
-              drainTimeoutMs,
-            }
-          : { reason: "SIGTERM" },
+        reason === "restart" ? { ...restartOptions, drainTimeoutMs: 100 } : { reason: "SIGTERM" },
       );
       expect(drainActiveSessionsForShutdown).toHaveBeenCalledOnce();
       expect(firstMockCall(drainActiveSessionsForShutdown)?.[0]?.reason).toBe(reason);
@@ -962,11 +943,7 @@ describe("createGatewayCloseHandler", () => {
       },
       markMainSessionsAbortedForRestart,
     });
-    const closing = close({
-      reason: "gateway restarting",
-      restartExpectedMs: 123,
-      drainTimeoutMs: 100,
-    });
+    const closing = close({ ...restartOptions, drainTimeoutMs: 100 });
     await graceEntered.promise;
     const { source } = await createCloseSource("late-grace-run", {
       lifecycleGeneration: getAgentEventLifecycleGeneration(),
@@ -1008,11 +985,7 @@ describe("createGatewayCloseHandler", () => {
     const own = await begin(resolveTestGatewayContext, "agent:main:unbound-close");
     const other = await begin(otherGateway, "agent:main:foreign-close");
     try {
-      await createGatewayCloseHandler()({
-        reason: "gateway restarting",
-        restartExpectedMs: 123,
-        drainTimeoutMs: 0,
-      });
+      await createGatewayCloseHandler()(restartOptions);
       expect(own.input.abortSignal.aborted).toBe(true);
       expect(other.input.abortSignal.aborted).toBe(false);
     } finally {
@@ -1152,9 +1125,9 @@ describe("createGatewayCloseHandler", () => {
     };
     const broadcast = vi.fn();
     const nodeSendToSession = vi.fn();
-    const markMainSessionsAbortedForRestart = vi.fn<MarkMainSessionsAbortedForRestart>(() => {
-      events.push("marker");
-    });
+    const markMainSessionsAbortedForRestart = vi.fn<MarkMainSessionsAbortedForRestart>(() =>
+      recordEvent(events, "marker"),
+    );
     const close = createGatewayCloseHandler({
       chatRunState,
       broadcast,
@@ -1170,11 +1143,7 @@ describe("createGatewayCloseHandler", () => {
         };
       }),
     });
-    const closing = close({
-      reason: "gateway restarting",
-      restartExpectedMs: 123,
-      drainTimeoutMs: 100,
-    });
+    const closing = close({ ...restartOptions, drainTimeoutMs: 100 });
     await vi.advanceTimersByTimeAsync(100);
     expect((await closing).warnings).toContain("restart-reply-drain");
     expect(rpcSourceTesting.has("run-1")).toBe(false);
@@ -1275,11 +1244,7 @@ describe("createGatewayCloseHandler", () => {
           : { getPendingReplyCount: vi.fn().mockReturnValueOnce(1).mockReturnValue(0) }),
         markMainSessionsAbortedForRestart,
       });
-      const closing = closeGateway(deps)({
-        reason: "gateway restarting",
-        restartExpectedMs: 123,
-        drainTimeoutMs: 0,
-      });
+      const closing = closeGateway(deps)(restartOptions);
       if (persistence === "pending") {
         await vi.advanceTimersByTimeAsync(1_000);
       }
@@ -1323,7 +1288,7 @@ describe("createGatewayCloseHandler", () => {
     const closing = createGatewayCloseHandler({
       getPendingReplyCount: vi.fn().mockReturnValueOnce(1).mockReturnValue(0),
       markMainSessionsAbortedForRestart: () => marker.promise,
-    })({ reason: "gateway restarting", restartExpectedMs: 123, drainTimeoutMs: 0 });
+    })(restartOptions);
     let settled = false;
     void closing.then(() => {
       settled = true;
@@ -1342,9 +1307,9 @@ describe("createGatewayCloseHandler", () => {
 
   it("disposes Code Mode runs before agent and bundle runtimes during shutdown", async () => {
     const closeOrder: string[] = [];
-    mocks.disposeAllCodeModeRuns.mockImplementation(() => {
-      closeOrder.push("code-mode-runs");
-    });
+    mocks.disposeAllCodeModeRuns.mockImplementation(() =>
+      recordEvent(closeOrder, "code-mode-runs"),
+    );
     for (const [dispose, label] of [
       [mocks.disposeAgentHarnesses, "agent-harnesses"],
       [mocks.closeProviderTransportDispatcherPool, "provider-transport-dispatchers"],
@@ -1352,26 +1317,21 @@ describe("createGatewayCloseHandler", () => {
       [mocks.disposeAllBundleLspRuntimes, "bundle-lsp"],
       [mocks.drainRetainedEmbeddingProviders, "embedding-providers"],
     ] as const) {
-      dispose.mockImplementation(async () => {
-        closeOrder.push(label);
-      });
+      dispose.mockImplementation(() => recordEvent(closeOrder, label));
     }
-    const tailscaleCleanup = vi.fn(async () => {
-      closeOrder.push("tailscale");
-    });
+    const tailscaleCleanup = vi.fn(() => recordEvent(closeOrder, "tailscale"));
     const lifecycleUnsub = vi.fn();
     const transcriptUnsub = vi.fn();
     const deps = createGatewayCloseTestDeps({
       tailscaleCleanup,
       lifecycleUnsub,
       transcriptUnsub,
-      httpServer: {
-        close: (callback: (err?: Error | null) => void) => {
+      httpServer: createHttpServer(
+        vi.fn((callback) => {
           closeOrder.push("http-server");
           callback(null);
-        },
-        closeIdleConnections: vi.fn(),
-      } as never,
+        }),
+      ) as never,
     });
     assert(deps.maintenance);
     const { stopPeriodicTasks } = deps.maintenance;
