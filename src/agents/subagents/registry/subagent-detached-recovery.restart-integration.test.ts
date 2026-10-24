@@ -506,12 +506,12 @@ describe("detached subagent restart recovery", () => {
             sessionId: request.sessionId,
           });
           activeRunIds.add(request.idempotencyKey);
-          // Native admission publishes the new running turn before model execution.
+          // Native admission clears the persisted terminal status before model execution.
           await replaceSessionEntry(
             { agentId: "main", sessionKey: childSessionKey },
             {
               ...loadSessionEntry({ agentId: "main", sessionKey: childSessionKey })!,
-              status: "running",
+              status: undefined,
               abortedLastRun: false,
               lifecycleRunId: request.idempotencyKey,
               lastRunId: request.idempotencyKey,
