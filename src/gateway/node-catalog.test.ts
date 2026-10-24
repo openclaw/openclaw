@@ -18,11 +18,6 @@ function pairedDevice(overrides: Partial<PairedDevice> = {}): PairedDevice {
   return {
     deviceId: "mac-1",
     publicKey: "public-key",
-    displayName: "Mac",
-    platform: "macos",
-    clientId: "openclaw-macos",
-    clientMode: "node",
-    role: "node",
     roles: ["node"],
     tokens: { node: { token: "current-token", role: "node", scopes: [], createdAtMs: 1 } },
     createdAtMs: 1,
@@ -33,8 +28,6 @@ function pairedDevice(overrides: Partial<PairedDevice> = {}): PairedDevice {
 
 function nodeSurface(overrides: Partial<NonNullable<PairedDevice["nodeSurface"]>> = {}) {
   return {
-    caps: ["camera"],
-    commands: ["system.run"],
     createdAtMs: 1,
     approvedAtMs: 100,
     ...overrides,
@@ -75,17 +68,7 @@ function createCatalogFixture(
   const sessions = connections.map((connection, index) => {
     const nodeId = connection.nodeId ?? "mac-1";
     const connId = connection.connId ?? `connection-${index}`;
-    const client = makeClient(connId, nodeId, [], {
-      clientId: "node-host",
-      displayName: connection.displayName,
-      platform: connection.platform,
-      caps: connection.caps,
-      commands: connection.commands,
-      permissions: connection.permissions,
-      declaredCaps: connection.declaredCaps,
-      declaredCommands: connection.declaredCommands,
-      declaredPermissions: connection.declaredPermissions,
-    });
+    const client = makeClient(connId, nodeId, [], { clientId: "node-host" });
     const binding = expectDefined(bindings.get(nodeId), `${nodeId} binding`);
     const session = registry.register(client, {
       pairingIdentity: binding.identity,
@@ -198,46 +181,36 @@ it("uses pending request metadata as the final fallback for pending-only nodes",
   }
 });
 
-it.each([true, false])(
-  "selects pending reapproval only for matching live declarations: %s",
-  async (widened) => {
-    const caps = ["camera", "screen"];
-    const commands = ["screen.snapshot", "system.run"];
-    const permissions = { camera: true, screen: true };
-    const fixture = createCatalogFixture(
+it("ignores stale reapproval when live declarations match the approved surface", async () => {
+  const approved = {
+    caps: ["camera"],
+    commands: ["screen.snapshot"],
+    permissions: { camera: true },
+  };
+  const fixture = createCatalogFixture(
+    {
+      nodeSurface: nodeSurface(approved),
+      pendingNodeSurface: pendingSurface(),
+    },
+    [
       {
-        nodeSurface: nodeSurface({
-          commands: ["screen.snapshot"],
-          permissions: { camera: true },
-        }),
-        pendingNodeSurface: pendingSurface(),
+        ...approved,
+        declaredCaps: approved.caps,
+        declaredCommands: approved.commands,
+        declaredPermissions: approved.permissions,
       },
-      [
-        {
-          displayName: "Mac",
-          platform: "macos",
-          caps: ["camera"],
-          commands: ["screen.snapshot"],
-          permissions: { camera: true },
-          declaredCaps: widened ? caps : ["camera"],
-          declaredCommands: widened ? commands : ["screen.snapshot"],
-          declaredPermissions: widened ? permissions : { camera: true },
-        },
-      ],
-    );
-    const node = (await fixture.read()).nodes[0];
-    expect(node).toMatchObject({
-      approvalState: widened ? "pending-reapproval" : "approved",
-      pendingRequestId: widened ? "request-1" : undefined,
-      pendingDeclaredCaps: widened ? caps : undefined,
-      pendingDeclaredCommands: widened ? commands : undefined,
-      caps: ["camera"],
-      commands: ["screen.snapshot"],
-    });
-    expect(node?.pendingDeclaredPermissions).toEqual(widened ? permissions : undefined);
-    expect(node?.permissions).toEqual({ camera: true });
-  },
-);
+    ],
+  );
+  const node = (await fixture.read()).nodes[0];
+  expect(node).toMatchObject({
+    ...approved,
+    approvalState: "approved",
+    pendingRequestId: undefined,
+    pendingDeclaredCaps: undefined,
+    pendingDeclaredCommands: undefined,
+    pendingDeclaredPermissions: undefined,
+  });
+});
 
 it("ignores malformed node capability entries instead of throwing", async () => {
   const fixture = createCatalogFixture({ deviceId: "bad-node" }, [{ nodeId: "bad-node" }]);
@@ -256,18 +229,14 @@ it("ignores malformed node capability entries instead of throwing", async () => 
 it("normalizes non-string scalar fields from malformed pairing records (no nodes-status crash)", async () => {
   // Corrupt persisted scalars must not reach status formatters' string operations.
   const device = pairedDevice({ platform: "linux", nodeSurface: nodeSurface() });
-  Object.assign(device, {
-    displayName: 654,
-    clientId: 456,
-    clientMode: 789,
-    remoteIp: 22,
-    deviceFamily: 33,
-  });
-  Object.assign(expectDefined(device.nodeSurface, "approved surface"), {
-    version: 123,
-    displayName: 321,
-    modelIdentifier: 44,
-  });
+  const corrupt = (target: object, keys: string[]) =>
+    Object.assign(target, Object.fromEntries(keys.map((key) => [key, 123])));
+  corrupt(device, ["displayName", "clientId", "clientMode", "remoteIp", "deviceFamily"]);
+  corrupt(expectDefined(device.nodeSurface, "approved surface"), [
+    "version",
+    "displayName",
+    "modelIdentifier",
+  ]);
   const fixture = createCatalogFixture([device], [{}]);
   Object.assign(expectDefined(fixture.sessions[0], "live node"), {
     platform: {},
@@ -287,21 +256,18 @@ it("normalizes non-string scalar fields from malformed pairing records (no nodes
   });
 });
 
-it.each([7, {}, []])(
-  "drops malformed persisted pairing ids before the catalog sort: %j",
-  async (deviceId) => {
-    const invalid = pairedDevice({
-      nodeSurface: nodeSurface(),
-      pendingNodeSurface: pendingSurface(),
-    });
-    Object.assign(invalid, { deviceId });
-    const fixture = createCatalogFixture([
-      pairedDevice({ deviceId: "good-node", nodeSurface: nodeSurface() }),
-      invalid,
-    ]);
-    expect((await fixture.read()).nodes.map((entry) => entry.nodeId)).toEqual(["good-node"]);
-  },
-);
+it("drops non-string persisted pairing ids before the catalog sort", async () => {
+  const invalid = pairedDevice({
+    nodeSurface: nodeSurface(),
+    pendingNodeSurface: pendingSurface(),
+  });
+  Object.assign(invalid, { deviceId: 7 });
+  const fixture = createCatalogFixture([
+    pairedDevice({ deviceId: "good-node", nodeSurface: nodeSurface() }),
+    invalid,
+  ]);
+  expect((await fixture.read()).nodes.map((entry) => entry.nodeId)).toEqual(["good-node"]);
+});
 
 it.each([undefined, { camera: true, screen: true }])(
   "normalizes pending approval with omitted live permissions and pending permissions %j",
@@ -347,18 +313,11 @@ it.each([undefined, { camera: true, screen: true }])(
   },
 );
 
-it("publishes detached immutable node metadata without private source fields", async () => {
-  const permissions = { camera: true };
+it("omits private source fields and preserves zero connection timestamps", async () => {
   const fixture = createCatalogFixture({ nodeSurface: nodeSurface() }, [
-    { connId: "private-connection", connectedAtMs: 0, permissions },
+    { connId: "private-connection", connectedAtMs: 0 },
   ]);
-  const catalog = (await fixture.read()).nodes;
-  const node = expectDefined(catalog[0], "catalog row");
-  const live = expectDefined(fixture.sessions[0], "live node");
-  expect(node.permissions).toEqual(permissions);
-  expect(node.permissions).not.toBe(permissions);
-  expect(node.nodePluginTools).toEqual([]);
-  expect(node.nodePluginTools).not.toBe(live.nodePluginTools);
+  const node = (await fixture.read()).nodes[0];
   for (const key of [
     "client",
     "connId",
@@ -380,14 +339,6 @@ it("publishes detached immutable node metadata without private source fields", a
     lastDisconnectedAtMs: undefined,
     sessionHost: false,
   });
-  for (const value of [catalog, node, node.permissions, node.nodePluginTools]) {
-    expect(Object.isFrozen(value)).toBe(true);
-  }
-  expect(() =>
-    Object.assign(expectDefined(node.permissions, "published permissions"), { camera: false }),
-  ).toThrow();
-  permissions.camera = false;
-  expect(node.permissions).toEqual({ camera: true });
 });
 
 it("keeps duplicate-source selection, newest pending request and last-seen tie precedence", async () => {

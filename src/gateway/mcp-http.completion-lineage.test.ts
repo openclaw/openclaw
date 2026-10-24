@@ -274,7 +274,17 @@ describe("MCP loopback completion lineage at the final tool-effect fence", () =>
     "registers watches without host SQL for %s lineage",
     async (kind, sourceKey, storedKey, suppliedSessionId, parentKey) => {
       const sessionId = suppliedSessionId ?? childEntry.sessionId;
-      await seedLineage({ sessionId, ...(parentKey ? { spawnedBy: parentKey } : {}) }, storedKey);
+      await seedLineage(
+        {
+          sessionId,
+          ...(kind === "durable"
+            ? { spawnedBy: anotherRequester, completionOwnerSessionKey: requesterKey }
+            : parentKey
+              ? { spawnedBy: parentKey }
+              : {}),
+        },
+        storedKey,
+      );
       if (parentKey) {
         await replaceSessionEntry({ agentId: "main", sessionKey: parentKey }, childEntry);
       }
@@ -376,18 +386,6 @@ describe("MCP loopback completion lineage at the final tool-effect fence", () =>
       expect(await grant.written()).toBeUndefined();
     },
   );
-
-  it("lets the completion owner write when another session controls the child", async () => {
-    // The persisted completion owner, when set, is the lineage; the controller is not.
-    await seedLineage({
-      spawnedBy: "agent:main:direct:controller",
-      completionOwnerSessionKey: requesterKey,
-    });
-    const grant = await mintCompletionGrant("lineage-completion-owner");
-
-    expect(await grant.call()).toMatchObject({ result: { isError: false } });
-    expect(await grant.written()).toBe("lineage-completion-owner");
-  });
 
   it.each<[string, () => Promise<void>, Partial<SessionEntry>?, string?]>([
     ["removed", removeChild],

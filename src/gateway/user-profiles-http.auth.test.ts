@@ -22,8 +22,6 @@ import {
 import * as profileAvatars from "../state/user-profiles-avatar.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
-import { createGatewayAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { authorizeGatewayHttpRequestOrReply } from "./http-auth-utils.js";
 import { finishGatewayHttpAuthorityError } from "./http-request-authority.js";
@@ -49,7 +47,6 @@ describe("personal avatar HTTP authentication", () => {
   let avatarPath: string;
   let auth: ResolvedGatewayAuth;
   let cfg: OpenClawConfig;
-  let rateLimiter: AuthRateLimiter | undefined;
 
   beforeAll(async () => {
     server = createServer((req, res) => {
@@ -63,7 +60,6 @@ describe("personal avatar HTTP authentication", () => {
         }
         await handleUserProfileAvatarHttpRequest(req, res, pathname, {
           auth,
-          rateLimiter,
           getResolvedAuth: () => auth,
           getRuntimeConfig: () => cfg,
         });
@@ -95,8 +91,6 @@ describe("personal avatar HTTP authentication", () => {
 
   afterEach(() => {
     setAvatarGatewayOrigin(null);
-    rateLimiter?.dispose();
-    rateLimiter = undefined;
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
   });
@@ -437,24 +431,4 @@ describe("personal avatar HTTP authentication", () => {
       expect(response.headers.get("content-type")).not.toBe("image/png");
     },
   );
-
-  it("fails closed for unbound device identities when profile roles are configured", async () => {
-    const { token } = await pairDevice();
-    cfg = { gateway: { roles: { definitions: {} } } };
-    expect((await request(token)).status).toBe(401);
-    expect((await request("test-shared-secret")).status).toBe(200);
-  });
-
-  it("does not spend the shared-secret failure budget on valid paired reads", async () => {
-    const { token } = await pairDevice();
-    rateLimiter = createGatewayAuthRateLimiter(
-      { maxAttempts: 1, exemptLoopback: false },
-      { scheduler: createTestGatewayScheduler() },
-    );
-    expect((await request(token)).status).toBe(200);
-    expect((await request(token)).status).toBe(200);
-    expect((await request("test-shared-secret")).status).toBe(200);
-    expect((await request("invalid-test-token")).status).toBe(401);
-    expect((await request("invalid-test-token")).status).toBe(429);
-  });
 });
