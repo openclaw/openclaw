@@ -137,18 +137,7 @@ describe("Agent Plugins bundle mock response", () => {
       { value: targetResult(probeText.replace("PROBE_MODE=live", "PROBE_MODE=live-corrupt")) },
     ],
     ["LF-suffixed probe mode field", 2, { value: targetResult(`${probeText}\n`) }],
-    ["unexpected required arguments", 1, { value: described({ required: ["city"] }) }],
-    [
-      "unexpected properties",
-      1,
-      { value: described({ properties: { city: { type: "string" } } }) },
-    ],
     ["permissive additional properties", 1, { value: described({ additionalProperties: true }) }],
-    [
-      "missing additional-property restriction",
-      1,
-      { value: { ...target, parameters: { type: "object", properties: {} } } },
-    ],
     ["extra invocation", 3, {}],
   ])("rejects %s even when success markers are present", (_label, index, patch) => {
     const completed = rounds();

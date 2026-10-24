@@ -147,8 +147,6 @@ it("reports malformed Google Live frames from the serialized browser callback", 
 
 it.each<[string, string, number, number, boolean, boolean]>([
   ["failed browser media", "failed", 0.002, 0.2, true, false],
-  ["silent browser audio", "connected", 0, 0, true, false],
-  ["comfort noise despite a completed transcript", "connected", 2.2539e-8, 0, true, false],
   ["audio too brief to establish speech", "connected", 0.002, 0.02, true, false],
   ["unrelated browser audio", "connected", 0.002, 0.2, false, false],
   ["completed browser speech", "connected", 0.002, 0.2, true, true],

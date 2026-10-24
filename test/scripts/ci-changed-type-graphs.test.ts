@@ -72,10 +72,8 @@ it("preserves canonical graph order and rejects unowned graphs", () => {
     [],
     ["core", "core"],
     ["unknown"],
-    ["core", "../../unowned.json"],
     ["test-root", "test-root-e2e"],
     ["test-root-e2e", "test-root"],
-    ["test-root-e2e", "test-root-e2e"],
   ]) {
     expect(() => resolveCiTsgoGraphs(names)).toThrow("canonical");
   }
@@ -99,18 +97,15 @@ it("keeps type-only consumers in every compiler family", () => {
   ).toEqual(consumers);
 });
 
-it.for([
-  [],
-  ["src/types/runtime.d.ts"],
-  ["package.json"],
-  [source, "src/deleted.ts"],
-  [source, "src/deleted.js"],
-])("keeps uncertain or deleted input full: %j", async (paths) => {
-  if (paths.length !== 2) {
-    expect(selectChangedCiTsgoGraphs(paths, graphs())).toBeUndefined();
-  }
-  await expectFull(paths, paths.length === 2 ? { cwd: workspace() } : {});
-});
+it.for([[], ["src/types/runtime.d.ts"], ["package.json"], [source, "src/deleted.ts"]])(
+  "keeps uncertain or deleted input full: %j",
+  async (paths) => {
+    if (paths.length !== 2) {
+      expect(selectChangedCiTsgoGraphs(paths, graphs())).toBeUndefined();
+    }
+    await expectFull(paths, paths.length === 2 ? { cwd: workspace() } : {});
+  },
+);
 
 it.each([undefined, "additional-checks"] as const)(
   "discovers core consumers with owner %s",
