@@ -55,7 +55,7 @@ const fixtures = Array.from({ length: 32 }, (_, index) => {
   // Every fourth event stays below the compression threshold; the remaining
   // events mix repeated JSON structure with deterministic varied text.
   const size = index % 4 === 0 ? Math.min(payloadSize, 512) : payloadSize;
-  const rows = Array.from({ length: Math.ceil(size / 100) }, (unused, row) => ({
+  const rows = Array.from({ length: Math.ceil(size / 100) }, (_unusedRow, row) => ({
     id: `synthetic-${index}-${row}`,
     state: row % 3 === 0 ? "running" : "complete",
     text: `line ${row}: result ${((row + 1) * (index + 17) * 2654435761) >>> 0}; ready\n`,
