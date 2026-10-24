@@ -1,7 +1,20 @@
-import { expect, it } from "vitest";
+import { existsSync } from "node:fs";
+import { cp } from "node:fs/promises";
+import path from "node:path";
+import { expect, inject, it } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
+import type { GatewayServer } from "../../../src/gateway/server-public.ts";
+import { createOpenClawTestState } from "../../../src/test-utils/openclaw-test-state.js";
+import { getFreePort } from "../../../src/test-utils/ports.js";
+import { resolveRuntimeServiceBuildId } from "../../../src/version.js";
+import {
+  buildProductionControlUiE2e,
+  installMockGateway,
+  refreshProductionControlUiE2e,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { deviceGatewayEnv } from "./device-gateway.test-support.ts";
 import { closeContext } from "./login-gate-e2e.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -67,4 +80,116 @@ suite.define(() => {
       await closeContext(context);
     }
   });
+
+  it("reloads an incompatible production bundle from a real Gateway and connects", async (test) => {
+    const currentBuild = inject("controlUiE2eBuildRoot");
+    expect(currentBuild).toBeTruthy();
+    const state = await createOpenClawTestState({
+      label: "protocol-mismatch-recovery",
+      layout: "home",
+      env: deviceGatewayEnv,
+    });
+    let gateway: GatewayServer | undefined;
+    await suite.runScenario(test, {
+      retainedState: () => state.root,
+      async run() {
+        const obsoleteRoot = state.path("obsolete-ui");
+        const currentRoot = state.path("current-ui");
+        await buildProductionControlUiE2e(obsoleteRoot, "obsolete-protocol-build", {
+          protocolVersion: PROTOCOL_VERSION + 1,
+        });
+        await cp(currentBuild!, currentRoot, { recursive: true });
+        const buildId = resolveRuntimeServiceBuildId();
+        if (buildId) {
+          await refreshProductionControlUiE2e(currentRoot, buildId);
+        }
+        const port = await getFreePort();
+        const baseUrl = `http://127.0.0.1:${port}`;
+        await state.writeConfig({
+          plugins: { enabled: false },
+          gateway: {
+            port,
+            auth: { mode: "none" },
+            controlUi: { root: currentRoot, allowedOrigins: [baseUrl] },
+          },
+        });
+        state.applyEnv();
+        const { startGatewayServer } = await import("../../../src/gateway/server.js");
+        gateway = await startGatewayServer(port, {
+          auth: { mode: "none" },
+          bind: "loopback",
+          controlUiEnabled: true,
+          sidecarStartup: "defer",
+        });
+        await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+          let obsolete = true;
+          const documents: string[] = [];
+          const connects: Array<{ minProtocol: number; maxProtocol: number }> = [];
+          const outcomes: Array<{ ok: boolean; error?: { details?: unknown } }> = [];
+          // Model a cached deployment with actual compiled assets. Keep its hashed
+          // chunks available so a missing import cannot masquerade as protocol recovery.
+          await page.route(`${baseUrl}/**`, async (route) => {
+            const request = route.request();
+            const url = new URL(request.url());
+            if (request.resourceType() === "document") {
+              documents.push(url.href);
+            }
+            const asset = path.join(
+              obsoleteRoot,
+              request.resourceType() === "document" ? "index.html" : url.pathname,
+            );
+            if (
+              (obsolete || url.pathname.startsWith("/assets/")) &&
+              request.method() === "GET" &&
+              existsSync(asset)
+            ) {
+              await route.fulfill({ path: asset });
+            } else {
+              await route.continue();
+            }
+          });
+          await page.routeWebSocket(`ws://127.0.0.1:${port}/**`, (socket) => {
+            const server = socket.connectToServer();
+            const ids = new Set<string>();
+            socket.onMessage((message) => {
+              const frame = JSON.parse(String(message));
+              if (frame.type === "req" && frame.method === "connect") {
+                connects.push(frame.params);
+                ids.add(frame.id);
+              }
+              server.send(message);
+            });
+            server.onMessage((message) => {
+              const frame = JSON.parse(String(message));
+              if (frame.type === "res" && ids.has(frame.id)) {
+                outcomes.push(frame);
+                obsolete = false;
+              }
+              socket.send(message);
+            });
+          });
+          await page.goto(`${baseUrl}/new`);
+          await expect.poll(() => outcomes.map(({ ok }) => ok)).toEqual([false, true]);
+          await page.locator("openclaw-app-shell").waitFor();
+          expect(connects).toMatchObject([
+            { minProtocol: PROTOCOL_VERSION + 1, maxProtocol: PROTOCOL_VERSION + 1 },
+            { minProtocol: PROTOCOL_VERSION, maxProtocol: PROTOCOL_VERSION },
+          ]);
+          expect(outcomes[0]?.error?.details).toMatchObject({
+            code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
+            minProtocol: PROTOCOL_VERSION,
+            maxProtocol: PROTOCOL_VERSION,
+            reloadRequired: true,
+          });
+          expect(documents).toHaveLength(2);
+          expect(new URL(documents[1]!).searchParams.has("openclaw_mount_recovery")).toBe(true);
+          expect(await page.locator("openclaw-login-gate").count()).toBe(0);
+        });
+      },
+      close: async () => {
+        await gateway?.close({ reason: "protocol recovery proof complete" });
+      },
+      release: () => state.cleanup(),
+    });
+  }, 180_000);
 });
