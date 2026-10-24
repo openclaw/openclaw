@@ -12,6 +12,7 @@ const { guardedFetch } = vi.hoisted(() => ({
   guardedFetch: vi.fn(),
 }));
 
+// mock-isolation: Keep HTTP and DNS access inside the synthetic stream transport.
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: guardedFetch,
 }));

@@ -36,10 +36,12 @@ const mocks = vi.hoisted(() => {
   };
   return { generate: vi.fn<(params?: ResponseParams) => Promise<ResponseResult>>(), stt };
 });
+// mock-isolation: Use the fixture provider without live transcription discovery or sessions.
 vi.mock("./realtime-transcription.runtime.js", () => ({
   getRealtimeTranscriptionProvider: () => mocks.stt,
   listRealtimeTranscriptionProviders: () => [mocks.stt],
 }));
+// mock-isolation: Exercise webhook delivery without running a real agent response.
 vi.mock("./response-generator.js", () => ({ generateVoiceResponse: mocks.generate }));
 beforeEach(() => {
   onTestFinished(() => {
