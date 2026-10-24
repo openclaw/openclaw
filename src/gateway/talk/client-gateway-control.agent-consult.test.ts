@@ -200,10 +200,6 @@ describe("Talk client agent consult admission", () => {
     embeddedRunsTesting.resetActiveEmbeddedRuns();
   });
 
-  it("does not advertise steering without a connection owner", () => {
-    expect(createRunner().runPrompt).not.toHaveProperty("steer");
-  });
-
   it.each(["success", "failure"] as const)(
     "keeps the released provider callback reusable after %s",
     async (outcome) => {
@@ -211,6 +207,7 @@ describe("Talk client agent consult admission", () => {
         mocks.consultRealtimeVoiceAgent.mockRejectedValueOnce(new Error("consult failed"));
       }
       const runner = createRunner();
+      expect(runner.runPrompt).not.toHaveProperty("steer");
       const first = runner.runPrompt({ prompt: "first task" });
       if (outcome === "failure") {
         await expect(first).rejects.toThrow("consult failed");
@@ -229,8 +226,8 @@ describe("Talk client agent consult admission", () => {
   );
 
   it.each(["runOwnedArgs", "runPrompt"] as const)(
-    "steers and claims only the exact registered consult owner through %s",
-    (entrypoint) =>
+    "steers and claims the registered owner through %s",
+    async (entrypoint) =>
       withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const scope = {
           agentId: "researcher",
@@ -238,14 +235,12 @@ describe("Talk client agent consult admission", () => {
           storePath: state.statePath("sessions.sqlite"),
         };
         const now = Date.now();
-        const priorInteractionAt = now - 61 * 60_000;
+        const staleAt = now - 61 * 60_000;
         await replaceSessionEntry(scope, {
           sessionId: "session-talk",
-          updatedAt: priorInteractionAt,
-          lastInteractionAt: priorInteractionAt,
+          updatedAt: staleAt,
+          lastInteractionAt: staleAt,
         });
-        rpcSourceTesting.clear();
-        const isRunCurrent = vi.fn((runId: string) => runId === "run-talk");
         mockConsult(async (params) => {
           await announce(params);
           await params.agentRuntime.runEmbeddedAgent({
@@ -253,26 +248,36 @@ describe("Talk client agent consult admission", () => {
             sessionTarget: { ...scope, sessionId: "session-talk" },
           });
         });
+        const entered = gate();
+        const publish = gate();
+        const project = vi.fn((_overlay: ReplyToolAuthorityOverlay) => "authority");
+        const client = sharingPolicyClient({
+          deviceId: "caller-device",
+          scopes: ["operator.admin"],
+        });
+        const authority = resolveTalkAgentConsultAuthority(client.connect.scopes, client);
         const handle = createEmbeddedRunHandle({ runId: "run-talk" });
-        const { finish, published } = pendingBackend(entrypoint, handle, async (instance) => {
-          await publishBackend(handle, instance, () => "authority", "attempt");
+        const { finish } = pendingBackend(entrypoint, handle, async (instance) => {
+          entered.resolve();
+          await publish.promise;
+          await publishBackend(
+            handle,
+            instance,
+            project,
+            entrypoint === "runPrompt" ? "reply" : "attempt",
+          );
         });
         const runner = createOwnedRunner({
+          authority,
           sessionTarget: { ...scope, canonicalKey: scope.sessionKey, assertCurrent: () => {} },
-          registerRun: vi.fn(async ({ runId }) => ({
-            release: vi.fn(),
-            isCurrent: () => isRunCurrent(runId),
-          })),
         });
-
-        const lifecycleRunner = runner[entrypoint];
-        if (entrypoint === "runPrompt") {
-          runner.runPrompt.adoptCompletionClaims();
-        }
-        const run =
+        const lifecycle = runner[entrypoint];
+        runner.runPrompt.adoptCompletionClaims();
+        const run = track(
           entrypoint === "runOwnedArgs"
-            ? runner.runOwnedArgs({ question: "first task" }, new AbortController().signal)
-            : runner.runPrompt({ prompt: "first task" });
+            ? runner.runOwnedArgs({ question: "first task" })
+            : runner.runPrompt({ prompt: "first task" }),
+        );
         mocks.controlRealtimeVoiceAgentRun.mockImplementationOnce(async (params: ControlParams) => {
           const recorder = params.createUserTurnTranscriptRecorder?.(params.text);
           if (entrypoint === "runPrompt") {
@@ -281,26 +286,34 @@ describe("Talk client agent consult admission", () => {
           } else {
             expect(recorder).toBeUndefined();
           }
-          return { ok: true, queued: true, message: "Steering accepted." };
+          return await projectSteering(params);
         });
         const clock = vi.spyOn(Date, "now").mockReturnValue(now);
         try {
-          await awaitGateBeforeSettlement(published.promise, run, "Talk backend must register");
-          await steer(lifecycleRunner);
+          await awaitGateBeforeSettlement(entered.promise, run, "Talk backend must register");
+          const steering = steer(lifecycle);
+          await Promise.resolve();
+          expect(mocks.controlRealtimeVoiceAgentRun).not.toHaveBeenCalled();
+          publish.resolve();
+          await steering;
+          expect(project).toHaveBeenCalledOnce();
+          expect(mocks.consultRealtimeVoiceAgent.mock.calls[0]?.[0]).toMatchObject({
+            senderIsOwner: true,
+            toolsAllow: undefined,
+          });
           expect(loadSessionEntry(scope)?.lastInteractionAt).toBe(
-            entrypoint === "runPrompt" ? now : priorInteractionAt,
+            entrypoint === "runPrompt" ? now : staleAt,
           );
-
           finish.resolve();
           await expect(run).resolves.toEqual({ text: "done" });
-          expectClaimOnce(lifecycleRunner.claimAppend);
+          expectClaimOnce(lifecycle.claimAppend);
           expect(rpcSourceTesting.has("run-talk")).toBe(false);
-          expect(isRunCurrent).toHaveBeenCalledWith("run-talk");
         } finally {
+          publish.resolve();
           finish.resolve();
           await run.catch(() => undefined);
           clock.mockRestore();
-          lifecycleRunner.claimFailureAppend();
+          lifecycle.claimFailureAppend();
         }
       }),
   );
@@ -322,6 +335,7 @@ describe("Talk client agent consult admission", () => {
         },
       });
       runner.runPrompt.adoptCompletionClaims();
+      finalizers.push(() => runner.runPrompt.claimFailureAppend());
       return {
         runId,
         storePath,
@@ -384,148 +398,71 @@ describe("Talk client agent consult admission", () => {
       );
       return { payloads: [] };
     });
-    const runs = consults.map(({ runner }) => runner.runPrompt({ prompt: "finish this task" }));
-    const completed = Promise.all(runs);
-    try {
-      await Promise.race([
-        Promise.all(consults.map(({ prepared }) => prepared.promise)),
-        completed,
-      ]);
-      publish.resolve();
-      await Promise.race([
-        Promise.all(consults.map(({ registered }) => registered.promise)),
-        completed,
-      ]);
-      finish.resolve();
-      await expect(completed).resolves.toEqual([{ text: "run-talk-a" }, { text: "run-talk-b" }]);
-      for (const { runner } of consults) {
-        expectClaimOnce(runner.runPrompt.claimAppend);
-      }
-    } finally {
-      publish.resolve();
-      finish.resolve();
-      await Promise.allSettled(runs);
-      for (const { runner } of consults) {
-        runner.runPrompt.claimFailureAppend();
-      }
-    }
-  });
-
-  it("waits for backend publication and projects its registered caller authority", async () => {
-    const announced = gate();
-    const publish = gate();
-    rpcSourceTesting.clear();
-    const client = sharingPolicyClient({
-      deviceId: "caller-device",
-      scopes: ["operator.admin"],
-    });
-    const authority = resolveTalkAgentConsultAuthority(client.connect.scopes, client);
-    const handle = createEmbeddedRunHandle({ runId: "run-talk" });
-    const projectToolAuthority = vi.fn((_overlay: ReplyToolAuthorityOverlay) => "authority");
-    const { finish } = pendingBackend("publication", handle, async (instance) => {
-      announced.resolve();
-      await publish.promise;
-      await publishBackend(handle, instance, projectToolAuthority, "reply");
-    });
-    const { runner, run } = startOwnedConsult({ authority });
-    await announced.promise;
-    const steering = steer(runner.runPrompt);
-
-    await Promise.resolve();
-    expect(mocks.controlRealtimeVoiceAgentRun).not.toHaveBeenCalled();
-    publish.resolve();
-    await steering;
-
-    const controlParams = mocks.controlRealtimeVoiceAgentRun.mock.calls[0]?.[0];
-    expect(controlParams).toMatchObject({
-      sessionKey: "agent:researcher:talk",
-      runTarget: expect.objectContaining({
-        runId: "run-talk",
-        signal: expect.any(AbortSignal),
-        isCurrent: expect.any(Function),
-      }),
-      getToolAuthorityOverlay: expect.any(Function),
-      text: "latest task",
-      mode: "steer",
-    });
-    const expectedOverlay = runner.getToolAuthorityOverlay(authority, "reply");
-    const capturedOverlay = controlParams?.getToolAuthorityOverlay?.();
-    expect(capturedOverlay).toEqual(expectedOverlay);
-    if (capturedOverlay) {
-      await controlParams?.prepareToolAuthorityOverlay?.(capturedOverlay);
-    }
-    expect(projectToolAuthority).toHaveBeenCalledWith(expectedOverlay);
-    finish.resolve();
-    await run;
-    expectClaimOnce(runner.runPrompt.claimAppend);
-    expect(rpcSourceTesting.has("run-talk")).toBe(false);
-    expect(mocks.consultRealtimeVoiceAgent).toHaveBeenCalledWith(
-      expect.objectContaining({ senderIsOwner: true }),
+    const runs = consults.map(({ runner }) =>
+      track(runner.runPrompt({ prompt: "finish this task" })),
     );
-    expect(mocks.consultRealtimeVoiceAgent.mock.calls[0]?.[0]?.toolsAllow).toBeUndefined();
+    const completed = Promise.all(runs);
+    await Promise.race([Promise.all(consults.map(({ prepared }) => prepared.promise)), completed]);
+    publish.resolve();
+    await Promise.race([
+      Promise.all(consults.map(({ registered }) => registered.promise)),
+      completed,
+    ]);
+    finish.resolve();
+    await expect(completed).resolves.toEqual([{ text: "run-talk-a" }, { text: "run-talk-b" }]);
+    for (const { runner } of consults) {
+      expectClaimOnce(runner.runPrompt.claimAppend);
+    }
   });
 
-  it("refreshes steering authority when the admitted run publishes a new attempt", async () => {
-    rpcSourceTesting.clear();
-    const firstHandle = createEmbeddedRunHandle({ runId: "run-talk" });
-    const secondHandle = createEmbeddedRunHandle({ runId: "run-talk" });
-    let firstLive = true;
-    const firstProject = vi.fn((_overlay: ReplyToolAuthorityOverlay) => {
-      if (!firstLive) {
-        throw new Error("first attempt expired");
-      }
-      return "first-authority";
-    });
-    const secondProject = vi.fn((_overlay: ReplyToolAuthorityOverlay) => "second-authority");
-    const { published } = pendingBackend("retry", secondHandle, async (instance) => {
-      await publishBackend(firstHandle, instance, firstProject, "attempt", () => {
-        if (!firstLive) {
+  it.each([false, true])(
+    "accepts a new attempt only within the same admission (foreign=%s)",
+    async (foreign) => {
+      const first = createEmbeddedRunHandle({ runId: "run-talk" });
+      const next = createEmbeddedRunHandle({ runId: "run-talk" });
+      let live = true;
+      const assertActive = () => {
+        if (!live) {
           throw new Error("first attempt expired");
         }
+      };
+      const firstProject = vi.fn((_overlay: ReplyToolAuthorityOverlay) => {
+        assertActive();
+        return "first-authority";
       });
-      await Promise.resolve();
-      firstLive = false;
-      clearActiveEmbeddedRun("session-talk", firstHandle, "agent:researcher:talk");
-      await publishBackend(secondHandle, instance, secondProject, "attempt");
-    });
-    mocks.controlRealtimeVoiceAgentRun.mockImplementationOnce(projectSteering);
-    const { runner } = startOwnedConsult();
-    await published.promise;
-
-    await expect(runner.runPrompt.steer?.({ prompt: "latest task" })).resolves.toEqual({
-      text: "",
-    });
-    expect(firstProject).not.toHaveBeenCalled();
-    expect(secondProject).toHaveBeenCalledOnce();
-  });
-
-  it("rejects steering when a replacement reuses the run id from another admission", async () => {
-    const outbound = vi.fn();
-    const replacementRun = { instanceId: "instance:replacement", runId: "run-talk" };
-    const firstHandle = createEmbeddedRunHandle({ runId: "run-talk" });
-    const secondHandle = createEmbeddedRunHandle({ runId: "run-talk" });
-    const ownerProject = (_overlay: ReplyToolAuthorityOverlay) => "owner-authority";
-    const replacementProject = vi.fn(
-      (_overlay: ReplyToolAuthorityOverlay) => "replacement-authority",
-    );
-    const { published } = pendingBackend("owner", secondHandle, async (instance) => {
-      await publishBackend(firstHandle, instance, ownerProject, "attempt");
-      clearActiveEmbeddedRun("session-talk", firstHandle, "agent:researcher:talk");
-      await publishBackend(secondHandle, replacementRun, replacementProject, "attempt");
-    });
-    mocks.controlRealtimeVoiceAgentRun.mockImplementationOnce(async (params) => {
-      params.getToolAuthorityOverlay?.();
-      outbound();
-      throw new Error("unexpected outbound enqueue");
-    });
-    const { runner } = startOwnedConsult();
-    await published.promise;
-
-    await expect(runner.runPrompt.steer?.({ prompt: "latest task" })).rejects.toThrow(
-      "backend is no longer current",
-    );
-    expectUnused(replacementProject, outbound);
-  });
+      const nextProject = vi.fn((_overlay: ReplyToolAuthorityOverlay) => "next-authority");
+      const outbound = vi.fn();
+      const { published } = pendingBackend("owner", next, async (instance) => {
+        await publishBackend(first, instance, firstProject, "attempt", assertActive);
+        await Promise.resolve();
+        live = false;
+        clearActiveEmbeddedRun("session-talk", first, "agent:researcher:talk");
+        await publishBackend(
+          next,
+          foreign ? { instanceId: "instance:replacement", runId: "run-talk" } : instance,
+          nextProject,
+          "attempt",
+        );
+      });
+      mocks.controlRealtimeVoiceAgentRun.mockImplementationOnce(async (params) => {
+        const result = await projectSteering(params);
+        outbound();
+        return result;
+      });
+      const { runner } = startOwnedConsult();
+      await published.promise;
+      const steering = steer(runner.runPrompt);
+      if (foreign) {
+        await expect(steering).rejects.toThrow("backend is no longer current");
+        expectUnused(nextProject, outbound);
+      } else {
+        await expect(steering).resolves.toEqual({ text: "" });
+        expect(nextProject).toHaveBeenCalledOnce();
+        expect(outbound).toHaveBeenCalledOnce();
+      }
+      expect(firstProject).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(["announcement", "admission"] as const)(
     "rejects a stale owner at %s without changing its replacement",
@@ -549,7 +486,6 @@ describe("Talk client agent consult admission", () => {
         await params.agentRuntime.runEmbeddedAgent(coreParams);
         return { text: "done" };
       });
-      const currentRun = { instanceId: "instance:current", runId: "run-talk" };
       let published: Promise<void> | undefined;
       if (phase === "announcement") {
         rpcSourceTesting.clear();
@@ -558,8 +494,6 @@ describe("Talk client agent consult admission", () => {
           await publishBackend(handle, instance, project, "attempt");
         }).published.promise;
         mocks.controlRealtimeVoiceAgentRun.mockImplementationOnce(projectSteering);
-      } else {
-        mocks.createOperationalRunInstanceRef.mockReturnValueOnce(currentRun);
       }
       const { runner, run: first } = startOwnedConsult({ registerRun });
       await waiting[0]!.promise;
@@ -574,9 +508,6 @@ describe("Talk client agent consult admission", () => {
         release[1]!.resolve();
         await expect(second).resolves.toEqual({ text: "done" });
         expect(mocks.prepareAgentRunAdmission).toHaveBeenCalledOnce();
-        expect(mocks.prepareAgentRunAdmission).toHaveBeenCalledWith(
-          expect.objectContaining({ operationalRunInstance: currentRun }),
-        );
         expect(runner.runPrompt.claimFailureAppend()).toBe(true);
       } else {
         await expect(runner.runPrompt.steer?.({ prompt: "latest task" })).resolves.toEqual({
