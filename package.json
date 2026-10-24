@@ -1832,6 +1832,8 @@
     "clean:dist": "node -e \"require('fs').rmSync('dist', {recursive: true, force: true})\"",
     "codex-app-server:protocol:check": "node --import ./scripts/tsx.mjs scripts/check-codex-app-server-protocol.ts",
     "codex-app-server:protocol:sync": "node --import ./scripts/tsx.mjs scripts/sync-codex-app-server-protocol.ts",
+    "codex-app-server:validators:gen": "node --import ./scripts/tsx.mjs scripts/generate-codex-validators.mts",
+    "codex-app-server:validators:check": "node --import ./scripts/tsx.mjs scripts/generate-codex-validators.mts --check",
     "codex-supervisor:mcp": "node --import ./scripts/tsx.mjs src/mcp/codex-supervision-tools-serve.ts",
     "codex:mcp": "node --import ./scripts/tsx.mjs src/mcp/codex-supervision-tools-serve.ts",
     "config:channels:check": "node --import ./scripts/tsx.mjs scripts/generate-bundled-channel-config-metadata.ts --check",
@@ -1895,6 +1897,8 @@
     "format:swift": "./scripts/format-swift.sh",
     "gateway:dev": "node --import ./scripts/tsx.mjs scripts/run-with-env.mts OPENCLAW_SKIP_CHANNELS=1 -- node scripts/run-node.mjs --dev gateway",
     "gateway:dev:reset": "node --import ./scripts/tsx.mjs scripts/run-with-env.mts OPENCLAW_SKIP_CHANNELS=1 -- node scripts/run-node.mjs --dev gateway --reset",
+    "gateway:validators:gen": "node --import ./scripts/tsx.mjs scripts/generate-gateway-validators.mts",
+    "gateway:validators:check": "node --import ./scripts/tsx.mjs scripts/generate-gateway-validators.mts --check",
     "gateway:watch": "node --import ./scripts/tsx.mjs scripts/gateway-watch-tmux.mts gateway --force",
     "gateway:watch:raw": "node scripts/watch-node.mjs gateway --force",
     "gen:browser-inspect-script:swift": "node --import ./scripts/tsx.mjs scripts/generate-browser-inspect-script-swift.mts --write",
@@ -2336,6 +2340,9 @@
     "ui:install": "node scripts/ui.js install",
     "update:compat:gen": "node scripts/update-compat-inventory.mts",
     "update:compat:check": "node scripts/update-compat-inventory.mts --check",
+    "static:validators:gen": "node --import ./scripts/tsx.mjs scripts/generate-static-validators.mts",
+    "static:validators:check": "node --import ./scripts/tsx.mjs scripts/generate-static-validators.mts --check",
+    "validators:check": "pnpm gateway:validators:check && pnpm ui:validators:check && pnpm codex-app-server:validators:check && pnpm static:validators:check",
     "verify": "node --import ./scripts/tsx.mjs scripts/verify.mts"
   },
   "bundleDependencies": [

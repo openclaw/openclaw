@@ -5,7 +5,10 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
 import type { ModelProviderConfig, OpenClawConfig } from "../config/types.js";
-import { createPluginMetadataSnapshotFixture } from "./plugin-metadata.test-support.js";
+import {
+  createPluginManifestRecordFixture,
+  createPluginMetadataSnapshotFixture,
+} from "./plugin-metadata.test-support.js";
 import type { ProviderExternalAuthProfile } from "./provider-external-auth.types.js";
 import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
 import {
@@ -776,18 +779,14 @@ describe("provider-runtime", () => {
           config,
           manifestRegistry: {
             plugins: [
-              {
+              createPluginManifestRecordFixture({
                 id: "same-provider-owner",
                 providers: [DEMO_PROVIDER_ID],
-                channels: [],
-                cliBackends: [],
-                skills: [],
-                hooks: [],
                 origin: "config",
                 rootDir: `/plugins/${source}`,
                 source: `/plugins/${source}/index.js`,
                 manifestPath: `/plugins/${source}/openclaw.plugin.json`,
-              },
+              }),
             ],
             diagnostics: [],
           },

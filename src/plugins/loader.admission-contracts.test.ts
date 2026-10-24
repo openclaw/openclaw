@@ -27,6 +27,7 @@ import {
   writePlugin,
   writePluginMetadata,
 } from "./loader.test-fixtures.js";
+import { createPluginManifestRecordFixture } from "./plugin-metadata.test-support.js";
 import { withPluginRegistryPreparationScope } from "./registry-lifecycle.js";
 import { createEmptyPluginRegistry } from "./registry.js";
 import {
@@ -55,19 +56,12 @@ module.exports = { id: "admission-contract", register() {} };`,
     config,
     manifestRegistry: {
       plugins: [
-        {
+        createPluginManifestRecordFixture({
           id: plugin.id,
-          origin: "bundled" as const,
           rootDir: plugin.dir,
           source: plugin.file,
-          manifestPath: path.join(plugin.dir, "openclaw.plugin.json"),
-          channels: [],
-          providers: [],
-          cliBackends: [],
-          skills: [],
-          hooks: [],
           configSchema: EMPTY_PLUGIN_SCHEMA,
-        },
+        }),
       ],
       diagnostics: [],
     },

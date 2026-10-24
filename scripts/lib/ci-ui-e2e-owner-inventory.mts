@@ -643,11 +643,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ],
   ),
   pageWatch(
-    "ui/src/e2e/chat-panel-reflow.e2e.test.ts",
-    ["chat"],
-    ["ui/src/pages/chat/components/chat-header-session-menu.ts"],
-  ),
-  pageWatch(
     "ui/src/e2e/chat-permission-refresh.e2e.test.ts",
     ["chat"],
     ["ui/src/pages/chat/chat-pane.ts"],
@@ -920,7 +915,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
       "ui/src/pages/chat/components/session-diff-menus.tsx",
     ],
   ),
-  pageWatch("ui/src/e2e/child-session-load-errors.e2e.test.ts", ["chat"], sessionMenuOwnerRoots),
   pageWatch("ui/src/e2e/chrome-extension-status.e2e.test.ts", ["config", "device"]),
   pageWatch("ui/src/e2e/cloud-reconciliation-followup.e2e.test.ts", ["chat"]),
   {
@@ -1013,11 +1007,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ["cron"],
     ["ui/src/components/select-picker.ts", "ui/src/lib/cron/types.ts"],
     ["ui/src/styles/select-picker.css"],
-  ),
-  pageWatch(
-    "ui/src/e2e/cron-heartbeat-scratch.e2e.test.ts",
-    ["cron"],
-    ["ui/src/lib/cron/types.ts"],
   ),
   pageWatch("ui/src/e2e/cron-remove.e2e.test.ts", ["cron"], ["ui/src/lib/cron/types.ts"]),
   pageWatch("ui/src/e2e/cron-run-completion.e2e.test.ts", ["cron"], ["ui/src/lib/cron/types.ts"]),
@@ -1905,7 +1894,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ["chat"],
     sessionMenuOwnerRoots,
   ),
-  pageWatch("ui/src/e2e/sidebar-plugin-order.e2e.test.ts", ["chat", "workboard"]),
   pageWatch("ui/src/e2e/sidebar-refresh-availability.e2e.test.ts", ["new-session"]),
   pageWatch("ui/src/e2e/sidebar-restart-recovery.e2e.test.ts", ["chat"], sessionMenuOwnerRoots),
   pageWatch("ui/src/e2e/sidebar-selection-overflow.e2e.test.ts", ["chat"], sessionMenuOwnerRoots),

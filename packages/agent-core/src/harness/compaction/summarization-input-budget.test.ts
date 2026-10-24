@@ -4,6 +4,7 @@ import {
   estimateStringChars,
 } from "@openclaw/normalization-core/cjk-chars";
 import { describe, expect, it, vi } from "vitest";
+import { makeProviderModel } from "../../../../ai/src/providers/provider-model.test-support.js";
 import { createAssistantMessageEventStream } from "../../llm.js";
 import type { AgentMessage } from "../../types.js";
 import { convertToLlm } from "../messages.js";
@@ -16,18 +17,13 @@ import {
 } from "./utils.js";
 
 function createModel(contextWindow: number, maxTokens = 32_000): Model {
-  return {
-    id: "summary-model",
+  return makeProviderModel("test-api", "test-provider", "summary-model", {
     name: "Summary Model",
-    api: "test-api",
-    provider: "test-provider",
     baseUrl: "https://example.test",
     reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow,
     maxTokens,
-  };
+  });
 }
 
 /**

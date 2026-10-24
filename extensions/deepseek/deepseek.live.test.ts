@@ -1,11 +1,6 @@
 // Deepseek tests cover deepseek plugin behavior.
-import {
-  streamSimple,
-  type AssistantMessage,
-  type Context,
-  type Model,
-} from "openclaw/plugin-sdk/llm";
-import { createSolidPngBuffer } from "openclaw/plugin-sdk/test-fixtures";
+import { streamSimple, type Context, type Model } from "openclaw/plugin-sdk/llm";
+import { createSolidPngBuffer, createZeroUsageFixture } from "openclaw/plugin-sdk/test-fixtures";
 import {
   createSingleUserPromptMessage,
   extractNonEmptyAssistantText,
@@ -22,20 +17,7 @@ const LIVE = isLiveTestEnabled(["DEEPSEEK_LIVE_TEST"]);
 
 const describeLive = LIVE && DEEPSEEK_KEY ? describe : describe.skip;
 
-const ZERO_USAGE: AssistantMessage["usage"] = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 0,
-  cost: {
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    total: 0,
-  },
-};
+const ZERO_USAGE = createZeroUsageFixture();
 
 function resolveDeepSeekLiveModel(): Model<"openai-completions"> {
   const provider = buildDeepSeekProvider();
