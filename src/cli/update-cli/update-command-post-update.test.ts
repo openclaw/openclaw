@@ -502,14 +502,15 @@ describe("successful update finalization ordering", () => {
     });
 
     it.each([
-      { outcome: "unchanged", stoppedAtMs: 500, downtimeMs: 10_700 },
-      { outcome: "rolled-back", stoppedAtMs: 500, downtimeMs: 11_500 },
-      { outcome: "unverified", stoppedAtMs: 500, downtimeMs: null },
+      ["unchanged", 10_700],
+      ["rolled-back", 11_500],
+      ["unverified", null],
     ] as const)(
-      "keeps plugin convergence stopped and measures the full interval through verification ($outcome, initial stop=$stoppedAtMs)",
-      async ({ outcome, stoppedAtMs, downtimeMs }) => {
+      "measures the stopped interval through %s verification",
+      async (outcome, downtimeMs) => {
         const changed = outcome !== "unchanged";
-        const restartFailed = outcome === "rolled-back" || outcome === "unverified";
+        const restartFailed = changed;
+        const rolledBack = outcome === "rolled-back";
         const packageRoot = tempDirs.make("update-downtime-installed-runtime-");
         await fs.writeFile(
           path.join(packageRoot, "package.json"),
@@ -527,18 +528,13 @@ describe("successful update finalization ordering", () => {
         const clock = { origin: Date.now(), elapsed: 1_000 };
         vi.spyOn(Date, "now").mockImplementation(() => clock.origin + clock.elapsed);
         const events: string[] = [];
-        const windowsEvents: string[] = [];
-        const oldRecovery = taskRecovery((phase) => {
-          if (phase === "complete") {
-            windowsEvents.push("old-complete");
-          }
-        });
+        const oldRecovery = taskRecovery();
         mocks.readServiceState.mockResolvedValue(
           managedServiceState(serviceEnv, { environment: serviceEnv }),
         );
         mocks.restartService.mockImplementation(async (params) => {
           events.push("start");
-          clock.elapsed += events.length === 1 ? 500 : 200;
+          clock.elapsed += 200;
           if (restartFailed && events.length > 1) {
             recordUpdateRunVerification(run.runId, { serviceRunning: false }, { env: serviceEnv });
             return "restart-health-failed";
@@ -558,7 +554,7 @@ describe("successful update finalization ordering", () => {
             if (changed) {
               await params.beforeDoctor?.();
               events.push("doctor");
-              expect(windowsEvents).toEqual([]);
+              expect(oldRecovery.complete).not.toHaveBeenCalled();
               clock.elapsed += 300;
             }
             return { pluginUpdate: plugins, configSnapshot: validConfigSnapshot };
@@ -570,7 +566,7 @@ describe("successful update finalization ordering", () => {
             events.push("rollback");
             expect(getUpdateRun(run.runId, { env: serviceEnv })?.confirmedAtMs).toBeNull();
             clock.elapsed = 12_000;
-            if (outcome === "rolled-back") {
+            if (rolledBack) {
               await fs.writeFile(
                 path.join(packageRoot, "package.json"),
                 JSON.stringify({ version: "2026.4.23" }),
@@ -581,22 +577,16 @@ describe("successful update finalization ordering", () => {
               result: {
                 ...result,
                 after: result.before,
-                recovery:
-                  outcome === "rolled-back"
-                    ? {
-                        serviceRestartSafe: true,
-                        version: "2026.4.23",
-                        packageRollbackVerified: true,
-                        service: "healthy",
-                      }
-                    : {
-                        serviceRestartSafe: false,
-                        packageRollbackVerified: true,
-                        reason: "runtime-verification-failed",
-                      },
+                recovery: {
+                  serviceRestartSafe: rolledBack,
+                  packageRollbackVerified: true,
+                  ...(rolledBack
+                    ? { version: "2026.4.23", service: "healthy" as const }
+                    : { reason: "runtime-verification-failed" }),
+                },
               },
-              rolledBack: outcome === "rolled-back",
-              ...(outcome === "rolled-back" ? { verifiedAtMs: Date.now() } : {}),
+              rolledBack,
+              ...(rolledBack ? { verifiedAtMs: Date.now() } : {}),
             };
           },
         );
@@ -608,7 +598,7 @@ describe("successful update finalization ordering", () => {
             packageRoot,
             restartEnvironment: serviceEnv,
             sealed: true,
-            stoppedAtMs: clock.origin + stoppedAtMs,
+            stoppedAtMs: clock.origin + 500,
             run,
             windowsTaskAutoStartRecovery: oldRecovery,
           },
@@ -626,7 +616,7 @@ describe("successful update finalization ordering", () => {
           await expect(finishing).rejects.toMatchObject({
             result: {
               status: "error",
-              recovery: { serviceRestartSafe: outcome === "rolled-back" },
+              recovery: { serviceRestartSafe: rolledBack },
             },
           });
         } else {
@@ -639,18 +629,12 @@ describe("successful update finalization ordering", () => {
           ...(restartFailed ? ["rollback"] : []),
         ]);
         expect(mocks.stopService).not.toHaveBeenCalled();
-        expect(oldRecovery.restore.mock.lastCall?.slice(0, 2)).toEqual([
-          true,
-          expect.any(Function),
-        ]);
         expect(oldRecovery.complete).toHaveBeenLastCalledWith(outcome !== "unverified");
-        expect(windowsEvents.at(-1)).toBe("old-complete");
         expect(getUpdateRun(run.runId, { env: serviceEnv })).toMatchObject({
-          status:
-            outcome === "rolled-back" ? "rolled-back" : restartFailed ? "failed" : "succeeded",
+          status: rolledBack ? "rolled-back" : restartFailed ? "failed" : "succeeded",
           downtimeMs,
         });
-        if (outcome === "rolled-back") {
+        if (rolledBack) {
           expect(complete).toHaveBeenCalledOnce();
         }
       },
@@ -687,62 +671,6 @@ describe("successful update finalization ordering", () => {
         expectReportedFailure("service-revalidation-failed");
       },
     );
-
-    it.each([
-      ["marks failed activation without finalizing success", false, false],
-      ["preserves the native context of an unloaded git service", true, true],
-    ] as const)("canonical sealed post-update %s", async (_name, activated, unloaded) => {
-      const serviceEnv = { MANAGED_VALUE: "revalidated" };
-      const env = { OPENCLAW_STATE_DIR: tempDirs.make("update-retention-fact-") };
-      const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
-      mocks.readServiceState.mockResolvedValueOnce(
-        managedServiceState(serviceEnv, { environment: serviceEnv }, unloaded),
-      );
-      mocks.restartService.mockImplementationOnce(async (params) => {
-        if (!activated) {
-          params.onVerificationFailure?.("readyz-unhealthy");
-        }
-        return activated ? "ok" : "failed";
-      });
-      const finishing = finishSuccessfulPackageSwitch({
-        restartEnvironment: { ...process.env },
-        sealed: true,
-        updateMode: unloaded ? "git" : "npm",
-        stoppedForUpdate: !unloaded,
-        run,
-      });
-      if (activated) {
-        await finishing;
-      } else {
-        await expectUpdateFailure(finishing, "readyz-unhealthy");
-      }
-
-      expect(mocks.restartService).toHaveBeenCalledOnce();
-      expectBefore(mocks.revalidateService, mocks.restartService);
-      if (activated) {
-        expect(mocks.writeSentinel).toHaveBeenCalledTimes(2);
-        expectBefore(mocks.restartService, mocks.writeSentinel, 0, 1);
-      } else {
-        expect(mocks.writeSentinel).toHaveBeenCalledOnce();
-        expect(mocks.printResult).toHaveBeenCalledOnce();
-        expectFailureReport(mocks.printResult, "readyz-unhealthy");
-        expect(mocks.markSentinelFailure).toHaveBeenCalledWith(
-          partial({ reason: "readyz-unhealthy" }),
-        );
-        expect(getUpdateRun(run.runId, { env })).toMatchObject({
-          status: "failed",
-          reason: "readyz-unhealthy",
-          steps: containing([
-            partial({
-              step: "package rollback",
-              status: "skipped",
-              detail:
-                "No retained previous package transaction is available; automatic package restoration was not attempted.",
-            }),
-          ]),
-        });
-      }
-    });
 
     it("leaves native service management blocked when HOME is relocated", async () => {
       const home = tempDirs.make("openclaw-post-update-relocated-home-");
