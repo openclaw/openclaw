@@ -4725,8 +4725,8 @@ its original module URL and dependencies; the output records both owner source S
 `--immutable-owner` selects the matching plain-data inspection owner when that
 module differs between revisions.
 Use the same installed source tree for both sides. `--counts` is a separate
-attribution pass: it counts committed captures, fork reads, JSON bytes attributed
-to the fork owner, and V8 payload bytes when present. It rewrites only validated
+attribution pass: it counts committed captures, fork reads, JSON bytes encoded directly
+by the fork owner, and V8 payload bytes when present. It rewrites only owner JSON calls and validated
 counter anchors and must not be used for timing comparisons. The normal workload
 makes zero fork reads during measurement; that ratio describes this synthetic
 traffic, not production fork frequency. `--unicode` adds one non-Latin1 character

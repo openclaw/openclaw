@@ -58,6 +58,7 @@ if (values.gateway) {
       entries: { main: { workspace: path.join(root, "workspace") } },
     },
     cron: { enabled: false },
+    plugins: { ...BASE_GATEWAY_BENCH_CONFIG.plugins, slots: { memory: "none" } },
   };
   applyMockOpenAiModelConfig(config, { mockPort: port, modelRef: "openai/synthetic-model" });
   const provider = config.models?.providers?.openai;
@@ -89,6 +90,14 @@ const probe = {
   stringifyCalls: 0,
   stringifyBytes: 0,
   serializedBytes: 0,
+  stringify(value: unknown) {
+    const result = JSON.stringify(value);
+    if (counting && result) {
+      probe.stringifyCalls++;
+      probe.stringifyBytes += Buffer.byteLength(result);
+    }
+    return result;
+  },
 };
 const probeKey = Symbol.for("openclaw.perf.forkCapture");
 Reflect.set(globalThis, probeKey, probe);
@@ -109,6 +118,8 @@ const hooks = registerHooks({
     ownerLoaded = true;
     let source = ownerSource;
     if (values.counts) {
+      assert(source.includes("JSON.stringify("), "capture owner contains JSON encoding sites");
+      source = source.replaceAll("JSON.stringify(", `${probeExpression}.stringify(`);
       const saveAnchor = "snapshots.set(identity.sessionId, snapshot);";
       const readAnchor = "const snapshot = snapshots.get(params.sessionId);";
       assert.equal(source.split(saveAnchor).length, 2, "one snapshot publication owner");
@@ -125,20 +136,9 @@ const hooks = registerHooks({
     return { format: "module", source: stripTypeScriptTypes(source), shortCircuit: true };
   },
 });
-// The source loader hook below passes TypeScript through the repository tsx hook.
 // Retain this native function for fixture construction and parity checks.
 const stringify = JSON.stringify;
 let counting = false;
-if (values.counts) {
-  JSON.stringify = function (value, replacer, space) {
-    const result = stringify(value, replacer, space);
-    if (counting && result && new Error().stack?.includes("session-fork.ts")) {
-      probe.stringifyCalls++;
-      probe.stringifyBytes += Buffer.byteLength(result);
-    }
-    return result;
-  };
-}
 let requests = 0;
 let continuations = 0;
 let wireBytes = 0;
@@ -164,6 +164,7 @@ const completion = (id: string) => ({
 const server = createServer((request, response) => {
   void (async () => {
     try {
+      assert.equal(request.url, "/v1/responses", "only synthetic Responses traffic is expected");
       const chunks: Buffer[] = [];
       for await (const chunk of request) {
         chunks.push(Buffer.from(chunk));
@@ -275,7 +276,6 @@ if (values.gateway) {
   } finally {
     peer.stop();
     await gateway.close();
-    JSON.stringify = stringify;
     hooks.deregister();
     server.closeAllConnections();
     server.close();
@@ -452,7 +452,6 @@ try {
   }
   console.log(stringify(result));
 } finally {
-  JSON.stringify = stringify;
   cleanupSessionResources(undefined, host);
   observer.disconnect();
   hooks.deregister();
