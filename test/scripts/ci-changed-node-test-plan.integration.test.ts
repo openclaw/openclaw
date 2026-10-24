@@ -292,6 +292,17 @@ it.each(["node", "bun-all"])("keeps exact UI and core owners with %s timings", (
     "canonical selected tooling owners",
   );
   const envScratch = tempDirs.make("changed-node-plan-env-");
+  const jobEnvironment = (job: CompactNodeTestShard) =>
+    Object.fromEntries(
+      Object.entries(job.env ?? {}).filter(([key]) => key !== "OPENCLAW_VITEST_MAX_WORKERS"),
+    );
+  const childWorkers = (job: CompactNodeTestShard, group: CompactNodeTestShard["groups"][number]) =>
+    buildChildEnv(
+      { kind: "group", name: group.shard_name, plan: group },
+      { OPENCLAW_VITEST_MAX_WORKERS: job.planConcurrency === 1 ? "8" : "2", ...job.env },
+      envScratch,
+      0,
+    ).OPENCLAW_VITEST_MAX_WORKERS;
   for (const job of shards ?? []) {
     for (const group of job.groups ?? []) {
       const owners = group.configs.includes("test/vitest/vitest.tooling.config.ts")
@@ -323,40 +334,15 @@ it.each(["node", "bun-all"])("keeps exact UI and core owners with %s timings", (
       for (const key of ["runner", "pretestBuildMode", "requiresDist", "timeoutMinutes"] as const) {
         expect(job[key], `${group.shard_name} job ${key}`).toEqual(selectedJob[key]);
       }
-      expect(
-        Object.fromEntries(
-          Object.entries(job.env ?? {}).filter(([key]) => key !== "OPENCLAW_VITEST_MAX_WORKERS"),
-        ),
-        `${group.shard_name} job environment`,
-      ).toEqual(
-        Object.fromEntries(
-          Object.entries(selectedJob.env ?? {}).filter(
-            ([key]) => key !== "OPENCLAW_VITEST_MAX_WORKERS",
-          ),
-        ),
+      expect(jobEnvironment(job), `${group.shard_name} job environment`).toEqual(
+        jobEnvironment(selectedJob),
       );
       // Bounding can coalesce compatible settled serial rows after canonical selection.
       // Compare the child budget the executor receives instead of projecting raw job concurrency
       // backward across that phase boundary.
-      const childWorkers = buildChildEnv(
-        { kind: "group", name: group.shard_name, plan: group },
-        {
-          OPENCLAW_VITEST_MAX_WORKERS: job.planConcurrency === 1 ? "8" : "2",
-          ...job.env,
-        },
-        envScratch,
-        0,
-      ).OPENCLAW_VITEST_MAX_WORKERS;
-      const selectedChildWorkers = buildChildEnv(
-        { kind: "group", name: selectedGroup.shard_name, plan: selectedGroup },
-        {
-          OPENCLAW_VITEST_MAX_WORKERS: selectedJob.planConcurrency === 1 ? "8" : "2",
-          ...selectedJob.env,
-        },
-        envScratch,
-        0,
-      ).OPENCLAW_VITEST_MAX_WORKERS;
-      expect(childWorkers, `${group.shard_name} child worker ceiling`).toBe(selectedChildWorkers);
+      expect(childWorkers(job, group), `${group.shard_name} child worker ceiling`).toBe(
+        childWorkers(selectedJob, selectedGroup),
+      );
     }
   }
   expect(createChangedNodeTestShards([paths[1]!, "ui/src/AGENTS.md"], options)).toEqual(
