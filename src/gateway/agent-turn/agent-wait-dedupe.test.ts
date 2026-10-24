@@ -78,6 +78,7 @@ const pendingResult = (runId: string) => ({
   providerStarted: false,
 });
 const hardTimeout = { status: "timeout", endedAt: 200, timeoutPhase: "provider" };
+const userCancellation = { status: "error", endedAt: 150, stopReason: "rpc" };
 
 function lifecycle(runId: string, data: Record<string, unknown>) {
   emitAgentEvent({ runId, stream: "lifecycle", data });
@@ -135,13 +136,18 @@ function waitThroughGateway(
     params.runId,
     params.timeoutMs,
   );
-  return {
-    respond: waiter.respond,
-    promise: Promise.resolve(waiter.promise).finally(async () => {
+  async function settleWait() {
+    try {
+      await waiter.promise;
+    } finally {
       if (claim !== undefined) {
         releaseSessionControllerClaim(await claim);
       }
-    }),
+    }
+  }
+  return {
+    respond: waiter.respond,
+    promise: settleWait(),
   };
 }
 
@@ -780,6 +786,25 @@ it.each([
     );
   },
 );
+
+it.each([
+  ["late completion", { status: "ok", endedAt: 300 }, hardTimeout],
+  ["earlier cancellation", userCancellation, userCancellation],
+] as const)("merges %s across agent and chat observations", async (_name, payload, expected) => {
+  for (const timeoutFirst of [true, false]) {
+    const { runId, write, wait } = runFixture();
+    const timeout = () => write({ ...hardTimeout, startedAt: 100 }, { ts: 200, ok: false });
+    const other = () =>
+      write(
+        { ...payload, startedAt: 100 },
+        { ts: 300, ok: payload.status === "ok", source: "chat" },
+      );
+    for (const observe of timeoutFirst ? [timeout, other] : [other, timeout]) {
+      observe();
+    }
+    await expectReply(wait(), expect.objectContaining({ runId, ...expected }));
+  }
+});
 
 it.each(["lifecycle-first", "dedupe-first"] as const)(
   "keeps terminal evidence when sticky status arrives $0",

@@ -389,7 +389,7 @@ describe("Talk client agent consult admission", () => {
     mocks.runEmbeddedAgentCore.mockImplementation(async (params: typeof coreParams) => {
       const consult = consults.find((candidate) => candidate.runId === params.runId)!;
       const handle = createEmbeddedRunHandle({ runId: consult.runId });
-      const detach = publishBackend(handle, consult.instance, () => consult.runId);
+      const detach = await publishBackend(handle, consult.instance, () => consult.runId);
       consult.registered.resolve();
       try {
         await finish.promise;

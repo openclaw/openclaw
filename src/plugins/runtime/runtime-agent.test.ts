@@ -288,7 +288,10 @@ describe("plugin runtime session creation", () => {
             failure === "persistence"
               ? harnessInitial(supervision({ initializing: true }))
               : { agentHarnessId: "codex" },
-          afterCreate: async () =>
+          afterCreate: async (): Promise<{
+            pluginExtensions: NonNullable<SessionEntry["pluginExtensions"]>;
+            displayName?: string;
+          }> =>
             failure === "persistence"
               ? { pluginExtensions: { codex: { supervision: { invalidJsonValue: 1n as never } } } }
               : { pluginExtensions: {}, displayName: "Invalid replacement" },

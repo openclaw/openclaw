@@ -140,6 +140,9 @@ describe("requestCodexAppServerJson sandbox guard", () => {
   it.each([
     ["sandbox", "command/exec"],
     ["node", "command/exec"],
+    ["node", "process/spawn"],
+    ["sandbox", "app/activate"],
+    ["node", "app/activate"],
     ["sessionless", "command/exec"],
     ["sessionless", "config/mcpServer/reload"],
     ["nodeSandbox", "thread/start"],
@@ -153,7 +156,7 @@ describe("requestCodexAppServerJson sandbox guard", () => {
     const requestParams =
       method === "thread/start"
         ? sandboxEnvironment
-        : method === "config/mcpServer/reload"
+        : method === "app/activate" || method === "config/mcpServer/reload"
           ? {}
           : { command: ["sh", "-lc", "id"] };
     const reason = scope === "sandbox" ? "OpenClaw sandboxing" : "OpenClaw exec host=node";
