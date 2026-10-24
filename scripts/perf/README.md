@@ -9,6 +9,24 @@ scaling without exporting snapshot payloads.
 
 ## Released session authority
 
+### Pending-input timer retention
+
+Run `node --expose-gc --import ./scripts/tsx.mjs scripts/perf/pending-input-retention.ts
+--state-dir /path/to/fresh-synthetic-state --turns 100 --expect-released` on the
+approved benchmark host. Repeat with 1,000 turns and with `--collected` for the
+aggregate owner. Use at least five alternating baseline/candidate samples per
+shape. Each turn stages and settles a real pending input, captures a separately
+decoded 40 KiB synthetic session entry in its admission callback, and leaves a
+one-hour timer pending in the receipt's async scope. The script reports surviving
+entries and retained heap bytes, then clears the timers and verifies collection.
+Acceptance: zero settled entries retained with timers still pending, unchanged
+late-execution refusal, and zero survivors after timer cleanup on both versions.
+This is forced-GC owner retention proof, not a production timer census, allocation,
+promotion, latency, or GC-time benchmark. Retained heap includes timers and store
+bookkeeping as well as the captured entries.
+
+### Session publication authority
+
 `node --expose-gc --import ./scripts/tsx.mjs scripts/perf/session-authority-retention.ts
 --reads 1000 --expect-released` measures the session publication owner's payload
 lifetime while released sharing, predicate, and generation handles stay reachable.
