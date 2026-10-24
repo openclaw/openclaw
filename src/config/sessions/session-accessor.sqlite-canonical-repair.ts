@@ -16,12 +16,14 @@ import {
   readSqliteSessionGenerationWindows,
   rehomeSqliteSessionGenerationWindow,
 } from "./session-accessor.sqlite-generation-copy.js";
-import { readSessionGenerationIdsForKeys } from "./session-accessor.sqlite-lifecycle-state.js";
 import {
   copySessionNodeArtifactsForRepair,
   deleteSessionMembersForRepair,
 } from "./session-accessor.sqlite-node-artifacts.js";
-import { collectSessionStateIdsForEntry } from "./session-accessor.sqlite-references.js";
+import {
+  collectSessionStateIdsForEntry,
+  readSessionGenerationIdsForKeys,
+} from "./session-accessor.sqlite-references.js";
 import {
   getSessionKysely,
   resolveSqliteStoreScope,

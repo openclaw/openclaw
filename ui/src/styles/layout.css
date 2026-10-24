@@ -12,7 +12,6 @@
   text-transform: uppercase;
 }
 
-.chat-swarm__task-name,
 .usage-list-label {
   overflow: hidden;
   color: var(--text);

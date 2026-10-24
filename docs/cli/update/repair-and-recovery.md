@@ -96,6 +96,14 @@ the Gateway still owns the state. Stop the managed Gateway with
 systemd user service), then run `openclaw update repair` again. Keep the same
 profile and state-directory overrides for both commands.
 
+Run `openclaw update repair` from a terminal outside the Gateway process tree,
+not through the Gateway agent's exec tool: stopping that service would kill the
+repair command. A refused repair keeps its managed-service reason (for example,
+`inside-gateway-process-tree`) in update history, failure reports, and
+`openclaw update status --json`. Update-failure notices remind the agent that
+stop-requiring repair needs an external terminal. The refusal still exits nonzero;
+it does not mean Doctor attempted a repair or stopped the Gateway.
+
 On macOS, a failed LaunchAgent state probe is recorded as a failed recovery
 attempt with its reason. OpenClaw leaves the service definition unchanged and
 prints `LaunchAgent state could not be inspected`. Run

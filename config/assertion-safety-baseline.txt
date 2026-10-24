@@ -423,7 +423,6 @@ extensions/matrix/src/matrix/sdk/crypto-bootstrap.ts	1
 extensions/matrix/src/matrix/sdk/crypto-facade.ts	1
 extensions/matrix/src/matrix/sdk/crypto-node.runtime.ts	1
 extensions/matrix/src/matrix/sdk/decrypt-bridge.ts	1
-extensions/matrix/src/matrix/sdk/fake-indexeddb-prune.ts	4
 extensions/matrix/src/matrix/sdk/transport.ts	2
 extensions/matrix/src/matrix/send.ts	5
 extensions/matrix/src/matrix/send/chunking.ts	1
@@ -995,7 +994,7 @@ packages/memory-host-sdk/src/host/memory-schema-recall.ts	1
 packages/memory-host-sdk/src/host/memory-schema.ts	7
 packages/memory-host-sdk/src/host/multimodal.ts	1
 packages/memory-host-sdk/src/host/read-retry.ts	1
-packages/memory-host-sdk/src/host/session-files.ts	8
+packages/memory-host-sdk/src/host/session-files.ts	1
 packages/memory-host-sdk/src/host/session-reset-recall.ts	1
 packages/memory-host-sdk/src/host/sqlite.ts	1
 packages/model-catalog-core/src/model-catalog-normalize.ts	5

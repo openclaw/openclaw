@@ -57,6 +57,10 @@ inside every shard.
     temporary root and are removed after its processes stop. Parent temporary
     paths and runtime environment patches do not redirect this scratch storage.
     `OPENCLAW_QA_KEEP_TEMP=1` retains that root for debugging.
+    Gateway stdout and stderr are streamed to debug files with at most 4 MiB of
+    pending writes per stream. If a sink stops keeping up, the suite fails with
+    a `log backlog exceeded` error and stops its child. Check the output disk
+    before retrying. The in-memory diagnostic tail remains bounded separately.
     If the controller dies, the current Gateway's parent watchdog exits without
     deleting runtime files that descendants may still use. A surviving owner or
     host maintenance must confirm that those writers stopped before removing the

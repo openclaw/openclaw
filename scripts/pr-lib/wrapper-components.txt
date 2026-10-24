@@ -250,6 +250,7 @@ scripts/watch-pr-ci.mjs
 scripts/watch-pr-ci.mts
 scripts/windows-cmd-helpers.mjs
 src/acp/event-ledger-bytes.ts
+src/agents/agent-activity-delegation.ts
 src/agents/agent-bundle-mcp-names.ts
 src/agents/agent-create-error.ts
 src/agents/agent-delete-session-store-safety.kernel.ts
@@ -1995,6 +1996,7 @@ src/state/openclaw-state-db-startup-checkpoint.ts
 src/state/openclaw-state-db-table-retirements.ts
 src/state/openclaw-state-db-task-delivery-recovery.ts
 src/state/openclaw-state-db-transaction.ts
+src/state/openclaw-state-postgres-admission.ts
 src/state/openclaw-state-postgres-snapshot-context.ts
 src/state/openclaw-state-postgres-snapshot.ts
 src/state/openclaw-state-schema-retired.ts
@@ -2562,6 +2564,7 @@ packages/markdown-core/package.json
 src/state/openclaw-agent-db-worker-admission.ts
 src/config/sessions/legacy-compaction-history.ts
 src/config/sessions/session-accessor.sqlite-references.ts
+src/config/sessions/session-accessor.sqlite-reference-projection.ts
 src/config/sessions/session-actor-memory-conversation-owner.ts
 src/config/sessions/session-actor-memory-lifecycle-artifacts.ts
 src/config/sessions/session-actor-memory-message-rewrite.ts

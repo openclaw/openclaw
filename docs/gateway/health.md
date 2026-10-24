@@ -43,6 +43,9 @@ and optional transcript previews are prepared when a page or session recipient
 first requests them. Those rows stay resident for subsequent reads and refresh
 from committed changes. Unrequested rows do not repeat display enrichment when
 the startup model catalog becomes available.
+Cold pages share bounded enrichment batches. Each requested row becomes available
+when its own preparation finishes, with event-loop yields between slices; pages
+do not repeatedly select the roster while their accepted rows are still preparing.
 
 ## Deep diagnostics
 

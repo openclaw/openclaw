@@ -1,0 +1,102 @@
+diff --git a/dist/web.dev.js b/dist/web.dev.js
+index 8e15c711fdd11b891821334cc6a791279fce8682..ae4f88da75dac638b310329e412f2cd0d43a0468 100644
+--- a/dist/web.dev.js
++++ b/dist/web.dev.js
+@@ -2073,18 +2073,19 @@ function writeSelectValue(node, value) {
+     return queueMicrotask(() => node.value = value) || (node.value = value);
+   }
+   node._$v = value;
+-  (selectInsert ||= p => {
+-    p && p._$v == null && (p = p.parentNode);
+-    const v = p && p._$v;
+-    if (v == null) return;
+-    if (v.map) {
+-      const o = [...p.options];
+-      for (let i = 0; i < o.length; i++) o[i].selected = v.some(x => x == o[i].value);
+-      v.every(x => o.some(el => el.value == x)) && selectChange(p);
+-    } else p.value = v, p.selectedIndex > -1 && p.value == v && (p._$v = null);
+-  })(node);
++  (selectInsert ||= applySelectValue)(node);
+   queueMicrotask(() => selectInsert(node));
+ }
++function applySelectValue(p) {
++  p && p._$v == null && (p = p.parentNode);
++  const v = p && p._$v;
++  if (v == null) return;
++  if (v.map) {
++    const o = [...p.options];
++    for (let i = 0; i < o.length; i++) o[i].selected = v.some(x => x == o[i].value);
++    v.every(x => o.some(el => el.value == x)) && selectChange(p);
++  } else p.value = v, p.selectedIndex > -1 && p.value == v && (p._$v = null);
++}
+ function normalize(value, current, multi, doNotUnwrap) {
+   value = flatten(value, {
+     skipNonRendered: true,
+diff --git a/dist/web.js b/dist/web.js
+index 8f5fa7bddc55802447a254ee8a9b77d7bbdeca31..0f0767ed881a35082f4b3dbeaa210829169a5304 100644
+--- a/dist/web.js
++++ b/dist/web.js
+@@ -1810,18 +1810,19 @@ function writeSelectValue(node, value) {
+     return queueMicrotask(() => node.value = value) || (node.value = value);
+   }
+   node._$v = value;
+-  (selectInsert ||= p => {
+-    p && p._$v == null && (p = p.parentNode);
+-    const v = p && p._$v;
+-    if (v == null) return;
+-    if (v.map) {
+-      const o = [...p.options];
+-      for (let i = 0; i < o.length; i++) o[i].selected = v.some(x => x == o[i].value);
+-      v.every(x => o.some(el => el.value == x)) && selectChange(p);
+-    } else p.value = v, p.selectedIndex > -1 && p.value == v && (p._$v = null);
+-  })(node);
++  (selectInsert ||= applySelectValue)(node);
+   queueMicrotask(() => selectInsert(node));
+ }
++function applySelectValue(p) {
++  p && p._$v == null && (p = p.parentNode);
++  const v = p && p._$v;
++  if (v == null) return;
++  if (v.map) {
++    const o = [...p.options];
++    for (let i = 0; i < o.length; i++) o[i].selected = v.some(x => x == o[i].value);
++    v.every(x => o.some(el => el.value == x)) && selectChange(p);
++  } else p.value = v, p.selectedIndex > -1 && p.value == v && (p._$v = null);
++}
+ function normalize(value, current, multi, doNotUnwrap) {
+   value = flatten(value, {
+     skipNonRendered: true,
+diff --git a/dist/web.observe.js b/dist/web.observe.js
+index 4e9d4d992d1e09552166fc7e1f467df3956582f5..433be400d3674059df440d13b8080fe7237f501e 100644
+--- a/dist/web.observe.js
++++ b/dist/web.observe.js
+@@ -1861,18 +1861,19 @@ function writeSelectValue(node, value) {
+     return queueMicrotask(() => node.value = value) || (node.value = value);
+   }
+   node._$v = value;
+-  (selectInsert ||= p => {
+-    p && p._$v == null && (p = p.parentNode);
+-    const v = p && p._$v;
+-    if (v == null) return;
+-    if (v.map) {
+-      const o = [...p.options];
+-      for (let i = 0; i < o.length; i++) o[i].selected = v.some(x => x == o[i].value);
+-      v.every(x => o.some(el => el.value == x)) && selectChange(p);
+-    } else p.value = v, p.selectedIndex > -1 && p.value == v && (p._$v = null);
+-  })(node);
++  (selectInsert ||= applySelectValue)(node);
+   queueMicrotask(() => selectInsert(node));
+ }
++function applySelectValue(p) {
++  p && p._$v == null && (p = p.parentNode);
++  const v = p && p._$v;
++  if (v == null) return;
++  if (v.map) {
++    const o = [...p.options];
++    for (let i = 0; i < o.length; i++) o[i].selected = v.some(x => x == o[i].value);
++    v.every(x => o.some(el => el.value == x)) && selectChange(p);
++  } else p.value = v, p.selectedIndex > -1 && p.value == v && (p._$v = null);
++}
+ function normalize(value, current, multi, doNotUnwrap) {
+   value = flatten(value, {
+     skipNonRendered: true,

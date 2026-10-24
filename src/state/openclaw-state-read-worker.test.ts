@@ -469,7 +469,7 @@ const reconciliationInput = {
 const captures = [
   ...(
     [
-      "githubPublication.sharedObservation",
+      "githubPublications.sharedObservation",
       "onboardingRecommendations.read",
       "workspace.snapshot",
       "pluginBlob.lookup",
@@ -480,7 +480,7 @@ const captures = [
     ] as const
   ).map((type) => {
     const command =
-      type === "githubPublication.sharedObservation"
+      type === "githubPublications.sharedObservation"
         ? {
             type,
             input: {
@@ -512,7 +512,7 @@ const captures = [
                     ? { type, containerName: selector }
                     : { type, backendId: selector, scopeKey: selector };
     const returned: OpenClawStateReadReply =
-      type === "githubPublication.sharedObservation"
+      type === "githubPublications.sharedObservation"
         ? { ok: true, type, sourceAdmitted: true, row: undefined }
         : type === "updateRuns.get"
           ? { ok: true, type, sourceAdmitted: true, run: undefined }
@@ -537,7 +537,7 @@ const captures = [
                         },
                       };
     const selectorCount =
-      type === "githubPublication.sharedObservation"
+      type === "githubPublications.sharedObservation"
         ? 10
         : type === "pluginBlob.lookup"
           ? 3
@@ -546,7 +546,7 @@ const captures = [
             : 1;
 
     return captureCase(command, returned, selectorBytes * selectorCount, () => {
-      if (command.type === "githubPublication.sharedObservation") {
+      if (command.type === "githubPublications.sharedObservation") {
         Object.assign(command.input.session, {
           agentId: "changed",
           sessionKey: "changed",

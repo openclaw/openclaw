@@ -409,6 +409,10 @@ apply to the continuation.
 A session already recovered into a replacement opens that replacement instead;
 resuming both could duplicate the task. If a CLI runtime cannot enforce the
 required restart-safe tools, WebChat offers **Resume in new session** instead.
+For SQLite-backed sessions, this copies the complete transcript, including large
+histories, without loading the entire conversation into memory. The replacement
+and its recovery link are saved together; a failed copy leaves the original
+session available for retry.
 An unresolved final-delivery record must
 settle before an in-place continuation, and missing transcripts require repair.
 In other channels, `/new` or `/reset` still starts a replacement session.

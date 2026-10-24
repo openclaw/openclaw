@@ -1,14 +1,20 @@
 import { normalizeOptionalString as resolveOptionalStringParam } from "@openclaw/normalization-core/string-coerce";
 import {
+  GATEWAY_CLIENT_CAPS,
+  GATEWAY_CLIENT_IDS,
+  hasGatewayClientCap,
+} from "../../../packages/gateway-protocol/src/client-info.js";
+import {
   ErrorCodes,
   errorShape,
   validateAgentsCreateParams,
   validateAgentsDeleteParams,
+  validateAgentsListParams,
   validateAgentsUpdateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { validateAgentIdInput } from "../../agents/agent-create.js";
 import { AgentSharedStoreOwnerError } from "../../agents/agent-delete-databases.js";
-import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import {
   createAgentIdentityConfig,
   normalizeIdentityForFile,
@@ -34,11 +40,19 @@ import {
 } from "../../process/gateway-work-admission.js";
 import { normalizeAgentIdStrict } from "../../routing/session-key.js";
 import { resolveUserPath } from "../../utils.js";
+import { prepareOperatorModelPresentation } from "../operator-model-presentation.js";
+import {
+  authorizeCurrentOperatorRoleScopes,
+  resolveOperatorRolePolicy,
+} from "../operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import type { PreparedGatewayModelCatalog } from "../server-model-catalog.types.js";
 import { reviveAgentDatabasesAfterConfigCommit } from "../server-reload-agent-databases.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
+import { listAgentsForGateway } from "../session-utils.js";
 import { startSlowRequestDiagnostics } from "../slow-request-diagnostics.js";
 import { captureGatewayClientUploadCommitGuard } from "../upload-policy.js";
+import { workerInferenceMetadata } from "../worker-environments/inference-placement.js";
 import { agentAvatarGenerateHandler } from "./agents-avatar.js";
 import {
   AgentConfigPreconditionError,
@@ -55,7 +69,6 @@ import {
   buildIdentityMarkdownOrRespondUnsafe,
   writeWorkspaceFileOrRespond,
 } from "./agents-files.js";
-import { agentListHandler } from "./agents-list.js";
 import {
   prepareAgentOnboarding,
   completeAgentOnboarding,
@@ -66,8 +79,12 @@ import {
   captureLocalStateMutationGuard,
   localStateOwnerChangedError,
 } from "./local-state-owner.js";
+import {
+  readPreparedServerMethodModelCatalog,
+  readPreparedServerMethodModelCatalogs,
+} from "./optional-model-catalog.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
-import { assertValidParams } from "./validation.js";
+import { assertValidParams, defineValidatedGatewayHandler } from "./validation.js";
 
 function respondAgentNotFound(respond: RespondFn, agentId: string): void {
   respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, `agent "${agentId}" not found`));
@@ -98,7 +115,113 @@ function createAgentConfigApplication(respond: RespondFn) {
 
 export const agentsHandlers: GatewayRequestHandlers = {
   "agents.avatar.generate": agentAvatarGenerateHandler,
-  "agents.list": agentListHandler,
+  "agents.list": defineValidatedGatewayHandler(
+    "agents.list",
+    validateAgentsListParams,
+    async ({ params, respond, context, client }) => {
+      const cfg = context.getRuntimeConfig();
+      const emptyAgentAllowlist = resolveOperatorRolePolicy(client, cfg)?.agents?.length === 0;
+      const agentIds = listAgentIds(cfg);
+      const modelCatalogByAgentId = emptyAgentAllowlist
+        ? new Map<string, PreparedGatewayModelCatalog | undefined>()
+        : context.readPreparedGatewayModelCatalogBatch
+          ? await readPreparedServerMethodModelCatalogs(context, agentIds)
+          : new Map(
+              await Promise.all(
+                agentIds.map(
+                  async (agentId) =>
+                    [
+                      agentId,
+                      await readPreparedServerMethodModelCatalog(context, { agentId }),
+                    ] as const,
+                ),
+              ),
+            );
+      const projectionOptions = {
+        modelCatalogByAgentId,
+        includeSystem: hasGatewayClientCap(client?.connect.caps, GATEWAY_CLIENT_CAPS.AGENT_KIND),
+        httpAvatarBasePath:
+          client?.connect.client.id === GATEWAY_CLIENT_IDS.CONTROL_UI
+            ? (cfg.gateway?.controlUi?.basePath ?? "")
+            : undefined,
+      };
+      // An empty captured roster needs no catalog; later grants appear on the next request.
+      const initialAllowedAgents = emptyAgentAllowlist
+        ? []
+        : resolveOperatorRolePolicy(client, context.getRuntimeConfig())?.agents;
+      const selectedAgentIds =
+        initialAllowedAgents && initialAllowedAgents !== "*"
+          ? new Set(initialAllowedAgents)
+          : undefined;
+      const result = await listAgentsForGateway(cfg, {
+        ...projectionOptions,
+        agentIds: selectedAgentIds,
+      });
+      const currentConfig = context.getRuntimeConfig();
+      const roleError = authorizeCurrentOperatorRoleScopes(client, currentConfig);
+      if (roleError) {
+        respond(false, undefined, roleError);
+        return;
+      }
+      // Grants during enrichment appear on the next request; revocations apply now.
+      const allowedAgents = resolveOperatorRolePolicy(client, currentConfig)?.agents;
+      const agents =
+        allowedAgents && allowedAgents !== "*"
+          ? result.agents.filter((agent) => allowedAgents.includes(agent.id))
+          : result.agents;
+      const policy = prepareOperatorModelPresentation({
+        cfg: currentConfig,
+        policyConfig: context.getCommittedRuntimeConfig?.() ?? currentConfig,
+        client,
+      });
+      const required = currentConfig.cloudWorkers?.requiredProfile;
+      const profile = required ? currentConfig.cloudWorkers?.profiles?.[required] : undefined;
+      // Keep legacy replies unchanged. This opt-in bootstrap fact grants no inventory or execution.
+      const projected =
+        params.includeSessionPlacement === true
+          ? {
+              ...result,
+              sessionPlacement: required
+                ? {
+                    requiredProfile: {
+                      id: required,
+                      ...(profile
+                        ? {
+                            providerId: profile.provider,
+                            executionModes:
+                              context.workerEnvironmentService?.supportsExecutionMode(
+                                required,
+                                "worker-turn",
+                              ) === true
+                                ? ["worker-turn" as const]
+                                : [],
+                            ...workerInferenceMetadata({
+                              providerId: profile.provider,
+                              profileSnapshot: profile,
+                            }),
+                          }
+                        : {}),
+                    },
+                  }
+                : {},
+            }
+          : result;
+      respond(
+        true,
+        {
+          ...projected,
+          agents: policy
+            ? agents.map((agent) =>
+                policy
+                  .forAgent(agent.id, modelCatalogByAgentId.get(agent.id)?.entries)
+                  .agent(agent),
+              )
+            : agents,
+        },
+        undefined,
+      );
+    },
+  ),
   "agents.create": async (options) => {
     const { params, respond, client, context } = options;
     using diagnostics = startSlowRequestDiagnostics<

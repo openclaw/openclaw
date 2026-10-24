@@ -289,6 +289,31 @@ describe("standalone browser protocol validation", () => {
     },
   );
 
+  it("retains bounded delegation receipts while cleaning unknown nested fields", () => {
+    const value = {
+      ...activity,
+      delegation: [
+        {
+          runId: "child",
+          childSessionKey: "agent:main:subagent:child",
+          status: "done",
+          runtimeMs: 42,
+          secret: "discard",
+        },
+      ],
+    };
+    const canonical = structuredClone(value);
+    checks.cleanAgentActivityItem(value);
+    expect(value).toEqual(Value.Clean(AgentActivityItemSchema, canonical));
+    expect(checks.isAgentActivityItem(value)).toBe(true);
+    expect(
+      checks.isAgentActivityItem({
+        ...value,
+        delegation: [{ ...value.delegation[0], runtimeMs: -1 }],
+      }),
+    ).toBe(false);
+  });
+
   it("cleans activity's unknown own keys while retaining its scalar values", () => {
     const value = { ...activity, extra: { nested: true }, startedAt: Number.NaN };
     Object.defineProperty(value, "hidden", { value: true, configurable: true });
