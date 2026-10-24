@@ -638,16 +638,14 @@ completed startup work with fixed labels:
 | `session_entry`      | Exact session row preparation and initial access check                 |
 | `pending_inputs`     | Pending-input page and orphaned-input reconciliation                   |
 | `history_page`       | Transcript page read and display projection                            |
-| `startup_projection` | Startup metadata, including requester and model preparation            |
-| `model_runtime`      | Model runtime readiness, including failed-catalog recovery             |
+| `startup_projection` | Command preparation and optional settled model projections             |
 | `projection_final`   | Final session row readiness, access revalidation and response assembly |
 | `session_info`       | Synchronous session snapshot presentation                              |
 
 Only entered phases contribute samples, including when they fail. These are
 elapsed durations, including worker queues and scheduling; they do not report
-CPU time. Phases can overlap: `model_runtime` is included in
-`startup_projection`, and `session_info` is included in `projection_final`.
-Account-specific startup preparation can overlap the history read. Do not sum
+CPU time. Phases can overlap: `session_info` is included in `projection_final`.
+Startup projection preparation can overlap the history read. Do not sum
 these phases as a request total; use the RPC handler duration for that total.
 Labels contain no agent, session, account or transcript identifiers.
 

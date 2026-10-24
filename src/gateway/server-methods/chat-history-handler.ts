@@ -62,7 +62,6 @@ import { prepareChatHistorySessionRead } from "./chat-history-session-read.js";
 import { handleChatMetadataRequest } from "./chat-metadata-handler.js";
 import { captureQueuedChatInputRunIds, readChatPendingInputs } from "./chat-pending-inputs.js";
 import { withChatStartupDiagnostics } from "./chat-server-timing.js";
-import { prepareChatStartupRequester } from "./chat-startup-requester.js";
 import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
 import { resolveGatewayModelSelectionPolicy } from "./session-model-selection-policy.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
@@ -161,9 +160,6 @@ export async function handleChatHistoryRequest({
               agentId: sessionAgentId,
               sessionKey: canonicalKey,
               sessionEntry: entry,
-              ...(method === "chat.startup"
-                ? { readRequesterProfileId: await prepareChatStartupRequester(client) }
-                : {}),
               readPolicy: method === "chat.history" ? "ready" : "current",
             });
           } catch (error) {

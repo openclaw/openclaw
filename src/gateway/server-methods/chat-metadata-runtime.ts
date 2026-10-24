@@ -525,83 +525,64 @@ export function createGatewayChatMetadataRuntime(params: {
     );
     const hasSessionContext = hasSessionCatalogContext(profiles);
     const assemble = (
-      neutral: PreparedChatMetadataProjection,
-      session: PreparedChatMetadataProjection,
-    ): ChatStartupProjectionResult => {
-      if (readParams.readPolicy !== "ready") {
-        // Catalog preparation may yield; retain the requester's publication fence.
-        readParams.readRequesterProfileId?.();
-      }
-      return {
-        // The pane's model picker reads models.list; startup carries commands and worker policy.
-        ...(readParams.readPolicy === "ready"
-          ? {}
-          : {
-              // Command receipts must not give session worker policy a catalog lifetime.
-              commandsRevision: session.agent.revision,
-              metadata: {
-                commands: session.agent.commands,
-                swarmEnabled: session.agent.swarmEnabled,
-                requiredWorkerInferenceProfileId: resolveRequiredWorkerInferenceProfileId(
-                  readParams,
-                  params.getConfig(),
-                ),
-              },
-            }),
-        sessionModelCatalog: session.modelCatalog,
-        defaultModelCatalog: neutral.modelCatalog,
-      };
-    };
-    const projectStartup = async (
-      generation: PreparedMetadataGeneration,
-    ): Promise<PreparedProjection<ChatStartupProjectionResult>> => {
-      const agentId = normalizeAgentId(readParams.agentId);
-      const agent = await prepareAgent(generation, agentId);
-      if (!agent) {
-        throw new ChatMetadataSnapshotUnavailableError(
-          `prepared chat startup projection is unavailable for agent "${agentId}"`,
-        );
-      }
-      const readNeutral = await projectAgent(generation, agent);
-      const readSession = hasSessionContext
-        ? await projectAgent(
-            generation,
-            agent,
-            readParams.sessionEntry,
-            readParams.readRequesterProfileId?.(),
-          )
-        : readNeutral;
-      return {
-        isCurrent: () => readNeutral.isCurrent() && readSession.isCurrent(),
-        read: () => assemble(readNeutral, readSession),
-      };
-    };
-    if (readParams.readPolicy !== "ready" && hasSessionContext) {
-      return readCurrent(projectStartup);
-    }
-    if (isUserModelAuthProfileId(profiles.preferredProfileId ?? "")) {
-      return undefined;
-    }
+      agent: PreparedAgentMetadata,
+      catalogs?: Pick<ChatStartupProjectionResult, "sessionModelCatalog" | "defaultModelCatalog">,
+    ): ChatStartupProjectionResult => ({
+      // The pane's model picker reads models.list; startup carries commands and worker policy.
+      ...(readParams.readPolicy === "ready"
+        ? {}
+        : {
+            // Command receipts must not give session worker policy a catalog lifetime.
+            commandsRevision: agent.revision,
+            metadata: {
+              commands: agent.commands,
+              swarmEnabled: agent.swarmEnabled,
+              requiredWorkerInferenceProfileId: resolveRequiredWorkerInferenceProfileId(
+                readParams,
+                params.getConfig(),
+              ),
+            },
+          }),
+      ...catalogs,
+    });
     const generation = current;
-    // Optional reads consume only settled exact-profile facts. Never start preparation
-    // or wait for a lifecycle replacement just to decorate an available transcript.
+    // Catalogs decorate an available transcript; startup never waits for their replacement.
     if (!generation || replacement || pending || !authStoresCurrent(generation.facts)) {
       return undefined;
     }
     const agentId = normalizeAgentId(readParams.agentId);
+    let agent: PreparedAgentMetadata | undefined;
+    if (readParams.readPolicy !== "ready" && hasSessionContext) {
+      agent = await prepareAgent(generation, agentId);
+      if (
+        !agent ||
+        current !== generation ||
+        replacement ||
+        pending ||
+        !authStoresCurrent(generation.facts) ||
+        !agent.owner.isCurrent()
+      ) {
+        return undefined;
+      }
+    }
     const neutral = generation.neutralProjectionByAgentId.get(agentId);
-    const session = hasSessionContext
-      ? generation.sessionProjectionByKey.get(sessionProjectionKey(agentId, profiles))
-      : neutral;
+    const session = isUserModelAuthProfileId(profiles.preferredProfileId ?? "")
+      ? undefined
+      : hasSessionContext
+        ? generation.sessionProjectionByKey.get(sessionProjectionKey(agentId, profiles))
+        : neutral;
     if (
       neutral?.state !== "ready" ||
       session?.state !== "ready" ||
       !neutral.projection.isCurrent() ||
       !session.projection.isCurrent()
     ) {
-      return undefined;
+      return agent ? assemble(agent) : undefined;
     }
-    return assemble(neutral.projection, session.projection);
+    return assemble(session.projection.agent, {
+      sessionModelCatalog: session.projection.modelCatalog,
+      defaultModelCatalog: neutral.projection.modelCatalog,
+    });
   };
 
   const invalidate = () => {

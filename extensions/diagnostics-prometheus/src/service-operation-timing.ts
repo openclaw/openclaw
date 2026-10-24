@@ -44,7 +44,7 @@ const CATALOG_LIST_PHASES = new Set([
   "delivery",
 ]);
 const CHAT_STARTUP_PHASE =
-  /^chat\.startup\.(session_entry|pending_inputs|history_page|startup_projection|model_runtime|projection_final|session_info)$/;
+  /^chat\.startup\.(session_entry|pending_inputs|history_page|startup_projection|projection_final|session_info)$/;
 const DIFF_CACHE_MISS_REASONS = new Set([
   "cold",
   "evicted",

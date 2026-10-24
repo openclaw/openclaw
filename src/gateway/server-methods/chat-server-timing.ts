@@ -161,7 +161,7 @@ export function createOperatorChatSendServerTiming({
 }
 
 const CHAT_STARTUP_PHASE =
-  /^gateway\.chat\.startup\.(session_entry|pending_inputs|history_page|startup_projection|model_runtime|projection_final|session_info)$/;
+  /^gateway\.chat\.startup\.(session_entry|pending_inputs|history_page|startup_projection|projection_final|session_info)$/;
 
 export function withChatStartupDiagnostics(
   run: (opts: GatewayRequestHandlerOptions) => Promise<void>,
