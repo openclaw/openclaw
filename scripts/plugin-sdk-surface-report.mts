@@ -294,7 +294,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: awaited web_search policy preparation for harnesses; the sync resolver stays.
       // +3: shared Decisions support/evaluation functions and the canonical capability schema.
       // +2: openRecord and ToolArgumentValidationError on the existing tool-plugin facade.
-      3815,
+      // +3: findTruncatedSecret, getLongestRegisteredSecretLength and hasConfiguredRedactPatterns bound diagnostics-otel content-capture redaction (#158145).
+      3818,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -339,7 +340,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: the same awaited web_search policy preparation.
       // +2: the same shared Decisions support predicate and evaluator.
       // +1: the same openRecord helper; ToolArgumentValidationError is construct-only.
-      2211,
+      // +3: findTruncatedSecret, getLongestRegisteredSecretLength and hasConfiguredRedactPatterns bound diagnostics-otel content-capture redaction (#158145).
+      2214,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
