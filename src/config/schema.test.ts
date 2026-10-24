@@ -1,22 +1,23 @@
 // Covers canonical config schema defaults, validation, and sensitive redaction.
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, describe, expect, it } from "vitest";
-import { buildConfigSchemaCore, lookupConfigSchema } from "./schema.js";
+import { buildConfigSchemaCore, lookupConfigSchema, type PluginUiMetadata } from "./schema.js";
 import { asSchemaObject } from "./schema.shared.js";
 import { validateConfigObjectRaw } from "./validation.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
+const objectSchema = (properties: Record<string, unknown>) => ({ type: "object", properties });
+const pluginSchema = (plugin: PluginUiMetadata) => buildConfigSchemaCore({ plugins: [plugin] });
 const mcpConfig = (server: Record<string, unknown>) => ({ mcp: { servers: { docs: server } } });
 const mcpUrl = "https://mcp.example.com/mcp";
 const reviewerTools = (reviewer: Record<string, unknown>) => ({ exec: { reviewer } });
 const accepts = (config: unknown) => OpenClawSchema.safeParse(config).success;
 const acceptsTools = (tools: unknown) => ToolsSchema.safeParse(tools).success;
 const tupleSchema = {
-  schema: {
-    type: "object",
-    properties: { pair: { type: "array", items: [{ type: "string" }, { type: "number" }] } },
-  },
+  schema: objectSchema({
+    pair: { type: "array", items: [{ type: "string" }, { type: "number" }] },
+  }),
   uiHints: {},
   version: "test",
   generatedAt: "test",
@@ -216,19 +217,15 @@ describe("config schema", () => {
   });
 
   it("merges plugin ui hints", () => {
-    const res = buildConfigSchemaCore({
-      plugins: [
-        {
-          id: "voice-call",
-          name: "Voice Call",
-          description: "Outbound voice calls",
-          configUiHints: {
-            provider: { label: "Provider" },
-            "twilio.authToken": { label: "Original Token", sensitive: true },
-            " .twilio.authToken ": { label: "Auth Token", help: "Twilio credential" },
-          },
-        },
-      ],
+    const res = pluginSchema({
+      id: "voice-call",
+      name: "Voice Call",
+      description: "Outbound voice calls",
+      configUiHints: {
+        provider: { label: "Provider" },
+        "twilio.authToken": { label: "Original Token", sensitive: true },
+        " .twilio.authToken ": { label: "Auth Token", help: "Twilio credential" },
+      },
     });
 
     expect(res.uiHints["plugins.entries.voice-call"]?.label).toBe("Voice Call");
@@ -264,15 +261,12 @@ describe("config schema", () => {
       cache: false,
       plugins: Array.from({ length: 40 }, (_, index) => ({
         id: `plugin-${index}`,
-        configSchema: {
-          type: "object",
-          properties: {
-            value: {
-              type: "string",
-              description: `schema-${index}-${"x".repeat(60_000)}`,
-            },
+        configSchema: objectSchema({
+          value: {
+            type: "string",
+            description: `schema-${index}-${"x".repeat(60_000)}`,
           },
-        },
+        }),
       })),
     });
 
@@ -287,12 +281,12 @@ describe("config schema", () => {
     const plugin = {
       id: "voice-call",
       name: "Voice Call",
-      configSchema: { type: "object", properties: { provider: { type: "string" } } },
+      configSchema: objectSchema({ provider: { type: "string" } }),
     };
     const channel = {
       id: "matrix",
       label: "Matrix",
-      configSchema: { type: "object", properties: { accessToken: { type: "string" } } },
+      configSchema: objectSchema({ accessToken: { type: "string" } }),
     };
     const first = buildConfigSchemaCore({ plugins: [plugin], channels: [channel] });
     const second = buildConfigSchemaCore({ plugins: [{ ...plugin }], channels: [{ ...channel }] });
@@ -301,13 +295,9 @@ describe("config schema", () => {
 
   it("keeps merged plugin schema fragments independent of manifest metadata", () => {
     const value = { type: "string" };
-    const result = buildConfigSchemaCore({
-      plugins: [
-        {
-          id: "independent-schema",
-          configSchema: { type: "object", properties: { value } },
-        },
-      ],
+    const result = pluginSchema({
+      id: "independent-schema",
+      configSchema: objectSchema({ value }),
     });
     value.type = "number";
     expect(
@@ -320,8 +310,7 @@ describe("config schema", () => {
       id: "secret-path-cache",
       configSchema: { type: "object", additionalProperties: true },
     };
-    const build = (path: string) =>
-      buildConfigSchemaCore({ plugins: [{ ...plugin, configSecretInputPaths: [path] }] });
+    const build = (path: string) => pluginSchema({ ...plugin, configSecretInputPaths: [path] });
     const first = build("routes.*.credential");
     const second = build("routes.*.replacement");
     expect(
@@ -498,7 +487,7 @@ describe("config schema", () => {
     const deepPathSegments = Array.from({ length: 33 }, (_, index) => `a${index}`);
     const deepSchema = {
       schema: deepPathSegments.reduceRight<Record<string, unknown>>(
-        (node, key) => ({ type: "object", properties: { [key]: node } }),
+        (node, key) => objectSchema({ [key]: node }),
         { type: "string" },
       ),
       uiHints: {},

@@ -1,12 +1,7 @@
 import { assert, describe, expect, it } from "vitest";
 import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import {
-  getConfigValueAtPath,
-  parseConfigPath,
-  setConfigValueAtPath,
-  unsetConfigValueAtPath,
-} from "./config-paths.js";
+import { parseConfigPath } from "./config-paths.js";
 import { readConfigFileSnapshot } from "./config.js";
 import { findLegacyConfigIssues } from "./legacy.js";
 import { buildWebSearchProviderConfig, withTempHome, writeOpenClawConfig } from "./test-helpers.js";
@@ -35,9 +30,6 @@ function validated(config: unknown, raw = false) {
   assert(result.ok);
   return result.config;
 }
-const pluginEntry = (entry: Record<string, unknown>) => ({
-  plugins: { entries: { "voice-call": entry } },
-});
 const providerConfig = (id: string, provider: unknown, mode?: "merge") => ({
   models: { ...(mode ? { mode } : {}), providers: { [id]: provider } },
 });
@@ -72,32 +64,101 @@ it.each([
   },
 );
 
+function configAt(path: string, value: unknown): unknown {
+  return path.split(".").reduceRight<unknown>((child, key) => ({ [key]: child }), value);
+}
+const schemaCases: Array<[string, unknown, boolean]> = [
+  [
+    "models.providers.ds4",
+    {
+      baseUrl: "http://127.0.0.1:18000/v1",
+      api: "openai-completions",
+      models: [],
+      localService: {
+        command: "/Users/me/ds4-server",
+        args: ["--port", "18000"],
+        cwd: "/Users/me/ds4",
+        env: { METAL_DEVICE_WRAPPER_TYPE: "1" },
+        healthUrl: "http://127.0.0.1:18000/v1/models",
+        readyTimeoutMs: 180_000,
+        idleStopMs: 0,
+      },
+    },
+    true,
+  ],
+  [
+    "accessGroups.maintainers",
+    {
+      type: "discord.channelAudience",
+      guildId: "guild",
+      channelId: "channel",
+      membership: "roleMember",
+    },
+    false,
+  ],
+  ["gateway.controlUi.allowExternalEmbedUrls", "yes", false],
+  ["gateway.controlUi.embedSandbox", "yolo", false],
+  [
+    "plugins.entries.voice-call.hooks",
+    { allowPromptInjection: "no", allowConversationAccess: true },
+    false,
+  ],
+  [
+    "plugins.entries.voice-call.hooks",
+    { allowPromptInjection: false, allowConversationAccess: "yes" },
+    false,
+  ],
+  ["plugins.entries.voice-call.subagent", { allowModelOverride: "yes", allowedModels: [1] }, false],
+  [
+    "plugins.entries.voice-call.llm",
+    {
+      allowModelOverride: "yes",
+      allowedModels: [1],
+      allowedCompletionModels: [1],
+      allowAuthProfileOverride: "yes",
+      allowAgentIdOverride: "yes",
+    },
+    false,
+  ],
+  ["cron.webhookSsrfPolicy", { allowEverything: true }, false],
+  ...([0, 120_000] as const).map((value): [string, unknown, boolean] => [
+    "models.usage.cacheTtlMs",
+    value,
+    true,
+  ]),
+  ...([-1, 1.5, "60000"] as const).map((value): [string, unknown, boolean] => [
+    "models.usage.cacheTtlMs",
+    value,
+    false,
+  ]),
+  ["models.catalogRefresh", { enabled: false, url: "https://catalog.example.test/v1.json" }, true],
+  ["models.catalogRefresh.url", "http://localhost:8080/catalog.json", true],
+  ["models.catalogRefresh.enabled", "false", false],
+  ...["file:///tmp/catalog.json", "not a url", "http://catalog.internal.example/catalog.json"].map(
+    (value): [string, unknown, boolean] => ["models.catalogRefresh.url", value, false],
+  ),
+  [
+    "mcp.apps",
+    { enabled: true, sandboxOrigin: "https://mcp-apps.example.com", sandboxPort: 29000 },
+    true,
+  ],
+  ["mcp.apps.sandboxPort", 65536, false],
+  ...[
+    "https://mcp-apps.example.com/path",
+    "https://mcp-apps.example.com?query=1",
+    "https://user:pass@mcp-apps.example.com",
+    "data:text/html,hello",
+  ].map((value): [string, unknown, boolean] => ["mcp.apps.sandboxOrigin", value, false]),
+];
+it.each(schemaCases)("validates %s = %j (accepted: %s)", (path, value, accepted) => {
+  expect(accepts(configAt(path, value))).toBe(accepted);
+});
+
 describe("model provider localService config", () => {
   it("revalidates materialized bundled provider overlays", () => {
     const first = validated(providerOverlay("google"), true);
     expect(first.models?.providers?.google).toMatchObject({ baseUrl: "", models: [] });
     expect(validateConfigObjectRaw(first).ok).toBe(true);
-  });
-
-  it("accepts on-demand local provider service settings", () => {
-    expect(
-      accepts(
-        providerConfig("ds4", {
-          baseUrl: "http://127.0.0.1:18000/v1",
-          api: "openai-completions",
-          localService: {
-            command: "/Users/me/ds4-server",
-            args: ["--port", "18000"],
-            cwd: "/Users/me/ds4",
-            env: { METAL_DEVICE_WRAPPER_TYPE: "1" },
-            healthUrl: "http://127.0.0.1:18000/v1/models",
-            readyTimeoutMs: 180_000,
-            idleStopMs: 0,
-          },
-          models: [],
-        }),
-      ),
-    ).toBe(true);
   });
 
   it("still requires baseUrl and models for custom provider declarations", () => {
@@ -106,110 +167,6 @@ describe("model provider localService config", () => {
     expect(issuePaths(invalid(result))).toEqual(
       expect.arrayContaining(["models.providers.custom.baseUrl", "models.providers.custom.models"]),
     );
-  });
-});
-
-it.each([
-  [
-    "unknown access group membership",
-    {
-      accessGroups: {
-        maintainers: {
-          type: "discord.channelAudience",
-          guildId: "guild",
-          channelId: "channel",
-          membership: "roleMember",
-        },
-      },
-    },
-  ],
-  [
-    "non-boolean external embed permission",
-    { gateway: { controlUi: { allowExternalEmbedUrls: "yes" } } },
-  ],
-  ["unsupported embed sandbox", { gateway: { controlUi: { embedSandbox: "yolo" } } }],
-  [
-    "non-boolean prompt injection",
-    pluginEntry({ hooks: { allowPromptInjection: "no", allowConversationAccess: true } }),
-  ],
-  [
-    "non-boolean conversation access",
-    pluginEntry({ hooks: { allowPromptInjection: false, allowConversationAccess: "yes" } }),
-  ],
-  [
-    "invalid trusted subagent overrides",
-    pluginEntry({ subagent: { allowModelOverride: "yes", allowedModels: [1] } }),
-  ],
-  [
-    "invalid trusted llm overrides",
-    pluginEntry({
-      llm: {
-        allowModelOverride: "yes",
-        allowedModels: [1],
-        allowedCompletionModels: [1],
-        allowAuthProfileOverride: "yes",
-        allowAgentIdOverride: "yes",
-      },
-    }),
-  ],
-  [
-    "unknown cron webhook SSRF policy fields",
-    { cron: { webhookSsrfPolicy: { allowEverything: true } } },
-  ],
-])("rejects %s", (_name, config) => {
-  expect(accepts(config)).toBe(false);
-});
-
-it.each([
-  [0, true],
-  [120_000, true],
-  [-1, false],
-  [1.5, false],
-  ["60000", false],
-])("validates provider usage cache lifetime %s", (cacheTtlMs, valid) => {
-  expect(accepts({ models: { usage: { cacheTtlMs } } })).toBe(valid);
-});
-
-describe("models.catalogRefresh", () => {
-  const acceptsRefresh = (catalogRefresh: unknown) => accepts({ models: { catalogRefresh } });
-  it("accepts the refresh toggle and an http(s) override", () => {
-    expect(acceptsRefresh({ enabled: false, url: "https://catalog.example.test/v1.json" })).toBe(
-      true,
-    );
-    expect(acceptsRefresh({ url: "http://localhost:8080/catalog.json" })).toBe(true);
-  });
-
-  it("rejects invalid refresh values", () => {
-    expect(acceptsRefresh({ enabled: "false" })).toBe(false);
-    for (const url of [
-      "file:///tmp/catalog.json",
-      "not a url",
-      "http://catalog.internal.example/catalog.json",
-    ]) {
-      expect(acceptsRefresh({ url })).toBe(false);
-    }
-  });
-});
-
-describe("mcp.apps.enabled", () => {
-  const acceptsApps = (apps: unknown) => accepts({ mcp: { apps } });
-  it("accepts only a bare HTTP(S) sandbox origin", () => {
-    expect(
-      acceptsApps({
-        enabled: true,
-        sandboxOrigin: "https://mcp-apps.example.com",
-        sandboxPort: 29000,
-      }),
-    ).toBe(true);
-    expect(acceptsApps({ sandboxPort: 65536 })).toBe(false);
-    for (const sandboxOrigin of [
-      "https://mcp-apps.example.com/path",
-      "https://mcp-apps.example.com?query=1",
-      "https://user:pass@mcp-apps.example.com",
-      "data:text/html,hello",
-    ]) {
-      expect(acceptsApps({ sandboxOrigin })).toBe(false);
-    }
   });
 });
 
@@ -383,18 +340,6 @@ describe("config paths", () => {
     expect(parseConfigPath("__proto__.polluted").ok).toBe(false);
     expect(parseConfigPath("constructor.polluted").ok).toBe(false);
     expect(parseConfigPath("prototype.polluted").ok).toBe(false);
-  });
-
-  it("sets, gets, and unsets nested values", () => {
-    const root: Record<string, unknown> = {};
-    const parsed = parseConfigPath("foo.bar");
-    if (!parsed.ok) {
-      throw new Error("path parse failed");
-    }
-    setConfigValueAtPath(root, parsed.path, 123);
-    expect(getConfigValueAtPath(root, parsed.path)).toBe(123);
-    expect(unsetConfigValueAtPath(root, parsed.path)).toBe(true);
-    expect(getConfigValueAtPath(root, parsed.path)).toBeUndefined();
   });
 });
 

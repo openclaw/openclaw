@@ -216,22 +216,45 @@ describe("applyPluginAutoEnable core", () => {
     },
   );
 
-  it.each([
-    { name: "an undefined config", config: undefined, envOverrides: {} },
-    {
-      name: "unrelated Slack-prefixed environment variables",
-      config: {},
-      envOverrides: { SLACK_WEBHOOK_URL: "https://hooks.slack.com/services/T000/B000/XXX" },
-    },
-  ])("keeps plugin auto-enable inactive with $name", ({ config, envOverrides }) => {
+  it.each<[string, OpenClawConfig?, ManifestPlugin[]?, NodeJS.ProcessEnv?]>([
+    ["undefined config"],
+    [
+      "unrelated Slack environment",
+      {},
+      undefined,
+      { SLACK_WEBHOOK_URL: "https://hooks.slack.com/services/T000/B000/XXX" },
+    ],
+    [
+      "modelByChannel metadata",
+      { channels: { modelByChannel: { openai: { whatsapp: "openai/gpt-5.4" } } } },
+    ],
+    ["disabled plugin", slackConfig({ entries: { slack: { enabled: false, config: {} } } })],
+    ["disabled built-in channel", { channels: { slack: { botToken: "x", enabled: false } } }],
+    [
+      "disabled external channel",
+      { channels: { matrix: { enabled: false } } },
+      [{ id: "matrix", channels: ["matrix"] }],
+    ],
+    [
+      "globally disabled plugins",
+      slackConfig({
+        enabled: false,
+        allow: ["slack"],
+        entries: { slack: { config: { botToken: "x" } } },
+      }),
+      [{ id: "slack", channels: ["slack"] }],
+    ],
+  ])("keeps auto-enable inactive for %s", (_name, config, plugins, envOverrides) => {
     const result = applyPluginAutoEnable({
       config,
-      env: makeIsolatedEnv(envOverrides),
+      env: envOverrides ? makeIsolatedEnv(envOverrides) : env,
+      ...(plugins ? { manifestRegistry: makeRegistry(plugins) } : {}),
     });
-
-    expect(result.config).toStrictEqual({});
+    expect(result.config).toStrictEqual(config ?? {});
     expect(result.changes).toStrictEqual([]);
-    expect(result.autoEnabledReasons).toStrictEqual({});
+    if (!config || Object.keys(config).length === 0) {
+      expect(result.autoEnabledReasons).toStrictEqual({});
+    }
   });
 
   it.each([{ allow: ["telegram"] }, { allow: [] }])(
@@ -297,18 +320,8 @@ describe("applyPluginAutoEnable core", () => {
   });
 
   it("bounds repeated model-candidate preference checks without changing plugin precedence", () => {
-    let denyChecks = 0;
-    const deny = new Proxy(["blocked"], {
-      get(target, property, receiver) {
-        if (property === "includes") {
-          return (pluginId: string) => {
-            denyChecks += 1;
-            return target.includes(pluginId);
-          };
-        }
-        return Reflect.get(target, property, receiver);
-      },
-    });
+    const deny = ["blocked"];
+    const denyChecks = vi.spyOn(deny, "includes");
     const config: OpenClawConfig = {
       agents: {
         ownership: "explicit",
@@ -327,7 +340,7 @@ describe("applyPluginAutoEnable core", () => {
       plugins: { deny },
     };
     expect(validateConfigObject(config).ok).toBe(true);
-    denyChecks = 0;
+    denyChecks.mockClear();
 
     const result = autoEnable(config, [
       plugin("primary", { providers: ["primary"] }),
@@ -344,7 +357,7 @@ describe("applyPluginAutoEnable core", () => {
       ),
     ]);
 
-    expect(denyChecks).toBeLessThanOrEqual(6);
+    expect(denyChecks.mock.calls.length).toBeLessThanOrEqual(6);
     expect(result.config.plugins?.entries?.primary?.enabled).toBe(false);
     expect(result.config.plugins?.entries?.secondary?.enabled).toBe(true);
     expect(result.config.plugins?.entries?.blocked).toBeUndefined();
@@ -394,16 +407,6 @@ describe("applyPluginAutoEnable core", () => {
     expect(result.config.plugins?.entries?.anthropic?.enabled).toBe(true);
     expect(result.config.plugins?.allow).toEqual(["telegram", "anthropic"]);
     expect(result.changes).toContain("claude-cli agent runtime configured, enabled automatically.");
-  });
-
-  it("ignores channels.modelByChannel for plugin auto-enable", () => {
-    const result = autoEnable({
-      channels: { modelByChannel: { openai: { whatsapp: "openai/gpt-5.4" } } },
-    });
-
-    expect(result.config.plugins?.entries?.modelByChannel).toBeUndefined();
-    expect(result.config.plugins?.allow).toBeUndefined();
-    expect(result.changes).toStrictEqual([]);
   });
 
   it("does not auto-enable WhatsApp from persisted auth state alone", () => {
@@ -539,27 +542,6 @@ describe("applyPluginAutoEnable core", () => {
     expect(second.config.plugins?.entries?.["apn-two"]?.enabled).toBe(true);
     expect(second.config.plugins?.entries?.["apn-one"]).toBeUndefined();
     expect(second).not.toBe(first);
-  });
-
-  it.each<[OpenClawConfig, ManifestPlugin[]?]>([
-    [slackConfig({ entries: { slack: { enabled: false, config: {} } } })],
-    [{ channels: { slack: { botToken: "x", enabled: false } } }],
-    [{ channels: { matrix: { enabled: false } } }, [{ id: "matrix", channels: ["matrix"] }]],
-  ])("respects explicit disablement: %j", (config, plugins) => {
-    const result = autoEnable(config, plugins);
-    expect(result.config).toEqual(config);
-    expect(result.changes).toStrictEqual([]);
-  });
-
-  it("skips when plugins are globally disabled", () => {
-    const config = slackConfig({
-      enabled: false,
-      allow: ["slack"],
-      entries: { slack: { config: { botToken: "x" } } },
-    });
-    const result = autoEnable(config, [{ id: "slack", channels: ["slack"] }]);
-    expect(result.config).toEqual(config);
-    expect(result.changes).toStrictEqual([]);
   });
 
   it("carries loader resolution facts onto a config the auto-enable rewrite rebuilt", () => {

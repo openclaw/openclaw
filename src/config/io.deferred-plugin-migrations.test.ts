@@ -38,10 +38,9 @@ import {
 } from "./validation.js";
 
 it("retains the authored canonical config key for a mixed-case migration owner", () => {
+  const key = "mixed-upgrade-proof";
   const sourceConfig = {
-    plugins: {
-      entries: { "mixed-upgrade-proof": { enabled: true, config: { token: "retained" } } },
-    },
+    plugins: { entries: { [key]: { enabled: true, config: { token: "retained" } } } },
   };
   const pending = {
     pluginId: "MiXeD-upgrade-proof",
@@ -52,17 +51,12 @@ it("retains the authored canonical config key for a mixed-case migration owner",
       pluginId: "MiXeD-upgrade-proof",
     }),
   };
-  expect(pending.configPaths).toContainEqual([
-    "plugins",
-    "entries",
-    "mixed-upgrade-proof",
-    "config",
-  ]);
+  expect(pending.configPaths).toContainEqual(["plugins", "entries", key, "config"]);
   expect(hasDeferredPluginMigrationConfig(sourceConfig, pending)).toBe(true);
   expect(
     preserveDeferredPluginMigrationConfig({
       sourceConfig,
-      nextConfig: { plugins: { entries: { "mixed-upgrade-proof": { enabled: true } } } },
+      nextConfig: { plugins: { entries: { [key]: { enabled: true } } } },
       pending: [pending],
     }),
   ).toEqual(sourceConfig);

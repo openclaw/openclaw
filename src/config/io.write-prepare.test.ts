@@ -30,8 +30,8 @@ const includedIdentity = { ...main, identity: { $include: "./identity.json" } };
 const worker = { workspace: "/srv/worker" };
 const roster = (entries: Record<string, unknown>) => ({ agents: { entries } });
 const listRoster = (list: unknown[]) => ({ agents: { list } });
-const legacyRoster = (entries: [string, object][]) =>
-  listRoster(entries.map(([id, entry]) => ({ id, ...entry })));
+const legacyRoster = (...entries: [string, object][]) =>
+  listRoster(entries.map(([id, entry]) => Object.assign({ id }, entry)));
 const legacyMain = (entry = main, id = "main") => listRoster([{ id, ...entry }]);
 const legacyWorker = (workspace: string, id = "worker") => listRoster([{ id, workspace }]);
 const tools = (allow: string[]) => roster({ main: { ...main, tools: { allow } } });
@@ -110,7 +110,7 @@ const rootModel = { primary: "fixture/primary", fallbacks: ["fixture/root"] };
 const thinkingParams = { thinking: { level: "high" } };
 const legacyResearch = (first: string, second: string) =>
   legacyRoster(
-    [first, second].map((workspace): [string, object] => [
+    ...[first, second].map((workspace): [string, object] => [
       "Research",
       { workspace, memorySearch: { enabled: false } },
     ]),
@@ -145,10 +145,7 @@ const writeCases: Record<string, WriteCase> = {
     authored: legacyMain(),
     next: roster({ main, worker: { workspace: "/resolved/worker" } }),
     options: legacySet(
-      legacyRoster([
-        ["main", main],
-        ["${WORKER_ID}", { workspace: "${WORKER_DIR}" }],
-      ]),
+      legacyRoster(["main", main], ["${WORKER_ID}", { workspace: "${WORKER_DIR}" }]),
     ),
     error: "cannot safely resolve an explicitly replaced agent list slot",
   },
@@ -175,30 +172,17 @@ const writeCases: Record<string, WriteCase> = {
     next: roster({ primary: main }),
     options: {
       ...legacySet(legacyMain(main, "primary"), "id", ["main"]),
-      unsetPaths: [["agents", "list", "0", "workspace"]],
+      unsetPaths: paths("agents.list.0.workspace"),
     },
   },
   "removes the explicitly reordered list slot instead of the surviving agent": {
     current: roster({ main, "0": worker }),
-    source: legacyRoster([
-      ["main", main],
-      ["0", worker],
-    ]),
-    authored: legacyRoster([
-      ["main", main],
-      ["0", worker],
-    ]),
+    source: legacyRoster(["main", main], ["0", worker]),
+    authored: legacyRoster(["main", main], ["0", worker]),
     next: roster({ main }),
     options: {
-      ...legacySet(
-        legacyRoster([
-          ["0", worker],
-          ["main", main],
-        ]),
-        undefined,
-        ["0"],
-      ),
-      unsetPaths: [["agents", "list", "0"]],
+      ...legacySet(legacyRoster(["0", worker], ["main", main]), undefined, ["0"]),
+      unsetPaths: paths("agents.list.0"),
     },
   },
   "rejects an indexed unset across duplicate explicit list ids": {
@@ -214,7 +198,7 @@ const writeCases: Record<string, WriteCase> = {
           { id: "worker", workspace: "/second" },
         ]),
       ),
-      unsetPaths: [["agents", "list", "0"]],
+      unsetPaths: paths("agents.list.0"),
     },
     error: 'cannot canonicalize duplicate normalized agent id "worker"',
   },
@@ -247,7 +231,7 @@ const writeCases: Record<string, WriteCase> = {
     current: roster({ main }),
     authored: legacyMain(),
     next: roster({ main }),
-    options: { unsetPaths: [["agents", "list", "0", "id"]] },
+    options: { unsetPaths: paths("agents.list.0.id") },
     error: "cannot unset an agent id",
   },
   "allows roster writes beside unrelated root includes using pre-migration provenance": {
