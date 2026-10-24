@@ -13,31 +13,28 @@ export function scheduleRoutePreload<TRouteId extends string>(
   disabled = false,
   immediate = false,
 ) {
-  if (disabled || !preload || !canPreload()) {
-    return;
-  }
   const target = event.currentTarget;
-  if (!target) {
+  if (disabled || !preload || !target) {
     return;
   }
-  const start = () => {
+  const start = async () => {
     timers.delete(target);
     if (!canPreload()) {
       return;
     }
     try {
-      void Promise.resolve(preload(routeId)).catch(() => undefined);
+      await preload(routeId);
     } catch {
       // Preloading is opportunistic; navigation still handles real route errors.
     }
   };
   if (immediate) {
     cancelRoutePreload(timers, event);
-    start();
+    void start();
     return;
   }
   if (!timers.has(target)) {
-    timers.set(target, globalThis.setTimeout(start, 50));
+    timers.set(target, globalThis.setTimeout(() => void start(), 50));
   }
 }
 
@@ -49,9 +46,6 @@ export function cancelRoutePreload(
   if (!target) {
     return;
   }
-  const timer = timers.get(target);
-  if (timer !== undefined) {
-    globalThis.clearTimeout(timer);
-    timers.delete(target);
-  }
+  globalThis.clearTimeout(timers.get(target));
+  timers.delete(target);
 }

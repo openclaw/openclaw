@@ -195,7 +195,7 @@ suite.define(() => {
         await expect.poll(readOverrides).toEqual(siblings);
         await expect.poll(() => item.isDisabled()).toBe(true);
         expect(await item.getAttribute("aria-checked")).toBe("false");
-        expect(await tooltipTitleText(item)).toContain("tools.web.search.enabled");
+        await expect.poll(() => tooltipTitleText(item)).toContain("tools.web.search.enabled");
         await item.evaluate((node) =>
           node.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true })),
         );
