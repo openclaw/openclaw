@@ -13,14 +13,24 @@ import {
 import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import * as discordRest from "../internal/rest.js";
+import { discordOutbound } from "../outbound-adapter.js";
 import { getDiscordRuntime } from "../runtime.js";
 import * as discordSend from "../send.js";
+import { createDiscordSendReceipt } from "../send.receipt.js";
 import { EMPTY_DISCORD_TEST_CONFIG } from "../test-support/config.js";
 import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtime.js";
-import { unbindThreadBindingsBySessionKeyAsync } from "./thread-bindings.lifecycle.js";
+import {
+  autoBindSpawnedDiscordSubagent,
+  setThreadBindingIdleTimeoutBySessionKeyAsync,
+  setThreadBindingMaxAgeBySessionKeyAsync,
+  unbindThreadBindingsBySessionKeyAsync,
+} from "./thread-bindings.lifecycle.js";
 import { createThreadBindingManager } from "./thread-bindings.manager.js";
 import { resetThreadBindingsForTests } from "./thread-bindings.test-support.js";
-import type { ThreadBindingRecord } from "./thread-bindings.types.js";
+import {
+  THREAD_BINDINGS_SWEEP_INTERVAL_MS,
+  type ThreadBindingRecord,
+} from "./thread-bindings.types.js";
 
 const THREAD = "111111111111111111";
 const PARENT = "222222222222222222";
@@ -136,6 +146,125 @@ it.each(["channel-lookup", "webhook-create", "child-create"] as const)(
   },
 );
 
+function holdNext<T>(value: T) {
+  const paused = createDeferred<void>();
+  const release = createDeferred<void>();
+  const respond = async () => {
+    paused.resolve();
+    await release.promise;
+    return value;
+  };
+  return { paused: paused.promise, release: () => release.resolve(), respond };
+}
+
+const parentChannel = { id: PARENT, type: ChannelType.GuildText };
+const spawnChild = () =>
+  autoBindSpawnedDiscordSubagent({
+    cfg: EMPTY_DISCORD_TEST_CONFIG,
+    accountId: "default",
+    channel: "discord",
+    to: `channel:${PARENT}`,
+    childSessionKey: "agent:main:subagent:replaced",
+    agentId: "main",
+  });
+
+it("refuses direct native creates after a replacement registers during the parent lookup", async () => {
+  // The first lookup resolves the spawn target; createThreadDiscord reads the parent again.
+  const held = holdNext(parentChannel);
+  fixture.get.mockResolvedValueOnce(parentChannel).mockImplementationOnce(held.respond);
+  const binding = spawnChild();
+  await held.paused;
+  const replacement = await createManager();
+  held.release();
+  await expect(binding).resolves.toBeNull();
+  expect(fixture.post).not.toHaveBeenCalled();
+  expect(replacement.listBindings()).toEqual([]);
+  await manager.stop();
+});
+
+it("settles a thread Discord accepted before a replacement registered, without a new webhook", async () => {
+  const held = holdNext({ id: CHILD });
+  fixture.get.mockResolvedValueOnce(parentChannel).mockResolvedValueOnce(parentChannel);
+  fixture.post.mockImplementationOnce(held.respond);
+  const binding = spawnChild();
+  await held.paused;
+  const replacement = await createManager();
+  held.release();
+  // The accepted thread is published; the follow-up webhook is refused after the handover.
+  await expect(binding).resolves.toMatchObject({ threadId: CHILD, webhookId: undefined });
+  expect(fixture.post.mock.calls.map(([route]) => route)).toEqual([`/channels/${PARENT}/threads`]);
+  expect(replacement.getByThreadId(CHILD)).toMatchObject({
+    targetSessionKey: "agent:main:subagent:replaced",
+    webhookId: undefined,
+  });
+  const conversation = { channel: "discord", accountId: "default", conversationId: CHILD };
+  await expect(
+    getSessionBindingService().resolveByConversationAsync(conversation),
+  ).resolves.toMatchObject({ targetSessionKey: "agent:main:subagent:replaced" });
+  // Without a webhook, bound replies use the bot send path.
+  const sent = {
+    messageId: "reply-1",
+    channelId: CHILD,
+    receipt: createDiscordSendReceipt({
+      platformMessageIds: ["reply-1"],
+      channelId: CHILD,
+      kind: "text",
+    }),
+  };
+  fixture.bot.mockResolvedValueOnce(sent);
+  await discordOutbound.sendText?.({
+    cfg: EMPTY_DISCORD_TEST_CONFIG,
+    to: `channel:${PARENT}`,
+    text: "bound reply",
+    accountId: "default",
+    threadId: CHILD,
+  });
+  // The retired manager's intro stays suppressed; only the reply reaches the thread.
+  expect(fixture.webhook).not.toHaveBeenCalled();
+  expect(fixture.bot).toHaveBeenCalledExactlyOnceWith(
+    `channel:${CHILD}`,
+    "bound reply",
+    expect.objectContaining({ accountId: "default" }),
+  );
+  await manager.stop();
+});
+
+it.each(["channel-lookup", "webhook-create"] as const)(
+  "settles only a webhook create accepted before a replacement registered (%s)",
+  async (replaceAt) => {
+    const accepted = replaceAt === "webhook-create";
+    const held = holdNext(accepted ? webhook : threadChannel);
+    if (accepted) {
+      fixture.post.mockImplementationOnce(held.respond);
+    } else {
+      fixture.get.mockImplementationOnce(held.respond);
+    }
+    const binding = manager.bindTarget({
+      threadId: THREAD,
+      targetKind: "subagent",
+      targetSessionKey: "agent:main:subagent:settled",
+      agentId: "main",
+    });
+    await held.paused;
+    const replacement = await createManager();
+    held.release();
+    if (accepted) {
+      await expect(binding).resolves.toMatchObject({ webhookId: webhook.id });
+      expect(replacement.getByThreadId(THREAD)).toMatchObject({
+        targetSessionKey: "agent:main:subagent:settled",
+        webhookId: webhook.id,
+      });
+    } else {
+      await expect(binding).rejects.toThrow("Discord thread binding manager was retired");
+      expect(replacement.getByThreadId(THREAD)).toBeUndefined();
+    }
+    expect(fixture.post.mock.calls.map(([route]) => route)).toEqual(
+      accepted ? [`/channels/${PARENT}/webhooks`] : [],
+    );
+    await manager.stop();
+  },
+);
+
 it("drains native create without blocking another account's mutations or shutdown", async () => {
   const independent = await createManager({ accountId: "independent", token: undefined });
   const independentThread = "444444444444444444";
@@ -198,3 +327,95 @@ it("drains native create without blocking another account's mutations or shutdow
   expect(manager.getByThreadId(THREAD)).toBeUndefined();
   expect(fixture.post).toHaveBeenCalledOnce();
 });
+
+it.each(["unbind", "idle", "max-age"] as const)(
+  "orders session %s behind an accepted create across two replacements",
+  async (mutation) => {
+    const held = holdNext(webhook);
+    fixture.post.mockImplementationOnce(held.respond);
+    const target = { accountId: "default", targetSessionKey: "agent:main:subagent:joined" };
+    const binding = manager.bindTarget({
+      threadId: THREAD,
+      targetKind: "subagent",
+      targetSessionKey: target.targetSessionKey,
+      agentId: "main",
+    });
+    await held.paused;
+    const middle = await createManager();
+    const replacement = await createManager();
+    const mutated = vi.fn((records: ThreadBindingRecord[]) => records);
+    const updating = (
+      mutation === "unbind"
+        ? unbindThreadBindingsBySessionKeyAsync({ ...target, sendFarewell: false })
+        : mutation === "idle"
+          ? setThreadBindingIdleTimeoutBySessionKeyAsync({ ...target, idleTimeoutMs: 12_345 })
+          : setThreadBindingMaxAgeBySessionKeyAsync({ ...target, maxAgeMs: 23_456 })
+    ).then(mutated);
+    const stopped = vi.fn<() => void>();
+    const stopping = replacement.stop().then(stopped);
+    try {
+      // A full turn lets an incorrectly detached queue finish before the accepted create.
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(mutated).not.toHaveBeenCalled();
+      expect(stopped).not.toHaveBeenCalled();
+    } finally {
+      held.release();
+      await Promise.allSettled([binding, updating, stopping]);
+      await Promise.all([manager.stop(), middle.stop()]);
+    }
+    await expect(binding).resolves.toMatchObject({ targetSessionKey: target.targetSessionKey });
+    await expect(updating).resolves.toHaveLength(1);
+    if (mutation === "unbind") {
+      expect(replacement.getByThreadId(THREAD)).toBeUndefined();
+    } else {
+      expect(replacement.getByThreadId(THREAD)).toMatchObject(
+        mutation === "idle" ? { idleTimeoutMs: 12_345 } : { maxAgeMs: 23_456 },
+      );
+    }
+  },
+);
+
+it.each(["before", "after"] as const)(
+  "does not join a predecessor stop begun %s replacement while its sweep is pending",
+  async (order) => {
+    await manager.stop();
+    vi.useFakeTimers();
+    const held = holdNext(threadChannel);
+    let stopping: Promise<void> | undefined;
+    try {
+      manager = await createManager({ enableSweeper: true });
+      await manager.bindTarget({
+        threadId: THREAD,
+        channelId: PARENT,
+        targetKind: "subagent",
+        targetSessionKey: sessionKey,
+        webhookId: webhook.id,
+        webhookToken: webhook.token,
+      });
+      fixture.get.mockImplementationOnce(held.respond);
+      await vi.advanceTimersByTimeAsync(THREAD_BINDINGS_SWEEP_INTERVAL_MS);
+      await held.paused;
+      const stopped = vi.fn<() => void>();
+      if (order === "before") {
+        stopping = manager.stop().then(stopped);
+      }
+      const replacement = await createManager();
+      if (order === "after") {
+        stopping = manager.stop().then(stopped);
+      }
+      const at = Date.now() + 1000;
+      await expect(replacement.touchThread({ threadId: THREAD, at })).resolves.toMatchObject({
+        lastActivityAt: at,
+      });
+      await replacement.stop();
+      expect(stopped).not.toHaveBeenCalled();
+    } finally {
+      held.release();
+      await stopping;
+      await manager.stop();
+      vi.useRealTimers();
+    }
+  },
+);

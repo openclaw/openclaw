@@ -3,8 +3,16 @@ import {
   IncognitoSessionEndedError,
   rethrowIncognitoSessionError,
 } from "openclaw/plugin-sdk/acp-runtime";
-import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
+import {
+  getSessionBindingService,
+  testing as sessionBindingTesting,
+} from "openclaw/plugin-sdk/conversation-runtime";
 import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import {
+  registerSessionBindingAdapterV2,
+  type SessionBindingAdapterV2,
+  type SessionBindingRecord,
+} from "openclaw/plugin-sdk/thread-bindings-session-runtime";
 import { expect, it, vi } from "vitest";
 import { getDiscordRuntime } from "../runtime.js";
 import { EMPTY_DISCORD_TEST_CONFIG } from "../test-support/config.js";
@@ -14,6 +22,7 @@ import {
   hoisted,
   installThreadBindingLifecycleTestHooks,
 } from "./thread-bindings.lifecycle.test-support.js";
+import { getThreadBindingToken } from "./thread-bindings.state.js";
 import { resetThreadBindingsForTests } from "./thread-bindings.test-support.js";
 import type { ThreadBindingRecord } from "./thread-bindings.types.js";
 
@@ -129,7 +138,7 @@ it("keeps current config and refreshed tokens after a retired manager stops agai
   const options = { accountId: "runtime", token: "token-old", cfg: startupCfg };
   const retired = await createTestThreadBindingManager(options);
   await retired.stop();
-  await createTestThreadBindingManager(options);
+  const previous = await createTestThreadBindingManager(options);
   const manager = await createTestThreadBindingManager({ ...options, token: "token-new" });
   await retired.stop();
   setRuntimeConfigSnapshot(cfg);
@@ -144,6 +153,56 @@ it("keeps current config and refreshed tokens after a retired manager stops agai
   expect(hoisted.createDiscordRestClient.mock.calls).toEqual([
     [{ accountId: "runtime", token: "token-new" }, cfg],
   ]);
+  await previous.stop();
+  expect(getThreadBindingToken("runtime")).toBe("token-new");
+  await manager.stop();
+});
+
+it("keeps other channels' session listings live when a replacement stops before its predecessor", async () => {
+  const other: SessionBindingRecord = {
+    bindingId: "other-binding",
+    targetSessionKey: childSessionKey,
+    targetKind: "session",
+    conversation: { channel: "other-chat", accountId: "default", conversationId: "room-1" },
+    status: "active",
+    boundAt: 1,
+  };
+  const otherAdapter: SessionBindingAdapterV2 = {
+    version: 2,
+    assertCurrent: () => {},
+    channel: "other-chat",
+    accountId: "default",
+    capabilities: { bindSupported: false, unbindSupported: false, placements: [] },
+    touchAsync: async () => {},
+    listBySessionAsync: async (key) => (key === childSessionKey ? [other] : []),
+    resolveByConversationAsync: async () => null,
+    inspectByConversationAsync: async () => null,
+    inspectByConversationsAsync: async (refs) => ({
+      bindings: refs.map(() => null),
+      assertCurrent: () => {},
+    }),
+    listBySession: () => [],
+    resolveByConversation: () => null,
+  };
+  // Adapters left by other files in a shared worker would answer for this account.
+  sessionBindingTesting.resetSessionBindingAdaptersForTests();
+  registerSessionBindingAdapterV2(otherAdapter);
+  // Overtaken owners never reach their stop before the newest replacement is disabled.
+  const overtaken = [
+    await createTestThreadBindingManager(),
+    await createTestThreadBindingManager(),
+  ];
+  try {
+    const replacement = await createTestThreadBindingManager();
+    await replacement.stop();
+    await expect(service.listBySessionAsync(childSessionKey)).resolves.toEqual([other]);
+    await expect(
+      service.bind({ conversation, targetSessionKey: childSessionKey, targetKind: "session" }),
+    ).rejects.toMatchObject({ code: "BINDING_ADAPTER_UNAVAILABLE" });
+  } finally {
+    await Promise.all(overtaken.map((manager) => manager.stop()));
+    sessionBindingTesting.resetSessionBindingAdaptersForTests();
+  }
 });
 
 it.each([false, true])(
