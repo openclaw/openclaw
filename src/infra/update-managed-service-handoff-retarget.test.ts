@@ -277,7 +277,7 @@ unix.each(["changed realpath", "closed destination", "same root"])(
 );
 
 unix("preserves commit errors across rollback and closes its own handle", () => {
-  const { from, to, store, source } = fixture();
+  const { from, to, store, source, options } = fixture();
   const failure = new Error("fixture commit failed");
   let damaged: DatabaseSync | undefined;
   const opener = observeDatabase((db, readOnly) => {
@@ -300,6 +300,17 @@ unix("preserves commit errors across rollback and closes its own handle", () => 
   opener.mockRestore();
   expect(store.read(from)).toEqual({ kind: "current", lease: source });
   expect(store.read(to)).toEqual({ kind: "absent" });
+  const independent = openDatabase(options.databasePath);
+  databases.push(independent);
+  expect(() =>
+    store.transact(independent, () =>
+      store.transact(independent, () => {
+        throw failure;
+      }),
+    ),
+  ).toThrow(failure);
+  expect(independent.isOpen).toBe(true);
+  expect(store.transact(independent, () => "usable")).toBe("usable");
 });
 
 unix("refuses retarget while the update executor is still a child", async () => {
@@ -390,26 +401,34 @@ unix("preserves both roots when destination inspection fails", () => {
 });
 
 // Released v1 claims are cleanup inputs only, never current runtime authority.
-unix("retires a dead legacy process only at retarget admission", () => {
-  const { from, to, store, source, legacy } = fixture();
-  const payload = legacyPayload(deadPid());
-  const db = legacy(payload);
-  const before = leaseRows(db);
-  expect(store.read(to)).toEqual({ kind: "unreadable", error: expect.any(Error) });
-  expect(leaseRows(db)).toEqual(before);
-  const result = store.retarget(source, to, action);
-  expect(result?.kind).toBe("acquired");
-  expect(store.read(to)).toMatchObject({ kind: "current", lease: { version: 2 } });
-  // A late stable updater/helper binding must lose its expected-payload CAS.
-  expect(
-    db
-      .prepare(
-        "UPDATE managed_update_handoffs SET payload_json = ?, updated_at = ? WHERE install_root = ? AND owner = ? AND payload_json = ?",
-      )
-      .run(payload, 2, to, "legacy-owner", payload).changes,
-  ).toBe(0);
-  expect(store.read(from)).toEqual({ kind: "absent" });
-});
+unix.each(["update", "foreground", "retarget"] as const)(
+  "retires a dead legacy process only at %s admission",
+  (admission) => {
+    const { from, to, store, source, legacy } = fixture();
+    const payload = legacyPayload(deadPid());
+    const db = legacy(payload);
+    const before = leaseRows(db);
+    expect(store.read(to)).toEqual({ kind: "unreadable", error: expect.any(Error) });
+    expect(leaseRows(db)).toEqual(before);
+    const result =
+      admission === "retarget"
+        ? store.retarget(source, to, action)
+        : store.acquire(to, "legacy-owner", admission === "update" ? update : foreground(store));
+    expect(result?.kind).toBe("acquired");
+    expect(store.read(to)).toMatchObject({ kind: "current", lease: { version: 2 } });
+    // A late stable updater/helper binding must lose its expected-payload CAS.
+    expect(
+      db
+        .prepare(
+          "UPDATE managed_update_handoffs SET payload_json = ?, updated_at = ? WHERE install_root = ? AND owner = ? AND payload_json = ?",
+        )
+        .run(payload, 2, to, "legacy-owner", payload).changes,
+    ).toBe(0);
+    expect(store.read(from)).toEqual(
+      admission === "retarget" ? { kind: "absent" } : { kind: "current", lease: source },
+    );
+  },
+);
 
 unix("reclaims a legacy reused PID without granting authority to its live process", () => {
   const { to, store, legacy } = fixture();

@@ -1,8 +1,10 @@
 import { randomUUID, createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { runExistingOpenClawStateWriteTransaction } from "../state/openclaw-state-db-existing-write.js";
+import * as handles from "../state/openclaw-state-db-handle.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -35,6 +37,7 @@ import {
   UpdateRecoveryRequiredError,
 } from "./update-run-recovery.js";
 import { captureCompletedUpdateRun } from "./update-run-terminal-record.js";
+import { updateRunLedgerSchema } from "./update-run-write.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => closeOpenClawStateDatabaseForTest());
@@ -525,6 +528,69 @@ function shape(pathname: string) {
       )
       .get(),
   };
+}
+it("refuses existing-state writes while another connection holds the native transaction", () => {
+  const f = source();
+  const before = fs.readFileSync(f.pathname);
+  using writer = openNodeSqliteDatabase(f.pathname);
+  writer.exec("BEGIN IMMEDIATE");
+  expect(() => probeExistingWriter(f, 0)).toThrow(/locked/);
+  expect(fs.readFileSync(f.pathname)).toEqual(before);
+  writer.exec("ROLLBACK");
+});
+
+it.each([
+  [
+    "future",
+    "PRAGMA user_version=2147483647; UPDATE schema_meta SET schema_version=2147483647 WHERE meta_key='primary'",
+  ],
+  ["metadata", "UPDATE schema_meta SET schema_version=14 WHERE meta_key='primary'"],
+  [
+    "trigger",
+    "CREATE TRIGGER unexpected_recovery_write AFTER UPDATE ON update_runs BEGIN UPDATE schema_meta SET app_version='unexpected'; END;",
+  ],
+])("refuses %s state without changing a retained handoff", (_scenario, sql) => {
+  const f = source();
+  {
+    using db = openNodeSqliteDatabase(f.pathname);
+    db.exec(sql);
+  }
+  const before = shape(f.pathname);
+  expect(() => probeExistingWriter(f)).toThrow();
+  expect(shape(f.pathname)).toEqual(before);
+  expect(before.recovery).toBeDefined();
+  expect(JSON.parse(String(before.recovery?.value_json))).toEqual(f.record);
+});
+
+it.each(["before admission", "before tracked open"])(
+  "does not recreate state displaced %s",
+  (when) => {
+    const f = source();
+    const before = shape(f.pathname);
+    const open = handles.openTrackedStateDatabase;
+    if (when === "before admission") {
+      fs.renameSync(f.pathname, f.pathname + ".retained");
+    }
+    using _ =
+      when === "before tracked open"
+        ? vi.spyOn(handles, "openTrackedStateDatabase").mockImplementation((pathname, options) => {
+            fs.renameSync(pathname, pathname + ".retained");
+            return open(pathname, options);
+          })
+        : undefined;
+    expect(() => probeExistingWriter(f)).toThrow();
+    expect(fs.existsSync(f.pathname)).toBe(false);
+    expect(shape(f.pathname + ".retained")).toEqual(before);
+    expect(before.version).toEqual({ user_version: 15 });
+  },
+);
+
+function probeExistingWriter(f: ReturnType<typeof source>, busyTimeoutMs?: number) {
+  return runExistingOpenClawStateWriteTransaction(() => undefined, f.options, {
+    schemaSql: updateRunLedgerSchema,
+    operationLabel: "retained-test-owner",
+    busyTimeoutMs,
+  });
 }
 it("preserves the previous runtime schema during ledger bookkeeping", () => {
   const f = source();

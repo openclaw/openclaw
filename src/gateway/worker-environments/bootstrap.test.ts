@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import * as tar from "tar";
 import { describe, expect, it, vi } from "vitest";
+import { PROCESS_NODE_VERSION_CHECK } from "../../../node-version.mjs";
 import type { WorkerSshEndpoint } from "../../plugins/types.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { WORKER_BUNDLE_ARTIFACT_PATHS } from "../../shared/worker-bundle-hash.js";
@@ -66,14 +67,13 @@ function tagged(action: "current" | "install" | "receipt", payload: string): str
 }
 
 function installResponses() {
-  return [output("install", REMOTE_TARBALL), result(), output("receipt", RECEIPT_JSON), result()];
+  return [
+    result({ stdout: tagged("install", REMOTE_TARBALL) }),
+    result(),
+    result({ stdout: tagged("receipt", RECEIPT_JSON) }),
+    result(),
+  ];
 }
-
-const output = (action: "current" | "install" | "receipt", payload: string) =>
-  result({ stdout: tagged(action, payload) });
-const readText = (root: string, name: string) => fs.readFile(path.join(root, name), "utf8");
-const isScript = (input: unknown, marker: string) =>
-  typeof input === "string" && input.includes(marker);
 
 function commandPort(argv: string[]): number {
   const portFlag = argv[0] === "scp" ? "-P" : "-p";
@@ -159,7 +159,7 @@ describe("bootstrapWorker", () => {
   it("does not dispatch SSH after bootstrap cancellation during identity resolution", async () => {
     const controller = new AbortController();
     const closed = new Error("bootstrap canceled");
-    const runner = fakeRunner([output("current", RECEIPT_JSON)]);
+    const runner = fakeRunner([result({ stdout: tagged("current", RECEIPT_JSON) })]);
     await expect(
       bootstrapWith(
         runner,
@@ -222,7 +222,9 @@ describe("bootstrapWorker", () => {
       let current = true;
       let commands = 0;
       const runner = fakeRunner(
-        boundary === "identity" ? [] : [output("install", REMOTE_TARBALL), result(), result()],
+        boundary === "identity"
+          ? []
+          : [result({ stdout: tagged("install", REMOTE_TARBALL) }), result(), result()],
         () => {
           commands += 1;
           if (
@@ -266,14 +268,31 @@ describe("bootstrapWorker", () => {
     },
   );
 
-  it("keeps a successful receipt despite cleanup failure without exposing the operation id", async () => {
-    const runner = fakeRunner(
-      [...installResponses().slice(0, 3), result({ code: 1, stderr: "cleanup failed" })],
-      (argv) => {
-        expect(argv.join(" ")).not.toContain(OPERATION_ID);
-      },
-    );
+  it("transfers and installs a fresh bundle despite terminal cleanup failure", async () => {
+    const runner = fakeRunner([
+      result({ stdout: tagged("install", REMOTE_TARBALL) }),
+      result(),
+      result({ stdout: tagged("receipt", RECEIPT_JSON) }),
+      result({ code: 1, stderr: "synthetic cleanup failure" }),
+    ]);
+
     await expect(bootstrapWith(runner)).resolves.toEqual(RECEIPT);
+    const [preflight, transfer, install] = runner.calls;
+    expect(commandNames(runner)).toEqual(["ssh", "scp", "ssh", "ssh"]);
+    expect(preflight?.argv).toContain("StrictHostKeyChecking=yes");
+    expect(runner.calls.flatMap((call) => call.argv)).not.toContain("StrictHostKeyChecking=no");
+    expect(transfer?.argv).toEqual(
+      expect.arrayContaining([BUNDLE.tarballPath, `worker@worker.example.com:${REMOTE_TARBALL}`]),
+    );
+    expect(runner.calls.flatMap((call) => call.argv).join(" ")).not.toContain(OPERATION_ID);
+    expect(preflight?.argv.at(-1)).toContain(OPERATION_TOKEN);
+    expect(install?.options.input).toContain("lock=$lock_root/$hash");
+    expect(install?.options.input).toContain('ln -s "$lock_identity" "$lock"');
+    expect(install?.options.input).toContain("worker bundle archive digest mismatch");
+    expect(install?.options.input).not.toContain('npm install --prefix "$staging"');
+    for (const value of [BUNDLE_HASH, TARBALL_SHA256, VERSION]) {
+      expect(install?.argv.at(-1)).toContain(value);
+    }
   });
 
   it.each([
@@ -325,7 +344,7 @@ describe("bootstrapWorker", () => {
     `/home/worker/.openclaw-worker/.incoming/../.incoming/${UPLOAD_FILENAME}`,
     `/home/worker/.openclaw-worker/.incoming/${UPLOAD_FILENAME}.other`,
   ])("rejects a noncanonical or non-owned upload path: %s", async (remotePath) => {
-    const runner = fakeRunner([output("install", remotePath), result()]);
+    const runner = fakeRunner([result({ stdout: tagged("install", remotePath) }), result()]);
 
     await expect(bootstrapWith(runner)).rejects.toThrow(
       "preflight returned an invalid upload path",
@@ -369,6 +388,12 @@ describe("bootstrapWorker", () => {
       const runner = fakeRunner([result({ code, stderr }), result()]);
       await expect(bootstrapWith(runner)).rejects.toThrow(error);
       expect(runner.calls).toHaveLength(2);
+      if (code === 45) {
+        expect(runner.calls[0]?.options.input).toContain(
+          `const nodeSafe = ${PROCESS_NODE_VERSION_CHECK};`,
+        );
+        expect(runner.calls[0]?.options.input).toContain("SELECT sqlite_version() AS version");
+      }
     },
   );
 
@@ -411,7 +436,7 @@ describe("bootstrapWorker", () => {
       identityPath = argv[identityIndex + 1] ?? "";
       identityContents = await fs.readFile(identityPath, "utf8");
       identityMode = (await fs.stat(identityPath)).mode & 0o777;
-      return output("current", RECEIPT_JSON);
+      return result({ stdout: tagged("current", RECEIPT_JSON) });
     };
 
     await bootstrapWorker(
@@ -434,7 +459,7 @@ describe("bootstrapWorker", () => {
 
   it("rejects a stale remote receipt instead of synthesizing the expected fields", async () => {
     const staleReceipt = JSON.stringify({ ...RECEIPT, openclawVersion: "2026.7.10" });
-    const runner = fakeRunner([output("current", staleReceipt), result()]);
+    const runner = fakeRunner([result({ stdout: tagged("current", staleReceipt) }), result()]);
 
     await expect(bootstrapWith(runner)).rejects.toThrow("receipt does not match");
     expect(runner.calls).toHaveLength(2);
@@ -445,7 +470,7 @@ describe("bootstrapWorker", () => {
     async (phase) => {
       const transferFailure = phase === "bundle transfer";
       const runner = fakeRunner([
-        output("install", REMOTE_TARBALL),
+        result({ stdout: tagged("install", REMOTE_TARBALL) }),
         transferFailure ? result({ code: 1, stderr: "transfer rejected" }) : result(),
         transferFailure
           ? result({ code: 255, stderr: "selected port changed" })
@@ -459,13 +484,18 @@ describe("bootstrapWorker", () => {
 
       expect(commandNames(runner)).toEqual(["ssh", "scp", "ssh", "ssh"]);
       const phaseCalls = runner.calls.filter((call) =>
-        transferFailure ? call.argv[0] === "scp" : isScript(call.options.input, "receipt_json=$5"),
+        transferFailure
+          ? call.argv[0] === "scp"
+          : typeof call.options.input === "string" &&
+            call.options.input.includes("receipt_json=$5"),
       );
       expect(phaseCalls).toHaveLength(1);
       expect(commandPort(phaseCalls[0]!.argv)).toBe(2222);
 
-      const cleanupCalls = runner.calls.filter((call) =>
-        isScript(call.options.input, "operation_token=$2"),
+      const cleanupCalls = runner.calls.filter(
+        (call) =>
+          typeof call.options.input === "string" &&
+          call.options.input.includes("operation_token=$2"),
       );
       expect(cleanupCalls.map((call) => commandPort(call.argv))).toEqual(
         transferFailure ? [2222, 22] : [2222],
@@ -518,9 +548,11 @@ describe("bootstrapWorker", () => {
             await fs.copyFile(artifact.tarballPath, remoteTarball);
             return result();
           }
-          const isPreflight = isScript(options.input, "expected_receipt=$2");
-          const isInstall = isScript(options.input, "receipt_json=$5");
-          if (isScript(options.input, "operation_token=$2")) {
+          const isPreflight =
+            typeof options.input === "string" && options.input.includes("expected_receipt=$2");
+          const isInstall =
+            typeof options.input === "string" && options.input.includes("receipt_json=$5");
+          if (typeof options.input === "string" && options.input.includes("operation_token=$2")) {
             cleanupAttempts += 1;
           }
           if (isInstall && installAttempts === 1) {
@@ -595,9 +627,9 @@ describe("bootstrapWorker", () => {
         for (const file of [remoteTarball, operationUpload, staleUpload, staleStaging, staleLock]) {
           await missingFile(file);
         }
-        await expect(readText(installRoot, "bootstrap-receipt.json")).resolves.toBe(
-          `${receiptJson}\n`,
-        );
+        await expect(
+          fs.readFile(path.join(installRoot, "bootstrap-receipt.json"), "utf8"),
+        ).resolves.toBe(`${receiptJson}\n`);
       }),
   );
 
@@ -674,7 +706,8 @@ console.log(JSON.stringify([{ filename: "package.tgz" }]));`,
         const installRoot = path.join(remoteHome, ".openclaw-worker", bundle.bundleHash);
         let installAttempts = 0;
         const runCommand: WorkerBootstrapCommandRunner = async (argv, options) => {
-          const isInstall = isScript(options.input, "receipt_json=$5");
+          const isInstall =
+            typeof options.input === "string" && options.input.includes("receipt_json=$5");
           if (isInstall) {
             installAttempts += 1;
           }
@@ -689,12 +722,14 @@ console.log(JSON.stringify([{ filename: "package.tgz" }]));`,
           ["bootstrap-receipt.json", ...Object.keys(WORKER_ARTIFACT_FIXTURE)].toSorted(),
         );
         for (const [artifactName, contents] of Object.entries(WORKER_ARTIFACT_FIXTURE)) {
-          await expect(readText(installRoot, artifactName)).resolves.toBe(contents);
+          await expect(fs.readFile(path.join(installRoot, artifactName), "utf8")).resolves.toBe(
+            contents,
+          );
           expect((await fs.stat(path.join(installRoot, artifactName))).mode & 0o777).toBe(0o700);
         }
-        await expect(readText(installRoot, "bootstrap-receipt.json")).resolves.toBe(
-          `${receiptJson}\n`,
-        );
+        await expect(
+          fs.readFile(path.join(installRoot, "bootstrap-receipt.json"), "utf8"),
+        ).resolves.toBe(`${receiptJson}\n`);
 
         await expect(run()).resolves.toEqual(receipt);
         expect(installAttempts).toBe(1);
