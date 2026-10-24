@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  createPlainTextToolCallProbe,
   projectPlainTextToolCallBlocks,
   scanPlainTextToolCall,
   stripPlainTextToolCallBlocks,
@@ -79,6 +80,30 @@ describe("scanPlainTextToolCall JSON branch", () => {
       }
     },
   );
+});
+
+describe("createPlainTextToolCallProbe", () => {
+  it.each([
+    ["bracket payload", ["Before\n[to", "ol:read] {", "}\nAfter"]],
+    ["payload on the next line", ["[read]\r", "\n{", "}\n[/read]"]],
+    ["Harmony call", ["analysis to=read co", "de {}\n"]],
+    ["XML-like call", ["<function=read>", "<parameter=x>x</parameter>"]],
+    ["deeply indented call", [`${" ".repeat(5_000)}[tool:read] {`, "}"]],
+  ])("activates for a split %s", (_name, chunks) => {
+    const probe = createPlainTextToolCallProbe();
+    expect(chunks.map((chunk) => probe(chunk))).toContain(true);
+  });
+
+  it.each([
+    ['Configure the value as {"mode":"fast"} before starting.'],
+    ['{\n  "items": [\n    {"id":0}\n  ]\n}'],
+    ["[1] A cited claim.\n[2] Another cited claim.\n"],
+  ])("does not activate for ordinary brace or citation text: %s", (text) => {
+    const probe = createPlainTextToolCallProbe();
+    for (let offset = 0; offset < text.length; offset += 4) {
+      expect(probe(text.slice(offset, offset + 4))).toBe(false);
+    }
+  });
 });
 
 describe("stripPlainTextToolCallBlocks", () => {

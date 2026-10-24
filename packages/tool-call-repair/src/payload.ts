@@ -513,6 +513,113 @@ export function stripPlainTextToolCallBlocks(
   return projectPlainTextToolCallBlocks(text, options).text;
 }
 
+const MAX_PLAIN_TEXT_TOOL_CALL_PROBE_LINE_CHARS = 4096;
+
+/**
+ * Detects a line-start plain-text tool-call candidate without rescanning the
+ * complete streamed reply on every delta. A candidate can only begin after a
+ * line break, so rejected lines are retired until the next line.
+ */
+export function createPlainTextToolCallProbe(): (delta: string) => boolean {
+  let active = false;
+  let line = "";
+  let lineStarted = false;
+  let lineRejected = false;
+  let previousOpening: string | undefined;
+  let previousCarriageReturn = false;
+
+  const isActivatingScan = (scan: ReturnType<typeof scanPlainTextToolCall>): boolean =>
+    scan.kind === "complete" || (scan.kind === "prefix" && scan.payloadStart !== undefined);
+
+  const scanLine = (text: string) => {
+    const start = skipLineIndentation(text, 0);
+    if (start === text.length) {
+      return undefined;
+    }
+    return scanPlainTextToolCall(text, start);
+  };
+
+  const finishLine = () => {
+    if (!lineRejected) {
+      const combined = previousOpening === undefined ? line : `${previousOpening}\n${line}`;
+      const scan = scanLine(combined);
+      if (scan && isActivatingScan(scan)) {
+        active = true;
+      } else {
+        const candidate =
+          scan?.kind === "prefix"
+            ? scan.json.kind === "prefix"
+              ? scan.json.candidate
+              : scan.xmlish.kind === "prefix"
+                ? scan.xmlish.candidate
+                : undefined
+            : undefined;
+        previousOpening =
+          previousOpening === undefined &&
+          candidate?.nameComplete &&
+          scan?.payloadStart === undefined
+            ? line
+            : undefined;
+      }
+    } else {
+      previousOpening = undefined;
+    }
+    line = "";
+    lineStarted = false;
+    lineRejected = false;
+  };
+
+  return (delta) => {
+    if (active) {
+      return true;
+    }
+    for (let index = 0; index < delta.length; index += 1) {
+      const char = delta.charAt(index);
+      if (previousCarriageReturn && char === "\n") {
+        previousCarriageReturn = false;
+        continue;
+      }
+      if (char === "\r" || char === "\n") {
+        const skipLineFeed = char === "\r" && delta[index + 1] === "\n";
+        if (skipLineFeed) {
+          index += 1;
+        }
+        finishLine();
+        previousCarriageReturn = char === "\r" && !skipLineFeed;
+        continue;
+      }
+      previousCarriageReturn = false;
+      if (lineRejected) {
+        continue;
+      }
+      if (!lineStarted && /[^\S\r\n]/u.test(char)) {
+        continue;
+      }
+      lineStarted = true;
+      if (line.length >= MAX_PLAIN_TEXT_TOOL_CALL_PROBE_LINE_CHARS) {
+        lineRejected = true;
+        previousOpening = undefined;
+        continue;
+      }
+      line += char;
+      const combined = previousOpening === undefined ? line : `${previousOpening}\n${line}`;
+      const scan = scanLine(combined);
+      if (!scan) {
+        continue;
+      }
+      if (isActivatingScan(scan)) {
+        active = true;
+        return true;
+      }
+      if (scan.kind === "invalid") {
+        lineRejected = true;
+        previousOpening = undefined;
+      }
+    }
+    return active;
+  };
+}
+
 /** Call-grammar settlement; callers also retain any mutable Markdown ownership. */
 export function projectPlainTextToolCallBlocks(
   text: string,

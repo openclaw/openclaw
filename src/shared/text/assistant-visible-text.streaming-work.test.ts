@@ -1,4 +1,5 @@
 import { expect, it, vi } from "vitest";
+import * as toolCallRepair from "../../../packages/tool-call-repair/src/index.js";
 import {
   createAssistantVisibleStreamText,
   sanitizeAssistantVisibleStreamText,
@@ -25,6 +26,39 @@ vi.mock("./code-regions.js", async (importOriginal) => {
       return actual.findCodeRegions(text);
     },
   };
+});
+
+it.each([
+  [
+    "brace-heavy prose",
+    () =>
+      'Configure the value as {"mode":"fast"} before starting the service and continue. '.repeat(
+        512,
+      ),
+  ],
+  [
+    "pretty-printed JSON",
+    () => `{\n${'  {"id":0,"label":"ordinary value"},\n'.repeat(1024)}  "done": true\n}`,
+  ],
+])("bounds plain-tool-call checkpoint work for %s", (_name, buildSource) => {
+  const source = buildSource().slice(0, 32 * 1024);
+  const project = vi.spyOn(toolCallRepair, "projectPlainTextToolCallBlocks");
+  const stream = createAssistantVisibleStreamText("final_answer");
+  let delivered = "";
+  let checkpointCharacters = 0;
+  try {
+    for (let offset = 0; offset < source.length; offset += 4) {
+      const result = stream.append(source.slice(offset, offset + 4));
+      delivered = result.delta === null ? result.text : delivered + result.delta;
+    }
+    checkpointCharacters = project.mock.calls.reduce((total, [text]) => total + text.length, 0);
+  } finally {
+    project.mockRestore();
+  }
+
+  expect(stream.text).toBe(source.trimEnd());
+  expect(delivered).toBe(stream.text);
+  expect(checkpointCharacters).toBe(0);
 });
 
 it("bounds prefix comparisons after a stripped trace line", () => {
