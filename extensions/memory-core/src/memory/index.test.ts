@@ -1096,4 +1096,3 @@ describe("memory index", () => {
     expect(sourceCount.count).toBe(1);
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
