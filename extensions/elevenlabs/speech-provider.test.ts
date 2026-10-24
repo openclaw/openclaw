@@ -156,6 +156,48 @@ describe("elevenlabs speech provider", () => {
     }
   });
 
+  it("prefixes the configured audio tag on Eleven v3 and later models", async () => {
+    await provider.synthesize?.({
+      ...request,
+      providerConfig: { apiKey: "xi-test", modelId: "eleven_v4_turbo", textPrefix: " [warmly] " },
+    });
+    expect(sentRequest().body).toHaveProperty("text", "[warmly] hello");
+  });
+
+  it("leaves the text alone for models without audio tags", async () => {
+    await provider.synthesizeTelephony?.({
+      ...request,
+      providerConfig: {
+        apiKey: "xi-test",
+        modelId: "eleven_multilingual_v2",
+        textPrefix: "[warmly]",
+      },
+    });
+    expect(sentRequest().body).toHaveProperty("text", "hello");
+  });
+
+  it("does not stack the prefix on text that already starts with an audio tag", async () => {
+    await provider.synthesizeTelephony?.({
+      ...request,
+      text: " [whispers] hello",
+      providerConfig: { apiKey: "xi-test", modelId: "eleven_v3", textPrefix: "[warmly]" },
+    });
+    expect(sentRequest().body).toHaveProperty("text", " [whispers] hello");
+  });
+
+  it("applies the prefix by the model that is actually used after overrides", async () => {
+    await provider.synthesizeTelephony?.({
+      ...request,
+      providerConfig: {
+        apiKey: "xi-test",
+        modelId: "eleven_multilingual_v2",
+        textPrefix: "[warmly]",
+      },
+      providerOverrides: { modelId: "eleven_v3" },
+    });
+    expect(sentRequest().body).toHaveProperty("text", "[warmly] hello");
+  });
+
   it("drops out-of-range voice settings before synthesis", async () => {
     await provider.synthesizeTelephony?.({
       ...request,
