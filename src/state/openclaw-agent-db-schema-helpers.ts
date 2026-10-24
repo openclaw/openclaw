@@ -43,6 +43,10 @@ import {
   ensureOpenClawAgentProgressCardSchemaInTransaction,
   AGENT_PROGRESS_CARD_SCHEMA_SQL,
 } from "./openclaw-agent-progress-card-schema.js";
+import {
+  DURABLE_QUESTIONS_SCHEMA_VERSION,
+  sessionQuestionsSchemaSql,
+} from "./openclaw-agent-questions-schema.js";
 import { RETIRED_AGENT_STATE_LEASE_SCHEMA_SQL } from "./openclaw-agent-schema-history.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import {
@@ -296,6 +300,12 @@ export function finishAgentSchemaMigration(
   assertMigration: () => void,
   integrityTables?: readonly string[],
 ): void {
+  if (
+    targetVersion >= DURABLE_QUESTIONS_SCHEMA_VERSION &&
+    readSqliteUserVersion(db) < DURABLE_QUESTIONS_SCHEMA_VERSION
+  ) {
+    db.exec(sessionQuestionsSchemaSql(schemaSql));
+  }
   db.exec(`PRAGMA user_version = ${targetVersion};`);
   persistAgentSchemaMetadata(db, agentId, targetVersion);
   assertAgentSchemaVersion(db, { agentId, pathname, version: targetVersion }, schemaSql);

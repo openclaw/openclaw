@@ -5,7 +5,6 @@ import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { withVerifiedUpdateRecoveryBackup } from "../infra/update-recovery-backup-reader.js";
 import type { UpdateRecoveryBaselineRef } from "../infra/update-recovery-baseline-capture.js";
 import { resolveCapturedRegistryPath } from "../infra/update-recovery-path.js";
-import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import {
   captureOpenClawMigrationWitness,
   assertOpenClawMigrationWitnessPreserved,
@@ -107,6 +106,7 @@ export async function inspectDoctorMigrationPreservation(params: {
         agentId: string;
         path: string;
         requireRegistration: boolean;
+        expectedSchemaVersion: 25 | 26 | 27 | 28 | 29 | 30 | 31 | 32 | 33;
       }[] = [];
       for (const entry of original.entries) {
         const owner = originalOwners.get(entry.sourcePath);
@@ -121,11 +121,23 @@ export async function inspectDoctorMigrationPreservation(params: {
         const afterWitness = readWitness(params.candidate, after, owner);
         assertOpenClawMigrationWitnessPreserved(beforeWitness, afterWitness);
         agentPairs.set(entry.sourcePath, { before: beforeWitness, after: afterWitness });
-        if (afterWitness.schemaVersion === OPENCLAW_AGENT_SCHEMA_VERSION) {
+        const expectedSchemaVersion = afterWitness.schemaVersion;
+        if (
+          expectedSchemaVersion === 25 ||
+          expectedSchemaVersion === 26 ||
+          expectedSchemaVersion === 27 ||
+          expectedSchemaVersion === 28 ||
+          expectedSchemaVersion === 29 ||
+          expectedSchemaVersion === 30 ||
+          expectedSchemaVersion === 31 ||
+          expectedSchemaVersion === 32 ||
+          expectedSchemaVersion === 33
+        ) {
           migratingAgents.push({
             agentId: owner.agentId,
             path: owner.path,
-            requireRegistration: beforeWitness.schemaVersion < OPENCLAW_AGENT_SCHEMA_VERSION,
+            requireRegistration: beforeWitness.schemaVersion < afterWitness.schemaVersion,
+            expectedSchemaVersion,
           });
         }
       }

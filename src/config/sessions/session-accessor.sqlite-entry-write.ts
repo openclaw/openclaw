@@ -1,3 +1,4 @@
+import { isMainThread } from "node:worker_threads";
 import { sql } from "kysely";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import {
@@ -62,6 +63,8 @@ import {
   type SessionEntryWritePostimages,
 } from "./session-entry-write-postimage.js";
 import { resolveSessionPublicShare } from "./session-public-share.js";
+import { assertQuestionLifecycleWorker } from "./session-question-recovery-owner.js";
+import { retireSessionQuestionsInDatabase } from "./session-questions-retirement.worker.js";
 import {
   readStagedSessionTranscriptUpdatedAt,
   readStagedSessionTranscriptAuthority,
@@ -83,6 +86,8 @@ function prepareSessionEntryWrite(
     profileInvolvement?: SessionEntry["profileInvolvement"];
     /** Only the provider review owner may replace a generation-bound pause. */
     providerReviewMutation?: boolean;
+    /** Only durable custody owns the native restart exclusion marker. */
+    questionOwnerMutation?: boolean;
     /** Canonical row revalidated in this write transaction; null proves absence. */
     canonicalPreviousEntry?: SessionEntry | null;
     /** Raw canonical columns from the same transaction, for exact no-op comparison. */
@@ -136,6 +141,21 @@ function prepareSessionEntryWrite(
       : options.allowStoredAliases && options.previousEntry !== undefined
         ? (options.previousEntry ?? undefined)
         : canonicalRead?.entry;
+  const lifecycleChanged =
+    canonicalPreviousEntry !== undefined &&
+    (canonicalPreviousEntry.sessionId !== normalizedEntry.sessionId ||
+      canonicalPreviousEntry.lifecycleRevision !== normalizedEntry.lifecycleRevision);
+  if (lifecycleChanged) {
+    assertQuestionLifecycleWorker(canonicalPreviousEntry);
+  }
+  if (!options.questionOwnerMutation && !options.allowStoredAliases) {
+    normalizedEntry = {
+      ...normalizedEntry,
+      durableQuestionOwners: !lifecycleChanged
+        ? canonicalPreviousEntry?.durableQuestionOwners
+        : undefined,
+    };
+  }
   const canonicalPreviousRow =
     options.canonicalPreviousRow ?? actor?.entryRows.get(sessionKey)?.row ?? canonicalRead?.row;
   const canonicalFacts = canonicalRead && captureSessionEntrySnapshot(canonicalRead);
@@ -311,6 +331,17 @@ function prepareSessionEntryWrite(
                       ? queries.nodeWithLegacySources
                       : queries.node;
                     writeNode(sessionNode);
+                  }
+                  if (lifecycleChanged && canonicalPreviousEntry && !isMainThread) {
+                    retireSessionQuestionsInDatabase(
+                      database,
+                      {
+                        sessionKey,
+                        sessionId: canonicalPreviousEntry.sessionId,
+                        lifecycleRevision: canonicalPreviousEntry.lifecycleRevision,
+                      },
+                      `retired:${canonicalPreviousEntry.sessionId}`,
+                    );
                   }
                   if (persisted.snapshotsChanged && !writeNodeWithSnapshots) {
                     writeSessionEntrySnapshots(

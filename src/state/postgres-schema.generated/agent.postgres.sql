@@ -433,6 +433,28 @@ CREATE TABLE "session_progress_cards" (
   PRIMARY KEY ("session_key")
 );
 
+CREATE TABLE "session_questions" (
+  "question_id" text COLLATE "C" NOT NULL,
+  "session_key" text COLLATE "C" NOT NULL,
+  "session_id" text COLLATE "C" NOT NULL,
+  "lifecycle_revision" text COLLATE "C" NOT NULL,
+  "definition_json" text COLLATE "C" NOT NULL,
+  "provenance_json" text COLLATE "C" NOT NULL,
+  "session_binding_json" text COLLATE "C" NOT NULL,
+  "result_json" text COLLATE "C",
+  "resolution_id" text COLLATE "C",
+  "continuation_state" text COLLATE "C" NOT NULL,
+  "continuation_run_id" text COLLATE "C",
+  "gateway_epoch" text COLLATE "C",
+  "continuation_reason" text COLLATE "C",
+  "terminal_at" bigint,
+  PRIMARY KEY ("question_id"),
+  CHECK (("continuation_state" IN ('pending', 'owed', 'claimed', 'settled', 'interrupted', 'blocked'))),
+  CHECK ((("result_json" IS NULL) = ("resolution_id" IS NULL))),
+  CHECK (((("continuation_state" = 'pending')) = ("result_json" IS NULL))),
+  CHECK (("continuation_state" <> 'claimed') OR ("continuation_run_id" IS NOT NULL AND "gateway_epoch" IS NOT NULL))
+);
+
 CREATE TABLE "session_reactions" (
   "session_key" text COLLATE "C" NOT NULL,
   "session_id" text COLLATE "C" NOT NULL,
@@ -715,6 +737,10 @@ CREATE INDEX "idx_agent_session_nodes_status" ON "session_nodes" (("status") ASC
 CREATE INDEX "idx_agent_session_nodes_updated_at" ON "session_nodes" (("updated_at") DESC NULLS LAST, ("session_key") ASC NULLS FIRST);
 
 CREATE INDEX "idx_agent_session_pending_inputs_session" ON "session_pending_inputs" (("session_key") ASC NULLS FIRST, ("session_id") ASC NULLS FIRST, ("seq") DESC NULLS LAST);
+
+CREATE INDEX "idx_agent_session_questions_continuation" ON "session_questions" (("continuation_state") ASC NULLS FIRST, ("session_key") ASC NULLS FIRST);
+
+CREATE UNIQUE INDEX "idx_agent_session_questions_pending" ON "session_questions" (("session_key") ASC NULLS FIRST, ("session_id") ASC NULLS FIRST, ("lifecycle_revision") ASC NULLS FIRST) WHERE ("continuation_state" = 'pending');
 
 CREATE INDEX "idx_agent_session_suggestions_author_created" ON "session_suggestions" (("author_id") ASC NULLS FIRST, ("created_at") ASC NULLS FIRST, ("id") ASC NULLS FIRST);
 

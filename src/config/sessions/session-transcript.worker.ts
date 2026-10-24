@@ -555,6 +555,11 @@ serveOwnedWorkerTasks(
         );
         return { kind: "conversation-delivery", record: result.found ? result.value : undefined };
       }
+      if (request.kind === "session-question-read") {
+        const { readSessionQuestionOperation } =
+          await import("./session-questions.kernel.worker.js");
+        return { kind: "session-question-read", result: readSessionQuestionOperation(request) };
+      }
       if (request.kind === "goal-operation-receipt") {
         const { withOpenClawAgentDatabaseReadOnly } =
           await import("../../state/openclaw-agent-db-readonly.js");
@@ -678,10 +683,7 @@ serveOwnedWorkerTasks(
   },
   {
     transferList(reply) {
-      if (!reply.ok) {
-        return [];
-      }
-      const value = reply.value;
+      const value = reply.ok ? reply.value : undefined;
       if (typeof value !== "object" || value === null || !("kind" in value)) {
         return [];
       }

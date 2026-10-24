@@ -149,6 +149,9 @@ it("migrates a copied large v23 store without losing snapshots or rewriting tran
       schema_version: OPENCLAW_AGENT_SCHEMA_VERSION,
     });
     expect(transcriptRows(database)).toEqual(beforeTranscript);
+    expect(
+      database.prepare("SELECT name FROM sqlite_schema WHERE name = 'session_questions'").get(),
+    ).toEqual({ name: "session_questions" });
     const reader = { agentId: "main", db: database };
     for (const [key, entry] of entries) {
       expect(readEntry(reader, key)?.entry).toEqual(entry);
@@ -247,6 +250,9 @@ it("rolls back extracted snapshots and version markers when schema publication i
     ).rejects.toThrow(/authoriz/i);
     database.setAuthorizer(null);
     expect(reachedPublication).toBe(true);
+    expect(
+      database.prepare("SELECT name FROM sqlite_schema WHERE name = 'session_questions'").get(),
+    ).toBeUndefined();
     expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 23 });
     expect(schemaRows(database)).toEqual(before.schema);
     expect(nodeRows(database)).toEqual(before.nodes);

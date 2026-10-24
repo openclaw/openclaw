@@ -1,7 +1,8 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 
 // v32 replaces the PostgreSQL vector decoder without rewriting canonical rows.
-export const OPENCLAW_AGENT_SCHEMA_VERSION = 32;
+// v33 adds dormant durable question custody.
+export const OPENCLAW_AGENT_SCHEMA_VERSION = 33;
 
 // v31 stores local workspace baselines by path and checkpoints as recoverable deltas.
 // v30 fences ordinary automation timing and delivery policies from older schedulers.

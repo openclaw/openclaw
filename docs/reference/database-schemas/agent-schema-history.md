@@ -49,6 +49,7 @@ backup and its matching build, not just reinstalling the older package.
 | 30      | Brotli trajectory payloads with per-row codec markers and logical-byte retention                                                                                                                                                                       | `Unreleased` |
 | 31      | Memory publication advances the index revision once per committed batch instead of once per source or chunk row                                                                                                                                        | `Unreleased` |
 | 32      | Set-based PostgreSQL vector decoding with one TOAST materialization; metadata-only SQLite advance                                                                                                                                                      | `Unreleased` |
+| 33      | Dormant durable question custody; proposed storage contract pending maintainer acceptance ([design checkpoint](/reference/database-schemas/storage-changes#proposed-durable-ordinary-questions))                                                       | `Unreleased` |
 
 Schema 1 first appeared in `v2026.5.30-beta.1` and was also written by the
 extended-stable `v2026.7.35`. Versions 2, 4, 5–6, and 7 were development-only

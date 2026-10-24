@@ -103,6 +103,7 @@ const migrationTables: Readonly<
       "session_canonical_validation_pending",
     ],
     26: ["session_nodes", "context_engine_turn_outbox", "transcript_events"],
+    33: ["session_questions"],
   },
   state: {
     ...SCHEMA_MIGRATION_BACKUP_TABLES.state,

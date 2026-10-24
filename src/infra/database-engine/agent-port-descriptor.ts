@@ -31,6 +31,7 @@ import {
   LEGACY_MEMORY_REVISION_SQLITE_TRIGGERS,
   withLegacyAgentPostgresMemoryRevisionTriggers,
 } from "../../state/openclaw-agent-memory-revision-migration.js";
+import { withoutSessionQuestionsPostgresSchema } from "../../state/openclaw-agent-questions-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../../state/openclaw-agent-schema.js";
 import { agentTranscriptSearchSchema } from "../../state/openclaw-agent-search-schema.js";
 import { withLegacyAgentPostgresTrajectoryStorage } from "../../state/openclaw-agent-trajectory-storage-migration.js";
@@ -145,11 +146,12 @@ export async function loadAgentPortDescriptor(
       return backup;
     }
     // Schema 30 appends trajectory columns; 31 removes revision triggers; 32 changes the decoder.
+    // Schema 33 adds question custody; earlier backups must not acquire it.
     // Pin the remaining shared layout so future DDL gets its own descriptor.
     if (
       backup ||
-      OPENCLAW_AGENT_SCHEMA_VERSION !== 32 ||
-      ![27, 28, 29, 30, 31].includes(sourceVersion)
+      OPENCLAW_AGENT_SCHEMA_VERSION !== 33 ||
+      ![27, 28, 29, 30, 31, 32].includes(sourceVersion)
     ) {
       throw new DatabasePortDataError(
         `Missing agent PostgreSQL backup descriptor for version ${sourceVersion}`,
@@ -161,13 +163,15 @@ export async function loadAgentPortDescriptor(
   ): fact is typeof fact & { value: PortTable["columns"][number] } => fact.kind === "column";
   const historical = sourceVersion !== agentEngineSchema.version;
   const legacyTrajectory = sourceVersion < 30;
-  const catalog = agentPostgresRuntime.expectedCatalog.filter(
-    (fact) =>
-      !legacyTrajectory ||
-      fact.table !== "trajectory_runtime_events" ||
-      !isColumn(fact) ||
-      !["event_utf8_bytes", "event_payload", "event_codec"].includes(fact.value.name),
-  );
+  const catalog = agentPostgresRuntime.expectedCatalog
+    .filter((fact) => sourceVersion >= 33 || fact.table !== "session_questions")
+    .filter(
+      (fact) =>
+        !legacyTrajectory ||
+        fact.table !== "trajectory_runtime_events" ||
+        !isColumn(fact) ||
+        !["event_utf8_bytes", "event_payload", "event_codec"].includes(fact.value.name),
+    );
   const columns = catalog.filter(isColumn);
   const keys = catalog.filter(
     (fact): fact is typeof fact & { value: string[] } => fact.kind === "primaryKey",
@@ -178,14 +182,16 @@ export async function loadAgentPortDescriptor(
     minimumPostgresVersion: manifest.minimumPostgresVersion,
     sqlite: OPENCLAW_AGENT_SCHEMA_SQL.replace(/^INSERT OR IGNORE INTO[^;]+;/gm, ""),
     tables: [
-      ...metadata.tables.map(({ name, identities }) => ({
-        name,
-        identities,
-        columns: columns
-          .filter((fact) => fact.table === name)
-          .map((fact) => ({ name: fact.value.name, type: fact.value.type })),
-        pk: keys.find((fact) => fact.table === name)?.value ?? [],
-      })),
+      ...metadata.tables
+        .filter(({ name }) => sourceVersion >= 33 || name !== "session_questions")
+        .map(({ name, identities }) => ({
+          name,
+          identities,
+          columns: columns
+            .filter((fact) => fact.table === name)
+            .map((fact) => ({ name: fact.value.name, type: fact.value.type })),
+          pk: keys.find((fact) => fact.table === name)?.value ?? [],
+        })),
       ...metadata.sqliteTables,
     ],
     triggers: metadata.triggers.map(({ name, table, range }) => ({
@@ -393,8 +399,10 @@ export async function loadAgentPortDescriptor(
   }
   const legacyRevision = sourceVersion < AGENT_MEMORY_REVISION_SCHEMA_VERSION;
   let postData = legacyRevision
-    ? withLegacyAgentPostgresMemoryRevisionTriggers(descriptor.postData)
-    : descriptor.postData;
+    ? withLegacyAgentPostgresMemoryRevisionTriggers(
+        withoutSessionQuestionsPostgresSchema(descriptor.postData),
+      )
+    : withoutSessionQuestionsPostgresSchema(descriptor.postData);
   if (legacyTrajectory) {
     postData = withLegacyAgentPostgresTrajectoryStorage(postData);
   }
@@ -421,9 +429,11 @@ export async function loadAgentPortDescriptor(
           }))
         : []),
     ],
-    preData: legacyTrajectory
-      ? withLegacyAgentPostgresTrajectoryStorage(descriptor.preData)
-      : descriptor.preData,
+    preData: withoutSessionQuestionsPostgresSchema(
+      legacyTrajectory
+        ? withLegacyAgentPostgresTrajectoryStorage(descriptor.preData)
+        : descriptor.preData,
+    ),
     postData,
     expectedCatalog: catalog.map((fact) =>
       sourceVersion < 29 &&

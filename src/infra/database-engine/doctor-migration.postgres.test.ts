@@ -607,6 +607,7 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
     [27, true],
     [30, false],
     [31, false],
+    [32, false],
   ] as const)(
     "keeps the real agent v%s→current rollback exact (foreign write: %s)",
     async (sourceVersion, foreignWrite) => {
@@ -732,6 +733,21 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
           indexname,
           indexdef: indexdef.replaceAll(agentNamespace, "fixture_namespace"),
         }));
+      const readMemoryRevisionTriggers = async () =>
+        (
+          await client.query<{ tgname: string }>(
+            `SELECT t.tgname FROM pg_trigger t
+              JOIN pg_class c ON c.oid = t.tgrelid
+              JOIN pg_namespace n ON n.oid = c.relnamespace
+              WHERE n.nspname = $1 AND NOT t.tgisinternal
+                AND t.tgname ~ '^memory_index_(sources|chunks)_revision_after_(insert|update|delete)$'
+              ORDER BY t.tgname`,
+            [agentNamespace],
+          )
+        ).rows;
+      const beforeMemoryRevisionTriggers = await readMemoryRevisionTriggers();
+      // Schema31 retired these triggers; rollback restores the selected historical contract.
+      expect(beforeMemoryRevisionTriggers).toHaveLength(sourceVersion < 31 ? 6 : 0);
       const beforeIndexes = await readIndexes();
       expect(beforeIndexes).toEqual(
         sourceVersion === 27
@@ -934,6 +950,7 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
             )
           ).rows,
         ).toEqual([{ entry_key: "retained-memory", origin_class: "owner" }]);
+        expect(await readMemoryRevisionTriggers()).toEqual(beforeMemoryRevisionTriggers);
         expect(admit(installed, agentPath)?.version).toBe(sourceVersion);
         await client.query(`INSERT INTO "${agentNamespace}".memory_index_sources (path, source, hash, mtime, size)
             VALUES ('restored.md', 'memory', 'hash', 1, 1);`);

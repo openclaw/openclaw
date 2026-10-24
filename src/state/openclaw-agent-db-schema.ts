@@ -68,12 +68,12 @@ import { registerOpenClawAgentDatabase } from "./openclaw-agent-db-registry.js";
 import { admitOpenClawAgentDatabaseSchema } from "./openclaw-agent-db-schema-admission.js";
 import {
   getOpenClawAgentMigrationSchema,
+  finishAgentSchemaMigration,
   assertExistingAgentSchemaOwner,
   assertOpenClawAgentCurrentRuntimeSchema,
   assertOpenClawAgentSchemaContains,
   assertSupportedAgentSchemaVersion,
   assertAgentSchemaVersion,
-  finishAgentSchemaMigration,
   hasPendingCurrentVersionAgentDatabaseMigration,
   hasPendingMemoryChunkMetadataMigration,
   migrateRetiredAgentStateLeaseSchema,

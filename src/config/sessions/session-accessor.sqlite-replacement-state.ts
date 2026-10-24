@@ -47,6 +47,7 @@ import {
 import { attachSessionEntrySnapshots } from "./session-entry-snapshot-values.js";
 import type { SessionEntryWindowRow } from "./session-entry-window.types.js";
 import type { SessionEntryWritePostimages } from "./session-entry-write-postimage.js";
+import { assertQuestionAliasRelocation } from "./session-question-recovery-owner.js";
 import { readStagedSessionTranscriptAuthority } from "./session-transcript-authority.js";
 import type { SessionMaintenancePreservationSnapshot } from "./store-maintenance-preserve-snapshot.types.js";
 import type { SessionEntry } from "./types.js";
@@ -251,6 +252,13 @@ export function commitSessionEntryReplacementsInDatabase(
       const window = transactionRow.row.window;
       if (window !== undefined) {
         windows.set(transactionRow.entry.sessionId, window);
+      }
+    }
+  }
+  for (const replacement of input.replacements) {
+    for (const key of replacement.previousSessionKeys ?? []) {
+      if (key !== replacement.sessionKey) {
+        assertQuestionAliasRelocation(transactionRows.get(key)?.entry);
       }
     }
   }

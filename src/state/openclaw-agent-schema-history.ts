@@ -13,6 +13,10 @@ import {
 } from "./openclaw-agent-db-contract.js";
 import { withLegacyAgentIndexes } from "./openclaw-agent-index-retirement-migration.js";
 import { withLegacyAgentMemoryRevisionTriggers } from "./openclaw-agent-memory-revision-migration.js";
+import {
+  DURABLE_QUESTIONS_SCHEMA_VERSION,
+  withoutSessionQuestionsSchema,
+} from "./openclaw-agent-questions-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import {
   SESSION_ENTRY_SNAPSHOTS_SCHEMA_VERSION,
@@ -305,10 +309,14 @@ function withLegacyAgentWriteLayout(schema: string): string {
 
 /** Compare historical migration targets against only the representation they support. */
 export function getOpenClawAgentMigrationSchema(targetVersion: number): string {
+  const questionSchemaSql =
+    targetVersion < DURABLE_QUESTIONS_SCHEMA_VERSION
+      ? withoutSessionQuestionsSchema(OPENCLAW_AGENT_SCHEMA_SQL)
+      : OPENCLAW_AGENT_SCHEMA_SQL;
   const revisionSchemaSql =
     targetVersion < AGENT_MEMORY_REVISION_SCHEMA_VERSION
-      ? withLegacyAgentMemoryRevisionTriggers(OPENCLAW_AGENT_SCHEMA_SQL)
-      : OPENCLAW_AGENT_SCHEMA_SQL;
+      ? withLegacyAgentMemoryRevisionTriggers(questionSchemaSql)
+      : questionSchemaSql;
   const trajectorySchemaSql =
     targetVersion < AGENT_TRAJECTORY_STORAGE_SCHEMA_VERSION
       ? withoutTrajectoryPayloadColumns(revisionSchemaSql)
@@ -403,7 +411,10 @@ export const AGENT_V14_CORE_SCHEMA_SQL = withLegacySessionParticipantsSchema(
       withoutAgentJsonPredicateColumns(
         withoutOutboxEnqueueSequence(
           withLegacyAgentWriteLayout(
-            AGENT_SCHEMA_WITHOUT_PROGRESS_CARD_SQL.replace(sessionSharingSchema, ""),
+            withoutSessionQuestionsSchema(AGENT_SCHEMA_WITHOUT_PROGRESS_CARD_SQL).replace(
+              sessionSharingSchema,
+              "",
+            ),
           ),
         ),
       ),

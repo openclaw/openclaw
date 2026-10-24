@@ -164,6 +164,10 @@
       "identities": []
     },
     {
+      "name": "session_questions",
+      "identities": []
+    },
+    {
       "name": "session_reactions",
       "identities": []
     },
@@ -462,41 +466,41 @@
       "name": "session_transcript_fts_rows_after_delete",
       "table": "session_transcript_fts_rows",
       "range": [
-        31189,
-        31372
+        32292,
+        32475
       ]
     },
     {
       "name": "standing_intents_fts_after_delete",
       "table": "standing_intents",
       "range": [
-        28729,
-        28976
+        29832,
+        30079
       ]
     },
     {
       "name": "standing_intents_fts_after_insert",
       "table": "standing_intents",
       "range": [
-        28512,
-        28727
+        29615,
+        29830
       ]
     },
     {
       "name": "standing_intents_fts_after_update",
       "table": "standing_intents",
       "range": [
-        28978,
-        29354
+        30081,
+        30457
       ]
     }
   ],
   "preData": [
     0,
-    29373
+    30394
   ],
   "postData": [
-    29373,
-    45231
+    30394,
+    46637
   ]
 }

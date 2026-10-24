@@ -224,8 +224,12 @@ describe.skipIf(!connection)("PostgreSQL vector decoder migration", () => {
         opened.push(result);
         return result;
       };
+      const predecessorSchema = agentEngineSchema.postgresMigrations!.find(
+        (step) => step.version === 32,
+      )!.fromSchema;
       const predecessor: StoreSchema = {
         ...agentEngineSchema,
+        ...predecessorSchema,
         version: 31,
         postgresVectorDecoderVersion: 1,
       };

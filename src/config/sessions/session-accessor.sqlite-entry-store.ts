@@ -1,3 +1,4 @@
+import { isMainThread } from "node:worker_threads";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   executeSqliteQuerySync,
@@ -27,6 +28,11 @@ import { collectSessionStateIdsForEntry } from "./session-accessor.sqlite-refere
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { parseSessionEntryJson as parseSessionEntryRow } from "./session-accessor.sqlite-status.js";
 import type { SessionEntryWritePostimages } from "./session-entry-write-postimage.js";
+import {
+  assertQuestionAliasRelocation,
+  assertQuestionLifecycleWorker,
+} from "./session-question-recovery-owner.js";
+import { retireSessionQuestionsInDatabase } from "./session-questions-retirement.worker.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 export {
@@ -65,6 +71,7 @@ export function deleteSessionEntryRows(
   // Lifecycle deletion reuses its transaction snapshot; Doctor also supplies validated legacy rows.
   const previousEntry =
     options.validatedEntry ?? readExactSessionEntryRow(database, sessionKey)?.entry;
+  assertQuestionLifecycleWorker(previousEntry);
   if (previousEntry) {
     commitSqliteSessionDeletion(sessionKey, previousEntry);
   }
@@ -163,6 +170,17 @@ export function deleteSessionEntryRows(
         deleteSessionNodeArtifacts(database, sessionKey);
       }
       if (remainingWindow) {
+        if (!isMainThread && previousEntry) {
+          retireSessionQuestionsInDatabase(
+            database,
+            {
+              sessionKey,
+              sessionId: previousEntry.sessionId,
+              lifecycleRevision: previousEntry.lifecycleRevision,
+            },
+            `retired:${previousEntry.sessionId}`,
+          );
+        }
         clearSqliteSessionEntryPreservingWindows(database, {
           sessionId: remainingWindow.session_id,
           sessionKey,
@@ -177,6 +195,17 @@ export function deleteSessionEntryRows(
           removedNodes: [sessionKey],
           removedWindows: ownedSessionIds,
         });
+        if (!isMainThread && previousEntry) {
+          retireSessionQuestionsInDatabase(
+            database,
+            {
+              sessionKey,
+              sessionId: previousEntry.sessionId,
+              lifecycleRevision: previousEntry.lifecycleRevision,
+            },
+            `retired:${previousEntry.sessionId}`,
+          );
+        }
         retireSqliteDatabaseWriteScopes(database.db, [
           sessionKey,
           ...ownedSessionIds.map(sqliteSessionIdWriteScope),
@@ -220,14 +249,19 @@ export function deleteLegacySessionEntryRows(
   if (legacyKeys.length === 0) {
     return;
   }
+  const removals = legacyKeys
+    .filter((key) => key !== sessionKey)
+    .map((legacyKey) => ({
+      legacyKey,
+      previousEntry:
+        options.validatedEntries?.get(legacyKey) ??
+        readExactSessionEntryRow(database, legacyKey)?.entry,
+    }));
+  for (const { previousEntry } of removals) {
+    assertQuestionAliasRelocation(previousEntry);
+  }
   const db = getSessionKysely(database.db);
-  for (const legacyKey of legacyKeys) {
-    if (legacyKey === sessionKey) {
-      continue;
-    }
-    const previousEntry =
-      options.validatedEntries?.get(legacyKey) ??
-      readExactSessionEntryRow(database, legacyKey)?.entry;
+  for (const { legacyKey, previousEntry } of removals) {
     if (previousEntry) {
       commitSqliteSessionDeletion(legacyKey, previousEntry);
     }

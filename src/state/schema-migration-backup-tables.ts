@@ -28,6 +28,7 @@ export const SCHEMA_MIGRATION_BACKUP_TABLES: Record<
     31: ["memory_index_sources", "memory_index_chunks"],
     // PostgreSQL-only function replacement; SQLite advances metadata only.
     32: [],
+    33: ["session_questions"],
   },
   state: {
     [CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION]: [

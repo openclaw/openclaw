@@ -2,7 +2,7 @@ import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { expect, it } from "vitest";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
-import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
+import { AGENT_MEMORY_REVISION_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { assertOpenClawMigrationWitnessPreserved as assertWitnessPreserved } from "./openclaw-migration-witness.js";
 import {
   agentWitness as captureWitness,
@@ -13,10 +13,11 @@ import {
 } from "./schema-migration.test-support.js";
 
 const predecessor = 30;
-const target = OPENCLAW_AGENT_SCHEMA_VERSION;
+const target = AGENT_MEMORY_REVISION_SCHEMA_VERSION;
 const scope = ["memory_index_chunks", "memory_index_sources", "schema_meta"];
 
-const withFixture = migrationFixture({ seed, predecessor, target, scope, admission: true });
+// Keep this historical step at 31; current admission also installs durable questions.
+const withFixture = migrationFixture({ seed, predecessor, target, scope });
 // Frozen schema plus the previously published bundle DDL, independent of the new migration.
 const schemaV27 = fs.readFileSync(
   new URL("../../test/fixtures/sqlite/openclaw-agent-schema-v27.sql", import.meta.url),

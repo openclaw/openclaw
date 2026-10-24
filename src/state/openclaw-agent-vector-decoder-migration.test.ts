@@ -14,7 +14,7 @@ import {
 const predecessor = 31;
 const target = 32;
 const scope = ["schema_meta"];
-const withFixture = migrationFixture({ seed, predecessor, target, scope, admission: true });
+const withFixture = migrationFixture({ seed, predecessor, target, scope });
 const schemaV27 = fs.readFileSync(
   new URL("../../test/fixtures/sqlite/openclaw-agent-schema-v27.sql", import.meta.url),
   "utf8",
