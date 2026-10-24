@@ -362,7 +362,10 @@ try {
     }
     if (messageCount === 0 && receiptCount > 0) {
       const deliveryDeadline = Date.now() + 300_000;
-      while (deliveredThrough < receiptCount && Date.now() < deliveryDeadline) {
+      while (Date.now() < deliveryDeadline) {
+        if (deliveredThrough >= receiptCount) {
+          break;
+        }
         if (child.exitCode !== null || child.signalCode !== null) {
           throw new Error("Gateway exited before processing the receipt backlog");
         }
@@ -422,7 +425,7 @@ try {
       }
       const rows = await entryStore.entries();
       const retained = verifyReefAuditWindow(
-        rows.map(({ value }) => value.entry).sort((a, b) => b.event.seq - a.event.seq),
+        rows.map(({ value }) => value.entry).toSorted((a, b) => b.event.seq - a.event.seq),
         head,
         REEF_AUDIT_MAX_ENTRIES,
       );
