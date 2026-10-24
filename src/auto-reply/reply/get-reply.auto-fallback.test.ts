@@ -91,6 +91,7 @@ function setupFallback(
     resolvedReasoningLevel?: "off" | "on";
     provider?: string;
     model?: string;
+    originProvider?: string;
   } = {},
 ) {
   const sessionKey = "agent:main:telegram:123";
@@ -100,7 +101,7 @@ function setupFallback(
     providerOverride: "anthropic",
     modelOverride: "claude-fallback",
     modelOverrideSource: "auto",
-    modelOverrideFallbackOriginProvider: "openai",
+    modelOverrideFallbackOriginProvider: params.originProvider ?? "openai",
     modelOverrideFallbackOriginModel: "gpt-5.5",
     modelSelectionLocked: params.modelSelectionLocked,
   };
@@ -179,6 +180,20 @@ describe("getReplyFromConfig auto-fallback primary probes", () => {
       abortedLastRun: false,
     }));
     vi.mocked(runPreparedReplyMock).mockReset().mockResolvedValue({ text: "ok" });
+  });
+
+  it("passes the current primary to ordinary-turn directives after the fallback origin changes", async () => {
+    setupFallback({ originProvider: "retired", provider: "openai", model: "gpt-5.5" });
+    await expect(reply()).resolves.toEqual({ text: "ok" });
+    expect(mocks.resolveReplyDirectives.mock.calls[0]?.[0]).toMatchObject({
+      provider: "openai",
+      model: "gpt-5.5",
+    });
+    expectRun({
+      provider: "openai",
+      model: "gpt-5.5",
+      autoFallbackPrimaryProbe: undefined,
+    });
   });
 
   it("does not start a primary probe after cancellation while its thinking catalog is pending", async () => {

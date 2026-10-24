@@ -1,9 +1,6 @@
 // Resolves stored model pins and their fallback probes against the current turn.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import {
-  hasLegacyAutoFallbackWithoutOrigin,
-  resolveAutoFallbackPrimaryProbe,
-} from "../../agents/agent-scope.js";
+import { hasStaleAutoFallback, resolveAutoFallbackPrimaryProbe } from "../../agents/agent-scope.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { resolveStoredModelOverrideAsync } from "../../sessions/stored-model-overrides.js";
 
@@ -26,12 +23,12 @@ export async function resolveReplyStoredModelSelection(params: {
     normalizeOptionalString(sessionEntry.providerOverride),
   );
   const storedOverride = await resolveStoredModelOverrideAsync(params);
-  const staleLegacyAutoFallbackWithoutOrigin =
+  const staleAutoFallback =
     !sessionModelSelectionLocked &&
     storedOverride?.source === "session" &&
-    hasLegacyAutoFallbackWithoutOrigin(sessionEntry);
+    hasStaleAutoFallback(sessionEntry, params.primaryProvider, params.primaryModel);
   const modelOverride =
-    storedOverride?.model && !hasResolvedTurnModelOverride && !staleLegacyAutoFallbackWithoutOrigin
+    storedOverride?.model && !hasResolvedTurnModelOverride && !staleAutoFallback
       ? {
           provider: storedOverride.provider ?? params.defaultProvider,
           model: storedOverride.model,
@@ -50,6 +47,6 @@ export async function resolveReplyStoredModelSelection(params: {
     modelOverride,
     autoFallbackPrimaryProbe,
     hasEffectiveStoredModelOverride:
-      Boolean(storedOverride || hasSessionModelOverride) && !staleLegacyAutoFallbackWithoutOrigin,
+      Boolean(storedOverride || hasSessionModelOverride) && !staleAutoFallback,
   };
 }

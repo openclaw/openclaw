@@ -120,7 +120,7 @@ const state = vi.hoisted(() => ({
     (_cfg?: unknown, _agentId?: string): string[] | undefined => undefined,
   ),
   resolveEffectiveModelFallbacksMock: vi.fn().mockReturnValue(undefined),
-  hasLegacyAutoFallbackWithoutOriginMock: vi.fn((_entry: unknown) => false),
+  hasStaleAutoFallbackMock: vi.fn((_entry: unknown) => false),
   isModelSelectionLockedMock: vi.fn(
     (entry: unknown) =>
       (entry as { modelSelectionLocked?: boolean } | undefined)?.modelSelectionLocked === true,
@@ -1006,7 +1006,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       entries: [],
       routeVariants: [],
     });
-    state.hasLegacyAutoFallbackWithoutOriginMock.mockReturnValue(false);
+    state.hasStaleAutoFallbackMock.mockReturnValue(false);
     state.isModelSelectionLockedMock.mockImplementation(
       (entry: unknown) =>
         (entry as { modelSelectionLocked?: boolean } | undefined)?.modelSelectionLocked === true,
@@ -1558,7 +1558,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
           ? "agent:main:plugin-owned"
           : "agent:main:harness:notes";
         if (legacy) {
-          state.hasLegacyAutoFallbackWithoutOriginMock.mockReturnValue(true);
+          state.hasStaleAutoFallbackMock.mockReturnValue(true);
         }
       }
       state.sessionEntryMock = createCommandSessionEntry({
@@ -2064,7 +2064,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       });
     }
     state.sessionEntryMock = sessionEntry;
-    state.hasLegacyAutoFallbackWithoutOriginMock.mockReturnValue(legacyFallback);
+    state.hasStaleAutoFallbackMock.mockReturnValue(legacyFallback);
 
     await (command ? agentCommand(command) : runBasicAgentCommand());
 
@@ -2094,7 +2094,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       delete entry.modelOverrideSource;
       return { updated: true };
     });
-    state.hasLegacyAutoFallbackWithoutOriginMock.mockImplementation(
+    state.hasStaleAutoFallbackMock.mockImplementation(
       (entry: unknown) =>
         (entry as SessionEntry | undefined)?.modelOverride === "stale-fallback-model",
     );

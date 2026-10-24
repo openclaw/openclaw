@@ -526,6 +526,40 @@ describe("command selection with configured model facts", () => {
 });
 
 describe("command selection with session routing", () => {
+  it.each(["provider", "model", "channel"] as const)(
+    "clears a fallback from the previous %s primary and preserves the account pin",
+    async (changed) => {
+      const fixture = createFixture();
+      fixture.defaults.modelPolicy = { allow: ["custom/*"] };
+      fixture.inventory.mockReturnValue(customCatalog("base", "child", "manual"));
+      fixture.store[sessionKey] = {
+        ...automaticEntry("manual"),
+        modelOverrideFallbackOriginProvider: changed === "provider" ? "retired" : "custom",
+        modelOverrideFallbackOriginModel: changed === "model" ? "previous" : "base",
+        authProfileOverride: "custom:chosen",
+        authProfileOverrideSource: "user",
+      };
+      vi.spyOn(authProfiles, "ensureAuthProfileStoreAsync").mockResolvedValue({
+        version: 1,
+        profiles: {
+          "custom:chosen": { type: "api_key", provider: "custom", key: "synthetic-account-key" },
+        },
+      });
+      if (changed === "channel") {
+        fixture.cfg.channels = { modelByChannel: { telegram: { "*": "custom/child" } } };
+      }
+      const selected = await fixture.select({ runContext: { messageChannel: "telegram" } });
+      expect(selected).toMatchObject(expectedRoute(changed === "channel" ? "child" : "base"));
+      expect(fixture.entry()).toMatchObject({
+        sessionId: "configured-child",
+        authProfileOverride: "custom:chosen",
+        authProfileOverrideSource: "user",
+      });
+      expect(fixture.entry().modelOverride).toBeUndefined();
+      expect(fixture.entry().modelOverrideFallbackOriginModel).toBeUndefined();
+    },
+  );
+
   it.each(TURN_MODEL_DIFFERENTIAL_FIXTURES)("pins observed $name behavior", async (fixture) => {
     const key = "agent:main:telegram:group:selection";
     const harness = createFixture({ sessionKey: key });

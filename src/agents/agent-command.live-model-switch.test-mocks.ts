@@ -53,7 +53,7 @@ export function createTestThinkingPolicy(state: {
 
 export function createTestAgentScope(
   params: {
-    hasLegacyAutoFallbackWithoutOriginMock: (entry: unknown) => boolean;
+    hasStaleAutoFallbackMock: typeof import("./agent-scope.js").hasStaleAutoFallback;
     resolveAutoFallbackPrimaryProbeMock: (params: unknown) => unknown;
     resolveEffectiveModelFallbacksMock: (...args: unknown[]) => unknown;
   },
@@ -67,8 +67,7 @@ export function createTestAgentScope(
     resolveSubagentSpawnModelFallbacksOverride: native.resolveSubagentSpawnModelFallbacksOverride,
     clearAutoFallbackPrimaryProbeSelection: vi.fn(),
     entryMatchesAutoFallbackPrimaryProbe: () => true,
-    hasLegacyAutoFallbackWithoutOrigin: (entry: unknown) =>
-      params.hasLegacyAutoFallbackWithoutOriginMock(entry),
+    hasStaleAutoFallback: params.hasStaleAutoFallbackMock,
     hasSessionAutoModelFallbackProvenance: () => false,
     listAgentEntries: () => [],
     listAgentIds: () => ["default"],

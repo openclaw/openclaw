@@ -11,7 +11,10 @@ import {
   resolveCollapsedSessionAuthPinSource,
   resolveSessionAuthProfileOverrideSource,
 } from "../config/sessions/auth-profile-override-provenance.js";
-import { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
+import {
+  hasSessionActiveAutoModelFallback,
+  hasSessionAutoModelFallbackProvenance,
+} from "../config/sessions/model-override-provenance.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../config/sessions/session-store-owner.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
@@ -128,6 +131,20 @@ export function hasLegacyAutoFallbackWithoutOrigin(
     entry?.modelOverrideSource === "auto" &&
     (!normalizeOptionalString(entry.modelOverrideFallbackOriginProvider) ||
       !normalizeOptionalString(entry.modelOverrideFallbackOriginModel))
+  );
+}
+
+/** Temporary fallback pins belong to their recorded primary, unlike self-origin creation pins. */
+export function hasStaleAutoFallback(
+  entry: AutoFallbackSessionEntry | undefined,
+  primaryProvider: string,
+  primaryModel: string,
+): boolean {
+  return (
+    hasLegacyAutoFallbackWithoutOrigin(entry) ||
+    (hasSessionActiveAutoModelFallback(entry) &&
+      (normalizeOptionalString(entry?.modelOverrideFallbackOriginProvider) !== primaryProvider ||
+        normalizeOptionalString(entry?.modelOverrideFallbackOriginModel) !== primaryModel))
   );
 }
 

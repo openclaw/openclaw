@@ -94,6 +94,52 @@ function selectModel(params: Partial<Parameters<typeof createModelSelectionState
   });
 }
 
+test.each([
+  { name: "changed provider", originProvider: "retired", originModel: "current", reset: true },
+  { name: "changed model", originProvider: "custom", originModel: "previous", reset: true },
+  { name: "current primary", originProvider: "custom", originModel: "current", reset: false },
+  { name: "self-origin creation", originProvider: "remote", originModel: "spare", reset: false },
+  { name: "deliberate pin", originProvider: "retired", originModel: "previous", user: true },
+  { name: "locked selection", originProvider: "retired", originModel: "previous", locked: true },
+])("reconciles automatic fallback after a primary change: $name", async (fixture) => {
+  await withStateDirEnv("reply-stale-fallback-", async () => {
+    const entry: SessionEntry = {
+      sessionId: "stale-fallback",
+      updatedAt: 1,
+      providerOverride: "remote",
+      modelOverride: "spare",
+      modelOverrideSource: fixture.user ? "user" : "auto",
+      modelOverrideFallbackOriginProvider: fixture.originProvider,
+      modelOverrideFallbackOriginModel: fixture.originModel,
+      modelSelectionLocked: fixture.locked,
+    };
+    const before = { ...entry };
+    const selection = await selectModel({
+      cfg: { plugins: { enabled: false }, agents: { defaults: { model: "custom/current" } } },
+      sessionEntry: entry,
+      sessionStore: { child: entry },
+      sessionKey: "child",
+      defaultModel: "current",
+      primaryProvider: "custom",
+      primaryModel: "current",
+      provider: "remote",
+      model: "spare",
+    });
+    const reset = fixture.reset === true;
+    expect(selection).toMatchObject({
+      provider: reset ? "custom" : "remote",
+      model: reset ? "current" : "spare",
+      resetModelOverride: reset,
+    });
+    if (reset) {
+      expect(entry.modelOverride).toBeUndefined();
+      expect(entry.modelOverrideFallbackOriginProvider).toBeUndefined();
+    } else {
+      expect(entry).toEqual(before);
+    }
+  });
+});
+
 test("keeps thinking defaults separate for distinct literal model IDs", async () => {
   await withStateDirEnv("reply-thinking-identities-", async () => {
     const selection = await selectModel({

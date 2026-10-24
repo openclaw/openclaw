@@ -7,6 +7,7 @@ import {
 } from "../../agents/admitted-run-context.js";
 import {
   hasLegacyAutoFallbackWithoutOrigin,
+  hasStaleAutoFallback,
   resolveAgentConfig,
   resolveAgentDir,
 } from "../../agents/agent-scope.js";
@@ -290,12 +291,13 @@ export async function createModelSelectionState(params: {
       normalizeModelRef(OPENAI_PROVIDER_ID, override.model, runtimeModelNormalization).model ===
         normalizeModelRef(OPENAI_PROVIDER_ID, primaryModel, runtimeModelNormalization).model;
     // Reapplying the current selection must not fight an explicit override.
-    const staleLegacyAutoFallbackWithoutOrigin =
+    const staleAutoFallback =
       override?.source === "session" &&
-      hasLegacyAutoFallbackWithoutOrigin(entry) &&
-      (params.provider !== (override.provider ?? defaultProvider) ||
+      hasStaleAutoFallback(entry, primaryProvider, primaryModel) &&
+      (!hasLegacyAutoFallbackWithoutOrigin(entry) ||
+        params.provider !== (override.provider ?? defaultProvider) ||
         params.model !== override.model);
-    return staleLegacyOpenAICodexAutoOverride || staleLegacyAutoFallbackWithoutOrigin;
+    return staleLegacyOpenAICodexAutoOverride || staleAutoFallback;
   };
   const staleDirectStoredOverride = isStaleStoredOverride(sessionEntry, directStoredModelOverride);
 
