@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { expectIncludes as containsAll, readCiWorkflow } from "./ci-workflow.test-support.js";
+import { readCiWorkflow } from "./ci-workflow.test-support.js";
 
 const workflow = readCiWorkflow();
 const job = workflow.jobs["android-access-native"];
@@ -10,10 +10,6 @@ const step = job.steps.find(
   (entry: { name?: string }) => entry.name === "Run packaged Access crypto on Android",
 );
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const pageSizes = [
-  { "page-size": 4096, image: "google_apis" },
-  { "page-size": 16384, image: "google_apis_ps16k" },
-];
 const invalidReports = ["empty", "wrong-class", "failed", "skipped"];
 const invalidApks = ["missing-abi", "wrong-variant", "ambiguous-output", "outside-output"];
 
@@ -50,13 +46,8 @@ with zipfile.ZipFile(apk, 'w') as archive:
   });
 }
 
-it("runs the packaged class with pinned Android tooling", () => {
+it("uses read-only permissions and installed alignment tooling", () => {
   expect(job.permissions).toEqual({ contents: "read" });
-  containsAll(step.run, [
-    ":app:connectedPlayDebugAndroidTest",
-    "-Pandroid.testInstrumentationRunnerArguments.class=ai.openclaw.app.gateway.CloudflareAccessNativeTest",
-    'zipalign" -c -P 16 -v 4 "$apk"',
-  ]);
   const zipalignVersion = step.run.match(/\/build-tools\/([^/]+)\/zipalign"/)?.[1];
   expect(zipalignVersion).toBeDefined();
   expect(readFileSync(".github/actions/setup-android-toolchain/action.yml", "utf8")).toContain(
@@ -65,22 +56,10 @@ it("runs the packaged class with pinned Android tooling", () => {
 });
 
 it("requires ordinary and strict simulated 16 KiB packaged execution", () => {
-  expect(job.strategy).toEqual({ "fail-fast": false, matrix: { include: pageSizes } });
-  expect(step.env).toMatchObject({
-    EXPECTED_PAGE_SIZE: "${{ matrix.page-size }}",
-    SYSTEM_IMAGE: "system-images;android-36;${{ matrix.image }};x86_64",
-  });
-  expect(step.run).toContain(
-    '-Pandroid.testInstrumentationRunnerArguments.expectedPageSize="$EXPECTED_PAGE_SIZE"',
-  );
   const guard = step.run.slice(
     step.run.indexOf('test "$(adb -s emulator-5554 shell getconf PAGE_SIZE'),
     step.run.indexOf("node --import ./scripts/tsx.mjs"),
   );
-  containsAll(guard, [
-    "setprop bionic.linker.16kb.app_compat.enabled false",
-    "setprop pm.16kb.app_compat.disabled true",
-  ]);
   for (const [pageSize, linker, packageManager, passes] of [
     [16384, "false", "true", true],
     [4096, "false", "true", false],

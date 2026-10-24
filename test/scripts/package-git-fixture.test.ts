@@ -89,9 +89,6 @@ describe("package git fixture", () => {
       devDependencies: { "@openclaw/normalization-core": "0.0.0-private" },
     });
     prepare(root);
-    expect(readFileSync(path.join(root, ".gitignore"), "utf8").split(/\r?\n/u)).toEqual(
-      expect.arrayContaining(["dist/", "node_modules", "**/node_modules/", "pnpm-lock.yaml"]),
-    );
     const packageJson = readJson(root);
     expect(packageJson.dependencies["@openclaw/ai"]).toBe("file:.openclaw-fixture/packages/ai");
     expect(packageJson.bundleDependencies).toEqual(["chalk"]);
@@ -100,6 +97,7 @@ describe("package git fixture", () => {
     expect(relocatedAiPackage).toMatchObject(aiPackage);
     expect(relocatedAiPackage).not.toHaveProperty("devDependencies");
 
+    write(root, "dist/kept.js", "ignored by the existing rule\n");
     write(root, "node_modules/chalk/package.json", "{}\n");
     write(root, ".openclaw-fixture/packages/ai/node_modules/zod/package.json", "{}\n");
     write(root, "pnpm-lock.yaml", "lockfileVersion: '9.0'\n");
@@ -116,6 +114,7 @@ describe("package git fixture", () => {
     run(root, "git", ["add", "-A"]);
     const staged = run(root, "git", ["diff", "--cached", "--name-only"]);
     expect(staged).not.toContain("node_modules");
+    expect(staged).not.toContain("dist/kept.js");
     expect(staged).not.toContain("pnpm-lock.yaml");
     expect(staged).not.toContain(".openclaw-update-");
     expect(staged).toContain("operator-notes.tmp");

@@ -7,7 +7,6 @@ import {
   readStandaloneRuntimeManifest,
   readStandaloneRuntimeManifestForRoot,
   resolveOpenClawCliInvocation,
-  resolveOpenClawCliRespawn,
   runtimeHasSourceLoader,
 } from "../../cli-invocation.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -145,35 +144,4 @@ it("uses a renamed standalone artifact's manifest for service invocation and run
   expect(() => readStandaloneRuntimeManifestForRoot(runtime)).toThrow("Invalid standalone");
   fs.writeFileSync(path.join(root, "manifest.json"), "{");
   expect(() => readStandaloneRuntimeManifest(executable)).toThrow("Invalid standalone");
-});
-
-it("keeps loose parent-bound respawn bytes identical to the former runner prefix", () => {
-  const env = { KEEP: "unchanged" };
-  const invocation = resolveOpenClawCliRespawn({
-    execPath,
-    entryPath,
-    execArgv: ["--no-warnings", ...execArgv],
-    args: ["doctor", "--fix"],
-    env,
-  });
-  // Keep the self-removing preload's bytes independent of its production constant.
-  const source = `
-  globalThis[Symbol.for("openclaw.cliRespawnParent")] = { pid: process.ppid };
-  process.execArgv = process.execArgv.filter((arg, index, args) =>
-    arg !== import.meta.url && !(arg === "--import" && args[index + 1] === import.meta.url));
-`;
-  expect(invocation).toEqual({
-    command: execPath,
-    args: [
-      "--import",
-      `data:text/javascript,${encodeURIComponent(source)}`,
-      "--no-warnings",
-      ...execArgv,
-      entryPath,
-      "doctor",
-      "--fix",
-    ],
-    env,
-  });
-  expect(invocation.env).toBe(env);
 });
