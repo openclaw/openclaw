@@ -36,7 +36,10 @@ import { readUserTurnCompletionForTest } from "./pending-input-commit.test-suppo
 import * as inProcessDispatch from "./server-plugin-in-process-dispatch.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import { runPublicSettleRecoveryCase } from "./server.subagent-settle-replay-recovery.test-support.js";
-import { createRequesterFinalResult as finalResult } from "./server.subagent-settle-replay.test-support.js";
+import {
+  createRequesterFinalResult as finalResult,
+  runTombstonedRequesterSettleCase,
+} from "./server.subagent-settle-replay.test-support.js";
 import {
   agentCommandMock,
   installGatewayTestHooks,
@@ -675,6 +678,22 @@ describe("public yielded settle replay with real Gateway admission", () => {
       }
     }
   });
+
+  it.for(["resume", "replace"] as const)(
+    "retains a tombstoned parent's exact completion until authorized %s",
+    async (action) => {
+      await runTombstonedRequesterSettleCase(action, {
+        child,
+        harness,
+        requesterScope,
+        saveChild,
+        restoreChildren,
+        wake,
+        markCommandExecutionStarted,
+        recoverViaRpc: (params) => rpcReq(resetClient.ws, "sessions.recover", params),
+      });
+    },
+  );
 
   it.for([
     "visible final",
