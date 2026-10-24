@@ -280,35 +280,41 @@ describe("minimax provider hooks", () => {
     });
   });
 
-  it("discovers M3.1 with its mandatory five-level thinking profile on both auth routes", async () => {
-    for (const provider of [apiProvider, portalProvider]) {
-      const ref = { provider: provider.id, modelId: m31Model.id };
-      const catalog = await provider.staticCatalog?.run({ env: {}, config: {} } as never);
-      const models =
-        catalog && "providers" in catalog ? catalog.providers[provider.id]?.models : [];
-      expect(models?.find((model) => model.id === "MiniMax-M3.1-Flash-Preview")).toEqual(
-        expect.objectContaining({
-          id: "MiniMax-M3.1-Flash-Preview",
-          input: ["text", "image"],
-          contextWindow: 1_000_000,
-          reasoning: true,
-          compat: { codeMode: "preferred" },
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        }),
-      );
-      expect(provider.resolveThinkingProfile?.(ref)).toEqual({
-        levels: [{ id: "low" }, { id: "medium" }, { id: "high" }, { id: "xhigh" }, { id: "max" }],
-        defaultLevel: "max",
-      });
-      expect(
-        provider.resolveDynamicModel?.({
-          ...ref,
-          modelId: ref.modelId.toLowerCase(),
-          providerConfig: {},
-        } as never),
-      ).toMatchObject({ id: "MiniMax-M3.1-Flash-Preview", api: "anthropic-messages" });
-    }
-  });
+  it.each([
+    ["MiniMax-M3.1-Flash-Preview", { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }],
+    ["MiniMax-M3.1-Flash", { input: 0.15, output: 0.6, cacheRead: 0.015, cacheWrite: 0 }],
+  ])(
+    "discovers %s with its mandatory five-level thinking profile on both auth routes",
+    async (modelId, cost) => {
+      for (const provider of [apiProvider, portalProvider]) {
+        const ref = { provider: provider.id, modelId };
+        const catalog = await provider.staticCatalog?.run({ env: {}, config: {} } as never);
+        const models =
+          catalog && "providers" in catalog ? catalog.providers[provider.id]?.models : [];
+        expect(models?.find((model) => model.id === modelId)).toEqual(
+          expect.objectContaining({
+            id: modelId,
+            input: ["text", "image"],
+            contextWindow: 1_000_000,
+            reasoning: true,
+            compat: { codeMode: "preferred" },
+            cost,
+          }),
+        );
+        expect(provider.resolveThinkingProfile?.(ref)).toEqual({
+          levels: [{ id: "low" }, { id: "medium" }, { id: "high" }, { id: "xhigh" }, { id: "max" }],
+          defaultLevel: "max",
+        });
+        expect(
+          provider.resolveDynamicModel?.({
+            ...ref,
+            modelId: ref.modelId.toLowerCase(),
+            providerConfig: {},
+          } as never),
+        ).toMatchObject({ id: modelId, api: "anthropic-messages" });
+      }
+    },
+  );
 
   it.each([
     [undefined, "max", m31Model.maxTokens, 500],
@@ -318,80 +324,85 @@ describe("minimax provider hooks", () => {
   ] as const)(
     "sends M3.1 effort %s as %s (model cap: %s, request cap: %s)",
     async (thinkingLevel, effort, modelMaxTokens, requestedMaxTokens) => {
-      for (const provider of [apiProvider, portalProvider]) {
-        for (const hook of ["wrapStreamFn", "wrapSimpleCompletionStreamFn"] as const) {
-          const model = {
-            ...m31Model,
-            maxTokens: modelMaxTokens,
-            provider: provider.id,
-            api:
-              hook === "wrapStreamFn" ? "anthropic-messages" : "openclaw-provider-simple:synthetic",
-          };
-          let payload: unknown;
-          const wrapped = provider[hook]?.({
-            provider: provider.id,
-            modelId: model.id,
-            sourceApi: "anthropic-messages",
-            thinkingLevel,
-            streamFn: (runtimeModel, context, options) =>
-              streamSimpleAnthropic(
-                { ...runtimeModel, api: "anthropic-messages" },
-                context,
-                options,
-              ),
-          });
-          if (!wrapped) {
-            throw new Error(`MiniMax did not register ${hook}`);
-          }
-          const stream = await wrapped(
-            model,
-            {
-              messages: [
-                { role: "user", content: "Hi", timestamp: 0 },
-                makeAgentAssistantMessage({
-                  api: "anthropic-messages",
-                  provider: provider.id,
-                  model: m31Model.id,
-                  content: [
-                    {
-                      type: "thinking",
-                      thinking: "Earlier reasoning.",
-                      thinkingSignature: "synthetic-thinking-signature",
-                    },
-                    { type: "text", text: "Hello." },
-                  ],
-                  timestamp: 1,
-                }),
-                { role: "user", content: "Continue.", timestamp: 2 },
-              ],
-            },
-            {
-              apiKey: "synthetic-minimax-key",
-              maxTokens: requestedMaxTokens,
-              reasoning: thinkingLevel === "adaptive" ? undefined : thinkingLevel,
-              // M3.1 uses adaptive effort; manual budgets must not disable signed replay.
-              thinkingBudgets:
-                modelMaxTokens === m31Model.maxTokens
-                  ? { low: 0, medium: 0, high: 0, max: 0 }
-                  : undefined,
-              onPayload: (value) => {
-                payload = value;
-                throw new Error("stop before network");
+      for (const modelId of [m31Model.id, "MiniMax-M3.1-Flash"]) {
+        for (const provider of [apiProvider, portalProvider]) {
+          for (const hook of ["wrapStreamFn", "wrapSimpleCompletionStreamFn"] as const) {
+            const model = {
+              ...m31Model,
+              id: modelId,
+              maxTokens: modelMaxTokens,
+              provider: provider.id,
+              api:
+                hook === "wrapStreamFn"
+                  ? "anthropic-messages"
+                  : "openclaw-provider-simple:synthetic",
+            };
+            let payload: unknown;
+            const wrapped = provider[hook]?.({
+              provider: provider.id,
+              modelId: model.id,
+              sourceApi: "anthropic-messages",
+              thinkingLevel,
+              streamFn: (runtimeModel, context, options) =>
+                streamSimpleAnthropic(
+                  { ...runtimeModel, api: "anthropic-messages" },
+                  context,
+                  options,
+                ),
+            });
+            if (!wrapped) {
+              throw new Error(`MiniMax did not register ${hook}`);
+            }
+            const stream = await wrapped(
+              model,
+              {
+                messages: [
+                  { role: "user", content: "Hi", timestamp: 0 },
+                  makeAgentAssistantMessage({
+                    api: "anthropic-messages",
+                    provider: provider.id,
+                    model: modelId,
+                    content: [
+                      {
+                        type: "thinking",
+                        thinking: "Earlier reasoning.",
+                        thinkingSignature: "synthetic-thinking-signature",
+                      },
+                      { type: "text", text: "Hello." },
+                    ],
+                    timestamp: 1,
+                  }),
+                  { role: "user", content: "Continue.", timestamp: 2 },
+                ],
               },
-            },
-          );
-          expect(await stream.result()).toMatchObject({ errorMessage: "stop before network" });
-          expect(payload).toMatchObject({
-            thinking: { type: "adaptive" },
-            max_tokens: Math.min(requestedMaxTokens ?? m31Model.maxTokens, modelMaxTokens),
-            output_config: { effort },
-          });
-          expect(payload).not.toHaveProperty("thinking.budget_tokens");
-          expect(payload).toHaveProperty("messages.1.content.0", {
-            type: "thinking",
-            thinking: "Earlier reasoning.",
-            signature: "synthetic-thinking-signature",
-          });
+              {
+                apiKey: "synthetic-minimax-key",
+                maxTokens: requestedMaxTokens,
+                reasoning: thinkingLevel === "adaptive" ? undefined : thinkingLevel,
+                // M3.1 uses adaptive effort; manual budgets must not disable signed replay.
+                thinkingBudgets:
+                  modelMaxTokens === m31Model.maxTokens
+                    ? { low: 0, medium: 0, high: 0, max: 0 }
+                    : undefined,
+                onPayload: (value) => {
+                  payload = value;
+                  throw new Error("stop before network");
+                },
+              },
+            );
+            expect(await stream.result()).toMatchObject({ errorMessage: "stop before network" });
+            expect(payload).toMatchObject({
+              thinking: { type: "adaptive" },
+              max_tokens: Math.min(requestedMaxTokens ?? m31Model.maxTokens, modelMaxTokens),
+              output_config: { effort },
+            });
+            expect(payload).not.toHaveProperty("thinking.budget_tokens");
+            expect(payload).toHaveProperty("messages.1.content.0", {
+              type: "thinking",
+              thinking: "Earlier reasoning.",
+              signature: "synthetic-thinking-signature",
+            });
+          }
         }
       }
     },
