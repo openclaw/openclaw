@@ -56,6 +56,35 @@ const stored: ChatSessionSnapshot = {
 };
 const liveMessages = [nativeHistoryMessage(2, "Live conversation")];
 const panes: TestChatPane[] = [];
+const emptyPendingInputs = () => ({ items: [], total: 0, queuedCount: 0 });
+const queuedPendingInputs = () => ({
+  items: [
+    {
+      id: "followup-1",
+      runId: "run-followup-1",
+      message: { role: "user", content: "Check the attachment before continuing." },
+      acceptedAt: 1,
+      state: "queued" as const,
+      queued: true as const,
+    },
+  ],
+  total: 1,
+  queuedCount: 1,
+});
+const startupCommands = () => [
+  {
+    name: "fixture_skill",
+    description: "Run the fixture skill",
+    source: "skill" as const,
+    scope: "text" as const,
+    acceptsArgs: true,
+  },
+];
+const startupRevision = () => ({
+  pendingInputs: "pending-1",
+  sessionInfo: "session-1",
+  commands: "commands-1",
+});
 
 function mountPane(
   withStore = true,
@@ -110,6 +139,19 @@ function mountPane(
     read,
     request,
     liveResult,
+    async hydrate(snapshot: ChatSessionSnapshot | null = stored) {
+      read.resolve(snapshot);
+      await vi.advanceTimersByTimeAsync(0);
+    },
+    snapshot: () =>
+      readChatSessionSnapshot(state.chatMessagesBySession!, state, { sessionKey: key }),
+    expectStartup(params: Record<string, unknown>) {
+      expect(request).toHaveBeenCalledExactlyOnceWith(
+        "chat.startup",
+        expect.objectContaining(params),
+        { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
+      );
+    },
     connect() {
       state.client = client;
       state.connected = true;
@@ -244,11 +286,7 @@ describe("first chat startup snapshot ordering", () => {
     expect(h.request).not.toHaveBeenCalled();
     h.read.resolve(stored);
     await vi.advanceTimersByTimeAsync(0);
-    expect(h.request).toHaveBeenCalledExactlyOnceWith(
-      "chat.startup",
-      expect.objectContaining({ cursor: "stored-cursor" }),
-      { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
-    );
+    h.expectStartup({ cursor: "stored-cursor" });
     expect(h.state.chatMessages).toEqual(stored.messages);
     network.resolve(h.liveResult);
     await loading;
@@ -299,15 +337,12 @@ describe("first chat startup snapshot ordering", () => {
     expect(paints.every((messages) => messages === paints[0])).toBe(true);
     expect(h.state.chatMessages).toBe(paints[0]);
     expect(h.state.chatMessages).toEqual(stored.messages);
-    expect(readChatSessionSnapshot(memory, h.state, { sessionKey })?.widgetHeights).toEqual(
-      snapshot.widgetHeights,
-    );
+    expect(h.snapshot()?.widgetHeights).toEqual(snapshot.widgetHeights);
   });
 
   it("replaces changed bytes at the same native message identity", async () => {
     const h = mountPane();
-    h.read.resolve(stored);
-    await vi.advanceTimersByTimeAsync(0);
+    await h.hydrate();
     const cachedMessage = h.state.chatMessages[0];
     const changedMessage = nativeHistoryMessage(1, "Updated conversation");
     h.request.mockResolvedValueOnce({ ...h.liveResult, messages: [changedMessage] });
@@ -364,15 +399,10 @@ describe("first chat startup snapshot ordering", () => {
 
   it("uses the cursor when the local read completed before startup", async () => {
     const h = mountPane();
-    h.read.resolve(stored);
-    await vi.advanceTimersByTimeAsync(0);
+    await h.hydrate();
     h.connect();
     await h.start();
-    expect(h.request).toHaveBeenCalledExactlyOnceWith(
-      "chat.startup",
-      expect.objectContaining({ sessionKey, cursor: "stored-cursor" }),
-      { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
-    );
+    h.expectStartup({ sessionKey, cursor: "stored-cursor" });
     expect(h.request.mock.calls[0]?.[1]).toMatchObject({ knownState: {} });
   });
 
@@ -380,34 +410,9 @@ describe("first chat startup snapshot ordering", () => {
     "restores only receipt-matched warm metadata when server state is %s",
     async (change) => {
       const initial = mountPane();
-      const pendingInputs = {
-        items: [
-          {
-            id: "followup-1",
-            runId: "run-followup-1",
-            message: { role: "user", content: "Check the attachment before continuing." },
-            acceptedAt: 1,
-            state: "queued" as const,
-            queued: true as const,
-          },
-        ],
-        total: 1,
-        queuedCount: 1,
-      };
-      const commands = [
-        {
-          name: "fixture_skill",
-          description: "Run the fixture skill",
-          source: "skill" as const,
-          scope: "text" as const,
-          acceptsArgs: true,
-        },
-      ];
-      const stateRevision = {
-        pendingInputs: "pending-1",
-        sessionInfo: "session-1",
-        commands: "commands-1",
-      };
+      const pendingInputs = queuedPendingInputs();
+      const commands = startupCommands();
+      const stateRevision = startupRevision();
       const initialInfo = { ...initial.liveResult.sessionInfo, snapshotAt: 100 };
       initial.read.resolve(null);
       initial.request.mockResolvedValueOnce({
@@ -419,13 +424,7 @@ describe("first chat startup snapshot ordering", () => {
       });
       initial.connect();
       await initial.start();
-      const snapshot = readChatSessionSnapshot(
-        initial.state.chatMessagesBySession!,
-        initial.state,
-        {
-          sessionKey,
-        },
-      );
+      const snapshot = initial.snapshot();
       expect(snapshot?.historyState).toEqual({
         stateRevision,
         pendingInputs,
@@ -434,8 +433,7 @@ describe("first chat startup snapshot ordering", () => {
       });
 
       const warm = mountPane();
-      warm.read.resolve(snapshot);
-      await vi.advanceTimersByTimeAsync(0);
+      await warm.hydrate(snapshot);
       const response = createDeferred<unknown>();
       warm.request.mockImplementation(async (method) =>
         method === "chat.startup" ? response.promise : { models: [] },
@@ -452,7 +450,7 @@ describe("first chat startup snapshot ordering", () => {
         expect.anything(),
       );
 
-      const emptyInputs = { items: [], total: 0, queuedCount: 0 };
+      const emptyInputs = emptyPendingInputs();
       const nextInputs =
         change === "unchanged"
           ? pendingInputs
@@ -539,10 +537,7 @@ describe("first chat startup snapshot ordering", () => {
       expect(warm.state.chatPendingInputs?.page).toEqual(nextInputs);
       expect(warm.state.chatPendingInputs?.queuedInputs).toEqual(nextInputs.items);
       expect(warm.state.currentSessionId).toBe(nextInfo.sessionId);
-      expect(
-        readChatSessionSnapshot(warm.state.chatMessagesBySession!, warm.state, { sessionKey })
-          ?.historyState,
-      ).toEqual({
+      expect(warm.snapshot()?.historyState).toEqual({
         stateRevision: nextRevision,
         pendingInputs: nextInputs,
         sessionInfo: nextInfo,
@@ -553,8 +548,7 @@ describe("first chat startup snapshot ordering", () => {
 
   it("does not advertise a command revision without the retained catalog", async () => {
     const h = mountPane();
-    h.read.resolve({ ...stored, historyState: { stateRevision: { commands: "commands-1" } } });
-    await vi.advanceTimersByTimeAsync(0);
+    await h.hydrate({ ...stored, historyState: { stateRevision: { commands: "commands-1" } } });
     h.connect();
     await h.start();
     expect(h.request).toHaveBeenCalledWith(
@@ -578,17 +572,12 @@ describe("first chat startup snapshot ordering", () => {
     h.request.mockReturnValueOnce(response.promise);
     h.connect();
     const loading = h.start();
-    h.read.resolve(stored);
-    await vi.advanceTimersByTimeAsync(0);
+    await h.hydrate();
     expect(h.state.chatMessages).toEqual(stored.messages);
     expect(h.request).not.toHaveBeenCalled();
     admission.resolve(true);
     await vi.advanceTimersByTimeAsync(0);
-    expect(h.request).toHaveBeenCalledExactlyOnceWith(
-      "chat.startup",
-      expect.objectContaining({ sessionKey, cursor: "stored-cursor" }),
-      { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
-    );
+    h.expectStartup({ sessionKey, cursor: "stored-cursor" });
     const shared = h.start();
     response.resolve(delta);
     await Promise.all([loading, shared]);
@@ -599,7 +588,7 @@ describe("first chat startup snapshot ordering", () => {
   it("keeps simultaneous startup requests with different metadata receipts separate", async () => {
     const first = mountPane();
     const second = mountPane();
-    const emptyInputs = { items: [], total: 0, queuedCount: 0 };
+    const emptyInputs = emptyPendingInputs();
     for (const [index, pane] of [first, second].entries()) {
       pane.read.resolve(null);
       pane.connect();
@@ -636,28 +625,13 @@ describe("first chat startup snapshot ordering", () => {
 
   it("requests missing pending inputs separately even when cached receipts match", async () => {
     const initial = mountPane();
-    const pendingInputs = {
-      items: [
-        {
-          id: "followup-1",
-          runId: "run-followup-1",
-          message: { role: "user", content: "Check the attachment." },
-          acceptedAt: 1,
-          state: "queued" as const,
-          queued: true as const,
-        },
-      ],
-      total: 1,
-      queuedCount: 1,
-    };
+    const pendingInputs = queuedPendingInputs();
     const stateRevision = { pendingInputs: "pending-1", sessionInfo: "info-1" };
     initial.read.resolve(null);
     initial.connect();
     initial.request.mockResolvedValueOnce({ ...initial.liveResult, pendingInputs, stateRevision });
     await initial.start();
-    const snapshot = readChatSessionSnapshot(initial.state.chatMessagesBySession!, initial.state, {
-      sessionKey,
-    });
+    const snapshot = initial.snapshot();
     if (!snapshot?.historyState) {
       throw new Error("expected cached startup metadata");
     }
@@ -733,9 +707,7 @@ describe("first chat startup snapshot ordering", () => {
       await Promise.all(loading);
       expect(first.state.chatMessages).toEqual(messages);
       expect(second.state.chatMessages).toEqual(messages);
-      expect(readChatSessionSnapshot(memory, second.state, { sessionKey })?.messages).toEqual(
-        messages,
-      );
+      expect(second.snapshot()?.messages).toEqual(messages);
     },
   );
 
@@ -773,14 +745,10 @@ describe("first chat startup snapshot ordering", () => {
     // need not leave another task for the pane's asynchronous hydration.
     await vi.advanceTimersByTimeAsync(16);
     const h = mountPane(true, sessionKey, true, new SessionSnapshotStore());
-    const stateRevision = {
-      pendingInputs: "pending-1",
-      sessionInfo: "session-1",
-      commands: "commands-1",
-    };
+    const stateRevision = startupRevision();
     const historyState = {
       stateRevision,
-      pendingInputs: { items: [], total: 0, queuedCount: 0 },
+      pendingInputs: emptyPendingInputs(),
       sessionInfo: h.liveResult.sessionInfo,
       commands: [],
     };
@@ -802,11 +770,7 @@ describe("first chat startup snapshot ordering", () => {
       snapshot: { ...stored, historyState },
     });
     await loading;
-    expect(h.request).toHaveBeenCalledExactlyOnceWith(
-      "chat.startup",
-      expect.objectContaining({ cursor: "stored-cursor", knownState: stateRevision }),
-      { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
-    );
+    h.expectStartup({ cursor: "stored-cursor", knownState: stateRevision });
     expect(h.state.chatMessages).toEqual(stored.messages);
     expect(h.state.chatHistoryPagination.hasMore).toBe(false);
   });

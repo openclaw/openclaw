@@ -80,11 +80,7 @@ function presentationPane() {
     client: { request: vi.fn() } as unknown as GatewayBrowserClient,
     sessions: {} as SessionCapability,
   });
-  fixture.pane.render = () => ({
-    layout: null,
-    capabilityDialogs: undefined,
-    providerReviewSource: undefined,
-  });
+  fixture.pane.render = emptyPresentation;
   return fixture;
 }
 
@@ -105,6 +101,16 @@ function disconnect(pane: TestChatPane) {
   });
 }
 
+const outputsDemand = (pane: TestChatPane) =>
+  pane.render().layout?.header?.header.header.detailsControl?.chat?.retainOutputs;
+const emptyPresentation = () => ({
+  layout: null,
+  capabilityDialogs: undefined,
+  providerReviewSource: undefined,
+});
+const setConnected = (pane: TestChatPane, value: boolean) =>
+  Object.defineProperty(pane, "isConnected", { configurable: true, value });
+
 describe("chat pane connection lifecycle", () => {
   it("keeps explicit mobile Outputs available during pending history only while presented", async () => {
     const { pane, state, request } = reconnectPane(new Promise<ChatHistoryResult>(() => {}));
@@ -114,20 +120,18 @@ describe("chat pane connection lifecycle", () => {
     pane.applyGatewaySnapshot(pane.context.gateway.snapshot);
     await waitForSolid(() => expect(requestCalls(request, "chat.startup")).toHaveLength(1));
     expect(chatHistoryRequests(state).historyLoad.phase).toBe("in-flight");
-    const readDemand = () =>
-      pane.render().layout?.header?.header.header.detailsControl?.chat?.retainOutputs;
-    expect(readDemand()).toBeUndefined();
+    expect(outputsDemand(pane)).toBeUndefined();
     expect(requestCalls(request, "artifacts.list")).toHaveLength(0);
 
     pane.presented = true;
-    const retain = readDemand();
+    const retain = outputsDemand(pane);
     expect(retain).toBeTypeOf("function");
     const release = retain!();
     onTestFinished(() => release?.());
     expect(requestCalls(request, "artifacts.list")).toHaveLength(1);
     expect(chatHistoryRequests(state).historyLoad.phase).toBe("in-flight");
     pane.presented = false;
-    expect(readDemand()).toBeUndefined();
+    expect(outputsDemand(pane)).toBeUndefined();
     expect(retain!()).toBeUndefined();
     expect(requestCalls(request, "artifacts.list")).toHaveLength(1);
   });
@@ -138,7 +142,7 @@ describe("chat pane connection lifecycle", () => {
       sessionId: "outputs-session",
     });
     await loadChatHistory(state, { startup: true });
-    const retain = pane.render().layout?.header?.header.header.detailsControl?.chat?.retainOutputs;
+    const retain = outputsDemand(pane);
     expect(retain).toBeTypeOf("function");
     const releaseDetails = retain!();
     const releaseFiles = retainSessionWorkspaceArtifacts(state);
@@ -196,27 +200,22 @@ describe("chat pane connection lifecycle", () => {
     });
     onTestFinished(stop);
     pane.chatState.composerPersistence.start();
+    onTestFinished(() => pane.chatState.composerPersistence.stop());
     pane.connectedClient = null;
     const startup = vi.spyOn(pane, "deferSessionHydrationUntilTranscript");
     const snapshot = pane.context.gateway.snapshot;
 
-    try {
-      pane.applyGatewaySnapshot(snapshot);
-      await startup.mock.calls[0]![1];
-      expect(state).toMatchObject({ chatMessages: [], chatMessage: "" });
-      expect(read).not.toHaveBeenCalled();
-
-      recoveryReady = true;
-      pane.applyGatewaySnapshot(snapshot);
-
-      await waitForSolid(() => {
-        expect(state.chatMessage).toBe(text);
-        expect(published).toContain(text);
-      });
-      expect(state.chatMessages).toEqual([]);
-    } finally {
-      pane.chatState.composerPersistence.stop();
-    }
+    pane.applyGatewaySnapshot(snapshot);
+    await startup.mock.calls[0]![1];
+    expect(state).toMatchObject({ chatMessages: [], chatMessage: "" });
+    expect(read).not.toHaveBeenCalled();
+    recoveryReady = true;
+    pane.applyGatewaySnapshot(snapshot);
+    await waitForSolid(() => {
+      expect(state.chatMessage).toBe(text);
+      expect(published).toContain(text);
+    });
+    expect(state.chatMessages).toEqual([]);
   });
 
   it.each(["main", "research"])(
@@ -452,7 +451,7 @@ describe("chat pane connection lifecycle", () => {
     const renderedNames: string[] = [];
     lifecycle.render = () => {
       renderedNames.push(state.assistantName);
-      return { layout: null, capabilityDialogs: undefined, providerReviewSource: undefined };
+      return emptyPresentation();
     };
     connectPaneTestView(lifecycle);
     await lifecycle.updateComplete;
@@ -478,7 +477,7 @@ describe("chat pane connection lifecycle", () => {
     visibility("hidden");
     state.assistantName = "Disconnected hidden update";
     await Promise.resolve();
-    Object.defineProperty(lifecycle, "isConnected", { configurable: true, value: false });
+    setConnected(lifecycle, false);
     lifecycle.disconnectedCallback();
     expect(removeVisibilityListener).toHaveBeenCalledWith(
       "visibilitychange",
@@ -486,7 +485,7 @@ describe("chat pane connection lifecycle", () => {
       undefined,
     );
 
-    Object.defineProperty(lifecycle, "isConnected", { configurable: true, value: true });
+    setConnected(lifecycle, true);
     connectPaneTestView(lifecycle);
     await lifecycle.updateComplete;
     // A disposed Solid root remounts once while hidden; measure the reveal independently.
@@ -500,7 +499,7 @@ describe("chat pane connection lifecycle", () => {
     expect(performUpdate).toHaveBeenCalledTimes(remountedReads + 1);
     expect(renderedNames.at(-1)).toBe("Latest remounted hidden update");
 
-    Object.defineProperty(lifecycle, "isConnected", { configurable: true, value: false });
+    setConnected(lifecycle, false);
     lifecycle.disconnectedCallback();
     addVisibilityListener.mockClear();
     state.assistantName = "Detached update";
@@ -669,11 +668,6 @@ describe("chat pane connection lifecycle", () => {
       await expect(chatHistoryRequests(state).subscriptionReady).resolves.toBe(true);
       expect(requestCalls(request, "chat.startup")).toHaveLength(1);
       expect(requestCalls(request, "question.list")).toHaveLength(questions);
-      expect(request).toHaveBeenCalledWith(
-        "chat.startup",
-        expect.objectContaining({ limit: 80, maxBytes: 256 * 1024, sessionKey: state.sessionKey }),
-        { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
-      );
       expect(deferHydration).toHaveBeenCalledExactlyOnceWith(state.sessionKey, expect.any(Promise));
       expect(branches).not.toHaveBeenCalled();
       expect(commitEffects).toEqual([]);

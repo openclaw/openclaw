@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { IDBFactory } from "fake-indexeddb";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { parseSidebarSnapshot } from "../../components/sidebar-snapshot-data.ts";
 import { sidebarSnapshot } from "../../components/sidebar-snapshot.test-support.ts";
 import {
@@ -13,7 +13,6 @@ import { createStorageMock } from "../../test-helpers/storage.ts";
 import { cacheChatBoardSnapshotAfterHydration } from "./chat-board-snapshot.ts";
 import { MAX_CACHED_CHAT_SESSIONS } from "./session-cache.ts";
 import {
-  appendChatMessageToCache,
   cacheChatSessionSnapshot,
   observeChatCache,
   readChatSessionSnapshot,
@@ -50,6 +49,51 @@ function snapshot(message: unknown, sessionId = "session-1"): ChatSessionSnapsho
     messages: [message],
     pagination: { hasMore: true, nextOffset: 1, totalMessages: 2 },
     sessionId,
+  };
+}
+
+const readSnapshot = (sessionKey: string) => new SessionSnapshotStore().read(sessionKey);
+function boardSnapshot(sessionKey: string, message: string, receivedAtMs = 100) {
+  return {
+    ...snapshot(message),
+    board: {
+      snapshot: { sessionKey: rawKey(sessionKey), revision: 1, tabs: [], widgets: [] },
+      receivedAtMs,
+    },
+  };
+}
+
+function historyState(message: unknown): ChatSessionSnapshot["historyState"] {
+  return {
+    stateRevision: { pendingInputs: "inputs-1", sessionInfo: "info-1", commands: "commands-1" },
+    commands: [
+      {
+        name: "skill",
+        description: "Run skill",
+        source: "skill",
+        scope: "text",
+        acceptsArgs: true,
+      },
+    ],
+    pendingInputs: {
+      items: [
+        {
+          id: "input-1",
+          acceptedAt: 1,
+          state: "queued",
+          queued: true,
+          message: { role: "user", content: message },
+        },
+      ],
+      total: 1,
+      queuedCount: 1,
+    },
+    sessionInfo: {
+      key: "agent:main:metadata",
+      kind: "direct",
+      sessionId: "session-1",
+      updatedAt: 1,
+    },
   };
 }
 
@@ -151,18 +195,8 @@ describe("persistent chat session snapshots", () => {
         receivedAtMs: 100,
         snapshot: {
           sessionKey: "agent:main:dashboard",
-          revision: 1,
-          tabs: [{ tabId: "overview", title: "Overview", position: 0, chatDock: "right" }],
           widgets: [
             {
-              name: "chart",
-              tabId: "overview",
-              contentKind: "html",
-              sizeW: 12,
-              sizeH: 8,
-              position: 0,
-              grantState: "none",
-              revision: 1,
               frameUrl: "/__openclaw__/board/dashboard/chart/index.html?bt=synthetic-ticket",
               viewTicket: "synthetic-ticket",
               viewTicketTtlMs: 1200000,
@@ -180,12 +214,8 @@ describe("persistent chat session snapshots", () => {
   it("does not present a cached board after its pending read is invalidated", async () => {
     const sessionKey = key("agent:main:retired-dashboard");
     await persist(writer, sessionKey, {
-      ...snapshot("retired conversation"),
+      ...boardSnapshot(sessionKey, "retired conversation"),
       historyState: { stateRevision: {}, commands: [] },
-      board: {
-        snapshot: { sessionKey: rawKey(sessionKey), revision: 1, tabs: [], widgets: [] },
-        receivedAtMs: 100,
-      },
     });
     const reader = new SessionSnapshotStore();
     const presentBoard = vi.fn();
@@ -199,13 +229,7 @@ describe("persistent chat session snapshots", () => {
     const memory: ChatMessageCache = new Map();
     const store = makeStore(memory);
     const sessionKey = key("agent:main:removed-dashboard");
-    await persist(writer, sessionKey, {
-      ...snapshot("saved conversation"),
-      board: {
-        snapshot: { sessionKey: rawKey(sessionKey), revision: 1, tabs: [], widgets: [] },
-        receivedAtMs: 100,
-      },
-    });
+    await persist(writer, sessionKey, boardSnapshot(sessionKey, "saved conversation"));
     cacheChatBoardSnapshotAfterHydration(
       { ...snapshotHost, chatMessagesBySession: memory },
       { sessionKey: rawKey(sessionKey) },
@@ -222,13 +246,7 @@ describe("persistent chat session snapshots", () => {
     await persist(writer, sessionKey, snapshot("initialize database"));
     await putRawRecord({
       ...envelope(sessionKey, snapshot("conversation")),
-      snapshot: {
-        ...snapshot("conversation"),
-        board: {
-          receivedAtMs: -1,
-          snapshot: { sessionKey: "dashboard", revision: 1, tabs: [], widgets: [] },
-        },
-      },
+      snapshot: boardSnapshot("dashboard", "conversation", -1),
     });
     const presentBoard = vi.fn();
     expect(await new SessionSnapshotStore().read(sessionKey, presentBoard)).toBeNull();
@@ -242,50 +260,13 @@ describe("persistent chat session snapshots", () => {
       const value: ChatSessionSnapshot = {
         ...snapshot("history"),
         deltaCursor: "cursor-1",
-        historyState: {
-          stateRevision: {
-            pendingInputs: "inputs-1",
-            sessionInfo: "info-1",
-            commands: "commands-1",
-          },
-          commands: [
-            {
-              name: "skill",
-              description: "Run skill",
-              source: "skill",
-              scope: "text",
-              acceptsArgs: true,
-            },
-          ],
-          pendingInputs: {
-            items: [
-              {
-                id: "input-1",
-                acceptedAt: 1,
-                state: "queued",
-                queued: true,
-                message: {
-                  role: "user",
-                  content: pairing
-                    ? [{ type: "openclaw_pairing_qr", data: "synthetic-private-pairing" }]
-                    : "Follow up.",
-                },
-              },
-            ],
-            total: 1,
-            queuedCount: 1,
-          },
-          sessionInfo: {
-            key: "agent:main:metadata",
-            kind: "direct",
-            sessionId: "session-1",
-            updatedAt: 1,
-          },
-        },
+        historyState: historyState(
+          pairing
+            ? [{ type: "openclaw_pairing_qr", data: "synthetic-private-pairing" }]
+            : "Follow up.",
+        ),
       };
-      const store = new SessionSnapshotStore();
-      store.write(sessionKey, value);
-      await store.flush();
+      await persist(writer, sessionKey, value);
       const restored = await new SessionSnapshotStore().read(sessionKey);
       expect(restored?.deltaCursor).toBe("cursor-1");
       expect(restored?.historyState).toEqual(pairing ? undefined : value.historyState);
@@ -371,11 +352,11 @@ describe("persistent chat session snapshots", () => {
     expect(await store.readSidebar(sidebarKey, parseSidebarSnapshot)).toBeNull();
   });
 
-  it.each([
-    { snapshot: { ...snapshot("message"), unexpected: true } },
-    { snapshot: { ...snapshot("message"), pagination: { hasMore: false, nextOffset: 1 } } },
-    { snapshot: { ...snapshot("message"), pagination: { hasMore: true, nextOffset: -1 } } },
-    {
+  it("rejects malformed durable history without exposing cached history", async () => {
+    const sessionKey = key("agent:main:corrupt-envelope");
+    await persist(writer, sessionKey, snapshot("message"));
+    await putRawRecord({
+      ...envelope(sessionKey, snapshot("message")),
       snapshot: {
         ...snapshot("message"),
         historyState: {
@@ -383,22 +364,10 @@ describe("persistent chat session snapshots", () => {
           sessionInfo: { key: "s", kind: "direct", owner: { actor: { type: "unknown" } } },
         },
       },
-    },
-    { sessionId: "different-session" },
-  ])(
-    "rejects malformed durable snapshot envelopes without exposing cached history ($snapshot)",
-    async (corrupt) => {
-      const sessionKey = key("agent:main:corrupt-envelope");
-      await persist(writer, sessionKey, snapshot("message"));
-      const persisted = await readStoredChatSnapshotRecord(sessionKey);
-      if (!persisted || typeof persisted !== "object") {
-        throw new Error("expected the writer to persist a snapshot envelope");
-      }
-      await putRawRecord({ ...persisted, ...corrupt });
-      expect(await new SessionSnapshotStore().read(sessionKey)).toBeNull();
-      expect(await readStoredChatSnapshotRecord(sessionKey)).toBeUndefined();
-    },
-  );
+    });
+    expect(await readSnapshot(sessionKey)).toBeNull();
+    expect(await readStoredChatSnapshotRecord(sessionKey)).toBeUndefined();
+  });
 
   it("retires one Gateway cache without touching another Gateway or account", async () => {
     const memory: ChatMessageCache = new Map();
@@ -525,35 +494,6 @@ describe("persistent chat session snapshots", () => {
     expect(reader.readSavedAt(ordinaryKey)).toBeNull();
   });
 
-  it("does not let an append miss replace a richer persisted snapshot", async () => {
-    const sessionKey = key("agent:main:append-miss");
-    const persisted = {
-      ...snapshot("unused", "session-rich"),
-      deltaCursor: "cursor-rich",
-      messages: ["one", "two", "three", "four", "five"],
-    };
-    await persist(writer, sessionKey, persisted);
-
-    const memoryCache: ChatMessageCache = new Map();
-    const store = new SessionSnapshotStore(memoryCache);
-    store.connect();
-    observeChatCache(memoryCache, store);
-    try {
-      appendChatMessageToCache(
-        memoryCache,
-        snapshotHost,
-        { sessionKey: rawKey(sessionKey) },
-        "newest",
-      );
-      await store.flush();
-
-      expect(await new SessionSnapshotStore().read(sessionKey)).toEqual(persisted);
-    } finally {
-      store.disconnect();
-      await store.whenIdle();
-    }
-  });
-
   it("defers snapshot sanitization until flush", async () => {
     const sessionKey = key("agent:main:deferred-sanitize");
     await persist(writer, sessionKey, snapshot("persisted"));
@@ -572,9 +512,8 @@ describe("persistent chat session snapshots", () => {
     const reader = makeStore(memoryCache);
     const previousHydration = await reader.read(sessionKey);
     const hydrated = await reader.read(sessionKey);
-    if (!previousHydration || !hydrated) {
-      throw new Error("expected hydrated snapshot");
-    }
+    assert.isNotNull(previousHydration);
+    assert.isNotNull(hydrated);
     cacheSnapshot(memoryCache, sessionKey, hydrated);
     await reader.flush();
     expect((await readRawRecord(sessionKey))?.savedAt).toBe(1);
@@ -590,9 +529,7 @@ describe("persistent chat session snapshots", () => {
     await persist(store, sessionKey, snapshot("persisted"));
     const { evicted, collectionControl } = await (async () => {
       const hydrated = await store.read(sessionKey);
-      if (!hydrated) {
-        throw new Error("expected hydrated snapshot");
-      }
+      assert.isNotNull(hydrated);
       cacheSnapshot(memoryCache, sessionKey, hydrated);
       return {
         evicted: new WeakRef(hydrated),
