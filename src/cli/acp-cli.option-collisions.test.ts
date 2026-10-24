@@ -4,8 +4,16 @@ import { ExitError } from "../runtime.js";
 import { withTempSecretFiles } from "../test-utils/secret-file-fixture.js";
 import { registerAcpCli } from "./acp-cli.js";
 
-type AcpClientOptions = { verbose?: boolean };
-type AcpGatewayOptions = { gatewayPassword?: string; gatewayToken?: string; prefixCwd?: boolean };
+type AcpClientOptions = {
+  verbose?: boolean;
+};
+
+type AcpGatewayOptions = {
+  agentId?: string;
+  gatewayPassword?: string;
+  gatewayToken?: string;
+  prefixCwd?: boolean;
+};
 
 const mocks = vi.hoisted(() => ({
   runAcpClientInteractive: vi.fn(async (_opts: AcpClientOptions) => 0),
@@ -82,6 +90,14 @@ describe("acp cli option collisions", () => {
       /Use either --passw.*d .*--password-file for Gateway password\./,
     );
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("forwards --agent to the ACP bridge", async () => {
+    await parseAcp(["--agent", "ops"]);
+
+    expect(serveAcpGateway).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ agentId: "ops" }),
+    );
   });
 
   it("warns when inline secret flags are used", async () => {

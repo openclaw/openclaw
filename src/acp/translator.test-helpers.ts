@@ -3,6 +3,7 @@ import type { AgentSideConnection } from "@agentclientprotocol/sdk";
 import type { AcpSessionStore } from "@openclaw/acp-core/session";
 import type { AcpServerOptions } from "@openclaw/acp-core/types";
 import { vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayClient } from "../gateway/client.js";
 import type { AcpEventLedger } from "./event-ledger.js";
 import { createTestAcpEventLedger } from "./event-ledger.test-support.js";
@@ -14,6 +15,7 @@ type TestAcpConnection = AgentSideConnection & {
 };
 
 type TestAcpGatewayAgentOptions = AcpServerOptions & {
+  config?: OpenClawConfig;
   eventLedger?: AcpEventLedger;
   sessionStore?: AcpSessionStore;
 };
