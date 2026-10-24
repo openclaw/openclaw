@@ -83,6 +83,15 @@ it("records one Inbox mention and involvement for a Gateway-authored assistant m
   });
 });
 
+it("keeps directive-like text literal so mention offsets still match", async () => {
+  await withMentionInbox(async (f) => {
+    const text = `${TEXT} Please test [[audio_as_voice]] replies.`;
+    expect(await insert(f, { text }).result).toMatchObject({ ok: true });
+    expect(await assistantRows()).toMatchObject([{ content: [{ type: "text", text }] }]);
+    expect(await f.items()).toMatchObject([{ excerpt: text }]);
+  });
+});
+
 it("finishes an interrupted Inbox delivery on retry", async () => {
   await withMentionInbox(async (f) => {
     // The row committed, but the process stopped before Inbox delivery.

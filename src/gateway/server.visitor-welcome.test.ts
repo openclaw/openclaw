@@ -7,6 +7,7 @@ import { expect, test } from "vitest";
 import type { WebSocket } from "ws";
 import type { GatewayOperatorRolesConfig } from "../config/types.gateway.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { setDisplayName, setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import {
@@ -62,6 +63,8 @@ test("a guest's plugin RPC sees its visitor grant, owns the session it creates, 
   setUserProfileRole(staff.id, "staff");
   setDisplayName(staff.id, "Staff");
   const guest = ensureProfileForEmail("visitor@example.com");
+  let visitorGrant = new AbortController();
+  const paused = { entered: createDeferredCore(), release: createDeferredCore() };
   const { config, registry } = createPluginRegistryFixture();
   registerTestPlugin({
     registry,
@@ -69,16 +72,23 @@ test("a guest's plugin RPC sees its visitor grant, owns the session it creates, 
     record: createPluginRecord({ id: "visitor-access", origin: "bundled" }),
     register(api) {
       api.registerGatewayAccessPolicy({
-        authorize: ({ requiredByRole }) =>
-          requiredByRole
-            ? { grantId: "grant-1", signal: new AbortController().signal, assertCurrent() {} }
-            : undefined,
+        authorize: ({ requiredByRole }) => {
+          const current = visitorGrant;
+          return requiredByRole
+            ? {
+                grantId: "grant-1",
+                signal: current.signal,
+                assertCurrent: () => current.signal.throwIfAborted(),
+              }
+            : undefined;
+        },
       });
       api.registerGatewayMethod(
         "visitor-access.probe",
         async ({ client, params, respond }) => {
           const grant = client?.internal?.operatorAccessAuthority?.gatewayAccessGrant ?? null;
-          const text = "Welcome! @Staff invited you.";
+          // Invitation notes are literal: a directive-like token must not change the bytes.
+          const text = "Welcome! @Staff invited you. Please test [[audio_as_voice]] replies.";
           const mentions = [{ profileId: staff.id, start: 9, end: 15 }];
           try {
             const sessionKey =
@@ -90,6 +100,10 @@ test("a guest's plugin RPC sees its visitor grant, owns the session it creates, 
                 agentId: "main",
                 displayName: "Welcome, Visitor",
               });
+            }
+            if (params.pause === true) {
+              paused.entered.resolve();
+              await paused.release.promise;
             }
             const appended = await api.runtime.gateway.appendAgentMessage({
               sessionKey,
@@ -148,6 +162,12 @@ test("a guest's plugin RPC sees its visitor grant, owns the session it creates, 
       expect(history.payload?.messages).toMatchObject([
         {
           role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "Welcome! @Staff invited you. Please test [[audio_as_voice]] replies.",
+            },
+          ],
           __openclaw: { humanMentions: [{ profileId: staff.id, start: 9, end: 15 }] },
         },
       ]);
@@ -174,6 +194,26 @@ test("a guest's plugin RPC sees its visitor grant, owns the session it creates, 
         agentId: "main",
       });
       expect(staffHistory.payload?.messages).toEqual([]);
+
+      // Revoking the grant while setup awaits stops the message and Inbox effects.
+      const revokedKey = `agent:main:dashboard:${randomUUID()}`;
+      const pending = rpcReq<Welcome>(guestWs, "visitor-access.probe", {
+        key: revokedKey,
+        create: true,
+        pause: true,
+      }).catch(() => undefined);
+      await paused.entered.promise;
+      visitorGrant.abort(new Error("Grant revoked"));
+      paused.release.resolve();
+      await pending;
+      visitorGrant = new AbortController();
+      const revokedHistory = await rpcReq<{ messages: unknown[] }>(staffWs, "chat.history", {
+        sessionKey: revokedKey,
+        agentId: "main",
+      });
+      expect(revokedHistory.payload?.messages ?? []).toEqual([]);
+      const inboxAfter = await rpcReq<{ items: unknown[] }>(staffWs, "mentions.list", {});
+      expect(inboxAfter.payload?.items).toHaveLength(1);
     } finally {
       staffWs.close();
       guestWs.close();

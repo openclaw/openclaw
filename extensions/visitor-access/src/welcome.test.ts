@@ -264,8 +264,9 @@ describe("visitor-access.welcome.ensure", () => {
     expect(restarted.messages.size).toBe(1);
   });
 
-  it("gives a legacy grant without inviter or onboarding a generic welcome", async () => {
-    const legacy = visitorGrant(EMAIL, { expiresAt: null });
+  it("gives a grant recorded by v2026.10.6, without inviter or onboarding, a generic welcome", async () => {
+    // Shape the v2026.10.6 visitor_invite tool recorded before onboarding metadata existed.
+    const legacy = visitorGrant(EMAIL, { invitedVia: "agent:main:maintainer", expiresAt: null });
     const config: OpenClawConfig = {
       gateway: {
         roles: {

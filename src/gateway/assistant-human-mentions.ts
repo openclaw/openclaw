@@ -84,6 +84,8 @@ export async function injectAssistantMessageWithHumanMentions(
       message: params.text,
       idempotencyKey: sourceId,
       humanMentions: mentions,
+      // Mention offsets bind the exact bytes; Gateway-authored text carries no model directives.
+      literal: true,
       // Replays reach this callback too, so a retry finishes an interrupted delivery;
       // the Inbox source key and involvement source keep it from alerting twice.
       onMessageCommitted: ({ anchor, message }) => {

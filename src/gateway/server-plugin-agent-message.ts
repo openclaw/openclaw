@@ -58,7 +58,12 @@ export async function appendTrustedPluginAgentMessage(
           )
         : await injectGatewayAssistantMessage(
             context,
-            { ...target, message: text, idempotencyKey: `assistant-message:${idempotencyKey}` },
+            {
+              ...target,
+              message: text,
+              idempotencyKey: `assistant-message:${idempotencyKey}`,
+              literal: true,
+            },
             assertCurrent,
           );
       if (!result.ok) {
