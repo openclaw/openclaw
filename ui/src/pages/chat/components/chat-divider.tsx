@@ -117,7 +117,11 @@ function FailureNotice(props: ChatNoticeProps) {
       data-ts={String(props.item.timestamp)}
       data-run-failure={failure().runId}
     >
-      <ChatRunFailureNotice summary={failure().summary} onRetry={actions()?.onRetry} />
+      <ChatRunFailureNotice
+        summary={failure().summary}
+        repeatCount={props.item.repeatCount}
+        onRetry={actions()?.onRetry}
+      />
     </div>
   );
 }

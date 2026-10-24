@@ -380,12 +380,12 @@ describe("direct embedded retry lifecycle", () => {
         timeoutMs: 30 * 60_000,
         onAgentEvent,
       });
-      expect(attempts).toBe(progress ? 40 : 10);
+      expect(attempts).toBe(progress ? 40 : 16);
       const retries = onAgentEvent.mock.calls
         .map(([event]) => event)
         .filter((event) => event.stream === "run_status" && event.data.phase === "retrying");
       expect(retries.map((event) => event.data.retryAttempt)).toEqual(
-        Array.from({ length: progress ? 39 : 9 }, (_, index) =>
+        Array.from({ length: progress ? 39 : 15 }, (_, index) =>
           progress ? (index % 3) + 1 : index + 1,
         ),
       );
@@ -395,7 +395,9 @@ describe("direct embedded retry lifecycle", () => {
         expect(result.payloads).toEqual([
           expect.objectContaining({
             isError: true,
-            text: expect.stringContaining("9 automatic retries without a completed model response"),
+            text: expect.stringContaining(
+              "15 automatic retries without a completed model response",
+            ),
           }),
         ]);
         const lastResult = await mockedRunEmbeddedAttempt.mock.results.at(-1)?.value;
