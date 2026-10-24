@@ -141,7 +141,6 @@ extensions/whatsapp/src/connection-controller.ts
 extensions/workboard/src/store-core.ts
 extensions/workboard/src/store-normalizers.ts
 extensions/workboard/src/store.test.ts
-extensions/xai/realtime-voice-provider.test.ts
 extensions/zalo/src/monitor.ts
 extensions/zalouser/src/monitor.ts
 extensions/zalouser/src/zalo-js.ts
@@ -253,7 +252,6 @@ src/commands/doctor-auth-flat-profiles.test.ts
 src/commands/doctor-auth-flat-profiles.ts
 src/commands/doctor-session-sqlite.ts
 src/commands/doctor-state-integrity.ts
-src/commands/doctor/repair-sequencing.test.ts
 src/commands/doctor/shared/legacy-config-migrate.test.ts
 src/commands/doctor/shared/legacy-config-migrations.runtime.agents.ts
 src/commands/doctor/shared/missing-configured-plugin-install.test.ts
@@ -389,7 +387,6 @@ src/plugins/tools.optional.test.ts
 src/plugins/uninstall.test.ts
 src/plugins/update.test.ts
 src/secrets/configure.ts
-src/secrets/runtime-state.test.ts
 src/secrets/runtime-state.ts
 src/security/audit-extra.sync.ts
 src/security/audit.ts

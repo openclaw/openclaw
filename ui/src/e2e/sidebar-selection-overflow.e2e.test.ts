@@ -45,7 +45,21 @@ suite.define(() => {
       }
       if (overflow) {
         await page.getByRole("button", { name: "Show more", exact: true }).click();
-        await expect.poll(() => page.locator(".sidebar-recent-session").count()).toBe(20);
+        const body = page.locator(".sidebar-shell__body");
+        const last = page.locator(
+          '.sidebar-recent-session[data-session-key="agent:main:dashboard:session-19"]',
+        );
+        await expect
+          .poll(async () => {
+            await body.evaluate((element) => {
+              element.scrollTop = element.scrollHeight;
+            });
+            return last.isVisible();
+          })
+          .toBe(true);
+        await body.evaluate((element) => {
+          element.scrollTop = 0;
+        });
       }
       const active = page.locator(
         `.sidebar-recent-session--active[data-session-key="${sessionKey}"]`,

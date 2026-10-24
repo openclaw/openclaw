@@ -164,6 +164,15 @@ describe("buildLineMessageContext", () => {
     });
   });
 
+  const imageEvent = () =>
+    createMessageEvent({ type: "user", userId: "user-image" }, {
+      message: {
+        id: "image-1",
+        type: "image",
+        contentProvider: { type: "line" },
+      },
+    } as Partial<MessageEvent>);
+
   const stickerEvent = (sticker: Partial<Record<string, unknown>>) =>
     createMessageEvent({ type: "user", userId: "user-1" }, {
       message: {
@@ -285,13 +294,7 @@ describe("buildLineMessageContext", () => {
   });
 
   it("keeps failed media-only command text empty and preserves its native media fact", async () => {
-    const event = createMessageEvent({ type: "user", userId: "user-image" }, {
-      message: {
-        id: "image-1",
-        type: "image",
-        contentProvider: { type: "line" },
-      },
-    } as Partial<MessageEvent>);
+    const event = imageEvent();
 
     const context = await buildMessageContext(event, {
       mediaUnavailable: true,
@@ -309,13 +312,7 @@ describe("buildLineMessageContext", () => {
   });
 
   it("tells the agent how much of a multi-image send never arrived", async () => {
-    const event = createMessageEvent({ type: "user", userId: "user-image" }, {
-      message: {
-        id: "image-1",
-        type: "image",
-        contentProvider: { type: "line" },
-      },
-    } as Partial<MessageEvent>);
+    const event = imageEvent();
 
     const context = await buildMessageContext(event, {
       allMedia: [{ path: "/tmp/one.png", contentType: "image/png" }],
@@ -330,13 +327,7 @@ describe("buildLineMessageContext", () => {
   });
 
   it("counts a single missing image in the singular", async () => {
-    const event = createMessageEvent({ type: "user", userId: "user-image" }, {
-      message: {
-        id: "image-1",
-        type: "image",
-        contentProvider: { type: "line" },
-      },
-    } as Partial<MessageEvent>);
+    const event = imageEvent();
 
     const context = await buildMessageContext(event, {
       allMedia: [{ path: "/tmp/one.png", contentType: "image/png" }],

@@ -715,7 +715,7 @@ suite.define(() => {
     const label = row.locator(".sidebar-recent-session__name");
     const link = row.locator("a.sidebar-recent-session__link");
     const tree = row.locator("..");
-    const list = tree.locator("..");
+    const list = tree.locator('xpath=ancestor::*[@role="list"][1]');
     await expectText(label, readableTitle);
     expect(await list.getAttribute("role")).toBe("list");
     expect(await tree.getAttribute("role")).toBe("listitem");

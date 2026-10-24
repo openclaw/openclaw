@@ -47,12 +47,31 @@ suite.define(() => {
       await gateway.resolveDeferred("chat.startup");
       await page.getByText("Selected conversation ready.", { exact: true }).waitFor();
       const pinned = page.locator('[data-session-section="pinned"] .sidebar-recent-session');
+      const viewport = page.locator(".sidebar-shell__body");
+      await pinned.getByText("Pinned chat 0", { exact: true }).waitFor();
+      const seen = new Map<string, number>();
+      await expect
+        .poll(async () => {
+          for (const [key, position] of await pinned.evaluateAll((rows) =>
+            rows.map(
+              (row) =>
+                [
+                  `session:${row.getAttribute("data-session-key")}`,
+                  Number(row.closest('[role="listitem"]')?.getAttribute("aria-posinset")),
+                ] as const,
+            ),
+          )) {
+            seen.set(key, position);
+          }
+          if (seen.size < pins.length) {
+            await viewport.evaluate((element) => {
+              element.scrollTop += element.clientHeight * 0.75;
+            });
+          }
+          return [...seen].toSorted((a, b) => a[1] - b[1]);
+        })
+        .toEqual(entries.map((entry, index) => [entry, index + 1]));
       await pinned.getByText("Pinned chat 29", { exact: true }).waitFor();
-      expect(
-        await pinned.evaluateAll((rows) =>
-          rows.map((row) => `session:${row.getAttribute("data-session-key")}`),
-        ),
-      ).toEqual(entries);
       expect(await pinReads()).toHaveLength(30);
     });
   });

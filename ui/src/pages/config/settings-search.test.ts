@@ -5,6 +5,7 @@ import type { SettingsSearchBlock } from "../../app-navigation.ts";
 import { setCurrentThemeBranding } from "../../app/theme-branding.ts";
 import { i18n } from "../../i18n/index.ts";
 import type { JsonSchema } from "../../lib/config-form-utils.ts";
+import { restorePropertyDescriptor } from "../../test-helpers/property-descriptor.ts";
 import { findSettingsSearchBlocks } from "./settings-search.ts";
 
 function object(
@@ -99,11 +100,7 @@ it("keeps target metadata cold and loads Settings English when search opens", as
   } finally {
     await runtime.i18n.setLocale("en");
     vi.resetModules();
-    if (previousTestApi) {
-      Object.defineProperty(globalThis, testApiKey, previousTestApi);
-    } else {
-      Reflect.deleteProperty(globalThis, testApiKey);
-    }
+    restorePropertyDescriptor(globalThis, testApiKey, previousTestApi);
   }
 });
 

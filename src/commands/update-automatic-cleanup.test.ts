@@ -40,6 +40,7 @@ import { inspectSessionSqliteRecovery } from "./doctor-session-sqlite-recovery-i
 import { retireSessionSqliteRecovery } from "./doctor-session-sqlite-retirement.js";
 import { useDoctorSessionSqliteTestFixture } from "./doctor-session-sqlite.test-support.js";
 import { withDoctorSqliteMaintenanceLock } from "./doctor-sqlite-maintenance-lock.js";
+import { createMissingConfigRecoveryManifest } from "./update-recovery-manifest.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const { createVerifiedRecoveryStore } = useDoctorSessionSqliteTestFixture();
@@ -85,31 +86,13 @@ function capture(runId: string, doctor = false, age = 0) {
     path.join(directory, "manifest.json"),
     JSON.stringify(
       doctor
-        ? {
-            schemaVersion: 2,
-            kind: "update-recovery",
-            generation: { kind: "baseline" },
-            databases: [],
+        ? createMissingConfigRecoveryManifest({
             runId,
             installRoot: stateDir,
             stateDir,
             configPath: env.OPENCLAW_CONFIG_PATH,
-            configPaths: [env.OPENCLAW_CONFIG_PATH],
-            creator: { host: "fixture", pid: 1, startIdentity: "1" },
-            drivers: [],
             createdAt: new Date(now - age * 86_400_000).toISOString(),
-            roots: [env.OPENCLAW_CONFIG_PATH],
-            excludedRoots: [],
-            protectedPaths: [env.OPENCLAW_CONFIG_PATH],
-            entries: [
-              {
-                kind: "missing",
-                sourcePath: env.OPENCLAW_CONFIG_PATH,
-                sqlite: false,
-                directory: false,
-              },
-            ],
-          }
+          })
         : {},
     ),
   );

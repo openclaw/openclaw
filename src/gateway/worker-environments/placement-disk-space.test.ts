@@ -3,6 +3,7 @@ import { withinTest } from "../../../test/helpers/promise.js";
 import type { SpawnResult } from "../../process/exec.js";
 import { onSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { StaleWorkerBuildError } from "./admission.js";
 import { createWorkerPlacementDiskSpaceMonitor } from "./placement-disk-space.js";
 import type { WorkerSessionPlacementRecord } from "./placement-store.js";
@@ -27,17 +28,12 @@ function activePlacement(
 }
 
 function result(availableBytes: number, totalBytes: number): SpawnResult {
-  return {
+  return createCommandResult({
     stdout: JSON.stringify({
       availableBytes: String(availableBytes),
       totalBytes: String(totalBytes),
     }),
-    stderr: "",
-    code: 0,
-    signal: null,
-    killed: false,
-    termination: "exit",
-  };
+  });
 }
 
 function createHarness(

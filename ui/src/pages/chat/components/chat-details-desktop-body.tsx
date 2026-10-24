@@ -1,5 +1,4 @@
 import type { JSX } from "@solidjs/web";
-import { onSettled } from "solid-js";
 import { createLayoutMeasurement } from "../../../lib/reactive/layout-measurement.ts";
 import "../../../styles/chat/details-desktop.css";
 
@@ -20,10 +19,6 @@ export function ChatDetailsDesktopBody(props: { presented: boolean; children: JS
   };
   const update = createLayoutMeasurement(() => props.presented, measure, {
     targets: () => [scroll, content],
-  });
-  // Reserve the initial gutters before interaction; later size/scroll work is coalesced.
-  onSettled(() => {
-    measure()();
   });
   return (
     <div ref={(element) => (scroll = element)} class="chat-details-desktop-body" onScroll={update}>
