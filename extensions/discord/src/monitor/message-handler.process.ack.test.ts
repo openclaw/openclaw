@@ -346,53 +346,45 @@ describe("processDiscordMessage reply session init conflict retry", () => {
     new Error("reply session initialization conflicted for agent:main:discord:channel:c1");
 
   it.each([
-    ["user_request", "automatic", 1],
-    ["room_event", "message_tool_only", 0],
-  ] as const)("records terminal notice outcome for %s", async (inboundEventKind, mode, sends) => {
-    dispatchInboundMessage.mockRejectedValue(conflictError());
-    const errorLog = vi.fn();
-    const ctx = await createBaseContext({
-      inboundEventKind,
-      shouldRequireMention: false,
-      effectiveWasMentioned: inboundEventKind !== "room_event",
-      cfg: { messages: { groupChat: { visibleReplies: "automatic" } } },
-      runtime: { log: vi.fn(), error: errorLog },
-    });
-    await expect(runProcessDiscordMessage(ctx)).resolves.toBeUndefined();
-    expect(dispatchInboundMessage).toHaveBeenCalledTimes(4);
-    expect(recordInboundSession).toHaveBeenCalledTimes(1);
-    expect(getLastDispatchReplyOptions()?.sourceReplyDeliveryMode).toBe(mode);
-    expect(deliverDiscordReply).toHaveBeenCalledTimes(sends);
-    expect(errorLog).toHaveBeenCalledExactlyOnceWith(
-      expect.stringContaining(`terminal notice ${sends === 1 ? "delivered" : "suppressed"}`),
-    );
-    if (sends === 1) {
-      expectFreshFinalText(
-        "⚠️ Couldn't process this message because the session stayed busy. Please try again in a moment.",
+    ["user_request", "automatic", true, 1],
+    ["room_event", "message_tool_only", true, 0],
+    ["user_request", "automatic", false, 1],
+  ] as const)(
+    "records terminal notice for %s (%s, visible=%s)",
+    async (inboundEventKind, mode, visible, sends) => {
+      dispatchInboundMessage.mockRejectedValue(conflictError());
+      if (!visible) {
+        deliverDiscordReply.mockResolvedValueOnce({ visibleReplySent: false });
+      }
+      const errorLog = vi.fn();
+      const ctx = await createBaseContext({
+        inboundEventKind,
+        shouldRequireMention: false,
+        effectiveWasMentioned: inboundEventKind !== "room_event",
+        cfg: { messages: { groupChat: { visibleReplies: "automatic" } } },
+        runtime: { log: vi.fn(), error: errorLog },
+      });
+      await expect(runProcessDiscordMessage(ctx)).resolves.toBeUndefined();
+      expect(dispatchInboundMessage).toHaveBeenCalledTimes(4);
+      expect(recordInboundSession).toHaveBeenCalledTimes(1);
+      expect(getLastDispatchReplyOptions()?.sourceReplyDeliveryMode).toBe(mode);
+      expect(deliverDiscordReply).toHaveBeenCalledTimes(sends);
+      expect(errorLog).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining(`terminal notice ${sends && visible ? "delivered" : "suppressed"}`),
       );
-    }
-  });
-
-  it("records downstream suppression without claiming its terminal notice was delivered", async () => {
-    dispatchInboundMessage.mockRejectedValue(conflictError());
-    deliverDiscordReply.mockResolvedValueOnce({ visibleReplySent: false });
-    const errorLog = vi.fn();
-    const ctx = await createBaseContext({ runtime: { log: vi.fn(), error: errorLog } });
-
-    await expect(runProcessDiscordMessage(ctx)).resolves.toBeUndefined();
-
-    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
-    expect(errorLog).toHaveBeenCalledExactlyOnceWith(
-      expect.stringContaining("terminal notice suppressed"),
-    );
-  });
+      if (sends === 1) {
+        expectFreshFinalText(
+          "⚠️ Couldn't process this message because the session stayed busy. Please try again in a moment.",
+        );
+      }
+    },
+  );
 
   it("keeps exhaustion retryable when the visible failure notice cannot land", async () => {
     dispatchInboundMessage.mockRejectedValue(conflictError());
     deliverDiscordReply.mockRejectedValueOnce(new Error("Discord unavailable"));
 
-    const ctx = await createBaseContext();
-    const failure = runProcessDiscordMessage(ctx);
+    const failure = runProcessDiscordMessage(await createBaseContext());
     await expect(failure).rejects.toBeInstanceOf(Error);
     await expect(failure).rejects.toMatchObject({ cause: expect.any(Error) });
     expect(dispatchInboundMessage).toHaveBeenCalledTimes(4);
@@ -425,8 +417,7 @@ describe("processDiscordMessage reply session init conflict retry", () => {
       throw conflictError();
     });
 
-    const ctx = await createBaseContext({ abortSignal: abortController.signal });
-    await expect(runProcessDiscordMessage(ctx)).resolves.toBeUndefined();
+    await expect(runBase({ abortSignal: abortController.signal })).resolves.toBeUndefined();
 
     expect(dispatchInboundMessage).toHaveBeenCalledTimes(1);
   });
@@ -478,7 +469,7 @@ describe("processDiscordMessage session routing and room events", () => {
 
   it("prefers bound session keys and sets MessageThreadId for bound thread messages", async () => {
     const threadBindings = await createThreadBindingManager({
-      cfg: {} as import("openclaw/plugin-sdk/config-contracts").OpenClawConfig,
+      cfg: {},
       accountId: "default",
       persist: false,
       enableSweeper: false,
@@ -704,10 +695,7 @@ describe("processDiscordMessage session routing", () => {
       baseSessionKey: "agent:main:main",
       author: { id: "222", username: "bob", discriminator: "0", globalName: "Bob" },
       sender: { id: "222", label: "bob" },
-      route: {
-        ...BASE_CHANNEL_ROUTE,
-        sessionKey: "agent:main:main",
-      },
+      route: { ...BASE_CHANNEL_ROUTE, sessionKey: "agent:main:main" },
     });
 
     expect(getLastRouteUpdate()).toMatchObject({
@@ -736,7 +724,7 @@ describe("Discord group-thread participant delivery", () => {
           ["main", "alice", "bob"].map((id) => [id, { workspace: workspaceFor(id) }]),
         ),
       },
-      broadcast: agents ? { "discord:c1": agents } : undefined,
+      broadcast: { "discord:c1": agents },
     };
     const ctx = await createAutomaticSourceDeliveryContext({
       cfg,
