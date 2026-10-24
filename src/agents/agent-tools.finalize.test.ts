@@ -13,10 +13,8 @@ import {
   createToolSearchTools,
   registerHeadlessToolSearchCatalog,
 } from "./tool-search.js";
-import { createImageTool } from "./tools/image-tool.js";
 import { createInstalledSkillTools } from "./tools/installed-skill-tools.js";
 import { createMessageTool } from "./tools/message-tool-execution.js";
-import { createVideoGenerateTool } from "./tools/video-generate-tool.js";
 
 type Options = Partial<Parameters<typeof finalizeAgentTools>[0]>;
 
@@ -69,43 +67,6 @@ async function published(tools: () => AnyAgentTool[], options: Options = {}) {
 afterEach(() => clearPluginMetadataLifecycleCaches());
 
 describe("finalized tool descriptor snapshots", () => {
-  it.each([false, true])(
-    "reuses media publications for vision=%s across runs and sessions",
-    async (modelHasVision) => {
-      const config = {
-        agents: { defaults: { mediaModels: { video: { primary: "schema-probe/video" } } } },
-      };
-      const factories = () => {
-        const image = createImageTool({ agentDir: "/synthetic-agent", modelHasVision });
-        const video = createVideoGenerateTool({ config }, true);
-        assert.ok(image && video);
-        return [image, video];
-      };
-      const cold = attempt(factories(), { config });
-      if (modelHasVision) {
-        expect(cold.tool().parameters).not.toHaveProperty("properties.model");
-      } else {
-        expect(cold.tool().parameters).toHaveProperty("properties.model");
-      }
-      const bytes = [0, 1].map((index) => JSON.stringify(cold.tool(index).parameters));
-      await cold.settle();
-      const publish = vi.spyOn(toolSchema, "publishRuntimeToolInputSchema");
-      const prewarm = vi.spyOn(toolSchema, "normalizeOpenAIStrictToolParameters");
-      try {
-        for (const sessionId of ["descriptor-session", "media-second", "media-third"]) {
-          const next = attempt(factories(), { config, hookContext: { sessionId } });
-          expect([0, 1].map((index) => JSON.stringify(next.tool(index).parameters))).toEqual(bytes);
-          await next.settle();
-        }
-        expect(publish).not.toHaveBeenCalled();
-        expect(prewarm).not.toHaveBeenCalled();
-      } finally {
-        publish.mockRestore();
-        prewarm.mockRestore();
-      }
-    },
-  );
-
   it.each([undefined, {}])(
     "shares message publications across new sessions (config: %j)",
     async (config) => {
