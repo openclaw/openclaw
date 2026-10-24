@@ -470,6 +470,68 @@ describe("gateway client capability tool filtering", () => {
     ).toBe(true);
   });
 
+  it("negotiates GitHub reconnect guidance with the requesting Control UI", () => {
+    const olderTools = createOpenClawTools({
+      githubPublicationAvailable: false,
+      clientCaps: ["ui-commands"],
+    });
+    const capableTools = createOpenClawTools({
+      githubPublicationAvailable: false,
+      clientCaps: ["ui-commands", "ui-agent-github-settings"],
+    });
+
+    expect(JSON.stringify(expectToolNamed(olderTools, "screen").parameters)).not.toContain(
+      "github_identity_settings",
+    );
+    expect(JSON.stringify(expectToolNamed(capableTools, "screen").parameters)).toContain(
+      "github_identity_settings",
+    );
+    expect(expectToolNamed(olderTools, "github_identity_status").description).not.toContain(
+      "github_identity_settings",
+    );
+    expect(expectToolNamed(capableTools, "github_identity_status").description).toContain(
+      "github_identity_settings",
+    );
+  });
+
+  it.each([
+    {
+      name: "screen tool is denied",
+      allow: ["github_identity_status"],
+      actions: undefined,
+      expected: false,
+    },
+    {
+      name: "settings action is denied",
+      allow: ["github_identity_status", "screen"],
+      actions: { screen: ["navigate"] },
+      expected: false,
+    },
+    {
+      name: "settings action remains callable",
+      allow: ["github_identity_status", "screen"],
+      actions: { screen: ["github_identity_settings"] },
+      expected: true,
+    },
+  ])("uses manual reconnect guidance when $name", ({ allow, actions, expected }) => {
+    const tools = createTestOpenClawTools({
+      githubPublicationAvailable: false,
+      clientCaps: ["ui-commands", "ui-agent-github-settings"],
+      config: {
+        tools: {
+          gatewayPolicy: { allow, ...(actions ? { actions } : {}) },
+        },
+      },
+    });
+
+    const description = expectToolNamed(tools, "github_identity_status").description;
+    if (expected) {
+      expect(description).toContain("github_identity_settings");
+    } else {
+      expect(description).not.toContain("github_identity_settings");
+    }
+  });
+
   it.each([
     {
       scope: "operator.sessions.write",

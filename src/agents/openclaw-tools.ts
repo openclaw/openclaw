@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
 import { isCoreCanvasHostEnabled } from "../canvas/config.js";
 import {
   createShowWidgetTool,
@@ -464,6 +465,8 @@ function* createOpenClawToolsSteps(
     : null;
   const transcriptsTool = resolveTranscriptsTool(resolvedConfig, sessionAgentId, options);
   const githubActionsAvailable = hasSessionControlAuthority(options?.sessionControlAuthority);
+  const githubIdentitySettingsAvailable =
+    options?.clientCaps?.includes(GATEWAY_CLIENT_CAPS.UI_AGENT_GITHUB_SETTINGS) === true;
   const tools: AnyAgentTool[] = [
     ...createInstalledSkillTools(options?.installedSkills ?? []),
     createDashboardTool({
@@ -513,6 +516,7 @@ function* createOpenClawToolsSteps(
           createScreenTool({
             agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
             agentId: sessionAgentId,
+            githubIdentitySettingsAvailable,
           }),
           createThemeTool(),
           ...(options?.sandboxed
@@ -551,7 +555,9 @@ function* createOpenClawToolsSteps(
         }),
     createDecisionTool(sessionAgentId, options),
     createTtsTool({ ...options, agentId: sessionAgentId }),
-    options?.githubPublicationAvailable !== undefined ? createGitHubIdentityStatusTool() : null,
+    options?.githubPublicationAvailable !== undefined
+      ? createGitHubIdentityStatusTool({ githubIdentitySettingsAvailable })
+      : null,
     options?.githubPublicationAvailable === true ||
     (options?.githubPublicationAvailable === false && githubActionsAvailable)
       ? createGitHubPublishTool({

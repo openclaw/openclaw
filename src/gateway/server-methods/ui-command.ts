@@ -104,6 +104,10 @@ export function dispatchUiCommandToRequester({
         ? { ...commandParams.command, sessionKey: canonicalSessionKey }
         : commandParams.command,
   };
+  const requiredCommandCapability =
+    normalizedParams.command.kind === "agent-github-settings"
+      ? GATEWAY_CLIENT_CAPS.UI_AGENT_GITHUB_SETTINGS
+      : undefined;
   const target = participant
     ? participant.gatewayUiCommandTarget
     : runtimeIdentity
@@ -121,7 +125,9 @@ export function dispatchUiCommandToRequester({
         !recipient.connectionSignal?.aborted &&
         (!target.profileId || recipient.authenticatedUserProfile?.profileId === target.profileId) &&
         recipient.connect.client.id === GATEWAY_CLIENT_IDS.CONTROL_UI &&
-        hasGatewayClientCap(recipient.connect.caps, GATEWAY_CLIENT_CAPS.UI_COMMANDS);
+        hasGatewayClientCap(recipient.connect.caps, GATEWAY_CLIENT_CAPS.UI_COMMANDS) &&
+        (!requiredCommandCapability ||
+          hasGatewayClientCap(recipient.connect.caps, requiredCommandCapability));
       if (selected) {
         selectedRecipient = recipient;
       }
