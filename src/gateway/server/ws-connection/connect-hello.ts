@@ -452,7 +452,7 @@ export async function sendGatewayHello(
   if (
     shouldScheduleBackgroundHealthRefresh(refreshHealthSnapshot, Date.now(), getHealthCache()?.ts)
   ) {
-    void refreshHealthSnapshot({ probe: false }).catch((err: unknown) =>
+    void refreshHealthSnapshot({ probe: false, origin: "post_connect" }).catch((err: unknown) =>
       logHealth.error(`post-connect health refresh failed: ${formatError(err)}`),
     );
   }

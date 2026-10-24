@@ -16,16 +16,35 @@ const {
   getRuntimeConfigMock,
   getUpdateAvailableMock,
   getUpdateScheduleMock,
+  healthRefreshLogMock,
+  healthDiagnosticsEnabledMock,
 } = vi.hoisted(() => ({
   collectGatewayHealthSnapshotMock: vi.fn(),
   getRuntimeConfigMock: vi.fn(),
   getUpdateAvailableMock: vi.fn(),
   getUpdateScheduleMock: vi.fn(),
+  healthRefreshLogMock: vi.fn(),
+  healthDiagnosticsEnabledMock: vi.fn(),
 }));
 
 vi.mock("../health/collector.js", () => ({
   collectGatewayHealthSnapshot: collectGatewayHealthSnapshotMock,
 }));
+
+vi.mock("../../infra/diagnostic-flags.js", () => ({
+  isDiagnosticFlagEnabled: healthDiagnosticsEnabledMock,
+}));
+
+vi.mock("../../logging/subsystem.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../../logging/subsystem.js")>();
+  return {
+    ...original,
+    createSubsystemLogger: (subsystem: string) => ({
+      ...original.createSubsystemLogger(subsystem),
+      ...(subsystem === "gateway/health" ? { info: healthRefreshLogMock } : {}),
+    }),
+  };
+});
 
 vi.mock("../../config/io.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/io.js")>()),
@@ -99,6 +118,8 @@ async function loadHealthState() {
   vi.resetModules();
   collectGatewayHealthSnapshotMock.mockReset();
   collectGatewayHealthSnapshotMock.mockResolvedValue(createHealthSummary());
+  healthRefreshLogMock.mockReset();
+  healthDiagnosticsEnabledMock.mockReset().mockReturnValue(false);
   getUpdateAvailableMock.mockReset();
   getUpdateAvailableMock.mockReturnValue(null);
   getUpdateScheduleMock.mockReset();
@@ -224,6 +245,126 @@ describe("buildGatewaySnapshot update metadata", () => {
 describe("refreshGatewayHealthSnapshot", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it("attributes starts, bounded coalesced origins and CPU overlap to the same collection", async () => {
+    const healthState = await loadHealthState();
+    healthDiagnosticsEnabledMock.mockReturnValue(true);
+    const pending = createPendingHealthSnapshot();
+    const summary = createHealthSummary();
+    collectGatewayHealthSnapshotMock.mockImplementationOnce(pending.collect);
+    let wall = 70_000;
+    let monotonic = 1_000;
+    vi.spyOn(Date, "now").mockImplementation(() => wall);
+    vi.spyOn(performance, "now").mockImplementation(() => monotonic);
+    const processCpu = vi
+      .spyOn(process, "cpuUsage")
+      .mockReturnValueOnce({ user: 100, system: 20 })
+      .mockReturnValue({ user: 160, system: 30 });
+    const threadCpu = vi
+      .spyOn(process, "threadCpuUsage")
+      .mockReturnValueOnce({ user: 50, system: 10 })
+      .mockReturnValue({ user: 80, system: 15 });
+
+    const first = healthState.refreshGatewayHealthSnapshot({ probe: false, origin: "periodic" });
+    await pending.started;
+    const waiters = Array.from({ length: 100 }, () =>
+      healthState.refreshGatewayHealthSnapshot({ probe: false, origin: "post_connect" }),
+    );
+    waiters.push(healthState.refreshGatewayHealthSnapshot({ probe: false, origin: "health_rpc" }));
+    const records = () => healthRefreshLogMock.mock.calls.map(([, record]) => record);
+    expect(records()).toMatchObject([
+      { phase: "started", origin: "periodic", audience: "public", strength: "passive" },
+      { phase: "coalesced", origin: "periodic", joiningOrigin: "post_connect" },
+      { phase: "coalesced", origin: "periodic", joiningOrigin: "health_rpc" },
+    ]);
+    expect(new Set(records().map((record) => record.collectionId)).size).toBe(1);
+    expect(collectGatewayHealthSnapshotMock).toHaveBeenCalledOnce();
+    wall -= 10_000;
+    monotonic += 250;
+    pending.resolve(summary);
+    await expect(Promise.all([first, ...waiters])).resolves.toEqual(Array(102).fill(summary));
+
+    expect(records()).toHaveLength(4);
+    expect(records().at(-1)).toMatchObject({
+      phase: "completed",
+      collectionId: records()[0].collectionId,
+      pid: process.pid,
+      origin: "periodic",
+      outcome: "success",
+      startedAtMs: 70_000,
+      completedAtMs: 60_000,
+      startedMonotonicMs: 1_000,
+      completedMonotonicMs: 1_250,
+      elapsedMs: 250,
+      cpuScope: "process_and_calling_thread_interval_overlap",
+      processCpuUsageUs: { user: 60, system: 10 },
+      threadCpuUsageUs: { user: 30, system: 5 },
+      coalescedRequests: 101,
+      coalescedOrigins: ["post_connect", "health_rpc"],
+    });
+    expect(processCpu).toHaveBeenCalledTimes(2);
+    expect(threadCpu).toHaveBeenCalledTimes(2);
+  });
+
+  it("records failures without private errors and preserves retries and unavailable counters", async () => {
+    const healthState = await loadHealthState();
+    healthDiagnosticsEnabledMock.mockReturnValue(true);
+    vi.spyOn(process, "cpuUsage").mockImplementation(() => {
+      throw new Error("unsupported");
+    });
+    vi.spyOn(process, "threadCpuUsage").mockImplementation(() => {
+      throw new Error("unsupported");
+    });
+    collectGatewayHealthSnapshotMock.mockRejectedValueOnce(new Error("private collector detail"));
+    await expect(
+      healthState.refreshGatewayHealthSnapshot({ probe: false, origin: "health_rpc" }),
+    ).rejects.toThrow("private collector detail");
+    const failed = healthRefreshLogMock.mock.calls.at(-1)![1];
+    expect(failed).toMatchObject({ phase: "completed", outcome: "failure" });
+    expect(failed.processCpuUsageUs).toBeUndefined();
+    expect(failed.threadCpuUsageUs).toBeUndefined();
+    expect(healthState.getHealthCache()).toBeNull();
+    expect(JSON.stringify(healthRefreshLogMock.mock.calls)).not.toContain(
+      "private collector detail",
+    );
+
+    vi.mocked(process.cpuUsage).mockReturnValue({ user: 10, system: 20 });
+    vi.mocked(process.threadCpuUsage).mockReturnValue({ user: 5, system: 10 });
+    healthRefreshLogMock.mockImplementationOnce(() => {
+      throw new Error("log unavailable");
+    });
+    const summary = await healthState.refreshGatewayHealthSnapshot({
+      probe: false,
+      origin: "health_rpc",
+    });
+    expect(healthState.getHealthCache()).toBe(summary);
+    const completed = healthRefreshLogMock.mock.calls.at(-1)![1];
+    expect(completed.collectionId).not.toBe(failed.collectionId);
+    expect(completed).toMatchObject({
+      outcome: "success",
+      processCpuUsageUs: { user: 0, system: 0 },
+      threadCpuUsageUs: { user: 0, system: 0 },
+    });
+  });
+
+  it("keeps attribution opt-in and normalizes unknown origins without retaining caller text", async () => {
+    const healthState = await loadHealthState();
+    const processCpu = vi.spyOn(process, "cpuUsage");
+    const threadCpu = vi.spyOn(process, "threadCpuUsage");
+    await healthState.refreshGatewayHealthSnapshot({ probe: false, origin: "periodic" });
+    expect(healthRefreshLogMock).not.toHaveBeenCalled();
+    expect(processCpu).not.toHaveBeenCalled();
+    expect(threadCpu).not.toHaveBeenCalled();
+
+    healthDiagnosticsEnabledMock.mockReturnValue(true);
+    await healthState.refreshGatewayHealthSnapshot({
+      probe: false,
+      origin: "private caller text" as never,
+    });
+    expect(healthRefreshLogMock.mock.calls).toHaveLength(2);
+    expect(healthRefreshLogMock.mock.calls[0]![1]).toMatchObject({ origin: "unspecified" });
+    expect(JSON.stringify(healthRefreshLogMock.mock.calls)).not.toContain("private caller text");
   });
 
   it("does not let a post-connect passive refresh absorb an explicit probe", async () => {

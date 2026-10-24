@@ -978,7 +978,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     });
 
     await waitForFast(() => {
-      expect(refreshHealthSnapshot).toHaveBeenCalledWith({ probe: false });
+      expect(refreshHealthSnapshot).toHaveBeenCalledWith({ probe: false, origin: "post_connect" });
     });
     resolveRefresh?.();
   });
@@ -1060,6 +1060,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
         expect(refreshHealthSnapshot).toHaveBeenNthCalledWith(1, {
           probe: true,
           includeSensitive: false,
+          origin: "health_rpc",
         });
 
         now += HEALTH_REFRESH_INTERVAL_MS;

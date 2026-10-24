@@ -473,11 +473,17 @@ describe("startGatewayMaintenanceTimers", () => {
     const timers = startGatewayMaintenanceTimers(deps);
     try {
       await clock.advanceBy(0);
-      expect(deps.refreshGatewayHealthSnapshot).toHaveBeenCalledWith({ probe: false });
+      expect(deps.refreshGatewayHealthSnapshot).toHaveBeenCalledWith({
+        probe: false,
+        origin: "periodic",
+      });
 
       await clock.advanceBy(60_000);
       expect(deps.refreshGatewayHealthSnapshot).toHaveBeenCalledTimes(2);
-      expect(deps.refreshGatewayHealthSnapshot).toHaveBeenLastCalledWith({ probe: false });
+      expect(deps.refreshGatewayHealthSnapshot).toHaveBeenLastCalledWith({
+        probe: false,
+        origin: "periodic",
+      });
     } finally {
       await stopMaintenanceTimers(timers);
     }

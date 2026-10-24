@@ -4339,6 +4339,7 @@ describe("gateway healthHandlers.health cache freshness", () => {
     expect(refreshHealthSnapshot).toHaveBeenCalledWith({
       probe: true,
       includeSensitive: true,
+      origin: "health_rpc",
     });
     expect(respond).toHaveBeenCalledWith(
       true,
@@ -4378,6 +4379,7 @@ describe("gateway healthHandlers.health cache freshness", () => {
     expect(refreshHealthSnapshot).toHaveBeenCalledWith({
       probe: false,
       includeSensitive: false,
+      origin: "health_rpc",
     });
     expect(respond).toHaveBeenCalledWith(
       false,
@@ -4405,6 +4407,7 @@ describe("gateway healthHandlers.health cache freshness", () => {
     expect(refreshHealthSnapshot).toHaveBeenCalledWith({
       probe: false,
       includeSensitive: false,
+      origin: "health_rpc",
     });
     expect(respond).toHaveBeenCalledWith(
       true,
@@ -4443,6 +4446,7 @@ describe("gateway healthHandlers.health cache freshness", () => {
     expect(refreshHealthSnapshot).toHaveBeenCalledWith({
       probe: false,
       includeSensitive: false,
+      origin: "health_rpc",
     });
     expect(respond).toHaveBeenCalledWith(
       true,
@@ -4482,6 +4486,7 @@ describe("gateway healthHandlers.health cache freshness", () => {
     expect(refreshHealthSnapshot).toHaveBeenCalledWith({
       probe: false,
       includeSensitive: false,
+      origin: "health_rpc",
     });
   });
 
@@ -4517,6 +4522,7 @@ describe("gateway healthHandlers.health cache freshness", () => {
     expect(refreshHealthSnapshot).toHaveBeenCalledWith({
       probe: false,
       includeSensitive: false,
+      origin: "health_rpc",
     });
     expect(getEventLoopHealth).not.toHaveBeenCalled();
     expect(mockCallArg(respond)).toBe(true);
@@ -4751,17 +4757,14 @@ describe("gateway healthHandlers.health cache freshness", () => {
       });
       const cached = summary(previousAccountIds);
       const fresh = summary(nextAccountIds);
-      const refreshHealthSnapshot = vi
-        .fn()
-        .mockResolvedValueOnce(cached)
-        .mockResolvedValueOnce(fresh);
+      const refreshHealthSnapshot = vi.fn().mockResolvedValue(fresh);
 
       await requestHealthSnapshot({
         cached,
         refreshHealthSnapshot,
         runtimeSnapshot: runtime(previousAccountIds),
       });
-      expect(refreshHealthSnapshot).toHaveBeenCalledOnce();
+      expect(refreshHealthSnapshot).not.toHaveBeenCalled();
 
       const { respond } = await requestHealthSnapshot({
         cached,
@@ -4769,10 +4772,11 @@ describe("gateway healthHandlers.health cache freshness", () => {
         runtimeSnapshot: runtime(nextAccountIds, uninitializedAccountId),
       });
 
-      expect(refreshHealthSnapshot).toHaveBeenCalledTimes(2);
+      expect(refreshHealthSnapshot).toHaveBeenCalledOnce();
       expect(refreshHealthSnapshot).toHaveBeenLastCalledWith({
         probe: false,
         includeSensitive: false,
+        origin: "health_rpc",
       });
       expect(respond).toHaveBeenCalledWith(
         true,

@@ -96,6 +96,7 @@ export function startGatewayMaintenanceTimers(params: {
   refreshGatewayHealthSnapshot: (opts?: {
     probe?: boolean;
     includeSensitive?: boolean;
+    origin?: import("./server/health-state.js").GatewayHealthRefreshOrigin;
   }) => Promise<HealthSummary>;
   logHealth: { info: (msg: string) => void; error: (msg: string) => void };
   restartRunningChannels: (
@@ -195,7 +196,7 @@ export function startGatewayMaintenanceTimers(params: {
     nowMs: () => scheduler.now(),
     restartChannelsIfIdle,
     refreshHealth: async () => {
-      await params.refreshGatewayHealthSnapshot({ probe: true });
+      await params.refreshGatewayHealthSnapshot({ probe: true, origin: "host_thaw" });
     },
     refreshPresence: params.refreshPresence,
     resetEventLoopHealth: params.resetEventLoopHealth,
@@ -251,7 +252,7 @@ export function startGatewayMaintenanceTimers(params: {
     HEALTH_REFRESH_INTERVAL_MS,
     () =>
       params
-        .refreshGatewayHealthSnapshot({ probe: false })
+        .refreshGatewayHealthSnapshot({ probe: false, origin: "periodic" })
         .catch((err: unknown) => params.logHealth.error(`refresh failed: ${formatError(err)}`)),
     true,
   );

@@ -164,14 +164,22 @@ export const healthHandlers: GatewayRequestHandlers = {
         { cached: true },
       );
       if (shouldScheduleBackgroundHealthRefresh(refreshHealthSnapshot, now, cached.ts)) {
-        void refreshHealthSnapshot({ probe: false, includeSensitive }).catch((err: unknown) =>
+        void refreshHealthSnapshot({
+          probe: false,
+          includeSensitive,
+          origin: "cached_health_rpc",
+        }).catch((err: unknown) =>
           logHealth.error(`background health refresh failed: ${formatError(err)}`),
         );
       }
       return;
     }
     await respondUnavailableOnThrow(respond, async () => {
-      const snap = await refreshHealthSnapshot({ probe: wantsProbe, includeSensitive });
+      const snap = await refreshHealthSnapshot({
+        probe: wantsProbe,
+        includeSensitive,
+        origin: "health_rpc",
+      });
       respond(
         true,
         {
