@@ -79,6 +79,9 @@ const ADMISSION_WORKFLOW = "openclaw-release-prepare.yml";
 const WITNESS_KIND = "openclaw.full-release-dispatch-inputs/v1";
 const WITNESS_FILE = "dispatch-inputs.json";
 const MAX_WITNESS_ARCHIVE_BYTES = 256 * 1024;
+// Extended-stable candidates trail main by tens of thousands of paths; the
+// tooling-lag diff alone exceeds execFileSync's 1 MiB default.
+const MAX_LOCAL_COMMAND_OUTPUT_BYTES = 256 * 1024 * 1024;
 const RUN_PAGE_SIZE = 20;
 const MAX_RUN_PAGES = 5;
 const GH_READ_OPTIONS = {
@@ -239,6 +242,7 @@ function run(command: string, args: string[], options: CommandOptions = {}) {
   }
   const output = execFileSync(command, args, {
     encoding: "utf8",
+    maxBuffer: MAX_LOCAL_COMMAND_OUTPUT_BYTES,
     stdio: options.stdio ?? ["ignore", "pipe", "inherit"],
   });
   return typeof output === "string" ? output.trim() : "";
