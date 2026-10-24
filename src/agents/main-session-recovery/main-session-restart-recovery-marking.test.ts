@@ -249,6 +249,24 @@ it("records an independent interrupted turn in a child of a cross-agent group pa
   });
 });
 
+it("leaves a completed replacement child and its copied old recovery claim untouched", async () => {
+  using store = createStore();
+  const child = await store.session("subagent:replaced-child", {
+    spawnDepth: 1,
+    spawnedBy: "agent:main:main",
+    lifecycleRevision: "replacement-child-revision",
+    lifecycleRunId: "replacement-child-run",
+    status: "done",
+    abortedLastRun: false,
+    endedAt: 10,
+    restartRecoveryRuns: [{ runId: "original-child-run", lifecycleGeneration: "old-gateway" }],
+    restartRecoveryDeliverySourceRunId: "original-child-run",
+  });
+  const before = child.read();
+  expect(await store.markStartup()).toEqual({ marked: 0, skipped: 0 });
+  expect(child.read()).toEqual(before);
+});
+
 it("loads only orphan candidates for main-session startup recovery", async () => {
   using store = createStore();
   const { storePath } = store;

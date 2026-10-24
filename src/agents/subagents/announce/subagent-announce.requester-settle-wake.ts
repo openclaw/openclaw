@@ -429,9 +429,14 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
       hasPrivateCompletion: privateRows.length > 0,
     });
     const knownNondelivery = state.status === "pending" && state.nextAttemptAt !== undefined;
-    const recoveryCustody = knownNondelivery
-      ? undefined
-      : resolveRequesterSettleRecoveryCustody(requesterEntry, identity);
+    const { resolvePrivateRequesterSettleRecoveryOwner } =
+      await import("../registry/subagent-registry-restart-recovery.js");
+    const privateOwner =
+      parentOnly && resolvePrivateRequesterSettleRecoveryOwner(requester, identity.runId);
+    const recoveryCustody =
+      knownNondelivery || privateOwner === "owned"
+        ? undefined
+        : resolveRequesterSettleRecoveryCustody(requesterEntry, identity);
     if (recoveryCustody?.status === "pending") {
       return false;
     }

@@ -304,9 +304,9 @@ recovery owner; independent child turns use the ordinary session recovery cycle
 and can be resumed with `sessions.recover`.
 Delegated recovery rechecks the recorded parent identity and current cross-agent
 spawn policy. If that authority cannot be restored, the child records why it
-stopped, and its unchanged parent receives a local transcript notice. A deleted
-archived, or replaced parent cannot receive that notice. A fresh authenticated message to
-the child carries its own authority.
+stopped, and its unchanged parent receives a local transcript notice. A deleted,
+archived, or replaced parent cannot receive that notice. A fresh authenticated
+message to the child carries its own authority.
 Startup discovery excludes archived sessions, recovery tombstones, and rows without
 recovery obligations before preparing targets. Completed sessions with pending
 recovery obligations still settle. Other skipped candidates are logged with a
@@ -368,8 +368,8 @@ TUI or Control UI, for user-owned work that must resume automatically. Paired
 clients must retain the original device-token generation: reissuing that token
 under a different authentication path can prevent recovery even for the same user.
 
-This also covers parent turns started by subagent completion or pause notices.
-An interrupted parent continues independently of later child completions, and a
+This also covers public parent turns started by subagent completion or pause notices.
+An interrupted public parent turn continues independently of later child completions, and a
 retry of the same notice joins that recovery instead of starting the turn again.
 Parents still waiting after yielding to children remain owned by their child batch.
 Once a parent turn has its own recorded operator source, recovery revalidates that
@@ -382,6 +382,13 @@ the old input. Later startup passes and restarts skip it. The session remains
 available for a fresh authenticated message; recovery never substitutes system
 authority. Temporary startup, binding, or access-policy availability failures keep
 their recovery claims and retry.
+
+Private completion turns retain their original accepted input with the child batch
+that owns its processing receipt. After a restart, that owner replays the same input
+once and records its result; ordinary recovery does not start a second copy.
+While automatic recovery owns that input, `sessions.recover` reports that it is
+already queued. Restoring the private turn still requires current sender and parent
+authority. An unavailable source produces a recorded interruption instead.
 
 If a delegated turn's sender authority cannot be reconstructed and no pending
 reply, harness completion, or independent run remains owed, recovery ends only that

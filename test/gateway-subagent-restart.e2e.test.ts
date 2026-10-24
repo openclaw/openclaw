@@ -713,8 +713,10 @@ it.skipIf(process.platform === "win32").for([
     const parentRequest = "DASHBOARD_RESTART_PARENT: start a visible child, then finish.";
     const childTask = "DASHBOARD_RESTART_CHILD: finish the retained assignment.";
     const childFinal = "DASHBOARD_CHILD_COMPLETED";
-    const leafTask = "DASHBOARD_RESTART_LEAF: finish the nested assignment.";
-    const leafResponse = createDeferred<ServerResponse>();
+    const peerRequest = "DASHBOARD_PEER_SEND: continue the retained child.";
+    const peerKey = `agent:${parentAgentId}:dashboard:restart-peer`;
+    let childKey = "";
+    let peerCalls = 0;
     const parentFinal = "DASHBOARD_PARENT_RECEIVED_RESULT";
     const failed = createDeferred<never>();
     void failed.promise.catch(() => {});
@@ -759,8 +761,26 @@ it.skipIf(process.platform === "win32").for([
             } else {
               text(title);
             }
-          } else if (input.includes(leafTask) && !input.includes(childTask)) {
-            leafResponse.resolve(response);
+          } else if (input.includes(peerRequest) && !input.includes(childTask)) {
+            peerCalls += 1;
+            if (peerCalls === 1) {
+              writeRestartToolCall(
+                response,
+                "peer_send",
+                "sessions_send",
+                {
+                  sessionKey: childKey,
+                  message: "DASHBOARD_CONTINUE: inspect retained work and finish.",
+                  mode: "followup",
+                  timeoutSeconds: 0,
+                  watch: false,
+                },
+                peerCalls,
+              );
+            } else {
+              expect(input).not.toContain('"status":"forbidden"');
+              text("DASHBOARD_PEER_ACKNOWLEDGED");
+            }
           } else if (input.includes(parentRequest)) {
             parentCalls += 1;
             if (parentCalls === 1) {
@@ -794,10 +814,8 @@ it.skipIf(process.platform === "win32").for([
               writeRestartToolCall(
                 response,
                 "dashboard_checkpoint",
-                followup ? "sessions_spawn" : "subagents",
-                followup
-                  ? { task: leafTask, taskName: "dashboard_restart_leaf", context: "isolated" }
-                  : { action: "list" },
+                "subagents",
+                { action: "list" },
                 childCalls,
               );
             } else if (followup && childCalls === 2) {
@@ -908,7 +926,9 @@ it.skipIf(process.platform === "win32").for([
             },
           },
           tools: {
-            allow: ["sessions_spawn", "sessions_send", "sessions_history", "subagents"],
+            sessions: { visibility: "all" },
+            agentToAgent: { enabled: true },
+            allow: ["read", "sessions_spawn", "sessions_send", "sessions_history", "subagents"],
             codeMode: { enabled: false },
             toolSearch: false,
           },
@@ -935,7 +955,7 @@ it.skipIf(process.platform === "win32").for([
           await client.request("agent.wait", { runId: accepted.runId, timeoutMs: 60_000 }),
         ).toMatchObject({ status: "ok" });
         const rows = await client.request<SessionsListResult>("sessions.list", { agentId: "main" });
-        const child = rows.sessions.find((row) => row.key.includes(":dashboard:"));
+        const child = rows.sessions.find((row) => row.spawnedBy === parentKey);
         expect(child, instance.logs()).toBeDefined();
         if (!child) {
           throw new Error("Visible spawn did not publish its dashboard child");
@@ -956,13 +976,22 @@ it.skipIf(process.platform === "win32").for([
               { timeout: 60_000 },
             ),
           );
-          // The finished child's registry task is historical; the leaf owns this new continuation.
-          writeOpenAiResponsesText(await wait(leafResponse.promise), {
-            text: "DASHBOARD_LEAF_COMPLETED",
-            messageId: "msg_dashboard_leaf_final",
-            responseId: "resp_dashboard_leaf_final",
-          });
+          // Peer follow-ups keep the original child task historical.
+          childKey = child.key;
+          await client.request("sessions.create", { key: peerKey, agentId: parentAgentId });
+          const peerRun = await client.request<{ runId: string }>(
+            "chat.send",
+            {
+              sessionKey: peerKey,
+              message: peerRequest,
+              idempotencyKey: "dashboard-peer-followup",
+            },
+            { expectFinal: false },
+          );
           await wait(initialChild.promise);
+          expect(
+            await client.request("agent.wait", { runId: peerRun.runId, timeoutMs: 60_000 }),
+          ).toMatchObject({ status: "ok" });
         }
         const beforeRestart = await client.request<SessionsListResult>("sessions.list", {
           agentId: "main",
@@ -974,6 +1003,20 @@ it.skipIf(process.platform === "win32").for([
         });
         expect(parentCalls).toBe(followup ? 3 : 2);
         await restart();
+        await wait(
+          vi.waitFor(
+            async () => {
+              const state = await client!.request<SessionsListResult>("sessions.list", {
+                agentId: "main",
+              });
+              expect(state.sessions.find((row) => row.key === child.key)).toMatchObject({
+                status: "running",
+                hasActiveRun: true,
+              });
+            },
+            { timeout: 60_000 },
+          ),
+        );
         const resumedResponse = await wait(resumedChild.promise);
         expect(parentCalls, instance.logs()).toBe(followup ? 3 : 2);
         expect(childCalls).toBe(resumedCall);

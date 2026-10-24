@@ -500,7 +500,7 @@ describe("typed restart recovery operator admission", () => {
         } finally {
           await finish();
         }
-      }, true);
+      }, parentState !== "direct human");
     },
   );
 

@@ -5,18 +5,19 @@ import type { SessionSourceAssertion } from "../config/sessions/session-source-a
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { GatewayOperatorRecoveryAuthorizationError } from "../infra/restart-recovery-errors.js";
 import { isSubagentSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
-import type { OperatorRecoveryTarget } from "./operator-run-recovery.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
 import { prepareSessionMutationFacts } from "./session-sharing-preparation.js";
 
 /** A delegated turn retains its exact parent, not merely the child's saved sender identity. */
 export async function prepareRestartRecoveryParentSource(params: {
   entry: InternalSessionEntry;
-  target: OperatorRecoveryTarget;
+  target: { agentId: string; sessionKey: string };
   requesterOrigin: RequesterOrigin | undefined;
   context: GatewayRequestContext;
   assertCurrent: () => void;
-}): Promise<{ source: SessionSourceAssertion; release: () => void } | undefined> {
+}): Promise<
+  { source: SessionSourceAssertion & { retain: () => () => void }; release: () => void } | undefined
+> {
   const parentSessionKey = params.entry.spawnedBy;
   // A fresh human turn in the child has its own operator source and needs no old parent.
   if (
@@ -26,7 +27,9 @@ export async function prepareRestartRecoveryParentSource(params: {
       (params.entry.spawnDepth ?? 0) > 0 ||
       isSubagentSessionKey(params.target.sessionKey)
     ) ||
-    params.requesterOrigin?.sessionKey === params.target.sessionKey
+    (params.requesterOrigin?.sessionKey === params.target.sessionKey &&
+      (params.entry.restartRecoverySourceIngress === "channel" ||
+        params.entry.restartRecoverySourceIngress === "control-ui"))
   ) {
     return undefined;
   }
@@ -90,7 +93,7 @@ export async function prepareRestartRecoveryParentSource(params: {
   try {
     params.assertCurrent();
     assertParentCurrent();
-    const source: SessionSourceAssertion = Object.assign(assertParentCurrent, {
+    const source = Object.assign(assertParentCurrent, {
       retain: () => {
         assertParentCurrent();
         references++;

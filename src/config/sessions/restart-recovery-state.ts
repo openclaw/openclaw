@@ -629,9 +629,10 @@ export function hasOrphanedMainSessionWork(
     !isCronSessionKey(sessionKey) &&
     !isAcpSessionKey(sessionKey) &&
     (isMainRestartRecoveryCandidate(entry, sessionKey) ||
-      Boolean(
-        entry.lifecycleRunId || entry.lastRunId || entry.restartRecoveryDeliverySourceRunId,
-      )) &&
+      ((entry.abortedLastRun === true || entry.status === "interrupted") &&
+        Boolean(
+          entry.lifecycleRunId || entry.lastRunId || entry.restartRecoveryDeliverySourceRunId,
+        ))) &&
     (hasMainSessionRecoveryClaim(entry) ||
       entry.abortedLastRun === true ||
       (entry.status === "interrupted" && !settledInterruption))

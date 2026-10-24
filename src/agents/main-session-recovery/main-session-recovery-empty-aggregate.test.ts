@@ -203,11 +203,13 @@ describe("empty main session recovery aggregate", () => {
     expect(session).toEqual(before);
   });
 
-  it("preserves an empty aggregate on a non-candidate session", () => {
-    const session = entry({ restartRecoveryRuns: undefined, spawnDepth: 1 });
+  it("preserves an empty aggregate owned by cron", () => {
+    const session = entry({ restartRecoveryRuns: undefined });
     const before = structuredClone(session);
 
-    expect(claimForeground(session)).toEqual({ kind: "no_change" });
+    expect(claimForeground(session, { sessionKey: "agent:main:cron:nightly" })).toEqual({
+      kind: "no_change",
+    });
     expect(session).toEqual(before);
   });
 
