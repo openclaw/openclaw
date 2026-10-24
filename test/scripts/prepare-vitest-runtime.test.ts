@@ -4,7 +4,10 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import * as buildAll from "../../scripts/build-all.mts";
 import { acquireDistArtifactOwnership } from "../../scripts/lib/dist-artifact-lock.mts";
 import * as artifactOwnership from "../../scripts/lib/dist-artifact-ownership.mts";
-import { prepareVitestRuntime } from "../../scripts/lib/vitest-build-prerequisites.mts";
+import {
+  prepareVitestRuntime,
+  runE2eGlobalSetup,
+} from "../../scripts/lib/vitest-build-prerequisites.mts";
 import { prepareTestRuntime } from "../../scripts/prepare-vitest-runtime.mts";
 import * as sourceRunner from "../../scripts/run-node.mts";
 import * as postbuild from "../../scripts/runtime-postbuild.mts";
@@ -92,59 +95,80 @@ beforeEach(async () => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-it.each([
-  { preparation: "ran", dts: undefined },
-  { preparation: "ran", dts: "0" },
-  { preparation: "ran", dts: "1" },
-  ...["cached", "reused", "postbuild", "warm", "locked recheck"].map((preparation) => ({
-    preparation,
-    dts: "1",
-  })),
-])(
-  "keeps the standalone AI writer unless an equivalent typed build completed here: $preparation, DTS=$dts",
-  async ({ preparation, dts }) => {
+it.each([undefined, "0", "1"])(
+  "admits E2E readers after one equivalent AI writer: caller DTS=%s",
+  async (dts) => {
     env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD = dts;
+    vi.spyOn(sourceRunner, "resolveRunNodePreparation").mockReturnValue({
+      build: true,
+      runtime: true,
+      immutable: false,
+    });
+    const writers: string[] = [];
+    // Keep the real qaRuntime planner, completion records, and dist ownership;
+    // only terminal workloads are fixtures, not evidence of actual compilation.
+    mockCompiler({
+      steps: undefined,
+      runStep: async ({ args, options }) => {
+        if (args.includes("scripts/tsdown-build.mts")) {
+          expect(options.env?.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD).toBe("0");
+          writers.push("typed runtime");
+          await fs.writeFile(entryPath(), "typed runtime\n");
+        }
+        return { status: 0 };
+      },
+    });
+    const standalone = async (commandEnv: NodeJS.ProcessEnv, signal?: AbortSignal) => {
+      expect(commandEnv).toBe(env);
+      const claim = await acquireDistArtifactOwnership(root, false, signal);
+      try {
+        writers.push("standalone");
+        await fs.writeFile(entryPath(), `standalone DTS=${dts}\n`);
+      } finally {
+        await claim.release();
+      }
+      return 0;
+    };
+    commands.prepare.mockImplementation(({ env: commandEnv, signal }) =>
+      standalone(commandEnv, signal),
+    );
+    await runE2eGlobalSetup(async (args, commandEnv) => {
+      if (args[0] === "scripts/prepare-vitest-runtime.mjs") {
+        return prepareTestRuntime(root, commandEnv, undefined, {
+          withAiPackage: args.includes("--with-ai-package"),
+        });
+      }
+      return standalone(commandEnv);
+    }, env);
+    expect(writers).toEqual(dts === "1" ? ["typed runtime", "standalone"] : ["typed runtime"]);
+    expect(await readEntry()).toBe(dts === "1" ? "standalone DTS=1\n" : "typed runtime\n");
+  },
+);
+
+it.each(["warm", "postbuild", "locked recheck"])(
+  "retains the original-environment AI writer after %s preparation",
+  async (preparation) => {
+    env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD = "1";
     const resolvePreparation = vi.spyOn(sourceRunner, "resolveRunNodePreparation");
     resolvePreparation.mockReturnValue({
-      build: !["warm", "postbuild"].includes(preparation),
+      build: false,
       runtime: preparation === "postbuild",
       immutable: false,
     });
     if (preparation === "locked recheck") {
       resolvePreparation.mockReturnValueOnce({ build: true, runtime: true, immutable: false });
-      resolvePreparation.mockReturnValue({ build: false, runtime: false, immutable: false });
     }
     vi.spyOn(postbuild, "runRuntimePostBuild").mockImplementation(() => {});
-    const build = vi.spyOn(buildAll, "runBuildAllSteps").mockResolvedValue({
-      exitCode: 0,
-      timings: [
-        { label: "tsdown", status: preparation === "ran" ? "ran" : "cached", durationMs: 1 },
-      ],
-    });
-    if (preparation === "reused") {
-      build.mockResolvedValue({
-        exitCode: 0,
-        timings: [{ label: "tsdown", status: "reused", durationMs: 1 }],
-      });
-    }
+    const build = vi.spyOn(buildAll, "runBuildAllSteps");
     commands.prepare.mockImplementation(async ({ env: commandEnv, signal }) => {
       expect(commandEnv).toBe(env);
-      expect(commandEnv.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD).toBe(dts);
-      // A standalone writer must be able to acquire its own claim immediately.
       const claim = await acquireDistArtifactOwnership(root, false, signal);
       await claim.release();
       return 0;
     });
     expect(await prepareTestRuntime(root, env, undefined, { withAiPackage: true })).toBe(0);
-    expect(commands.prepare).toHaveBeenCalledTimes(preparation === "ran" && dts !== "1" ? 0 : 1);
-    if (build.mock.calls.length) {
-      expect(build).toHaveBeenCalledWith(
-        "qaRuntime",
-        expect.objectContaining({
-          env: { ...env, OPENCLAW_BUILD_PRIVATE_QA: "1", OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0" },
-        }),
-      );
-    }
+    expect(commands.prepare).toHaveBeenCalledOnce();
+    expect(build).not.toHaveBeenCalled();
   },
 );
 
@@ -160,10 +184,7 @@ it("does not start another writer after a failed compiler generation", async () 
     runtime: true,
     immutable: false,
   });
-  vi.spyOn(buildAll, "runBuildAllSteps").mockResolvedValue({
-    exitCode: 7,
-    timings: [{ label: "tsdown", status: "ran", durationMs: 1 }],
-  });
+  mockCompiler({ steps: undefined, runStep: async () => ({ status: 7 }) });
   expect(await prepareTestRuntime(root, env, undefined, { withAiPackage: true })).toBe(7);
   expect(commands.prepare).not.toHaveBeenCalled();
 });
