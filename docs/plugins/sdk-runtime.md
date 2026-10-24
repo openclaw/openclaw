@@ -46,6 +46,34 @@ surface and session root. Channels may use this capability to enable helper
 tools for restricted senders. Core remains responsible for authorization and
 containment. The same ID is advertised in Gateway `hello-ok.features.capabilities`.
 
+## Module loading and host identity
+
+Declare plugin entries in `package.json` under `openclaw.extensions`, import
+documented `openclaw/plugin-sdk/*` subpaths, and declare `openclaw` as a peer
+dependency. The running host owns SDK classes, registries, and lifecycle state;
+do not bundle a second SDK copy. Installation and Doctor repair the peer link.
+Loading retains the existing peer-identity, captured-source, and instance
+disposal checks and never installs dependencies.
+
+[Standalone builds](/install/standalone) validate an explicit map of package SDK
+runtime exports and bundled runtime/setup entries. Those modules execute from the
+image and cannot be replaced through cache deletion or export mutation.
+Replacing bundled code requires restarting its owner. JIT and bytecode standalone
+builds, including a matched JIT companion, lazily load a host-owned Jiti package
+when a plugin needs transformation. The host supplies its native SDK namespace
+directly. This preserves SDK identity
+without evaluating another SDK copy. Native JavaScript loading retains its
+existing behavior.
+
+Use `api.logger` for plugin logs, owned fetch wrappers and the declared provider
+`createStreamFn`/`wrapStreamFn` hooks for transport behavior, and `onDiagnosticEvent` from
+`openclaw/plugin-sdk/diagnostic-runtime` for observability. Local wrappers,
+owned subclasses, and metadata on individual response objects avoid competing
+process-wide `console`, `fetch`, process-method, or prototype patches. Loader
+interception cannot observe every import in a compiled host. Qualify a plugin's
+transitive dependencies and activation/shutdown behavior against the actual host
+runtime; the compiled entry map is not a compatibility certificate.
+
 ## What each page covers
 
 - [Config and utilities](/plugins/sdk-runtime/config-and-utilities) — runtime config reads and writes, plus the shared process, error, and model-picker utilities.
