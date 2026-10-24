@@ -1,4 +1,4 @@
-import { createMemo, For, onSettled, Show } from "solid-js";
+import { createMemo, For, onSettled, Show, useContext } from "solid-js";
 import type {
   SessionParticipant,
   SessionParticipantIdentity,
@@ -18,6 +18,7 @@ import { projectAgentIdentity, projectAgents } from "../../lib/reactive/domain-c
 import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { personActivityLink, type PersonActivityRouting } from "../person-activity-link.ts";
+import { SidebarSnapshotContext } from "../sidebar-snapshot-context.ts";
 import { IdentityAvatarImage, createIdentityAvatarPresentation } from "./identity-avatar-image.tsx";
 import { useIdentityAvatarView } from "./identity-avatar-view.ts";
 import { AgentIdentityAvatar } from "./identity-avatar.tsx";
@@ -241,6 +242,7 @@ export function ParticipantAvatar(props: {
   label?: string;
   "aria-hidden"?: "true";
 }) {
+  const snapshot = useContext(SidebarSnapshotContext);
   const agent = () => {
     const identity = props.user.identity;
     return identity?.type === "agent" ? identity : undefined;
@@ -269,6 +271,13 @@ export function ParticipantAvatar(props: {
             })
           : undefined;
         const avatar = createMemo(() => {
+          const saved = snapshot?.();
+          const cached = (saved?.avatarAgents ?? saved?.cards)?.find(
+            (card) => card.id === identity().id,
+          );
+          if (cached) {
+            return cached;
+          }
           const rosterAgent = agents
             ?.read()
             .agentsList?.agents.find((entry) => entry.id === identity().id);

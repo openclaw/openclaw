@@ -30,6 +30,7 @@ export type SidebarAttentionProps = {
   activeRouteId?: NavigationRouteId;
   onNavigate?: ApplicationContext["navigate"];
   watchUpdateProgress?: (listener: (progress: UpdateProgress) => void) => () => void;
+  snapshot?: { visible: boolean; count: number };
 };
 
 export type SidebarAttentionMethods = { dismissPanel(): boolean };
@@ -70,7 +71,9 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
   let panelFocus: SidebarAttentionFocus | null = null;
   let panelGeneration = 0;
   let disposed = false;
-  const count = createMemo(() => sidebarInboxTabCounts(attention.read()).all);
+  const count = createMemo(
+    () => props.snapshot?.count ?? sidebarInboxTabCounts(attention.read()).all,
+  );
   const label = createMemo(() =>
     t(count() === 1 ? "attention.issueCount" : "attention.issueCountPlural", {
       count: String(count()),
@@ -79,7 +82,11 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
 
   function isCurrentPanel(generation: number, scope: ReturnType<typeof routeScope>) {
     return (
-      !disposed && host.isConnected && generation === panelGeneration && scope === routeScope()
+      !disposed &&
+      !props.snapshot &&
+      host.isConnected &&
+      generation === panelGeneration &&
+      scope === routeScope()
     );
   }
 
@@ -109,9 +116,14 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
     content: attention.revision,
   });
   const preloadPanel = () => {
-    void panelLoad.load().catch(() => undefined);
+    if (!props.snapshot) {
+      void panelLoad.load().catch(() => undefined);
+    }
   };
   async function openPanel(trigger: HTMLElement) {
+    if (props.snapshot) {
+      return;
+    }
     const generation = ++panelGeneration;
     const scope = routeScope();
     panelTrigger = { element: trigger, scope };
@@ -293,13 +305,19 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
   });
 
   return (
-    <Show when={gateway.read().snapshot.phase === "connected" || attention.read().length > 0}>
+    <Show
+      when={
+        props.snapshot?.visible ??
+        (gateway.read().snapshot.phase === "connected" || attention.read().length > 0)
+      }
+    >
       <span class="sr-only" role="status" aria-live="polite">
         {label()}
       </span>
       <button
         type="button"
         class="sidebar-issues-button"
+        inert={Boolean(props.snapshot)}
         aria-expanded={panelOpen() ? "true" : "false"}
         aria-haspopup="dialog"
         aria-controls="sidebar-issues-panel"
@@ -367,10 +385,11 @@ export const SidebarAttention = defineSolidBridge<SidebarAttentionProps, Sidebar
       activeRouteId: { default: undefined, attribute: false },
       onNavigate: { default: undefined, attribute: false },
       watchUpdateProgress: { default: undefined, attribute: false },
+      snapshot: { default: undefined, attribute: false },
     },
     methods: { dismissPanel: (host) => panelDismissals.get(host)?.() ?? false },
     propertyChanged: (host, key) => {
-      if (key === "activeRouteId") {
+      if (key === "activeRouteId" || key === "snapshot") {
         panelDismissals.get(host)?.();
       }
     },

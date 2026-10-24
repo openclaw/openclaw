@@ -127,7 +127,7 @@ const sidebarRecordsSchema = json.array(
   json.object(
     {
       ...metadataFields,
-      projectionVersion: json.literal(1),
+      projectionVersion: json.literal(2),
       model: json.unknown,
     },
     true,
@@ -511,7 +511,7 @@ export class SessionSnapshotStore implements ChatCacheObserver {
       const record: SidebarRecord = {
         sessionKey: key,
         savedAt: Date.now(),
-        projectionVersion: 1,
+        projectionVersion: 2,
         model: structuredClone(model),
       };
       if (sidebarRecordBytes(record) > 512 * 1024) {

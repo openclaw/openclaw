@@ -10,12 +10,16 @@ import { resolveAvatarImageUrl } from "../lib/identity-avatar-loader.ts";
 import type { AgentIdentity } from "../lib/identity-avatar-view.ts";
 import type { IdentityAvatarInput } from "../lib/identity-avatar.ts";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
+import { SidebarSnapshotContext } from "./sidebar-snapshot-context.ts";
+import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
+import { sidebarSnapshot } from "./sidebar-snapshot.test-support.ts";
 import {
   IdentityAvatarImage,
   createIdentityAvatarPresentation,
 } from "./solid/identity-avatar-image.tsx";
 import { useIdentityAvatarView } from "./solid/identity-avatar-view.ts";
 import { AgentIdentityAvatar } from "./solid/identity-avatar.tsx";
+import { ViewerFacepile } from "./solid/viewer-facepile.tsx";
 
 const gateway = "https://gateway.example.test";
 const imageResponse = () =>
@@ -91,6 +95,45 @@ afterEach(() => {
   vi.unstubAllGlobals();
   document.documentElement.removeAttribute("data-openclaw-control-ui-build-id");
 });
+
+it.each([null, "/avatar/cedar?v=1"])(
+  "keeps the cached agent avatar presentation %s until the sidebar handoff",
+  async (avatar) => {
+    const { fetchAvatar } = mockImages(["blob:cached-card", "blob:live-card"]);
+    const model = {
+      ...sidebarSnapshot,
+      cards: [{ id: "cedar", name: "Cedar", mainKey: "main", avatar, textAvatar: "🦀" }],
+    };
+    const view = mountAvatar<SidebarSnapshotModel | null>(
+      model,
+      (snapshot) => (
+        <SidebarSnapshotContext value={snapshot}>
+          <ViewerFacepile
+            staticParticipants={[
+              {
+                label: "Cedar",
+                identity: { type: "agent", id: "cedar" },
+                avatarUrl: "/avatar/cedar?v=2",
+              },
+            ]}
+          />
+        </SidebarSnapshotContext>
+      ),
+      ".identity-avatar--agent",
+    );
+    if (avatar) {
+      await view.loaded("blob:cached-card");
+      expect(fetchAvatar).toHaveBeenLastCalledWith(`${gateway}${avatar}`, expect.any(Object));
+    } else {
+      expect(view.image()).toBeNull();
+      expect(view.container.querySelector<HTMLElement>("[data-avatar]")?.dataset.avatar).toBe("🦀");
+      expect(fetchAvatar).not.toHaveBeenCalled();
+    }
+    view.update(null);
+    await view.loaded(avatar ? "blob:live-card" : "blob:cached-card");
+    expect(fetchAvatar).toHaveBeenLastCalledWith(`${gateway}/avatar/cedar?v=2`, expect.any(Object));
+  },
+);
 
 it.each(["profile", "agent"] as const)(
   "refreshes mounted %s images after credential changes",

@@ -462,6 +462,7 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): SolidJSX.
           </button>
         </openclaw-tooltip>
         <SidebarAttention
+          snapshot={host.sidebarSnapshot?.issues}
           activeRouteId={host.activeRouteId}
           onNavigate={host.onNavigate}
           watchUpdateProgress={host.watchUpdateProgress}

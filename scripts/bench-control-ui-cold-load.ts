@@ -16,6 +16,7 @@
 // --gateway-http serves paired bundles through the Gateway HTTP owner on loopback.
 // --first-load skips warm-up and clears client state; external Gateway URL runs stay single-sample.
 // --sidebar-persistent-children keeps expanded rows outside root windows for staggered handoff proof.
+// --sidebar-presentation adds badges/avatars; --sidebar-presentation-probe records visible waves.
 // --critical-path captures usable-screen readiness and first Sessions/Settings/Cron/Agents visits.
 // Repeat --critical-path-route to narrow/order visits; HTTP throttling and RPC latency are separate.
 // Paint/CLS and static-shell geometry are recorded in presentation; --filmstrip-only saves frames.
@@ -47,6 +48,7 @@ import {
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
 import { createControlUiSandboxFixtureServer } from "../ui/src/test-helpers/control-ui-sandbox-fixture-server.ts";
 import { createTeamScaleSidebarListOwner } from "../ui/src/test-helpers/control-ui-sidebar-list-fixture.ts";
+import { installTeamScaleSidebarPresentation } from "../ui/src/test-helpers/control-ui-sidebar-presentation.test-support.ts";
 import {
   createControlUiStreamingReply,
   createStreamingReplyProbeInitScript,
@@ -90,6 +92,7 @@ import {
   type InteractionStyleSheet,
 } from "./lib/control-ui-interaction-trace.ts";
 import { probeColdLoadOverlays } from "./lib/control-ui-overlay-probe.ts";
+import { sidebarPresentationProbe } from "./lib/control-ui-sidebar-presentation.test-support.ts";
 import { warmReloadProbe } from "./lib/control-ui-warm-reload-probe.ts";
 import {
   GATEWAY_HEAP_SAMPLE_INTERVAL,
@@ -271,6 +274,8 @@ const { values } = parseArgs({
     "sidebar-list-churn": { type: "boolean", default: false },
     "sidebar-live-churn": { type: "boolean", default: false },
     "sidebar-avatars": { type: "boolean", default: false },
+    "sidebar-presentation": { type: "boolean", default: false },
+    "sidebar-presentation-probe": { type: "boolean", default: false },
     "sidebar-expanded": { type: "boolean", default: false },
     "sidebar-persistent-children": { type: "boolean", default: false },
     "omit-hello-self-presence": { type: "boolean", default: false },
@@ -319,6 +324,9 @@ if (values["streaming-reply"] && values["live-events"]) {
 }
 if (values["streaming-allocations"] && !values["streaming-reply"]) {
   throw new Error("streaming-allocations requires streaming-reply");
+}
+if (values["sidebar-presentation-probe"] && !values["sidebar-presentation"]) {
+  throw new Error("sidebar-presentation-probe requires sidebar-presentation");
 }
 if (values["sidebar-list-churn"] && !values["live-events"]) {
   throw new Error("sidebar-list-churn requires live-events");
@@ -648,6 +656,7 @@ const fixture = createControlUiTeamScaleFixture({
   sidebarListChurn: values["sidebar-list-churn"],
   sidebarLiveChurn: values["sidebar-live-churn"],
   sidebarAvatars: values["sidebar-avatars"],
+  sidebarPresentation: values["sidebar-presentation"],
   sidebarPersistentChildren: values["sidebar-persistent-children"],
   sessionEventChurn: values["session-event-churn"],
   sessionEventDurationMs,
@@ -1011,6 +1020,7 @@ try {
     if (
       values["sidebar-live-churn"] ||
       values["sidebar-avatars"] ||
+      values["sidebar-presentation"] ||
       values["closed-menu-members"]
     ) {
       await page.route("**/api/users/*/avatar?*", async (route) => {
@@ -1026,6 +1036,12 @@ try {
         }
         return route.fulfill(response);
       });
+      if (values["sidebar-presentation"]) {
+        await page.route("**/avatar/*", (route) => {
+          const asset = fixture.assets.get(new URL(route.request().url()).pathname);
+          return asset ? route.fulfill(asset) : route.fallback();
+        });
+      }
     }
   }
   await page.addInitScript(
@@ -1087,11 +1103,14 @@ try {
     },
   );
   const warmProbes = values["warm-reload"] ? `\n(${warmReloadProbe.toString()})();` : "";
+  const presentationProbes = fixture.sidebarPresentation
+    ? `\n(${installTeamScaleSidebarPresentation.toString()})(${JSON.stringify(fixture.sidebarPresentation)});${values["sidebar-presentation-probe"] ? `\n(${sidebarPresentationProbe.toString()})();` : ""}`
+    : "";
   const boardTickets = values["dashboard-widget"]
     ? `\n(${installRotatingBoardTickets.toString()})(${JSON.stringify(fixture.board)}, window.openclawControlUiE2eGateway);`
     : "";
   await page.addInitScript({
-    content: `;(() => { if (window !== window.top || location.protocol === "about:") return; const __name = (fn) => fn; (${installWidgetReadiness.toString()})(); ${createControlUiMockGatewayInitScript(prepared.scenario)}\n${rigProbeScript}\nwindow.__teamScaleSidebarLists = { apply: (mutation) => window.__teamScaleMutate(mutation) }; window.openclawControlUiE2eGateway.setRequestHandler("sessions.list", async ({ params, respond }) => respond(await window.__teamScaleList(params))); window.openclawControlUiE2eGateway.setRequestHandler("cron.list", async ({ params, respond }) => respond(await window.__teamScaleCronList(params)));\n${boardTickets}\n${createColdLoadProbeInitScript({ latencyMs, downloadKbps: values["critical-path"] ? downloadKbps : undefined, methodLatencyMs, sidebarQueryLatencyMs, omitHelloSelfPresence: values["omit-hello-self-presence"], connectNotBeforeMs, frameGapMs, events: fixture.events, liveEvents: fixture.liveEvents, liveHistory: fixture.liveHistory, ownerProbes: !cpuProfile && !allocations && !values["session-event-churn"], sidebarCounters: !cpuProfile })}\n${streamingReply ? createStreamingReplyProbeInitScript() : ""}\n${extraInitScripts.join("\n")}\n${warmProbes} })();`,
+    content: `;(() => { if (window !== window.top || location.protocol === "about:") return; const __name = (fn) => fn; (${installWidgetReadiness.toString()})(); ${createControlUiMockGatewayInitScript(prepared.scenario)}\n${rigProbeScript}\nwindow.__teamScaleSidebarLists = { apply: (mutation) => window.__teamScaleMutate(mutation) }; window.openclawControlUiE2eGateway.setRequestHandler("sessions.list", async ({ params, respond }) => respond(await window.__teamScaleList(params))); window.openclawControlUiE2eGateway.setRequestHandler("cron.list", async ({ params, respond }) => respond(await window.__teamScaleCronList(params)));\n${boardTickets}\n${createColdLoadProbeInitScript({ latencyMs, downloadKbps: values["critical-path"] ? downloadKbps : undefined, methodLatencyMs, sidebarQueryLatencyMs, omitHelloSelfPresence: values["omit-hello-self-presence"], connectNotBeforeMs, frameGapMs, events: fixture.events, liveEvents: fixture.liveEvents, liveHistory: fixture.liveHistory, ownerProbes: !cpuProfile && !allocations && !values["session-event-churn"], sidebarCounters: !cpuProfile })}\n${streamingReply ? createStreamingReplyProbeInitScript() : ""}\n${extraInitScripts.join("\n")}\n${warmProbes}${presentationProbes} })();`,
   });
   if (values["critical-path"]) {
     await page.addInitScript({
@@ -1768,6 +1787,9 @@ try {
     }
     const warmReload = values["warm-reload"]
       ? await page.evaluate(() => Reflect.get(window, "__warmReload").read())
+      : undefined;
+    const sidebarPresentation = values["sidebar-presentation-probe"]
+      ? await page.evaluate(() => Reflect.get(window, "__sidebarPresentation").read())
       : undefined;
     if (cpuProfile) {
       await writeFile(
@@ -2558,6 +2580,7 @@ try {
       sessionSwitch,
       criticalPath,
       warmReload,
+      sidebarPresentation,
       historyValidatorRequests: historyValidatorRequests - validatorRequestsBeforeReload,
       snapshotSave: snapshotSaves[bundleIndex],
       overlays,
@@ -2652,6 +2675,8 @@ try {
         fixture: fixture.counts,
         sidebarView,
         sidebarAvatars: values["sidebar-avatars"],
+        sidebarPresentation: values["sidebar-presentation"],
+        sidebarPresentationProbe: values["sidebar-presentation-probe"],
         sidebarExpanded: values["sidebar-expanded"],
         sidebarPersistentChildren: fixture.sidebarPersistentChildren,
         omitHelloSelfPresence: values["omit-hello-self-presence"],

@@ -114,6 +114,7 @@ export type SidebarRecentSession = Readonly<{
   subtitle?: string;
   /** Admitted display slot used only while restoring a sidebar snapshot. */
   snapshotSubtitle?: { subtitle?: string; narration?: string; toolName?: string };
+  snapshotPresentation?: import("./sidebar-snapshot-data.ts").SidebarSnapshotSession["snapshotPresentation"];
   workContext?: SessionWorkContext;
   active: boolean;
   visuallyActive: boolean;

@@ -1,5 +1,9 @@
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import type { ApplicationGateway } from "../app/gateway.ts";
+import {
+  captureIdentityAvatarSnapshot,
+  restoreIdentityAvatarSnapshot,
+} from "../lib/identity-avatar-loader.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT } from "../pages/chat/chat-history-events.ts";
 import {
@@ -13,7 +17,11 @@ import {
   type SidebarSnapshotScope,
 } from "../pages/chat/session-snapshot-prewarm.ts";
 import { SessionSnapshotStore } from "../pages/chat/session-snapshot-store.ts";
-import { parseSidebarSnapshot, type SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
+import {
+  parseSidebarSnapshot,
+  sidebarSnapshotAvatarUrls,
+  type SidebarSnapshotModel,
+} from "./sidebar-snapshot-model.ts";
 
 type SidebarSnapshotHost = {
   sidebarSnapshot: SidebarSnapshotModel | null;
@@ -49,6 +57,7 @@ export function createSidebarSnapshot(host: SidebarSnapshotHost) {
   let handoffIdle: number | undefined;
   let handoffReady = false;
   let handoffExpired = false;
+  let releaseAvatars: (() => void) | undefined;
 
   function subscribe(listener: () => void): () => void {
     publish = listener;
@@ -110,17 +119,24 @@ export function createSidebarSnapshot(host: SidebarSnapshotHost) {
           scope = boot.scope;
           pending = true;
           const current = captureScope();
-          void boot.snapshot.then((model) => {
+          void boot.snapshot.then(async (model) => {
             synchronize();
             if (!current()) {
               return;
             }
-            pending = false;
             if (model && matchesAgent(model) && !host.sidebarSnapshotSettled()) {
+              const avatars = restoreIdentityAvatarSnapshot(model.avatarImages ?? []);
+              releaseAvatars = avatars.release;
+              await avatars.ready;
+              if (!current()) {
+                avatars.release();
+                return;
+              }
               host.restoreSidebarSnapshot(model);
               serialized = JSON.stringify(model);
               saved = true;
             }
+            pending = false;
             notify();
           });
         }
@@ -263,7 +279,16 @@ export function createSidebarSnapshot(host: SidebarSnapshotHost) {
       if (!current()) {
         return;
       }
-      const written = await store.writeSidebar(key, model, parseSidebarSnapshot);
+      const urls = sidebarSnapshotAvatarUrls(model);
+      let stored = model;
+      if (urls.length > 0) {
+        const avatarImages = await captureIdentityAvatarSnapshot(urls);
+        if (!current()) {
+          return;
+        }
+        stored = { ...model, avatarImages };
+      }
+      const written = await store.writeSidebar(key, stored, parseSidebarSnapshot);
       if (written && current() && nextSerialized === serialized) {
         saved = true;
         notify();
@@ -311,6 +336,8 @@ export function createSidebarSnapshot(host: SidebarSnapshotHost) {
   }
 
   function clearDisplay(): void {
+    releaseAvatars?.();
+    releaseAvatars = undefined;
     cancelHandoff();
     cancelCapture?.();
     cancelCapture = undefined;

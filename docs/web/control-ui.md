@@ -147,6 +147,8 @@ Session details share concurrent reads across the sidebar, chat, and resource pa
 
 Sidebar pull-request indicators reuse the last known snapshot. Opening a session, its progress card, or its Git activity requests current checkout facts; sidebar rows alone do not poll Git. Active panels detect branch and staged changes from Git metadata. Tool completion refreshes working-tree stats, with a five-minute fallback for edits made outside OpenClaw.
 
+Reloading with an admitted browser snapshot restores the sidebar's unread marks, state icons, pull-request badges, avatars, and Inbox count together. These are the last verified display facts for the same Gateway and account; live reads replace changed facts when recovery settles. Cached images keep their avatar revision and do not grant access or enable actions. Switching accounts, losing snapshot admission, or clearing the scoped cache retires them. Incognito session presentation is never saved.
+
 Changes summaries share identical concurrent polls and reuse unchanged checkout results when file metadata can establish freshness. Summary reads have a separate worker queue from full patches and PR statistics, with priority inside the shared Git child limit. Running Git commands still finish normally, and background work keeps making progress.
 
 When a checkout is too large or its Git layout cannot be validated cheaply, summaries reuse the last result for up to ten seconds before probing again. Missing or unavailable checkouts retry after one second. Full patches still require fresh revision validation.
