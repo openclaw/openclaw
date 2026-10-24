@@ -41,4 +41,5 @@ export type CommandHandlerContext = {
   }>;
   localCli?: ReturnType<typeof createTuiLocalCliRunner>;
   requestExit: (result?: Partial<TuiResult>) => void;
+  resolveSessionSelection?: (raw?: string, agentId?: string) => { key: string; agentId: string };
 };
