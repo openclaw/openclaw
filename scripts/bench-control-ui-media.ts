@@ -160,7 +160,7 @@ try {
         let pendingMedia = 0;
         let mediaTransferAt = 0;
         const errors: string[] = [];
-        const events: Array<{ name: string; dur?: number }> = [];
+        const events: Array<Record<string, unknown>> = [];
         let tracing = false;
         page.on("pageerror", (error) => errors.push(error.message));
         page.on("console", (message) => {
@@ -375,7 +375,7 @@ try {
               }
             },
           );
-          await cdp.send("Performance.enable");
+          await cdp.send("Performance.enable", { timeDomain: "threadTicks" });
           await cdp.send("Network.enable");
           if (profile === "remote") {
             await cdp.send("Network.emulateNetworkConditions", {
@@ -402,9 +402,9 @@ try {
           await cdp.send("HeapProfiler.collectGarbage");
           const before = await metrics(cdp);
           if (values.trace) {
-            cdp.on("Tracing.dataCollected", ({ value }: { value: typeof events }) =>
-              events.push(...value),
-            );
+            cdp.on("Tracing.dataCollected", ({ value }) => {
+              events.push(...value);
+            });
             await cdp.send("Tracing.start", {
               categories: "toplevel,devtools.timeline,disabled-by-default-devtools.timeline",
               transferMode: "ReportEvents",
@@ -547,7 +547,10 @@ try {
                   name,
                   events
                     .filter((entry) => entry.name === name)
-                    .reduce((sum, entry) => sum + (entry.dur ?? 0), 0) / 1000,
+                    .reduce(
+                      (sum, entry) => sum + (typeof entry.dur === "number" ? entry.dur : 0),
+                      0,
+                    ) / 1000,
                 ],
               ),
             );
@@ -570,8 +573,8 @@ try {
           const disposedRequests = Object.fromEntries(requests);
           const steadyRequests = Object.fromEntries(
             [...requests]
-              .map(([key, count]) => [key, count - (bootRequests[key] ?? 0)])
-              .filter(([, count]) => Number(count) > 0),
+              .map(([key, count]): [string, number] => [key, count - (bootRequests[key] ?? 0)])
+              .filter(([, count]) => count > 0),
           );
           const afterDispose = await metrics(cdp);
           Object.assign(result, {
@@ -669,6 +672,7 @@ try {
     JSON.stringify(
       {
         browser: browser.version(),
+        durationClock: "threadTicks",
         bundles: servers.map(({ server: _server, ...item }) => item),
         fixture: {
           messages: 96,

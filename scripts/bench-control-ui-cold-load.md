@@ -28,6 +28,10 @@ Per-sample JSON records request counts by full URL (including revision, ticket,
 and size queries), method, kind and opaque auth-context identity; credentials are
 never recorded. Cumulative before/stable/scroll/disposal snapshots and separate
 boot/steady duplicate counts distinguish request ownership from bootstrap work.
+Duration metrics use Chrome’s `threadTicks` clock to measure thread CPU time,
+excluding time descheduled by other work on the host. Wall-clock load/scroll
+timings remain separate.
+
 It also records CLS source rectangles and media attribution, object URL
 creation/revocation and remaining DOM consumers, CDP script/task/layout/style
 duration, and JS heap before scrolling and after forced GC immediately before

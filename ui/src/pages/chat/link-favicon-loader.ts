@@ -3,7 +3,11 @@ import { hasSameOriginGatewayTransport } from "../../dev-gateway.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { fetchLinkFaviconBlobUrl } from "../plugins/icon-loader.ts";
 import { observeChatAttachmentViewport } from "./components/chat-attachment-viewport.ts";
-import { createLinkFaviconReader, type LinkFaviconFetcher } from "./link-favicon-cache.ts";
+import {
+  createLinkFaviconReader,
+  hasLinkFavicon,
+  type LinkFaviconFetcher,
+} from "./link-favicon-cache.ts";
 
 let currentFetcher:
   | {
@@ -132,12 +136,19 @@ export function hydrateLinkFavicons(root: ParentNode, fetchFavicon?: LinkFavicon
       );
       image.src = blobUrl;
     };
-    const stopObserving = observeChatAttachmentViewport(image, () => {
+    let stopObserving: (() => void) | undefined;
+    const load = () => {
       image.dataset.linkFaviconState = "loading";
       apply();
-    });
+    };
+    // Reusing admitted work needs no second viewport wait on row remounts.
+    if (hasLinkFavicon(hostname, fetchFavicon)) {
+      load();
+    } else {
+      stopObserving = observeChatAttachmentViewport(image, load);
+    }
     hydrated.images.set(image, () => {
-      stopObserving();
+      stopObserving?.();
       settled.abort();
       reader.dispose();
       image.removeAttribute("src");

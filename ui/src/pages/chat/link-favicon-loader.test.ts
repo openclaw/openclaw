@@ -62,6 +62,10 @@ it("defers offscreen links and releases their shared URL after the last image le
   enter.get(second)?.();
   expect(second.src).toBe(first.src);
   expect(fetcher).toHaveBeenCalledOnce();
+  const remounted = appendPlaceholder();
+  hydrateLinkFavicons(document.body, fetcher);
+  expect(remounted.src).toBe(first.src);
+  expect(enter.has(remounted)).toBe(false);
   first.remove();
   hydrateLinkFavicons(document.body, fetcher);
   expect(revoke).not.toHaveBeenCalled();

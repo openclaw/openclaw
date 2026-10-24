@@ -47,6 +47,10 @@ export function retainLinkFaviconCache(fetcher: LinkFaviconFetcher): () => void 
   };
 }
 
+export function hasLinkFavicon(hostname: string, fetcher: LinkFaviconFetcher): boolean {
+  return caches.get(fetcher)?.entries.has(hostname) ?? false;
+}
+
 export function createLinkFaviconReader(onSettled: () => void) {
   const notify = () => onSettled();
   let current:
