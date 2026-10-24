@@ -1,11 +1,31 @@
-import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
+import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
+import {
+  executeExistingOpenClawStateRead,
+  withExistingOpenClawStateDatabaseCurrentReadOnly,
+} from "./openclaw-state-db-readonly.js";
+import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 import { captureUserProfileAuthorityRead } from "./user-profile-events.js";
+import { selectUserProfileIdentityInDatabase } from "./user-profile-identity.read.js";
 import { prepareUserProfileCatalog, readUserProfileSnapshot } from "./user-profile-list.js";
 import type { CachedGitHubIdentity, CachedGitHubIdentityBinding } from "./user-profiles.types.js";
 
 type ProfileReadOptions = Pick<OpenClawStateDatabaseOptions, "path" | "env">;
+
+/** Final node-host disclosure cannot borrow another process's resident profile publications. */
+export function readCurrentUserProfileIdentity(
+  profileId: string,
+  options: ProfileReadOptions = {},
+) {
+  return withExistingOpenClawStateDatabaseCurrentReadOnly(
+    ({ db }) =>
+      tableExists(db, "user_profiles")
+        ? runSqliteReadSnapshotSync(db, () => selectUserProfileIdentityInDatabase(db, profileId))
+        : undefined,
+    { ...options, allowNativeRead: true },
+  );
+}
 
 /** Fresh disclosure aliases retain their physical store and merge authority across caller waits. */
 export async function prepareCurrentUserProfileAliases(

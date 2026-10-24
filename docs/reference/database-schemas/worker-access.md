@@ -6728,12 +6728,16 @@ bounded connection-owned results reuse its current revision, invalidating on loc
 writer receipts, schema changes, and disposal. Synchronous projection
 preserves actor order, missing profiles, merge aliases, and secondary GitHub logins.
 Released synchronous SDK projectors remain available through the next SDK major.
-Final source-session disclosure guards still read selected session keys on the host:
-raw synchronous SDK writers do not publish complete revocation facts.
-Retained agent readers share admission and synchronous consumption without a
-foreign-observation scope or added transaction around the final guard.
-These guards retire when the next SDK major removes those writers and session-owner
-publications cover all revocations. Schemas, stored bytes, permissions, retention,
+Final source-session disclosure prepares the selected stores through the ordered
+worker cohort, then retains the existing native selected-key guard on the host.
+Worker queues and profile publications are process-local; the source Gateway can
+commit a group, owner, participant, or profile change while the node host awaits.
+After the last await, bounded native reads select current session rows and the
+chosen profile's canonical aliases. The synchronous callback rechecks configuration,
+groups, source identity, and exact session IDs before serialization. This final-read
+contract is not atomic cross-database serialization. No retained catalog or returned
+metadata grants later authority. These native guards remain until the canonical
+owners cover external writers. Schemas, stored bytes, permissions, retention,
 durability, and update behavior are unchanged.
 
 Secret-store expiry runs in that worker for scheduled Gateway cleanup and
