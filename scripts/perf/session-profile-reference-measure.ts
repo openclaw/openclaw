@@ -5,7 +5,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { Session, type HeapProfiler } from "node:inspector/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { performance, PerformanceObserver } from "node:perf_hooks";
+import { performance, PerformanceObserver, type PerformanceEntry } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
@@ -244,13 +244,14 @@ try {
   let measuredUntil = Infinity;
   const measuredSince = performance.now();
   const startedAtEpochMs = Date.now();
-  const observer = new PerformanceObserver((list) => {
-    for (const entry of list.getEntries()) {
+  const recordGc = (entries: PerformanceEntry[]) => {
+    for (const entry of entries) {
       if (entry.startTime >= measuredSince && entry.startTime < measuredUntil) {
         gcDurations.push(entry.duration);
       }
     }
-  });
+  };
+  const observer = new PerformanceObserver((list) => recordGc(list.getEntries()));
   observer.observe({ entryTypes: ["gc"] });
   let returnedEntries = 0;
   let matchedEntries = 0;
@@ -280,9 +281,8 @@ try {
   const cpu = process.threadCpuUsage(started);
   measuredUntil = performance.now();
   const { profile } = await inspector.post("HeapProfiler.stopSampling");
-  await new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
+  await delay(10);
+  recordGc(observer.takeRecords());
   observer.disconnect();
   assert.equal(
     matchedEntries,
