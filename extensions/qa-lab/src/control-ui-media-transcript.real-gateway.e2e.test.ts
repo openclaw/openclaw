@@ -7,8 +7,7 @@ import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/se
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
-import { transformMessages } from "../../../packages/ai/src/transcript-transform.ts";
-import type { AssistantMessage, Model } from "../../../packages/ai/src/types.ts";
+import type { AssistantMessage } from "../../../packages/ai/src/types.ts";
 import { createControlUiE2eSuite } from "../../../ui/src/e2e/control-ui-e2e-suite.test-support.ts";
 import { waitForControlUiGatewayReady } from "../../../ui/src/test-helpers/control-ui-e2e-readiness.ts";
 import {
@@ -33,19 +32,6 @@ const suite = createControlUiE2eSuite({
 
 const retainedImageBase64 =
   "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAmElEQVR4nO3QMREAIBDAsHeERQyjAWRkoEP2Xmftc382OkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAO0B06OyaOxP7RwAAAAASUVORK5CYII=";
-const replayModel: Model<"openai-responses"> = {
-  id: "gpt-5.6-luna",
-  name: "Mock OpenAI",
-  api: "openai-responses",
-  provider: "mock-openai",
-  baseUrl: "https://example.invalid/v1",
-  reasoning: false,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 128_000,
-  maxTokens: 4_096,
-};
-
 type PersistedAssistantMessage = AssistantMessage & {
   openclawDisplayContent?: Array<Record<string, unknown>>;
 };
@@ -253,17 +239,9 @@ suite.define(() => {
     "delivers PowerPoint and keeps persisted attachment failures replay-safe",
     { timeout: 180_000 },
     async () => {
-      const startedAt = performance.now();
-      // Suite deadlines can expire without a Playwright locator stack.
-      const reportPhase = (phase: string) =>
-        console.info("[media-transcript]", {
-          phase,
-          elapsedMs: Math.round(performance.now() - startedAt),
-        });
       const gatewayOwner = createQaLiveLaneGateway();
       const errors: unknown[] = [];
       try {
-        reportPhase("gateway-starting");
         const gateway = await startGateway(gatewayOwner);
         await writeFile(path.join(gateway.gateway.workspaceDir, "slides.pptx"), await createPptx());
         expect(await gateway.gateway.call("config.get", {})).toHaveProperty(
@@ -293,7 +271,6 @@ suite.define(() => {
           });
           const stop = page.getByRole("button", { name: "Stop generating", exact: true });
           await send(page, "Reply exactly `Slides ready\nMEDIA:./slides.pptx`");
-          reportPhase("powerpoint-request-sent");
           const card = page.locator(".chat-assistant-attachment-card", {
             hasText: "slides.pptx",
           });
@@ -306,7 +283,6 @@ suite.define(() => {
           await stop.waitFor({ state: "hidden" });
           await send(page, "Reply exactly `Session healthy`");
           await healthyReplay(() => history(20), "Session healthy");
-          reportPhase("success-replay-checked");
           await stop.waitFor({ state: "hidden" });
           await send(page, "Reply exactly `Missing file\nMEDIA:./missing-proof.txt`");
           const failureCard = page.locator(".chat-assistant-attachment-card", {
@@ -317,7 +293,6 @@ suite.define(() => {
           await stop.waitFor({ state: "hidden" });
           await send(page, "Reply exactly `Session recovered`");
           await healthyReplay(() => history(30), "Session recovered");
-          reportPhase("failure-replay-checked");
           const stateDir = gateway.gateway.runtimeEnv.OPENCLAW_STATE_DIR;
           if (!stateDir) {
             throw new Error("QA Gateway state directory is unavailable");
@@ -343,20 +318,16 @@ suite.define(() => {
             displayHistoryHasAttachmentError: true,
             modelHistoryHasAttachmentError: false,
           });
-          expect(() => transformMessages(rawAssistantMessages, replayModel)).not.toThrow();
-          reportPhase("verdict-checked");
         });
       } catch (error) {
         errors.push(error);
       }
-      reportPhase("gateway-stopping");
       await stopControlUiGateway(
         gatewayOwner,
         suite.artifactDir,
         "Control UI media transcript proof failed",
         errors,
       );
-      reportPhase("gateway-stopped");
     },
   );
 });

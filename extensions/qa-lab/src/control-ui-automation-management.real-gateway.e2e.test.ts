@@ -8,6 +8,11 @@ import { expect, it } from "vitest";
 import { createControlUiE2eSuite } from "../../../ui/src/e2e/control-ui-e2e-suite.test-support.ts";
 import { controlUiSessionUrl } from "../../../ui/src/test-helpers/control-ui-e2e.ts";
 import { startAutomationProvider } from "./control-ui-automation-provider.test-support.ts";
+import {
+  authenticateControlUi,
+  captureControlUi,
+  controlUiPageOptions,
+} from "./control-ui-gateway.e2e.test-support.ts";
 import { createQaCrablineTransportAdapter } from "./crabline-transport.ts";
 import { createQaGatewayChild, type QaGatewayChild } from "./gateway-child.ts";
 import { redactQaGatewayDebugText } from "./gateway-log-redaction.ts";
@@ -22,16 +27,13 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
 });
 
-const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 type AutomationAction = "list" | "get" | "update" | "run" | "remove";
 const actions = ["list", "get", "update", "run", "remove"] as const;
 const automationName = "Telegram-created reminder _literal_";
 const updatedReminderMessage = "Complete the reminder updated from Control UI.";
 const toolPolicy = { profile: "full" as const, allow: ["automations", "session_status"] };
 const screenshot = (page: Page, name: string) =>
-  captureUiProof
-    ? page.screenshot({ path: path.join(suite.artifactDir, `${name}.png`) })
-    : Promise.resolve();
+  captureControlUi(page, suite.artifactDir, `${name}.png`);
 const poll = <T>(read: () => T | Promise<T>, timeout = 60_000) => expect.poll(read, { timeout });
 const waitForReply = (page: Page, marker: string) =>
   page
@@ -126,26 +128,11 @@ function startGateway(
 }
 
 function withChat(gateway: QaGatewayChild, sessionKey: string, run: (page: Page) => Promise<void>) {
-  return suite.withPage(
-    {
-      locale: "en-US",
-      viewport: { width: 1280, height: 900 },
-      serviceWorkers: "block",
-      ...(captureUiProof
-        ? { recordVideo: { dir: suite.artifactDir, size: { width: 1280, height: 900 } } }
-        : {}),
-    },
-    async ({ page }) => {
-      await page.addInitScript(
-        (auth) => {
-          Object.assign(window, { __OPENCLAW_NATIVE_CONTROL_AUTH__: auth });
-        },
-        { gatewayUrl: gateway.wsUrl, token: gateway.token },
-      );
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-      await run(page);
-    },
-  );
+  return suite.withPage(controlUiPageOptions(suite.artifactDir), async ({ page }) => {
+    await authenticateControlUi(page, gateway);
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+    await run(page);
+  });
 }
 
 const writeVerdict = (file: string, value: unknown) =>
@@ -305,40 +292,7 @@ suite.define(() => {
         disabledJob(automationName, "Complete this synthetic reminder."),
       );
       await send("100001", "create", "Create a disabled hourly reminder.");
-      try {
-        await transport.waitForOutbound({ textIncludes: "create:", timeoutMs: 60_000 });
-      } catch (error) {
-        const providerState = provider.diagnostics("create");
-        const snapshot = transport.state.getSnapshot();
-        const outbound = snapshot.messages.filter((message) => message.direction === "outbound");
-        const matchingRequests = providerState.observedRequests.filter(
-          (request) => request.marker === "create",
-        );
-        const facts = {
-          phase: "telegram-create-reply",
-          provider: {
-            initialRequestObserved: providerState.matchingInitialRequestObserved,
-            automationsToolAvailable: providerState.automationsToolAvailable,
-            resultReceived: providerState.resultReceived,
-            requestCount: providerState.observedRequests.length,
-            matchingRequestCount: matchingRequests.length,
-            toolOutputRequestCount: matchingRequests.filter((request) => request.hasOutput).length,
-            errorCount: providerState.providerErrors.length,
-          },
-          transport: {
-            inboundCount: snapshot.messages.filter((message) => message.direction === "inbound")
-              .length,
-            outboundCount: outbound.length,
-            errorCount: outbound.filter((message) => message.isError).length,
-            matchingReplyCount: outbound.filter((message) => message.text.includes("create:"))
-              .length,
-          },
-        };
-        console.error("[control-ui-e2e] automation creation failure facts", JSON.stringify(facts));
-        // Diagnostics must preserve the original timeout even if artifact writing fails.
-        await writeVerdict("create-failure-facts.public.json", facts).catch(() => undefined);
-        throw error;
-      }
+      await transport.waitForOutbound({ textIncludes: "create:", timeoutMs: 60_000 });
       const created = readResult(provider.results.get("create") ?? "null");
       expect(created).toMatchObject({
         id: expect.any(String),
@@ -422,29 +376,13 @@ suite.define(() => {
       await withChat(gateway, sessionKey, async (page) => {
         for (const action of actions) {
           const marker = `admin-${action}`;
-          const gatewayLogMark = gateway.markLogs();
           provider.requests.set(marker, managementArgs(action, jobId));
           await page
             .locator(".agent-chat__composer-combobox textarea")
             .fill(`${action} the Telegram-created reminder. [automation-proof:${marker}]`);
           await screenshot(page, `${marker}-request`);
           await page.getByRole("button", { name: "Send message" }).click();
-          try {
-            await poll(() => provider.results.has(marker)).toBe(true);
-          } catch (error) {
-            console.error(
-              "Admin automation provider round trip stalled",
-              JSON.stringify(
-                {
-                  ...provider.diagnostics(marker),
-                  gatewayLog: gateway.readLogsSince(gatewayLogMark),
-                },
-                null,
-                2,
-              ),
-            );
-            throw error;
-          }
+          await poll(() => provider.results.has(marker)).toBe(true);
           const result = readResult(provider.results.get(marker) ?? "null");
           expect(result).toEqual(expect.objectContaining(expectedResults[action]));
           if (action === "update") {
