@@ -76,18 +76,43 @@ function expectNoWrites(docker: ReturnType<typeof createDockerMock>) {
   expect(docker.mock.calls.some(([, args]) => args[2] === "create")).toBe(false);
 }
 
-function expectRejected(docker: ReturnType<typeof createDockerMock>, message: string) {
-  expect(() => runPromotion(docker)).toThrow(message);
-  expectNoWrites(docker);
-}
+type WorkflowStep = {
+  name?: string;
+  run?: string;
+  uses?: string;
+  with?: Record<string, boolean | string>;
+};
 
 type WorkflowJob = {
   concurrency?: { group?: string; "cancel-in-progress"?: boolean; queue?: string };
   environment?: string;
   needs?: string | string[];
   permissions?: Record<string, string>;
-  steps?: { uses?: string; with?: Record<string, boolean | string> }[];
+  steps?: WorkflowStep[];
 };
+
+type Workflow = {
+  concurrency?: { group?: string; "cancel-in-progress"?: boolean; queue?: string };
+  jobs?: Record<string, WorkflowJob>;
+};
+
+function readWorkflow(path: string): Workflow {
+  return parse(readFileSync(path, "utf8")) as Workflow;
+}
+
+function requireJob(workflow: Workflow, name: string): WorkflowJob {
+  const job = workflow.jobs?.[name];
+  if (!job) {
+    throw new Error(`Missing workflow job: ${name}`);
+  }
+  return job;
+}
+
+function expectTrustedCheckout(job: WorkflowJob) {
+  expect(job.steps?.find((step) => step.uses?.startsWith("actions/checkout@"))?.with).toEqual(
+    expect.objectContaining({ ref: "${{ github.sha }}", "persist-credentials": false }),
+  );
+}
 
 describe("Docker channel promotion", () => {
   it("stops channel alias writes when authority is revoked between registries", () => {
@@ -119,11 +144,11 @@ describe("Docker channel promotion", () => {
     expect(writes).toHaveLength(3);
   });
 
-  it("rejects malformed rebuild suffixes", () => {
+  it.each(["r20260820"])("rejects malformed rebuild suffix %s", (imageTagSuffix) => {
     expect(() =>
       createDockerChannelPromotionPlan({
         version: "2026.7.1",
-        imageTagSuffix: "r20260820",
+        imageTagSuffix,
         images: images.slice(0, 1),
       }),
     ).toThrow("Invalid Docker image tag suffix");
@@ -195,7 +220,8 @@ describe("Docker channel promotion", () => {
       },
     });
 
-    expectRejected(docker, "docker inspect failed");
+    expect(() => runPromotion(docker)).toThrow("docker inspect failed");
+    expectNoWrites(docker);
   });
 
   it("promotes the same digests whose attestations were verified", () => {
@@ -217,17 +243,55 @@ describe("Docker channel promotion", () => {
   });
 
   it("rejects a custom-build source label at the requested-release comparison", () => {
-    expectRejected(
-      createDockerMock({ candidateVersion: "custom-build" }),
-      `ghcr.io/openclaw/openclaw@${digest} reports version custom-build, expected 2026.6.33`,
+    const candidateVersion = "custom-build";
+    const docker = createDockerMock({ candidateVersion });
+
+    expect(() => runPromotion(docker)).toThrow(
+      `ghcr.io/openclaw/openclaw@${digest} reports version ${candidateVersion}, expected 2026.6.33`,
     );
+    expectNoWrites(docker);
+  });
+
+  it.each([
+    ["malformed JSON", "{", "linux/amd64"],
+    ["second-platform missing label", "{}", "linux/arm64"],
+  ])("rejects %s before writing aliases", (_name, raw, platform) => {
+    const docker = createDockerMock({
+      sourceImageConfigs: { [platform]: raw },
+    });
+    const attempt = vi.fn(() => runPromotion(docker));
+    const sourceRef = `${images[0]}@${digest}`;
+
+    expect(attempt).toThrow(
+      raw === "{"
+        ? `Could not parse the ${platform} image config for ${sourceRef}.`
+        : `${sourceRef} does not have an org.opencontainers.image.version label for ${platform}.`,
+    );
+    if (raw === "{") {
+      expect(attempt.mock.results[0]?.value).toHaveProperty("cause", expect.any(SyntaxError));
+    } else {
+      expect(attempt.mock.results[0]?.value).not.toHaveProperty("cause");
+    }
+    expect(docker.mock.calls.at(-1)?.[1]).toEqual([
+      "buildx",
+      "imagetools",
+      "inspect",
+      sourceRef,
+      "--format",
+      `{{json (index .Image "${platform}")}}`,
+    ]);
+    expectNoWrites(docker);
   });
 
   it("rejects a source whose platform version labels disagree", () => {
-    expectRejected(
-      createDockerMock({ sourceImageConfigs: { "linux/arm64": imageConfig("2026.6.34") } }),
+    const docker = createDockerMock({
+      sourceImageConfigs: { "linux/arm64": imageConfig("2026.6.34") },
+    });
+
+    expect(() => runPromotion(docker)).toThrow(
       "inconsistent platform versions: linux/amd64=2026.6.33, linux/arm64=2026.6.34",
     );
+    expectNoWrites(docker);
   });
 
   it("rejects channels without moving aliases", () => {
@@ -236,39 +300,48 @@ describe("Docker channel promotion", () => {
     );
   });
 
-  it("gates digest-bound publication and repairs on trusted checkout and approval", () => {
-    const workflow = parse(
-      readFileSync(".github/workflows/docker-channel-promote.yml", "utf8"),
-    ) as {
-      jobs: Record<string, WorkflowJob>;
-    };
-    const jobs = Object.entries(workflow.jobs);
-    const approvals = jobs.filter(([, job]) => job.environment === "docker-release");
-    const writers = jobs.filter(([, job]) => job.permissions?.packages === "write");
-    expect(approvals).toHaveLength(1);
-    expect(writers).toHaveLength(1);
-    for (const [, job] of jobs) {
-      expect(
-        Object.entries(job.permissions ?? {})
-          .filter(([, level]) => level === "write")
-          .map(([scope]) => scope),
-      ).toEqual(job.permissions?.packages === "write" ? ["packages"] : []);
-      for (const step of job.steps ?? []) {
-        if (step.uses?.startsWith("actions/checkout@")) {
-          expect(step.with).toMatchObject({
-            ref: "${{ github.sha }}",
-            "persist-credentials": false,
-          });
-        }
-      }
-    }
-    const writer = writers[0]![1];
-    expect(writer.steps?.some((step) => step.uses?.startsWith("actions/checkout@"))).toBe(true);
-    expect([writer.needs].flat()).toContain(approvals[0]![0]);
-    expect(writer.concurrency).toEqual({
+  it("uses the digest-bound promotion path for releases and approved repairs", () => {
+    const workflow = readWorkflow(".github/workflows/docker-channel-promote.yml");
+    const releaseWorkflow = readWorkflow(".github/workflows/docker-release.yml");
+    const publish = requireJob(releaseWorkflow, "publish");
+    const resolve = requireJob(workflow, "resolve");
+    const approve = requireJob(workflow, "approve");
+    const promote = requireJob(workflow, "promote");
+    const publicationLock = {
       group: "docker-release-publish",
       "cancel-in-progress": false,
       queue: "max",
+    };
+
+    expect(publish.permissions).toEqual({
+      actions: "read",
+      attestations: "read",
+      contents: "read",
+      packages: "write",
     });
+
+    expect(resolve.permissions).toEqual({ contents: "read" });
+    expectTrustedCheckout(resolve);
+    expect(approve).toMatchObject({ needs: "resolve", environment: "docker-release" });
+    expect(approve.permissions).toEqual({});
+    expect(promote.needs).toEqual(["resolve", "approve"]);
+    expect(promote.permissions).toEqual({ contents: "read", packages: "write" });
+    expect(promote.concurrency).toEqual(publicationLock);
+    expectTrustedCheckout(promote);
+
+    const steps = promote.steps ?? [];
+    const promotionIndex = steps.findIndex(
+      (step) => step.name === "Promote and verify channel aliases",
+    );
+    expect(steps.some((step) => step.run?.includes("verify-docker-attestations.mjs"))).toBe(false);
+    expect(promotionIndex).toBeGreaterThan(-1);
+    expect(steps[promotionIndex]?.run).toContain("node scripts/docker-channel-promote.mjs");
+    expect(steps[promotionIndex]?.run).toContain("--allow-rollback");
+
+    const packageWriters = Object.entries(workflow.jobs ?? {}).filter(
+      ([, job]) => job.permissions?.packages === "write",
+    );
+    expect(packageWriters.map(([name]) => name)).toEqual(["promote"]);
+    expect(packageWriters[0]?.[1].needs).toContain("approve");
   });
 });

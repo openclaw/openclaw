@@ -134,14 +134,19 @@ $aclCases = @(
   @{ Name='outsider owner'; Sddl='O:BUG:SYD:'; Expected='unsafe' },
   @{ Name='null DACL'; Sddl='O:BAG:SY'; Expected='unsafe' },
   @{ Name='signed generic read'; Sddl='O:BAG:SYD:(A;;GR;;;BU)'; Expected='safe' },
+  @{ Name='generic execute'; Sddl='O:BAG:SYD:(A;;GX;;;BU)'; Expected='safe' },
   @{ Name='generic write'; Sddl='O:BAG:SYD:(A;;GW;;;BU)'; Expected='unsafe' },
   @{ Name='generic all'; Sddl='O:BAG:SYD:(A;;GA;;;BU)'; Expected='unsafe' },
   @{ Name='mixed generic and write'; Sddl='O:BAG:SYD:(A;;0x80000002;;;BU)'; Expected='unsafe' },
   @{ Name='inherit only'; Sddl='O:BAG:SYD:(A;OICIIO;GA;;;CO)'; Expected='safe' },
   @{ Name='inherited applying'; Sddl='O:BAG:SYD:(A;ID;GW;;;BU)'; Expected='unsafe' },
+  @{ Name='no propagate applies'; Sddl='O:BAG:SYD:(A;OICINP;GW;;;BU)'; Expected='unsafe' },
   @{ Name='delete child'; Sddl='O:BAG:SYD:(A;;0x00000040;;;BU)'; Expected='unsafe' },
   @{ Name='change DACL'; Sddl='O:BAG:SYD:(A;;0x00040000;;;BU)'; Expected='unsafe' },
   @{ Name='change owner'; Sddl='O:BAG:SYD:(A;;WO;;;BU)'; Expected='unsafe' },
+  @{ Name='append'; Sddl='O:BAG:SYD:(A;;0x4;;;BU)'; Expected='unsafe' },
+  @{ Name='extended attributes'; Sddl='O:BAG:SYD:(A;;0x10;;;BU)'; Expected='unsafe' },
+  @{ Name='attributes'; Sddl='O:BAG:SYD:(A;;0x100;;;BU)'; Expected='unsafe' },
   @{ Name='delete'; Sddl='O:BAG:SYD:(A;;0x10000;;;BU)'; Expected='unsafe' },
   @{ Name='deny does not cancel allow'; Sddl='O:BAG:SYD:(D;;GA;;;BU)(A;;GW;;;BU)'; Expected='unsafe' }
 )
@@ -279,6 +284,10 @@ foreach ($case in $cases) {
   try { $result = Get-WindowsTestboxOpenSshInstallation } catch { $failure = $_.Exception.Message }
   if ($case.Accept) {
     Assert ($null -eq $failure -and $result.Sshd -eq $script:sshd -and $result.Keygen -eq "$directory\ssh-keygen.exe") $case.Name
+    Assert ($result.PSObject.Properties.Name.Count -eq 2) 'pair only'
+    Assert (($script:acls -join '|') -eq "$directory|$directory\sshd.exe|$directory\ssh-keygen.exe") 'exact ACL scope'
+    Assert (($script:signatures -join '|') -eq "$directory\sshd.exe|$directory\ssh-keygen.exe") 'both signatures'
+    Assert ($script:serviceReads -eq 2 -and $script:processReads -eq 2) 'stable identity reread'
   } else {
     Assert ($null -eq $result -and $failure -eq 'Cannot admit the native Windows OpenSSH installation; verify the provider service, Microsoft binaries, and installation permissions.') $case.Name
   }
@@ -286,6 +295,7 @@ foreach ($case in $cases) {
     Assert ($script:items[-1] -eq $case.Reparse -and $script:acls.Count -eq 0 -and $script:signatures.Count -eq 0) 'stop before following reparse'
   }
 }
+@{ installations=$cases.Count; descriptors=($aclCases.Count + 4) } | ConvertTo-Json -Compress
 `,
     );
     const resolver = path.resolve("scripts/windows-testbox-openssh.ps1");
@@ -323,5 +333,6 @@ foreach ($case in $cases) {
       stderr: redact(result.stderr),
     });
     expect(outcome, diagnostic).toEqual({ status: 0, signal: null, error: undefined });
+    expect(JSON.parse(result.stdout)).toEqual({ installations: 40, descriptors: 25 });
   });
 });

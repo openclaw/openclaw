@@ -168,7 +168,7 @@ describe("iOS resource timeline workload boundary", () => {
         const watcher = watch(${JSON.stringify(root)}, finish);
         finish();
       `,
-        {},
+        { OPENCLAW_IOS_RESOURCE_DIAGNOSTICS: "1" },
         preload,
       );
       expect(result.error).toBeUndefined();

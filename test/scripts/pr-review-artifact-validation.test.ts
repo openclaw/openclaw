@@ -19,6 +19,18 @@ const mergeScript = join(process.cwd(), "scripts/pr-lib/merge.sh");
 const describePosix = process.platform === "win32" ? describe.skip : describe;
 const testNodeExecPath = resolveTestNodeExecPath();
 
+const REVIEWED_IDENTITY_LINE = `Review artifact for PR #${REVIEWED_PR} at ${REVIEWED_HEAD}`;
+const REVIEW_SHELL_COMMAND_SURFACE = [
+  "rg() {",
+  '  if [ "${1-}" = "-F" ]; then',
+  "    shift",
+  '    command grep -F "$@"',
+  "  else",
+  '    command grep -E "$@"',
+  "  fi",
+  "}",
+].join("\n");
+
 it("runs dependency-free CLI and native lock regressions", () => {
   const result = spawnSync(
     testNodeExecPath,
@@ -37,17 +49,26 @@ function validReadyReview(head = REVIEWED_HEAD) {
 
 function runValidation(
   review: ReturnType<typeof validReview>,
-  options: ReviewArtifactFixtureOptions = {},
+  options: ReviewArtifactFixtureOptions & {
+    guardFailure?: boolean;
+    orList?: boolean;
+  } = {},
 ) {
   const fixtureRoot = tempDirs.make("openclaw-pr-review-validation-");
   writeReviewArtifacts(fixtureRoot, review, options);
 
-  return runReviewShellFunction(fixtureRoot, "review_validate_artifacts 42", [
-    'common_repo_root() { printf "%s\\n" "$fixture_root"; }',
-    `pr_worktree_state() { printf '{"path":"%s","present":true}\\n' "$fixture_root"; }`,
-    `review_guard() { enter_worktree 42 || return 1; REVIEW_MODE=${options.mode ?? "pr"}; }`,
-    "print_review_stdout_summary() { :; }",
-  ]);
+  return runReviewShellFunction(
+    fixtureRoot,
+    options.orList ? "review_validate_artifacts 42 || exit 1" : "review_validate_artifacts 42",
+    [
+      'common_repo_root() { printf "%s\\n" "$fixture_root"; }',
+      `pr_worktree_state() { printf '{"path":"%s","present":true}\\n' "$fixture_root"; }`,
+      options.guardFailure
+        ? "review_guard() { REVIEW_MODE=pr; echo 'review head guard failed'; return 1; }"
+        : `review_guard() { enter_worktree 42 || return 1; REVIEW_MODE=${options.mode ?? "pr"}; }`,
+      "print_review_stdout_summary() { :; }",
+    ],
+  );
 }
 
 function runReviewShellFunction(
@@ -55,16 +76,19 @@ function runReviewShellFunction(
   invocation: string,
   setup = ["mark_pr_operation_side_effects_started() { :; }"],
 ) {
+  return runShell(fixtureRoot, reviewScript, [REVIEW_SHELL_COMMAND_SURFACE, ...setup, invocation]);
+}
+
+function runShell(fixtureRoot: string, script: string, commands: string[]) {
   const source = [
     "set -euo pipefail",
     'source "$1"',
     'fixture_root="$2"',
     'enter_worktree() { cd "$fixture_root"; }',
     'require_artifact() { [ -s "$1" ]; }',
-    ...setup,
-    invocation,
+    ...commands,
   ].join("\n");
-  return spawnSync(bash, ["-c", source, "pr-review-shell", reviewScript, fixtureRoot], {
+  return spawnSync(bash, ["-c", source, "pr-review-shell", script, fixtureRoot], {
     encoding: "utf8",
   });
 }
@@ -228,7 +252,7 @@ describePosix("scripts/pr review artifact validation", () => {
   it("preserves in-progress artifacts already stamped for this head", () => {
     const inProgress = validReadyReview();
     inProgress.issueValidation.summary = "Half-written review worth keeping.";
-    const markdown = `Review artifact for PR #${REVIEWED_PR} at ${REVIEWED_HEAD}\n\nA) Half-written review worth keeping.\n`;
+    const markdown = `${REVIEWED_IDENTITY_LINE}\n\nA) Half-written review worth keeping.\n`;
     const { result, localDir } = runArtifactsInit(inProgress, markdown);
 
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
@@ -252,6 +276,24 @@ describePosix("scripts/pr review artifact validation", () => {
       `Review guard failed: .local/pr-meta.env describes PR #113928, not #${REVIEWED_PR}`,
     );
   });
+
+  it("preserves head-guard failures when preparation calls validation in an OR-list", () => {
+    const result = runValidation(validReview(), { guardFailure: true, orList: true });
+
+    expectRejected(result, "review head guard failed");
+    expect(result.stdout).not.toContain("review artifacts validated");
+  });
+
+  it.each(["packages/normalization-core/src/string-normalization.ts", "ui/src/app.ts"])(
+    "requires behavioral review for core runtime path %s",
+    (path) => {
+      expectRejected(
+        runValidation(validReview(), { files: [path] }),
+        "runtime file changes require behavioralSweep.status=pass|needs_work",
+        "runtime file changes require at least one branch entry",
+      );
+    },
+  );
 
   it.each([
     ["api-error", "stderr", "unable to verify the required GitHub checks"],

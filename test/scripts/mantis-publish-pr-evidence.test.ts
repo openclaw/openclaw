@@ -135,7 +135,7 @@ describe("scripts/mantis/publish-pr-evidence", () => {
       `<td width="50%" align="center"><img src="${rawBase}/baseline.png" width="100%"`,
       `[Baseline change MP4](${rawBase}/baseline-change.mp4)`,
       "- Baseline: `fail` at `aaa`, expected queued-only",
-      "- Candidate (PR merged onto main): `pass` at `bbb` — queued -> thinking -> done · facts: 3 messages",
+      "- Candidate (PR merged onto main): `pass` at `bbb` — queued -&gt; thinking -&gt; done · facts: 3 messages",
       "- Differential (trusted facts): bot messages 2→3 · deletes 1→0\n- Overall: `pass`",
     );
     expect(body).not.toContain("raw.githubusercontent.com");

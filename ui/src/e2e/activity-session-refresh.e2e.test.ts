@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { ElementHandle, Page } from "playwright";
 import { expect, it } from "vitest";
 import {
@@ -182,6 +183,7 @@ suite.define(() => {
       {
         viewport: { width: 1280, height: 900 },
         locale: "en-US",
+        recordVideo: { dir: suite.artifactDir, size: { width: 1280, height: 900 } },
       },
       async ({ page }) => {
         const key = "agent:main:activity-refresh";
@@ -263,6 +265,7 @@ suite.define(() => {
         await expectCount(entry).toBe(1);
         await entry.locator("summary").click();
         await showText(entry, "Received while viewing Live activity.");
+        await page.screenshot({ path: path.join(suite.artifactDir, "04-live-activity.png") });
         for (let index = 0; index < 20; index += 1) {
           await emitTool({ phase: "start", name: "exec", toolCallId: `tool-${index}` });
         }
@@ -303,6 +306,7 @@ suite.define(() => {
             }),
           )
           .toBe(true);
+        await page.screenshot({ path: path.join(suite.artifactDir, "05-live-burst.png") });
         await page.getByRole("tab", { name: "Sessions", exact: true }).click();
         await expectText(row).toContain("Latest activity");
       },
