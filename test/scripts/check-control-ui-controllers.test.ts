@@ -44,7 +44,9 @@ function fixture(source = "export {};\n") {
     "onCleanup",
     "manualImport",
   ]) {
-    write(root, `config/control-ui-${pattern}-baseline.txt`, "");
+    for (const surface of ["control-ui", "plugin-ui"]) {
+      write(root, `config/${surface}-${pattern}-baseline.txt`, "");
+    }
   }
   for (const args of [["init"], ["add", "."], ["commit", "-m", "base"]]) {
     git(root, args);
@@ -65,6 +67,56 @@ function runLint(root: string, args: string[]) {
 }
 
 describe("Control UI controller guard", () => {
+  it.each([
+    "extensions/workboard/browser/page.tsx",
+    "extensions/memory-core/browser/page.tsx",
+    "extensions/nostr/browser/page.tsx",
+    "extensions/whatsapp/browser/page.tsx",
+    "extensions/clawrouter/src/control-ui.tsx",
+    "extensions/x/src/control-ui.tsx",
+  ])("rejects forbidden Solid patterns in the plugin view %s", (file) => {
+    const root = fixture();
+    write(root, file, 'element.addEventListener("click", handler);');
+    expect(main(root, [])).toBe(1);
+    expect(errors.mock.calls.flat().join("\n")).toContain(`${file}:1`);
+  });
+
+  it("ratchets plugin helpers separately from host and other plugin allowances, including staged source", () => {
+    const root = fixture();
+    const file = "extensions/nostr/browser/lifetime.ts";
+    const baseline = "config/plugin-ui-onCleanup-baseline.txt";
+    const source = 'import { onCleanup } from "solid-js"; onCleanup(dispose);';
+    write(root, file, source);
+    write(root, baseline, `${file}\t1\n`);
+    // Backend owners and test helpers are outside the browser-view guard.
+    write(root, "extensions/nostr/src/server.ts", 'element.querySelector("button");');
+    write(root, "extensions/nostr/browser/profile.test.tsx", source);
+    write(root, "extensions/workboard/browser/test/dom-host.ts", source);
+    git(root, ["add", "."]);
+    git(root, ["commit", "-m", "existing plugin integration"]);
+    expect(main(root, [])).toBe(0);
+    write(root, file, `${source}\nonCleanup(dispose);`);
+    write(root, baseline, `${file}\t2\n`);
+    expect(main(root, [])).toBe(1);
+    expect(errors.mock.calls.flat().join("\n")).toContain(
+      "Plugin UI onCleanup allowances must not increase",
+    );
+    write(root, baseline, `${file}\t1\n`);
+    git(root, ["add", "."]);
+    write(root, file, source);
+    expect(main(root, ["--staged"])).toBe(1);
+    expect(main(root, [])).toBe(0);
+    write(root, "extensions/whatsapp/browser/lifetime.ts", source);
+    expect(main(root, [])).toBe(1);
+    expect(errors.mock.calls.flat().join("\n")).toContain(
+      "extensions/whatsapp/browser/lifetime.ts: 1 > 0",
+    );
+    write(root, "extensions/whatsapp/browser/lifetime.ts", "export {};\n");
+    write(root, file, "export {};\n");
+    expect(main(root, ["--prune"])).toBe(0);
+    expect(fs.readFileSync(path.join(root, baseline), "utf8")).not.toContain(`${file}\t`);
+  });
+
   it.each([
     'import { createRenderEffect as render } from "solid-js"; render(() => 1, () => {});',
     'import * as solid from "solid-js"; solid.createRenderEffect(() => 1, () => {});',

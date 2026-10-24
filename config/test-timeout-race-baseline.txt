@@ -111,9 +111,8 @@ test/helpers/openclaw-test-instance.acquisition.test.ts	1
 test/helpers/qa-gateway-test-lifetime.test.ts	2
 test/plugins/browser-session-authority.gateway.test.ts	1
 test/plugins/team-reports-http.gateway.test.ts	1
-test/scripts/ci-run-node-test-shard.test.ts	3
+test/scripts/ci-run-node-test-shard.test.ts	1
 test/scripts/test-projects-build-admission.test.ts	3
 test/scripts/upstream-repository-advisories.test.ts	2
 test/slack-download-read-authority.integration.test.ts	2
-test/subagent-requester-owner.e2e.test.ts	2
 ui/src/e2e/chat-flow.catalog-bootstrap.e2e.test.ts	4

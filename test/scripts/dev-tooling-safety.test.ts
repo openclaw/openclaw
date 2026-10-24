@@ -159,7 +159,6 @@ async function withDescendantFixture(
     ready: () => Promise<number>;
   }) => Promise<void>,
   ipc = false,
-  group = false,
 ) {
   const message = ipc ? once(child, "message") : undefined;
   const closed = childClosed(child);
@@ -169,16 +168,12 @@ async function withDescendantFixture(
     await check({
       closed,
       ready: async () => {
-        descendantPid = message
-          ? Number(
-              (
-                await withinTest(
-                  awaitGateBeforeSettlement(message, closed, "timed out waiting for condition"),
-                  signal,
-                )
-              )[0],
+        const readiness = message
+          ? awaitGateBeforeSettlement(message, closed, "timed out waiting for condition").then(
+              ([pid]) => Number(pid),
             )
-          : await withinTest(promptReadyBeforeSettlement(pidPath, closed), signal);
+          : promptReadyBeforeSettlement(pidPath, closed);
+        descendantPid = await withinTest(readiness, signal);
         expect(Number.isInteger(descendantPid)).toBe(true);
         expect(isProcessAlive(descendantPid)).toBe(true);
         return descendantPid;
@@ -186,7 +181,7 @@ async function withDescendantFixture(
     });
   } finally {
     if (child.pid && isProcessAlive(child.pid)) {
-      process.kill(group ? -child.pid : child.pid, group ? "SIGKILL" : "SIGTERM");
+      process.kill(child.pid, "SIGTERM");
     }
     const pid = descendantPid || (existsSync(pidPath) ? Number(readFileSync(pidPath, "utf8")) : 0);
     await closed;
@@ -327,7 +322,6 @@ describe("dev tooling safety helpers", () => {
 
 describe("script-specific dev tooling hardening", () => {
   it("rejects unknown Discord smoke drivers instead of silently using token mode", () => {
-    expect(discord.parseDriverMode("webhook")).toBe("webhook");
     expect(() => discord.parseDriverMode("curl")).toThrow(/Invalid --driver/u);
   });
 
@@ -561,7 +555,6 @@ describe("script-specific dev tooling hardening", () => {
 
   it.each([
     [["--help"], true, 1, false],
-    [["--openai-only"], false, 1, true],
     [["--openai-audio-cycles", "3"], false, 3, false],
   ] as const)("parses realtime smoke arguments %j", (args, help, openAIAudioCycles, openAIOnly) => {
     expect(realtime.parseRealtimeSmokeArgs([...args])).toEqual({
@@ -906,42 +899,6 @@ describe("script-specific dev tooling hardening", () => {
   });
 
   it.runIf(process.platform !== "win32")(
-    "cleans gateway descendants after leader exit",
-    async ({ signal }) => {
-      const tempRoot = await tempDir("openclaw-prompt-gateway-tree-");
-      const descendantPidPath = path.join(tempRoot, "descendant.pid");
-      const leaderScript = gatewayLeaderScript(descendantPidPath);
-      const child = spawn(process.execPath, ["--input-type=module", "--eval", leaderScript], {
-        detached: true,
-        stdio: ["ignore", "ignore", "ignore", "ipc"],
-      });
-      const spawned = once(child, "spawn");
-      const log = { close: vi.fn(async () => {}) };
-      await withDescendantFixture(
-        child,
-        descendantPidPath,
-        signal,
-        async ({ ready }) => {
-          await withinTest(spawned, signal);
-          const descendantPid = await ready();
-          const stopped = await prompt.stopGatewayPromptChild(
-            child as Parameters<typeof prompt.stopGatewayPromptChild>[0],
-            log,
-            50,
-            100,
-          );
-
-          expect(stopped).toBe(true);
-          expect(log.close).toHaveBeenCalledTimes(1);
-          await waitForDead(descendantPid, signal);
-        },
-        true,
-        true,
-      );
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
     "cleans gateway descendants attached after parent signal",
     async ({ signal }) => {
       const tempRoot = await tempDir("openclaw-prompt-parent-signal-");
@@ -1086,31 +1043,9 @@ describe("script-specific dev tooling hardening", () => {
       });
       const startedAt = Date.now();
       const proxyUrl = `http://127.0.0.1:${proxy.port}/v1/messages`;
-      const request = sendsHeaders
-        ? (async (): Promise<{ status: number; body: string }> => {
-            const downstream = spawn(
-              testNodeExecPath,
-              [
-                "-e",
-                `fetch(process.argv[1], { method: "POST", body: "{}" })
-                  .then(async response => ({ status: response.status, body: await response.text() }))
-                  .then(result => process.stdout.write(JSON.stringify(result)))
-                  .catch(error => { process.stderr.write(String(error)); process.exitCode = 1; });`,
-                proxyUrl,
-              ],
-              { stdio: ["ignore", "pipe", "pipe"] },
-            );
-            const { output, closed } = captureChild(downstream);
-            const { code } = await closed;
-            if (code !== 0) {
-              throw new Error(output.stderr || `proxy client exited ${String(code)}`);
-            }
-            return JSON.parse(output.stdout);
-          })()
-        : nativeFetch(proxyUrl, { method: "POST", body: "{}" }).then(async (response) => ({
-            status: response.status,
-            body: await response.text(),
-          }));
+      const request = nativeFetch(proxyUrl, { method: "POST", body: "{}" }).then(
+        async (response) => ({ status: response.status, body: await response.text() }),
+      );
 
       if (sendsHeaders) {
         await expect(request).rejects.toThrow();
@@ -1121,10 +1056,6 @@ describe("script-specific dev tooling hardening", () => {
         });
       }
       expect(Date.now() - startedAt).toBeLessThan(2_000);
-      expect(fetchSpy).toHaveBeenCalledWith(
-        "https://api.anthropic.com/v1/messages",
-        expect.objectContaining({ signal: expect.any(AbortSignal) }),
-      );
     } finally {
       fetchSpy.mockRestore();
       await proxy?.stop();

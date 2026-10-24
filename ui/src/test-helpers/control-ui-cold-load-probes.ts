@@ -19,6 +19,8 @@ function installColdLoadProbes(
     requestBytes: number;
     responseBytes: number;
     ms: number;
+    requestMs: number;
+    responseMs: number;
     dispatchMs?: number;
     responseAtMs?: number;
     abandoned?: true;
@@ -39,6 +41,7 @@ function installColdLoadProbes(
   let lastActivity = performance.now();
   let queued = 0;
   let nextFrameAt = 0;
+  let nextWireAt = 0;
   const eventStream = createEventStream(input);
   const liveOrigins = new Map<string, number>();
   let liveInvalidatorOwner: ProbeInit.SessionDataProbeOwner | undefined;
@@ -361,6 +364,8 @@ function installColdLoadProbes(
               requestBytes: request.bytes,
               responseBytes: 0,
               ms: performance.now() - request.at,
+              requestMs: request.at,
+              responseMs: performance.now(),
               abandoned: true,
             });
           }
@@ -440,41 +445,54 @@ function installColdLoadProbes(
             : 0,
         );
         queued++;
+        const deliver = () => {
+          queued--;
+          const request = pending.get(frame.id);
+          const rpcIndex = rpcs.length;
+          if (request) {
+            pending.delete(frame.id);
+            rpcs.push({
+              method: request.method,
+              params: request.params,
+              stack: request.stack,
+              requestBytes: request.bytes,
+              responseBytes,
+              ms: performance.now() - request.at,
+              requestMs: request.at,
+              responseMs: performance.now(),
+              ...(liveStartedAt ? { responseAtMs: performance.now() - liveStartedAt } : {}),
+            });
+          }
+          const responseMark = request && `cold-load-rpc:${rpcIndex}:${request.method}`;
+          const delivery = liveEvent
+            ? { ...liveEvent, deliveredAtMs: performance.now() - liveStartedAt }
+            : null;
+          if (delivery) {
+            liveKind = delivery.kind;
+            liveEvents.set(delivery.kind, (liveEvents.get(delivery.kind) ?? 0) + 1);
+          }
+          const dispatchStarted = performance.now();
+          if (responseMark) {
+            performance.mark(`${responseMark}:start`);
+          }
+          frameProbe.withDelivery(delivery, () => dispatch(deliveredEvent));
+          if (request) {
+            rpcs[rpcIndex]!.dispatchMs = performance.now() - dispatchStarted;
+            performance.mark(`${responseMark}:end`);
+          }
+          lastActivity = performance.now();
+        };
         window.setTimeout(
           () => {
-            queued--;
-            const request = pending.get(frame.id);
-            const rpcIndex = rpcs.length;
-            if (request) {
-              pending.delete(frame.id);
-              rpcs.push({
-                method: request.method,
-                params: request.params,
-                stack: request.stack,
-                requestBytes: request.bytes,
-                responseBytes,
-                ms: performance.now() - request.at,
-                ...(liveStartedAt ? { responseAtMs: performance.now() - liveStartedAt } : {}),
-              });
+            if (input.downloadKbps) {
+              // Reserve the wire only once the reply is ready, so server delay
+              // cannot hold unrelated replies behind it.
+              nextWireAt =
+                Math.max(performance.now(), nextWireAt) + (responseBytes * 8) / input.downloadKbps;
+              window.setTimeout(deliver, Math.max(0, nextWireAt - performance.now()));
+            } else {
+              deliver();
             }
-            const responseMark = request && `cold-load-rpc:${rpcIndex}:${request.method}`;
-            const delivery = liveEvent
-              ? { ...liveEvent, deliveredAtMs: performance.now() - liveStartedAt }
-              : null;
-            if (delivery) {
-              liveKind = delivery.kind;
-              liveEvents.set(delivery.kind, (liveEvents.get(delivery.kind) ?? 0) + 1);
-            }
-            const dispatchStarted = performance.now();
-            if (responseMark) {
-              performance.mark(`${responseMark}:start`);
-            }
-            frameProbe.withDelivery(delivery, () => dispatch(deliveredEvent));
-            if (request) {
-              rpcs[rpcIndex]!.dispatchMs = performance.now() - dispatchStarted;
-              performance.mark(`${responseMark}:end`);
-            }
-            lastActivity = performance.now();
           },
           Math.max(0, deliverAt - performance.now()),
         );

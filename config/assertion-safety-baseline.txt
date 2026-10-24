@@ -2256,7 +2256,6 @@ src/security/safe-regex.ts	1
 src/sessions/input-provenance.ts	3
 src/sessions/session-key-utils.ts	1
 src/sessions/session-upstream-monitor.ts	2
-src/sessions/user-turn-transcript-runtime-context.ts	2
 src/shared/account-enabled.ts	1
 src/shared/bounded-serial-queue.ts	1
 src/shared/chat-content.ts	2
