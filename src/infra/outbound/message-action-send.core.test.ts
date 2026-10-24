@@ -304,6 +304,29 @@ describe("runMessageAction core send routing", () => {
     expect(mockFirstRecordArg(sendText, "send text").text).toBe(expected);
   });
 
+  it.each([
+    {
+      label: "expands escaped newlines in single-line text",
+      message: String.raw`line one\nline two`,
+      expected: "line one\nline two",
+    },
+    {
+      label: "keeps escaped newlines inside multi-line text",
+      message: 'Fix:\n```c\nprintf("%d\\n", x);\n```',
+      expected: 'Fix:\n```c\nprintf("%d\\n", x);\n```',
+    },
+  ])("$label", async ({ message, expected }) => {
+    const sendText = registerSlackTextPlugin();
+    const cfg: OpenClawConfig = { channels: { slack: { enabled: true } } };
+
+    await runMessageAction({
+      cfg,
+      params: { channel: "slack", target: "channel:OTHER", message },
+    });
+
+    expect(mockFirstRecordArg(sendText, "send text").text).toBe(expected);
+  });
+
   it("leaves media-only sends without a responsePrefix", async () => {
     const sendMedia = vi.fn().mockResolvedValue(receipt("slack", "m1", "C123"));
     registerPlugin(
