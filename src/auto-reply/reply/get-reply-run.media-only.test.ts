@@ -393,12 +393,10 @@ vi.mock("./session-system-events.js", () => ({
 }));
 
 // mock-isolation: reply orchestration uses fixture model overrides without opening host session stores.
-vi.mock("../../sessions/stored-model-overrides.js", () => {
+vi.mock("../../sessions/stored-model-overrides.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../sessions/stored-model-overrides.js")>();
   const resolveStoredModelOverride = vi.fn(
-    (params: {
-      sessionEntry?: { providerOverride?: string; modelOverride?: string };
-      sessionStore?: Record<string, { providerOverride?: string; modelOverride?: string }>;
-    }) => {
+    (params: Parameters<typeof actual.resolveStoredModelOverride>[0]) => {
       const entries = [params.sessionEntry, ...Object.values(params.sessionStore ?? {})];
       if (entries.some((entry) => entry?.providerOverride || entry?.modelOverride)) {
         preparedReplyMockState.unexpectedCalls.push("resolveStoredModelOverride");
@@ -407,6 +405,7 @@ vi.mock("../../sessions/stored-model-overrides.js", () => {
     },
   );
   return {
+    ...actual,
     resolveStoredModelOverride,
     resolveStoredModelOverrideAsync: async (
       params: Parameters<typeof resolveStoredModelOverride>[0],

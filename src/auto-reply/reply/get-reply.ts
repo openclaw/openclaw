@@ -34,6 +34,7 @@ import {
   isModelSelectionLocked,
   ModelSelectionLockedError,
 } from "../../sessions/model-overrides.js";
+import { resolveModelParentSessionKey } from "../../sessions/stored-model-overrides.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
 import { waitForAgentDatabaseWriteAdmission } from "../../state/agent-database-preparation-context.js";
@@ -672,10 +673,7 @@ async function resolveReplyFromConfig(
       sessionEntry,
       sessionStore,
       sessionKey,
-      parentSessionKey:
-        sessionEntry.parentSessionKey ??
-        sessionCtx.ModelParentSessionKey ??
-        sessionCtx.ParentSessionKey,
+      parentSessionKey: resolveModelParentSessionKey(sessionEntry, sessionCtx),
       defaultProvider,
       defaultModel,
       primaryProvider,
@@ -848,10 +846,7 @@ async function resolveReplyFromConfig(
           agentId,
           agentCfg,
           ...replySession,
-          parentSessionKey:
-            sessionEntry.parentSessionKey ??
-            sessionCtx.ModelParentSessionKey ??
-            sessionCtx.ParentSessionKey,
+          parentSessionKey: resolveModelParentSessionKey(sessionEntry, sessionCtx),
           defaultProvider,
           defaultModel,
           primaryProvider,

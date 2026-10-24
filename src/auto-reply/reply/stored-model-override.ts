@@ -12,7 +12,7 @@ export async function resolveReplyStoredModelSelection(params: {
   sessionEntry: SessionEntry;
   sessionStore: Record<string, SessionEntry>;
   sessionKey: string;
-  parentSessionKey?: string;
+  parentSessionKey?: string | null;
   defaultProvider: string;
   defaultModel: string;
   primaryProvider: string;

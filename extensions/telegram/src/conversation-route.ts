@@ -269,27 +269,34 @@ export function resolveTelegramTargetSession(params: {
   senderId?: string | number | null;
   dmThreadId?: number;
   botHasTopicsEnabled?: boolean;
-}): string {
+}): { sessionKey: string; modelParentSessionKey?: null } {
   const baseSessionKey = resolveTelegramConversationBaseSessionKey(params);
+  // The thread suffix's base is the whole DM (or main) session, not a parent conversation.
   return shouldUseTelegramDmThreadSession(params) && params.dmThreadId != null
-    ? resolveThreadSessionKeys({
-        baseSessionKey,
-        threadId: `${params.chatId}:${params.dmThreadId}`,
-      }).sessionKey
-    : baseSessionKey;
+    ? {
+        sessionKey: resolveThreadSessionKeys({
+          baseSessionKey,
+          threadId: `${params.chatId}:${params.dmThreadId}`,
+        }).sessionKey,
+        modelParentSessionKey: null,
+      }
+    : { sessionKey: baseSessionKey };
 }
 
 /** Route inbound DM-topic and named-account traffic to the same session as its messages. */
 export function applyTelegramTargetSession(
   params: Parameters<typeof resolveTelegramTargetSession>[0],
-): TelegramResolvedRoute {
-  const sessionKey = resolveTelegramTargetSession(params);
+): { route: TelegramResolvedRoute; modelParentSessionKey?: null } {
+  const { sessionKey, modelParentSessionKey } = resolveTelegramTargetSession(params);
   return {
-    ...params.route,
-    sessionKey,
-    lastRoutePolicy: deriveLastRoutePolicy({
+    route: {
+      ...params.route,
       sessionKey,
-      mainSessionKey: params.route.mainSessionKey,
-    }),
+      lastRoutePolicy: deriveLastRoutePolicy({
+        sessionKey,
+        mainSessionKey: params.route.mainSessionKey,
+      }),
+    },
+    modelParentSessionKey,
   };
 }
