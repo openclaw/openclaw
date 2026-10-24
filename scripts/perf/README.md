@@ -4223,3 +4223,28 @@ out. The 2/4-consumer cells measure fanout scaling. Accept reduced duplicate clo
 and multi-consumer allocation only with intact isolation and no material
 single-consumer CPU/allocation regression. Report sample counts and absolute as
 well as relative deltas; short-sample percentiles are context only.
+
+## Plugin inspection retirement
+
+`plugin-inspection-retention.ts` loads 44 synthetic plugins through the real
+inspection loader for 20 generations. It keeps the released handles reachable
+and counts surviving inspection caches using `WeakRef` after four forced
+collections separated by event-loop turns. Separate borrower and paused-disposal
+controls assert that caches remain reachable while physical custody is live.
+
+```sh
+mkdir -p /path/to/isolated/home /path/to/isolated/state /path/to/isolated/tmp
+HOME=/path/to/isolated/home OPENCLAW_STATE_DIR=/path/to/isolated/state \
+  TMPDIR=/path/to/isolated/tmp node --expose-gc --import ./scripts/tsx.mjs \
+  scripts/perf/plugin-inspection-retention.ts --plugins 44 --generations 20 \
+  --gateway --port 41660
+```
+
+Run baseline and candidate on an approved benchmark host with the same fixture
+size and source dependencies. Accept collection of completed caches while the
+borrower and pending-disposal controls retain theirs until disposal finishes.
+Report cache counts and absolute retained-heap bytes; whole-process heap includes
+loader/module overhead and the deliberately retained registry handles. This is
+an inspection-lifecycle probe in a real Gateway main isolate when `--gateway` is
+set, not Gateway RPC throughput or a production old-generation plateau
+measurement. Omit `--gateway` for the loader-only control.
