@@ -1,7 +1,7 @@
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import { appendChatAttachmentFiles } from "./chat-attachments.ts";
 
-type AttachmentInputKind = "file" | "photo" | "camera";
+export type AttachmentInputKind = "file" | "photo" | "camera" | "camera-video";
 type AttachmentInputBindings = {
   inputs: Partial<Record<AttachmentInputKind, HTMLInputElement>>;
   camera?: { show(): void };
