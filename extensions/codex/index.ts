@@ -36,6 +36,7 @@ import {
 import { retireSharedCodexAppServerClientsBeforeDesktopGeneration } from "./src/app-server/shared-client-lifecycle.js";
 import { createCodexAppServerProcessReaperService } from "./src/app-server/transport-process-registration.js";
 import { codexNativeProfileRecoveryService } from "./src/auth-profile-health.js";
+import { registerCodexAuthProfileMigration } from "./src/auth-profile-migration.js";
 import type { CodexPluginsConfigBlock } from "./src/command-plugin-config.js";
 import { createCodexCommand } from "./src/commands.js";
 import {
@@ -187,6 +188,7 @@ export default definePluginEntry({
       lazyBindingStateStore,
       lazyManagedThreadStateStore,
     );
+    registerCodexAuthProfileMigration(api, bindingStore);
     registerCodexCliMetadata(api);
     const { resolveCodexSupervisionAppServerRuntimeOptions } = createCodexAppServerConfig(
       api.runtime.modelAuth,

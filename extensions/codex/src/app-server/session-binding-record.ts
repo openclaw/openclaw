@@ -388,3 +388,14 @@ export function preservedSessionGeneration(
   }
   return storedSessionGeneration(identity, current);
 }
+
+export function isSameSupervisionOwner(
+  current: CodexAppServerThreadBinding,
+  replacement: CodexAppServerThreadBinding,
+): boolean {
+  return (
+    replacement.connectionScope === "supervision" &&
+    replacement.threadId === current.threadId &&
+    replacement.supervisionSourceThreadId === current.supervisionSourceThreadId
+  );
+}

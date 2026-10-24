@@ -23,6 +23,10 @@ import {
   type CodexNativeSubagentSubmission,
 } from "./native-subagent-submission.js";
 import {
+  migrateCodexBindingAuthProfile,
+  type CodexAuthProfileMigrationMutation,
+} from "./session-binding-auth-migration.js";
+import {
   CODEX_APP_SERVER_BINDING_LEASE,
   PHYSICAL_SESSION_RETIRE_TTL_MS,
 } from "./session-binding-meta.js";
@@ -38,6 +42,7 @@ import {
   storedSessionGeneration,
   bindingStoreKey,
   matchesPendingSupervisionBranch,
+  isSameSupervisionOwner,
   ownsStoredSessionGeneration,
   preserveCodexNativeSubagentSubmissions,
   readCurrentCodexAppServerBinding,
@@ -86,6 +91,7 @@ export {
 } from "./session-binding-meta.js";
 
 type CodexAppServerBindingMutation =
+  | CodexAuthProfileMigrationMutation
   | CodexNativeSubagentBindingMutation
   | {
       kind: "set";
@@ -468,6 +474,9 @@ export function createCodexAppServerBindingStore(
         return await lifecycle.transact(
           key,
           (current, leaseToken) => {
+            if (mutation.kind === "clear-auth-profile") {
+              return migrateCodexBindingAuthProfile(identity, current, mutation);
+            }
             if (
               mutation.kind === "record-native-subagent-assignment" ||
               mutation.kind === "consume-native-subagent-assignment" ||
@@ -729,15 +738,4 @@ function codexSessionGenerationOperations(
         authority,
       ),
   };
-}
-
-function isSameSupervisionOwner(
-  current: CodexAppServerThreadBinding,
-  replacement: CodexAppServerThreadBinding,
-): boolean {
-  return (
-    replacement.connectionScope === "supervision" &&
-    replacement.threadId === current.threadId &&
-    replacement.supervisionSourceThreadId === current.supervisionSourceThreadId
-  );
 }
