@@ -19,7 +19,10 @@ import { SubagentAnnouncePreparationConflictError } from "../announce/subagent-a
 import { revokeRequesterCronAuthorityBatch } from "../requester-cron-authority.js";
 import { revokeRequesterFinalAttachment } from "../requester-final-attachment.js";
 import { matchesSubagentChildSessionOwner } from "./subagent-child-owner-match.js";
-import { retireSubagentControllerInputs } from "./subagent-controller-inputs.js";
+import {
+  captureSubagentControllerInputRetirement,
+  retireSubagentControllerInputs,
+} from "./subagent-controller-inputs.js";
 import { isCompletedRequesterDeliveryBlocked } from "./subagent-delivery-state.js";
 import { retireSubagentGatewayBinding } from "./subagent-registry-execution-cleanup.js";
 import type {
@@ -386,6 +389,7 @@ export function scheduleRequesterSettleWake(
     }
     // Retry bookkeeping with the observed outcome, never by replaying delivery or inventing failure.
     const receipt: RequesterWakeMutationReceipt = {};
+    const retireInputs = batch.map(captureSubagentControllerInputRetirement);
     const settlement = {
       scope,
       rearmGeneration,
@@ -423,6 +427,9 @@ export function scheduleRequesterSettleWake(
           }
         }
         if (settlesMembers) {
+          for (const retire of retireInputs) {
+            retire();
+          }
           await onCommitted?.();
           releaseRequesterSettleWakeBatch(context, members, rearmGeneration);
         }
