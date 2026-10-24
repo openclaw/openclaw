@@ -38,6 +38,7 @@ import {
   createAzureOpenAIResponsesTransportStreamFn,
   createOpenAIResponsesTransportStreamFn,
 } from "./openai-responses-client.js";
+import { collectEventTypes } from "./openai-stream-cases.test-support.js";
 
 const initialHost = getAiTransportHost();
 const { SDK_FULL_HISTORY_PREFIX: fullHistory, SDK_REASONING_CIPHERTEXT: reasoningCiphertext } =
@@ -512,10 +513,7 @@ describe("OpenAI Responses provider prompt observer", () => {
     sdkState.outcomes = [failedResponse, recoveredResponse];
 
     const stream = await runManaged(model, context, options);
-    const eventTypes: string[] = [];
-    for await (const event of stream) {
-      eventTypes.push(event.type);
-    }
+    const eventTypes = await collectEventTypes(stream);
     const result = await stream.result();
     expect(result).toMatchObject({ stopReason: "stop" });
     expect(result.responseModel).toBeUndefined();

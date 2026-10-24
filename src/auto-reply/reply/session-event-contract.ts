@@ -46,7 +46,8 @@ export type SessionEventOutcome = {
   summary?: string;
   nextCheckMs?: number;
   sourceDeliveryOutcome?: SourceDeliveryOutcome;
-  automationResult?: CronRunTelemetry & Pick<CronRunOutcome, "replyDisposition" | "diagnostics">;
+  automationResult?: CronRunTelemetry &
+    Pick<CronRunOutcome, "replyDisposition" | "diagnostics" | "result">;
   /** Recorded controller restart outcome, before the error is flattened. */
   interruptedByRestart?: boolean;
   error?: string;

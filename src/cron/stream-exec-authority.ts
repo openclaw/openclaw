@@ -45,6 +45,8 @@ export class CronStreamExecApprovalRequiredError extends TypeError {
 }
 
 export type CronStreamExecApproval = {
+  /** Retain creation identity, including derived authority revisions, across the approval wait. */
+  createdAtMs: number;
   policyKey: string;
   binding: string;
   consumption: ExecApprovalPreparedConsumption;

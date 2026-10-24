@@ -204,22 +204,20 @@ describe("gateway chat metadata shutdown", () => {
     const harness = createChatMetadataHarness(undefined, { onChanged });
     await harness.refresh();
     harness.runtime.invalidate();
-    const reads = [
-      harness.read(),
+    const read = harness.read().catch((error: unknown) => error);
+    await expect(
       harness.startup({
         agentId: "main",
         sessionEntry: { authProfileOverride: "test:session", authProfileOverrideSource: "user" },
       }),
-    ].map((read) => read.catch((error: unknown) => error));
+    ).resolves.toBeUndefined();
 
     await harness.runtime.stop();
 
-    for (const result of await Promise.all(reads)) {
-      expect(result).toMatchObject({
-        name: "ChatMetadataSnapshotUnavailableError",
-        message: "gateway chat metadata runtime is stopped",
-      });
-    }
+    expect(await read).toMatchObject({
+      name: "ChatMetadataSnapshotUnavailableError",
+      message: "gateway chat metadata runtime is stopped",
+    });
     harness.runtime.invalidate();
     harness.runtime.fail(new Error("late owner failure"));
     await expect(harness.refresh()).rejects.toThrow("stopped");

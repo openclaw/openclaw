@@ -13,7 +13,6 @@ import type { SidebarPanelDefinitionParams, SidebarPanelData } from "./chat-pane
 import { EmbeddedPluginPanel } from "./chat-pane-plugin-panel.tsx";
 import { usePanePresentation } from "./chat-pane-presentation.ts";
 import { ChatBoardPanel } from "./chat-pane-surfaces.tsx";
-import { resolveChatAttachmentLimits } from "./components/chat-attachment-admission.ts";
 import { ChatDetailSlot } from "./components/chat-detail-slot-view.tsx";
 import { ChatLazyBoundary } from "./components/chat-lazy-boundary.tsx";
 import type { ChatSessionRailElement } from "./components/chat-session-rail.tsx";
@@ -49,7 +48,7 @@ const Context = lazy(() => import("./components/chat-context-panel.tsx"), {
   export: "ChatContextPanel",
 });
 const Companion = lazy(() => import("./components/chat-session-rail.tsx"), {
-  export: "ChatSessionRail",
+  export: "ChatSessionRailPanel",
 });
 const Desktop = lazy(() => import("../../components/desktop/desktop-panel-solid.tsx"), {
   export: "DesktopPanel",
@@ -113,38 +112,6 @@ function BrowserPanel(props: Props) {
       sessionTabs={props.sessionBrowserTabs ?? []}
       resourceBasePath={props.state.resourceBasePath}
       authToken={resolveControlUiAuthToken(props.state)}
-    />
-  );
-}
-
-function CompanionPanel(props: Props) {
-  const presented = usePanePresentation(() => props.companionPresented);
-  return (
-    <Companion
-      presentation={props.presentation}
-      data-sidebar-panel-host
-      ref={[elementRef(props.registerPanelHost)]}
-      presented={presented()}
-      focusRequest={props.companionFocusRequest}
-      sessionKey={props.state.sessionKey}
-      agentId={props.agentId}
-      assistantName={props.state.assistantName}
-      digest={props.digest}
-      running={Boolean(props.activeRunId)}
-      activeRunId={props.activeRunId}
-      pullRequests={props.pullRequests}
-      companion={props.companion}
-      modelControls={props.companionModelControls}
-      client={props.state.connected ? props.state.client : null}
-      connected={props.state.connected}
-      sendShortcut={props.state.settings.chatSendShortcut ?? "enter"}
-      inputDeviceId={props.state.settings.realtimeTalkInputDeviceId}
-      onSubmit={props.onCompanionSubmit}
-      onDraftChange={props.onCompanionDraftChange}
-      onAttachmentsChange={props.onCompanionAttachmentsChange}
-      onOpenImage={props.state.handleOpenImage}
-      uploadConfig={props.state.uploadConfig}
-      attachmentLimits={resolveChatAttachmentLimits(props.state.hello?.policy)}
     />
   );
 }
@@ -393,7 +360,7 @@ const embeddedPanels: Partial<
 > = {
   terminal: TerminalPanel,
   browser: BrowserPanel,
-  companion: CompanionPanel,
+  companion: Companion,
   desktop: DesktopPanel,
   discussion: DiscussionPanel,
   portal: PortalPanel,
@@ -416,7 +383,8 @@ export function SidebarPanel(
       previous ||
       (props.definition.slot !== "dashboard" &&
         props.definition.slot !== "workspace" &&
-        props.definition.slot !== "context") ||
+        props.definition.slot !== "context" &&
+        props.definition.slot !== "companion") ||
       props.visible !== false,
   );
   return (

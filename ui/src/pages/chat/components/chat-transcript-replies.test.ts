@@ -241,7 +241,7 @@ it.each([false, true])(
 
 it.each([true, false])(
   "keeps answers and independent automation deliveries visible (foreground run identity: %s)",
-  (keyed) => {
+  async (keyed) => {
     const runId = "approval-question-run";
     const run = keyed ? { runId } : {};
     const prompt = keyed ? { idempotencyKey: `${runId}:user` } : {};
@@ -256,8 +256,8 @@ it.each([true, false])(
         stopReason: "stop",
       },
     ]);
-    const { container, rerender } = threadView(props);
-    rerender(true);
+    const { container, rerender, start } = threadView(props);
+    await start();
     expectEntryText(container, "answer", "An operator approved it.");
     expect(container.querySelector('[data-entry-id="commentary"]')).toBeNull();
     for (const index of [1, 2]) {
@@ -276,6 +276,7 @@ it.each([true, false])(
         },
       ];
       rerender();
+      await flushDeferredRowPrune();
       expectEntryText(container, "answer", "An operator approved it.");
       for (let alert = 1; alert <= index; alert++) {
         expectEntryText(container, `alert-${alert}`, `New application error ${alert}.`);
@@ -284,12 +285,14 @@ it.each([true, false])(
     }
     props.messages = structuredClone(props.messages);
     rerender();
+    await flushDeferredRowPrune();
     expectEntryText(container, "answer", "An operator approved it.");
     props.runId = "next-foreground-run";
     props.runActive = true;
     props.runWorking = true;
     props.streamStartedAt = 6_000;
     rerender();
+    await flushDeferredRowPrune();
     const alert = requireElement(container, '[data-entry-id="alert-2"]');
     const progress = requireElement(container, ".chat-working-indicator");
     expect(alert.closest(".chat-group")?.contains(progress)).toBe(false);

@@ -16,6 +16,8 @@ import { createReplyToModeFilterForChannel } from "../auto-reply/reply/reply-thr
 import { createTypingSignaler } from "../auto-reply/reply/typing-mode.js";
 import { createTypingController } from "../auto-reply/reply/typing.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
+import { createAutomationResultRecorder } from "../infra/agent-run-registry.automation.js";
+import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
 import { runAgentLoop } from "../plugin-sdk/agent-core.js";
 import { sanitizeUserFacingText } from "./embedded-agent-helpers/sanitize-user-facing-text.js";
 import { blockDirectiveCases } from "./embedded-agent-subscribe.directive-delivery.block-code.test-support.js";
@@ -27,6 +29,7 @@ import {
 } from "./embedded-agent-subscribe.e2e-harness.js";
 import { resolveManagedStreamMediaUrls } from "./embedded-agent-subscribe.handlers.messages.replies.js";
 import { createStreamingReplyResolver } from "./embedded-agent-subscribe.handlers.messages.stream.js";
+import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 
 const googleModel: Model<"google-generative-ai"> = {
   id: "gemini-2.5-flash",
@@ -157,6 +160,39 @@ function createDeliveryHarness(
   });
   return { delivered, blocks, pipeline, handler, emit, subscription, flush };
 }
+
+it.each(["no_change", "progress"] as const)(
+  "leaves scheduled reply publication to final delivery (%s)",
+  async (outcome) => {
+    const runId = "run-directive-delivery";
+    const claim = claimAgentRunContext(
+      runId,
+      {
+        cronRunsByJobId: new Map([["job", { nextCheckEnabled: false, assertCurrent: () => {} }]]),
+      },
+      { trackOwner: true, ownsContext: true },
+    );
+    onTestFinished(() => releaseAgentRunContext(runId, claim));
+    const harness = createDeliveryHarness();
+    const message = makeAgentAssistantMessage({
+      content: [{ type: "text", text: "The check completed with a useful result." }],
+    });
+    harness.emit({ type: "message_start", message });
+    emitAssistantTextDelta({
+      emit: harness.emit,
+      delta: "The check completed with a useful result.",
+    });
+    harness.emit({ type: "message_end", message });
+    await harness.flush();
+    expect(harness.delivered).toEqual([]);
+    createAutomationResultRecorder(runId, "job")({ outcome, summary: "Check complete." });
+    harness.emit({ type: "message_start", message });
+    emitAssistantTextDelta({ emit: harness.emit, delta: "The check completed." });
+    harness.emit({ type: "message_end", message });
+    await harness.flush();
+    expect(harness.delivered).toEqual([]);
+  },
+);
 
 type Delivery = ReturnType<typeof createDeliveryHarness>;
 function runDeliveryLoop(

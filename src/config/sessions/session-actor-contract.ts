@@ -18,6 +18,7 @@ import type {
   SessionActorStorageReads,
   SessionActorStorageWrites,
 } from "./session-actor-storage-contract.js";
+import type { SessionEntryMetadataReceipt } from "./session-entry-metadata-receipt.js";
 import type {
   SessionEntryBookkeepingReducer,
   SessionEntryPatchOperation,
@@ -270,6 +271,7 @@ export type SessionActorReceipt = {
     projectionNeedsReconcile: boolean;
   };
   conversationPublication?: readonly ConversationPublication[];
+  entryMetadata?: readonly SessionEntryMetadataReceipt[];
   pendingInputReceipt?: SessionPendingInputWorkerReceipt;
   pendingInputMutationReceipt?: PendingInputMutationReceipt;
   reducers: SessionActorReducerOutcome[];

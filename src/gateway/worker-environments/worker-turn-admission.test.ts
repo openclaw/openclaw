@@ -15,6 +15,7 @@ import type { PluginHookBeforeAgentRunEvent } from "../../plugins/hook-types.js"
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { prepareSkillBundle } from "../../skills/library/bundle.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { runWorkerEmbeddedTurn } from "../../worker/embedded-agent.runtime.js";
 import { hashWorkerCredential } from "./credential.js";
 import { createWorkerInferenceStore } from "./inference-store.js";
@@ -220,14 +221,7 @@ describe("worker-side before_agent_run admission", () => {
                 }
               : undefined,
           });
-          return {
-            stdout: "",
-            stderr: "",
-            code: 0,
-            signal: null,
-            killed: false,
-            termination: "exit",
-          };
+          return createCommandResult();
         },
       );
       const tunnel = createWorkerTurnTunnel({
@@ -512,18 +506,13 @@ describe("worker-side before_agent_run admission", () => {
           payload: { phase: "finishing", endedAt: 1, aborted: true },
         });
         // A valid successful result must not let finalization persist unapproved input.
-        return {
+        return createCommandResult({
           stdout: JSON.stringify({
             status: "completed",
             transcriptLeafId: null,
             transcriptNextSeq: 1,
           }),
-          stderr: "",
-          code: 0,
-          signal: null,
-          killed: false,
-          termination: "exit",
-        };
+        });
       },
     );
     const tunnel = createWorkerTurnTunnel({

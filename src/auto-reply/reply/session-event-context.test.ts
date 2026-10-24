@@ -4,7 +4,7 @@ import { TEST_SCHEDULED_OCCURRENCE } from "../../cron/scheduled-occurrence.test-
 import { projectChatDisplayMessages } from "../../gateway/chat-display-projection.js";
 import { buildSessionEventContext } from "./session-event-context.js";
 
-it("keeps scheduled conversation prompts attributable through chat history projection", () => {
+it("retains scheduled execution provenance without projecting the prompt as a result", () => {
   const sessionKey = "agent:main:scheduled-review";
   const job = makeCronJob({
     sessionTarget: `session:${sessionKey}`,
@@ -29,22 +29,17 @@ it("keeps scheduled conversation prompts attributable through chat history proje
     target: { sessionId: "existing-session", generation: "current" },
     assertCurrent() {},
   });
-  const [message] = projectChatDisplayMessages(
+  const messages = projectChatDisplayMessages(
     [{ role: "user", content: ctx.Body, provenance: ctx.InputProvenance }],
     { resolveCronJobName: () => "Review watcher" },
   );
-  expect(message).toMatchObject({
-    role: "assistant",
-    content: text,
-    provenance: {
-      kind: "internal_system",
-      sourceTool: "cron",
-      jobId: job.id,
-      runId: "cron:job-1:1000",
-      sourceSessionKey: sessionKey,
-    },
-    senderSession: { sessionKey, agentId: "main", label: "Review watcher" },
-    __openclaw: { turnBoundary: true },
+  expect(messages).toEqual([]);
+  expect(ctx.InputProvenance).toEqual({
+    kind: "internal_system",
+    sourceTool: "cron_execution",
+    jobId: job.id,
+    runId: "cron:job-1:1000",
+    sourceSessionKey: sessionKey,
   });
   expect(ctx.BodyForAgent).toBe(text);
 });

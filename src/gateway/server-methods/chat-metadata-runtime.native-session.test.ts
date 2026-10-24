@@ -120,6 +120,8 @@ describe("gateway chat metadata native session ownership", () => {
       try {
         await harness.refresh();
         await expect(startup(native, "ready")).resolves.toBeUndefined();
+        await harness.read();
+        await harness.read({ sessionEntry: native });
         const nativeStartup = await startup(native);
         expect((await harness.read({ sessionEntry: host })).models?.[0]?.agentRuntime?.id).toBe(
           "openclaw",

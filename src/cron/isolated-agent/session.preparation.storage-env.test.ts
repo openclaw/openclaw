@@ -58,7 +58,8 @@ it.each(["admission", "cron discovery"] as const)(
           sessionKey,
           nowMs: 2,
         });
-        expect(prepared.sessionEntry).toMatchObject({ ...entry, updatedAt: 2 });
+        // A prepared check retains conversation activity even when read through Windows env semantics.
+        expect(prepared.sessionEntry).toMatchObject(entry);
         expect(prepared.isNewSession).toBe(false);
       }
     } finally {

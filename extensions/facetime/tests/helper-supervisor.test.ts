@@ -1,19 +1,13 @@
 import { existsSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { commandResult } from "../../test-support/command-result.test-support.js";
 import { FaceTimeHelperSupervisor } from "../src/helper-supervisor.js";
 
 vi.mock("node:fs", () => ({ existsSync: vi.fn() }));
 
 type SupervisorParams = ConstructorParameters<typeof FaceTimeHelperSupervisor>[0];
 type CommandResult = Awaited<ReturnType<SupervisorParams["runCommandWithTimeout"]>>;
-const completed: CommandResult = {
-  code: 0,
-  stdout: "",
-  stderr: "",
-  signal: null,
-  killed: false,
-  termination: "exit",
-};
+const completed: CommandResult = commandResult();
 const injection = ["/bin/bash", "/tmp/facetime/scripts/inject-helper.sh", "--app", "FaceTime"];
 const cancellable = { timeoutMs: 120_000, killProcessTree: true, signal: expect.any(AbortSignal) };
 const processExited = () => {

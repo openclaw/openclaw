@@ -59,6 +59,7 @@ import {
   type SessionAutomationInventory,
 } from "./chat-summary-automations.tsx";
 import "../../../styles/chat/details.css";
+import { SessionAutomationResult } from "./session-automation-result.tsx";
 import { sessionAutomationSchedule } from "./session-automation-schedule.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
@@ -219,6 +220,7 @@ function MobileRoot(
       items: inventory.jobs().map((job) => ({
         value: job.id,
         label: job.name.trim() || job.id,
+        status: <SessionAutomationResult job={job} />,
         description: job.autoDisabled
           ? t("chat.sessionDetails.automationAttention")
           : !job.enabled

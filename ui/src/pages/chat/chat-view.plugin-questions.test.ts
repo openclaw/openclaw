@@ -13,6 +13,7 @@ import {
   createApplicationGateway,
 } from "../../test-helpers/application-context.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
+import { restorePropertyDescriptor } from "../../test-helpers/property-descriptor.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { resetComposerFixture } from "./chat-composer.test-support.ts";
@@ -21,12 +22,12 @@ import { createChatProps } from "./chat-view.test-helpers.ts";
 import { ChatView, type ChatProps } from "./chat-view.tsx";
 import { createComposerQuestions } from "./components/chat-composer-questions.ts";
 import { questionPanelIn } from "./components/chat-question-card.test-support.ts";
+import "../../plugins/control-ui-view.solid.tsx";
+import "../../plugins/control-ui-contributions.solid.tsx";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
 } from "./components/chat-transcript.test-support.ts";
-import "../../plugins/control-ui-view.solid.tsx";
-import "../../plugins/control-ui-contributions.solid.tsx";
 
 const fontsDescriptor = Object.getOwnPropertyDescriptor(document, "fonts");
 beforeEach(() => {
@@ -41,11 +42,7 @@ afterEach(async () => {
   resetChatViewState();
   resetTranscriptTestDom();
   await resetComposerFixture();
-  if (fontsDescriptor) {
-    Object.defineProperty(document, "fonts", fontsDescriptor);
-  } else {
-    Reflect.deleteProperty(document, "fonts");
-  }
+  restorePropertyDescriptor(document, "fonts", fontsDescriptor);
 });
 
 function createPluginChat(
