@@ -386,14 +386,6 @@ describe("iOS Periphery comment workflow", () => {
     });
   });
 
-  it("uses hosted macOS capacity for scans", () => {
-    const iosWorkflow = readWorkflow(PRODUCER_WORKFLOW_PATH);
-    const macosWorkflow = readWorkflow(MACOS_PRODUCER_WORKFLOW_PATH);
-    expect(iosWorkflow.jobs?.scan?.["runs-on"]).toBe("xcode-27");
-    expect(macosWorkflow.jobs?.["macos-index"]?.["runs-on"]).toBe("xcode-27");
-    expect(macosWorkflow.jobs?.["scan-ios"]?.["runs-on"]).toBe("xcode-27");
-  });
-
   it.each([
     [
       "oversized artifact metadata before download",

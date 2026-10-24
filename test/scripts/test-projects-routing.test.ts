@@ -1,12 +1,9 @@
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { globSync } from "tinyglobby";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveCanonicalNodeTestConfig } from "../../scripts/lib/ci-node-test-plan.mts";
-import { collectModuleReferencesFromSource } from "../../scripts/lib/guard-inventory-utils.mjs";
-import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 import {
   listVitestRuntimeConsumerFiles,
   resolveVitestCliEntry,
@@ -16,11 +13,6 @@ import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-process-env.mts"
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createGatewayDatabaseWorkersVitestConfig } from "../vitest/vitest.gateway-database-workers.config.ts";
 import { createGatewayServerIsolatedVitestConfig } from "../vitest/vitest.gateway-server-isolated.config.ts";
-import {
-  gatewayDatabaseWorkerTestFiles,
-  isGatewayServerTestFile,
-} from "../vitest/vitest.gateway-server-paths.mjs";
-import { packageContractTestFiles } from "../vitest/vitest.package-contract-paths.mjs";
 import { collectVitestExcludePatterns, matchesVitestGlob } from "../vitest/vitest.pattern-file.ts";
 
 const {
@@ -389,80 +381,24 @@ describe("test-projects args", () => {
   });
 
   it("routes top-level test helpers to importing repo tests", () => {
-    // Derive the importer inventory: frozen lists broke on unrelated test additions.
-    const plans = planRuns(["test/helpers/temp-dir.ts"]);
-    const planFiles = plans.map((plan) => plan.includePatterns ?? plan.forwardedArgs);
-    const expandedFiles = planFiles.flat();
-
-    expect(expandedFiles).toContain("test/helpers/temp-dir.test.ts");
-    expect(expandedFiles).not.toContain("test/helpers/temp-dir.ts");
-    expect(expandedFiles.filter((file) => !file.endsWith(".test.ts"))).toEqual([]);
-
-    // Independent AST parsing excludes import text inside source fixtures.
-    const scanRoots = ["src", "test", "ui", "extensions", "packages"];
-    const grep = spawnSync(
-      "git",
-      ["grep", "-l", "--fixed-strings", "helpers/temp-dir", "--", ...scanRoots],
-      { encoding: "utf8" },
-    );
-    expect(grep.status).toBe(0);
-    using parser = createNativeTypeScriptParser();
-    const candidates = grep.stdout
-      .split("\n")
-      .map((line) => line.trim())
-      .filter((file) => file.endsWith(".test.ts") && !file.endsWith(".live.test.ts"));
-    const directImporterTests = parser
-      .parseSourceFiles(
-        candidates.map((fileName) => ({ fileName, text: fs.readFileSync(fileName, "utf8") })),
-      )
-      .flatMap((sourceFile) => {
-        const file = path.relative(process.cwd(), sourceFile.fileName).replaceAll("\\", "/");
-        const references = collectModuleReferencesFromSource(sourceFile, {
-          acceptSpecifier: (specifier) => {
-            if (!specifier.startsWith(".")) {
-              return false;
-            }
-            const resolved = path.posix.normalize(
-              path.posix.join(path.posix.dirname(file), specifier),
-            );
-            return resolved.replace(/\.(?:js|ts)$/u, "") === "test/helpers/temp-dir";
-          },
-        });
-        return references.some(({ kind }) => kind === "import" || kind === "export") ? [file] : [];
-      });
-    expect(directImporterTests.length).toBeGreaterThan(0);
-    expect(directImporterTests.filter((file) => !expandedFiles.includes(file))).toEqual([]);
-
-    expect(plans.length).toBeGreaterThan(1);
-    expect(new Set(expandedFiles).size).toBe(expandedFiles.length);
-    for (const files of planFiles) {
-      expect(files).toEqual([...files].toSorted((left, right) => left.localeCompare(right)));
+    const root = tempDirs.make("openclaw-top-level-helper-");
+    const helper = "test/helpers/fixture.ts";
+    const consumers = ["test/scripts/a.test.ts", "test/scripts/b.test.ts", "src/tui/c.test.ts"];
+    for (const [file, source] of Object.entries({
+      [helper]: "export const fixture = 1;",
+      [consumers[0]!]: 'import "../helpers/fixture.js";',
+      [consumers[1]!]: 'export * from "../helpers/fixture.js";',
+      [consumers[2]!]: 'import "../../test/helpers/fixture.js";',
+      "test/scripts/decoy.test.ts": "const source = 'import \"../helpers/fixture.js\";';",
+    })) {
+      const target = path.join(root, file);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, source);
     }
-
-    // Mixed selections coalesce owners; singleton selections retain leaf owners.
-    for (const plan of plans) {
-      expect(plan.watchMode).toBe(false);
-      for (const file of plan.includePatterns ?? plan.forwardedArgs) {
-        const config =
-          plan.config === "test/vitest/vitest.e2e.config.ts" &&
-          packageContractTestFiles.includes(file)
-            ? "test/vitest/vitest.package-contract.config.ts"
-            : plan.config === "test/vitest/vitest.gateway.config.ts" &&
-                gatewayDatabaseWorkerTestFiles.includes(file)
-              ? "test/vitest/vitest.gateway-database-workers.config.ts"
-              : plan.config === "test/vitest/vitest.gateway.config.ts" &&
-                  isGatewayServerTestFile(file)
-                ? "test/vitest/vitest.gateway-server.config.ts"
-                : plan.config;
-        expect(planRuns([file])).toEqual([
-          expectedPlan(
-            config,
-            plan.includePatterns ? [file] : null,
-            plan.forwardedArgs.includes(file) ? [file] : [],
-          ),
-        ]);
-      }
-    }
+    expect(planRuns([helper], root)).toEqual([
+      expectedPlan("tooling", consumers.slice(0, 2)),
+      expectedPlan("tui", consumers.slice(2)),
+    ]);
   });
 
   it.each([

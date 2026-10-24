@@ -398,24 +398,21 @@ test ! -s "$OPENCLAW_ONBOARD_E2E_TMPDIR/sent.txt"
     expect(`${result.stdout}\n${result.stderr}`).not.toContain("Timeout waiting");
   });
 
-  it("checks local onboarding logs for systemd noise", async () => {
-    const contents = await readFile("scripts/e2e/lib/onboard/scenario.sh", "utf8");
-
-    for (const text of [
-      'ONBOARD_TMP_DIR="$(mktemp -d "$ONBOARD_TMP_ROOT/openclaw-onboard.XXXXXX")"',
-      'OPENCLAW_E2E_LOG_DIR="$ONBOARD_TMP_DIR/logs"',
-      'GATEWAY_LOG_PATH="$ONBOARD_TMP_DIR/gateway-e2e.log"',
-      'validate_local_basic_log "$OPENCLAW_E2E_LAST_LOG_PATH"',
-      'openclaw_e2e_assert_log_not_contains "$log_path" "systemctl --user unavailable"',
-    ]) {
-      expect(contents).toContain(text);
-    }
-    for (const text of [
-      "/tmp/gateway-e2e.log",
-      "validate_local_basic_log /tmp/openclaw-onboard-local-basic.log",
-    ]) {
-      expect(contents).not.toContain(text);
-    }
+  it("rejects systemd noise from the actual local onboarding log", () => {
+    const result = runOnboard(`
+openclaw_test_state_create() { :; }
+run_local_onboard() {
+  openclaw_e2e_run_logged local-basic printf '%s' 'systemctl --user unavailable'
+  case "$OPENCLAW_E2E_LAST_LOG_PATH" in
+    "$ONBOARD_TMP_DIR"/logs/*) ;;
+    *) exit 2 ;;
+  esac
+}
+openclaw_e2e_run_command() { "$@"; }
+run_case_local_basic
+`);
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stdout).toContain("Unexpected log output: systemctl --user unavailable");
   });
 
   it.each([true, false])(

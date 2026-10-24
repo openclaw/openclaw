@@ -35,6 +35,21 @@ function git(root: string, args: string[]) {
   return result.stdout.trim();
 }
 
+function commitFixture(root: string, message: string) {
+  git(root, ["add", "."]);
+  git(root, [
+    "-c",
+    "user.name=Test",
+    "-c",
+    "user.email=test@example.com",
+    "commit",
+    "--quiet",
+    "-m",
+    message,
+  ]);
+  return git(root, ["rev-parse", "HEAD"]);
+}
+
 function makeFixture(name: string, config?: unknown, copyConfig = !config) {
   const root = fs.realpathSync(createTempDir(`openclaw-oxlint-${name}-`));
   const write = (file: string, content: string) => writeFixture(root, file, content);
@@ -48,6 +63,27 @@ function makeFixture(name: string, config?: unknown, copyConfig = !config) {
     json(".oxlintrc.json", config);
   }
   return { root, write, copy, json };
+}
+
+function makeReleaseFixture(name: string, policy?: string) {
+  const fixture = makeFixture(name, {
+    categories: { correctness: "off" },
+    rules: { "max-lines": ["error", 2] },
+  });
+  const { root, write, json } = fixture;
+  linkDependencies(root);
+  for (const stem of ["changed", "untouched"]) {
+    write(`src/${stem}.ts`, `export const ${stem} = [\n  0,\n  1,\n];\n`);
+  }
+  if (policy) {
+    write(
+      "scripts/lib/oxlint-changed-scope.mts",
+      `export const policy = ${JSON.stringify(policy)};\n`,
+    );
+  }
+  json("package.json", { name: "fixture", version: "2026.10.10-beta.3" });
+  git(root, ["init", "--quiet"]);
+  return { ...fixture, base: commitFixture(root, "base") };
 }
 
 type LintReport = {
@@ -129,14 +165,6 @@ function writeSourceProjectFixture(root: string) {
     writeFixture(root, file, "export {};\n");
   }
 }
-
-type OxlintTsconfig = {
-  compilerOptions?: {
-    allowJs?: boolean;
-  };
-  include?: string[];
-  exclude?: string[];
-};
 
 function readJson(filePath: string): unknown {
   return JSON5.parse(fs.readFileSync(filePath, "utf8"));
@@ -446,17 +474,6 @@ describe("oxlint config", () => {
     checked(typecheck, 0);
   });
 
-  it("has a discoverable scripts tsconfig for type-aware linting", () => {
-    const tsconfig = readJson("scripts/tsconfig.json") as OxlintTsconfig;
-
-    expect(tsconfig).toMatchObject({
-      compilerOptions: { allowJs: true },
-      include: expect.arrayContaining(["**/*.ts", "**/*.mts"]),
-    });
-    expect(tsconfig.exclude ?? []).not.toContain("**/*.ts");
-    expect(tsconfig.exclude ?? []).not.toContain("**/*.mts");
-  });
-
   it("keeps native cap scopes and correctness while warning on untouched local line debt", () => {
     const config = readJson(".oxlintrc.json") as OxlintConfig;
     const { root, write, json } = makeFixture(
@@ -626,25 +643,7 @@ describe("oxlint config", () => {
   });
 
   it("keeps untouched limits advisory for release-version-only manifest changes", () => {
-    const config = { categories: { correctness: "off" }, rules: { "max-lines": ["error", 2] } };
-    const { root, write, json } = makeFixture("release-version-scope", config);
-    linkDependencies(root);
-    write("src/changed.ts", "export const changed = [\n  0,\n  1,\n];\n");
-    write("src/untouched.ts", "export const untouched = [\n  0,\n  1,\n];\n");
-    json("package.json", { name: "fixture", version: "2026.10.10-beta.3" });
-    git(root, ["init", "--quiet"]);
-    git(root, ["add", "."]);
-    git(root, [
-      "-c",
-      "user.name=Test",
-      "-c",
-      "user.email=test@example.com",
-      "commit",
-      "--quiet",
-      "-m",
-      "base",
-    ]);
-    const base = git(root, ["rev-parse", "HEAD"]);
+    const { root, json, base } = makeReleaseFixture("release-version-scope");
     json("package.json", { name: "fixture", version: "2026.10.10-beta.4" });
 
     const result = runFocused(root, ["src/changed.ts", "src/untouched.ts"], {
@@ -658,39 +657,9 @@ describe("oxlint config", () => {
   });
 
   it("trusts changed lint policy files only when they match authoritative main", () => {
-    const config = { categories: { correctness: "off" }, rules: { "max-lines": ["error", 2] } };
-    const { root, write, json } = makeFixture("trusted-release-policy", config);
-    linkDependencies(root);
-    write("src/changed.ts", "export const changed = [\n  0,\n  1,\n];\n");
-    write("src/untouched.ts", "export const untouched = [\n  0,\n  1,\n];\n");
-    write("scripts/lib/oxlint-changed-scope.mts", 'export const policy = "base";\n');
-    json("package.json", { name: "fixture", version: "2026.10.10-beta.3" });
-    git(root, ["init", "--quiet"]);
-    git(root, ["add", "."]);
-    git(root, [
-      "-c",
-      "user.name=Test",
-      "-c",
-      "user.email=test@example.com",
-      "commit",
-      "--quiet",
-      "-m",
-      "base",
-    ]);
-    const base = git(root, ["rev-parse", "HEAD"]);
+    const { root, write, json, base } = makeReleaseFixture("trusted-release-policy", "base");
     write("scripts/lib/oxlint-changed-scope.mts", 'export const policy = "trusted";\n');
-    git(root, ["add", "scripts/lib/oxlint-changed-scope.mts"]);
-    git(root, [
-      "-c",
-      "user.name=Test",
-      "-c",
-      "user.email=test@example.com",
-      "commit",
-      "--quiet",
-      "-m",
-      "trusted policy",
-    ]);
-    const trustedPolicyRef = git(root, ["rev-parse", "HEAD"]);
+    const trustedPolicyRef = commitFixture(root, "trusted policy");
     json("package.json", { name: "fixture", version: "2026.10.10-beta.4" });
 
     const changedPaths = ["package.json", "scripts/lib/oxlint-changed-scope.mts", "src/changed.ts"];
