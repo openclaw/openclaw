@@ -34,12 +34,57 @@ const InboundPolicySchema = z.enum(["disabled", "allowlist", "pairing", "open"])
 
 const SecretInputSchema = buildSecretInputSchema();
 
+/**
+ * Engine-specific Telnyx `noise_suppression_engine_config` fields. Krisp reads `model` and
+ * `suppressionLevel`, DeepFilterNet reads `attenuationLimit` and `mode`, AiCoustics reads
+ * `enhancementLevel` and `voiceGain`; Telnyx ignores fields its engine does not use.
+ */
+const TelnyxNoiseSuppressionEngineConfigSchema = z
+  .object({
+    /** Krisp model file, for example `krisp-viva-tel-lite-v1.kef` for telephony voice isolation. */
+    model: z.string().min(1).optional(),
+    /** Krisp suppression level, 0 to 100. */
+    suppressionLevel: z.number().min(0).max(100).optional(),
+    /** DeepFilterNet attenuation limit in dB, 0 to 100. */
+    attenuationLimit: z.number().int().min(0).max(100).optional(),
+    /** DeepFilterNet processing mode. */
+    mode: z.enum(["standard", "advanced"]).optional(),
+    /** AiCoustics enhancement level, 0 to 1. */
+    enhancementLevel: z.number().min(0).max(1).optional(),
+    /** AiCoustics voice gain multiplier, 0.1 to 4. */
+    voiceGain: z.number().min(0.1).max(4).optional(),
+  })
+  .strict();
+export type TelnyxNoiseSuppressionEngineConfig = z.infer<
+  typeof TelnyxNoiseSuppressionEngineConfigSchema
+>;
+
+const TelnyxNoiseSuppressionConfigSchema = z
+  .object({
+    /**
+     * Telnyx suppression_start direction: outbound is audio received from the caller (the
+     * streamed track), inbound is audio played to the caller, both is both.
+     */
+    direction: z.enum(["inbound", "outbound", "both"]),
+    /** Telnyx noise suppression engine; Telnyx picks its default when unset. */
+    engine: z.enum(["Denoiser", "DeepFilterNet", "Krisp", "AiCoustics"]).optional(),
+    /** Engine-specific tuning passed to Telnyx unchanged in shape; requires `engine`. */
+    engineConfig: TelnyxNoiseSuppressionEngineConfigSchema.optional(),
+  })
+  .strict()
+  .refine((value) => value.engineConfig === undefined || value.engine !== undefined, {
+    message: "telnyx.noiseSuppression.engineConfig requires telnyx.noiseSuppression.engine",
+    path: ["engineConfig"],
+  });
+
 const TelnyxConfigSchema = z
   .object({
     apiKey: z.string().min(1).optional(),
     connectionId: z.string().min(1).optional(),
     /** Public key for webhook signature verification */
     publicKey: z.string().min(1).optional(),
+    /** Start noise suppression before media streaming on inbound streamed calls. Off when unset. */
+    noiseSuppression: TelnyxNoiseSuppressionConfigSchema.optional(),
   })
   .strict();
 export type TelnyxConfig = z.infer<typeof TelnyxConfigSchema>;

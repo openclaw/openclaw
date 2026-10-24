@@ -1,11 +1,35 @@
 import crypto from "node:crypto";
+import { setImmediate } from "node:timers/promises";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { fetchWithSsrFGuard } from "../../api.js";
 import type { WebhookContext } from "../types.js";
 import { TelnyxProvider } from "./telnyx.js";
 
 const PROVIDER_CONFIG = { apiKey: "KEY123", connectionId: "CONN456", publicKey: undefined };
+const STREAM_URL = "wss://example.test/voice/stream/realtime/token-xyz";
+// Inline answer/dial stream fields in wire order; streaming_start must reuse them unchanged.
+const STREAM_FIELDS = {
+  stream_url: STREAM_URL,
+  stream_track: "inbound_track",
+  stream_codec: "PCMU",
+  stream_bidirectional_mode: "rtp",
+  stream_bidirectional_codec: "PCMU",
+  stream_bidirectional_sampling_rate: 8000,
+  stream_bidirectional_target_legs: "self",
+  stream_auth_token: "token-xyz",
+};
+const STREAMING_DIAL_BODY = JSON.stringify({
+  connection_id: "CONN456",
+  to: "+15550000002",
+  from: "+15550000001",
+  webhook_url: "https://example.test/voice/webhook",
+  webhook_url_method: "POST",
+  client_state: Buffer.from("call-1").toString("base64"),
+  timeout_secs: 30,
+  ...STREAM_FIELDS,
+});
 
 const apiMocks = vi.hoisted(() => ({
   fetchWithSsrFGuard: vi.fn<typeof fetchWithSsrFGuard>(),
@@ -17,6 +41,7 @@ vi.mock("../../api.js", () => ({
 
 afterEach(() => {
   apiMocks.fetchWithSsrFGuard.mockReset();
+  vi.restoreAllMocks();
 });
 
 function createCtx(params?: Partial<WebhookContext>): WebhookContext {
@@ -58,6 +83,29 @@ function mockResponse(data: Record<string, unknown> = {}) {
 
 function requireFetchRequest() {
   return expectDefined(apiMocks.fetchWithSsrFGuard.mock.calls[0], "Telnyx API request")[0];
+}
+
+/** Answer every Telnyx request with a fresh 200 unless `fail` supplies a response or error. */
+function mockTelnyxApi(fail?: (url: string) => Response | Error | undefined) {
+  apiMocks.fetchWithSsrFGuard.mockImplementation(async (request) => {
+    const failure = fail?.(request.url);
+    if (failure instanceof Error) {
+      throw failure;
+    }
+    return {
+      response: failure ?? new Response(JSON.stringify({ data: {} }), { status: 200 }),
+      finalUrl: request.url,
+      release: vi.fn(async () => {}),
+    };
+  });
+}
+
+/** Return the URL and raw body of every mocked Telnyx request, in call order. */
+function readFetchRequests() {
+  return apiMocks.fetchWithSsrFGuard.mock.calls.map(([request]) => {
+    const { url, init } = request as { url?: string; init?: { body?: unknown } };
+    return { url, body: init?.body };
+  });
 }
 
 function createSignedTelnyxCtx(params: {
@@ -261,5 +309,256 @@ describe("TelnyxProvider Media Streaming (PCMU)", () => {
     const body = JSON.parse(request.init?.body as string) as { voice?: string };
     expect(body.voice).toBe("Telnyx.Qwen3TTS.12345678-1234-1234-1234-123456789abc");
     expect(release).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("TelnyxProvider noise suppression", () => {
+  const ACTIONS_URL = "https://api.telnyx.com/v2/calls/call-control-1/actions";
+  const STREAMING_ANSWER = {
+    callId: "call-1",
+    providerCallId: "call-control-1",
+    streamUrl: STREAM_URL,
+    streamAuthToken: "token-xyz",
+  };
+
+  it("answers with the stream in a single unchanged request when unset", async () => {
+    mockTelnyxApi();
+    const provider = new TelnyxProvider(PROVIDER_CONFIG);
+
+    await provider.answerCall(STREAMING_ANSWER);
+
+    expect(readFetchRequests()).toEqual([
+      {
+        url: `${ACTIONS_URL}/answer`,
+        body: JSON.stringify({ command_id: "openclaw-answer-call-1", ...STREAM_FIELDS }),
+      },
+    ]);
+  });
+  const STREAMING_START = {
+    url: `${ACTIONS_URL}/streaming_start`,
+    body: JSON.stringify({ command_id: "openclaw-streaming-call-1", ...STREAM_FIELDS }),
+  };
+
+  it.each([
+    {
+      name: "a selected engine",
+      noiseSuppression: { direction: "outbound", engine: "Krisp" },
+      suppressionStart: { direction: "outbound", noise_suppression_engine: "Krisp" },
+    },
+    {
+      name: "the Telnyx default engine",
+      noiseSuppression: { direction: "both" },
+      suppressionStart: { direction: "both" },
+    },
+    {
+      name: "a Krisp model and level mapped to Telnyx field names",
+      noiseSuppression: {
+        direction: "outbound",
+        engine: "Krisp",
+        engineConfig: { model: "krisp-viva-tel-lite-v1.kef", suppressionLevel: 80 },
+      },
+      suppressionStart: {
+        direction: "outbound",
+        noise_suppression_engine: "Krisp",
+        noise_suppression_engine_config: {
+          model: "krisp-viva-tel-lite-v1.kef",
+          suppression_level: 80,
+        },
+      },
+    },
+    {
+      name: "AiCoustics tuning mapped to Telnyx field names",
+      noiseSuppression: {
+        direction: "outbound",
+        engine: "AiCoustics",
+        engineConfig: { enhancementLevel: 0.8, voiceGain: 1.5 },
+      },
+      suppressionStart: {
+        direction: "outbound",
+        noise_suppression_engine: "AiCoustics",
+        noise_suppression_engine_config: { enhancement_level: 0.8, voice_gain: 1.5 },
+      },
+    },
+  ] as const)(
+    "answers without the stream, then starts suppression and streaming with $name",
+    async ({ noiseSuppression, suppressionStart }) => {
+      mockTelnyxApi();
+      const provider = new TelnyxProvider({ ...PROVIDER_CONFIG, noiseSuppression });
+
+      await provider.answerCall(STREAMING_ANSWER);
+
+      expect(readFetchRequests()).toEqual([
+        {
+          url: `${ACTIONS_URL}/answer`,
+          body: JSON.stringify({ command_id: "openclaw-answer-call-1" }),
+        },
+        {
+          url: `${ACTIONS_URL}/suppression_start`,
+          body: JSON.stringify({ command_id: "openclaw-suppression-call-1", ...suppressionStart }),
+        },
+        STREAMING_START,
+      ]);
+    },
+  );
+
+  it("waits for suppression_start to settle before starting the stream", async () => {
+    const suppressionRequested = createDeferred<void>();
+    const suppressionResponse = createDeferred<Response>();
+    apiMocks.fetchWithSsrFGuard.mockImplementation(async (request: { url: string }) => {
+      if (request.url.endsWith("/suppression_start")) {
+        suppressionRequested.resolve();
+        return {
+          response: await suppressionResponse.promise,
+          finalUrl: request.url,
+          release: vi.fn(async () => {}),
+        };
+      }
+      return {
+        response: new Response(JSON.stringify({ data: {} }), { status: 200 }),
+        finalUrl: request.url,
+        release: vi.fn(async () => {}),
+      };
+    });
+    const provider = new TelnyxProvider({
+      ...PROVIDER_CONFIG,
+      noiseSuppression: { direction: "outbound" },
+    });
+
+    const answered = provider.answerCall(STREAMING_ANSWER);
+    await suppressionRequested.promise;
+    await setImmediate();
+
+    expect(readFetchRequests().map(({ url }) => url)).toEqual([
+      `${ACTIONS_URL}/answer`,
+      `${ACTIONS_URL}/suppression_start`,
+    ]);
+    suppressionResponse.resolve(new Response(JSON.stringify({ data: {} }), { status: 200 }));
+    await answered;
+    expect(readFetchRequests().at(-1)).toEqual(STREAMING_START);
+  });
+
+  it("bounds suppression_start well inside the 30s stream token lifetime", async () => {
+    mockTelnyxApi();
+    const provider = new TelnyxProvider({
+      ...PROVIDER_CONFIG,
+      noiseSuppression: { direction: "outbound" },
+    });
+
+    await provider.answerCall(STREAMING_ANSWER);
+
+    const timeouts = apiMocks.fetchWithSsrFGuard.mock.calls.map(
+      ([request]) => (request as { timeoutMs?: number }).timeoutMs,
+    );
+    expect(timeouts).toEqual([30_000, 5_000, 30_000]);
+  });
+
+  it.each([
+    {
+      name: "a 422 media streaming conflict",
+      failure: () =>
+        new Response(JSON.stringify({ errors: [{ code: "90045", title: "Invalid command" }] }), {
+          status: 422,
+        }),
+      detail: "90045",
+    },
+    {
+      name: "a network error",
+      failure: () => new Error("socket hang up"),
+      detail: "socket hang up",
+    },
+  ])("still starts streaming after $name from suppression_start", async ({ failure, detail }) => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    mockTelnyxApi((url) => (url.endsWith("/suppression_start") ? failure() : undefined));
+    const provider = new TelnyxProvider({
+      ...PROVIDER_CONFIG,
+      noiseSuppression: { direction: "outbound" },
+    });
+
+    await expect(provider.answerCall(STREAMING_ANSWER)).resolves.toBeUndefined();
+
+    const requests = readFetchRequests();
+    expect(requests.map(({ url }) => url)).toEqual([
+      `${ACTIONS_URL}/answer`,
+      `${ACTIONS_URL}/suppression_start`,
+      STREAMING_START.url,
+    ]);
+    expect(requests[2]).toEqual(STREAMING_START);
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("Noise suppression failed to start for call call-1"),
+    );
+    expect(warn.mock.calls[0]?.[0]).toContain(detail);
+  });
+
+  it("answers calls without media streaming normally", async () => {
+    mockTelnyxApi();
+    const provider = new TelnyxProvider({
+      ...PROVIDER_CONFIG,
+      noiseSuppression: { direction: "both" },
+    });
+
+    await provider.answerCall({ callId: "call-1", providerCallId: "call-control-1" });
+
+    expect(readFetchRequests()).toEqual([
+      {
+        url: `${ACTIONS_URL}/answer`,
+        body: JSON.stringify({ command_id: "openclaw-answer-call-1" }),
+      },
+    ]);
+  });
+
+  it.each([
+    {
+      name: "hangs up when streaming cannot start after the answer",
+      hangupFailure: undefined,
+      warnings: 0,
+    },
+    {
+      name: "still reports the stream failure when that hangup also fails",
+      hangupFailure: () => new Error("hangup refused"),
+      warnings: 1,
+    },
+  ])("$name", async ({ hangupFailure, warnings }) => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    mockTelnyxApi((url) => {
+      if (url.endsWith("/streaming_start")) {
+        return new Response("upstream unavailable", { status: 503 });
+      }
+      return url.endsWith("/hangup") ? hangupFailure?.() : undefined;
+    });
+    const provider = new TelnyxProvider({
+      ...PROVIDER_CONFIG,
+      noiseSuppression: { direction: "outbound" },
+    });
+
+    await expect(provider.answerCall(STREAMING_ANSWER)).rejects.toThrow(
+      "call answered but Telnyx streaming_start failed; hanging up: Telnyx API error: 503 upstream unavailable",
+    );
+    expect(readFetchRequests().map(({ url }) => url)).toEqual([
+      `${ACTIONS_URL}/answer`,
+      `${ACTIONS_URL}/suppression_start`,
+      STREAMING_START.url,
+      `${ACTIONS_URL}/hangup`,
+    ]);
+    expect(warn).toHaveBeenCalledTimes(warnings);
+  });
+
+  it("leaves outbound dial requests unchanged", async () => {
+    mockResponse({ call_control_id: "call-control-1" });
+    const provider = new TelnyxProvider({
+      ...PROVIDER_CONFIG,
+      noiseSuppression: { direction: "outbound" },
+    });
+
+    await provider.initiateCall({
+      callId: "call-1",
+      from: "+15550000001",
+      to: "+15550000002",
+      webhookUrl: "https://example.test/voice/webhook",
+      streamUrl: STREAM_URL,
+      streamAuthToken: "token-xyz",
+    });
+
+    expect(apiMocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(1);
+    expect(requireFetchRequest().init?.body).toBe(STREAMING_DIAL_BODY);
   });
 });

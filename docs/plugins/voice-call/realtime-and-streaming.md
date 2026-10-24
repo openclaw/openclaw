@@ -23,7 +23,7 @@ audio mode per call.
 
 Runtime behavior:
 
-- `realtime.enabled` is supported for Twilio and Telnyx.
+- `realtime.enabled` is supported for Twilio and Telnyx. Inbound Telnyx calls can also [denoise caller audio](/plugins/voice-call/realtime-and-streaming#telnyx-noise-suppression) before it reaches the realtime model.
 - `realtime.provider` is optional. If unset, Voice Call selects the first configured realtime voice provider in provider priority order. Providers named in `realtime.providers` are discovered even when another provider is already active; plugin disablement and allow/deny rules still apply.
 - Bundled realtime voice providers: Google Gemini Live (`google`) and OpenAI (`openai`), registered by their provider plugins.
 - Provider-owned raw config lives under `realtime.providers.<providerId>`.
@@ -225,6 +225,43 @@ your public webhook URL with `?type=status` appended, for example
 call event. OpenClaw-created outbound calls configure their callback
 automatically. The callback provides the fastest teardown signal, while stream
 close and the inactivity backstop remain independent of it.
+
+### Telnyx noise suppression
+
+Telnyx can denoise call audio before the media stream carries it to the
+realtime model. Set `telnyx.noiseSuppression` to enable it; remove the block
+to turn it off.
+
+```json5
+{
+  plugins: {
+    entries: {
+      "voice-call": {
+        config: {
+          provider: "telnyx",
+          telnyx: {
+            noiseSuppression: {
+              direction: "outbound", // outbound | inbound | both
+              engine: "Krisp", // optional: Denoiser | DeepFilterNet | Krisp | AiCoustics
+              engineConfig: { model: "krisp-viva-tel-lite-v1.kef" }, // optional, engine-specific
+            },
+          },
+          realtime: { enabled: true },
+        },
+      },
+    },
+  },
+}
+```
+
+- `direction` is passed to Telnyx unchanged and uses Telnyx's naming from the call's side, per the [Telnyx noise suppression guide](https://developers.telnyx.com/docs/voice/programmable-voice/noise-suppression): `outbound` is audio received from the caller, which is what the realtime stream carries; `inbound` is audio played to the caller; `both` covers both and is billed per direction. Telnyx recommends `outbound` or `both` for streaming and AI use cases.
+- `engine` is optional. When unset, Telnyx uses its default engine (`Denoiser`), which handles ambient noise. For callers in rooms where other people are talking, `Krisp` with `engineConfig.model: "krisp-viva-tel-lite-v1.kef"` isolates the caller's voice from background speech; `AiCoustics` is a lower-cost alternative built for speech-to-text pipelines.
+- `engineConfig` is optional and requires `engine`. Its fields are passed to Telnyx as `noise_suppression_engine_config`: `model` and `suppressionLevel` (0 to 100) for Krisp, `attenuationLimit` (0 to 100) and `mode` (`standard` or `advanced`) for DeepFilterNet, `enhancementLevel` (0 to 1) and `voiceGain` (0.1 to 4) for AiCoustics.
+- Set the number's own noise suppression to `disabled` in Telnyx first (Mission Control Portal, Voice, Phone Numbers, the number, Settings, or `PATCH /v2/phone_numbers/{id}/voice`). A number-level setting engages Telnyx's default engine at answer, and a later `suppression_start` collides with it; Telnyx returns a 500 for that collision rather than a clean 422. Per-call suppression also costs more than the default engine, and Telnyx bills each direction separately.
+- Telnyx rejects noise suppression while media streaming is active, so Voice Call answers these calls without the stream, starts suppression, and then starts streaming with the same stream settings.
+- If the suppression request fails or takes longer than 5 seconds, Voice Call logs a warning and streams without suppression. The call continues.
+- If streaming cannot start after the answer, Voice Call hangs up instead of leaving the caller on a silent line.
+- The setting applies to inbound calls only. Outbound dial requests are unchanged, and calls without media streaming are unaffected.
 
 ### Tool policy
 
