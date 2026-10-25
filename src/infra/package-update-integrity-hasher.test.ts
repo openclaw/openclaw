@@ -268,132 +268,100 @@ describe("package file hashing workers", () => {
     },
   );
 
-  it("falls back after construction fails with identical hashes and at most four in-process jobs", async ({
-    signal,
-  }) => {
-    runtime.parallelism = 1;
-    runtime.construct.mockImplementation(() => {
-      throw new Error("fixture worker construction failed");
-    });
-    const { file, stat } = await fixture("fallback");
-    const saturated = createDeferred();
-    const release = createDeferred();
-    let active = 0;
-    let peak = 0;
-    const fallback = vi.fn(async (pathname: string) => {
-      active++;
-      peak = Math.max(peak, active);
-      if (active === 4) {
-        saturated.resolve();
-      }
-      try {
-        await release.promise;
-        return digest(await fs.readFile(pathname));
-      } finally {
-        active--;
-      }
-    });
-    const hasher = createHasher(fallback);
-    const hashes = Promise.all(Array.from({ length: 11 }, () => hasher.hash(file, stat)));
-    hasher.flush();
-    try {
-      await withinTest(
-        awaitGateBeforeSettlement(saturated.promise, hashes, "fallback did not admit four files"),
-        signal,
-      );
-      expect(fallback).toHaveBeenCalledTimes(4);
-      release.resolve();
-      expect(await hashes).toEqual(Array.from({ length: 11 }, () => digest("package bytes")));
-      const laterHash = hasher.hash(file, stat);
-      hasher.flush();
-      expect(await laterHash).toBe(digest("package bytes"));
-      expect(peak).toBe(4);
-      expect(fallback).toHaveBeenCalledTimes(12);
-      expect(runtime.construct).toHaveBeenCalledOnce();
-    } finally {
-      release.resolve();
-      await hashes;
-    }
-  });
-
-  it("shares the four-file budget with healthy workers after a peer crashes", async ({
-    signal,
-  }) => {
-    const { file, stat } = await fixture("mixed-fallback");
-    const gate = new Int32Array(new SharedArrayBuffer(5 * Int32Array.BYTES_PER_ELEMENT));
-    const activeFiles = () => Atomics.load(gate, 1) - Atomics.load(gate, 2);
-    const ready = Array.from({ length: 3 }, () => createDeferred());
-    const channels: MessageChannel[] = [];
-    runtime.construct.mockImplementation((source, options) => {
-      const index = runtime.workers.length;
-      if (index === 3) {
-        return [
-          `Atomics.wait(require("node:worker_threads").workerData.probeGate, 4, 0);
+  it.for([
+    { failure: "construction", healthy: 0, jobs: 11 },
+    { failure: "peer crash", healthy: 3, jobs: 64 },
+  ])(
+    "preserves hashes and the shared four-file budget after $failure",
+    async ({ healthy, jobs }, { signal }) => {
+      runtime.parallelism = healthy + 1;
+      const { file, stat } = await fixture("fallback");
+      const gate = new Int32Array(new SharedArrayBuffer(5 * Int32Array.BYTES_PER_ELEMENT));
+      const activeFiles = () => Atomics.load(gate, 1) - Atomics.load(gate, 2);
+      const ready = Array.from({ length: healthy }, () => createDeferred());
+      const channels: MessageChannel[] = [];
+      runtime.construct.mockImplementation((source, options) => {
+        if (!healthy) {
+          throw new Error("fixture worker construction failed");
+        }
+        const index = runtime.workers.length;
+        if (index === healthy) {
+          return [
+            `Atomics.wait(require("node:worker_threads").workerData.probeGate, 4, 0);
            throw new Error("fixture worker crashed");\nimport(${JSON.stringify(String(source))});`,
-          { ...options, eval: true, workerData: { ...options.workerData, probeGate: gate } },
-        ];
-      }
-      const channel = new MessageChannel();
-      channels.push(channel);
-      channel.port1.once("message", () => ready[index]!.resolve());
-      return probeReads(source, options, gate, channel.port2, [file]);
-    });
-    const fallbackStarted = createDeferred();
-    const releaseFallback = createDeferred();
-    let peak = 0;
-    const fallback = vi.fn(async (pathname: string) => {
-      Atomics.add(gate, 1, 1);
-      peak = Math.max(peak, activeFiles());
-      fallbackStarted.resolve();
-      try {
-        await releaseFallback.promise;
-        return digest(await fs.readFile(pathname));
-      } finally {
-        Atomics.add(gate, 2, 1);
-      }
-    });
-    const hasher = createHasher(fallback);
-    const hashes = Promise.all(Array.from({ length: 64 }, () => hasher.hash(file, stat)));
-    hasher.flush();
-    try {
-      await withinTest(
-        awaitGateBeforeSettlement(
-          Promise.all(ready.map(({ promise }) => promise)),
-          hashes,
-          "healthy workers never reached their file reads",
-        ),
-        signal,
-      );
-      expect(activeFiles()).toBe(3);
-      releaseGate(gate, 4);
-      await withinTest(
-        awaitGateBeforeSettlement(fallbackStarted.promise, hashes, "crashed job did not fall back"),
-        signal,
-      );
-      expect(fallback).toHaveBeenCalledOnce();
-      expect(activeFiles()).toBe(4);
-      releaseGate(gate);
-      releaseFallback.resolve();
-      expect(await hashes).toEqual(Array.from({ length: 64 }, () => digest("package bytes")));
-      const laterHash = hasher.hash(file, stat);
+            { ...options, eval: true, workerData: { ...options.workerData, probeGate: gate } },
+          ];
+        }
+        const channel = new MessageChannel();
+        channels.push(channel);
+        channel.port1.once("message", () => ready[index]!.resolve());
+        return probeReads(source, options, gate, channel.port2, [file]);
+      });
+      const saturated = createDeferred();
+      const releaseFallback = createDeferred();
+      let peak = 0;
+      const fallback = vi.fn(async (pathname: string) => {
+        Atomics.add(gate, 1, 1);
+        peak = Math.max(peak, activeFiles());
+        if (activeFiles() === 4) {
+          saturated.resolve();
+        }
+        try {
+          await releaseFallback.promise;
+          return digest(await fs.readFile(pathname));
+        } finally {
+          Atomics.add(gate, 2, 1);
+        }
+      });
+      const hasher = createHasher(fallback);
+      const hashes = Promise.all(Array.from({ length: jobs }, () => hasher.hash(file, stat)));
       hasher.flush();
-      expect(await laterHash).toBe(digest("package bytes"));
-      expect(peak).toBe(4);
-      expect(activeFiles()).toBe(0);
-      // Cancellation also stops the healthy workers' active files; all 64 and the later hash rerun in-process.
-      expect(fallback).toHaveBeenCalledTimes(65);
-      expect(runtime.construct).toHaveBeenCalledTimes(4);
-    } finally {
-      releaseGate(gate);
-      releaseGate(gate, 4);
-      releaseFallback.resolve();
-      await Promise.allSettled([hashes]);
-      hasher.close();
-      await Promise.all(runtime.exits);
-      for (const { port1, port2 } of channels) {
-        port1.close();
-        port2.close();
+      try {
+        if (healthy) {
+          await withinTest(
+            awaitGateBeforeSettlement(
+              Promise.all(ready.map(({ promise }) => promise)),
+              hashes,
+              "healthy workers never reached their file reads",
+            ),
+            signal,
+          );
+          expect(activeFiles()).toBe(healthy);
+          releaseGate(gate, 4);
+        }
+        await withinTest(
+          awaitGateBeforeSettlement(
+            saturated.promise,
+            hashes,
+            "fallback did not fill the file budget",
+          ),
+          signal,
+        );
+        expect(fallback).toHaveBeenCalledTimes(4 - healthy);
+        expect(activeFiles()).toBe(4);
+        releaseGate(gate);
+        releaseFallback.resolve();
+        expect(await hashes).toEqual(Array.from({ length: jobs }, () => digest("package bytes")));
+        const laterHash = hasher.hash(file, stat);
+        hasher.flush();
+        expect(await laterHash).toBe(digest("package bytes"));
+        expect(peak).toBe(4);
+        expect(activeFiles()).toBe(0);
+        // A peer failure cancels healthy workers too; every job reruns in-process.
+        expect(fallback).toHaveBeenCalledTimes(jobs + 1);
+        expect(runtime.construct).toHaveBeenCalledTimes(healthy + 1);
+      } finally {
+        releaseGate(gate);
+        releaseGate(gate, 4);
+        releaseFallback.resolve();
+        await Promise.allSettled([hashes]);
+        hasher.close();
+        await Promise.all(runtime.exits);
+        for (const { port1, port2 } of channels) {
+          port1.close();
+          port2.close();
+        }
       }
-    }
-  });
+    },
+  );
 });
