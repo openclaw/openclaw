@@ -153,10 +153,11 @@ describe("X allowlist Gateway methods", () => {
     expect(logger.warn).not.toHaveBeenCalled();
   });
 
-  it.each(["implicit default", "explicit default", "named account"])(
+  it.each(["implicit default", "explicit default", "mixed-case default", "named account"])(
     "persists guest mode for the %s while preserving other account settings",
     async (selection) => {
       const accountId = selection === "named account" ? "second" : "default";
+      const key = selection === "mixed-case default" ? "Default" : accountId;
       const { invoke, getConfig } = gateway(undefined, {
         channels: {
           x: {
@@ -165,7 +166,9 @@ describe("X allowlist Gateway methods", () => {
             guests: { enabled: false, maxMentionsPerAuthorPerDay: 7 },
             costLimits: { dailyUsd: 100, monthlyUsd: 1000, cycleStartDay: 20 },
             accounts: {
-              ...(selection === "explicit default" ? { default: {} } : {}),
+              ...(selection === "explicit default" || selection === "mixed-case default"
+                ? { [key]: {} }
+                : {}),
               second: {
                 userId: "101",
                 username: "second_bot",
@@ -181,6 +184,10 @@ describe("X allowlist Gateway methods", () => {
         true,
         expect.objectContaining({
           accountId,
+          accounts: [
+            { accountId: "default", username: "example_bot" },
+            { accountId: "second", username: "second_bot" },
+          ],
           spend: expect.objectContaining({
             dailyLimitUsd: selection === "named account" ? 5 : 100,
             monthlyLimitUsd: 1000,
@@ -195,7 +202,7 @@ describe("X allowlist Gateway methods", () => {
         }),
       );
       const channel = getConfig().channels!.x;
-      const selected = selection === "implicit default" ? channel : channel.accounts[accountId];
+      const selected = selection === "implicit default" ? channel : channel.accounts[key];
       expect(selected.guests.enabled).toBe(true);
       expect(channel.guests.maxMentionsPerAuthorPerDay).toBe(7);
       expect(channel.accounts.second.guests.threadContextMaxPosts).toBe(4);
