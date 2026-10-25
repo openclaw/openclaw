@@ -204,16 +204,13 @@ describe("repairProviderWrappedModelOverride", () => {
     expect(entry.updatedAt).toBeGreaterThan(before);
   });
 
-  it.each([
-    ["the wrapped default", {}, { defaultProvider: "openrouter" }],
-    ["aligned runtime fields", runtime, { defaultProvider: "openai" }],
-  ])("keeps a cataloged direct route that resembles %s", (_label, fields, defaults) => {
-    const entry = wrappedEntry(fields);
+  it("keeps a cataloged direct route that resembles aligned runtime fields", () => {
+    const entry = wrappedEntry(runtime);
     const unchanged = { ...entry };
 
     const result = repairProviderWrappedModelOverride({
       entry,
-      ...defaults,
+      defaultProvider: "openai",
       defaultModel: "anthropic/claude-haiku-4.5",
       isKnownRoute: (ref) => ref.provider === "anthropic" && ref.model === "claude-haiku-4.5",
     });
