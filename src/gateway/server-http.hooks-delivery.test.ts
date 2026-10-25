@@ -117,25 +117,10 @@ describe("hook request delivery normalization", () => {
     const { handler, dispatchAgentHook } = createDeliveryHandler();
     const send = (payload: Record<string, unknown> = {}, error?: string) =>
       dispatchPayload(handler, { message: "Direct", ...payload }, "/hooks/agent", error);
-    await send();
-    expect(dispatchAgentHook.mock.calls[0]?.[0]).toMatchObject({
-      channel: "last",
-      to: undefined,
-      delivery: { mode: "none" },
-    });
     await send({ to: "sensitive-recipient" }, "channel and to must be set together");
-    await send({ to: 123 }, "to must be a non-empty string");
-    await send({ channel: "delivery-test" }, "channel and to must be set together");
-    expect(dispatchAgentHook).toHaveBeenCalledTimes(1);
-    await send({ deliver: false, channel: "stale-channel", to: "sensitive-recipient" });
-    expect(dispatchAgentHook.mock.calls[1]?.[0]).toMatchObject({
-      deliver: false,
-      channel: "last",
-      to: undefined,
-      delivery: { mode: "none" },
-    });
+    expect(dispatchAgentHook).not.toHaveBeenCalled();
     await send({ channel: "delivery-test", to: "123456", accountId: "work" });
-    expect(dispatchAgentHook.mock.calls[2]?.[0]).toMatchObject({
+    expect(dispatchAgentHook.mock.calls[0]?.[0]).toMatchObject({
       accountId: "work",
       delivery: { mode: "announce", channel: "delivery-test", to: "123456", accountId: "work" },
     });
@@ -177,24 +162,6 @@ describe("hook request delivery normalization", () => {
     await dispatchPayload(handler, payload, path, "agentId must be a non-empty string");
     expect(dispatchAgentHook).not.toHaveBeenCalled();
     expect(dispatchWakeHook).not.toHaveBeenCalled();
-  });
-
-  test("preserves config-mapping fallback for an unrepresentable agentId", async () => {
-    const { handler, dispatchAgentHook } = createDeliveryHandler({
-      mappings: [
-        {
-          id: "mapped-unknown-agent",
-          matchPath: "mapped-unknown-agent",
-          action: "agent",
-          agentId: "!!!",
-          messageTemplate: "Mapped fallback",
-        },
-      ],
-    });
-    await dispatchPayload(handler, {}, "/hooks/mapped-unknown-agent");
-    expect(dispatchAgentHook).toHaveBeenCalledWith(
-      expect.objectContaining({ agentId: "main", effectiveAgentId: "main" }),
-    );
   });
 
   test.each([

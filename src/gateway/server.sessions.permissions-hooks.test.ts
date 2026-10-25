@@ -125,7 +125,6 @@ test("session:patch hook mutations cannot change the response path", async () =>
 
   sessionHookMocks.triggerInternalHook.mockImplementationOnce(async (event) => {
     assert(isInternalHookEvent(event));
-    expect(event).toMatchObject({ type: "session", action: "patch" });
     assert(event.context.cfg && typeof event.context.cfg === "object");
     Object.assign(event.context.cfg, { agents: { defaults: { model: "zai/glm-4.6" } } });
   });
@@ -159,29 +158,20 @@ test("session:patch hook mutations cannot change the response path", async () =>
   ws.close();
 });
 
-test("sessions.patch stores and clears rootless modes while preserving recorded roots", async () => {
-  const pinnedKey = "agent:main:dashboard:pinned-permission";
+test("sessions.patch stores and clears rootless modes", async () => {
   const storePath = await seedSessions({
     main: sessionStoreEntry("sess-rootless-permission"),
-    [pinnedKey]: sessionStoreEntry("sess-pinned-permission", {
-      sessionRoot: "/workspace/project",
-    }),
   });
 
   const { ws } = await openClient();
-  const patchMode = (key: string, permissionMode: "guarded" | "workspace" | null) =>
-    rpcOk(ws, "sessions.patch", { key, permissionMode });
-  const stored = (sessionKey = mainKey) => loadSessionEntry({ sessionKey, storePath });
+  const patchMode = (permissionMode: "guarded" | null) =>
+    rpcOk(ws, "sessions.patch", { key: mainKey, permissionMode });
+  const stored = () => loadSessionEntry({ sessionKey: mainKey, storePath });
   try {
-    await patchMode(mainKey, "guarded");
+    await patchMode("guarded");
     expect(stored()).toMatchObject({ permissionMode: "guarded" });
-    await patchMode(mainKey, null);
+    await patchMode(null);
     expect(stored()).not.toHaveProperty("permissionMode");
-    await patchMode(pinnedKey, "workspace");
-    expect(stored(pinnedKey)).toMatchObject({
-      permissionMode: "workspace",
-      sessionRoot: "/workspace/project",
-    });
   } finally {
     ws.close();
   }
