@@ -41,6 +41,7 @@ describe("collectWorkspaceStatusHealthFindings", () => {
       pluginId: "broken-fixture",
       source: "/plugins/broken-fixture/index.js",
       message: "board widget registration has invalid kind",
+      code: "channel-setup-failure",
     };
     mocks.listAgentIds.mockReturnValue(["alpha", "beta"]);
     mocks.resolveAgentWorkspaceDir.mockImplementation((_cfg, agentId) => `/workspace/${agentId}`);
@@ -57,7 +58,22 @@ describe("collectWorkspaceStatusHealthFindings", () => {
       expect(activeWorkspace).toBe(workspaceDir);
       return {
         workspaceDir,
-        ...createPluginLoadResult({ plugins: [], diagnostics: [diagnostic] }),
+        ...createPluginLoadResult({
+          plugins: [],
+          diagnostics: [
+            diagnostic,
+            ...(workspaceDir === "/workspace/beta"
+              ? [
+                  { level: "error" as const, pluginId: "secondary", message: "load failed" },
+                  {
+                    level: "info" as const,
+                    pluginId: "selected",
+                    message: "explicit plugin source selected",
+                  },
+                ]
+              : []),
+          ],
+        }),
       };
     });
     mocks.buildPluginCompatibilityWarnings.mockImplementation(({ workspaceDir }) => {
@@ -70,8 +86,31 @@ describe("collectWorkspaceStatusHealthFindings", () => {
       'Agent "alpha": legacy-plugin is hook-only',
       'Agent "alpha": board widget registration has invalid kind',
       'Agent "beta": legacy-plugin is hook-only',
+      'Agent "beta": load failed',
+      'Agent "beta": explicit plugin source selected',
     ]);
     expect(findings.filter((finding) => finding.target === "broken-fixture")).toHaveLength(1);
+    expect(findings).toMatchObject([
+      {
+        checkId: "core/doctor/workspace-status",
+        severity: "warning",
+        path: "plugins",
+        requirement: "plugin-compatibility",
+        category: "recommended",
+      },
+      {
+        checkId: "core/doctor/workspace-status",
+        severity: "error",
+        path: "plugins.entries.broken-fixture",
+        requirement: "channel-setup-failure",
+        category: "fix-now",
+        source: diagnostic.source,
+        fixHint: expect.stringContaining("openclaw plugins inspect broken-fixture --runtime"),
+      },
+      { severity: "warning" },
+      { path: "plugins.entries.secondary" },
+      { severity: "info", target: "selected" },
+    ]);
     expect(activeWorkspace).toBeUndefined();
   });
 
@@ -88,158 +127,67 @@ describe("collectWorkspaceStatusHealthFindings", () => {
     expect(collectWorkspaceStatusHealthFindings({})).toEqual([
       expect.objectContaining({
         target: "broken",
+        message: "manifest invalid",
         category: "fix-now",
         fixHint: expect.stringContaining("openclaw plugins inspect broken --runtime"),
       }),
     ]);
   });
 
-  it("collects plugin version drift as structured findings", () => {
-    const findings = collectWorkspaceStatusHealthFindings(
-      {
-        plugins: { entries: { codex: { enabled: true } } },
-      },
-      {
-        pluginVersionReadiness: {
-          status: "resolved",
-          report: {
-            gatewayVersion: "2026.6.1",
-            drifts: [
-              {
-                pluginId: "codex",
-                installedVersion: "2026.5.30-beta.1",
-                gatewayVersion: "2026.6.1",
-                source: "npm",
-              },
-            ],
-          },
-        },
-      },
-    );
-
-    expect(findings).toEqual([
-      expect.objectContaining({
-        checkId: "core/doctor/workspace-status",
-        severity: "warning",
-        path: "plugins.entries.codex",
-        target: "codex",
-        requirement: "plugin-version-drift",
-        message: expect.stringContaining("2026.5.30-beta.1"),
-        fixHint: expect.stringContaining("openclaw plugins update codex"),
-      }),
-    ]);
-  });
-
-  it("reports npm target lookup failure without an uninstallable fix hint", () => {
-    const findings = collectWorkspaceStatusHealthFindings(
-      { plugins: { entries: { brave: { enabled: true } } } },
-      {
-        pluginVersionReadiness: {
-          status: "resolved",
-          report: {
-            gatewayVersion: "2026.7.1-2",
-            drifts: [
-              {
-                pluginId: "brave",
-                installedVersion: "2026.7.1-beta.2",
-                gatewayVersion: "2026.7.1-2",
-                source: "npm",
-                packageName: "@openclaw/brave-plugin",
-                spec: "@openclaw/brave-plugin@2026.7.1-beta.2",
-                targetResolution: {
-                  status: "unresolved",
-                  packageName: "@openclaw/brave-plugin",
-                  requestedTarget: "2026.7.1",
-                  error: "npm registry did not resolve @openclaw/brave-plugin@2026.7.1: HTTP 404",
+  it.each([false, true])(
+    "reports plugin drift with an actionable hint (unresolved: %s)",
+    (unresolved) => {
+      const pluginId = "codex";
+      const findings = collectWorkspaceStatusHealthFindings(
+        { plugins: { entries: { [pluginId]: { enabled: true } } } },
+        {
+          pluginVersionReadiness: {
+            status: "resolved",
+            report: {
+              gatewayVersion: "2026.6.1",
+              drifts: [
+                {
+                  pluginId,
+                  installedVersion: "2026.5.30-beta.1",
+                  gatewayVersion: "2026.6.1",
+                  source: "npm",
+                  ...(unresolved
+                    ? ({
+                        packageName: "@openclaw/codex",
+                        targetResolution: {
+                          status: "unresolved",
+                          packageName: "@openclaw/codex",
+                          requestedTarget: "2026.6.1",
+                          error: "HTTP 404",
+                        },
+                      } as const)
+                    : {}),
                 },
-              },
-            ],
+              ],
+            },
           },
         },
-      },
-    );
+      );
 
-    expect(findings).toEqual([
-      expect.objectContaining({
-        severity: "warning",
-        message: expect.stringContaining("Repair target resolution failed"),
-        fixHint: expect.stringContaining("No install command generated"),
-      }),
-    ]);
-    expect(findings[0]?.fixHint).not.toContain("openclaw plugins update");
-    expect(findings[0]?.fixHint).not.toContain("openclaw gateway restart");
-  });
-
-  it("collects compatibility warnings and plugin diagnostics", () => {
-    mocks.buildPluginRegistrySnapshotReport.mockReturnValue({
-      workspaceDir: "/workspace",
-      ...createPluginLoadResult({
-        plugins: [],
-        diagnostics: [
-          {
-            level: "error",
-            pluginId: "broken-plugin",
-            message: "channel setup failed",
-            source: "/tmp/plugin.json",
-            code: "channel-setup-failure",
-          },
-          { level: "info", pluginId: "selected", message: "explicit plugin source selected" },
-        ],
-      }),
-    });
-    mocks.buildPluginCompatibilityWarnings.mockReturnValue(["legacy-plugin is hook-only"]);
-    const findings = collectWorkspaceStatusHealthFindings({});
-
-    expect(findings).toEqual([
-      expect.objectContaining({
-        checkId: "core/doctor/workspace-status",
-        severity: "warning",
-        path: "plugins",
-        requirement: "plugin-compatibility",
-        category: "recommended",
-        message: "legacy-plugin is hook-only",
-      }),
-      expect.objectContaining({
-        checkId: "core/doctor/workspace-status",
-        severity: "error",
-        path: "plugins.entries.broken-plugin",
-        target: "broken-plugin",
-        requirement: "channel-setup-failure",
-        category: "fix-now",
-        fixHint: expect.stringContaining("openclaw plugins inspect broken-plugin --runtime"),
-        source: "/tmp/plugin.json",
-        message: "channel setup failed",
-      }),
-      expect.objectContaining({
-        severity: "info",
-        target: "selected",
-        message: "explicit plugin source selected",
-      }),
-    ]);
-  });
-
-  it("labels workspace diagnostics for the affected secondary agent", () => {
-    mocks.listAgentIds.mockReturnValue(["default", "secondary"]);
-    mocks.resolveAgentWorkspaceDir.mockImplementation((_cfg, agentId) => `/${agentId}`);
-    mocks.buildPluginRegistrySnapshotReport.mockImplementation(({ workspaceDir }) => ({
-      workspaceDir,
-      ...createPluginLoadResult({
-        plugins: [],
-        diagnostics:
-          workspaceDir === "/secondary"
-            ? [{ level: "error", pluginId: "broken", message: "load failed" }]
-            : [],
-      }),
-    }));
-
-    const findings = collectWorkspaceStatusHealthFindings({});
-
-    expect(mocks.buildPluginRegistrySnapshotReport).toHaveBeenCalledTimes(2);
-    expect(findings).toEqual([
-      expect.objectContaining({
-        message: 'Agent "secondary": load failed',
-        path: "plugins.entries.broken",
-      }),
-    ]);
-  });
+      expect(findings).toEqual([
+        expect.objectContaining({
+          checkId: "core/doctor/workspace-status",
+          severity: "warning",
+          path: "plugins.entries.codex",
+          target: pluginId,
+          requirement: "plugin-version-drift",
+          message: expect.stringContaining(
+            unresolved ? "Repair target resolution failed" : "2026.5.30-beta.1",
+          ),
+          fixHint: expect.stringContaining(
+            unresolved ? "No install command generated" : "openclaw plugins update codex",
+          ),
+        }),
+      ]);
+      if (unresolved) {
+        expect(findings[0]?.fixHint).not.toContain("openclaw plugins update");
+        expect(findings[0]?.fixHint).not.toContain("openclaw gateway restart");
+      }
+    },
+  );
 });

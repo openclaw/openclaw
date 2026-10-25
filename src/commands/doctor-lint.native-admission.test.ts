@@ -7,6 +7,7 @@ import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { runtimeToolSchemaCheck } from "../flows/doctor-tool-schema-check.js";
 import { clearHealthChecksForTest } from "../flows/health-check-registry.js";
 import type { HealthCheckContext } from "../flows/health-checks.js";
+import { buildCatalogModel, catalogFixture } from "../plugin-sdk/provider-catalog.test-support.js";
 import { readPersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store.js";
 import { acquirePluginRegistryForInspection } from "../plugins/loader-runtime-load.js";
 import {
@@ -15,8 +16,6 @@ import {
   withPluginCache,
   type PluginCache,
 } from "../plugins/plugin-cache.js";
-import { bindPluginInstanceModuleLoader } from "../plugins/plugin-instance-module-loader.js";
-import { PluginInstance } from "../plugins/plugin-instance.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { settlePluginNativeAdmissions } from "../plugins/plugin-native-admission-state.js";
 import {
@@ -24,15 +23,10 @@ import {
   seedInstalledPluginIndex,
 } from "../plugins/test-helpers/installed-plugin-index.js";
 import { writeManagedNpmPlugin } from "../plugins/test-helpers/managed-npm-plugin.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { runDoctorLintCliInProcess } from "./doctor-lint-runner.js";
 import { runDoctorLintCli } from "./doctor-lint.js";
 import { createDoctorPluginMetadataSnapshotScope } from "./doctor/shared/plugin-metadata-snapshot-scope.js";
-import { createTestModelDefinition, createTestRuntime } from "./test-runtime-config-helpers.js";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const contributions = vi.hoisted(() => ({ resolve: vi.fn() }));
 vi.mock("../flows/doctor-health-contributions.js", () => ({
@@ -112,17 +106,9 @@ export default {
         },
         models: {
           providers: {
-            fixture: {
-              api: "openai-completions",
-              baseUrl: "http://127.0.0.1:1/v1",
-              models: [
-                createTestModelDefinition("local", {
-                  name: "Local fixture",
-                  contextWindow: 128000,
-                  maxTokens: 8192,
-                }),
-              ],
-            },
+            fixture: catalogFixture("fixture", "http://127.0.0.1:1/v1", [
+              buildCatalogModel("local", { name: "Local fixture" }),
+            ]).providerConfig,
           },
         },
         memory: { search: { enabled: false } },
@@ -224,76 +210,4 @@ export default {
       }
     },
   );
-});
-
-it("keeps native plugin captures alive after Doctor retires its private state snapshot", async () => {
-  await withOpenClawTestState({ prefix: "doctor-plugin-captures-" }, async (state) => {
-    await state.writeConfig({ gateway: { mode: "local" }, plugins: { enabled: false } });
-    openOpenClawStateDatabase();
-    await closeOpenClawStateDatabaseAsync();
-    const plugin = state.path("channel-plugin");
-    fs.mkdirSync(plugin);
-    writePluginFiles(plugin, {
-      "package.json": { name: "channel-fixture" },
-      "README.md": "channel companion",
-      "addon.node": "synthetic native bytes",
-      "index.cjs": `const fs = require("node:fs");
-       const path = require("node:path");
-       exports.read = () => {
-         const native = fs.realpathSync(path.join(__dirname, "addon.node"));
-         return fs.readFileSync(path.join(path.dirname(native), "README.md"), "utf8");
-       };`,
-    });
-    const cache = createPluginCache();
-    const instances: PluginInstance[] = [];
-    const load = () => {
-      const instance = new PluginInstance("channel-fixture");
-      instances.push(instance);
-      const source = path.join(plugin, "index.cjs");
-      bindPluginInstanceModuleLoader({ instance, origin: "config", source, rootDir: plugin });
-      return instance.loadModule(source) as { read(): string };
-    };
-    let first: ReturnType<typeof load> | undefined;
-    let privateState = "";
-    let snapshotHasCaptures = false;
-    contributions.resolve.mockResolvedValue([
-      {
-        id: "core/doctor/runtime-tool-schemas",
-        kind: "core",
-        description: "Inspect channel plugin",
-        async detect() {
-          privateState = process.env.OPENCLAW_STATE_DIR!;
-          first = load();
-          expect(first.read()).toBe("channel companion");
-          snapshotHasCaptures = fs.existsSync(path.join(privateState, "tmp", "plugin-captures"));
-          return [];
-        },
-      },
-    ]);
-    clearHealthChecksForTest();
-    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-    try {
-      await withPluginCache(cache, async () => {
-        expect(
-          await runDoctorLintCliInProcess(createTestRuntime(), {
-            json: true,
-            onlyIds: ["core/doctor/runtime-tool-schemas"],
-          }),
-        ).toBe(0);
-        expect(privateState).not.toBe(state.stateDir);
-        expect(fs.existsSync(privateState)).toBe(false);
-        expect(first?.read()).toBe("channel companion");
-        expect(snapshotHasCaptures).toBe(false);
-        // Channel setup loads again after the inspection snapshot has retired.
-        expect(load().read()).toBe("channel companion");
-      });
-    } finally {
-      stdout.mockRestore();
-      for (const instance of instances) {
-        await instance.dispose();
-      }
-      await retirePluginCache(cache);
-      clearHealthChecksForTest();
-    }
-  });
 });

@@ -212,18 +212,6 @@ it.each(["run-id", "result-channel"] as const)(
         await expectInheritedHeartbeatAutomation(swap.cfg);
         expect(f.receipt()).toMatchObject({ status: "skipped" });
       }
-      for (const [index, detail] of [
-        "Heartbeat billing route changed.",
-        "Subagent billing route changed.",
-        "Gateway is bound to loopback.",
-      ].entries()) {
-        recordUpdateRunStep(f.runId, {
-          step: `warning:openclaw doctor:${index + 1}`,
-          status: "completed",
-          detail,
-        });
-      }
-
       await withEnvAsync({ OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1" }, async () => {
         {
           await using converged = await prepareDoctorContext(f.configPath);
