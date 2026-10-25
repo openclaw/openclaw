@@ -1,4 +1,3 @@
-// SSH-verified node pairing policy and verifier tests.
 import crypto from "node:crypto";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -106,22 +105,12 @@ describe("planNodePairingSshVerify", () => {
   });
 
   test("passes user, identity, timeout, and normalized cidrs into the probe policy", () => {
+    const policy = { user: "peter", identity: "/keys/probe", timeoutMs: 1_234 };
     const plan = planFor(
       { reportedClientIp: "10.1.2.3" },
-      {
-        user: "peter",
-        identity: "/keys/probe",
-        timeoutMs: 1_234,
-        cidrs: ["10.0.0.0/8", "  "],
-      },
+      { ...policy, cidrs: ["10.0.0.0/8", "  "] },
     );
-
-    expect(plan?.policy).toEqual({
-      user: "peter",
-      identity: "/keys/probe",
-      timeoutMs: 1_234,
-      cidrs: ["10.0.0.0/8"],
-    });
+    expect(plan?.policy).toEqual({ ...policy, cidrs: ["10.0.0.0/8"] });
   });
 });
 
@@ -144,10 +133,7 @@ describe("startNodePairingSshVerify", () => {
         oldProbe.resolve(failure);
         await original?.done;
       }
-      const probe = probeReturning({
-        status: "ok",
-        stdout: JSON.stringify({ deviceId: identity.deviceId, publicKey: identity.publicKey }),
-      });
+      const probe = probeReturning({ status: "ok", stdout: JSON.stringify(identity) });
       const replacement = startProbe(identity, probe, {
         ...oldPlan,
         policy: { ...oldPlan.policy, ...policy },
@@ -179,19 +165,13 @@ describe("startNodePairingSshVerify", () => {
 
   test("reports probe failures and unreadable identities distinctly", async () => {
     const identity = makeIdentity();
-    const failed = startProbe(
-      identity,
-      probeReturning({ status: "failed", code: 255, stderr: "denied" }),
-      makePlan("192.168.1.30"),
-    );
-    await expect(failed?.done).resolves.toEqual({ ok: false, reason: "probe-failed" });
-
-    const unreadable = startProbe(
-      identity,
-      probeReturning({ status: "ok", stdout: "no json here\n" }),
-      makePlan("192.168.1.31"),
-    );
-    await expect(unreadable?.done).resolves.toEqual({ ok: false, reason: "identity-unreadable" });
+    const check = async (result: NodeIdentityProbeResult, host: string, reason: string) =>
+      expect(startProbe(identity, probeReturning(result), makePlan(host))?.done).resolves.toEqual({
+        ok: false,
+        reason,
+      });
+    await check({ status: "failed", code: 255, stderr: "denied" }, "192.168.1.30", "probe-failed");
+    await check({ status: "ok", stdout: "no json here\n" }, "192.168.1.31", "identity-unreadable");
   });
 
   test("shares an in-flight probe with reconnects instead of starting another", async () => {
