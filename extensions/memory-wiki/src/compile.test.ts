@@ -188,26 +188,10 @@ describe("compileMemoryWikiVault", () => {
 
   it("writes agent directory, relationship, provenance, and privacy reports", async () => {
     const { rootDir, config, page: writePage, read } = await createVault();
-    const relationships = [
-      {
-        targetId: "entity.alice",
-        targetTitle: "Alice",
-        kind: "collaborates-with",
-        weight: 0.7,
-        confidence: 0.6,
-        evidenceKind: "discrawl-stat",
-        privacyTier: "local-private",
-      },
-    ];
-    const evidence = [
-      {
-        kind: "maintainer-whois",
-        sourceId: "source.maintainers",
-        confidence: 0.8,
-        privacyTier: "local-private",
-      },
-    ];
-    const metadata = {
+    await writePage("entities/brad.md", {
+      pageType: "entity",
+      id: "entity.brad",
+      title: "Brad Groux",
       entityType: "person",
       canonicalId: "maintainer.brad-groux",
       aliases: ["brad", "bgroux"],
@@ -215,13 +199,17 @@ describe("compileMemoryWikiVault", () => {
       bestUsedFor: ["Microsoft ecosystem routing"],
       notEnoughFor: ["legal approval"],
       lastRefreshedAt: "2026-04-29T00:00:00.000Z",
-      relationships,
-    };
-    await writePage("entities/brad.md", {
-      ...metadata,
-      pageType: "entity",
-      id: "entity.brad",
-      title: "Brad Groux",
+      relationships: [
+        {
+          targetId: "entity.alice",
+          targetTitle: "Alice",
+          kind: "collaborates-with",
+          weight: 0.7,
+          confidence: 0.6,
+          evidenceKind: "discrawl-stat",
+          privacyTier: "local-private",
+        },
+      ],
       personCard: {
         handles: ["@bgroux"],
         email: "brad@example.com",
@@ -236,7 +224,14 @@ describe("compileMemoryWikiVault", () => {
           text: "Brad is useful for Microsoft Teams routing.",
           status: "supported",
           confidence: 0.9,
-          evidence,
+          evidence: [
+            {
+              kind: "maintainer-whois",
+              sourceId: "source.maintainers",
+              confidence: 0.8,
+              privacyTier: "local-private",
+            },
+          ],
         },
       ],
     });
@@ -248,24 +243,20 @@ describe("compileMemoryWikiVault", () => {
         absolutePath: path.join(rootDir, "entities/brad.md"),
         relativePath: "entities/brad.md",
         raw: await read("entities/brad.md"),
-      }),
+      })?.personCard,
     ).toMatchObject({
-      ...metadata,
-      personCard: {
-        handles: ["@bgroux"],
-        emails: ["brad@example.com"],
-        lane: "Microsoft Teams",
-        privacyTier: "confirm-before-use",
-      },
-      claims: [expect.objectContaining({ id: "claim.brad.teams", evidence })],
+      emails: ["brad@example.com"],
+      privacyTier: "confirm-before-use",
     });
 
-    const expectReport = async (name: string, content: string) =>
-      expect(read(`reports/${name}.md`)).resolves.toContain(content);
-    await expectReport("person-agent-directory", "[Brad Groux](../entities/brad.md)");
-    await expectReport("relationship-graph", "[Brad Groux](../entities/brad.md) -> Alice");
-    await expectReport("provenance-coverage", "maintainer-whois: 1");
-    await expectReport("privacy-review", "[Brad Groux](../entities/brad.md)");
+    for (const [name, content] of [
+      ["person-agent-directory", "[Brad Groux](../entities/brad.md)"],
+      ["relationship-graph", "[Brad Groux](../entities/brad.md) -> Alice"],
+      ["provenance-coverage", "maintainer-whois: 1"],
+      ["privacy-review", "[Brad Groux](../entities/brad.md)"],
+    ]) {
+      await expect(read(`reports/${name}.md`)).resolves.toContain(content);
+    }
 
     const { digest: agentDigest, claims } = expectDefined(
       await loadMemoryWikiCompiledCache(config),

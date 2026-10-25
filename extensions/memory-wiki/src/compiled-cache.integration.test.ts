@@ -86,14 +86,7 @@ function snapshot(text: string): MemoryWikiCompiledCacheSnapshot {
         }),
       ],
     }),
-    claims: [
-      {
-        pageTitle: "Snapshot",
-        pageKind: "entity",
-        pagePath: "entities/snapshot.md",
-        text,
-      },
-    ],
+    claims: [{ pageTitle: "Snapshot", pageKind: "entity", pagePath: "entities/snapshot.md", text }],
   };
 }
 
@@ -152,6 +145,18 @@ async function preparePrompt(config: Config): Promise<string> {
   ).join("\n");
 }
 
+async function expectClaim(config: Config, text: string) {
+  expect((await loadMemoryWikiCompiledCache(config))?.claims[0]?.text).toBe(text);
+}
+
+async function createSourceVault(options: Parameters<typeof createPersistentVault>[0] = {}) {
+  const vault = await createPersistentVault({ ...options, initialize: true });
+  const sourcePath = path.join(vault.rootDir, "sources", "alpha.md");
+  await fs.writeFile(sourcePath, "# Alpha\n\nRequested source.\n");
+  await compileMemoryWikiVault(vault.config);
+  return { ...vault, sourcePath };
+}
+
 describe("Memory Wiki compiled cache lifecycle", () => {
   beforeEach(async () => {
     await closeOpenClawStateDatabaseAsync();
@@ -171,12 +176,9 @@ describe("Memory Wiki compiled cache lifecycle", () => {
   });
 
   it("reuses an existing publication when local source sync starts with an inactive owner", async () => {
-    const { rootDir, config } = await createPersistentVault({
-      initialize: true,
+    const { rootDir, config } = await createSourceVault({
       config: { vaultMode: "isolated", ingest: { autoCompile: true } },
     });
-    await fs.writeFile(path.join(rootDir, "sources", "alpha.md"), "# Alpha\n\nLocal source.\n");
-    await compileMemoryWikiVault(config);
     const before = await loadMemoryWikiVaultIdentity(rootDir);
     deactivateMemoryWikiCompiledCacheOwnersExcept(new Set());
 
@@ -198,16 +200,12 @@ describe("Memory Wiki compiled cache lifecycle", () => {
   it.each([false, true])(
     "reconciles an external publication before source sync (source changed: %s)",
     async (sourceChanged) => {
-      const { rootDir, config } = await createPersistentVault({
-        initialize: true,
+      const { rootDir, config, sourcePath } = await createSourceVault({
         config: {
           vaultMode: "bridge",
           bridge: { enabled: true, readMemoryArtifacts: false },
         },
       });
-      const sourcePath = path.join(rootDir, "sources", "alpha.md");
-      await fs.writeFile(sourcePath, "# Alpha\n\nOriginal source.\n");
-      await compileMemoryWikiVault(config);
       const compiled = await loadMemoryWikiCompiledCache(config);
       if (!compiled) {
         throw new Error("Expected the initial compiled snapshot");
@@ -259,10 +257,7 @@ describe("Memory Wiki compiled cache lifecycle", () => {
   );
 
   it("reuses an active compiled owner during repeated initialization and exact page reads", async () => {
-    const { rootDir, config } = await createPersistentVault();
-    await fs.writeFile(path.join(rootDir, "sources", "alpha.md"), "# Alpha\n\nRequested source.\n");
-    await fs.writeFile(path.join(rootDir, "sources", "unrelated.md"), "# Unrelated\n");
-    await compileMemoryWikiVault(config);
+    const { config } = await createSourceVault();
     const readdir = vi.spyOn(fs, "readdir");
     try {
       await initializeMemoryWikiVault(config);
@@ -283,6 +278,9 @@ describe("Memory Wiki compiled cache lifecycle", () => {
       initialize: true,
       config: { context: { includeCompiledDigestPrompt: true } },
     });
+    const legacyPath = path.join(rootDir, ".openclaw-wiki", "cache", "agent-digest.json");
+    await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+    await fs.writeFile(legacyPath, JSON.stringify({ claimCount: 1, pages: [] }), "utf8");
     await page(
       "entities/alpha.md",
       {
@@ -302,15 +300,20 @@ describe("Memory Wiki compiled cache lifecycle", () => {
       "# Alpha\n\nDatabase notes.\n",
     );
 
+    await expect(preparePrompt(config)).resolves.not.toContain("Alpha uses PostgreSQL");
     await compileMemoryWikiVault(config);
+    await expect(fs.readFile(legacyPath, "utf8")).resolves.toContain("claimCount");
 
-    await expect(preparePrompt(config)).resolves.toContain(
-      "Alpha uses PostgreSQL for production writes.",
-    );
-    await expect(getMemoryWikiPage({ config, lookup: "claim.alpha.db" })).resolves.toMatchObject({
-      path: "entities/alpha.md",
-      title: "Alpha",
-    });
+    const expectCompiledClaim = async () => {
+      await expect(preparePrompt(config)).resolves.toContain(
+        "Alpha uses PostgreSQL for production writes.",
+      );
+      await expect(getMemoryWikiPage({ config, lookup: "claim.alpha.db" })).resolves.toMatchObject({
+        path: "entities/alpha.md",
+        title: "Alpha",
+      });
+    };
+    await expectCompiledClaim();
 
     restartCache();
     const entered = createDeferred<void>();
@@ -321,34 +324,26 @@ describe("Memory Wiki compiled cache lifecycle", () => {
     });
     await entered.promise;
     const readFile = vi.spyOn(fs, "readFile");
+    let activationReads: number;
     const open = vi.spyOn(fs, "open");
     const activation = activateExistingMemoryWikiVault(config);
     try {
-      try {
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
-        expect(open).not.toHaveBeenCalled();
-      } finally {
-        released.resolve();
-        await mutation;
-        await activation;
-        open.mockRestore();
-      }
-      expect(
-        readFile.mock.calls.filter(([file]) => file === path.join(rootDir, "entities", "alpha.md")),
-      ).toHaveLength(1);
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(open).not.toHaveBeenCalled();
     } finally {
+      released.resolve();
+      await mutation;
+      await activation;
+      activationReads = readFile.mock.calls.filter(
+        ([file]) => file === path.join(rootDir, "entities", "alpha.md"),
+      ).length;
+      open.mockRestore();
       readFile.mockRestore();
     }
-
-    await expect(preparePrompt(config)).resolves.toContain(
-      "Alpha uses PostgreSQL for production writes.",
-    );
-    await expect(getMemoryWikiPage({ config, lookup: "claim.alpha.db" })).resolves.toMatchObject({
-      path: "entities/alpha.md",
-      title: "Alpha",
-    });
+    expect(activationReads).toBe(1);
+    await expectCompiledClaim();
   });
 
   it("bounds dashboard projections below the compiled-cache entry limit", () => {
@@ -412,32 +407,6 @@ describe("Memory Wiki compiled cache lifecycle", () => {
     expect(Buffer.byteLength(JSON.stringify(dashboards))).toBeLessThan(32 * 1024 * 1024);
   });
 
-  it("ignores legacy files and rebuilds only on compile", async () => {
-    const { rootDir, config, page } = await createPersistentVault({
-      initialize: true,
-      config: { context: { includeCompiledDigestPrompt: true } },
-    });
-    const legacyPath = path.join(rootDir, ".openclaw-wiki", "cache", "agent-digest.json");
-    await fs.mkdir(path.dirname(legacyPath), { recursive: true });
-    await fs.writeFile(legacyPath, JSON.stringify({ claimCount: 1, pages: [] }), "utf8");
-    await page(
-      "entities/fresh.md",
-      {
-        pageType: "entity",
-        id: "entity.fresh",
-        title: "Fresh",
-        claims: [{ text: "Fresh cache content.", status: "supported" }],
-      },
-      "# Fresh\n",
-    );
-
-    await expect(preparePrompt(config)).resolves.not.toContain("Fresh cache content.");
-    await compileMemoryWikiVault(config);
-
-    await expect(preparePrompt(config)).resolves.toContain("Fresh cache content.");
-    await expect(fs.readFile(legacyPath, "utf8")).resolves.toContain("claimCount");
-  });
-
   it("rejects claims newer than a restored vault after lifecycle refresh", async () => {
     const { config, restore } = await createBackedUpVault();
     const newerSnapshot = snapshot("Private post-backup claim.");
@@ -474,7 +443,7 @@ describe("Memory Wiki compiled cache lifecycle", () => {
     await expect(reserved.write(reserved.commit)).rejects.toThrow("vault changed");
     await expect(loadMemoryWikiCompiledCache(config)).resolves.toBeNull();
     await activateExistingMemoryWikiVault(config);
-    expect((await loadMemoryWikiCompiledCache(config))?.claims[0]?.text).toBe("backup");
+    await expectClaim(config, "backup");
   });
 
   it("keeps a committed publication when an older writer is rejected", async () => {
@@ -494,7 +463,7 @@ describe("Memory Wiki compiled cache lifecycle", () => {
     releaseCallback.resolve();
 
     await expect(staleWrite).rejects.toThrow("vault changed");
-    expect((await loadMemoryWikiCompiledCache(config))?.claims[0]?.text).toBe("accepted successor");
+    await expectClaim(config, "accepted successor");
   });
 
   it("reports transient SQLite read failures as failed dashboard state", async () => {
@@ -527,7 +496,7 @@ describe("Memory Wiki compiled cache lifecycle", () => {
       state: "failed",
     });
     expect(errors).toHaveLength(1);
-    expect((await loadMemoryWikiCompiledCache(config))?.claims[0]?.text).toBe("recoverable");
+    await expectClaim(config, "recoverable");
   });
 
   it("keeps a restored owner closed when its durable identity cannot be loaded", async () => {
@@ -557,18 +526,12 @@ describe("Memory Wiki compiled cache lifecycle", () => {
     await publishSnapshot(config, snapshot("Private predecessor content."));
     await fs.rm(rootDir, { recursive: true, force: true });
     await fs.mkdir(path.join(rootDir, ".openclaw-wiki"), { recursive: true });
-    await Promise.all([
-      fs.writeFile(path.join(rootDir, "WIKI.md"), "# Replacement\n", "utf8"),
-      fs.writeFile(
-        path.join(rootDir, ".openclaw-wiki", "log.jsonl"),
-        `${JSON.stringify({
-          type: "vault-generation",
-          timestamp: "2026-07-17T00:00:00.000Z",
-          details: { vaultGeneration: "replacement-generation" },
-        })}\n`,
-        "utf8",
-      ),
-    ]);
+    await fs.writeFile(path.join(rootDir, "WIKI.md"), "# Replacement\n", "utf8");
+    await appendMemoryWikiLog(rootDir, {
+      type: "vault-generation",
+      timestamp: "2026-07-17T00:00:00.000Z",
+      details: { vaultGeneration: "replacement-generation" },
+    });
     await initializeMemoryWikiVault(config);
 
     await expect(preparePrompt(config)).resolves.not.toContain("Private predecessor content.");
@@ -581,16 +544,10 @@ describe("Memory Wiki compiled cache lifecycle", () => {
       agents: { entries: { support: {}, marketing: {} } },
     };
     const baseConfig = resolveMemoryWikiConfig({ vault: { scope: "agent", path: rootDir } });
-    const support = resolveMemoryWikiAgentConfig({
-      config: baseConfig,
-      appConfig,
-      agentId: "support",
-    });
-    const marketing = resolveMemoryWikiAgentConfig({
-      config: baseConfig,
-      appConfig,
-      agentId: "marketing",
-    });
+    const forAgent = (agentId: string) =>
+      resolveMemoryWikiAgentConfig({ config: baseConfig, appConfig, agentId });
+    const support = forAgent("support");
+    const marketing = forAgent("marketing");
     for (const config of [support, marketing]) {
       await initializeMemoryWikiVault(config);
       await publishSnapshot(config, snapshot(config.agentId ?? "unknown"));

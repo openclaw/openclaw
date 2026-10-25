@@ -94,24 +94,20 @@ describe("lintMemoryWikiVault", () => {
         });
       } else {
         const notes = "## Notes\n<!-- openclaw:human:start -->\n<!-- openclaw:human:end -->";
-        await write(
-          paths[0],
+        for (const [file, title, metadata] of [
           [
-            "# Memory Bridge: Alpha",
-            "## Bridge Source\n- Workspace: `/tmp/workspace`\n- Relative path: `MEMORY.md`",
-            "## Content\nalpha bridge body",
-            notes,
-          ].join("\n\n"),
-        );
-        await write(
-          paths[1],
+            paths[0],
+            "Memory Bridge: Alpha",
+            "Bridge Source\n- Workspace: `/tmp/workspace`\n- Relative path: `MEMORY.md`",
+          ],
           [
-            "# Unsafe Local Import: alpha.md",
-            "## Unsafe Local Source\n- Configured path: `/tmp/private`\n- Relative path: `alpha.md`",
-            "## Content\nalpha unsafe-local body",
-            notes,
-          ].join("\n\n"),
-        );
+            paths[1],
+            "Unsafe Local Import: alpha.md",
+            "Unsafe Local Source\n- Configured path: `/tmp/private`\n- Relative path: `alpha.md`",
+          ],
+        ]) {
+          await write(file, `# ${title}\n\n## ${metadata}\n\n## Content\nalpha body\n\n${notes}`);
+        }
       }
       const result = await lintMemoryWikiVault(config);
       for (const pagePath of paths) {
@@ -148,15 +144,7 @@ describe("lintMemoryWikiVault", () => {
     });
     await page(
       "sources/links.md",
-      {
-        pageType: "source",
-        id: "source.links",
-        title: "Links",
-        sourceType: "memory-bridge",
-        sourcePath: "/workspace/Alpha.md",
-        bridgeRelativePath: "Alpha.md",
-        bridgeWorkspaceDir: "/workspace",
-      },
+      { pageType: "source", id: "source.links", title: "Links" },
       "# Links\n\n" + links.map((target) => `[[${target}]]`).join("\n"),
     );
     await page(`syntheses/${stem}.md`, {
@@ -356,18 +344,14 @@ describe("lintMemoryWikiVault", () => {
         compiled = true;
         return result;
       });
-    let failure: unknown;
     try {
-      await lintMemoryWikiVault(config);
-    } catch (error) {
-      failure = error;
+      await expect(lintMemoryWikiVault(config)).rejects.toBe(readError);
     } finally {
       readSpy.mockRestore();
       compileSpy.mockRestore();
     }
 
     expect(injected).toBe(true);
-    expect(failure).toBe(readError);
     expect(await fs.readFile(reportPath)).toEqual(originalBytes);
   });
 
@@ -411,28 +395,20 @@ describe("lintMemoryWikiVault", () => {
   it.each([
     {
       name: "syntax-error",
-      frontmatterLines: [
-        "pageType: report",
-        "id: report.lint",
-        "sourceIds:",
-        '  - **MEMORY.md line 235**:"some quoted, value"',
-      ],
+      frontmatter:
+        'pageType: report\nid: report.lint\nsourceIds:\n  - **MEMORY.md line 235**:"some quoted, value"',
       error: "Unexpected scalar",
     },
     {
       name: "sequence-root",
-      frontmatterLines: ["- pageType: report", "  id: report.lint"],
+      frontmatter: "- pageType: report\n  id: report.lint",
       error: "Wiki frontmatter must be a YAML mapping",
     },
   ])(
     "rejects a malformed lint report without changing its bytes ($name)",
-    async ({ frontmatterLines, error }) => {
+    async ({ frontmatter, error }) => {
       const { config, write } = await createLintVault();
-      const malformedReport = [
-        "---",
-        ...frontmatterLines,
-        "---\n\n# Lint Report\n\nExisting report body.\n",
-      ].join("\n");
+      const malformedReport = `---\n${frontmatter}\n---\n\n# Lint Report\n\nExisting report body.\n`;
       const reportPath = await write("reports/lint.md", malformedReport);
 
       await expect(lintMemoryWikiVault(config)).rejects.toThrow(error);
