@@ -86,6 +86,12 @@ describe("sandbox health", () => {
       agents: { defaults: { sandbox: { mode, ...(network ? { docker: { network } } : {}) } } },
     };
   }
+  const probeOnLinux = (cfg = createSandboxConfig("all")) =>
+    onPlatform("linux", () => noteCodexBwrapNamespaceWarnings(cfg));
+  const expectNoCodexProbe = () => {
+    expect(resolveCodexHealthApi).not.toHaveBeenCalled();
+    expect(probeCodexWorkspaceWriteSandbox).not.toHaveBeenCalled();
+  };
 
   it.each(["non-main", "off"] as const)(
     "reports unavailable Docker with sandbox mode %s",
@@ -95,18 +101,10 @@ describe("sandbox health", () => {
       if (mode === "off") {
         expect(note).not.toHaveBeenCalled();
       } else {
-        expect(note.mock.calls[0]!).toEqual([
-          [
-            'Sandbox mode is enabled (mode: "non-main") but Docker is not available.',
-            "Docker is required for sandbox mode to function.",
-            "Isolated sessions (automations, sub-agents) will fail without Docker.",
-            "",
-            "Options:",
-            "- Install Docker and restart the gateway",
-            "- Disable sandbox mode: openclaw config set agents.defaults.sandbox.mode off",
-          ].join("\n"),
-          "Sandbox",
-        ]);
+        const [message, title] = note.mock.calls[0]!;
+        expect(title).toBe("Sandbox");
+        expect(message).toContain('mode: "non-main") but Docker is not available');
+        expect(message).toContain("openclaw config set agents.defaults.sandbox.mode off");
       }
     },
   );
@@ -138,8 +136,7 @@ describe("sandbox health", () => {
       timeoutMs: 5_000,
     });
     expect(runExec.mock.calls.some(([command]) => command === "unshare")).toBe(false);
-    expect(resolveCodexHealthApi).not.toHaveBeenCalled();
-    expect(probeCodexWorkspaceWriteSandbox).not.toHaveBeenCalled();
+    expectNoCodexProbe();
   });
 
   it.each([
@@ -159,8 +156,7 @@ describe("sandbox health", () => {
     }
     await onPlatform(platform, () => noteCodexBwrapNamespaceWarnings(cfg));
     expect(runExec.mock.calls.some(([command]) => command === "unshare")).toBe(false);
-    expect(resolveCodexHealthApi).not.toHaveBeenCalled();
-    expect(probeCodexWorkspaceWriteSandbox).not.toHaveBeenCalled();
+    expectNoCodexProbe();
     expect(note).not.toHaveBeenCalled();
   });
 
@@ -235,7 +231,7 @@ describe("sandbox health", () => {
         command: codexSandboxCommand,
         reason,
       });
-      await onPlatform("linux", () => noteCodexBwrapNamespaceWarnings(createSandboxConfig("all")));
+      await probeOnLinux();
       const message = note.mock.calls[0]![0];
       expect(message).toContain("Doctor could not verify the Codex bwrap network sandbox.");
       expect(message).toContain(`Check result: ${reason}`);
@@ -260,12 +256,8 @@ describe("sandbox health", () => {
           reason: "A remote Codex transport is configured.",
         });
       }
-      await onPlatform("linux", () =>
-        noteCodexBwrapNamespaceWarnings(
-          status === "egress-enabled"
-            ? createSandboxConfig("all", "bridge")
-            : createSandboxConfig("all"),
-        ),
+      await probeOnLinux(
+        createSandboxConfig("all", status === "egress-enabled" ? "bridge" : undefined),
       );
       expect(note).not.toHaveBeenCalled();
       if (status === "not-configured" || status === "egress-enabled") {

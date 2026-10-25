@@ -39,6 +39,11 @@ const runtimeSnapshot = {
   gatewayService: { label: "LaunchAgent" },
   nodeService: { label: "node" },
 };
+const unavailableDatabases = {
+  source: "unavailable",
+  stores: [],
+  reason: "Physical store inspection unavailable in fixture.",
+};
 
 const mocks = vi.hoisted(() => ({
   scanStatusJsonFast: vi.fn(),
@@ -62,11 +67,7 @@ vi.mock("../infra/update-run-status.js", async (importOriginal) => ({
 
 // mock-isolation: Keep store discovery out of these runtime composition tests.
 vi.mock("./status-database-engines.js", () => ({
-  resolveStatusDatabaseEngines: async () => ({
-    source: "unavailable",
-    stores: [],
-    reason: "Physical store inspection unavailable in fixture.",
-  }),
+  resolveStatusDatabaseEngines: async () => unavailableDatabases,
 }));
 
 // mock-isolation: Keep config I/O out of this fixture while exercising the real snapshot owner.
@@ -148,7 +149,7 @@ describe("runStatusJsonCommand", () => {
     vi.restoreAllMocks();
   });
 
-  it("preserves the complete status JSON schema with optional sections", async () => {
+  it("preserves status JSON composition with optional sections", async () => {
     const scan = createScan();
     const update = {
       root: "/tmp/openclaw",
@@ -183,16 +184,18 @@ describe("runStatusJsonCommand", () => {
       message: "Gateway target: wss://gateway.example.com",
     };
     scan.gatewayProbeAuthWarning = "warn";
-    scan.configDiagnostics = {
+    const configDiagnostics = {
       path: "/tmp/openclaw.json",
       issues: [{ path: "gateway.port", message: "invalid" }],
     };
+    scan.configDiagnostics = configDiagnostics;
     scan.secretDiagnostics = ["diag"];
-    mocks.resolveStatusRuntimeSnapshot.mockResolvedValueOnce({
+    const resolvedRuntime = {
       ...structuredClone(runtimeSnapshot),
       gatewayService: { label: "LaunchAgent", installed: true, loadedText: "loaded" },
       nodeService: { label: "node", installed: true, loadedText: "loaded" },
-    });
+    };
+    mocks.resolveStatusRuntimeSnapshot.mockResolvedValueOnce(resolvedRuntime);
 
     const result = await runJson(scan, {
       ...createStatusGatewayProbeBudget(1234),
@@ -206,8 +209,11 @@ describe("runStatusJsonCommand", () => {
       runtimeInput(1234, { agentId: "beta", usage: true, deep: true, includeSecurityAudit: true }),
     );
     expect(mocks.readBackupRunFreshness).toHaveBeenCalledWith(scan.env);
-    expect(result).toEqual({
-      ...runtimeSnapshot,
+    // Family selection is covered by status-database-engines.test.ts; this owns composition.
+    const { databaseEngines, ...output } = result;
+    expect(databaseEngines).toMatchObject(unavailableDatabases);
+    expect(output).toEqual({
+      ...resolvedRuntime,
       ok: true,
       recoveryCopies: expect.objectContaining({
         scope: "local",
@@ -219,29 +225,6 @@ describe("runStatusJsonCommand", () => {
       updateChannelSource: "config",
       memory: null,
       memoryPlugin: { enabled: true, slot: "memory" },
-      databaseEngines: {
-        source: "unavailable",
-        stores: [],
-        reason: "Physical store inspection unavailable in fixture.",
-        experimental: false,
-        families: [
-          ["state", "Shared state", false],
-          ["agent", "Agent data", false],
-          ["workboard", "Workboard", false],
-          ["logbook", "Logbook", false],
-          ["team-reports", "Team Reports", false],
-          ["quarantine", "Database quarantine", true],
-          ["managed-update", "Managed update handoffs", true],
-          ["package-activation", "Package activation journal", true],
-        ].map(([id, label, fixedLocal]) => ({
-          id,
-          label,
-          fixedLocal,
-          default: "sqlite",
-          override: null,
-          effective: "sqlite",
-        })),
-      },
       gateway: {
         mode: "remote",
         url: "wss://gateway.example.com",
@@ -253,13 +236,8 @@ describe("runStatusJsonCommand", () => {
         error: null,
         authWarning: "warn",
       },
-      gatewayService: { label: "LaunchAgent", installed: true, loadedText: "loaded" },
-      nodeService: { label: "node", installed: true, loadedText: "loaded" },
       agents: { agents: [{ id: "main" }], defaultId: "main" },
-      configDiagnostics: {
-        path: "/tmp/openclaw.json",
-        issues: [{ path: "gateway.port", message: "invalid" }],
-      },
+      configDiagnostics,
       secretDiagnostics: ["diag"],
       pluginCompatibility: { count: 1, warnings: [compatibilityWarning] },
       backups: backup,
