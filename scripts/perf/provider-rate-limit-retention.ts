@@ -111,9 +111,9 @@ for (let index = 0; index < turns; index++) {
 }
 const after = await settledHeap();
 const retained = held.filter(({ reference }) => reference.deref()).length;
-for (let index = 0; index < held.length; index++) {
+for (const [index, entry] of held.entries()) {
   if (index % 4 !== 3) {
-    assert.equal(await held[index].stream.result(), held[index].terminal);
+    assert.equal(await entry.stream.result(), entry.terminal);
   }
 }
 console.log(
