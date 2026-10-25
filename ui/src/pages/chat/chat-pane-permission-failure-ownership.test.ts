@@ -162,6 +162,8 @@ describe("chat permission failure ownership", () => {
         pending.reject(new Error("saved mode could not be applied to the active run"));
         await selection;
         expect(state.chatError).toContain("Failed to update permissions");
+        expect(state.chatError).toContain("saved mode could not be applied to the active run");
+        expect(state.lastError).toBe(state.chatError);
         if (recovery !== "immediate") {
           draw();
           expectPicker(trigger, "full", false);
@@ -189,7 +191,7 @@ describe("chat permission failure ownership", () => {
     },
   );
 
-  it.each(["current", "before recovery", "during recovery", "newer selection"] as const)(
+  it.each(["before recovery", "during recovery", "newer selection"] as const)(
     "keeps permission errors with their captured incarnation (%s)",
     async (replacement) => {
       const original = permissionSession("agent:main:permission-incarnation", {
@@ -292,19 +294,9 @@ describe("chat permission failure ownership", () => {
         }
         recoveryReply.resolve(recoverySnapshot);
         await older;
-        if (replacement === "current") {
-          expect(state.chatError).toContain("Original permission application rejected");
-          expect(state.lastError).toBe(state.chatError);
-        } else {
-          const error = replacement === "newer selection" ? null : successorError;
-          expectErrors(state, error);
-        }
+        expectErrors(state, replacement === "newer selection" ? null : successorError);
         expect(current.permissionMode).toBe(
-          replacement === "current"
-            ? "workspace"
-            : replacement === "newer selection"
-              ? "guarded"
-              : "read-only",
+          replacement === "newer selection" ? "guarded" : "read-only",
         );
       } finally {
         holdRecovery = false;

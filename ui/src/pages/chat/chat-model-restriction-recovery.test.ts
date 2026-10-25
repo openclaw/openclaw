@@ -225,16 +225,27 @@ it("keeps the draft without replay when a confirmed recovery is rejected", async
 });
 
 it.each([
-  { sessionKey: "global", rememberedAgentId: "selected-agent" },
-  { sessionKey: "agent:selected-agent:chat", rememberedAgentId: "selected-agent" },
-  { sessionKey: "agent:other-agent:chat", rememberedAgentId: "other-agent" },
-])(
-  "uses the owning agent's remembered permissions for $sessionKey without prompting",
-  async ({ sessionKey, rememberedAgentId }) => {
+  ["global", "selected-agent", true],
+  ["agent:selected-agent:chat", "selected-agent", true],
+  ["agent:other-agent:chat", "other-agent", true],
+  ["agent:other-agent:chat", "selected-agent", false],
+] as const)(
+  "uses only the owning agent's consent for %s (%s)",
+  async (sessionKey, rememberedAgentId, ownsConsent) => {
     const { host, select } = fixture({ remembered: true, sessionKey, rememberedAgentId });
-    await expect(select()).resolves.toBe(true);
+    const selection = select();
+    if (!ownsConsent) {
+      const modal = await dialog();
+      expect(requestCalls(host.request, "sessions.patch")).toHaveLength(1);
+      click(modal, "cancel");
+    }
+    await expect(selection).resolves.toBe(ownsConsent);
     expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
     const patches = requestCalls(host.request, "sessions.patch");
+    if (!ownsConsent) {
+      expect(patches).toHaveLength(1);
+      return;
+    }
     expect(patches[1]?.[1]).toMatchObject({
       key: sessionKey,
       agentRuntime: "opencode",
@@ -245,19 +256,6 @@ it.each([
     expect(requestCalls(host.request, "config.patch")).toHaveLength(0);
   },
 );
-
-it("requires confirmation when only the UI-selected agent remembers consent", async () => {
-  const sessionKey = "agent:other-agent:chat";
-  const { host, selection, modal } = await selecting({
-    remembered: true,
-    sessionKey,
-    rememberedAgentId: "selected-agent",
-  });
-  expect(requestCalls(host.request, "sessions.patch")).toHaveLength(1);
-  click(modal, "cancel");
-  await expect(selection).resolves.toBe(false);
-  expect(requestCalls(host.request, "sessions.patch")).toHaveLength(1);
-});
 
 it.each([
   {
