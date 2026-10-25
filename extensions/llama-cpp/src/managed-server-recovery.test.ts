@@ -102,7 +102,7 @@ it.each(["missing host", "duplicate preset", "different port", "direct model"])(
 );
 
 it.each(["absolute", "relative", "equals"])("recovers %s before transport", async (kind) => {
-  const { root, command, presetPath, provider, embed } = await createFixture();
+  const { root, asset, command, presetPath, provider, embed } = await createFixture();
   const preset = kind === "relative" ? "models.ini" : presetPath;
   const localService = {
     ...provider.localService,
@@ -127,11 +127,13 @@ it.each(["absolute", "relative", "equals"])("recovers %s before transport", asyn
   });
   mocks.genericCreate.mockImplementation(async () => {
     expect(orphanAlive).toBe(false);
+    expect(await fs.readFile(command, "utf8")).toBe("restored managed executable");
     return { provider: null };
   });
   await embed(localService);
   await embed(localService);
   expect(mocks.reap).toHaveBeenCalledOnce();
+  expect(mocks.install).toHaveBeenCalledWith(expect.objectContaining({ asset }));
   expect(mocks.genericCreate).toHaveBeenCalledTimes(2);
 });
 
@@ -151,17 +153,6 @@ it.each([false, true])("prepares chat with an existing executable: %s", async (e
   expect(provider.localService.command).toBe(command);
   await prepare();
   expect(mocks.install).toHaveBeenCalledTimes(existing ? 0 : 1);
-});
-
-it("restores the managed executable before creating the embedding transport", async () => {
-  const { asset, command, embed } = await createFixture();
-  mocks.genericCreate.mockImplementation(async () => {
-    expect(await fs.readFile(command, "utf8")).toBe("restored managed executable");
-    return { provider: null };
-  });
-  await embed();
-  expect(mocks.install).toHaveBeenCalledWith(expect.objectContaining({ asset }));
-  expect(mocks.genericCreate).toHaveBeenCalledTimes(1);
 });
 
 it("reports the missing OpenSSL runtime through embedding errors and status facts", async () => {
