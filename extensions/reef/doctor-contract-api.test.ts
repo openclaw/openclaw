@@ -185,8 +185,17 @@ describe("Reef doctor contract", () => {
   }
 
   function expectIdentityMarker(expected: state.ReefIdentityMigrationRecord | undefined) {
-    const store = openStore<state.ReefIdentityMigrationRecord>("identity");
-    return expect(store.lookup(state.REEF_KEYS_MIGRATION_KEY)).resolves.toEqual(expected);
+    return expectStored("identity", state.REEF_KEYS_MIGRATION_KEY, expected);
+  }
+
+  function expectStored(name: keyof typeof storeSpecs, key: string, expected: unknown) {
+    return expect(openStore(name).lookup(key)).resolves.toEqual(expected);
+  }
+
+  async function migrateSuccessfully(name: string, params = migrationParams()) {
+    const result = await migrate(name, params);
+    expect(result.warnings).toEqual([]);
+    return result;
   }
 
   function expectArchive(filePath: string, archived: boolean, source?: string) {
@@ -239,33 +248,9 @@ describe("Reef doctor contract", () => {
     ["reviews.json", "runtime-files", "reviews"],
     ["delivered.json", "runtime-files", "delivered"],
   ] as const)("retains malformed UTF-8 in %s before importing", async (filename, owner, target) => {
-    const review = reviewRequest();
-    const { entries } = await auditFixture();
-    fs.rmSync(path.join(createLegacyDir(), "audit.jsonl"));
-    const values: Record<string, unknown> = {
-      "keys.json": { ...reefKeys(), note: "utf8-marker" },
-      "identity.json": { ...identityBinding, handle: "utf8-marker" },
-      "setup-session.json": {
-        session: "utf8-marker",
-        relayUrl: identityBinding.relayUrl,
-        email: "owner@example.com",
-      },
-      "audit.jsonl": jsonLines(
-        entries.map((entry) => Object.assign({}, entry, { note: "utf8-marker" })),
-      ),
-      "replay.jsonl": jsonLines([
-        { op: "claim", peer: "utf8-marker", id: "replay-id", envelopeHash: "a".repeat(64) },
-      ]),
-      "reviews.json": {
-        [review.approvalDigest]: {
-          review: { ...review, verdict: { ...review.verdict, reason: "utf8-marker" } },
-        },
-      },
-      "delivered.json": ["utf8-marker"],
-    };
-    const filePath = writeLegacy(filename, values[filename]);
-    const bytes = fs.readFileSync(filePath);
-    bytes[bytes.indexOf("utf8-marker")] = 0xff;
+    // UTF-8 validation must precede JSON/record parsing for every source owner.
+    const filePath = writeLegacy(filename, "");
+    const bytes = Buffer.from([0xff]);
     fs.writeFileSync(filePath, bytes);
     const result = await migrate(owner);
     expect(result.warningDisposition).toBe("recoverable");
@@ -286,9 +271,7 @@ describe("Reef doctor contract", () => {
     }
     expect(warningCount).toBeGreaterThan(0);
     expect(fs.readFileSync(filePath)).toEqual(bytes);
-    expect(await openStore("durable").lookup(state.REEF_DURABLE_MIGRATION_KEY)).toEqual({
-      pending: true,
-    });
+    await expectStored("durable", state.REEF_DURABLE_MIGRATION_KEY, { pending: true });
   });
 
   function isolatedIdentity() {
@@ -357,7 +340,7 @@ describe("Reef doctor contract", () => {
       preview: ["- Reef identity keys -> plugin state (identity)"],
     });
     await expect(migration.migrateLegacyState(params)).resolves.toMatchObject({ warnings: [] });
-    await expect(openStore<ReefKeys>("keys").lookup(state.REEF_KEYS_KEY)).resolves.toEqual(keys);
+    await expectStored("keys", state.REEF_KEYS_KEY, keys);
     expectArchive(homeKeysPath, true);
   });
 
@@ -401,23 +384,18 @@ describe("Reef doctor contract", () => {
           },
         );
       }
-      expect((await migrate("keys-json", params)).warnings).toEqual([]);
+      await migrateSuccessfully("keys-json", params);
       await expectIdentityMarker(pendingIdentity);
       if (source === "file") {
         await expectBlocked("load", incompleteMigration);
       }
-      const registration = await migrate("registration-json", params);
-      expect(registration.warnings).toEqual([]);
+      const registration = await migrateSuccessfully("registration-json", params);
       expect(registration.changes).toContain(
         source === "file"
           ? "Verified Reef identity keys and binding; cleared migration marker"
           : "Migrated Reef identity binding from config -> plugin state",
       );
-      await expect(
-        openStore<state.ReefIdentityBinding>("registration").lookup(
-          state.REEF_REGISTRATION_IDENTITY_KEY,
-        ),
-      ).resolves.toEqual(identityBinding);
+      await expectStored("registration", state.REEF_REGISTRATION_IDENTITY_KEY, identityBinding);
       await expectIdentityMarker(undefined);
       if (source === "file") {
         await expectBlocked("load", incompleteMigration);
@@ -483,8 +461,7 @@ describe("Reef doctor contract", () => {
       expectArchive(filePath, false, source);
       await expectBlocked("audit");
 
-      const recovered = await migration.migrateLegacyState(migrationParams());
-      expect(recovered.warnings).toEqual([]);
+      await migrateSuccessfully("audit-jsonl");
       expectArchive(filePath, true, source);
       await migrate("runtime-files");
       const stores = await state.openStores(createRuntime(stateDir), reefKeys());
@@ -494,22 +471,18 @@ describe("Reef doctor contract", () => {
 
   it("imports and verifies the append-only audit chain", async () => {
     const { filePath, entries } = await auditFixture();
-    const result = await migrate("audit-jsonl");
-
-    expect(result.warnings).toEqual([]);
+    const result = await migrateSuccessfully("audit-jsonl");
     expect(result.changes).toEqual([
       "Migrated 2 Reef audit entries -> plugin state",
       expect.stringContaining("Archived Reef audit trail legacy source"),
     ]);
-    const store = openStore<state.ReefAuditStateRecord>("audit");
-    const headStore = openStore<state.ReefAuditHeadRecord>("head");
-    await expect(headStore.lookup(state.REEF_AUDIT_HEAD_KEY)).resolves.toEqual({
+    await expectStored("head", state.REEF_AUDIT_HEAD_KEY, {
       kind: "head",
       hash: entries[1]!.entryHash,
       seq: 2,
       oldestHash: entries[0]!.entryHash,
     });
-    await expect(store.lookup(state.reefAuditEntryKey(entries[0]!.entryHash))).resolves.toEqual({
+    await expectStored("audit", state.reefAuditEntryKey(entries[0]!.entryHash), {
       kind: "entry",
       entry: entries[0],
       nextHash: entries[1]!.entryHash,
@@ -519,21 +492,16 @@ describe("Reef doctor contract", () => {
 
   it("finishes an interrupted migration of an empty audit trail", async () => {
     const filePath = writeLegacy("audit.jsonl", "");
-    const imported = await migrate("audit-jsonl");
-    expect(imported.warnings).toEqual([]);
+    await migrateSuccessfully("audit-jsonl");
     expect(fs.existsSync(filePath)).toBe(false);
 
-    const migrationStore = openStore<{
-      pending: true;
-      expectedEntries: number;
-    }>("auditMigration");
+    const migrationStore = openStore<{ pending: true; expectedEntries: number }>("auditMigration");
     await migrationStore.register(state.REEF_AUDIT_MIGRATION_KEY, {
       pending: true,
       expectedEntries: 0,
     });
 
-    const recovered = await migrate("audit-jsonl");
-    expect(recovered.warnings).toEqual([]);
+    const recovered = await migrateSuccessfully("audit-jsonl");
     expect(recovered.changes).toContain(
       "Verified Reef audit trail; cleared completed migration marker",
     );
@@ -544,19 +512,15 @@ describe("Reef doctor contract", () => {
     const filePath = writeLegacy("audit.jsonl", "{broken\n");
     const failed = await migrate("audit-jsonl");
     expectWarnings(failed, "Failed importing Reef audit trail");
-    const migrationStore = openStore<{ pending: true }>("auditMigration");
-    await expect(migrationStore.lookup(state.REEF_AUDIT_MIGRATION_KEY)).resolves.toEqual({
-      pending: true,
-    });
+    await expectStored("auditMigration", state.REEF_AUDIT_MIGRATION_KEY, { pending: true });
     await expectBlocked("audit", incompleteMigration);
 
     const audit = new MemoryAuditStore(new Uint8Array(32).fill(1));
     await audit.appendEvent("repaired", { id: 1 }, 10);
     fs.writeFileSync(filePath, jsonLines(await audit.entries()));
 
-    const repaired = await migrate("audit-jsonl");
-    expect(repaired.warnings).toEqual([]);
-    await expect(migrationStore.lookup(state.REEF_AUDIT_MIGRATION_KEY)).resolves.toBeUndefined();
+    await migrateSuccessfully("audit-jsonl");
+    await expectStored("auditMigration", state.REEF_AUDIT_MIGRATION_KEY, undefined);
     await migrate("runtime-files");
     await expect(state.openStores(createRuntime(stateDir), reefKeys())).resolves.toBeDefined();
   });
@@ -590,13 +554,11 @@ describe("Reef doctor contract", () => {
       state: "consumed",
     });
 
-    const registration = await migrate("registration-json");
-    const runtimeState = await migrate("runtime-files");
+    const registration = await migrateSuccessfully("registration-json");
+    const runtimeState = await migrateSuccessfully("runtime-files");
     await expectBlocked("generate", /has no stored keys/);
 
-    expect(registration.warnings).toEqual([]);
     expect(registration.changes).toHaveLength(4);
-    expect(runtimeState.warnings).toEqual([]);
     expect(runtimeState.changes).toHaveLength(7);
     for (const filename of [
       "identity.json",
@@ -607,20 +569,18 @@ describe("Reef doctor contract", () => {
     ]) {
       expectArchive(path.join(legacyDir, filename), true);
     }
-    const replayStore = openStore<replay.ReefReplayRecord>("replay");
-    await expect(
-      Promise.all([
-        replayStore.lookup(replay.reefReplayStoreKey("alice", replayId)),
-        replayStore.lookup(replay.reefReplayStoreKey("bob", secondReplayId)),
-        openStore<state.ReefReviewRecord>("reviews").lookup(review.approvalDigest),
-        openStore<{ id: string }>("delivered").lookup(replayId),
-      ]),
-    ).resolves.toEqual([
+    await expectStored(
+      "replay",
+      replay.reefReplayStoreKey("alice", replayId),
       expect.objectContaining({ state: "consumed", envelopeHash: "a".repeat(64) }),
+    );
+    await expectStored(
+      "replay",
+      replay.reefReplayStoreKey("bob", secondReplayId),
       expect.objectContaining({ state: "available", envelopeHash: "d".repeat(64) }),
-      { review, approved: true },
-      { id: replayId },
-    ]);
+    );
+    await expectStored("reviews", review.approvalDigest, { review, approved: true });
+    await expectStored("delivered", replayId, { id: replayId });
   });
 
   it.each([
