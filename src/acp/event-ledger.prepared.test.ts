@@ -1,6 +1,7 @@
 import path from "node:path";
 import { constants } from "node:sqlite";
 import { afterEach, describe, expect, it as baseIt } from "vitest";
+import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
@@ -165,6 +166,62 @@ describe("ACP replay worker", () => {
     });
     expectAcpReplayUtf8Accounting(db);
   });
+
+  it.for([false, true])(
+    "carries byte-budget accounting across ordered partial-session eviction (understated=%s)",
+    async (understated, { dir }) => {
+      const options = { path: path.join(dir, "state.sqlite") };
+      const database = openOpenClawStateDatabase(options);
+      const db = requireNativeSqliteDatabase(database.db);
+      const updateJson = JSON.stringify(update("x".repeat(64 * 1024)));
+      runOpenClawStateWriteTransaction(() => {
+        const insertSession = db.prepare(
+          "INSERT INTO acp_replay_sessions (session_id, session_key, cwd, complete, created_at, updated_at, next_seq, estimated_bytes) VALUES (?, ?, '', 1, 100, 100, 131, ?)",
+        );
+        const insertEvent = db.prepare(
+          "INSERT INTO acp_replay_events (session_id, seq, at, session_key, run_id, update_json, estimated_bytes) VALUES (?, ?, 100, ?, NULL, ?, ?)",
+        );
+        for (const id of ["a", "b", "c"]) {
+          const eventBytes = 34 + Buffer.byteLength(updateJson);
+          insertSession.run(id, id, understated && id === "a" ? 1 : 34 + 130 * eventBytes);
+          for (let seq = 1; seq <= 130; seq++) {
+            insertEvent.run(id, seq, id, updateJson, eventBytes);
+          }
+        }
+      }, options);
+      const measured = trackSqliteStatementExecutions(db, ["budgetRead"], (sql) =>
+        /^select /i.test(sql) &&
+        /from "acp_replay_sessions"/i.test(sql) &&
+        (/sum\(/i.test(sql) || /order by "updated_at" asc/i.test(sql))
+          ? "budgetRead"
+          : null,
+      );
+      const context: WorkerWriteOperationContext = {
+        open: () => database,
+        stateOptions: () => ({ path: options.path, env: process.env }),
+        write: (operation) => runOpenClawStateWriteTransaction(operation, options),
+        writeAdmitted: (operation) => runOpenClawStateWriteTransaction(operation, options),
+      };
+      try {
+        acpReplayOperations["acpReplay.start"](
+          { session: { ...defaultSession, sessionId: "fresh" }, now: 200 },
+          context,
+        );
+      } finally {
+        measured.restore();
+      }
+      expectValues(db, "session_id, complete FROM acp_replay_sessions ORDER BY session_id").toEqual(
+        ["b", 0, "c", 1, "fresh", 1],
+      );
+      expectValues(
+        db,
+        "MIN(seq), MAX(seq), COUNT(*) FROM acp_replay_events WHERE session_id = 'b'",
+      ).toEqual([65, 130, 66]);
+      expectValues(db, "COUNT(*) FROM acp_replay_events WHERE session_id = 'c'").toEqual([130]);
+      expect(expectAcpReplayUtf8Accounting(db)).toBeLessThanOrEqual(16 * 1024 * 1024);
+      expect(measured.counts.budgetRead).toBeLessThanOrEqual(2);
+    },
+  );
 
   it("uses fixed caps across shared handles and gapped sequences", async ({ dir }) => {
     const options = { path: path.join(dir, "state.sqlite") };

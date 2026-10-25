@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { loseFirstCronMutationReply } from "../../test/helpers/cron/runtime-mutation.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
@@ -24,6 +25,27 @@ const config: OpenClawConfig = {
     entries: { main: {}, helper: {} },
   },
 };
+
+it("invalidates retained summaries when provisioning commits but its reply is lost", async () => {
+  await withOpenClawTestState({ label: "proactive-provision-lost-reply" }, async (state) => {
+    const storePath = state.statePath("selected", "jobs.json");
+    writeConfigMachineState("cron.store", storePath);
+    await saveCronJobsStore(storePath, { version: 1, jobs: [] });
+    const before = getCronJobsStoreRevision(storePath);
+    const dropped = loseFirstCronMutationReply("cron.provisionDefaultProactive");
+    try {
+      await expect(
+        provisionDefaultProactiveJob(config, "main", { cadenceMs: 60_000 }),
+      ).rejects.toThrow();
+      expect(dropped.wasDropped()).toBe(true);
+      const after = getCronJobsStoreRevision(storePath);
+      expect(await readDefaultProactiveJobsAsync(storePath, ["main"])).toHaveLength(1);
+      expect(after).toBeGreaterThan(before);
+    } finally {
+      await dropped.close();
+    }
+  });
+});
 
 it("provisions only the ambient owner once in the selected partition without host SQL", async () => {
   await withOpenClawTestState({ label: "proactive-provision" }, async (state) => {

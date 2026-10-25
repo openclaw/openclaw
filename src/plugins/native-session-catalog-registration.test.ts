@@ -12,7 +12,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { PluginInstanceDrainTimeoutError } from "./plugin-instance-error.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import { createPluginManifestRecordFixture } from "./plugin-metadata.test-support.js";
-import { createPluginRegistry } from "./registry.js";
+import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
 import { withPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { validatePluginSchemaValue } from "./schema-validator.js";
@@ -107,11 +107,7 @@ async function registerCatalog(
   expect(config.plugins?.entries?.[pluginId]?.config).toEqual({
     sessionCatalog: { ...(initial !== undefined ? { enabled: initial } : {}), pageSize: 10 },
   });
-  const registry = createPluginRegistry({
-    runtime: { config: { current: () => config } } as PluginRuntime,
-    logger: { info() {}, warn() {}, error() {}, debug() {} },
-    activateGlobalSideEffects: false,
-  });
+  const registry = createTestPluginRegistry({ config: { current: () => config } } as PluginRuntime);
   const record = createPluginRecord({
     id: pluginId,
     source: manifest.source,

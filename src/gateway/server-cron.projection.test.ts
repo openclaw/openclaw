@@ -5,7 +5,7 @@ import {
   recordConvertedProactiveJobInDatabase,
   recordDefaultProactiveJobInDatabase,
 } from "../cron/proactive-job-receipt.js";
-import { saveCronJobsStore } from "../cron/store.js";
+import { saveCronJobsStore, saveCronStore } from "../cron/store.js";
 import type { CronStoredJob } from "../cron/types.js";
 import { getLastHeartbeatEvent, resetHeartbeatEventsForTest } from "../infra/heartbeat-events.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
@@ -56,6 +56,97 @@ describe("Gateway legacy heartbeat projection lifecycle", () => {
     }));
   });
 
+  it("reuses successful summaries across reads and follows SDK writes and config changes", async () => {
+    await withOpenClawTestState({ label: "cron-health-summary" }, async () => {
+      const cfg = projectionConfig();
+      const service = loadCronService(cfg);
+      assert(service.readHeartbeatSummary);
+      const primary = projectionJob("health-primary", Date.now());
+      const other = { ...projectionJob("health-other", primary.createdAtMs), agentId: "other" };
+      await saveCronStore(service.storePath, { version: 1, jobs: [primary, other] });
+      runOpenClawStateWriteTransaction(({ db }) => {
+        recordDefaultProactiveJobInDatabase(db, service.storePath, "main", primary.id, 1);
+        recordDefaultProactiveJobInDatabase(db, service.storePath, "other", other.id, 1);
+      });
+      const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+      const summaryReads = () =>
+        reads.mock.calls.filter(([, command]) => command.type === "automationProactive.jobs");
+      try {
+        expect(await service.readHeartbeatSummary(cfg)).toMatchObject([{ id: primary.id }]);
+        expect(await service.readHeartbeatSummary(cfg)).toMatchObject([{ id: primary.id }]);
+        expect(summaryReads()).toHaveLength(1);
+
+        const otherCfg: OpenClawConfig = {
+          agents: {
+            defaults: { systemAgent: { agentId: "other" } },
+            entries: { other: {} },
+          },
+        };
+        expect(await service.readHeartbeatSummary(otherCfg)).toMatchObject([{ id: other.id }]);
+        expect(await service.readHeartbeatSummary(cfg)).toMatchObject([{ id: primary.id }]);
+        expect(summaryReads()).toHaveLength(3);
+
+        primary.enabled = false;
+        await saveCronStore(service.storePath, { version: 1, jobs: [primary, other] });
+        expect(await service.readHeartbeatSummary(cfg)).toMatchObject([
+          { id: primary.id, enabled: false },
+        ]);
+        expect(summaryReads()).toHaveLength(4);
+        await saveCronStore(service.storePath, { version: 1, jobs: [] });
+        expect(await service.readHeartbeatSummary(cfg)).toEqual([]);
+        expect(await service.readHeartbeatSummary(cfg)).toEqual([]);
+        expect(summaryReads()).toHaveLength(5);
+
+        service.cron.stop();
+        expect(await service.readHeartbeatSummary(cfg)).toEqual([]);
+        expect(summaryReads()).toHaveLength(6);
+      } finally {
+        await service.cron.stopAndDrain?.();
+        reads.mockRestore();
+      }
+    });
+  });
+
+  it("does not retain a summary overtaken by a committed SDK write", async () => {
+    await withOpenClawTestState({ label: "cron-health-summary-write" }, async () => {
+      const cfg = projectionConfig();
+      const service = loadCronService(cfg);
+      assert(service.readHeartbeatSummary);
+      const job = projectionJob("health-overlap", Date.now());
+      await saveCronStore(service.storePath, { version: 1, jobs: [job] });
+      runOpenClawStateWriteTransaction(({ db }) => {
+        recordDefaultProactiveJobInDatabase(db, service.storePath, "main", job.id, 1);
+      });
+      const execute = stateReads.executeExistingOpenClawStateRead;
+      let updated = false;
+      const reads = vi
+        .spyOn(stateReads, "executeExistingOpenClawStateRead")
+        .mockImplementation(async (...args) => {
+          const result = await execute(...args);
+          if (!updated && args[1].type === "automationProactive.jobs") {
+            updated = true;
+            await saveCronStore(service.storePath, {
+              version: 1,
+              jobs: [{ ...job, enabled: false }],
+            });
+          }
+          return result;
+        });
+      try {
+        expect(await service.readHeartbeatSummary(cfg)).toMatchObject([{ enabled: true }]);
+        expect(updated).toBe(true);
+        expect(await service.readHeartbeatSummary(cfg)).toMatchObject([{ enabled: false }]);
+        expect(await service.readHeartbeatSummary(cfg)).toMatchObject([{ enabled: false }]);
+        expect(
+          reads.mock.calls.filter(([, command]) => command.type === "automationProactive.jobs"),
+        ).toHaveLength(2);
+      } finally {
+        await service.cron.stopAndDrain?.();
+        reads.mockRestore();
+      }
+    });
+  });
+
   it("broadcasts retained automation status and check freshness after a run", async () => {
     await withOpenClawTestState({ label: "cron-result-broadcast" }, async () => {
       const broadcast = vi.fn();
@@ -99,7 +190,9 @@ describe("Gateway legacy heartbeat projection lifecycle", () => {
 
   it("loads once per start and reopens receipt membership after the same service restarts", async () => {
     await withOpenClawTestState({ label: "cron-projection-restart" }, async () => {
-      const service = loadCronService(projectionConfig());
+      const cfg = projectionConfig();
+      const service = loadCronService(cfg);
+      assert(service.readHeartbeatSummary);
       assert(typeof service.cron.stopAndDrain === "function");
       const primary = projectionJob("projection-primary", Date.now());
       const converted = projectionJob("projection-converted", primary.createdAtMs);
@@ -121,6 +214,7 @@ describe("Gateway legacy heartbeat projection lifecycle", () => {
           reads.mock.calls.filter(([, command]) => command.type === "automationProactive.jobs");
 
         await service.cron.start();
+        expect(await service.readHeartbeatSummary(cfg)).toMatchObject([{ id: primary.id }]);
         expect(projectionReads()).toHaveLength(1);
         await service.cron.start();
         expect(projectionReads()).toHaveLength(1);
@@ -147,6 +241,8 @@ describe("Gateway legacy heartbeat projection lifecycle", () => {
         });
         await service.cron.start();
         expect(projectionReads()).toHaveLength(2);
+        expect(await service.readHeartbeatSummary(cfg)).toHaveLength(2);
+        expect(projectionReads()).toHaveLength(2);
         await expect(service.cron.run(converted.id, "force")).resolves.toMatchObject({
           ok: true,
           ran: true,
@@ -167,7 +263,9 @@ describe("Gateway legacy heartbeat projection lifecycle", () => {
   it("reports a projection read failure while keeping cron startup available", async () => {
     await withOpenClawTestState({ label: "cron-projection-failure" }, async () => {
       const warnings = createWarnLogCapture("cron-projection-failure");
-      const service = loadCronService(projectionConfig());
+      const cfg = projectionConfig();
+      const service = loadCronService(cfg);
+      assert(service.readHeartbeatSummary);
       assert(typeof service.cron.stopAndDrain === "function");
       const execute = stateReads.executeExistingOpenClawStateRead;
       let rejected = false;
@@ -186,6 +284,11 @@ describe("Gateway legacy heartbeat projection lifecycle", () => {
         expect(
           await warnings.findText("Legacy heartbeat diagnostics could not read automation state"),
         ).toBeDefined();
+        expect(await service.readHeartbeatSummary(cfg)).toEqual([]);
+        expect(await service.readHeartbeatSummary(cfg)).toEqual([]);
+        expect(
+          reads.mock.calls.filter(([, command]) => command.type === "automationProactive.jobs"),
+        ).toHaveLength(2);
       } finally {
         await service.cron.stopAndDrain();
         reads.mockRestore();

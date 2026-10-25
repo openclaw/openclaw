@@ -26,6 +26,19 @@ function importedNames(source, specifier) {
   );
 }
 
+function dynamicImportMemberNames(source, specifier) {
+  return [
+    ...new Set(
+      [
+        // Also matches a memoized load: `(await (module ??= import("..."))).name`.
+        ...source.matchAll(
+          /\(\s*await\s+(?:import\(\s*["']([^"'\r\n]+)["']\s*\)|\(\s*[A-Za-z_$][\w$]*\s*\?\?=\s*import\(\s*["']([^"'\r\n]+)["']\s*\)\s*\))\s*\)\s*\.\s*([A-Za-z_$][\w$]*)/gu,
+        ),
+      ].flatMap(([, direct, memoized, name]) => ((direct ?? memoized) === specifier ? [name] : [])),
+    ),
+  ];
+}
+
 function namedImport(names, targetFile, consumerFile, index) {
   const bindings = names.map(
     (name, bindingIndex) => `${name} as __dynamic${index}_${bindingIndex}`,
@@ -99,6 +112,23 @@ export function compileDynamicConsumerEdges(source, filePath) {
         ),
       );
     }
+  }
+
+  const doctorConsumerPath = "src/commands/config-preflight-snapshot.ts";
+  const doctorLegacySpecifier = "./doctor/shared/legacy-config-issues.js";
+  const doctorLegacyNames = dynamicImportMemberNames(
+    fs.readFileSync(doctorConsumerPath, "utf8"),
+    doctorLegacySpecifier,
+  );
+  if (doctorLegacyNames.length > 0) {
+    imports.push(
+      namedImport(
+        doctorLegacyNames,
+        path.resolve(path.dirname(doctorConsumerPath), doctorLegacySpecifier),
+        filePath,
+        imports.length,
+      ),
+    );
   }
 
   return `${source}\n${imports.join("\n")}`;

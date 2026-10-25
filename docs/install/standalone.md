@@ -15,6 +15,10 @@ installation, but the executable and its sidecar must stay together.
 Use this path to prepare application or deployment artifacts from a source
 checkout. For a normal CLI installation, start with [Install](/install).
 
+For a manually enabled, unsigned macOS 27-only CI artifact, see
+[Experimental AOT Actions builds](/install/standalone-aot-actions). This experiment
+does not replace the Mac app release or qualify macOS 15 support.
+
 ## Build the default JIT executable
 
 Use the repository's pinned package manager and the production Bun pin in
@@ -66,11 +70,12 @@ module-resolution context.
 
 ## Choose a compilation mode
 
-| Mode     | Builder option  | Behavior                                                                            |
-| -------- | --------------- | ----------------------------------------------------------------------------------- |
-| JIT      | None            | Default. Embeds JavaScript and lets Bun compile it at runtime.                      |
-| Bytecode | `--bytecode`    | Embeds Bun bytecode to reduce JavaScript parsing at startup. It still uses the JIT. |
-| AOT      | `--compile-aot` | **Experimental.** Requires an AOT-capable Bun build and runs with the JIT disabled. |
+| Mode             | Builder option  | Behavior                                                                                        |
+| ---------------- | --------------- | ----------------------------------------------------------------------------------------------- |
+| JIT              | None            | Default. Embeds JavaScript and lets Bun compile it at runtime.                                  |
+| Bytecode         | `--bytecode`    | Embeds Bun bytecode to reduce JavaScript parsing at startup. It still uses the JIT.             |
+| AOT              | `--compile-aot` | **Experimental.** Compiles the emitted JavaScript with an AOT-capable Bun and disables the JIT. |
+| Typed source AOT | `--aot-source`  | **Experimental.** Compiles original TypeScript with the same AOT compiler.                      |
 
 ```bash
 ./standalone-compiler/bin/bun scripts/build-bun-standalone.mjs ./standalone-bytecode --bytecode
@@ -89,6 +94,50 @@ through the normal loader against the compiled SDK. Missing runtime modules and
 builds with `--disallow-code-generation-from-strings=strict` still report actionable
 guidance. Guest runtimes keep their own qualification requirements; OpenClaw
 does not silently switch executors.
+
+### Original TypeScript and compiler options
+
+`--compile-aot` compiles the completed JavaScript runtime build. `--aot-source` resolves
+CLI, plugin, and worker roots through the repository's build entry configuration
+and compiles their original TypeScript. Both modes preserve named entry contracts;
+shared chunks remain reachable imports. The completed `pnpm build` is required
+for generated files, runtime resources, and source-to-emitted module URL metadata.
+Rerun it when the builder reports missing or stale metadata.
+Source AOT also requires the repository-supported Node executable on `PATH` for
+syntax analysis of TypeScript forms that the packaging parser cannot read.
+This analysis preserves source offsets; native compilation receives the original
+TypeScript.
+
+Prepare the local package-boundary declarations before a source AOT build:
+
+```bash
+node --import ./scripts/tsx.mjs scripts/prepare-extension-package-boundary-artifacts.mts
+./aot-compiler/bin/bun scripts/build-bun-standalone.mjs ./standalone-typed --aot-source
+```
+
+The `sourceBuild` manifest field records source hashes, compiler roots, and their
+build contexts. Type-only inputs stay available during compilation; the staged
+TypeScript tree is removed from the completed sidecar. The experimental compiler
+uses guarded native specializations and preserves JavaScript behavior when values
+do not match their declared types. Type errors still stop compilation.
+
+AOT-only options apply to either input mode:
+
+- `--trim` removes unused compiler/runtime features. `--trim-locales <locale,...>`
+  requires `--trim` and retains the selected locales.
+- `--no-compile-function-source` omits function source text. Source serialization
+  consumers need their own qualification with this option.
+- `--disallow-code-generation-from-strings` denies ordinary string evaluation;
+  `=strict` also denies VM string execution. The strict option breaks host NodeVM
+  execution. These settings do not prohibit every guest interpreter.
+- `--explain[=<report>]` writes compiler diagnostics. It can be repeated.
+- `--aot-log-type-mismatches` inventories mismatches and changes generated code;
+  rebuild without it for performance measurements.
+
+A hardened compiler can additionally omit ShadowRealm. Keep WebAssembly and FFI
+when qualifying the compatible hardened variant; disabling either is a different
+capability profile. These experimental settings require separate per-platform
+runtime and signing proof and do not change the production Bun pin.
 
 ### WebAssembly in AOT builds
 
@@ -119,8 +168,8 @@ wall-time samples, including QuickJS module transfer to a real worker.
 
 ## Matched JIT support build
 
-Use `--support-output` with AOT to produce a JIT companion from the **same staged
-module graph, compiler, source commit, plugin selection, and resource snapshot**:
+Use `--support-output` with AOT to produce a JIT companion from the **same discovery
+graph, compiler, source commit, plugin selection, and resource snapshot**:
 
 ```bash
 ./aot-compiler/bin/bun scripts/build-bun-standalone.mjs ./standalone-aot --compile-aot --support-output ./standalone-support --plugins "$EMBEDDED_PLUGIN_IDS"
@@ -132,6 +181,18 @@ artifact has `mode: "jit"` and `build.flavor: "support"`; the AOT artifact has
 `mode: "aot"` and `build.flavor: "standard"`. Compare `build.id`,
 `openclaw.commit`, `build.pluginSetSha256`, and `build.moduleGraphSha256` before
 reproducing an issue. Matching a version string alone is insufficient.
+
+`--support-output` accepts emitted-JavaScript AOT (`--compile-aot`). It rejects
+`--aot-source` before staging files. For a source AOT comparison, build a separate
+default JIT artifact from the same commit.
+
+The build identity is derived from compiled modules, retained resources, compiler,
+target, and compilation options. Independent builds of identical prepared inputs
+share that identity; changing compiled code or native resources invalidates it.
+For reproducible preparation, set the same `OPENCLAW_BUILD_TIMESTAMP` when running
+`pnpm build` in each checkout. Local cache freshness stamps are omitted from the
+standalone runtime. Compare executable hashes before timestamped signing;
+a matching build identity alone does not prove byte-identical executables.
 
 For breakpoints, the companion also retains the selected input runtime, its
 source maps, and a copy of the matching ordinary Bun executable under `debug/`.

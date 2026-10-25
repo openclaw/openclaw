@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import * as codeRegions from "./code-regions.js";
+import * as codeRegions from "./code-ranges.js";
 import { createTextProjection } from "./text-projection.js";
 import { stripToolCallXmlTags, toolCallXmlTextFilter } from "./tool-call-xml.js";
 

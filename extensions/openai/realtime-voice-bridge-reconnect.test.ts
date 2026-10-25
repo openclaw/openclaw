@@ -12,8 +12,9 @@ const mocks = await vi.hoisted(async () => {
 });
 const { FakeWebSocket } = mocks;
 
-vi.mock("ws", () => ({
-  default: mocks.FakeWebSocket,
+vi.mock("openclaw/plugin-sdk/websocket-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/websocket-runtime")>()),
+  WebSocket: mocks.FakeWebSocket,
 }));
 
 // mock-isolation: Reconnect tests control credential completion without host auth storage or refresh work.
@@ -41,41 +42,55 @@ const {
   rejectedKeyMessage: OPENAI_REALTIME_REJECTED_KEY_MESSAGE,
 } = createOpenAIRealtimeTestSupport({ ...mocks, buildOpenAIRealtimeVoiceProvider });
 
-describe("OpenAI realtime voice bridge reconnect", () => {
-  beforeEach(() => {
-    resetTestState();
-  });
+function observedBridge(...keys: Array<"onClose" | "onError" | "onEvent" | "onReady" | undefined>) {
+  const callbacks = { onClose: vi.fn(), onError: vi.fn(), onEvent: vi.fn(), onReady: vi.fn() };
+  const selected: Partial<typeof callbacks> = {};
+  for (const key of keys) {
+    if (key) {
+      selected[key] = callbacks[key];
+    }
+  }
+  return { ...callbacks, bridge: createNativeBridge(selected) };
+}
+function dropSocket(socket: ReturnType<typeof requireSocket>) {
+  socket.readyState = FakeWebSocket.CLOSED;
+  socket.emit("close", 1006, Buffer.from("transient drop"));
+}
+function openRetrySocket() {
+  const socket = requireSocket(1);
+  openSocket(socket);
+  return socket;
+}
+function providerError(socket: ReturnType<typeof requireSocket>, message: string) {
+  emitServerEvent(socket, { type: "error", error: { message } });
+}
+function expectEvent(callback: unknown, type: string, detail: string, direction = "client") {
+  expect(callback).toHaveBeenCalledWith({ direction, type, detail });
+}
+function expectNoEvent(callback: unknown, type: string) {
+  expect(callback).not.toHaveBeenCalledWith(expect.objectContaining({ type }));
+}
 
-  afterEach(() => {
-    restoreTestEnvironment();
-  });
+describe("OpenAI realtime voice bridge reconnect", () => {
+  beforeEach(resetTestState);
+  afterEach(restoreTestEnvironment);
 
   it("rotates realtime bridges on provider max-duration events without reporting an error", async () => {
     vi.useFakeTimers();
-    const onError = vi.fn();
-    const onEvent = vi.fn();
-    const onReady = vi.fn();
-    const bridge = createNativeBridge({ onError, onEvent, onReady });
+    const { bridge, onError, onEvent, onReady } = observedBridge("onError", "onEvent", "onReady");
     const firstSocket = await connectReadyBridge(bridge);
     expect(onReady).toHaveBeenCalledOnce();
 
-    emitServerEvent(firstSocket, {
-      type: "error",
-      error: { message: "Your session hit the maximum duration of 60 minutes." },
-    });
+    providerError(firstSocket, "Your session hit the maximum duration of 60 minutes.");
 
     expect(onError).not.toHaveBeenCalled();
     expect(firstSocket.closed).toBe(true);
-    expect(onEvent).toHaveBeenCalledWith({
-      direction: "server",
-      type: "session.rotation",
-      detail: "reason=max-duration",
-    });
-    expect(onEvent).toHaveBeenCalledWith({
-      direction: "client",
-      type: "session.reconnect.scheduled",
-      detail: "reason=max-duration attempt=1 delayMs=1000",
-    });
+    expectEvent(onEvent, "session.rotation", "reason=max-duration", "server");
+    expectEvent(
+      onEvent,
+      "session.reconnect.scheduled",
+      "reason=max-duration attempt=1 delayMs=1000",
+    );
 
     await vi.advanceTimersByTimeAsync(1000);
     await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(2));
@@ -84,18 +99,10 @@ describe("OpenAI realtime voice bridge reconnect", () => {
     emitSessionUpdated(secondSocket);
 
     await vi.waitFor(() =>
-      expect(onEvent).toHaveBeenCalledWith({
-        direction: "server",
-        type: "session.rotation.ready",
-        detail: "reason=max-duration",
-      }),
+      expectEvent(onEvent, "session.rotation.ready", "reason=max-duration", "server"),
     );
     await vi.waitFor(() =>
-      expect(onEvent).toHaveBeenCalledWith({
-        direction: "client",
-        type: "session.reconnect.ready",
-        detail: "reason=max-duration attempt=1",
-      }),
+      expectEvent(onEvent, "session.reconnect.ready", "reason=max-duration attempt=1"),
     );
     expect(bridge.isConnected()).toBe(true);
     expect(onReady).toHaveBeenCalledOnce();
@@ -105,11 +112,12 @@ describe("OpenAI realtime voice bridge reconnect", () => {
 
   it("clears canceled rotation metadata before an explicit reconnect", async () => {
     vi.useFakeTimers();
-    const onClose = vi.fn();
-    const onError = vi.fn();
-    const onEvent = vi.fn();
-    const onReady = vi.fn();
-    const bridge = createNativeBridge({ onClose, onError, onEvent, onReady });
+    const { bridge, onClose, onError, onEvent, onReady } = observedBridge(
+      "onClose",
+      "onError",
+      "onEvent",
+      "onReady",
+    );
     const { connecting, socket: firstSocket } = beginBridgeConnection(bridge);
 
     firstSocket.deferClose = true;
@@ -118,16 +126,12 @@ describe("OpenAI realtime voice bridge reconnect", () => {
     await connecting;
     expect(onReady).toHaveBeenCalledOnce();
 
-    emitServerEvent(firstSocket, {
-      type: "error",
-      error: { message: "Your session hit the maximum duration of 60 minutes." },
-    });
+    providerError(firstSocket, "Your session hit the maximum duration of 60 minutes.");
     expect(firstSocket.closed).toBe(true);
 
     void bridge.close();
     void bridge.close();
-    expect(onClose).toHaveBeenCalledOnce();
-    expect(onClose).toHaveBeenCalledWith("completed");
+    expect(onClose).toHaveBeenCalledExactlyOnceWith("completed");
 
     const { connecting: reconnecting, socket: secondSocket } = beginBridgeConnection(bridge, 1);
     firstSocket.emitDeferredClose();
@@ -136,20 +140,17 @@ describe("OpenAI realtime voice bridge reconnect", () => {
     await reconnecting;
 
     expect(onReady).toHaveBeenCalledTimes(2);
-    expect(onEvent).not.toHaveBeenCalledWith(
-      expect.objectContaining({ type: "session.rotation.ready" }),
-    );
+    expectNoEvent(onEvent, "session.rotation.ready");
     expect(onError).not.toHaveBeenCalled();
 
-    secondSocket.readyState = FakeWebSocket.CLOSED;
-    secondSocket.emit("close", 1006, Buffer.from("ordinary drop"));
+    dropSocket(secondSocket);
     await vi.advanceTimersByTimeAsync(0);
 
-    expect(onEvent).toHaveBeenCalledWith({
-      direction: "client",
-      type: "session.reconnect.scheduled",
-      detail: "reason=websocket-close attempt=1 delayMs=1000",
-    });
+    expectEvent(
+      onEvent,
+      "session.reconnect.scheduled",
+      "reason=websocket-close attempt=1 delayMs=1000",
+    );
     expect(onEvent).not.toHaveBeenCalledWith(
       expect.objectContaining({
         type: "session.reconnect.scheduled",
@@ -164,86 +165,55 @@ describe("OpenAI realtime voice bridge reconnect", () => {
     expect(onClose).toHaveBeenLastCalledWith("completed");
   });
 
-  it("does not report reconnect readiness after cancellation during provider setup", async () => {
-    vi.useFakeTimers();
-    const onClose = vi.fn();
-    const onError = vi.fn();
-    const onEvent = vi.fn();
-    const bridge = createNativeBridge({ onClose, onError, onEvent });
-    const socket = await connectReadyBridge(bridge);
+  it.each(["pending setup", "queued startup error"])(
+    "lets cancellation win during reconnect %s without reporting readiness",
+    async (phase) => {
+      vi.useFakeTimers();
+      const { bridge, onClose, onError, onEvent } = observedBridge(
+        "onClose",
+        "onError",
+        phase === "pending setup" ? "onEvent" : undefined,
+      );
+      const socket = await connectReadyBridge(bridge);
 
-    socket.readyState = FakeWebSocket.CLOSED;
-    socket.emit("close", 1006, Buffer.from("transient drop"));
-    await vi.advanceTimersByTimeAsync(1000);
-    const retrySocket = requireSocket(1);
-    openSocket(retrySocket);
+      dropSocket(socket);
+      await vi.advanceTimersByTimeAsync(1000);
+      const retry = openRetrySocket();
+      if (phase === "queued startup error") {
+        providerError(retry, "queued retry startup failure");
+      }
 
-    void bridge.close();
-    await vi.advanceTimersByTimeAsync(0);
+      void bridge.close();
+      await vi.advanceTimersByTimeAsync(0);
 
-    expect(onEvent).not.toHaveBeenCalledWith(
-      expect.objectContaining({ type: "session.reconnect.ready" }),
-    );
-    expect(onError).not.toHaveBeenCalled();
-    expect(onClose).toHaveBeenCalledOnce();
-    expect(onClose).toHaveBeenCalledWith("completed");
-  });
-
-  it("lets cancellation win a queued reconnect startup error", async () => {
-    vi.useFakeTimers();
-    const onClose = vi.fn();
-    const onError = vi.fn();
-    const bridge = createNativeBridge({ onClose, onError });
-    const socket = await connectReadyBridge(bridge);
-
-    socket.readyState = FakeWebSocket.CLOSED;
-    socket.emit("close", 1006, Buffer.from("transient drop"));
-    await vi.advanceTimersByTimeAsync(1000);
-    const retrySocket = requireSocket(1);
-    openSocket(retrySocket);
-    emitServerEvent(retrySocket, {
-      type: "error",
-      error: { message: "queued retry startup failure" },
-    });
-
-    void bridge.close();
-    await vi.advanceTimersByTimeAsync(0);
-
-    expect(onError).not.toHaveBeenCalled();
-    expect(onClose).toHaveBeenCalledOnce();
-    expect(onClose).toHaveBeenCalledWith("completed");
-    expect(vi.getTimerCount()).toBe(0);
-  });
+      if (phase === "pending setup") {
+        expectNoEvent(onEvent, "session.reconnect.ready");
+      }
+      expect(onError).not.toHaveBeenCalled();
+      expect(onClose).toHaveBeenCalledExactlyOnceWith("completed");
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
 
   it("reports one terminal error for malformed audio during reconnect setup", async () => {
     vi.useFakeTimers();
-    const onClose = vi.fn();
-    const onError = vi.fn();
-    const onEvent = vi.fn();
-    const bridge = createNativeBridge({ onClose, onError, onEvent });
+    const { bridge, onClose, onError, onEvent } = observedBridge("onClose", "onError", "onEvent");
     const socket = await connectReadyBridge(bridge);
 
-    socket.readyState = FakeWebSocket.CLOSED;
-    socket.emit("close", 1006, Buffer.from("transient drop"));
+    dropSocket(socket);
     await vi.advanceTimersByTimeAsync(1000);
-    const retrySocket = requireSocket(1);
-    openSocket(retrySocket);
-    emitServerEvent(retrySocket, {
+    emitServerEvent(openRetrySocket(), {
       type: "response.output_audio.delta",
       item_id: "item_1",
       delta: "not-base64!",
     });
     await vi.advanceTimersByTimeAsync(0);
 
-    expect(onError).toHaveBeenCalledOnce();
-    expect(onError).toHaveBeenCalledWith(
+    expect(onError).toHaveBeenCalledExactlyOnceWith(
       new Error("OpenAI realtime stream returned malformed base64 audio data"),
     );
-    expect(onClose).toHaveBeenCalledOnce();
-    expect(onClose).toHaveBeenCalledWith("error");
-    expect(onEvent).not.toHaveBeenCalledWith(
-      expect.objectContaining({ type: "session.reconnect.ready" }),
-    );
+    expect(onClose).toHaveBeenCalledExactlyOnceWith("error");
+    expectNoEvent(onEvent, "session.reconnect.ready");
     expect(vi.getTimerCount()).toBe(0);
   });
 
@@ -252,15 +222,10 @@ describe("OpenAI realtime voice bridge reconnect", () => {
     const onAudio = vi.fn();
     const onClose = vi.fn();
     const onError = vi.fn();
-    const bridge = createNativeBridge({
-      onAudio,
-      onClose,
-      onError,
-    });
+    const bridge = createNativeBridge({ onAudio, onClose, onError });
     const firstSocket = await connectReadyBridge(bridge);
 
-    firstSocket.readyState = FakeWebSocket.CLOSED;
-    firstSocket.emit("close", 1006, Buffer.from("transient drop"));
+    dropSocket(firstSocket);
     emitServerEvent(firstSocket, {
       type: "response.audio.delta",
       delta: Buffer.from("late audio").toString("base64"),
@@ -270,8 +235,7 @@ describe("OpenAI realtime voice bridge reconnect", () => {
     expect(onError).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(1000);
-    const secondSocket = requireSocket(1);
-    openSocket(secondSocket);
+    const secondSocket = openRetrySocket();
     emitSessionUpdated(secondSocket);
     await vi.waitFor(() => expect(bridge.isConnected()).toBe(true));
 
@@ -290,46 +254,30 @@ describe("OpenAI realtime voice bridge reconnect", () => {
 
   it("exhausts retries when sockets open but never become provider-ready", async () => {
     vi.useFakeTimers();
-    const onClose = vi.fn();
-    const onError = vi.fn();
-    const onEvent = vi.fn();
-    const bridge = createNativeBridge({ onClose, onError, onEvent });
+    const { bridge, onClose, onError, onEvent } = observedBridge("onClose", "onError", "onEvent");
     const firstSocket = await connectReadyBridge(bridge);
 
-    firstSocket.readyState = FakeWebSocket.CLOSED;
-    firstSocket.emit("close", 1006, Buffer.from("transient drop"));
+    dropSocket(firstSocket);
 
     for (let attempt = 1; attempt <= 5; attempt += 1) {
       await vi.waitFor(() =>
-        expect(onEvent).toHaveBeenCalledWith({
-          direction: "client",
-          type: "session.reconnect.scheduled",
-          detail: `reason=websocket-close attempt=${attempt} delayMs=${1000 * 2 ** (attempt - 1)}`,
-        }),
+        expectEvent(
+          onEvent,
+          "session.reconnect.scheduled",
+          `reason=websocket-close attempt=${attempt} delayMs=${1000 * 2 ** (attempt - 1)}`,
+        ),
       );
       await vi.advanceTimersByTimeAsync(1000 * 2 ** (attempt - 1));
       const retrySocket = requireSocket(attempt);
       openSocket(retrySocket);
-      retrySocket.emit(
-        "message",
-        Buffer.from(
-          JSON.stringify({
-            type: "error",
-            error: { message: `retry startup failure ${attempt}` },
-          }),
-        ),
-      );
+      providerError(retrySocket, `retry startup failure ${attempt}`);
     }
 
     await vi.waitFor(() => expect(onClose).toHaveBeenCalledWith("error"));
     expect(onClose).toHaveBeenCalledOnce();
     expect(onError).toHaveBeenCalledTimes(5);
     expect(FakeWebSocket.instances).toHaveLength(6);
-    expect(onEvent).toHaveBeenCalledWith({
-      direction: "client",
-      type: "session.reconnect.exhausted",
-      detail: "reason=websocket-close attempts=5",
-    });
+    expectEvent(onEvent, "session.reconnect.exhausted", "reason=websocket-close attempts=5");
 
     void bridge.close();
     expect(onClose).toHaveBeenCalledOnce();
@@ -342,15 +290,7 @@ describe("OpenAI realtime voice bridge reconnect", () => {
     failedSocket.deferClose = true;
 
     openSocket(failedSocket);
-    failedSocket.emit(
-      "message",
-      Buffer.from(
-        JSON.stringify({
-          type: "error",
-          error: { message: "Incorrect API key provided" },
-        }),
-      ),
-    );
+    providerError(failedSocket, "Incorrect API key provided");
 
     await expect(failedConnect).rejects.toThrow(OPENAI_REALTIME_REJECTED_KEY_MESSAGE);
     expect(failedSocket.deferredClose).toBeDefined();

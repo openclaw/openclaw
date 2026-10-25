@@ -22,7 +22,6 @@ import { readTranscriptContextVersionInTransaction } from "./session-accessor.sq
 import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import type { SessionEntryCohortRequest } from "./session-entry-read.types.js";
 import { addSessionMember, removeSessionMember } from "./session-sharing-store.native.js";
-import { projectionLane } from "./session-transcript-worker-resources.js";
 import { messageEvent } from "./transcript-message.test-support.js";
 
 async function entryReader(
@@ -177,7 +176,7 @@ it.each([false, true])("reads complete cold entry facts with lifecycle=%s", asyn
     addSessionMember(scope, { identityId: "member", addedBy: "owner", addedAt: 3 });
     const readEntry = await entryReader(database, env);
     const read = (snapshotFields?: SessionEntryCohortRequest["snapshotFields"]) =>
-      readEntry({
+      checkedRead({
         sessionKeys: [sessionKey, "agent:main:absent"],
         snapshotFields,
         includeMembers: true,
@@ -190,10 +189,16 @@ it.each([false, true])("reads complete cold entry facts with lifecycle=%s", asyn
       () => "all",
     );
     const transactions = vi.spyOn(database.db, "exec");
-    try {
-      const first = read();
+    const checkedRead = (request: SessionEntryCohortRequest) => {
+      statements.counts.all = 0;
+      transactions.mockClear();
+      const result = readEntry(request);
       expect(statements.counts.all).toBe(1);
       expect(transactions.mock.calls).toEqual([]);
+      return result;
+    };
+    try {
+      const first = read();
       expect(first.entries).toMatchObject([
         {
           sessionKey,
@@ -222,11 +227,8 @@ it.each([false, true])("reads complete cold entry facts with lifecycle=%s", asyn
       expect(first.lifecycleTimestamps).toEqual(
         lifecycle ? { sessionStartedAt: 1, lastInteractionAt: undefined } : {},
       );
-      statements.counts.all = 0;
       expect(read([]).entries[0]?.entry.skillsSnapshot).toBeUndefined();
-      expect(statements.counts.all).toBe(1);
-      statements.counts.all = 0;
-      const target = readEntry({
+      const target = checkedRead({
         sessionKeys: [sessionKey],
         runtimeTarget: { agentId: "main", sessionId: "fused", sessionKey },
       });
@@ -236,8 +238,6 @@ it.each([false, true])("reads complete cold entry facts with lifecycle=%s", asyn
         sessionKey,
         storePath: database.path,
       });
-      expect(statements.counts.all).toBe(1);
-      expect(transactions.mock.calls).toEqual([]);
       recordSessionParticipant(scope, { ...contribution, promptedAt: 4 });
       removeSessionMember(scope, "member");
       replaceSessionEntrySync(scope, {
@@ -245,15 +245,11 @@ it.each([false, true])("reads complete cold entry facts with lifecycle=%s", asyn
         updatedAt: 5,
         sessionStartedAt: 5,
       });
-      statements.counts.all = 0;
-      transactions.mockClear();
       const next = read();
       expect(next.members).toEqual({ [sessionKey]: [] });
       expect(next.participantRecords?.[sessionKey]).toMatchObject([
         { contributionCount: 2, firstPromptedAt: 2, lastPromptedAt: 4 },
       ]);
-      expect(statements.counts.all).toBe(1);
-      expect(transactions.mock.calls).toEqual([]);
       expect(next.lifecycleTimestamps).toEqual(
         lifecycle ? { sessionStartedAt: 5, lastInteractionAt: undefined } : {},
       );
@@ -575,21 +571,6 @@ it("prepares the admitted run target with its entry and refuses source loss afte
     };
     const withRead = reader.withRead.bind(reader);
     const reads = vi.spyOn(reader, "withRead");
-    const runRequest = projectionLane.pool.run.bind(projectionLane.pool);
-    let runtimeTargets = 0;
-    const requests = vi.spyOn(projectionLane.pool, "run").mockImplementation(async (...args) => {
-      const reply = await runRequest(...args);
-      if (
-        reply.ok &&
-        typeof reply.value === "object" &&
-        reply.value !== null &&
-        "kind" in reply.value &&
-        reply.value.kind === "session-runtime-target"
-      ) {
-        runtimeTargets++;
-      }
-      return reply;
-    });
     try {
       const prepared = await prepareEmbeddedRunSession(input);
       expect(prepared.sessionAdmission?.entry.sessionId).toBe("bootstrap");
@@ -599,7 +580,6 @@ it("prepares the admitted run target with its entry and refuses source loss afte
         sessionKey,
       });
       expect(reads).toHaveBeenCalledTimes(1);
-      expect(runtimeTargets).toBe(0);
 
       const interrupted = new Error("bootstrap source ended after target preparation");
       reads.mockImplementationOnce(async (...args) => {
@@ -610,7 +590,6 @@ it("prepares the admitted run target with its entry and refuses source loss afte
       await expect(prepareEmbeddedRunSession(input)).rejects.toBe(interrupted);
     } finally {
       reads.mockRestore();
-      requests.mockRestore();
       operation.complete();
       expect(await waitForReplyRunSuccessorAdmission(operation.key, null)).toMatchObject({
         settled: true,

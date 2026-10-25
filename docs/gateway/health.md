@@ -377,6 +377,10 @@ and a Gateway-owned deadline, so one slow account returns a structured timeout w
 completed sibling results remain available. The command exits non-zero if the gateway is
 unreachable or the Gateway call itself times out.
 
+Cron heartbeat summaries reuse the running scheduler's last successful read until
+jobs or configuration change. Failed reads are retried on the next refresh. Before
+the scheduler loads, health reads the selected cron store directly.
+
 ### Queue warnings
 
 A successful health RPC reports top-level `ok: true`. That value means the Gateway
