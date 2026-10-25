@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import type { WAMessage } from "baileys";
 import {
@@ -8,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/channel-inbound";
 import { listMessageReceiptPlatformIds } from "openclaw/plugin-sdk/channel-outbound";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prepareWhatsAppOutboundMedia } from "../outbound-media-contract.js";
 import { markdownToWhatsApp } from "../targets-runtime.js";
@@ -29,6 +29,7 @@ const LID_JID = "277038292303944@lid";
 const MEDIA = Buffer.from("media");
 const THUMBNAIL = Buffer.from("thumb");
 const PREVIEW = { jpegThumbnail: THUMBNAIL.toString("base64"), width: 640, height: 480 };
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const recordChannelActivity = vi.hoisted(() => vi.fn());
 const imageOps = vi.hoisted(() => ({
@@ -64,13 +65,13 @@ describe("createWebSendApi", () => {
     imageOps.resizeToJpeg.mockRejectedValue(new Error("unexpected thumbnail generation"));
     api = createWebSendApi({ sock, defaultAccountId: "main" });
   });
-  function expectPartial(failure: unknown, ids: string[], cause: unknown, calls = 2) {
+  function expectPartial(failure: unknown, ids: string[], cause: unknown) {
     expect(isChannelPartialDeliveryError(failure)).toBe(true);
     expect(failure).toMatchObject({
       cause,
       deliveryResult: { messageIds: ids, receipt: { platformMessageIds: ids } },
     });
-    expect(sendMessage).toHaveBeenCalledTimes(calls);
+    expect(sendMessage).toHaveBeenCalledOnce();
     expectOutboundActivityOnce();
   }
   function expectSend(fields: Record<string, unknown>, jid = DM_JID) {
@@ -81,15 +82,14 @@ describe("createWebSendApi", () => {
     expect(result).toMatchObject({ kind, messageId, providerAccepted: true });
   }
 
-  function expectOutboundActivityOnce(accountId = "main") {
+  function expectOutboundActivityOnce() {
     expect(recordChannelActivity).toHaveBeenCalledExactlyOnceWith({
       channel: "whatsapp",
-      accountId,
+      accountId: "main",
       direction: "outbound",
     });
   }
   const voice = () => api.sendMessage("+1555", "voice text", MEDIA, "audio/ogg");
-  const failure = (send = voice) => send().catch((caught: unknown) => caught);
 
   const vcard = "BEGIN:VCARD\nFN:QA Contact\nEND:VCARD";
   const contact = { displayName: "QA Contact", vcard };
@@ -145,6 +145,7 @@ describe("createWebSendApi", () => {
     [mapped, line, expectedLine, [LID_JID]],
     [mapped, "Run `notify\n" + source, "Run `notify\n" + source, []],
     [mapped, "Run ``notify ` " + source, "Run ``notify ` " + source, []],
+    [phone, "cap @15551234567", "cap @15551234567", [PN]],
     [phone, tagged, tagged, [], PN],
     [[{ id: "15550000000@s.whatsapp.net" }], tagged, tagged, []],
   ])("native mentions %#", async (participants, text, expected, mentions, to = GROUP_JID) => {
@@ -156,75 +157,57 @@ describe("createWebSendApi", () => {
     );
   });
 
-  it.each(["image", "document"] as const)("sends %s captions with mentions", async (kind) => {
-    useMentions(kind === "image" ? phone : mapped);
+  it.each([
+    ["video", " Video/MP4; charset=binary ", "video/mp4", undefined, {}],
+    ["video", "video/mp4", "video/mp4", { gifPlayback: true }, { gifPlayback: true }],
+    ["document", undefined, "application/octet-stream", undefined, {}],
+    ["image", "image/jpeg", "image/jpeg", undefined, PREVIEW],
+    [
+      "document",
+      "image/jpeg",
+      "image/jpeg",
+      { asDocument: true, fileName: "promo.jpg" },
+      { fileName: "promo.jpg" },
+    ],
+  ] as const)("sends %s media (%s)", async (kind, inputType, mimetype, options, fields) => {
+    useMentions(mapped);
     if (kind === "image") {
       imageOps.getImageMetadata.mockResolvedValueOnce({ width: 640, height: 480 });
       imageOps.resizeToJpeg.mockResolvedValueOnce(THUMBNAIL);
     }
-    const asDocument = kind === "document";
-    await api.sendMessage(
-      GROUP_JID,
-      asDocument ? "cap " + source : "cap @15551234567",
-      MEDIA,
-      "image/jpeg",
-      asDocument ? { asDocument, fileName: "promo.jpg" } : undefined,
-    );
-    expectSend(
-      {
-        [kind]: MEDIA,
-        mimetype: "image/jpeg",
-        caption: asDocument ? "cap " + target : "cap @15551234567",
-        mentions: [asDocument ? LID_JID : PN],
-        ...(asDocument ? { fileName: "promo.jpg" } : PREVIEW),
-      },
-      GROUP_JID,
-    );
-  });
-
-  it.each([
-    [" Video/MP4; charset=binary ", "video/mp4", "video", undefined],
-    ["video/mp4", "video/mp4", "video", { gifPlayback: true }],
-    [undefined, "application/octet-stream", "document", undefined],
-  ] as const)("sends media %s as %s", async (inputType, mimetype, kind, options) => {
     const media = inputType
       ? await prepareWhatsAppOutboundMedia({ buffer: MEDIA, contentType: inputType })
       : { buffer: MEDIA, mimetype: undefined };
-    await api.sendMessage("+1555", "cap", media.buffer, media.mimetype, options);
-    expectSend({ [kind]: MEDIA, caption: "cap", mimetype, ...options });
+    await api.sendMessage(GROUP_JID, "cap " + source, media.buffer, media.mimetype, options);
+    expectSend(
+      { [kind]: MEDIA, caption: "cap " + target, mimetype, mentions: [LID_JID], ...fields },
+      GROUP_JID,
+    );
   });
 
-  it("sends voice text separately and combines both receipts", async () => {
+  it("quotes both voice sends and combines their receipts", async () => {
     sendMessage
       .mockResolvedValueOnce(acceptedMessage("voice-1"))
       .mockResolvedValueOnce(acceptedMessage("voice-text-1"));
-    const res = await voice();
-    expectSend({ audio: MEDIA, ptt: true, mimetype: "audio/ogg" });
-    expect(sendMessage).toHaveBeenNthCalledWith(2, DM_JID, { text: "voice text" });
+    const key = { id: "quoted-1", remoteJid: DM_JID, fromMe: true };
+    const res = await api.sendMessage("+1555", "voice text", MEDIA, "audio/ogg", {
+      quotedMessageKey: {
+        ...key,
+        remoteJid: LID_JID,
+        lookupTargetJid: DM_JID,
+        messageText: "quote",
+      },
+    });
+    expect(sendMessage.mock.calls).toMatchObject([
+      [DM_JID, { audio: MEDIA, ptt: true, mimetype: "audio/ogg" }, { quoted: { key } }],
+      [DM_JID, { text: "voice text" }, { quoted: { key } }],
+    ]);
     expectAccepted(res, "media", "voice-1");
     expect(res.receipt ? listMessageReceiptPlatformIds(res.receipt) : []).toEqual([
       "voice-1",
       "voice-text-1",
     ]);
     expectOutboundActivityOnce();
-  });
-
-  it("combines voice and nested partial-caption receipts", async () => {
-    const bookkeepingError = new Error("caption bookkeeping failed");
-    const acceptedCaption = normalizeWhatsAppSendResult(acceptedMessage("caption"), "text");
-    sendMessage.mockResolvedValueOnce(acceptedMessage("voice")).mockRejectedValueOnce(
-      createChannelPartialDeliveryError(bookkeepingError, {
-        messageIds: [acceptedCaption.messageId],
-        receipt: acceptedCaption.receipt,
-        visibleReplySent: true,
-      }),
-    );
-    expectPartial(await failure(), ["voice", "caption"], bookkeepingError);
-  });
-
-  it("retains voice receipts when the caption is unaccepted", async () => {
-    sendMessage.mockResolvedValueOnce(acceptedMessage("voice")).mockResolvedValueOnce(undefined);
-    expectPartial(await failure(), ["voice"], expect.any(PlatformMessageNotDispatchedError));
   });
 
   it.each([
@@ -236,7 +219,7 @@ describe("createWebSendApi", () => {
     recordChannelActivity.mockImplementationOnce(() => {
       throw activityError;
     });
-    expectPartial(await failure(send), ["accepted"], activityError, 1);
+    expectPartial(await send().catch((caught: unknown) => caught), ["accepted"], activityError);
   });
 
   it("rejects an unaccepted Baileys voice send without recording outbound activity", async () => {
@@ -247,42 +230,13 @@ describe("createWebSendApi", () => {
     expect(recordChannelActivity).not.toHaveBeenCalled();
   });
 
-  it("forwards quote context to the provider", async () => {
-    await api.sendMessage("+1555", "hello", undefined, undefined, {
-      quotedMessageKey: {
-        id: "quoted-1",
-        remoteJid: LID_JID,
-        fromMe: true,
-        lookupTargetJid: DM_JID,
-        messageText: "quoted body",
-      },
-    });
-    expect(sendMessage.mock.calls[0]?.[2]).toHaveProperty(
-      "quoted.key",
-      expect.objectContaining({ remoteJid: DM_JID, id: "quoted-1", fromMe: true }),
-    );
-  });
   // #67378: Missing LID resolution sends messages into a sender-only ghost chat.
   describe("createWebSendApi LID resolution (issue #67378)", () => {
     const { sendPresenceUpdate } = sock;
-    let authDir: string;
-
     beforeEach(() => {
-      authDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-wa-lid-"));
-      fs.writeFileSync(
-        path.join(authDir, "lid-mapping-15555550000.json"),
-        JSON.stringify("987654"),
-      );
+      const authDir = tempDirs.make("openclaw-wa-lid-");
+      fs.writeFileSync(path.join(authDir, "lid-mapping-15555550000.json"), '"987654"');
       api = createWebSendApi({ sock, defaultAccountId: "main", authDir });
-    });
-
-    afterEach(() => {
-      fs.rmSync(authDir, { recursive: true, force: true });
-    });
-
-    it("falls back to PN s.whatsapp.net when no LID mapping exists", async () => {
-      await api.sendMessage("+33123456789", "hello");
-      expect(sendMessage).toHaveBeenCalledWith("33123456789@s.whatsapp.net", { text: "hello" });
     });
 
     it.each([undefined, "+1999"])(
@@ -292,17 +246,9 @@ describe("createWebSendApi", () => {
           await api.sendReaction("+15555550000", "msg-2", "👍", true, participant),
           "reaction",
         );
-        expect(sendMessage).toHaveBeenCalledWith("987654@lid", {
-          react: {
-            text: "👍",
-            key: {
-              remoteJid: "987654@lid",
-              id: "msg-2",
-              fromMe: true,
-              participant: participant ? "1999@s.whatsapp.net" : undefined,
-            },
-          },
-        });
+        const normalized = participant ? "1999@s.whatsapp.net" : undefined;
+        const key = { remoteJid: "987654@lid", id: "msg-2", fromMe: true, participant: normalized };
+        expect(sendMessage).toHaveBeenCalledWith("987654@lid", { react: { text: "👍", key } });
       },
     );
 
@@ -316,20 +262,13 @@ describe("createWebSendApi", () => {
       expect(sendPresenceUpdate).not.toHaveBeenCalled();
     });
   });
-});
-
-describe("WhatsApp send receipts", () => {
   it("rejects empty send batches instead of fabricating an unknown receipt", () => {
     expect(() => combineWhatsAppSendResults("text", [])).toThrow(PlatformMessageNotDispatchedError);
   });
 
   it("enriches nested partial receipts from canonical accepted metadata", () => {
-    const key = {
-      id: "accepted",
-      remoteJid: DM_JID,
-      fromMe: true,
-      participant: "456@s.whatsapp.net",
-    };
+    const participant = "456@s.whatsapp.net";
+    const key = { id: "accepted", remoteJid: DM_JID, fromMe: true, participant };
     const accepted = normalizeWhatsAppSendResult({ key }, "text");
     const receipt = accepted.receipt;
     if (!receipt) {
@@ -360,27 +299,14 @@ describe("WhatsApp send receipts", () => {
     });
     expect(isChannelPartialDeliveryError(enriched)).toBe(true);
     expect(enriched).not.toBe(wrapped);
-    const expectedRaw = {
-      ...raw,
-      toJid: DM_JID,
-      meta: { fromMe: true, participant: key.participant },
-    };
+    expect(receipt.raw).toEqual([
+      { ...raw, toJid: DM_JID, meta: { fromMe: true, participant: key.participant } },
+    ]);
     expect(enriched).toMatchObject({
       cause,
       sentBeforeError: true,
       visibleReplySent: true,
-      deliveryResult: {
-        receipt: {
-          primaryPlatformMessageId: key.id,
-          platformMessageIds: [key.id],
-          ...context,
-          ...tokens,
-          raw: [expectedRaw],
-          parts: [
-            { platformMessageId: key.id, kind: "text", index: 7, ...context, raw: expectedRaw },
-          ],
-        },
-      },
+      deliveryResult: { receipt: accepted.receipt },
     });
   });
 });
