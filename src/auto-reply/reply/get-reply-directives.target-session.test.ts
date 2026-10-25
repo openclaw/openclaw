@@ -1,10 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import { SessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
-import {
-  MODEL_SELECTION_LOCKED_MESSAGE,
-  ModelSelectionLockedError,
-} from "../../sessions/model-overrides.js";
+import { ModelSelectionLockedError } from "../../sessions/model-overrides.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { FinalizedTemplateContext as TemplateContext } from "../templating.js";
@@ -43,22 +40,19 @@ async function resolveHelloWithModelDefaults(params: {
   opts?: Parameters<typeof resolveReplyDirectives>[0]["opts"];
   modelError?: unknown;
 }) {
+  const { body = "hello", modelError, ctx, sessionCtx: sessionOverrides, ...overrides } = params;
   const resolveDefaultReasoningLevel = vi.fn(async () => "on");
-  if (params.modelError) {
-    mocks.createModelSelectionState.mockRejectedValueOnce(params.modelError);
+  if (modelError) {
+    mocks.createModelSelectionState.mockRejectedValueOnce(modelError);
   } else {
     mocks.createModelSelectionState.mockResolvedValueOnce({
       provider: "openai",
       model: "gpt-4o-mini",
-      allowedModelKeys: new Set<string>(),
-      allowedModelCatalog: [],
-      resetModelOverride: false,
       resolveDefaultThinkingLevel: async () => "off",
       resolveDefaultReasoningLevel,
     });
   }
   const typing = makeTypingController();
-  const body = params.body ?? "hello";
   const sessionCtx = {
     Body: body,
     BodyStripped: body,
@@ -68,25 +62,16 @@ async function resolveHelloWithModelDefaults(params: {
     agentText: body,
     rawText: body,
     Provider: "whatsapp",
-    ...params.sessionCtx,
+    ...sessionOverrides,
   } as TemplateContext;
-
-  const sessionEntry = params.sessionEntry ?? makeSessionEntry();
 
   const result = await resolveReplyDirectives(
     replyDirectiveParams({
-      ctx: buildTestCtx({
-        Body: body,
-        CommandBody: body,
-        ...params.ctx,
-      }),
-      agentCfg: params.agentCfg ?? {},
+      ...overrides,
+      ctx: buildTestCtx({ Body: body, CommandBody: body, ...ctx }),
       sessionCtx,
-      sessionEntry,
-      sessionStore: params.sessionStore ?? {},
-      commandAuthorized: params.commandAuthorized ?? false,
+      sessionEntry: params.sessionEntry ?? makeSessionEntry(),
       typing,
-      opts: params.opts,
     }),
   );
 
@@ -126,16 +111,9 @@ vi.mock("./commands-context.js", () => ({
   buildCommandContext: vi.fn((params: { commandAuthorized?: boolean }) => ({
     surface: "whatsapp",
     channel: "whatsapp",
-    channelId: "whatsapp",
-    ownerList: [],
     senderIsOwner: false,
     isAuthorizedSender: params.commandAuthorized === true,
-    senderId: undefined,
-    abortKey: "abort-key",
-    rawBodyNormalized: "hello",
     commandBodyNormalized: "hello",
-    from: "whatsapp:+1000",
-    to: "whatsapp:+2000",
   })),
 }));
 
@@ -237,12 +215,10 @@ describe("resolveReplyDirectives", () => {
     ),
     new ModelSelectionLockedError(),
   ])("returns a terminal reply for %s", async (error) => {
-    const text =
-      error instanceof ModelSelectionLockedError ? MODEL_SELECTION_LOCKED_MESSAGE : error.message;
     const { result, typing } = await resolveHelloWithModelDefaults({ modelError: error });
     expect(result).toEqual({
       kind: "reply",
-      reply: { text, isError: true },
+      reply: { text: error.message, isError: true },
     });
     expect(typing.cleanup).toHaveBeenCalledOnce();
     expect(mocks.applyInlineDirectiveOverrides).not.toHaveBeenCalled();

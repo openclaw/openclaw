@@ -181,25 +181,21 @@ describe("handleModelsCommand", () => {
     { name: "CLI-only role policy", runtime: "claude-cli", roleOnly: true, expectedCli: true },
   ])("preserves route choice for $name", async ({ runtime, view, roleOnly, expectedCli }) => {
     cliCatalog();
-    const config: OpenClawConfig = {
-      ...cliConfig(runtime),
-      ...(roleOnly
-        ? {
-            gateway: {
-              roles: {
-                definitions: {
-                  cli: {
-                    sessions: { others: "none" },
-                    agents: "*",
-                    scopes: ["operator.read"],
-                    modelPolicy: { allow: ["claude-cli/*"] },
-                  },
-                },
-              },
+    const config = cliConfig(runtime);
+    if (roleOnly) {
+      config.gateway = {
+        roles: {
+          definitions: {
+            cli: {
+              sessions: { others: "none" },
+              agents: "*",
+              scopes: ["operator.read"],
+              modelPolicy: { allow: ["claude-cli/*"] },
             },
-          }
-        : {}),
-    };
+          },
+        },
+      };
+    }
     const data = await buildPreparedModelsProviderData(config, "main", { view });
     expect(data.providers).toEqual(expectedCli ? ["anthropic", "claude-cli"] : ["anthropic"]);
     expect(data.byProvider.get("anthropic")).toEqual(new Set(["claude-opus-4-5"]));

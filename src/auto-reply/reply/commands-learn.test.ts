@@ -26,14 +26,7 @@ function createLearnModels(supportsTools: boolean): NonNullable<OpenClawConfig["
     providers: {
       openai: {
         baseUrl: "https://api.openai.com/v1",
-        models: [
-          model("gpt-5.5", "GPT-5.5", {
-            reasoning: true,
-            contextWindow: 128_000,
-            maxTokens: 16_384,
-            compat: { supportsTools },
-          }),
-        ],
+        models: [model("gpt-5.5", "GPT-5.5", { compat: { supportsTools } })],
       },
     },
   };
@@ -46,8 +39,8 @@ function buildLearnParams(
   cfg: OpenClawConfig = {},
 ): HandleCommandsParams {
   const loadedConfig = createCanonicalAgentConfigFixture(cfg).config;
-  return {
-    ...buildSessionCommandTestParams({
+  return buildSessionCommandTestParams(
+    {
       commandBodyNormalized,
       isAuthorizedSender: true,
       senderIsOwner: true,
@@ -57,18 +50,20 @@ function buildLearnParams(
       surface: INTERNAL_MESSAGE_CHANNEL,
       ownerList: [],
       rawBodyNormalized: commandBodyNormalized,
-    }),
-    cfg: { ...loadedConfig, models: loadedConfig.models ?? DEFAULT_TEST_MODELS },
-    ctx: {
-      Provider: INTERNAL_MESSAGE_CHANNEL,
-      Surface: INTERNAL_MESSAGE_CHANNEL,
-      CommandSource: "text",
-      BodyForAgent: commandBodyNormalized,
     },
-    directives: {},
-    sessionKey: "agent:main:webchat:test",
-    model: "gpt-5.5",
-  } as unknown as HandleCommandsParams;
+    {
+      cfg: { ...loadedConfig, models: loadedConfig.models ?? DEFAULT_TEST_MODELS },
+      ctx: {
+        Provider: INTERNAL_MESSAGE_CHANNEL,
+        Surface: INTERNAL_MESSAGE_CHANNEL,
+        CommandSource: "text",
+        BodyForAgent: commandBodyNormalized,
+      },
+      directives: {},
+      sessionKey: "agent:main:webchat:test",
+      model: "gpt-5.5",
+    },
+  );
 }
 
 afterEach(() => {

@@ -18,15 +18,15 @@ import type { TtsProviderAttempt, TtsResult, TtsStatusEntry } from "../../tts/tt
 
 const ttsMocks = vi.hoisted(() => ({
   getLastTtsAttempt: vi.fn(),
-  getTtsMaxLength: vi.fn(),
+  getTtsMaxLength: vi.fn(() => 1500),
   getTtsPersona: vi.fn(),
-  getTtsProviderAsync: vi.fn(),
-  isSummarizationEnabled: vi.fn(),
-  isTtsEnabled: vi.fn(),
-  isTtsProviderConfiguredAsync: vi.fn(),
+  getTtsProviderAsync: vi.fn(() => PRIMARY_TTS_PROVIDER),
+  isSummarizationEnabled: vi.fn(() => true),
+  isTtsEnabled: vi.fn(() => true),
+  isTtsProviderConfiguredAsync: vi.fn(() => true),
   listTtsPersonas: vi.fn(),
-  resolveTtsConfig: vi.fn(),
-  resolveTtsPrefsPathAsync: vi.fn(),
+  resolveTtsConfig: vi.fn(() => ({})),
+  resolveTtsPrefsPathAsync: vi.fn(async () => "/tmp/tts-prefs.json"),
   setLastTtsAttempt: vi.fn(),
   updateTtsPrefsAsync: vi.fn(),
   textToSpeech: vi.fn(),
@@ -136,16 +136,7 @@ function transcriptText(text: string, phase: "commentary" | "final_answer") {
 
 describe("handleTtsCommands status fallback reporting", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
-    ttsMocks.resolveTtsConfig.mockReturnValue({});
-    ttsMocks.resolveTtsPrefsPathAsync.mockResolvedValue("/tmp/tts-prefs.json");
-    ttsMocks.isTtsEnabled.mockReturnValue(true);
-    ttsMocks.getTtsProviderAsync.mockReturnValue(PRIMARY_TTS_PROVIDER);
-    ttsMocks.getTtsPersona.mockReturnValue(undefined);
-    ttsMocks.isTtsProviderConfiguredAsync.mockReturnValue(true);
-    ttsMocks.getTtsMaxLength.mockReturnValue(1500);
-    ttsMocks.isSummarizationEnabled.mockReturnValue(true);
-    ttsMocks.getLastTtsAttempt.mockReturnValue(undefined);
+    vi.resetAllMocks();
     ttsMocks.listTtsPersonas.mockReturnValue([]);
   });
 
@@ -195,10 +186,8 @@ describe("handleTtsCommands status fallback reporting", () => {
   });
 
   it("persists fallback metadata from /tts audio and renders it in /tts status", async () => {
-    let lastAttempt: TtsStatusEntry | undefined;
-    ttsMocks.getLastTtsAttempt.mockImplementation(() => lastAttempt);
     ttsMocks.setLastTtsAttempt.mockImplementation((next: TtsStatusEntry) => {
-      lastAttempt = next;
+      ttsMocks.getLastTtsAttempt.mockReturnValue(next);
     });
     mockAudio("/tmp/fallback.ogg", {
       provider: FALLBACK_TTS_PROVIDER,
