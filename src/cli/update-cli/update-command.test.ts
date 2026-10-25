@@ -1,4 +1,3 @@
-// Update command tests cover update command orchestration and filesystem effects.
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -13,7 +12,7 @@ import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import * as nativeLaunchAgentRecovery from "../daemon-cli/launchd-recovery.js";
 import * as restartHealth from "../daemon-cli/restart-health.js";
 import * as launchAgentRecovery from "./update-command-launch-agent-recovery.js";
-import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
+import { createPostCorePluginUpdateResult } from "./update-command-plugins-internals.js";
 import { applyPostPluginConfigValidation } from "./update-command-post-plugin-validation.js";
 import {
   resolveServiceRefreshEnv,
@@ -26,190 +25,160 @@ import { resolveUpdatedGatewayRestartPort } from "./update-command-service.js";
 import { verifyUpdatedGateway } from "./update-command-verification.js";
 
 const tempDirs = createTempDirTracker();
+const stoppedHealth = () => ({
+  runtime: { status: "stopped" as const },
+  portUsage: { port: 18790, status: "free" as const, listeners: [], hints: [] },
+  healthy: false,
+  staleGatewayPids: [],
+  waitOutcome: "stopped-free" as const,
+});
+const recoveryMessage =
+  "Gateway LaunchAgent was installed but not loaded; re-bootstrapped launchd service.";
+const serviceState = (env = {}, loaded = false) => ({
+  installed: true,
+  loadState: { status: loaded ? ("loaded" as const) : ("not-loaded" as const) },
+  running: false,
+  env,
+  command: null,
+  runtime: { status: "stopped" as const },
+});
+function expectGuidance(output: string, parts: string[]) {
+  for (const part of parts) {
+    expect(output).toContain(part);
+  }
+}
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
   tempDirs.cleanup();
 });
 
-describe("applyPostPluginConfigValidation", () => {
-  const pluginUpdate = {
-    status: "ok",
-    changed: true,
-    sync: {
-      changed: true,
-      switchedToBundled: [],
-      switchedToNpm: [],
-      warnings: [],
-      errors: [],
-    },
-    npm: { changed: true, outcomes: [] },
-    integrityDrifts: [],
-    warnings: [],
-  } satisfies PostCorePluginUpdateResult;
+it("fails closed when updated plugin migrations leave config invalid", () => {
+  const pluginUpdate = createPostCorePluginUpdateResult({ status: "ok", changed: true });
+  expect(
+    applyPostPluginConfigValidation(pluginUpdate, { status: "invalid", failureFacts: [] }),
+  ).toMatchObject({
+    status: "error",
+    reason: "post-plugin-doctor-invalid-config",
+    warnings: [
+      {
+        guidance: ["Run `openclaw doctor --fix`, then rerun `openclaw update repair`."],
+      },
+    ],
+  });
+});
 
-  it("fails closed when updated plugin migrations leave config invalid", () => {
+it("uses the managed service port ahead of the caller environment", async () => {
+  expect(
+    await resolveUpdatedGatewayRestartPort({
+      config: { gateway: { port: 19000 } } as never,
+      processEnv: { OPENCLAW_GATEWAY_PORT: "19001" },
+      serviceEnv: { OPENCLAW_GATEWAY_PORT: "19002" },
+    }),
+  ).toBe(19002);
+});
+
+it("preserves Windows selector lookup semantics without retaining the live environment", () => {
+  const descriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+  Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+  try {
+    const caller = {
+      Home: "/caller/home",
+      OpenClaw_State_Dir: "/caller/state",
+      OpenClaw_Config_Path: "/caller/config.json",
+      OpenClaw_Profile: "caller",
+    };
+    const snapshot = resolveServiceRefreshEnv(caller);
+    caller.OpenClaw_State_Dir = "/later/state";
+    expect(snapshot).toEqual({
+      HOME: "/caller/home",
+      OPENCLAW_STATE_DIR: "/caller/state",
+      OPENCLAW_CONFIG_PATH: "/caller/config.json",
+      OPENCLAW_PROFILE: "caller",
+    });
+    const owned = resolveOwnedManagedUpdateEnv({
+      processEnv: snapshot,
+      serviceEnv: { OpenClaw_State_Dir: "/service/state" },
+    });
+    expect(owned.OPENCLAW_STATE_DIR).toBe("/service/state");
+    expect(owned.OPENCLAW_CONFIG_PATH).toBeUndefined();
+    expect(owned.OPENCLAW_PROFILE).toBeUndefined();
     expect(
-      applyPostPluginConfigValidation(pluginUpdate, { status: "invalid", failureFacts: [] }),
-    ).toMatchObject({
-      status: "error",
-      reason: "post-plugin-doctor-invalid-config",
-      warnings: [
-        {
-          guidance: ["Run `openclaw doctor --fix`, then rerun `openclaw update repair`."],
-        },
-      ],
-    });
-  });
+      resolveUpdateTargetEnv({ baseEnv: caller, serviceEnv: { OPENCLAW_PROFILE: "work" } }),
+    ).toMatchObject({ HOME: "/caller/home", OPENCLAW_PROFILE: "work" });
+  } finally {
+    Object.defineProperty(process, "platform", descriptor);
+  }
 });
 
-describe("resolveUpdatedGatewayRestartPort", () => {
-  it("uses the managed service port ahead of the caller environment", async () => {
-    expect(
-      await resolveUpdatedGatewayRestartPort({
-        config: { gateway: { port: 19000 } } as never,
-        processEnv: { OPENCLAW_GATEWAY_PORT: "19001" },
-        serviceEnv: { OPENCLAW_GATEWAY_PORT: "19002" },
-      }),
-    ).toBe(19002);
-  });
-});
-
-describe("update environment snapshots", () => {
-  it.each(["win32"] as const)(
-    "preserves %s selector lookup semantics without retaining the live environment",
-    (platform) => {
-      const descriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
-      Object.defineProperty(process, "platform", { value: platform, configurable: true });
-      try {
-        const caller = {
-          Home: "/caller/home",
-          OpenClaw_State_Dir: "/caller/state",
-          OpenClaw_Config_Path: "/caller/config.json",
-          OpenClaw_Profile: "caller",
-        };
-        const snapshot = resolveServiceRefreshEnv(caller);
-        caller.OpenClaw_State_Dir = "/later/state";
-        if (platform === "win32") {
-          expect(snapshot).toEqual({
-            HOME: "/caller/home",
-            OPENCLAW_STATE_DIR: "/caller/state",
-            OPENCLAW_CONFIG_PATH: "/caller/config.json",
-            OPENCLAW_PROFILE: "caller",
-          });
-          const owned = resolveOwnedManagedUpdateEnv({
-            processEnv: snapshot,
-            serviceEnv: { OpenClaw_State_Dir: "/service/state" },
-          });
-          expect(owned.OPENCLAW_STATE_DIR).toBe("/service/state");
-          expect(owned.OPENCLAW_CONFIG_PATH).toBeUndefined();
-          expect(owned.OPENCLAW_PROFILE).toBeUndefined();
-          expect(
-            resolveUpdateTargetEnv({ baseEnv: caller, serviceEnv: { OPENCLAW_PROFILE: "work" } }),
-          ).toMatchObject({ HOME: "/caller/home", OPENCLAW_PROFILE: "work" });
-        }
-      } finally {
-        Object.defineProperty(process, "platform", descriptor);
-      }
+it("keeps the caller env when no managed service env is available", () => {
+  const env = resolveUpdateTargetEnv({
+    baseEnv: {
+      PATH: "/bin",
+      OPENCLAW_SERVICE_REPAIR_POLICY: "external",
+      OPENCLAW_STATE_DIR: "/caller/state",
+      OPENCLAW_PROFILE: "caller",
     },
-  );
-});
+  });
 
-describe("resolveUpdateTargetEnv", () => {
-  it("keeps the caller env when no managed service env is available", () => {
-    const env = resolveUpdateTargetEnv({
-      baseEnv: {
-        PATH: "/bin",
-        OPENCLAW_SERVICE_REPAIR_POLICY: "external",
-        OPENCLAW_STATE_DIR: "/caller/state",
-        OPENCLAW_PROFILE: "caller",
-      },
-    });
-
-    expect(env.PATH).toBe("/bin");
-    expect(env.OPENCLAW_SERVICE_REPAIR_POLICY).toBe("external");
-    expect(env.NODE_DISABLE_COMPILE_CACHE).toBe("1");
-    expect(env.OPENCLAW_STATE_DIR).toBe("/caller/state");
-    expect(env.OPENCLAW_PROFILE).toBe("caller");
+  expect(env).toMatchObject({
+    PATH: "/bin",
+    OPENCLAW_SERVICE_REPAIR_POLICY: "external",
+    NODE_DISABLE_COMPILE_CACHE: "1",
+    OPENCLAW_STATE_DIR: "/caller/state",
+    OPENCLAW_PROFILE: "caller",
   });
 });
 
-describe("resolveUpdatedInstallCommandEnv", () => {
-  it("keeps operator scratch and SecretRef inputs while applying managed service selectors", () => {
-    const env = resolveUpdatedInstallCommandEnv({
-      invocationCwd: "/srv/openclaw",
-      processEnv: {
-        OPENCLAW_GATEWAY_AUTH_TOKEN: "runtime-token",
-        OPENCLAW_STATE_DIR: "/wrong/state",
-        OPENCLAW_HOME: "/wrong/home",
-        OPENCLAW_PROFILE: "caller",
-        PATH: "/caller/bin",
-        TMPDIR: "/caller/cache",
-        TMP: "/caller/tmp",
-        TEMP: "/caller/temp",
-      },
-      serviceEnv: {
-        OPENCLAW_STATE_DIR: "daemon-state",
-        OPENCLAW_HOME: "/daemon/home",
-        OPENCLAW_PROFILE: "work",
-        PATH: "/daemon/bin",
-        TMPDIR: "/tmp",
-        TMP: "/service/tmp",
-        TEMP: "/service/temp",
-      },
-    });
-
-    expect(env.OPENCLAW_GATEWAY_AUTH_TOKEN).toBe("runtime-token");
-    expect(env.OPENCLAW_STATE_DIR).toBe(path.join("/srv/openclaw", "daemon-state"));
-    expect(env.PATH).toBe("/daemon/bin");
-    expect(env.OPENCLAW_HOME).toBe("/daemon/home");
-    expect(env.OPENCLAW_PROFILE).toBe("work");
-    expect(env).toMatchObject({
+it("keeps operator scratch and SecretRef inputs while applying managed service selectors", () => {
+  const env = resolveUpdatedInstallCommandEnv({
+    invocationCwd: "/srv/openclaw",
+    processEnv: {
+      OPENCLAW_GATEWAY_AUTH_TOKEN: "runtime-token",
+      OPENCLAW_STATE_DIR: "/wrong/state",
+      OPENCLAW_HOME: "/wrong/home",
+      OPENCLAW_PROFILE: "caller",
+      PATH: "/caller/bin",
       TMPDIR: "/caller/cache",
       TMP: "/caller/tmp",
       TEMP: "/caller/temp",
-    });
-    expect(env.NODE_DISABLE_COMPILE_CACHE).toBe("1");
-    expect(resolveUpdatedInstallCommandEnv({ processEnv: env })).toEqual(env);
+    },
+    serviceEnv: {
+      OPENCLAW_STATE_DIR: "daemon-state",
+      OPENCLAW_HOME: "/daemon/home",
+      OPENCLAW_PROFILE: "work",
+      PATH: "/daemon/bin",
+      TMPDIR: "/tmp",
+      TMP: "/service/tmp",
+      TEMP: "/service/temp",
+    },
   });
+
+  expect(env).toMatchObject({
+    OPENCLAW_GATEWAY_AUTH_TOKEN: "runtime-token",
+    OPENCLAW_STATE_DIR: path.join("/srv/openclaw", "daemon-state"),
+    PATH: "/daemon/bin",
+    OPENCLAW_HOME: "/daemon/home",
+    OPENCLAW_PROFILE: "work",
+    TMPDIR: "/caller/cache",
+    TMP: "/caller/tmp",
+    TEMP: "/caller/temp",
+    NODE_DISABLE_COMPILE_CACHE: "1",
+  });
+  expect(resolveUpdatedInstallCommandEnv({ processEnv: env })).toEqual(env);
 });
 
 describe("recoverInstalledLaunchAgentAfterUpdate", () => {
   beforeEach(() => mockProcessPlatform("darwin"));
   afterEach(() => vi.restoreAllMocks());
-  it("does not recover a loaded LaunchAgent", async () => {
-    const service = createMockGatewayService();
-    vi.spyOn(gatewayService, "readGatewayServiceState").mockResolvedValue({
-      installed: true,
-      loadState: { status: "loaded" },
-      running: false,
-      env: {},
-      command: null,
-    });
-    const recover = vi
-      .spyOn(nativeLaunchAgentRecovery, "recoverInstalledLaunchAgent")
-      .mockResolvedValue(null);
-
-    await expect(
-      launchAgentRecovery.recoverInstalledLaunchAgentAfterUpdate({ service }),
-    ).resolves.toEqual({ status: "not-needed" });
-    expect(recover).not.toHaveBeenCalled();
-  });
-  it.each(["recovered", "failed", "system owner"] as const)(
-    "reports installed-but-not-loaded LaunchAgent recovery: %s",
+  it.each(["loaded", "recovered", "failed", "system owner"] as const)(
+    "reports LaunchAgent recovery: %s",
     async (outcome) => {
       const service = createMockGatewayService();
       const serviceEnv = { OPENCLAW_PROFILE: "stomme" };
       const recoveredEnv = { ...serviceEnv, OPENCLAW_PORT: "18790" };
-      const readState = vi.spyOn(gatewayService, "readGatewayServiceState").mockResolvedValue({
-        installed: true,
-        loadState: { status: "not-loaded" },
-        running: false,
-        env: recoveredEnv,
-        command: null,
-        runtime: { status: "stopped" },
-      });
-      const message =
-        "Gateway LaunchAgent was installed but not loaded; re-bootstrapped launchd service.";
+      const readState = vi
+        .spyOn(gatewayService, "readGatewayServiceState")
+        .mockResolvedValue(serviceState(recoveredEnv, outcome === "loaded"));
       const guidance = "System LaunchDaemon system/ai.openclaw.stomme owns this label";
       const recover = vi
         .spyOn(nativeLaunchAgentRecovery, "recoverInstalledLaunchAgent")
@@ -217,7 +186,9 @@ describe("recoverInstalledLaunchAgentAfterUpdate", () => {
           if (outcome === "system owner") {
             throw new Error(guidance);
           }
-          return outcome === "recovered" ? { result, loaded: true, message } : null;
+          return outcome === "recovered"
+            ? { result, loaded: true, message: recoveryMessage }
+            : null;
         });
 
       await expect(
@@ -226,18 +197,24 @@ describe("recoverInstalledLaunchAgentAfterUpdate", () => {
           env: serviceEnv,
         }),
       ).resolves.toEqual(
-        outcome === "recovered"
-          ? { status: "recovered", message }
-          : {
-              status: "failed",
-              detail:
-                outcome === "system owner"
-                  ? guidance
-                  : "LaunchAgent was installed but not loaded; automatic bootstrap/kickstart recovery failed.",
-            },
+        outcome === "loaded"
+          ? { status: "not-needed" }
+          : outcome === "recovered"
+            ? { status: "recovered", message: recoveryMessage }
+            : {
+                status: "failed",
+                detail:
+                  outcome === "system owner"
+                    ? guidance
+                    : "LaunchAgent was installed but not loaded; automatic bootstrap/kickstart recovery failed.",
+              },
       );
       expect(readState).toHaveBeenCalledWith(service, { env: serviceEnv });
-      expect(recover).toHaveBeenCalledWith({ result: "restarted", env: recoveredEnv });
+      if (outcome === "loaded") {
+        expect(recover).not.toHaveBeenCalled();
+      } else {
+        expect(recover).toHaveBeenCalledWith({ result: "restarted", env: recoveredEnv });
+      }
     },
   );
 });
@@ -262,11 +239,8 @@ describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
         readState.mockRejectedValue(new Error(reason));
       } else {
         readState.mockResolvedValue({
-          installed: true,
+          ...serviceState(env),
           loadState: { status: "unknown", detail: reason },
-          running: false,
-          env,
-          command: null,
         });
       }
       const recover = vi
@@ -280,13 +254,7 @@ describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
         opts: { json: true, run },
         serviceEnv: env,
         gatewayPort: 18790,
-        health: {
-          runtime: { status: "stopped" },
-          portUsage: { port: 18790, status: "free", listeners: [], hints: [] },
-          healthy: false,
-          staleGatewayPids: [],
-          waitOutcome: "stopped-free",
-        },
+        health: stoppedHealth(),
         recoverHealth: (health, _reinspect, assertCurrent) =>
           recoverLaunchAgentAndRecheckGatewayHealth({
             updateRun: run,
@@ -305,21 +273,20 @@ describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
           summary: expect.stringContaining(`LaunchAgent state could not be inspected: ${reason}`),
         }),
       ]);
-      expect(output.mock.calls.flat().join("\n")).toContain(
+      expectGuidance(output.mock.calls.flat().join("\n"), [
         `LaunchAgent state could not be inspected: ${reason}`,
-      );
-      expect(output.mock.calls.flat().join("\n")).toContain("openclaw gateway status --deep");
-      expect(output.mock.calls.flat().join("\n")).toContain(
+        "openclaw gateway status --deep",
         "the LaunchAgent is installed but not loaded",
-      );
-      expect(output.mock.calls.flat().join("\n")).toContain("logged-in macOS user session");
+        "logged-in macOS user session",
+      ]);
       expect(recover).not.toHaveBeenCalled();
       expect(start).not.toHaveBeenCalled();
     },
   );
-  it.each(["recovered", "failed"] as const)(
+  it.each(["recovered", "failed", "unhealthy"] as const)(
     "records only attempted native repair before rechecking update health (%s)",
     async (outcome) => {
+      const repaired = outcome !== "failed";
       const env = {
         OPENCLAW_STATE_DIR: tempDirs.make("update-native-repair-"),
         OPENCLAW_PROFILE: "stomme",
@@ -327,43 +294,36 @@ describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
       };
       const runId = createUpdateRun({ trigger: "cli" }, { env }).runId;
       const service = {} as never;
-      const unhealthy = {
-        runtime: { status: "stopped" },
-        portUsage: { port: 18790, status: "free", listeners: [], hints: [] },
-        healthy: false,
-        staleGatewayPids: [],
-        waitOutcome: "stopped-free",
-      } as never;
+      const unhealthy = stoppedHealth();
       const healthy = {
-        runtime: { status: "running", pid: 4242 },
-        portUsage: { port: 18790, status: "busy", listeners: [{ pid: 4242 }], hints: [] },
+        ...unhealthy,
+        runtime: { status: "running" as const, pid: 4242 },
+        portUsage: { port: 18790, status: "busy" as const, listeners: [{ pid: 4242 }], hints: [] },
         healthy: true,
-        staleGatewayPids: [],
         gatewayVersion: "2026.5.3",
-        waitOutcome: "healthy",
-      } as never;
-      const message =
-        "Gateway LaunchAgent was installed but not loaded; re-bootstrapped launchd service.";
-      const recovery =
-        outcome === "recovered"
-          ? ({ status: "recovered", message } as const)
-          : outcome === "failed"
-            ? ({ status: "failed", detail: "Bootstrap failed." } as const)
-            : ({ status: "not-needed" } as const);
+        waitOutcome: "healthy" as const,
+      };
+      const rechecked =
+        outcome === "unhealthy" ? { ...unhealthy, waitOutcome: "timeout" as const } : healthy;
+      const recovery = repaired
+        ? ({ status: "recovered", message: recoveryMessage } as const)
+        : ({ status: "failed", detail: "Bootstrap failed." } as const);
       vi.spyOn(launchAgentRecovery, "recoverInstalledLaunchAgentAfterUpdate").mockResolvedValue(
         recovery,
       );
       const waitForHealthy = vi
         .spyOn(restartHealth, "waitForGatewayHealthyRestart")
         .mockImplementation(async () => {
-          expect(getUpdateRun(runId, { env })?.repair).toMatchObject([{ status: "succeeded" }]);
-          return healthy;
+          if (outcome !== "unhealthy") {
+            expect(getUpdateRun(runId, { env })?.repair).toMatchObject([{ status: "succeeded" }]);
+          }
+          return rechecked;
         });
       const startedAtMs = Date.now();
 
       await expect(
         recoverLaunchAgentAndRecheckGatewayHealth({
-          updateRun: { runId, env },
+          ...(outcome === "unhealthy" ? {} : { updateRun: { runId, env } }),
           health: unhealthy,
           service,
           port: 18790,
@@ -372,11 +332,11 @@ describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
           env,
         }),
       ).resolves.toEqual({
-        health: outcome === "recovered" ? healthy : unhealthy,
+        health: repaired ? rechecked : unhealthy,
         launchAgentRecovery: recovery,
       });
 
-      if (outcome === "recovered") {
+      if (repaired) {
         expect(waitForHealthy).toHaveBeenCalledWith({
           service,
           port: 18790,
@@ -391,14 +351,16 @@ describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
         expect(waitForHealthy).not.toHaveBeenCalled();
       }
       const repair = getUpdateRun(runId, { env })?.repair;
-      {
+      if (outcome === "unhealthy") {
+        expect(repair).toEqual([]);
+      } else {
         expect(repair).toEqual([
           {
             attempt: 1,
-            status: outcome === "recovered" ? "succeeded" : "failed",
+            status: repaired ? "succeeded" : "failed",
             startedAtMs: expect.any(Number),
             endedAtMs: expect.any(Number),
-            summary: outcome === "recovered" ? message : "Bootstrap failed.",
+            summary: repaired ? recoveryMessage : "Bootstrap failed.",
           },
         ]);
         expect(repair?.[0]?.startedAtMs).toBeGreaterThanOrEqual(startedAtMs);
@@ -406,35 +368,4 @@ describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
       }
     },
   );
-
-  it("keeps the update unhealthy when LaunchAgent repair succeeds but health does not recover", async () => {
-    const service = {} as never;
-    const unhealthySnapshot = {
-      runtime: { status: "stopped" },
-      portUsage: { port: 18790, status: "free", listeners: [], hints: [] },
-      healthy: false,
-      staleGatewayPids: [],
-      waitOutcome: "stopped-free",
-    };
-    const unhealthy = unhealthySnapshot as never;
-    const stillUnhealthy = {
-      ...unhealthySnapshot,
-      waitOutcome: "timeout",
-    } as never;
-    vi.spyOn(launchAgentRecovery, "recoverInstalledLaunchAgentAfterUpdate").mockResolvedValue({
-      status: "recovered",
-      message: "Gateway LaunchAgent was installed but not loaded; re-bootstrapped launchd service.",
-    });
-    vi.spyOn(restartHealth, "waitForGatewayHealthyRestart").mockResolvedValue(stillUnhealthy);
-
-    const result = await recoverLaunchAgentAndRecheckGatewayHealth({
-      health: unhealthy,
-      service,
-      port: 18790,
-      expectedVersion: "2026.5.3",
-    });
-    expect(result.health.healthy).toBe(false);
-    expect(result.health.waitOutcome).toBe("timeout");
-    expect(result.launchAgentRecovery?.status).toBe("recovered");
-  });
 });
