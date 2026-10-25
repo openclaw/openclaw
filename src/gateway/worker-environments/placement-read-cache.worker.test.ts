@@ -43,9 +43,6 @@ beforeEach(() => {
   writer = createWorkerSessionPlacementStore({ database });
 });
 
-const claimLocal = (identity = sessionIdentity("local"), claimId = "claim", runId = "run") =>
-  writer.claimTurn({ ...identity, owner: { kind: "local" }, claimId, runId });
-
 describe("worker placement read cache", () => {
   it("keeps the syncing owner when a read captured during commit returns its older snapshot", async () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", roots.make("placement-pending-replica-"));
@@ -89,16 +86,40 @@ describe("worker placement read cache", () => {
     expect(store.get(identity.sessionId)).toEqual(syncing);
   });
 
-  it("sees committed recovery candidates across stores", async () => {
+  it("reuses empty recovery candidates and sees committed work across stores", async () => {
+    const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+    const recoveryReadCount = () =>
+      reads.mock.calls.filter(
+        ([, command]) => command.type === "workers.placementRecoveryCandidates",
+      ).length;
+
     expect(await reader.readRecoveryCandidates()).toEqual([]);
     expect(await writer.readRecoveryCandidates()).toEqual([]);
-    const local = await claimLocal(sessionIdentity("local-only"));
+    expect(recoveryReadCount()).toBe(1);
+
+    const local = sessionIdentity("recovery-local");
+    const claim = await writer.claimTurn({
+      ...local,
+      owner: { kind: "local" },
+      claimId: "local-claim",
+      runId: "local-run",
+    });
     expect(await reader.readRecoveryCandidates()).toEqual([]);
-    await writer.releaseTurnIfOwned(local);
-    const remote = await writer.startDispatch(sessionIdentity("recovery-local"));
+    await writer.releaseTurnIfOwned(claim);
+    expect(await reader.readRecoveryCandidates()).toEqual([]);
+    await writer.retireSessionPlacementAsync({
+      sessionId: local.sessionId,
+      expectedState: "local",
+      expectedGeneration: claim.placementGeneration,
+    });
+    expect(await reader.readRecoveryCandidates()).toEqual([]);
+    expect(recoveryReadCount()).toBe(1);
+
+    const remote = await writer.startDispatch(local);
     const expected = [{ sessionId: remote.sessionId, environmentId: null, state: "requested" }];
     expect(await reader.readRecoveryCandidates()).toEqual(expected);
     expect(await reader.readRecoveryCandidates()).toEqual(expected);
+    expect(recoveryReadCount()).toBe(3);
 
     await writer.retireSessionPlacementAsync({
       sessionId: remote.sessionId,
@@ -107,6 +128,7 @@ describe("worker placement read cache", () => {
     });
     expect(await reader.readRecoveryCandidates()).toEqual([]);
     expect(await writer.readRecoveryCandidates()).toEqual([]);
+    expect(recoveryReadCount()).toBe(4);
   });
 
   it("returns overlapping recovery snapshots without caching an invalidated empty result", async () => {
@@ -139,7 +161,7 @@ describe("worker placement read cache", () => {
     }
   });
 
-  it("only probes active placements as the disk sweep inventory changes", async () => {
+  it("reuses the disk sweep inventory and observes committed placement transitions", async () => {
     const runWorkspaceCommand = vi.fn(async () =>
       createCommandResult({
         stdout: JSON.stringify({ availableBytes: "6000000000", totalBytes: "10000000000" }),
@@ -168,6 +190,9 @@ describe("worker placement read cache", () => {
     const unsubscribe = reader.subscribeChanges(() => monitor.invalidate());
     try {
       await monitor.sweep();
+      const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+      await monitor.sweep();
+      expect(reads).not.toHaveBeenCalled();
       expect(runWorkspaceCommand).not.toHaveBeenCalled();
 
       const active = await advancePlacementFixtureToActive(
@@ -224,7 +249,12 @@ describe("worker placement read cache", () => {
         expect((await reader.readProjection([identity.sessionId])).placements.size).toBe(0);
       }
       const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
-      const claim = await claimLocal(identity);
+      const claim = await writer.claimTurn({
+        ...identity,
+        owner: { kind: "local" },
+        claimId: "claim",
+        runId: "run",
+      });
       const claimed = await read();
       expect(claimed.turnClaim?.claimId).toBe("claim");
       // Borrowed owner facts reject both placement and nested claim mutation.
@@ -237,16 +267,25 @@ describe("worker placement read cache", () => {
       expect(reads).toHaveBeenCalledTimes(preloaded ? 0 : 1);
       // A committed replacement leaves the earlier snapshot intact.
       expect(claimed.turnClaim?.claimId).toBe("claim");
+      expect(Reflect.set(claimed, "state", "requested")).toBe(false);
+      expect((await read()).state).toBe("local");
     },
   );
 
   it("updates prepared preservation from non-local writer receipts", async () => {
     const initial = await reader.prepareMaintenancePlacements();
     initial.release();
-    const local = await claimLocal();
-    await writer.releaseTurnIfOwned(local);
+    const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+    const claim = await writer.claimTurn({
+      ...sessionIdentity("local"),
+      owner: { kind: "local" },
+      claimId: "claim",
+      runId: "run",
+    });
+    await writer.releaseTurnIfOwned(claim);
     const unchanged = await reader.prepareMaintenancePlacements();
     expect(unchanged.placements).toEqual([]);
+    expect(reads).not.toHaveBeenCalled();
     const remote = await writer.startDispatch(sessionIdentity("remote"));
     expect(unchanged.placements).toEqual([remote]);
     unchanged.assertCurrent();
@@ -260,5 +299,8 @@ describe("worker placement read cache", () => {
     changed.assertCurrent();
     changed.release();
     expect(() => changed.placements).toThrow();
+    expect(
+      reads.mock.calls.filter(([, command]) => command.type === "workers.placementPreservation"),
+    ).toHaveLength(1);
   });
 });

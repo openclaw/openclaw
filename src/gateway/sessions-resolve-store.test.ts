@@ -153,21 +153,43 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
     });
   });
 
-  it.each(["agent:main:guildchat:direct:u1", "agent:main:main"])(
-    "rejects deleted-agent row %s without adopting it into the live default",
-    async (key) => {
-      await withStateDirEnv("openclaw-sessions-resolve-deleted-main-", async () => {
-        const cfg = opsOnly();
-        await seedAgent(cfg, "ops", { "agent:ops:main": entry("sess-live-default") });
-        await seedAgent(cfg, "main", { [key]: entry("sess-deleted-main", "deleted-main") });
-        await expectInvalid(cfg, { sessionId: "sess-deleted-main" }, deletedMainError);
-        if (key === "agent:main:main") {
-          await expectInvalid(cfg, { label: "deleted-main" }, deletedMainError);
-          await expectInvalid(cfg, { key }, deletedMainError);
-        }
+  it("selects the deterministic winner within one agent before cross-agent checks", async () => {
+    await withStateDirEnv("openclaw-sessions-resolve-same-agent-", async () => {
+      const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
+      await seedAgent(cfg, "main", {
+        "agent:main:older": { sessionId: "session-duplicate", updatedAt: 10 },
+        "agent:main:newer": { sessionId: "session-duplicate", updatedAt: 20 },
       });
-    },
-  );
+
+      await expect(resolve(cfg, { sessionId: "session-duplicate" })).resolves.toEqual(
+        resolved("agent:main:newer"),
+      );
+    });
+  });
+
+  it("still rejects non-alias agent:main matches when main is no longer configured", async () => {
+    await withStateDirEnv("openclaw-sessions-resolve-stale-main-", async () => {
+      const cfg = {
+        session: { mainKey: "main", store: undefined },
+        agents: { entries: { ops: {} } },
+      } satisfies OpenClawConfig;
+      await seedAgent(cfg, "main", {
+        "agent:main:guildchat:direct:u1": entry("sess-stale-main", "stale-main"),
+      });
+      await expectInvalid(cfg, { sessionId: "sess-stale-main" }, deletedMainError);
+    });
+  });
+
+  it("does not adopt legacy main aliases from discovered deleted-agent stores", async () => {
+    await withStateDirEnv("openclaw-sessions-resolve-discovered-main-", async () => {
+      const cfg = opsOnly();
+      await seedAgent(cfg, "main", {
+        "agent:main:main": entry("sess-discovered-main", "discovered-main"),
+      });
+      await expectInvalid(cfg, { sessionId: "sess-discovered-main" }, deletedMainError);
+      await expectInvalid(cfg, { label: "discovered-main" }, deletedMainError);
+    });
+  });
 
   it.each([
     {
@@ -266,5 +288,18 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
         }
       },
     );
+  });
+
+  it("rejects an explicit listed deleted main key instead of remapping to the live default main", async () => {
+    await withStateDirEnv("openclaw-sessions-resolve-key-deleted-main-", async () => {
+      const cfg = opsOnly();
+      await seedAgent(cfg, "ops", {
+        "agent:ops:main": entry("sess-live-default"),
+      });
+      await seedAgent(cfg, "main", {
+        "agent:main:main": entry("sess-deleted-main"),
+      });
+      await expectInvalid(cfg, { key: "agent:main:main" }, deletedMainError);
+    });
   });
 });

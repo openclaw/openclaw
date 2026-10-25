@@ -65,17 +65,11 @@ describe("live device scope upgrade", () => {
   async function decideUpgrade(requestId: string | undefined, decision = "approve") {
     expect((await rpcReq(started.ws, `device.pair.${decision}`, { requestId })).ok).toBe(true);
   }
-  async function registerUpgrade(ws: Parameters<typeof rpcReq>[0]) {
+  async function beginUpgrade(ws: Parameters<typeof rpcReq>[0]) {
     const registration = await requestUpgrade(ws);
     expect(registration).toMatchObject({ ok: true, payload: { requestId: expect.any(String) } });
-    return registration.payload?.requestId;
-  }
-  async function beginUpgrade(ws: Parameters<typeof rpcReq>[0]) {
-    const requestId = await registerUpgrade(ws);
+    const requestId = registration.payload?.requestId;
     return { requestId, wait: waitUpgrade(ws, requestId) };
-  }
-  function expectInvalidRequest(response: Awaited<ReturnType<typeof rpcReq>>, error: object) {
-    expect(response).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST", ...error } });
   }
   afterEach(() => {
     vi.restoreAllMocks();
@@ -149,7 +143,9 @@ describe("live device scope upgrade", () => {
 
   test("lets a paired scope-less operator request access recovery", async () => {
     const limited = await openLimitedDevice("live-scope-upgrade-scope-less", false, []);
-    await registerUpgrade(limited.ws);
+    const registration = await requestUpgrade(limited.ws);
+    expect(registration.ok, JSON.stringify(registration.error)).toBe(true);
+    expect(registration.payload?.requestId).toBeTypeOf("string");
   });
 
   test.each(["Control UI", "browser"])("upgrades and reconnects %s", async (kind) => {
@@ -204,7 +200,13 @@ describe("live device scope upgrade", () => {
     const { requestId, wait } = await beginUpgrade(limited.ws);
     await decideUpgrade(requestId);
     const result = await wait;
-    expectInvalidRequest(result, { message: expect.stringContaining("previously narrowed") });
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("previously narrowed"),
+      },
+    });
     expect(result.error?.message).toContain("openclaw dashboard");
     expect(result.error).not.toMatchObject({ retryable: true });
     expect(result.payload).toBeUndefined();
@@ -226,7 +228,8 @@ describe("live device scope upgrade", () => {
     let requestId: string | undefined;
     let waits: Array<Promise<unknown>> = [];
     try {
-      requestId = await registerUpgrade(limited.ws);
+      const registration = await requestUpgrade(limited.ws);
+      requestId = registration.payload?.requestId;
       waits = [waitUpgrade(limited.ws, requestId), waitUpgrade(limited.ws, requestId)];
       await vi.waitFor(() => expect(pendingSpy).toHaveBeenCalled());
       expect(pendingSpy).toHaveBeenCalledTimes(1);
@@ -261,11 +264,24 @@ describe("live device scope upgrade", () => {
       },
     });
     const response = await requestUpgrade(ws);
-    expectInvalidRequest(response, {
-      details: {
-        code: "DEVICE_IDENTITY_REQUIRED",
-        recommendedNextStep: "reopen_control_ui_securely",
+    expect(response).toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        details: {
+          code: "DEVICE_IDENTITY_REQUIRED",
+          recommendedNextStep: "reopen_control_ui_securely",
+        },
       },
+    });
+  });
+
+  test("rejects a requested scope set narrower than the live connection", async () => {
+    const limited = await openLimitedDevice("live-scope-upgrade-narrower");
+    const response = await requestUpgrade(limited.ws, ["operator.approvals"]);
+    expect(response).toMatchObject({
+      ok: false,
+      error: { code: "INVALID_REQUEST", message: expect.stringContaining("current scopes") },
     });
   });
 
@@ -273,11 +289,12 @@ describe("live device scope upgrade", () => {
     const limited = await openLimitedDevice("live-scope-upgrade-refreshed-deadline");
     const now = Date.now();
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
-    const first = await registerUpgrade(limited.ws);
+    const first = await requestUpgrade(limited.ws);
     nowSpy.mockReturnValue(now + PAIRING_PENDING_TTL_MS - 1_000);
-    const requestId = await registerUpgrade(limited.ws);
-    expect(requestId).toBe(first);
+    const retry = await requestUpgrade(limited.ws);
+    expect(retry.payload?.requestId).toBe(first.payload?.requestId);
     nowSpy.mockReturnValue(now + PAIRING_PENDING_TTL_MS + 1_000);
+    const requestId = retry.payload?.requestId;
     const wait = waitUpgrade(limited.ws, requestId);
     await decideUpgrade(requestId);
     expect(await wait).toMatchObject({
@@ -289,9 +306,13 @@ describe("live device scope upgrade", () => {
   test("does not disclose upgrade results to another authenticated device", async () => {
     const owner = await openLimitedDevice("live-scope-upgrade-owner");
     const other = await openLimitedDevice("live-scope-upgrade-other");
-    const requestId = await registerUpgrade(owner.ws);
+    const registration = await requestUpgrade(owner.ws);
+    const requestId = registration.payload?.requestId;
     const crossDeviceWait = await rpcReq(other.ws, "device.scopes.waitUpgrade", { requestId });
-    expectInvalidRequest(crossDeviceWait, { message: "scope upgrade expired or not found" });
+    expect(crossDeviceWait).toMatchObject({
+      ok: false,
+      error: { code: "INVALID_REQUEST", message: "scope upgrade expired or not found" },
+    });
     await decideUpgrade(requestId, "reject");
   });
 });
