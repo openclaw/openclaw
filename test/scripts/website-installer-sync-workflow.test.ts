@@ -182,6 +182,7 @@ describe("installer platform admission", () => {
 
   it.each([
     { file: "scripts/install.ps1", unix: false, windows: true },
+    { file: "test/scripts/install-ps1-entrypoint.ps1", unix: false, windows: true },
     { file: "scripts/install.sh", unix: true, windows: false },
     { file: ".github/workflows/website-installer-sync.yml", unix: true, windows: true },
     { file: "scripts/install.ps1", moveTo: "retired.ps1", unix: false, windows: true },

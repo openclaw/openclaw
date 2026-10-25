@@ -1,3 +1,4 @@
+import { stripInlineLinks } from "@openclaw/normalization-core/markdown-plain-text";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   RAW_TEXT_TAGS,
@@ -30,10 +31,30 @@ const BLOCK_BREAK_TAGS = new Set([
   "dl",
   "dt",
   "dd",
+  "address",
+  "aside",
+  "blockquote",
+  "caption",
+  "center",
+  "details",
+  "dialog",
+  "dir",
+  "fieldset",
+  "figcaption",
+  "figure",
+  "form",
+  "hgroup",
+  "legend",
+  "main",
+  "menu",
+  "nav",
+  "search",
+  "summary",
 ]);
 // Keep malformed nested markup from making end-of-document context unwind quadratic.
 // web_fetch favors bounded, auditable text over preserving deep broken HTML structure.
 const MAX_RENDER_CONTEXT_DEPTH = 32;
+const MAX_BLOCK_BREAK_LOOKBACK = 64;
 
 type RenderContext =
   | { kind: "root"; parts: string[] }
@@ -44,6 +65,7 @@ type RenderContext =
   | { kind: "pre"; parts: string[] };
 
 type RenderState = {
+  linksAsText?: boolean;
   title?: string;
   preBlocks: string[];
 };
@@ -70,6 +92,24 @@ function appendText(stack: RenderContext[], value: string): void {
   context?.parts.push(context.kind === "pre" ? value : escapePreMarkerText(value));
   if (context?.kind === "anchor" && /\S/.test(value)) {
     context.hasText = true;
+  }
+}
+
+// A block that starts mid-line must not run into the text before it. The look-back over trailing
+// spaces is bounded so long whitespace runs cannot make every block start rescan them.
+function breakLineBeforeBlock(stack: RenderContext[]): void {
+  const parts = stack[stack.length - 1]?.parts ?? [];
+  let budget = MAX_BLOCK_BREAK_LOOKBACK;
+  for (let i = parts.length - 1; i >= 0 && budget > 0; i -= 1, budget -= 1) {
+    const part = parts[i]!;
+    for (let j = part.length - 1; j >= 0 && budget > 0; j -= 1, budget -= 1) {
+      if (part[j] !== " " && part[j] !== "\t") {
+        if (part[j] !== "\n") {
+          appendText(stack, "\n");
+        }
+        return;
+      }
+    }
   }
 }
 
@@ -123,7 +163,7 @@ function closeContext(context: RenderContext, parent: RenderContext, state: Rend
       return;
     case "anchor":
       parent.parts.push(
-        context.href && label
+        !state.linksAsText && context.href && label
           ? `[${label}](${escapePreMarkerText(context.href)})`
           : label || escapePreMarkerText(context.href || ""),
       );
@@ -181,10 +221,13 @@ function pushContext(
   stack.push(context);
 }
 
-export function htmlToMarkdown(html: string): { text: string; title?: string } {
+export function htmlToMarkdown(
+  html: string,
+  options?: { linksAsText?: boolean },
+): { text: string; title?: string } {
   const root: RenderContext = { kind: "root", parts: [] };
   const stack: RenderContext[] = [root];
-  const state: RenderState = { preBlocks: [] };
+  const state: RenderState = { preBlocks: [], linksAsText: options?.linksAsText };
   const tableRowCellCounts: number[] = [];
 
   for (let i = 0; i < html.length;) {
@@ -272,8 +315,12 @@ export function htmlToMarkdown(html: string): { text: string; title?: string } {
         tableRowCellCounts[rowIndex] = cellCount + 1;
       }
     }
-    if (BLOCK_BREAK_TAGS.has(token.name) && closeThroughContext(stack, "anchor", state, true)) {
-      appendText(stack, " ");
+    if (BLOCK_BREAK_TAGS.has(token.name)) {
+      if (closeThroughContext(stack, "anchor", state, true)) {
+        appendText(stack, " ");
+      } else {
+        breakLineBeforeBlock(stack);
+      }
     }
     if (token.name === "pre") {
       appendText(stack, "\n");
@@ -398,8 +445,7 @@ export function markdownToText(markdown: string): string {
     text += lineEnd;
     pos = close?.end ?? markdown.length;
   }
-  text = text.replace(/!\[[^\]]*]\([^)]+\)/g, "");
-  text = text.replace(/\[([^\]]+)]\([^)]+\)/g, "$1");
+  text = stripInlineLinks(text, { images: "omit" });
   text = text.replace(/`([^`]+)`/g, "$1");
   text = text.replace(/^#{1,6}\s+/gm, "");
   text = text.replace(/^[^\S\n]*[-*+]\s+/gm, "");
@@ -428,7 +474,9 @@ export async function extractBasicHtmlContent(params: {
   extractMode: ExtractMode;
 }): Promise<{ text: string; title?: string } | null> {
   const cleanHtml = await sanitizeHtml(params.html);
-  const rendered = htmlToMarkdown(cleanHtml);
+  // HTML labels are literal text, not authored Markdown. Do not serialize destinations
+  // only to parse them back out in text mode. Keep Markdown rendering unchanged.
+  const rendered = htmlToMarkdown(cleanHtml, { linksAsText: params.extractMode === "text" });
   const text =
     stripInvisibleUnicode(
       params.extractMode === "text" ? markdownToText(rendered.text) : rendered.text,

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentsListResult } from "../../api/types.ts";
+import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import { createNativeDeviceSettingsCapability } from "../../app/native-device-settings.ts";
 import { createNativeDeviceSettingsSnapshot } from "../../test-helpers/native-device-settings.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
@@ -23,12 +24,7 @@ function result(status: SetupAutoResult["status"] = "activated"): SetupAutoResul
 const methods = ["chat", "setup.auto", "setup.activate", "setup.auth.start"].map(
   (method) => "openclaw." + method,
 );
-const agentsList: AgentsListResult = {
-  defaultId: "main",
-  mainKey: "main",
-  scope: "global",
-  agents: [{ id: "main" }],
-};
+const agentsList: AgentsListResult = makeBootRoster({ scope: "global" });
 const reply = { sessionId: "setup-session", reply: "Welcome.", action: "none" };
 type Page = Awaited<ReturnType<typeof mountPage>>["page"];
 type Request = Parameters<typeof createContext>[0];

@@ -155,9 +155,15 @@ it("joins worker exit, closed pipes and the queued IPC disconnect", async () => 
 
 it("keeps ordinary children supervised through repeated operational errors", async () => {
   const { adapter, child, emitExit, emitClose } = await setup();
+  const errors = vi.fn();
+  adapter.onError(errors);
+  const errorListenerCount = child.listenerCount("error");
   const settled = watch(adapter.wait());
   for (let attempt = 0; attempt < 2; attempt++) {
-    child.emit("error", Object.assign(new Error("kill EPERM"), { code: "EPERM" }));
+    const error = Object.assign(new Error("kill EPERM"), { code: "EPERM", syscall: "kill" });
+    child.emit("error", error);
+    expect(errors).toHaveBeenNthCalledWith(attempt + 1, error, "process");
+    expect(child.listenerCount("error")).toBe(errorListenerCount);
     await Promise.resolve();
     expect(settled).not.toHaveBeenCalled();
   }
@@ -169,6 +175,9 @@ it("keeps ordinary children supervised through repeated operational errors", asy
   emitClose(0);
   await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
   adapter.dispose();
+  for (const event of ["error", "exit", "close"]) {
+    expect(child.listenerCount(event)).toBe(0);
+  }
 });
 
 it.each(["error", "close"])(

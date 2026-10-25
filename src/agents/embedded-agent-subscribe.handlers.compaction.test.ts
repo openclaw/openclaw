@@ -10,8 +10,8 @@ import {
   createStubSessionHarness,
   createSubscribedSessionHarness,
 } from "./embedded-agent-subscribe.e2e-harness.js";
-import { handleCompactionEnd } from "./embedded-agent-subscribe.handlers.compaction.js";
 import reconcileSessionStoreCompactionCountAfterSuccess from "./embedded-agent-subscribe.handlers.compaction.runtime.js";
+import { handleCompactionEnd } from "./embedded-agent-subscribe.handlers.lifecycle.js";
 import { createContext } from "./embedded-agent-subscribe.handlers.lifecycle.test-helpers.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 import type { AgentMessage } from "./runtime/index.js";

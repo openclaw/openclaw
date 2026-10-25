@@ -14,6 +14,7 @@ import {
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { backupRestoreCommand } from "./backup-restore.js";
 import { buildBackupArchivePath } from "./backup-shared.js";
+import { encodeTarEntry } from "./backup-tar.test-support.js";
 import type { BackupManifest } from "./backup-verify-manifest.js";
 import { prepareBackupArchive, verifyBackupArchive } from "./backup-verify.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
@@ -50,34 +51,6 @@ async function listFilesystemLeafEntries(root: string, relative = ""): Promise<s
     }
   }
   return entries.toSorted();
-}
-
-function encodeTarEntry(params: {
-  path: string;
-  contents?: string | Buffer;
-  type?: "File" | "Directory" | "Link" | "SymbolicLink";
-  linkpath?: string;
-}): Buffer {
-  const body = Buffer.isBuffer(params.contents)
-    ? params.contents
-    : Buffer.from(params.contents ?? "", "utf8");
-  const type = params.type ?? "File";
-  const header = new tar.Header({
-    path: params.path,
-    type,
-    size: type === "File" ? body.length : 0,
-    mode: type === "Directory" ? 0o700 : 0o600,
-    uid: 0,
-    gid: 0,
-    mtime: new Date(0),
-    ...(params.linkpath ? { linkpath: params.linkpath } : {}),
-  });
-  const headerBlock = Buffer.alloc(512);
-  header.encode(headerBlock);
-  if (type !== "File") {
-    return headerBlock;
-  }
-  return Buffer.concat([headerBlock, body, Buffer.alloc((512 - (body.length % 512)) % 512)]);
 }
 
 async function writeArchive(params: {
@@ -127,7 +100,7 @@ async function writeUnextractableArchive(archivePath: string) {
   await writeArchive({
     archivePath,
     extraEntries: [
-      encodeTarEntry({ path: directoryPath, type: "Directory" }),
+      encodeTarEntry({ path: directoryPath, type: "Directory", mode: 0o700 }),
       encodeTarEntry({
         path: `${DEFAULT_ARCHIVE_ROOT}/payload/directory-hardlink`,
         type: "Link",

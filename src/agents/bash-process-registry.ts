@@ -287,7 +287,7 @@ function queueProcessChange(session: ProcessSession) {
       }
     }, 5_000),
   );
-  changeTimer.unref?.();
+  changeTimer.unref();
 }
 
 /** Return whether a process session id is live, retained, or reserved for notification. */
@@ -714,7 +714,7 @@ function scheduleSweeper() {
     return;
   }
   sweeper = setTimeout(scheduleSweeper, nextExpiration - now);
-  sweeper.unref?.();
+  sweeper.unref();
 }
 
 function stopSweeper() {

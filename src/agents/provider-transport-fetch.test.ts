@@ -48,7 +48,7 @@ function mockResponse(
 }
 
 function mockStream(
-  chunks: string[],
+  chunks: (string | Uint8Array)[],
   contentType?: string,
   options: Parameters<typeof responseStream>[1] = {},
 ) {
@@ -69,7 +69,7 @@ function privateNetworkPolicy(allowPrivateNetwork = false, trustConfiguredBaseUr
 }
 
 function responseStream(
-  chunks: string[],
+  chunks: (string | Uint8Array)[],
   options: { open?: boolean; cancel?: (reason: unknown) => Promise<void> } = {},
 ) {
   let close!: () => void;
@@ -77,7 +77,7 @@ function responseStream(
     start(controller) {
       close = () => controller.close();
       for (const chunk of chunks) {
-        controller.enqueue(new TextEncoder().encode(chunk));
+        controller.enqueue(typeof chunk === "string" ? new TextEncoder().encode(chunk) : chunk);
       }
       if (!options.open) {
         controller.close();
@@ -565,12 +565,18 @@ describe("buildGuardedModelFetch SSE readability", () => {
     "observes comment lines without event separators on %s streams",
     async (mode) => {
       const chunks = [
-        "\uFEFF: keep",
+        "\uFEFF: 🦞 keep",
         "alive\r",
         "\n: second\n: third\r",
-        'event: ping\n\ndata: {"ok": true}\n\n',
+        '🦞: not a comment\nevent: ping\n\ndata: {"ok": true}\n\n',
       ];
-      mockStream(chunks, "text/event-stream");
+      const bytes = new TextEncoder().encode(chunks.join(""));
+      // Split the BOM and multibyte text as well as CRLF across network chunks.
+      mockStream(
+        Array.from(bytes, (_, index) => bytes.subarray(index, index + 1)),
+        "text/event-stream",
+      );
+      using decode = vi.spyOn(TextDecoder.prototype, "decode");
       const target =
         mode === "official"
           ? { ...completionModel, provider: "openai", baseUrl: "https://api.openai.com/v1" }
@@ -589,6 +595,10 @@ describe("buildGuardedModelFetch SSE readability", () => {
         );
       }
       expect(onSseComment).toHaveBeenCalledTimes(3);
+      if (mode !== "sanitized") {
+        // The observer forwards bytes; UTF-8 decoding belongs to the SDK consumer.
+        expect(decode).not.toHaveBeenCalled();
+      }
     },
   );
 

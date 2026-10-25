@@ -85,10 +85,21 @@ function openedTargets(elements: HTMLElement[]) {
   });
 }
 
-function messageEntries(messages: Array<{ toolCallId: string }>): MessageGroup["messages"] {
-  return groupMessages(
-    messages.map((message) => ({ kind: "message", key: message.toolCallId, message })),
-  ).flatMap((item) => (item.kind === "group" ? item.messages : []));
+function browserResultGroup(
+  messages: Array<{ toolCallId: string }>,
+  key = "browser-results",
+): MessageGroup {
+  return {
+    kind: "group",
+    key,
+    role: "tool",
+    visibleContent: "text",
+    isStreaming: false,
+    timestamp: 1,
+    messages: groupMessages(
+      messages.map((message) => ({ kind: "message", key: message.toolCallId, message })),
+    ).flatMap((item) => (item.kind === "group" ? item.messages : [])),
+  };
 }
 
 afterEach(() => {
@@ -191,15 +202,7 @@ async function drawActivity(
   messages: ReturnType<typeof browserResult>[],
   expanded: boolean,
 ) {
-  const group: MessageGroup = {
-    kind: "group",
-    key: "browser-results",
-    role: "tool",
-    visibleContent: "text",
-    isStreaming: false,
-    timestamp: 1,
-    messages: messageEntries(messages),
-  };
+  const group: MessageGroup = browserResultGroup(messages);
   await drawGroup(
     host,
     {
@@ -779,15 +782,7 @@ describe("browser tab card", () => {
       details: { browserTab: { profile: "managed", ...browserTab } },
     }));
     const host = container();
-    const group: MessageGroup = {
-      kind: "group",
-      key: "browser-results",
-      role: "tool",
-      visibleContent: "text",
-      isStreaming: false,
-      timestamp: 1,
-      messages: messageEntries(messages),
-    };
+    const group: MessageGroup = browserResultGroup(messages);
     await drawGroup(host, {
       groups: [group],
       options: { showReasoning: false },
@@ -820,15 +815,7 @@ describe("browser tab card", () => {
             : { browserTab: { ...browserTab, url: truncateUtf16Safe(url, 2_048) } },
         };
       });
-      const group: MessageGroup = {
-        kind: "group",
-        key: "bounded-browser-results",
-        role: "tool",
-        visibleContent: "text",
-        isStreaming: false,
-        timestamp: 1,
-        messages: messageEntries(messages),
-      };
+      const group: MessageGroup = browserResultGroup(messages, "bounded-browser-results");
       const host = container();
       await drawGroup(host, {
         groups: [group],

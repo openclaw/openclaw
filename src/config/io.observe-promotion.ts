@@ -51,7 +51,6 @@ export async function promoteConfigSnapshotToLastKnownGoodCore(params: {
     hash: current.hash,
     lastObservedSuspiciousSignature: entry.lastObservedSuspiciousSignature,
     bytes: current.bytes,
-    hasMeta: current.hasMeta,
     gatewayMode: current.gatewayMode,
     parsed: snapshot.parsed,
     lastKnownGood: entry.lastKnownGood,

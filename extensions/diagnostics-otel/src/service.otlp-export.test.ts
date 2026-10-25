@@ -320,6 +320,10 @@ test("propagates the exported model span across two OTLP services with one roote
     expect(new Set(spans.map((span) => span.traceId)).size).toBe(1);
     expect(roots.map((span) => span.name)).toEqual(["peer.request"]);
     expect(spans.every((span) => !span.parentSpanId || spanIds.has(span.parentSpanId))).toBe(true);
+    expect(modelSpan?.attributes).toMatchObject({
+      "gen_ai.request.model": runBase.model,
+      "gen_ai.response.model": "synthetic-routed-model",
+    });
     const { traceId, spanId } = modelSpan ?? {};
     expect(outboundContext).toMatchObject({ traceId, spanId });
     expect(spans.find((span) => span.name === "peer.callback")?.parentSpanId).toBe(spanId);
@@ -330,6 +334,67 @@ test("propagates the exported model span across two OTLP services with one roote
     await receiver.close();
   }
 }, 30_000);
+
+test("exports cache-write TTL facts without duplicate generic usage", async () => {
+  const receiver = startLocalOtlpReceiver();
+  const port = await receiver.listen();
+  releasePreloadedOtelGlobals();
+  const { service, ctx } = await startOtelService({
+    endpoint: `http://127.0.0.1:${port}`,
+    traces: true,
+    metrics: false,
+    logs: false,
+  });
+  try {
+    for (const usage of [
+      { cacheWrite: 1_000_000, cacheWrite1h: 400_000, cacheWrite5m: 600_000 },
+      { cacheWrite: 0, cacheWrite1h: 0, cacheWrite5m: 0 },
+      { cacheWrite: 1_000_000 },
+    ]) {
+      emit({
+        type: "model.call.completed",
+        ...runBase,
+        callId: "cache-write",
+        durationMs: 10,
+        usage,
+      });
+    }
+    await waitForDiagnosticEventsDrained();
+    await service.stop?.(ctx);
+    const attrs = receiver.capturedSpans
+      .filter((span) => span.name === "openclaw.model.call")
+      .map((span) => span.attributes);
+    expect(attrs).toHaveLength(3);
+    expect(attrs[0]).toMatchObject({
+      "openclaw.model_call.usage.cache_creation_input_tokens_1h": 400_000,
+      "openclaw.model_call.usage.cache_creation_input_tokens_5m": 600_000,
+    });
+    expect(attrs[1]).toMatchObject({
+      "openclaw.model_call.usage.cache_creation_input_tokens_1h": 0,
+      "openclaw.model_call.usage.cache_creation_input_tokens_5m": 0,
+    });
+    expect(attrs[2]).not.toHaveProperty("openclaw.model_call.usage.cache_creation_input_tokens_1h");
+    expect(attrs[2]).not.toHaveProperty("openclaw.model_call.usage.cache_creation_input_tokens_5m");
+    // Langfuse's generic extractor retains every gen_ai.usage key, then prices
+    // each bucket independently. Only the blended cache count belongs there.
+    expect(
+      attrs.map((attributes) =>
+        Object.fromEntries(
+          Object.entries(attributes).filter(
+            ([key]) => key.startsWith("gen_ai.usage.") && key.includes("cache_creation"),
+          ),
+        ),
+      ),
+    ).toEqual([
+      { "gen_ai.usage.cache_creation.input_tokens": 1_000_000 },
+      { "gen_ai.usage.cache_creation.input_tokens": 0 },
+      { "gen_ai.usage.cache_creation.input_tokens": 1_000_000 },
+    ]);
+  } finally {
+    await service.stop?.(ctx);
+    await receiver.close();
+  }
+});
 
 test("keeps a whole turn on one trace when children arrive after their parent ended", async () => {
   const { service, ctx } = await startOtelService({ traces: true });

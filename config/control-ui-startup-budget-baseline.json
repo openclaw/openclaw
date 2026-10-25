@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 281465,
-  "reason": "Streaming-only token-to-DOM: Peter accepted chat boot growth after the original experiment reduced streaming script CPU 8.6% and HTML assignments 2129 to 178. Settled rendering retains HTML plus DOMPurify; startup measures 281465 B with unchanged requests. Ratchet to the measured head.",
+  "startupJsGzipBytes": 270488,
+  "reason": "Heavy tool details avoid rendering hidden diff/raw views: rejected-patch script CPU -39.07% and main-thread task CPU -47.04% over 20 counterbalanced pairs. Integrated same-toolchain build on f8a97fe: startup 270323 to 270488 B gzip (+165 B), five JS and one CSS request unchanged; Chat -132 B, New +114 B. Accept the small startup tradeoff and ratchet to the measured head.",
   "updatedAt": "2026-10-25"
 }

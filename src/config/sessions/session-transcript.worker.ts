@@ -301,7 +301,7 @@ serveOwnedWorkerTasks(
           await import("./session-accessor.sqlite-archive-read.js");
         return {
           kind: "session-archive-presence" as const,
-          registered: readTranscriptArchivePresenceInWorker({
+          registered: await readTranscriptArchivePresenceInWorker({
             ...request,
             env: cloneEnvWithPlatformSemantics(request.env),
           }),
@@ -451,14 +451,10 @@ serveOwnedWorkerTasks(
       if (request.kind === "projection-status") {
         const { withOpenClawAgentDatabaseReadOnly } =
           await import("../../state/openclaw-agent-db-readonly.js");
-        const { runSqliteReadSnapshotSync } = await import("../../infra/sqlite-transaction.js");
         const { sessionTranscriptIndexNeedsReconcile } =
           await import("./session-transcript-index.js");
         const result = withOpenClawAgentDatabaseReadOnly(
-          ({ db }) =>
-            runSqliteReadSnapshotSync(db, () =>
-              sessionTranscriptIndexNeedsReconcile(db, request.sessionId),
-            ),
+          ({ db }) => sessionTranscriptIndexNeedsReconcile(db, request.sessionId),
           { ...request.database, env: request.env },
         );
         return result.found && result.value;

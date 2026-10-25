@@ -10,10 +10,7 @@ import { installTitleTooltips } from "./tooltip-title.ts";
 import { settleTooltip } from "./tooltip.test-support.ts";
 
 const runtimeLoad = vi.hoisted(() => {
-  let release!: () => void;
-  const pending = new Promise<void>((resolve) => {
-    release = resolve;
-  });
+  const { promise: pending, resolve: release } = Promise.withResolvers<void>();
   return { pending, release };
 });
 

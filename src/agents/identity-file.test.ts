@@ -117,22 +117,19 @@ describe("loadAgentIdentityFromWorkspace", () => {
       );
       if (kind === "missing") {
         await expect(loadAgentIdentityFromFile(identityPath)).resolves.toBeNull();
-      } else if (kind === "oversized") {
-        fs.writeFileSync(identityPath, "x".repeat(TEST_MAX_IDENTITY_FILE_BYTES + 1));
-        expect(loadAgentIdentityFromWorkspace(tempDir)).toBeNull();
-        expect(await load()).toBeNull();
-        await expect(loadAgentIdentityFromFile(identityPath)).rejects.toThrow(
-          `exceeds the maximum size of ${TEST_MAX_IDENTITY_FILE_BYTES} bytes`,
-        );
       } else {
         fs.writeFileSync(
           identityPath,
-          Buffer.from([0x2d, 0x20, 0x4e, 0x61, 0x6d, 0x65, 0x3a, 0x20, 0xff]),
+          kind === "oversized"
+            ? "x".repeat(TEST_MAX_IDENTITY_FILE_BYTES + 1)
+            : Buffer.from([0x2d, 0x20, 0x4e, 0x61, 0x6d, 0x65, 0x3a, 0x20, 0xff]),
         );
         expect(loadAgentIdentityFromWorkspace(tempDir)).toBeNull();
         expect(await load()).toBeNull();
         await expect(loadAgentIdentityFromFile(identityPath)).rejects.toThrow(
-          "must be valid UTF-8",
+          kind === "oversized"
+            ? `exceeds the maximum size of ${TEST_MAX_IDENTITY_FILE_BYTES} bytes`
+            : "must be valid UTF-8",
         );
       }
     },

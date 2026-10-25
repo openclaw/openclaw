@@ -120,18 +120,28 @@ function createTruncationMarker(
   );
   return (limit: number) => {
     const prefix = fit(limit);
-    return { ...marker, omittedBytes: originalBytes - Buffer.byteLength(prefix, "utf8"), prefix };
+    const omittedBytes = originalBytes - prefix.bytes;
+    return {
+      marker: { ...marker, omittedBytes, prefix: prefix.text },
+      prefixBytes: prefix.bytes,
+      jsonBytes: fixedBytes + String(omittedBytes).length + prefix.jsonBytes,
+    };
   };
 }
 
 function createErrorFitter(error: string, maxBytes: number) {
   const suffix = " [error truncated]";
   const fit = createJsonPrefixFitter(error, maxBytes, () => suffix.length);
-  return (limit: number) => `${fit(limit)}${suffix}`;
+  return (limit: number) => {
+    const prefix = fit(limit);
+    return { text: `${prefix.text}${suffix}`, jsonBytes: prefix.jsonBytes + suffix.length };
+  };
 }
 
 export function boundCodeModeError(error: string, maxBytes: number): string {
-  return jsonUtf8Bytes(error) <= maxBytes ? error : createErrorFitter(error, maxBytes)(maxBytes);
+  return jsonUtf8Bytes(error) <= maxBytes
+    ? error
+    : createErrorFitter(error, maxBytes)(maxBytes).text;
 }
 
 type DeliveryReceipt =
@@ -302,7 +312,7 @@ export class CodeModeOutputState {
       : undefined;
     const referenceBytes = minimumReference ? jsonUtf8Bytes(minimumReference) : 0;
     const minimumOutputBytes = reference
-      ? Math.min(outputBytes, jsonUtf8Bytes([createTruncationMarker(source, this.maxBytes)(0)]))
+      ? Math.min(outputBytes, createTruncationMarker(source, this.maxBytes)(0).jsonBytes + 2)
       : 0;
     const errorBytes = fullError === undefined ? 0 : jsonUtf8Bytes(fullError);
     // Reuse decoded channels only within this fit; later deliveries need fresh objects.
@@ -322,11 +332,12 @@ export class CodeModeOutputState {
       // Short channels donate their unused share; diagnostics retain their leading cause.
       const errorAllowance =
         maxBytes - Math.min(outputBytes + valueBytes, Math.floor(maxBytes / 2));
-      const error =
-        fullError === undefined || errorBytes <= errorAllowance
-          ? fullError
-          : (errorFitter ??= createErrorFitter(fullError, this.maxBytes))(errorAllowance);
-      const remaining = maxBytes - (error === fullError ? errorBytes : jsonUtf8Bytes(error));
+      const fittedError =
+        fullError !== undefined && errorBytes > errorAllowance
+          ? (errorFitter ??= createErrorFitter(fullError, this.maxBytes))(errorAllowance)
+          : undefined;
+      const error = fittedError?.text ?? fullError;
+      const remaining = maxBytes - (fittedError?.jsonBytes ?? errorBytes);
       const valueReservation = Math.max(
         Math.floor(remaining / 2),
         remaining >= referenceBytes + minimumOutputBytes ? referenceBytes : 0,
@@ -342,13 +353,12 @@ export class CodeModeOutputState {
         chargedOutputBytes = outputBytes;
         receipt = { kind: "entries", count };
       } else {
-        const marker = (outputMarker ??= createTruncationMarker(source, this.maxBytes))(
+        const fitted = (outputMarker ??= createTruncationMarker(source, this.maxBytes))(
           outputAllowance - 2,
         );
-        const prefixBytes = Buffer.byteLength(marker.prefix, "utf8");
-        output = [marker];
-        chargedOutputBytes = jsonUtf8Bytes([marker]);
-        receipt = { kind: "summary", originalBytes: outputBytes, prefixBytes };
+        output = [fitted.marker];
+        chargedOutputBytes = fitted.jsonBytes + 2;
+        receipt = { kind: "summary", originalBytes: outputBytes, prefixBytes: fitted.prefixBytes };
       }
       const valueAllowance = remaining - chargedOutputBytes;
       const saved = reference ? retainedMarker(reference, valueAllowance) : undefined;
@@ -374,7 +384,7 @@ export class CodeModeOutputState {
                       value,
                       this.maxBytes,
                       params.valueGuidance,
-                    ))(remaining - chargedOutputBytes),
+                    ))(remaining - chargedOutputBytes).marker,
                   }),
           ...(error === undefined ? {} : { error }),
         },

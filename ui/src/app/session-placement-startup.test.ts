@@ -13,6 +13,7 @@ import {
 import { makeChatHost } from "../pages/chat/chat-host.test-support.ts";
 import { applyChatPendingInputs, getChatPendingInputs } from "../pages/chat/chat-pending-inputs.ts";
 import { admitChatSubmission, reduceChatSessionProjection } from "../pages/chat/history-merge.ts";
+import { restoreMocksAndGlobals } from "../test-helpers/mock-cleanup.ts";
 import {
   createPlacementStartupHarness,
   readStartupRecovery,
@@ -68,10 +69,86 @@ describe("application session placement startup", () => {
     sessionStorage.clear();
   });
 
-  afterEach(() => {
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
+  afterEach(() => restoreMocksAndGlobals());
+
+  it("keeps empty connections lazy until a memory-only Start", async () => {
+    const moduleLoad = createDeferred<RuntimeModule>();
+    const fake = createFakeRuntime();
+    const loader = vi.fn(() => moduleLoad.promise);
+    const request = vi.fn();
+    const { startup, input, key, gateway } = createPlacementStartupHarness(request, {
+      loadRuntime: loader,
+    });
+    sessionStorage.clear();
+
+    startup.resumeRecovery();
+    const onSnapshot = expectDefined(
+      vi.mocked(gateway.subscribe).mock.calls[0]?.[0],
+      "gateway snapshot subscription",
+    );
+    onSnapshot(gateway.snapshot);
+    expect(loader).not.toHaveBeenCalled();
+    expect(startup.hasPendingTurn(key)).toBe(false);
+    expect(startup.get(key)).toBeNull();
+
+    for (const otherOwner of [
+      { gatewayUrl: "ws://other.example" },
+      { recoveryScope: "principal-b" },
+    ]) {
+      expect(writeSessionPlacementRecovery({ ...input.recovery, ...otherOwner })).toBe(true);
+    }
+    onSnapshot(gateway.snapshot);
+    expect(loader).not.toHaveBeenCalled();
+    expect(request).not.toHaveBeenCalled();
+
+    startup.start({ ...input, persistRecovery: false });
+    expect(loader).toHaveBeenCalledOnce();
+    expect(startup.hasPendingTurn(key)).toBe(true);
+    expect(startup.get(key)?.initialTurn?.text).toBe(input.recovery.message);
+    moduleLoad.resolve({ default: fake.factory });
+    await flushStartupMicrotasks();
+    expect(fake.runtime.start).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ ...input, persistRecovery: false }),
+    );
   });
+
+  it.each([false, true])(
+    "discovers recovery added after an empty connection (required=%s)",
+    async (required) => {
+      const moduleLoad = createDeferred<RuntimeModule>();
+      const fake = createFakeRuntime();
+      const loader = vi.fn(() => moduleLoad.promise);
+      const { startup, input, key, gateway } = createPlacementStartupHarness(vi.fn(), {
+        loadRuntime: loader,
+      });
+      sessionStorage.clear();
+      startup.resumeRecovery();
+      expect(loader).not.toHaveBeenCalled();
+
+      expect(
+        writeSessionPlacementRecovery({
+          ...input.recovery,
+          target: required
+            ? { kind: "profile", profileId: "aws", required: true }
+            : input.recovery.target,
+        }),
+      ).toBe(true);
+      const onSnapshot = expectDefined(
+        vi.mocked(gateway.subscribe).mock.calls[0]?.[0],
+        "gateway snapshot subscription",
+      );
+      onSnapshot(gateway.snapshot);
+      onSnapshot(gateway.snapshot);
+      expect(loader).toHaveBeenCalledOnce();
+      expect(startup.hasPendingTurn(key)).toBe(true);
+      expect(startup.get(key)).toMatchObject({ phase: "pending" });
+
+      moduleLoad.resolve({ default: fake.factory });
+      await flushStartupMicrotasks();
+      expect(fake.factory).toHaveBeenCalledOnce();
+      expect(fake.runtime.resumeRecovery).toHaveBeenCalledOnce();
+    },
+  );
 
   it("does not install a runtime that finishes loading after disposal", async () => {
     const moduleLoad = createDeferred<RuntimeModule>();
@@ -131,7 +208,7 @@ describe("application session placement startup", () => {
     startup.dispose();
   });
 
-  it("lets Start own recovery when it arrives during connection prewarm", async () => {
+  it("lets Start own recovery when it arrives during a restored recovery load", async () => {
     const moduleLoad = createDeferred<RuntimeModule>();
     const fake = createFakeRuntime();
     const factory = fake.factory;

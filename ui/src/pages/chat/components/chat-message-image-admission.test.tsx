@@ -50,14 +50,23 @@ beforeEach(() => {
       readonly rootMargin = "240px 0px";
       readonly scrollMargin = "0px";
       readonly thresholds = [0];
-      constructor(callback: IntersectionObserverCallback) {
-        intersections.push(() =>
-          callback([{ isIntersecting: true } as IntersectionObserverEntry], this),
-        );
+      private readonly targets = new Set<Element>();
+      constructor(private readonly callback: IntersectionObserverCallback) {}
+      observe(target: Element) {
+        this.targets.add(target);
+        intersections.push(() => {
+          if (this.targets.has(target)) {
+            // SAFETY: The viewport owner reads only target and isIntersecting.
+            this.callback([{ target, isIntersecting: true } as IntersectionObserverEntry], this);
+          }
+        });
       }
-      observe() {}
-      unobserve() {}
-      disconnect() {}
+      unobserve(target: Element) {
+        this.targets.delete(target);
+      }
+      disconnect() {
+        this.targets.clear();
+      }
       takeRecords() {
         return [];
       }

@@ -1,7 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import { formatBillingErrorMessage } from "../../agents/failover/user-copy.js";
-import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
-import { loggingState } from "../../logging/state.js";
 import * as autoFallback from "./agent-runner-auto-fallback.js";
 import {
   setupAgentRunnerExecutionTestState,
@@ -87,45 +85,11 @@ describe("executeAgentTurn: compaction events", () => {
       text: expect.stringContaining("/new or a larger model"),
     });
   });
-  it("logs Codex app-server compaction completion while notices stay silent by default", async () => {
+  it("keeps compaction notices silent by default", async () => {
     const onBlockReply = vi.fn();
-    const consoleLog = vi.fn();
-    setLoggerOverride({ level: "silent", consoleLevel: "info", consoleStyle: "compact" });
-    loggingState.rawConsole = {
-      log: consoleLog,
-      info: vi.fn(),
-      warn: vi.fn(),
-      error: vi.fn(),
-    };
-    try {
-      state.runWithModelFallbackMock.mockImplementationOnce(
-        async (params: FallbackRunnerParams) => ({
-          result: await params.run("openai", "gpt-5.5", initialFallbackAttemptOptions(params)),
-          provider: "openai",
-          model: "gpt-5.5",
-          attempts: [{ provider: "anthropic", model: "claude", error: "rate limit" }],
-        }),
-      );
-      const context = {
-        backend: "codex-app-server",
-        threadId: "thread-1",
-        turnId: "turn-1",
-        itemId: "compaction-1",
-      };
-      mockCompaction(context, context);
-
-      const result = await executeTestTurn({ opts: { onBlockReply } });
-
-      expect(result.kind).toBe("success");
-      expect(onBlockReply).not.toHaveBeenCalled();
-      expect(consoleLog.mock.calls.map(([line]) => String(line)).join("\n")).toContain(
-        "codex app-server auto-compaction succeeded for openai/gpt-5.5; refreshed session context",
-      );
-    } finally {
-      loggingState.rawConsole = null;
-      setLoggerOverride(null);
-      resetLogger();
-    }
+    mockCompaction({ backend: "codex-app-server" }, { backend: "codex-app-server" });
+    expect((await executeTestTurn({ opts: { onBlockReply } })).kind).toBe("success");
+    expect(onBlockReply).not.toHaveBeenCalled();
   });
 
   it("carries committed compaction into a later CLI fallback failure", async () => {

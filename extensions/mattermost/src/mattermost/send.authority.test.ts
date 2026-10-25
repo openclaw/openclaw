@@ -17,14 +17,16 @@ type SendOptions = Parameters<typeof sendMessageMattermost>[2];
 type AccountConfig = NonNullable<SendOptions["cfg"]["channels"]>["mattermost"];
 const config = (mattermost: AccountConfig): SendOptions["cfg"] => ({ channels: { mattermost } });
 
-function sendOptions(baseUrl: string): SendOptions {
+function sendOptions(baseUrl: string, overrides: AccountConfig = {}): SendOptions {
   setMattermostRuntime(createPluginRuntimeMock());
-  const account = {
-    baseUrl,
-    botToken: "synthetic-send-authority",
-    network: { dangerouslyAllowPrivateNetwork: true },
+  return {
+    cfg: config({
+      baseUrl,
+      botToken: "synthetic-send-authority",
+      network: { dangerouslyAllowPrivateNetwork: true },
+      ...overrides,
+    }),
   };
-  return { cfg: config(account) };
 }
 
 function json(response: ServerResponse, body: unknown, code = 200) {
@@ -113,17 +115,14 @@ describe("Mattermost send authority lifecycle", () => {
         );
       }),
       async (baseUrl) => {
-        const options = sendOptions(baseUrl);
+        const options = sendOptions(baseUrl, {
+          dmChannelRetry: { maxRetries: 3, initialDelayMs: 0, maxDelayMs: 0 },
+        });
         const runtime = createPluginRuntimeMock();
         const logger = runtime.logging.getChildLogger({ module: "mattermost" });
         runtime.logging.shouldLogVerbose = () => true;
         runtime.logging.getChildLogger = () => ({ ...logger, warn: retryLog });
         setMattermostRuntime(runtime);
-        options.cfg.channels!.mattermost!.dmChannelRetry = {
-          maxRetries: 3,
-          initialDelayMs: 0,
-          maxDelayMs: 0,
-        };
         const outcome = await observeSend(
           sendMessageMattermost("user:bbbbbbbbbbbbbbbbbbbbbbbbbb", "retired DM", {
             ...options,
@@ -283,7 +282,6 @@ it("rejects oversized source bytes without uploading or falling back to a text p
   const directory = await realpath(await mkdtemp(nodePath.join(os.tmpdir(), "mattermost-cap-")));
   const file = nodePath.join(directory, "attachment.txt");
   const writes: string[] = [];
-  setMattermostRuntime(createPluginRuntimeMock());
   try {
     await withServer(
       afterBody((request, response) => {
@@ -297,11 +295,11 @@ it("rejects oversized source bytes without uploading or falling back to a text p
         );
       }),
       async (baseUrl) => {
-        const opts = sendOptions(baseUrl);
-        opts.cfg.channels!.mattermost!.mediaMaxMb = 10;
-        opts.cfg.channels!.mattermost!.accounts = { Limited: { mediaMaxMb: 1 / 1024 } };
         const mediaOptions = {
-          ...opts,
+          ...sendOptions(baseUrl, {
+            mediaMaxMb: 10,
+            accounts: { Limited: { mediaMaxMb: 1 / 1024 } },
+          }),
           accountId: "limited",
           mediaUrl: file,
           mediaLocalRoots: [directory],
@@ -369,7 +367,12 @@ it("resolves cold and warm bare users with the selected account policy", async (
           cfg,
           accountId: "selected",
         });
-        expect(result).toMatchObject({ messageId: "post-1", channelId: LOOPBACK_CHANNEL_ID });
+        expect(result).toMatchObject({
+          messageId: "post-1",
+          channelId: LOOPBACK_CHANNEL_ID,
+          content: "target proof",
+          receipt: { primaryPlatformMessageId: "post-1", platformMessageIds: ["post-1"] },
+        });
       }
       expect(requests.map(({ path }) => path)).toEqual([
         "/api/v4/users/" + USER_ID,

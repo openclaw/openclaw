@@ -6,12 +6,11 @@ import { createAgentTeam } from "../agents/agent-team.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { listDirectoryTreeStrict } from "../infra/directory-walk.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { defaultRuntime } from "../runtime.js";
 import { publishAgentDeletionJournalStatus } from "../state/agent-deletion-journal-status.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -34,8 +33,6 @@ it.aroundEach(async (runTest) => {
         await runTest();
       } finally {
         vi.restoreAllMocks();
-        closeOpenClawAgentDatabasesForTest();
-        closeOpenClawStateDatabaseForTest();
       }
     },
   );
@@ -114,17 +111,15 @@ it("rejects unfinished role adoption without workspace or config changes", async
   await fs.rm(path.join(workspace, ".git"), { recursive: true, force: true });
   await fs.rm(path.join(workspace, "SOUL.md"));
   await fs.rm(path.join(workspace, "IDENTITY.md"));
-  const readWorkspace = async () => {
-    const entries = await fs.readdir(workspace, { recursive: true, withFileTypes: true });
-    return Promise.all(
-      entries
-        .filter((entry) => entry.isFile())
-        .map(async (entry) => {
-          const file = path.join(entry.parentPath, entry.name);
+  const readWorkspace = async () =>
+    Promise.all(
+      (await listDirectoryTreeStrict(workspace))
+        .filter(({ dirent }) => dirent.isFile())
+        .map(async ({ dirent }) => {
+          const file = path.join(dirent.parentPath, dirent.name);
           return [path.relative(workspace, file), await fs.readFile(file)];
         }),
     );
-  };
   const before = await readWorkspace();
   const adding = agentsAddCommand({
     name: "Editor",

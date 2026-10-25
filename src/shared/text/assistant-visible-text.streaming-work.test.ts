@@ -20,11 +20,106 @@ vi.mock("./code-regions.js", async (importOriginal) => {
       markdownOwnershipWork.scannedCharacters += text.length;
       return actual.findCodeOwnership(text, options);
     },
-    findCodeRegions(text: Parameters<typeof actual.findCodeRegions>[0]) {
+  };
+});
+
+vi.mock("../../../packages/markdown-core/src/markdown-code-regions.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("../../../packages/markdown-core/src/markdown-code-regions.js")
+    >();
+  return {
+    ...actual,
+    findMarkdownCodeRegions(text: string) {
       markdownOwnershipWork.scannedCharacters += text.length;
-      return actual.findCodeRegions(text);
+      return actual.findMarkdownCodeRegions(text);
+    },
+    findMarkdownCodeSpans(text: string) {
+      // Its internal region call does not cross this module mock's export boundary.
+      markdownOwnershipWork.scannedCharacters += text.length;
+      return actual.findMarkdownCodeSpans(text);
     },
   };
+});
+
+it.each(["mixed", "leading", "repeated literal", "repeated hidden"])(
+  "bounds Markdown work for %s output",
+  (shape) => {
+    const mixed = Array.from(
+      { length: 80 },
+      (_, index) =>
+        `Section ${index}: this explanation preserves literal examples while hiding unpublished steps.\n\n` +
+        "```text\n[tool:read] {}\n<final>literal answer</final>\n<think>literal reasoning example</think>\n```\n\n" +
+        "<think>private reasoning</think>\n\n" +
+        "The visible answer continues after the example.\n\n",
+    ).join("");
+    const repeated =
+      shape === "repeated literal"
+        ? "```text\n<think>literal code</think>\n```\nOrdinary prose follows.\n\n"
+        : '<think>hidden</think>\n```json\n{"ok":true}\n```\nOrdinary prose follows.\n\n';
+    const source = shape.startsWith("repeated")
+      ? `<final>${repeated.repeat(Math.ceil(22_000 / repeated.length))}</final>`
+      : (shape === "leading" ? "\n\n" : "") + mixed;
+    expect(source.length).toBeGreaterThanOrEqual(20_000);
+    const stream = createAssistantVisibleStreamText("final_answer");
+    let delivered = "";
+    let scannedCharacters = 0;
+    for (let offset = 0; offset < source.length; offset += 98) {
+      const end = Math.min(offset + 98, source.length);
+      const expected = sanitizeAssistantVisibleStreamText(source.slice(0, end), "final_answer");
+      const before = markdownOwnershipWork.scannedCharacters;
+      const result = stream.append(source.slice(offset, end));
+      scannedCharacters += markdownOwnershipWork.scannedCharacters - before;
+      delivered = result.delta === null ? result.text : delivered + result.delta;
+      expect(result.text).toBe(expected);
+      expect(delivered).toBe(expected);
+    }
+    if (!shape.startsWith("repeated")) {
+      expect(stream.text).toContain("<think>literal reasoning example</think>");
+      expect(stream.text).not.toContain("private reasoning");
+    }
+    expect(scannedCharacters).toBeLessThan(source.length * 16);
+  },
+);
+
+it("restores provisional reasoning text and resets its state on replacement", () => {
+  const stream = createAssistantVisibleStreamText("final_answer");
+  const fenced =
+    "<final>" +
+    "```text\n<think>literal code</think>\n```\nOrdinary prose follows.\n\n".repeat(4) +
+    "</final>";
+  const scenarios = [
+    ["<final\nx='a'>Answer\n", "next\n"],
+    ["<final\nx='a", "'>Answer\n", "next\n"],
+    ["<think\n/>Answer\n", "next\n"],
+    ["</think\n>Answer\n", "next\n"],
+    ["[x]: /u\n    <internal>private</internal>\n", "\n"],
+    ["[x]: /u\n    <final>Answer</final>\n", "\n"],
+    ["A\n\n", "`x </think> y", "`"],
+    ["Answer <think>secret", "</think> done"],
+    ["<thi", "<thi", "</internal>\n", "---\n", "\r"],
+    Array.from({ length: Math.ceil(fenced.length / 98) }, (_, index) =>
+      fenced.slice(index * 98, (index + 1) * 98),
+    ),
+  ];
+  for (const chunks of scenarios) {
+    stream.replace("");
+    let source = "";
+    let delivered = "";
+    for (const chunk of chunks) {
+      source += chunk;
+      const result = stream.append(chunk);
+      delivered = result.delta === null ? result.text : delivered + result.delta;
+      const expected = sanitizeAssistantVisibleStreamText(source, "final_answer");
+      expect(result.text).toBe(expected);
+      expect(delivered).toBe(expected);
+    }
+  }
+  expect(stream.replace("<think>new hidden</think>Fresh")).toEqual({
+    text: "Fresh",
+    delta: null,
+  });
+  expect(stream.append(" tail")).toEqual({ text: "Fresh tail", delta: " tail" });
 });
 
 it("bounds prefix comparisons after a stripped trace line", () => {

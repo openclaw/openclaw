@@ -158,6 +158,7 @@ function prompt(transcriptLeafId: string | null = null) {
 
 function finalizationInput(preparedState: ReturnType<typeof prepared>) {
   return {
+    runAbortController: new AbortController(),
     agentDir: "/tmp/agent",
     resolveActiveContextEnginePluginId: () => undefined,
     setup: { effectiveWorkspace: "/tmp/workspace", sessionAgentId: "main" },

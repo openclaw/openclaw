@@ -103,6 +103,7 @@ const nodeRequiredFiles = new Set([
   "src/gateway/server-methods/diagnostics.heap-snapshot.test.ts",
   // JavaScriptCore's conservative stack scanning cannot prove forced WeakRef collection.
   "ui/src/components/desktop/desktop-mobile-keyboard.test.ts",
+  "ui/src/lib/reactive/session-progress-roster.test.ts",
   "ui/src/pages/chat/chat-pane-retention.test.ts",
   "ui/src/pages/chat/chat-thread-retention.test.ts",
   "ui/src/pages/chat/session-snapshot-store.test.ts",

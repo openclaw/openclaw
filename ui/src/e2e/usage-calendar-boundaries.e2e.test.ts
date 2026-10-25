@@ -1,37 +1,23 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { createEmptyCostUsageTotals } from "../../../src/infra/session-cost-usage-totals.js";
 import type { SessionsUsageResult } from "../../../src/shared/usage-types.js";
+import { buildAggregatesFromSessions } from "../pages/usage/view.test-support.ts";
+import { agentRoster } from "./agent-roster.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { installUsageOverviewGateway as installMockGateway } from "./usage-overview-fixture.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Usage calendar boundaries" });
-const emptyTotals = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 0,
-  totalCost: 0,
-  inputCost: 0,
-  outputCost: 0,
-  cacheReadCost: 0,
-  cacheWriteCost: 0,
-  missingCostEntries: 0,
-};
+const emptyTotals = createEmptyCostUsageTotals();
 const emptyMessages = { total: 0, user: 0, assistant: 0, toolCalls: 0, toolResults: 0, errors: 0 };
 function aggregates(
   messages = emptyMessages,
   costDaily: SessionsUsageResult["aggregates"]["costDaily"] = [],
 ) {
   return {
+    ...buildAggregatesFromSessions([]),
     messages,
     costDaily,
-    tools: { totalCalls: 0, uniqueTools: 0, tools: [] },
-    byModel: [],
-    byProvider: [],
-    byAgent: [],
-    byChannel: [],
-    daily: [],
   };
 }
 async function selectLocalDate(page: Page, date: string) {
@@ -88,15 +74,11 @@ suite.define(() => {
           await page.clock.setFixedTime(new Date(instant));
           const gateway = await installMockGateway(page, {
             methodResponses: {
-              "agents.list": {
-                defaultId: "main",
-                mainKey: "main",
-                scope: "per-sender",
-                agents: [
-                  { id: "main", name: "OpenClaw" },
-                  { id: "research", name: "Research" },
-                ],
-              },
+              "agents.list": agentRoster(
+                { main: "OpenClaw", research: "Research" },
+                "main",
+                "per-sender",
+              ),
               "sessions.usage": {
                 cases: [
                   ...calendars.map(({ date, mode }) => ({
@@ -167,8 +149,13 @@ suite.define(() => {
                 after: requestsBefore,
               });
               await expect
-                .poll(() => page.locator(".usage-page .usage-loading-spinner").count())
-                .toBe(0);
+                .poll(() =>
+                  page
+                    .locator(".usage-page")
+                    .getByRole("button", { name: "Refresh", exact: true })
+                    .isEnabled(),
+                )
+                .toBe(true);
               expect(request.params).toMatchObject({ startDate, endDate: date, mode });
               const inputs = await page.locator(".usage-date-input").all();
               expect(await Promise.all(inputs.map((input) => input.inputValue()))).toEqual([

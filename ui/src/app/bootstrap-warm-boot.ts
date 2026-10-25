@@ -54,7 +54,7 @@ export function prewarmBootChat(
     return;
   }
   if (parseAgentSessionKey(sessionKey)) {
-    prewarmChatSnapshot(
+    void prewarmChatSnapshot(
       resolveChatSnapshotKey(
         {
           agentsList: record.agents,

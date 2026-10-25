@@ -1,9 +1,13 @@
-import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
-import { fileURLToPath } from "node:url";
-// Daemon runtime path tests cover executable and config path resolution.
-import { runInNewContext } from "node:vm";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+// Platform fixtures do not create host files; the generated bootstrap has separate process proof.
+vi.mock("../../runtime-process-scripts.generated.mjs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../runtime-process-scripts.generated.mjs")>()),
+  createRuntimeProcessScriptFile: () => ({
+    url: new URL("file:///qa/daemon-runtime-probe.mjs"),
+    dispose() {},
+  }),
+}));
 
 const fsMocks = vi.hoisted(() => ({
   access: vi.fn(),
@@ -16,8 +20,6 @@ vi.mock("node:fs/promises", async () => {
   return { ...mocked, default: mocked };
 });
 
-import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
-import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import * as processExec from "../process/exec.js";
 import { resolveNodeProgramArguments } from "./program-args.js";
 import {
@@ -128,35 +130,12 @@ describe("resolvePreferredNodePath", () => {
     ["24.22.1", false, "unsupported"],
     ["24.15.0+vendor.1", true, "unsupported"],
   ] as const)(
-    "probes the selected binary's decoder on Node %s",
+    "uses the selected runtime's reported SQLite TEXT capability on Node %s",
     async (version, lossless, expected) => {
       mockNodePathPresent("/usr/bin/node");
-      vi.spyOn(processExec, "runExec").mockImplementation(async (_file, args, options) => {
-        expect(options).toMatchObject({ timeoutMs: 5_000 });
-        let stdout = "";
-        class CandidateDatabase extends DatabaseSync {
-          override prepare(sql: string) {
-            if (!lossless && sql === "SELECT text_value, blob_value, json_value FROM probe") {
-              return super.prepare("SELECT 'a' AS text_value, blob_value, json_value FROM probe");
-            }
-            return super.prepare(sql);
-          }
-        }
-        runInNewContext(args[1] ?? "", {
-          require: () => ({ DatabaseSync: CandidateDatabase }),
-          Buffer,
-          Uint8Array,
-          process: {
-            versions: { node: version },
-            stdout: {
-              write: (value: string) => {
-                stdout += value;
-              },
-            },
-          },
-        });
-        return { stdout, stderr: "" };
-      });
+      vi.spyOn(processExec, "runExec").mockResolvedValue(
+        nodeRuntime(version, "3.51.3", false, lossless),
+      );
       const result = await resolveSystemNodeInfo({ env: {}, platform: "linux" });
       expect(result).toMatchObject({
         status: expected,
@@ -281,7 +260,7 @@ describe("resolvePreferredNodePath", () => {
     expect(execFile).toHaveBeenCalledTimes(1);
     expect(execFile).toHaveBeenCalledWith(
       darwinNode,
-      ["-e", expect.stringContaining("SELECT sqlite_version() AS version")],
+      [expect.stringMatching(/daemon-runtime-probe\.mjs$/), "node", ""],
       { logOutput: false, timeoutMs: 5_000, baseEnv: expect.any(Object) },
     );
   });
@@ -315,7 +294,7 @@ describe("resolvePreferredBunPath", () => {
     expect(result).toBe(bunPath);
     expect(execFile).toHaveBeenCalledWith(
       bunPath,
-      ["-e", expect.stringContaining("SELECT sqlite_version() AS version")],
+      [expect.stringMatching(/daemon-runtime-probe\.mjs$/), "bun", ""],
       { logOutput: false, timeoutMs: 5_000, baseEnv: expect.any(Object) },
     );
   });
@@ -371,17 +350,9 @@ describe("resolvePreferredBunPath", () => {
       sqliteLibraryPath,
       nodeSharedSqlite: false,
     });
-    const selectionModule = fileURLToPath(
-      resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.bunSqliteLibrary),
-    );
     expect(execFile).toHaveBeenCalledWith(
       bunPath,
-      [
-        "-e",
-        expect.stringContaining(
-          `require(${JSON.stringify(selectionModule)}).ensureSqliteLibrarySelected`,
-        ),
-      ],
+      [expect.stringMatching(/daemon-runtime-probe\.mjs$/), "bun", ""],
       {
         logOutput: false,
         timeoutMs: 5_000,
@@ -392,50 +363,6 @@ describe("resolvePreferredBunPath", () => {
         },
       },
     );
-  });
-
-  it("resolves the selected library path in the Bun probe before returning it", async () => {
-    const selectedPath = "custom homebrew/opt/sqlite/lib/libsqlite3.dylib";
-    const selectionModule = fileURLToPath(
-      resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.bunSqliteLibrary),
-    );
-    const selectLibrary = vi.fn(() => ({ path: selectedPath }));
-    vi.spyOn(processExec, "runExec").mockImplementation(async (_file, args) => {
-      let stdout = "";
-      runInNewContext(args[1] ?? "", {
-        require: (specifier: string) => {
-          if (specifier === selectionModule) {
-            return { ensureSqliteLibrarySelected: selectLibrary };
-          }
-          if (specifier === "node:path") {
-            return path;
-          }
-          if (specifier === "node:sqlite") {
-            expect(selectLibrary).toHaveBeenCalledOnce();
-            return { DatabaseSync };
-          }
-          throw new Error(`Unexpected probe import: ${specifier}`);
-        },
-        Buffer,
-        Uint8Array,
-        process: {
-          versions: { bun: "1.4.3", node: "24.3.0" },
-          stdout: {
-            write: (value: string) => {
-              stdout += value;
-            },
-          },
-        },
-      });
-      return { stdout, stderr: "" };
-    });
-
-    await expect(resolveBunRuntimeInfo("/opt/bun", {})).resolves.toMatchObject({
-      version: "1.4.3",
-      sqliteLibraryPath: path.resolve(selectedPath),
-      sqliteProbe: { available: true },
-    });
-    expect(selectLibrary).toHaveBeenCalledOnce();
   });
 
   it("reports an invalid SQLite library override instead of advising a Bun upgrade", async () => {
@@ -498,7 +425,7 @@ describe("resolveSystemNodeInfo", () => {
     expect(execFile).toHaveBeenCalledTimes(1);
     expect(execFile).toHaveBeenCalledWith(
       homebrewOptNode,
-      ["-e", expect.stringContaining("SELECT sqlite_version() AS version")],
+      [expect.stringMatching(/daemon-runtime-probe\.mjs$/), "node", ""],
       { logOutput: false, timeoutMs: 5_000, baseEnv: expect.any(Object) },
     );
   });

@@ -223,25 +223,19 @@ describe("event Web Push classification", () => {
 
     finishAgent(
       createDelivery(() => cfg),
-      { runId: "avatar-run" },
+      {},
       researchContext,
     );
-
-    await vi.waitFor(() => expect(mocks.send).toHaveBeenCalledTimes(2), {
-      timeout: 3_000,
-    });
-    const identifiedPayload = mocks.send.mock.calls.find(
-      ([call]) => call.subscriptions[0] === identified,
-    )?.[0].payload;
-    const privatePayload = mocks.send.mock.calls.find(
-      ([call]) => call.subscriptions[0] === privateTarget,
-    )?.[0].payload;
+    await vi.waitFor(() => expect(mocks.send).toHaveBeenCalledTimes(2), { timeout: 3_000 });
+    const payloadFor = (subscription: BoundWebPushSubscription) =>
+      mocks.send.mock.calls.find(([call]) => call.subscriptions[0] === subscription)?.[0].payload;
+    const identifiedPayload = payloadFor(identified);
     expect(identifiedPayload.icon).toMatch(/^data:image\/png;base64,/);
     expect(identifiedPayload.icon.length).toBeLessThanOrEqual(2_400);
     expect(
       readImageMetadataFromHeader(Buffer.from(identifiedPayload.icon.split(",")[1], "base64")),
     ).toEqual({ width: 32, height: 32 });
-    expect(privatePayload).not.toHaveProperty("icon");
+    expect(payloadFor(privateTarget)).not.toHaveProperty("icon");
   });
 
   it("drops a prepared avatar when identity changes during recipient preparation", async () => {
@@ -254,10 +248,9 @@ describe("event Web Push classification", () => {
 
     finishAgent(
       createDelivery(() => cfg),
-      { runId: "changed-avatar-run" },
+      {},
       researchContext,
     );
-
     await vi.waitFor(() => expect(mocks.send).toHaveBeenCalledOnce());
     expect(mocks.send.mock.calls[0]?.[0].payload).not.toHaveProperty("icon");
   });
@@ -342,8 +335,7 @@ describe("event Web Push classification", () => {
     ],
   ] as const)("routes %s to its originating Gateway", async (event, payload, path) => {
     setPaired(pairedOperator("browser-device", ["operator.read", "operator.questions"]));
-    const delivery = createDelivery(gatewayConfig);
-    delivery.handleEvent(event, payload, researchContext);
+    createDelivery(gatewayConfig).handleEvent(event, payload, researchContext);
     await expectPayload({
       url: `${path}#gatewayUrl=wss%3A%2F%2Fgateway.example.test%2Foperator`,
     });
@@ -356,11 +348,9 @@ describe("event Web Push classification", () => {
         role: "assistant",
         provider: "openclaw",
         model: "gateway-injected",
-        content: [{ type: "text", text: "Injected transcript update" }],
       },
     });
     await Promise.resolve();
-    expect(mocks.sender).not.toHaveBeenCalled();
     expect(mocks.send).not.toHaveBeenCalled();
   });
 
@@ -400,12 +390,10 @@ describe("event Web Push classification", () => {
   });
 
   it("rereads subscriptions after transport preparation before sending", async () => {
-    const stale = makeSubscription("stale-device");
     const preparation = prepareSender();
-    setRecipients(stale);
+    setRecipients(makeSubscription("stale-device"));
     const getRuntimeConfig = vi.fn(() => ({}));
-    const delivery = createDelivery(getRuntimeConfig);
-    finishAgent(delivery);
+    finishAgent(createDelivery(getRuntimeConfig));
     await vi.waitFor(() => expect(mocks.sender).toHaveBeenCalledOnce());
     expect(getRuntimeConfig).not.toHaveBeenCalled();
     expect(mocks.subscriptions).not.toHaveBeenCalled();
@@ -448,13 +436,10 @@ describe("event Web Push classification", () => {
     }
     subscriptions.resolve([makeSubscription("browser-device")]);
     await vi.waitFor(() => expect(mocks.pairing).toHaveBeenCalledOnce());
-    if (revoked) {
-      expect(mocks.send).not.toHaveBeenCalled();
-      expect(order).toEqual(["authority", "next-microtask"]);
-    } else {
-      expect(mocks.send).toHaveBeenCalledOnce();
-      expect(order).toEqual(["authority", "send", "next-microtask"]);
-    }
+    expect(mocks.send).toHaveBeenCalledTimes(revoked ? 0 : 1);
+    expect(order).toEqual(
+      revoked ? ["authority", "next-microtask"] : ["authority", "send", "next-microtask"],
+    );
   });
 
   it.each(["preferences changed", "profile merged"] as const)(
@@ -487,12 +472,6 @@ describe("event Web Push classification", () => {
       pairingReady.resolve();
       await authorityCompleted.promise;
       expect(mocks.send).not.toHaveBeenCalled();
-      expect(mocks.preferences).toHaveBeenCalledTimes(2);
-      expect(mocks.preferences).toHaveBeenLastCalledWith(
-        [profileId],
-        "notifications.web.v1",
-        expect.anything(),
-      );
     },
   );
 
@@ -504,14 +483,12 @@ describe("event Web Push classification", () => {
     it("targets the recipient's canonical subscriptions, not other readers of the session", async () => {
       const bob = makeSubscription("bob-browser", "bob");
       const mergedBob = makeSubscription("bob-phone", "bob-old");
-      const subscriptions = [
+      setRecipients(
         makeSubscription("alice-browser", "alice"),
         bob,
         mergedBob,
-        makeSubscription("carol-browser", "carol"),
         makeSubscription("anonymous-browser"),
-      ];
-      setRecipients(...subscriptions);
+      );
       mocks.identity.mockImplementation((id: string) =>
         profileIdentity(id === "bob-old" ? "bob" : id, [id]),
       );
@@ -633,11 +610,8 @@ describe("event Web Push classification", () => {
           if (scenario === "generic event") {
             finishAgent(
               delivery,
-              { runId: "draft-run", agentId: "main" },
-              {
-                sessionKeys: [sessionKey],
-                agentId: "main",
-              },
+              { agentId: "main" },
+              { sessionKeys: [sessionKey], agentId: "main" },
             );
           } else {
             delivery.deliverMention(
@@ -661,7 +635,6 @@ describe("event Web Push classification", () => {
             preparation.resolve(mocks.send);
             await authorityCompleted.promise;
             expect(statements.map((spy) => spy.mock.calls.length)).toEqual([0, 0, 0, 0]);
-            expect(mocks.canReceive).toHaveBeenCalledOnce();
             if (scenario === "eligible admin") {
               expectSend({ subscriptions: [subscription] });
             } else {

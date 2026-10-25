@@ -147,6 +147,12 @@ export function finishMessageStream(
   stream.end();
 }
 
+export function toolResultMessages(events: AgentTypes.AgentEvent[]) {
+  return events.flatMap((event) =>
+    event.type === "message_end" && event.message.role === "toolResult" ? [event.message] : [],
+  );
+}
+
 export function captureAgentLoop(
   prompts: AgentTypes.AgentMessage[],
   context: AgentTypes.AgentContext,

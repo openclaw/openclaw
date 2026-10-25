@@ -14,6 +14,7 @@ import {
 import { createUpdateRun } from "./update-run-ledger.js";
 import { listUpdateRunsAsync } from "./update-run-reader.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
+import { createUpdateRunRecordFixture } from "./update-run-record.test-support.js";
 import { assertUpdateRecoveryAdmission } from "./update-run-recovery-admission.js";
 
 vi.mock("./update-run-reader.js", () => ({ listUpdateRunsAsync: vi.fn() }));
@@ -69,25 +70,13 @@ function run(
   runId: string,
   origin: UpdateRunRecord["origin"] = { driver: localDriver() },
 ): UpdateRunRecord {
-  return {
-    runId,
+  return createUpdateRunRecordFixture(runId, {
     origin,
-    target: {},
-    before: {},
-    after: {},
-    trigger: "cli",
-    phase: "finished",
-    status: "failed",
     reason: "update-failed",
-    steps: [],
-    verification: {},
-    repair: [],
     createdAtMs: 10,
     updatedAtMs: 20,
-    confirmedAtMs: null,
     finishedAtMs: 20,
-    downtimeMs: null,
-  };
+  });
 }
 
 async function expectFacts(
