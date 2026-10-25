@@ -8,7 +8,11 @@ import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import { createComposerQuestions } from "./components/chat-composer-questions.ts";
-import { handleChatScrollTakeover } from "./scroll.ts";
+import {
+  canAutoFollowChat,
+  handleChatScrollTakeover,
+  scheduleCommittedChatScroll,
+} from "./scroll.ts";
 
 const disposals: Array<() => void> = [];
 beforeEach(() => {
@@ -55,7 +59,7 @@ function setup() {
   let height = 2000;
   Object.defineProperties(scrollport, {
     clientHeight: { value: 500 },
-    scrollHeight: { get: () => height },
+    scrollHeight: { configurable: true, get: () => height },
   });
   scrollport.scrollTop = 1500;
   state.chatLastScrollTop = scrollport.scrollTop;
@@ -88,6 +92,41 @@ function setup() {
 }
 
 describe("transcript arrival scroll ownership", () => {
+  it("publishes stream arrival and removal to the pane without publishing continuing text", () => {
+    const { state } = setup();
+    const paneUpdate = vi.fn();
+    disposals.push(chatRunPresentation(state).subscribeNonText(paneUpdate));
+    const publish = (text: string | null) => {
+      chatRunPresentation(state).batch(() => {
+        state.chatStream = text;
+      }, "animation-frame");
+      vi.advanceTimersToNextFrame();
+    };
+
+    publish("First text");
+    expect(paneUpdate).toHaveBeenCalledOnce();
+    paneUpdate.mockClear();
+    publish("First text continues");
+    expect(paneUpdate).not.toHaveBeenCalled();
+    publish(null);
+    expect(paneUpdate).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a pending manual command ahead of geometric follow", () => {
+    const source = "manual";
+    const { state } = setup();
+    const follow = vi.spyOn(state, "chatScrollToEnd");
+    state.chatHasAutoScrolled = false;
+    state.chatFollowLocked = false;
+    scheduleCommittedChatScroll(state, true, false, { source });
+
+    expect(canAutoFollowChat(state)).toBe(false);
+    expect(follow).not.toHaveBeenCalled();
+    vi.advanceTimersToNextFrame();
+    expect(follow).toHaveBeenCalledExactlyOnceWith({ behavior: "auto", source });
+    expect(state.chatHasAutoScrolled).toBe(true);
+  });
+
   it("keeps text publications out of the message and run-state projections", () => {
     const { state, runtime } = setup();
     state.chatRunId = "stream-run";
@@ -230,6 +269,47 @@ describe("transcript arrival scroll ownership", () => {
     vi.advanceTimersToNextFrame();
     expect(follow).toHaveBeenCalledOnce();
     expect(state.chatStreamRenderFrame).toBeNull();
+  });
+
+  it("leaves continuing text to measured row growth without reading the viewport", () => {
+    const { controller, state, scrollport } = setup();
+    const follow = vi.spyOn(state, "chatScrollToEnd");
+    const readHeight = vi.spyOn(scrollport, "scrollHeight", "get");
+    const commit = () => {
+      controller.captureRenderChanges();
+      controller.commitRender();
+      vi.advanceTimersToNextFrame();
+    };
+    state.chatStream = "First text";
+    commit();
+    expect(follow).toHaveBeenCalledOnce();
+    follow.mockClear();
+    readHeight.mockClear();
+
+    for (const text of ["First text grows", "First text grows again", "First text grows again."]) {
+      state.chatStream = text;
+      commit();
+    }
+    expect(follow).not.toHaveBeenCalled();
+    expect(readHeight).not.toHaveBeenCalled();
+    expect(state.chatNewMessagesBelow).toBe(false);
+
+    scrollport.scrollTop = 800;
+    handleChatScrollTakeover(state);
+    state.chatNewMessagesBelow = false;
+    readHeight.mockClear();
+    state.chatStream = "Text also arrives while reading history";
+    commit();
+    expect(follow).not.toHaveBeenCalled();
+    expect(readHeight).not.toHaveBeenCalled();
+    expect(state.chatNewMessagesBelow).toBe(true);
+    expect(scrollport.scrollTop).toBe(800);
+
+    scrollport.scrollTop = 1500;
+    state.chatFollowLocked = false;
+    state.chatStream = null;
+    commit();
+    expect(follow).toHaveBeenCalledOnce();
   });
 
   it.each(["message", "pending input", "resumed stream", "speech"] as const)(

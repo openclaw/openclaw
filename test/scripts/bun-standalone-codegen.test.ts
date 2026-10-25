@@ -48,7 +48,11 @@ export const result = [first(input), first === second];`;
   });
 
   it("emits an executable lexical function and respects a shadowed compiler binding", () => {
-    const transform = createStandaloneCodegenTransform({ programs: [program], parse });
+    const transform = createStandaloneCodegenTransform({
+      programs: [program],
+      parse,
+      programModule: undefined,
+    });
     const source = `import { compileFunction as compile } from "node:vm";
 const SOURCE = "const prefix = 3;";
 const fn = compile(\`\${SOURCE}\nreturn value + prefix;\`, ["value"]);
@@ -63,7 +67,11 @@ function local(compile) { return compile("not a fixed program"); }
   });
 
   it("records unsupported runtime programs instead of inventing captured behavior", () => {
-    const transform = createStandaloneCodegenTransform({ programs: [program], parse });
+    const transform = createStandaloneCodegenTransform({
+      programs: [program],
+      parse,
+      programModule: undefined,
+    });
     const source = `import { compileFunction } from "node:vm";
 export const dynamic = (source) => compileFunction(source, []);`;
     expect(transform.transform({ filename: "dynamic.mjs", contents: source }).contents).toBe(
@@ -75,7 +83,12 @@ export const dynamic = (source) => compileFunction(source, []);`;
   });
 
   it.each([false, true])("preserves JIT library behavior unless AOT is requested (%s)", (aot) => {
-    const transform = createStandaloneCodegenTransform({ programs: [], parse, aot });
+    const transform = createStandaloneCodegenTransform({
+      programs: [],
+      parse,
+      aot,
+      programModule: undefined,
+    });
     const source = "Error.stackTraceLimit = 9; delete Error.prepareStackTrace;";
     const result = transform.transform({ filename: "library.mjs", contents: source });
     expect(result.guardedIntrinsicWrites).toBe(aot ? 2 : 0);
@@ -95,7 +108,12 @@ export const dynamic = (source) => compileFunction(source, []);`;
     const source = "export function CanEvaluate() { return true; }";
     const filename = "/runtime/node_modules/typebox/build/system/environment/evaluate.mjs";
     for (const aot of [false, true]) {
-      const transform = createStandaloneCodegenTransform({ programs: [], parse, aot });
+      const transform = createStandaloneCodegenTransform({
+        programs: [],
+        parse,
+        aot,
+        programModule: undefined,
+      });
       const result = transform.transform({ filename, contents: source });
       const evaluate = vm.runInNewContext(
         `${result.contents.replace("export ", "")} CanEvaluate;`,

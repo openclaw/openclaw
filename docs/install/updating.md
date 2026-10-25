@@ -16,6 +16,13 @@ hint without changing the package or stopping the Gateway; background checks
 skip package-registry updates. Missing or invalid markers retain normal install
 behavior, with a warning for an invalid marker.
 
+After a Mac app update, recovery checks the service selected by the connection
+mode: the local Gateway or, with a remote primary, the Mac node service. If a
+custom node launcher cannot be inspected, check its node LaunchAgent before
+retrying. This node inspection failure does not invalidate an already verified
+local Gateway. Recovery keeps the update receipt for retry, verifies the node
+after its launcher is repaired, and leaves the custom launcher unchanged.
+
 For [standalone builds](/install/standalone#update-the-complete-artifact), update
 the owning desktop app or replace the complete executable and runtime directory.
 The standalone CLI refuses package-manager and git updates with a visible next

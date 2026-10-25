@@ -432,13 +432,18 @@ function* createOpenClawToolsSteps(
   // A run admitted with scheduled tool targets is a scheduled turn on every runtime.
   const scheduledCaller =
     options?.gatewayCallerScheduled === true || scheduledTargets !== undefined;
-  const pinnedWidgetOnly =
+  const pinnedWidgetAuthoringAdmitted =
     (options?.pinnedWidgetAuthoring === true ||
       (scheduledCaller && scheduledWidgetExplicitlyAllowed)) &&
-    !inlineWidgetClientAvailable &&
     !currentChannelWidgetPresenter &&
     Boolean(widgetBoardSessionKey) &&
     !isCronRunSessionKey(widgetBoardSessionKey);
+  const pinnedWidgetOnly = pinnedWidgetAuthoringAdmitted && !inlineWidgetClientAvailable;
+  // The catalog follows the session's recorded caps; a recovered turn without that client still pins.
+  const pinWidgetWithoutInlineClient =
+    pinnedWidgetAuthoringAdmitted &&
+    inlineWidgetClientAvailable &&
+    options?.clientCaps?.includes("inline-widgets") !== true;
   const includeMessageTool =
     !embedded ||
     options?.sourceReplyDeliveryMode === "message_tool_only" ||
@@ -549,6 +554,7 @@ function* createOpenClawToolsSteps(
           inlineHostEnabled: isCoreCanvasHostEnabled(resolvedConfig),
           inlineClientAvailable: inlineWidgetClientAvailable,
           pinnedOnly: pinnedWidgetOnly,
+          pinWithoutInlineClient: pinWidgetWithoutInlineClient,
           presenters: widgetPresenters,
           presenterContext: widgetPresenterContext,
         }),

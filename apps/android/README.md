@@ -65,6 +65,13 @@ Android Back, or a stationary tap on empty background. Image taps, drags,
 and two-finger gestures do not dismiss the preview. Rotation or recreation
 refits the image rather than restoring offsets from the old viewport.
 
+Photo and voice-note messages keep their attachments after history refresh. Queued
+photos use their stored attachment bytes for previews. The default Gateway transcript
+echo appears beneath its transcribed voice note, and Copy, Share, and Reply include the
+visible transcript. Custom transcript formats remain ordinary message text. Cached
+history keeps media references and transcription state; loading an uncached photo
+still requires reconnecting to its Gateway.
+
 ## Completed work in Chat
 
 In the app's own conversation, agent main sessions, and dashboard conversations,

@@ -699,7 +699,7 @@ export function scheduleRequesterSettleWake(
               },
               Math.max(0, waiting.deadline - Date.now()),
             );
-            waiting.timer.unref?.();
+            waiting.timer.unref();
           }
         }
       });

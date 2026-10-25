@@ -826,6 +826,19 @@ class GatewaySession(
     return GatewayLoadedImage(bytes = loaded.bytes, mimeType = loaded.mimeType)
   }
 
+  /** [basePath] is the accepted Control UI mount; null uses the socket's context path. */
+  internal suspend fun loadInboundImage(
+    expectedEndpointStableId: String?,
+    basePath: String?,
+    sessionKey: String,
+    agentId: String?,
+    source: String,
+  ): GatewayLoadedImage? {
+    val conn = readyConnection(expectedEndpointStableId) ?: return null
+    val image = conn.loadInboundImage(basePath, sessionKey, agentId, source, guardRequestEnqueue(conn) { it() })
+    return synchronized(lifecycleLock) { image.takeIf { currentConnection === conn && conn.isReady() } }
+  }
+
   internal suspend fun loadSourceFavicon(
     expectedEndpointStableId: String,
     config: GatewaySourcePreviewConfig,
@@ -1085,7 +1098,7 @@ class GatewaySession(
     private var connectRequestId: String? = null
     val tlsConfig: GatewayTlsConfig? = buildGatewayTlsConfig(target.tls)
     private val client: OkHttpClient = buildClient()
-    private val sourceFaviconLoader by lazy { GatewaySourceFaviconLoader(client) }
+    private val imageLoader by lazy { GatewayImageLoader(client) }
     private var controlUiReadCredentials: List<String> = emptyList()
     private val listener = Listener()
     private var socket: WebSocket? = null
@@ -1239,10 +1252,28 @@ class GatewaySession(
       hostname: String,
       withEnqueue: (() -> Unit) -> Unit,
     ): GatewayLoadedImage? =
-      sourceFaviconLoader.load(
+      imageLoader.loadFavicon(
         gatewayUrl = "${if (tlsConfig != null) "https" else "http"}://${formatGatewayAuthority(target.endpoint.host, target.endpoint.port)}",
         basePath = config.basePath,
         hostname = hostname,
+        headers = mediaTransportHeaders(),
+        credentials = controlUiReadCredentials,
+        withEnqueue = withEnqueue,
+      )
+
+    suspend fun loadInboundImage(
+      basePath: String?,
+      sessionKey: String,
+      agentId: String?,
+      source: String,
+      withEnqueue: (() -> Unit) -> Unit,
+    ): GatewayLoadedImage? =
+      imageLoader.loadInboundImage(
+        gatewayUrl = "${if (tlsConfig != null) "https" else "http"}://${formatGatewayAuthority(target.endpoint.host, target.endpoint.port)}",
+        basePath = basePath ?: target.endpoint.contextPath,
+        source = source,
+        sessionKey = sessionKey,
+        agentId = agentId,
         headers = mediaTransportHeaders(),
         credentials = controlUiReadCredentials,
         withEnqueue = withEnqueue,

@@ -689,6 +689,8 @@ reset the index, reattach HEAD, or prune the registration.
 
 ## CLI
 
+Human-readable worktree reports escape control characters in displayed values. The records and paths returned by `--json` are unchanged.
+
 Worktree CLI mutations use the authenticated Gateway that owns the selected local
 state directory when one is running. This includes creation, ordinary, lossless
 and exact-state removal, restoration, garbage collection, interrupted-removal

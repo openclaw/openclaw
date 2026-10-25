@@ -346,6 +346,20 @@ metrics on a loaded host. Selector instrumentation adds substantial overhead;
 use separate untraced interleaved runs for timing comparisons. Empty Chromium
 selector snapshots represent no matching work and are omitted from the ranking.
 
+For per-row resource counts, the warm runner accepts `--resource-counts` and
+`--steps sidebar-resources-scroll-resize,sidebar-resources-idle-visible,sidebar-resources-idle-hidden`.
+These scenarios use 1,000 long session labels, 400-message transcripts, and native
+clocks. The result records created/active observers, observed targets, callbacks,
+intervals, media queries, and global listeners before and after each action.
+Run timing comparisons separately without instrumentation, with
+`--thread-cpu-time --pairs 20 --compare-bundle-dir <other-build>` and an A/A
+control on a loaded host. Hidden idle requires `--headed`: the runner minimizes
+its own Chromium window and verifies native document visibility. Hidden samples
+use a fresh runner-owned profile and Playwright's `noDefaults` connection so its
+normal focus emulation cannot override native visibility. The profile and process
+are removed after each sample. A browser that
+remains visible produces an explicit skip, never a simulated hidden result.
+
 Each invocation keeps its exact Git head and dirty-tree inventory, raw Chrome trace,
 CPU profile, settled screenshot, and JSON summary in a fresh timestamped directory.
 It measures renderer-main-thread task interval union, long tasks, layouts with
@@ -414,10 +428,14 @@ with the same `--fixture-now-ms` and a future `--live-start-at-ms`, `--runs 1`, 
 distinct `--port` / `--sandbox-port` values. The start barrier supports either
 `--streaming-reply` or `--live-events` and fails if setup misses the requested time.
 
-Use `--streaming-burst-size 5` to enqueue five snapshots every 166.7 ms
+Use `--streaming-rate 150 --streaming-burst-size 5` to enqueue five snapshots every 33.3 ms (fast-provider bursts). The default rate remains 30 snapshots/s; `--streaming-burst-size 5` alone enqueues five snapshots every 166.7 ms
 while retaining the average 30 deltas/s. The mock transport still applies
 `--frame-gap-ms`; set it to zero to remove intentional spacing, and inspect
 delivery timestamps before treating a group as one-frame delivery.
+`--filmstrip-only --streaming-reply` retains the stream's screenshot frames in
+`run-N.streaming.filmstrip/`. Traced/filmstrip runs also check plain-paragraph
+suffix visibility on the next rendering frame (`streaming.textVisibility`);
+keep these instrumented captures separate from timing comparisons.
 Streaming reports count synchronous
 stream assignments, frame publications, pane render calls/time, forced rail
 observations, and row ResizeObserver deliveries. These are separate boundaries:

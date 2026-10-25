@@ -6,7 +6,6 @@ import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { createStandaloneSourceEntries } from "../../scripts/lib/bun-standalone-source-entries.mjs";
 import { createStandaloneSourceGraph } from "../../scripts/lib/bun-standalone-source-graph.mjs";
-import { createStandaloneSourceParser } from "../../scripts/lib/bun-standalone-source-parser.mjs";
 import { prepareStandaloneWorkers } from "../../scripts/lib/bun-standalone-workers.mjs";
 import { collectNativeTypeScriptDiagnostics } from "../../scripts/lib/native-typescript-diagnostics.mts";
 import { createNativeTypeScriptProject } from "../../scripts/lib/native-typescript.mts";
@@ -91,10 +90,7 @@ describe("standalone original-source graph", () => {
       runtimeRoot,
       outputRoot,
       workerEntries: [],
-      moduleEntries: [],
       runtimeBootstrap: path.join(outputRoot, "bootstrap.mjs"),
-      parse: createStandaloneSourceParser(),
-      deferInlineDiscovery: true,
     });
     const entry = path.relative(runtimeRoot, workers.workerThreadsShim);
     expect(graph.addEntry(entry)).toBeUndefined();

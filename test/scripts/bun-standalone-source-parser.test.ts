@@ -40,10 +40,10 @@ it("analyzes typed conditional arrows without moving Unicode or CRLF source span
     "// 🦞 π\r\nconst selected = enabled ? async (value: number): Promise<string> => String(value) : undefined;\r\nexport { selected };";
   const ast = parse(source, { ecmaVersion: "latest", sourceType: "module" });
   const declaration = ast.body[0];
-  if (declaration.type !== "VariableDeclaration") {
+  if (!declaration || declaration.type !== "VariableDeclaration") {
     throw new Error("Missing conditional declaration");
   }
-  const conditional = declaration.declarations[0].init;
+  const conditional = declaration.declarations[0]?.init;
   if (conditional?.type !== "ConditionalExpression") {
     throw new Error("Missing conditional expression");
   }
@@ -59,7 +59,11 @@ it("analyzes typed conditional arrows without moving Unicode or CRLF source span
   };
   expect(slice(selected)).toBe("async (value: number): Promise<string> => String(value)");
   expect(slice(selected.body)).toBe("String(value)");
-  expect(slice(ast.body[1])).toBe("export { selected };");
+  const exported = ast.body[1];
+  if (!exported || exported.type !== "ExportNamedDeclaration") {
+    throw new Error("Missing selected export");
+  }
+  expect(slice(exported)).toBe("export { selected };");
   expect(() =>
     parse(
       "const selected = enabled ? async (): Promise<void> => { return broken +; } : undefined;",

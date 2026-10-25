@@ -333,7 +333,7 @@ it.each([
   { name: "dashboard frame and queued tail", framed: true, searchActive: false },
   { name: "unframed stream without boundary", framed: false, searchActive: false },
   { name: "search projection", framed: true, searchActive: true },
-])("recomputes streamed history: $name", ({ framed, searchActive }) => {
+])("retains streamed structure until visibility changes: $name", ({ framed, searchActive }) => {
   const historical = (seq: number, fields: Record<string, unknown>) =>
     makeMessage(`history-${seq - 1}`, seq, {
       timestamp: seq,
@@ -426,15 +426,9 @@ it.each([
       if (!framed && owner?.kind === "stream-run") {
         expect(owner.boundaryId).toBeUndefined();
       }
-      if (framed && visible) {
-        const marker = index.positionIndex.markers.find((item) => item.id === "run:live");
-        expect(
-          index.positionIndex.liveMarkers?.find((item) => item.id === marker?.id)?.message ??
-            marker?.message,
-        ).toMatchObject({ content: [{ type: "text", text: stream }] });
-      }
       if ([3, 4, 6, 9].includes(delta)) {
         const previous = retained.at(-1)!;
+        expect(chain).toBe(previous.chain);
         expect(chain.transcriptItems[0]).toBe(previous.chain.transcriptItems[0]);
         expect(index.transcriptMessageKeys).toBe(previous.index.transcriptMessageKeys);
         expect(index.loadedReplySources).toBe(previous.index.loadedReplySources);

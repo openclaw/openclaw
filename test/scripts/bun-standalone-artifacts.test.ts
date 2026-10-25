@@ -16,7 +16,6 @@ describe.each(parsers)("standalone artifact syntax contract: $name", ({ parse })
     return createStandaloneArtifactAdapter({
       runtimeRoot,
       embeddedPaths: { "dist/extensions/example/index.js": "/$bunfs/root/example.js" },
-      buildIdentity: "fixture-build",
       parse,
     }).transform({ filename: `${runtimeRoot}/dist/owner.mjs`, contents });
   }

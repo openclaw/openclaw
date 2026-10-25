@@ -116,22 +116,33 @@ async function createPlayer(
 }
 
 function observeIntersections() {
-  const callbacks: IntersectionObserverCallback[] = [];
+  const callbacks: Array<() => void> = [];
   vi.stubGlobal(
     "IntersectionObserver",
     class {
-      constructor(callback: IntersectionObserverCallback) {
-        callbacks.push(callback);
+      private readonly targets = new Set<Element>();
+      constructor(private readonly callback: IntersectionObserverCallback) {}
+      observe(target: Element) {
+        this.targets.add(target);
+        callbacks.push(() => {
+          if (this.targets.has(target)) {
+            // SAFETY: The viewport owner reads only target and isIntersecting.
+            this.callback(
+              [{ target, isIntersecting: true } as IntersectionObserverEntry],
+              this as unknown as IntersectionObserver,
+            );
+          }
+        });
       }
-      observe() {}
-      disconnect() {}
+      unobserve(target: Element) {
+        this.targets.delete(target);
+      }
+      disconnect() {
+        this.targets.clear();
+      }
     },
   );
-  return () =>
-    callbacks.shift()?.(
-      [{ isIntersecting: true } as IntersectionObserverEntry],
-      {} as IntersectionObserver,
-    );
+  return () => callbacks.shift()?.();
 }
 
 function stubAudioContext(decodeAudioData = vi.fn()) {

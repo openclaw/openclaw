@@ -268,6 +268,7 @@ export class MarkdownDomReconciler {
   private messageKey?: string;
   private source = "";
   private stableHtml = "";
+  private previewText?: { node: Text; original: string; path: RenderedNode[] };
   private connected = true;
   private readonly mediaSlots = new Map<
     number,
@@ -289,6 +290,76 @@ export class MarkdownDomReconciler {
     }
   }
 
+  canPreview(messageKey: string, source: string): boolean {
+    if (
+      messageKey !== this.messageKey ||
+      source.length <= this.source.length ||
+      !source.startsWith(this.source) ||
+      !this.tail
+    ) {
+      return false;
+    }
+    // Keep inline delimiters canonical: transient syntax can wrap, then shrink again.
+    if (
+      /[\n\r<>&`*_~[\]()!\\|]/u.test(source.slice(this.source.length)) ||
+      /[\uE000-\uF8FF]/u.test(source)
+    ) {
+      return false;
+    }
+    if (this.previewText) {
+      return true;
+    }
+    const preview = this.findPreviewText(this.tail.children);
+    // A closed emphasis/link/code leaf cannot own text following its closing delimiter.
+    return Boolean(preview && this.source.endsWith(preview.node.data));
+  }
+
+  private findPreviewPath(nodes: RenderedNode[]): RenderedNode[] | undefined {
+    for (let i = nodes.length - 1; i >= 0; i--) {
+      const node = nodes[i]!;
+      const nested = this.findPreviewPath(node.children);
+      if (nested) {
+        return [node, ...nested];
+      }
+      if (
+        node.canonical?.startsWith("3:") &&
+        node.start.parentElement?.closest("p,li,code,td,th,h1,h2,h3,h4,h5,h6")
+      ) {
+        return [node];
+      }
+    }
+    return undefined;
+  }
+
+  private findPreviewText(nodes: RenderedNode[]) {
+    const path = this.findPreviewPath(nodes);
+    const range = path?.at(-1);
+    const text = range?.start.nextSibling;
+    return text instanceof Text && text.nextSibling === range?.end
+      ? { node: text, path: path! }
+      : undefined;
+  }
+
+  /** Show safe text now; formatting still owns the canonical tree and the next update. */
+  preview(source: string): void {
+    if (!this.previewText) {
+      const preview = this.findPreviewText(this.tail!.children)!;
+      this.previewText = { ...preview, original: preview.node.data };
+    }
+    this.previewText.node.data = this.previewText.original + source.slice(this.source.length);
+  }
+
+  private clearPreview(): void {
+    if (this.previewText) {
+      // Reconcile from the visible text, without dirtying layout by restoring old bytes first.
+      for (const node of this.previewText.path) {
+        node.canonical = undefined;
+      }
+      this.tail!.parsedHtml = undefined;
+      this.previewText = undefined;
+    }
+  }
+
   /** The caller must supply sanitized HTML and a collision-free media prefix. */
   update(
     messageKey: string,
@@ -296,6 +367,7 @@ export class MarkdownDomReconciler {
     [stableContent, tailContent]: readonly [MarkdownContent, MarkdownContent],
     media?: MarkdownDomMedia,
   ): void {
+    this.clearPreview();
     const stableHtml = markdownContentHtml(stableContent);
     const tailHtml = markdownContentHtml(tailContent);
     if (this.messageKey !== messageKey) {
@@ -339,6 +411,7 @@ export class MarkdownDomReconciler {
 
   /** A standalone fragment uses the same canonical-tree and media ownership. */
   updateHtml(html: MarkdownContent, media?: MarkdownDomMedia, incremental = false): void {
+    this.clearPreview();
     let fragment = this.fragments[0];
     if (!fragment || fragment.incremental !== incremental) {
       this.reset();
@@ -356,6 +429,7 @@ export class MarkdownDomReconciler {
   }
 
   private reset(): void {
+    this.clearPreview();
     for (const fragment of this.fragments) {
       releaseSessionTitles(fragment);
     }
@@ -478,7 +552,9 @@ export class MarkdownDomReconciler {
       const first = node.start.nextSibling;
       // External highlighters can split or wrap text; repair only this range.
       if (first instanceof Text && first.nextSibling === node.end) {
-        first.data = source.text;
+        if (first.data !== source.text) {
+          first.data = source.text;
+        }
       } else {
         clearRenderedRange(node);
         node.end.before(document.createTextNode(source.text));

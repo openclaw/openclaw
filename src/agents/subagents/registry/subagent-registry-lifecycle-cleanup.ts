@@ -266,7 +266,7 @@ export function scheduleResumeSubagentRun(
         }
       });
   }, delayMs);
-  timer.unref?.();
+  timer.unref();
   context.scheduledResumeTimers.set(runtimeKey, timer);
 }
 

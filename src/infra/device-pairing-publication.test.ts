@@ -64,6 +64,11 @@ function persistNodes(
   persistDevicePairingStoreState({ pendingById: {}, pairedByDeviceId }, baseDir, mode);
 }
 
+const inState = <T>(run: () => Promise<T>) => withEnvAsync({ OPENCLAW_STATE_DIR: baseDir }, run);
+async function generationFor(id = "node") {
+  return expectDefined(await inState(() => captureNodePairingGeneration(id)), `${id} generation`);
+}
+
 function holdWorker() {
   const entered = createDeferredCore();
   const release = createDeferredCore();
@@ -177,7 +182,7 @@ test("keeps committed node bindings across bootstrap writes and caller-owned row
 });
 
 test("keeps node authority available while retained setup cleanup is pending", async () => {
-  await withEnvAsync({ OPENCLAW_STATE_DIR: baseDir }, async () => {
+  await inState(async () => {
     const snapshot = await readDevicePairingNodeSnapshot(baseDir);
     const binding = getPublishedPairedDeviceBinding("node", baseDir);
     expect(binding).not.toBeNull();
@@ -215,24 +220,15 @@ test.for([
   "retains only usable node authority during %s",
   async ([change, expected], { signal }) => {
     const snapshot = await readDevicePairingNodeSnapshot(baseDir);
-    const generation = await withEnvAsync({ OPENCLAW_STATE_DIR: baseDir }, () =>
-      captureNodePairingGeneration("node"),
-    );
-    if (!generation) {
-      throw new Error("expected paired node generation");
-    }
+    const generation = await generationFor();
     const binding = getPublishedPairedDeviceBinding("node", baseDir);
     if (change === "metadata after a failed read") {
-      const read = vi
+      using _ = vi
         .spyOn(stateReads, "executeExistingOpenClawStateRead")
         .mockRejectedValueOnce(new Error("pairing read unavailable"));
-      try {
-        await expect(getPendingDevicePairing("unavailable", baseDir)).rejects.toThrow(
-          "pairing read unavailable",
-        );
-      } finally {
-        read.mockRestore();
-      }
+      await expect(getPendingDevicePairing("unavailable", baseDir)).rejects.toThrow(
+        "pairing read unavailable",
+      );
     }
     const { entered: mutationQueued, release: releaseMutation, writer } = holdWorker();
     const mutation = changesFor("node", generation)[change]();
@@ -259,15 +255,12 @@ test.for([
             ? expect.objectContaining({ displayName: "Renamed node" })
             : true,
       );
-      expect(getPublishedPairedDeviceBinding("node", baseDir)).toEqual(
-        change === "token revocation" ? null : binding,
-      );
+      const committedBinding = change === "token revocation" ? null : binding;
+      expect(getPublishedPairedDeviceBinding("node", baseDir)).toEqual(committedBinding);
       const updated = await readDevicePairingNodeSnapshot(baseDir);
       expect(updated).not.toBe(snapshot);
       expect(await readDevicePairingNodeSnapshot(baseDir)).toBe(updated);
-      expect(updated.bindings.get("node") ?? null).toEqual(
-        change === "token revocation" ? null : binding,
-      );
+      expect(updated.bindings.get("node") ?? null).toEqual(committedBinding);
       expect(updated.paired[0]).toMatchObject(expected);
     } finally {
       releaseMutation.resolve();
@@ -309,12 +302,7 @@ test.for([
   const otherBinding = getPublishedPairedDeviceBinding("other", baseDir);
   expect(nodeBinding).not.toBeNull();
   expect(otherBinding).not.toBeNull();
-  const generation = expectDefined(
-    await withEnvAsync({ OPENCLAW_STATE_DIR: baseDir }, () =>
-      captureNodePairingGeneration("other"),
-    ),
-    "other generation",
-  );
+  const generation = await generationFor("other");
   const entered = createDeferredCore();
   const release = createDeferredCore();
   const afterCommit: unknown[] = [];
@@ -364,7 +352,7 @@ test.each([
   { change: "node token replacement", remainsCurrent: false },
   { change: "node token revocation", remainsCurrent: false },
 ] as const)("refreshes node work authority after $change", async ({ change, remainsCurrent }) => {
-  await withEnvAsync({ OPENCLAW_STATE_DIR: baseDir }, async () => {
+  await inState(async () => {
     const generation = await captureNodePairingGeneration("node");
     expect(generation).not.toBeNull();
     await expect(isNodePairingGenerationCurrent(generation!)).resolves.toBe(true);

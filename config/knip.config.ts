@@ -104,6 +104,8 @@ const repositoryScriptEntries = [
   "scripts/perf/fsync-scratch-measure.ts!",
   // scripts/perf/README.md invokes this database page-cache benchmark by path.
   "scripts/perf/database-page-cache-measure.ts!",
+  // The ACP eviction PR invokes this isolated stdio/Gateway workload by path.
+  "scripts/perf/acp-ledger-eviction-measure.ts!",
   // The source header documents this GitHub reader benchmark's Node command.
   "scripts/perf/github-reader-measure.ts!",
   // docs/reference/test/performance.md invokes the Decision transport comparison driver.
@@ -124,6 +126,8 @@ const repositoryScriptEntries = [
   // #181150 invokes this reproducible session-row owner probe by path.
   "scripts/perf/session-actor-row-facts-measure.ts!",
   "scripts/perf/session-catalog-selection-measure.ts!",
+  // The offline health-cron measurement invokes this synthetic fixture by path.
+  "scripts/perf/health-cron-fixture.ts!",
   // #183020 invokes this synthetic category-registration workload by path.
   "scripts/perf/session-group-registration-measure.ts!",
   "scripts/perf/session-pr-subscriptions-measure.ts!",
@@ -152,6 +156,14 @@ const repositoryScriptEntries = [
   "scripts/perf/mention-inbox-measure.ts!",
   // scripts/perf/README.md invokes this main-thread stall measurement CLI by path.
   "scripts/perf/main-thread-stall-measure.mjs!",
+  // scripts/perf/README.md invokes these measurement commands by path.
+  "scripts/perf/cron-delivery-gateway-entry.ts!",
+  "scripts/perf/plugin-policy-read-measure.mjs!",
+  "scripts/perf/prompt-cache-observation-measure.ts!",
+  "scripts/perf/reconnect-read-wave-measure.ts!",
+  "scripts/perf/session-actor-retention-measure.ts!",
+  // The row-churn instrumenter injects this probe from its compiled source path.
+  "scripts/perf/session-row-churn-probe.ts!",
   // scripts/perf/README.md invokes this synthetic reload fixture by path.
   "scripts/perf/control-ui-reload-fixture.ts!",
   // docs/ci/checkout.md invokes this checkout materialization benchmark by path.

@@ -1,7 +1,6 @@
 #!/usr/bin/env bun
 // Build a relocatable executable and sidecar from a completed pnpm build.
 import { spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -66,7 +65,7 @@ import {
   publishStandaloneArtifacts,
   STANDALONE_BUILD_MARKER,
 } from "./lib/bun-standalone-support.mjs";
-import { prepareStandaloneWasm } from "./lib/bun-standalone-wasm.mjs";
+import { prepareStandaloneWasm, standaloneWasmImport } from "./lib/bun-standalone-wasm.mjs";
 import {
   discoverStandaloneWorkers,
   prepareStandaloneWorkers,
@@ -116,7 +115,6 @@ if (!fs.existsSync(path.join(sourceRoot, "dist/cli-startup-metadata.json"))) {
   throw new Error("Run pnpm build before building a standalone executable.");
 }
 const plugins = planStandalonePlugins(sourceRoot, options.pluginIds);
-const buildId = randomUUID();
 if (options.source) {
   assertStandaloneSourceBoundaryPrepared(sourceRoot);
 }
@@ -415,7 +413,6 @@ const artifacts = createStandaloneArtifactAdapter({
   runtimeRoot,
   embeddedPaths,
   parse,
-  buildIdentity: buildId,
 });
 const metadataSourceOptions = {
   metadataEntries,
@@ -740,9 +737,11 @@ const buildOptions = {
             }
             if (sourceGraph && (loader === "ts" || loader === "tsx")) {
               const reference = `/// <reference path=${JSON.stringify(path.relative(path.dirname(filename), sourceGlobals).split(path.sep).join("/"))} />\n`;
-              contents = contents.startsWith("#!")
-                ? contents.replace(/\n/, `\n${reference}`)
-                : reference + contents;
+              const shebangEnd = contents.startsWith("#!") ? contents.indexOf("\n") : -1;
+              contents =
+                shebangEnd >= 0
+                  ? contents.slice(0, shebangEnd + 1) + reference + contents.slice(shebangEnd + 1)
+                  : reference + contents;
             }
             transformedFiles.push(relative);
             sourceGraph?.recordLoaded(filename, contents);
@@ -894,7 +893,8 @@ for (const filename of compiledEntries) {
   if (contents.includes(nativeResources.bootstrapReplacement.search)) {
     nativeTables += 1;
     contents =
-      (wasm?.registrationPath ? `import ${JSON.stringify(wasm.registrationPath)};\n` : "") +
+      // Every embedded worker imports this bootstrap before its library loaders.
+      (wasm?.registrationPath ? standaloneWasmImport(filename, wasm.registrationPath) : "") +
       contents.replaceAll(
         nativeResources.bootstrapReplacement.search,
         nativeResources.bootstrapReplacement.replacement,
@@ -1018,7 +1018,7 @@ const artifactsToPublish = await compileStandaloneArtifacts({
   plugins,
   nativeModules,
   sqlite: sqlite.manifest,
-  buildId,
+  resourcePlan,
   ...(sourceGraph
     ? {
         async compileAot({ outfile, buildInfo }) {
@@ -1026,7 +1026,9 @@ const artifactsToPublish = await compileStandaloneArtifacts({
           const sourceBootstrap = fs.readFileSync(runtimeBootstrap, "utf8");
           fs.writeFileSync(
             runtimeBootstrap,
-            (wasm?.registrationPath ? `import ${JSON.stringify(wasm.registrationPath)};\n` : "") +
+            (wasm?.registrationPath
+              ? standaloneWasmImport(runtimeBootstrap, wasm.registrationPath)
+              : "") +
               sourceBootstrap
                 .replaceAll(JSON.stringify(STANDALONE_BUILD_MARKER), JSON.stringify(buildInfo))
                 .replaceAll(builtinRequires.search, builtinRequires.replacement)

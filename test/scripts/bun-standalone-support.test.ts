@@ -1,7 +1,13 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { parse } from "acorn";
 import { afterEach, describe, expect, it } from "vitest";
+import { createStandaloneArtifactAdapter } from "../../scripts/lib/bun-standalone-artifacts.mjs";
+import {
+  planStandaloneRuntime,
+  pruneStandaloneRuntime,
+} from "../../scripts/lib/bun-standalone-sidecar.mjs";
 import {
   assertStandaloneDestinations,
   compileStandaloneArtifacts,
@@ -76,16 +82,15 @@ fs.writeFileSync(output, JSON.stringify({aot: args.includes('--aot'), source: fs
   return { root, outputRoot, compileRoot, runtimeRoot, mainEntry, source, compiler };
 }
 
-function compile(
+function compileOptions(
   input: ReturnType<typeof fixture>,
-  compileAot?: Parameters<typeof compileStandaloneArtifacts>[0]["compileAot"],
-  support = true,
-) {
-  return compileStandaloneArtifacts({
+  overrides: Partial<Parameters<typeof compileStandaloneArtifacts>[0]> = {},
+): Parameters<typeof compileStandaloneArtifacts>[0] {
+  return {
     runtimeRoot: input.runtimeRoot,
     outputRoot: input.outputRoot,
     destination: path.join(input.root, "aot"),
-    ...(support ? { supportDestination: path.join(input.root, "support") } : {}),
+    supportDestination: path.join(input.root, "support"),
     mode: "aot",
     compileFlags: ["--aot"],
     compileRoot: input.compileRoot,
@@ -100,30 +105,89 @@ function compile(
     plugins: { embedded: ["slack", "codex"], omitted: ["matrix"], omittedDirs: ["matrix"] },
     nativeModules: [],
     sqlite: { path: "lib/test-sqlite.dylib" },
-    buildId: "matched-build",
-    ...(compileAot ? { compileAot } : {}),
-  });
+    resourcePlan: {
+      files: [
+        { source: path.join(input.runtimeRoot, "asset.txt"), destination: "asset.txt" },
+        {
+          source: path.join(input.runtimeRoot, "lib/test-sqlite.dylib"),
+          destination: "lib/test-sqlite.dylib",
+        },
+      ],
+      directories: ["lib"],
+    },
+    ...overrides,
+  };
+}
+
+async function compile(
+  input: ReturnType<typeof fixture>,
+  overrides: Partial<Parameters<typeof compileStandaloneArtifacts>[0]> = {},
+) {
+  const artifacts = await compileStandaloneArtifacts(compileOptions(input, overrides));
+  const [standard, support] = artifacts;
+  if (!standard || !support || artifacts.length !== 2) {
+    throw new Error("Expected the standard and support fixture artifacts");
+  }
+  return [standard, support] satisfies [typeof standard, typeof support];
 }
 
 describe("matched standalone support artifacts", () => {
+  it("keeps bundled plugin fingerprints bound to the executing image's captured identity", () => {
+    const runtimeRoot = tempDirs.make("standalone-fingerprint-");
+    const entry = "dist/extensions/demo/state-operation-api.js";
+    const entries = { [entry]: "/$bunfs/root/runtime/" + entry };
+    const adapter = createStandaloneArtifactAdapter({ runtimeRoot, embeddedPaths: entries, parse });
+    const record = {
+      origin: "bundled",
+      rootDir: path.join(runtimeRoot, "dist/extensions/demo"),
+      source: "state-operation-api.js",
+    };
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        `
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+const root = ${JSON.stringify(runtimeRoot)};
+const entries = ${JSON.stringify(entries)};
+globalThis.__openclawStandaloneBuildInfo = { build: { id: "image-a" } };
+${adapter.bootstrap}
+globalThis.__openclawStandaloneBuildInfo = { build: { id: "image-b" } };
+const record = ${JSON.stringify(record)};
+const fingerprint = globalThis.__openclawStandaloneFingerprintArtifact;
+console.log(JSON.stringify([fingerprint(record), fingerprint({ ...record, sourcePreferred: true })]));
+`,
+      ],
+      { encoding: "utf8" },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual([
+      'image-a:["dist/extensions/demo","dist/extensions/demo/state-operation-api.js"]',
+      null,
+    ]);
+  });
+
   it.skipIf(process.platform === "win32")(
     "runs original-source AOT through the shared build owner",
     async () => {
       const input = fixture();
       const seen: object[] = [];
-      const artifacts = await compile(
-        input,
-        async ({ outfile, buildInfo }) => {
-          seen.push(buildInfo);
-          fs.writeFileSync(outfile, JSON.stringify(buildInfo));
-        },
-        false,
+      const artifacts = await compileStandaloneArtifacts(
+        compileOptions(input, {
+          supportDestination: undefined,
+          async compileAot({ outfile, buildInfo }) {
+            seen.push(buildInfo);
+            fs.writeFileSync(outfile, JSON.stringify(buildInfo));
+          },
+        }),
       );
       expect(seen).toHaveLength(1);
       expect(artifacts.map(({ mode }) => mode)).toEqual(["aot"]);
       const aot = JSON.parse(fs.readFileSync(path.join(input.outputRoot, "openclaw"), "utf8"));
       expect(aot.mode).toBe("aot");
-      expect(aot.build.id).toBe("matched-build");
+      expect(aot.build.id).toMatch(/^[0-9a-f]{64}$/);
       expect(aot.build.moduleGraphSha256).toMatch(/^[0-9a-f]{64}$/);
       expect(fs.readFileSync(input.mainEntry, "utf8")).toBe(input.source);
     },
@@ -183,7 +247,7 @@ describe("matched standalone support artifacts", () => {
       );
       expect(aot).toMatchObject({
         mode: "aot",
-        build: { id: "matched-build", flavor: "standard" },
+        build: { id: expect.stringMatching(/^[a-f0-9]{64}$/), flavor: "standard" },
         plugins: {
           embedded: ["codex", "slack"],
           contract: {
@@ -200,7 +264,7 @@ describe("matched standalone support artifacts", () => {
       });
       expect(support).toMatchObject({
         mode: "jit",
-        build: { id: "matched-build", flavor: "support", debugEntry: "debug/entry.mjs" },
+        build: { id: aot.build.id, flavor: "support", debugEntry: "debug/entry.mjs" },
         openclaw: aot.openclaw,
         plugins: aot.plugins,
         debug: {
@@ -274,6 +338,80 @@ describe("matched standalone support artifacts", () => {
       expect(fs.existsSync(path.join(input.root, "aot"))).toBe(false);
       expect(fs.existsSync(path.join(input.root, "support"))).toBe(false);
       expect(fs.readFileSync(input.mainEntry, "utf8")).toBe(input.source);
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "ignores local freshness stamps when building independent copies of the same inputs",
+    async () => {
+      const first = fixture();
+      const second = fixture();
+      const plans = [first, second].map((input, index) => {
+        fs.mkdirSync(path.join(input.runtimeRoot, "dist"));
+        fs.writeFileSync(
+          path.join(input.runtimeRoot, "dist/build-info.json"),
+          JSON.stringify({ commit: "a".repeat(40), builtAt: "2026-10-24T00:00:00.000Z" }),
+        );
+        fs.writeFileSync(
+          path.join(input.runtimeRoot, "dist/.buildstamp"),
+          JSON.stringify({ head: "a".repeat(40), builtAt: 1000 + index }),
+        );
+        fs.writeFileSync(
+          path.join(input.runtimeRoot, "dist/.runtime-postbuildstamp"),
+          JSON.stringify({ head: "a".repeat(40), syncedAt: 2000 + index }),
+        );
+        return planStandaloneRuntime(input.runtimeRoot, [
+          { source: "asset.txt", destination: "asset.txt", category: "dependencyAssets" },
+          {
+            source: "lib/test-sqlite.dylib",
+            destination: "lib/test-sqlite.dylib",
+            category: "nativeLibraries",
+          },
+        ]);
+      });
+      const [a, b] = await Promise.all([
+        compile(first, { resourcePlan: plans[0] }),
+        compile(second, { resourcePlan: plans[1] }),
+      ]);
+      expect(a[0].build.id).toMatch(/^[a-f0-9]{64}$/);
+      expect(b[0].build).toEqual(a[0].build);
+      expect(fs.readFileSync(path.join(second.outputRoot, "openclaw"))).toEqual(
+        fs.readFileSync(path.join(first.outputRoot, "openclaw")),
+      );
+      for (const plan of plans) {
+        pruneStandaloneRuntime(plan);
+        expect(fs.existsSync(path.join(plan.root, "dist/build-info.json"))).toBe(true);
+        expect(fs.existsSync(path.join(plan.root, "dist/.buildstamp"))).toBe(false);
+        expect(fs.existsSync(path.join(plan.root, "dist/.runtime-postbuildstamp"))).toBe(false);
+      }
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "changes build identity when compiled code, native resources, compiler, or policy changes",
+    async () => {
+      const input = fixture();
+      const [original] = await compile(input);
+      fs.appendFileSync(input.mainEntry, "\nconsole.log('changed');\n");
+      const [codeChanged] = await compile(input);
+      expect(codeChanged.build.id).not.toBe(original.build.id);
+      fs.writeFileSync(input.mainEntry, input.source);
+      fs.writeFileSync(
+        path.join(input.runtimeRoot, "lib/test-sqlite.dylib"),
+        "changed native library",
+      );
+      const [nativeChanged] = await compile(input);
+      expect(nativeChanged.build.id).not.toBe(original.build.id);
+      fs.writeFileSync(
+        path.join(input.runtimeRoot, "lib/test-sqlite.dylib"),
+        "synthetic SQLite library",
+      );
+      const [compilerChanged] = await compile(input, {
+        bun: { version: "1.4.4", revision: "another-compiler" },
+      });
+      expect(compilerChanged.build.id).not.toBe(original.build.id);
+      const [policyChanged] = await compile(input, { compileFlags: ["--aot", "--trim"] });
+      expect(policyChanged.build.id).not.toBe(original.build.id);
     },
   );
 

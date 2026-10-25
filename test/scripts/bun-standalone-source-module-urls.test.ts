@@ -4,7 +4,7 @@ import { stripTypeScriptTypes } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { build, type UserConfig } from "tsdown";
+import { build, type InlineConfig, type UserConfig } from "tsdown";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildExternalPluginLocalDist } from "../../scripts/build-external-plugin-local-dist.mts";
 import { rewriteStandaloneImports } from "../../scripts/lib/bun-standalone-imports.mjs";
@@ -74,7 +74,7 @@ async function buildOwner(sourceRoot: string, format: "esm" | "cjs", outDir = "d
     logLevel: "silent",
     outExtensions: () => ({ js: extension }),
     plugins: [createStandaloneSourceModuleUrlPlugin({ rootDir: sourceRoot })],
-  } satisfies UserConfig;
+  } satisfies InlineConfig;
   const built = await build(config);
   expect(
     built.bundles
@@ -162,7 +162,7 @@ describe("standalone source module URL ownership", () => {
       logLevel: "silent",
       inputOptions: { external: [external] },
       plugins: [createStandaloneSourceModuleUrlPlugin({ rootDir: sourceRoot })],
-    } satisfies UserConfig;
+    } satisfies InlineConfig;
     await build(config);
     const { rendered: urls } = readStandaloneSourceModuleIdentities({
       sourceRoot,
@@ -243,7 +243,7 @@ describe("standalone source module URL ownership", () => {
         codeSplitting: { groups: [{ name: "shared.runtime", test: /identity\.runtime\.ts$/ }] },
       },
       plugins: [createStandaloneSourceModuleUrlPlugin({ rootDir: sourceRoot })],
-    } satisfies UserConfig;
+    } satisfies InlineConfig;
     await build(config);
     const postbuildOwner = pathToFileURL(path.resolve("scripts/runtime-postbuild.mts")).href;
     execFileSync(
@@ -294,11 +294,15 @@ rewriteRootRuntimeImportsToStableAliases({ rootDir });`,
       throw new Error("Missing named source root");
     }
     expect(graph.files.get(filename)?.runtimePath).toBe(facadeOutput);
-    expect(graph.resolveModuleUrl(filename)).toBe(path.join(runtimeRoot, runtimeOutput));
+    const resolvedModuleUrl = graph.resolveModuleUrl(filename);
+    if (!resolvedModuleUrl) {
+      throw new Error("Missing named source module URL");
+    }
+    expect(resolvedModuleUrl).toBe(path.join(runtimeRoot, runtimeOutput));
     runRelocatedHelper(root, sourceRoot, runtimeOutput, {
       filename,
       physicalFilename: path.join(runtimeRoot, facadeOutput),
-      resolveModuleUrl: () => graph.resolveModuleUrl(filename),
+      resolveModuleUrl: () => resolvedModuleUrl,
     });
   });
 
@@ -358,7 +362,7 @@ rewriteRootRuntimeImportsToStableAliases({ rootDir });`,
       logLevel: "silent",
       outExtensions: () => ({ js: ".js" }),
       plugins: [createStandaloneSourceModuleUrlPlugin({ rootDir: sourceRoot })],
-    } satisfies UserConfig;
+    } satisfies InlineConfig;
     await build(config);
     const index = () => createStandaloneSourceEntries({ sourceRoot, configs: [config] });
     const output = index().resolveModuleUrl(helper, config);
@@ -374,7 +378,11 @@ rewriteRootRuntimeImportsToStableAliases({ rootDir });`,
     const { sourceRoot, helper } = fixture();
     const config = await buildOwner(sourceRoot, "esm");
     const metadataDirectory = path.join(sourceRoot, "dist/.source-module-urls");
-    const metadataPath = path.join(metadataDirectory, fs.readdirSync(metadataDirectory)[0]);
+    const [metadataName] = fs.readdirSync(metadataDirectory);
+    if (!metadataName) {
+      throw new Error("Missing module URL metadata");
+    }
+    const metadataPath = path.join(metadataDirectory, metadataName);
     const metadata = JSON.parse(fs.readFileSync(metadataPath, "utf8"));
     const rewrites = metadata.chunks.map((chunk: { output: string }) => {
       const filename = path.join(sourceRoot, "dist", chunk.output);
@@ -426,7 +434,7 @@ rewriteRootRuntimeImportsToStableAliases({ rootDir });`,
       logLevel: "silent",
       outExtensions: () => ({ js: ".mjs" }),
       plugins: [createStandaloneSourceModuleUrlPlugin({ rootDir: sourceRoot })],
-    } satisfies UserConfig;
+    } satisfies InlineConfig;
     await build(config);
     const entries = createStandaloneSourceEntries({ sourceRoot, configs: [config] });
     expect(entries.resolveModuleUrl(physicalSource, config)).toBe("dist/highlight.mjs");
@@ -451,7 +459,7 @@ rewriteRootRuntimeImportsToStableAliases({ rootDir });`,
       logLevel: "silent",
       outExtensions: () => ({ js: ".mjs" }),
       plugins: [plugin],
-    } satisfies UserConfig;
+    } satisfies InlineConfig;
     await build(config);
     const entries = createStandaloneSourceEntries({ sourceRoot, configs: [config] });
     const output = entries.resolveModuleUrl(source, config);
@@ -463,7 +471,11 @@ rewriteRootRuntimeImportsToStableAliases({ rootDir });`,
     const { sourceRoot, helper } = fixture();
     const config = await buildOwner(sourceRoot, "esm");
     const directory = path.join(sourceRoot, "dist/.source-module-urls");
-    const filename = path.join(directory, fs.readdirSync(directory)[0]);
+    const [metadataName] = fs.readdirSync(directory);
+    if (!metadataName) {
+      throw new Error("Missing module URL metadata");
+    }
+    const filename = path.join(directory, metadataName);
     const metadata = JSON.parse(fs.readFileSync(filename, "utf8"));
     fs.writeFileSync(filename, JSON.stringify({ ...metadata, version: 2 }));
     expect(() =>
@@ -505,7 +517,11 @@ rewriteRootRuntimeImportsToStableAliases({ rootDir });`,
       configs: [config],
     }).resolveModuleUrl(helper, config);
     const metadataDirectory = path.join(sourceRoot, "dist/.source-module-urls");
-    const metadataPath = path.join(metadataDirectory, fs.readdirSync(metadataDirectory)[0]);
+    const [metadataName] = fs.readdirSync(metadataDirectory);
+    if (!metadataName) {
+      throw new Error("Missing module URL metadata");
+    }
+    const metadataPath = path.join(metadataDirectory, metadataName);
     const metadata = JSON.parse(fs.readFileSync(metadataPath, "utf8"));
     const body = metadata.chunks.find(
       (chunk: { output: string }) => chunk.output === path.relative("dist", output),
@@ -633,7 +649,7 @@ export default defineBundledChannelSetupEntry({ legacySessionSurface: { specifie
           createPluginInventoryModuleRefsPlugin(path.join(sourceRoot, "extensions/demo")),
           createStandaloneSourceModuleUrlPlugin({ rootDir: sourceRoot }),
         ],
-      } satisfies UserConfig;
+      } satisfies InlineConfig;
       await build(config);
       const runtimeRoot = path.join(root, "output/runtime");
       fs.mkdirSync(path.join(runtimeRoot, "node_modules"), { recursive: true });
@@ -686,11 +702,17 @@ export default defineBundledChannelSetupEntry({ legacySessionSurface: { specifie
         fs.closeSync(opened.fd);
       }
       const embedded = embeddedPaths[relative];
+      if (!embedded) {
+        throw new Error("Missing embedded companion path");
+      }
       expect(embedded).toMatch(/^\/\$bunfs\/root\//);
       const staged = path.join(path.dirname(runtimeRoot), embedded.slice("/$bunfs/root/".length));
       expect(graph.roots.has(staged)).toBe(true);
       expect(graph.files.get(staged)?.context.config).toBe(config);
       const otherEntry = embeddedPaths[`dist/${setupName}.js`];
+      if (!otherEntry) {
+        throw new Error("Missing embedded setup entry");
+      }
       embeddedPaths[relative] = otherEntry;
       expect(() => graph.addEmittedChunk({ id: companion, config })).toThrow(
         "Conflicting standalone emitted chunk",

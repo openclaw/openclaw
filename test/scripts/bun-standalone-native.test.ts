@@ -476,7 +476,10 @@ console.log("full-ws loaded without node_modules");
       );
     }
     source.write(path.join(source.root, "src/entry.ts"), "export const value: number = 1;");
-    const configs = [{ entry: { first: "src/entry.ts" } }, { entry: { second: "src/entry.ts" } }];
+    const configs: Parameters<typeof createStandaloneSourceEntries>[0]["configs"] = [
+      { entry: { first: "src/entry.ts" } },
+      { entry: { second: "src/entry.ts" } },
+    ];
     const embeddedPaths: Record<string, string> = {};
     const graph = createStandaloneSourceGraph({
       sourceRoot: source.root,

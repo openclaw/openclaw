@@ -72,14 +72,27 @@ describe("link reader document content", () => {
     vi.stubGlobal(
       "IntersectionObserver",
       class {
-        constructor(private readonly callback: (entries: { isIntersecting: boolean }[]) => void) {}
+        private readonly targets = new Set<Element>();
+        constructor(
+          private readonly callback: (
+            entries: { target: Element; isIntersecting: boolean }[],
+          ) => void,
+        ) {}
         private readonly notify = (isIntersecting: boolean) => {
-          this.callback([{ isIntersecting }]);
+          this.callback([...this.targets].map((element) => ({ target: element, isIntersecting })));
         };
-        observe() {
+        observe(element: Element) {
+          this.targets.add(element);
           visible.add(this.notify);
         }
+        unobserve(element: Element) {
+          this.targets.delete(element);
+          if (this.targets.size === 0) {
+            visible.delete(this.notify);
+          }
+        }
         disconnect() {
+          this.targets.clear();
           visible.delete(this.notify);
         }
       },
