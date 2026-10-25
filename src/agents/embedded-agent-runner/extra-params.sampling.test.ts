@@ -40,8 +40,12 @@ function createStreamAgent() {
   return { underlying, agent };
 }
 
-function modelConfig(ref: string, params: Record<string, unknown>): OpenClawConfig {
-  return { agents: { defaults: { models: { [ref]: { params } } } } };
+function modelConfig(
+  ref: string,
+  params: Record<string, unknown>,
+  defaults?: Record<string, unknown>,
+): OpenClawConfig {
+  return { agents: { defaults: { params: defaults, models: { [ref]: { params } } } } };
 }
 
 function sample(
@@ -76,23 +80,18 @@ describe("createStreamFnWithExtraParams sampling overrides", () => {
   });
 
   it.each([
-    { params: { top_p: 0.3 }, override: undefined, options: undefined, expected: 0.3 },
-    { params: { topP: 0.3 }, override: undefined, options: undefined, expected: 0.3 },
-    { params: { top_p: 0 }, override: undefined, options: undefined, expected: 0 },
-    { params: { topP: 0.7, top_p: 0.3 }, override: undefined, options: undefined, expected: 0.7 },
-    { params: { top_p: 0.3 }, override: { topP: 0.8 }, options: undefined, expected: 0.8 },
-    { params: { top_p: 0.3 }, override: undefined, options: { topP: 0.9 }, expected: 0.9 },
-  ])(
+    [{ top_p: 0.3 }, undefined, undefined, 0.3],
+    [{ topP: 0.3 }, undefined, undefined, 0.3],
+    [{ top_p: 0 }, undefined, undefined, 0],
+    [{ topP: 0.7, top_p: 0.3 }, undefined, undefined, 0.7],
+    [{ top_p: 0.3 }, { topP: 0.8 }, undefined, 0.8],
+    [{ top_p: 0.3 }, undefined, { topP: 0.9 }, 0.9],
+  ] as const)(
     "projects configured nucleus sampling with request precedence: %j",
-    ({ params, override, options, expected }) => {
-      const callOptions = sample(
-        override,
-        modelConfig("local/model", params),
-        options,
-        "local",
-        "model",
-      );
-      expect(callOptions).toMatchObject({ topP: expected });
+    (params, override, options, expected) => {
+      expect(
+        sample(override, modelConfig("local/model", params), options, "local", "model"),
+      ).toMatchObject({ topP: expected });
     },
   );
 
@@ -108,19 +107,16 @@ describe("createStreamFnWithExtraParams sampling overrides", () => {
   });
 
   it("canonicalizes token aliases with config precedence before preparing stream params", () => {
+    const cfg = modelConfig(
+      "dashscope/kimi-k2.6",
+      { max_completion_tokens: 64_000 },
+      {
+        maxTokens: 32_000,
+      },
+    );
     const resolved = resolveExtraParams({
       cfg: {
-        agents: {
-          defaults: {
-            params: { maxTokens: 32_000 },
-            models: {
-              "dashscope/kimi-k2.6": { params: { max_completion_tokens: 64_000 } },
-            },
-          },
-          entries: {
-            bot: { params: { max_tokens: 48_000 } },
-          },
-        },
+        agents: { ...cfg.agents, entries: { bot: { params: { max_tokens: 48_000 } } } },
       } as never,
       provider: "dashscope",
       modelId: "kimi-k2.6",
@@ -157,7 +153,6 @@ describe("createStreamFnWithExtraParams sampling overrides", () => {
 
   it("preserves configured cache retention with an own undefined request option", () => {
     const { underlying, agent } = createStreamAgent();
-
     applyExtraParamsToAgent(
       agent,
       undefined,
@@ -169,7 +164,6 @@ describe("createStreamFnWithExtraParams sampling overrides", () => {
       undefined,
       { supportsPromptCacheKey: true } as never,
     );
-
     const requestOptions = { cacheRetention: undefined };
     expect(requestOptions).toHaveProperty("cacheRetention");
     void agent.streamFn?.(
@@ -177,11 +171,8 @@ describe("createStreamFnWithExtraParams sampling overrides", () => {
       { messages: [], tools: [] },
       requestOptions,
     );
-    const callOptions = vi.mocked(underlying).mock.calls[0]?.[2];
-
     expect(underlying).toHaveBeenCalledTimes(1);
-
-    expect(callOptions?.cacheRetention).toBe("long");
+    expect(vi.mocked(underlying).mock.calls[0]?.[2]?.cacheRetention).toBe("long");
   });
 });
 
@@ -202,20 +193,6 @@ describe("cacheRetention default behavior", () => {
   });
 });
 
-function runGoogleExtraParamsCase(params?: { cfg?: unknown }) {
-  return runExtraParamsCase({
-    ...(params?.cfg ? { cfg: params.cfg as never } : {}),
-    applyProvider: "google",
-    applyModelId: "gemini-2.5-pro",
-    model: {
-      api: "google-generative-ai",
-      provider: "google",
-      id: "gemini-2.5-pro",
-    } as unknown as Model<"openai-completions">,
-    payload: { contents: [] },
-  });
-}
-
 describe("extra-params: Google thinking payload compatibility", () => {
   beforeEach(() => {
     extraParamsTesting.setProviderRuntimeDepsForTest({
@@ -226,17 +203,20 @@ describe("extra-params: Google thinking payload compatibility", () => {
   });
 
   it("lets higher-precedence cachedContent override lower-precedence cached_content", () => {
-    const { options } = runGoogleExtraParamsCase({
-      cfg: {
-        agents: {
-          defaults: {
-            params: { cached_content: "cachedContents/default-cache" },
-            models: {
-              "google/gemini-2.5-pro": { params: { cachedContent: "cachedContents/model-cache" } },
-            },
-          },
+    const { options } = runExtraParamsCase({
+      cfg: modelConfig(
+        "google/gemini-2.5-pro",
+        { cachedContent: "cachedContents/model-cache" },
+        {
+          cached_content: "cachedContents/default-cache",
         },
-      },
+      ),
+      model: {
+        api: "google-generative-ai",
+        provider: "google",
+        id: "gemini-2.5-pro",
+      } as unknown as Model<"openai-completions">,
+      payload: { contents: [] },
     });
 
     expect((options as { cachedContent?: string } | undefined)?.cachedContent).toBe(

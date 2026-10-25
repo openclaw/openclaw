@@ -2,7 +2,6 @@ import { createServer, type Server } from "node:http";
 import { withFirstStreamEventTimeout } from "@openclaw/ai/internal/runtime";
 import { beforeEach, describe, expect, it } from "vitest";
 import { withTestTimeout } from "../../../test/helpers/promise.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import {
   createOpenClawTestState,
@@ -22,7 +21,6 @@ import {
 
 const PROVIDER = "ai-brick";
 const MODEL_ID = "ornith-1.0-35b";
-const CONFIGURED_TIMEOUT_SECONDS = 1;
 const CONFIGURED_TIMEOUT_MS = 1_000;
 const HOOK_TIMEOUT_MS = 2_500;
 const HTTP_EVENT_DELAY_MS = 90;
@@ -76,39 +74,26 @@ function createRebuildingRuntimeHooks(
   };
 }
 
-function createProviderConfig(baseUrl: string, timeoutSeconds?: number): OpenClawConfig {
-  return {
-    models: {
-      providers: {
-        [PROVIDER]: {
-          baseUrl,
-          api: "openai-completions",
-          ...(timeoutSeconds === undefined ? {} : { timeoutSeconds }),
-          models: [
-            {
-              ...makeModel(MODEL_ID),
-              name: "Ornith 1.0 35B",
-              api: "openai-completions",
-              contextWindow: 8_192,
-              maxTokens: 512,
-            },
-          ],
-        },
-      },
-    },
-  };
-}
-
 async function resolveProviderModel(params: {
   baseUrl?: string;
-  timeoutSeconds?: number;
   runtimeHooks?: ProviderRuntimeHooks;
 }): Promise<ProviderRuntimeModel> {
   const result = await resolveModelAsync(
     PROVIDER,
     MODEL_ID,
     state.agentDir(),
-    createProviderConfig(params.baseUrl ?? "http://127.0.0.1:8123/v1", params.timeoutSeconds),
+    {
+      models: {
+        providers: {
+          [PROVIDER]: {
+            baseUrl: params.baseUrl ?? "http://127.0.0.1:8123/v1",
+            api: "openai-completions",
+            timeoutSeconds: CONFIGURED_TIMEOUT_MS / 1_000,
+            models: [{ ...makeModel(MODEL_ID), contextWindow: 8_192, maxTokens: 512 }],
+          },
+        },
+      },
+    },
     {
       authStorage: { mocked: true } as never,
       modelRegistry: { find: () => null, getProviderMetadataOwners: () => undefined } as never,
@@ -205,62 +190,48 @@ async function nextIdleGuardedHttpEvent(params: {
 }
 
 describe("provider request timeout across rebuilding runtime hooks", () => {
-  it("keeps the configured timeout when the transport hook rebuilds the resolved model", async () => {
-    const model = await resolveProviderModel({
-      timeoutSeconds: CONFIGURED_TIMEOUT_SECONDS,
-      runtimeHooks: createRebuildingRuntimeHooks("transport"),
-    });
-
-    expect(model.requestTimeoutMs).toBe(CONFIGURED_TIMEOUT_MS);
-  });
-
-  it("preserves an explicit timeout supplied by the rebuilding model hook", async () => {
-    const model = await resolveProviderModel({
-      timeoutSeconds: CONFIGURED_TIMEOUT_SECONDS,
-      runtimeHooks: createRebuildingRuntimeHooks("model", HOOK_TIMEOUT_MS),
-    });
-
-    expect(model.requestTimeoutMs).toBe(HOOK_TIMEOUT_MS);
-  });
+  it.each([
+    ["transport", undefined, CONFIGURED_TIMEOUT_MS],
+    ["model", HOOK_TIMEOUT_MS, HOOK_TIMEOUT_MS],
+  ] as const)(
+    "preserves timeout through the %s hook (override %s)",
+    async (stage, override, expected) => {
+      const model = await resolveProviderModel({
+        runtimeHooks: createRebuildingRuntimeHooks(stage, override),
+      });
+      expect(model.requestTimeoutMs).toBe(expected);
+    },
+  );
 
   it("applies the surviving configured timeout to real HTTP first-event and idle guards", async () => {
     const { server, url } = await listenForDelayedSse();
     try {
       const model = await resolveProviderModel({
         baseUrl: url.replace(/\/stream$/, ""),
-        timeoutSeconds: CONFIGURED_TIMEOUT_SECONDS,
         runtimeHooks: createRebuildingRuntimeHooks("model"),
       });
-
-      await expect(
-        nextGuardedHttpEvent(url, (source) =>
-          withFirstStreamEventTimeout(source, { timeoutMs: SHORT_CONTROL_TIMEOUT_MS }),
-        ),
-      ).rejects.toThrow(/first-event timeout/);
-
       expect(model.requestTimeoutMs).toBe(CONFIGURED_TIMEOUT_MS);
-      const firstEventTimeoutMs = resolveLlmFirstEventTimeoutMs({
-        model,
-        modelRequestTimeoutMs: model.requestTimeoutMs,
-      });
-      const idleTimeoutMs = resolveLlmIdleTimeoutMs({
-        model,
-        modelRequestTimeoutMs: model.requestTimeoutMs,
-      });
-      expect(firstEventTimeoutMs).toBe(CONFIGURED_TIMEOUT_MS);
-      expect(idleTimeoutMs).toBe(CONFIGURED_TIMEOUT_MS);
-
-      const firstEvent = await nextGuardedHttpEvent(url, (source) =>
-        withFirstStreamEventTimeout(source, { timeoutMs: firstEventTimeoutMs }),
-      );
-      expect(firstEvent.value).toContain("provider event");
-
-      await expect(
-        nextIdleGuardedHttpEvent({ url, model, timeoutMs: SHORT_CONTROL_TIMEOUT_MS }),
-      ).rejects.toThrow(/LLM idle timeout/);
-
-      const idleEvent = await nextIdleGuardedHttpEvent({ url, model, timeoutMs: idleTimeoutMs });
-      expect(idleEvent.value).toContain("provider event");
+      const timeoutParams = { model, modelRequestTimeoutMs: model.requestTimeoutMs };
+      const guards = [
+        {
+          timeout: resolveLlmFirstEventTimeoutMs(timeoutParams),
+          error: /first-event timeout/,
+          next: (timeoutMs: number) =>
+            nextGuardedHttpEvent(url, (source) =>
+              withFirstStreamEventTimeout(source, { timeoutMs }),
+            ),
+        },
+        {
+          timeout: resolveLlmIdleTimeoutMs(timeoutParams),
+          error: /LLM idle timeout/,
+          next: (timeoutMs: number) => nextIdleGuardedHttpEvent({ url, model, timeoutMs }),
+        },
+      ];
+      for (const { timeout, error, next } of guards) {
+        expect(timeout).toBe(CONFIGURED_TIMEOUT_MS);
+        await expect(next(SHORT_CONTROL_TIMEOUT_MS)).rejects.toThrow(error);
+        expect((await next(timeout)).value).toContain("provider event");
+      }
     } finally {
       server.closeAllConnections();
       await new Promise<void>((resolve, reject) => {
