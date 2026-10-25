@@ -22,30 +22,24 @@ vi.mock("./access.js", () => ({
 const { startClickClackGatewayAccount } = await import("./gateway.js");
 
 const CREATED_AT = "2026-01-01T00:00:00.000Z";
-const messageBase = {
-  workspace_id: "wsp_1",
-  author_id: "usr_human",
-  body_format: "markdown" as const,
-  created_at: CREATED_AT,
-};
-const RESOLVABLE_MESSAGES: ClickClackMessage[] = [
+function reply(id: string, root: string, body: string, thread_seq: number): ClickClackMessage {
+  return {
+    id,
+    body,
+    thread_seq,
+    workspace_id: "wsp_1",
+    author_id: "usr_human",
+    body_format: "markdown",
+    created_at: CREATED_AT,
+    thread_root_id: root,
+    parent_message_id: root,
+  };
+}
+const RESOLVABLE_MESSAGES = [
+  { ...reply("msg-101", "msg_root", "reply 101", 101), channel_id: "chn_1" },
   {
-    ...messageBase,
-    id: "msg-101",
-    channel_id: "chn_1",
-    thread_root_id: "msg_root",
-    parent_message_id: "msg_root",
-    thread_seq: 101,
-    body: "reply 101",
-  },
-  {
-    ...messageBase,
-    id: "msg_dm_reply",
+    ...reply("msg_dm_reply", "msg_dm_root", "dm thread reply", 1),
     direct_conversation_id: "dmc_1",
-    thread_root_id: "msg_dm_root",
-    parent_message_id: "msg_dm_root",
-    thread_seq: 1,
-    body: "dm thread reply",
   },
 ];
 
@@ -59,16 +53,13 @@ async function startClickClackTestServer() {
       res.writeHead(status, { "Content-Type": "application/json" });
       res.end(JSON.stringify(body));
     };
-    if (url.pathname === "/api/me") {
-      return json(200, { user: { id: "usr_bot", handle: "bot" } });
-    }
-    if (url.pathname === "/api/workspaces") {
-      return json(200, {
-        workspaces: [{ id: "wsp_1", name: "Main", slug: "main" }],
-      });
-    }
-    if (url.pathname === "/api/realtime/events") {
-      return json(200, { events: [], tail_cursor: "cursor-0" });
+    const routes: Record<string, unknown> = {
+      "/api/me": { user: { id: "usr_bot", handle: "bot" } },
+      "/api/workspaces": { workspaces: [{ id: "wsp_1", name: "Main", slug: "main" }] },
+      "/api/realtime/events": { events: [], tail_cursor: "cursor-0" },
+    };
+    if (url.pathname in routes) {
+      return json(200, routes[url.pathname]);
     }
     const messageMatch = url.pathname.match(/^\/api\/messages\/([^/]+)$/u);
     if (messageMatch) {
@@ -76,10 +67,7 @@ async function startClickClackTestServer() {
       const message = missingMessageIds.has(messageId)
         ? undefined
         : RESOLVABLE_MESSAGES.find((candidate) => candidate.id === messageId);
-      if (!message) {
-        return json(404, { error: "message not found" });
-      }
-      return json(200, { message });
+      return message ? json(200, { message }) : json(404, { error: "message not found" });
     }
     json(404, { error: `unhandled ${url.pathname}` });
   });

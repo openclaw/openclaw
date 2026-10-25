@@ -1,3 +1,4 @@
+import { once } from "node:events";
 import { createServer, type Server } from "node:http";
 import { Readable } from "node:stream";
 import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
@@ -31,12 +32,13 @@ function createTestClient(
   });
 }
 
-function historyRoot(sequence: number, replies: number) {
+function historyRoot(sequence: number, replies: number, overrides: Record<string, unknown> = {}) {
   return {
     id: "msg_root",
     channel_seq: sequence,
     created_at: "2026-07-19T10:00:00.000Z",
     thread_state: { reply_count: replies, last_reply_at: "2026-07-19T13:00:00.000Z" },
+    ...overrides,
   };
 }
 
@@ -157,21 +159,18 @@ describe("ClickClack HTTP client", () => {
 
   it("merges recent thread replies into the global latest-message window", async () => {
     const root = historyRoot(10, 1);
-    const newerRoot = {
-      ...root,
+    const newerRoot = historyRoot(11, 0, {
       id: "msg_newer",
-      channel_seq: 11,
       created_at: "2026-07-19T12:00:00.000Z",
       thread_state: { root_message_id: "msg_newer", reply_count: 0, last_reply_author_ids: [] },
-    };
-    const reply = {
-      ...root,
+    });
+    const reply = historyRoot(10, 1, {
       id: "msg_reply",
       parent_message_id: "msg_root",
       thread_seq: 1,
       created_at: "2026-07-19T13:00:00.000Z",
       thread_state: undefined,
-    };
+    });
     const fetchMock = jsonResponses(
       { messages: [newerRoot], oldest_seq: 11, newest_seq: 11, has_older: true },
       { messages: [root], oldest_seq: 10, newest_seq: 10, has_older: false },
@@ -194,14 +193,13 @@ describe("ClickClack HTTP client", () => {
 
   it("fails closed when a capped thread response cannot contain the latest replies", async () => {
     const root = historyRoot(1, 201);
-    const oldestReply = {
-      ...root,
+    const oldestReply = historyRoot(1, 201, {
       id: "msg_oldest_reply",
       parent_message_id: "msg_root",
       thread_seq: 1,
       created_at: "2026-07-19T10:01:00.000Z",
       thread_state: undefined,
-    };
+    });
     const fetchMock = jsonResponses(
       { messages: [root], oldest_seq: 1, newest_seq: 1, has_older: false },
       { replies: [oldestReply] },
@@ -219,26 +217,20 @@ describe("ClickClack HTTP client", () => {
       sequence -= 1;
       return Response.json({
         messages: [
-          {
+          historyRoot(current, 0, {
             id: `msg_${current}`,
-            channel_seq: current,
             created_at: `2026-07-19T10:00:${String(current % 60).padStart(2, "0")}.000Z`,
-            thread_state: {
-              reply_count: 0,
-            },
-          },
+          }),
         ],
         oldest_seq: current,
         newest_seq: current,
         has_older: true,
       });
     });
-    const client = createTestClient(fetchMock);
-
-    const result = await client.latestChannelMessages("chn_discussion", 1);
-
-    expect(result.truncated).toBe(true);
-    expect(result.messages).toHaveLength(1);
+    expect(await createTestClient(fetchMock).latestChannelMessages("chn_discussion", 1)).toEqual({
+      truncated: true,
+      messages: [expect.any(Object)],
+    });
     expect(fetchMock).toHaveBeenCalledTimes(8);
   });
 
@@ -248,10 +240,10 @@ describe("ClickClack HTTP client", () => {
     const commands = [{ command: "status", description: "Show agent status", args_hint: "" }];
     expect(await createTestClient(fetchMock).setBotCommands(commands)).toEqual([botCommand]);
     expectRequest(fetchMock.mock.calls, 1, "bots/self/commands", "PUT", { commands });
-    const init = fetchMock.mock.calls[0]?.[1];
-    const headers = new Headers(init?.headers);
-    expect(headers.get("Authorization")).toBe("Bearer fake");
-    expect(headers.get("Content-Type")).toBe("application/json");
+    expect(Object.fromEntries(new Headers(fetchMock.mock.calls[0]?.[1]?.headers))).toMatchObject({
+      authorization: "Bearer fake",
+      "content-type": "application/json",
+    });
   });
 
   it("adds paged tail queries without changing the legacy events result", async () => {
@@ -532,9 +524,7 @@ describe("ClickClack HTTP client", () => {
 describe("createClickClackClient websocket", () => {
   async function runFrameCase(frame: string): Promise<{ delivered: boolean; error?: string }> {
     const wss = new WebSocketServer({ port: 0, host: "127.0.0.1" });
-    await new Promise<void>((resolve) => {
-      wss.once("listening", () => resolve());
-    });
+    await once(wss, "listening");
     const address = wss.address();
     if (!address || typeof address === "string") {
       throw new Error("expected loopback ws address");
