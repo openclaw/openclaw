@@ -54,6 +54,19 @@ function mainRow(
   return sessionRow(key, sessionId, { agentId: "main", archived: false, updatedAt, ...fields });
 }
 
+function describeRow({ key }: Params, rows: GatewaySessionRow[]) {
+  const session = rows.find((row) => row.key === key);
+  if (!session) {
+    throw new Error(`Unexpected describe key: ${String(key)}`);
+  }
+  return { session };
+}
+
+function selectChat(sidebar: SidebarLifecycleState, key: string) {
+  sidebar.activeRouteId = "chat";
+  sidebar.sessionKey = key;
+}
+
 function sessionTree(sidebar: SidebarLifecycleState, selected: string) {
   const row = (key: string) => rowElement(sidebar, key);
   const parent = () =>
@@ -88,15 +101,7 @@ it("hides a selected active main child in Archived after fresh lineage completes
   const initialParent = deferred<{ session: GatewaySessionRow }>();
   const request = lineageRequest(
     (params) => sessionsResult(params.archived === true ? [] : [selected], 10),
-    ({ key }) => {
-      if (key === selected.key) {
-        return { session: selected };
-      }
-      if (key === mainKey) {
-        return initialParent.promise;
-      }
-      throw new Error(`Unexpected describe key: ${String(key)}`);
-    },
+    (params) => (params.key === mainKey ? initialParent.promise : describeRow(params, [selected])),
   );
   const { sidebar, provider, sessions, data } = await mountRoster(request, mainAgents);
   const row = () => rowElement(sidebar, selected.key);
@@ -105,8 +110,7 @@ it("hides a selected active main child in Archived after fresh lineage completes
       ([method, params]) => method === "sessions.describe" && asOptionalRecord(params)?.key === key,
     );
   try {
-    sidebar.activeRouteId = "chat";
-    sidebar.sessionKey = selected.key;
+    selectChat(sidebar, selected.key);
     await waitForRequest(request, "sessions.describe", { key: mainKey });
     await waitForFast(() => expect(row()).not.toBeNull());
 
@@ -189,8 +193,7 @@ it.each([
     });
     const { sidebar, provider, sessions, data } = await mountRoster(request);
     try {
-      sidebar.activeRouteId = "chat";
-      sidebar.sessionKey = key;
+      selectChat(sidebar, key);
       const lineage = data.loadActiveSessionLineage(key);
       await waitForRequest(request, "sessions.describe", { key });
       childToggle(sidebar)?.click();
@@ -295,20 +298,17 @@ it.each(["pending incarnation", "known parent"] as const)(
         return result();
       },
       (params) => {
-        if (params?.key === key) {
-          return { session: current };
-        }
-        if (params?.key === p1) {
+        if (params.key === p1) {
           parentReads += 1;
           if (pendingIncarnation && parentReads === 1) {
             return oldParentRead.promise;
           }
-          return { session: pendingIncarnation ? freshParent : oldParent };
         }
-        if (params?.key === p2) {
-          return { session: newParent };
-        }
-        throw new Error(`Unexpected describe key: ${String(params?.key)}`);
+        return describeRow(params, [
+          current,
+          pendingIncarnation ? freshParent : oldParent,
+          newParent,
+        ]);
       },
       () => ({ subscribed: true, list: result() }),
     );
@@ -329,8 +329,7 @@ it.each(["pending incarnation", "known parent"] as const)(
           knownParent ? [key, p2] : [key],
         );
       });
-      sidebar.activeRouteId = "chat";
-      sidebar.sessionKey = key;
+      selectChat(sidebar, key);
       await waitForFast(() => expect(parentReads).toBe(1));
       originalLineage = data.loadActiveSessionLineage(key);
       if (!pendingIncarnation) {
@@ -472,17 +471,10 @@ it.each(["status-filtered omitted", "unfiltered metadata"] as const)(
         return result(primaryRows());
       },
       (params) => {
-        if (params?.key === key) {
-          return { session: current };
-        }
-        if (params?.key === p1) {
-          return { session: parent };
-        }
-        if (params?.key === p2) {
+        if (params.key === p2) {
           newParentReads += 1;
-          return { session: newParent };
         }
-        throw new Error(`Unexpected describe key: ${String(params?.key)}`);
+        return describeRow(params, [current, parent, newParent]);
       },
       () => ({ subscribed: true, list: result(primaryRows()) }),
     );
@@ -501,8 +493,7 @@ it.each(["status-filtered omitted", "unfiltered metadata"] as const)(
           expect(data.sessionsResult?.sessions.map((entry) => entry.key)).toEqual([p1]);
         });
       }
-      sidebar.activeRouteId = "chat";
-      sidebar.sessionKey = key;
+      selectChat(sidebar, key);
       await waitForFast(() => expect(data.activeSessionLineageRoot?.key).toBe(p1));
       await expand(p1);
       await waitForFast(() => {
@@ -738,8 +729,7 @@ it("resolves the routed child's former global ancestor over a foreign cached row
     expect(selection.state.selectedId).toBe("work");
 
     selectApplicationSession({ selection, gateway, sessionKey: child.key });
-    sidebar.activeRouteId = "chat";
-    sidebar.sessionKey = child.key;
+    selectChat(sidebar, child.key);
     await data.loadActiveSessionLineage(child.key);
     await sidebar.updateComplete;
     // Reveal the loaded section without fetching the next Gateway page.

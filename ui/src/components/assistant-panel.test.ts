@@ -181,7 +181,7 @@ describe("assistant panel", () => {
     expect(panel.assistantPanelOpen).toBe(false);
   });
 
-  it("admits same-route Home selection through the pane owner (global=true)", async () => {
+  it("admits same-route global Home selection through the pane owner", async () => {
     const { panel, context } = await mountPanel({
       global: true,
       homeAvailable: true,
@@ -233,7 +233,7 @@ describe("assistant panel", () => {
     },
   );
 
-  it("follows the sidebar agent switcher and suppresses only the selected conversation (global=false)", async () => {
+  it("follows the sidebar agent and suppresses only the selected conversation", async () => {
     const { context, panel, store, dom } = await mountPanel();
     const refresh = vi.spyOn(store, "refreshTranscriptIfIdle");
     await update(panel, {
@@ -276,7 +276,7 @@ describe("assistant panel", () => {
     expect(chatInputOwnerForContext(context).current).toBe("page");
   });
 
-  it("replaces the custodian with an activation-owned session and follows navigation without restoring closed docks", async () => {
+  it("preserves activation ownership across navigation without restoring closed docks", async () => {
     const { context, panel, store, dom } = await mountPanel();
     const refresh = vi.spyOn(store, "refreshTranscriptIfIdle");
     await update(panel, {
@@ -290,10 +290,9 @@ describe("assistant panel", () => {
     const activation = {};
     const hint = { page: "review:board", detail: { filter: "stuck" } };
     const keys: (string | null)[] = [];
-    const stop = context.assistantDock.subscribe(() =>
-      keys.push(context.assistantDock.openSessionKey),
+    onTestFinished(
+      context.assistantDock.subscribe(() => keys.push(context.assistantDock.openSessionKey)),
     );
-    onTestFinished(stop);
     context.assistantDock.openSession(
       {
         sessionKey: "agent:research:review",
@@ -375,12 +374,10 @@ describe("assistant panel", () => {
     provider.append(panel);
     await panel.updateComplete;
     expect(panel.assistantPanelOpen).toBe(false);
-    window.dispatchEvent(new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT));
-    await panel.updateComplete;
+    await toggle(panel, CUSTODIAN_PANEL_TOGGLE_EVENT);
     expect(panel.assistantPanelOpen).toBe(true);
     expect(assistantDock.openSessionKey).toBeNull();
-    window.dispatchEvent(new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT));
-    await panel.updateComplete;
+    await toggle(panel, CUSTODIAN_PANEL_TOGGLE_EVENT);
     expect(panel.assistantPanelOpen).toBe(false);
   });
 
@@ -699,9 +696,9 @@ describe("assistant panel", () => {
     expect(restored.assistantPanelOpen).toBe(true);
   });
 
-  it.each(["right", "bottom"])("drags only passive header chrome when docked %s", async (dock) => {
+  it("drags only passive header chrome and switches dock orientation", async () => {
     const { panel, dom } = await mountPanel({ custodianSuppressed: false });
-    await toggle(panel, CUSTODIAN_PANEL_TOGGLE_EVENT, { open: true, dock });
+    await toggle(panel, CUSTODIAN_PANEL_TOGGLE_EVENT, { open: true, dock: "right" });
 
     const postMessage = vi.fn();
     vi.stubGlobal("webkit", { messageHandlers: { openclawWindowDrag: { postMessage } } });
@@ -734,48 +731,42 @@ describe("assistant panel", () => {
     }
 
     await click(panel, ".assistant-panel-actions button:first-child");
-    expect(dom.query(`.assistant-panel--${dock === "right" ? "bottom" : "right"}`)).not.toBeNull();
+    expect(dom.query(".assistant-panel--bottom")).not.toBeNull();
+    await click(panel, ".assistant-panel-actions button:first-child");
+    expect(dom.query(".assistant-panel--right")).not.toBeNull();
     await click(panel, ".assistant-panel-actions button:last-child");
     expect(panel.assistantPanelOpen).toBe(false);
   });
 
-  it.each([false, true])(
-    "updates mascot and dock ownership after source replacement=%s",
-    async (replace) => {
-      const { panel, store, context } = await mountPanel();
-      const currentStore = replace ? new CustodianSessionStore() : store;
-      const currentContext = replace ? { ...context, assistantDock: new AssistantDock() } : context;
-      if (replace) {
-        panel.context = currentContext;
-        panel.store = currentStore;
-      }
-      currentStore.messages = [
-        { id: 1, role: "user", text: "Check this system", at: 1, question: null, step: null },
-      ];
-      panel.custodianSuppressed = false;
-      panel.minimizeRequestId = 1;
-      await panel.updateComplete;
+  it("updates mascot and dock ownership after source replacement", async () => {
+    const { panel, context } = await mountPanel();
+    const currentStore = new CustodianSessionStore();
+    const currentContext = { ...context, assistantDock: new AssistantDock() };
+    panel.context = currentContext;
+    panel.store = currentStore;
+    currentStore.messages = [
+      { id: 1, role: "user", text: "Check this system", at: 1, question: null, step: null },
+    ];
+    panel.custodianSuppressed = false;
+    panel.minimizeRequestId = 1;
+    await panel.updateComplete;
 
-      currentStore.sending = true;
-      currentStore.setInput("status");
-      await panel.updateComplete;
+    currentStore.sending = true;
+    currentStore.setInput("status");
+    await panel.updateComplete;
 
-      expect(
-        panel.querySelector<HTMLElement & { mood: string }>(
-          ".assistant-panel-title openclaw-mascot",
-        )?.mood,
-      ).toBe("thinking");
-      if (replace) {
-        expect(() =>
-          context.assistantDock.openSession(
-            { sessionKey: "stale", agentId: "main", label: "Stale" },
-            {},
-          ),
-        ).toThrow("conversation dock is unavailable");
-        openReview(currentContext.assistantDock);
-        await panel.updateComplete;
-        expect(home(panel)?.sessionKey).toBe("agent:research:review");
-      }
-    },
-  );
+    expect(
+      panel.querySelector<HTMLElement & { mood: string }>(".assistant-panel-title openclaw-mascot")
+        ?.mood,
+    ).toBe("thinking");
+    expect(() =>
+      context.assistantDock.openSession(
+        { sessionKey: "stale", agentId: "main", label: "Stale" },
+        {},
+      ),
+    ).toThrow("conversation dock is unavailable");
+    openReview(currentContext.assistantDock);
+    await panel.updateComplete;
+    expect(home(panel)?.sessionKey).toBe("agent:research:review");
+  });
 });

@@ -15,6 +15,8 @@ import { SidebarUpdateCard, type SidebarUpdateCardProps } from "./sidebar-update
 let originalWebkit: PropertyDescriptor | undefined;
 const checkFailure = "Could not check the latest update";
 const reconnectFailure = "Could not refresh. Check your connection and try again.";
+const called = (callback: unknown, times = 1) =>
+  vi.waitFor(() => expect(callback).toHaveBeenCalledTimes(times));
 async function settle() {
   await Promise.resolve();
   flush();
@@ -106,6 +108,7 @@ async function mount(
     setProps,
     dispose,
     action: () => find<HTMLButtonElement>(".sidebar-update-card__action"),
+    part: (name: string) => find(".sidebar-update-card__" + name),
     expand(open = true) {
       const details = find("details")!;
       const expanded = new Promise<void>((resolve) => {
@@ -156,7 +159,7 @@ describe("SidebarUpdateCard", () => {
       await vi.waitFor(() => expect(element.action()?.disabled).toBe(false));
       const action = element.action()!;
       action.click();
-      await vi.waitFor(() => expect(element.props().onCheckStatus).toHaveBeenCalledTimes(2));
+      await called(element.props().onCheckStatus, 2);
       expect(element.action()).toBe(action);
       expect(action.disabled).toBe(true);
       opening.resolve(true);
@@ -240,7 +243,7 @@ describe("SidebarUpdateCard", () => {
         await vi.waitFor(() => expect(postMessage).toHaveBeenCalledOnce());
         expect(element.props().prepareRetry).not.toHaveBeenCalled();
       } else {
-        await vi.waitFor(() => expect(element.props().prepareRetry).toHaveBeenCalledOnce());
+        await called(element.props().prepareRetry);
         expect(document.querySelector("openclaw-modal-dialog")).not.toBeNull();
         expect(element.props().onUpdate).not.toHaveBeenCalled();
         if (!native) {
@@ -259,7 +262,7 @@ describe("SidebarUpdateCard", () => {
           expect(element.props().onUpdate).not.toHaveBeenCalled();
           if (bridgeLost) {
             modalButton(refreshed.modal, "Update and restart").click();
-            await vi.waitFor(() => expect(element.props().onUpdate).toHaveBeenCalledOnce());
+            await called(element.props().onUpdate);
             expect(postMessage).not.toHaveBeenCalled();
           }
         } else {
@@ -300,7 +303,6 @@ describe("SidebarUpdateCard", () => {
     });
     const action = () => element.action()!;
     expect(action().getAttribute("aria-disabled")).toBe("true");
-
     installNativeBridge();
     window.dispatchEvent(new Event(NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT));
     await settle();
@@ -308,7 +310,6 @@ describe("SidebarUpdateCard", () => {
     expect(action().textContent).toContain("Update Mac app");
     await element.expand();
     expect(element.props().onCheckStatus).not.toHaveBeenCalled();
-
     await element.update({ canNativeUpdate: false });
     expect(action().getAttribute("aria-disabled")).toBe("true");
     element.setProps({ canNativeUpdate: true });
@@ -342,7 +343,7 @@ describe("SidebarUpdateCard", () => {
       expect(element.props().onCheckStatus).toHaveBeenCalledOnce();
       expect(element.action()?.disabled).toBe(true);
       if (history) {
-        expect(element.element.textContent).toContain("Checking for updates…");
+        expect(element.text()).toContain("Checking for updates…");
         expect(element.find(".update-git-revisions")).toBeNull();
         await element.update({ updateAvailable: freshGitUpdate });
       }
@@ -351,11 +352,11 @@ describe("SidebarUpdateCard", () => {
         await vi.waitFor(() =>
           expect(element.find(".update-git-revisions")?.textContent).toContain("cccccccc"),
         );
-        expect(element.element.textContent).toContain("9 commits behind");
+        expect(element.text()).toContain("9 commits behind");
         expect(element.props().onUpdate).not.toHaveBeenCalled();
         await element.expand(false);
         details.open = true;
-        await vi.waitFor(() => expect(element.props().onCheckStatus).toHaveBeenCalledTimes(2));
+        await called(element.props().onCheckStatus, 2);
       } else {
         await vi.waitFor(() => expect(element.action()?.disabled).toBe(false));
         expect(element.action()?.getAttribute("aria-busy")).toBe("false");
@@ -377,7 +378,7 @@ describe("SidebarUpdateCard", () => {
       onUpdate: vi.fn(),
     });
     element.find("details")!.open = true;
-    await vi.waitFor(() => expect(element.props().onCheckStatus).toHaveBeenCalledOnce());
+    await called(element.props().onCheckStatus);
     expect(element.action()?.disabled).toBe(true);
     expect(element.action()?.getAttribute("aria-busy")).toBe("true");
     check.reject(new Error("Status unavailable"));
@@ -385,7 +386,7 @@ describe("SidebarUpdateCard", () => {
     const action = element.action()!;
     await vi.waitFor(() => expect(action.disabled).toBe(false));
     action.click();
-    await vi.waitFor(() => expect(element.props().onCheckStatus).toHaveBeenCalledTimes(2));
+    await called(element.props().onCheckStatus, 2);
     expect(element.action()).toBe(action);
     expect(action.disabled).toBe(true);
     expect(element.text()).not.toContain(checkFailure);
@@ -410,7 +411,7 @@ describe("SidebarUpdateCard", () => {
     );
     expect(retry).toBeDefined();
     retry!.click();
-    await vi.waitFor(() => expect(element.props().onCheckStatus).toHaveBeenCalledTimes(3));
+    await called(element.props().onCheckStatus, 3);
     expect(element.props().onUpdate).not.toHaveBeenCalled();
   });
 
@@ -425,10 +426,8 @@ describe("SidebarUpdateCard", () => {
       .mockReturnValueOnce(second.promise)
       .mockReturnValueOnce(third.promise);
     await element.update({ refreshRequired: true, onRefresh });
-
     element.action()?.click();
     await settle();
-
     await element.update({ refreshRequired: false });
     await element.update({ refreshRequired: true });
     const action = element.action();
@@ -438,12 +437,10 @@ describe("SidebarUpdateCard", () => {
     expect(action?.disabled).toBe(true);
     action?.click();
     expect(onRefresh).toHaveBeenCalledTimes(2);
-
     first.resolve(false);
     await settle();
     expect(action?.disabled).toBe(true);
     expect(element.text()).not.toContain(reconnectFailure);
-
     await element.update({ connected: false });
     expect(action?.disabled).toBe(true);
     second.resolve(false);
@@ -469,8 +466,8 @@ describe("SidebarUpdateCard", () => {
     "keeps live run controls focused until acknowledgement (compact: %s)",
     async (compact) => {
       const element = await mount(null, { compact, updateRun: createUpdateRunFixture() });
-      expect(element.element.textContent).toContain("OpenClaw update in progress: staging");
-      expect(element.element.textContent).toContain("phases complete");
+      expect(element.text()).toContain("OpenClaw update in progress: staging");
+      expect(element.text()).toContain("phases complete");
       const action = element.action()!;
       const details = element.find("details");
       if (details) {
@@ -479,24 +476,22 @@ describe("SidebarUpdateCard", () => {
       expect(action.disabled).toBe(false);
       action.focus();
       expect(document.activeElement).toBe(action);
-
       await element.update({
         updateRun: createUpdateRunFixture({ phase: "verifying", updatedAtMs: 3 }),
       });
-      expect(element.element.textContent).toContain("OpenClaw update in progress: verifying");
-      expect(element.find(".sidebar-update-card__action")).toBe(action);
+      expect(element.text()).toContain("OpenClaw update in progress: verifying");
+      expect(element.action()).toBe(action);
       expect(document.activeElement).toBe(action);
       if (details) {
         expect(element.find("details")).toBe(details);
         expect(details.open).toBe(true);
       }
-
       const completedRun = succeededRun({
         finishedAtMs: Date.now(),
         after: { version: "2026.9.2" },
       });
       await element.update({ updateRun: completedRun });
-      expect(element.element.textContent).toContain("OpenClaw updated to 2026.9.2");
+      expect(element.text()).toContain("OpenClaw updated to 2026.9.2");
       await element.update({ updateRunAcknowledged: true });
       expect(element.find(".sidebar-update-card")).toBeNull();
       await element.update({
@@ -525,14 +520,12 @@ describe("SidebarUpdateCard", () => {
         (code) => code.textContent,
       ),
     ).toEqual(["12345678", "abc1234d"]);
-
     await element.update({ updateBusy: true });
     const action = element.action();
     expect(action?.disabled).toBe(true);
     expect(action?.textContent).toContain("Updating Gateway…");
-
     await element.update({ updateAvailable: null, updateSchedule: null });
-    expect(element.element.textContent).toContain("Updating Gateway…");
+    expect(element.text()).toContain("Updating Gateway…");
   });
 
   it("retires stale git availability after a refreshed current comparison", async () => {
@@ -545,7 +538,6 @@ describe("SidebarUpdateCard", () => {
         },
       },
     );
-
     expect(element.find(".sidebar-update-card")).toBeNull();
   });
 
@@ -555,7 +547,6 @@ describe("SidebarUpdateCard", () => {
       onDismiss: vi.fn(),
       onUpdate: vi.fn(),
     });
-
     expect(element.find(".sidebar-issues-panel__entity")?.textContent).toBe("Update available");
     expect(element.find("summary time")).toBeNull();
     expect(element.action()?.textContent).toContain("Update Gateway");
@@ -602,7 +593,6 @@ describe("SidebarUpdateCard", () => {
       await element.find<HTMLElement & { updateComplete: Promise<boolean> }>(
         "openclaw-relative-time",
       )?.updateComplete;
-
       const title = element.find("summary .sidebar-issues-panel__entity");
       const meta = title?.nextElementSibling;
       const time = meta?.querySelector("time");
@@ -631,11 +621,9 @@ describe("SidebarUpdateCard", () => {
     await element.find<HTMLElement & { updateComplete: Promise<boolean> }>("openclaw-relative-time")
       ?.updateComplete;
     expect(element.find("summary time")?.textContent?.trim()).toBe("5m ago");
-
     await vi.advanceTimersByTimeAsync(60_000);
     const time = element.find("summary time");
     expect(time?.textContent?.trim()).toBe("6m ago");
-
     element.dispose();
     await Promise.resolve();
     expect(element.element.isConnected).toBe(false);
@@ -648,13 +636,11 @@ describe("SidebarUpdateCard", () => {
   it("keeps an unauthorized update discoverable without allowing activation", async () => {
     const onUpdate = vi.fn();
     const element = await mount(stableUpdate, { canUpdate: false, onUpdate });
-
     const action = element.action();
     const tooltip = action?.closest("openclaw-tooltip") as
       | (HTMLElement & { content?: string; updateComplete: Promise<boolean> })
       | null;
     await tooltip?.updateComplete;
-
     expect(action?.disabled).toBe(false);
     expect(action?.getAttribute("aria-disabled")).toBe("true");
     expect(action?.getAttribute("aria-describedby")).not.toBeNull();
@@ -673,23 +659,19 @@ describe("SidebarUpdateCard", () => {
         applyAtMs: 55_000,
       }),
     });
-
     const card = element.find(".sidebar-update-card");
     const timer = element.find("[role='timer']");
     expect(card?.hasAttribute("role")).toBe(false);
     expect(timer?.getAttribute("aria-live")).toBe("off");
     expect(timer?.textContent).toContain("Updating in 0:54 · v2.0.0");
-    expect(element.find(".sidebar-update-card__hold")?.textContent?.trim()).toBe("Hold 1 h");
-
+    expect(element.part("hold")?.textContent?.trim()).toBe("Hold 1 h");
     await element.update({ updateBusy: true });
-    expect(element.find(".sidebar-update-card__hold")).toBeNull();
+    expect(element.part("hold")).toBeNull();
     await element.update({ updateBusy: false });
-    expect(element.find(".sidebar-update-card__hold")).not.toBeNull();
-
+    expect(element.part("hold")).not.toBeNull();
     await vi.advanceTimersByTimeAsync(1_000);
     await settle();
     expect(element.find("[role='timer']")?.textContent).toContain("Updating in 0:53");
-
     element.dispose();
     expect(clearInterval).toHaveBeenCalled();
   });
@@ -702,7 +684,6 @@ describe("SidebarUpdateCard", () => {
       updateSchedule: packageSchedule({}),
       onHoldUpdate,
     });
-
     const hold = element.find<HTMLButtonElement>(".sidebar-update-card__hold")!;
     hold.click();
     await settle();
@@ -711,19 +692,18 @@ describe("SidebarUpdateCard", () => {
     expect(onHoldUpdate).toHaveBeenCalledOnce();
     holding.resolve(false);
     await vi.waitFor(() => expect(hold.disabled).toBe(false));
-    expect(element.find(".sidebar-update-card__hold")).toBe(hold);
+    expect(element.part("hold")).toBe(hold);
     hold.click();
     await vi.waitFor(() => expect(onHoldUpdate).toHaveBeenCalledTimes(2));
     await element.update({
       heldUpdateCampaignId: "campaign-1",
       updateSchedule: packageSchedule({ holdUntilMs: 61_000 }),
     });
-    expect(element.find(".sidebar-update-card__hold")).toBeNull();
-
+    expect(element.part("hold")).toBeNull();
     await element.update({
       updateSchedule: packageSchedule({ holdUntilMs: 500 }),
     });
-    expect(element.find(".sidebar-update-card__hold")).toBeNull();
+    expect(element.part("hold")).toBeNull();
   });
 
   it("renders held timing and gates hold for active or unauthorized campaigns", async () => {
@@ -740,14 +720,12 @@ describe("SidebarUpdateCard", () => {
     const held = await mount(null, { updateSchedule: schedule });
     expect(held.element.textContent).toContain("Update held · resumes in 1:00");
     expect(held.element.querySelector(".sidebar-update-card__hold")).toBeNull();
-
     const unheldSchedule: UpdateScheduleState = {
       ...schedule,
       campaign: { ...schedule.campaign!, holdUntilMs: undefined },
     };
     const unauthorized = await mount(null, { updateSchedule: unheldSchedule, canUpdate: false });
     expect(unauthorized.element.querySelector(".sidebar-update-card__hold")).toBeNull();
-
     const unsupported = await mount(null, { updateSchedule: unheldSchedule, canHoldUpdate: false });
     expect(unsupported.element.querySelector(".sidebar-update-card__hold")).toBeNull();
   });
