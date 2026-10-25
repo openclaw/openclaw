@@ -110,20 +110,13 @@ export function registerWorkerGoalChatCases(
       const loadNativeAsync = vi
         .spyOn(runtimePlugins, "loadAgentRuntimePluginRegistryHandleAsync")
         .mockResolvedValue(getTestPluginRegistry());
-      const baseline = getRuntimeConfig();
-      const config: OpenClawConfig = {
-        ...baseline,
-        plugins: {
-          ...baseline.plugins,
-          entries: { ...baseline.plugins?.entries, codex: { enabled: true } },
-        },
-        agents: {
-          ...baseline.agents,
-          entries: {
-            ...baseline.agents?.entries,
-            main: { ...baseline.agents?.entries?.main, nativeRuntimeConsent: ["codex"] },
-          },
-        },
+      const config: OpenClawConfig = structuredClone(getRuntimeConfig());
+      config.plugins ??= {};
+      config.plugins.entries = { ...config.plugins.entries, codex: { enabled: true } };
+      config.agents ??= {};
+      config.agents.entries = {
+        ...config.agents.entries,
+        main: { ...config.agents.entries?.main, nativeRuntimeConsent: ["codex"] },
       };
       await prepareGatewayReplyRuntimeForTest({ force: true, config });
       await patchSessionEntryCore(scope(), () => ({

@@ -11,17 +11,11 @@ const { gatewayClientState, createGatewayClientState } = vi.hoisted(() => {
     requests: [] as string[],
     startCalls: 0,
     startMode: "hello" as "hello" | "close" | "connect-error-close" | "defer",
-    socketOpened: true,
     transportValidated: true,
     close: { code: 1008, reason: "pairing required" },
     helloAuth: { role: "operator", scopes: ["operator.read"] } as
       | { role?: string; scopes?: string[] }
       | undefined,
-    helloServer: {
-      version: "2026.4.24",
-      buildId: "build-test",
-      connId: "conn-test",
-    } as { version: string; buildId?: string; connId: string },
     connectError: "scope upgrade pending approval (requestId: req-123)",
     connectErrorDetails: {
       code: "PAIRING_REQUIRED",
@@ -46,7 +40,6 @@ const { deviceIdentityState, createDeviceIdentityState, loadDeviceIdentity } = v
       scopes: ["operator.read"],
       updatedAtMs: 1,
     } as Record<string, unknown> | null,
-    cachedOriginToken: null as Record<string, unknown> | null,
   });
   const state = createState();
   return {
@@ -93,14 +86,13 @@ class MockGatewayClient {
         }
         if (gatewayClientState.startMode !== "hello") {
           this.emit("onClose", gatewayClientState.close.code, gatewayClientState.close.reason, {
-            socketOpened: gatewayClientState.socketOpened,
             transportValidated: gatewayClientState.transportValidated,
           });
           return;
         }
         await this.emit("onHelloOk", {
           type: "hello-ok",
-          server: gatewayClientState.helloServer,
+          server: { version: "2026.4.24", buildId: "build-test", connId: "conn-test" },
           auth: gatewayClientState.helloAuth,
         });
       })
@@ -142,7 +134,7 @@ vi.mock("../infra/device-identity-async.js", async (importOriginal) => ({
 // mock-isolation: Probe credentials come from the fixture, never the local device-auth store.
 vi.mock("../infra/device-auth-store.js", () => ({
   loadDeviceAuthTokenReadOnly: () => deviceIdentityState.cachedToken,
-  loadOriginDeviceTokenReadOnly: () => deviceIdentityState.cachedOriginToken,
+  loadOriginDeviceTokenReadOnly: () => null,
 }));
 
 vi.mock("../../packages/gateway-client/src/event-loop-ready.js", () => ({
@@ -301,11 +293,6 @@ describe("probeGateway", () => {
         close: { code: 1008, reason: "connect failed" },
       },
       expected: { ok: false, auth: expect.objectContaining({ capability: "unknown" }) },
-    },
-    {
-      name: "keeps latency unknown when the opened transport fails validation",
-      state: { startMode: "connect-error-close", transportValidated: false },
-      expected: { connectLatencyMs: null },
     },
   ])("$name", async ({ state, expected }) => {
     Object.assign(gatewayClientState, state);

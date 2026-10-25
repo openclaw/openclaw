@@ -75,15 +75,9 @@ test.each([undefined, "session-a"])(
       { key: sessionKey, archived: true, expectedSessionId },
       { context },
     );
-    expect(result).toMatchObject({
-      ok: false,
-      error: {
-        code: "INVALID_REQUEST",
-        ...(expectedSessionId
-          ? { details: { reason: "session-changed" } }
-          : { message: `session not found: ${sessionKey}` }),
-      },
-    });
+    expect(result).toMatchObject(
+      expectedSessionId ? changed : invalid(`session not found: ${sessionKey}`),
+    );
     expect(loadSessionEntry({ sessionKey, storePath })).toBeUndefined();
     expectNoSessionQueueCleanup();
     expectNoPublication(context);
@@ -91,38 +85,35 @@ test.each([undefined, "session-a"])(
 );
 
 test.each([
-  ["session id before archive", { archived: true, expectedSessionId: "sess-before-reset" }],
-  [
-    "lifecycle revision before archive",
-    { archived: true, expectedLifecycleRevision: "revision-before-reset" },
-  ],
-  [
-    "lifecycle revision for metadata",
-    { label: "Stale agent request", expectedLifecycleRevision: "revision-before-reset" },
-  ],
-] as const)("sessions.patch rejects a replaced %s without side effects", async (_name, patch) => {
-  const sessionKey = "agent:main:subagent:active-replacement";
-  const replacementSessionId = "sess-active-after-reset";
-  const { read } = await seedSession(
-    sessionKey,
-    { lifecycleRevision: "revision-after-reset" },
-    replacementSessionId,
-  );
-  const replacementBefore = read();
-  const context = observingContext();
-  embeddedRunMock.activeIds.add(replacementSessionId);
+  [{ archived: true }, { expectedSessionId: "stale" }],
+  [{ archived: true }, { expectedLifecycleRevision: "stale" }],
+  [{ label: "Stale agent request" }, { expectedLifecycleRevision: "stale" }],
+])(
+  "sessions.patch rejects replaced targets (%j, %j) without side effects",
+  async (patch, identity) => {
+    const sessionKey = "agent:main:subagent:active-replacement";
+    const replacementSessionId = "sess-active-after-reset";
+    const { read } = await seedSession(
+      sessionKey,
+      { lifecycleRevision: "revision-after-reset" },
+      replacementSessionId,
+    );
+    const replacementBefore = read();
+    const context = observingContext();
+    embeddedRunMock.activeIds.add(replacementSessionId);
 
-  const result = await directSessionReq(
-    "sessions.patch",
-    { key: sessionKey, ...patch },
-    { context },
-  );
+    const result = await directSessionReq(
+      "sessions.patch",
+      { key: sessionKey, ...patch, ...identity },
+      { context },
+    );
 
-  expect(result).toMatchObject(changed);
-  expect(read()).toEqual(replacementBefore);
-  expect(embeddedRunMock.abortCalls).toEqual([]);
-  expectNoPublication(context);
-});
+    expect(result).toMatchObject(changed);
+    expect(read()).toEqual(replacementBefore);
+    expect(embeddedRunMock.abortCalls).toEqual([]);
+    expectNoPublication(context);
+  },
+);
 
 test("sessions.patch rejects a session replaced before restore reaches the SQLite writer", async () => {
   const patchPreparation = await import("./server-methods/sessions-patch-expectations.js");
@@ -173,13 +164,7 @@ test("sessions.patch rejects a session replaced before restore reaches the SQLit
     await preflightCompleted.promise;
     replaceSession.resolve();
     await writer;
-    expect(await restored).toMatchObject({
-      ok: false,
-      error: {
-        code: "INVALID_REQUEST",
-        details: { reason: "session-changed" },
-      },
-    });
+    expect(await restored).toMatchObject(changed);
     expect(read()).toMatchObject({
       archivedAt: 2,
       sessionId: "restored-replacement",

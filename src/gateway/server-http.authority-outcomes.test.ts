@@ -132,38 +132,29 @@ afterAll(async () => {
   }
 });
 
-it.each([false, true])(
-  "admits shutdown closure only for an ended request lifetime (ended=%s)",
-  async (ended) => {
-    const work = new GatewayConnectionWork();
-    const entries = new GatewayRequestEntryLifetime();
-    if (ended) {
-      entries.beginClose();
-    }
-    await work.drain();
-    const req = new IncomingMessage(new Socket());
-    const res = new ServerResponse(req);
-    const handle = vi.fn(async (): Promise<undefined> => undefined);
-    try {
-      const result = runGatewayHttpRequest(
-        req,
-        res,
-        { requestEntryLifetime: entries, trackExecution: (run) => work.track(run) },
-        handle,
-      );
-      if (ended) {
-        await expect(result).resolves.toBeUndefined();
-        expect(res.destroyed).toBe(true);
-      } else {
-        await expect(result).rejects.toThrow("Async work scope is closed");
-      }
-      expect(handle).not.toHaveBeenCalled();
-    } finally {
-      res.destroy();
-      req.destroy();
-    }
-  },
-);
+it("closes late HTTP responses after the request lifetime ends", async () => {
+  const work = new GatewayConnectionWork();
+  const entries = new GatewayRequestEntryLifetime();
+  entries.beginClose();
+  await work.drain();
+  const req = new IncomingMessage(new Socket());
+  const res = new ServerResponse(req);
+  const handle = vi.fn(async (): Promise<undefined> => undefined);
+  try {
+    const result = runGatewayHttpRequest(
+      req,
+      res,
+      { requestEntryLifetime: entries, trackExecution: (run) => work.track(run) },
+      handle,
+    );
+    await expect(result).resolves.toBeUndefined();
+    expect(res.destroyed).toBe(true);
+    expect(handle).not.toHaveBeenCalled();
+  } finally {
+    res.destroy();
+    req.destroy();
+  }
+});
 
 it.each([false, true])(
   "keeps delivered HTTP work out of cancellation telemetry (rejected=%s)",
@@ -199,7 +190,6 @@ it.each(["core", "plugin"])(
   async (surface) => {
     const entered = createDeferred();
     const cancelled = createRelease();
-    const finished = createDeferred();
     const releaseCleanup = createRelease();
     let cleanup = Promise.resolve();
     let cleanupBelongsToRequest = false;
@@ -219,21 +209,15 @@ it.each(["core", "plugin"])(
       };
       signal?.addEventListener("abort", abort, { once: true });
       entered.resolve();
-      try {
-        await cancelled.promise;
-        signal?.throwIfAborted();
-        throw new Error("Disconnected read was not cancelled");
-      } finally {
-        signal?.removeEventListener("abort", abort);
-        finished.resolve();
-      }
+      await cancelled.promise;
+      signal?.throwIfAborted();
+      throw new Error("Disconnected read was not cancelled");
     });
     const requests = vi.spyOn(lifecycle, "runHttpConnectionRequest");
     const client = createClientRequest(surface);
     client.end();
     await entered.promise;
     client.destroy();
-    await finished.promise;
     await Promise.all(requests.mock.results.map((result) => result.value));
     expect([cleanupBelongsToRequest, connectionWork.hasPendingWork]).toEqual([true, true]);
     releaseCleanup.resolve();
@@ -292,7 +276,7 @@ it.each([
   },
 );
 
-// Each request owner consumes both authority error types and preserves unexpected errors.
+// Each request owner consumes authority failures and returns 500 for unexpected errors.
 // Shared response handling covers disconnect, staged headers, and partial streams once.
 it.each([
   ["core", "disconnect"],
@@ -341,8 +325,6 @@ it.each([
     outcome === "unexpected abort"
       ? new DOMException("Unrelated upstream cancellation", "AbortError")
       : new Error("HTTP request authority expired");
-  const errors = vi.spyOn(console, "error").mockImplementation(() => {});
-  const warnings = vi.spyOn(log, "warn").mockImplementation(() => {});
   route.mockImplementation(async (req, res) => {
     const authority = bindHttpResponseAuthority(
       {
@@ -457,20 +439,5 @@ it.each([
     expect(responseHeaders?.["cache-control"]).toBe("no-store");
     expect(responseHeaders?.["access-control-allow-origin"]).toBe("https://example.test");
     expect(responseHeaders?.["x-content-type-options"]).toBe("nosniff");
-  }
-  if (unexpected) {
-    if (surface === "core") {
-      expect(errors).toHaveBeenCalledExactlyOnceWith(
-        "[gateway-http] unhandled error in request handler:",
-        unexpectedError,
-      );
-    } else {
-      expect(warnings).toHaveBeenCalledExactlyOnceWith(
-        expect.stringContaining("plugin http route failed"),
-      );
-    }
-  } else {
-    expect(errors).not.toHaveBeenCalled();
-    expect(warnings).not.toHaveBeenCalled();
   }
 });

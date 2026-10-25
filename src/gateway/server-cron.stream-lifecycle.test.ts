@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { resolveCronJobConfigRevision } from "../cron/config-revision.js";
 import * as cronStore from "../cron/service/store.js";
@@ -16,29 +16,20 @@ import {
 import { cronHandlers } from "./server-methods/cron.js";
 
 const extinctionError = "stream process extinction is unconfirmed";
+let disposeSource: (() => Promise<void>) | undefined;
 
 function watchSource(label: string, replacement = false) {
   const watched = createWatchedRun();
   const { spawn } = mockCronSupervisor(watched, ...(replacement ? [createWatchedRun()] : []));
   const cfg = createCronConfig(label);
   cfg.cron = { ...cfg.cron, triggers: { enabled: true } };
-  const state = loadCronService(cfg);
-  const service = Object.assign(state, {
-    cfg,
-    async [Symbol.asyncDispose]() {
-      await state.stopStreamWatchers?.();
-      state.cron.stop();
-    },
-  });
-  return {
-    state: service,
-    watched,
-    spawn,
-    async [Symbol.asyncDispose]() {
-      watched.waitForExtinction.mockResolvedValue(undefined);
-      await service[Symbol.asyncDispose]();
-    },
+  const state = Object.assign(loadCronService(cfg), { cfg });
+  disposeSource = async () => {
+    watched.waitForExtinction.mockResolvedValue(undefined);
+    await state.stopStreamWatchers?.();
+    state.cron.stop();
   };
+  return { state, watched, spawn };
 }
 
 function expectUninterrupted(
@@ -60,10 +51,18 @@ async function addSource(state: ReturnType<typeof watchSource>["state"], name: s
 
 describe("buildGatewayCronService stream lifecycle", () => {
   beforeEach(resetGatewayCronMocks);
+  afterEach(async () => {
+    try {
+      await disposeSource?.();
+    } finally {
+      disposeSource = undefined;
+      vi.useRealTimers();
+      vi.unstubAllEnvs();
+    }
+  });
 
   it("keeps a stream source running when a conditional or invalid update is rejected", async () => {
-    const { watched, spawn, state: resource } = watchSource("server-cron-stream-rejected-update");
-    await using state = resource;
+    const { watched, spawn, state } = watchSource("server-cron-stream-rejected-update");
 
     const streamJob = await addSource(state, "stream source");
     expect(streamJob.state.streamStatus).toBe("running");
@@ -122,13 +121,11 @@ describe("buildGatewayCronService stream lifecycle", () => {
     } finally {
       releaseStart.resolve();
       await Promise.allSettled([adding, updating]);
-      await state[Symbol.asyncDispose]();
     }
   });
 
   it("rejects a stale removal before stopping the changed watcher", async () => {
-    const { watched, spawn, state: resource } = watchSource("stale-removal", true);
-    await using state = resource;
+    const { watched, spawn, state } = watchSource("stale-removal", true);
     const context = createDirectChatContext({
       cron: state.cron,
       getRuntimeConfig: () => state.cfg,
@@ -188,8 +185,7 @@ describe("buildGatewayCronService stream lifecycle", () => {
   });
 
   it("does not interrupt the existing source while its replacement requires consent", async () => {
-    const { watched, spawn, state: resource } = watchSource("server-cron-stream-consent");
-    await using state = resource;
+    const { watched, spawn, state } = watchSource("server-cron-stream-consent");
     const original = await addSource(state, "current source");
     await expect(
       state.cron.update(
@@ -217,42 +213,36 @@ describe("buildGatewayCronService stream lifecycle", () => {
 
   it("discards a stale reconcile list snapshot that raced a direct mutation route", async () => {
     const { watched, spawn, state } = watchSource("server-cron-stream-stale-snapshot");
-
-    try {
-      // Release the pre-add snapshot after the direct route starts the owner.
-      const originalList = state.cron.list.bind(state.cron);
-      const { promise: staleListGate, resolve: releaseStaleList } = createDeferred();
-      let armed = true;
-      state.cron.list = async (opts?: Parameters<typeof originalList>[0]) => {
-        if (!armed) {
-          return await originalList(opts);
-        }
-        armed = false;
-        const snapshot = await originalList(opts);
-        await staleListGate;
-        return snapshot;
-      };
-
-      const reconciling = state.reconcileStreamWatchers?.();
-      const streamJob = await addSource(state, "stale snapshot stream source");
-      const sourceIdentity = streamJob.state.streamSourceIdentity;
-      expect(spawn).toHaveBeenCalledOnce();
-      releaseStaleList();
-      await reconciling;
-
-      expectUninterrupted(watched, spawn);
-      expect(state.cron.getJob(streamJob.id)?.state.streamSourceIdentity).toBe(sourceIdentity);
-    } finally {
-      await state[Symbol.asyncDispose]();
-      vi.unstubAllEnvs();
-    }
+    // Release the pre-add snapshot after the direct route starts the owner.
+    const originalList = state.cron.list.bind(state.cron);
+    const { promise: staleListGate, resolve: releaseStaleList } = createDeferred();
+    let armed = true;
+    state.cron.list = async (opts?: Parameters<typeof originalList>[0]) => {
+      if (!armed) {
+        return await originalList(opts);
+      }
+      armed = false;
+      const snapshot = await originalList(opts);
+      await staleListGate;
+      return snapshot;
+    };
+    const reconciling = state.reconcileStreamWatchers?.();
+    const streamJob = await addSource(state, "stale snapshot stream source");
+    const sourceIdentity = streamJob.state.streamSourceIdentity;
+    expect(spawn).toHaveBeenCalledOnce();
+    releaseStaleList();
+    await reconciling;
+    expectUninterrupted(watched, spawn);
+    expect(state.cron.getJob(streamJob.id)?.state.streamSourceIdentity).toBe(sourceIdentity);
   });
 
   it.each(["running", "cleanup pending"] as const)(
     "preserves an explicit terminal failure from %s until authorized recovery",
     async (initialState) => {
-      await using source = watchSource(`server-cron-stream-terminal-${initialState}`, true);
-      const { watched, spawn, state } = source;
+      const { watched, spawn, state } = watchSource(
+        `server-cron-stream-terminal-${initialState}`,
+        true,
+      );
       const streamJob = await addSource(state, "terminal stream source");
       if (initialState === "cleanup pending") {
         watched.waitForExtinction.mockRejectedValue(new Error("cleanup is unconfirmed"));
@@ -294,8 +284,7 @@ describe("buildGatewayCronService stream lifecycle", () => {
   it.each(["enable", "clear exhaustion"] as const)(
     "keeps %s recovery in effect after retryable cleanup succeeds",
     async (recovery) => {
-      await using source = watchSource(`server-cron-stream-recovery-${recovery}`);
-      const { watched, spawn, state } = source;
+      const { watched, spawn, state } = watchSource(`server-cron-stream-recovery-${recovery}`);
       const streamJob = await addSource(state, "recovering source");
       watched.waitForExtinction.mockRejectedValue(new Error("cleanup is unconfirmed"));
       await state.cron.update(streamJob.id, {
@@ -317,31 +306,20 @@ describe("buildGatewayCronService stream lifecycle", () => {
     },
   );
 
-  it("drains stream teardown once when stop and stopAndDrain overlap", async () => {
-    await using source = watchSource("server-cron-stream-single-drain");
-    const { watched, state } = source;
+  it.each(["overlapping stop", "failed drain"])("joins teardown after %s", async (prior) => {
+    const { watched, state } = watchSource(`server-cron-stream-${prior}`);
     const { cancel, waitForExtinction } = watched;
-
-    await addSource(state, "single drain stream source");
-    // stopAndDrain must join cron.stop's teardown.
-    state.cron.stop();
-    await state.cron.stopAndDrain?.();
-    expect(cancel).toHaveBeenCalledWith("manual-cancel");
-    expect(waitForExtinction).toHaveBeenCalledOnce();
-  });
-
-  it("retries stream teardown after a prior drain failure", async () => {
-    await using source = watchSource("server-cron-stream-retry-drain");
-    const { watched, state } = source;
-    const { cancel, waitForExtinction } = watched;
-    waitForExtinction.mockRejectedValue(new Error(extinctionError));
-    await addSource(state, "retry drain stream source");
-
-    await expect(state.cron.stopAndDrain?.()).rejects.toThrow(extinctionError);
-    waitForExtinction.mockResolvedValue(undefined);
+    await addSource(state, "drain stream source");
+    if (prior === "failed drain") {
+      waitForExtinction.mockRejectedValue(new Error(extinctionError));
+      await expect(state.cron.stopAndDrain?.()).rejects.toThrow(extinctionError);
+      waitForExtinction.mockResolvedValue(undefined);
+    } else {
+      state.cron.stop();
+    }
     await expect(state.cron.stopAndDrain?.()).resolves.toBeUndefined();
     expect(cancel).toHaveBeenCalledWith("manual-cancel");
-    expect(waitForExtinction).toHaveBeenCalledTimes(2);
+    expect(waitForExtinction).toHaveBeenCalledTimes(prior === "failed drain" ? 2 : 1);
   });
 
   it("reports a committed stream update as successful when source teardown fails", async () => {
@@ -390,17 +368,13 @@ describe("buildGatewayCronService stream lifecycle", () => {
       commitReleased.resolve();
       await updatePromise?.catch(() => undefined);
       mutation.mockRestore();
-      waitForExtinction.mockResolvedValue(undefined);
-      await state[Symbol.asyncDispose]();
-      vi.useRealTimers();
     }
   });
 
   it.each(["rejected", "uncertain"] as const)(
     "retains %s stream removal and clears its error only after confirmed cleanup",
     async (outcome) => {
-      await using source = watchSource("server-cron-stream-remove-failure");
-      const { watched, state } = source;
+      const { watched, state } = watchSource("server-cron-stream-remove-failure");
       const { cancel, detachOutput, waitForExtinction } = watched;
       if (outcome === "uncertain") {
         waitForExtinction.mockResolvedValue({ status: "uncertain", reason: "job-unavailable" });
