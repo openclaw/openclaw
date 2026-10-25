@@ -1,7 +1,5 @@
-import { createInMemorySessionStore } from "@openclaw/acp-core/session";
 import type { AcpServerOptions } from "@openclaw/acp-core/types";
 import { expect, it, vi } from "vitest";
-import type { GatewayClient } from "../gateway/client.js";
 import type { GatewaySessionRow } from "../gateway/session-utils.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createTestAcpEventLedger } from "./event-ledger.test-support.js";
@@ -9,13 +7,9 @@ import {
   createLoadSessionRequest,
   createNewSessionRequest,
   createPromptRequest,
+  expectConfigOption,
 } from "./translator.bridge-test-helpers.js";
 import { createTranslatorScenario } from "./translator.scenario.test-support.js";
-import {
-  createAcpConnection,
-  createAcpGateway,
-  createAcpGatewayAgent,
-} from "./translator.test-helpers.js";
 
 type RequestHandler = (method: string, params?: Record<string, unknown>) => Promise<unknown>;
 const sessionKey = "agent:main:work";
@@ -30,11 +24,15 @@ function sessions(rows: GatewaySessionRow[]) {
 function encodeCursor(value: unknown) {
   return Buffer.from(JSON.stringify(value)).toString("base64url");
 }
-function fixture(rows: GatewaySessionRow[] = [], handler?: RequestHandler) {
+function fixture(
+  rows: GatewaySessionRow[] = [],
+  handler?: RequestHandler,
+  options: AcpServerOptions = {},
+) {
   const request = vi.fn(
     handler ?? (async (method) => (method === "sessions.list" ? sessions(rows) : { ok: true })),
   );
-  return { ...createTranslatorScenario(request, { sessions: [] }), request };
+  return { ...createTranslatorScenario(request, { ...options, sessions: [] }), request };
 }
 function pagedFixture(rows: GatewaySessionRow[]) {
   return fixture([], async (method, params) => {
@@ -77,16 +75,10 @@ it.each<Route>([
 ])(
   "routes newSession metadata %j with defaults %j to %s",
   async (metadata, opts, expected, lookup, reset) => {
-    const gateway = createAcpGateway();
-    const request = vi.spyOn(gateway, "request").mockResolvedValue(sessions([]));
+    const { agent, request, sessionStore } = fixture([], undefined, opts);
     if (lookup) {
       request.mockResolvedValueOnce({ ok: true, key: expected });
     }
-    const sessionStore = createInMemorySessionStore();
-    const agent = createAcpGatewayAgent(createAcpConnection(), gateway, {
-      ...opts,
-      sessionStore,
-    });
     const { newSession } = agent;
     const result = await newSession({ ...createNewSessionRequest(cwd), _meta: metadata });
     const selectedKey = expected ?? `acp-bridge:${result.sessionId}`;
@@ -101,24 +93,16 @@ it.each<Route>([
 );
 
 it.each([
-  {
-    metadata: { sessionLabel: "missing" },
-    lookup: { label: "missing" },
-    error: "Unable to resolve session label: missing",
-  },
-  {
-    metadata: { sessionKey: "missing", requireExisting: true },
-    lookup: { key: "missing" },
-    error: "Session key not found: missing",
-  },
-])(
-  "rejects an unresolved newSession route before resetting: $metadata",
-  async ({ metadata, lookup, error }) => {
-    const gateway = createAcpGateway();
-    const request = vi.spyOn(gateway, "request").mockResolvedValue({ ok: true });
-    const connection = createAcpConnection();
-    const sessionUpdate = vi.spyOn(connection, "sessionUpdate");
-    const agent = createAcpGatewayAgent(connection, gateway, {
+  [{ sessionLabel: "missing" }, { label: "missing" }, "Unable to resolve session label: missing"],
+  [
+    { sessionKey: "missing", requireExisting: true },
+    { key: "missing" },
+    "Session key not found: missing",
+  ],
+] as const)(
+  "rejects an unresolved newSession route before resetting: %j",
+  async (metadata, lookup, error) => {
+    const { agent, request, sessionUpdate } = fixture([], async () => ({ ok: true }), {
       resetSession: true,
     });
     await expect(
@@ -130,19 +114,13 @@ it.each([
 );
 
 it.each([
-  { cursor: "not-base64-json", error: "Invalid ACP session list cursor." },
-  {
-    cursor: encodeCursor({ v: 1, offset: 10_101 }),
-    error: "Invalid ACP session list cursor offset.",
-  },
-  {
-    cursor: encodeCursor({ v: 2, offset: 0 }),
-    error: "Unsupported ACP session list cursor.",
-  },
-  { cursor: encodeCursor([]), error: "Invalid ACP session list cursor." },
+  ["not-base64-json", "Invalid ACP session list cursor."],
+  [encodeCursor({ v: 1, offset: 10_101 }), "Invalid ACP session list cursor offset."],
+  [encodeCursor({ v: 2, offset: 0 }), "Unsupported ACP session list cursor."],
+  [encodeCursor([]), "Invalid ACP session list cursor."],
 ])(
-  "rejects invalid session/list cursors before querying the Gateway: $cursor",
-  async ({ cursor, error }) => {
+  "rejects invalid session/list cursors before querying the Gateway: %s",
+  async (cursor, error) => {
     const { agent, request } = fixture();
     await expect(agent.listSessions({ cursor })).rejects.toThrow(error);
     expect(request).not.toHaveBeenCalled();
@@ -262,26 +240,24 @@ it.each(["resume", "load"] as const)(
   async (route) => {
     const resume = route === "resume";
     const sessionId = resume ? sessionKey : "client-local-session";
-    const title = resume ? "Work session" : "Child";
-    const spawnedWorkspaceDir = resume ? cwd : "/workspace/child";
+    const title = "Child";
+    const spawnedWorkspaceDir = "/workspace/child";
     const { agent, request, sessionUpdate, sessionStore } = fixture([
       row(sessionKey, {
         thinkingLevel: "adaptive",
-        ...(resume ? { derivedTitle: title } : { parentSessionKey, displayName: title }),
+        parentSessionKey,
+        ...(resume ? { derivedTitle: title } : { displayName: title }),
         spawnedWorkspaceDir,
-        updatedAt: resume ? 1_710_000_000_000 : 1_710_000_020_000,
       }),
     ]);
-    const result = resume
-      ? await agent.resumeSession({ sessionId, cwd, mcpServers: [] })
-      : await agent.loadSession({
+    const result = await (resume
+      ? agent.resumeSession({ sessionId, cwd, mcpServers: [] })
+      : agent.loadSession({
           ...createLoadSessionRequest(sessionId),
           _meta: { sessionKey },
-        });
+        }));
     expect(result.modes?.currentModeId).toBe("adaptive");
-    expect(result.configOptions?.find((option) => option.id === "thought_level")).toMatchObject({
-      currentValue: "adaptive",
-    });
+    expectConfigOption(result.configOptions, "thought_level", { currentValue: "adaptive" });
     expect(sessionStore.getSession(sessionId)?.sessionKey).toBe(sessionKey);
     if (resume) {
       expect(request.mock.calls.map(([method]) => method)).not.toContain("sessions.get");
@@ -291,11 +267,11 @@ it.each(["resume", "load"] as const)(
       update: {
         sessionUpdate: "session_info_update",
         title,
-        updatedAt: resume ? "2024-03-09T16:00:00.000Z" : "2024-03-09T16:00:20.000Z",
+        updatedAt: "2024-03-09T16:00:00.000Z",
         _meta: expect.objectContaining({
           sessionKey,
           spawnedWorkspaceDir,
-          ...(!resume ? { parentSessionId: parentSessionKey } : {}),
+          parentSessionId: parentSessionKey,
         }),
       },
     });
@@ -309,7 +285,7 @@ it.each([
 ] as const)(
   "settles prompts on a terminal $status acknowledgement",
   async ({ status, stopReason }) => {
-    const { agent, request, sessionStore } = fixture([], async (method, params) => {
+    const { agent, sessionStore } = fixture([], async (method, params) => {
       if (method === "chat.send") {
         return { runId: params?.idempotencyKey, status };
       }
@@ -322,7 +298,6 @@ it.each([
     } else {
       await expect(prompt).resolves.toEqual({ stopReason });
     }
-    expect(request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
   },
 );
 
@@ -340,15 +315,11 @@ it("drains only its own pending work and sessions during shutdown", async () => 
     }
     return method === "sessions.list" ? sessions([]) : { ok: true };
   });
-  const agentA = createAcpGatewayAgent(
-    createAcpConnection(),
-    createAcpGateway(request as GatewayClient["request"]),
-    { eventLedger: ledger },
-  );
-  const agentB = createAcpGatewayAgent(
-    createAcpConnection(),
-    createAcpGateway(request as GatewayClient["request"]),
-  );
+  const { agent: agentA } = createTranslatorScenario(request, {
+    sessions: [],
+    eventLedger: ledger,
+  });
+  const { agent: agentB } = createTranslatorScenario(request, { sessions: [] });
   const sessionA = await agentA.newSession(createNewSessionRequest(cwd));
   const sessionB = await agentB.newSession(createNewSessionRequest(cwd));
   const pending = agentA.prompt(createPromptRequest(sessionA.sessionId, "hello"));

@@ -80,14 +80,20 @@ async function createHarness(
     await Promise.all(prompts);
   };
   onTestFinished(cleanup);
+  const resolutions = () =>
+    h.request.mock.calls.filter(([method]) => method === "exec.approval.resolve");
   return {
     ...h,
     requestPermission,
-    resolutions: () =>
-      h.request.mock.calls.filter(([method]) => method === "exec.approval.resolve"),
+    resolutions,
     send: h.agent.handleGatewayEvent.bind(h.agent),
-    expectResolution(id: string, decision = "allow-once") {
-      expect(h.request).toHaveBeenCalledWith("exec.approval.resolve", { id, decision });
+    async expectResolution(id: string, decision = "allow-once", attempts = 1) {
+      await vi.waitFor(() => {
+        expect(requestPermission).toHaveBeenCalledTimes(1);
+        expect(resolutions()).toEqual(
+          Array.from({ length: attempts }, () => ["exec.approval.resolve", { id, decision }]),
+        );
+      });
     },
     runId: expectDefined(h.runIds[0], "first Gateway run id"),
     cleanup,
@@ -128,22 +134,14 @@ it.each([
       : vi.fn().mockResolvedValue({ outcome });
   const h = await createHarness({ requestPermission });
   await h.send(approval(h.runId));
-  await vi.waitFor(() => {
-    expect(h.requestPermission).toHaveBeenCalledTimes(1);
-    expect(h.resolutions()).toEqual([
-      ["exec.approval.resolve", { id: "approval-1", decision: "deny" }],
-    ]);
-  });
+  await h.expectResolution("approval-1", "deny");
 });
 
 it("relays raw approval requests once before the later agent approval event", async () => {
   const h = await createHarness();
   await h.send(rawApproval("approval-raw"));
   await h.send(approval(h.runId, "approval-raw", "tool-late"));
-  await vi.waitFor(() => {
-    expect(h.requestPermission).toHaveBeenCalledTimes(1);
-    expect(h.resolutions()).toHaveLength(1);
-  });
+  await h.expectResolution("approval-raw");
   expectSingleCall(h.requestPermission, {
     sessionId: "session-1",
     toolCall: {
@@ -151,7 +149,6 @@ it("relays raw approval requests once before the later agent approval event", as
       rawInput: { command: "echo hydrated" },
     },
   });
-  h.expectResolution("approval-raw");
 });
 
 it("correlates concurrent approvals by a unique execute tool call and fails closed otherwise", async () => {
@@ -167,15 +164,11 @@ it("correlates concurrent approvals by a unique execute tool call and fails clos
   await h.send(tool(secondRun, "tool-second", "exec", "echo second"));
   expect(h.requestPermission).not.toHaveBeenCalled();
   await h.send(rawApproval("approval-shared", "tool-second"));
-  await vi.waitFor(() => {
-    expect(h.requestPermission).toHaveBeenCalledTimes(1);
-    expect(h.resolutions()).toHaveLength(1);
-  });
+  await h.expectResolution("approval-shared");
   expectSingleCall(h.requestPermission, {
     sessionId: "session-2",
     toolCall: { toolCallId: "tool-second", title: expect.stringContaining("echo second") },
   });
-  h.expectResolution("approval-shared");
   await h.send(rawApproval("approval-mismatch", "tool-missing"));
   for (const runId of h.runIds) {
     await h.send(tool(runId, "tool-duplicate"));
@@ -212,9 +205,7 @@ it.each(["duplicate event", "gateway reconnect"])(
     } else {
       await h.send(event);
     }
-    await vi.waitFor(() => expect(resolveApproval).toHaveBeenCalledTimes(2));
-    h.expectResolution("approval-retry");
-    expect(h.requestPermission).toHaveBeenCalledTimes(1);
+    await h.expectResolution("approval-retry", "allow-once", 2);
   },
 );
 
