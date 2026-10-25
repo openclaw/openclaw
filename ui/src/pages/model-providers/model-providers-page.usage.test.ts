@@ -75,12 +75,11 @@ describe("ModelProvidersPage usage convergence", () => {
       [...openai.querySelectorAll(".model-providers__account-limits")].map(
         (limits) => limits.textContent,
       );
-    await vi.waitFor(() =>
-      expect(limitsText()).toEqual([
-        expect.stringContaining("90% left"),
-        expect.stringContaining("90% left"),
-      ]),
-    );
+    const expectLimits = (remaining: number) =>
+      expect(limitsText()).toEqual(
+        Array.from({ length: 2 }, () => expect.stringContaining(`${remaining}% left`)),
+      );
+    await vi.waitFor(() => expectLimits(90));
     expect(accountRequests).toEqual([
       { agentId: "main", profileId: "openai:one" },
       { agentId: "main", profileId: "openai:two" },
@@ -90,29 +89,23 @@ describe("ModelProvidersPage usage convergence", () => {
         meter.getAttribute("aria-valuenow"),
       ),
     ).toEqual(["90", "90"]);
-    expect(
-      anthropic.querySelector('[data-profile-id="anthropic:one"] .model-providers__account-limits'),
-    ).toBeNull();
-    expect(
-      openai.querySelector('[data-profile-id="openai:key"] .model-providers__account-limits'),
-    ).toBeNull();
+    for (const [row, id] of [
+      [anthropic, "anthropic:one"],
+      [openai, "openai:key"],
+    ] as const) {
+      expect(
+        row.querySelector(`[data-profile-id="${id}"] .model-providers__account-limits`),
+      ).toBeNull();
+    }
     runtimeConfig.state.configSaving = true;
     notifyRuntimeConfig();
     await page.updateComplete;
-    expect(limitsText()).toEqual([
-      expect.stringContaining("90% left"),
-      expect.stringContaining("90% left"),
-    ]);
+    expectLimits(90);
     runtimeConfig.state.configSaving = false;
     notifyRuntimeConfig();
     usedPercent = 90;
     page.querySelector<HTMLButtonElement>('button[aria-label="Refresh"]')?.click();
-    await vi.waitFor(() =>
-      expect(limitsText()).toEqual([
-        expect.stringContaining("10% left"),
-        expect.stringContaining("10% left"),
-      ]),
-    );
+    await vi.waitFor(() => expectLimits(10));
     expect(accountRequests).toHaveLength(4);
   });
 
@@ -157,9 +150,7 @@ describe("ModelProvidersPage usage convergence", () => {
       await page.updateComplete;
       expect(page.renderRoot.textContent).toContain("did not finish loading");
 
-      const usageCallsBeforeRestart = harness.request.mock.calls.filter(
-        ([method]) => method === "usage.status",
-      ).length;
+      const usageCallsBeforeRestart = requestCount(harness.request, "usage.status");
       expect(usageCallsBeforeRestart).toBe(4);
 
       if (trigger === "manual refresh") {
@@ -178,9 +169,7 @@ describe("ModelProvidersPage usage convergence", () => {
       await page.updateComplete;
       await vi.advanceTimersByTimeAsync(0);
 
-      expect(
-        harness.request.mock.calls.filter(([method]) => method === "usage.status").length,
-      ).toBe(5);
+      expect(requestCount(harness.request, "usage.status")).toBe(5);
     },
   );
 
@@ -202,11 +191,7 @@ describe("ModelProvidersPage usage convergence", () => {
     harness.publishPhase("connected");
     await page.updateComplete;
 
-    await vi.waitFor(() =>
-      expect(
-        harness.request.mock.calls.filter(([method]) => method === "usage.status").length,
-      ).toBe(1),
-    );
+    await vi.waitFor(() => expect(requestCount(harness.request, "usage.status")).toBe(1));
     releaseOldLoad();
     await vi.waitFor(() =>
       expect(page.view.props.cards.find((card) => card.id === "openai")?.usage).toEqual(
@@ -301,6 +286,13 @@ describe("ModelProvidersPage usage convergence", () => {
     expect(requestCount(harness.request, "sessions.usage")).toBe(0);
     const search = page.querySelector<HTMLInputElement>(".model-providers__search input")!;
     const row = page.querySelector('[data-provider-id="openai"]')!;
+    const expectRetainedControls = () => {
+      expect(requestCount(harness.request, "sessions.usage")).toBe(0);
+      expect(page.querySelector('[data-provider-id="openai"]')).toBe(row);
+      expect(page.querySelector(".model-providers__search input")).toBe(search);
+      expect(document.activeElement).toBe(search);
+      expect(row.querySelector(".provider-row__plan")?.textContent).toBe("Pro");
+    };
     search.focus();
     page.loaderPending = false;
     await waitForSolid(() => expect(usageReads).toBe(1));
@@ -311,21 +303,14 @@ describe("ModelProvidersPage usage convergence", () => {
     await waitForSolid(() =>
       expect(row.querySelector(".provider-row__plan")?.textContent).toBe("Pro"),
     );
-    expect(requestCount(harness.request, "sessions.usage")).toBe(0);
-    expect(page.querySelector('[data-provider-id="openai"]')).toBe(row);
-    expect(page.querySelector(".model-providers__search input")).toBe(search);
-    expect(document.activeElement).toBe(search);
+    expectRetainedControls();
     page.view.props.onRefresh();
     await waitForSolid(() =>
       expect(page.renderRoot.textContent).toContain(
         "Provider usage is unavailable; the last request failed. Refresh to retry.",
       ),
     );
-    expect(requestCount(harness.request, "sessions.usage")).toBe(0);
-    expect(page.querySelector('[data-provider-id="openai"]')).toBe(row);
-    expect(page.querySelector(".model-providers__search input")).toBe(search);
-    expect(document.activeElement).toBe(search);
-    expect(row.querySelector(".provider-row__plan")?.textContent).toBe("Pro");
+    expectRetainedControls();
     usageFails = false;
     page.view.props.onRefresh();
     await waitForSolid(() => {
