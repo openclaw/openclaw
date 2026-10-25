@@ -154,7 +154,8 @@ describe("announce loop guard (#18264)", () => {
   const { flushAsync } = createLifecycleWaits("agent:main:main");
   const terminalRun = (
     runId: string,
-    child: "expired-child" | "retry-budget",
+    child: string,
+    sessionId: string,
     ages: [number, number, number],
     overrides: Partial<SubagentRunRecord> = {},
   ): SubagentRunRecord => {
@@ -162,7 +163,7 @@ describe("announce loop guard (#18264)", () => {
     return {
       runId,
       childSessionKey: `agent:main:subagent:${child}`,
-      childSessionIdentity: { sessionId: sessionStore[`agent:main:subagent:${child}`]!.sessionId },
+      childSessionIdentity: { sessionId },
       requesterSessionKey: "agent:main:main",
       requesterDisplayKey: "agent:main:main",
       task: runId,
@@ -238,8 +239,11 @@ describe("announce loop guard (#18264)", () => {
     const entry = terminalRun(
       "test-expired-loop",
       "expired-child",
+      "sess-expired",
       [15 * 60_000, 14 * 60_000, 10 * 60_000],
       {
+        task: "expired test task",
+        cleanupCompletedAt: undefined,
         delivery: { status: "pending", attemptCount: 3, lastAttemptAt: now - 9 * 60_000 },
       },
     );
@@ -260,14 +264,15 @@ describe("announce loop guard (#18264)", () => {
   test.each([
     {
       name: "controller queue custody preserves the failure budget without timer replay",
+      attemptCount: 3,
       restoreDelayMs: 0,
     },
     {
       name: "restores saved backoff before transferring delivery to the controller queue",
+      attemptCount: 3,
       restoreDelayMs: 1_000,
     },
-  ])("$name", async ({ restoreDelayMs }) => {
-    const attemptCount = 3;
+  ])("$name", async ({ attemptCount, restoreDelayMs }) => {
     const busyRequester = reserveSessionControllerSource("agent:main:main", {
       sourceTurnId: "busy-requester",
       policy: { mode: "followup" },
@@ -307,18 +312,25 @@ describe("announce loop guard (#18264)", () => {
     });
 
     const now = Date.now();
-    const entry = terminalRun("test-retry-budget", "retry-budget", [120_000, 90_000, 60_000], {
-      expectsCompletionMessage: true,
-      completion: { required: true },
-      delivery: {
-        status: "pending",
-        attemptCount: 3,
-        lastAttemptAt: now - 30_000,
-        windowStartedAt: now - 60_000,
-        deadlineAt: now - 60_000 + 30 * 60_000,
-        ...(restoreDelayMs ? { nextAttemptAt: now + restoreDelayMs } : {}),
+    const entry = terminalRun(
+      "test-retry-budget",
+      "retry-budget",
+      "sess-retry",
+      [120_000, 90_000, 60_000],
+      {
+        task: "retry window test",
+        expectsCompletionMessage: true,
+        completion: { required: true },
+        delivery: {
+          status: "pending",
+          attemptCount: 3,
+          lastAttemptAt: now - 30_000,
+          windowStartedAt: now - 60_000,
+          deadlineAt: now - 60_000 + 30 * 60_000,
+          ...(restoreDelayMs ? { nextAttemptAt: now + restoreDelayMs } : {}),
+        },
       },
-    });
+    );
     await prepareSubagentRecoveryFixture(entry, { entries: sessionStore });
     restoreRun(entry);
 

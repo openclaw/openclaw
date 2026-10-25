@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
+import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, assert, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
@@ -15,8 +16,8 @@ const failedLogPaths = new Set<string>();
 let logPath: string;
 const read = (file: string) => fs.readFileSync(file, "utf8");
 const captureStderr = () => vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-const warningLines = (spy: ReturnType<typeof captureStderr>, text = "") =>
-  spy.mock.calls.map(([line]) => String(line)).filter((line) => line.includes(text));
+const warningLines = (spy: ReturnType<typeof captureStderr>) =>
+  spy.mock.calls.map(([line]) => String(line));
 function entry(file: string, payload: string, maxFileBytes = 1024 * 1024) {
   return { file, hostname: "transport-test-host", maxFileBytes, payload };
 }
@@ -44,6 +45,12 @@ async function logBatch(...messages: string[]) {
     getLogger().info(message);
   }
   await fileLogTransport.flush();
+}
+
+function writeStableRecords(): void {
+  const logger = getLogger();
+  logger.info({ sequence: 1 }, "first queued record");
+  logger.info({ sequence: 2 }, "second queued record");
 }
 
 beforeAll(async () => {
@@ -74,6 +81,28 @@ afterEach(async () => {
 afterAll(() => logPathTracker.cleanup());
 beforeEach(() => {
   logPath = logPathTracker.nextPath();
+});
+
+it("writes queued records in order and byte-identically to the synchronous drain", async () => {
+  const syncPath = logPathTracker.nextPath();
+  const asyncPath = logPathTracker.nextPath();
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-07-27T12:00:00Z"));
+  vi.spyOn(os, "hostname").mockReturnValue("transport-test-host");
+  setLoggerOverride({ level: "info", file: syncPath });
+
+  writeStableRecords();
+  fileLogTransport.drainSync();
+  const syncBytes = fs.readFileSync(syncPath);
+
+  resetLogger();
+  setLoggerOverride({ level: "info", file: asyncPath });
+  writeStableRecords();
+  await fileLogTransport.flush();
+
+  expect(fs.readFileSync(asyncPath)).toEqual(syncBytes);
+  const messages = records(syncPath).map((record) => record.message);
+  expect(messages).toEqual(["first queued record", "second queued record"]);
 });
 
 it("drops the oldest records on overflow and writes one count marker", async () => {
@@ -192,10 +221,13 @@ for (const kind of ["symlink", "hardlink"]) {
       failedLogPaths.add(logPath);
       const stderr = captureStderr();
       setLoggerOverride({ level: "info", file: logPath });
-      await logBatch("first queued record", "second queued record");
+      writeStableRecords();
+      await fileLogTransport.flush();
 
       expect(read(target)).toBe("untouched");
-      expect(warningLines(stderr, "log file append failed")).toHaveLength(1);
+      expect(
+        warningLines(stderr).filter((line) => line.includes("log file append failed")),
+      ).toHaveLength(1);
     },
   );
 }
@@ -221,9 +253,33 @@ it("warns once per append failure streak and continues with later batches", asyn
     "written-companion-after-failure",
   ]);
   const warnings = warningLines(stderrSpy);
-  expect(warningLines(stderrSpy, "log file append failed")).toHaveLength(2);
+  expect(warnings.filter((line) => line.includes("log file append failed"))).toHaveLength(2);
   expect(warnings[0]).toContain("records dropped; check that the path is a writable regular file");
   expect(warnings.join("\n")).not.toContain(secret);
+});
+
+it("keeps failure streaks independent by file", async () => {
+  const firstPath = logPathTracker.nextPath();
+  const secondPath = logPathTracker.nextPath();
+  fs.mkdirSync(firstPath);
+  fs.mkdirSync(secondPath);
+  failedLogPaths.add(firstPath);
+  failedLogPaths.add(secondPath);
+  const stderrSpy = captureStderr();
+
+  logTo(firstPath, "first-file-failure");
+  logTo(secondPath, "second-file-failure");
+  await fileLogTransport.flush();
+
+  fs.rmdirSync(secondPath);
+  getLogger().info("second-file-recovery");
+  logTo(firstPath, "first-file-repeated-failure");
+  await fileLogTransport.flush();
+
+  const warnings = warningLines(stderrSpy);
+  expect(warnings.filter((line) => line.includes(`file=${firstPath}`))).toHaveLength(1);
+  expect(warnings.filter((line) => line.includes(`file=${secondPath}`))).toHaveLength(1);
+  expect(read(secondPath)).toContain("second-file-recovery");
 });
 
 // A deleted directory reached through its open descriptor mirrors a stale mounted
@@ -242,7 +298,8 @@ it.skipIf(process.platform !== "linux")(
       logTo(logPath, "only-record-after-deletion");
       await fileLogTransport.flush();
 
-      expect(warningLines(stderrSpy, `file=${logPath}`)).not.toHaveLength(0);
+      const warnings = warningLines(stderrSpy);
+      expect(warnings.some((line) => line.includes(`file=${logPath}`))).toBe(true);
     } finally {
       fs.closeSync(fd);
     }
@@ -292,7 +349,7 @@ it("retries the warning after stderr rejects it", async () => {
   expect(String(stderrSpy.mock.calls[1]?.[0])).toContain(`file=${logPath}`);
 });
 
-it("keeps failure streaks independent and releases saturated tracking after recovery", async () => {
+it("releases saturated failure tracking after a tracked file recovers", async () => {
   const paths = Array.from({ length: 65 }, () => logPathTracker.nextPath());
   const firstPath = paths[0]!;
   const lastPath = paths[64]!;
@@ -310,17 +367,16 @@ it("keeps failure streaks independent and releases saturated tracking after reco
   }
   await fileLogTransport.flush();
 
-  expect(warningLines(stderrSpy, "diagnostics saturated")).toHaveLength(1);
-  expect(warningLines(stderrSpy, `file=${lastPath}`)).toHaveLength(0);
+  const warnings = warningLines(stderrSpy);
+  expect(warnings.filter((line) => line.includes("diagnostics saturated"))).toHaveLength(1);
+  expect(warnings.some((line) => line.includes(`file=${lastPath}`))).toBe(false);
 
   recoveringFirstPath = true;
   logTo(firstPath, "tracked-file-recovery");
   logTo(lastPath, "newly-tracked-failure");
-  logTo(paths[1]!, "still-failing-file");
   await fileLogTransport.flush();
 
-  expect(read(firstPath)).toContain("tracked-file-recovery");
-  expect(warningLines(stderrSpy, `file=${firstPath}`)).toHaveLength(1);
-  expect(warningLines(stderrSpy, `file=${paths[1]!}`)).toHaveLength(1);
-  expect(warningLines(stderrSpy, `file=${lastPath}`)).not.toHaveLength(0);
+  expect(stderrSpy.mock.calls.some(([line]) => String(line).includes(`file=${lastPath}`))).toBe(
+    true,
+  );
 });

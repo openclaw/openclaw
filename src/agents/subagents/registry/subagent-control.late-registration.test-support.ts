@@ -3,21 +3,17 @@ import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/help
 import { replaceSessionEntrySync } from "../../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { rotateAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
-import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
+  beginSessionEffect,
   captureSessionTarget,
   SESSION_CONTROLLER_DRAIN_TIMEOUT_MS,
 } from "../../../sessions/session-controller.lifecycle.js";
 import { createReplyOperation } from "../../../sessions/session-controller.operation.js";
-import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
+import { runOpenClawStateWorkerOperation } from "../../../state/openclaw-state-worker-store.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { holdQueuedSwarmRun, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
 import * as killSession from "./subagent-control-session.js";
-import {
-  beginControlAdmission,
-  controlController,
-  enqueueControlRun,
-} from "./subagent-control.fixtures.test-support.js";
+import { controlController, enqueueControlRun } from "./subagent-control.fixtures.test-support.js";
 import { killAllControlledSubagentRuns } from "./subagent-control.js";
 import { runSubagentStateWorkerOperation } from "./subagent-control.test-support.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
@@ -35,39 +31,6 @@ type StoreControlDeps = {
   ) => void;
   writeSessionStoreFixture: (label: string, store: Record<string, unknown>) => Promise<string>;
 };
-
-const sessionIdentity = (sessionId: string) => ({
-  sessionId,
-  lifecycleRevision: sessionId + "-revision",
-});
-function withdrawReservation(runId: string, releases: Promise<void>[]) {
-  const hold = holdQueuedSwarmRun(runId);
-  const withdrawn = hold?.withdraw();
-  if (hold) {
-    releases.push(hold.release());
-  }
-  expect(withdrawn).toBe(true);
-}
-const registerQueued = (
-  runId: string,
-  requesterSessionKey: string,
-  task: string,
-  requesterTurnRunId?: string,
-) =>
-  registerSubagentRun({
-    runId,
-    childSessionKey: `agent:main:subagent:${runId}`,
-    childAgentId: "main",
-    sessionEntry: sessionIdentity(`${runId}-session`),
-    requesterSessionKey,
-    requesterAgentId: "main",
-    requesterDisplayKey: requesterSessionKey,
-    requesterTurnRunId,
-    task,
-    cleanup: "keep",
-    collect: true,
-    queued: true,
-  });
 
 export function registerAdmissionDrainControlTests({
   cfgWithSessionStore,
@@ -88,7 +51,7 @@ export function registerAdmissionDrainControlTests({
       let entry = createSubagentRunRecord({
         runId: "run-kill-admission-timeout",
         childSessionKey,
-        childSessionIdentity: sessionIdentity(sessionId),
+        childSessionIdentity: { sessionId, lifecycleRevision: sessionId + "-revision" },
         controllerSessionKey,
         task: "hold admission during kill",
         collect: queued,
@@ -102,12 +65,12 @@ export function registerAdmissionDrainControlTests({
         [childSessionKey]: { sessionId, updatedAt: Date.now() },
       });
       const interrupted = createDeferred();
-      const admission = await beginControlAdmission(
-        storePath,
-        childSessionKey,
-        sessionId,
-        interrupted.resolve,
-      );
+      const admission = await beginSessionEffect({
+        scope: storePath,
+        identities: [childSessionKey, sessionId],
+        assertAllowed: () => {},
+        onInterrupt: () => interrupted.resolve(),
+      });
       setSubagentControlDepsForTest({
         clearSessionQueues: () => [],
       });
@@ -176,7 +139,10 @@ export function registerLateDescendantControlTests({
       let parent = createSubagentRunRecord({
         runId: "late-parent",
         childSessionKey: "agent:main:subagent:late-parent",
-        childSessionIdentity: sessionIdentity("late-parent-session"),
+        childSessionIdentity: {
+          sessionId: "late-parent-session",
+          lifecycleRevision: "late-parent-session-revision",
+        },
         requesterSessionKey: owner,
         requesterDisplayKey: owner,
         task: "orchestrator",
@@ -188,7 +154,10 @@ export function registerLateDescendantControlTests({
         ...parent,
         runId: "live-child",
         childSessionKey: "agent:main:subagent:live-child",
-        childSessionIdentity: sessionIdentity("live-child-session"),
+        childSessionIdentity: {
+          sessionId: "live-child-session",
+          lifecycleRevision: "live-child-session-revision",
+        },
         controllerSessionKey: parent.childSessionKey,
       });
       await addSubagentRunForTests(parent);
@@ -202,29 +171,40 @@ export function registerLateDescendantControlTests({
       });
       const reached = createDeferred();
       const proceed = createDeferred();
-      const admission = await beginControlAdmission(
-        storePath,
-        parent.childSessionKey,
-        "late-parent-session",
-        () => {
+      const admission = await beginSessionEffect({
+        scope: storePath,
+        identities: [parent.childSessionKey, "late-parent-session"],
+        assertAllowed: () => {},
+        onInterrupt: () => {
           reached.resolve();
           if (phase !== "admission drain") {
             expect(releaseSwarmRun(parent.runId)).toBe(true);
             admission.release();
           }
         },
-      );
+      });
       const start = vi.fn(async () => {});
       const childKey = "agent:main:subagent:late-child";
       const registerChild = () => {
         const requester = phase === "admission drain" ? activeChild : parent;
         expect(requester.execution.endedAt).toBeUndefined();
         enqueueControlRun("late-descendants", "late-child", [parent.runId], start);
-        return registerQueued(
-          "late-child",
-          requester.childSessionKey,
-          "registered while orchestrator is live",
-        );
+        return registerSubagentRun({
+          runId: "late-child",
+          childSessionKey: childKey,
+          childAgentId: "main",
+          sessionEntry: {
+            sessionId: "late-child-session",
+            lifecycleRevision: "late-child-session-revision",
+          },
+          requesterSessionKey: requester.childSessionKey,
+          requesterAgentId: "main",
+          requesterDisplayKey: requester.childSessionKey,
+          task: "registered while orchestrator is live",
+          cleanup: "keep",
+          collect: true,
+          queued: true,
+        });
       };
       setSubagentControlDepsForTest({});
       const cfg = cfgWithSessionStore(storePath);
@@ -258,16 +238,32 @@ export function registerLateDescendantControlTests({
       try {
         await reached.promise;
         if (replaceChild) {
-          withdrawReservation("late-child", reservationReleases);
+          const hold = holdQueuedSwarmRun("late-child");
+          const withdrawn = hold?.withdraw();
+          if (hold) {
+            reservationReleases.push(hold.release());
+          }
+          expect(withdrawn).toBe(true);
         }
         await registerChild();
         const outsideStart = vi.fn(async () => {});
-        await registerQueued(
-          "other-turn-root",
-          owner,
-          "outside the captured root set",
-          "other-turn",
-        );
+        await registerSubagentRun({
+          runId: "other-turn-root",
+          childSessionKey: "agent:main:subagent:other-turn-root",
+          childAgentId: "main",
+          sessionEntry: {
+            sessionId: "other-turn-root-session",
+            lifecycleRevision: "other-turn-root-session-revision",
+          },
+          requesterSessionKey: owner,
+          requesterAgentId: "main",
+          requesterTurnRunId: "other-turn",
+          requesterDisplayKey: owner,
+          task: "outside the captured root set",
+          cleanup: "keep",
+          collect: true,
+          queued: true,
+        });
         enqueueControlRun("other-turn", "other-turn-root", [], outsideStart);
         proceed.resolve();
         if (phase === "admission drain") {
@@ -326,12 +322,16 @@ export function registerQueuedReservationFailureTests({
     "session replacement",
     "row replacement",
     "lifecycle rotation",
+    "parent persistence",
   ])("releases or withdraws the exact queued reservation after %s failure", async (failure) => {
     const { controllerSessionKey } = controlController;
     let entry = createSubagentRunRecord({
       runId: "failure-queued",
       childSessionKey: "agent:main:subagent:failure-queued",
-      childSessionIdentity: sessionIdentity("queued-session"),
+      childSessionIdentity: {
+        sessionId: "queued-session",
+        lifecycleRevision: "queued-session-revision",
+      },
       controllerSessionKey,
       requesterSessionKey: controllerSessionKey,
       task: "queued failure",
@@ -350,37 +350,49 @@ export function registerQueuedReservationFailureTests({
     const reserve = () => enqueueControlRun("failure-lane", entry.runId, [], dispatch);
     reserve();
     let writes = 0;
-    const rejectsWrite = [
-      "tombstone write",
-      "claim release",
-      "session replacement release",
-    ].includes(failure);
-    const replaceSession = () =>
-      replaceSessionEntrySync(
-        { storePath, sessionKey: entry.childSessionKey },
-        { sessionId: "new-session", updatedAt: 2 },
-      );
+    let rejectedWrite: number | undefined;
     resetRegistryLeafMocks();
-    probe.command(
-      stateWorker,
-      async (command, options, scope) => {
-        const writeNumber = command.type === "subagents.persistChanges" ? ++writes : undefined;
-        if (failure === "session replacement at intent" && writeNumber === 1) {
-          replaceSession();
-        }
-        if (rejectsWrite && writeNumber === 2) {
-          throw new Error("sqlite busy");
-        }
-        const receipt = await scope.execute(command, options);
-        if (
-          ["session replacement", "session replacement release"].includes(failure) &&
-          writeNumber === 1
-        ) {
-          replaceSession();
-        }
-        return receipt;
-      },
-      { original: runSubagentStateWorkerOperation },
+    vi.mocked(runOpenClawStateWorkerOperation).mockImplementation((context, operation, options) =>
+      runSubagentStateWorkerOperation(
+        context,
+        (scope) =>
+          operation({
+            ...scope,
+            execute: async (command) => {
+              const writeNumber =
+                command.type === "subagents.persistChanges" ? ++writes : undefined;
+              if (writeNumber !== undefined) {
+                if (failure === "session replacement at intent" && writeNumber === 1) {
+                  replaceSessionEntrySync(
+                    { storePath, sessionKey: entry.childSessionKey },
+                    { sessionId: "new-session", updatedAt: 2 },
+                  );
+                }
+                if (
+                  ["tombstone write", "claim release", "session replacement release"].includes(
+                    failure,
+                  ) &&
+                  writeNumber === 2
+                ) {
+                  rejectedWrite = writeNumber;
+                  throw new Error("sqlite busy");
+                }
+              }
+              const receipt = await scope.execute(command);
+              if (
+                ["session replacement", "session replacement release"].includes(failure) &&
+                writeNumber === 1
+              ) {
+                replaceSessionEntrySync(
+                  { storePath, sessionKey: entry.childSessionKey },
+                  { sessionId: "new-session", updatedAt: 2 },
+                );
+              }
+              return receipt;
+            },
+          }),
+        options,
+      ),
     );
     setSubagentControlDepsForTest({
       clearSessionQueues: () => [],
@@ -414,27 +426,40 @@ export function registerQueuedReservationFailureTests({
             "scheduled pump cannot dispatch while cancellation owns the reservation",
           ).not.toHaveBeenCalled();
           if (failure === "row replacement") {
-            withdrawReservation(entry.runId, reservationReleases);
+            const hold = holdQueuedSwarmRun(entry.runId);
+            const withdrawn = hold?.withdraw();
+            if (hold) {
+              reservationReleases.push(hold.release());
+            }
+            expect(withdrawn).toBe(true);
             await addSubagentRunForTests({ ...entry, generation: 2, createdAt: 2 });
             reserve();
           }
           if (failure === "lifecycle rotation") {
             rotateAgentEventLifecycleGeneration();
           }
+          if (failure === "parent persistence") {
+            throw new Error("partial persistence failed");
+          }
           return true;
         },
       });
-      const result = await pending;
-      expect(result.killed).toBe(0);
-      expect(result.status).toBe(
-        ["row replacement", "lifecycle rotation"].includes(failure) ? "ok" : "error",
-      );
-      if (failure === "session replacement release") {
-        expect(result).toMatchObject({
-          error: expect.stringContaining("kill intent could not be released"),
-        });
+      if (failure === "parent persistence") {
+        await expect(pending).rejects.toThrow("partial persistence failed");
+      } else {
+        const result = await pending;
+        expect(result.killed).toBe(0);
+        expect(result.status).toBe(
+          ["row replacement", "lifecycle rotation"].includes(failure) ? "ok" : "error",
+        );
+        if (failure === "session replacement release") {
+          expect(rejectedWrite).toBe(2);
+          expect(result).toMatchObject({
+            error: expect.stringContaining("kill intent could not be released"),
+          });
+        }
       }
-      if (rejectsWrite) {
+      if (["tombstone write", "claim release", "session replacement release"].includes(failure)) {
         expect(subagentRuns.get(entry.runId)?.killIntent).toMatchObject({ reason: "killed" });
         const survivor = vi.fn(async () => {});
         enqueueControlRun("failure-lane", "survivor", [], survivor);

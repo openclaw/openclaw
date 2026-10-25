@@ -178,25 +178,19 @@ function readInput(
 }
 
 function appendCompletionSource({ target, entry }: Pick<AdmittedCompletion, "target" | "entry">) {
-  return appendMessage(
-    { target, entry },
+  return appendTranscriptMessage(
+    { ...target, sessionId: entry.sessionId },
     {
-      role: "user",
-      content: "completed child",
-      idempotencyKey: `${announceId}:user`,
-      __openclaw: { runId: announceId },
-      provenance: inputProvenance,
+      eventId: "completion-source",
+      message: {
+        role: "user",
+        content: "completed child",
+        idempotencyKey: `${announceId}:user`,
+        __openclaw: { runId: announceId },
+        provenance: inputProvenance,
+      },
     },
-    "completion-source",
   );
-}
-
-function appendMessage(
-  { target, entry }: Pick<AdmittedCompletion, "target" | "entry">,
-  message: Parameters<typeof appendTranscriptMessage>[1]["message"],
-  eventId?: string,
-) {
-  return appendTranscriptMessage({ ...target, sessionId: entry.sessionId }, { message, eventId });
 }
 
 function prepareCompletionAdmission(
@@ -220,7 +214,9 @@ function prepareCompletionAdmission(
 
 async function admitEffect(admission: ReturnType<typeof prepareCompletionAdmission>) {
   const assertion = resolveAdmittedRunActiveAssertion(await admission.admit("embedded"));
-  assert(assertion, "Source effect was not captured.");
+  if (!assertion) {
+    throw new Error("Source effect was not captured.");
+  }
   return {
     assertion,
     effect: () => runWithAgentToolSourceExecutionScope(assertion, async () => assertion()),
@@ -244,7 +240,10 @@ describe("host-owned harness completion recovery", () => {
         });
         await expect(
           runWithAgentToolSourceExecutionScope(assertion, async () => {
-            await appendMessage({ target, entry }, { role: "user", content: "new instruction" });
+            await appendTranscriptMessage(
+              { ...target, sessionId: entry.sessionId },
+              { message: { role: "user", content: "new instruction" } },
+            );
             assertion();
           }),
         ).rejects.toThrow("no longer active");
@@ -287,7 +286,9 @@ describe("host-owned harness completion recovery", () => {
               ...transcript,
               entryId: "later-human",
             });
-            assert(anchor, "Missing admission fence anchor.");
+            if (!anchor) {
+              throw new Error("Missing admission fence anchor.");
+            }
             await expect(
               runWithSessionTranscriptReadFence(
                 { ...anchor, logicalTurnId: recoveryRunId, role: "user" },
@@ -503,7 +504,9 @@ describe("host-owned harness completion recovery", () => {
       const terminal = terminalEntry(entry, kind !== "progress");
       const sent =
         terminal.restartRecoveryTerminalDeliveryEvidence?.[0]?.messagingToolSentTargets?.[0];
-      assert(sent, "Missing real terminal target.");
+      if (!sent) {
+        throw new Error("Missing real terminal target.");
+      }
       switch (kind) {
         case "cold-final":
         case "progress":
@@ -546,17 +549,19 @@ describe("host-owned harness completion recovery", () => {
   it("requires the exact stored source and does not claim foreign or ordinary completions", async () => {
     for (const scenario of ["valid", "wrong-key", "ordinary-provenance"]) {
       await withCompletion(async ({ claim, entry, target, source }) => {
-        await appendMessage(
-          { target, entry },
+        await appendTranscriptMessage(
+          { ...target, sessionId: entry.sessionId },
           {
-            role: "user",
-            content: "Background work finished",
-            idempotencyKey: scenario === "wrong-key" ? "other:user" : `${announceId}:user`,
-            __openclaw: { runId: announceId },
-            provenance:
-              scenario === "ordinary-provenance"
-                ? { ...inputProvenance, sourceTool: "subagent_announce" }
-                : inputProvenance,
+            message: {
+              role: "user",
+              content: "Background work finished",
+              idempotencyKey: scenario === "wrong-key" ? "other:user" : `${announceId}:user`,
+              __openclaw: { runId: announceId },
+              provenance:
+                scenario === "ordinary-provenance"
+                  ? { ...inputProvenance, sourceTool: "subagent_announce" }
+                  : inputProvenance,
+            },
           },
         );
         expect(await readInput({ claim, entry, target })).toBe(scenario === "valid");
@@ -579,7 +584,9 @@ describe("host-owned harness completion recovery", () => {
 
       const terminal = terminalEntry(entry);
       const receipt = terminal.restartRecoveryTerminalDeliveryEvidence?.[0];
-      assert(receipt?.harnessCompletion, "missing terminal binding");
+      if (!receipt?.harnessCompletion) {
+        throw new Error("missing terminal binding");
+      }
       receipt.harnessCompletion.sessionId = "predecessor-physical";
       await replaceSessionEntry(target, {
         ...entry,
@@ -596,7 +603,9 @@ describe("host-owned harness completion recovery", () => {
         loadExactSessionEntry(target)?.entry,
         announceId,
       );
-      assert(receipt, "terminal receipt was not persisted");
+      if (!receipt) {
+        throw new Error("terminal receipt was not persisted");
+      }
       const visibleTarget = {
         provider: "discord",
         accountId: "main",
@@ -646,7 +655,10 @@ describe("review3 custody ownership", () => {
           await appendCompletionSource({ target, entry });
         }
         if (kind === "intervening-human") {
-          await appendMessage({ target, entry }, { role: "user", content: "new human work" });
+          await appendTranscriptMessage(
+            { ...target, sessionId: entry.sessionId },
+            { message: { role: "user", content: "new human work" } },
+          );
         }
         expect(await reconcileHarnessCompletionDelivery(request)).toBe("blocked");
       }),
@@ -732,7 +744,9 @@ describe("review3 Gateway admission custody", () => {
       let releaseClaim: (() => void) | undefined;
       try {
         expect(registration.registered).toBe(true);
-        assert(registration.entry, "expected registered source");
+        if (!registration.entry) {
+          throw new Error("expected registered source");
+        }
         expect(registration.markExecutionStarted()).toBe(false);
         if (kind === "claimed-preparation" || kind === "cleanup-requested") {
           const claim = await claimSessionControllerTask(registration.entry.input, () => {});
