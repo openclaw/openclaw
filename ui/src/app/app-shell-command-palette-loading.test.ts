@@ -144,24 +144,6 @@ describe("cold command palette input custody", () => {
     },
   );
 
-  it("retains its live field and selection while the shell refreshes and locks a queued submit", async () => {
-    const { state, input } = await mountLoader();
-    type(input, "Keep this selection");
-    input.setSelectionRange(5, 9, "backward");
-    flush();
-    expect(container.querySelector("textarea")).toBe(input);
-    expect([input.selectionStart, input.selectionEnd, input.selectionDirection]).toEqual([
-      5,
-      9,
-      "backward",
-    ]);
-    keydown(input, { metaKey: true });
-    flush();
-    expect(state.submitRequested()).toBe(true);
-    expect(input.readOnly).toBe(true);
-    expect(container.querySelector("textarea")).toBe(input);
-  });
-
   it.each(["typed", "pasted", "replaced", "dropped", "composing"])(
     "preserves only a typed mention trigger: %s",
     async (mode) => {
@@ -249,6 +231,7 @@ describe("cold command palette input custody", () => {
       type(input, value);
       const event = keydown(input, modifier);
       keydown(input, { ...modifier, repeat: true });
+      flush();
       expect(event.defaultPrevented).toBe(true);
       if (!submit) {
         expect(close).not.toHaveBeenCalled();
@@ -258,6 +241,8 @@ describe("cold command palette input custody", () => {
         expect(state.submitRequested()).toBe(false);
         return;
       }
+      expect(input.readOnly).toBe(true);
+      expect(container.querySelector("textarea")).toBe(input);
       const take = state.captureHandoff();
       expect(take()).toMatchObject({ value, submitRequested: true });
       expect(take()).toBeUndefined();

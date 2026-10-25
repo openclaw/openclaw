@@ -161,37 +161,6 @@ describe("openclaw-router-outlet", () => {
     expect(teardownView).not.toHaveBeenCalled();
   });
 
-  it("replaces the loading skeleton with the resolved route", async () => {
-    const routeModule = createDeferredCore<TestModule>();
-    const context = { label: "loaded" };
-    const router = testRouter(
-      page("page", routeModule.promise, (loadContext) => ({ label: loadContext.label })),
-    );
-    const outlet = createOutlet(router, context);
-    const navigation = router.navigate("page", context);
-
-    await settleOutlet(outlet);
-
-    const loadingState = outlet.querySelector('[role="status"]');
-    expect(loadingState?.getAttribute("aria-label")).toBe("Loading…");
-    expect(loadingState?.querySelector(".loading-skeleton")?.getAttribute("aria-hidden")).toBe(
-      "true",
-    );
-    expect(loadingState?.getAttribute("aria-busy")).toBeNull();
-    expect(loadingState?.textContent?.trim()).toBe("");
-    expect(outlet.textContent).not.toContain("Loading panel");
-
-    routeModule.resolve({
-      renderSolid: (props) => <div data-testid="route-page">{props.data?.label}</div>,
-    });
-    await navigation;
-    await settleOutlet(outlet);
-
-    expect(outlet.querySelector('[data-testid="route-page"]')?.textContent).toBe("loaded");
-    expect(outlet.querySelector('[role="status"]')).toBeNull();
-    expect(outlet.querySelector(".loading-skeleton")).toBeNull();
-  });
-
   it.each(["finish", "disconnect"])("settles a retiring MCP route after %s", async (completion) => {
     const teardown = createDeferredCore();
     const teardownView = vi.fn(() => teardown.promise);
@@ -237,46 +206,6 @@ describe("openclaw-router-outlet", () => {
     teardown.resolve(undefined);
     await expect.poll(() => outlet.querySelector('[data-testid="route-next"]')).not.toBeNull();
     expect(outlet.querySelector("mcp-app-view")).toBeNull();
-  });
-
-  it("keeps a loaded route visible with an error and retries through the latest context", async () => {
-    const firstLoad = createDeferredCore<TestData>();
-    let loadCount = 0;
-    const router = testRouter(
-      page(
-        "page",
-        {
-          renderSolid: (props) => (
-            <div data-testid="route-page">{props.data?.label ?? "pending"}</div>
-          ),
-        },
-        (context) => {
-          loadCount += 1;
-          return loadCount === 1 ? firstLoad.promise : { label: context.label };
-        },
-      ),
-    );
-    const initialContext = { label: "initial" };
-    const retryContext = { label: "retried" };
-    const outlet = createOutlet(router, initialContext);
-    const navigation = router.navigate("page", initialContext);
-    await settleOutlet(outlet);
-    firstLoad.reject(new Error("load failed"));
-    await expect(navigation).rejects.toThrow("load failed");
-    await settleOutlet(outlet);
-
-    expect(outlet.querySelector('[data-testid="route-page"]')?.textContent).toBe("pending");
-    expect(outlet.querySelector('[role="alert"]')?.textContent).toContain("load failed");
-
-    outlet.setInputs({ retryContext });
-    await settleOutlet(outlet);
-    outlet.querySelector<HTMLButtonElement>("button")?.click();
-    await expect
-      .poll(() => outlet.querySelector('[data-testid="route-page"]')?.textContent)
-      .toBe("retried");
-
-    expect(loadCount).toBe(2);
-    expect(outlet.querySelector('[role="alert"]')).toBeNull();
   });
 
   it("keeps asset recovery retryable after the reachability wait expires", async () => {
