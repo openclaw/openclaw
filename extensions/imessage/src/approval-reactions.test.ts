@@ -35,7 +35,11 @@ const deliveryTarget = {
   accountId: "default",
   target: { channel: "imessage", to: "+15551230000" },
 };
-function execPayload(approvalId: string, approvalSlug: string, command: string) {
+function execPayload(
+  approvalId = "exec-strict-1",
+  approvalSlug = "strict-1",
+  command = "echo strict",
+) {
   return buildTypedExecApprovalPendingReplyPayload({
     approvalId,
     approvalSlug,
@@ -49,6 +53,23 @@ function prepare(payload: ReplyPayload, approvalKind: "exec" | "plugin" = "exec"
 }
 function resolveTarget(messageId: string) {
   return lookupTarget({ ...identity, messageId, reactionKey: "👎" });
+}
+function requirePrepared(payload: ReplyPayload): ReplyPayload & { text: string } {
+  const prepared = prepare(payload);
+  if (!prepared?.text) {
+    throw new Error("Expected typed iMessage approval payload");
+  }
+  return { ...prepared, text: prepared.text };
+}
+function delivery(messageId: string, text: string, guid?: string) {
+  return {
+    channel: "imessage" as const,
+    messageId,
+    meta: { imessageMessageGuid: guid, imessageVisibleText: text },
+  };
+}
+function bind(payload: ReplyPayload, results: Parameters<typeof bindDelivered>[0]["results"]) {
+  return bindDelivered({ ...deliveryTarget, payload, results });
 }
 
 type IMessageTargetParams = Parameters<typeof registerRaw>[0];
@@ -146,25 +167,8 @@ describe("iMessage approval reactions", () => {
   });
 
   it("binds delivered shared prompts from typed metadata and stable GUIDs", async () => {
-    const payload = prepare(execPayload("exec-shared-1", "shared-1", "echo shared"));
-    if (!payload) {
-      throw new Error("Expected typed iMessage approval payload");
-    }
-
-    expect(
-      await bindDelivered({
-        ...deliveryTarget,
-        payload,
-        results: [
-          {
-            channel: "imessage",
-            messageId: "42",
-            meta: { imessageMessageGuid: "p:0/shared-guid", imessageVisibleText: payload.text },
-          },
-        ],
-      }),
-    ).toBe(true);
-
+    const payload = requirePrepared(execPayload("exec-shared-1", "shared-1", "echo shared"));
+    expect(await bind(payload, [delivery("42", payload.text, "p:0/shared-guid")])).toBe(true);
     await expect(resolveTarget("p:0/shared-guid")).resolves.toEqual({
       approvalId: "exec-shared-1",
       approvalKind: "exec",
@@ -174,12 +178,11 @@ describe("iMessage approval reactions", () => {
   });
 
   it("fails closed when typed metadata and approval actions disagree", () => {
-    const buildPayload = () => execPayload("exec-strict-1", "strict-1", "echo strict");
-    const missingKind = buildPayload();
+    const missingKind = execPayload();
     delete requireExecApprovalMetadata(missingKind).approvalKind;
     expect(prepare(missingKind)).toBeNull();
 
-    const mismatchedAction = buildPayload();
+    const mismatchedAction = execPayload();
     const buttons = mismatchedAction.presentation?.blocks.find((block) => block.type === "buttons");
     if (!buttons || buttons.type !== "buttons" || !buttons.buttons[0]?.action) {
       throw new Error("Expected typed approval buttons");
@@ -192,7 +195,7 @@ describe("iMessage approval reactions", () => {
     };
     expect(prepare(mismatchedAction)).toBeNull();
 
-    const duplicateDecision = buildPayload();
+    const duplicateDecision = execPayload();
     requireExecApprovalMetadata(duplicateDecision).allowedDecisions = [
       "allow-once",
       "allow-once",
@@ -202,46 +205,24 @@ describe("iMessage approval reactions", () => {
   });
 
   it("rejects delivered shared prompts without the exact private GUID and visible binding", async () => {
-    const payload: ReplyPayload = buildForwardedApproval("exec", "exec-shared-2", "shared-2");
-    const prepared = prepare(payload);
-    if (!prepared?.text) {
-      throw new Error("Expected typed iMessage approval payload");
-    }
-
+    const prepared = requirePrepared(buildForwardedApproval("exec", "exec-shared-2", "shared-2"));
     expect(
-      await bindDelivered({
-        ...deliveryTarget,
-        payload: prepared,
-        results: [
-          {
-            channel: "imessage",
-            messageId: "p:0/guessed-guid",
-            meta: { imessageVisibleText: prepared.text },
-          },
-          {
-            channel: "imessage",
-            messageId: "42",
-            meta: {
-              imessageMessageGuid: "p:0/real-guid",
-              imessageVisibleText: prepared.text.replace("exec-shared-2", "exec-other"),
-            },
-          },
-        ],
-      }),
+      await bind(prepared, [
+        delivery("p:0/guessed-guid", prepared.text),
+        delivery("42", prepared.text.replace("exec-shared-2", "exec-other"), "p:0/real-guid"),
+      ]),
     ).toBe(false);
   });
 
   it("derives reaction conversation keys from every supported target form", () => {
-    expect(buildIMessageApprovalConversationKeyForTarget("+1 (555) 123-0000")).toEqual({
-      handle: "+15551230000",
-    });
-    expect(buildIMessageApprovalConversationKeyForTarget("chat_id:42")).toEqual({ chatId: 42 });
-    expect(buildIMessageApprovalConversationKeyForTarget("chat_guid:iMessage;+;group-1")).toEqual({
-      chatGuid: "iMessage;+;group-1",
-    });
-    expect(
-      buildIMessageApprovalConversationKeyForTarget("chat_identifier:group@example.com"),
-    ).toEqual({ chatIdentifier: "group@example.com" });
+    for (const [target, expected] of [
+      ["+1 (555) 123-0000", { handle: "+15551230000" }],
+      ["chat_id:42", { chatId: 42 }],
+      ["chat_guid:iMessage;+;group-1", { chatGuid: "iMessage;+;group-1" }],
+      ["chat_identifier:group@example.com", { chatIdentifier: "group@example.com" }],
+    ] as const) {
+      expect(buildIMessageApprovalConversationKeyForTarget(target)).toEqual(expected);
+    }
   });
 
   it("rejects reaction targets without an explicit approval kind", async () => {
@@ -257,19 +238,9 @@ describe("iMessage approval reactions", () => {
   });
 
   it.each([
-    {
-      name: "does not keep pending poll targets when the process clock is invalid",
-      now: Number.NaN,
-      id: "invalid-clock",
-      ttlMs: undefined,
-    },
-    {
-      name: "falls back to the default pending poll target ttl for invalid explicit ttl values",
-      now: 1_800_000_000_000,
-      id: "invalid-ttl",
-      ttlMs: Number.NaN,
-    },
-  ])("$name", async ({ now, id, ttlMs }) => {
+    ["invalid-clock", Number.NaN, undefined],
+    ["invalid-ttl", 1_800_000_000_000, Number.NaN],
+  ] as const)("handles %s without retaining an invalid expiry", async (id, now, ttlMs) => {
     const dateNow = vi.spyOn(Date, "now").mockReturnValue(now);
     const approvalId = `exec-${id}`;
     try {

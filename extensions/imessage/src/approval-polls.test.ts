@@ -52,13 +52,6 @@ function bind(overrides: Partial<PollTarget> = {}): Promise<boolean> {
 function voteRecord(participant: string, option_id = ALLOW_ONCE_OPTION, event_type = "selected") {
   return { option_id, participant, event_type };
 }
-function completeVote(
-  votes: ReturnType<typeof voteRecord>[],
-  vote?: ReturnType<typeof voteRecord>,
-) {
-  return pollVote(POLL_GUID, votes, {}, vote);
-}
-
 function buildVote(overrides?: {
   sender?: string;
   participant?: string;
@@ -115,21 +108,10 @@ describe("mapSentPollOptionsToDecisions", () => {
   const requested = buildApprovalPollOptions({ allowedDecisions: ["allow-once", "deny"] });
 
   it.each([
-    {
-      reason: "the bridge normalizes option text",
-      sent: [
-        { id: "id-a", text: "Allow Once" },
-        { id: "id-b", text: "Deny" },
-      ],
-    },
-    {
-      reason: "option ids are duplicated",
-      sent: [
-        { id: "same-id", text: "👍 Allow Once" },
-        { id: "same-id", text: "👎 Deny" },
-      ],
-    },
-  ])("fails closed when $reason", ({ sent }) => {
+    ["the bridge normalizes option text", ["id-a", "Allow Once"], ["id-b", "Deny"]],
+    ["option ids are duplicated", ["same-id", "👍 Allow Once"], ["same-id", "👎 Deny"]],
+  ] as const)("fails closed when %s", (_reason, first, second) => {
+    const sent = [first, second].map(([id, text]) => ({ id, text }));
     expect(mapSentPollOptionsToDecisions({ requested, sent })).toEqual([]);
   });
 });
@@ -152,33 +134,33 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
   });
 
   it.each([
-    {
-      name: "selects the transport actor from a multi-participant complete vote set",
-      votes: [voteRecord("+15559999999"), voteRecord(APPROVER, DENY_OPTION)],
-      vote: voteRecord("+15559999999"),
-      decision: "deny",
-    },
-    {
-      name: "fails closed when a multi-participant set does not identify the transport actor",
-      votes: [voteRecord("+15559999998"), voteRecord("+15559999999", DENY_OPTION)],
-      decision: null,
-    },
-    {
-      name: "accepts a complete multi-record set for one participant alias",
-      votes: [
+    [
+      "selects the transport actor from a multi-participant complete vote set",
+      [voteRecord("+15559999999"), voteRecord(APPROVER, DENY_OPTION)],
+      "deny",
+      voteRecord("+15559999999"),
+    ],
+    [
+      "fails closed when a multi-participant set does not identify the transport actor",
+      [voteRecord("+15559999998"), voteRecord("+15559999999", DENY_OPTION)],
+      null,
+    ],
+    [
+      "accepts a complete multi-record set for one participant alias",
+      [
         voteRecord("e:active-account-alias@example.com"),
         voteRecord("e:active-account-alias@example.com", DENY_OPTION, "removed"),
       ],
-      decision: "allow-once",
-    },
-    {
-      name: "fails closed when the actor selected multiple approval decisions",
-      votes: [voteRecord(APPROVER), voteRecord(APPROVER, DENY_OPTION)],
-      decision: null,
-    },
-  ])("$name", async ({ votes, vote, decision }) => {
+      "allow-once",
+    ],
+    [
+      "fails closed when the actor selected multiple approval decisions",
+      [voteRecord(APPROVER), voteRecord(APPROVER, DENY_OPTION)],
+      null,
+    ],
+  ] as const)("%s", async (_name, votes, decision, vote) => {
     expect(await bind()).toBe(true);
-    expect(await resolveVote(completeVote(votes, vote))).toBe(true);
+    expect(await resolveVote(pollVote(POLL_GUID, [...votes], {}, vote))).toBe(true);
     if (decision) {
       expect(resolverMocks.resolve).toHaveBeenCalledWith(
         expect.objectContaining({ approvalId: "exec-1", decision }),
@@ -190,16 +172,8 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
 
   it("authenticates paired-device self votes with destination_caller_id", async () => {
     expect(await bind()).toBe(true);
-    expect(
-      await resolveVote(
-        buildVote({
-          sender: "",
-          participant: APPROVER,
-          isFromMe: true,
-          destinationCallerId: APPROVER,
-        }),
-      ),
-    ).toBe(true);
+    const message = buildVote({ sender: "", isFromMe: true, destinationCallerId: APPROVER });
+    expect(await resolveVote(message)).toBe(true);
     expect(resolverMocks.resolve).toHaveBeenCalledWith(
       expect.objectContaining({ decision: "allow-once", senderId: APPROVER }),
     );
@@ -216,46 +190,27 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
     );
   });
 
-  // Group lookup matches every member; only allowFrom authenticates the actor.
-  async function bindGroup(): Promise<void> {
+  it("authorizes the transport sender, not the payload participant", async () => {
+    // Group lookup matches every member; only allowFrom authenticates the actor.
     await bind({
       conversation: { chatGuid: GROUP_CHAT_GUID },
       approvalId: "exec-group",
       optionDecisions: [[ALLOW_ONCE_OPTION, "allow-once"]],
     });
-  }
-
-  function buildGroupVote(overrides: { sender: string; participant: string }): IMessagePayload {
-    return {
-      ...buildVote(overrides),
+    await expectUnresolved({
+      ...buildVote({ sender: "+15559999999", participant: APPROVER }),
       chat_guid: GROUP_CHAT_GUID,
       is_group: true,
-    } as IMessagePayload;
-  }
-
-  it("authorizes the transport sender, not the payload participant", async () => {
-    // A crafted participant can claim an allowlisted handle, unlike the transport sender.
-    await bindGroup();
-
-    await expectUnresolved(buildGroupVote({ sender: "+15559999999", participant: APPROVER }));
+    });
   });
 
-  it("requires explicit approvers", async () => {
+  it.each([
+    ["requires explicit approvers", {}, { cfg: { channels: { imessage: {} } } }],
+    ["owns an un-vote without resolving it", { eventType: "removed" }, {}],
+    ["ignores an option id that is not bound to a decision", { optionId: "opt-unknown" }, {}],
+  ] as const)("%s", async (_name, vote, options) => {
     await bind();
-
-    await expectUnresolved(buildVote(), true, { cfg: { channels: { imessage: {} } } });
-  });
-
-  it("owns an un-vote without resolving it", async () => {
-    await bind();
-
-    await expectUnresolved(buildVote({ eventType: "removed" }));
-  });
-
-  it("ignores an option id that is not bound to a decision", async () => {
-    await bind();
-
-    await expectUnresolved(buildVote({ optionId: "opt-unknown" }));
+    await expectUnresolved(buildVote(vote), true, options);
   });
 
   it.each([
@@ -264,9 +219,7 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
   ])("falls through on %s", async (_label, poll) => {
     await bind();
 
-    await expect(
-      resolveVote({ sender: APPROVER, poll } as unknown as IMessagePayload),
-    ).resolves.toBe(false);
+    await expectUnresolved({ sender: APPROVER, poll } as unknown as IMessagePayload, false);
   });
 
   it("fails closed on a malformed complete vote set for an owned poll", async () => {

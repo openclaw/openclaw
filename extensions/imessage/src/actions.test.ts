@@ -202,13 +202,19 @@ describe("imessage message actions", () => {
     expect(runtimeMock.sendPoll).not.toHaveBeenCalled();
   });
 
-  it("resolves and authorizes the current inbound poll before voting by index", async () => {
+  it.each([
+    [{ pollOptionIndex: 2 }, { optionIndex: 2, optionId: undefined, optionText: undefined }],
+    [
+      { pollId: "3", pollOptionText: "Blue" },
+      { optionIndex: undefined, optionId: undefined, optionText: "Blue" },
+    ],
+  ])("resolves and authorizes the poll with selector %j", async (params, selector) => {
     probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue(voteStatus);
     runtimeMock.resolveIMessageMessageId.mockReturnValueOnce("poll-full-guid");
     runtimeMock.sendPollVote.mockResolvedValue({ messageId: "vote-guid", optionText: "Blue" });
     const result = await run(
       "poll-vote",
-      { chatGuid, pollOptionIndex: 2 },
+      { chatGuid, ...params },
       { toolContext: { currentMessageId: 3 }, conversationReadOrigin: "delegated" },
     );
     expect(runtimeMock.resolveIMessageMessageId).toHaveBeenCalledWith(
@@ -219,9 +225,7 @@ describe("imessage message actions", () => {
     expectCall(runtimeMock.sendPollVote, {
       chatGuid,
       pollGuid: "poll-full-guid",
-      optionIndex: 2,
-      optionId: undefined,
-      optionText: undefined,
+      ...selector,
     });
     expect(result).toMatchObject({
       details: { ok: true, messageId: "vote-guid", pollVotedOption: "Blue" },
@@ -265,31 +269,12 @@ describe("imessage message actions", () => {
     ).not.toHaveBeenCalled();
   });
 
-  it("dispatches a poll vote by plugin-owned text selector", async () => {
-    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue(voteStatus);
-    runtimeMock.resolveIMessageMessageId.mockReturnValueOnce("poll-full-guid");
-    runtimeMock.sendPollVote.mockResolvedValue({ messageId: "vote-guid" });
-    await run("poll-vote", { chatGuid, pollId: "3", pollOptionText: "Blue" });
-    expect(runtimeMock.sendPollVote).toHaveBeenCalledWith(
-      expect.objectContaining({ optionText: "Blue", optionId: undefined, optionIndex: undefined }),
-    );
-  });
-
   it("authorizes edits and uses the detected remote transport", async () => {
     const text = "spaces ; $(touch /tmp/nope) `whoami` & |";
+    const remote = { cliPath: "/gateway/imsg-ssh", dbPath: "~/Library/Messages/chat.db" };
     bridge({ editMessage: true });
     remoteHostMock.resolve.mockResolvedValue("bot@messages-mac");
-    await run(
-      "edit",
-      { ...message, text },
-      {
-        cfg: {
-          channels: {
-            imessage: { cliPath: "/gateway/imsg-ssh", dbPath: "~/Library/Messages/chat.db" },
-          },
-        },
-      },
-    );
+    await run("edit", { ...message, text }, { cfg: { channels: { imessage: remote } } });
     expect(remoteHostMock.resolve).toHaveBeenCalledWith({
       cliPath: "/gateway/imsg-ssh",
       remoteHost: undefined,
@@ -300,8 +285,7 @@ describe("imessage message actions", () => {
       expect.objectContaining({
         text,
         options: expect.objectContaining({
-          cliPath: "/gateway/imsg-ssh",
-          dbPath: "~/Library/Messages/chat.db",
+          ...remote,
           remoteHost: "bot@messages-mac",
         }),
       }),

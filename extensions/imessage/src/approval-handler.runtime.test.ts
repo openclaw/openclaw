@@ -18,9 +18,7 @@ const probeMock = vi.hoisted(() => ({ cachedStatus: vi.fn(), probeIMessagePrivat
 
 const actionsMock = vi.hoisted(() => ({ sendPoll: vi.fn(), resolveChat: vi.fn() }));
 
-const timersMock = vi.hoisted(() => ({
-  delay: vi.fn(async () => undefined),
-}));
+const timersMock = vi.hoisted(() => ({ delay: vi.fn(async () => undefined) }));
 
 const approvalGatewayMock = vi.hoisted(() => ({ resolve: vi.fn() }));
 
@@ -92,16 +90,11 @@ function execView(
   } as never;
 }
 
-function sendResult(
-  messageId: string,
-  params: {
-    guid?: string;
-    service?: string;
-    chatGuid?: string;
-    sentText?: string;
-  } = {},
+function receipt(
+  guid = PROMPT_GUID,
+  params: { service?: string; chatGuid?: string; sentText?: string } = {},
 ) {
-  return { messageId, ...params };
+  return { messageId: guid, guid, ...params };
 }
 
 vi.mock("node:timers/promises", () => ({ setTimeout: timersMock.delay }));
@@ -220,11 +213,7 @@ describe("imessageApprovalNativeRuntime", () => {
 
   beforeEach(() => {
     approvalGatewayMock.resolve.mockReset().mockResolvedValue({ applied: true, approval: {} });
-    send
-      .mockReset()
-      .mockResolvedValue(
-        sendResult(PROMPT_GUID, { guid: PROMPT_GUID, sentText: "PROMPT WITH COMMANDS" }),
-      );
+    send.mockReset().mockResolvedValue(receipt(PROMPT_GUID, { sentText: "PROMPT WITH COMMANDS" }));
     probeMock.cachedStatus.mockReset().mockReturnValue(POLL_CAPABLE_STATUS);
     probeMock.probeIMessagePrivateApi.mockReset();
     actionsMock.sendPoll.mockReset().mockResolvedValue(pollResult);
@@ -238,12 +227,13 @@ describe("imessageApprovalNativeRuntime", () => {
     const to = `chat_guid:${groupChatGuid}`;
     const nowMs = Date.now();
     const expiresAtMs = nowMs + 60_000;
+    const description = "Update the agent display name";
     const request: PendingPayloadArgs["request"] = {
       approvalKind: "system-agent",
       id: approvalId,
       request: {
         title: "OpenClaw change",
-        description: "Update the agent display name",
+        description,
         command: "config.patch",
         proposalHash: "synthetic-proposal",
         sessionId: "synthetic-session",
@@ -258,8 +248,8 @@ describe("imessageApprovalNativeRuntime", () => {
       phase: "pending",
       title: "OpenClaw change requires approval",
       metadata: [],
-      commandText: request.request.description,
-      operationSummary: request.request.description,
+      commandText: description,
+      operationSummary: description,
       expiresAtMs,
       actions: (["allow-once", "deny"] as const).map((decision) => ({
         decision,
@@ -268,12 +258,8 @@ describe("imessageApprovalNativeRuntime", () => {
         style: decision === "deny" ? "danger" : "success",
       })),
     };
-    const pendingPayload = await buildPendingPayload({
-      request,
-      approvalKind: "system-agent",
-      view,
-      nowMs,
-    });
+    const args = { request, approvalKind: "system-agent" as const, view };
+    const pendingPayload = await buildPendingPayload({ ...args, nowMs });
     probeMock.cachedStatus.mockReturnValue(NO_POLL_SELECTOR_STATUS);
     approvalGatewayMock.resolve.mockResolvedValue({
       applied: true,
@@ -281,9 +267,7 @@ describe("imessageApprovalNativeRuntime", () => {
     });
 
     const entry = await deliverPoll({
-      request,
-      approvalKind: "system-agent",
-      view,
+      ...args,
       pendingPayload,
       ...deliveryTarget(to),
     });
@@ -379,32 +363,19 @@ describe("imessageApprovalNativeRuntime", () => {
     expect(approvalGatewayMock.resolve).toHaveBeenCalledTimes(1);
   });
 
-  it.each<{ name: string; overrides: Partial<DeliverPendingArgs> }>([
-    {
-      name: "keeps explicit forwarding targets on the text approval path",
-      overrides: {
-        plannedTarget: { ...pollDeliverArgs.plannedTarget, surface: "forward" } as never,
-      },
-    },
-    {
-      name: "keeps non-iMessage target sms:+15551230000 on the text approval path",
-      overrides: deliveryTarget("sms:+15551230000"),
-    },
-    {
-      name: "keeps non-iMessage target chat_guid:SMS;-;+15551230000 on the text approval path",
-      overrides: deliveryTarget("chat_guid:SMS;-;+15551230000"),
-    },
-    {
-      name: "keeps text controls when no explicit approver can authorize a poll vote",
-      overrides: { cfg: { channels: { imessage: {} } } as never },
-    },
-    {
-      name: "keeps the tapback hint when fewer than two decisions are allowed",
-      overrides: {
-        pendingPayload: { ...pollDeliverArgs.pendingPayload, allowedDecisions: ["allow-once"] },
-      },
-    },
-  ])("$name", async ({ overrides }) => {
+  it.each<[string, Partial<DeliverPendingArgs>]>([
+    [
+      "explicit forwarding",
+      { plannedTarget: { ...pollDeliverArgs.plannedTarget, surface: "forward" } as never },
+    ],
+    ["SMS handle", deliveryTarget("sms:+15551230000")],
+    ["SMS chat GUID", deliveryTarget("chat_guid:SMS;-;+15551230000")],
+    ["no explicit approver", { cfg: { channels: { imessage: {} } } as never }],
+    [
+      "one decision",
+      { pendingPayload: { ...pollDeliverArgs.pendingPayload, allowedDecisions: ["allow-once"] } },
+    ],
+  ])("keeps %s on the text approval path", async (_name, overrides) => {
     const entry = await deliverPoll(overrides);
     expectSend(pollDeliverArgs.pendingPayload.text, {}, overrides.preparedTarget?.to ?? HANDLE);
     expectTextOnly(entry);
@@ -413,8 +384,7 @@ describe("imessageApprovalNativeRuntime", () => {
   it("resolves a chat_id before sending its native poll", async () => {
     const to = "chat_id:42";
     send.mockResolvedValueOnce(
-      sendResult(PROMPT_GUID, {
-        guid: PROMPT_GUID,
+      receipt(PROMPT_GUID, {
         service: "imessage",
         chatGuid: "iMessage;+;chat42",
         sentText: "PROMPT WITH HINT",
@@ -434,9 +404,7 @@ describe("imessageApprovalNativeRuntime", () => {
 
   it("adds a threaded tapback hint when the chat is not registered with Messages", async () => {
     actionsMock.resolveChat.mockResolvedValue(null);
-    send
-      .mockResolvedValueOnce(sendResult(PROMPT_GUID, { guid: PROMPT_GUID }))
-      .mockResolvedValueOnce(sendResult("hint-guid", { guid: "hint-guid" }));
+    send.mockResolvedValueOnce(receipt()).mockResolvedValueOnce(receipt("hint-guid"));
 
     const entry = await deliverPoll();
 
@@ -450,7 +418,7 @@ describe("imessageApprovalNativeRuntime", () => {
   });
 
   it("keeps manual controls when the approval prompt has no GUID", async () => {
-    send.mockResolvedValueOnce(sendResult("42"));
+    send.mockResolvedValueOnce({ messageId: "42" });
 
     const entry = await deliverPoll();
 
