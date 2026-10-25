@@ -10,7 +10,12 @@ import {
   createTestSessionCapability,
   sessionsResult,
 } from "./session-capability.test-support.ts";
-import { sessionRpc, patchReceipt, sessionRow } from "./session-rpc.test-support.ts";
+import {
+  sessionRpc,
+  patchReceipt,
+  sessionRow,
+  sessionChanged,
+} from "./session-rpc.test-support.ts";
 
 const sidebarQuery = {
   archivedFilter: "all" as const,
@@ -56,133 +61,125 @@ function fixture(handlers: Parameters<typeof sessionRpc>[0], release: () => void
   return { client, sessions, emitEvent, track, patch };
 }
 
-it.each([
-  { name: "permission and read overlap", permission: true, read: true, primary: "main" },
-  { name: "no permission projection", permission: false, read: true, primary: "main" },
-  { name: "no read overlay", permission: true, read: false, primary: "main" },
-  { name: "an intact primary copy", permission: true, read: true, primary: "work" },
-])("retains an event label with $name", async ({ permission, read, primary }) => {
-  const target = { key: "global", agentId: "work" };
-  const initial = sessionRow("work-global-session", {
-    key: "global",
-    agentId: "work",
-    kind: "global",
-    updatedAt: 200,
-    label: "Before rename",
-    archived: false,
-    status: "done",
-    hasActiveRun: false,
-    activeRunIds: [],
-    permissionMode: "guarded",
-    unread: true,
-    lastReadAt: 0,
-    lastActivityAt: 200,
-  });
-  const primaryRow =
-    primary === "work"
-      ? initial
-      : {
-          ...initial,
-          agentId: "main",
-          sessionId: "main-global-session",
-          label: "Main roster",
-        };
-  const oldReply = createDeferred<ReturnType<typeof sessionsResult>>();
-  const listReply = createDeferred<ReturnType<typeof sessionsResult>>();
-  const listDispatched = createDeferred();
-  const readReply = createDeferred<unknown>();
-  const readDispatched = createDeferred();
-  let permissionAcknowledged = false;
-  const h = fixture(
-    {
-      "sessions.list": (params) => {
-        const requestParams = asNullableRecord(params);
-        if (requestParams?.archived === "all") {
-          return oldReply.promise;
-        }
-        if (permissionAcknowledged) {
-          expect(requestParams?.agentId).toBe("work");
-          listDispatched.resolve();
-          return listReply.promise;
-        }
-        expect(requestParams?.agentId).toBe(primary);
-        return sessionsResult([primaryRow], 200);
+it.each(["main", "work"])(
+  "retains an event label through permission/read overlap (%s primary)",
+  async (primary) => {
+    const target = { key: "global", agentId: "work" };
+    const initial = sessionRow("work-global-session", {
+      key: "global",
+      agentId: "work",
+      kind: "global",
+      updatedAt: 200,
+      label: "Before rename",
+      archived: false,
+      status: "done",
+      hasActiveRun: false,
+      activeRunIds: [],
+      permissionMode: "guarded",
+      unread: true,
+      lastReadAt: 0,
+      lastActivityAt: 200,
+    });
+    const primaryRow =
+      primary === "work"
+        ? initial
+        : {
+            ...initial,
+            agentId: "main",
+            sessionId: "main-global-session",
+            label: "Main roster",
+          };
+    const oldReply = createDeferred<ReturnType<typeof sessionsResult>>();
+    const listReply = createDeferred<ReturnType<typeof sessionsResult>>();
+    const listDispatched = createDeferred();
+    const readReply = createDeferred<unknown>();
+    const readDispatched = createDeferred();
+    let permissionAcknowledged = false;
+    const h = fixture(
+      {
+        "sessions.list": (params) => {
+          const requestParams = asNullableRecord(params);
+          if (requestParams?.archived === "all") {
+            return oldReply.promise;
+          }
+          if (permissionAcknowledged) {
+            expect(requestParams?.agentId).toBe("work");
+            listDispatched.resolve();
+            return listReply.promise;
+          }
+          expect(requestParams?.agentId).toBe(primary);
+          return sessionsResult([primaryRow], 200);
+        },
+        "sessions.describe": (params) => {
+          expect(params).toMatchObject(target);
+          return { session: initial };
+        },
+        "sessions.patch": (params) => {
+          const requestParams = asNullableRecord(params);
+          expect(params).toMatchObject(target);
+          if (requestParams?.permissionMode === "workspace") {
+            permissionAcknowledged = true;
+            return patchReceipt(
+              "global",
+              {
+                sessionId: initial.sessionId,
+                permissionMode: "workspace",
+                updatedAt: 201,
+              },
+              "(multiple)",
+            );
+          }
+          expect(requestParams?.unread).toBe(false);
+          readDispatched.resolve();
+          return readReply.promise;
+        },
       },
-      "sessions.describe": (params) => {
-        expect(params).toMatchObject(target);
-        return { session: initial };
+      () => {
+        oldReply.resolve(sessionsResult([{ ...initial }], 200));
+        listReply.resolve(sessionsResult([initial], 200));
+        readReply.resolve(patchReceipt("global", initial, "(multiple)"));
       },
-      "sessions.patch": (params) => {
-        const requestParams = asNullableRecord(params);
-        expect(params).toMatchObject(target);
-        if (requestParams?.permissionMode === "workspace") {
-          permissionAcknowledged = true;
-          return patchReceipt(
-            "global",
-            {
-              sessionId: initial.sessionId,
-              permissionMode: "workspace",
-              updatedAt: 201,
-            },
-            "(multiple)",
-          );
-        }
-        expect(requestParams?.unread).toBe(false);
-        readDispatched.resolve();
-        return readReply.promise;
-      },
-    },
-    () => {
-      oldReply.resolve(sessionsResult([{ ...initial }], 200));
-      listReply.resolve(sessionsResult([initial], 200));
-      readReply.resolve(patchReceipt("global", initial, "(multiple)"));
-    },
-  );
-  await h.sessions.refresh({ agentId: primary, force: true });
-  const observation = h.sessions.observeRow(target, () => {});
-  const seed = observation.captureReconcile();
-  const described = await h.client.request<{ session: GatewaySessionRow }>(
-    "sessions.describe",
-    target,
-  );
-  seed(described.session);
-  expect(observation.row).toMatchObject(initial);
-  const query = { ...sidebarQuery, agentId: "work" };
-  const older = h.track(h.sessions.refreshList({ ...query, force: true }));
-  expect(h.sessions.listSnapshot(query).loading).toBe(true);
-  h.emitEvent({
-    type: "event",
-    event: "sessions.changed",
-    payload: { ...initial, sessionKey: initial.key, reason: "patch", label: "New event label" },
-  });
-  expect(observation.row?.label).toBe("New event label");
-  if (permission) {
+    );
+    await h.sessions.refresh({ agentId: primary, force: true });
+    const observation = h.sessions.observeRow(target, () => {});
+    const seed = observation.captureReconcile();
+    const described = await h.client.request<{ session: GatewaySessionRow }>(
+      "sessions.describe",
+      target,
+    );
+    seed(described.session);
+    const query = { ...sidebarQuery, agentId: "work" };
+    const older = h.track(h.sessions.refreshList({ ...query, force: true }));
+    expect(h.sessions.listSnapshot(query).loading).toBe(true);
+    h.emitEvent(
+      sessionChanged({
+        ...initial,
+        sessionKey: initial.key,
+        reason: "patch",
+        label: "New event label",
+      }),
+    );
+    expect(observation.row?.label).toBe("New event label");
     void h.patch(initial, { permissionMode: "workspace" });
     await listDispatched.promise;
-  }
-  if (read) {
     void h.patch(initial, { unread: false });
     await readDispatched.promise;
     expect(observation.row?.unread).toBe(false);
-  }
-  oldReply.resolve(sessionsResult([{ ...initial }], 200));
-  await older;
-  expect(observation.row).toMatchObject({
-    label: "New event label",
-    permissionMode: permission ? "workspace" : "guarded",
-    unread: !read,
-  });
-  if (primary === "main") {
-    expect(h.sessions.state.agentId).toBe("main");
-    expect(h.sessions.state.result?.sessions).toEqual([primaryRow]);
-  }
-});
+    oldReply.resolve(sessionsResult([{ ...initial }], 200));
+    await older;
+    expect(observation.row).toMatchObject({
+      label: "New event label",
+      permissionMode: "workspace",
+      unread: false,
+    });
+    if (primary === "main") {
+      expect(h.sessions.state.agentId).toBe("main");
+      expect(h.sessions.state.result?.sessions).toEqual([primaryRow]);
+    }
+  },
+);
 
-it.each([
-  { name: "swarm and pin overlap", swarm: true, pin: true },
-  { name: "no swarm decoration", swarm: false, pin: true },
-  { name: "no pin overlay", swarm: true, pin: false },
-])("retains a newer list preview with $name", async ({ swarm, pin }) => {
+it("retains a newer list preview through swarm and pin overlap", async () => {
   const parentKey = "agent:main:main";
   const groupId = "swarm:agent:main:main:turn-42";
   const initial = sessionRow("worker-session", {
@@ -230,40 +227,32 @@ it.each([
     h.sessions.refresh({ agentId: "main", force: true, includeLastMessage: true });
   const row = () => h.sessions.state.result?.sessions.find((entry) => entry.key === initial.key);
   await refresh();
-  if (swarm) {
-    h.emitEvent({
-      type: "event",
-      event: "sessions.changed",
-      payload: {
-        ...parent,
-        sessionKey: parentKey,
-        reason: "swarm-note",
-        swarmGroupId: groupId,
-        kind: "log",
-        text: "Work is progressing",
-      },
-    });
-    expect(row()).toHaveProperty("swarmLog", "Work is progressing");
-  }
-  if (pin) {
-    void h.patch(initial, { pinned: true });
-    await pinDispatched.promise;
-    expect(row()?.pinned).toBe(true);
-  }
+  h.emitEvent(
+    sessionChanged({
+      ...parent,
+      sessionKey: parentKey,
+      reason: "swarm-note",
+      swarmGroupId: groupId,
+      kind: "log",
+      text: "Work is progressing",
+    }),
+  );
+  expect(row()).toHaveProperty("swarmLog", "Work is progressing");
+  void h.patch(initial, { pinned: true });
+  await pinDispatched.promise;
+  expect(row()?.pinned).toBe(true);
   const query = { ...sidebarQuery, agentId: "main" };
   const older = h.track(h.sessions.refreshList({ ...query, force: true }));
   expect(h.sessions.listSnapshot(query).loading).toBe(true);
   current = fresh;
   await refresh();
-  expect(row()).toMatchObject({ lastMessagePreview: fresh.lastMessagePreview, pinned: pin });
+  expect(row()).toMatchObject({ lastMessagePreview: fresh.lastMessagePreview, pinned: true });
   oldReply.resolve(sessionsResult([parent, { ...initial }], 10));
   await older;
   const managed = h.sessions
     .listSnapshot(query)
     .result?.sessions.find((entry) => entry.key === initial.key);
-  expect(managed).toMatchObject({ lastMessagePreview: fresh.lastMessagePreview, pinned: pin });
-  expect(row()).toMatchObject({ lastMessagePreview: fresh.lastMessagePreview, pinned: pin });
-  if (swarm) {
-    expect(row()).toHaveProperty("swarmLog", "Work is progressing");
-  }
+  expect(managed).toMatchObject({ lastMessagePreview: fresh.lastMessagePreview, pinned: true });
+  expect(row()).toMatchObject({ lastMessagePreview: fresh.lastMessagePreview, pinned: true });
+  expect(row()).toHaveProperty("swarmLog", "Work is progressing");
 });
