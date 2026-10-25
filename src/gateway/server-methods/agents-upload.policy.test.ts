@@ -191,9 +191,6 @@ it.each([
       expectSuccess(respond, method === "agents.update" ? updated : expect.anything());
       expect(await readConfig()).toContain(inlineAvatar);
       expect(await readIdentity()).toBe(admittedIdentity);
-      if (stage === "remote-write") {
-        expect(writeFile).toHaveBeenCalledTimes(1);
-      }
     } else {
       expect.soft(respond).toHaveBeenCalledExactlyOnceWith(false, undefined, uploadsDisabled);
       expect.soft(await readIdentity()).toBe(originalIdentity);

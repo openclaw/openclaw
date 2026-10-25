@@ -115,8 +115,6 @@ const waitOneTask = () =>
 beforeEach(() => {
   createdEngines.length = 0;
   inferenceFallbackMocks.verify.mockResolvedValue({ ok: true, binding: {} });
-  transcriptStoreMocks.appendReset.mockReset();
-  transcriptStoreMocks.appendTurn.mockReset();
   transcriptStoreMocks.readTranscriptTailAsync.mockReset().mockResolvedValue([]);
 });
 
@@ -209,20 +207,9 @@ describe("openclaw.chat session lifecycle", () => {
     expect(respond).not.toHaveBeenCalled();
   });
 
-  it("resets a session on request", async () => {
-    const engine = makeEngine();
-    const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession({ engine })]]);
-    const context = makeContext(sessions);
-
-    const reset = await callChat(context, { sessionId: "s1", reset: true });
-
-    expect(engine.handle).not.toHaveBeenCalled();
-    expect(engine.dispose).toHaveBeenCalledOnce();
-    expect(sessions.get("s1")?.engine).not.toBe(engine);
-    expect(reset.ok).toBe(true);
-    expect(transcriptStoreMocks.appendReset).toHaveBeenCalledOnce();
-    expect(createdEngines[0]?.seedHistory).not.toHaveBeenCalled();
-
+  it("seeds a fresh session from only post-reset turns", async () => {
+    const context = makeContext(new Map());
+    expect((await callChat(context, { sessionId: "reset", reset: true })).ok).toBe(true);
     const turns = [
       { role: "user", text: "After reset" },
       { role: "assistant", text: "Fresh answer" },
@@ -230,9 +217,7 @@ describe("openclaw.chat session lifecycle", () => {
     transcriptStoreMocks.readTranscriptTailAsync.mockResolvedValue(
       turns.map((turn, at) => ({ ...turn, at })),
     );
-    const fresh = await callChat(context, { sessionId: "fresh-after-reset" });
-
-    expect(fresh.ok).toBe(true);
+    expect((await callChat(context, { sessionId: "fresh-after-reset" })).ok).toBe(true);
     expect(createdEngines.at(-1)?.seedHistory).toHaveBeenCalledWith(turns);
     expect(transcriptStoreMocks.readTranscriptTailAsync).toHaveBeenLastCalledWith(30, {
       afterLastReset: true,

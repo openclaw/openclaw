@@ -20,13 +20,9 @@ vi.mock("./chat-send-agent-dispatch.js", () => ({
 
 function createMockContext() {
   return {
-    ...createDirectChatContext(),
-    broadcast: vi.fn(),
-    nodeSendToSession: vi.fn(),
-    getRuntimeConfig: () => ({ agents: { entries: { main: {} } } }),
-    logGateway: { warn: vi.fn(), debug: vi.fn(), error: vi.fn() },
-    addChatRun: vi.fn(),
-    removeChatRun: vi.fn(),
+    ...createDirectChatContext({
+      getRuntimeConfig: () => ({ agents: { entries: { main: {} } } }),
+    }),
     recordClientActivity: vi.fn<(client: GatewayClient | null) => void>(),
   };
 }
@@ -168,7 +164,7 @@ describe("chat.send error broadcast", () => {
 
   it("scopes selected-agent global errors to the linked agent", () =>
     withChatState(async (ctx) => {
-      ctx.addChatRun.mockImplementation(() => {
+      vi.mocked(ctx.addChatRun).mockImplementation(() => {
         throw Object.assign(new Error("LLM timeout"), { code: "TIMEOUT" });
       });
 

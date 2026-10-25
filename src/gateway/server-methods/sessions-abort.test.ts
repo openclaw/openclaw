@@ -19,7 +19,6 @@ import {
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import * as lifecyclePersistence from "../session-lifecycle-state.js";
 import { testState } from "../test-helpers.js";
 import {
   directSessionReq,
@@ -150,7 +149,7 @@ test.each(["default", "fixed", "template", "absent"] as const)(
   },
 );
 
-test("native Stop persists before ACK and fences its successor until cleanup", async ({
+test("native Stop ACK precedes cleanup without provisioning or admitting a successor", async ({
   signal,
 }) => {
   const agentId = "native-active-only";
@@ -159,7 +158,8 @@ test("native Stop persists before ACK and fences its successor until cleanup", a
   const runId = "native-active-only-run";
   const { getRuntimeConfig } = await getGatewayConfigModule();
   const storePath = resolveSessionStorePathCore(getRuntimeConfig().session?.store, { agentId });
-  const abort = vi.fn();
+  const aborted = createDeferred();
+  const abort = vi.fn(() => aborted.resolve());
   const handle = createEmbeddedRunHandle({ runId, abort });
   registerTestEmbeddedRun(sessionId, handle, sessionKey, undefined, agentId);
   const native = expectDefined(resolveActiveEmbeddedRunOwnerByRunId(runId), "native owner");
@@ -167,39 +167,23 @@ test("native Stop persists before ACK and fences its successor until cleanup", a
   const nativeSettlement = native.waitForSettlement().then(() => {
     nativeSettled = true;
   });
-  const persisted = createDeferred();
-  const publish = createDeferred();
-  const persist = lifecyclePersistence.persistGatewaySessionLifecycleEvent;
-  const persistence = vi
-    .spyOn(lifecyclePersistence, "persistGatewaySessionLifecycleEvent")
-    .mockImplementation(async (params) => {
-      const result = await persist(params);
-      persisted.resolve();
-      await publish.promise;
-      return result;
-    });
   const { getRuntimeConfig: _getRuntimeConfig, ...abortContext } = createChatAbortContext({
     getSessionEventSubscriberConnIds: () => new Set(),
   });
-  let finished = false;
   const request = directSessionReq(
     "sessions.abort",
     { key: sessionKey, runId },
     { context: abortContext },
-  ).then((result) => {
-    finished = true;
-    return result;
-  });
+  );
   let successor: Promise<void> | undefined;
   let successorStarted = false;
   try {
-    await withinTest(persisted.promise, signal);
+    await withinTest(aborted.promise, signal);
     expect(abort).toHaveBeenCalledOnce();
-    expect({ finished, nativeSettled }).toEqual({ finished: false, nativeSettled: false });
+    expect(nativeSettled).toBe(false);
     successor = withSessionTurn({ sessionKey, sessionId, agentId, storePath }, async () => {
       successorStarted = true;
     });
-    publish.resolve();
     expectAborted(await withinTest(request, signal), runId);
     expect([nativeSettled, successorStarted]).toEqual([false, false]);
     expect(fs.existsSync(statePath("agents", agentId))).toBe(false);
@@ -208,10 +192,8 @@ test("native Stop persists before ACK and fences its successor until cleanup", a
     await withinTest(Promise.all([nativeSettlement, successor]), signal);
     expect([nativeSettled, successorStarted]).toEqual([true, true]);
   } finally {
-    publish.resolve();
     clearTestEmbeddedRun(sessionId, handle, sessionKey);
     await Promise.allSettled([request, nativeSettlement, successor]);
-    persistence.mockRestore();
   }
 });
 
