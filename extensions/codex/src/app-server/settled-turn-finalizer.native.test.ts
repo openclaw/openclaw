@@ -299,6 +299,7 @@ type SummaryScenario = {
   priorCount?: number;
   hidden?: boolean;
   promptSuppressed?: boolean;
+  continuation?: boolean;
   live?: boolean;
 };
 
@@ -640,8 +641,14 @@ it.skipIf(process.platform === "win32").for<SummaryScenario>([
   { label: "long conversation", priorCount: 201 },
   { label: "hidden background notification", hidden: true },
   { label: "prompt-less stranded-reply retry", promptSuppressed: true },
+  { label: "same-run continuation after a transient provider overload", continuation: true },
   ...(LIVE
     ? [
+        {
+          label: "same-run continuation after a transient provider overload with live provider",
+          continuation: true,
+          live: true,
+        },
         { label: "hidden background notification with live provider", hidden: true, live: true },
         {
           label: "prompt-less stranded-reply retry with live provider",
@@ -672,6 +679,7 @@ async function runSummary(
     live = false,
     hidden = false,
     promptSuppressed = false,
+    continuation = false,
   }: SummaryScenario,
 ) {
   const pluginConfig = {
@@ -726,7 +734,7 @@ async function runSummary(
   }
   fixture.setPhase("action");
   params.runId = "run-settled-action";
-  if (hidden || promptSuppressed) {
+  if (hidden || promptSuppressed || continuation) {
     params.prompt =
       "Background task completed. Use exec_command exactly once to run " +
       "`printf 'completed-once\\n' >> completed-actions.txt; cat completed-actions.txt`, " +
@@ -755,6 +763,35 @@ async function runSummary(
     });
     await params.userTurnTranscriptRecorder.persistApproved();
   }
+  if (continuation) {
+    // The first native turn persists and annotates the user's prompt, then the provider
+    // fails it as overloaded before any output. The runner's transient same-model retry
+    // continues the run with the same recorder and a suppressed prompt
+    // (attempt-normalization.ts): a new native turn.
+    const createRecorder = await loadUserTurnTranscriptRecorderFactoryForTest();
+    params.userTurnTranscriptRecorder = createRecorder({
+      input: { text: params.prompt, idempotencyKey: `${params.runId}:user` },
+      target: { ...transcriptTarget(params), sessionEntry: undefined },
+      beforeMessageWrite: ({ message }) => message,
+    });
+    await params.userTurnTranscriptRecorder.persistApproved();
+    fixture.setPhase("overload");
+    const closeFirstHost = await bindProductionHarnessHostCapabilitiesForTest(params);
+    cleanups.push(async () => closeFirstHost());
+    const overloaded = await run();
+    closeFirstHost();
+    expect(overloaded.terminal).toMatchObject({
+      kind: "failed",
+      error: { status: 503, code: "OVERLOADED" },
+    });
+    expect(overloaded.replayMetadata).toEqual({ hadPotentialSideEffects: false, replaySafe: true });
+    expect(fixture.requests).toHaveLength(1);
+    expect(params.userTurnTranscriptRecorder.getPersistedMessage?.()).toMatchObject({
+      __openclaw: { mirrorIdentity: expect.stringMatching(/:prompt$/) },
+    });
+    fixture.setPhase("action");
+    params.suppressNextUserMessagePersistence = true;
+  }
   const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params);
   cleanups.push(async () => closeHost());
   const settledAttempt = await run();
@@ -778,6 +815,19 @@ async function runSummary(
       display: false,
       __openclaw: { mirrorIdentity: expect.any(String) },
     });
+  }
+  if (continuation) {
+    // The settled evidence is anchored on the prompt the first native turn persisted.
+    expect(context.data).toEqual(
+      containsObject(
+        {
+          role: "user",
+          content: containsObject({ text: expect.stringContaining(params.prompt) }),
+        },
+        { type: "function_call" },
+        { type: "function_call_output" },
+      ),
+    );
   }
   if (promptSuppressed) {
     expect(context.data).toEqual(
