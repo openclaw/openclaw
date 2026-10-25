@@ -89,6 +89,14 @@ const queryFor = (storePath: string, store: ListQuery["store"], cfg: ListQuery["
 const researchConfig = {
   agents: { entries: { main: {}, research: { identity: { name: "Research" } } } },
 };
+function useMergedProfiles(displayName: (id: string) => string) {
+  getUserProfileDisplay.mockImplementation((id) => ({
+    id: id === "former" ? "current" : id,
+    displayName: displayName(id),
+    hasAvatar: false,
+    avatarRevision: "1",
+  }));
+}
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -401,12 +409,7 @@ it("deduplicates participants in order, excludes the owner, and filters sessions
 });
 
 it("associates a required spawn creator without inventing profile contributions or promoting unqualified creators", async () => {
-  getUserProfileDisplay.mockImplementation((id) => ({
-    id: id === "former" ? "current" : id,
-    displayName: "Current",
-    hasAvatar: false,
-    avatarRevision: "1",
-  }));
+  useMergedProfiles(() => "Current");
   const childKey = "agent:main:delegated";
   const child: SessionEntry = {
     ...buildSessionCreationStamp({
@@ -499,12 +502,7 @@ it("associates a required spawn creator without inventing profile contributions 
 });
 
 it("returns a canonical selected person and orders merged owners without borrowing remote identities", async () => {
-  getUserProfileDisplay.mockImplementation((id) => ({
-    id: id === "former" ? "current" : id,
-    displayName: id,
-    hasAvatar: false,
-    avatarRevision: "1",
-  }));
+  useMergedProfiles((id) => id);
   const store: Record<string, SessionEntry> = Object.fromEntries(
     Array.from({ length: 65 }, (_, i) => [
       `agent:main:other-${i}`,

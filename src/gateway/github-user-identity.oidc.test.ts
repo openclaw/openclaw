@@ -28,6 +28,36 @@ import { resolveAuthenticatedHttpUserProfile } from "./http-auth-user-profile.js
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import { resolveGatewayConnectProfileAdmission } from "./server/ws-connection/connect-user-profile.js";
 
+const accessIdentityUrl = `${accessOrigin}/cdn-cgi/access/get-identity`;
+const emailIdentity = { email: "ada@example.test", idp: { type: "oidc" } };
+const githubIdentity = { id: 101, login: "canonical-ada" };
+
+function mockIdentityLookup(identity: unknown = oidcIdentity(), status = 200) {
+  return vi
+    .spyOn(globalThis, "fetch")
+    .mockImplementation(async (url) =>
+      url === accessIdentityUrl
+        ? identityResponse(identity)
+        : identityResponse(status === 200 ? githubIdentity : {}, status),
+    );
+}
+
+function mockEmailIdentity() {
+  return vi
+    .spyOn(globalThis, "fetch")
+    .mockImplementation(async () => identityResponse(emailIdentity));
+}
+
+function expectCreditDisabled(profileId: string) {
+  expect(getUserPreferences(profileId, [GIT_COAUTHOR_PREFERENCE_KEY])).toEqual({
+    [GIT_COAUTHOR_PREFERENCE_KEY]: false,
+  });
+}
+
+async function expectNoAttribution(profileId: string) {
+  expect((await resolveUserProfileGitHubAttribution([profileId])).get(profileId)).toBeNull();
+}
+
 function disposableAccessRequest(...args: Parameters<typeof accessRequest>) {
   const request = accessRequest(...args);
   return {
@@ -120,25 +150,15 @@ describe("Cloudflare Access OIDC profile resolution", () => {
         setUserProfileRole(profile.id, "maintainer");
         setUserPreferences(profile.id, { [GIT_COAUTHOR_PREFERENCE_KEY]: false });
         const before = getUserProfileListItem(profile.id);
-        const transport = vi
-          .spyOn(globalThis, "fetch")
-          .mockImplementation(async (url) =>
-            url === `${accessOrigin}/cdn-cgi/access/get-identity`
-              ? identityResponse(oidcIdentity("101", field))
-              : identityResponse({}, verified ? 404 : 503),
-          );
+        const transport = mockIdentityLookup(oidcIdentity("101", field), verified ? 404 : 503);
         using request = disposableAccessRequest("ada@example.test", githubCfg);
         const http = await resolveAuthenticatedHttpUserProfile(request);
         expect(http.authenticatedUserProfile?.profileId).toBe(profile.id);
         expect(http.operatorRolePolicy?.scopes).toEqual(["operator.admin"]);
         expect(await resolveWsProfileAdmission(request)).toEqual(http.authenticatedUserProfile);
         expect(getUserProfileListItem(profile.id)).toEqual(before);
-        expect(
-          (await resolveUserProfileGitHubAttribution([profile.id])).get(profile.id),
-        ).toBeNull();
-        expect(getUserPreferences(profile.id, [GIT_COAUTHOR_PREFERENCE_KEY])).toEqual({
-          [GIT_COAUTHOR_PREFERENCE_KEY]: false,
-        });
+        await expectNoAttribution(profile.id);
+        expectCreditDisabled(profile.id);
 
         setUserProfileRole(profile.id, null);
         invalidateOperatorRolePolicy(profile.id);
@@ -147,19 +167,13 @@ describe("Cloudflare Access OIDC profile resolution", () => {
         ).toEqual([]);
 
         transport.mockImplementation(async (url) =>
-          identityResponse(
-            url === `${accessOrigin}/cdn-cgi/access/get-identity`
-              ? oidcIdentity("101", field)
-              : { id: 101, login: "canonical-ada" },
-          ),
+          identityResponse(url === accessIdentityUrl ? oidcIdentity("101", field) : githubIdentity),
         );
         expect(
           (await resolveAuthenticatedHttpUserProfile(request)).authenticatedUserProfile?.profileId,
         ).toBe(profile.id);
         expect(getUserProfileListItem(profile.id).githubIdentity?.login).toBe("canonical-ada");
-        expect(getUserPreferences(profile.id, [GIT_COAUTHOR_PREFERENCE_KEY])).toEqual({
-          [GIT_COAUTHOR_PREFERENCE_KEY]: false,
-        });
+        expectCreditDisabled(profile.id);
       });
     },
   );
@@ -211,7 +225,7 @@ describe("Cloudflare Access OIDC profile resolution", () => {
           emails: ["ada@example.test"],
           githubIdentity: null,
         });
-        expect((await resolveUserProfileGitHubAttribution([profileId])).get(profileId)).toBeNull();
+        await expectNoAttribution(profileId);
         expect(transport).toHaveBeenCalledOnce();
       });
     },
@@ -261,15 +275,7 @@ describe("Cloudflare Access OIDC profile resolution", () => {
       setUserProfileRole(maintainer.id, "maintainer");
       setUserPreferences(maintainer.id, { [GIT_COAUTHOR_PREFERENCE_KEY]: false });
       const before = getUserProfileListItem(maintainer.id);
-      const transport = vi
-        .spyOn(globalThis, "fetch")
-        .mockImplementation(async (url) =>
-          identityResponse(
-            url === `${accessOrigin}/cdn-cgi/access/get-identity`
-              ? oidcIdentity()
-              : { id: 101, login: "canonical-ada" },
-          ),
-        );
+      const transport = mockIdentityLookup();
       using request = disposableAccessRequest("ada@example.test", githubCfg);
       await expect(resolveAuthenticatedHttpUserProfile(request)).rejects.toThrow("users.linkEmail");
       expect(getUserProfileListItem(maintainer.id)).toEqual(before);
@@ -283,9 +289,7 @@ describe("Cloudflare Access OIDC profile resolution", () => {
       const linked = await resolveAuthenticatedHttpUserProfile(request);
       expect(linked.authenticatedUserProfile?.profileId).toBe(maintainer.id);
       expect(linked.operatorRolePolicy?.scopes).toEqual(["operator.admin"]);
-      expect(
-        (await resolveUserProfileGitHubAttribution([maintainer.id])).get(maintainer.id),
-      ).toBeNull();
+      await expectNoAttribution(maintainer.id);
 
       setUserProfileRole(maintainer.id, null);
       invalidateOperatorRolePolicy(maintainer.id);
@@ -325,11 +329,7 @@ describe("Cloudflare Access OIDC profile resolution", () => {
         queries.mockRestore();
         expect(getUserProfileListItem(profile.id)).toEqual(before);
         expect(transport).toHaveBeenCalledTimes(2);
-        expect(
-          transport.mock.calls.every(
-            ([url]) => url === `${accessOrigin}/cdn-cgi/access/get-identity`,
-          ),
-        ).toBe(true);
+        expect(transport.mock.calls.every(([url]) => url === accessIdentityUrl)).toBe(true);
       } finally {
         queries.mockRestore();
       }
@@ -410,11 +410,7 @@ it("rechecks current profile roles while reusing the same verified assertion", a
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const profile = ensureProfileForEmail("ada@example.test");
     setUserProfileRole(profile.id, "maintainer");
-    const transport = vi
-      .spyOn(globalThis, "fetch")
-      .mockImplementation(async () =>
-        identityResponse({ email: "ada@example.test", idp: { type: "oidc" } }),
-      );
+    const transport = mockEmailIdentity();
     using request = disposableAccessRequest("ada@example.test", githubCfg);
     request.req.headers = requestIdentity(Math.floor(Date.now() / 1_000) + 600).requestHeaders;
     expect((await resolveAuthenticatedHttpUserProfile(request)).operatorRolePolicy?.scopes).toEqual(
@@ -435,9 +431,7 @@ it("coalesces concurrent assertions and reuses their verified result without ext
     const transport = vi
       .spyOn(globalThis, "fetch")
       .mockImplementation(async (url) =>
-        url === `${accessOrigin}/cdn-cgi/access/get-identity`
-          ? pending.promise
-          : identityResponse({ id: 101, login: "ada" }),
+        url === accessIdentityUrl ? pending.promise : identityResponse({ id: 101, login: "ada" }),
       );
     const params = requestIdentity(Math.floor(Date.now() / 1_000) + 600);
     const first = resolveCachedIdentity(params);
@@ -447,7 +441,7 @@ it("coalesces concurrent assertions and reuses their verified result without ext
     expect(a.profileId).toBe(b.profileId);
     expect((await resolveCachedIdentity(params)).profileId).toBe(a.profileId);
     expect(transport.mock.calls.map(([url]) => url)).toEqual([
-      `${accessOrigin}/cdn-cgi/access/get-identity`,
+      accessIdentityUrl,
       "https://api.github.com/user/101",
     ]);
   });
@@ -455,15 +449,7 @@ it("coalesces concurrent assertions and reuses their verified result without ext
 
 it("partitions signed assertions, principals, and OIDC configuration", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const transport = vi
-      .spyOn(globalThis, "fetch")
-      .mockImplementation(async (url) =>
-        identityResponse(
-          url === `${accessOrigin}/cdn-cgi/access/get-identity`
-            ? oidcIdentity()
-            : { id: 101, login: "ada" },
-        ),
-      );
+    const transport = mockIdentityLookup();
     const exp = Math.floor(Date.now() / 1_000) + 600;
     const params = requestIdentity(exp);
     await resolveCachedIdentity(params);
@@ -474,9 +460,7 @@ it("partitions signed assertions, principals, and OIDC configuration", async () 
     const changed = structuredClone(params);
     changed.authConfig!.trustedProxy!.cloudflareAccessOidc!.providerId = "other";
     await resolveCachedIdentity(changed);
-    expect(
-      transport.mock.calls.filter(([url]) => url === `${accessOrigin}/cdn-cgi/access/get-identity`),
-    ).toHaveLength(4);
+    expect(transport.mock.calls.filter(([url]) => url === accessIdentityUrl)).toHaveLength(4);
   });
 });
 
@@ -485,7 +469,7 @@ it("keeps pending verification bound to the OIDC policy used by its cache key", 
     const entered = Promise.withResolvers<void>();
     const response = Promise.withResolvers<Response>();
     const transport = vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
-      if (url === `${accessOrigin}/cdn-cgi/access/get-identity`) {
+      if (url === accessIdentityUrl) {
         entered.resolve();
         return response.promise;
       }
@@ -512,12 +496,7 @@ it.each([30, 600])(
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const now = Date.now();
       const clock = vi.spyOn(Date, "now").mockReturnValue(now);
-      const transport = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
-        identityResponse({
-          email: "ada@example.test",
-          idp: { type: "oidc" },
-        }),
-      );
+      const transport = mockEmailIdentity();
       const params = requestIdentity(Math.floor(now / 1_000) + ttl);
       await resolveCachedIdentity(params);
       clock.mockReturnValue(now + Math.min(ttl, 300) * 1_000);
@@ -531,11 +510,7 @@ it.each([undefined, "invalid", 0])(
   "does not cache assertions without a future numeric expiry (%s)",
   async (exp) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const transport = vi
-        .spyOn(globalThis, "fetch")
-        .mockImplementation(async () =>
-          identityResponse({ email: "ada@example.test", idp: { type: "oidc" } }),
-        );
+      const transport = mockEmailIdentity();
       const params = requestIdentity(exp);
       await resolveCachedIdentity(params);
       await resolveCachedIdentity(params);
@@ -551,9 +526,7 @@ it.each(["network", "principal"])("does not cache %s failures", async (failure) 
       .mockResolvedValueOnce(
         identityResponse({ email: "wrong@example.test" }, failure === "network" ? 503 : 200),
       )
-      .mockResolvedValueOnce(
-        identityResponse({ email: "ada@example.test", idp: { type: "oidc" } }),
-      );
+      .mockResolvedValueOnce(identityResponse(emailIdentity));
     const params = requestIdentity(Math.floor(Date.now() / 1_000) + 600);
     await expect(resolveCachedIdentity(params)).rejects.toThrow();
     await expect(resolveCachedIdentity(params)).resolves.toHaveProperty("profileId");
