@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
@@ -37,9 +38,7 @@ vi.mock("../../infra/sqlite-worker-operation-admission.js", async (importOrigina
 function caller(id: string) {
   const controller = new AbortController();
   const authority = claimAgentRunDelegatedAuthority({ instanceId: id, runId: id });
-  const close = () => {
-    releaseAgentRunDelegatedAuthority(authority);
-  };
+  const close = () => releaseAgentRunDelegatedAuthority(authority);
   support.testState.releaseTurnOwners.push(close);
   return {
     signal: controller.signal,
@@ -68,14 +67,8 @@ function bundleGate(error?: Error) {
   return { entered, release };
 }
 
-async function reach(gate: Promise<void>, operation: Promise<unknown>) {
-  await Promise.race([
-    gate,
-    operation.then(() => {
-      throw new Error("Attachment fixture settled before its gate");
-    }),
-  ]);
-}
+const reach = (gate: Promise<void>, operation: Promise<unknown>) =>
+  awaitGateBeforeSettlement(gate, operation, "Attachment fixture settled before its gate");
 
 function binding(environmentId: string, source: ReturnType<typeof caller>) {
   return {
@@ -185,15 +178,11 @@ describe("attachment precommit authority and committed custody", () => {
 
   it("refuses closed source at actual native commit admission", async () => {
     const environmentId = "attachment-native-commit";
-    await support.seedReady(environmentId);
-    const previous = snapshot(environmentId);
-    const source = caller(environmentId);
+    const { previous, source, generate, service } = await attachmentFixture(environmentId);
     const mintedWhileLive: boolean[] = [];
-    const service = support.createService(support.createProvider(), {
-      generateWorkerCredential: () => {
-        mintedWhileLive.push(source.isCurrent());
-        return support.CREDENTIAL;
-      },
+    generate.mockImplementation(() => {
+      mintedWhileLive.push(source.isCurrent());
+      return support.CREDENTIAL;
     });
     // Startup inference recovery uses the same native admission factory.
     await service.ready();
