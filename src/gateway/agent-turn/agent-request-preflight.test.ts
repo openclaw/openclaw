@@ -93,14 +93,14 @@ describe("agent database admission preflight", () => {
               pending: state === "pending",
             });
       recordAgentDatabaseAdmissions([refusal]);
-      const { respond, result } = await runRequest({
+      const outcome = await runRequest({
         message: "continue",
         agentId: "worker",
         idempotencyKey: "inspection-retry",
       });
 
-      expect(result).toBeUndefined();
-      expect(respond).toHaveBeenCalledWith(false, undefined, {
+      expect(outcome.result).toBeUndefined();
+      expect(outcome.respond).toHaveBeenCalledWith(false, undefined, {
         code: "UNAVAILABLE",
         message: `${refusal.reason}\n${refusal.repairHint}`,
         details: refusal,
@@ -236,16 +236,9 @@ describe("agent request Swarm preflight", () => {
   });
 
   it("rejects collector flags while Swarm is disabled", async () => {
-    expectRejected(
-      await runPreflight(undefined, true, {
-        enabled: false,
-        backend: true,
-        register: true,
-      }),
-      {
-        message: "swarm collector fields require an enabled, host-registered collector run",
-      },
-    );
+    expectRejected(await runCollector({ enabled: false }), {
+      message: "swarm collector fields require an enabled, host-registered collector run",
+    });
   });
 
   it.each([
@@ -275,18 +268,14 @@ describe("agent request Swarm preflight", () => {
   });
 
   it("allows an exact cached collector replay after Swarm is disabled", async () => {
-    const replayed = await runCollector({
-      enabled: false,
-      launchPending: false,
-      cached: true,
-    });
-    await expectCachedReplay(replayed);
+    await expectCachedReplay(
+      await runCollector({ enabled: false, launchPending: false, cached: true }),
+    );
   });
 
   it("marks a provisional cached replay as admission pending without exposing its reservation", async () => {
-    const replayed = await runPreflight(undefined, true, {
-      backend: true,
-      register: true,
+    const replayed = await runCollector({
+      enabled: undefined,
       launchPending: false,
       cached: true,
       admissionPending: true,
@@ -301,16 +290,12 @@ describe("agent request Swarm preflight", () => {
       launchPending: false,
       completed: true,
     });
-    // Callers learn the one-shot contract and its alternatives, not an internal field name.
     expectRejected(ordinary, { code: "INVALID_REQUEST", message: collectorContinuationRefusal });
 
     subagentRuns.clear();
-    const replayed = await runCollector({
-      launchPending: false,
-      completed: true,
-      cached: true,
-    });
-    await expectCachedReplay(replayed);
+    await expectCachedReplay(
+      await runCollector({ launchPending: false, completed: true, cached: true }),
+    );
   });
 
   it("uses the effective requester override when its session key names another agent", async () => {
@@ -329,29 +314,16 @@ describe("agent request Swarm preflight", () => {
 describe("agent request restart recovery preflight", () => {
   const overrideError = "forceCodeModeTools is reserved for native restart recovery.";
   const retryError = expect.stringContaining("execution identity recovery fields");
+  const subagent = "subagent_restart_recovery";
   it.each([
     ["backend recovery", true, true, undefined, undefined, false],
     ["non-backend retry", false, true, undefined, retryError, false],
     ["non-backend override", false, false, undefined, overrideError, false],
     ["unrelated internal override", true, false, "other_internal_source", overrideError, false],
-    ["backend subagent recovery", true, false, "subagent_restart_recovery", undefined, false],
-    [
-      "non-backend subagent override",
-      false,
-      false,
-      "subagent_restart_recovery",
-      overrideError,
-      false,
-    ],
-    [
-      "subagent recovery for another session",
-      true,
-      false,
-      "subagent_restart_recovery",
-      overrideError,
-      true,
-    ],
-    ["subagent identity retry", true, true, "subagent_restart_recovery", retryError, false],
+    ["backend subagent recovery", true, false, subagent, undefined, false],
+    ["non-backend subagent override", false, false, subagent, overrideError, false],
+    ["subagent recovery for another session", true, false, subagent, overrideError, true],
+    ["subagent identity retry", true, true, subagent, retryError, false],
   ] as const)(
     "checks Code Mode authority for %s",
     async (_name, backend, retry, sourceTool, error, mismatchedSource) => {

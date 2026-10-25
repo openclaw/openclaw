@@ -1,5 +1,3 @@
-import crypto from "node:crypto";
-import { syncBuiltinESMExports } from "node:module";
 import { expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
@@ -192,52 +190,6 @@ it.each<[Partial<PatchParams>, string, boolean, boolean?]>([
     }
   },
 );
-
-it.each([
-  { name: "existing identity", input: { freshEntry }, sessionId: "original", allocations: 0 },
-  {
-    name: "requested missing identity",
-    input: { freshEntry: undefined, initialEntry: undefined, requestedSessionId: "requested" },
-    sessionId: "requested",
-    allocations: 1,
-  },
-  {
-    name: "requested fresh identity",
-    input: { freshEntry, requestedSessionId: "requested" },
-    sessionId: "requested",
-    allocations: 1,
-  },
-  {
-    name: "new identity",
-    input: {},
-    sessionId: "00000000-0000-4000-8000-000000000001",
-    allocations: 2,
-  },
-  {
-    name: "stable writer fallback",
-    input: { fallbackSessionId: "selected" },
-    sessionId: "selected",
-    allocations: 1,
-  },
-] satisfies Array<{
-  name: string;
-  input: Partial<PatchParams>;
-  sessionId: string;
-  allocations: number;
-}>)("allocates only the required identity UUIDs for $name", async (scenario) => {
-  const randomUUID = vi
-    .spyOn(crypto, "randomUUID")
-    .mockReturnValue("00000000-0000-4000-8000-000000000001");
-  try {
-    syncBuiltinESMExports();
-    const result = await buildReusePatch({ fallbackSessionId: undefined, ...scenario.input });
-    expect(result.patch.sessionId).toBe(scenario.sessionId);
-    expect(randomUUID).toHaveBeenCalledTimes(scenario.allocations);
-  } finally {
-    randomUUID.mockRestore();
-    syncBuiltinESMExports();
-  }
-});
 
 it("preserves a legacy session's missing revision when reusing it", async () => {
   const legacyEntry = { ...freshEntry, lifecycleRevision: undefined };

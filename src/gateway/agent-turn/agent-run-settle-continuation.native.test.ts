@@ -80,6 +80,13 @@ async function withTurn<T>(params: TurnParams, body: (recorder: Recorder) => Pro
 }
 
 const fixture = useTempSessionsFixture("settle-continuation-native-");
+async function expectUserInputs(scope: Parameters<typeof loadTranscriptEvents>[0], count: number) {
+  const users = (await loadTranscriptEvents(scope)).filter(
+    (entry) =>
+      isIndexedSessionEntry(entry) && entry.type === "message" && entry.message.role === "user",
+  );
+  expect(users).toHaveLength(count);
+}
 
 describe("requester-settle processing survives later user turns", () => {
   const sessionKey = "agent:main:settle-continuation";
@@ -113,6 +120,15 @@ describe("requester-settle processing survives later user turns", () => {
     ...makeAgentAssistantMessage({ content: [{ type: "text", text }], timestamp: 2, stopReason }),
     __openclaw: { runId },
   });
+  const register = (instanceId: string) => {
+    const entry = createTestRpcSource(
+      { sessionKey, sessionId, operationalRunInstance: { runId, instanceId } },
+      runId,
+    );
+    rpcSourceTesting.set(runId, entry);
+    return entry;
+  };
+  const completedPayload = { status: "ok", summary: "completed", inputProcessingCompleted: true };
   type Prepared = Awaited<ReturnType<typeof prepare>>;
   const dispatch = (turn: Prepared, entry: ReturnType<typeof createTestRpcSource>) => {
     const controller = testRpcSourceController(entry);
@@ -183,11 +199,7 @@ describe("requester-settle processing survives later user turns", () => {
     for (let duplicate = 0; duplicate < count; duplicate++) {
       const replay = await prepareReplay();
       expect(completion(replay)).toMatchObject({ reason: "completed", status: "ok" });
-      await expectAcknowledgement(replay, {
-        status: "ok",
-        summary: "completed",
-        inputProcessingCompleted: true,
-      });
+      await expectAcknowledgement(replay, completedPayload);
       expect(await loadTranscriptEvents(scope())).toEqual(before);
       await release(replay);
     }
@@ -232,22 +244,14 @@ describe("requester-settle processing survives later user turns", () => {
         effectiveTranscriptInputText: retryMessage,
       });
       if (privateCompletion) {
-        await expectAcknowledgement(retry, {
-          status: "ok",
-          summary: "completed",
-          inputProcessingCompleted: true,
-        });
+        await expectAcknowledgement(retry, completedPayload);
       } else {
         expectNoReconciliation(retry);
         expect(await retry.recorder!.persistApproved()).toMatchObject({ appended: true });
         await complete(retry);
       }
       await release(retry);
-      const users = (await loadTranscriptEvents(scope())).filter(
-        (entry) =>
-          isIndexedSessionEntry(entry) && entry.type === "message" && entry.message.role === "user",
-      );
-      expect(users).toHaveLength(privateCompletion ? 1 : 2);
+      await expectUserInputs(scope(), privateCompletion ? 1 : 2);
       expect(reads.command).not.toHaveBeenCalled();
     },
   );
@@ -258,15 +262,7 @@ describe("requester-settle processing survives later user turns", () => {
     const manager = await SessionManager.openAsync(scope(), fixture.sessionsDir());
     await manager.appendMessageAsync(assistant("toolUse"));
     await manager.appendCustomMessageEntryAsync("openclaw.sessions_yield", "", false, { runId });
-    const entry = createTestRpcSource(
-      {
-        sessionKey,
-        sessionId,
-        operationalRunInstance: { runId, instanceId: "settle-native-instance" },
-      },
-      runId,
-    );
-    rpcSourceTesting.set(runId, entry);
+    const entry = register("settle-native-instance");
     const { emitFinal, execute } = dispatch(original, entry);
     await execute();
     expect(emitFinal).toHaveBeenCalledWith(
@@ -334,11 +330,7 @@ describe("requester-settle processing survives later user turns", () => {
     expect(await resumed.recorder!.persistApproved()).toMatchObject({ appended: true });
     await complete(resumed);
     await release(resumed);
-    const users = (await loadTranscriptEvents(scope())).filter(
-      (entry) =>
-        isIndexedSessionEntry(entry) && entry.type === "message" && entry.message.role === "user",
-    );
-    expect(users).toHaveLength(1);
+    await expectUserInputs(scope(), 1);
   });
 
   it("never infers completion for legacy committed input and preserves its current-turn refusal", async () => {
@@ -396,15 +388,7 @@ describe("requester-settle processing survives later user turns", () => {
   it.each([false, true])(
     "retains timeout input until its producer settles (classified=%s)",
     async (classified) => {
-      const entry = createTestRpcSource(
-        {
-          sessionKey,
-          sessionId,
-          operationalRunInstance: { runId, instanceId: "settle-timeout-instance" },
-        },
-        runId,
-      );
-      rpcSourceTesting.set(runId, entry);
+      const entry = register("settle-timeout-instance");
       const controller = testRpcSourceController(entry);
       const original = await prepare({
         abortSignal: controller.signal,
@@ -437,13 +421,13 @@ describe("requester-settle processing survives later user turns", () => {
         );
         controller.abort(new DOMException("Synthetic producer deadline", "TimeoutError"));
         await original.recorder!.waitForPendingInputSettlement!();
-        expect(original.recorder!.getProcessingCompletion!()).toBeUndefined();
+        expect(completion(original)).toBeUndefined();
         expect(cleanupAbortController).not.toHaveBeenCalled();
         expect(emitFinal).not.toHaveBeenCalled();
         finishProducer.resolve();
         await execution;
         await original.recorder!.waitForPendingInputSettlement!();
-        expect(original.recorder!.getProcessingCompletion!()).toMatchObject({
+        expect(completion(original)).toMatchObject({
           status: "timeout",
           reason: classified ? "hard_timeout" : "timed_out",
         });
