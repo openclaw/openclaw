@@ -1,5 +1,4 @@
 import { once } from "node:events";
-import fs from "node:fs/promises";
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import { dashboardCommand } from "../../commands/dashboard.js";
@@ -12,6 +11,7 @@ import {
   sendMinimalGatewayResponse,
   startMinimalRealGateway,
 } from "../../gateway/minimal-gateway.test-helpers.js";
+import { listDirectoryTreeStrict } from "../../infra/directory-walk.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { probeGatewayStatus } from "./probe.js";
 import type { DaemonStatus } from "./status.gather.js";
@@ -123,7 +123,9 @@ describe("Gateway reachability over real sockets", () => {
       await once(wss, "listening");
       const address = wss.address();
       assert(address && typeof address !== "string");
-      const before = await fs.readdir(state.stateDir, { recursive: true });
+      const before = (await listDirectoryTreeStrict(state.stateDir)).map(
+        (walkEntry) => walkEntry.relativePath,
+      );
       const rpc = await probeGatewayStatus({
         url: `ws://127.0.0.1:${address.port}`,
         ...auth,
@@ -140,7 +142,9 @@ describe("Gateway reachability over real sockets", () => {
       });
       expect(rpc, JSON.stringify(rpc)).toMatchObject({ ok: true });
       expect(connectAuth ?? {}).toEqual(auth);
-      expect(await fs.readdir(state.stateDir, { recursive: true })).toEqual(before);
+      expect(
+        (await listDirectoryTreeStrict(state.stateDir)).map((walkEntry) => walkEntry.relativePath),
+      ).toEqual(before);
     },
   );
 
