@@ -13,6 +13,7 @@ import { mcpAppRouteFromSearch, resolveMcpAppRouteServer } from "../../lib/mcp-a
 import { projectAgentSelection, projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import { buildMacGatewayLaunchUrl } from "./gateway-launch.ts";
 import { Apps } from "./view.tsx";
 
@@ -30,10 +31,13 @@ export function AppsPage(props: { appSearch?: string }) {
   const appRoute = createMemo(() => mcpAppRouteFromSearch(appSearch()));
   const catalog = createMcpAppCatalog(
     context,
-    () => ({
-      sessionKey: appRoute() ? gateway.read().snapshot.sessionKey : "",
-      agentId: selection.read().state.selectedId ?? undefined,
-    }),
+    () => {
+      const sessionKey = appRoute() ? gateway.read().snapshot.sessionKey : "";
+      // The Gateway rejects a sessionKey whose agent segment disagrees with agentId, and the
+      // agent selection advances on its own schedule, so a switch could send a stale pair.
+      // Name the agent the key itself carries instead of reading a second source.
+      return { sessionKey, agentId: parseAgentSessionKey(sessionKey)?.agentId };
+    },
     () => true,
   );
   const launch = createMemo((previous: AppLaunch | undefined): AppLaunch => {

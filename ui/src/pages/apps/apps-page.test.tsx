@@ -168,4 +168,35 @@ describe("AppsPage", () => {
     expect(container.querySelectorAll("h1")).toHaveLength(1);
     expect(page.getByRole("heading", { level: 2, name: "Take OpenClaw everywhere" })).toBeTruthy();
   });
+
+  it("asks for discovery with the agent the open session key names", async () => {
+    // The selection advances on its own schedule, so a request built from both the
+    // gateway's session key and the selected agent can name two different agents. The
+    // Gateway refuses that pair with FORBIDDEN/SESSION_ACCESS_CHANGED.
+    const { gateway, publish } = createApplicationGateway();
+    const request = createGatewayRequestMock(async () => ({ servers: [], onboarding: [] }));
+    publish({
+      ...gateway.snapshot,
+      client: createTestGatewayClient(request),
+      phase: "connected",
+      sessionKey: "agent:main:main",
+      hello: gatewayHelloForMethods(["mcp.app.discover"]),
+    });
+    const context = {
+      gateway,
+      navigate: vi.fn(),
+      agentSelection: { state: { selectedId: "claude" }, subscribe: () => () => {} },
+      sessions: { describe: async () => ({ session: { key: "agent:main:main" } }) },
+    } as unknown as ApplicationContext;
+    mountSolid(() => <AppsPage appSearch="?server=parts&tool=library" />, {
+      wrapper: createSolidApplicationContextProvider(context).wrapper,
+    });
+    const isDiscovery = ([method]: unknown[]) => method === "mcp.app.discover";
+    await waitForSolid(() => expect(request.mock.calls.some(isDiscovery)).toBe(true));
+
+    const discover = request.mock.calls.find(isDiscovery);
+    const target = discover?.[1] as { sessionKey: string; agentId?: string } | undefined;
+    expect(target?.sessionKey).toBe("agent:main:main");
+    expect(target?.agentId).toBe("main");
+  });
 });
