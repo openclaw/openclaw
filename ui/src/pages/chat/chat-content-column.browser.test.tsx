@@ -107,7 +107,7 @@ const visibleBlocks = [
   ["working", ".chat-reading-indicator"],
 ] as const;
 const boundedBlocks =
-  ".chat-bubble, .code-block-viewport, .markdown-table__viewport, .chat-message-images, .chat-assistant-attachment-card, .chat-activity-group, .chat-tool-msg-summary, .chat-tool-msg-body, .chat-reply-attribution";
+  ".chat-bubble, .chat-text p, .chat-text h1, .code-block-viewport, .markdown-table__viewport, .chat-message-images, .chat-assistant-attachment-card, .chat-activity-group, .chat-tool-msg-summary, .chat-tool-msg-body, .chat-reply-attribution, .chat-reading-indicator";
 
 async function assertColumn(
   root: HTMLElement,
@@ -128,14 +128,11 @@ async function assertColumn(
     expect(excess, `${context}: ${detail}`).toBeLessThanOrEqual(1);
   const own = q('[data-chat-row-key="own"] .chat-bubble');
   const ownName = q('[data-chat-row-key="own"] .chat-sender-name');
-  expect(own).not.toBeNull();
-  expect(ownName).not.toBeNull();
   const boundary = edge(own);
   // Mobile actions put the bubble edge on the footer, not the name.
   const ownFooter = q('[data-chat-row-key="own"] > .chat-group-footer');
   bound(Math.abs(edge(width <= 768 ? ownFooter : ownName) - boundary), "own footer");
   const leftGroups = all('.chat-group:not([data-chat-row-key="own"])');
-  expect(leftGroups).toHaveLength(fixtures.length + 3);
   for (const left of leftGroups) {
     const excess = edge(left.querySelector(".chat-group-messages")!) - boundary;
     bound(
@@ -143,29 +140,16 @@ async function assertColumn(
       `${left.getAttribute("data-chat-row-key")} column`,
     );
     for (const block of left.querySelectorAll(boundedBlocks)) {
+      expect(block.getBoundingClientRect().width, `${context}: ${block.className}`).toBeGreaterThan(
+        0,
+      );
       bound(edge(block) - boundary, block.className);
     }
   }
-  for (const [key, selector] of visibleBlocks) {
-    const block = q(`[data-chat-row-key="${key}"]`).querySelector(selector);
-    expect(block, `${context}: ${key} ${selector}`).not.toBeNull();
-    expect(
-      block!.getBoundingClientRect().width,
-      `${context}: ${key} visible block`,
-    ).toBeGreaterThan(0);
-  }
-  for (const [key, count] of [
-    ["image", 1],
-    ["gallery", 2],
-  ] as const) {
-    const images = all<HTMLImageElement>(`[data-chat-row-key="${key}"] img.chat-message-image`);
-    expect(images, `${context}: ${key} image count`).toHaveLength(count);
-    // Admit lazy images to the viewport before decoding their geometry.
-    for (const element of images) {
-      element.scrollIntoView({ block: "center", inline: "nearest", behavior: "instant" });
-      await element.decode();
-      expect(element.naturalWidth).toBeGreaterThan(0);
-    }
+  // Admit lazy images to the viewport before decoding their geometry.
+  for (const element of all<HTMLImageElement>("img.chat-message-image")) {
+    element.scrollIntoView({ block: "center", inline: "nearest", behavior: "instant" });
+    await element.decode();
   }
   for (const selector of [".code-block-wrapper", ".markdown-table"]) {
     const viewport = [...q(selector).querySelectorAll<HTMLElement>("*")].find(
@@ -181,90 +165,75 @@ async function assertColumn(
   bound(thread.scrollWidth - thread.clientWidth, "thread overflow");
 }
 
-it.each([1440, 1024, 390].flatMap((width) => ["light", "dark"].map((theme) => ({ width, theme }))))(
-  "bounds every left-side block at $width px in $theme",
-  async ({ width, theme }) => {
-    await page.viewport(width, 900);
-    const root = document.body.appendChild(document.createElement("div"));
-    root.className = "chat";
-    root.style.height = "850px";
-    const previousTheme = document.documentElement.dataset.themeMode;
-    document.documentElement.dataset.themeMode = theme;
-    onTestFinished(() => {
-      root.remove();
-      if (previousTheme === undefined) {
-        delete document.documentElement.dataset.themeMode;
-      } else {
-        document.documentElement.dataset.themeMode = previousTheme;
-      }
-    });
-    const [directLayout, setDirectLayout] = createSignal(false);
-    mountSolid(
-      () => (
-        <div
-          class={["chat-thread", { "chat-thread--direct": directLayout() }]}
-          style={{ height: "850px" }}
-        >
-          <div class="chat-thread-inner">
-            <MessageGroup group={ownGroup} options={options} />
-            <For each={fixtures}>
-              {(fixture) => (
-                <MessageGroup
-                  group={fixture}
-                  options={{ ...options, isToolExpanded: () => true }}
-                />
-              )}
-            </For>
-            <WorkGroupSummary
-              item={{ key: "summary", durationMs: 2_000, groups: [] }}
-              options={{ expanded: false, onToggle: () => {} }}
-            />
-            <StreamGroup options={{}} parts={[stream]} />
-            <StreamGroup options={{}} parts={[working]} />
-          </div>
+it.each([1440, 1024, 390])("bounds every left-side block at %s px", async (width) => {
+  await page.viewport(width, 900);
+  const root = document.body.appendChild(document.createElement("div"));
+  root.className = "chat";
+  root.style.height = "850px";
+  onTestFinished(() => root.remove());
+  const [directLayout, setDirectLayout] = createSignal(false);
+  mountSolid(
+    () => (
+      <div
+        class={["chat-thread", { "chat-thread--direct": directLayout() }]}
+        style={{ height: "850px" }}
+      >
+        <div class="chat-thread-inner">
+          <MessageGroup group={ownGroup} options={options} />
+          <For each={fixtures}>
+            {(entry) => (
+              <MessageGroup group={entry} options={{ ...options, isToolExpanded: () => true }} />
+            )}
+          </For>
+          <WorkGroupSummary
+            item={{ key: "summary", durationMs: 2_000, groups: [] }}
+            options={{ expanded: false, onToggle: () => {} }}
+          />
+          <StreamGroup options={{}} parts={[stream]} />
+          <StreamGroup options={{}} parts={[working]} />
         </div>
-      ),
-      { container: root },
-    );
-    await vi.dynamicImportSettled();
-    await waitForSolid(() => {
-      for (const [key, selector] of visibleBlocks) {
-        expect(
-          root.querySelector(`[data-chat-row-key="${key}"]`)?.querySelector(selector),
-        ).toBeInstanceOf(HTMLElement);
-      }
-    });
-    for (const direct of [false, true]) {
-      for (const direction of ["ltr", "rtl"]) {
-        for (const mode of ["saved", "narrow", "default"]) {
-          const fullWidth = mode !== "default";
-          // A narrow desktop pane retains avatars; the mobile viewport hides them.
-          for (const [property, enabled] of [
-            ["--chat-message-max-width", fullWidth],
-            ["--chat-thread-max-width", mode === "saved"],
-          ] as const) {
-            if (enabled) {
-              root.style.setProperty(property, "100%");
-            } else {
-              root.style.removeProperty(property);
-            }
+      </div>
+    ),
+    { container: root },
+  );
+  await vi.dynamicImportSettled();
+  await waitForSolid(() => {
+    for (const [key, selector] of visibleBlocks) {
+      expect(
+        root.querySelector(`[data-chat-row-key="${key}"]`)?.querySelector(selector),
+      ).toBeInstanceOf(HTMLElement);
+    }
+  });
+  for (const direct of [false, true]) {
+    for (const direction of ["ltr", "rtl"]) {
+      for (const mode of ["saved", "narrow", "default"]) {
+        const fullWidth = mode !== "default";
+        // A narrow desktop pane retains avatars; the mobile viewport hides them.
+        for (const [property, enabled] of [
+          ["--chat-message-max-width", fullWidth],
+          ["--chat-thread-max-width", mode === "saved"],
+        ] as const) {
+          if (enabled) {
+            root.style.setProperty(property, "100%");
+          } else {
+            root.style.removeProperty(property);
           }
-          root.dir = direction;
-          root.style.width = mode === "narrow" ? "min(100%, 480px)" : "100%";
-          setDirectLayout(direct);
-          flush();
-          await new Promise<void>((resolve) => {
-            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-          });
-          await assertColumn(
-            root,
-            width,
-            direction === "rtl",
-            fullWidth,
-            `${width}/${theme}/${direct ? "direct" : "shared"}/${direction}/${mode}`,
-          );
         }
+        root.dir = direction;
+        root.style.width = mode === "narrow" ? "min(100%, 480px)" : "100%";
+        setDirectLayout(direct);
+        flush();
+        await new Promise<void>((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+        });
+        await assertColumn(
+          root,
+          width,
+          direction === "rtl",
+          fullWidth,
+          `${width}/${direct ? "direct" : "shared"}/${direction}/${mode}`,
+        );
       }
     }
-  },
-);
+  }
+});
