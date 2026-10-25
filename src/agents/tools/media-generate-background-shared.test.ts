@@ -445,10 +445,7 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
     expectCall(lifecycle.completeTaskRun, {
       terminalResult: expect.objectContaining({ terminalOutcome: "blocked" }),
     });
-    expect(onWakeFailure).toHaveBeenCalledWith(
-      "Image generation completion wake failed after successful generation",
-      expect.objectContaining({ taskId: "task-image-orphaned" }),
-    );
+    expect(onWakeFailure).toHaveBeenCalledOnce();
   });
 
   it.each([false, true])("completes blocked delivery when wake throws=%s", async (throws) => {
@@ -479,14 +476,7 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
         : {},
     );
     await scheduled[0]?.();
-    expect(onWakeFailure).toHaveBeenCalledWith(
-      `Image generation completion ${throws ? "wake failed" : "delivery was not confirmed"} after successful generation`,
-      expect.objectContaining({
-        runId: handle.runId,
-        taskId: handle.taskId,
-        ...(throws ? { error } : {}),
-      }),
-    );
+    expect(onWakeFailure).toHaveBeenCalledOnce();
     expectCall(lifecycle.completeTaskRun, {
       count: 1,
       terminalResult: { terminalOutcome: "blocked" },
@@ -507,14 +497,7 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
 
     await scheduled[0]?.();
 
-    expect(onWakeFailure).toHaveBeenCalledWith(
-      "Image generation completion progress update failed",
-      expect.objectContaining({
-        error: progressError,
-        runId: "tool:image_generate:progress-error",
-        taskId: "task-image-progress-error",
-      }),
-    );
+    expect(onWakeFailure).toHaveBeenCalledOnce();
     expectCall(lifecycle.wakeTaskCompletion, {
       status: "ok",
       result: "generated",

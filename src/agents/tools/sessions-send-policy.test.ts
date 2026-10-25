@@ -334,32 +334,40 @@ describe("sessions_send directed policy at the tool boundary", () => {
   });
 
   it.each([
-    { name: "long reply", full: `${"a".repeat(5_000)}TAIL`, preview: `${"a".repeat(4_095)}…` },
-    {
-      name: "whitespace-shortened preview",
-      full: `${"a".repeat(4_000)}${" ".repeat(100)}TAIL`,
-      preview: `${"a".repeat(4_000)}…`,
-    },
-    { name: "literal ellipsis", full: "Still thinking…", preview: "Still thinking…" },
-    {
-      name: "tool-budget overflow",
-      full: `${"a".repeat(20_000)}TAIL`,
-      preview: `${"a".repeat(4_095)}…`,
-    },
-  ])(
-    "returns the accepted run's full $name with explicit tool-budget truncation",
-    async ({ full, preview }) => {
+    [
+      "whitespace-shortened preview",
+      `${"a".repeat(4_000)}${" ".repeat(100)}TAIL`,
+      `${"a".repeat(4_000)}…`,
+    ],
+    ["literal ellipsis", "Still thinking…", "Still thinking…"],
+    ["tool-budget overflow", `${"a".repeat(20_000)}TAIL`, `${"a".repeat(4_095)}…`],
+    ["unavailable full reply", undefined, `${"a".repeat(4_095)}…`],
+  ] as const)(
+    "returns the accepted run's %s with explicit truncation",
+    async (_name, full, preview) => {
       gatewayResponses({
         "agent.wait": terminalReply(preview),
         "chat.history": {
-          messages: [assistantReply(full), assistantReply("Unrelated answer", "later-run")],
+          messages: [
+            ...(full === undefined ? [] : [assistantReply(full)]),
+            assistantReply("Unrelated answer", "other-run"),
+          ],
         },
       });
 
       const result = await send(configFor({ send: ["worker"] }), { agentId: "worker" });
+      expect(Value.Check(SessionsSendOutputSchema, result.details)).toBe(true);
+      if (full === undefined) {
+        expect(result.details).toMatchObject({
+          status: "ok",
+          reply: preview,
+          replyTruncated: true,
+          note: expect.stringContaining("missing section or a file"),
+        });
+        return;
+      }
       expect(result.details).toMatchObject({ status: "ok", reply: full });
       expect(result.details).not.toHaveProperty("replyTruncated");
-      expect(Value.Check(SessionsSendOutputSchema, result.details)).toBe(true);
 
       const projected = truncateToolResultMessage(
         {
@@ -382,22 +390,6 @@ describe("sessions_send directed policy at the tool boundary", () => {
       }
     },
   );
-
-  it("reports a truncated preview when the accepted run's full reply is unavailable", async () => {
-    const preview = `${"a".repeat(4_095)}…`;
-    gatewayResponses({
-      "agent.wait": terminalReply(preview),
-      "chat.history": { messages: [assistantReply("Unrelated answer", "other-run")] },
-    });
-    const result = await send(configFor({ send: ["worker"] }), { agentId: "worker" });
-    expect(result.details).toMatchObject({
-      status: "ok",
-      reply: preview,
-      replyTruncated: true,
-      note: expect.stringContaining("missing section or a file"),
-    });
-    expect(Value.Check(SessionsSendOutputSchema, result.details)).toBe(true);
-  });
 
   it.each([
     [
@@ -433,32 +425,14 @@ describe("sessions_send directed policy at the tool boundary", () => {
     expectNoDispatch();
   });
 
-  it("denies send-only watch before delivery but permits the plain run-scoped reply", async () => {
-    const watch = vi.spyOn(sessionStateEvents, "registerSessionStateWatch").mockResolvedValue(true);
-    const config = configFor({ send: ["worker"] });
-    const watched = await send(config, { agentId: "worker", watch: true });
-    expect(watched.details).toMatchObject({ status: "forbidden" });
-    expectNoDispatch();
-    expect(watch).not.toHaveBeenCalled();
-
-    const plain = await send(config, { agentId: "worker" });
-    expect(plain.details).toMatchObject({ status: "ok", reply: replyText });
-    expect(watch).not.toHaveBeenCalled();
-  });
-
-  it("still registers a requested watch when the target has read visibility", async () => {
-    const watch = vi.spyOn(sessionStateEvents, "registerSessionStateWatch").mockResolvedValue(true);
-    const result = await send(configFor({ send: ["worker"], visibility: "all" }), {
-      agentId: "worker",
-      watch: true,
-    });
-    expect(result.details).toMatchObject({ status: "ok", reply: replyText, watched: true });
-    expect(watch).toHaveBeenCalledOnce();
-  });
-
-  it.each([false, true])(
-    "keeps a durable parent's explicit watch ceiling (bound=%s)",
-    async (bound) => {
+  it.each([
+    ["send-only", "self", false],
+    ["read-visible", "all", false],
+    ["parent", "tree", false],
+    ["bound parent", "tree", true],
+  ] as const)("keeps the %s watch ceiling", async (_name, visibility, bound) => {
+    const config = configFor({ send: ["worker"], visibility });
+    if (visibility === "tree") {
       gatewayResponses({
         "sessions.describe": {
           session: {
@@ -470,18 +444,29 @@ describe("sessions_send directed policy at the tool boundary", () => {
           },
         },
       });
-      const watch = vi
-        .spyOn(sessionStateEvents, "registerSessionStateWatch")
-        .mockResolvedValue(true);
-      const result = await send(
-        configFor({ send: ["worker"], visibility: "tree" }),
-        { sessionKey: nativeChildKey, message: "Continue this exact child", watch: true },
-        bound ? { expectedTargetSessionId: "native-child-session" } : {},
-      );
+    }
+    const watch = vi.spyOn(sessionStateEvents, "registerSessionStateWatch").mockResolvedValue(true);
+    const result = await send(
+      config,
+      visibility === "tree"
+        ? { sessionKey: nativeChildKey, message: "Continue this exact child", watch: true }
+        : { agentId: "worker", watch: true },
+      bound ? { expectedTargetSessionId: "native-child-session" } : {},
+    );
+    if (visibility === "self") {
+      expect(result.details).toMatchObject({ status: "forbidden" });
+      expectNoDispatch();
+      expect(watch).not.toHaveBeenCalled();
+      expect((await send(config, { agentId: "worker" })).details).toMatchObject({
+        status: "ok",
+        reply: replyText,
+      });
+      expect(watch).not.toHaveBeenCalled();
+    } else {
       expect(result.details).toMatchObject({ status: "ok", reply: replyText, watched: !bound });
       expect(watch).toHaveBeenCalledTimes(bound ? 0 : 1);
-    },
-  );
+    }
+  });
 
   it("reports a raw-target watch refusal without misreporting an accepted send", async () => {
     const result = await send(configFor({ send: ["worker"], visibility: "all" }), {

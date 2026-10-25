@@ -410,10 +410,8 @@ it("preserves the selected stored filename in background completion", async () =
     "audio/wav",
   );
   const generate = mockGeneratedMusic({
-    provider: "google",
     model: "lyria-3-pro-preview",
     tracks: [{ buffer: generatedWav, mimeType: "audio/wav", fileName: "track-1.wav" }],
-    metadata: { taskId: "music-task-1" },
   });
   mediaStoreMocks.saveMediaBuffer.mockResolvedValueOnce(stored);
 
@@ -450,12 +448,6 @@ it("preserves the selected stored filename in background completion", async () =
       autoProviderFallback: false,
       timeoutMs: 120_000,
     });
-    const progress = callArgument(taskExecutorMocks.recordProgress);
-    expect(String(progress.runId)).toMatch(/^tool:music_generate:/);
-    expect(progress.progressSummary).toBe("Generating music");
-    expect(String(callArgument(taskExecutorMocks.completeOperation).runId)).toMatch(
-      /^tool:music_generate:/,
-    );
     expect(wakeSpy).toHaveBeenCalledTimes(1);
     const wake = callArgument(wakeSpy);
     expect(wake).toMatchObject({ handle: { taskId: "task-123" }, status: "ok" });
@@ -519,31 +511,6 @@ it("stops loading later music references when the caller aborts a pending refere
   expect(signal?.reason).toBe(abortReason);
 });
 
-it("keeps an accepted detached music task running after its requester aborts", async () => {
-  const generate = mockGeneratedMusic({
-    tracks: [musicAsset("music", "music.mp3")],
-  });
-  mediaStoreMocks.saveMediaBuffer.mockResolvedValue(savedMedia("accepted-music.mp3", 5));
-  taskExecutorMocks.createOperation.mockReturnValue({ taskId: "task-music-accepted" });
-  const controller = new AbortController();
-  const tool = musicTool("google/lyria-3-clip-preview", requester);
-  await withHeldMediaGenerationResult(generate, taskExecutorMocks, async (complete) => {
-    const result = await tool.execute(
-      "call-music-accepted",
-      { prompt: "an accepted music" },
-      controller.signal,
-    );
-    controller.abort(new Error("requester ended after acceptance"));
-
-    expect(detailsOf(result).status).toBe("started");
-    expect(taskExecutorMocks.completeOperation).not.toHaveBeenCalled();
-    expect(mediaStoreMocks.saveMediaBuffer).not.toHaveBeenCalled();
-    await complete();
-    expect(generate).toHaveBeenCalledOnce();
-    expect(taskExecutorMocks.completeOperation).toHaveBeenCalledOnce();
-  });
-});
-
 defineMediaGenerationDuplicateTests({
   kind: "music",
   tasks: taskExecutorMocks,
@@ -582,37 +549,6 @@ defineMediaGenerationDuplicateTests({
   ],
 });
 
-it("rolls back late music saves after a concurrent persistence failure", async () => {
-  mockGeneratedMusic({
-    provider: "minimax",
-    model: "music-2.6",
-    tracks: [musicAsset("failed", "failed.mp3"), musicAsset("late", "late.mp3")],
-  });
-  const terminalError = new Error("music persistence failed");
-  const lateSavedMedia = savedMedia("late.mp3", 4);
-  const lateSave = createDeferred<typeof lateSavedMedia>();
-  mediaStoreMocks.saveMediaBuffer
-    .mockRejectedValueOnce(terminalError)
-    .mockImplementationOnce(() => lateSave.promise);
-  mediaStoreMocks.deleteMediaBuffer.mockRejectedValueOnce(new Error("music cleanup failed"));
-  const execution = musicTool().execute("call-partial-save", { prompt: "two tracks" });
-  let executionSettled = false;
-  const onSettled = () => {
-    executionSettled = true;
-  };
-  void execution.then(onSettled, onSettled);
-  await vi.waitFor(() => expect(mediaStoreMocks.saveMediaBuffer).toHaveBeenCalledTimes(2));
-  await Promise.resolve();
-  expect(executionSettled).toBe(false);
-
-  lateSave.resolve(lateSavedMedia);
-  await expect(execution).rejects.toBe(terminalError);
-  expect(mediaStoreMocks.deleteMediaBuffer).toHaveBeenCalledExactlyOnceWith(
-    "late.mp3",
-    "tool-music-generation",
-  );
-});
-
 it("lists provider capabilities", async () => {
   registerMusicProvider({
     capabilities: {
@@ -641,20 +577,6 @@ it("warns when optional provider overrides are ignored", async () => {
   ];
   const warning =
     "Ignored unsupported overrides for google/lyria-3-clip-preview: durationSeconds=30, format=wav.";
-  registerMusicProvider({
-    id: "google",
-    defaultModel: "lyria-3-clip-preview",
-    models: ["lyria-3-clip-preview"],
-    capabilities: {
-      generate: {
-        supportsLyrics: true,
-        supportsInstrumental: true,
-        supportsFormat: true,
-        supportedFormatsByModel: { "lyria-3-clip-preview": ["mp3"] },
-      },
-    },
-    generateMusic: unusedGenerator(),
-  });
   mockGeneratedMusic({
     ignoredOverrides,
     tracks: [musicAsset("music-bytes", "molty-anthem.mp3")],

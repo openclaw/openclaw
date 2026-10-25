@@ -65,11 +65,16 @@ vi.mock("../subagents/registry/subagent-registry-read.js", async (importOriginal
   ...(await importOriginal<typeof import("../subagents/registry/subagent-registry-read.js")>()),
   getLatestLiveSubagentRunByChildSessionKey: () => state.task,
 }));
-function endpoint(name: string, entry: Partial<SessionEntry> = {}): CommunicationEndpoint {
+function endpoint(
+  name: string,
+  entry: Partial<SessionEntry> = {},
+  agentId = "main",
+  storePath = "/sessions",
+): CommunicationEndpoint {
   const row = {
-    agentId: "main",
-    sessionKey: "agent:main:" + name,
-    storePath: "/sessions",
+    agentId,
+    sessionKey: `agent:${agentId}:${name}`,
+    storePath,
     entry: { sessionId: name, updatedAt: 1, ...entry },
   };
   state.rows.set(row.sessionKey, row);
@@ -308,20 +313,16 @@ describe("sessions_send communication boundary", () => {
           })
         : parent;
       ancestor.storePath = parent.storePath;
-      const target = {
-        ...endpoint(childName, {
+      const target = endpoint(
+        childName,
+        {
           updatedAt: Date.now(),
           spawnedBy: ancestor.sessionKey,
           parentSessionId: ancestor.entry!.sessionId,
-        }),
-        agentId: childAgentId,
-        sessionKey: `agent:${childAgentId}:${childName}`,
-        storePath:
-          childAgentId === "main"
-            ? parent.storePath
-            : path.join(tempDirs.make(), "sessions.sqlite"),
-      };
-      state.rows.set(target.sessionKey, target);
+        },
+        childAgentId,
+        childAgentId === "main" ? parent.storePath : path.join(tempDirs.make(), "sessions.sqlite"),
+      );
       state.config = { tools: { agentToAgent: { enabled: true, allow: ["*"] } } };
       await replaceSessionEntry(parent, parent.entry!);
       expect(loadSessionEntry(parent)?.updatedAt).toBe(expiredAt);
@@ -459,6 +460,7 @@ describe("sessions_send communication boundary", () => {
     const input = operation();
     state.config = current;
     await denied(input);
+    expectNoApprovalOrDelivery(input);
   });
   it("asks sender then recipient for exact content and waits for both human decisions", async () => {
     const input = operation(endpoint("source", askSend), endpoint("target", askReceive));
@@ -634,24 +636,12 @@ describe("sessions_send communication boundary", () => {
       expect(state.approve).not.toHaveBeenCalled();
     });
   });
-  it.each(["self", "cross-agent"] as const)(
-    "always cannot override the existing %s access ceiling",
-    async (restriction) => {
-      state.config = {
-        tools: {
-          sessions: { visibility: restriction === "self" ? "self" : "all" },
-          agentToAgent: { enabled: false },
-        },
-      };
-      const input = operation();
-      if (restriction === "cross-agent") {
-        input.target = { ...input.target, agentId: "peer", sessionKey: "agent:peer:target" };
-        state.rows.set(input.target.sessionKey, input.target);
-      }
-      await expect(prepareSessionsSendCommunication(input)).rejects.toThrow();
-      expectNoApprovalOrDelivery(input);
-    },
-  );
+  it("always cannot override the disabled cross-agent access ceiling", async () => {
+    state.config = { tools: { sessions: { visibility: "all" }, agentToAgent: { enabled: false } } };
+    const input = operation(undefined, endpoint("target", {}, "peer"));
+    await expect(prepareSessionsSendCommunication(input)).rejects.toThrow();
+    expectNoApprovalOrDelivery(input);
+  });
 
   it("rechecks config after human approval and at final dispatch", async () => {
     const input = operation(endpoint("source", askSend));

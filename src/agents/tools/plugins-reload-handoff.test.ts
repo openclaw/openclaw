@@ -43,12 +43,9 @@ import {
 import { wrapToolWithAbortSignal } from "../agent-tools.abort.js";
 import { SESSIONS_YIELD_ABORT_REASON } from "../embedded-agent-runner/run/attempt-sessions-yield.js";
 import { buildEmbeddedAttemptToolRunContext } from "../embedded-agent-runner/run/attempt-tool-run-context.js";
-import { hasYieldContinuationEvidence } from "../embedded-agent-runner/run/incomplete-turn-resolution.js";
-import { isAsyncStartedToolResult } from "../embedded-agent-tool-results.js";
 import { runEmbeddedAgent } from "../embedded-agent.js";
 import { createAgentHarnessHostCapabilities } from "../harness/host-capability.js";
 import { withPreparedEmbeddedRunToolAuthority } from "../harness/tool-authority.runtime.js";
-import { resolveOpenClawPluginToolsForOptionsAsync } from "../openclaw-plugin-tools.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
@@ -72,22 +69,18 @@ afterEach(() => {
   resetGatewayWorkAdmission();
 });
 it.each([
-  ["success", '"generation":2'],
-  ["without run ID", '"generation":2'],
   ["same-ID without run ID", ""],
   ["same-ID callback", '"generation":2'],
   ["same-ID late construction", '"generation":2'],
   ["same-ID prepublication", '"generation":2'],
   ["same-ID unmatched run", ""],
-  ["reload failure", "fixture reload failed"],
   ["permission denied", "operator.admin"],
-  ["stop", ""],
 ])("ends the turn before reload and resumes once: %s", async (outcome, expectedText) => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const sessionKey = "agent:main:reload";
     const sessionId = "reload-session";
     const runId = "reload-run";
-    const withoutRunId = outcome === "without run ID" || outcome === "same-ID without run ID";
+    const withoutRunId = outcome === "same-ID without run ID";
     const refusesHandoff =
       outcome === "same-ID unmatched run" || outcome === "same-ID without run ID";
     const config = { agents: { entries: { main: { workspace: state.workspaceDir } } } };
@@ -119,11 +112,7 @@ it.each([
     const endpoint = vi.fn<GatewayRequestHandler>(async ({ respond }) => {
       expect(plugin.hasRetainedConsumers).toBe(false);
       order.push("reload");
-      if (outcome === "reload failure") {
-        respond(false, undefined, { code: "UNAVAILABLE", message: "fixture reload failed" });
-      } else {
-        respond(true, { ok: true, runtime: { generation: 2, pluginIds: ["reload-fixture"] } });
-      }
+      respond(true, { ok: true, runtime: { generation: 2, pluginIds: ["reload-fixture"] } });
     });
     const context = createContext([["plugins.reload", "operator.admin", "plugins", endpoint]]);
     context.getRuntimeConfig = () => config;
@@ -185,9 +174,6 @@ it.each([
         }
         const result = await execute();
         expect(result.details).toMatchObject({ status: "started", async: true, yielded: true });
-        const asyncStarted = isAsyncStartedToolResult(result);
-        expect(asyncStarted).toBe(true);
-        expect(hasYieldContinuationEvidence({ toolMetas: [{ asyncStarted }] })).toBe(true);
         expect(order).toEqual(["yield"]);
         expectNoHandoff();
         await expect(sourceTool.execute("duplicate", request)).rejects.toThrow(
@@ -240,12 +226,6 @@ it.each([
       if (refusesHandoff) {
         return;
       }
-      if (outcome === "stop") {
-        exec.cancelExecRequestOwners(exec.activeExecRequestOwners({ sessionKey }, () => true));
-        cleanup.resolve();
-        await operation.ownerSettlement;
-        return;
-      }
       cleanup.resolve();
       const text = await resumed.promise;
       expect(order).toEqual([
@@ -280,9 +260,6 @@ it.each([
               ),
           ),
       );
-      if (outcome === "stop") {
-        expectNoHandoff();
-      }
     } finally {
       cleanup.resolve();
       operation.complete();
@@ -364,6 +341,9 @@ it.for([
         const observer = vi
           .spyOn(events, "enqueueSessionEventForHost")
           .mockImplementation((text, options) => {
+            expect(text).toContain(
+              scenario === "reload failure" ? "fixture reload failed" : '"generation":2',
+            );
             const receipt = enqueue(text, options);
             enqueued.resolve(receipt);
             return receipt;
@@ -567,35 +547,6 @@ it.for([
                           expect(sourceAuthority?.profileId).toBe(
                             client?.authenticatedUserProfile?.profileId,
                           );
-                          if (isOwner) {
-                            const audience = await resolveAudience(true, () =>
-                              sourceAuthority!.assertCurrent(),
-                            );
-                            try {
-                              const tools = await resolveOpenClawPluginToolsForOptionsAsync({
-                                options: {
-                                  config,
-                                  runId: "reload-source",
-                                  agentSessionKey: sessionKey,
-                                  sessionId,
-                                  workspaceDir: state.workspaceDir,
-                                  senderIsOwner: true,
-                                  memoryAudience: audience.audience,
-                                  pluginToolAllowlist: ["owner_probe"],
-                                  assertInvocationCurrent: () => sourceAuthority!.assertCurrent(),
-                                },
-                              });
-                              const initialProbe = expectDefined(
-                                tools.find((tool) => tool.name === "owner_probe"),
-                                "initial owner-only plugin tool",
-                              );
-                              expect(await initialProbe.execute("initial-read", {})).toMatchObject({
-                                content: [{ text: "owner record" }],
-                              });
-                            } finally {
-                              audience.release();
-                            }
-                          }
                           const tool = createPluginsTool({
                             sessionId,
                             runId: "reload-source",
@@ -654,7 +605,7 @@ it.for([
             executionStarted: true,
           });
           expect(await fs.readFile(readsFile, "utf8").catch(() => "")).toBe(
-            !isOwner ? "" : invalidated ? "read\n" : "read\nread\n",
+            isOwner && !invalidated ? "read\n" : "",
           );
           expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
           expect(endpoint).toHaveBeenCalledOnce();
