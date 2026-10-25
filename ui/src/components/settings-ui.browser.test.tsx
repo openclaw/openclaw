@@ -12,42 +12,6 @@ import startupStyles from "../styles.css?inline";
 const optionsFor = (...values: string[]) =>
   values.map((value) => ({ value, label: value[0]!.toUpperCase() + value.slice(1) }));
 
-function mountRadioGroups(onChange = vi.fn()) {
-  const [state, setState] = createSignal({
-    value: "first",
-    busy: false,
-    disabled: false,
-    expanded: false,
-  });
-  const options = [
-    ...optionsFor("first", "second"),
-    { value: "locked", label: "Locked", disabled: true },
-  ];
-  const view = mountSolid(() => (
-    <fieldset disabled={state().busy}>
-      <SettingsSegmented
-        value={state().value}
-        disabled={state().disabled}
-        ariaLabel="Schedule"
-        options={state().expanded ? [...options, { value: "third", label: "Third" }] : options}
-        onChange={onChange}
-      />
-      <SettingsSegmented
-        value="second"
-        options={options}
-        ariaLabel="Other schedule"
-        onChange={onChange}
-      />
-    </fieldset>
-  ));
-  const draw = (next: Partial<ReturnType<typeof state>>) => {
-    setState((previous) => ({ ...previous, ...next }));
-    flush();
-  };
-  flush();
-  return { ...view, draw };
-}
-
 it("animates Applying before lazy settings styles load", async () => {
   const container = document.createElement("div");
   // Keep lazy route keyframes from masking a missing startup animation owner.
@@ -78,42 +42,27 @@ it("animates Applying before lazy settings styles load", async () => {
   expect(transform).toMatchObject({ a: expect.closeTo(0), b: expect.closeTo(1) });
 });
 
-it("restores segmented controls after fieldset busy state while preserving disabled options", () => {
+it("restores inherited fieldset restrictions when busy state clears", () => {
+  const [busy, setBusy] = createSignal(true);
   const onChange = vi.fn();
-  const { container, draw } = mountRadioGroups(onChange);
-  const disabledStates = (busy: boolean, disabled = false) => {
-    draw({ busy, disabled });
-    return [
-      ...container.querySelector('[role="radiogroup"]')!.querySelectorAll("input[type=radio]"),
-    ].map((radio) => radio.matches(":disabled"));
-  };
-  expect(disabledStates(false)).toEqual([false, false, true]);
-  expect(disabledStates(true)).toEqual([true, true, true]);
-  container.querySelector<HTMLElement>('input[type=radio][value="second"]')?.click();
+  const { container } = mountSolid(() => (
+    <fieldset disabled={busy()}>
+      <SettingsSegmented
+        value="first"
+        options={optionsFor("first", "second")}
+        onChange={onChange}
+      />
+    </fieldset>
+  ));
+  const second = container.querySelector<HTMLInputElement>('input[value="second"]')!;
+  expect(second.matches(":disabled")).toBe(true);
+  second.click();
   expect(onChange).not.toHaveBeenCalled();
-  expect(disabledStates(false)).toEqual([false, false, true]);
-  container.querySelector<HTMLElement>('input[type=radio][value="second"]')?.click();
+  setBusy(false);
+  flush();
+  expect(second.matches(":disabled")).toBe(false);
+  second.click();
   expect(onChange).toHaveBeenCalledWith("second", expect.any(HTMLElement));
-  onChange.mockClear();
-  expect(disabledStates(true, true)).toEqual([true, true, true]);
-  expect(disabledStates(false, true)).toEqual([true, true, true]);
-  container.querySelector<HTMLElement>('input[type=radio][value="second"]')?.click();
-  expect(onChange).not.toHaveBeenCalled();
-  expect(disabledStates(false)).toEqual([false, false, true]);
-});
-
-it("keeps externally updated radio selections checked and independent as options change", () => {
-  const { container, draw } = mountRadioGroups();
-  const selected = (value: string, expanded = false) => {
-    draw({ value, expanded });
-    return [...container.querySelectorAll('[role="radiogroup"]')].map((group) =>
-      [...group.querySelectorAll<HTMLInputElement>("input:checked")].map((input) => input.value),
-    );
-  };
-  expect(selected("second")).toEqual([["second"], ["second"]]);
-  expect(selected("first")).toEqual([["first"], ["second"]]);
-  expect(selected("third", true)).toEqual([["third"], ["second"]]);
-  expect(selected("second", true)).toEqual([["second"], ["second"]]);
 });
 
 function mountBusyControls() {

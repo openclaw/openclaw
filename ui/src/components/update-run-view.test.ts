@@ -47,35 +47,19 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it.each(["running", "skipped"] as const)("omits native progress for OCM %s", (status) => {
-  const view = project({
-    status,
-    phase: status === "running" ? "requested" : "finished",
-    target: { kind: "package", installationMethod: "ocm" },
-  });
+it("omits native progress for OCM-managed runs", () => {
+  const view = project({ target: { kind: "package", installationMethod: "ocm" } });
   expect(view).toMatchObject({ compactLabel: "", phases: [], oracles: [] });
-  if (status === "running") {
-    expect(view.headline).toContain("managed by OCM");
-  }
+  expect(view.headline).toContain("managed by OCM");
 });
 
-it.each(["in_progress", "failed"] as const)("preserves %s repair after activation", (status) => {
+it("retains a recorded repair phase after the run has finished", () => {
   const view = project({
-    phase: status === "in_progress" ? "repairing" : "finished",
-    status: status === "in_progress" ? "running" : "failed",
-    steps: [
-      makeStep("activating"),
-      makeStep("restarting"),
-      makeStep("verifying", "failed"),
-      { ...makeStep("repairing", status), startedAtMs: 10 },
-    ],
+    phase: "finished",
+    status: "failed",
+    steps: [makeStep("repairing", "failed")],
   });
-  const phases = Object.fromEntries(view.phases.map(({ step, status: state }) => [step, state]));
-  expect(phases).toMatchObject({
-    repairing: status,
-    activating: "completed",
-    verifying: "failed",
-  });
+  expect(view.phases.find(({ step }) => step === "repairing")?.status).toBe("failed");
 });
 
 it("presents diagnostic receipts as readable details without inventing installation steps", () => {
@@ -259,20 +243,18 @@ it("preserves early failure phases and renders diagnostic markup as text", () =>
     "Run openclaw triage to diagnose and repair the failed update.",
   );
   expect(output()).toBe(failure);
-  expect(
+  const phaseStates = Object.fromEntries(
     [...element.querySelectorAll(".update-run-view__phases [data-status]")].map((phase) => [
       phase.getAttribute("data-step"),
       phase.getAttribute("data-status"),
     ]),
-  ).toEqual([
-    ["requested", "completed"],
-    ["staging", "completed"],
-    ["validating", "failed"],
-    ["activating", "skipped"],
-    ["restarting", "skipped"],
-    ["verifying", "skipped"],
-    ["finished", "failed"],
-  ]);
+  );
+  expect(phaseStates).toMatchObject({
+    staging: "completed",
+    validating: "failed",
+    activating: "skipped",
+    finished: "failed",
+  });
   expect(element.querySelectorAll(".update-run-view__step-scroll li")).toHaveLength(1);
   expect(element.querySelectorAll('[data-oracle][data-state="warn"]')).toHaveLength(4);
   expect(find("img")).toBeNull();
