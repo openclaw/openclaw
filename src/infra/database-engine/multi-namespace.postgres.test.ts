@@ -20,19 +20,13 @@ const dirs = useAutoCleanupTempDirTracker(afterAll);
 function launch(prefix: string, dsn = connection) {
   const databasePath = path.join(dirs.make("pg-multi-namespace-"), "anchor.sqlite");
   const gates = new Int32Array(new SharedArrayBuffer(8));
-  const events = new Map<string, ReturnType<typeof Promise.withResolvers<unknown>>>();
-  for (const name of ["booting", "ready", "holding"]) {
-    events.set(name, Promise.withResolvers());
-  }
+  const events = new Map(
+    ["booting", "ready", "holding"].map((name) => [name, Promise.withResolvers<unknown>()]),
+  );
   const { anchor, worker } = spawnConformanceWorker(
     multiNamespaceEntrypoint,
     databasePath,
-    {
-      connection: dsn,
-      prefix,
-      path: databasePath,
-      gates: gates.buffer,
-    },
+    { connection: dsn, prefix, path: databasePath, gates: gates.buffer },
     undefined,
     { connection: dsn! },
   );
@@ -161,11 +155,10 @@ describe.skipIf(!connection)("independent PostgreSQL installation namespaces", (
         { id: "second-id", snippet: "café second" },
       ]);
       const namespace = identities[i]!.namespace;
-      expect(
-        await rows(
-          `SELECT id, embedding::text FROM ${pgSearchName(namespace)}.vectors ORDER BY id`,
-        ),
-      ).toEqual([
+      const vectors = await rows(
+        `SELECT id, embedding::text FROM ${pgSearchName(namespace)}.vectors ORDER BY id`,
+      );
+      expect(vectors).toEqual([
         { id: "same-id", embedding: "[1,0,0]" },
         { id: "second-id", embedding: "[1,0,0]" },
       ]);
