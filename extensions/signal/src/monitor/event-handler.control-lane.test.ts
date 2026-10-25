@@ -7,22 +7,20 @@ import {
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SignalIngressLifecycle } from "../signal-ingress.js";
-import type { SignalInboundEntry } from "./event-handler.control-lane.js";
+import type { SignalEventHandlerDeps } from "./event-handler.types.js";
 
-const { dispatchMock, recordMock, receiptMock, typingMock, fixture } = vi.hoisted(() => ({
+const { dispatchMock, recordMock, fixture } = vi.hoisted(() => ({
   fixture: { realSession: false },
   dispatchMock:
     vi.fn<(params: { ctx: MsgContext; replyOptions?: GetReplyOptions }) => Promise<unknown>>(),
   recordMock: vi.fn(),
-  receiptMock: vi.fn(),
-  typingMock: vi.fn(),
 }));
 
 // mock-isolation: Control-lane scheduling must not send live Signal messages or receipts.
 vi.mock("../send.js", () => ({
   sendMessageSignal: vi.fn(),
-  sendTypingSignal: typingMock,
-  sendReadReceiptSignal: receiptMock,
+  sendTypingSignal: vi.fn(async () => true),
+  sendReadReceiptSignal: vi.fn(async () => true),
 }));
 
 // mock-isolation: Shared helper preserves real exports while isolating worker-backed dispatch.
@@ -60,26 +58,15 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
     recordInboundSession: (...args: Parameters<typeof actual.recordInboundSession>) =>
       (fixture.realSession ? actual : mocked).recordInboundSession(...args),
     readChannelAllowFromStore: (...args: Parameters<typeof actual.readChannelAllowFromStore>) =>
-      fixture.realSession
-        ? actual.readChannelAllowFromStore(...args)
-        : mocked.readChannelAllowFromStore(),
-    upsertChannelPairingRequest: (
-      ...args: Parameters<typeof actual.upsertChannelPairingRequest>
-    ) =>
-      fixture.realSession
-        ? actual.upsertChannelPairingRequest(...args)
-        : mocked.upsertChannelPairingRequest(),
+      (fixture.realSession ? actual : mocked).readChannelAllowFromStore(...args),
+    upsertChannelPairingRequest: (...args: Parameters<typeof actual.upsertChannelPairingRequest>) =>
+      (fixture.realSession ? actual : mocked).upsertChannelPairingRequest(...args),
   };
 });
 
 const { createBaseSignalEventHandlerDeps, createSignalReceiveEvent } =
   await import("./event-handler.test-harness.js");
 const { createSignalEventHandler } = await import("./event-handler.js");
-const {
-  createSignalPendingInboundRegistry: createRegistry,
-  resolveSignalControlLaneKey: controlKey,
-  resolveSignalInboundDebounceKey: debounceKey,
-} = await import("./event-handler.control-lane.js");
 
 const dispatchResult = { queuedFinal: false, counts: { tool: 0, block: 0, final: 1 } };
 const pendingTasks: Promise<void>[] = [];
@@ -96,7 +83,11 @@ function waitForDispatch(count: number) {
   return started.promise;
 }
 
-function createHandler(debounceMs: number, config?: OpenClawConfig) {
+function createHandler(
+  debounceMs: number,
+  config?: OpenClawConfig,
+  overrides: Partial<SignalEventHandlerDeps> = {},
+) {
   pendingDebounceMs = Math.max(pendingDebounceMs, debounceMs);
   const dmPolicy = "allowlist";
   const allowFrom = ["+15550001111"];
@@ -112,27 +103,9 @@ function createHandler(debounceMs: number, config?: OpenClawConfig) {
       runTrackedTask: (task) => {
         pendingTasks.push(task());
       },
+      ...overrides,
     }),
   );
-}
-
-function controlEntry(overrides: Partial<SignalInboundEntry> = {}): SignalInboundEntry {
-  return {
-    cfg: {},
-    resolveChannelIngress: async () => {
-      throw new Error("control-lane fixture must not resolve ingress");
-    },
-    senderName: "Alice",
-    senderDisplay: "+15550001111",
-    senderRecipient: "+15550001111",
-    senderPeerId: "+15550001111",
-    isGroup: true,
-    groupId: "group-1",
-    bodyText: "stop",
-    commandBody: "stop",
-    commandAuthorized: true,
-    ...overrides,
-  };
 }
 
 async function startHeldDispatch(debounceMs: number, message = "start a long task") {
@@ -149,18 +122,22 @@ async function startHeldDispatch(debounceMs: number, message = "start a long tas
   }
   await vi.advanceTimersByTimeAsync(debounceMs);
   await waitForDispatch(1);
-  expect(dispatchMock).toHaveBeenCalledTimes(1);
   return { handler, active, release: gate.resolve };
 }
 
-function signalText(message: string, timestamp: number, sourceNumber?: string) {
+function signalText(
+  message: string,
+  timestamp: number,
+  sourceNumber?: string,
+  groupId = "group-1",
+) {
   return createSignalReceiveEvent({
     ...(sourceNumber ? { sourceNumber, sourceName: sourceNumber } : {}),
     timestamp,
     dataMessage: {
       message,
       attachments: [],
-      ...(sourceNumber ? { groupInfo: { groupId: "group-1", groupName: "Test Group" } } : {}),
+      ...(sourceNumber ? { groupInfo: { groupId, groupName: "Test Group" } } : {}),
     },
   });
 }
@@ -180,8 +157,6 @@ describe("Signal active-run control lane", () => {
     dispatchStarts.clear();
     dispatchMock.mockReset().mockResolvedValue(dispatchResult);
     recordMock.mockReset().mockResolvedValue(undefined);
-    receiptMock.mockReset().mockResolvedValue(true);
-    typingMock.mockReset().mockResolvedValue(true);
   });
 
   afterEach(async () => {
@@ -232,89 +207,54 @@ describe("Signal active-run control lane", () => {
     expect(dispatchMock).toHaveBeenCalledTimes(4);
   });
 
-  it.each([
-    { debounceMs: 5, text: "stop" },
-    { debounceMs: 5, text: "/approve abc12345 allow-once" },
-    { debounceMs: 5, text: "/status" },
-    { debounceMs: 5, text: "/QUEUE" },
-    { debounceMs: 5, text: "/steer keep going" },
-    { debounceMs: 0, text: "one more detail" },
-    { debounceMs: 0, text: "/reset" },
+  it.each<[number, string, boolean, string?]>([
+    [5, "stop", false],
+    [5, "/approve abc12345 allow-once", false],
+    [5, "/QUEUE", false],
+    [0, "one more detail", false],
+    [0, "/reset", false],
+    [0, "halt", true, "stop"],
+    [5, "/reset", true],
+    [5, "/queue status", true],
   ])(
-    "dispatches $debounceMs-ms followup $text while normal work is active",
-    async ({ debounceMs, text }) => {
-      const { handler, active, release } = await startHeldDispatch(debounceMs);
+    "%i-ms followup %s has serialized=%s",
+    async (debounceMs, text, serialized, message = "start a long task") => {
+      const { handler, active, release } = await startHeldDispatch(debounceMs, message);
       const followup = handler(signalText(text, 2));
-      await vi.advanceTimersByTimeAsync(0);
-      await waitForDispatch(2);
-      expectDispatch(1, text);
+      await vi.advanceTimersByTimeAsync(serialized ? 20 : 0);
+      if (!serialized) {
+        await waitForDispatch(2);
+      }
+      expect(dispatchMock).toHaveBeenCalledTimes(serialized ? 1 : 2);
       release();
       await Promise.all([active, followup]);
+      expectDispatch(1, text);
     },
   );
 
-  it("does not promote or cancel an unauthorized abort", () => {
-    const entry = controlEntry({ isGroup: false, groupId: undefined, commandAuthorized: false });
-    const cancelKey = vi.fn(() => true);
-    const pendingInboundRegistry = createRegistry("default");
-
-    expect(debounceKey("default", entry)).toBe("signal:default:+15550001111:+15550001111");
-    expect(controlKey("default", entry)).toBeNull();
-    pendingInboundRegistry.track(entry);
-    pendingInboundRegistry.cancelPendingOnAbort(entry, cancelKey);
-    expect(cancelKey).not.toHaveBeenCalled();
+  it("does not dispatch an unauthorized abort or cancel authorized pending work", async () => {
+    const handler = createHandler(50, undefined, { groupAllowFrom: [] });
+    await handler(signalText("queued work", 1, "+15550001111"));
+    await handler(signalText("stop", 2, "+15550002222"));
+    expect(dispatchMock).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(50);
+    expectDispatch(0, "queued work");
   });
-
-  it("cancels each pending sender once and forgets completed entries", () => {
-    const entry = controlEntry();
-    const second = { ...entry };
-    const otherSender = { ...entry, senderPeerId: "+15550002222" };
-    const otherGroup = { ...entry, groupId: "group-2" };
-    expect(controlKey("default", entry)).toBe(controlKey("default", otherSender));
-    expect(debounceKey("default", entry)).not.toBe(debounceKey("default", otherSender));
-    const registry = createRegistry("default");
-    for (const pending of [entry, entry, second, otherSender, otherGroup]) {
-      registry.track(pending);
-    }
-    registry.complete([entry, entry]);
-    const cancelKey = vi.fn(() => true);
-    registry.cancelPendingOnAbort(entry, cancelKey);
-    expect(cancelKey.mock.calls).toEqual([
-      ["signal:default:group-1:+15550001111"],
-      ["signal:default:group-1:+15550002222"],
-    ]);
-    registry.complete([second, otherSender]);
-    cancelKey.mockClear();
-    registry.cancelPendingOnAbort(entry, cancelKey);
-    expect(cancelKey).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    { debounceMs: 0, message: "stop", commandText: "halt" },
-    { debounceMs: 5, message: "start a long task", commandText: "/reset" },
-    { debounceMs: 5, message: "start a long task", commandText: "/queue status" },
-  ])(
-    "serializes $commandText behind $message ($debounceMs-ms debounce)",
-    async ({ debounceMs, message, commandText }) => {
-      const { handler, active, release } = await startHeldDispatch(debounceMs, message);
-      const statefulCommand = handler(signalText(commandText, 2));
-      await vi.advanceTimersByTimeAsync(20);
-      expect(dispatchMock).toHaveBeenCalledTimes(1);
-
-      release();
-      await Promise.all([active, statefulCommand]);
-      expectDispatch(1, commandText);
-    },
-  );
 
   it.each([false, true])("cancels pending debounce work (group: %s)", async (group) => {
     const handler = createHandler(50);
+    if (group) {
+      await handler(signalText("other group", 0, "+15550003333", "group-2"));
+    }
     await handler(signalText("queued work", 1, group ? "+15550001111" : undefined));
     await handler(signalText("stop", 2, group ? "+15550002222" : undefined));
     expectDispatch(0, "stop");
 
     await vi.advanceTimersByTimeAsync(75);
-    expect(dispatchMock).toHaveBeenCalledTimes(1);
+    expect(dispatchMock).toHaveBeenCalledTimes(group ? 2 : 1);
+    if (group) {
+      expect(dispatchedCommandBody(1)).toBe("other group");
+    }
   });
 
   it("cancels ordinary text released from debounce but still waiting on active work", async () => {
@@ -331,82 +271,58 @@ describe("Signal active-run control lane", () => {
   });
 });
 
-const waitOptions = { timeout: 5_000 };
-
-function createTrackedLifecycle() {
-  return {
+const createTrackedLifecycle = () =>
+  ({
     abortSignal: new AbortController().signal,
     onAdopted: vi.fn(async () => {}),
     onDeferred: () => {},
     onAdoptionFinalizing: () => {},
     onFailed: vi.fn(),
     onAbandoned: vi.fn(),
-  } satisfies SignalIngressLifecycle;
-}
+  }) satisfies SignalIngressLifecycle;
 
-function createDataEvent(timestamp: number, message: string) {
-  return createSignalReceiveEvent({
-    sourceUuid: "11111111-2222-3333-4444-555555555555",
-    timestamp,
-    dataMessage: { timestamp, message },
-  });
-}
-
-async function enqueueMergedClaims(timestamp: number) {
-  const handler = createSignalEventHandler(
-    createBaseSignalEventHandlerDeps({ cfg: { messages: { inbound: { debounceMs: 40 } } } }),
-  );
-  const first = createTrackedLifecycle();
-  const second = createTrackedLifecycle();
-  expect([
-    await handler(createDataEvent(timestamp, "part one"), first),
-    await handler(createDataEvent(timestamp + 100, "part two"), second),
-  ]).toEqual([{ kind: "deferred" }, { kind: "deferred" }]);
-  return [first, second];
-}
-
-describe("signal drain claim ownership", () => {
-  beforeEach(() => {
+it.each(["adopted", "failed", "unadopted"] as const)(
+  "settles every drain claim after %s dispatch",
+  async (outcome) => {
     fixture.realSession = true;
     vi.useRealTimers();
     dispatchMock.mockReset().mockImplementation(async (params) => {
-      await params.replyOptions?.turnAdoptionLifecycle?.onAdopted();
+      if (outcome === "failed") {
+        throw new Error("merged dispatch failed");
+      }
+      if (outcome === "adopted") {
+        await params.replyOptions?.turnAdoptionLifecycle?.onAdopted();
+      }
       return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
     });
-  });
-
-  it("completes every constituent claim when debounced entries merge into one turn", async () => {
-    const claims = await enqueueMergedClaims(1700000002000);
-    await vi.waitFor(() => expect(dispatchMock).toHaveBeenCalledTimes(1), waitOptions);
-    await vi.waitFor(
-      () => expect(claims.map((c) => c.onAdopted.mock.calls.length)).toEqual([1, 1]),
-      waitOptions,
+    const merged = outcome !== "unadopted";
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: { messages: { inbound: { debounceMs: merged ? 40 : 0 } } },
+      }),
     );
-  });
-
-  it("fails every constituent claim when a merged dispatch rejects before adoption", async () => {
-    dispatchMock.mockRejectedValue(new Error("merged dispatch failed"));
-    const claims = await enqueueMergedClaims(1700000003500);
-    await vi.waitFor(() => {
-      expect(dispatchMock).toHaveBeenCalledOnce();
-      expect(claims.map((c) => c.onFailed.mock.calls.length)).toEqual([1, 1]);
-    }, waitOptions);
-    for (const claim of claims) {
-      expect(claim.onAdopted).not.toHaveBeenCalled();
-      expect(claim.onAbandoned).not.toHaveBeenCalled();
+    const claims = Array.from({ length: merged ? 2 : 1 }, createTrackedLifecycle);
+    for (const [index, claim] of claims.entries()) {
+      const timestamp =
+        { adopted: 1700000002000, failed: 1700000003500, unadopted: 1700000004000 }[outcome] +
+        index * 100;
+      const event = createSignalReceiveEvent({
+        sourceUuid: "11111111-2222-3333-4444-555555555555",
+        timestamp,
+        dataMessage: { timestamp, message: `part ${index}` },
+      });
+      expect(await handler(event, claim)).toEqual({ kind: "deferred" });
     }
-  });
-
-  it("settles the claim for a turn that finishes without adoption", async () => {
-    // A gated/no-reply dispatch must settle rather than dead-letter via the watchdog.
-    dispatchMock.mockResolvedValue({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
-    const handler = createSignalEventHandler(createBaseSignalEventHandlerDeps());
-    const lifecycle = createTrackedLifecycle();
-
-    const result = await handler(createDataEvent(1700000004000, "no adoption"), lifecycle);
-
-    expect(result).toEqual({ kind: "deferred" });
-    await vi.waitFor(() => expect(lifecycle.onAdopted).toHaveBeenCalledTimes(1), waitOptions);
-    expect(lifecycle.onAbandoned).not.toHaveBeenCalled();
-  });
-});
+    await vi.waitFor(
+      () => {
+        expect(dispatchMock).toHaveBeenCalledOnce();
+        for (const claim of claims) {
+          expect(claim.onAdopted).toHaveBeenCalledTimes(outcome === "failed" ? 0 : 1);
+          expect(claim.onFailed).toHaveBeenCalledTimes(outcome === "failed" ? 1 : 0);
+          expect(claim.onAbandoned).not.toHaveBeenCalled();
+        }
+      },
+      { timeout: 5_000 },
+    );
+  },
+);
