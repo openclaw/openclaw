@@ -414,6 +414,7 @@ class ChatController internal constructor(
   private val activeSessionReads = mutableSetOf<SessionSettingsRead>()
   private val progressCardUpgradeError = nativeText("Update the gateway to load progress cards for this agent.")
   private val sessionSettingsRefreshError = nativeText("Could not refresh session settings. Refresh before sending.")
+  private val chatMetadataLoadError = nativeText("Could not refresh chat metadata. Tap Refresh to try again.")
   private val chatMetadataRefreshError = nativeText("Could not refresh models. Tap Refresh to try again.")
 
   // Guarded by gatewayScopeApplyLock; stable gateway keys retain choices across reconnects.
@@ -1224,7 +1225,9 @@ class ChatController internal constructor(
   fun refresh() {
     syncSessionReactions(force = true)
     synchronized(gatewayScopeApplyLock) {
-      if (_errorText.value != chatMetadataRefreshError) updateErrorText(null)
+      if (_errorText.value != chatMetadataRefreshError && _errorText.value != chatMetadataLoadError) {
+        updateErrorText(null)
+      }
     }
     refreshCommands()
     refreshHistoryForRecovery(forceHealth = true)
@@ -4762,6 +4765,7 @@ class ChatController internal constructor(
         currentSessionActionSnapshot(_sessionKey.value)
       }
     var requestedSwarmState: Boolean? = null
+    var chatMetadataReadSucceeded = false
     runCatchingCancellable {
       val root =
         requestGatewayJson(
@@ -4776,6 +4780,7 @@ class ChatController internal constructor(
         synchronized(swarmLock) { swarmEnabled = metadataSwarmEnabled }
         requestedSwarmState = metadataSwarmEnabled
       }
+      chatMetadataReadSucceeded = true
       val catalogParams =
         buildJsonObject {
           put("agentId", JsonPrimitive(metadataScope.agentId))
@@ -4802,7 +4807,9 @@ class ChatController internal constructor(
               updateLocalizedErrorText(nativeText("Update your Gateway to use session model choices."))
             } else if (refreshFailed && (_errorText.value == null || _errorText.value == chatMetadataRefreshError)) {
               updateLocalizedErrorText(chatMetadataRefreshError)
-            } else if (!refreshFailed && _errorText.value == chatMetadataRefreshError) {
+            } else if (!refreshFailed &&
+              (_errorText.value == chatMetadataRefreshError || _errorText.value == chatMetadataLoadError)
+            ) {
               updateErrorText(null)
             }
           }
@@ -4810,13 +4817,18 @@ class ChatController internal constructor(
       }
     }.onFailure {
       synchronized(gatewayScopeApplyLock) {
+        val failureNotice = if (chatMetadataReadSucceeded) chatMetadataRefreshError else chatMetadataLoadError
         if (
           isCurrent() &&
           requestSelection != null &&
           isCurrentSessionAction(requestSelection) &&
-          _errorText.value == null
+          (
+            _errorText.value == null ||
+              _errorText.value == chatMetadataRefreshError ||
+              _errorText.value == chatMetadataLoadError
+          )
         ) {
-          updateLocalizedErrorText(chatMetadataRefreshError)
+          updateLocalizedErrorText(failureNotice)
         }
       }
     }

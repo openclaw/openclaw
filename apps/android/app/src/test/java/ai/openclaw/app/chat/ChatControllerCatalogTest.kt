@@ -7,6 +7,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -27,6 +28,74 @@ class ChatControllerCatalogTest {
       assertEquals(listOf("new"), controller.commands.value.map { it.name })
       assertFalse(requests.any { it.first == "models.list" })
       assertEquals("Update your Gateway to use session model choices.", controller.errorText.value)
+    }
+
+  @Test
+  fun metadataFailureNamesMetadataRefreshWithoutCallingModelsList() =
+    runTest {
+      var metadataFails = false
+      val (controller, requests) =
+        chatControllerTestSetup {
+          gatewayAdvertisesCapability = {
+            it == "session-scoped-chat-metadata" || it == "session-scoped-model-catalog"
+          }
+          respond("chat.metadata") {
+            if (metadataFails) error("Session changed while preparing its metadata. Retry the request.") else """{"commands":[]}"""
+          }
+          respond("models.list") {
+            """{"models":[{"id":"chat","name":"Chat","provider":"fixture","available":true}]}"""
+          }
+        }
+      controller.handleGatewayEvent("health", null)
+      advanceUntilIdle()
+      val acceptedChoices = controller.modelCatalog.value
+      assertEquals(listOf("chat"), acceptedChoices.map { it.id })
+      val modelReads = requests.count { it.first == "models.list" }
+
+      metadataFails = true
+      controller.handleGatewayEvent("chat.metadata.changed", "{}")
+      advanceUntilIdle()
+
+      assertEquals("Could not refresh chat metadata. Tap Refresh to try again.", controller.errorText.value)
+      assertEquals(modelReads, requests.count { it.first == "models.list" })
+      assertEquals(acceptedChoices, controller.modelCatalog.value)
+
+      metadataFails = false
+      controller.handleGatewayEvent("chat.metadata.changed", "{}")
+      advanceUntilIdle()
+      assertNull(controller.errorText.value)
+      assertEquals(acceptedChoices, controller.modelCatalog.value)
+    }
+
+  @Test
+  fun catalogFailureStillNamesModelRefresh() =
+    runTest {
+      var catalogFails = false
+      val (controller, _) =
+        chatControllerTestSetup {
+          gatewayAdvertisesCapability = {
+            it == "session-scoped-chat-metadata" || it == "session-scoped-model-catalog"
+          }
+          respond("chat.metadata", """{"commands":[]}""")
+          respond("models.list") {
+            if (catalogFails) error("catalog unavailable") else """{"models":[{"id":"chat","name":"Chat","provider":"fixture","available":true}]}"""
+          }
+        }
+      controller.handleGatewayEvent("health", null)
+      advanceUntilIdle()
+      val acceptedChoices = controller.modelCatalog.value
+
+      catalogFails = true
+      controller.handleGatewayEvent("chat.metadata.changed", "{}")
+      advanceUntilIdle()
+
+      assertEquals("Could not refresh models. Tap Refresh to try again.", controller.errorText.value)
+      assertEquals(acceptedChoices, controller.modelCatalog.value)
+
+      catalogFails = false
+      controller.handleGatewayEvent("chat.metadata.changed", "{}")
+      advanceUntilIdle()
+      assertNull(controller.errorText.value)
     }
 
   @Test
