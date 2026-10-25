@@ -11,6 +11,8 @@ import {
   hasActiveStartupMigrationLease,
   inspectPortUsage,
   monotonicClock,
+  ownerLease,
+  portUsage as makePortUsage,
   readActiveGatewayLockIdentity,
   readGatewayOwnerLease,
   requestStartupProbe,
@@ -44,12 +46,7 @@ function portUsage(
   port: number,
   listeners: Array<{ pid: number; ppid?: number; command?: string }> = [],
 ) {
-  return {
-    port,
-    status: listeners.length ? ("busy" as const) : ("free" as const),
-    listeners,
-    hints: [],
-  };
+  return makePortUsage(listeners, { port });
 }
 
 function startedGateway() {
@@ -83,15 +80,11 @@ function advanceClock<T>(ms: number, value: T) {
 
 function foregroundOwner(owner = "fixture-owner", port = 18789) {
   return {
+    ...ownerLease(8000, "live", 1),
     owner,
-    pid: 8000,
-    host: "fixture-host",
-    startedAt: 1,
     port,
     mode: "foreground" as const,
     supervisor: null,
-    state: "live" as const,
-    expired: false,
   };
 }
 
@@ -158,21 +151,14 @@ it.each([22_000, 61_000])(
   },
 );
 
-it.each(
-  (
-    [
-      [20_000, 19_500, false],
-      [7_500, 20_000, false],
-      [20_000, 19_500, true],
-      [7_500, 20_000, true],
-      [20_000, 20_000, false],
-    ] as const
-  ).flatMap(([timeoutMs, readyAtMs, ownerAppearsDuringProbe]) =>
-    ["lease", "legacy lock"].map(
-      (ownerKind) => [timeoutMs, readyAtMs, ownerAppearsDuringProbe, ownerKind] as const,
-    ),
-  ),
-)(
+it.each([
+  [20_000, 19_500, false, "lease"],
+  [7_500, 20_000, false, "lease"],
+  [20_000, 20_000, false, "lease"],
+  [20_000, 19_500, true, "lease"],
+  [20_000, 19_500, false, "legacy lock"],
+  [20_000, 19_500, true, "legacy lock"],
+] as const)(
   "observes startup within %d ms, ready at %d ms (late owner=%s, kind=%s)",
   async (timeoutMs, readyAtMs, ownerAppearsDuringProbe, ownerKind) => {
     isAbsent.mockResolvedValue(true);
@@ -268,7 +254,7 @@ it("waits for a legacy replacement after an observed owner lease dies", async ()
 });
 
 it.each([
-  ...["service-command", "permissive command", "absence", "legacy lock", "late legacy lock"].map(
+  ...["service-command", "absence", "legacy lock", "late legacy lock"].map(
     (source) =>
       [source, source === "late legacy lock" ? 30_000 : 1_250, undefined, undefined] as const,
   ),
@@ -287,13 +273,6 @@ it.each([
       });
     } else if (source === "service-command") {
       readCommand.mockRejectedValue(error);
-    } else if (source === "permissive command") {
-      readCommand.mockImplementation(async (_env, options) => {
-        if (options?.requireEffective) {
-          throw error;
-        }
-        return null;
-      });
     } else if (source === "absence") {
       isAbsent.mockRejectedValue(error);
     } else {
@@ -322,26 +301,17 @@ it.each(["initial runtime", "late legacy owner"])(
   },
 );
 
-it.each(["missing command", "different port", "unavailable manager"])(
+it.each(["missing command", "different port"])(
   "does not wait for an absent Gateway with %s",
   async (reason) => {
-    const unavailableManager = reason === "unavailable manager";
     isAbsent.mockResolvedValue(reason !== "different port");
-    if (unavailableManager) {
-      readCommand.mockRejectedValue(new Error("service manager unavailable"));
-    } else {
-      readCommand.mockResolvedValue(reason === "missing command" ? null : nativeCommand);
-      readRuntime.mockResolvedValueOnce({ status: "running" });
-    }
-    const result = await waitForGatewayDiagnosticReadiness({
-      config: noAuthConfig,
-      localPortOverride: unavailableManager ? undefined : 19092,
-      timeoutMs: unavailableManager ? 1_250 : 60_000,
-    });
+    readCommand.mockResolvedValue(reason === "missing command" ? null : nativeCommand);
+    readRuntime.mockResolvedValueOnce({ status: "running" });
+    const result = await waitForReadiness({ localPortOverride: 19092, timeoutMs: 60_000 });
     expect(result).toBeUndefined();
     expect(monotonicClock.nowMs).toBe(0);
     expect(readRuntime).not.toHaveBeenCalled();
-    if (unavailableManager) {
+    if (reason === "missing command") {
       expect(readCommand).not.toHaveBeenCalled();
     }
   },

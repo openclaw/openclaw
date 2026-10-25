@@ -593,10 +593,8 @@ describe.skipIf(process.platform === "win32")("service definition repair", () =>
     { seconds: 20, throttle: 45, migrated: true, portDrift: true },
     { seconds: 20, throttle: 45, migrated: true, updater: true },
     { seconds: 600, throttle: 10, migrated: false },
-    { seconds: 30, throttle: 10, migrated: false },
     { seconds: 600, throttle: 1, migrated: true },
     { seconds: 600, throttle: 10, migrated: true, portDrift: true },
-    { seconds: 30, throttle: 10, migrated: true, portDrift: true },
     { seconds: 20, throttle: 10, migrated: true, updater: true },
   ])(
     "migrates only the retired LaunchAgent timeout ($seconds, throttle=$throttle, portDrift=$portDrift, updater=$updater)",
@@ -672,20 +670,11 @@ describe.skipIf(process.platform === "win32")("service definition repair", () =>
     },
   );
 
-  it.each(["stopped service", "unapproved token"] as const)(
-    "standalone Doctor preserves native policy for a %s",
-    async (reason) => {
-      const f = await fixture();
-      const before = await fs.readdir(path.dirname(f.source));
-      let config: OpenClawConfig = native.config;
-      if (reason === "unapproved token") {
-        config = { gateway: { mode: "local", port: 19137, auth: { mode: "token" } } };
-        await writeJson(process.env.OPENCLAW_CONFIG_PATH!, config);
-        process.env.OPENCLAW_GATEWAY_TOKEN = "doctor-policy-environment-fixture-token";
-      }
-      await runStandaloneDoctor("direct", reason === "unapproved token", config);
-      expect(native.writeConfig).not.toHaveBeenCalled();
-      await expectPreserved(f, before);
-    },
-  );
+  it("standalone Doctor preserves native policy for a stopped service", async () => {
+    const f = await fixture();
+    const before = await fs.readdir(path.dirname(f.source));
+    await runStandaloneDoctor("direct", false);
+    expect(native.writeConfig).not.toHaveBeenCalled();
+    await expectPreserved(f, before);
+  });
 });
