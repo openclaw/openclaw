@@ -138,7 +138,6 @@ export function handleAgentEnd(
     yieldDetected: ctx.state.yielded,
     didSendDeterministicApprovalPrompt: ctx.state.deterministicApprovalPromptSent,
     heartbeatToolResponse: ctx.state.heartbeatToolResponse,
-    lastToolError: ctx.state.lastToolError,
     toolMediaUrls: [...ctx.state.pendingToolMediaUrls, ...deferredMediaUrls],
     toolAudioAsVoice:
       ctx.state.pendingToolAudioAsVoice ||

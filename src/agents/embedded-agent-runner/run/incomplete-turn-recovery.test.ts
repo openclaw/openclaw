@@ -8,6 +8,7 @@ import {
   resolveEmptyResponseRetryInstruction,
   resolveReasoningOnlyRetryInstruction,
   shouldTreatEmptyAssistantReplyAsSilent,
+  shouldRetrySilentErrorAssistantTurn,
 } from "./incomplete-turn-recovery.js";
 import { resolveIncompleteTurnPayloadText } from "./incomplete-turn-resolution.js";
 
@@ -33,6 +34,28 @@ function emptyAttempt(assistant = emptyAssistant()) {
 }
 
 describe("incomplete-turn recovery policy", () => {
+  it.each([false, true])(
+    "does not retry a silent error after a tool failure (executionStarted=%s)",
+    (executionStarted) => {
+      const assistant = emptyAssistant({
+        stopReason: "error",
+        content: [],
+        usage: createZeroUsageFixture(),
+      });
+      const attempt = emptyAttempt(assistant);
+      expect(shouldRetrySilentErrorAssistantTurn({ attempt, assistant })).toBe(true);
+      expect(
+        shouldRetrySilentErrorAssistantTurn({
+          attempt: {
+            ...attempt,
+            lastToolError: { toolName: "exec", error: "command failed", executionStarted },
+          },
+          assistant,
+        }),
+      ).toBe(false);
+    },
+  );
+
   it("does not request a visible continuation for an authored speech-only answer", () => {
     const assistant = emptyAssistant({
       content: [

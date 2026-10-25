@@ -21,10 +21,39 @@ import type {
   FallbackRunnerParams,
   EmbeddedAgentParams,
 } from "./agent-runner-execution.test-support.js";
+import { createReplyDispatcher } from "./reply-dispatcher.js";
 
 const state = await setupAgentRunnerExecutionTestState();
 
 describe("executeAgentTurn: result and tool delivery", () => {
+  it("preserves and delivers one unanswered tool failure notice", async () => {
+    const notice = { text: "⚠️ Exec blocked", isError: true };
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [notice],
+      meta: { stopReason: "error", error: { kind: "incomplete_turn", message: notice.text } },
+    });
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(
+      createMinimalRunAgentTurnParams({ followupRun: createFollowupRun() }),
+    );
+    expect(result.kind).toBe("success");
+    if (result.kind !== "success") {
+      throw new Error("expected settled execution");
+    }
+    expect(result.runResult.meta.error).toEqual({ kind: "incomplete_turn", message: notice.text });
+    expect(result.runResult.payloads).toEqual([notice]);
+    const deliver = vi.fn(async () => {});
+    const dispatcher = createReplyDispatcher({ deliver });
+    for (const payload of result.runResult.payloads ?? []) {
+      dispatcher.sendFinalReply(payload);
+    }
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+    expect(deliver).toHaveBeenCalledExactlyOnceWith(expect.objectContaining(notice), {
+      kind: "final",
+    });
+  });
+
   it.each([
     { stopReason: "error", isHeartbeat: true, failureText: HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT },
     { stopReason: "superseded", isHeartbeat: false, failureText: undefined },

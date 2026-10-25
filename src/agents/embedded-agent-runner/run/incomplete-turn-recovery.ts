@@ -79,6 +79,7 @@ export function shouldRetrySilentErrorAssistantTurn(params: {
   // harnesses retain the cumulative, fail-closed behavior.
   if (
     joinAssistantTexts(params.attempt.assistantTexts).length > 0 ||
+    params.attempt.lastToolError ||
     hasAttemptTerminalState(params.attempt) ||
     !isCurrentAttemptReplaySafe(params.attempt)
   ) {
@@ -368,6 +369,10 @@ export function resolveSettledToolTerminalContinuationInstruction(
     intentionalTermination ||
     parkedCodeModeRun ||
     hasUnsettledToolError ||
+    // A denied action must not reopen tools after an empty stop. Settled execution
+    // failures retain their existing continuation and text-only summary contracts.
+    (attempt.lastToolError?.executionStarted === false &&
+      assistantState.assistant?.stopReason !== "toolUse") ||
     hasAsyncActivity(attempt.toolMetas) ||
     hasAcceptedSessionSpawn(attempt.acceptedSessionSpawns) ||
     attempt.clientToolCalls ||

@@ -78,6 +78,28 @@ describe("attempt trajectory status", () => {
     });
   });
 
+  it.each([false, true])(
+    "does not count an unanswered tool error as delivery (answered=%s)",
+    (answered) => {
+      expect(
+        resolveAttemptTrajectoryTerminal(
+          baseParams({
+            assistantTexts: answered ? ["The command was denied."] : [],
+            lastToolError: {
+              toolName: "exec",
+              error: "Execution denied.",
+              executionStarted: false,
+            },
+          }),
+        ),
+      ).toEqual(
+        answered
+          ? { status: "success" }
+          : { status: "error", terminalError: NON_DELIVERABLE_TERMINAL_TURN_REASON },
+      );
+    },
+  );
+
   it("uses safe last-assistant fallback text for terminal delivery status", () => {
     expect(
       resolveTerminalAssistantTexts({

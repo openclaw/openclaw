@@ -85,7 +85,6 @@ export function resolveAttemptTrajectoryTerminal(
     params.heartbeatToolResponse !== undefined ||
     (params.clientToolCalls?.length ?? 0) > 0 ||
     params.yieldDetected === true ||
-    params.lastToolError !== undefined ||
     hasAsyncActivity(params.toolMetas);
 
   // Tool-use turns need explicit delivery; length stops need delivered or visible
