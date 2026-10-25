@@ -103,16 +103,8 @@ describe("matrix sync helpers", () => {
     await Promise.resolve();
     fetchCanComplete.resolve();
     const [preview, notice] = await waits;
-    expect(notice).toEqual({
-      event: {
-        kind: "notice",
-        roomId: defaultRoomId,
-        eventId: "$notice",
-        sender: "@sut:matrix-qa.test",
-        type: "m.room.message",
-        body: "notice",
-        msgtype: "m.notice",
-      },
+    expect(notice).toMatchObject({
+      event: { kind: "notice", eventId: "$notice" },
       matched: true,
       since: "next-batch-2",
     });

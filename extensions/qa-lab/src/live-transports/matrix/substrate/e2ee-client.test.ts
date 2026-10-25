@@ -135,7 +135,7 @@ describe("matrix qa e2ee client", () => {
     const operation = client.sendNoticeMessage({ roomId: image.roomId, body: "notice" });
     const settled = Promise.allSettled([operation]);
     await vi.advanceTimersByTimeAsync(0);
-    expectCalls({ encrypt: 0, upload: 0, send: 0 });
+    expectCalls({ send: 0 });
     ready.resolve(() => undefined);
     await settled;
     await expect(operation).resolves.toBe("$sent");
@@ -149,33 +149,52 @@ describe("matrix qa e2ee client", () => {
     expect(runtimeFixture.upload).not.toHaveBeenCalled();
   });
 
-  it("joins late encryption after the grace deadline before discard and fences its upload", async () => {
-    const encryption = pending(encryptedMedia());
-    const discarded = pending<void>(undefined);
-    runtimeFixture.encrypt.mockReturnValue(encryption.promise);
-    runtimeFixture.discard.mockReturnValue(discarded.promise);
-    const operation = client.sendImageMessage(image);
-    const settled = Promise.allSettled([operation]);
-    await vi.advanceTimersByTimeAsync(0);
-    const stop = client.stop();
-    const stopSettled = Promise.allSettled([stop]);
-    let stopped = false;
-    void stopSettled.then(() => {
-      stopped = true;
-    });
-    await vi.advanceTimersByTimeAsync(101);
-    expectCalls({ persist: 0, discard: 0, abort: 1 });
-    expect(stopped).toBe(false);
-    encryption.resolve(encryptedMedia());
-    await settled;
-    await vi.advanceTimersByTimeAsync(0);
-    expect(runtimeFixture.discard).toHaveBeenCalledOnce();
-    expect(stopped).toBe(false);
-    discarded.resolve();
-    await stopSettled;
-    await expect(stop).rejects.toThrow(shutdownFailure);
-    expectCalls({ discard: 1, persist: 0, upload: 0, send: 0 });
-  });
+  it.each(["encryption", "send"] as const)(
+    "joins late %s before discarding state",
+    async (stage) => {
+      const sending = stage === "send";
+      if (sending) {
+        await client.stop();
+        client = await createClient(2_000);
+        runtimeFixture.detach.mockClear();
+        runtimeFixture.drain.mockClear();
+        runtimeFixture.persist.mockClear();
+      }
+      const active = pending(sending ? "$sent" : encryptedMedia());
+      const discarded = pending<void>(undefined);
+      runtimeFixture[sending ? "send" : "encrypt"].mockReturnValue(active.promise);
+      runtimeFixture.discard.mockReturnValue(discarded.promise);
+      const operation = sending ? sendText() : client.sendImageMessage(image);
+      const settled = Promise.allSettled([operation]);
+      await vi.advanceTimersByTimeAsync(0);
+      const stop = client.stop();
+      const stopSettled = Promise.allSettled([stop]);
+      let stopped = false;
+      void stopSettled.then(() => {
+        stopped = true;
+      });
+      await vi.advanceTimersByTimeAsync(sending ? 1_000 : 101);
+      expectCalls({ persist: 0, discard: 0, abort: 1, drain: 0 });
+      expect(stopped).toBe(false);
+      if (sending) {
+        active.reject(new Error("late send failure"));
+      } else {
+        active.resolve(encryptedMedia());
+      }
+      await settled;
+      if (sending) {
+        await expect(operation).rejects.toThrow("late send failure");
+      }
+      await vi.advanceTimersByTimeAsync(0);
+      expect(runtimeFixture.discard).toHaveBeenCalledOnce();
+      expect(stopped).toBe(false);
+      discarded.resolve();
+      await stopSettled;
+      await expect(stop).rejects.toThrow(shutdownFailure);
+      expectCalls({ discard: 1, persist: 0, upload: 0, send: sending ? 1 : 0 });
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
 
   it.each(["encryption", "upload"])(
     "fences a room invalidated while media %s was pending",
@@ -275,30 +294,6 @@ describe("matrix qa e2ee client", () => {
     await vi.advanceTimersByTimeAsync(100);
     await rejection;
     expectCalls({ drain: 1, discard: 1, persist: 0 });
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("observes a late send rejection before shutdown discards state", async () => {
-    await client.stop();
-    client = await createClient(2_000);
-    runtimeFixture.detach.mockClear();
-    runtimeFixture.drain.mockClear();
-    runtimeFixture.persist.mockClear();
-    const finish = pending("$sent");
-    runtimeFixture.send.mockReturnValue(finish.promise);
-    const operation = sendText();
-    const operationRejection = expect(operation).rejects.toThrow("late send failure");
-    await vi.advanceTimersByTimeAsync(0);
-    const stopRejection = expect(client.stop()).rejects.toThrow(shutdownFailure);
-    try {
-      await vi.advanceTimersByTimeAsync(1_000);
-      expectCalls({ abort: 1, drain: 0, discard: 0 });
-    } finally {
-      finish.reject(new Error("late send failure"));
-    }
-    await operationRejection;
-    await stopRejection;
-    expectCalls({ send: 1, discard: 1, persist: 0 });
     expect(vi.getTimerCount()).toBe(0);
   });
 

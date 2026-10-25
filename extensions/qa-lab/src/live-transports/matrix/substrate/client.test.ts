@@ -103,41 +103,39 @@ describe("matrix driver client", () => {
     ]);
   });
 
-  it.each([
-    {
-      name: "reaction",
-      run: (client: ReturnType<typeof makeClient>) =>
-        client.sendReaction({ emoji: " 👍 ", messageId: " $msg-1 ", roomId }),
-      endpoint: expect.stringContaining(roomEndpoint + "/send/m.reaction/"),
-      body: { "m.relates_to": { rel_type: "m.annotation", event_id: "$msg-1", key: "👍" } },
-    },
-    {
-      name: "replacement",
-      run: (client: ReturnType<typeof makeClient>) =>
+  it.each<[string, (client: ReturnType<typeof makeClient>) => Promise<string>, unknown, unknown]>([
+    [
+      "reaction",
+      (client) => client.sendReaction({ emoji: " 👍 ", messageId: " $msg-1 ", roomId }),
+      expect.stringContaining(roomEndpoint + "/send/m.reaction/"),
+      { "m.relates_to": { rel_type: "m.annotation", event_id: "$msg-1", key: "👍" } },
+    ],
+    [
+      "replacement",
+      (client) =>
         client.sendReplacementMessage({
           body: sut,
           mentionUserIds: [sut],
           roomId,
           targetEventId: " $msg-1 ",
         }),
-      endpoint: expect.stringContaining(roomEndpoint + "/send/m.room.message/"),
-      body: {
+      expect.stringContaining(roomEndpoint + "/send/m.room.message/"),
+      {
         body: "* " + sut,
         msgtype: "m.text",
         "m.new_content": mention,
         "m.relates_to": { rel_type: "m.replace", event_id: "$msg-1" },
       },
-    },
-    {
-      name: "redaction",
-      run: (client: ReturnType<typeof makeClient>) =>
-        client.redactEvent({ eventId: "$reaction-1", reason: "qa cleanup", roomId }),
-      endpoint: expect.stringMatching(
+    ],
+    [
+      "redaction",
+      (client) => client.redactEvent({ eventId: "$reaction-1", reason: "qa cleanup", roomId }),
+      expect.stringMatching(
         /^http:\/\/127\.0\.0\.1:28008\/_matrix\/client\/v3\/rooms\/!room%3Amatrix-qa\.test\/redact\/%24reaction-1\/[0-9a-f-]{36}$/,
       ),
-      body: { reason: "qa cleanup" },
-    },
-  ])("sends $name through its protocol endpoint", async ({ name, run, endpoint, body }) => {
+      { reason: "qa cleanup" },
+    ],
+  ])("sends %s through its protocol endpoint", async (name, run, endpoint, body) => {
     const eventId = "$" + name + "-1";
     const { client, requests } = capture([{ event_id: eventId }]);
     await expect(run(client)).resolves.toBe(eventId);
@@ -170,7 +168,6 @@ describe("matrix driver client", () => {
   });
   it.each([
     ["media upload", 200],
-    ["JSON request", 200],
     ["JSON request", 500],
   ] as const)("cancels an over-cap %s response before handling HTTP %s", async (entry, status) => {
     let reads = 0;

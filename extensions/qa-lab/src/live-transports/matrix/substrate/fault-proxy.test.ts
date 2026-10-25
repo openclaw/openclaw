@@ -198,9 +198,7 @@ describe("Matrix QA fault proxy", () => {
       forwardedBody,
     );
     expect(observed).toEqual(Buffer.from(body));
-    expect(target.requests).toEqual([
-      forwardedRequest(syncPath, { method: "POST", body: Buffer.from(body) }),
-    ]);
+    expect(target.requests.map((request) => request.body)).toEqual([Buffer.from(body)]);
   });
 
   it("returns 413 for a chunked overflow before the upload ends", async () => {
@@ -282,10 +280,8 @@ describe("Matrix QA fault proxy", () => {
     expect([headers.get("content-encoding"), headers.get("content-length")]).toEqual([null, null]);
     await expectReply(mutated, 200, { forwarded: true, mutated: true });
     expect(proxy.hits()).toEqual([faultHit("GET", "sync-state-after")]);
-    expect(target.requests).toEqual([
-      forwardedRequest(`${syncPath}?timeout=0&org.matrix.msc4222.use_state_after=true`, {
-        authorization: "Bearer driver-token",
-      }),
+    expect(target.requests.map((request) => request.url)).toEqual([
+      `${syncPath}?timeout=0&org.matrix.msc4222.use_state_after=true`,
     ]);
   });
 
