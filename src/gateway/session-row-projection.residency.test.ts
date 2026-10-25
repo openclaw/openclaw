@@ -25,16 +25,19 @@ import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { listRows, writeRow } from "./session-row-projection-read-fixtures.test-support.js";
 import { ready } from "./session-row-projection-record.js";
 import { holdSubagentExecution } from "./session-row-projection.read-fixture.test-support.js";
-import { appendProjectionMessages } from "./session-row-projection.test-support.js";
-import { withSessionRowProjectionState } from "./session-row-projection.test-support.js";
+import {
+  appendProjectionMessages,
+  withSessionRowProjectionState,
+} from "./session-row-projection.test-support.js";
 import { rolePolicyConfig } from "./session-sharing.test-utils.js";
 import { createSessionViewerPresenceDeclarations } from "./session-viewer-presence.js";
 import { createGatewayMaintenanceStateForTest } from "./test-helpers.maintenance-state.js";
 
 it("releases terminal display rows after a broad visit without losing parent or search metadata", async () => {
-  await withSessionRowProjectionState(async (create, _, cleanup) => {
+  await withSessionRowProjectionState(async (create, _state, cleanup) => {
     const clock = createGatewaySchedulerClock(Date.now());
-    using _now = vi.spyOn(Date, "now").mockImplementation(clock.clock.now);
+    using clockNow = vi.spyOn(Date, "now");
+    clockNow.mockImplementation(clock.clock.now);
     const expire = (projection: Parameters<typeof listRows>[0]) => {
       clock.setTime(clock.clock.now() + 10 * 60_000);
       projection.sweepMaterializedRows(clock.clock.now());
@@ -114,9 +117,10 @@ it("releases terminal display rows after a broad visit without losing parent or 
 });
 
 it("retains runtime, recovery, delivery, cleanup and client custody while trimming finished rows", async () => {
-  await withSessionRowProjectionState(async (create, _, cleanup) => {
+  await withSessionRowProjectionState(async (create, _state, cleanup) => {
     const clock = createGatewaySchedulerClock(Date.now());
-    using _now = vi.spyOn(Date, "now").mockImplementation(clock.clock.now);
+    using clockNow = vi.spyOn(Date, "now");
+    clockNow.mockImplementation(clock.clock.now);
     const expire = (projection: Parameters<typeof listRows>[0]) => {
       clock.setTime(clock.clock.now() + 10 * 60_000);
       projection.sweepMaterializedRows(clock.clock.now());
@@ -187,9 +191,10 @@ it("retains runtime, recovery, delivery, cleanup and client custody while trimmi
 });
 
 it("promotes a cold row for event publication and enforces visibility revocation from cold metadata", async () => {
-  await withSessionRowProjectionState(async (create, _, cleanup) => {
+  await withSessionRowProjectionState(async (create, _state, cleanup) => {
     const clock = createGatewaySchedulerClock(Date.now());
-    using _now = vi.spyOn(Date, "now").mockImplementation(clock.clock.now);
+    using clockNow = vi.spyOn(Date, "now");
+    clockNow.mockImplementation(clock.clock.now);
     const expire = () => {
       clock.setTime(clock.clock.now() + 10 * 60_000);
       projection.sweepMaterializedRows(clock.clock.now());

@@ -127,7 +127,12 @@ export function createSessionRowProjectionResidency(params: {
     }
   }
   function sweep(now: number) {
-    const pinned = new Set([...readPins].flatMap((pins) => [...pins]));
+    const pinned = new Set<string>();
+    for (const pins of readPins) {
+      for (const id of pins) {
+        pinned.add(id);
+      }
+    }
     for (const [id, lastRead] of materialized) {
       const row = params.rows.get(id)!;
       if (

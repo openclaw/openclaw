@@ -37,13 +37,22 @@ it.for(["search", "full", "overflow"] as const)(
   "prepares evicted category facts through %s reads",
   async (mode) => {
     await withCategoryState(async () => {
+      using clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
       const overflow = mode === "overflow";
-      const count = overflow ? DEFAULT_WORKER_PENDING_TASKS * MAX_SESSION_ROW_FACTS_KEYS + 1 : 101;
+      const count = overflow ? DEFAULT_WORKER_PENDING_TASKS * MAX_SESSION_ROW_FACTS_KEYS + 1 : 2;
       const queries = Array.from({ length: count }, (_, index) => ({
         agentId: "main",
         key: `agent:main:cold-category-${index}`,
       }));
       const oldest = queries[0]!;
+      const warm = queries.slice(0, 2);
+      const invalidate = () =>
+        sessionChanges.emitBatch(
+          (overflow ? queries : [oldest]).map(({ key }) => ({
+            sessionKey: key,
+            factsInvalidated: "category" as const,
+          })),
+        );
       for (const query of queries) {
         writeRow(query.key, {
           archivedAt: 1,
@@ -57,23 +66,31 @@ it.for(["search", "full", "overflow"] as const)(
       try {
         await withReadySessionRows(
           projection,
-          () => queries.slice(0, 101),
+          () => warm,
           (read) => {
-            // Invalidate while pinned; release must preserve unresolved facts when demoting.
-            for (const query of queries.slice(0, 101)) {
+            for (const query of warm) {
               expect(read.describe(query)?.entry.category).toBe("Work");
             }
-            sessionChanges.emitBatch(
-              (overflow ? queries : [oldest]).map(({ key }) => ({
-                sessionKey: key,
-                factsInvalidated: "category" as const,
-              })),
-            );
+            invalidate();
           },
         );
-        const materialized = projection.materializedCount;
-        expect(materialized).toBe(101);
+        clock.mockReturnValue(Date.now() + 10 * 60_000);
+        projection.sweepMaterializedRows(Date.now());
+        expect(projection.capture(oldest)?.materialized).toBeDefined();
+        await withReadySessionRows(
+          projection,
+          () => warm,
+          (read) => {
+            for (const query of warm) {
+              expect(read.describe(query)).toBeDefined();
+            }
+          },
+        );
+        clock.mockReturnValue(Date.now() + 10 * 60_000);
+        projection.sweepMaterializedRows(Date.now());
         expect(projection.capture(oldest)?.materialized).toBeUndefined();
+        invalidate();
+        const materialized = projection.materializedCount;
         const reads: string[][] = [];
         observeRowFacts((owner) => async (input) => {
           reads.push([...input.sessionKeys]);

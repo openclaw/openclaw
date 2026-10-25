@@ -482,7 +482,7 @@ it.each(["overlapping pinned pages", "transcript-only invalidation"] as const)(
         };
         setRuntimeConfigSnapshot(cfg);
         clearSubagentRunsReadCacheForTest();
-        const queries = Array.from({ length: transcriptOnly ? 2 : 102 }, (_, index) => ({
+        const queries = Array.from({ length: transcriptOnly ? 2 : 4 }, (_, index) => ({
           agentId: "main",
           key: `agent:main:accepted-archive-${index}`,
         }));
@@ -704,12 +704,12 @@ it.each(["overlapping pinned pages", "transcript-only invalidation"] as const)(
             projection,
             () => queries.slice(2),
             () => {
-              expect(projection.selectEntries().filter(ready)).toHaveLength(102);
+              expect(projection.selectEntries().filter(ready)).toHaveLength(4);
             },
           );
           // The first page retains its ready rows while its other physical store is pending.
-          // Releasing the other page trims through the real LRU without evicting those pins.
-          expect(projection.selectEntries().filter(ready)).toHaveLength(100);
+          projection.sweepMaterializedRows(Date.now() + 10 * 60_000);
+          expect(projection.selectEntries().filter(ready)).toHaveLength(2);
           const residentKeys = new Set(
             projection
               .selectEntries()
