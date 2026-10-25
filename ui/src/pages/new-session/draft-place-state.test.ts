@@ -8,6 +8,7 @@ import type { DraftCloudProfile } from "./discovery.ts";
 import { DraftCloudMachineState } from "./draft-cloud-machine-state.ts";
 import { buildSelectedSessionCreateParams } from "./draft-create-params.ts";
 import { createRepositoryFixture } from "./draft-place-state.test-support.ts";
+import { createNewSessionRouteData } from "./location.test-support.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import { waitForModelControl } from "./model-control.test-support.ts";
 import type { NewSessionPreference } from "./preferences.ts";
@@ -36,11 +37,7 @@ function nextChange(
   return published.promise;
 }
 const routeData = (overrides: Partial<NewSessionRouteData>): NewSessionRouteData => ({
-  agentId: "main",
-  requestedAgentId: "main",
-  catalogId: "",
-  catalogLabel: "",
-  startTerminal: false,
+  ...createNewSessionRouteData(),
   ...overrides,
 });
 const models = (...ids: string[]) =>

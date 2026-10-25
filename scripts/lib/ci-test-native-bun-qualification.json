@@ -108,7 +108,6 @@
     "src/agents/provider-tool-policy.test.ts": "556bfe4194fe0a53c9e6edc58665f0511c490d3d4ed935460c99c17b97ef5f00",
     "src/agents/pty-keys.test.ts": "3e5de4b0803934e3b02d9d9cca1ca181abbe7305b1d376beaf6d7e2ca4a0caa0",
     "src/agents/responses-image-payload-sanitizer.test.ts": "7128780318aa4e9599c866dbdea18b57308dfcf9b770104c592d4a03abfb0d70",
-    "src/agents/runtime-auth-refresh.test.ts": "7d46003c01685bf335b7043bd6ca49f3f1afdf4ded14d29c00b716c9c36ca157",
     "src/agents/scheduled-tool-policy.test.ts": "1bb55206b22560f23dd00a66ba0a348a6c0a612d650fc103d0f682948f216dd7",
     "src/agents/schema/clean-for-xai.test.ts": "9d2d1a52434231a99e3fb535d9cfaf3e1eba86e45e5840a782e8e808dade47a7",
     "src/agents/session-permission-exec-mode.test.ts": "df1e5cd6258f8830d3245428e3ba4ba513fdfc644949ecd175d6e1cef77b3290",

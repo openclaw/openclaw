@@ -1,5 +1,6 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { makeBootRoster } from "../app/bootstrap.test-support.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
@@ -59,12 +60,7 @@ async function installStartupGateway(page: Page) {
     sessionGroups: ["Client work"],
     sessionGroupDefaults: { "Client work": { cwd: "/workspace/client", worktree: true } },
     methodResponses: {
-      "agents.list": {
-        defaultId: "main",
-        mainKey: "main",
-        scope: "per-sender",
-        agents: [{ id: "main" }, { id: "research" }],
-      },
+      "agents.list": makeBootRoster({ agents: [{ id: "main" }, { id: "research" }] }),
       "sessions.catalog.list": { catalogs: [] },
       "taskSuggestions.list": { suggestions: [] },
       "taskSuggestions.dismiss": { taskId: "explicit-suggestion", dismissed: true },

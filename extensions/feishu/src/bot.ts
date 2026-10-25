@@ -81,11 +81,7 @@ import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu, listFeishuThreadMessages, sendMessageFeishu } from "./send.js";
 import { getFeishuSyntheticDirectPreDispatchTarget } from "./synthetic-event-target.js";
-import {
-  isFeishuGroupChatType,
-  type FeishuMessageContext,
-  type FeishuMessageInfo,
-} from "./types.js";
+import { isFeishuGroupChatType, type FeishuMessageContext } from "./types.js";
 export { parseFeishuMessageEvent } from "./bot-content.js";
 export type { FeishuBotAddedEvent, FeishuMessageEvent } from "./event-types.js";
 
@@ -131,29 +127,6 @@ async function shouldIncludeFetchedGroupContextMessage(params: {
     kind: params.kind,
     senderAllowed,
   }).include;
-}
-
-async function filterFetchedGroupContextMessages<
-  T extends Pick<FeishuMessageInfo, "senderId" | "senderType">,
->(
-  messages: readonly T[],
-  params: Omit<
-    Parameters<typeof shouldIncludeFetchedGroupContextMessage>[0],
-    "senderId" | "senderType"
-  >,
-): Promise<T[]> {
-  const results: Array<T | undefined> = await Promise.all(
-    messages.map(async (message) =>
-      (await shouldIncludeFetchedGroupContextMessage({
-        ...params,
-        senderId: message.senderId,
-        senderType: message.senderType,
-      }))
-        ? message
-        : undefined,
-    ),
-  );
-  return results.filter((message): message is T => message !== undefined);
 }
 
 export async function handleFeishuMessage(params: {
@@ -1100,10 +1073,19 @@ export async function handleFeishuMessage(params: {
         const senderIds = new Set(
           [ctx.senderOpenId, senderUserId].filter((id): id is string => Boolean(id)),
         );
-        const allowlistedMessages = await filterFetchedGroupContextMessages(threadMessages, {
-          ...fetchedContextPolicy,
-          kind: "history",
-        });
+        const contextResults = await Promise.all(
+          threadMessages.map(async (message) =>
+            (await shouldIncludeFetchedGroupContextMessage({
+              ...fetchedContextPolicy,
+              kind: "history",
+              senderId: message.senderId,
+              senderType: message.senderType,
+            }))
+              ? message
+              : undefined,
+          ),
+        );
+        const allowlistedMessages = contextResults.filter((message) => message !== undefined);
         const relevantMessages = senderScoped
           ? allowlistedMessages.filter(
               (msg) =>

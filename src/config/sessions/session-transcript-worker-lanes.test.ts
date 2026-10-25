@@ -54,7 +54,7 @@ const absent = { ok: true as const, value: false };
 
 it("keeps native close conservative until an unqualified reader is retired", async () => {
   const pool = createSessionTranscriptHistoryPool();
-  const request = { kind: "prewarm" as const, database: input().database, env: {}, history: false };
+  const request = { kind: "prewarm" as const, database: input().database, env: {} };
   const read = () => pool.run(() => request, {});
   observed.run.mockResolvedValue(prewarmed);
   try {
@@ -380,7 +380,6 @@ it.each([historyLane, maintenanceLane])(
     expect(observed.run).toHaveBeenCalledOnce();
     expect(observed.run.mock.calls[0]?.[0]).toMatchObject({
       kind: "prewarm",
-      history: lane === historyLane,
     });
     expect(lane.pending).toBe(1);
     expect(isSessionHistoryWorkerCold(lane)).toBe(false);

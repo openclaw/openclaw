@@ -15,6 +15,7 @@ import {
   createApplicationGateway,
 } from "../../test-helpers/application-context.ts";
 import { deviceSystemInfo } from "../../test-helpers/devices-fixtures.ts";
+import { missingReadScopeErrorFixture } from "../../test-helpers/gateway-client.ts";
 import "../debug/debug-overlay-content.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { settleLitElement } from "../../test-helpers/lit-settle.ts";
@@ -732,19 +733,7 @@ it.each(["response", "error", "response before rebinding"] as const)(
 
 it.each([
   ["transient", new Error("temporarily unavailable"), true],
-  [
-    "missing read scope",
-    new GatewayRequestError({
-      code: "FORBIDDEN",
-      message: "permission denied",
-      details: {
-        code: "MISSING_SCOPE",
-        missingScope: "operator.read",
-        requiredScopes: ["operator.read"],
-      },
-    }),
-    false,
-  ],
+  ["missing read scope", missingReadScopeErrorFixture(), false],
 ] as const)("preserves the polling policy after a %s error", async (_kind, error, retry) => {
   vi.useFakeTimers();
   const request = vi

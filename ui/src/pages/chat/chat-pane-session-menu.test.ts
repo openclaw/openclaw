@@ -4,6 +4,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { createComponent, flush, merge } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import { loadSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
@@ -776,12 +777,7 @@ describe("chat pane session menu boundary", () => {
         request: async (method) => {
           switch (method) {
             case "agents.list":
-              return {
-                defaultId: "main",
-                mainKey: "main",
-                scope: "per-sender",
-                agents: [{ id: "main" }, { id: "research" }],
-              };
+              return makeBootRoster({ agents: [{ id: "main" }, { id: "research" }] });
             case "sessions.describe":
               return { session: null };
             default:

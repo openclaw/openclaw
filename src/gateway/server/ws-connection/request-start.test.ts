@@ -69,6 +69,7 @@ describe("Gateway request start fairness", () => {
       { method: "sessions.subscribe", params: { limit: 100 } },
       { method: "models.list" },
       { method: "sessions.messages.subscribe", params: { includeApprovals: true } },
+      { method: "sessions.messages.subscribe", params: { initialHistory: {} } },
     ];
     const completions = Array.from({ length: 8 }, heldCompletion);
     const full = createDeferredCore();

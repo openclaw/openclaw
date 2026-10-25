@@ -15,6 +15,7 @@ import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createModelProviderLogin, type ModelProviderLogin } from "./login-controller.ts";
 import { ModelProviderLoginView } from "./login-view.tsx";
 import {
+  museCodeCapability,
   loginHarness,
   openPicker,
   selectProvider,
@@ -60,23 +61,7 @@ describe("Models provider login", () => {
   ])("connects Muse Code (setup: $setup, entry: $entry)", async ({ setup, entry }) => {
     vi.spyOn(window, "open").mockReturnValue(null);
     const { context, request, answer } = loginHarness({
-      capabilities: [
-        {
-          provider: "meta",
-          apiKeySupported: true,
-          quickApiKeySetup: true,
-          loginOptions: [
-            {
-              id: "meta/muse-code",
-              brandId: "meta",
-              label: "Muse Code",
-              kind: "device-code",
-              featured: true,
-              requiresSetup: true,
-            },
-          ],
-        },
-      ],
+      capabilities: [museCodeCapability()],
     });
     const originalRequest = request.getMockImplementation()!;
     const authStatusReady = deferred();

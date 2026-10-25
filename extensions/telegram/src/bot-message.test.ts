@@ -716,10 +716,7 @@ describe("telegram bot message processor", () => {
   it("aborts an isolated queued retry when its outer spool owner is cancelled", async () => {
     buildTelegramMessageContext.mockResolvedValue(createMessageContext());
     const outerAbortController = new AbortController();
-    let markDeferred: (() => void) | undefined;
-    const deferred = new Promise<void>((resolve) => {
-      markDeferred = resolve;
-    });
+    const { promise: deferred, resolve: markDeferred } = Promise.withResolvers<void>();
     let queuedAbortSignal: AbortSignal | undefined;
     dispatchTelegramMessage.mockImplementationOnce(async ({ turnAdoptionLifecycle }) => {
       const turnAbortSignal = turnAdoptionLifecycle?.abortSignal;

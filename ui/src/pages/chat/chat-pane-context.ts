@@ -421,7 +421,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       !catalogRouteKey &&
       (sourceChanged || this.connectedClient !== snapshot.client)
     ) {
-      void syncSelectedSessionMessageSubscription(state, { force: true });
+      void syncSelectedSessionMessageSubscription(state, { force: true, initialHistory: true });
     }
     this.reconcileTaskSuggestionConnection(sourceChanged);
     this.synchronizeSessionObservation();

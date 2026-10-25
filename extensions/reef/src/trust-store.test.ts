@@ -394,12 +394,17 @@ it("rejects recovery if peer keys change before rejection reservation", async ()
 });
 
 it.each(["overdue", "rejections"] as const)(
-  "observes sanctioned sibling writes between %s scans",
+  "observes new deliveries and sanctioned sibling writes between %s scans",
   async (kind) => {
     const now = Date.now();
     const clock = vi.spyOn(Date, "now").mockReturnValue(now);
     const { store, trustedPeer: trust, recipient } = await trustedStore();
     const binding = { bodyHash: "a".repeat(64), recipient };
+    const scan = async () =>
+      kind === "overdue"
+        ? await store.overdueOutboundDeliveries(600_000, Date.now() + 601_000)
+        : await store.pendingOutboundRejections();
+    expect(await scan()).toEqual([]);
     await store.set("other", trust);
     await store.set("stranger", trust);
     const peers = ["clawd", "clawd", "other", "stranger", "clawd", "other", "stranger"];
@@ -413,10 +418,6 @@ it.each(["overdue", "rejections"] as const)(
       }
     }
     await store.remove("stranger");
-    const scan = async () =>
-      kind === "overdue"
-        ? await store.overdueOutboundDeliveries(600_000, Date.now() + 601_000)
-        : await store.pendingOutboundRejections();
     expect((await scan()).map((entry) => entry.id)).toEqual(
       ids.filter((_, i) => i !== 3 && i !== 6),
     );

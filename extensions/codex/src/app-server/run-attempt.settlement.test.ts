@@ -756,17 +756,9 @@ describe("Codex app-server terminal settlement", () => {
             abortSignal: successorAbort.signal,
           });
           await successor.waitForTurnAccepted();
-          await nextHarness.notify({
-            method: "turn/completed",
-            params: {
-              threadId: nextThreadId,
-              turn: {
-                id: "turn-next",
-                status: "completed",
-                items: [{ id: "next-answer", type: "agentMessage", text: "Next turn saved." }],
-              },
-            },
-          });
+          await nextHarness.notify(
+            completedTurn("Next turn saved.", nextThreadId, "turn-next", "next-answer"),
+          );
           const next = await successor;
           expect(readAttemptTerminal(next)).toMatchObject({ aborted: false, timedOut: false });
           expect(next.assistantTranscriptOwned).toBe(true);

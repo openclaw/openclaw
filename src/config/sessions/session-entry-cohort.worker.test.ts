@@ -23,6 +23,7 @@ import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcrip
 import type { SessionEntryCohortRequest } from "./session-entry-read.types.js";
 import { addSessionMember, removeSessionMember } from "./session-sharing-store.native.js";
 import { projectionLane } from "./session-transcript-worker-resources.js";
+import { messageEvent } from "./transcript-message.test-support.js";
 
 async function entryReader(
   database: ReturnType<typeof openOpenClawAgentDatabase>,
@@ -299,12 +300,7 @@ it("prepares bounded facts on one admitted source and refreshes after sibling an
     });
     replaceTranscriptEventsSync(scope, [
       { type: "session", id: "cohort", version: 3, timestamp: 123 },
-      {
-        type: "message",
-        id: "question",
-        parentId: null,
-        message: { role: "user", content: "cohort input" },
-      },
+      messageEvent("question", null, { role: "user", content: "cohort input" }),
     ]);
     const readEntry = await entryReader(database, env);
     const request: SessionEntryCohortRequest = {

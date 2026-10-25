@@ -175,7 +175,7 @@ export function parseMessageContent(content: string, messageType: string): strin
 
 const FEISHU_MEDIA_MESSAGE_TYPES = new Set(["image", "file", "audio", "video", "media", "sticker"]);
 
-export function checkBotMentioned(event: FeishuMessageLike, botOpenId?: string): boolean {
+function checkBotMentioned(event: FeishuMessageLike, botOpenId?: string): boolean {
   if (!botOpenId) {
     return false;
   }

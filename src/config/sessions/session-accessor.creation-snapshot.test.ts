@@ -20,6 +20,7 @@ import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcrip
 import { markCanonicalSessionValidationPending } from "./session-canonical-key.js";
 import { seedCanonicalSessionValidation } from "./session-canonical-validation.js";
 import { promptReport } from "./system-prompt-report.test-support.js";
+import { timedMessageEvent } from "./transcript-message.test-support.js";
 import type { SessionEntry } from "./types.js";
 
 const tempDirs: string[] = [];
@@ -78,13 +79,10 @@ it("preserves adopted history without selecting a new projection", async () => {
   const result = await createSession(scope, async () => {
     await Promise.resolve();
     replaceTranscriptEventsSync(scope, [
-      {
-        type: "message",
-        id: "user-1",
-        parentId: null,
-        timestamp: "2026-07-15T21:23:03.698Z",
-        message: { role: "user", content: "Retained text.\r\n  Keep spacing." },
-      },
+      timedMessageEvent("user-1", null, "2026-07-15T21:23:03.698Z", {
+        role: "user",
+        content: "Retained text.\r\n  Keep spacing.",
+      }),
     ]);
     before = readTranscriptStorageRows(database(), "target");
     return { ok: true, entry: { ...entry, label: "adopted" } };

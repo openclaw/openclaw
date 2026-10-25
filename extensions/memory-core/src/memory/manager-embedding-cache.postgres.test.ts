@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { getEnvironmentData, threadId } from "node:worker_threads";
@@ -26,6 +27,17 @@ const configured: unknown = getEnvironmentData("openclaw.test.workboard.connecti
 const connection = typeof configured === "string" ? configured : undefined;
 const identity = { provider: "local", model: "fixture", providerKey: "fixture" };
 const provider = { id: identity.provider, model: identity.model };
+const canonicalAgentSql = fs.readFileSync(
+  new URL("../../../../src/state/postgres-schema.generated/agent.postgres.sql", import.meta.url),
+  "utf8",
+);
+const cacheSchema = [
+  canonicalAgentSql.match(/CREATE TABLE "memory_embedding_cache" \([\s\S]*?\n\);/)?.[0],
+  canonicalAgentSql.match(/CREATE INDEX "idx_memory_embedding_cache_updated_at"[^;]+;/)?.[0],
+];
+if (cacheSchema.some((sql) => !sql)) {
+  throw new Error("Canonical embedding-cache PostgreSQL schema is missing");
+}
 
 describe.skipIf(!connection)("PostgreSQL memory embedding cache", () => {
   const dirs = useAutoCleanupTempDirTracker(afterAll);
@@ -73,13 +85,7 @@ describe.skipIf(!connection)("PostgreSQL memory embedding cache", () => {
           id: "memory_cache",
           version: 1,
           sqlite: "",
-          postgres: `CREATE TABLE memory_embedding_cache (
-            provider TEXT COLLATE "C" NOT NULL, model TEXT COLLATE "C" NOT NULL,
-            provider_key TEXT COLLATE "C" NOT NULL, hash TEXT COLLATE "C" NOT NULL,
-            embedding BYTEA NOT NULL, dims BIGINT, updated_at BIGINT NOT NULL,
-            PRIMARY KEY (provider, model, provider_key, hash)
-          ); CREATE INDEX idx_memory_embedding_cache_updated_at
-            ON memory_embedding_cache(updated_at ASC NULLS FIRST);
+          postgres: `${cacheSchema.join("\n")}
           CREATE TABLE memory_index_chunks (
             id TEXT PRIMARY KEY, hash TEXT NOT NULL, updated_at BIGINT NOT NULL
           );`,
@@ -109,6 +115,44 @@ describe.skipIf(!connection)("PostgreSQL memory embedding cache", () => {
         database?.close();
         anchor?.close();
       }
+    });
+  });
+
+  it("evicts through the canonical timestamp index and stops at the limit", () => {
+    write(() => {
+      db().exec(`INSERT INTO memory_embedding_cache
+        (provider, model, provider_key, hash, embedding, dims, updated_at)
+        SELECT 'local', 'fixture', 'fixture', 'hash-' || n, decode('00', 'hex'), 1, n
+        FROM generate_series(1, 50000) AS n;
+        ANALYZE memory_embedding_cache`);
+      const query = db().query.bind(db());
+      let eviction: Parameters<typeof query> | undefined;
+      const capture = vi.spyOn(db(), "query").mockImplementation((sql, parameters) => {
+        if (/^delete from "memory_embedding_cache"/iu.test(sql)) {
+          eviction = [sql, parameters];
+        }
+        return query(sql, parameters);
+      });
+      try {
+        expect(pruneMemoryEmbeddingCache(database, { size: 50000, exact: true }, 49990)).toEqual({
+          size: 49990,
+          exact: true,
+        });
+      } finally {
+        capture.mockRestore();
+      }
+      expect(
+        db().prepare("SELECT min(updated_at) AS oldest FROM memory_embedding_cache").get(),
+      ).toEqual({ oldest: 11 });
+      if (!eviction) {
+        throw new Error("Eviction did not execute a DELETE");
+      }
+      const plan = query(`EXPLAIN (ANALYZE, BUFFERS) ${eviction[0]}`, eviction[1]).rows.map((row) =>
+        String(row["QUERY PLAN"]),
+      );
+      const scan = plan.find((line) => line.includes("idx_memory_embedding_cache_updated_at"));
+      expect(scan, plan.join("\n")).toMatch(/Index Scan.*actual .*rows=11 loops=1/);
+      expect(plan.some((line) => line.includes("Seq Scan"))).toBe(false);
     });
   });
 
@@ -201,45 +245,6 @@ describe.skipIf(!connection)("PostgreSQL memory embedding cache", () => {
     );
     expect(write(() => clearMemoryEmbeddingCacheIdentities(database, [identity]))).toBe(3);
     expect(withEngineStoreAdmission(() => countMemoryEmbeddingCache(database))).toBe(0);
-  });
-
-  it("walks the generated updated_at index for oldest-first eviction", () => {
-    write(() =>
-      db().exec(`INSERT INTO memory_embedding_cache
-          SELECT 'local', 'fixture', 'fixture', 'hash-' || i, '\\x00'::bytea, 2, i
-          FROM generate_series(1, 2000) AS i;
-        ANALYZE memory_embedding_cache`),
-    );
-    const query = db().query.bind(db());
-    const evictions: Array<Parameters<typeof query>> = [];
-    const spy = vi.spyOn(db(), "query").mockImplementation((sql, bindings) => {
-      if (/^delete from "memory_embedding_cache"/iu.test(sql)) {
-        evictions.push([sql, bindings]);
-      }
-      return query(sql, bindings);
-    });
-    try {
-      expect(
-        write(() => pruneMemoryEmbeddingCache(database, { size: 2000, exact: true }, 1990)),
-      ).toEqual({ size: 1990, exact: true });
-    } finally {
-      spy.mockRestore();
-    }
-    expect(evictions).toHaveLength(1);
-    const [sql, bindings] = evictions[0]!;
-    const plan = withEngineStoreAdmission(() =>
-      db()
-        .query(`EXPLAIN ${sql}`, bindings)
-        .rows.map((row) => String(row["QUERY PLAN"]))
-        .join("\n"),
-    );
-    // A full-cache sort would run on every insertion batch once the cache is at its cap.
-    expect(plan).toContain("using idx_memory_embedding_cache_updated_at");
-    withEngineStoreAdmission(() => {
-      expect(
-        db().prepare("SELECT min(updated_at)::integer AS oldest FROM memory_embedding_cache").get(),
-      ).toEqual({ oldest: 11 });
-    });
   });
 
   function seedEviction(

@@ -691,7 +691,7 @@ describe("Workboard SQLite schema admission", () => {
           created_at, updated_at, archived_at
         FROM workboard_boards_strict;
         DROP TABLE workboard_boards_strict;
-        DELETE FROM workboard_schema_migrations WHERE id = 'schema-3';
+        DELETE FROM workboard_schema_migrations;
         INSERT OR IGNORE INTO workboard_schema_migrations (id, applied_at)
         VALUES ('schema-2', 1);
       `);
@@ -713,7 +713,7 @@ describe("Workboard SQLite schema admission", () => {
       ).toEqual({ strict: 1 });
       expect(
         migrated
-          .prepare("SELECT 1 AS found FROM workboard_schema_migrations WHERE id = 'schema-3'")
+          .prepare("SELECT 1 AS found FROM workboard_schema_migrations WHERE id = 'schema-4'")
           .get(),
       ).toEqual({ found: 1 });
     });

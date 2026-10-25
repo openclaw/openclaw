@@ -7,6 +7,7 @@ import type {
   ArtifactsDownloadResult,
   ArtifactsListResult,
 } from "../../packages/gateway-protocol/src/schema/artifacts.js";
+import { readRequestText } from "../../test/helpers/gateway-integration-fixtures.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -18,7 +19,6 @@ import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
   closeProvider,
   listenProvider,
-  readProviderBody,
   writeToolCallResponse,
 } from "./gateway-provider-fixture.test-support.js";
 import { parseSseEvents } from "./http-stream.test-support.js";
@@ -109,7 +109,7 @@ it(
     });
     const provider = createServer((request, response) => {
       void (async () => {
-        const input = await readProviderBody(request);
+        const input = await readRequestText(request);
         if (request.method !== "POST" || request.url !== "/v1/responses") {
           response.writeHead(404).end();
           return;

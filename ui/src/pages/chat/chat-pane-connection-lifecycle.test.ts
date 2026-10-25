@@ -5,6 +5,7 @@ import type { SessionSuggestionsListResult } from "../../../../packages/gateway-
 import { GATEWAY_OWNER_PROFILE_ID } from "../../../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import * as draftStore from "../../lib/chat/composer-draft-store.runtime.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
@@ -49,12 +50,7 @@ function createReconnectRequest(
 ) {
   return makeRequestMock({
     "chat.startup": startup,
-    "agents.list": {
-      defaultId: "main",
-      mainKey: "main",
-      scope: "per-sender",
-      agents: [{ id: "main" }],
-    },
+    "agents.list": makeBootRoster(),
     "chat.metadata": { commands: [] },
     "models.list": { models: [] },
     "models.authStatus": { ts: 1, providers: [] },

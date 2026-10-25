@@ -55,6 +55,7 @@ import {
   waitForSessionTranscriptProjection,
 } from "./session-transcript-reconcile.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
+import { timedMessageEvent } from "./transcript-message.test-support.js";
 
 const custodyFault = useSqliteWorkerFault([
   {
@@ -762,13 +763,7 @@ it.each(["deleted", "rebound", "replaced"] as const)(
         await upsertSessionEntryCore(scope(), { sessionId: "replacement-session", updatedAt: 2 });
       } else {
         await replaceTranscriptEvents(scope(), [
-          {
-            type: "message",
-            id: "rewritten-user",
-            parentId: null,
-            timestamp: new Date(100).toISOString(),
-            message: receipt.message,
-          },
+          timedMessageEvent("rewritten-user", null, new Date(100).toISOString(), receipt.message),
         ]);
         expect(anchor("rewritten-user")).toMatchObject({
           entryId: "rewritten-user",

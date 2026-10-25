@@ -1,7 +1,6 @@
+import { performance } from "node:perf_hooks";
 // Cron validation tests cover channel target validation against plugin
 // prefixes/aliases and runtime config for cron delivery destinations.
-
-import { performance } from "node:perf_hooks";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -9,6 +8,7 @@ import {
   bindCronManagementGrant,
   runWithCronCreatorAuthorityCapability,
 } from "../../agents/cron-creator-authority-context.js";
+import { modelDefinition } from "../../agents/model-auth.fixtures.test-support.js";
 import { updateCronJobFromAgentTool } from "../../agents/tools/cron-tool-write.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { isConfiguredCommandOwner } from "../../auto-reply/command-auth.js";
@@ -948,12 +948,9 @@ describe("cron method validation", () => {
 
   it("keeps wake mutation at zero when delegated authority closes during preparation", async () => {
     let authorityActive = true;
-    let releasePreparation: (() => void) | undefined;
-    const held = new Promise<undefined>((resolve) => {
-      releasePreparation = () => resolve(undefined);
-    });
+    const held = createDeferred<undefined>();
     const context = createCronContext();
-    context.cron.prepareWake.mockImplementationOnce(async () => await held);
+    context.cron.prepareWake.mockImplementationOnce(async () => await held.promise);
     context.validateAgentRuntimeApprovalAuthority = () => authorityActive;
 
     const invocation = invokeCron(
@@ -963,7 +960,7 @@ describe("cron method validation", () => {
     );
     await vi.waitFor(() => expect(context.cron.prepareWake).toHaveBeenCalledOnce());
     authorityActive = false;
-    releasePreparation?.();
+    held.resolve(undefined);
     const { respond } = await invocation;
 
     expect(context.cron.wake).toHaveBeenCalledOnce();
@@ -2233,15 +2230,13 @@ describe("cron method validation", () => {
             api: "anthropic-messages",
             baseUrl: "https://api.anthropic.com",
             apiKey: "synthetic-unused-model-key",
-            models: ["claude-sonnet-4-6", "claude-opus-4-6"].map((id) => ({
-              id,
-              name: `Synthetic ${id}`,
-              reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              contextWindow: 200_000,
-              maxTokens: 8192,
-            })),
+            models: ["claude-sonnet-4-6", "claude-opus-4-6"].map((id) =>
+              modelDefinition(id, {
+                name: `Synthetic ${id}`,
+                reasoning: false,
+                contextWindow: 200_000,
+              }),
+            ),
           },
         },
       },

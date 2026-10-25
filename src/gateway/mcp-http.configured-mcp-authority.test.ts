@@ -6,6 +6,7 @@ import { afterAll, beforeAll, expect, it } from "vitest";
 import {
   listenLoopback,
   closeHttpServer,
+  readRequestText,
 } from "../../test/helpers/gateway-integration-fixtures.js";
 import {
   prepareSystemAgentRunAdmission,
@@ -112,11 +113,7 @@ async function startProbeServer() {
         response.writeHead(request.method === "DELETE" ? 200 : 405).end();
         return;
       }
-      const chunks: Buffer[] = [];
-      for await (const chunk of request) {
-        chunks.push(Buffer.from(chunk));
-      }
-      const message = JSON.parse(Buffer.concat(chunks).toString()) as ProbeMessage;
+      const message = JSON.parse(await readRequestText(request)) as ProbeMessage;
       if (message.method === undefined) {
         // Response to a server-initiated request.
         pendingPings.get(String(message.id))?.();

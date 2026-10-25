@@ -11,6 +11,7 @@ import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
+import { gatewayConnect } from "../server/client-fixtures.test-support.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import {
   catalogHost,
@@ -167,7 +168,7 @@ describe("session catalog Gateway methods", () => {
           params: { metadataOnly: true, progressId: "metadata-progress" },
           context,
           respond: metadata,
-          client: { connId: "metadata-client" },
+          client: { connId: "metadata-client", connect: gatewayConnect([]) },
         } as never);
       await readMetadata();
       expect(list).not.toHaveBeenCalled();
@@ -316,7 +317,7 @@ describe("session catalog Gateway methods", () => {
       "sessions.catalog.list",
       { progressId: "progress-creator" },
       {},
-      { connId: "requester", connect: {} },
+      { connId: "requester", connect: gatewayConnect([]) },
       { broadcastToConnIds },
     );
     const projectedSessions = [
@@ -519,7 +520,7 @@ describe("session catalog Gateway methods", () => {
       "sessions.catalog.continue",
       { catalogId: "remote", hostId: "node:devbox", threadId: "thread-1" },
       {},
-      { connect: { scopes: ["operator.write", "operator.admin"] } },
+      { connect: gatewayConnect(["operator.write", "operator.admin"]) },
     );
 
     expect(continueSession).toHaveBeenCalledWith({
@@ -607,7 +608,7 @@ it("keeps a delayed source off the catalog RPC path", async () => {
   hoisted.hasMultipleSessionSharingIdentities.mockReturnValue(true);
   const clients = Array.from({ length: 6 }, (_, index) => ({
     connId: `viewer-${index}`,
-    connect: { scopes: ["operator.admin"] },
+    connect: gatewayConnect(["operator.admin"]),
   }));
   const broadcasts = clients.map(() => vi.fn());
   const request = (
@@ -649,18 +650,22 @@ it("keeps a delayed source off the catalog RPC path", async () => {
       expectCatalogHost(pendingCall.respond, {
         hostId: "node:source",
         sessions: [],
-        error: expect.objectContaining({ code: "CATALOG_LOADING" }),
+        pending: true,
       });
+      const catalog = pendingCall.respond.mock.calls[0]?.[1]?.catalogs[0];
+      expect(catalog).not.toHaveProperty("error");
+      expect(catalog?.hosts[0]).not.toHaveProperty("error");
     }
-    expectCatalogHost(metadata.respond, {
-      error: expect.objectContaining({ code: "CATALOG_LOADING" }),
-    });
+    expect(metadata.respond).not.toHaveBeenCalled();
     clients[5]!.connect.scopes = ["operator.read"];
     await vi.advanceTimersByTimeAsync(sourceDelayMs - 49);
     source.resolve();
     await vi.advanceTimersByTimeAsync(0);
     await done;
     await metadata.completion;
+    expectCatalog(metadata.respond, { pending: true, hosts: [] });
+    const metadataCatalog = metadata.respond.mock.calls[0]?.[1]?.catalogs[0];
+    expect(metadataCatalog).not.toHaveProperty("error");
     for (const [index, broadcast] of broadcasts.entries()) {
       expect(broadcast).toHaveBeenLastCalledWith(
         "sessions.catalog.host",
@@ -677,15 +682,11 @@ it("keeps a delayed source off the catalog RPC path", async () => {
         { dropIfSlow: true },
       );
     }
-    for (let index = 0; index < 6; index++) {
-      const warm = request();
-      await warm.completion;
-      expectCatalogHost(warm.respond, { sessions: [expect.objectContaining(row)] });
-    }
-    expect(invokeNode).toHaveBeenCalledTimes(1);
-    const current = request(progressiveQuery, clients[0], broadcasts[0]);
+    const current = request();
+    await vi.advanceTimersByTimeAsync(0);
     await current.completion;
     expect(current.respond.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]?.sessions).toEqual([row]);
+    expect(invokeNode).toHaveBeenCalledTimes(2);
     invokeNode
       .mockRejectedValueOnce(new Error("Paired node did not respond"))
       .mockImplementation(async () => {
@@ -693,7 +694,7 @@ it("keeps a delayed source off the catalog RPC path", async () => {
         throw new Error("Paired node did not respond");
       });
     await vi.advanceTimersByTimeAsync(60_005);
-    expect(invokeNode).toHaveBeenCalledTimes(3);
+    expect(invokeNode).toHaveBeenCalledTimes(4);
     const refreshing = request(progressiveQuery, clients[0], broadcasts[0]);
     await refreshing.completion;
     expect(refreshing.respond.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]).toMatchObject({
@@ -708,6 +709,9 @@ it("keeps a delayed source off the catalog RPC path", async () => {
     for (const errorCode of ["NODE_INVOKE_FAILED", "NODE_OFFLINE"]) {
       connected = errorCode !== "NODE_OFFLINE";
       const expired = request();
+      if (connected) {
+        await vi.advanceTimersByTimeAsync(0);
+      }
       await expired.completion;
       expectCatalogHost(expired.respond, {
         sessions: [],

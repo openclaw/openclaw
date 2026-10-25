@@ -5653,3 +5653,16 @@ sets in pair two. The output reports input/output hashes, visited entries, CPU p
 operation, allocation per operation, latency sample counts, per-kind GC counts,
 totals and maxima, and event-loop sample counts and tails. A warmup collection
 precedes measurement; no collections are forced within the measured interval.
+
+Use `--authority-state-dir /path/to/new-state` to include the real database
+admission and placement-observation capture before each preservation read. This
+mode creates an isolated database, seeds the same 10,000 synthetic retained
+replicas, and supplies 200 synthetic environment variables through native
+`process.env`. It does not start a Gateway or model. `--owner-source` then selects
+a sibling copy of `placement-turn-authority.ts`, permitting baseline and candidate
+runs with identical dependencies. `--mode counts` reports full ambient environment
+enumerations and their synthetic workload rate; that rate is not production demand.
+Run counts separately from timing and allocation. Use fresh state directories,
+fixed operation counts, a shared `--start-at`, and swapped interleaved CPU placement
+under the quiet-slot lock and production guard for paired comparisons. Report GC
+counts and absolute total/max deltas alongside CPU and allocation per operation.
