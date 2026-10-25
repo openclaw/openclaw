@@ -1,6 +1,6 @@
 import { getAiTransportHost } from "@openclaw/ai";
 import { createAzureOpenAIResponsesTransportStreamFn } from "@openclaw/ai/transports";
-import { assert, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { createAssistantOutput } from "../../packages/ai/src/transports/assistant-output.js";
 import { logResponsesFailedNoDetails } from "../../packages/ai/src/transports/openai-responses-debug.js";
 import {
@@ -43,33 +43,40 @@ const textBlock = (id: string, text: string) => ({
   text,
   textSignature: JSON.stringify({ v: 1, id }),
 });
+const itemEvent = (phase: "added" | "done", item: object, output_index?: number) => ({
+  type: `response.output_item.${phase}`,
+  item,
+  output_index,
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
 
 describe("openai transport stream", () => {
   it("fails Azure Responses streams when headers arrive but no first event follows", async () => {
     vi.useFakeTimers();
-    try {
-      const model = createAzureResponsesModel();
-      const abortFirstEventStream = vi.fn();
-      const onFirstEventTimeout = vi.fn();
-      const resultPromise = testing.processResponsesStream(
-        neverYieldsStream(),
-        createResponsesAssistantOutput(model),
-        { push: vi.fn() },
-        model,
-        { firstEventTimeoutMs: 5, abortFirstEventStream, onFirstEventTimeout },
-      );
-      const rejection = expect(resultPromise).rejects.toThrow(
-        /did not deliver a first SSE event within 5ms after streaming headers/,
-      );
+    const model = createAzureResponsesModel();
+    const abortFirstEventStream = vi.fn();
+    const onFirstEventTimeout = vi.fn();
+    const resultPromise = testing.processResponsesStream(
+      neverYieldsStream(),
+      createResponsesAssistantOutput(model),
+      { push: vi.fn() },
+      model,
+      { firstEventTimeoutMs: 5, abortFirstEventStream, onFirstEventTimeout },
+    );
+    const rejection = expect(resultPromise).rejects.toThrow(
+      /did not deliver a first SSE event within 5ms after streaming headers/,
+    );
 
-      await vi.advanceTimersByTimeAsync(5);
-      await rejection;
-      expect(abortFirstEventStream).toHaveBeenCalledTimes(1);
-      expect(abortFirstEventStream.mock.calls[0]?.[0]).toBeInstanceOf(Error);
-      expect(onFirstEventTimeout).toHaveBeenCalledWith(abortFirstEventStream.mock.calls[0]?.[0]);
-    } finally {
-      vi.useRealTimers();
-    }
+    await vi.advanceTimersByTimeAsync(5);
+    await rejection;
+    expect(abortFirstEventStream).toHaveBeenCalledTimes(1);
+    expect(abortFirstEventStream.mock.calls[0]?.[0]).toBeInstanceOf(Error);
+    expect(onFirstEventTimeout).toHaveBeenCalledWith(abortFirstEventStream.mock.calls[0]?.[0]);
   });
 
   it("observes detail-less Responses failures without leaking request ids", async () => {
@@ -109,14 +116,10 @@ describe("openai transport stream", () => {
     expect(observation.requestIdHashes).toHaveLength(6);
     expect(observation.requestIdHashes.join(",")).toContain("sha256:");
     const logWarn = vi.spyOn(getAiTransportHost(), "logWarn").mockImplementation(() => {});
-    try {
-      logResponsesFailedNoDetails(observation);
-      expect(logWarn).toHaveBeenCalledOnce();
-      expect(logWarn.mock.calls[0]?.[1]).toContain("responseId=resp_failed_123");
-      expect(logWarn.mock.calls[0]?.[1]).toContain("requestIds=");
-    } finally {
-      logWarn.mockRestore();
-    }
+    logResponsesFailedNoDetails(observation);
+    expect(logWarn).toHaveBeenCalledOnce();
+    expect(logWarn.mock.calls[0]?.[1]).toContain("responseId=resp_failed_123");
+    expect(logWarn.mock.calls[0]?.[1]).toContain("requestIds=");
     for (const secret of secrets) {
       expect(JSON.stringify(observation)).not.toContain(secret);
     }
@@ -133,20 +136,14 @@ describe("openai transport stream", () => {
       authProfileId: "openai:oauth",
       sessionId: "session-123",
     });
+    const reasoning = {
+      type: "reasoning",
+      id: "rs_123",
+      encrypted_content: "ciphertext",
+      summary: [{ type: "summary_text", text: "Need a tool." }],
+    };
     const output = await streamOutput(
-      [
-        { type: "response.output_item.added", item: { type: "reasoning" } },
-        {
-          type: "response.output_item.done",
-          item: {
-            type: "reasoning",
-            id: "rs_123",
-            encrypted_content: "ciphertext",
-            summary: [{ type: "summary_text", text: "Need a tool." }],
-          },
-        },
-        completed(),
-      ],
+      [itemEvent("added", { type: "reasoning" }), itemEvent("done", reasoning), completed()],
       model,
       { reasoningReplayMetadata: replayMetadata },
     );
@@ -225,43 +222,32 @@ describe("openai transport stream", () => {
     const baseUrl = "https://example.openai.azure.com";
     const model = { ...createAzureResponsesModel(), baseUrl };
     const requests: Request[] = [];
-    const fetchOwner = vi
-      .spyOn(getAiTransportHost(), "buildModelFetch")
-      .mockReturnValue(async (input, init) => {
-        requests.push(new Request(input, init));
-        return new Response(`data: ${JSON.stringify(completed())}\n\n`, {
-          headers: { "content-type": "text/event-stream" },
-        });
+    vi.spyOn(getAiTransportHost(), "buildModelFetch").mockReturnValue(async (input, init) => {
+      requests.push(new Request(input, init));
+      return new Response(`data: ${JSON.stringify(completed())}\n\n`, {
+        headers: { "content-type": "text/event-stream" },
       });
-    try {
-      const stream = await createAzureOpenAIResponsesTransportStreamFn()(
-        model,
-        { messages: [{ role: "user", content: "hello", timestamp: 1 }] },
-        { apiKey: "test-key", headers: { session_id: "prepared-affinity" } },
-      );
-      const result = await stream.result();
-      expect(result.stopReason).toBe("stop");
-      expect(requests).toHaveLength(1);
-      const request = requests[0];
-      assert(request);
-      const url = new URL(request.url);
-      expect(url.origin + url.pathname).toBe(`${baseUrl}/responses`);
-      expect(url.searchParams.get("api-version")).toBe("preview");
-      expect(request.headers.get("api-key")).toBe("test-key");
-      expect(request.headers.get("session_id")).toBe("prepared-affinity");
-    } finally {
-      fetchOwner.mockRestore();
-      vi.unstubAllEnvs();
-    }
+    });
+    const stream = await createAzureOpenAIResponsesTransportStreamFn()(
+      model,
+      { messages: [{ role: "user", content: "hello", timestamp: 1 }] },
+      { apiKey: "test-key", headers: { session_id: "prepared-affinity" } },
+    );
+    const result = await stream.result();
+    expect(result.stopReason).toBe("stop");
+    expect(requests).toHaveLength(1);
+    const request = requests[0];
+    assert(request);
+    const url = new URL(request.url);
+    expect(url.origin + url.pathname).toBe(`${baseUrl}/responses`);
+    expect(url.searchParams.get("api-version")).toBe("preview");
+    expect(request.headers.get("api-key")).toBe("test-key");
+    expect(request.headers.get("session_id")).toBe("prepared-affinity");
   });
 
   it("does not replay terminal text that already streamed", async () => {
     const output = await streamOutput([
-      {
-        type: "response.output_item.added",
-        output_index: 0,
-        item: { type: "message", id: "msg_streamed" },
-      },
+      itemEvent("added", { type: "message", id: "msg_streamed" }, 0),
       {
         type: "response.output_text.delta",
         output_index: 0,

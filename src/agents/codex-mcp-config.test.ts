@@ -5,7 +5,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BundleMcpConfig } from "../plugins/bundle-mcp.types.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import {
-  buildCodexMcpServersConfig,
   loadCodexBundleMcpApprovalConfig,
   loadCodexBundleMcpThreadConfigCore,
 } from "./codex-mcp-config.js";
@@ -56,38 +55,6 @@ beforeEach(() => {
 
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
-});
-
-describe("buildCodexMcpServersConfig", () => {
-  it.each([
-    { label: "strings", args: ["", " --flag "], expected: ["", " --flag "] },
-    { label: "mixed", args: ["ok", 2], expected: undefined },
-  ])("keeps MCP args typed and copied ($label)", ({ args, expected }) => {
-    const projected = buildCodexMcpServersConfig({
-      mcpServers: { docs: { command: "mcp", args } },
-    });
-
-    expect(projected.docs?.args).toEqual(expected);
-    if (expected !== undefined) {
-      expect(projected.docs?.args).not.toBe(args);
-    } else {
-      expect(projected.docs).not.toHaveProperty("args");
-    }
-  });
-
-  it("keeps native timeout projection within OpenClaw timer bounds", () => {
-    expect(
-      buildCodexMcpServersConfig({
-        mcpServers: {
-          bounded: { command: "mcp", connectionTimeoutMs: 0.25, requestTimeoutMs: 1e306 },
-          defaults: { command: "mcp" },
-        },
-      }),
-    ).toEqual({
-      bounded: { command: "mcp", startup_timeout_sec: 0.001, tool_timeout_sec: 2_147_000 },
-      defaults: { command: "mcp" },
-    });
-  });
 });
 
 describe("loadCodexBundleMcpThreadConfigCore", () => {
@@ -176,14 +143,22 @@ describe("loadCodexBundleMcpThreadConfigCore", () => {
     ]);
   });
 
-  it("loads enabled bundled MCP servers as a Codex thread config patch", async () => {
+  it("projects typed args and bounded timeouts into the fingerprinted thread config", async () => {
+    const args = ["", " --flag "];
     const search = {
       url: "https://mcp.example.com/mcp",
       connectionTimeoutMs: 12_345,
       requestTimeoutMs: 20_125,
       supportsParallelToolCalls: true,
     };
-    setServers({ search: { type: "http", ...search } });
+    const servers = {
+      search: http(search.url, search),
+      bounded: { command: "mcp", connectionTimeoutMs: 0.25, requestTimeoutMs: 1e306 },
+      defaults: { command: "mcp" },
+      valid: { command: "mcp", args },
+      invalid: { command: "mcp", args: ["ok", 2] },
+    };
+    setServers(servers);
 
     const loaded = await load({
       cfg: { plugins: { entries: { "bundle-probe": { enabled: true } } } },
@@ -196,15 +171,20 @@ describe("loadCodexBundleMcpThreadConfigCore", () => {
         tool_timeout_sec: 20.125,
         supports_parallel_tool_calls: true,
       },
+      bounded: { command: "mcp", startup_timeout_sec: 0.001, tool_timeout_sec: 2_147_000 },
+      defaults: { command: "mcp" },
+      valid: { command: "mcp", args: ["", " --flag "] },
+      invalid: { command: "mcp" },
     });
+    expect(loaded.configPatch?.mcp_servers.valid?.args).not.toBe(args);
     expect(loaded.fingerprint).toMatch(/^[a-f0-9]{64}$/);
-    expect(loaded.staticServerNames).toEqual(["search"]);
+    expect(loaded.staticServerNames).toEqual(["bounded", "defaults", "invalid", "search", "valid"]);
     for (const changedControls of [
       { connectionTimeoutMs: 25_000 },
       { requestTimeoutMs: 45_000 },
       { supportsParallelToolCalls: false },
     ]) {
-      setServers({ search: { ...search, ...changedControls } });
+      setServers({ ...servers, search: { ...search, ...changedControls } });
       const changed = await load();
       expect(changed.fingerprint).not.toBe(loaded.fingerprint);
     }
