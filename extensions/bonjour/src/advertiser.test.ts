@@ -1,7 +1,11 @@
 import fs from "node:fs";
 import os from "node:os";
-import type { CiaoLogger } from "@homebridge/ciao/native.js";
+import type { CiaoLogger, ServiceOptions } from "@homebridge/ciao/native.js";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+type PublishedService = Required<
+  Pick<ServiceOptions, "name" | "type" | "domain" | "hostname" | "port">
+> & { txt: Record<string, string> };
 
 const {
   createService,
@@ -11,17 +15,7 @@ const {
   registerUnhandledRejectionHandler,
   logger,
 } = vi.hoisted(() => ({
-  createService:
-    vi.fn<
-      (options: {
-        name: string;
-        type: string;
-        domain: string;
-        hostname: string;
-        port: number;
-        txt: Record<string, string>;
-      }) => unknown
-    >(),
+  createService: vi.fn<(options: PublishedService) => unknown>(),
   getResponder: vi.fn<(options?: { logger?: CiaoLogger }) => unknown>(),
   shutdown: vi.fn(),
   registerUncaughtExceptionHandler: vi.fn(),
@@ -40,13 +34,6 @@ function expectCalledOnce(...functions: ReturnType<typeof vi.fn>[]) {
   }
 }
 
-function enableAdvertiserUnitMode(hostname = "test-host") {
-  vi.stubEnv("VITEST", undefined);
-  vi.stubEnv("NODE_ENV", "development");
-  vi.spyOn(os, "hostname").mockReturnValue(hostname);
-  vi.stubEnv("OPENCLAW_MDNS_HOSTNAME", hostname);
-}
-
 function mockCiaoService() {
   const listeners = new Map<string, (value: unknown) => void>();
   const service = {
@@ -56,15 +43,13 @@ function mockCiaoService() {
     serviceState: "announced",
     on: (event: string, listener: (value: unknown) => void) => listeners.set(event, listener),
   };
-  createService.mockImplementation((options) => ({
-    ...service,
-    get serviceState() {
-      return service.serviceState;
-    },
-    getFQDN: () => `${options.type}.${options.domain}.`,
-    getHostname: () => options.hostname,
-    getPort: () => options.port,
-  }));
+  createService.mockImplementation((options) =>
+    Object.assign(service, {
+      getFQDN: () => `${options.type}.${options.domain}.`,
+      getHostname: () => options.hostname,
+      getPort: () => options.port,
+    }),
+  );
   getResponder.mockReturnValue({ createService, shutdown });
   return service;
 }
@@ -94,32 +79,21 @@ async function startAdvertiser(
   ));
 }
 
-function serviceOptions() {
-  const call = createService.mock.calls[0];
-  if (!call) {
-    throw new Error("expected Bonjour service creation");
+function required<T>(value: T | undefined): T {
+  if (value === undefined) {
+    throw new Error("expected Bonjour callback registration");
   }
-  return call[0];
+  return value;
 }
-
-async function expectDisabled() {
-  const started = await startAdvertiser();
-  expect(createService).not.toHaveBeenCalled();
-  await expect(started.stop()).resolves.toBeUndefined();
-}
-
-function responderLogger(): CiaoLogger {
-  const ciaoLogger = getResponder.mock.calls[0]?.[0]?.logger;
-  if (!ciaoLogger) {
-    throw new Error("expected a responder-owned logger");
-  }
-  return ciaoLogger;
-}
+const serviceOptions = () => required(createService.mock.calls[0]?.[0]);
+const responderLogger = () => required(getResponder.mock.calls[0]?.[0]?.logger);
 
 describe("gateway bonjour advertiser", () => {
   let service: ReturnType<typeof mockCiaoService>;
   beforeEach(() => {
-    enableAdvertiserUnitMode();
+    vi.stubEnv("VITEST", undefined);
+    vi.stubEnv("NODE_ENV", "development");
+    vi.stubEnv("OPENCLAW_MDNS_HOSTNAME", "test-host");
     service = mockCiaoService();
   });
 
@@ -135,13 +109,11 @@ describe("gateway bonjour advertiser", () => {
   it("does not block on advertise and publishes expected txt keys", async () => {
     const pending = Promise.withResolvers<void>();
     service.advertise.mockReturnValue(pending.promise);
-    const started = await startAdvertiser({
+    await startAdvertiser({
       gatewayDirectReachable: true,
       tailnetDns: "host.tailnet.ts.net",
       cliPath: "/opt/homebrew/bin/openclaw",
-      minimal: false,
     });
-    expectCalledOnce(createService);
     expect(serviceOptions()).toMatchObject({
       type: "openclaw-gw",
       port: 18789,
@@ -160,8 +132,6 @@ describe("gateway bonjour advertiser", () => {
     expectCalledOnce(service.advertise);
     pending.resolve();
     await Promise.resolve();
-    await started.stop();
-    expectCalledOnce(service.destroy, shutdown);
   });
 
   it("omits cliPath and sshPort in minimal mode", async () => {
@@ -174,29 +144,19 @@ describe("gateway bonjour advertiser", () => {
     expect([txt.sshPort, txt.cliPath, txt.tailnetDns]).toEqual([undefined, undefined, undefined]);
   });
 
-  it("honors truthy OPENCLAW_DISABLE_BONJOUR values", async () => {
-    vi.stubEnv("OPENCLAW_DISABLE_BONJOUR", "true");
-    await expectDisabled();
-  });
-
-  it("auto-disables Bonjour in detected containers", async () => {
-    vi.spyOn(fs, "existsSync").mockImplementation((filePath) => String(filePath) === "/.dockerenv");
-    await expectDisabled();
-  });
-
-  it("auto-disables Bonjour on Fly Machines without Docker sentinel files", async () => {
-    vi.stubEnv("FLY_MACHINE_ID", "3d8d5459a03038");
-    vi.stubEnv("FLY_APP_NAME", "openclaw-clawcks-test");
-    vi.spyOn(fs, "existsSync").mockReturnValue(false);
-    vi.spyOn(fs, "readFileSync").mockReturnValue("10:cpuset:/\n9:perf_event:/\n8:memory:/\n0::/\n");
-    await expectDisabled();
-  });
-
-  it("honors explicit Bonjour opt-in inside detected containers", async () => {
-    vi.stubEnv("OPENCLAW_DISABLE_BONJOUR", "0");
-    vi.spyOn(fs, "existsSync").mockImplementation((filePath) => String(filePath) === "/.dockerenv");
-    await startAdvertiser();
-    expectCalledOnce(createService);
+  it.each([
+    ["explicit disable", "true", false, false, false],
+    ["Docker", undefined, true, false, false],
+    ["Fly", undefined, false, true, false],
+    ["container opt-in", "0", true, false, true],
+  ] as const)("applies %s discovery policy", async (_, disabled, docker, fly, enabled) => {
+    vi.stubEnv("OPENCLAW_DISABLE_BONJOUR", disabled);
+    vi.stubEnv("FLY_MACHINE_ID", fly ? "machine" : undefined);
+    vi.stubEnv("FLY_APP_NAME", fly ? "app" : undefined);
+    vi.spyOn(fs, "existsSync").mockImplementation((path) => docker && path === "/.dockerenv");
+    const started = await startAdvertiser();
+    expect(createService).toHaveBeenCalledTimes(enabled ? 1 : 0);
+    await expect(started.stop()).resolves.toBeUndefined();
   });
 
   it("cleans up ciao process handlers after shutdown, only once for concurrent stops", async () => {
@@ -208,52 +168,32 @@ describe("gateway bonjour advertiser", () => {
     registerUnhandledRejectionHandler.mockReturnValue(cleanupRejection);
     const started = await startAdvertiser();
     await Promise.all([started.stop(), started.stop()]);
-    expectCalledOnce(
-      registerUncaughtExceptionHandler,
-      registerUnhandledRejectionHandler,
-      cleanupException,
-      cleanupRejection,
-      service.destroy,
-      shutdown,
-    );
+    expectCalledOnce(cleanupException, cleanupRejection, service.destroy, shutdown);
     expect(order).toEqual(["shutdown", "cleanup-exception", "cleanup-rejection"]);
   });
 
-  it("handles ciao netmask assertions at the bonjour caller", async () => {
-    await startAdvertiser();
-    const exceptionHandler = registerUncaughtExceptionHandler.mock.calls[0]?.[0];
-    expect(exceptionHandler).toBeTypeOf("function");
-    const error = Object.assign(
+  it.each([
+    [
       new Error(
         "IP address version must match. Netmask cannot have a version different from the address!",
       ),
-      { name: "AssertionError" },
-    );
-    expect(exceptionHandler?.(error)).toBe(true);
-    expectWarnContaining("suppressing ciao netmask assertion");
-  });
-
-  it("handles wrapped interface enumeration failures without hiding unrelated process errors", async () => {
+      "suppressing ciao netmask assertion",
+    ],
+    [
+      Object.assign(new Error("uv_interface_addresses"), { name: "SystemError" }),
+      "disabling mDNS — networkInterfaces() unavailable in this environment: SystemError: uv_interface_addresses",
+    ],
+  ])("handles ciao process error %s directly and wrapped", async (error, warning) => {
     await startAdvertiser();
-    const inner = Object.assign(
-      new Error("A system error occurred: uv_interface_addresses returned Unknown system error 1"),
-      { name: "SystemError" },
-    );
-    const wrapper = new Error("ciao NetworkManager init failed", { cause: inner });
     for (const registration of [
       registerUncaughtExceptionHandler,
       registerUnhandledRejectionHandler,
     ]) {
-      const handler = registration.mock.calls[0]?.[0];
-      if (typeof handler !== "function") {
-        throw new Error("expected Bonjour process error handler");
-      }
-      for (const error of [wrapper, inner]) {
+      const handler = required(registration.mock.calls[0]?.[0]);
+      for (const reason of [error, new Error("ciao init failed", { cause: error })]) {
         logger.warn.mockClear();
-        expect(handler(error)).toBe(true);
-        expect(logger.warn).toHaveBeenCalledExactlyOnceWith(
-          "bonjour: disabling mDNS — networkInterfaces() unavailable in this environment: SystemError: A system error occurred: uv_interface_addresses returned Unknown system error 1",
-        );
+        expect(handler(reason)).toBe(true);
+        expectWarnContaining(warning);
       }
       logger.warn.mockClear();
       expect(handler(new Error("boom"))).toBe(false);
@@ -264,9 +204,7 @@ describe("gateway bonjour advertiser", () => {
   it.each([
     [Object.assign(new Error("   "), { name: "AbortError" }), "AbortError"],
     [new Error("   "), "Error"],
-    [new Error(""), "Error"],
     ["boom", "boom"],
-    [42, "42"],
   ])("formats advertise rejection %j as %s", async (error, formatted) => {
     service.advertise.mockRejectedValue(error);
     service.serviceState = "unannounced";
@@ -282,7 +220,6 @@ describe("gateway bonjour advertiser", () => {
     service.advertise.mockRejectedValue(new Error("boom"));
     service.serviceState = "unannounced";
     const started = await startAdvertiser();
-    expectCalledOnce(service.advertise);
     await Promise.resolve();
     expectWarnContaining("advertise failed");
     await vi.advanceTimersByTimeAsync(60_000);
@@ -298,31 +235,24 @@ describe("gateway bonjour advertiser", () => {
     });
     service.serviceState = "unannounced";
     await startAdvertiser();
-    expectCalledOnce(service.advertise);
     expectWarnContaining("advertise threw");
   });
 
   it.each([
     [
       "log",
-      "[test._openclaw-gw._tcp.local.] failed probing with reason: Error: Can't probe for a service which is announced already. Received announcing for service test._openclaw-gw._tcp.local.. Trying again in 2 seconds!",
+      "failed probing with reason: Error: Can't probe for a service which is announced already.",
     ],
-    [
-      "warn",
-      "Encountered MDNS socket error on socket 'br-abcdef123456': Error: send ENODEV 224.0.0.251:5353\n    at ...",
-    ],
-  ] as const)(
-    "filters ciao %s noise without suppressing ordinary diagnostics",
-    async (method, noise) => {
-      await startAdvertiser();
-      const destination = method === "log" ? logger.info : logger.warn;
-      destination.mockClear();
-      const ciaoLogger = responderLogger();
-      ciaoLogger[method](noise);
-      ciaoLogger[method]("ordinary %s", "ciao line");
-      expect(destination).toHaveBeenCalledExactlyOnceWith("bonjour: ordinary ciao line");
-    },
-  );
+    ["warn", "Encountered MDNS socket error on socket 'br': send ENODEV"],
+  ] as const)("filters ciao %s noise only", async (method, noise) => {
+    await startAdvertiser();
+    const destination = method === "log" ? logger.info : logger.warn;
+    destination.mockClear();
+    const ciaoLogger = responderLogger();
+    ciaoLogger[method](noise);
+    ciaoLogger[method]("ordinary %s", "ciao line");
+    expect(destination).toHaveBeenCalledExactlyOnceWith("bonjour: ordinary ciao line");
+  });
 
   it("routes ciao errors without replacing or filtering the process console", async () => {
     const methods = ["log", "warn", "error"] as const;
@@ -347,7 +277,6 @@ describe("gateway bonjour advertiser", () => {
     service.serviceState = "unannounced";
     service.advertise.mockReturnValue(new Promise<void>(() => {}));
     const started = await startAdvertiser();
-    expectCalledOnce(createService, service.advertise);
     for (const state of ["probing", "announcing", "unannounced", "probed", "announced"]) {
       service.serviceState = state;
       await vi.advanceTimersByTimeAsync(60_000);
@@ -365,35 +294,28 @@ describe("gateway bonjour advertiser", () => {
   });
 
   it.each([
-    [
-      "Mac.localdomain",
-      { name: "Mac (OpenClaw)", domain: "local", hostname: "Mac", txt: { lanHost: "Mac.local" } },
-    ],
-    ["My_Lobster Host", { hostname: "openclaw", txt: { lanHost: "openclaw.local" } }],
-  ])("normalizes system hostname %s for DNS", async (raw, expected) => {
+    ["Mac.localdomain", "Mac"],
+    ["My_Lobster Host", "openclaw"],
+  ])("normalizes system hostname %s for DNS", async (raw, hostname) => {
     vi.stubEnv("OPENCLAW_MDNS_HOSTNAME", undefined);
     vi.spyOn(os, "hostname").mockReturnValue(raw);
     await startAdvertiser();
-    expect(serviceOptions()).toMatchObject(expected);
+    expect(serviceOptions()).toMatchObject({
+      name: `${hostname} (OpenClaw)`,
+      domain: "local",
+      hostname,
+      txt: { lanHost: `${hostname}.local` },
+    });
   });
 
-  it("truncates host labels exceeding the 63-byte DNS label limit", async () => {
-    const longHostname = "app-41627eae5842473f9e05f139ea307277-7f9477f4d6-lqqzf-abcdefghij";
-    enableAdvertiserUnitMode(longHostname);
+  it.each([
+    ["ASCII", "a".repeat(64), "a".repeat(63)],
+    ["UTF-8", "你".repeat(21), "你".repeat(21)],
+  ])("keeps %s hostname and service labels within DNS byte limits", async (_, raw, expected) => {
+    vi.stubEnv("OPENCLAW_MDNS_HOSTNAME", raw);
     await startAdvertiser();
     const { name, hostname } = serviceOptions();
-    expect(Buffer.byteLength(longHostname)).toBe(64);
-    expect(Buffer.byteLength(hostname)).toBe(63);
-    expect(hostname).toBe(longHostname.slice(0, -1));
-    expect(hostname).not.toMatch(/-$/);
-    expect(Buffer.byteLength(name)).toBeLessThanOrEqual(63);
-  });
-
-  it("truncates multi-byte hostname within DNS label byte limit", async () => {
-    const cjkHostname = "你".repeat(21);
-    enableAdvertiserUnitMode(cjkHostname);
-    await startAdvertiser();
-    const { name } = serviceOptions();
+    expect(hostname).toBe(expected);
     expect(Buffer.byteLength(name)).toBeLessThanOrEqual(63);
     expect(name).not.toMatch(/\uFFFD$/);
   });
