@@ -1,17 +1,25 @@
 /**
- * Synthetic trajectory owner lifetime audit (not Gateway traffic).
+ * Synthetic trajectory owner lifetime/allocation audit (not Gateway traffic).
  * Run: node --expose-gc --import ./scripts/tsx.mjs
  *   scripts/perf/trajectory-preparation-retention.ts --state-dir <isolated-dir>
- *   --phase pending|flushed --recorders 64
- * Alternate phases for five samples each. Both execute identical recording and
- * persistence; only the forced-GC observation point changes. This compares
- * lifecycle phases on the same source, not baseline and candidate implementations.
+ *   --phase pending|flushed --mode survivors|allocation|timing --recorders 64
+ * For a baseline overlay, set OPENCLAW_BENCH_BASELINE_DIR and preload
+ * ./scripts/perf/worker-retained-heap-preload.ts after the TSX preload. Preserve
+ * the changed modules at their repository-relative paths; use an empty overlay
+ * for the candidate. Alternate variants for five process samples per mode.
+ * Survivor samples follow three forced GCs with recorder handles still live.
+ * Allocation mode includes collected objects. Only untraced timing-mode CPU/GC
+ * is timing evidence; its window includes fixture work and GC notification drain.
+ * A separate --trace-gc-nvp --phase flushed pass marks capture through forced
+ * GC for promotion context. Sampling stacks include helper allocations: zero
+ * sampled survivors is not exhaustive reachability proof.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { Session } from "node:inspector/promises";
 import path from "node:path";
+import { PerformanceObserver } from "node:perf_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { parseArgs } from "node:util";
 
@@ -20,11 +28,16 @@ const { values } = parseArgs({
     "state-dir": { type: "string" },
     phase: { type: "string", default: "pending" },
     recorders: { type: "string", default: "64" },
+    mode: { type: "string", default: "survivors" },
+    variant: { type: "string", default: "current" },
   },
 });
 assert(global.gc, "Use --expose-gc");
 assert(values["state-dir"], "Use a new isolated --state-dir");
 assert(["pending", "flushed"].includes(values.phase));
+assert(["survivors", "allocation", "timing"].includes(values.mode));
+const traced = process.execArgv.includes("--trace-gc-nvp");
+assert(!traced || values.phase === "flushed", "Traced runs require --phase flushed");
 const count = Number(values.recorders);
 assert(Number.isSafeInteger(count) && count > 0);
 const stateDir = path.resolve(values["state-dir"]);
@@ -60,8 +73,19 @@ const makeRecorder = async (runId: string) => {
   assert(recorder);
   return recorder;
 };
+function metadataFixture(index: number) {
+  return {
+    skills: {
+      entries: Array.from({ length: 40 }, (_, skill) => ({
+        name: `synthetic-${index}-skill-${skill}`,
+        description: `Synthetic trajectory guidance ${skill}. `.repeat(12),
+      })),
+    },
+    prompting: { skillsPrompt: "Synthetic skill catalog. ".repeat(400) },
+  };
+}
 const warm = await makeRecorder("warmup");
-warm.recordEvent("session.started");
+warm.recordEvent("trace.metadata", metadataFixture(-1));
 await warm.flush();
 const recorders: Awaited<ReturnType<typeof makeRecorder>>[] = [];
 for (let index = 0; index < count; index++) {
@@ -74,10 +98,18 @@ async function collect() {
   }
 }
 await collect();
+await nextTurn();
+await nextTurn();
 const heapBefore = process.memoryUsage().heapUsed;
 const inspector = new Session();
-inspector.connect();
-await inspector.post("HeapProfiler.startSampling", { samplingInterval: 1024 });
+if (values.mode !== "timing") {
+  inspector.connect();
+  await inspector.post("HeapProfiler.startSampling", {
+    samplingInterval: 1024,
+    includeObjectsCollectedByMajorGC: values.mode === "allocation",
+    includeObjectsCollectedByMinorGC: values.mode === "allocation",
+  });
+}
 const inputs: WeakRef<object>[] = [];
 function trackInput(value: unknown) {
   if (value && typeof value === "object") {
@@ -86,21 +118,36 @@ function trackInput(value: unknown) {
   }
 }
 const expected = createHash("sha256");
-for (const [index, recorder] of recorders.entries()) {
-  const metadata = {
-    skills: {
-      entries: Array.from({ length: 40 }, (_, skill) => ({
-        name: `synthetic-${index}-skill-${skill}`,
-        description: `Synthetic trajectory guidance ${skill}. `.repeat(12),
-      })),
-    },
-    prompting: { skillsPrompt: "Synthetic skill catalog. ".repeat(400) },
-  };
-  trackInput(metadata);
-  expected.update(JSON.stringify(metadata));
-  recorder.recordEvent("session.started", { toolCount: 40 });
-  recorder.recordEvent("trace.metadata", metadata);
+function recordPreparations() {
+  // A synchronous frame must return before GC; the module's await frame can
+  // otherwise keep its final loop-local fixture alive independently of the sink.
+  for (const [index, recorder] of recorders.entries()) {
+    const metadata = metadataFixture(index);
+    trackInput(metadata);
+    expected.update(JSON.stringify(metadata));
+    recorder.recordEvent("session.started", { toolCount: 40 });
+    recorder.recordEvent("trace.metadata", metadata);
+  }
 }
+const collections: Array<{ kind: number; duration: number }> = [];
+const observer = new PerformanceObserver((list) => {
+  for (const entry of list.getEntries()) {
+    const detail = (entry as PerformanceEntry & { detail: { kind: number } }).detail;
+    collections.push({ kind: detail.kind, duration: entry.duration });
+  }
+});
+if (traced) {
+  console.log("trajectory-audit:work-start");
+}
+observer.observe({ entryTypes: ["gc"] });
+const cpuBefore = process.cpuUsage();
+const workStarted = performance.now();
+recordPreparations();
+await nextTurn();
+await nextTurn();
+observer.disconnect();
+const workMs = performance.now() - workStarted;
+const cpu = process.cpuUsage(cpuBefore);
 const pending = recorders.map((recorder) => recorder.describeFlushState());
 assert(pending.every((state) => state?.includes("pendingRows=2")));
 const flush = async () => {
@@ -114,30 +161,59 @@ if (values.phase === "flushed") {
 }
 await collect();
 const observedHeap = process.memoryUsage().heapUsed;
-const { profile } = await inspector.post("HeapProfiler.getSamplingProfile");
-let sampledLiveOwnerBytes = 0;
+const profile =
+  values.mode === "timing"
+    ? undefined
+    : (await inspector.post("HeapProfiler.getSamplingProfile")).profile;
+let sampledOwnerBytes = 0;
+let sampledSerializationBytes = 0;
+let sampledBrandingBytes = 0;
 let ownerAllocationNodes = 0;
-function visit(node: typeof profile.head, inOwner = false) {
-  const owned = inOwner || node.callFrame.functionName === "recordEvent";
+const runtimeUrl = new URL("../../src/trajectory/runtime.ts", import.meta.url).href;
+const stringifyUrl = new URL("../../src/utils/safe-json.ts", import.meta.url).href;
+function visit(
+  node: NonNullable<typeof profile>["head"],
+  inOwner = false,
+  inPayload = false,
+  inBranding = false,
+) {
+  // TSX reports the recordEvent arrow as anonymous; its source URL is stable.
+  const owned = inOwner || node.callFrame.url === runtimeUrl;
+  const payload = inPayload || (owned && node.callFrame.url === stringifyUrl);
+  const branding =
+    inBranding ||
+    (owned &&
+      ["createDiagnosticRecord", "createDiagnosticArray"].includes(node.callFrame.functionName));
   if (owned) {
-    sampledLiveOwnerBytes += node.selfSize;
+    sampledOwnerBytes += node.selfSize;
     ownerAllocationNodes += Number(node.selfSize > 0);
   }
+  if (payload) {
+    sampledSerializationBytes += node.selfSize;
+  }
+  if (branding) {
+    sampledBrandingBytes += node.selfSize;
+  }
   for (const child of node.children) {
-    visit(child, owned);
+    visit(child, owned, payload, branding);
   }
 }
-visit(profile.head);
+if (profile) {
+  visit(profile.head);
+}
 const survivingInputs = inputs.filter((input) => input.deref()).length;
 assert.equal(survivingInputs, 0, "The recorder retained original preparation objects");
-if (values.phase === "pending") {
-  assert(sampledLiveOwnerBytes > 0, "Sampling did not observe the pending payload owner");
-} else {
-  assert.equal(sampledLiveOwnerBytes, 0, "Recorded payload allocations survived successful flush");
+if (profile && values.phase === "pending") {
+  assert(sampledSerializationBytes > 0, "Sampling did not observe the pending serialized payloads");
 }
 const observedPending = recorders.map((recorder) => recorder.describeFlushState());
-await inspector.post("HeapProfiler.stopSampling");
-inspector.disconnect();
+if (profile) {
+  await inspector.post("HeapProfiler.stopSampling");
+  inspector.disconnect();
+}
+if (traced) {
+  console.log("trajectory-audit:work-end");
+}
 if (values.phase === "pending") {
   await flush();
 }
@@ -165,7 +241,7 @@ for (let index = 0; index < count; index++) {
   assert.deepEqual(pair[0]?.data, { toolCount: 40 });
   assert.equal(pair[1]?.type, "trace.metadata");
 }
-for (const event of events) {
+for (const event of events.slice(1)) {
   if (event.type === "trace.metadata") {
     actual.update(JSON.stringify(event.data));
   }
@@ -175,6 +251,8 @@ assert.equal(payloadHash, expected.digest("hex"));
 console.log(
   JSON.stringify({
     node: process.version,
+    mode: values.mode,
+    variant: values.variant,
     phase: values.phase,
     recorders: count,
     recordedEvents: count * 2,
@@ -189,12 +267,27 @@ console.log(
     ),
     inputObjects: inputs.length,
     survivingInputs,
-    sampledLiveOwnerBytes,
+    sampledOwnerBytes: profile ? sampledOwnerBytes : undefined,
+    sampledSerializationBytes: profile ? sampledSerializationBytes : undefined,
+    sampledBrandingBytes: profile ? sampledBrandingBytes : undefined,
     ownerAllocationNodes,
-    profileSamples: profile.samples.length,
+    profileSamples: profile?.samples.length,
+    workMs,
+    cpuMs: (cpu.user + cpu.system) / 1000,
+    gc: [...new Set(collections.map(({ kind }) => kind))].map((kind) => {
+      const pauses = collections
+        .filter((entry) => entry.kind === kind)
+        .map((entry) => entry.duration);
+      return {
+        kind,
+        count: pauses.length,
+        totalMs: pauses.reduce((sum, duration) => sum + duration, 0),
+        maxMs: Math.max(0, ...pauses),
+      };
+    }),
     heapDeltaBytes: observedHeap - heapBefore,
     payloadHash,
-    scope: "Same-source lifecycle observation; recorder handles retained through verification",
+    scope: "Synthetic recorder/sink audit; retained handles and checked SQLite readback",
   }),
 );
 await closeOpenClawAgentDatabasesAsync();
