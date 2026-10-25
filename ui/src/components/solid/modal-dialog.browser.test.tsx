@@ -11,13 +11,30 @@ import { keyFocus } from "./menu-contract.test-support.tsx";
 
 const modalDialog = (host: OpenClawModalDialog) =>
   host.querySelector<HTMLDialogElement>(":scope > .oc-modal-dialog")!;
+const element = <K extends keyof HTMLElementTagNameMap>(
+  tag: K,
+  props: Partial<HTMLElementTagNameMap[K]> = {},
+) => Object.assign(document.createElement(tag), props);
 
-afterEach(cleanup);
+const extraNodes: Element[] = [];
+afterEach(() => {
+  cleanup();
+  extraNodes.splice(0).forEach((node) => node.remove());
+});
+
+async function tabCycle(order: HTMLElement[], active?: () => Element | null) {
+  order[0]!.focus();
+  for (const next of [...order.slice(1), order[0]!]) {
+    await keyFocus("{Tab}", next, active);
+  }
+  for (const next of [...order.slice(1).toReversed(), order[0]!]) {
+    await keyFocus("{Shift>}{Tab}{/Shift}", next, active);
+  }
+}
 
 function renderModal(
   label: string,
   content: () => JSX.Element,
-  variant = "",
   options?: { container?: HTMLElement; initialFocus?: () => HTMLElement },
 ) {
   let handle!: OpenClawModalDialog;
@@ -25,7 +42,6 @@ function renderModal(
     () => (
       <ModalDialog
         label={label}
-        class={variant}
         initialFocus={options?.initialFocus}
         ref={(value) => (handle = value)}
       >
@@ -46,25 +62,13 @@ async function escapeModal(handle: OpenClawModalDialog) {
   expect(modalDialog(handle).open).toBe(false);
 }
 
-function mountModal(variant = "", container?: HTMLElement) {
-  let name!: HTMLInputElement;
-  let notes!: HTMLTextAreaElement;
-  const { handle } = renderModal(
-    "Edit details",
-    () => (
-      <>
-        <input
-          aria-label="Name"
-          autofocus
-          value="Original name"
-          ref={(element) => (name = element)}
-        />
-        <textarea aria-label="Notes" ref={(element) => (notes = element)} />
-      </>
-    ),
-    variant,
-    { container, initialFocus: () => name },
-  );
+function mountModal(container?: HTMLElement) {
+  const name = element("input", { ariaLabel: "Name", autofocus: true, value: "Original name" });
+  const notes = element("textarea", { ariaLabel: "Notes" });
+  const { handle } = renderModal("Edit details", () => [name, notes], {
+    container,
+    initialFocus: () => name,
+  });
   return { handle, name, notes };
 }
 
@@ -72,91 +76,61 @@ it.each([false, true])("wraps native Tab at modal boundaries (shadow: %s)", asyn
   const trigger = document.createElement("button");
   const container = document.createElement("div");
   document.body.append(trigger, container);
+  extraNodes.push(trigger, container);
   const mount = inShadow ? document.createElement("div") : container;
   if (inShadow) {
     container.attachShadow({ mode: "open" }).append(mount);
   }
   trigger.focus();
-  const { handle, name, notes } = mountModal("", mount);
+  const { handle, name, notes } = mountModal(mount);
   const active = () => (inShadow ? container.shadowRoot!.activeElement : document.activeElement);
-  try {
-    notes.focus();
-    await keyFocus("{Tab}", name, active);
-    await keyFocus("{Shift>}{Tab}{/Shift}", notes, active);
-    name.focus();
-    await keyFocus("{Tab}", notes, active);
+  notes.focus();
+  await keyFocus("{Tab}", name, active);
+  await keyFocus("{Shift>}{Tab}{/Shift}", notes, active);
+  name.focus();
+  await keyFocus("{Tab}", notes, active);
 
-    const preventTab = (event: KeyboardEvent) => {
-      if (event.key === "Tab") {
-        event.preventDefault();
-      }
-    };
-    notes.addEventListener("keydown", preventTab);
-    await keyFocus("{Tab}", notes, active);
-    notes.removeEventListener("keydown", preventTab);
+  const preventTab = (event: KeyboardEvent) => {
+    if (event.key === "Tab") {
+      event.preventDefault();
+    }
+  };
+  notes.addEventListener("keydown", preventTab);
+  await keyFocus("{Tab}", notes, active);
+  notes.removeEventListener("keydown", preventTab);
 
-    const hidden = afterModalHidden(handle);
-    handle.hide();
-    await hidden;
-    expect(document.activeElement).toBe(trigger);
-  } finally {
-    trigger.remove();
-    container.remove();
-  }
+  const hidden = afterModalHidden(handle);
+  handle.hide();
+  await hidden;
+  expect(document.activeElement).toBe(trigger);
 });
 
 it.each([false, true])("Tabs through descendant shadow roots (only=%s)", async (shadowOnly) => {
-  let before!: HTMLInputElement;
-  let shadow!: ShadowRoot;
-  let first!: HTMLInputElement;
-  let slotted!: HTMLInputElement;
-  let last!: HTMLInputElement;
-  renderModal("Shadow fields", () => (
-    <>
-      {!shadowOnly && <input aria-label="Before shadow" ref={(value) => (before = value)} />}
-      <div
-        ref={(host) => {
-          shadow = host.attachShadow({ mode: "open" });
-          first = document.createElement("input");
-          last = document.createElement("input");
-          slotted = document.createElement("input");
-          host.append(slotted);
-          shadow.append(first, document.createElement("slot"), last);
-        }}
-      />
-    </>
-  ));
+  const before = element("input", { ariaLabel: "Before shadow" });
+  const host = element("div");
+  const shadow = host.attachShadow({ mode: "open" });
+  const [first, slotted, last] = [element("input"), element("input"), element("input")];
+  host.append(slotted);
+  shadow.append(first, element("slot"), last);
+  renderModal("Shadow fields", () => [!shadowOnly && before, host]);
   const order = shadowOnly ? [first, slotted, last] : [before, first, slotted, last];
   const active = () => shadow.activeElement ?? document.activeElement;
-  const start = shadowOnly ? first : before;
-  start.focus();
-  for (const next of [...order.slice(1), start]) {
-    await keyFocus("{Tab}", next, active);
-  }
-  for (const next of [...order.slice(1).toReversed(), start]) {
-    await keyFocus("{Shift>}{Tab}{/Shift}", next, active);
-  }
+  await tabCycle(order, active);
 });
 
 it.each(["summary", "editable"])(
   "wraps native %s content without an explicit tabindex",
   async (kind) => {
-    let target!: HTMLElement;
-    const { handle } = renderModal("Native content", () =>
-      kind === "summary" ? (
-        <details>
-          <summary ref={(value) => (target = value)}>Details</summary>
-          Content
-        </details>
-      ) : (
-        <div contenteditable="true" ref={(value) => (target = value)}>
-          Draft
-        </div>
-      ),
-    );
-    target.focus();
-    await keyFocus("{Tab}", target);
-    await keyFocus("{Shift>}{Tab}{/Shift}", target);
+    const target =
+      kind === "summary"
+        ? element("summary", { textContent: "Details" })
+        : element("div", { contentEditable: "true", textContent: "Draft" });
+    const content = kind === "summary" ? element("details") : target;
+    if (kind === "summary") {
+      content.append(target, "Content");
+    }
+    const { handle } = renderModal("Native content", () => content);
+    await tabCycle([target]);
     target.tabIndex = -1;
     modalDialog(handle).focus();
     await keyFocus("{Tab}", modalDialog(handle));
@@ -164,16 +138,12 @@ it.each(["summary", "editable"])(
 );
 
 it.each([-1, 0, 1])("wraps to the radio group's tab stop (checked: %s)", async (checked) => {
-  let text!: HTMLInputElement;
-  let first!: HTMLInputElement;
-  let second!: HTMLInputElement;
-  renderModal("Radio group", () => (
-    <>
-      <input aria-label="Text" ref={(value) => (text = value)} />
-      <input type="radio" name="mode" checked={checked === 0} ref={(value) => (first = value)} />
-      <input type="radio" name="mode" checked={checked === 1} ref={(value) => (second = value)} />
-    </>
-  ));
+  const text = element("input", { ariaLabel: "Text" });
+  const radio = (index: number) =>
+    element("input", { type: "radio", name: "mode", checked: checked === index });
+  const first = radio(0),
+    second = radio(1);
+  renderModal("Radio group", () => [text, first, second]);
   const selected = checked === 1 ? second : first;
   text.focus();
   await keyFocus("{Shift>}{Tab}{/Shift}", selected);
@@ -183,8 +153,7 @@ it.each([-1, 0, 1])("wraps to the radio group's tab stop (checked: %s)", async (
 it("keeps an empty modal focused without cycling through its guards", async () => {
   const { dialog } = renderModal("Empty modal", () => null);
   expect(document.activeElement).toBe(dialog);
-  await keyFocus("{Tab}", dialog);
-  await keyFocus("{Shift>}{Tab}{/Shift}", dialog);
+  await tabCycle([dialog]);
 });
 
 it("a vetoed Escape keeps native top-layer, focus, and draft ownership", async () => {
