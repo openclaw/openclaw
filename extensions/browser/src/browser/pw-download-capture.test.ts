@@ -78,73 +78,35 @@ describe("Playwright download capture cancellation", () => {
     f.expectReleased();
   });
 
-  it.each(["explicit", "passive", "caller cancellation"] as const)(
-    "prevents saving after %s interrupts delayed validation",
-    async (mode) => {
-      const deadline = mode !== "caller cancellation";
-      if (deadline) {
-        vi.useFakeTimers();
-      }
+  it.for([
+    { stage: "validation", mode: "explicit", deadline: true },
+    { stage: "validation", mode: "passive", deadline: true },
+    { stage: "validation", mode: undefined, deadline: false },
+    { stage: "saving", mode: "explicit", deadline: false },
+    { stage: "saving", mode: "explicit", deadline: true },
+    { stage: "publishing", mode: "explicit", deadline: false },
+    { stage: "publishing", mode: "explicit", deadline: true },
+  ] as const)(
+    "settles interruption during $stage (mode=$mode, deadline=$deadline)",
+    async ({ stage, mode, deadline }, { signal }) => {
       const controller = new AbortController();
       const reason = new Error("download request aborted");
-      const validation = Promise.withResolvers<void>();
-      const beforeSave = vi.fn(async () => {
-        await validation.promise;
-      });
+      const validating = stage === "validation";
+      const publishing = stage === "publishing";
+      const fakeClock = deadline || publishing;
       const timeoutMessage =
         mode === "passive"
           ? "Timeout waiting for navigation download"
           : "Timeout waiting for download";
-      const f = makeCapture({
-        mode: deadline ? mode : undefined,
-        signal: controller.signal,
-        timeoutMessage,
-        beforeSave,
-        timeout: deadline ? 25 : 1_000,
-      });
-
-      try {
-        f.emit();
-        expect(beforeSave).toHaveBeenCalledOnce();
-        if (deadline) {
-          await vi.advanceTimersByTimeAsync(25);
-          await expect(pendingOr(f.outcome)).resolves.toMatchObject({ message: timeoutMessage });
-        } else {
-          controller.abort(reason);
-          await nextTurn();
-          expect(await pendingOr(f.outcome)).toBe(reason);
-        }
-        expect(f.cancel).toHaveBeenCalledOnce();
-        validation.resolve();
-        await (deadline ? vi.advanceTimersByTimeAsync(0) : nextTurn());
-        expect(f.saveAs).not.toHaveBeenCalled();
-        f.expectReleased();
-      } finally {
-        controller.abort(new Error("download test cleanup"));
-        validation.resolve();
-        await f.outcome;
-        vi.useRealTimers();
-      }
-    },
-  );
-
-  it.for([
-    { kind: "caller cancellation", publishing: false },
-    { kind: "download deadline", publishing: false },
-    { kind: "caller cancellation", publishing: true },
-    { kind: "download deadline", publishing: true },
-  ])(
-    "settles $kind at the download commit boundary (publishing=$publishing)",
-    async ({ kind, publishing }, { signal }) => {
-      const controller = new AbortController();
-      const reason = new Error("download request aborted");
-      const deadline = kind === "download deadline";
-      const fakeClock = deadline || publishing;
       const outputRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-download-"));
       const outputPath = path.join(outputRoot, "download.bin");
       const { write, writeSettled } = observeOutputWriteSettlement(outputFiles);
       const release = Promise.withResolvers<void>();
       const started = Promise.withResolvers<string>();
+      const beforeSave = vi.fn(async () => {
+        started.resolve("");
+        await release.promise;
+      });
       const originalRename = fs.rename.bind(fs);
       const rename = publishing
         ? vi.spyOn(fs, "rename").mockImplementation(async (source, destination) => {
@@ -159,9 +121,11 @@ describe("Playwright download capture cancellation", () => {
         vi.useFakeTimers();
       }
       const f = makeCapture({
-        mode: "explicit",
+        mode,
         outputPath,
         outputRoot,
+        timeoutMessage,
+        beforeSave: validating ? beforeSave : undefined,
         signal: controller.signal,
         timeout: deadline ? 25 : 1_000,
         download: {
@@ -175,14 +139,19 @@ describe("Playwright download capture cancellation", () => {
             }
           },
           cancel: async () => {
-            release.resolve();
+            if (!validating) {
+              release.resolve();
+            }
           },
         },
       });
       try {
         f.emit();
+        if (validating) {
+          expect(beforeSave).toHaveBeenCalledOnce();
+        }
         const partialPath = await withinTest(started.promise, signal);
-        if (!publishing) {
+        if (stage === "saving") {
           await expect(fs.readFile(partialPath, "utf8")).resolves.toBe("download contents");
         }
         if (deadline) {
@@ -199,20 +168,27 @@ describe("Playwright download capture cancellation", () => {
           await expect(fs.readFile(outputPath, "utf8")).resolves.toBe("download contents");
         } else {
           if (deadline) {
-            await expect(pendingOr(f.outcome)).resolves.toMatchObject({
-              message: "Timeout waiting for download",
-            });
+            await expect(pendingOr(f.outcome)).resolves.toMatchObject({ message: timeoutMessage });
           } else {
-            await expect(f.outcome).resolves.toBe(reason);
+            await expect(pendingOr(f.outcome)).resolves.toBe(reason);
           }
           expect(f.cancel).toHaveBeenCalledOnce();
-          // Capture rejection precedes staging cleanup; join that exact writer.
-          await withinTest(writeSettled.promise, signal);
-          await expect(fs.access(partialPath)).rejects.toMatchObject({ code: "ENOENT" });
-          await expect(fs.access(outputPath)).rejects.toMatchObject({ code: "ENOENT" });
+          if (validating) {
+            release.resolve();
+            await (deadline ? vi.advanceTimersByTimeAsync(0) : nextTurn());
+            expect(f.saveAs).not.toHaveBeenCalled();
+          } else {
+            // Capture rejection precedes staging cleanup; join that exact writer.
+            await withinTest(writeSettled.promise, signal);
+            await expect(fs.access(partialPath)).rejects.toMatchObject({ code: "ENOENT" });
+            await expect(fs.access(outputPath)).rejects.toMatchObject({ code: "ENOENT" });
+          }
         }
         f.expectReleased();
       } finally {
+        if (validating) {
+          controller.abort(new Error("download test cleanup"));
+        }
         release.resolve();
         await f.outcome;
         // Teardown joins admitted writes even after the test signal aborts.

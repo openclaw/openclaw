@@ -17,11 +17,6 @@ const { mockChromeMcpProcesses, resetChromeMcpProcessMocks } = await vi.hoisted(
   () => import("./chrome-mcp-process.test-support.js"),
 );
 
-vi.mock("openclaw/plugin-sdk/logging-core", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/logging-core")>()),
-  createSubsystemLogger: () => ({ child: () => ({ warn: vi.fn() }) }),
-}));
-
 let disposePeer: (() => Promise<void>) | undefined;
 afterEach(async () => {
   try {
@@ -166,7 +161,6 @@ if (!descendant) {
     options,
     events: connected,
     exactChild: child,
-    exited: once(child, "exit"),
     closed: childClosed,
     waitFor,
   };
@@ -221,7 +215,6 @@ describe.skipIf(process.platform === "win32")("Chrome MCP SDK-initiated cleanup"
     expect(settled, "readiness and all closes join the live child").toBe(0);
     expect(replacementFactory).not.toHaveBeenCalled();
     rootControl.end("release\n");
-    await fixture.exited;
     await cleanup;
     await fixture.closed;
     await expect(readiness).rejects.toThrow("fixture initialization failed");
