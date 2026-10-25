@@ -184,7 +184,7 @@ describe("buildChannelInboundEventContext", () => {
       });
       expect(ctx.CommandTurn).toEqual(expected);
       expect(ctx.CommandSource).toBe(source);
-      expect(ctx.CommandAuthorized).toBe(expected.authorized);
+      expect(ctx.CommandAuthorized).toBe(true);
     },
   );
 

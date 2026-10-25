@@ -91,6 +91,7 @@ function request(index: number, url: string, timeoutMs = 300_000) {
 }
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.fetch.mockReset();
   vi.stubGlobal("fetch", vi.fn());
   mocks.authenticate.mockResolvedValue("urbauth-~zod=fake-cookie");
   storage();

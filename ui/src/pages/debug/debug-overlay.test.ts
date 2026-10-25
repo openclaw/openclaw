@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { registerListener } from "../../../../src/shared/listeners.js";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
-import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import type {
+  ApplicationContext,
+  ApplicationGateway,
+  ApplicationGatewaySnapshot,
+} from "../../app/context.ts";
 import type { SparklineSample } from "../../components/sparkline-tile.tsx";
 import type { SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
@@ -271,7 +275,7 @@ it.each([
   "close and reopen",
 ])("discards pending samples and prior disk history on %s", async (transition) => {
   const listeners = new Set<(snapshot: ApplicationGatewaySnapshot) => void>();
-  const eventListeners = new Set<() => void>();
+  const eventListeners = new Set<Parameters<ApplicationGateway["subscribeEventLog"]>[0]>();
   const pending = deferred<unknown>();
   const replacement = deferred<unknown>();
   onTestFinished(() => {
@@ -290,7 +294,8 @@ it.each([
     },
     subscribe: (listener: (snapshot: ApplicationGatewaySnapshot) => void) =>
       registerListener(listeners, listener),
-    subscribeEventLog: (listener: () => void) => registerListener(eventListeners, listener),
+    subscribeEventLog: (listener: Parameters<ApplicationGateway["subscribeEventLog"]>[0]) =>
+      registerListener(eventListeners, listener),
   };
   const publishSnapshot = (next: ApplicationGatewaySnapshot) => {
     snapshot = next;

@@ -77,12 +77,17 @@ it("keeps shared MiMo request and output policy when a provider decorates the st
       expect(modelParams).toEqual({ policy: "agent-model", modelOnly: true });
       expect(modelCallUrgency).toBe("foreground");
       const underlying = expectDefined(streamFn, "prepared provider stream");
-      const decorated: StreamFn = (...args) => underlying(...args);
+      const decorated: StreamFn = (requestModel, context, options) =>
+        underlying(requestModel, context, {
+          ...options,
+          headers: { ...options?.headers, "x-fixture-policy": String(modelParams?.policy) },
+        });
       return Object.assign(decorated, { preservesGenericCompatibility: true });
     },
   };
   const payload = { messages: [{ role: "assistant", content: "Earlier answer" }] };
   const baseStreamFn: StreamFn = async (requestModel, _context, options) => {
+    expect(options?.headers).toMatchObject({ "x-fixture-policy": "agent-model" });
     await options?.onPayload?.(payload, requestModel);
     const stream = createAssistantMessageEventStream();
     stream.push({

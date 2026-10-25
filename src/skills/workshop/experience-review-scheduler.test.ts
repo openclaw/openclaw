@@ -49,7 +49,12 @@ function turn(
       modelId: "gpt-test",
       modelIterations,
       skillWorkshopAvailable: true,
-      foregroundPromptContext: { agentId: "main", workspaceDir: "/workspace", trigger: "user" },
+      foregroundPromptContext: {
+        agentId: "main",
+        workspaceDir: "/workspace",
+        sandboxSessionKey: sessionKey,
+        trigger: "user",
+      },
     },
     config: { skills: { workshop: { autonomous: { mode: "auto" } } } },
     source,

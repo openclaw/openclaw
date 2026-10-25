@@ -67,8 +67,11 @@ it.each([undefined, 0])(
         headers: { "x-synthetic": "invalid\nheader" },
         substituted: true,
       }),
-      ownResource: (resource) =>
-        forward.ownResource(resource).on("error", () => resource.destroy()),
+      ownResource<T extends Readable | Writable>(resource: T) {
+        forward.ownResource(resource);
+        resource.on("error", () => resource.destroy());
+        return resource;
+      },
     });
     request.push(null);
     await setImmediate();
