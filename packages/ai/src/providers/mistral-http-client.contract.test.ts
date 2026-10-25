@@ -88,6 +88,37 @@ describe("Mistral HTTPClient contract", () => {
     }
   });
 
+  it("omits a deleted model header from the outbound request", async () => {
+    const model = makeProviderModel("mistral-conversations", "mistral", "mistral-test", {
+      baseUrl: "https://mistral.invalid",
+      headers: { "X-Model-Header": "original", "x-retained": "retained" },
+    });
+    let sentHeaders: Headers | undefined;
+    const host = getAiTransportHost();
+    configureAiTransportHost({
+      ...host,
+      buildModelFetch: () => async (input, init) => {
+        sentHeaders = new Request(input, init).headers;
+        return sse();
+      },
+    });
+    try {
+      await streamMistral(
+        model,
+        { messages: [] },
+        {
+          apiKey: "fixture-key",
+          headers: { "x-model-header": null },
+        },
+      ).result();
+      expect(sentHeaders?.has("x-model-header")).toBe(false);
+      expect(sentHeaders?.get("x-retained")).toBe("retained");
+      expect(model.headers?.["X-Model-Header"]).toBe("original");
+    } finally {
+      configureAiTransportHost(host);
+    }
+  });
+
   it.each([
     ["root", (options: ClientOptions) => new Mistral(options).chat],
     ["chat", (options: ClientOptions) => new Chat(options)],

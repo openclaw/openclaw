@@ -28,6 +28,12 @@ const AgentAvatarFace = lazy(() => import("../agent-avatar-face.tsx"), {
   export: "AgentAvatarFace",
 });
 
+const avatarBranding = projectSource(null, {
+  read: currentThemeBranding,
+  subscribe: (_source, notify) => subscribeThemeBranding(notify),
+  equality: Object.is,
+});
+
 export function AgentIdentityAvatar(props: {
   elementRef?: (element: HTMLElement) => void;
   agent: AgentIdentity;
@@ -35,11 +41,6 @@ export function AgentIdentityAvatar(props: {
   onImageError?: () => void;
 }) {
   const gateway = useAvatarGatewayContext();
-  const branding = projectSource(null, {
-    read: currentThemeBranding,
-    subscribe: (_source, notify) => subscribeThemeBranding(notify),
-    equality: Object.is,
-  });
   const view = createMemo(() => {
     gateway();
     return resolveAgentIdentityAvatarView(props.agent);
@@ -52,7 +53,7 @@ export function AgentIdentityAvatar(props: {
         <SystemAgentAvatar
           name={props.agent.name}
           class={props.class}
-          branding={branding.read()}
+          branding={avatarBranding.read()}
           elementRef={props.elementRef}
         />
       }
@@ -88,7 +89,7 @@ export function AgentIdentityAvatar(props: {
           </Show>
         </span>
         <Show when={!props.agent.pending}>
-          <AgentAvatarHat agentId={props.agent.id} branding={branding.read()} />
+          <AgentAvatarHat agentId={props.agent.id} branding={avatarBranding.read()} />
         </Show>
       </span>
     </Show>
@@ -178,6 +179,7 @@ function SystemAgentAvatar(props: {
           src={inferControlUiPublicAssetPath("favicon.svg")}
           alt={props.name ?? ""}
           aria-hidden={props.name ? undefined : "true"}
+          decoding="async"
         />
       }
     >

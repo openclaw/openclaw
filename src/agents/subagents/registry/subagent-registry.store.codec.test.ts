@@ -43,6 +43,23 @@ it("encodes restart-safe cleanup without changing the live lease or shared reply
   });
 });
 
+it.each([undefined, "queued-completion"])(
+  "restores in-progress delivery only when the durable queue owns it (%s)",
+  (queueId) => {
+    const entry = createRun({
+      cleanupHandled: true,
+      delivery: { status: "in_progress", queueId },
+    });
+    const row = bindSubagentRunRecord(entry);
+    row.payload_json = JSON.stringify(entry);
+
+    const restored = rowToSubagentRunRecord(row);
+    expect(restored?.delivery?.status).toBe(queueId ? "in_progress" : "pending");
+    expect(restored?.cleanupHandled).toBe(false);
+    expect(entry.delivery?.status).toBe("in_progress");
+  },
+);
+
 it.each([{ version: 2 }, { snapshot: "x".repeat(65_537) }])(
   "keeps interrupted results when stored operator evidence is invalid",
   (operatorRecoverySource) => {

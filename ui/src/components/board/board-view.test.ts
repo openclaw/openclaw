@@ -2,10 +2,10 @@ import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import { BOARD_GRID_GAP, BOARD_GRID_ROW_HEIGHT } from "../../lib/board/grid.ts";
 import "../../lib/toast-host.tsx";
-import "../mcp-app-view-registration.ts";
+import "../mcp-app-view.tsx";
 // Side-effect import: registers the custom elements mount() depends on
 // without relying on transitive fixture imports.
-import "./board-view.ts";
+import "./board-view.tsx";
 import {
   createApplicationContextProvider,
   createApplicationGateway,

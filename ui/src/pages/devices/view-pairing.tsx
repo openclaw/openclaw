@@ -309,24 +309,28 @@ export function DevicePairSetup(props: DevicePairSetupProps) {
                       <summary>{t("devices.pairing.showSetupCode")}</summary>
                       <code>{current().setupCode}</code>
                     </details>
-                    <Show
-                      when={props.pendingCount > 0}
-                      fallback={
-                        <p class="device-pair-setup__waiting">
-                          {t(
-                            isNodeSetup()
-                              ? "devices.pairing.nodeWaiting"
-                              : "devices.pairing.waiting",
-                          )}
-                        </p>
+                    <Show when={props.pendingCount === 0}>
+                      <p class="device-pair-setup__waiting">
+                        {t(
+                          isNodeSetup() ? "devices.pairing.nodeWaiting" : "devices.pairing.waiting",
+                        )}
+                      </p>
+                    </Show>
+                    {/* Stays mounted while empty so the first request updates an existing live region. */}
+                    <div
+                      class={
+                        props.pendingCount > 0
+                          ? "callout warn device-pair-setup__pending"
+                          : "sr-only"
                       }
+                      role="status"
                     >
-                      <div class="callout warn device-pair-setup__pending">
+                      <Show when={props.pendingCount > 0}>
                         <span>
                           {t("devices.pairing.pending", { count: String(props.pendingCount) })}
                         </span>
-                      </div>
-                    </Show>
+                      </Show>
+                    </div>
                   </>
                 );
               }}

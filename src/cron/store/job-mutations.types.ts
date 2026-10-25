@@ -18,6 +18,7 @@ type CronJobMutationOptions = Pick<
   | "inferenceBinding"
   | "sourceConversation"
   | "operatorSource"
+  | "operatorSourceExecutionRevision"
   | "skillLibrarySelections"
   | "toolsAllowProvenance"
   | "toolsAllowExecTarget"
@@ -30,6 +31,7 @@ type CronJobMutationOptions = Pick<
 export type CronJobMutation =
   | {
       kind: "add";
+      createdAtMs?: number;
       input: CronJobCreate;
       matchingJobIds?: string[];
       options: CronJobMutationOptions;

@@ -74,6 +74,8 @@ import {
 } from "./attempt-execution.announce.test-support.js";
 import {
   cliRuntimeConfig,
+  CLI_BINDING_SETTLEMENT_OUTCOMES,
+  createCliBindingSettlementCase,
   registerCommandCliAdmissionTests,
   createCliImageCapabilityPlugins,
   makeCliResult,
@@ -91,6 +93,7 @@ import {
   restrictedCompletionCases,
   type RestrictedCompletion,
 } from "./attempt-execution.restricted-completion.test-fixtures.js";
+import { registerSandboxedDelegatedCliTests } from "./attempt-execution.sandbox-cli.test-support.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "./claude-cli-project-dir.js";
 import { resolveEmbeddedModelSelection } from "./model-selection.js";
 import { persistAcpTurnTranscript, persistCliTurnTranscript } from "./transcript-persistence.js";
@@ -830,8 +833,8 @@ describe("CLI attempt execution", () => {
         agentId: "main",
         modelProvider: expectDefined(run.modelProvider, "CLI model provider"),
         modelId: expectDefined(run.model, "CLI model"),
-        toolsAllow: ["read"],
       });
+      context.toolsAllow = ["read"];
       const scoped = await resolveMcpLoopbackScopedTools({
         cfg,
         context,
@@ -876,15 +879,13 @@ describe("CLI attempt execution", () => {
     expect(runCliAgentMock).toHaveBeenCalledOnce();
   });
 
-  it.each(["rejected", "rejected-clear", "outer-fallback", "preserved-state"])(
+  it.each(CLI_BINDING_SETTLEMENT_OUTCOMES)(
     "settles a cold %s CLI binding before the next queued command starts",
     async (outcome) => {
-      const suppression = outcome === "preserved-state" ? outcome : undefined;
-      const outerFallback = outcome === "outer-fallback" || suppression !== undefined;
-      const accepted = outcome === "accepted" || outerFallback;
-      const previousBinding = { sessionId: "previous-native-session" };
       const sessionKey = "agent:main:cli-binding-settlement";
       const sessionEntry = makeSessionEntry("binding-settlement-session");
+      const { suppression, outerFallback, accepted, previousBinding, binding, expectedBinding } =
+        createCliBindingSettlementCase(outcome, sessionEntry.sessionId);
       if (outcome === "rejected-clear" || suppression) {
         sessionEntry.cliSessionBindings = { "claude-cli": previousBinding };
         await writeClaudeCliAssistantTranscript(
@@ -899,10 +900,6 @@ describe("CLI attempt execution", () => {
       );
       const firstStarted = createDeferredCore();
       const finishFirst = createDeferredCore();
-      const binding = {
-        sessionId: "settled-native-session",
-        authProfileId: "anthropic:claude-cli",
-      };
       if (outerFallback) {
         runCliAgentMock.mockRejectedValueOnce(
           new FailoverError("primary capacity", {
@@ -966,11 +963,14 @@ describe("CLI attempt execution", () => {
         expect(firstRunCliAgentArg(0).model).toBe("sonnet");
         expect(firstRunCliAgentArg(1).model).toBe("opus");
       }
-      const expectedBinding = suppression ? previousBinding : accepted ? binding : undefined;
-      expect(firstRunCliAgentArg(outerFallback ? 2 : 1)).toMatchObject({
+      const nextRun = firstRunCliAgentArg(outerFallback ? 2 : 1);
+      expect(nextRun).toMatchObject({
         cliSessionId: expectedBinding?.sessionId,
         cliSessionBinding: expectedBinding,
       });
+      if (suppression) {
+        expect(nextRun.cliSessionBinding).toEqual(expectedBinding);
+      }
     },
   );
 
@@ -2008,6 +2008,14 @@ describe("CLI attempt execution", () => {
   });
 
   registerCommandReplyPolicyTests({
+    runStoredAttempt,
+    seedSessionStore,
+    runEmbeddedAgentMock,
+    runCliAgentMock,
+    executePreparedCliRunMock,
+  });
+
+  registerSandboxedDelegatedCliTests({
     runStoredAttempt,
     seedSessionStore,
     runEmbeddedAgentMock,

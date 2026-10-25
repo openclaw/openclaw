@@ -672,8 +672,8 @@ it("syncs form enabled after header pause and resets runs scope after remove", a
     patch: { enabled: false },
   });
   const findRemoveButton = () => getButtonByText(page, "Remove");
-  await waitFor(() => expect(findRemoveButton()?.disabled).toBe(false));
   await openCronMenu(page, ".cron-job-menu");
+  await waitFor(() => expect(findRemoveButton()?.disabled).toBe(false));
   findRemoveButton()?.click();
   getButtonByText(await waitForConfirmDialogActions(), "Remove").click();
   await removeRequested.promise;

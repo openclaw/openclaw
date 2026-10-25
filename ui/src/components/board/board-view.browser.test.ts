@@ -6,7 +6,7 @@ import { BOARD_GRID_GAP, BOARD_GRID_ROW_HEIGHT } from "../../lib/board/grid.ts";
 import type { BoardSnapshot } from "../../lib/board/types.ts";
 import "../../styles/base.css";
 import "../../styles/chat/board.css";
-import "./board-view.ts";
+import "./board-view.tsx";
 
 type OpenClawBoardView = HTMLElementTagNameMap["openclaw-board-view"];
 

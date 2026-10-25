@@ -5,7 +5,6 @@ import type { MigrationPlan } from "openclaw/plugin-sdk/plugin-entry";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import { describe, expect, it, vi } from "vitest";
 import { collectHermesProviders, collectHermesProviderSecretBindings } from "./config-providers.js";
-import { buildConfigItems } from "./config.js";
 import { resolveHermesModelRef } from "./model.js";
 import { buildHermesMigrationProvider } from "./provider.js";
 import { hermesCase, item } from "./test/hermes-case.js";
@@ -563,13 +562,14 @@ describe("Hermes source encoding", () => {
   });
 });
 
-function providerItems(raw: Record<string, unknown>) {
-  return buildConfigItems({
-    ctx: fixture.context(),
-    config: { providers: { acme: { api: "https://models.example/v1", ...raw } } },
+async function providerItems(raw: Record<string, unknown>) {
+  const h = makeCase();
+  await h.write("config.yaml", {
+    providers: { acme: { api: "https://models.example/v1", ...raw } },
   });
+  return (await h.plan()).items;
 }
-function expectProvider(items: ReturnType<typeof providerItems>, acme: object) {
+function expectProvider(items: MigrationPlan["items"], acme: object) {
   expect(
     items.find((entry) => entry.id === "config:model-provider:acme")?.details?.value,
   ).toMatchObject({ acme });
@@ -587,12 +587,12 @@ describe("Hermes provider source contracts", () => {
     ["openai", "openai-completions"],
     ["responses", "openai-responses"],
     [" CHAT_COMPLETIONS ", "openai-completions"],
-  ])("imports transport alias %s as %s", (transport, api) => {
-    const items = providerItems({ transport, default_model: "acme-model" });
+  ])("imports transport alias %s as %s", async (transport, api) => {
+    const items = await providerItems({ transport, default_model: "acme-model" });
     expectProvider(items, { api, models: [{ id: "acme-model", api }] });
     expect(items.filter((entry) => entry.kind === "manual")).toEqual([]);
   });
-  it("supports camelCase fields and canonical transport precedence", () => {
+  it("supports camelCase fields and canonical transport precedence", async () => {
     const config = {
       providers: {
         acme: {
@@ -604,25 +604,24 @@ describe("Hermes provider source contracts", () => {
         },
       },
     };
-    expectProvider(
-      buildConfigItems({
-        ctx: fixture.context(),
-        config,
-        env: { ACME_TOKEN: "test-only-placeholder" },
-      }),
-      { api: "anthropic-messages", models: [{ id: "acme-model", contextWindow: 262144 }] },
-    );
+    const h = makeCase();
+    await h.write("config.yaml", config);
+    await h.write(".env", "ACME_TOKEN=test-only-placeholder\n");
+    expectProvider((await h.plan()).items, {
+      api: "anthropic-messages",
+      models: [{ id: "acme-model", contextWindow: 262144 }],
+    });
     expect(collectHermesProviderSecretBindings(config)).toEqual([
       { provider: "acme", envVar: "ACME_TOKEN" },
     ]);
     expectProvider(
-      providerItems({ api_mode: "chat_completions", transport: "anthropic_messages" }),
+      await providerItems({ api_mode: "chat_completions", transport: "anthropic_messages" }),
       { api: "openai-completions" },
     );
   });
-  it("preserves list metadata and removes catalog marker keys", () => {
+  it("preserves list metadata and removes catalog marker keys", async () => {
     expectProvider(
-      providerItems({
+      await providerItems({
         context_length: 32768,
         models: [
           " plain-model ",
@@ -639,7 +638,7 @@ describe("Hermes provider source contracts", () => {
       },
     );
     expectProvider(
-      providerItems({
+      await providerItems({
         models: {
           "acme-model": { context_length: 262144, max_tokens: 16384 },
           __discovered_model_catalog__: true,

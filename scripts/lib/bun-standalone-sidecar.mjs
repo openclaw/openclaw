@@ -34,7 +34,7 @@ export function standaloneResourceCategory(name, declaredPluginAssets = new Set(
   if (name.startsWith("dist/control-ui/")) {
     return "controlUi";
   }
-  if (name.startsWith("dist/assets/") || name.startsWith("dist/canvas-host/a2ui/")) {
+  if (name.startsWith("dist/assets/")) {
     return "runtimeAssets";
   }
   if (/^dist\/bundled\/[^/]+\/HOOK\.md$/.test(name)) {
@@ -65,7 +65,7 @@ export function standaloneResourceCategory(name, declaredPluginAssets = new Set(
   if (
     name === "package.json" ||
     name === "openclaw-install-owner.json" ||
-    /^dist\/(?:build-info\.json|cli-startup-metadata\.json|channel-catalog\.json|runtime-dependency-ownership\.json|\.buildstamp|\.runtime-postbuildstamp)$/.test(
+    /^dist\/(?:build-info\.json|cli-startup-metadata\.json|channel-catalog\.json|runtime-dependency-ownership\.json)$/.test(
       name,
     )
   ) {

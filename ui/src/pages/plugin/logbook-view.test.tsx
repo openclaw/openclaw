@@ -160,11 +160,14 @@ function pendingRefresh(title?: string) {
 
 describe("Logbook request ownership", () => {
   const disposals: Array<() => void> = [];
-  const createModel = (client: GatewayBrowserClient) =>
-    createRoot((dispose) => {
+  const createModel = (client: GatewayBrowserClient) => {
+    const model = createRoot((dispose) => {
       disposals.push(dispose);
       return Object.assign(createLogbook(client), { dispose });
     });
+    flush();
+    return model;
+  };
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 6, 4, 12));
@@ -175,6 +178,20 @@ describe("Logbook request ownership", () => {
       dispose();
     }
     vi.useRealTimers();
+  });
+
+  it("does not poll from a render discarded before settlement", () => {
+    const request = vi.fn(async () => null);
+    const dispose = createRoot((disposeRoot) => {
+      disposals.push(disposeRoot);
+      createLogbook(clientWithRequest(request));
+      return disposeRoot;
+    });
+    vi.advanceTimersByTime(30_000);
+    expect(request).not.toHaveBeenCalled();
+    dispose();
+    vi.advanceTimersByTime(30_000);
+    expect(request).not.toHaveBeenCalled();
   });
 
   it.each(["poll", "analysis", "queued analysis", "disposed"] as const)(

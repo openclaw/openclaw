@@ -43,6 +43,137 @@ new directory taxonomy.
 | Commits         | `git add <files...>` then `git commit -m "<message>"`                          | Stage only the intended files for each commit.                                                                      |
 | Remote proof    | `node scripts/crabbox-wrapper.mjs ...`                                         | Use when the current host lacks the required isolation, OS, device, or capacity; sync each run and reuse the lease. |
 
+## Exact memory search benchmark
+
+Use `scripts/bench-memory-search.mjs` against a disposable PostgreSQL database
+with pgvector, pg_trgm, and unaccent installed. Set `PGMEMSEARCH_CONNECTION`,
+`PGMEMSEARCH_OUT` (a new directory), and `PGMEMSEARCH_CHUNKS` to 20000 or 50000;
+run it through `node --import ./scripts/tsx.mjs`. The deterministic corpus needs
+no embedding provider. `--help` lists all inputs.
+
+The benchmark interleaves 100 baseline/candidate pairs after five warmups for
+vector, keyword, and hybrid retrieval. It captures every search statement,
+EXPLAIN ANALYZE/BUFFERS, exact result hashes, p50/p95, and five paired blocks.
+The candidate orders by the selected distance; the baseline repeats the bound
+cosine expression. `PGMEMSEARCH_SOURCE_MODE` identifies which SQL shape the
+checkout produces, so that arm executes unchanged. Eligibility, ranking, and
+limits stay fixed. Compare the block deltas and spread at both corpus sizes;
+unchanged hashes and statement counts are required before accepting a speedup.
+
+Run `scripts/bench-memory-search-sqlite.mjs` with a separate fresh output
+directory and the same chunk count for the production sqlite-vec KNN control.
+Both benchmarks create synthetic state; stop and remove only their disposable
+database state after collecting results.
+
+## Control UI warm interactions
+
+Build with `pnpm ui:build`, then collect the production renderer's desktop and
+mobile interactions against the synthetic Gateway:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/bench-control-ui-interactions.ts --trace
+```
+
+The report links each asserted step to its screenshot, explicit-mark trace,
+source-mapped CPU profile, and interval RPC counts. It covers 1,000 sessions,
+two 400-message transcripts, 1,000 models, and 500 Cron jobs. Sessions retains
+its supported pagination; text search uses the command palette, not the sidebar.
+Navigation setup is outside the measured interval. Native clocks and animations
+remain enabled; profiling overhead is included and no live provider is called.
+Cron search pastes one complete query so both builds perform the same Gateway
+request; model and session searches use sequential key input. The separate
+`cron-search-typing` scenario exposes burst-input request coalescing; compare its
+request counts before interpreting latency differences as equal work.
+
+Compare saved production builds serially with at least ten interleaved pairs:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/bench-control-ui-interactions.ts \
+  --bundle-dir <baseline> --compare-bundle-dir <candidate> --pairs 10 \
+  --steps model-picker-open-search
+```
+
+Use `--viewport desktop` or `mobile` to narrow a diagnosis. Comparisons omit
+profiling and report median, p95, and min–max; every cell over 20% worse is marked
+for review. These are report-only measurements, not timing gates. Wall time is
+automation-to-assertion time, not INP. Keep failed attempts alongside successful
+captures and compare only runs with the same fixture, viewport, and collection mode.
+
+## Control UI request waterfalls
+
+The production-bundle cold-load harness can record usable-screen readiness,
+Gateway request/reply times, exact duplicate method/parameter sets, overlapping
+identical requests, resource timing, and renderer CPU counters. It reuses the
+team-scale synthetic Gateway; these are renderer/mock measurements, not real
+Gateway server timings.
+
+```sh
+NODE_DISABLE_COMPILE_CACHE=1 node --import ./scripts/tsx.mjs scripts/bench-control-ui-cold-load.ts \
+  --bundle-dir <built-control-ui> --first-load --runs 1 --face chat --untraced \
+  --critical-path --session-switch --thread-cpu-time --latency-ms 0 --frame-gap-ms 0 \
+  --output <proof-dir>
+```
+
+Use `--boot-route new` without `--session-switch` for New Session. The default
+first-navigation order is Sessions, Settings (Appearance), Cron, Agents. Repeat
+`--critical-path-route <name>` to select an order or isolate a single destination.
+The harness reloads and settles the boot document before each destination, so
+earlier pages cannot warm a later page's domain owner. With `--first-load`, it
+first unloads to `about:blank`, clears all measured-origin storage and the browser
+HTTP cache over its existing CDP session, and clears session storage on an empty
+same-origin preparation document. That document seeds only the existing mock's
+build identity; no application code runs there. These resets also run before
+each sample. Cold here means fresh application owners, persistent application
+storage, and HTTP cache; the Chromium process, V8 code caches, and OS caches remain
+warm. Navigation starts after authoritative boot RPCs settle. The harness uses
+existing navigation links and the Settings keyboard shortcut; opening the Pages
+catalog is preparation outside the measured navigation interval. Each record has
+its own document time origin.
+
+For ten serial interleaved cold pairs in one process, add
+`--compare-bundle-dir <candidate-control-ui> --runs 20`. Two or three bundle slots
+are supported and every cycle must be complete. Use a second independent copy of
+the baseline bundle as the comparison for an A/A control. The synthetic server,
+fixture, and init scripts are shared; each measured document's owners and storage
+are reset. `--gateway-url` remains restricted to one first-load sample without
+bundle comparison, so real server-cache lifecycle remains externally controlled.
+`--warm-reload` cannot be combined with `--first-load`; the existing persisted
+warm-snapshot comparison path remains separate.
+
+For the 100 ms RTT / 10 Mbps profile, replace `--latency-ms 0` with
+`--latency-ms 100 --network-latency-ms 100 --download-kbps 10000` and add
+`--cold-http-cache`. HTTP/CDP throttling does not affect the synthetic WebSocket,
+so critical-path mode also applies the explicit RPC reply floor and serializes
+received frame bytes at the selected download rate. HTTP and WebSocket traffic
+use separate simulated pipes. The floor includes no real server work, and
+serialized Gateway events may add their own fixture delay.
+
+`run-1.critical-path.json` records document-clock start/readiness/capture times,
+RPCs (including requests already in flight at interaction start), duplicate
+groups, resource timings, and task/script/layout/style CPU milliseconds.
+It also records compilation, DevTools command, other-task, and total thread CPU
+counters when Chromium exposes them. Add `--cpu-profile` to save each selected
+destination's `run-1.<route>.cpuprofile` and `run-1.<route>.trace.json` for attribution.
+Profile base and candidate in separate invocations; bundle comparison accepts
+only unprofiled runs.
+Readiness is the first animation frame with visible transcript and enabled
+composer (Chat), enabled composer (New Session), populated usable inventory
+(Sessions/Cron/Agents), or visible Appearance controls and Settings search.
+The record continues through 750 ms of RPC idle to retain secondary work; that
+drain contributes to CPU totals but never to the readiness time. Use
+`--thread-cpu-time` to exclude renderer descheduling from those totals on a loaded
+host. These are
+renderer-frame readiness measurements, not INP or proof that pixels reached a
+physical display. Each destination also saves a synthetic screenshot.
+
+Run ten serial interleaved base/head pairs per profile with identical fixture
+options and report median, p95, min/max, RPC counts, and duplicate groups. Record
+an A/A control on a loaded host; if that control exceeds the timing acceptance
+band, use twenty interleaved pairs' CPU counters and structural request counts
+for attribution. Keep traced/profiling captures separate from untraced timing
+runs, and inspect request/chunk initiation against owner code before claiming
+a causal waterfall: adjacent timestamps alone do not establish a dependency.
+
 ## Control UI development benchmark
 
 Measure CLI-to-listening readiness without a browser or source edits:
@@ -79,29 +210,39 @@ the Vite config resolves this setting before Chokidar selects its native backend
 
 ## Formatting and lint selection
 
-`lib/dev-tool.mts` selects the pinned Bun fork for local formatting, with an
-oxfmt fallback, and oxlint for linting. CI formatting still gates on oxfmt and
-checks Bun parity. See the
+`lib/dev-tool.mts` selects the pinned Bun fork for local formatting and linting,
+with oxfmt and oxlint fallbacks. CI gates on oxfmt and oxlint and checks Bun
+parity in the same jobs. See the
 [local development tools reference](https://docs.openclaw.ai/reference/test/local#openclaw-bun-fork)
 for overrides, staging, and benchmark details. On a clean AWS `c7a.8xlarge`,
 three interleaved runs measured `pnpm format` at 0.62 s with Bun versus 1.41 s
 with oxfmt, and `pnpm format:check` at 0.62 s versus 1.38 s. The loaded Mac
 sanity run measured 15.65 s versus 14.74 s for writes and 14.31 s versus 16.40 s
-for checks; the write gain is not universal. `DEFAULT_LINT_TOOL` waits for upstream commit
-`b39aa848` and diagnostic parity. Bun receives the repository's existing
-configuration; no separate formatter configuration is maintained.
+for checks; the write gain is not universal. An earlier native comparison on
+the same AWS host measured S3 (`1.4.4-canary.1+ef37c31de`) at 23.3 s versus
+oxlint 1.87.0 at 143.3 s summed across core, scripts, extensions, and UI:
+6.15× faster at default threads, with no missing or extra diagnostics.
+These native timings exclude wrapper preparation.
+One loaded M3 Ultra Mac pair with S3 and oxlint 1.88.0 reported identical 243
+diagnostics: whole `pnpm lint --format=json` times were 635.0 s for Bun and
+912.7 s for oxlint, while summed native lint times were 1,037.8 s and 819.6 s.
+The runs held the shared build lock, but background load reached 86 and the
+first oxlint run generated declarations reused by Bun. This confirms parity,
+not a Mac lint-speed gain; the oxlint override remains useful.
+Bun receives the repository's existing configuration; no separate configuration
+is maintained.
 
-| Caller                                                                                                                                | Selection and reason                                                                                                              |
-| ------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `format`, `format:check`, `format:fix`, `format:diff`, `format:all`                                                                   | `run-format.mts` uses the selector. In CI, checks compare oxfmt and Bun on identical arguments and require oxfmt success.         |
-| `check.mts`, `check-changed.mts`, `ci-check-plan.mts`, `ci.yml`                                                                       | Consume `format:check`, including CI parity, without another job or runner.                                                       |
-| `pre-commit/format-staged.sh`, `.pre-commit-config.yaml`                                                                              | `run-node-tool.sh` uses the selector when dependencies exist; index-only formatting and partial staging remain owned by the hook. |
-| Dependency-less `pre-commit/run-node-tool.sh` recovery                                                                                | Retains its verified tooling-owner oxfmt fallback so code-only checkouts can satisfy the CI gate without installing dependencies. |
-| `run-lint.mts` and `run-oxlint-shards.mts`                                                                                            | `run-oxlint.mts` selects the executable after existing scope/resource preparation; all shards honor the override.                 |
-| `format-docs.mts`                                                                                                                     | Retains oxfmt for the dedicated docs CI gate and temporary-copy checks.                                                           |
-| `lib/format-generated-module.mts`, `generate-prompt-snapshots.ts`, `lib/codex-app-server-protocol-source.ts`                          | Retain oxfmt so generated modules, snapshots, and protocol bytes match CI regeneration.                                           |
-| `generate-control-ui-validators.mts`, `plugin-sdk-shipped-surface.mts`, `database-worker-inventory.mjs`, `qa/render-maturity-docs.ts` | Retain the oxfmt API for reproducible generated-artifact gates, including explicit per-artifact options.                          |
-| `crabbox-hydrate.yml`                                                                                                                 | Only verifies the oxfmt dependency is installed for CI; does not invoke formatting.                                               |
+| Caller                                                                                                                                | Selection and reason                                                                                                                                                                                                                           |
+| ------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `format`, `format:check`, `format:fix`, `format:diff`, `format:all`                                                                   | `run-format.mts` uses the selector. In CI, checks compare oxfmt and Bun on identical arguments and require oxfmt success.                                                                                                                      |
+| `check.mts`, `check-changed.mts`, `ci-check-plan.mts`, `ci.yml`                                                                       | Consume `format:check`, including CI parity, without another job or runner.                                                                                                                                                                    |
+| `pre-commit/format-staged.sh`, `.pre-commit-config.yaml`                                                                              | `run-node-tool.sh` uses the selector when dependencies exist; index-only formatting and partial staging remain owned by the hook.                                                                                                              |
+| Dependency-less `pre-commit/run-node-tool.sh` recovery                                                                                | Retains its verified tooling-owner oxfmt fallback so code-only checkouts can satisfy the CI gate without installing dependencies.                                                                                                              |
+| `run-lint.mts` and `run-oxlint-shards.mts`                                                                                            | `run-oxlint.mts` selects the executable after existing scope/resource preparation; all local shards honor `OPENCLAW_LINT_TOOL`. CI compares full diagnostic multisets on identical prepared configs and targets, then requires oxlint success. |
+| `format-docs.mts`                                                                                                                     | Retains oxfmt for the dedicated docs CI gate and temporary-copy checks.                                                                                                                                                                        |
+| `lib/format-generated-module.mts`, `generate-prompt-snapshots.ts`, `lib/codex-app-server-protocol-source.ts`                          | Retain oxfmt so generated modules, snapshots, and protocol bytes match CI regeneration.                                                                                                                                                        |
+| `generate-control-ui-validators.mts`, `plugin-sdk-shipped-surface.mts`, `database-worker-inventory.mjs`, `qa/render-maturity-docs.ts` | Retain the oxfmt API for reproducible generated-artifact gates, including explicit per-artifact options.                                                                                                                                       |
+| `crabbox-hydrate.yml`                                                                                                                 | Only verifies the oxfmt dependency is installed for CI; does not invoke formatting.                                                                                                                                                            |
 
 There is no lint-staged formatter configuration; staged-file formatting belongs
 to the hooks above. References in configuration, test fixtures, and scope
@@ -136,6 +277,26 @@ it. The complete semantic program is preserved on cache misses.
 
 ## Maintenance Rules
 
+Fixed validators are emitted from their canonical schemas. Gateway, Control UI,
+Codex, and fixed first-party generators share the standalone TypeBox emitter in
+`lib/typebox-standalone.mts`; it binds explicit static captures and rejects
+unsupported ones. Lobster uses the Ajv standalone emitter to preserve its
+dependency-owned error contract.
+
+| Schemas                                                     | Regenerate                                                         |
+| ----------------------------------------------------------- | ------------------------------------------------------------------ |
+| Gateway protocol                                            | `pnpm gateway:validators:gen`                                      |
+| Control UI protocol                                         | `pnpm ui:validators:gen`                                           |
+| Codex app-server protocol                                   | `pnpm codex-app-server:validators:gen`                             |
+| Model registry, theme, TypeSafe, and computer-use contracts | `pnpm static:validators:gen`                                       |
+| Lobster fixed payload/envelope contracts                    | `pnpm lobster:validators:gen --package-dir <pnpm-patch-directory>` |
+
+Run `pnpm validators:check` after schema changes to verify the committed
+validators are current. CI runs this freshness check alongside the normal build.
+The Lobster generator writes only inside an explicit `pnpm patch` edit directory;
+after regeneration, run `pnpm patch-commit <directory>` to refresh the dependency
+patch. Its check command reads the installed patched schemas without modifying them.
+
 - Read `scripts/AGENTS.md` before changing scripts.
 - Keep package scripts, generators, generated-artifact checks, docs references,
   and workflow references aligned when touching a script path.
@@ -144,3 +305,7 @@ it. The complete semantic program is preserved on cache misses.
   behavior.
 
 See also [Scripts](https://docs.openclaw.ai/help/scripts) for public-facing script guidance.
+
+### Dynamic validator benchmark
+
+`node --import ./scripts/tsx.mjs scripts/bench-dynamic-validators.mts <jit|aot> [iterations] [warmup] [mcp|plugin|llm|llm-coerce]` measures the actual validation owners. Compare five interleaved fresh baseline/candidate processes per fixture; import/setup and warm CPU/wall costs are reported separately.

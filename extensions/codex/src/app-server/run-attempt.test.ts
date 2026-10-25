@@ -53,6 +53,7 @@ import {
   shouldEnableCodexAppServerNativeToolSurface,
 } from "./dynamic-tool-build.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
+import { flattenSpecsWithNamespace } from "./dynamic-tools.test-support.js";
 import * as elicitationBridge from "./elicitation-bridge.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
 import { setCodexTestToolFactory } from "./host-capability.test-support.js";
@@ -67,6 +68,8 @@ import { codexApprovalTimeoutText } from "./plugin-approval-roundtrip.js";
 import {
   appInfo,
   appSummary,
+  codexPluginConfig,
+  curatedPlugin,
   pluginDetail,
   pluginInstalled,
   pluginList,
@@ -76,7 +79,6 @@ import { buildCodexPluginThreadConfig } from "./plugin-thread-config.js";
 import {
   flattenCodexDynamicToolFunctions,
   isJsonObject,
-  type CodexDynamicToolFunctionSpec,
   type CodexDynamicToolSpec,
   type CodexThreadStartParams,
   type CodexThreadResumeParams,
@@ -394,16 +396,6 @@ async function startThreadWithDisabledNativeSurfaceForTest(
 type RuntimeDynamicToolForTest = Parameters<
   typeof createCodexDynamicToolBridge
 >[0]["tools"][number];
-
-function flattenSpecsWithNamespace(
-  specs: readonly CodexDynamicToolSpec[],
-): Array<CodexDynamicToolFunctionSpec & { namespace?: string }> {
-  return specs.flatMap((spec) =>
-    spec.type === "namespace"
-      ? spec.tools.map((tool) => ({ ...tool, namespace: spec.name }))
-      : [spec],
-  );
-}
 
 function specNames(specs: readonly CodexDynamicToolSpec[]): string[] {
   return flattenCodexDynamicToolFunctions(specs).map((tool) => tool.name);
@@ -1541,15 +1533,9 @@ describe("runCodexAppServerAttempt", () => {
       {
         pluginConfig: {
           appServer: { mode: "yolo" },
-          codexPlugins: {
-            enabled: true,
-            plugins: {
-              "google-calendar": {
-                marketplaceName: "openai-curated",
-                pluginName: "google-calendar",
-              },
-            },
-          },
+          ...codexPluginConfig({
+            plugins: { "google-calendar": curatedPlugin("google-calendar") },
+          }),
         },
         developerInstructions: params.extraSystemPrompt,
       },

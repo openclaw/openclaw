@@ -61,7 +61,6 @@ export type PlainTextToolCallStreamNormalizerOptions = {
     allowPromotion: boolean;
     message: unknown;
     preserveEmptyTextBlocks?: boolean;
-    reason: unknown;
   }): PlainTextToolCallMessageNormalization;
   /** Stop after the first normalized done event when the wrapped provider has completed. */
   stopAfterDone?: boolean;
@@ -551,7 +550,6 @@ export async function* normalizePlainTextToolCallStreamEvents(
       allowPromotion: false,
       message: value,
       preserveEmptyTextBlocks,
-      reason: "error",
     });
     return normalized?.kind === "scrubbed" ? normalized : undefined;
   };
@@ -1168,7 +1166,6 @@ export async function* normalizePlainTextToolCallStreamEvents(
           allowPromotion: record.reason === "stop" || record.reason === "toolUse",
           message: record.message,
           preserveEmptyTextBlocks: preserveTerminalContentIndexes,
-          reason: record.reason,
         });
         const forcedProjection = forceScrubTerminal
           ? scrubSnapshot(record.message, preserveTerminalContentIndexes, true)

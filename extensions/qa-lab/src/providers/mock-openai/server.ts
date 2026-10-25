@@ -29,6 +29,7 @@ import {
   isCanonicalCompactionRetryWriteResult,
   QA_COMPACTION_RETRY_FINAL_MARKER,
 } from "./mock-openai-assistant-text.js";
+import { planAutomationScenarioTurn } from "./mock-openai-automation-turns.js";
 import {
   type ResponsesInputItem,
   type StreamEvent,
@@ -119,9 +120,6 @@ import {
   extractEmbeddingInputTexts,
   buildDeterministicEmbedding,
 } from "./mock-openai-contracts.js";
-import { planCronBlockedOutcomeTurn } from "./mock-openai-cron-blocked-outcome.js";
-import { planCronFailureRepairTurn } from "./mock-openai-cron-failure-repair.js";
-import { planCronSendContinueTurn } from "./mock-openai-cron-send-continue.js";
 import {
   extractExactReplyDirective,
   extractExactMarkerDirective,
@@ -535,22 +533,14 @@ async function buildResponsesPayload(
   }
   const compactionRetryScenarioActive =
     scenarioState.compactionRetryActive || hasCompactionRetryMarker;
-  const cronFailureRepairTurn = planCronFailureRepairTurn(prompt, input);
-  if (cronFailureRepairTurn) {
-    return cronFailureRepairTurn;
-  }
-  const cronSendContinueTurn = planCronSendContinueTurn({
+  const automationScenarioTurn = planAutomationScenarioTurn({
     prompt,
     input,
     body: toolDeclarationBody,
     buildToolCall: buildToolCallEventsWithArgs,
   });
-  if (cronSendContinueTurn) {
-    return cronSendContinueTurn;
-  }
-  const cronBlockedOutcomeTurn = planCronBlockedOutcomeTurn(prompt);
-  if (cronBlockedOutcomeTurn) {
-    return cronBlockedOutcomeTurn;
+  if (automationScenarioTurn) {
+    return automationScenarioTurn;
   }
   // The queued followup carries the stalled prompt in transcript history, so
   // current-turn dispatch must win before the persistent recovery fixture.

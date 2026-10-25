@@ -15,6 +15,7 @@ const catalog = {
 };
 const params = {
   key: "agent:main:required",
+  sessionId: "physical-startup-session",
   agentId: "main",
   target,
   message: "Inspect workspace",
@@ -61,7 +62,7 @@ it("waits for server-started placement and sends exactly once without dispatch",
     "agents.list",
     "sessions.describe",
     "sessions.describe",
-    "sessions.send",
+    "chat.send",
   ]);
 });
 
@@ -85,7 +86,7 @@ it.each(["failed", "reclaimed", "local"])(
     expect(request.mock.calls.map(([method]) => method)).toEqual([
       "agents.list",
       "sessions.describe",
-      "sessions.send",
+      "chat.send",
     ]);
   },
 );
@@ -133,9 +134,10 @@ it("Stop fences a late active placement reply and retains the existing reclaim o
   ]);
 });
 
-it("restores a required target and reconciles uncertain delivery without a duplicate send", async () => {
+it("restores a required first input by resending its original key without placement changes", async () => {
   const recovery: SessionPlacementRecovery = {
     sessionKey: params.key,
+    sessionId: params.sessionId,
     agentId: params.agentId,
     target,
     message: params.message,
@@ -151,7 +153,7 @@ it("restores a required target and reconciles uncertain delivery without a dupli
     recovery.sessionKey,
   )!;
   expect(restored.target).toEqual(target);
-  const request = vi.fn(async (_method: string) => ({ messages: [] }));
+  const request = vi.fn(async (_method: string) => ({ runId: params.messageId, status: "ok" }));
   const result = await advanceSessionPlacementDraft({
     ...clientWith(request),
     recovery: restored,
@@ -162,8 +164,13 @@ it("restores a required target and reconciles uncertain delivery without a dupli
     setRecoveryPhase: vi.fn(),
     cleanupOnCancellation: () => false,
   });
-  expect(result).toMatchObject({ status: "paused", recovery: { reason: "unconfirmed", target } });
-  expect(request.mock.calls.map(([method]) => method)).toEqual(["chat.history"]);
+  expect(result).toEqual({ status: "started", messageId: params.messageId });
+  expect(request.mock.calls.map(([method]) => method)).toEqual(["chat.send"]);
+  expect(request).toHaveBeenCalledWith(
+    "chat.send",
+    expect.objectContaining({ idempotencyKey: params.messageId, message: params.message }),
+    expect.anything(),
+  );
 });
 
 it("retains an explicit native runtime while a required create is restored", () => {

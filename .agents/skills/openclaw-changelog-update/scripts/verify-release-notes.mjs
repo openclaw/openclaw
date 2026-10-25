@@ -105,6 +105,8 @@ Options:
   --refresh-github-snapshot
                         Ignore an existing exact-range snapshot and rebuild it.
   --main-ref <ref>      Canonical mainline used to replace backport PRs.
+  --release-branch <ref>
+                        Ref whose history must contain the generation target.
   --seed-ref <ref>      Use an existing release section as editorial input.
   --shipped-ref <tag>   Exclude PRs already recorded by this shipped tag; repeatable.
   --release-provenance <sha -> #PR[, #PR]>
@@ -128,6 +130,7 @@ export function parseArgs(argv) {
     manifestPath: undefined,
     githubSnapshotPath: undefined,
     mainRef: undefined,
+    releaseBranch: /** @type {string | undefined} */ (undefined),
     noGithubSnapshot: false,
     regularStableVersion: undefined,
     refreshGithubSnapshot: false,
@@ -152,6 +155,7 @@ export function parseArgs(argv) {
     ["--shipped-ref", "shippedRefs"],
     ["--github-snapshot", "githubSnapshotPath"],
     ["--main-ref", "mainRef"],
+    ["--release-branch", "releaseBranch"],
     ["--manifest", "manifestPath"],
     ["--regular-stable-version", "regularStableVersion"],
     ["--seed-ref", "seedRef"],
@@ -2700,6 +2704,11 @@ function main() {
     options.base = git(["merge-base", options.base, options.target]);
   }
   const rootDir = process.cwd();
+  if (options.releaseBranch && !gitIsAncestor(options.target, options.releaseBranch)) {
+    fail(
+      `release notes target ${options.target} is not reachable from canonical release branch ${options.releaseBranch}; generate notes from that branch's frozen tip`,
+    );
+  }
   const releaseSource = loadOrInitializeReleaseChangelog(
     rootDir,
     options.version,

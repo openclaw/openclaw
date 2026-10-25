@@ -228,6 +228,8 @@ Repeated failures with the same cause stay grouped into one incident across Gate
 
 After an in-place plugin replacement, the next script invocation refreshes its retained tool runtime before executing. It uses the current plugin hooks without restarting the Gateway or replaying a completed tool effect.
 
+For transient failures, a scheduler-authored repair may intentionally return `NO_REPLY` and finish silently without a WebChat error. Public messages do not gain that waiver by claiming cron provenance.
+
 <Note>
 Main-session system-event and script jobs may only use `delivery.failureDestination` when primary delivery mode is `webhook`. Agent-turn and isolated jobs accept it in all modes.
 </Note>
@@ -382,7 +384,7 @@ later Doctor runs do not overwrite edits or recreate a deleted migrated job.
 Use `automations show`, `runs`, `enable`, and `disable` to manage the jobs.
 Legacy `system heartbeat` controls apply only to converted/default jobs. See [Heartbeat migration](/gateway/heartbeat).
 
-The `cron.*` Gateway methods and protocol v4 remain compatible. The deprecated
+The `cron.*` Gateway methods remain compatible. The deprecated
 `--wake now|next-heartbeat` field remains accepted, but scheduled jobs execute
 their payload through ordinary session execution when the job is due. It does
 not add another wake or deferral step. Use the job's schedule to control timing.

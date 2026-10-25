@@ -670,3 +670,50 @@ it("keeps unrelated module preparation independent of captured dependency count"
   expect(populated).toBeLessThanOrEqual(empty + 1);
   expect(fs.readFileSync(foreign, "utf8")).toBe("export const value = 1;");
 });
+
+it("resolves captured package files without walking each source path", () => {
+  const fixture = fs.realpathSync(temp.make("plugin-capture-realpath-"));
+  const countSourceRealpaths = (fileCount: number) => {
+    const root = path.join(fixture, `plugin-${fileCount}`);
+    const lib = path.join(root, "lib", "nested");
+    fs.mkdirSync(lib, { recursive: true });
+    fs.writeFileSync(path.join(root, "index.js"), "exports.value = 1;");
+    for (let index = 0; index < fileCount; index++) {
+      fs.writeFileSync(path.join(lib, `file-${index}.js`), `exports.value = ${index};`);
+    }
+    const nativeRealpath = vi.spyOn(fs.realpathSync, "native");
+    const realpath = vi.spyOn(fs, "realpathSync");
+    const artifact = capturePluginGenerationArtifact(root);
+    cleanups.push(artifact.dispose);
+    const walked = realpath.mock.calls.filter(([filename]) =>
+      String(filename).startsWith(path.join(root, "lib")),
+    ).length;
+    realpath.mockRestore();
+    nativeRealpath.mockRestore();
+    if (fileCount > 0) {
+      const captured = artifact.resolve(path.join(lib, `file-${fileCount - 1}.js`));
+      expect(fs.readFileSync(captured, "utf8")).toBe(`exports.value = ${fileCount - 1};`);
+    }
+    return walked;
+  };
+  const empty = countSourceRealpaths(0);
+  const populated = countSourceRealpaths(24);
+  // Compare work growth: Windows realpathSync lstats every component of each path.
+  expect(populated).toBeLessThanOrEqual(empty + 1);
+});
+
+it("keeps canonical capture for linked directories inside the package", () => {
+  const root = fs.realpathSync(temp.make("plugin-capture-internal-link-"));
+  fs.mkdirSync(path.join(root, "lib"));
+  fs.writeFileSync(path.join(root, "lib", "value.js"), "exports.value = 7;");
+  fs.symlinkSync(path.join(root, "lib"), path.join(root, "alias"), "junction");
+  fs.writeFileSync(
+    path.join(root, "index.js"),
+    "exports.value = require('./alias/value.js').value;",
+  );
+  const artifact = capturePluginGenerationArtifact(root);
+  cleanups.push(artifact.dispose);
+  expect(createArtifactLoader(artifact)(artifact.resolve(path.join(root, "index.js")))).toEqual({
+    value: 7,
+  });
+});

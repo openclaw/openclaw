@@ -39,7 +39,7 @@ export function collectRequest(request: IncomingMessage, handle: (body: string) 
   });
 }
 
-export const choiceAnswer = (
+const choiceAnswer = (
   choice: string,
   probabilities: Record<string, number>,
   confidence: number,

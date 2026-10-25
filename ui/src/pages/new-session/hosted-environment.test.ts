@@ -1,9 +1,10 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { ModelCatalogEntry, ModelCatalogResult } from "../../api/types.ts";
 import { buildSelectedSessionCreateParams } from "./draft-create-params.ts";
 import { createRepositoryFixture } from "./draft-place-state.test-support.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
+import { createNewSessionRouteData } from "./location.test-support.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import { managedModelControls, controlQueries } from "./model-control-view-queries.test-support.ts";
 import { contextWith, renderControl, waitForModelControl } from "./model-control.test-support.ts";
@@ -152,13 +153,7 @@ it("retains the explicit API-key account through hosted selection and rejects a 
 });
 it("keeps terminal placement when a hosted draft changes to a same-agent catalog target", async () => {
   const folder = "/local/project";
-  const data: NewSessionRouteData = {
-    agentId: "main",
-    requestedAgentId: "main",
-    catalogId: "",
-    catalogLabel: "",
-    startTerminal: false,
-  };
+  const data: NewSessionRouteData = createNewSessionRouteData();
   const fixture = hostedRepository(data);
   const { state, request } = fixture;
   request.mockResolvedValue({
@@ -205,7 +200,12 @@ it("describes Auto using the eligible host runtime while a hosted workspace is s
   expect(f.place.hostedEnvironment).toBeDefined();
   await f.gateway.refreshCloudProfiles();
   const element = renderPlace(f);
-  expect(element.textContent).toContain("Chooses the first eligible connected device");
+  document.body.append(element);
+  onTestFinished(() => element.remove());
+  element.querySelector<HTMLButtonElement>("#new-session-where-trigger")!.click();
+  await vi.waitFor(() =>
+    expect(element.textContent).toContain("Chooses the first eligible connected device"),
+  );
   expect(element.textContent).not.toContain("Chooses the least-busy connected device");
   f.place.selectDevice("", true);
   expect(f.place.autoDevice).toBe(true);

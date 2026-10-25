@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SystemRunApprovalPlan } from "../infra/exec-approvals.js";
 import { decodeNodeInvokeParams } from "./invoke-payload.js";
@@ -64,7 +65,7 @@ const ENV_ALLOWLIST = new Set([
   "NO_COLOR",
   "TERM",
 ]);
-const CLEAR_ENV_ALLOWLIST = new Set([
+export const CLAUDE_NODE_CLEAR_ENV = new Set([
   "ANTHROPIC_API_KEY",
   "ANTHROPIC_API_KEY_OLD",
   "ANTHROPIC_API_TOKEN",
@@ -113,6 +114,7 @@ const ALLOWED_PARAMS = new Set([
   "cwd",
   "env",
   "clearEnv",
+  "nativeAuthOnly",
   "systemPrompt",
   "agentId",
   "sessionKey",
@@ -199,11 +201,7 @@ export function requestsClaudeNodeSkillRuntime(raw?: string | null): boolean {
   if (!raw || Buffer.byteLength(raw, "utf8") > MAX_REQUEST_BYTES) {
     return false;
   }
-  try {
-    return asRecord(JSON.parse(raw))?.skillRuntime === true;
-  } catch {
-    return false;
-  }
+  return safeParseJsonRecord(raw)?.skillRuntime === true;
 }
 
 /** Resource bytes use the negotiated duplex, never argv or node filesystem paths. */
@@ -222,6 +220,9 @@ export async function decodeClaudeCliNodeRunParams(raw?: string | null) {
   const argv = validateArgs(value.argv);
   if (value.skillRuntime !== undefined && value.skillRuntime !== true) {
     throw new Error("INVALID_REQUEST: skillRuntime must be true when supplied");
+  }
+  if (value.nativeAuthOnly !== undefined && value.nativeAuthOnly !== true) {
+    throw new Error("INVALID_REQUEST: nativeAuthOnly must be true when supplied");
   }
   const stdin = optionalBoundedString(value.stdin, "stdin", MAX_REQUEST_BYTES);
   const systemPrompt = optionalBoundedString(value.systemPrompt, "systemPrompt", MAX_REQUEST_BYTES);
@@ -265,13 +266,13 @@ export async function decodeClaudeCliNodeRunParams(raw?: string | null) {
   }
   let clearEnv: string[] | undefined;
   if (value.clearEnv !== undefined) {
-    if (!Array.isArray(value.clearEnv) || value.clearEnv.length > CLEAR_ENV_ALLOWLIST.size) {
+    if (!Array.isArray(value.clearEnv) || value.clearEnv.length > CLAUDE_NODE_CLEAR_ENV.size) {
       throw new Error("INVALID_REQUEST: clearEnv must be a bounded array");
     }
     clearEnv = [];
     for (const candidate of value.clearEnv) {
       const key = requireBoundedString(candidate, "clearEnv entry", MAX_ARG_BYTES);
-      if (!CLEAR_ENV_ALLOWLIST.has(key)) {
+      if (!CLAUDE_NODE_CLEAR_ENV.has(key)) {
         throw new Error(`INVALID_REQUEST: clearEnv key is not allowed: ${key}`);
       }
       if (!clearEnv.includes(key)) {
@@ -282,6 +283,7 @@ export async function decodeClaudeCliNodeRunParams(raw?: string | null) {
   return {
     argv,
     ...(value.skillRuntime === true ? { skillRuntime: true as const } : {}),
+    ...(value.nativeAuthOnly === true ? { nativeAuthOnly: true as const } : {}),
     ...(stdin !== undefined ? { stdin } : {}),
     ...(systemPrompt !== undefined ? { systemPrompt } : {}),
     ...(agentId ? { agentId } : {}),

@@ -11,10 +11,11 @@ import {
   LearnMoreLink,
 } from "../../components/solid/settings-ui.tsx";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
+import { registerRouteSubtitlesEnglish } from "../../i18n/locales/en-route-subtitles.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
-import { buildAgentContext } from "../../lib/agents/display.ts";
 import "../../styles/agents.css";
 import "../../styles/sidebar-markdown.css";
+import { buildAgentContext } from "../../lib/agents/display.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { ReasonedDisabledControl } from "../plugins/reasoned-disabled-control.tsx";
@@ -27,6 +28,8 @@ import { AgentSkills } from "./panels-skills.tsx";
 import { AgentChannels } from "./panels-status-files.tsx";
 import { AgentTools } from "./panels-tools-skills.tsx";
 import { AgentReadNotice, createAgentReadPending } from "./read-status.tsx";
+
+registerRouteSubtitlesEnglish();
 
 registerEnglishCatalog(registerSettingsEnglish);
 registerEnglishCatalog(registerPluginManagementEnglish);
@@ -150,18 +153,29 @@ export function Agents(props: AgentsProps) {
                   <Show when={agent().id} keyed>
                     {(id) => {
                       let label!: HTMLSpanElement;
+                      let announcement!: HTMLSpanElement;
                       return (
-                        <button
-                          type="button"
-                          class="btn btn--sm btn--ghost"
-                          onClick={(event) =>
-                            void handleCopyButton(event, id, t("agents.copyId"), { label })
-                          }
-                        >
-                          <span ref={(element) => (label = element)} data-copy-label>
-                            {t("agents.copyId")}
-                          </span>
-                        </button>
+                        <>
+                          <button
+                            type="button"
+                            class="btn btn--sm btn--ghost"
+                            onClick={(event) =>
+                              void handleCopyButton(event, id, t("agents.copyId"), {
+                                label,
+                                announcement,
+                              })
+                            }
+                          >
+                            <span ref={(element) => (label = element)} data-copy-label>
+                              {t("agents.copyId")}
+                            </span>
+                          </button>
+                          <span
+                            ref={(element) => (announcement = element)}
+                            class="sr-only"
+                            role="status"
+                          />
+                        </>
                       );
                     }}
                   </Show>

@@ -106,7 +106,6 @@ function makeReport(scenarios: QaSeedScenarioWithSource[], suite?: QaParitySuite
   return buildQaToolCoverageReport({
     scenarios,
     summary: suite,
-    generatedAt: "2026-05-10T00:00:00.000Z",
   });
 }
 

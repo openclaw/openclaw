@@ -1,4 +1,7 @@
-import { createContractToolTerminalObserver } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
+import {
+  buildContractReplyPayloads,
+  createContractToolTerminalObserver,
+} from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { afterEach, beforeEach } from "vitest";
 import { createNativeCommandItem } from "./event-projector-command.test-support.js";
 import {
@@ -19,6 +22,7 @@ import {
   mockCallArg,
   forCurrentTurn,
   readAttemptTerminal,
+  turnCompleted,
   type DiagnosticEventPayload,
 } from "./event-projector.test-harness.js";
 import { codexApprovalTimeoutText } from "./plugin-approval-roundtrip.js";
@@ -266,8 +270,100 @@ describe("CodexAppServerEventProjector native tool failure recovery", () => {
     ]);
   });
 
-  it("clears a declined pre-execution error after an unrelated action succeeds", async () => {
-    const projector = await createProjector();
+  it.each([true, false])(
+    "preserves an unanswered denial across a successful sibling (denialFirst=%s)",
+    async (denialFirst) => {
+      const params = await createParams();
+      const observe = createContractToolTerminalObserver(params.runId);
+      params.observeToolTerminal = observe;
+      const projector = await createProjector(params);
+      await notify(projector, "item/started", {
+        item: { ...nativeCommand, id: "denied", status: "inProgress", durationMs: null },
+      });
+      projector.recordDynamicToolCall({
+        callId: "sibling",
+        tool: "read",
+        arguments: { path: "README.md" },
+      });
+      const settleDenial = () =>
+        notify(projector, "item/completed", {
+          item: { ...nativeCommand, id: "denied", status: "declined", durationMs: 1 },
+        });
+      const settleRead = () =>
+        projector.recordDynamicToolResult({
+          callId: "sibling",
+          tool: "read",
+          success: true,
+          terminalResolution: observe({
+            toolCallId: "sibling",
+            toolName: "read",
+            arguments: { path: "README.md" },
+            outcome: "success",
+          }),
+          contentItems: [{ type: "inputText", text: "File contents." }],
+        });
+      if (denialFirst) {
+        await settleDenial();
+        settleRead();
+      } else {
+        settleRead();
+        await settleDenial();
+      }
+      await projector.handleNotification(turnCompleted());
+      const attempt = projector.buildResult(buildEmptyToolTelemetry());
+      expect(attempt).toMatchObject({
+        assistantTexts: [],
+        currentAttemptAssistant: undefined,
+        agentHarnessResultClassification: "empty",
+        lastToolError: {
+          toolName: "bash",
+          error: "codex native tool blocked",
+          executionStarted: false,
+          mutatingAction: false,
+        },
+        replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+      });
+      expect(attempt.toolMetas).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ toolName: "bash", isError: true }),
+          expect.objectContaining({ toolName: "read", isError: false }),
+        ]),
+      );
+      expect(
+        attempt.messagesSnapshot.filter((message) => message.role === "toolResult"),
+      ).toMatchObject(
+        denialFirst
+          ? [
+              { toolCallId: "denied", isError: true },
+              { toolCallId: "sibling", isError: false },
+            ]
+          : [
+              { toolCallId: "sibling", isError: false },
+              { toolCallId: "denied", isError: true },
+            ],
+      );
+      expect(
+        buildContractReplyPayloads({
+          attempt,
+          runParams: {
+            sessionId: params.sessionId,
+            runId: params.runId,
+            workspaceDir: params.workspaceDir,
+            prompt: params.prompt,
+            timeoutMs: params.timeoutMs,
+            config: params.config,
+            provider: params.provider,
+            model: params.modelId,
+          },
+        }),
+      ).toEqual([{ text: "⚠️ Bash blocked", isError: true }]);
+    },
+  );
+
+  it("clears a declined pre-execution error after the same tool succeeds", async () => {
+    const params = await createParams();
+    params.observeToolTerminal = createContractToolTerminalObserver(params.runId);
+    const projector = await createProjector(params);
 
     await notify(projector, "item/completed", {
       item: { ...nativeCommand, id: "cmd-declined", status: "declined", durationMs: 1 },
@@ -276,6 +372,7 @@ describe("CodexAppServerEventProjector native tool failure recovery", () => {
       toolName: "bash",
       meta: "run tests (workspace)",
       error: "codex native tool blocked",
+      executionStarted: false,
       mutatingAction: false,
     });
 

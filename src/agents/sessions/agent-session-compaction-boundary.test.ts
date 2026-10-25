@@ -9,7 +9,6 @@ import { readTranscriptStorageRows } from "../../config/sessions/session-accesso
 import type { CompactionProvider } from "../../plugins/compaction-provider.js";
 import { requireActivePluginRegistry } from "../../plugins/runtime.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { setCompactionSafeguardRuntime } from "../agent-hooks/compaction-safeguard-runtime.js";
 import compactionSafeguardExtension from "../agent-hooks/compaction-safeguard.js";
 import {
@@ -20,14 +19,12 @@ import {
 } from "./agent-session-loop-correctness.test-support.js";
 import { createResourceLoader } from "./agent-session-loop-resource-loader.test-support.js";
 import { SessionManager } from "./session-manager.js";
+import { cleanupTrackedSessionState } from "./session-state-cleanup.test-support.js";
 import { SettingsManager } from "./settings-manager.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
-    for (const stateDir of tempDirs.dirs) {
-      await cleanupSessionStateForTest({ stateDir });
-    }
-    cleanup();
+    await cleanupTrackedSessionState(tempDirs.dirs, cleanup);
   }),
 );
 registerAgentSessionLoopTestLifecycle();

@@ -27,7 +27,6 @@ import {
 } from "./substrate/topology.js";
 
 type AdapterFactory = NonNullable<QaRunnerCliRegistration["adapterFactory"]>;
-type FactoryContext = Parameters<AdapterFactory["create"]>[0];
 type AdapterDefinition = Awaited<ReturnType<AdapterFactory["create"]>>;
 
 const MATRIX_SHARED_FLOW_TOPOLOGY = {
@@ -69,7 +68,6 @@ export async function waitForMatrixQaObserverEvent(params: {
   observer: MatrixQaRoomObserver;
   predicate: (event: MatrixQaObservedEvent) => boolean;
   roomId: string;
-  timeoutMs: number;
 }): Promise<MatrixQaRoomEventWaitResult> {
   for (;;) {
     const expectedInterruptionAtStart = params.isExpectedInterruption();
@@ -77,7 +75,7 @@ export async function waitForMatrixQaObserverEvent(params: {
       return await params.observer.waitForOptionalRoomEvent({
         predicate: params.predicate,
         roomId: params.roomId,
-        timeoutMs: params.timeoutMs,
+        timeoutMs: 1_000,
       });
     } catch (error) {
       // A poll spanning the entire restart may fail visibly; rerun that scenario.
@@ -134,7 +132,7 @@ function resolveMatrixQaAdapterRoom(
 }
 
 export async function createMatrixQaTransportAdapter(
-  context: FactoryContext,
+  context: Parameters<AdapterFactory["create"]>[0],
 ): Promise<AdapterDefinition> {
   const options = context.adapterOptions ?? {};
   const repoRoot = options.repoRoot?.trim() || process.cwd();
@@ -222,7 +220,6 @@ export async function createMatrixQaTransportAdapter(
           observer,
           predicate: (event) => event.sender === provisioning.sut.userId && Boolean(event.body),
           roomId,
-          timeoutMs: 1_000,
         });
         if (!observed.matched) {
           continue;

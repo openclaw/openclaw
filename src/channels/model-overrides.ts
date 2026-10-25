@@ -44,14 +44,12 @@ function resolveProviderEntry(
   modelByChannel: ChannelModelByChannelConfig | undefined,
   channel: string,
 ): Record<string, string> | undefined {
-  const normalized =
-    normalizeMessageChannel(channel) ?? normalizeOptionalLowercaseString(channel) ?? "";
+  const normalized = normalizeMessageChannel(channel) ?? "";
   return (
     modelByChannel?.[normalized] ??
     modelByChannel?.[
       Object.keys(modelByChannel ?? {}).find((key) => {
-        const normalizedKey =
-          normalizeMessageChannel(key) ?? normalizeOptionalLowercaseString(key) ?? "";
+        const normalizedKey = normalizeMessageChannel(key) ?? "";
         return normalizedKey === normalized;
       }) ?? ""
     ]
@@ -64,9 +62,7 @@ function buildChannelCandidates(
     "channel" | "groupId" | "groupChatType" | "groupChannel" | "groupSubject" | "parentSessionKey"
   >,
 ): { keys: string[]; parentKeys: string[] } {
-  const normalizedChannel =
-    normalizeMessageChannel(params.channel ?? "") ??
-    normalizeOptionalLowercaseString(params.channel);
+  const normalizedChannel = normalizeMessageChannel(params.channel);
   const groupId = normalizeOptionalString(params.groupId);
   const rawParentConversation = parseRawSessionConversationRef(params.parentSessionKey);
   const channelPlugin = normalizedChannel ? getChannelPlugin(normalizedChannel) : undefined;
@@ -166,8 +162,7 @@ export function resolveChannelModelOverride(
     const model = normalizeOptionalString(match.entry ?? match.wildcardEntry);
     return model
       ? {
-          channel:
-            normalizeMessageChannel(channel) ?? normalizeOptionalLowercaseString(channel) ?? "",
+          channel: normalizeMessageChannel(channel) ?? "",
           model,
           matchKey: match.matchKey,
           matchSource: match.matchSource,

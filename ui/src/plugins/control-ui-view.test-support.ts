@@ -7,6 +7,17 @@ import type {
 } from "../../../src/plugin-sdk/control-ui.js";
 import type { ApplicationContext } from "../app/context.ts";
 
+export function createInertViewHost(signal: AbortSignal): ControlUiHost {
+  return {
+    signal,
+    sessions: {},
+    agents: {},
+    navigation: {},
+    ui: {},
+    components: {},
+  } as unknown as ControlUiHost;
+}
+
 type Surface = "workspace" | "composer";
 type ViewContext<S extends Surface> = ControlUiViewContext<ControlUiSurfaceProps[S]>;
 

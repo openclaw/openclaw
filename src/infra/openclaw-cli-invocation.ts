@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   getEmbeddedStandaloneRuntimeRoot,
   readStandaloneRuntimeManifest,
@@ -9,6 +9,7 @@ import {
 } from "../../cli-invocation.mjs";
 import { isBunRuntime } from "../daemon/runtime-binary.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
+import { resolveExternalPackageRuntimeEntrypointUrl } from "./runtime-process-url.js";
 import { resolveRuntimeArgs, resolveRuntimeWorkerArgv } from "./runtime-worker-url.js";
 import { tryProcessCwd } from "./safe-cwd.js";
 
@@ -28,10 +29,6 @@ export type OpenClawCliInvocation = Readonly<{
   cwd: string;
   env?: Record<string, string>;
 }>;
-
-function resolveTsxImport(packageRoot: string): string {
-  return pathToFileURL(requireFromHere.resolve("tsx", { paths: [packageRoot] })).href;
-}
 
 /** Keep parent runtime flags, pin its known TSX preload, and leave debugger ownership behind. */
 export function filterOpenClawChildExecArgv(
@@ -53,7 +50,7 @@ export function filterOpenClawChildExecArgv(
     const bareTsx = arg === "tsx" && execArgv[index - 1] === "--import";
     filtered.push(
       sourceRoot && (bareTsx || arg === "--import=tsx")
-        ? `${bareTsx ? "" : "--import="}${resolveTsxImport(sourceRoot)}`
+        ? `${bareTsx ? "" : "--import="}${pathToFileURL(requireFromHere.resolve("tsx", { paths: [sourceRoot] })).href}`
         : arg,
     );
   }
@@ -61,18 +58,22 @@ export function filterOpenClawChildExecArgv(
 }
 
 function buildPackageRootCliArgs(packageRoot: string, execPath: string): string[] {
-  const sourceEntry = path.join(packageRoot, "src", "entry.ts");
+  const sourceEntryUrl = resolveExternalPackageRuntimeEntrypointUrl("sourceCli", packageRoot);
+  const sourceEntry = fileURLToPath(sourceEntryUrl);
   if (fs.existsSync(sourceEntry)) {
     try {
       return filterOpenClawChildExecArgv(
-        resolveRuntimeWorkerArgv(pathToFileURL(sourceEntry), execPath),
+        resolveRuntimeWorkerArgv(sourceEntryUrl, execPath),
         packageRoot,
       );
     } catch {
       // A checkout without TSX can still use its built package launcher.
     }
   }
-  return [...resolveRuntimeArgs(execPath), path.join(packageRoot, "openclaw.mjs")];
+  return [
+    ...resolveRuntimeArgs(execPath),
+    fileURLToPath(resolveExternalPackageRuntimeEntrypointUrl("cliLauncher", packageRoot)),
+  ];
 }
 
 export function resolveOpenClawCliEntryPath(argv1: string | undefined): string | undefined {
@@ -92,16 +93,11 @@ export function resolveOpenClawCliEntryPath(argv1: string | undefined): string |
 export function resolveCurrentOpenClawCliInvocation(
   args: readonly string[],
   options: {
-    argv1?: string;
-    cwd?: string;
-    execArgv?: readonly string[];
-    execPath?: string;
     moduleUrl?: string;
   } = {},
 ): OpenClawCliInvocation {
-  const execPath = options.execPath ?? process.execPath;
-  const embeddedRoot =
-    execPath === process.execPath ? getEmbeddedStandaloneRuntimeRoot() : undefined;
+  const execPath = process.execPath;
+  const embeddedRoot = getEmbeddedStandaloneRuntimeRoot();
   const manifest = embeddedRoot ? undefined : readStandaloneRuntimeManifest(execPath);
   const standaloneRoot =
     embeddedRoot ??
@@ -111,8 +107,8 @@ export function resolveCurrentOpenClawCliInvocation(
   }
 
   // Only loose installations need entry discovery and source-loader preparation.
-  const entry = resolveOpenClawCliEntryPath(options.argv1 ?? process.argv[1]);
-  const cwd = options.cwd ?? tryProcessCwd();
+  const entry = resolveOpenClawCliEntryPath(process.argv[1]);
+  const cwd = tryProcessCwd();
   const entryPackageRoot = entry ? resolveOpenClawPackageRootSync({ argv1: entry }) : null;
   const packageRoot =
     entryPackageRoot ??
@@ -138,7 +134,7 @@ export function resolveCurrentOpenClawCliInvocation(
   const cliArgs = currentEntry
     ? [
         ...filterOpenClawChildExecArgv(
-          options.execArgv ?? process.execArgv,
+          process.execArgv,
           currentEntry === sourceEntry ? (packageRoot ?? undefined) : undefined,
         ),
         currentEntry,

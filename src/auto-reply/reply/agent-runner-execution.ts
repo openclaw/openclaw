@@ -16,6 +16,7 @@ import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-erro
 import { leaseMcpAppModelContextForSessionTurn } from "../../agents/mcp-ui-resource.js";
 import { createAgentPatchedSessionModelRunGuard } from "../../agents/session-model-auto-revert.js";
 import { captureAgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
+import { selectLiveRuntimeConfig } from "../../config/runtime-snapshot.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { prepareCronRunInference, type CronRunInference } from "../../cron/run-inference.js";
@@ -31,7 +32,10 @@ import { bindAgentRunTerminalWriteSettlement } from "../../infra/agent-run-termi
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { logSessionTurnCreated } from "../../logging/diagnostic.js";
-import { progressCardRefreshRunProjection } from "../../sessions/input-provenance.js";
+import {
+  isCronExecutionInputProvenance,
+  progressCardRefreshRunProjection,
+} from "../../sessions/input-provenance.js";
 import { markReplyOperationExecutionStarted } from "../../sessions/session-controller.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { notifyPreparedAgentRunStart } from "../agent-run-start.js";
@@ -69,7 +73,6 @@ import { buildReplyMediaContextParams } from "./agent-runner-media-context.js";
 import { createAgentTurnPresentation } from "./agent-runner-presentation.js";
 import { prepareReplySubagentContinuation } from "./agent-runner-subagent.js";
 import { createAgentTurnTimingTracker } from "./agent-runner-turn-timing.js";
-import { resolveQueuedReplyRuntimeConfig } from "./agent-runner-utils.js";
 import { shouldNotifyUserAboutCompaction } from "./compaction-notice.js";
 import { type CurrentTurnImages, resolveCurrentTurnImages } from "./current-turn-images.js";
 import type { FollowupRun } from "./queue.js";
@@ -109,7 +112,7 @@ async function executeAgentTurnInternalLoop(
   if (runnableRun !== params.followupRun.run) {
     params.followupRun.run = runnableRun;
   }
-  const runtimeConfig = resolveQueuedReplyRuntimeConfig(runnableRun.config);
+  const runtimeConfig = selectLiveRuntimeConfig(runnableRun.config);
   const effectiveRun =
     runtimeConfig === runnableRun.config
       ? runnableRun
@@ -155,6 +158,10 @@ async function executeAgentTurnInternalLoop(
       verboseLevel: params.resolvedVerboseLevel,
       isControlUiVisible: shouldSurfaceToControlUi,
       ...progressCardRefreshRunProjection(params.followupRun.run.inputProvenance),
+      // Scheduled checks must not replace foreground status; their authored results still publish.
+      ...(isCronExecutionInputProvenance(params.followupRun.run.inputProvenance)
+        ? { projectSessionActive: false, projectSessionLifecycle: false }
+        : {}),
       completionSource: params.completionSource,
       sessionEventDelivery: resolveReplySessionEventDelivery(params.opts, params.followupRun.run),
     });
@@ -612,7 +619,7 @@ async function executeAgentTurnOutcome(
           if (binding) {
             scheduledInference = await prepareCronRunInference({
               binding,
-              cfg: resolveQueuedReplyRuntimeConfig(executionParams.followupRun.run.config),
+              cfg: selectLiveRuntimeConfig(executionParams.followupRun.run.config),
               agentDir: executionParams.followupRun.run.agentDir,
             });
           }

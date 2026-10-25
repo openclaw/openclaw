@@ -13,12 +13,19 @@ import { captureControlUiE2eRendererStall } from "./control-ui-e2e-renderer-stal
 const CONTROL_UI_E2E_DIAGNOSTIC_RING_LIMIT = 200;
 const controlUiE2ePageDiagnostics = new WeakMap<Page, ControlUiE2eDiagnosticEvent[]>();
 const controlUiE2eUnhandledRejectionPages = new WeakSet<Page>();
-const controlUiE2eFailureFacts = new WeakMap<Page, Record<string, boolean | number | null>>();
+export type ControlUiE2eFailureFact =
+  | boolean
+  | number
+  | string
+  | null
+  | readonly ControlUiE2eFailureFact[]
+  | { readonly [key: string]: ControlUiE2eFailureFact };
+const controlUiE2eFailureFacts = new WeakMap<Page, Record<string, ControlUiE2eFailureFact>>();
 
-/** Callers supply fixed diagnostic keys and scalar facts, never user content or identifiers. */
+/** Callers bound and redact facts; keys/string values are fixed labels, never content or IDs. */
 export function recordControlUiE2eFailureFacts(
   page: Page,
-  facts: Record<string, boolean | number | null>,
+  facts: Record<string, ControlUiE2eFailureFact>,
 ): void {
   controlUiE2eFailureFacts.set(page, { ...controlUiE2eFailureFacts.get(page), ...facts });
 }

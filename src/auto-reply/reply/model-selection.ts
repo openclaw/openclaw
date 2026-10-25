@@ -272,9 +272,18 @@ export async function createModelSelectionState(params: {
     entry: SessionEntry | undefined,
     override: storedModelOverrides.StoredModelOverride | null,
   ) => {
+    // Configured child selections carry self-origin metadata, not legacy fallback residue.
+    // Require explicit stored fields; the fallback helper defaults missing fields to the origin.
+    const overrideProvider = normalizeOptionalString(entry?.providerOverride);
+    const overrideModel = normalizeOptionalString(entry?.modelOverride);
+    const selfOriginSelection =
+      Boolean(overrideProvider && overrideModel) &&
+      overrideProvider === normalizeOptionalString(entry?.modelOverrideFallbackOriginProvider) &&
+      overrideModel === normalizeOptionalString(entry?.modelOverrideFallbackOriginModel);
     const staleLegacyOpenAICodexAutoOverride =
       override?.source === "session" &&
       entry?.modelOverrideSource === "auto" &&
+      !selfOriginSelection &&
       normalizeProviderId(override.provider ?? "") === OPENAI_PROVIDER_ID &&
       normalizeProviderId(primaryProvider) === OPENAI_PROVIDER_ID &&
       primaryHarnessPolicy.runtime === "codex" &&

@@ -2,6 +2,7 @@
 import { createEffect, onSettled } from "solid-js";
 import { t } from "../../i18n/index.ts";
 import { formatDurationCompact } from "../../lib/format.ts";
+import { listen } from "../../lib/listener.ts";
 import { getCardStaleAgeMs } from "../../lib/workboard/card-alerts.ts";
 import { getCardSessionState, type CardSessionState } from "../../lib/workboard/session-state.ts";
 import type { WorkboardCard, WorkboardLifecycle } from "../../lib/workboard/types.ts";
@@ -64,7 +65,7 @@ export function SessionStatusBadge(props: { presentation: SessionStatusPresentat
     <>
       {props.presentation.visible ? (
         <span
-          class={`workboard-session-badge workboard-session-badge--${props.presentation.tone}`}
+          class={["workboard-session-badge", `workboard-session-badge--${props.presentation.tone}`]}
           title={props.presentation.title}
         >
           {props.presentation.label}
@@ -148,14 +149,14 @@ export function SessionStatus(props: {
         dismiss();
       }
     };
-    doc.addEventListener("scroll", scroll, true);
-    doc.addEventListener("pointerdown", outside, true);
-    doc.addEventListener("keydown", escape, true);
+    const stopScroll = listen(doc, "scroll", scroll, true);
+    const stopPointer = listen(doc, "pointerdown", outside, true);
+    const stopKey = listen(doc, "keydown", escape, true);
     return () => {
       dismiss();
-      doc.removeEventListener("scroll", scroll, true);
-      doc.removeEventListener("pointerdown", outside, true);
-      doc.removeEventListener("keydown", escape, true);
+      stopScroll();
+      stopPointer();
+      stopKey();
     };
   });
   return (

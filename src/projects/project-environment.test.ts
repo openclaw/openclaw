@@ -105,9 +105,11 @@ vi.mock("./project-checkout.js", () => ({
   resolveProjectCheckout: mocks.resolveCheckout,
   resolveProjectDirectory: async (directory: string) => directory,
 }));
+// mock-isolation: environment routing must not spawn Git against synthetic checkout paths.
 vi.mock("./project-clone-runtime.js", () => ({
   ProjectCloneError: class extends Error {},
   cloneProjectCheckout: mocks.clone,
+  configureProjectCheckoutMaintenance: vi.fn(),
   refreshProjectCheckout: mocks.refresh,
   ensureProjectCheckoutCommit: vi.fn(),
 }));

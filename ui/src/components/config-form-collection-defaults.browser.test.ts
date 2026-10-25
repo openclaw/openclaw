@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 // Control UI tests cover collection default provenance and editing behavior.
 import {
-  renderJsonTextareaFixture,
+  renderNodeFixture,
   renderArrayFixture,
   renderObjectFixture,
 } from "../test-helpers/config-form-fixtures.tsx";
@@ -23,7 +23,7 @@ describe("config form collection defaults", () => {
       default: { mode: "balanced" },
     };
 
-    renderJsonTextareaFixture(container, {
+    renderNodeFixture(container, {
       schema,
       value: { mode: "custom" },
       path: ["payload"],
@@ -41,7 +41,7 @@ describe("config form collection defaults", () => {
     expect(onPatch).toHaveBeenCalledWith(["payload"], undefined);
 
     onPatch.mockClear();
-    renderJsonTextareaFixture(container, {
+    renderNodeFixture(container, {
       schema,
       value: undefined,
       path: ["payload"],

@@ -15,8 +15,8 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { readConfigMachineStateWithMetadata } from "../test-utils/config-machine-state.js";
-import { acquireGatewayLock } from "./gateway-lock.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
+import { withGatewayLockHeld } from "./state-migrations.gateway-lock.test-support.js";
 import {
   detectLegacyNodeHostConfig,
   migrateLegacyNodeHostConfig,
@@ -133,24 +133,22 @@ describe("legacy node-host Doctor migration", () => {
     expect((await loadNodeHostConfig(env))?.gateway?.contextPath).toBeUndefined();
   });
 
+  it("retains malformed UTF-8 without importing replacement characters", async () => {
+    const { env, sourcePath, migrate } = await legacyFixture({ displayName: "utf8-marker" });
+    const bytes = await fsp.readFile(sourcePath);
+    bytes[bytes.indexOf("utf8-marker")] = 0xff;
+    await fsp.writeFile(sourcePath, bytes);
+    const result = await migrate();
+    expect(result.changes).toEqual([]);
+    expect(result.warningDisposition).toBe("recoverable");
+    expect(result.warnings.join("\n")).toContain("must be valid UTF-8");
+    expect(await fsp.readFile(sourcePath)).toEqual(bytes);
+    expect(readCanonicalRow(env)).toBeUndefined();
+  });
+
   it("requires exclusive state ownership", async () => {
     const { env, sourcePath, migrate } = await legacyFixture();
-    const gatewayLock = await acquireGatewayLock({
-      allowInTests: true,
-      env,
-      pollIntervalMs: 10,
-      port: 18_789,
-      timeoutMs: 100,
-    });
-    if (!gatewayLock) {
-      throw new Error("expected test Gateway lock");
-    }
-    let blocked: Awaited<ReturnType<typeof migrateLegacyNodeHostConfig>>;
-    try {
-      blocked = await migrate();
-    } finally {
-      await gatewayLock.release();
-    }
+    const blocked = await withGatewayLockHeld(env, 18_789, () => migrate());
     expect(blocked.warnings[0]).toContain("OpenClaw state database is busy");
     expect(readCanonicalRow(env)).toBeUndefined();
     expect(fs.existsSync(sourcePath)).toBe(true);

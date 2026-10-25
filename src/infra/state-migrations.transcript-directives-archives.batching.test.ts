@@ -5,7 +5,6 @@ import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { zstdCompressSync, zstdDecompressSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import * as archiveCompression from "../config/sessions/archive-compression.js";
 import { resolveSqliteTranscriptArchiveDirectory } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { runWithAgentDatabaseMaintenanceAuthority } from "../state/openclaw-agent-db-lease.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
@@ -226,7 +225,7 @@ describe("canonical transcript archive batch transactions", () => {
     expect(f.progress).toBe('{"phase":"complete"}');
   });
 
-  it("inspects compressed historical directives without whole-archive string decoding", async () => {
+  it("inspects compressed historical directives without rewriting the archive", async () => {
     using f = fixture(1);
     const content = JSON.stringify({
       type: "message",
@@ -241,9 +240,6 @@ describe("canonical transcript archive batch transactions", () => {
         "UPDATE session_transcript_archives SET archive_blob = ?, archive_sha256 = ?, encoding = 'zstd'",
       )
       .run(source, sha256(source));
-    vi.spyOn(archiveCompression, "decodeSessionArchiveBytes").mockImplementation(() => {
-      throw new RangeError("Cannot create a string longer than 0x1fffffe8 characters");
-    });
     await expect(f.needsMigration({ generation: "", sessionId: "" })).resolves.toBe(true);
     expect(f.blob("s00000")).toEqual(source);
     expect(f.progress).toBe("start");

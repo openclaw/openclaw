@@ -4,6 +4,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as doctorLegacy from "../commands/doctor/shared/legacy-config-issues.js";
 import * as channelPresence from "../plugins/channel-presence-policy.js";
+import * as pluginIndexState from "../plugins/installed-plugin-index-record-state.js";
 import * as manifestRegistry from "../plugins/manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -11,6 +12,7 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { createConfigIoContext } from "./io.context.js";
 import { createConfigIO } from "./io.factory.js";
 import { createConfigReadError } from "./io.invalid-config.js";
+import { createRecoveryConfigEnv } from "./io.observe-recovery.test-support.js";
 import { readBestEffortConfigSnapshot } from "./io.runtime.js";
 import {
   readConfigFileSnapshotFromContext as readSnapshot,
@@ -42,14 +44,7 @@ function fixture(
   return createConfigIoContext({
     pluginValidation: options.pluginValidation,
     configPath,
-    env: {
-      HOME: root,
-      USERPROFILE: root,
-      OPENCLAW_CONFIG_PATH: configPath,
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      OPENCLAW_STATE_DIR: path.join(root, "state"),
-      VITEST: "true",
-    },
+    env: createRecoveryConfigEnv(root, configPath, path.join(root, "state")),
     homedir: () => root,
     observe: false,
   });
@@ -197,6 +192,7 @@ it.each([
   async ({ config, mode, issue, legacy, spy }) => {
     const context = fixture(config, { pluginValidation: mode });
     const repair = spy();
+    const prepare = vi.spyOn(pluginIndexState, "preparePluginMetadataMachineStateAsync");
     const snapshot = await readSnapshot(context);
     expect(snapshot.valid).toBe(false);
     expect(snapshot.issues).toContainEqual(expect.objectContaining(issue));
@@ -206,6 +202,7 @@ it.each([
       expect(snapshot.sourceConfig.agents).toEqual(legacyAgents);
     }
     expect(repair).not.toHaveBeenCalled();
+    expect(prepare).not.toHaveBeenCalled();
   },
 );
 

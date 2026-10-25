@@ -1,8 +1,10 @@
 import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
+import { gatewayKernelLogs } from "./server-kernel.js";
 import type { GatewayServer } from "./server-public.js";
 import { createStartupTestState, gatewayStartupOptions } from "./server-startup.test-support.js";
 import * as workers from "./server-worker-environment-startup.js";
@@ -11,11 +13,11 @@ import { startClaimedGateway } from "./test-helpers.listener.js";
 // Prepare the cold module graph outside the real lock-wait proof.
 await import("./server-start.js");
 
-it.each([
+it.for([
   ["starts after a competing connection releases its recovery lock", "release"],
   ["fails clearly when the recovery lock outlasts the retry budget", "exhaust"],
   ["fails immediately for a non-lock recovery error", "fatal"],
-] as const)("%s", { timeout: 90_000 }, async (_name, mode) => {
+] as const)("%s", { timeout: 90_000 }, async ([_name, mode], { signal }) => {
   await using state = await createStartupTestState(`worker-recovery-${mode}`, {
     OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
   });
@@ -28,6 +30,15 @@ it.each([
   });
   const claim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
   const retryObserved = createDeferredCore<"retry">();
+  const ready = createDeferredCore();
+  const info = gatewayKernelLogs.log.info.bind(gatewayKernelLogs.log);
+  using readyLog = vi.spyOn(gatewayKernelLogs.log, "info");
+  readyLog.mockImplementation((message, meta) => {
+    info(message, meta);
+    if (message === "gateway ready") {
+      ready.resolve();
+    }
+  });
   const warnings: string[] = [];
   const failure = new Error("disk I/O error");
   let attempts = 0;
@@ -112,6 +123,8 @@ it.each([
         throw result.error;
       }
       await result.server.startupSettled;
+      // Recovery can outlive startup settlement; wait for traffic admission.
+      await withinTest(ready.promise, signal);
       expect((await fetch(`http://127.0.0.1:${claim.port}/readyz`)).status).toBe(200);
       expect(attempts).toBe(2);
       expect(warnings).toHaveLength(1);

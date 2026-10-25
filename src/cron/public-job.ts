@@ -34,5 +34,15 @@ export function toPublicCronJob(job: CronStoredJob): CronJob {
     ...(job.schedule.kind === "stream"
       ? { streamExecutionHost: job.streamSandbox ? ("sandbox" as const) : ("gateway" as const) }
       : {}),
+    // Names the stored kind without exposing the private envelope or the requester's arguments.
+    ...(job.pluginCommand
+      ? {
+          payloadSource: {
+            kind: "pluginCommand" as const,
+            pluginId: job.pluginCommand.pluginId,
+            command: job.pluginCommand.command,
+          },
+        }
+      : {}),
   };
 }

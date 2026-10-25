@@ -130,6 +130,7 @@ export function generatedManifest(planArtifact: Record<string, any>): Record<str
     sourceParentRunAttempt: 1,
     targetRef: "main",
     targetSha: TARGET_SHA,
+    validationInputs: { targetVersion: planArtifact.targetVersion },
     version: 3,
     workflowFullRef: "refs/heads/release-ci/tooling",
     workflowName: "Full Release Validation",

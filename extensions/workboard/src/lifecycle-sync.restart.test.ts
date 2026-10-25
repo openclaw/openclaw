@@ -6,7 +6,6 @@ import {
   type LifecycleSnapshot,
 } from "./lifecycle-sync-fixtures.test-support.js";
 import { createWorkboardLifecycleService, syncWorkboardSubagentEnded } from "./lifecycle-sync.js";
-import { createDeferred } from "./lifecycle-sync.test-support.js";
 import { WorkboardStore } from "./store.js";
 import { createWorkboardSqliteTestHarness, sqliteTestAuxStores } from "./test/sqlite-store.js";
 
@@ -17,8 +16,8 @@ async function beginPreparedDispatch() {
     status: "ready",
     workspaceAccess: { unrestricted: true },
   });
-  const reachedRun = createDeferred<{ sessionKey: string; provisionalRunId: string }>();
-  const runResult = createDeferred<{ sessionKey?: string; runId: string }>();
+  const reachedRun = Promise.withResolvers<{ sessionKey: string; provisionalRunId: string }>();
+  const runResult = Promise.withResolvers<{ sessionKey?: string; runId: string }>();
   const run = vi.fn().mockImplementation(async (input) => {
     reachedRun.resolve({ sessionKey: input.sessionKey, provisionalRunId: input.idempotencyKey });
     return await runResult.promise;

@@ -541,6 +541,44 @@ suite.define(() => {
         )
         .toEqual(["list-issues", "search-items", "search_items"]);
       await expect.poll(() => menu.getByText(notice).count()).toBe(0);
+    });
+  });
+
+  it("refreshes the open Tool access view when the session run settles", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const idleSessions = sessionsList();
+      const runningSessions = {
+        ...idleSessions,
+        sessions: idleSessions.sessions.map((session) => ({ ...session, status: "running" })),
+      };
+      const gateway = await installMockGateway(page, {
+        featureMethods: ["chat.metadata", "chat.startup", "tools.effective"],
+        methodResponses: {
+          "config.get": configResponse({
+            github: { url: "https://mcp.example.test", enabled: true },
+          }),
+          "sessions.list": runningSessions,
+          "tools.effective": undiscoveredMcpToolsResponse(),
+        },
+      });
+
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const composer = await openMenu(page);
+      const menu = composer.locator(".agent-chat__capability-menu");
+      const notice = menu.getByText(
+        "MCP tools will appear here after an agent run discovers them.",
+      );
+      await menu.getByRole("menuitem", { name: /^Plugins/ }).click();
+      await menu.getByRole("menuitem", { name: "Tool access" }).click();
+      await expect.poll(() => notice.isVisible()).toBe(true);
+
+      await gateway.setMethodResponse("tools.effective", effectiveToolsResponse());
+      await gateway.setSessionsListResponse(idleSessions);
+      await gateway.emitGatewayEvent("sessions.changed", { sessionKey: "agent:main:main" });
+
+      await expect.poll(() => menu.getByText("2 of 3 tools on").isVisible()).toBe(true);
+      await expect.poll(() => notice.count()).toBe(0);
+      await expect.poll(() => menu.getAttribute("data-view")).toBe("tools:github");
       expect(await gateway.getRequests("tools.effective")).toHaveLength(2);
     });
   });

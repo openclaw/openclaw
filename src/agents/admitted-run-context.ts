@@ -67,10 +67,11 @@ export type AdmittedRunOperatorAuthority = Readonly<{
   source?: object;
   /** Retains the original source independently of a foreground run or request. */
   retain?: () => () => void;
-  /** Live assignment from the original prepared profile lease. */
-  readCurrentRoleAssignment?: (this: void) => string | null;
-  /** Verified primary login from the same live profile authority. */
-  readCurrentGithubLogin?: (this: void) => string | null;
+  /** Assignment and verified login from one check of the original live profile authority. */
+  readCurrentRoleFacts?: (this: void) => Readonly<{
+    assignedRole: string | null;
+    githubLogin?: string | null;
+  }>;
   /** Prepared role permissions; source-policy changes revoke the owning authority. */
   rolePolicy?: Readonly<{
     sessionAccessCap: GatewayOperatorRoleDefinition["sessions"]["others"];
@@ -109,15 +110,7 @@ export function createAdmittedRunOperatorAuthority(
       throw error;
     }
   });
-  const bindCurrentReader = (read: (() => string | null) | undefined) =>
-    read
-      ? () => {
-          assertCurrent();
-          return read();
-        }
-      : undefined;
-  const readCurrentRoleAssignment = bindCurrentReader(source.readCurrentRoleAssignment);
-  const readCurrentGithubLogin = bindCurrentReader(source.readCurrentGithubLogin);
+  const readRoleFacts = source.readCurrentRoleFacts;
   const authority = Object.freeze({
     profileId: source.profileId,
     recoverySnapshot: source.recoverySnapshot
@@ -141,8 +134,12 @@ export function createAdmittedRunOperatorAuthority(
       return source.modelPolicy;
     },
     assertCurrent,
-    readCurrentRoleAssignment,
-    readCurrentGithubLogin,
+    readCurrentRoleFacts: readRoleFacts
+      ? () => {
+          assertCurrent();
+          return readRoleFacts();
+        }
+      : undefined,
     rolePolicy: source.rolePolicy
       ? Object.freeze({
           ...source.rolePolicy,
@@ -412,7 +409,7 @@ export function getAdmittedRunSource(
 export function resolveAdmittedRunActiveAssertion(
   context: AdmittedRunContext,
   signal?: AbortSignal,
-): SessionSourceAssertion | undefined {
+): ReturnType<typeof captureAdmittedRunActiveAssertion> {
   const authority = getAdmittedRunDelegatedAuthority(context);
   return authority ? captureAdmittedRunActiveAssertion(context, authority, signal) : undefined;
 }

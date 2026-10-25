@@ -7,10 +7,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { toRepoArtifactPath } from "../cli-paths.js";
 import { createQaEvidenceInvocation } from "../evidence-invocation.js";
 import { QA_EVIDENCE_FILENAME, buildQaSuiteEvidenceSummary } from "../evidence-summary.js";
+import { makeQaSuiteTestLaunch } from "../suite-test-helpers.js";
 import { publishMantisRunOutput } from "./run-artifacts.runtime.js";
 import { runMantisBeforeAfter } from "./run.runtime.js";
 import {
   failedCommandResult,
+  mockMantisSetupCommand,
   requireArgAfter,
   successfulCommandResult,
   writeLegacyLaneSummary,
@@ -41,18 +43,8 @@ describe("mantis before/after runtime", () => {
       const commands: { args: readonly string[]; command: string; stage: string }[] = [];
       const runner = vi.fn(async (command: string, args: readonly string[], execution) => {
         commands.push({ command, args, stage: execution.stage });
-        if (command === "git" && execution.stage === "worktree-add") {
-          await fs.mkdir(String(args[4]), { recursive: true });
-          return successfulCommandResult();
-        }
-        if (command === "git" && execution.stage === "worktree-cleanup") {
-          if (args[1] === "remove") {
-            await fs.rm(execution.cwd, { force: true, recursive: true });
-          }
-          return successfulCommandResult();
-        }
         if (command !== "pnpm" || !args.includes("openclaw")) {
-          return successfulCommandResult();
+          return mockMantisSetupCommand(command, args, execution);
         }
         const repoRootArg = requireArgAfter(args, "--repo-root");
         const outputDirArg = requireArgAfter(args, "--output-dir");
@@ -222,18 +214,8 @@ describe("mantis before/after runtime", () => {
 
   it("supports the Discord thread filePath attachment Mantis scenario", async () => {
     const runner = vi.fn(async (command: string, args: readonly string[], execution) => {
-      if (command === "git" && execution.stage === "worktree-add") {
-        await fs.mkdir(String(args[4]), { recursive: true });
-        return successfulCommandResult();
-      }
-      if (command === "git" && execution.stage === "worktree-cleanup") {
-        if (args[1] === "remove") {
-          await fs.rm(execution.cwd, { force: true, recursive: true });
-        }
-        return successfulCommandResult();
-      }
       if (command !== "pnpm" || !args.includes("openclaw")) {
-        return successfulCommandResult();
+        return mockMantisSetupCommand(command, args, execution);
       }
       const repoRootArg = requireArgAfter(args, "--repo-root");
       const outputDirArg = requireArgAfter(args, "--output-dir");
@@ -307,16 +289,11 @@ describe("mantis before/after runtime", () => {
     const executions: { stage: string; timeoutMs: number }[] = [];
     const runner = vi.fn(async (command: string, args: readonly string[], execution) => {
       executions.push({ stage: execution.stage, timeoutMs: execution.timeoutMs });
-      if (command === "git" && execution.stage === "worktree-add") {
-        await fs.mkdir(String(args[4]), { recursive: true });
-      }
-      if (command === "git" && execution.stage === "worktree-cleanup" && args[1] === "remove") {
-        await fs.rm(execution.cwd, { force: true, recursive: true });
-      }
       if (command === "pnpm" && args.includes("openclaw")) {
         await writeLegacyLaneSummary({ args, scenario: "discord-status-reactions-tool-only" });
+        return successfulCommandResult();
       }
-      return successfulCommandResult();
+      return mockMantisSetupCommand(command, args, execution);
     });
 
     await runMantisBeforeAfter({
@@ -602,18 +579,8 @@ describe("mantis before/after runtime", () => {
     async (caseName) => {
       const scenarioId = "discord-status-reactions-tool-only";
       const runner = vi.fn(async (command: string, args: readonly string[], execution) => {
-        if (command === "git" && execution.stage === "worktree-add") {
-          await fs.mkdir(String(args[4]), { recursive: true });
-          return successfulCommandResult();
-        }
-        if (command === "git" && execution.stage === "worktree-cleanup") {
-          if (args[1] === "remove") {
-            await fs.rm(execution.cwd, { force: true, recursive: true });
-          }
-          return successfulCommandResult();
-        }
         if (command !== "pnpm" || !args.includes("openclaw")) {
-          return successfulCommandResult();
+          return mockMantisSetupCommand(command, args, execution);
         }
         const laneRoot = requireArgAfter(args, "--repo-root");
         const outputArg = requireArgAfter(args, "--output-dir");
@@ -628,14 +595,7 @@ describe("mantis before/after runtime", () => {
             { id: scenarioId, execution: { kind: "script" } },
           ],
           channel: "discord",
-          launch: {
-            source: { ref: null, integrity: null },
-            runtime: { id: null, version: null },
-            package: null,
-            protocol: null,
-            accountRef: null,
-            proofClass: null,
-          },
+          launch: makeQaSuiteTestLaunch(),
         });
         const first = invocation.begin(0);
         const status = outputArg.endsWith("baseline") ? "fail" : "pass";

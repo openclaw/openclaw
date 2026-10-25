@@ -13,10 +13,11 @@ Cold catalog listing waits up to one second per provider, concurrently. Provider
 finish within that budget return normally. When a page is already available for
 the same caller and query, listing returns it promptly while discovery refreshes
 in the background; an already-settled refresh returns its fresh page instead.
-A slow provider returns
-`catalog.error.code: "catalog_pending"`; when available, its latest available page
-for the same caller and query is included with hosts marked `pending: true` and
-a stale-results message. A failed catalog enumeration can likewise return that page with
+A slow provider returns `catalog.pending: true` without treating healthy discovery
+as an error; when available, its latest available page for the same caller and query
+is included with hosts marked `pending: true`. A pending refresh retains the last
+catalog failure until a successful enumeration clears it, including an empty result.
+A failed catalog enumeration can return that page with
 `catalog.error.code: "catalog_stale"` and the underlying error in its message.
 Completed host results are authoritative, including offline or unavailable hosts;
 the Gateway does not replace those results with older rows, even while another

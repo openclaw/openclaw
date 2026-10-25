@@ -8,12 +8,14 @@ import type {
   SessionReactionsSetResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import type { ApplicationGateway } from "../../app/gateway.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import * as toast from "../../lib/toast.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { setChatHistoryLoad } from "./chat-history-state.ts";
 import { createTestChatPane } from "./chat-pane.test-support.ts";
 
 const peerReaction: MessageReactionSummary[] = [
@@ -36,6 +38,9 @@ function fixture(
   const writes: unknown[] = [];
   const client = createTestGatewayClient((method, params) => {
     requests.push(method);
+    if (method === "agents.list") {
+      return makeBootRoster();
+    }
     if (method === "session.reactions.set") {
       writes.push(params);
     }
@@ -95,6 +100,17 @@ function fixture(
     );
   };
   session("session-1");
+  const commitHistory = () =>
+    setChatHistoryLoad(created.state, {
+      phase: "committed",
+      sessions: created.state.sessions,
+      client,
+      connectionEpoch: created.state.connectionEpoch,
+      sessionKey: created.state.sessionKey,
+      requestAgentId: undefined,
+      sessionInfo: { key: created.state.sessionKey, sessionId: "session-1", kind: "direct" },
+    });
+  commitHistory();
   const event = (reactions = peerReaction): SessionReactionEvent => ({
     sessionKey: created.state.sessionKey,
     sessionId: "session-1",
@@ -109,6 +125,7 @@ function fixture(
     ...created,
     pane,
     session,
+    commitHistory,
     event,
     requests,
     writes,
@@ -127,6 +144,28 @@ function fixture(
 }
 
 describe("pane reaction ownership", () => {
+  it("defers the baseline until transcript readiness while publishing live reactions", async () => {
+    const list = createDeferred<SessionReactionsListResult>();
+    const f = fixture(list.promise);
+    setChatHistoryLoad(f.state, {
+      phase: "pending-connection",
+      sessionKey: f.state.sessionKey,
+      requestAgentId: undefined,
+      startup: true,
+    });
+    f.pane.syncSessionReactions();
+    f.pane.handleSessionReactionEvent(f.event());
+    expect(f.requests).toEqual([]);
+    expect(f.reactions()).toEqual(peerReaction);
+    f.commitHistory();
+    f.pane.syncSessionReactions();
+    expect(f.requests).toEqual(["session.reactions.list"]);
+    list.resolve({ sessionId: "session-1", reactions: { "message-1": peerReaction } });
+    await list.promise;
+    await Promise.resolve();
+    expect(f.reactions()).toEqual(peerReaction);
+  });
+
   it.each(["list", "set"] as const)(
     "retains live events over an older %s response",
     async (operation) => {
@@ -286,7 +325,19 @@ describe("pane reaction ownership", () => {
       assert(pending);
       const replay = pending.run(client);
       if (owner === "replacement client") {
-        pane.context.gateway.snapshot.client = createTestGatewayClient(() => ({}));
+        pane.context.gateway.snapshot.client = createTestGatewayClient((method) => {
+          switch (method) {
+            case "agents.list":
+              return makeBootRoster();
+            case "sessions.list":
+              return sessionsResult([]);
+            case "chat.startup":
+            case "chat.history":
+              return { messages: [] };
+            default:
+              return {};
+          }
+        });
       } else if (owner === "replacement scope") {
         Object.defineProperty(client, "recoveryScope", { get: () => "replacement-scope" });
       }

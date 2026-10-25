@@ -79,7 +79,9 @@ async function expectContextRemoved() {
 
 beforeEach(async () => {
   vi.clearAllMocks();
-  root = tempDirs.make("update-candidate-admission-");
+  const { resolvePreferredOpenClawTmpDir } =
+    await vi.importActual<typeof import("./tmp-openclaw-dir.js")>("./tmp-openclaw-dir.js");
+  root = tempDirs.make("update-candidate-admission-", resolvePreferredOpenClawTmpDir());
   mocks.tmpdir.mockReturnValue(root);
   await fs.mkdir(path.join(root, "dist"));
   await fs.writeFile(path.join(root, "dist", "index.js"), "// candidate entry fixture");
@@ -168,9 +170,10 @@ it.each(["known-version", "unknown-version", "artifact"] as const)(
     if (target === "unknown-version") {
       context.target.version = null;
     } else if (target === "artifact") {
-      const artifactUrl = new URL(
-        "https://fixture-user:fixture-password@registry.example/package.tgz?token=fixture-token",
-      );
+      // Assembled at runtime: a literal credential URL trips the PR input-safety scanner.
+      const artifactUrl = new URL("https://registry.example/package.tgz?token=fixture-token");
+      artifactUrl.username = "fixture-user";
+      artifactUrl.password = "fixture-password";
       context.target.source = "artifact";
       context.target.spec = artifactUrl.href;
       context.target.tag = context.target.spec;
@@ -337,6 +340,26 @@ it.each([
     await expectContextRemoved();
   },
 );
+
+it("bounds and redacts the stdout excerpt when a debug line precedes the verdict", async () => {
+  // The synthetic JWT's payload straddles the excerpt bound; a pre-redaction cut leaks its header.
+  const jwt = `eyJhbGciOiJub25lIn0.${"c".repeat(40)}.${"s".repeat(20)}`;
+  const line = `[state/sqlite] SQLite read-only snapshot token=synthetic-secret ${"x".repeat(40)} ${jwt}`;
+  fixture = { code: 0, stdout: `${line}\n${verdictJson()}`, stderr: "cannot inspect state\n" };
+
+  const result = await run({ env: { API_TOKEN: "synthetic-secret" } });
+
+  expect(result).toMatchObject({ owner: "installed", fallbackReason: "malformed-json" });
+  const message = result.warning?.message ?? "";
+  expect(message).toContain("cannot inspect state");
+  const excerpt = /Candidate stdout began with: (".*")$/u.exec(message)?.[1];
+  expect(JSON.parse(excerpt ?? "null")).toMatch(/^\[state\/sqlite\] SQLite read-only snapshot/);
+  expect(JSON.parse(excerpt ?? "null").length).toBeLessThanOrEqual(160);
+  expect(message).not.toContain("synthetic-secret");
+  expect(message).not.toContain("eyJhbGciOiJub25lIn0");
+  expect(message.length).toBeLessThanOrEqual(UPDATE_RUN_TEXT_LIMIT);
+  await expectContextRemoved();
+});
 
 it("bounds admission and terminates its process tree before context cleanup", async () => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });

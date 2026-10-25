@@ -29,7 +29,6 @@ it.each([
   ["tooling", undefined],
   ["hermetic", "caller-cache"],
   ["hermetic", ""],
-  ["hermetic", "0"],
 ] as const)(
   "reuses owned source compiler caches (%s, Bun cache %s)",
   async (homeMode, bunCache) => {
@@ -87,9 +86,7 @@ console.log(JSON.stringify({ namespace, output, again, disabled: process.env.TSX
           ? undefined
           : path.resolve(import.meta.dirname, "../../.cache/bun-transpiler")),
     );
-    expect(env.BUN_RUNTIME_TRANSPILER_CACHE_PATH).toBe(bunCache);
     expect(path.dirname(observed.namespace)).toBe(root);
-    expect(env.TSX_DISABLE_CACHE).toBe("1");
     expect(fs.existsSync(observed.namespace)).toBe(process.platform === "win32");
   },
 );

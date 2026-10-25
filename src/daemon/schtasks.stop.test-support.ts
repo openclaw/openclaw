@@ -9,6 +9,8 @@ import type { PortUsage } from "../infra/ports-types.js";
 import "./test-helpers/schtasks-base-mocks.js";
 import {
   inspectPortUsageMock,
+  makeSpawnSyncResult,
+  type SpawnSyncResult,
   killProcessTreeMock,
   resetSchtasksBaseMocks,
   schtasksCalls,
@@ -27,23 +29,9 @@ const readGatewayOwnerLease = vi.hoisted(() =>
 const readWindowsProcessStartTimeSync = vi.hoisted(() =>
   vi.fn<typeof import("../infra/windows-process-start.js").readWindowsProcessStartTimeSync>(),
 );
-type SpawnSyncResult = {
-  pid: number;
-  output: (string | null)[];
-  stdout: string;
-  stderr: string;
-  status: number;
-  signal: null;
-};
+
 function spawnSyncResult(stdout: string, status = 0): SpawnSyncResult {
-  return {
-    pid: 0,
-    output: [null, stdout, ""],
-    stdout,
-    stderr: "",
-    status,
-    signal: null,
-  };
+  return makeSpawnSyncResult({ output: [null, stdout, ""], stdout, status });
 }
 const spawnSync = vi.hoisted(() =>
   vi.fn<(command: string, args?: readonly string[], options?: SpawnSyncOptions) => SpawnSyncResult>(
@@ -171,23 +159,16 @@ function mockWindowsTaskkillSuccess() {
       return scheduledTaskProbeResult();
     }
     if (/taskkill\.exe$/i.test(exeText)) {
-      return { pid: 0, output: [null, "", ""], stdout: "", stderr: "", status: 0, signal: null };
+      return makeSpawnSyncResult();
     }
     if (/tasklist\.exe$/i.test(exeText)) {
       const pid = Number(args?.find((arg) => arg.startsWith("PID eq "))?.slice(7));
       const gone =
         taskkillPids().includes(pid) || schtasksCalls.some(([action]) => action === "/End");
       const stdout = gone ? "No tasks" : `"node.exe","${pid}","Console","1","1 K"`;
-      return { pid: 0, output: [null, stdout, ""], stdout, stderr: "", status: 0, signal: null };
+      return spawnSyncResult(stdout);
     }
-    return {
-      pid: 0,
-      output: [null, "-2147024891", ""],
-      stdout: "-2147024891",
-      stderr: "",
-      status: 1,
-      signal: null,
-    };
+    return spawnSyncResult("-2147024891", 1);
   });
 }
 

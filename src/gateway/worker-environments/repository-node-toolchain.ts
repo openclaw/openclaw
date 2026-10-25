@@ -1,5 +1,5 @@
 import { NODE_TOOLCHAIN_INSTALL_SH } from "./node-toolchain.js";
-import { resolveRepositoryNodeRequirement } from "./repository-node-requirement.js";
+import { REPOSITORY_NODE_REQUIREMENT_SOURCE } from "./repository-node-requirement.generated.js";
 
 /** Runs inside the supported bootstrap Node, before any repository setup command. */
 export const PREPARE_REPOSITORY_NODE_JS = `async (workspaceDir, homeDir, machineHome) => {
@@ -16,7 +16,7 @@ export const PREPARE_REPOSITORY_NODE_JS = `async (workspaceDir, homeDir, machine
       files[name] = fs.readFileSync(file, "utf8");
     } catch (error) { if (error.code !== "ENOENT") throw error; }
   }
-  const requirement = (${resolveRepositoryNodeRequirement.toString()})(files);
+  const requirement = (${REPOSITORY_NODE_REQUIREMENT_SOURCE})(files);
   const manifest = files["package.json"] ? JSON.parse(files["package.json"]) : {};
   let nodeBin = path.dirname(process.execPath);
   let semver, version;

@@ -131,7 +131,6 @@ describe("security CLI", () => {
     expect(auditOptions).toMatchObject({
       deep: false,
       includeFilesystem: true,
-      includeChannelSecurity: true,
     });
     const payload = JSON.parse(String(runtimeLogs.at(-1)));
     expect(payload.secretDiagnostics).toEqual([diagnostic]);

@@ -1,5 +1,5 @@
 import type { NewSessionResponse, SessionUpdate } from "@agentclientprotocol/sdk";
-import { expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import { isAcpSessionKey } from "../sessions/session-key-utils.js";
 import {
   createNewSessionRequest,
@@ -15,8 +15,6 @@ import {
 } from "./translator.bridge-test-helpers.js";
 import type { GatewaySessionPresentationRow } from "./translator.presentation.js";
 import { createPromptScenario } from "./translator.scenario.test-support.js";
-
-vi.mock("./commands.js", () => ({ getAvailableCommands: () => [] }));
 
 const sessionId = "bridge-session";
 const row: GatewaySessionPresentationRow = {

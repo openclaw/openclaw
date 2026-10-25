@@ -15,7 +15,7 @@ import {
 } from "../../test-helpers/gateway-client.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { questionPanelIn } from "../chat/components/chat-question-card.test-support.ts";
-import "./question-page-registration.ts";
+import "./question-page.tsx";
 
 type QuestionPage = HTMLElementTagNameMap["openclaw-question-page"];
 const answers = { answers: { audience: ["The design team"] } };
@@ -74,6 +74,28 @@ it.each(["question", "outside"] as const)("restores only question focus (%s)", a
   });
   expect(page.textContent).toContain("Unavailable");
   expect(request).toHaveBeenCalledTimes(1);
+});
+
+it("keeps focus on the collapsed question so it can be reopened", async () => {
+  const { page } = await mount(vi.fn().mockResolvedValue({ question: question() }));
+  await questionPanelIn(page);
+  const input = page.querySelector("textarea")!;
+  input.value = "The design team";
+  input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+  const collapse = page.querySelector<HTMLButtonElement>(".chat-question-panel__collapse")!;
+  collapse.focus();
+  collapse.click();
+  await waitForSolid(() => {
+    const expand = page.querySelector(".chat-question-panel__collapsed-button");
+    expect(expand).not.toBeNull();
+    expect(document.activeElement).toBe(expand);
+  });
+
+  page.querySelector<HTMLButtonElement>(".chat-question-panel__collapsed-button")!.click();
+  await waitForSolid(() => {
+    expect(document.activeElement).toBe(page.querySelector(".chat-question-panel"));
+    expect(page.querySelector("textarea")?.value).toBe("The design team");
+  });
 });
 
 it("recovers a failed reconnect lookup without losing the typed answer", async () => {

@@ -159,6 +159,7 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
       const occlusionTail = () => occlusion.slice(occlusionAfterOpening);
       await expect.element(search).toHaveFocus();
       expect(getComputedStyle(query(".picker-select__search")!).boxShadow).not.toBe("none");
+      await expect.poll(() => query(".picker-select__option[data-active]")).not.toBeNull();
       expect(ringStyle(sidebar, ".picker-select__option[data-active]")).not.toBe("none");
       await userEvent.keyboard("bo");
       await expect.poll(() => ownerOptions(sidebar)).toEqual(["Bob"]);

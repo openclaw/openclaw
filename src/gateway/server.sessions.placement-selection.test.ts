@@ -12,6 +12,7 @@ import {
   directSessionReq,
   getGatewayConfigModule,
   setupGatewaySessionsHandlerTestHarness,
+  createRepositoryDeviceHarness,
 } from "./test/server-sessions.test-helpers.js";
 
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
@@ -19,22 +20,7 @@ let originalRegistry: ReturnType<typeof getActivePluginRegistry>;
 beforeEach(() => {
   originalRegistry = getActivePluginRegistry();
   setActivePluginRegistry(createEmptyPluginRegistry());
-  registerAgentHarness({
-    id: "repository-device",
-    label: "Repository device",
-    autoSelection: { providerIds: ["repository-provider"] },
-    supports: () => ({ supported: true }),
-    cloudPlacement: {
-      mode: "remote-exec",
-      devicePlacement: {
-        requiredNodeCommands: ["runtime.repository.v1"],
-        consumesWorkerSlot: false,
-      },
-    },
-    runAttempt: async () => {
-      throw new Error("selection must not execute the runtime");
-    },
-  });
+  registerAgentHarness(createRepositoryDeviceHarness("selection must not execute the runtime"));
 });
 afterEach(() => {
   if (originalRegistry) {

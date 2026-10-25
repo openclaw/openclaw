@@ -160,16 +160,16 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
       expect(footerReattachments).toEqual([]);
 
       // The fix must retain height queries, not just avoid their invalidations.
-      const fadeDisplay = () => style(page, ".chat-footer", "display", "::before");
+      const fadeContent = () => style(page, ".chat-footer", "content", "::before");
       const editorCap = () => style(page, "textarea", "max-height").then(Number.parseFloat);
-      expect(await fadeDisplay()).not.toBe("none");
+      expect(await fadeContent()).toBe("none");
       const tallEditorCap = await editorCap();
       await page.setViewportSize({ width: 1200, height: 260 });
       const shortConversation = await getRect(page, ".chat-main__conversation");
       const thread = await getRect(page, ".chat-thread");
       const footer = await getRect(page, ".chat-footer");
       expect(shortConversation.height).toBe(260);
-      expect(await fadeDisplay()).toBe("none");
+      expect(await fadeContent()).toBe("none");
       expect(await editorCap()).toBeLessThan(tallEditorCap);
       expect(thread.height).toBeGreaterThan(0);
       expect(thread.bottom).toBeLessThanOrEqual(footer.top);
@@ -185,26 +185,24 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
           composerFooter(
             "Composer",
             `<div class="chat-footer__context">
-                <div class="chat-inline-approval">Approval</div>
                 <div class="chat-prs"><article class="chat-pr">Pull request</article></div>
                 <div class="session-suggestions">Suggestion</div>
-                <div class="chat-swarm">Parallel task</div>
+                <div class="chat-inline-approval">Approval context</div>
                 <openclaw-plugin-contributions><button data-plugin-action>Plugin action</button></openclaw-plugin-contributions>
               </div>`,
           ),
         )}</section>`);
       const composer = await getRect(page, ".agent-chat__input");
-      for (const selector of [
-        ".chat-prs",
-        ".chat-swarm",
-        ".session-suggestions",
-        ".chat-inline-approval",
-      ]) {
+      for (const selector of [".chat-prs", ".session-suggestions", ".chat-inline-approval"]) {
         const card = await getRect(page, selector);
         expect(card.left, selector).toBeCloseTo(composer.left, 0);
         expect(card.right, selector).toBeCloseTo(composer.right, 0);
       }
-      for (const selector of [".session-suggestions", ".chat-swarm", "[data-plugin-action]"]) {
+      for (const selector of [
+        ".session-suggestions",
+        ".chat-inline-approval",
+        "[data-plugin-action]",
+      ]) {
         const pullRequest = await getRect(page, ".chat-pr");
         const neighbor = await getRect(page, selector);
         expect(neighbor.top, selector).toBeGreaterThan(pullRequest.bottom);
@@ -345,18 +343,13 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
               const box = element(selector).getBoundingClientRect();
               return { bottom: box.bottom, top: box.top, height: box.height, width: box.width };
             };
-            const footer = element(".chat-footer").getBoundingClientRect();
-            const threadElement = element(".chat-thread");
-            const thread = threadElement.getBoundingClientRect();
             const fade = getComputedStyle(element(".chat-footer"), "::before");
             return {
               composer: rect(".agent-chat__composer-shell"),
               conversation: rect(".chat-main__conversation"),
               footer: rect(".chat-footer"),
               input: rect(".agent-chat__input"),
-              fadeInsetLeft: footer.left + Number.parseFloat(fade.left) - thread.left,
-              fadeInsetRight: thread.right - (footer.right - Number.parseFloat(fade.right)),
-              scrollbarSize: (thread.width - threadElement.clientWidth) / 2,
+              fadeContent: fade.content,
               thread: rect(".chat-thread"),
             };
           });
@@ -382,8 +375,7 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
         expect(await page.locator(".agent-chat__composer-notices").isVisible()).toBe(false);
         expect(await page.locator(".chat-footer__context").isVisible()).toBe(withPullRequest);
         expect(await geometry()).toEqual(before);
-        expect(before.fadeInsetLeft).toBeGreaterThanOrEqual(before.scrollbarSize);
-        expect(before.fadeInsetRight).toBeGreaterThanOrEqual(before.scrollbarSize);
+        expect(before.fadeContent).toBe("none");
         expect(before.thread.bottom).toBeLessThanOrEqual(before.footer.top);
         await setHtml(
           page,

@@ -3,6 +3,7 @@ import { MediaFetchError } from "openclaw/plugin-sdk/media-runtime";
 import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import {
   createImageLifecycleCore,
   createImageUpdate,
@@ -270,18 +271,8 @@ describe("Zalo polling image handling", () => {
     const server = createServer((_req, _res) => {
       // Accept the connection but never write status/headers.
     });
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", () => {
-        server.off("error", reject);
-        resolve();
-      });
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("expected loopback TCP address");
-    }
-    const stallUrl = `http://127.0.0.1:${address.port}/stall.jpg`;
+    const port = await listenOnLoopback(server);
+    const stallUrl = `http://127.0.0.1:${port}/stall.jpg`;
     const headerTimeoutMs = 250;
 
     // Production monitor passes the full timeout budget; the harness shortens

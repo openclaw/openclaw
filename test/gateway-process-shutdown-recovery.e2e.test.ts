@@ -17,8 +17,10 @@ import {
   connectRestartClient,
   writeRestartTitle,
   restartModelConfig,
+  restartToolNames,
   writeRestartToolCall,
 } from "./gateway-restart.test-support.js";
+import { readRequestText } from "./helpers/gateway-integration-fixtures.js";
 import { GATEWAY_RESTART_TEST_KILL_MS } from "./helpers/gateway-restart-budget.js";
 import { writeOpenAiResponsesText } from "./helpers/openai-responses-sse.js";
 import { createOpenClawTestInstance } from "./helpers/openclaw-test-instance.js";
@@ -138,16 +140,8 @@ async function startProvider(scenarios: Scenario[], signal: AbortSignal) {
             return;
           }
           expect(request.url).toBe("/v1/responses");
-          const chunks: Buffer[] = [];
-          for await (const chunk of request) {
-            chunks.push(Buffer.from(chunk));
-          }
-          const body = asRecord(JSON.parse(Buffer.concat(chunks).toString("utf8")));
-          const tools = Array.isArray(body.tools)
-            ? body.tools.flatMap((tool) =>
-                isRecord(tool) && typeof tool.name === "string" ? [tool.name] : [],
-              )
-            : [];
+          const body = asRecord(JSON.parse(await readRequestText(request)));
+          const tools = restartToolNames(body);
           if (tools.length === 0) {
             if (body.stream === false) {
               writeRestartTitle(response, "Synthetic shutdown task");

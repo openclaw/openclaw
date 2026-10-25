@@ -7,6 +7,7 @@ import { expectGatewayErrorResponse } from "./gateway-response.test-helpers.js";
 import { ttsHandlers } from "./tts.js";
 
 const mocks = vi.hoisted(() => ({
+  updateTtsPrefsAsync: vi.fn(async () => {}),
   getRuntimeConfig: vi.fn(() => ({})),
   getSpeechProvider: vi.fn(),
   isTtsProviderConfiguredAsync: vi.fn(
@@ -43,6 +44,11 @@ const mocks = vi.hoisted(() => ({
   })),
 }));
 
+vi.mock("../../tts/tts-settings-write-worker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../tts/tts-settings-write-worker.js")>()),
+  updateTtsPrefsAsync: mocks.updateTtsPrefsAsync,
+}));
+
 vi.mock("../../config/config.js", () => ({
   getRuntimeConfig:
     mocks.getRuntimeConfig as typeof import("../../config/config.js").getRuntimeConfig,
@@ -77,9 +83,6 @@ vi.mock("../../tts/tts.js", () => ({
   resolveTtsConfig: mocks.resolveTtsConfig,
   resolveTtsPrefsPathAsync: vi.fn(async () => "/tmp/tts.json"),
   resolveTtsProviderOrder: mocks.resolveTtsProviderOrder,
-  setTtsEnabled: vi.fn(),
-  setTtsPersona: vi.fn(),
-  setTtsProvider: vi.fn(),
   synthesizeSpeech: mocks.synthesizeSpeech,
   textToSpeech: mocks.textToSpeech as typeof import("../../tts/tts.js").textToSpeech,
 }));

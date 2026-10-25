@@ -1,7 +1,8 @@
+import { jsonResponse } from "openclaw/plugin-sdk/test-env";
 import { bufferedOversizedJsonResponse as oversizedJsonResponse } from "openclaw/plugin-sdk/test-fixtures";
 import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-media-understanding";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { binaryResponse, jsonResponse, stubFetch } from "./provider-test-helpers.js";
+import { binaryResponse, stubFetch } from "./provider-test-helpers.js";
 import { buildVydraSpeechProvider } from "./speech-provider.js";
 
 describe("vydra speech provider", () => {

@@ -1,9 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as reasoningTagParser from "../../../markdown-core/src/reasoning-tag-parser.js";
-import {
-  createReasoningTagTextPartitioner,
-  type ReasoningTagTextDelta,
-} from "./reasoning-tag-text-partitioner.js";
+import type { ReasoningTagTextDelta } from "../../../markdown-core/src/reasoning-tags.js";
+import { createReasoningTagTextPartitioner } from "./reasoning-tag-text-partitioner.js";
 
 describe("createReasoningTagTextPartitioner", () => {
   let partitioner: ReturnType<typeof createReasoningTagTextPartitioner>;

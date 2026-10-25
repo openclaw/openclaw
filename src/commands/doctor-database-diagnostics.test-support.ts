@@ -82,7 +82,9 @@ function initializeSqlite(file: string, descriptor: PortDescriptor) {
       `schema-${descriptor.version}`,
     );
   } else if (descriptor.id === "team-reports") {
-    db.exec("INSERT INTO team_reports_schema_migrations VALUES ('schema-1', 1)");
+    db.exec(
+      `INSERT INTO team_reports_schema_migrations VALUES ('schema-${descriptor.version}', 1)`,
+    );
   }
 }
 

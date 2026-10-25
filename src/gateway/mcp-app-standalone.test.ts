@@ -1,6 +1,7 @@
 import { setImmediate as settle } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { runStandaloneMcpAppHost } from "./mcp-app-standalone-host.js";
 import {
   createMcpAppStandaloneTicket,
   createSerializedHost,
@@ -171,22 +172,32 @@ describe("MCP App standalone host", () => {
     },
   );
 
-  it("bounds initial serialized body fetch with a visible outcome", async () => {
-    const timeoutError = Object.assign(new Error("timed out"), { name: "TimeoutError" });
-    const initialSignal = AbortSignal.abort(timeoutError);
-    const initialBody = createDeferred<unknown>();
-    const host = await createSerializedHost({ initialBody, initialSignal });
-    initialBody.reject(timeoutError);
-    await vi.waitFor(() =>
-      expect(host.replaceChildren).toHaveBeenCalledWith(
-        expect.objectContaining({ textContent: "MCP App view timed out; reload to try again" }),
-      ),
-    );
-    expect(host.timeout).toHaveBeenCalledWith(30_000);
-    expect(host.fetch).toHaveBeenCalledWith(
-      "/__openclaw__/mcp-app/view",
-      expect.objectContaining({ signal: initialSignal }),
-    );
+  it("bounds the built browser fetch when runtime function source is unavailable", async () => {
+    Object.defineProperty(runStandaloneMcpAppHost, "toString", {
+      configurable: true,
+      value() {
+        throw new Error("Runtime function source is unavailable");
+      },
+    });
+    try {
+      const timeoutError = Object.assign(new Error("timed out"), { name: "TimeoutError" });
+      const initialSignal = AbortSignal.abort(timeoutError);
+      const initialBody = createDeferred<unknown>();
+      const host = await createSerializedHost({ initialBody, initialSignal });
+      initialBody.reject(timeoutError);
+      await vi.waitFor(() =>
+        expect(host.replaceChildren).toHaveBeenCalledWith(
+          expect.objectContaining({ textContent: "MCP App view timed out; reload to try again" }),
+        ),
+      );
+      expect(host.timeout).toHaveBeenCalledWith(30_000);
+      expect(host.fetch).toHaveBeenCalledWith(
+        "/__openclaw__/mcp-app/view",
+        expect.objectContaining({ signal: initialSignal }),
+      );
+    } finally {
+      Reflect.deleteProperty(runStandaloneMcpAppHost, "toString");
+    }
   });
 
   it("returns capabilities only for handlers installed on the live view", async () => {
@@ -517,26 +528,38 @@ describe("MCP App standalone host", () => {
     expect(runtime.callTool).not.toHaveBeenCalled();
   });
 
-  it.each(["read-only", "unbound"])("denies server operations for a %s view", async (mode) => {
-    Object.assign(
-      view,
-      mode === "read-only" ? { readOnly: true } : { allowedAppToolNames: undefined },
-    );
-    const issued = issueTicket({ sessionKey: "agent:main:main", view, nowMs });
-    const invoke = operations(issued.ticket);
-    if (mode === "read-only") {
-      const payload = await appRequest(issued.ticket);
-      expect(JSON.parse(String(payload.end.mock.calls[0]?.[0]))).toMatchObject({
-        serverResources: false,
-      });
-    } else {
-      expect(await invoke({ method: "tools/list", params: {} })).toBe(403);
-    }
-    expect(await invoke(appCall())).toBe(403);
-    expect(await invoke(resourceRead)).toBe(403);
-    expect(runtime.callTool).not.toHaveBeenCalled();
-    expect(runtime.readResource).not.toHaveBeenCalled();
-  });
+  it.each(["read-only", "unbound", "rejected-authority"])(
+    "denies server operations for a %s view",
+    async (mode) => {
+      Object.assign(
+        view,
+        mode === "read-only"
+          ? { readOnly: true }
+          : mode === "unbound"
+            ? { allowedAppToolNames: undefined }
+            : {
+                authorizeAppInteraction: async () => {
+                  throw new Error("App interaction authority unavailable");
+                },
+              },
+      );
+      const issued = issueTicket({ sessionKey: "agent:main:main", view, nowMs });
+      const invoke = operations(issued.ticket);
+      if (mode !== "unbound") {
+        const payload = await appRequest(issued.ticket);
+        expect(payload.res.statusCode).toBe(200);
+        expect(JSON.parse(String(payload.end.mock.calls[0]?.[0]))).toMatchObject({
+          serverResources: false,
+        });
+      } else {
+        expect(await invoke({ method: "tools/list", params: {} })).toBe(403);
+      }
+      expect(await invoke(appCall())).toBe(403);
+      expect(await invoke(resourceRead)).toBe(403);
+      expect(runtime.callTool).not.toHaveBeenCalled();
+      expect(runtime.readResource).not.toHaveBeenCalled();
+    },
+  );
 
   it("revalidates expiry and enforces request concurrency through the ticket boundary", async () => {
     const issued = issueTicket({ sessionKey: "agent:main:main", view, nowMs });

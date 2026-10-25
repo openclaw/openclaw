@@ -115,14 +115,19 @@
 }
 
 .markdown-hex-color {
+  margin-inline: 0.2em;
   white-space: nowrap;
+
+  &:not(:is(strong, b) *) {
+    font-weight: 500;
+  }
 }
 
 .markdown-hex-color__swatch {
   display: inline-block;
   width: 0.85em;
   height: 0.85em;
-  margin-inline-start: 0.3em;
+  margin-inline-end: 0.3em;
   vertical-align: -0.05em;
   border: 1px solid var(--muted);
   border-radius: 3px;
@@ -210,7 +215,7 @@
   padding: 10px;
   border: 0;
   background: transparent;
-  color: var(--text);
+  color: color-mix(in srgb, var(--muted) 94%, transparent);
   cursor: var(--cursor-action);
   place-items: center;
 }
@@ -272,6 +277,7 @@
 }
 
 .markdown-table-dialog__close {
+  color: var(--text);
   position: fixed;
   top: 8px;
   right: 8px;
@@ -328,58 +334,71 @@
 }
 
 /* Auto layout gives prose more space than short values, then wraps it. */
-:is(.markdown-table, .markdown-table-dialog.chat-text) :where(table) {
-  display: table;
-  width: 100%;
-  table-layout: auto;
-  margin: 0;
-  border: 0;
-  border-collapse: collapse;
-  background: transparent;
-  box-shadow: none;
-  overflow: visible;
-}
+.markdown-table,
+.markdown-table-dialog.chat-text {
+  :where(table) {
+    display: table;
+    width: 100%;
+    table-layout: auto;
+    margin: 0;
+    border: 0;
+    border-collapse: collapse;
+    background: transparent;
+    box-shadow: none;
+    overflow: visible;
+  }
 
-/* Many-column comparisons keep useful column widths instead of wrapping a
-   notes column into a word per line. Short numeric columns still fit naturally. */
-:is(.markdown-table, .markdown-table-dialog.chat-text) table:has(tr > :nth-child(5)) {
-  width: max-content;
-  min-width: 100%;
-}
+  /* Many-column comparisons keep useful column widths instead of wrapping a
+   notes column into a word per line. Markdown body rows have the header's column
+   count, so inspecting the header avoids searching every row. */
+  table:has(> :where(thead) > tr > :nth-child(5)) {
+    width: max-content;
+    min-width: 100%;
+  }
 
-:is(.markdown-table, .markdown-table-dialog.chat-text) :where(table, thead, tbody, tr, th, td) {
-  background: transparent;
-}
+  :where(table),
+  :where(thead),
+  :where(tbody),
+  :where(tr),
+  :where(th),
+  :where(td) {
+    background: transparent;
+  }
 
-:is(.markdown-table, .markdown-table-dialog.chat-text) :where(th, td) {
-  padding-block: 12px;
-  border-right: 0;
-  border-bottom-color: color-mix(in srgb, var(--border) 42%, transparent);
-  min-width: 0;
-  /* Preserve short tokens' intrinsic width; long hashes still wrap at the cap. */
-  max-width: 24rem;
-  overflow-wrap: break-word;
-  white-space: normal;
-  word-break: normal;
-  vertical-align: top;
-}
+  :where(th),
+  :where(td) {
+    padding-block: 12px;
+    border-right: 0;
+    border-bottom-color: color-mix(in srgb, var(--border) 42%, transparent);
+    min-width: 0;
+    /* Preserve short tokens' intrinsic width; long hashes still wrap at the cap. */
+    max-width: 24rem;
+    overflow-wrap: break-word;
+    white-space: normal;
+    word-break: normal;
+    vertical-align: top;
+  }
 
-:is(.markdown-table, .markdown-table-dialog.chat-text) :where(th:first-child, td:first-child) {
-  padding-inline-start: 0;
-}
+  :where(th:first-child),
+  :where(td:first-child) {
+    padding-inline-start: 0;
+  }
 
-:is(.markdown-table, .markdown-table-dialog.chat-text) :where(th) {
-  border-bottom-color: var(--border-strong);
-  background: transparent;
-}
+  :where(th) {
+    border-bottom-color: var(--border-strong);
+    background: transparent;
+  }
 
-:is(.markdown-table, .markdown-table-dialog.chat-text) :where(tbody tr) {
-  transition: none;
-}
+  :where(tbody tr) {
+    transition: none;
+  }
 
-:is(.markdown-table, .markdown-table-dialog.chat-text)
-  :where(tbody tr:nth-child(even), tbody tr:hover) {
-  background: transparent;
+  @media (hover: hover) {
+    :where(tbody tr:nth-child(even)),
+    :where(tbody tr:hover) {
+      background: transparent;
+    }
+  }
 }
 
 .markdown-table-dialog.chat-text :where(thead) {
@@ -660,7 +679,8 @@
 }
 
 .chat-text :where(.markdown-link-favicon) {
-  display: none;
+  display: inline-block;
+  visibility: hidden;
   width: 1em;
   height: 1em;
   margin-inline-end: 0.3em;
@@ -668,7 +688,7 @@
 }
 
 .chat-text :where(.markdown-link-favicon.is-loaded) {
-  display: inline-block;
+  visibility: visible;
 }
 
 .chat-text :where(a:has(> .markdown-link-favicon.is-loaded)) {
@@ -1404,12 +1424,12 @@
   margin-block-start: inherit;
 }
 
-.chat-text > * + *,
-.chat-text > * + .markdown-external-image {
+.chat-text > :where(:not(:first-child)),
+.chat-text > .markdown-external-image:where(:not(:first-child)) {
   margin-block-start: var(--chat-block-gap);
 }
 
-.chat-text > * + :where(h1, h2, h3, h4) {
+.chat-text > :where(h1, h2, h3, h4):where(:not(:first-child)) {
   margin-block-start: calc(var(--chat-block-gap) * 1.5);
 }
 

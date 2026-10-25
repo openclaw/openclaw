@@ -4,14 +4,11 @@ import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { normalizeAccountId } from "../../routing/account-id.js";
 import { outboundMessageIdentities } from "./outbound-echo-state.js";
 
-type OutboundMessageIdentityScope = {
+export type OutboundMessageIdentity = {
   channel: string;
   accountId?: string;
   conversationId: string;
-};
-
-export type OutboundMessageIdentity = OutboundMessageIdentityScope &
-  ({ messageId: string; sourceId?: string } | { messageId?: string; sourceId: string });
+} & ({ messageId: string; sourceId?: string } | { messageId?: string; sourceId: string });
 
 const OUTBOUND_ECHO_WINDOW_MS = 30_000;
 const OUTBOUND_MESSAGE_IDENTITY_MAX_ENTRIES = 10_000;

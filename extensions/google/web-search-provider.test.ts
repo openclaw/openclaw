@@ -55,7 +55,7 @@ function getFetchHeaders(mockFetch: ReturnType<typeof installGeminiFetch>): Reco
   return Object.fromEntries(new Headers(init?.headers).entries());
 }
 
-function createGeminiToolOptions() {
+function createGeminiToolOptions(webSearch: Record<string, unknown> = {}) {
   return {
     config: {
       plugins: {
@@ -64,6 +64,7 @@ function createGeminiToolOptions() {
             config: {
               webSearch: {
                 apiKey: "AIza-plugin-test",
+                ...webSearch,
               },
             },
           },
@@ -75,23 +76,7 @@ function createGeminiToolOptions() {
 }
 
 function createGeminiToolWithHeaders(headers: Record<string, unknown>) {
-  return createGeminiWebSearchProvider().createTool({
-    config: {
-      plugins: {
-        entries: {
-          google: {
-            config: {
-              webSearch: {
-                apiKey: "AIza-plugin-test",
-                headers,
-              },
-            },
-          },
-        },
-      },
-    },
-    searchConfig: { provider: "gemini" },
-  });
+  return createGeminiWebSearchProvider().createTool(createGeminiToolOptions({ headers }));
 }
 
 function getGeminiFetchUrl(mockFetch: ReturnType<typeof installGeminiFetch>): string | undefined {
@@ -157,23 +142,11 @@ describe("google web search provider", () => {
   it("routes Gemini web search through plugin webSearch.baseUrl", async () => {
     const mockFetch = installGeminiFetch();
     const provider = createGeminiWebSearchProvider();
-    const tool = provider.createTool({
-      config: {
-        plugins: {
-          entries: {
-            google: {
-              config: {
-                webSearch: {
-                  apiKey: "AIza-plugin-test",
-                  baseUrl: "https://generativelanguage.googleapis.com/proxy/v1beta/",
-                },
-              },
-            },
-          },
-        },
-      },
-      searchConfig: { provider: "gemini" },
-    });
+    const tool = provider.createTool(
+      createGeminiToolOptions({
+        baseUrl: "https://generativelanguage.googleapis.com/proxy/v1beta/",
+      }),
+    );
 
     await tool?.execute({ query: "OpenClaw docs" });
 
@@ -275,11 +248,7 @@ describe("google web search provider", () => {
     const provider = createGeminiWebSearchProvider();
     const createTool = (ttl: number) =>
       provider.createTool({
-        config: {
-          plugins: {
-            entries: { google: { config: { webSearch: { apiKey: "AIza-plugin-test" } } } },
-          },
-        },
+        config: createGeminiToolOptions().config,
         searchConfig: { provider: "gemini", cacheTtlMinutes: ttl },
       });
     const query = `Gemini current request cache TTL ${cacheTtlMinutes}`;
@@ -627,16 +596,7 @@ describe("google web search provider", () => {
         }),
       );
     });
-    const tool = createGeminiWebSearchProvider().createTool({
-      config: {
-        plugins: {
-          entries: {
-            google: { config: { webSearch: { apiKey: "AIza-plugin-test" } } },
-          },
-        },
-      },
-      searchConfig: { provider: "gemini" },
-    });
+    const tool = createGeminiWebSearchProvider().createTool(createGeminiToolOptions());
     const query = "OpenClaw late-cancel Gemini cache";
 
     await expect(tool?.execute({ query }, { signal: controller.signal })).rejects.toBe(reason);
@@ -676,17 +636,7 @@ describe("google web search provider", () => {
       const provider = createGeminiWebSearchProvider();
       const tool = provider.createTool({
         config: {
-          plugins: {
-            entries: {
-              google: {
-                config: {
-                  webSearch: {
-                    apiKey: "AIza-plugin-test",
-                  },
-                },
-              },
-            },
-          },
+          plugins: createGeminiToolOptions().config.plugins,
           models: {
             providers: {
               google: createGoogleModelProviderConfig({
@@ -734,18 +684,9 @@ describe("google web search provider", () => {
     const provider = createGeminiWebSearchProvider();
     const tool = provider.createTool({
       config: {
-        plugins: {
-          entries: {
-            google: {
-              config: {
-                webSearch: {
-                  apiKey: "AIza-plugin-test",
-                  baseUrl: "https://generativelanguage.googleapis.com/plugin/v1beta/",
-                },
-              },
-            },
-          },
-        },
+        plugins: createGeminiToolOptions({
+          baseUrl: "https://generativelanguage.googleapis.com/plugin/v1beta/",
+        }).config.plugins,
         models: {
           providers: {
             google: createGoogleModelProviderConfig({

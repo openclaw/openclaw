@@ -91,7 +91,9 @@ suite.define(() => {
           return;
         }
 
-        const pin = page.locator(`.sidebar-rail [data-sidebar-entry="session:${sessionKey}"]`);
+        const pin = page.locator(
+          `[data-session-section="pinned"] .sidebar-recent-session[data-session-key="${sessionKey}"]`,
+        );
         const shortcuts = [`session:${sessionKey}`];
         for (const [after, name] of ["Pin session", "Unpin session"].entries()) {
           if (after) {

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { standaloneLookupExpression } from "./bun-standalone-data.mjs";
 
 const metadataOwnerHooks = new Map([
   ["pluginCacheExistsSync", "ImageExists"],
@@ -173,16 +174,16 @@ export function createStandaloneMetadataAdapter({ runtimeRoot, embeddedPaths, pa
     throw new Error("Missing standalone Doctor metadata facts");
   }
   const bootstrap = `(() => {
-  const doctor = ${JSON.stringify(doctor)};
-  const imageFiles = ${JSON.stringify(imageFiles)};
-  const imageDirectories = ${JSON.stringify(imageDirectories)};
-  const secretEntrypoints = ${JSON.stringify(secretEntrypoints)};
+  const doctor = ${standaloneLookupExpression(doctor)};
+  const imageFiles = ${standaloneLookupExpression(imageFiles)};
+  const imageDirectories = ${standaloneLookupExpression(imageDirectories)};
+  const secretEntrypoints = ${standaloneLookupExpression(secretEntrypoints)};
   const imageFs = import.meta.require("node:fs");
   const relative = (filename) => typeof filename === "string" && path.isAbsolute(filename)
     ? path.relative(root, filename).split(path.sep).join("/") : undefined;
   const get = (table, filename) => {
     const key = relative(filename);
-    return Object.hasOwn(table, key) ? table[key] : undefined;
+    return table(key);
   };
   const stat = (filename, lstat = false) => {
     const size = get(imageFiles, filename);
@@ -238,6 +239,7 @@ export function createStandaloneMetadataAdapter({ runtimeRoot, embeddedPaths, pa
       return { filename, rootDir: canonicalRoot };
     } catch { return; }
   };
+  globalThis.__openclawStandaloneIsEmbeddedModule = (filename) => get(imageFiles, filename) !== undefined;
   globalThis.__openclawStandaloneImageStat = stat;
   globalThis.__openclawStandaloneImageLstat = (filename) => stat(filename, true);
   globalThis.__openclawStandaloneImageExists = (filename) => {

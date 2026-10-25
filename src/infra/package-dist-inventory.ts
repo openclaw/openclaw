@@ -282,11 +282,9 @@ export async function readPackageDistInventoryIfPresent(
   return sortUniqueStrings(parsed.map(normalizeRelativePath));
 }
 
-type PackageDistFsRoot = Awaited<ReturnType<typeof openFsRoot>>;
-
 async function openPackageDistFsRootIfPresent(
   packageRoot: string,
-): Promise<PackageDistFsRoot | null> {
+): Promise<Awaited<ReturnType<typeof openFsRoot>> | null> {
   const packageFs = await openFsRoot(packageRoot, {
     hardlinks: "allow",
     symlinks: "reject",
@@ -383,6 +381,7 @@ export async function readPackageDistContentInventoryIfPresent(
 
 export async function collectPackageDistContentInventoryErrors(
   packageRoot: string,
+  warnings?: string[],
 ): Promise<string[]> {
   const expected = await readPackageDistContentInventoryIfPresent(packageRoot);
   if (expected === null) {
@@ -391,5 +390,6 @@ export async function collectPackageDistContentInventoryErrors(
   return comparePackageDistContentInventory(
     expected,
     await collectPackageDistContentInventory(packageRoot),
+    warnings,
   );
 }

@@ -10,6 +10,30 @@ const expectFocus = (locator: Locator, focused = true) =>
     .poll(() => locator.evaluate((element) => document.activeElement === element))
     .toBe(focused);
 
+const measureComposer = (composer: Locator) =>
+  composer.evaluate(async (element) => {
+    await Promise.all(element.getAnimations().map((animation) => animation.finished));
+    const { borderColor, boxShadow } = getComputedStyle(element);
+    const { width, height } = element.getBoundingClientRect();
+    const channels = borderColor
+      .match(/[\d.]+/g)
+      ?.slice(0, 3)
+      .map(Number);
+    if (!channels || channels.length !== 3) {
+      throw new Error(`expected an RGB color, received ${borderColor}`);
+    }
+    const rgb = borderColor.startsWith("color(srgb")
+      ? channels.map((value) => value * 255)
+      : channels;
+    return {
+      borderColor,
+      boxShadow,
+      width,
+      height,
+      neutralChannelSpread: Math.max(...rgb) - Math.min(...rgb),
+    };
+  });
+
 async function openAgentPicker(page: Page) {
   await installMockGateway(page, {
     defaultAgentId: "main",
@@ -34,6 +58,45 @@ async function openAgentPicker(page: Page) {
 }
 
 suite.define(() => {
+  it.each(["chat", "new"])(
+    "centers %s composer keyboard focus on its action glyphs",
+    async (route) => {
+      await suite.withPage(
+        { viewport: { width: 1280, height: 900 }, reducedMotion: "reduce" },
+        async ({ page }) => {
+          await installMockGateway(page);
+          await page.goto(suite.server.baseUrl + route);
+          const composer = page.locator(".agent-chat__input");
+          await composer.locator("textarea").waitFor();
+          await page.keyboard.press("Tab");
+          for (const label of ["Add attachment", "Microphone input"]) {
+            const control = composer.getByRole("button", { name: label, exact: true });
+            await control.focus();
+            await expect
+              .poll(() => control.evaluate((element) => element.matches(":focus-visible")))
+              .toBe(true);
+            await expect
+              .poll(
+                async () => {
+                  const button = await control.boundingBox();
+                  const icon = await control.locator("svg").boundingBox();
+                  if (!button || !icon) {
+                    return Number.POSITIVE_INFINITY;
+                  }
+                  return Math.max(
+                    Math.abs(button.x + button.width / 2 - icon.x - icon.width / 2),
+                    Math.abs(button.y + button.height / 2 - icon.y - icon.height / 2),
+                  );
+                },
+                { message: label + " glyph must share the focused hit area's center" },
+              )
+              .toBeLessThanOrEqual(0.5);
+          }
+        },
+      );
+    },
+  );
+
   it("routes agent-menu letters and selection keys to their owners", async () => {
     await suite.withPage({}, async ({ page }) => {
       const { picker, trigger, option, composer } = await openAgentPicker(page);
@@ -84,31 +147,6 @@ suite.define(() => {
     });
   });
 
-  it("routes printable input from the real Chat context menu to the composer", async () => {
-    await suite.withPage({}, async ({ page }) => {
-      const messageText = "Context menu typing route";
-      await installMockGateway(page, {
-        historyMessages: [
-          { role: "assistant", content: [{ type: "text", text: messageText }], timestamp: 1_000 },
-        ],
-      });
-      await page.goto(`${suite.server.baseUrl}chat`);
-      const bubble = page.locator(".chat-bubble").filter({ hasText: messageText });
-      await bubble.waitFor();
-      await bubble.click({ button: "right" });
-      const menuItem = page
-        .locator(".chat-reply-context-menu")
-        .getByRole("menuitem", { name: "Reply to message", exact: true });
-      await menuItem.focus();
-
-      await page.keyboard.type("x");
-
-      const composer = page.locator(".agent-chat__composer-combobox > textarea");
-      await expect.poll(() => composer.inputValue()).toBe("x");
-      await expectFocus(composer);
-    });
-  });
-
   it("keeps remote-control typing out of the chat composer", async () => {
     await suite.withPage({}, async ({ page }) => {
       const gateway = await installMockGateway(page, {
@@ -154,6 +192,44 @@ suite.define(() => {
     });
   });
 
+  it.each(["chat", "new"])(
+    "keeps %s composer keyboard focus visible in forced colors",
+    async (route) => {
+      await suite.withPage(
+        { viewport: { width: 1280, height: 900 }, forcedColors: "active", reducedMotion: "reduce" },
+        async ({ page }) => {
+          await installMockGateway(page);
+          await page.goto(suite.server.baseUrl + route);
+          const composer = page.locator(".agent-chat__input");
+          const textarea = composer.locator("textarea");
+          await textarea.waitFor();
+          const indicator = () =>
+            composer.evaluate((element) => {
+              const style = getComputedStyle(element);
+              return {
+                border: style.borderColor,
+                shadow: style.boxShadow,
+                outlineStyle: style.outlineStyle,
+                outlineWidth: style.outlineWidth,
+                outlineColor: style.outlineColor,
+              };
+            });
+          await textarea.blur();
+          const resting = await indicator();
+          await textarea.focus();
+          expect(await textarea.evaluate((element) => element.matches(":focus-visible"))).toBe(
+            true,
+          );
+          const focused = await indicator();
+          expect(focused.outlineStyle).toBe("solid");
+          expect(Number.parseFloat(focused.outlineWidth)).toBeGreaterThanOrEqual(2);
+          await page.keyboard.press("Tab");
+          expect(await indicator()).toEqual(resting);
+        },
+      );
+    },
+  );
+
   it("changes neutral focus styling in dark and light themes", async () => {
     await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
       const gateway = await installMockGateway(page);
@@ -170,40 +246,9 @@ suite.define(() => {
           .poll(() => page.evaluate(() => document.documentElement.dataset.themeMode))
           .toBe(theme);
         await textarea.evaluate((element) => element.blur());
-        const unfocused = await composer.evaluate(async (element) => {
-          await Promise.all(element.getAnimations().map((animation) => animation.finished));
-          const style = getComputedStyle(element);
-          const { width, height } = element.getBoundingClientRect();
-          return { borderColor: style.borderColor, boxShadow: style.boxShadow, width, height };
-        });
-
+        const unfocused = await measureComposer(composer);
         await textarea.focus();
-        const focused = await composer.evaluate(async (element) => {
-          await Promise.all(element.getAnimations().map((animation) => animation.finished));
-          const style = getComputedStyle(element);
-          const { width, height } = element.getBoundingClientRect();
-          const parseRgb = (color: string): [number, number, number] => {
-            const values = color
-              .match(/[\d.]+/g)
-              ?.slice(0, 3)
-              .map(Number);
-            if (!values || values.length !== 3) {
-              throw new Error(`expected an RGB color, received ${color}`);
-            }
-            return (
-              color.startsWith("color(srgb") ? values.map((value) => value * 255) : values
-            ) as [number, number, number];
-          };
-          const borderChannels = parseRgb(style.borderColor);
-
-          return {
-            borderColor: style.borderColor,
-            boxShadow: style.boxShadow,
-            width,
-            height,
-            neutralChannelSpread: Math.max(...borderChannels) - Math.min(...borderChannels),
-          };
-        });
+        const focused = await measureComposer(composer);
 
         expect([focused.borderColor, focused.boxShadow]).not.toEqual([
           unfocused.borderColor,

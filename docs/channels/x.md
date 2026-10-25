@@ -80,6 +80,22 @@ For multiple bots, put account-specific values under
 `channels.x.accounts.<accountId>`. Root fields are shared defaults; the default
 account ID is `default`.
 
+## Requester identity and credit
+
+X polling and Activity streams obtain immutable `author_id` values from the
+authenticated X API. An allowlist entry admits work; it does not identify a
+Gateway person. An administrator must [link the channel sender](/concepts/user-model#channel-identity-links)
+to their existing profile with `users.linkChannelIdentity`, using `channelId: "x"`,
+the exact configured account ID, and that immutable sender ID. Handles and
+display names are not identity evidence.
+
+After linking, subsequent turns carry the host-verified requester profile. New
+visible work sessions default to that requester when the source has no different
+human owner. Their contribution is eligible for the profile's existing verified
+GitHub credit preference, including delegated work. Linking does not rewrite
+historical creators, reassign existing sessions, change sharing, or grant an
+operator role. Unlinked senders remain channel identities, not Gateway profiles.
+
 ## Public work sessions
 
 Set `channels.x.accounts.<accountId>.autoPublishWorkSessions: true` (or the

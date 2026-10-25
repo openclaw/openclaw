@@ -13,13 +13,11 @@ import {
 } from "../agents/test-helpers/model-fallback-runner.test-support.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { captureCronUpdatedInferenceBinding } from "../gateway/server-methods/cron-input-validation.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
-import { captureCronInferenceBinding } from "./inference-binding.runtime.js";
 import {
   makeIsolatedAgentJobFixture,
   makeIsolatedAgentParamsFixture,
@@ -31,6 +29,10 @@ import type { CronStoredJob } from "./types.js";
 
 const runCronIsolatedAgentTurn = await h.loadRunCronIsolatedAgentTurn();
 const { resolveAgentDir } = await import("./isolated-agent/run.runtime.js");
+// Install the harness before capture loads the shared scheduled-model selector.
+const { captureCronInferenceBinding } = await import("./inference-binding.runtime.js");
+const { captureCronUpdatedInferenceBinding } =
+  await import("../gateway/server-methods/cron-input-validation.js");
 const platformId = "openai:platform";
 const subscriptionId = "openai:subscription";
 
@@ -126,6 +128,15 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
     });
     // The real credential owner resolves the canonical main directory, not a custom test root.
     vi.mocked(resolveAgentDir).mockReturnValue(state.agentDir());
+    h.loadModelCatalogOwnerMock.mockImplementation(async ({ config: cfg, agentId = "main" }) => ({
+      agentId,
+      agentDir: state.agentDir(),
+      workspaceDir: state.workspaceDir,
+      config: cfg,
+      modelCatalog: { entries: [], routeVariants: [] },
+    }));
+    h.resolveConfiguredModelRefMock.mockReturnValue({ provider: "openai", model: "gpt-4.1" });
+    h.resolveAllowedModelRefMock.mockReturnValue({ ref: { provider: "openai", model: "gpt-4.1" } });
     h.mockRunCronFallbackPassthrough();
   });
 
@@ -356,6 +367,13 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
       profiles: { "anthropic:default": { provider: "anthropic", mode: "token" } },
       order: { anthropic: ["anthropic:default"] },
     };
+    h.resolveConfiguredModelRefMock.mockReturnValue({
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+    });
+    h.resolveAllowedModelRefMock.mockReturnValue({
+      ref: { provider: "anthropic", model: "claude-opus-4-6" },
+    });
     return cfg;
   };
 
@@ -374,10 +392,6 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
         profileId: "anthropic:default",
         authRequirement: "subscription",
         source,
-      });
-      h.resolveConfiguredModelRefMock.mockReturnValue({
-        provider: "anthropic",
-        model: "claude-opus-4-6",
       });
       let assertCurrent: (() => void) | undefined;
       h.runCliAgentMock.mockImplementation(async (request) => {
@@ -411,10 +425,6 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
       setupClaudeCliBackend();
       const cfg = claudeCliConfig();
       const binding = await captureCronInferenceBinding({ cfg, agentId: "main" });
-      h.resolveConfiguredModelRefMock.mockReturnValue({
-        provider: "anthropic",
-        model: "claude-opus-4-6",
-      });
       const credentialUse = vi.fn();
       h.runCliAgentMock.mockImplementation(async (request) => {
         expect(request.assertCurrent).toBeTypeOf("function");

@@ -15,12 +15,8 @@ const { http, isConfigured, refreshAuth, resolveAuth } = vi.hoisted(() => ({
     createProviderOperationDeadline: vi.fn((params: Record<string, unknown>) => params),
     postJsonRequest: vi.fn(),
     postMultipartRequest: vi.fn(),
-    resolveProviderHttpRequestConfig: vi.fn((params: Record<string, unknown>) => ({
-      baseUrl: params.baseUrl ?? params.defaultBaseUrl,
-      allowPrivateNetwork: false,
-      headers: new Headers(params.defaultHeaders as HeadersInit | undefined),
-      dispatcherPolicy: undefined,
-    })),
+    resolveProviderHttpRequestConfig:
+      vi.fn<typeof import("openclaw/plugin-sdk/provider-http").resolveProviderHttpRequestConfig>(),
     resolveProviderOperationTimeoutMs: vi.fn(
       (params: Record<string, unknown>) =>
         (params.deadline as { timeoutMs?: number }).timeoutMs ?? params.defaultTimeoutMs,
@@ -51,6 +47,7 @@ vi.mock("openclaw/plugin-sdk/provider-http", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/provider-http")>(
     "openclaw/plugin-sdk/provider-http",
   );
+  http.resolveProviderHttpRequestConfig.mockImplementation(actual.resolveProviderHttpRequestConfig);
   return { ...actual, ...http };
 });
 
@@ -256,17 +253,15 @@ describe("microsoft foundry image generation provider", () => {
       baseUrl: "https://example.services.ai.azure.com/openai/v1",
       expiresAt: Date.now() + 60_000,
     });
-    http.resolveProviderHttpRequestConfig.mockImplementationOnce(
-      (params: Record<string, unknown>) => ({
-        baseUrl: params.baseUrl ?? params.defaultBaseUrl,
-        allowPrivateNetwork: false,
-        headers: new Headers({
-          ...(params.defaultHeaders as Record<string, string>),
-          "Content-Type": "application/json",
-        }),
-        dispatcherPolicy: undefined,
+    http.resolveProviderHttpRequestConfig.mockImplementationOnce((params) => ({
+      baseUrl: params.baseUrl ?? params.defaultBaseUrl,
+      allowPrivateNetwork: false,
+      headers: new Headers({
+        ...(params.defaultHeaders as Record<string, string>),
+        "Content-Type": "application/json",
       }),
-    );
+      dispatcherPolicy: undefined,
+    }));
     http.postMultipartRequest.mockResolvedValue(
       imageResponse(Buffer.from("edited").toString("base64")),
     );

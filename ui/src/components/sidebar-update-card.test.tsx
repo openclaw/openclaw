@@ -8,6 +8,7 @@ import { NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT } from "../app/native-link-rou
 import { formatDateTimeMs } from "../lib/format.ts";
 import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
+import { restorePropertyDescriptor } from "../test-helpers/property-descriptor.ts";
 import { createUpdateRunFixture } from "../test-helpers/update-run.ts";
 import { SidebarUpdateCard, type SidebarUpdateCardProps } from "./sidebar-update-card.tsx";
 
@@ -130,11 +131,7 @@ afterEach(async () => {
   await Promise.resolve();
   vi.useRealTimers();
   vi.restoreAllMocks();
-  if (originalWebkit) {
-    Object.defineProperty(window, "webkit", originalWebkit);
-  } else {
-    Reflect.deleteProperty(window, "webkit");
-  }
+  restorePropertyDescriptor(window, "webkit", originalWebkit);
 });
 
 describe("SidebarUpdateCard", () => {
@@ -147,11 +144,14 @@ describe("SidebarUpdateCard", () => {
       onCheckStatus: vi
         .fn()
         .mockReturnValueOnce(expansion.promise)
-        .mockReturnValueOnce(opening.promise),
+        .mockImplementationOnce(async () => {
+          const ready = await opening.promise;
+          element.setProps({ updateAvailable: freshGitUpdate });
+          return ready;
+        }),
     });
     try {
       await element.expand();
-      await element.update({ updateAvailable: freshGitUpdate });
       expansion.resolve(true);
       await vi.waitFor(() => expect(element.action()?.disabled).toBe(false));
       const action = element.action()!;
@@ -163,6 +163,10 @@ describe("SidebarUpdateCard", () => {
       await vi.waitFor(() =>
         expect(document.querySelector("openclaw-modal-dialog")).not.toBeNull(),
       );
+      const modal = document.querySelector("openclaw-modal-dialog")!;
+      expect(modal.textContent).toContain("cccccccc");
+      expect(modal.textContent).toContain("9 commits");
+      expect(modal.textContent).not.toContain("bbbbbbbb");
     } finally {
       document.querySelector("openclaw-modal-dialog")?.dispatchEvent(new Event("modal-cancel"));
       restoreDialog();

@@ -231,6 +231,42 @@ it("keeps a missing reservation current when its database is created", async () 
   });
 });
 
+it.each(["symlink", "hardlink"] as const)(
+  "borrows one foreground admission for %s aliases without admitting a worker reservation",
+  async (kind) => {
+    const { options, root } = makeFixture("openclaw-batch-alias-");
+    fs.writeFileSync(options.path, "database");
+    const aliasDirectory = path.join(root, "alias");
+    const alias = {
+      ...options,
+      path:
+        kind === "symlink"
+          ? path.join(aliasDirectory, path.basename(options.path))
+          : path.join(root, "alias.sqlite"),
+    };
+    if (kind === "symlink") {
+      fs.symlinkSync(root, aliasDirectory, process.platform === "win32" ? "junction" : "dir");
+    } else {
+      fs.linkSync(options.path, alias.path);
+    }
+    await write(options, async () => {
+      expect(await writeMany([alias, options], () => "read complete")).toBe("read complete");
+    });
+    await workerWrite(options, async () => {
+      await expect(writeMany([alias, options], () => "unsafe read")).rejects.toThrow(
+        "cannot reenter an active SQLite writer admission",
+      );
+    });
+    const distinct = { ...options, path: path.join(root, "distinct.sqlite") };
+    fs.writeFileSync(distinct.path, "other database");
+    await write(options, async () => {
+      await expect(writeMany([options, distinct], () => "unsafe read")).rejects.toThrow(
+        "cannot reenter an active SQLite writer admission",
+      );
+    });
+  },
+);
+
 it.each([
   { count: 773, outcome: "ok" },
   { count: 5_000, outcome: "error" },
@@ -294,6 +330,65 @@ it("releases earlier reservations when a later database path is invalid", async 
   expect(run).not.toHaveBeenCalled();
   expect(await follower).toBe("released");
 });
+
+it.each(["worker", "multiple stores"] as const)(
+  "identifies the inherited %s admission when refusing a nested session read",
+  async (kind) => {
+    const { options } = makeFixture(
+      "openclaw-reentry-diagnostic-",
+      "usage",
+      path.join(...Array.from({ length: 12 }, () => "long-directory"), "agent.sqlite"),
+    );
+    const second = { ...options, path: path.join(path.dirname(options.path), "second.sqlite") };
+    let now = 100;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    const consume = vi.fn();
+    const run = async () => {
+      const request = trackWorkerRequest("sqlite_writer", "session.entry.patch.commit");
+      request.started();
+      const privateRequest = trackWorkerRequest("sqlite_writer", "private-command-payload");
+      privateRequest.started();
+      await Promise.resolve();
+      now = 350;
+      const error = await writeMany(
+        kind === "worker" ? [options] : [options, second],
+        consume,
+      ).then(
+        () => undefined,
+        (cause: unknown) => cause,
+      );
+      expect(error).toBeInstanceOf(Error);
+      expect(String(error)).toContain(
+        "Session read batch cannot reenter an active SQLite writer admission",
+      );
+      expect(String(error)).toContain(`"operation":"${kind === "worker" ? "worker" : "direct"}"`);
+      expect(String(error)).toContain('"ageMs":250');
+      expect(String(error)).toContain(`"threadId":${threadId}`);
+      expect(String(error)).toContain(`"isMainThread":${isMainThread}`);
+      expect(String(error)).toContain('"database":');
+      expect(String(error)).toContain("agent.sqlite");
+      expect(String(error)).not.toContain(path.dirname(options.path));
+      expect(String(error).length).toBeLessThan(600);
+      if (kind === "worker") {
+        expect(String(error)).toContain(
+          '"workerOperations":["session.entry.patch.commit","other"]',
+        );
+      } else {
+        expect(String(error)).toContain('"caller":"session-manager.write"');
+      }
+      expect(String(error)).not.toContain("private-command-payload");
+      expect(consume).not.toHaveBeenCalled();
+      request.completed();
+      privateRequest.completed();
+    };
+    if (kind === "worker") {
+      await workerWrite(options, run);
+    } else {
+      await write(options, run, false, undefined, undefined, "session-manager.write");
+    }
+    await expect(writeMany([options], () => "released")).resolves.toBe("released");
+  },
+);
 
 function fixture() {
   const base = makeFixture(

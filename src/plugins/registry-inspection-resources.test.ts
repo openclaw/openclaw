@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { acquirePluginRegistryForInspection, loadPluginRegistryHandle } from "./loader.js";
@@ -20,6 +20,10 @@ import {
   getPluginLoaderCacheState,
 } from "./registry-lifecycle.js";
 import type { PluginRegistry } from "./registry-types.js";
+import {
+  PluginRuntimeCloseCompletedError,
+  PluginRuntimeCloseRetainedError,
+} from "./runtime-close-error.js";
 import {
   disposePluginRegistryInstances,
   getActivePluginRegistry,
@@ -61,6 +65,20 @@ function disposalError(fixture: InspectionFixture, cause = false) {
 }
 
 describe("owned plugin inspections", () => {
+  it.each([false, true])("preserves frozen disposal errors (retained: %s)", async (retained) => {
+    const failure = retained
+      ? new PluginRuntimeCloseRetainedError(new Error("Unfinished disposal"))
+      : new Error("Completed disposal failed");
+    Object.freeze(failure);
+    const resources = new PluginRegistryInspectionResources(async () => {
+      throw failure;
+    });
+    const outcome = await resources.release().catch((error: unknown) => error);
+    expect(outcome).toBeInstanceOf(AggregateError);
+    expect(outcome instanceof PluginRuntimeCloseCompletedError).toBe(!retained);
+    expect(outcome).toMatchObject({ errors: [failure] });
+  });
+
   it.each([false, true])(
     "keeps borrowed sources through final native cleanup (failure: %s)",
     async (fails) => {
@@ -623,7 +641,8 @@ describe("owned plugin inspections", () => {
         cfg: fixture.config,
         doctorFixCommand: "openclaw doctor --fix",
       });
-      await vi.waitFor(() => expect(fixture.state.connections).toHaveLength(1));
+      await Promise.race([fixture.state.disposalStarted.promise, warnings]);
+      expect(fixture.state.connections).toHaveLength(1);
       let completed = false;
       void warnings.then(() => {
         completed = true;

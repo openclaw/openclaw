@@ -93,13 +93,13 @@ describe("native hook relay store", () => {
     expect(await renew({ ...replacement, expiresAtMs: 40_000 })).toBe(true);
     expect(await remove(replacement)).toBe(true);
     expect(await renew(replacement)).toBe(true);
+    using _ = vi.spyOn(Date, "now").mockReturnValue(30_001);
     expect(
       await pruneNativeHookRelayBridgeRecords({
         currentPid: replacement.pid,
         isPidDead: () => {
           throw new Error("Expired rows do not need a PID probe");
         },
-        nowMs: 30_001,
         stateDbPath: primaryStateDbPath,
       }),
     ).toEqual([{ relayId: replacement.relayId, pid: replacement.pid, reason: "expired" }]);
@@ -134,10 +134,10 @@ describe("native hook relay store", () => {
     }
     const isPidDead = vi.fn((pid: number) => pid === dead.pid);
 
+    using _ = vi.spyOn(Date, "now").mockReturnValue(10_000);
     const pruned = await pruneNativeHookRelayBridgeRecords({
       currentPid: 100,
       isPidDead,
-      nowMs: 10_000,
       stateDbPath: primaryStateDbPath,
     });
 
@@ -170,6 +170,7 @@ describe("native hook relay store", () => {
     });
     await write(stale, 1_000);
 
+    using _ = vi.spyOn(Date, "now").mockReturnValue(10_000);
     const pruned = await pruneNativeHookRelayBridgeRecords({
       currentPid: 100,
       isPidDead: async (pid) => {
@@ -177,7 +178,6 @@ describe("native hook relay store", () => {
         await write(replacement, 2_000);
         return true;
       },
-      nowMs: 10_000,
       stateDbPath: primaryStateDbPath,
     });
 

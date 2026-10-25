@@ -7,6 +7,7 @@ import { asNullableRecord as asRecord } from "@openclaw/normalization-core/recor
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringifiedOptionalString,
+  readNonBlankString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeCsvOrLooseStringList } from "@openclaw/normalization-core/string-normalization";
 import { Command } from "commander";
@@ -21,7 +22,7 @@ import {
 import { resolveMcpTransportConfig } from "../agents/mcp-transport-config.js";
 import { parseConfigValue } from "../auto-reply/reply/config-value.js";
 import { renderEnvTemplateToken, scanEnvTemplateTokens } from "../config/env-substitution.js";
-import { listConfiguredMcpServers } from "../config/mcp-config.js";
+import { listConfiguredMcpServers, redactMcpServersForDisplay } from "../config/mcp-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { executableFileExists, safeStat } from "../infra/path-existence.js";
@@ -633,7 +634,7 @@ export function registerMcpCli(program: Command) {
     .action(async (opts: { json?: boolean }) => {
       const loaded = await loadMcpConfig(opts);
       if (opts.json) {
-        defaultRuntime.writeJson(loaded.mcpServers);
+        defaultRuntime.writeJson(redactMcpServersForDisplay(loaded.mcpServers));
         return;
       }
       const entries = Object.entries(loaded.mcpServers).toSorted(([a], [b]) => a.localeCompare(b));
@@ -664,7 +665,7 @@ export function registerMcpCli(program: Command) {
     .option("--json", "Print JSON")
     .action(async (name: string | undefined, opts: { json?: boolean }) => {
       const loaded = await loadMcpConfig(opts);
-      const value = name ? requireMcpServer(loaded, name, opts) : loaded.mcpServers;
+      const value = redactMcpServersForDisplay(selectMcpServers(loaded, name, opts));
       if (!opts.json) {
         defaultRuntime.log(
           name
@@ -672,7 +673,7 @@ export function registerMcpCli(program: Command) {
             : `OpenClaw-managed MCP servers (${loaded.path}):`,
         );
       }
-      defaultRuntime.writeJson(value ?? {});
+      defaultRuntime.writeJson(name ? value[name] : value);
     });
 
   mcp
@@ -901,7 +902,7 @@ export function registerMcpCli(program: Command) {
           },
         ) => {
           const server: Record<string, unknown> = {};
-          const command = normalizeStringifiedOptionalString(opts.command);
+          const command = readNonBlankString(opts.command);
           const url = normalizeStringifiedOptionalString(opts.url);
           if (command && url) {
             fail("Specify either --command for stdio or --url for HTTP, not both.");
@@ -915,7 +916,7 @@ export function registerMcpCli(program: Command) {
               server.args = opts.arg;
             }
             setOptionalField(server, "env", parseKeyValueEntries(opts.env, "--env"));
-            setOptionalField(server, "cwd", normalizeStringifiedOptionalString(opts.cwd));
+            setOptionalField(server, "cwd", readNonBlankString(opts.cwd));
           }
           if (url) {
             server.url = url;
@@ -937,9 +938,7 @@ export function registerMcpCli(program: Command) {
           if (targetName && Object.hasOwn(loaded.mcpServers, targetName)) {
             fail(`MCP server ${JSON.stringify(targetName)} already exists.`);
           }
-          const shouldProbe =
-            opts.probe !== false && server.enabled !== false && server.auth !== "oauth";
-          if (shouldProbe) {
+          if (opts.probe !== false && server.enabled !== false && server.auth !== "oauth") {
             await probeMcpServersOrFail({
               config: loaded.config,
               path: loaded.path,

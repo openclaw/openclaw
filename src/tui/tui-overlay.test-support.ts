@@ -5,18 +5,7 @@ import {
   captureChoicePromptSelector,
   type TestChoiceSelector,
 } from "./components/choice-prompt.test-support.js";
-
-export function createOverlayHandle(): OverlayHandle {
-  return {
-    hide: vi.fn(),
-    setHidden: vi.fn(),
-    isHidden: vi.fn(() => false),
-    focus: vi.fn(),
-    unfocus: vi.fn(),
-    isFocused: vi.fn(() => true),
-    getBounds: () => undefined,
-  };
-}
+import { createOverlayHandle } from "./tui-overlay-handle.test-support.js";
 
 export function createPendingRequests() {
   const cleanups: Array<() => Promise<void>> = [];

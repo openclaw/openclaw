@@ -10,7 +10,7 @@ import {
   RESPAWN_SIGNAL_FORCE_KILL_GRACE_MS,
   resolveLauncherStopTimeoutMs,
 } from "./gateway-shutdown-budget.mjs";
-import { withNodeRuntimePath } from "./node-runtime-env.mjs";
+import { nodeRuntimePathEntries, withNodeRuntimePath } from "./node-runtime-env.mjs";
 import {
   detectCurrentSqliteCapabilities,
   nodeRuntimeFailure,
@@ -44,6 +44,25 @@ const respawnSignals =
     ? ["SIGTERM", "SIGINT", "SIGBREAK"]
     : ["SIGTERM", "SIGINT", "SIGHUP", "SIGQUIT"];
 const respawnSignalForceKillGraceMs = RESPAWN_SIGNAL_FORCE_KILL_GRACE_MS;
+
+/**
+ * Startup-only bootstrap cannot depend on dist or installed packages, so this
+ * mirrors formatErrorStackWithMessage
+ * (packages/normalization-core/src/error-coercion.ts): Bun can materialize
+ * `stack` during garbage collection with a bare header that drops the message.
+ */
+function formatRespawnErrorDetail(error) {
+  const name = typeof error.name === "string" && error.name ? error.name : "Error";
+  const message = typeof error.message === "string" ? error.message : "";
+  const stack = typeof error.stack === "string" ? error.stack : "";
+  if (!stack || !message || stack.includes(message)) {
+    return stack || message || name;
+  }
+  const header = `${name}: ${message}`;
+  const lineEnd = stack.indexOf("\n");
+  const firstLine = lineEnd < 0 ? stack : stack.slice(0, lineEnd);
+  return firstLine === name ? header + stack.slice(firstLine.length) : `${header}\n${stack}`;
+}
 
 /** Resolve true only after the replacement and its stdio close; the caller must return. */
 export const runRespawnedChild = ({ command, args, env }) => {
@@ -143,7 +162,7 @@ export const runRespawnedChild = ({ command, args, env }) => {
     child.once("error", (error) => {
       failed = true;
       process.stderr.write(
-        `[openclaw] Failed to respawn launcher: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`,
+        `[openclaw] Failed to respawn launcher: ${error instanceof Error ? formatRespawnErrorDetail(error) : String(error)}\n`,
       );
     });
     child.once("exit", () => {
@@ -589,7 +608,7 @@ function* availableNodeCandidates(homeDir, env) {
       ? Object.keys(env).find((key) => key.toUpperCase() === "PATH") || "PATH"
       : "PATH";
   const binary = process.platform === "win32" ? "node.exe" : "node";
-  for (const directory of (env[pathKey] || "").split(path.delimiter)) {
+  for (const directory of nodeRuntimePathEntries(env[pathKey])) {
     if (path.isAbsolute(directory)) {
       yield [path.join(directory, binary), "PATH"];
     }

@@ -13,6 +13,7 @@ import {
   getModelRegistryRuntime,
   initializeModelRegistryRuntime,
 } from "../agents/sessions/model-registry-runtime.js";
+import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
 import { ZERO_USAGE_FIXTURE } from "../agents/test-helpers/usage-fixtures.js";
 import { openClawAgentCoreRuntime } from "../plugin-sdk/agent-core.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -27,18 +28,15 @@ import {
   trackCompletion,
 } from "./plugin-instance.test-support.js";
 
-const model: Model = {
+const model: Model = makeProviderModelFixture({
   id: "consumer-fixture",
   name: "Consumer fixture",
   api: "test-api",
   provider: "test-provider",
   baseUrl: "https://example.test",
-  reasoning: false,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 8000,
   maxTokens: 1000,
-};
+});
 const user = { role: "user" as const, content: "Summarize this synthetic turn.", timestamp: 1 };
 const message: AssistantMessage = {
   role: "assistant",

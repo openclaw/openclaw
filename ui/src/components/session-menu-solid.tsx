@@ -94,17 +94,14 @@ function SessionMenuContent(
     }
   };
   const actions = new SessionMenuActions(
-    {
-      get updateComplete() {
-        return host.updateComplete;
-      },
-      focusCurrentView() {
+    () => {
+      void host.updateComplete.then(() => {
         if (compactView() === "icon") {
           view.appearance.focusFirst();
         } else {
           menu?.focusFirst();
         }
-      },
+      });
     },
     readState,
     (action) => props.onAction(action),

@@ -7,10 +7,8 @@ import type {
   ArtifactsDownloadResult,
   ArtifactsListResult,
 } from "../../packages/gateway-protocol/src/schema/artifacts.js";
-import {
-  writeOpenAiResponsesSse,
-  writeOpenAiResponsesText,
-} from "../../test/helpers/openai-responses-sse.js";
+import { readRequestText } from "../../test/helpers/gateway-integration-fixtures.js";
+import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
@@ -21,7 +19,7 @@ import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
   closeProvider,
   listenProvider,
-  readProviderBody,
+  writeToolCallResponse,
 } from "./gateway-provider-fixture.test-support.js";
 import { parseSseEvents } from "./http-stream.test-support.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
@@ -111,7 +109,7 @@ it(
     });
     const provider = createServer((request, response) => {
       void (async () => {
-        const input = await readProviderBody(request);
+        const input = await readRequestText(request);
         if (request.method !== "POST" || request.url !== "/v1/responses") {
           response.writeHead(404).end();
           return;
@@ -152,29 +150,7 @@ it(
               ...(selected.name === "cancel" ? { final: false } : {}),
             }),
           };
-          writeOpenAiResponsesSse(response, [
-            {
-              type: "response.output_item.added",
-              output_index: 0,
-              item: { ...item, status: "in_progress", arguments: "" },
-            },
-            {
-              type: "response.function_call_arguments.done",
-              item_id: item.id,
-              output_index: 0,
-              arguments: item.arguments,
-            },
-            { type: "response.output_item.done", output_index: 0, item },
-            {
-              type: "response.completed",
-              response: {
-                id: `response_${selected.name}`,
-                status: "completed",
-                output: [item],
-                usage: { input_tokens: 10, output_tokens: 10, total_tokens: 20 },
-              },
-            },
-          ]);
+          writeToolCallResponse(response, item, `response_${selected.name}`, 10, 10);
         } else if (selected.name === "cancel") {
           heldFinalRequest.resolve();
         } else {

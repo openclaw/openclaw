@@ -10,6 +10,7 @@ import {
   SERVICE_AUDIT_CODES as codes,
 } from "./service-audit.js";
 import { buildServiceEnvironment } from "./service-env.js";
+import { nativeExit } from "./systemd-exec.test-support.js";
 import {
   execSystemctlMock,
   execSystemctlUserMock,
@@ -371,12 +372,7 @@ describe("auditGatewayServiceConfig systemd", () => {
     );
   }
   function manager(lines: string[]) {
-    execSystemctlUserMock.mockResolvedValueOnce({
-      stdout: lines.join("\n"),
-      stderr: "",
-      code: 0,
-      termination: "exit",
-    });
+    execSystemctlUserMock.mockResolvedValueOnce(nativeExit(lines.join("\n")));
   }
   const systemdCodes = (result: Awaited<ReturnType<typeof audit>>) =>
     result.issues.filter((issue) => issue.code.startsWith("systemd-")).map((issue) => issue.code);
@@ -437,12 +433,13 @@ describe("auditGatewayServiceConfig systemd", () => {
       "TimeoutStopUSec=5min 30s",
       "ControlGroup=/user.slice/user-1000.slice/user@1000.service/app.slice/openclaw-audit.service",
     ]);
-    execSystemctlMock.mockResolvedValue({
-      code: timeout ? 0 : 1,
-      stdout: timeout ? `LoadState=loaded\nTimeoutStopUSec=${timeout}` : "",
-      stderr: "",
-      termination: "exit",
-    });
+    execSystemctlMock.mockResolvedValue(
+      nativeExit(
+        timeout ? `LoadState=loaded\nTimeoutStopUSec=${timeout}` : "",
+        "",
+        timeout ? 0 : 1,
+      ),
+    );
     const result = await auditUnit(321);
     expect(systemdCodes(result)).toEqual(warned ? ["systemd-user-manager-stop-timeout"] : []);
     if (warned) {

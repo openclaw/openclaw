@@ -6,7 +6,6 @@ import {
   createOptimistic,
   createSignal,
   Errored,
-  flush,
   latest,
   onSettled,
 } from "solid-js";
@@ -185,10 +184,7 @@ export function SidebarUpdateCard(
     const completion = (async () => check())().catch(() => false);
     setTargetCompletion({ result: completion });
     try {
-      const refreshed = await checkStatus(completion);
-      // The action has settled; commit the overlay's fresh props before live checks.
-      flush();
-      return refreshed;
+      return await checkStatus(completion);
     } finally {
       targetCheckPending = false;
     }

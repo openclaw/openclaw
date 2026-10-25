@@ -27,7 +27,6 @@ export function applyManualCompactInTransaction(
     events: TranscriptEvent[];
     nowMs?: number;
   },
-  projection?: { scheduleProjectionReconcile: false; onProjectionReconcileNeeded?: () => void },
 ) {
   assertSqliteTranscriptSnapshotUnchanged(database, scope.sessionId, input.rows);
   const current = readSessionEntrySelectionSnapshot(database, scope.sessionKey, true);
@@ -40,7 +39,9 @@ export function applyManualCompactInTransaction(
   if (!previous || previous.sessionId !== scope.sessionId) {
     throw new Error(`SQLite session changed before compacting ${scope.sessionId}`);
   }
-  replaceSqliteTranscriptEventsInTransaction(database, scope, input.events, projection);
+  replaceSqliteTranscriptEventsInTransaction(database, scope, input.events, {
+    rebuildProjectionSynchronously: true,
+  });
   const next = projectManuallyCompactedSessionEntry(
     previous.priorWorkspace
       ? (readSessionEntryRow(database, scope.sessionKey)?.entry ?? previous)

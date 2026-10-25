@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
 import { applyModelDefaults as applyModelDefaultsWithPolicy } from "./defaults.js";
 import type { ModelDefinitionConfig, ModelProviderConfig, OpenClawConfig } from "./types.js";
 
@@ -83,13 +84,9 @@ describe("applyModelDefaults", () => {
   function buildCustomProviderManifestRegistry() {
     return {
       plugins: [
-        {
+        createPluginManifestRecordFixture({
           id: "custom-provider-plugin",
-          channels: [],
           providers: ["myproxy"],
-          cliBackends: [],
-          skills: [],
-          hooks: [],
           origin: "config",
           rootDir: "/tmp/custom-provider-plugin",
           source: "test",
@@ -102,7 +99,7 @@ describe("applyModelDefaults", () => {
               },
             },
           },
-        },
+        }),
       ],
       diagnostics: [],
     } satisfies PluginManifestRegistry;

@@ -18,6 +18,68 @@ vi.mock("../../agents/auth-profiles.runtime.js", () => ({
 
 afterEach(() => resetPluginRuntimeStateForTest());
 
+test.each([
+  { name: "configured selection", originProvider: "openai", originModel: "gpt-x", reset: false },
+  { name: "trimmed selection", originProvider: " openai ", originModel: " gpt-x ", reset: false },
+  { name: "legacy fallback", reset: true },
+  { name: "another model", originProvider: "openai", originModel: "gpt-old", reset: true },
+  { name: "another provider", originProvider: "other", originModel: "gpt-x", reset: true },
+  { name: "incomplete origin", originProvider: "openai", reset: true },
+  { name: "case-distinct model", originProvider: "openai", originModel: "GPT-X", reset: true },
+  {
+    name: "blank override provider",
+    provider: " ",
+    originProvider: "openai",
+    originModel: "gpt-x",
+    reset: true,
+  },
+  {
+    name: "missing override provider",
+    missingProvider: true,
+    originProvider: "openai",
+    originModel: "gpt-x",
+    reset: true,
+  },
+])("Codex model cleanup preserves only complete self-origin selections: $name", async (fixture) => {
+  await withStateDirEnv("reply-codex-self-origin-", async () => {
+    const entry: SessionEntry = {
+      sessionId: "child",
+      updatedAt: 1,
+      providerOverride: fixture.missingProvider ? undefined : (fixture.provider ?? "openai"),
+      modelOverride: "gpt-x",
+      modelOverrideSource: "auto",
+      modelOverrideRouteResolution: "resolved",
+      modelOverrideFallbackOriginProvider: fixture.originProvider,
+      modelOverrideFallbackOriginModel: fixture.originModel,
+    };
+    const before = { ...entry };
+    const selection = await createModelSelectionState({
+      agentId: "main",
+      cfg: {
+        plugins: { enabled: false },
+        agents: { defaults: { models: { "openai/gpt-x": { agentRuntime: { id: "codex" } } } } },
+      },
+      agentCfg: undefined,
+      sessionEntry: entry,
+      sessionStore: { child: entry },
+      sessionKey: "child",
+      defaultProvider: "openai",
+      defaultModel: "gpt-x",
+      provider: "openai",
+      model: "gpt-x",
+      hasModelDirective: false,
+    });
+    expect(selection.resetModelOverride).toBe(fixture.reset);
+    expect(entry.modelOverride).toBe(fixture.reset ? undefined : "gpt-x");
+    if (!fixture.reset) {
+      expect(entry).toEqual(before);
+    }
+    expect(selection).toMatchObject({
+      provider: "openai",
+      model: "gpt-x",
+    });
+  });
+});
 function selectModel(params: Partial<Parameters<typeof createModelSelectionState>[0]>) {
   return createModelSelectionState({
     agentId: "main",

@@ -1,12 +1,10 @@
 import { For, onSettled, Show } from "solid-js";
 import { uploadsEnabled } from "../../../lib/uploads.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
-import {
-  type ChatAttachmentInputHandle,
-  handleChatAttachmentFileSelect,
-} from "./chat-attachment-inputs.ts";
+import type { ChatAttachmentInputHandle } from "./chat-attachment-inputs.ts";
 import { appendChatAttachmentFiles } from "./chat-attachments.ts";
-import { ChatCameraCapture, type OpenClawChatCameraCapture } from "./chat-camera-capture.tsx";
+import type { OpenClawChatCameraCapture } from "./chat-camera-capture.tsx";
+import "./chat-camera-capture.css";
 
 export function ChatAttachmentInputs(
   props: ChatAttachmentControlsProps & { inputHandle: ChatAttachmentInputHandle },
@@ -24,19 +22,21 @@ export function ChatAttachmentInputs(
         onSettled(() => props.inputHandle.bindInputs({ inputs, camera }));
         return (
           <>
-            <ChatCameraCapture
+            {/* The lazy plus menu registers this retained host before camera activation. */}
+            <openclaw-chat-camera-capture
               ref={(element) => {
                 camera = element;
               }}
-              disabled={Boolean(props.disabled) || props.cameraActive === false}
-              readSignal={props.readSignal ?? props.attachmentReads?.readSignal}
-              onCapture={(file: File) => {
+              style={{ display: "contents" }}
+              prop:disabled={Boolean(props.disabled) || props.cameraActive === false}
+              prop:readSignal={props.readSignal ?? props.attachmentReads?.readSignal}
+              prop:onCapture={(file: File) => {
                 if (!props.disabled) {
                   appendChatAttachmentFiles([file], props);
                 }
               }}
-              onNativeCapture={openInput("camera")}
-              onUpload={openInput("photo")}
+              prop:onNativeCapture={openInput("camera")}
+              prop:onUpload={openInput("photo")}
             />
             <For each={["file", "photo", "camera"] as const}>
               {(kind) => (
@@ -54,7 +54,13 @@ export function ChatAttachmentInputs(
                   disabled={props.disabled}
                   onChange={(event) => {
                     if (!props.disabled) {
-                      handleChatAttachmentFileSelect(event, props);
+                      const input = event.target;
+                      if (!(input instanceof HTMLInputElement)) {
+                        return;
+                      }
+                      const files = [...(input.files ?? [])];
+                      input.value = "";
+                      appendChatAttachmentFiles(files, props);
                     }
                   }}
                 />

@@ -188,6 +188,21 @@ describe.each([
   });
 
   describe.each(["GET", "HEAD"] as const)("%s", (method) => {
+    it.each(["gzip", "br", ""])(
+      "serves the original without sidecars (Accept-Encoding: %s)",
+      async (encoding) => {
+        const { response, body } = await requestAsset(
+          `${baseUrl}/assets/cold.js`,
+          method,
+          encoding ? { "Accept-Encoding": encoding } : {},
+        );
+        expect(response.statusCode).toBe(200);
+        expect(response.headers["content-encoding"]).toBeUndefined();
+        expect(response.headers["content-length"]).toBe(String(assetBody.byteLength));
+        expect(body).toEqual(method === "GET" ? assetBody : Buffer.alloc(0));
+      },
+    );
+
     it.each(["themes/absolutely.css", "sw.js"])(
       "versions public %s only for the active bundled build",
       async (asset) => {

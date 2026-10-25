@@ -430,7 +430,7 @@ describe("cloud worker milestone 2 fault injection", () => {
     harness.addFault({ kind: "partition-after-inference-event", seq: 2 });
     harness.addFault({ kind: "drop-response", method: "worker.transcript.commit", restart: false });
     harness.addFault({ kind: "drop-response", method: "worker.live-event", restart: false });
-    await current.connection.start();
+    await current.start();
 
     const inferenceSeqs: number[] = [];
     const inference = current.inference.start(inferenceRequest(harness.epoch, "partitioned-turn"), {
@@ -471,7 +471,7 @@ describe("cloud worker milestone 2 fault injection", () => {
     const { release: providerRelease, started: providerStarted } = harness.planPending();
     const { entered: commitEntered, release: commitRelease } = transcriptGate("after-apply");
     harness.addFault({ kind: "drop-response", method: "worker.transcript.commit", restart: true });
-    await current.connection.start();
+    await current.start();
 
     previews(current, RUN_ID, "acked");
     await vi.waitFor(() => expect(harness.liveDeltas).toEqual(["acked"]));
@@ -521,7 +521,7 @@ describe("cloud worker milestone 2 fault injection", () => {
       epoch: freshEpoch,
       runId: recoveryRunId,
     });
-    await fresh.connection.start();
+    await fresh.start();
     previews(fresh, recoveryRunId, "recovered");
     await expect(fresh.live.emitTerminal(recoveryRunId, TERMINAL_EVENT)).resolves.toBeUndefined();
     const freshIdentity = harness.admissions.at(-1);
@@ -541,7 +541,7 @@ describe("cloud worker milestone 2 fault injection", () => {
   it("fail-stops a reconnected commit whose base changes while application is in flight", async () => {
     const current = await createClients();
     const { entered, release } = transcriptGate("before-apply");
-    await current.connection.start();
+    await current.start();
     const commit = current.transcript.commit([transcriptMessage("stale paid output")]);
     await entered.promise;
     harness.partition();
@@ -565,7 +565,7 @@ describe("cloud worker milestone 2 fault injection", () => {
   it("settles stop during an in-flight commit without retrying or spinning", async () => {
     const current = await createClients();
     const { entered, release } = transcriptGate("before-apply");
-    await current.connection.start();
+    await current.start();
     const commit = current.transcript.commit([transcriptMessage("stopped commit")]);
     await entered.promise;
 

@@ -12,8 +12,9 @@ const mocks = await vi.hoisted(async () => {
 });
 const { FakeWebSocket } = mocks;
 
-vi.mock("ws", () => ({
-  default: mocks.FakeWebSocket,
+vi.mock("openclaw/plugin-sdk/websocket-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/websocket-runtime")>()),
+  WebSocket: mocks.FakeWebSocket,
 }));
 
 // mock-isolation: Reconnect tests control credential completion without host auth storage or refresh work.
@@ -56,11 +57,7 @@ describe("OpenAI realtime voice bridge reconnect", () => {
     const onEvent = vi.fn();
     const onReady = vi.fn();
     const bridge = createNativeBridge({ onError, onEvent, onReady });
-    const { connecting, socket: firstSocket } = beginBridgeConnection(bridge);
-
-    openSocket(firstSocket);
-    emitSessionUpdated(firstSocket);
-    await connecting;
+    const firstSocket = await connectReadyBridge(bridge);
     expect(onReady).toHaveBeenCalledOnce();
 
     emitServerEvent(firstSocket, {
@@ -261,11 +258,7 @@ describe("OpenAI realtime voice bridge reconnect", () => {
       onClose,
       onError,
     });
-    const { connecting, socket: firstSocket } = beginBridgeConnection(bridge);
-
-    openSocket(firstSocket);
-    emitSessionUpdated(firstSocket);
-    await connecting;
+    const firstSocket = await connectReadyBridge(bridge);
 
     firstSocket.readyState = FakeWebSocket.CLOSED;
     firstSocket.emit("close", 1006, Buffer.from("transient drop"));
@@ -302,11 +295,7 @@ describe("OpenAI realtime voice bridge reconnect", () => {
     const onError = vi.fn();
     const onEvent = vi.fn();
     const bridge = createNativeBridge({ onClose, onError, onEvent });
-    const { connecting, socket: firstSocket } = beginBridgeConnection(bridge);
-
-    openSocket(firstSocket);
-    emitSessionUpdated(firstSocket);
-    await connecting;
+    const firstSocket = await connectReadyBridge(bridge);
 
     firstSocket.readyState = FakeWebSocket.CLOSED;
     firstSocket.emit("close", 1006, Buffer.from("transient drop"));

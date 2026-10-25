@@ -58,6 +58,9 @@ function createClosedState(stateDir: string) {
   return options;
 }
 
+const snapshot = <T>(operation: () => T) =>
+  withArtifactPreservingStateReads(() => withSynchronousArtifactPreservingStateSnapshot(operation));
+
 function createWalFixture(root: string) {
   const options = createClosedState(root);
   const writer = new DatabaseSync(options.path);
@@ -122,10 +125,8 @@ it.each([undefined, "EACCES"])(
       observeMissingPath(true);
       closeOpenClawStateDatabaseForTest();
       await withOpenClawStateDatabaseReadSnapshot(async () => observeMissingPath(true), options);
-      withArtifactPreservingStateReads(() =>
-        withSynchronousArtifactPreservingStateSnapshot(() => {
-          withExistingOpenClawStateDatabaseReadOnly(() => observeMissingPath(true), options);
-        }),
+      snapshot(() =>
+        withExistingOpenClawStateDatabaseReadOnly(() => observeMissingPath(true), options),
       );
       observeMissingPath(false);
       expect(fs.existsSync(options.path)).toBe(true);
@@ -445,35 +446,31 @@ it("shares only one synchronous metadata snapshot and refreshes committed WAL ne
   await withTempDir("openclaw-metadata-snapshot-", async (root) => {
     const { writer, read, artifacts } = createWalFixture(root);
     const prepare = vi.spyOn(sqliteReadOnly, "prepareSqliteReadOnlyLocationSync");
-    const scope = (operation: () => unknown) =>
-      withArtifactPreservingStateReads(() =>
-        withSynchronousArtifactPreservingStateSnapshot(operation),
-      );
     try {
       const before = artifacts();
-      scope(() => {
+      snapshot(() => {
         expect(read()).toBe("first");
         expect(read()).toBe("first");
       });
       expect(prepare).toHaveBeenCalledTimes(1);
       expect(artifacts()).toEqual(before);
-      scope(() => {
+      snapshot(() => {
         expect(read()).toBe("first");
         writer.exec("UPDATE held SET value='second'");
         expect(read()).toBe("first");
       });
       expect(prepare).toHaveBeenCalledTimes(2);
-      scope(() => expect(read()).toBe("second"));
+      snapshot(() => expect(read()).toBe("second"));
       expect(prepare).toHaveBeenCalledTimes(3);
       expect(() =>
-        scope(() => {
+        snapshot(() => {
           read();
           throw new Error("consumer failure");
         }),
       ).toThrow("consumer failure");
-      scope(() => expect(read()).toBe("second"));
+      snapshot(() => expect(read()).toBe("second"));
       expect(prepare).toHaveBeenCalledTimes(5);
-      expect(() => scope(() => Promise.resolve(1))).toThrow("must remain synchronous");
+      expect(() => snapshot(() => Promise.resolve(1))).toThrow("must remain synchronous");
     } finally {
       writer.close();
     }
@@ -508,33 +505,31 @@ it("keeps the original synchronous snapshot while retained current reads see lat
       );
     };
     try {
-      withArtifactPreservingStateReads(() =>
-        withSynchronousArtifactPreservingStateSnapshot(() => {
-          expect(legacyRead()).toBe('"first"');
-          writer
-            .prepare(
-              "UPDATE config_machine_state SET value_json = ?, updated_at_ms = 2 WHERE state_key = ?",
-            )
-            .run('"second"', "retained.snapshot.fixture");
-          const prepare = vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(() => {
-            throw new Error("Retained read prepared SQLite on the caller thread");
-          });
-          const exec = vi.spyOn(DatabaseSync.prototype, "exec").mockImplementation(() => {
-            throw new Error("Retained read executed SQLite on the caller thread");
-          });
-          try {
-            startRead();
-            startRead(true);
-            startRead();
-            expect(prepare).not.toHaveBeenCalled();
-            expect(exec).not.toHaveBeenCalled();
-          } finally {
-            prepare.mockRestore();
-            exec.mockRestore();
-          }
-          expect(legacyRead()).toBe('"first"');
-        }),
-      );
+      snapshot(() => {
+        expect(legacyRead()).toBe('"first"');
+        writer
+          .prepare(
+            "UPDATE config_machine_state SET value_json = ?, updated_at_ms = 2 WHERE state_key = ?",
+          )
+          .run('"second"', "retained.snapshot.fixture");
+        const prepare = vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(() => {
+          throw new Error("Retained read prepared SQLite on the caller thread");
+        });
+        const exec = vi.spyOn(DatabaseSync.prototype, "exec").mockImplementation(() => {
+          throw new Error("Retained read executed SQLite on the caller thread");
+        });
+        try {
+          startRead();
+          startRead(true);
+          startRead();
+          expect(prepare).not.toHaveBeenCalled();
+          expect(exec).not.toHaveBeenCalled();
+        } finally {
+          prepare.mockRestore();
+          exec.mockRestore();
+        }
+        expect(legacyRead()).toBe('"first"');
+      });
       const replies = await Promise.all(pending);
       expect(
         replies.map((reply) => {
@@ -636,10 +631,7 @@ it.each(["admission", "cleanup"] as const)(
       const options = createClosedState(root);
       const failure = new Error("synthetic verification failure");
       const read = () => withExistingOpenClawStateDatabaseReadOnly(() => 1, options);
-      const scope = (operation = read) =>
-        withArtifactPreservingStateReads(() =>
-          withSynchronousArtifactPreservingStateSnapshot(operation),
-        );
+      const scope = (operation = read) => snapshot(operation);
       if (phase === "admission") {
         scope(() => {
           expect(read()).toBe(1);

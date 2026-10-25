@@ -7,21 +7,16 @@ import {
   hasManifestToolAvailability,
   manifestConfigSignalPasses,
 } from "./manifest-tool-availability.js";
+import { createPluginManifestRecordFixture } from "./plugin-metadata.test-support.js";
 
 function makePlugin(overrides: Partial<PluginManifestRecord>): PluginManifestRecord {
-  return {
+  return createPluginManifestRecordFixture({
     id: "demo",
-    channels: [],
-    providers: [],
-    cliBackends: [],
-    skills: [],
-    hooks: [],
-    origin: "bundled",
     rootDir: "/tmp/demo",
     source: "/tmp/demo/index.js",
     manifestPath: "/tmp/demo/openclaw.plugin.json",
     ...overrides,
-  };
+  });
 }
 
 function makeConfig(value: Record<string, unknown>): OpenClawConfig {

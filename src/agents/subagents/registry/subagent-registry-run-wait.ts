@@ -140,7 +140,7 @@ export abstract class SubagentWaitManager {
           return;
         }
         void this.waitForSubagentCompletion(runId, entry, waitTimeoutMs, true);
-      }, RECOVERABLE_WAIT_RETRY_DELAY_MS).unref?.();
+      }, RECOVERABLE_WAIT_RETRY_DELAY_MS).unref();
       log.info(reason, {
         runId,
         childSessionKey: entry.childSessionKey,

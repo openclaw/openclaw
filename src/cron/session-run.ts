@@ -18,6 +18,7 @@ import {
   finalizeCronPromptForResolvedTools,
   resolveCronDeliveryContext,
 } from "./isolated-agent/run-delivery-trace.js";
+import { CronOperatorSourceError } from "./operator-source-error.js";
 import { appendCronJobScratchPrompt, buildCronCommandBody } from "./run-prompt.js";
 import { isCronScratchEffectivelyEmpty } from "./scratch-contract.js";
 import { readCronScratchSnapshot } from "./scratch-read.js";
@@ -322,6 +323,16 @@ export async function runCronSessionTurn(
           }
         : {}),
       ...(result.nextCheckMs !== undefined ? { nextCheck: { delayMs: result.nextCheckMs } } : {}),
+    };
+  } catch (error) {
+    if (!(error instanceof CronOperatorSourceError)) {
+      throw error;
+    }
+    return {
+      status: "error",
+      error: error.message,
+      errorClassification: { kind: "permanent" },
+      executionStarted: false,
     };
   } finally {
     if (!params.sessionPreparation) {

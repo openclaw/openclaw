@@ -14,7 +14,7 @@ import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { resolveUiSelectedSessionAgentId } from "../../lib/sessions/session-key.ts";
 import type { ChatPendingInputView, PendingInputRequest } from "./chat-pending-inputs.types.ts";
-import { confirmQueuedMessageCustody, removeQueuedMessage } from "./chat-queue.ts";
+import { removeQueuedMessage } from "./chat-queue.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import { projectChatSystemNotice } from "./chat-system-notice.ts";
@@ -143,9 +143,7 @@ function collectChatInputRunIds(state: ChatState): string[] {
     ...projection.entries
       .filter((entry) => entry.pending && entry.identity?.role === "user")
       .map((entry) => entry.pendingRunId),
-    ...state.chatQueue
-      .filter((item) => (item.sendAttempts ?? 0) > 0 || item.sendState === "unconfirmed")
-      .map((item) => item.sendRunId),
+    ...state.chatQueue.filter((item) => (item.sendAttempts ?? 0) > 0).map((item) => item.sendRunId),
   ];
   const current = new Set(
     runIds.filter((id): id is string => Boolean(id && id.length <= CHAT_INPUT_RUN_ID_MAX_CHARS)),
@@ -189,23 +187,17 @@ function reconcilePendingInputPage(
       .map((receipt) => receipt.runId),
     ...displayPage.items.filter((input) => input.state === "cancelled").map((input) => input.runId),
   ]);
-  // Acceptance keeps the browser's authenticated retry payload. Only consumption
-  // or explicit cancellation retires it; a restart may need a fresh admission.
+  // Any positive custody receipt transfers retry ownership to the Gateway.
   for (const item of state.chatQueue) {
     const canonical = findChatSubmissionMessage(state.chatMessages, item.sendRunId, true);
     if (
       item.sendRunId &&
-      (settled.has(item.sendRunId) ||
+      (acceptedRunIds.has(item.sendRunId) ||
+        settled.has(item.sendRunId) ||
         (canonical && (canonical.id !== null || canonical.sequence !== null))) &&
       (!item.sessionId || item.sessionId === state.currentSessionId)
     ) {
       removeQueuedMessage(state, item.id);
-    } else if (
-      item.sendRunId &&
-      acceptedRunIds.has(item.sendRunId) &&
-      (!item.sessionId || item.sendState === "unconfirmed")
-    ) {
-      confirmQueuedMessageCustody(state, item, state.currentSessionId ?? undefined);
     }
   }
   return displayPage;

@@ -111,6 +111,8 @@ it.each([false, true])(
       resolveSessionTargetForRunId: () => undefined,
       captureSessionCancellation: () => ({
         runIds: ["worker-run"],
+        settled: Promise.resolve(),
+        executing: false,
         cancel: (control) => {
           control?.assertCurrent?.();
           control?.onCancelled?.("worker-run");

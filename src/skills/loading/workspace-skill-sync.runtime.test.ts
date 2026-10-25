@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -204,6 +205,25 @@ describe("syncWorkspaceSkills", () => {
     expect(prompt.replaceAll("\\", "/")).toContain("demo-skill/SKILL.md");
     expect(await exists(skillPath(target, "demo-skill", ".git"))).toBe(false);
     expect(await exists(skillPath(target, "demo-skill", "node_modules"))).toBe(false);
+  });
+
+  it("publishes rebuildable skill copies and their manifest without synchronous fsync", async () => {
+    const { source, target } = await setupSkills(["alpha"]);
+    const skillsSnapshot = await buildSnapshot(source);
+    const fsync = vi.spyOn(fsSync, "fsyncSync");
+    try {
+      const usage = await sync(source, target, { skillsSnapshot });
+
+      expectUsage(usage, skillPath(source, "alpha"), skillPath(target, "alpha"), "alpha");
+      expect(await readText(skillPath(target, "alpha", "SKILL.md"))).toContain("alpha skill");
+      expect(JSON.parse(await readText(skillPath(target, ".openclaw-sync.json")))).toMatchObject({
+        entryKeys: [JSON.stringify(["alpha", "alpha"])],
+        skillsVersion: skillsSnapshot.version,
+      });
+      expect(fsync).not.toHaveBeenCalled();
+    } finally {
+      fsync.mockRestore();
+    }
   });
 
   it("skips discovery and copying when the synced snapshot still matches", async () => {

@@ -1,5 +1,6 @@
 // Imported by a dispatch-from-config entrypoint to keep its mocked suite in one Vitest module graph.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { readAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createApprovalNativeRouteReporter } from "../../infra/approval-native-route-coordinator.js";
@@ -12,6 +13,7 @@ import {
   DispatchReplyOperationAbortedError,
   runWithDispatchAbortSignal,
 } from "./dispatch-from-config.abort.js";
+import { sendPolicySessionEntry } from "./dispatch-from-config.session-fixtures.test-support.js";
 import {
   acpMocks,
   agentEventMocks,
@@ -52,6 +54,48 @@ const FAST_ABORT_SESSION_MODEL = Object.freeze({
   modelOverrideRouteResolution: "resolved" as const,
   thinkingLevel: "high" as const,
 });
+
+function createLiveAcpConfig(maxChunkChars: number) {
+  return {
+    acp: {
+      enabled: true,
+      dispatch: { enabled: true },
+      stream: { deliveryMode: "live" as const, coalesceIdleMs: 0, maxChunkChars },
+    },
+  };
+}
+
+function createPersistentAcpSessionEntry() {
+  return {
+    sessionKey: "agent:codex-acp:session-1",
+    storeSessionKey: "agent:codex-acp:session-1",
+    cfg: {},
+    storePath: "/tmp/mock-sessions.json",
+    entry: {},
+    acp: {
+      backend: "acpx",
+      agent: "codex",
+      runtimeSessionName: "runtime:1",
+      mode: "persistent",
+      state: "idle",
+      lastActivityAt: Date.now(),
+    },
+  } satisfies NonNullable<ReturnType<typeof acpMocks.readAcpSessionEntry>>;
+}
+
+function mockPersistentAcpRuntime(runtime: ReturnType<typeof createAcpRuntime>) {
+  acpMocks.readAcpSessionEntry.mockReturnValue(createPersistentAcpSessionEntry());
+  acpMocks.requireAcpRuntimeBackend.mockReturnValue({ id: "acpx", runtime });
+}
+
+function createPersistentAcpContext(body: string) {
+  return buildTestCtx({
+    Provider: "discord",
+    Surface: "discord",
+    SessionKey: "agent:codex-acp:session-1",
+    BodyForAgent: body,
+  });
+}
 
 function setupResolvedAcpSessionNotice(params: { bound: boolean; messageThreadId?: string }) {
   const runtime = createAcpRuntime([{ type: "text_delta", text: "hello" }, { type: "done" }]);
@@ -217,12 +261,7 @@ describe("dispatchReplyFromConfig", () => {
 
   it("delivers verbose tool summaries despite message-tool-only source suppression", async () => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "allow",
-      verboseLevel: "on",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow", { verboseLevel: "on" });
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
       Provider: "telegram",
@@ -252,12 +291,7 @@ describe("dispatchReplyFromConfig", () => {
 
   it("keeps verbose tool summaries suppressed for room events", async () => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "allow",
-      verboseLevel: "on",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow", { verboseLevel: "on" });
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
       Provider: "discord",
@@ -288,12 +322,7 @@ describe("dispatchReplyFromConfig", () => {
 
   it("delivers verbose tool summaries for Discord channel message-tool-only turns", async () => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "allow",
-      verboseLevel: "on",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow", { verboseLevel: "on" });
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
       Provider: "discord",
@@ -574,21 +603,7 @@ describe("dispatchReplyFromConfig", () => {
       { type: "text_delta", text: "world" },
       { type: "done" },
     ]);
-    let currentAcpEntry = {
-      sessionKey: "agent:codex-acp:session-1",
-      storeSessionKey: "agent:codex-acp:session-1",
-      cfg: {},
-      storePath: "/tmp/mock-sessions.json",
-      entry: {},
-      acp: {
-        backend: "acpx",
-        agent: "codex",
-        runtimeSessionName: "runtime:1",
-        mode: "persistent",
-        state: "idle",
-        lastActivityAt: Date.now(),
-      },
-    } satisfies NonNullable<ReturnType<typeof acpMocks.readAcpSessionEntry>>;
+    let currentAcpEntry = createPersistentAcpSessionEntry();
     acpMocks.readAcpSessionEntry.mockImplementation(() => currentAcpEntry);
     acpMocks.upsertAcpSessionMeta.mockImplementation(async (paramsUnknown: unknown) => {
       const params = paramsUnknown as {
@@ -616,20 +631,9 @@ describe("dispatchReplyFromConfig", () => {
       runtime,
     });
 
-    const cfg = {
-      acp: {
-        enabled: true,
-        dispatch: { enabled: true },
-        stream: { deliveryMode: "live", coalesceIdleMs: 0, maxChunkChars: 128 },
-      },
-    } as OpenClawConfig;
+    const cfg = createLiveAcpConfig(128);
     const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "discord",
-      Surface: "discord",
-      SessionKey: "agent:codex-acp:session-1",
-      BodyForAgent: "write a test",
-    });
+    const ctx = createPersistentAcpContext("write a test");
     const replyResolver = vi.fn(async () => ({ text: "fallback" }) as ReplyPayload);
 
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
@@ -653,33 +657,10 @@ describe("dispatchReplyFromConfig", () => {
   it("emits lifecycle end for ACP turns using the current run id", async () => {
     setNoAbort();
     const runtime = createAcpRuntime([{ type: "text_delta", text: "done" }, { type: "done" }]);
-    acpMocks.readAcpSessionEntry.mockReturnValue({
-      sessionKey: "agent:codex-acp:session-1",
-      storeSessionKey: "agent:codex-acp:session-1",
-      cfg: {},
-      storePath: "/tmp/mock-sessions.json",
-      entry: {},
-      acp: {
-        backend: "acpx",
-        agent: "codex",
-        runtimeSessionName: "runtime:1",
-        mode: "persistent",
-        state: "idle",
-        lastActivityAt: Date.now(),
-      },
-    });
-    acpMocks.requireAcpRuntimeBackend.mockReturnValue({
-      id: "acpx",
-      runtime,
-    });
+    mockPersistentAcpRuntime(runtime);
 
     const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "discord",
-      Surface: "discord",
-      SessionKey: "agent:codex-acp:session-1",
-      BodyForAgent: "write a test",
-    });
+    const ctx = createPersistentAcpContext("write a test");
 
     await dispatchReplyFromConfig({
       ctx,
@@ -719,33 +700,10 @@ describe("dispatchReplyFromConfig", () => {
       yield { type: "status", tag: "usage_update", text: "warming up" };
       throw new Error("ACP exploded");
     });
-    acpMocks.readAcpSessionEntry.mockReturnValue({
-      sessionKey: "agent:codex-acp:session-1",
-      storeSessionKey: "agent:codex-acp:session-1",
-      cfg: {},
-      storePath: "/tmp/mock-sessions.json",
-      entry: {},
-      acp: {
-        backend: "acpx",
-        agent: "codex",
-        runtimeSessionName: "runtime:1",
-        mode: "persistent",
-        state: "idle",
-        lastActivityAt: Date.now(),
-      },
-    });
-    acpMocks.requireAcpRuntimeBackend.mockReturnValue({
-      id: "acpx",
-      runtime,
-    });
+    mockPersistentAcpRuntime(runtime);
 
     const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "discord",
-      Surface: "discord",
-      SessionKey: "agent:codex-acp:session-1",
-      BodyForAgent: "write a test",
-    });
+    const ctx = createPersistentAcpContext("write a test");
 
     await dispatchReplyFromConfig({
       ctx,
@@ -797,25 +755,7 @@ describe("dispatchReplyFromConfig", () => {
       abortController.abort();
       yield { type: "done" };
     });
-    acpMocks.readAcpSessionEntry.mockReturnValue({
-      sessionKey: "agent:codex-acp:session-1",
-      storeSessionKey: "agent:codex-acp:session-1",
-      cfg: {},
-      storePath: "/tmp/mock-sessions.json",
-      entry: {},
-      acp: {
-        backend: "acpx",
-        agent: "codex",
-        runtimeSessionName: "runtime:1",
-        mode: "persistent",
-        state: "idle",
-        lastActivityAt: Date.now(),
-      },
-    });
-    acpMocks.requireAcpRuntimeBackend.mockReturnValue({
-      id: "acpx",
-      runtime,
-    });
+    mockPersistentAcpRuntime(runtime);
     hookMocks.runner.runReplyDispatch.mockImplementationOnce(async (event, contextUnknown) => {
       const context = contextUnknown as Record<string, unknown>;
       return (
@@ -830,12 +770,7 @@ describe("dispatchReplyFromConfig", () => {
     });
 
     await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Provider: "discord",
-        Surface: "discord",
-        SessionKey: "agent:codex-acp:session-1",
-        BodyForAgent: "stop this turn",
-      }),
+      ctx: createPersistentAcpContext("stop this turn"),
       cfg: {
         diagnostics: { enabled: true },
         acp: {
@@ -1015,13 +950,7 @@ describe("dispatchReplyFromConfig", () => {
       targetSessionKey === boundSessionKey ? [boundConversationBinding] : [],
     );
 
-    const cfg = {
-      acp: {
-        enabled: true,
-        dispatch: { enabled: true },
-        stream: { deliveryMode: "live", coalesceIdleMs: 0, maxChunkChars: 256 },
-      },
-    } as OpenClawConfig;
+    const cfg = createLiveAcpConfig(256);
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => ({ text: "fallback reply" }) satisfies ReplyPayload);
     const ctx = buildTestCtx({
@@ -1132,40 +1061,11 @@ describe("dispatchReplyFromConfig", () => {
       { type: "text_delta", text: " on?" },
       { type: "done" },
     ]);
-    acpMocks.readAcpSessionEntry.mockReturnValue({
-      sessionKey: "agent:codex-acp:session-1",
-      storeSessionKey: "agent:codex-acp:session-1",
-      cfg: {},
-      storePath: "/tmp/mock-sessions.json",
-      entry: {},
-      acp: {
-        backend: "acpx",
-        agent: "codex",
-        runtimeSessionName: "runtime:1",
-        mode: "persistent",
-        state: "idle",
-        lastActivityAt: Date.now(),
-      },
-    });
-    acpMocks.requireAcpRuntimeBackend.mockReturnValue({
-      id: "acpx",
-      runtime,
-    });
+    mockPersistentAcpRuntime(runtime);
 
-    const cfg = {
-      acp: {
-        enabled: true,
-        dispatch: { enabled: true },
-        stream: { deliveryMode: "live", coalesceIdleMs: 0, maxChunkChars: 256 },
-      },
-    } as OpenClawConfig;
+    const cfg = createLiveAcpConfig(256);
     const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "discord",
-      Surface: "discord",
-      SessionKey: "agent:codex-acp:session-1",
-      BodyForAgent: "test spacing",
-    });
+    const ctx = createPersistentAcpContext("test spacing");
 
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher });
 
@@ -1188,40 +1088,11 @@ describe("dispatchReplyFromConfig", () => {
       { type: "text_delta", text: "Hello from ACP streaming." },
       { type: "done" },
     ]);
-    acpMocks.readAcpSessionEntry.mockReturnValue({
-      sessionKey: "agent:codex-acp:session-1",
-      storeSessionKey: "agent:codex-acp:session-1",
-      cfg: {},
-      storePath: "/tmp/mock-sessions.json",
-      entry: {},
-      acp: {
-        backend: "acpx",
-        agent: "codex",
-        runtimeSessionName: "runtime:1",
-        mode: "persistent",
-        state: "idle",
-        lastActivityAt: Date.now(),
-      },
-    });
-    acpMocks.requireAcpRuntimeBackend.mockReturnValue({
-      id: "acpx",
-      runtime,
-    });
+    mockPersistentAcpRuntime(runtime);
 
-    const cfg = {
-      acp: {
-        enabled: true,
-        dispatch: { enabled: true },
-        stream: { deliveryMode: "live", coalesceIdleMs: 0, maxChunkChars: 256 },
-      },
-    } as OpenClawConfig;
+    const cfg = createLiveAcpConfig(256);
     const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "discord",
-      Surface: "discord",
-      SessionKey: "agent:codex-acp:session-1",
-      BodyForAgent: "stream this",
-    });
+    const ctx = createPersistentAcpContext("stream this");
 
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher });
 
@@ -1338,14 +1209,8 @@ describe("dispatchReplyFromConfig", () => {
     hookMocks.runner.hasHooks.mockImplementation(
       ((hookName?: string) => hookName === "before_dispatch") as () => boolean,
     );
-    let markHookStarted!: () => void;
-    const hookStarted = new Promise<void>((resolve) => {
-      markHookStarted = resolve;
-    });
-    let releaseHook!: () => void;
-    const hookRelease = new Promise<void>((resolve) => {
-      releaseHook = resolve;
-    });
+    const { resolve: markHookStarted, promise: hookStarted } = createDeferred();
+    const { resolve: releaseHook, promise: hookRelease } = createDeferred();
     hookMocks.runner.runBeforeDispatch
       .mockImplementationOnce(async () => {
         markHookStarted();

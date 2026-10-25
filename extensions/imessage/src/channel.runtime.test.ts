@@ -10,8 +10,8 @@ import { sendMessageIMessage } from "./send.js";
 const monitorMock = vi.hoisted(() => vi.fn(async () => undefined));
 const createRpcClientMock = vi.hoisted(() => vi.fn());
 
-vi.mock("./monitor.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./monitor.js")>()),
+vi.mock("./monitor/monitor-provider.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./monitor/monitor-provider.js")>()),
   monitorIMessageProvider: monitorMock,
 }));
 

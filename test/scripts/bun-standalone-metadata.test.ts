@@ -11,6 +11,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { parse } from "acorn";
 import { transformSync } from "esbuild";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { isEmbeddedStandaloneModule } from "../../cli-invocation.mjs";
 import { parseFrontmatterBlockResult } from "../../packages/markdown-core/src/frontmatter.js";
 import { rewriteStandaloneImports } from "../../scripts/lib/bun-standalone-imports.mjs";
 import { createStandaloneMetadataAdapter } from "../../scripts/lib/bun-standalone-metadata.mjs";
@@ -22,6 +23,7 @@ import {
   readFileDescriptorBoundedSync,
 } from "../../src/infra/boundary-file-read.js";
 import { readRootJsonObjectSync } from "../../src/infra/json-files.js";
+import { resolveRuntimeWorkerArgv } from "../../src/infra/runtime-worker-url.js";
 import { tryProcessCwd } from "../../src/infra/safe-cwd.js";
 import {
   resolveImmutableInstallIdentity,
@@ -39,6 +41,7 @@ import { createPluginCacheSdk, getPluginSdkHostFacts } from "../../src/plugins/p
 
 const temporaryRoots: string[] = [];
 afterEach(() => {
+  vi.unstubAllGlobals();
   temporaryRoots.splice(0).forEach((root) => fs.rmSync(root, { recursive: true, force: true }));
 });
 
@@ -71,6 +74,7 @@ function fixture({
   retainSourceFiles = false,
   retainImageFiles = false,
   boundaryReaderModule = "",
+  secretEntrypointOnDisk = false,
 } = {}) {
   const runtime = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-image-metadata-"));
   temporaryRoots.push(runtime);
@@ -126,8 +130,7 @@ function fixture({
     launcher,
     bridge,
     hookHandler,
-    secretEntrypoint,
-    undeclaredEntrypoint,
+    ...(secretEntrypointOnDisk ? [] : [secretEntrypoint]),
     mxcLauncher,
     vaultResolver,
     sqliteWorker,
@@ -159,6 +162,9 @@ function fixture({
   for (const file of imageEntries.slice(5)) {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, "export default () => {};\n");
+  }
+  if (secretEntrypointOnDisk) {
+    fs.writeFileSync(secretEntrypoint, "export default () => {};\n");
   }
   fs.mkdirSync(path.dirname(bridge), { recursive: true });
   fs.writeFileSync(launcher, "export {};\n");
@@ -238,6 +244,7 @@ function fixture({
     openRootFileSync: rootOpen,
     bundledRootFileOpen: rootOpen,
     readFileDescriptorBoundedSync,
+    resolveRuntimeWorkerArgv,
     parseFrontmatterBlockResult,
     resolveHookManifestMetadata,
     HOOK_METADATA_MAX_BYTES: 1024 * 1024,
@@ -254,6 +261,13 @@ function fixture({
   });
   vm.runInContext(adapter.bootstrap.replace("import.meta.require(", "require("), context);
   for (const [file, name] of [
+    ["cli-invocation.mjs", "isEmbeddedStandaloneModule"],
+    ["src/infra/runtime-process-manifest.ts", "createRuntimeProcessEntrypoints"],
+    ["src/infra/runtime-process-entrypoints.ts", "runtimeProcessEntrypoints"],
+    ["src/infra/runtime-process-package-url.ts", "resolvePackageRuntimeProcessEntrypointUrl"],
+    ["src/infra/runtime-process-manifest.ts", "pluginRuntimeProcess"],
+    ["src/infra/runtime-process-manifest.ts", "pluginRuntimeProcessManifest"],
+    ["src/infra/runtime-process-dependency-url.ts", "resolvePluginRuntimeProcessAssetUrl"],
     ["src/plugins/plugin-cache-files.ts", undefined],
     ["src/plugins/plugin-registry-snapshot.ts", "fileContentMatches"],
     ["src/infra/openclaw-root.ts", "candidateDirsFromArgv1"],
@@ -323,6 +337,19 @@ function fixture({
 }
 
 describe("standalone image metadata", () => {
+  it("distinguishes embedded modules from directories and later disk additions", () => {
+    const { runtime, entry, context } = fixture();
+    vi.stubGlobal(
+      "__openclawStandaloneIsEmbeddedModule",
+      // eslint-disable-next-line no-underscore-dangle -- Compiler bootstrap contract.
+      context.__openclawStandaloneIsEmbeddedModule,
+    );
+    expect(isEmbeddedStandaloneModule(pathToFileURL(entry).href)).toBe(true);
+    expect(isEmbeddedStandaloneModule(path.dirname(entry))).toBe(false);
+    const fetched = path.join(runtime, "later.js");
+    fs.writeFileSync(fetched, "export const value = 42;");
+    expect(isEmbeddedStandaloneModule(fetched)).toBe(false);
+  });
   it.each(
     [false, true].flatMap((physical) => [false, true].map((minified) => ({ physical, minified }))),
   )(
@@ -674,7 +701,7 @@ describe("standalone image metadata", () => {
       ["src/plugins/native-module-require.ts", "PLUGIN_SOURCE_MODULE_EXTENSIONS"],
       ["src/channels/plugins/module-loader.ts", "loadModule"],
       ["src/plugins/module-export.ts", "unwrapDefaultModuleExport"],
-      ["src/channels/plugins/merge-plugin-section.ts", "mergeChannelPluginSection"],
+      ["src/channels/plugins/merge-plugin-section.ts", undefined],
       ["src/plugins/loader-channel-setup.ts", undefined],
     ] as const) {
       vm.runInContext(
@@ -1568,16 +1595,27 @@ describe("standalone image metadata", () => {
   it.each(["", "@openclaw/fs-safe/advanced"])(
     "admits embedded secret resolvers with physical parent trust (%s)",
     (boundaryReaderModule) => {
-      const { runtime, plugin, secretEntrypoint, undeclaredEntrypoint, rootOpen, context } =
-        fixture({ boundaryReaderModule });
-      const resolve = (pluginRoot: string, entrypoint = "./handlers/resolver.js") =>
-        context.resolveNodeEntrypointArg({
-          integration: { command: "${node}", args: [entrypoint] },
+      const embedded = fixture({ boundaryReaderModule });
+      const resolveEmbedded = (pluginRoot: string, entrypoint = "./handlers/resolver.js") =>
+        embedded.context.resolveNodeEntrypointArg({
+          args: [entrypoint],
           pluginRoot,
           rejectHardlinks: true,
         });
-      expect(resolve(plugin)).toBe(secretEntrypoint);
-      expect(rootOpen).not.toHaveBeenCalled();
+      expect(resolveEmbedded(embedded.plugin)).toBe(embedded.secretEntrypoint);
+      expect(embedded.rootOpen).not.toHaveBeenCalled();
+      const embeddedAlias = path.join(embedded.runtime, "plugin-alias");
+      fs.symlinkSync(embedded.plugin, embeddedAlias);
+      expect(resolveEmbedded(embeddedAlias)).toBeUndefined();
+
+      const { runtime, plugin, secretEntrypoint, undeclaredEntrypoint, rootOpen, context } =
+        fixture({ boundaryReaderModule, secretEntrypointOnDisk: true });
+      const resolve = (pluginRoot: string, entrypoint = "./handlers/resolver.js") =>
+        context.resolveNodeEntrypointArg({
+          args: [entrypoint],
+          pluginRoot,
+          rejectHardlinks: true,
+        });
       expect(resolve(plugin, "./handlers/other.js")).toBeUndefined();
       expect(rootOpen.mock.calls.at(-1)?.[0].absolutePath).toBe(undeclaredEntrypoint);
       fs.chmodSync(path.dirname(secretEntrypoint), 0o777);
@@ -1591,9 +1629,11 @@ describe("standalone image metadata", () => {
       fs.mkdirSync(external);
       fs.writeFileSync(path.join(external, "resolver.js"), "export {};\n");
       expect(resolve(external, "./resolver.js")).toBe(path.join(external, "resolver.js"));
-      const alias = path.join(runtime, "plugin-alias");
-      fs.symlinkSync(plugin, alias);
-      expect(resolve(alias)).toBeUndefined();
+      const outsideEntrypoint = path.join(runtime, "outside-resolver.js");
+      fs.writeFileSync(outsideEntrypoint, "export {};\n");
+      fs.rmSync(secretEntrypoint);
+      fs.symlinkSync(outsideEntrypoint, secretEntrypoint);
+      expect(resolve(plugin)).toBeUndefined();
     },
   );
 
@@ -1630,24 +1670,32 @@ describe("standalone image metadata", () => {
     expect(context.candidateDirsFromArgv1(launcher)).toEqual([runtime]);
     expect(
       context.resolveManagedToolsMcpServerConfig(
-        "plugin-tools-serve",
+        "pluginToolsServe",
         pathToFileURL(path.join(acpx, "index.js")).href,
       ),
-    ).toEqual({ command: process.execPath, args: [bridge] });
+    ).toEqual({
+      command: process.execPath,
+      args: process.versions.bun ? ["--no-install", bridge] : [bridge],
+    });
 
     const external = path.join(runtime, "external");
     const externalPlugin = path.join(external, "extensions/acpx");
     fs.mkdirSync(externalPlugin, { recursive: true });
     fs.writeFileSync(path.join(externalPlugin, "package.json"), "{}");
     fs.writeFileSync(path.join(externalPlugin, "openclaw.plugin.json"), "{}");
+    const externalBridge = path.join(external, "src/mcp/plugin-tools-serve.ts");
+    fs.mkdirSync(path.dirname(externalBridge), { recursive: true });
+    fs.writeFileSync(externalBridge, "export {};\n");
     expect(
       context.resolveManagedToolsMcpServerConfig(
-        "plugin-tools-serve",
+        "pluginToolsServe",
         pathToFileURL(path.join(externalPlugin, "index.js")).href,
       ),
     ).toEqual({
       command: process.execPath,
-      args: ["--import", "tsx", path.join(external, "src/mcp/plugin-tools-serve.ts")],
+      args: process.versions.bun
+        ? ["--no-install", externalBridge]
+        : ["--import", import.meta.resolve("tsx"), externalBridge],
     });
     const externalLauncher = path.join(external, "openclaw.mjs");
     fs.writeFileSync(externalLauncher, "external");

@@ -49,6 +49,6 @@ export function installMarkdownHexColors(parser: MarkdownIt): void {
     const image = encodeURIComponent(
       `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><path fill="${color}" d="M0 0h16v16H0z"/></svg>`,
     );
-    return `<span class="markdown-hex-color">${color}<img class="markdown-hex-color__swatch" src="data:image/svg+xml,${image}" alt="" aria-hidden="true"></span>`;
+    return `<span class="markdown-hex-color"><img class="markdown-hex-color__swatch" src="data:image/svg+xml,${image}" alt="" aria-hidden="true">${color}</span>`;
   };
 }

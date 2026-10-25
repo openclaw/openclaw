@@ -101,6 +101,16 @@ function captureStore() {
   return () => captured;
 }
 
+function replayCollectorInput() {
+  return {
+    task: "collect replay-safe evidence",
+    collect: true,
+    groupId: "swarm:replay",
+    swarmLaunchReplayKey: "cm-restart:bridge:1",
+    swarmLaunchRequestFingerprint: "sha256:request",
+  };
+}
+
 describe("spawnSubagentDirect seam flow", () => {
   beforeAll(async () => {
     ({ resetSubagentRegistryForTests, spawnSubagentDirect } = await loadSubagentSpawnModuleForTest({
@@ -195,6 +205,28 @@ describe("spawnSubagentDirect seam flow", () => {
       current = false;
       expect(() => forwarded?.assertCurrent()).toThrow("parent authority retired");
       await forwarded?.release?.();
+    },
+  );
+
+  it.each([false, true])(
+    "rejects invalid worktree names before reserving native work (collect=%s)",
+    async (collect) => {
+      const onSpawnEffectsStart = vi.fn();
+      const result = await spawn(
+        {
+          task: "inspect",
+          worktree: true,
+          worktreeName: "codex/qa-telemetry-prompt-cache-20261016",
+          collect,
+        },
+        { ...collectorContext, onSpawnEffectsStart },
+      );
+      expect(onSpawnEffectsStart).not.toHaveBeenCalled();
+      expectNoChildSpawnSideEffects();
+      expect(result).toEqual({
+        status: "error",
+        error: "worktree name must match [a-z0-9][a-z0-9-]{0,63}",
+      });
     },
   );
 
@@ -300,6 +332,7 @@ describe("spawnSubagentDirect seam flow", () => {
 
     expect(result.status).toBe("accepted");
     expect(result.sessionKey).toBe(result.childSessionKey);
+    expect(result.groupId).toBe("swarm:agent:main:main:parent-run");
     expect(result.expectsCompletionMessage).toBe(false);
     const registerInput = firstRegisteredSubagentRun();
     expect(registerInput).toMatchObject({
@@ -352,28 +385,13 @@ describe("spawnSubagentDirect seam flow", () => {
   it("persists a host-reserved collector launch identity", async () => {
     configOverride = createConfigOverride({ tools: { swarm: true } });
 
-    const result = await spawn(
-      {
-        task: "collect replay-safe evidence",
-        collect: true,
-        groupId: "swarm:replay",
-        swarmLaunchReplayKey: "cm-restart:bridge:1",
-        swarmLaunchRequestFingerprint: "sha256:request",
-      },
-      collectorContext,
-    );
-    const otherRequesterResult = await spawn(
-      {
-        task: "collect replay-safe evidence",
-        collect: true,
-        groupId: "swarm:replay",
-        swarmLaunchReplayKey: "cm-restart:bridge:1",
-        swarmLaunchRequestFingerprint: "sha256:request",
-      },
-      { agentSessionKey: "agent:main:other", requesterRunId: "parent-run" },
-    );
+    const result = await spawn(replayCollectorInput(), collectorContext);
+    const otherRequesterResult = await spawn(replayCollectorInput(), {
+      agentSessionKey: "agent:main:other",
+      requesterRunId: "parent-run",
+    });
 
-    expect(result).toMatchObject({ status: "accepted" });
+    expect(result).toMatchObject({ status: "accepted", groupId: "swarm:replay" });
     expect(result.runId).toMatch(/^swarm_[0-9a-f]{32}$/u);
     expect(otherRequesterResult).toMatchObject({ status: "accepted" });
     expect(otherRequesterResult.runId).toMatch(/^swarm_[0-9a-f]{32}$/u);

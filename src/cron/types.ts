@@ -1,4 +1,5 @@
 import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
+import type { AutomationResult } from "../../packages/gateway-protocol/src/schema/cron-automation-result.js";
 import type {
   CronDeliveryPreview as CronDeliveryPreviewWire,
   CronJob as CronJobWire,
@@ -159,6 +160,7 @@ export type CronEvent = {
   completionStatus?: CronCompletionStatus;
   error?: string;
   summary?: string;
+  result?: AutomationResult;
   diagnostics?: CronRunDiagnostics;
   delivered?: boolean;
   deliveryStatus?: CronDeliveryStatus;
@@ -219,6 +221,7 @@ export type CronRunOutcome = {
   /** Transient internal detail; never project into persisted or public cron events. */
   failureNotificationDetail?: CronFailureNotificationDetail;
   summary?: string;
+  result?: AutomationResult;
   /** Producer-authored terminal reply fact without exposing reply text. */
   replyDisposition?: AgentRunTerminalReplySnapshot["disposition"];
   sessionId?: string;
@@ -404,6 +407,11 @@ export type CronJob = CronJobBase<
   displayName?: string;
   /** Read-only execution placement derived from the stored stream target. */
   streamExecutionHost?: "gateway" | "sandbox";
+  /**
+   * Read-only stored payload kind when `payload` is a compatibility placeholder. A plugin command
+   * schedule keeps its reserved agentTurn sentinel in `payload` for existing readers.
+   */
+  payloadSource?: { kind: "pluginCommand"; pluginId: string; command: string };
   owner?: {
     agentId?: string;
     sessionKey?: string;
@@ -441,7 +449,7 @@ export type CronToolsAllowProvenance =
     ));
 
 /** Persisted row shape; public Gateway and wire contracts use CronJob. */
-export type CronStoredJob = Omit<CronJob, "streamExecutionHost"> & {
+export type CronStoredJob = Omit<CronJob, "streamExecutionHost" | "payloadSource"> & {
   /** Immutable host-captured scheduled command invocation; never public create/patch input. */
   pluginCommand?: PluginCommandSchedule;
   /** Original authenticated source for a same-conversation continuation, never a public grant. */
@@ -482,6 +490,7 @@ export type CronStoreFile = {
 type CronJobStateInput = Partial<
   Omit<
     CronJobState,
+    | "lastMeaningfulResult"
     | "autoDisabled"
     | "scheduleActivatedAtMs"
     | "streamSourceIdentity"
@@ -496,7 +505,13 @@ type CronJobStateInput = Partial<
 /** Create input accepted by cron APIs before id/timestamps/state are assigned. */
 export type CronJobCreate = Omit<
   CronJob,
-  "id" | "createdAtMs" | "updatedAtMs" | "state" | "scheduledToolPolicy" | "streamExecutionHost"
+  | "id"
+  | "createdAtMs"
+  | "updatedAtMs"
+  | "state"
+  | "scheduledToolPolicy"
+  | "streamExecutionHost"
+  | "payloadSource"
 > & {
   /** Internal callers can reserve a durable id before creation; public cron.add omits this. */
   id?: string;
@@ -518,6 +533,7 @@ export type CronJobPatch = Partial<
     | "owner"
     | "scheduledToolPolicy"
     | "streamExecutionHost"
+    | "payloadSource"
     | "pacing"
     | "activeHours"
     | "idleOnly"

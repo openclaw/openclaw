@@ -174,8 +174,8 @@ async function createCaller(
       agentId: "coder",
       modelProvider: "fixture",
       modelId: "fixture",
-      toolsAllow: policy.runtimeToolsAllowPolicy ?? ["read", "write", "exec"],
     });
+    context.toolsAllow = policy.runtimeToolsAllowPolicy ?? ["read", "write", "exec"];
     const projected = await resolveMcpLoopbackPolicyTools({
       cfg: currentConfig,
       context,

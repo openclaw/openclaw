@@ -6,8 +6,12 @@ import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-entry";
 import {
+  assertOkOrThrowHttpError,
   createProviderOperationDeadline,
+  createProviderOperationTimeoutError,
   createProviderOperationTimeoutResolver,
+  executeProviderOperationWithRetry,
+  fetchWithTimeoutGuarded,
   pollProviderOperationJson,
   postJsonResponse,
   resolveProviderOperationTimeoutMs,
@@ -84,17 +88,6 @@ function readRunwayFailureMessage(failure: unknown): string | undefined {
     return normalizeOptionalString(failure.message);
   }
   return undefined;
-}
-
-function readRunwayOutputUrls(payload: RunwayTaskDetailResponse): string[] {
-  if (!Array.isArray(payload.output)) {
-    throw new Error("Runway video generation completed with malformed output URLs");
-  }
-  const outputUrls = normalizeTrimmedStringList(payload.output);
-  if (!outputUrls.length) {
-    throw new Error("Runway video generation completed without output URLs");
-  }
-  return outputUrls;
 }
 
 function resolveSourceUri(
@@ -336,7 +329,14 @@ export default definePluginEntry({
               : undefined;
           },
         });
-        const outputUrls = readRunwayOutputUrls(completed);
+        if (!Array.isArray(completed.output)) {
+          throw new Error("Runway video generation completed with malformed output URLs");
+        }
+        const outputUrls = normalizeTrimmedStringList(completed.output);
+        if (!outputUrls.length) {
+          throw new Error("Runway video generation completed without output URLs");
+        }
+
         const timeoutMs = createProviderOperationTimeoutResolver({
           deadline,
           defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
@@ -357,6 +357,39 @@ export default definePluginEntry({
               maxBytes,
               validateBinaryResponse: true,
               metadata: { sourceUrl: url },
+              fetchResponse: ({ deadline: downloadDeadline, timeoutMs: downloadTimeoutMs }) =>
+                executeProviderOperationWithRetry({
+                  provider: "runway",
+                  stage: "download",
+                  operation: async () => {
+                    // Result URLs never inherit task credentials or private-network trust.
+                    const result = await fetchWithTimeoutGuarded(
+                      url,
+                      { method: "GET" },
+                      downloadTimeoutMs(),
+                      fetchFn,
+                      {
+                        mode: "strict",
+                        dispatcherPolicy: dispatcherPolicy ?? { mode: "env-proxy" },
+                      },
+                    );
+                    try {
+                      await assertOkOrThrowHttpError(
+                        result.response,
+                        "Runway generated video download failed",
+                        {
+                          bodyTimeoutMs: downloadTimeoutMs,
+                          onBodyTimeout: () =>
+                            createProviderOperationTimeoutError(downloadDeadline),
+                        },
+                      );
+                      return result;
+                    } catch (error) {
+                      await result.release();
+                      throw error;
+                    }
+                  },
+                }),
             }),
           );
         }

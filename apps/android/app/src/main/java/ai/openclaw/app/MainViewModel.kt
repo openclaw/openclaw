@@ -1412,6 +1412,8 @@ class MainViewModel internal constructor(
 
   internal suspend fun loadChatImageArtifact(artifactId: String) = ensureRuntime().chat.loadImageArtifact(artifactId)
 
+  internal suspend fun loadChatOutboxImagePreview(attachment: ai.openclaw.app.chat.ChatOutboxAttachment) = ensureRuntime().chat.loadOutboxImagePreview(attachment)
+
   internal suspend fun loadChatMediaArtifact(
     artifactId: String,
     kind: GatewayMediaKind,

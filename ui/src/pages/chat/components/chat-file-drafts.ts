@@ -4,7 +4,7 @@ import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-previe
 import { formatUiError } from "../../../lib/format-error.ts";
 import { showToast } from "../../../lib/toast.ts";
 import type { FileSidebarContent } from "./chat-sidebar-content-types.ts";
-import { reviewFileDrafts } from "./file-draft-recovery-dialog-view.tsx";
+import { reviewFileDrafts } from "./file-draft-recovery-dialog-loading.tsx";
 
 registerFilePreviewEnglish();
 

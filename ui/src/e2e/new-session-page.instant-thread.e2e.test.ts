@@ -298,9 +298,7 @@ suite.define(() => {
         await page.getByLabel("Name", { exact: true }).fill("instant-proof");
         await page.keyboard.press("Escape");
         await page.locator('[data-chat-model-select="true"]').click();
-        await selectChatModelOption(
-          page.locator('[data-chat-model-option="synthetic/synthetic-model"]'),
-        );
+        await selectChatModelOption(page, "synthetic/synthetic-model");
         await page.locator('[data-chat-permission-select="true"]').click();
         await page.locator('[data-chat-permission-option="full"]').click();
         await evaluateControlUiContext(page, (application) => {

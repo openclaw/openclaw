@@ -44,6 +44,8 @@ import { createReplyOperation } from "../../sessions/session-controller.operatio
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../../state/user-profiles.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { gatewayRequest } from "../request-frame.test-support.js";
+import { dispatchProfile } from "../server/client-fixtures.test-support.js";
 import {
   createDispatchTestHarness,
   createOperatorWsClient,
@@ -184,13 +186,10 @@ describe("steering input custody", () => {
         ...createOperatorWsClient({ connId, scopes: fixture.client.connect.scopes }),
         usesSharedGatewayAuth: sharedSecretOwner,
         authenticatedUserId: sharedSecretOwner ? undefined : "reconnect-steering@example.test",
-        authenticatedUserProfile: {
-          profileId: profile.id,
-          displayName: null,
+        authenticatedUserProfile: dispatchProfile(profile.id, {
           avatarRevision: "synthetic-avatar",
-          hasAvatar: false,
           updatedAt: profile.updatedAt,
-        },
+        }),
         connect: { ...fixture.client.connect, caps: ["ui-commands"] },
         internal: sharedSecretOwner
           ? { authenticatedOperator: true as const, operatorRoleActor: { kind: "system" as const } }
@@ -244,16 +243,11 @@ describe("steering input custody", () => {
             extraHandlers: { "chat.send": handleChatSend },
           });
           await ownerDispatch.dispatcher.dispatch(
-            {
-              type: "req",
-              id: "owner-input",
-              method: "chat.send",
-              params: {
-                ...fixture.params,
-                message: "Continue the original work",
-                idempotencyKey: "owner-input",
-              },
-            },
+            gatewayRequest("owner-input", "chat.send", {
+              ...fixture.params,
+              message: "Continue the original work",
+              idempotencyKey: "owner-input",
+            }),
             originalClient,
           );
           await fixture.dispatchedRecorder;
@@ -421,13 +415,22 @@ describe("steering input custody", () => {
           expect(ownerUserContext).not.toContain(incomingProfile.id);
         }
         fixture.beforeApprove.mockClear();
+        const steeringAccepted = createDeferred();
         const queueMessage = vi.fn<
           NonNullable<ReplyBackendMessageInjectionV2["queueMessageAsync"]>
         >(async (text, options, preparation, authorityKind) =>
           steerActiveSessionWithOptionalDeliveryWait(
             session,
             text,
-            options,
+            {
+              ...options,
+              onQueueAccepted: (nativeAccepted) => {
+                options?.onQueueAccepted?.(nativeAccepted);
+                if (nativeAccepted) {
+                  steeringAccepted.resolve();
+                }
+              },
+            },
             fixture.scope.sessionKey,
             () => {
               preparation.assertCurrent();
@@ -479,18 +482,17 @@ describe("steering input custody", () => {
           return await dispatchInput(params);
         });
         await dispatch.dispatcher.dispatch(
-          {
-            type: "req",
-            id: "reconnected-input",
-            method: "chat.send",
-            params: { ...fixture.params, queueMode: "steer" },
-          },
+          gatewayRequest("reconnected-input", "chat.send", {
+            ...fixture.params,
+            queueMode: "steer",
+          }),
           reconnectedClient,
         );
         if (accepted || forwarded) {
           expect(dispatch.send).toHaveBeenCalledWith(expect.objectContaining({ ok: true }));
         }
         if (accepted) {
+          await withinTest(steeringAccepted.promise, signal);
           expect(
             session.getSteeringMessages(),
             JSON.stringify(vi.mocked(fixture.context.logGateway.warn).mock.calls),

@@ -664,40 +664,77 @@ describe("memory session update sync", () => {
     }
   });
 
-  it("excludes system-only archives without deleting from a fresh rebuild", async () => {
-    const archiveName = "internal-turn.jsonl.deleted.2026-08-26T11-00-00.000Z";
-    const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
-    await fs.mkdir(sessionsDir, { recursive: true });
-    const record = {
-      type: "message",
-      message: {
-        role: "user",
-        content: "Internal system-generated fragment",
-        provenance: { kind: "internal_system", sourceTool: "internal-maintenance" },
-      },
-    };
-    const archivePath = path.join(sessionsDir, archiveName);
-    await fs.writeFile(archivePath, JSON.stringify(record) + "\n");
-    const manager = await getFreshManager(sessionConfig(), "cli");
-    const deletion = vi.spyOn(MemoryIndexDatabase.prototype, "deleteSource");
-    try {
-      await manager.sync({ reason: "forced-reindex", force: true });
-      expect(deletion).not.toHaveBeenCalled();
-    } finally {
-      deletion.mockRestore();
-    }
-    const db = Reflect.get(manager, "db") as DatabaseSync;
-    expect(selectIndex(db, "chunks", "DISTINCT path", "WHERE source = 'sessions'").all()).toEqual(
-      [],
-    );
-    const sessionPath = `sessions/main/${archiveName}`;
-    const writer = memoryIndexFixtureWriter(manager);
-    seedIndexedSession(writer, sessionPath, "Stale violet internal fragment.");
-    // Forget can leave chunks without a source row; published cleanup still owns them.
-    writer.prepare("DELETE FROM memory_index_sources WHERE path = ?").run(sessionPath);
-    await manager.sync({ reason: "archive-cleanup", archiveFiles: [archivePath] });
-    expectSessionIndexRemoved(db, sessionPath);
-  });
+  it.each(["absent", "replaced"] as const)(
+    "cleans system-only archives when source is %s",
+    async (sourceState) => {
+      const archiveName = "internal-turn.jsonl.deleted.2026-08-26T11-00-00.000Z";
+      const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
+      await fs.mkdir(sessionsDir, { recursive: true });
+      const record = {
+        type: "message",
+        message: {
+          role: "user",
+          content: "Internal system-generated fragment",
+          provenance: { kind: "internal_system", sourceTool: "internal-maintenance" },
+        },
+      };
+      const archivePath = path.join(sessionsDir, archiveName);
+      await fs.writeFile(archivePath, JSON.stringify(record) + "\n");
+      const manager = await getFreshManager(sessionConfig(), "cli");
+      const deletion = vi.spyOn(MemoryIndexDatabase.prototype, "deleteSource");
+      try {
+        await manager.sync({ reason: "forced-reindex", force: true });
+        expect(deletion).not.toHaveBeenCalled();
+      } finally {
+        deletion.mockRestore();
+      }
+      const db = Reflect.get(manager, "db") as DatabaseSync;
+      expect(selectIndex(db, "chunks", "DISTINCT path", "WHERE source = 'sessions'").all()).toEqual(
+        [],
+      );
+      const sessionPath = `sessions/main/${archiveName}`;
+      const writer = memoryIndexFixtureWriter(manager);
+      seedIndexedSession(writer, sessionPath, "Stale violet internal fragment.");
+      // Forget can leave chunks without a source row; published cleanup still owns them.
+      writer.prepare("DELETE FROM memory_index_sources WHERE path = ?").run(sessionPath);
+      const orphaned = readPublishedSessionIndex(db, sessionPath, "violet");
+      // oxlint-disable-next-line typescript/unbound-method -- Called below with the intercepted database receiver.
+      const readSourceState = MemoryIndexDatabase.prototype.readSourceState;
+      const inventory = vi
+        .spyOn(MemoryIndexDatabase.prototype, "readSourceState")
+        .mockImplementation(async function (this: MemoryIndexDatabase, query) {
+          const rows = await readSourceState.call(this, query);
+          if (query.paths?.includes(sessionPath)) {
+            expect(rows).toEqual([]);
+            if (sourceState === "replaced") {
+              writer
+                .prepare(
+                  "INSERT INTO memory_index_sources (path, source, hash, mtime, size) VALUES (?, 'sessions', 'newer-session', 30, 40)",
+                )
+                .run(sessionPath);
+            }
+          }
+          return rows;
+        });
+      const reads = vi.spyOn(memoryCpuWorkerRuntime, "runMemoryIndexRead");
+      try {
+        await manager.sync({ reason: "archive-cleanup", archiveFiles: [archivePath] });
+        expect(inventory).toHaveBeenCalledWith({ source: "sessions", paths: [sessionPath] });
+        if (sourceState === "replaced") {
+          const retained = readPublishedSessionIndex(db, sessionPath, "violet");
+          expect(retained.source?.hash).toBe("newer-session");
+          expect(retained.chunks).toEqual(orphaned.chunks);
+          expect(retained.search).toEqual(orphaned.search);
+        } else {
+          expectSessionIndexRemoved(db, sessionPath);
+        }
+        expect(reads.mock.calls.map(([, command]) => command.type)).not.toContain("source.hash");
+      } finally {
+        inventory.mockRestore();
+        reads.mockRestore();
+      }
+    },
+  );
 
   it.each([
     {

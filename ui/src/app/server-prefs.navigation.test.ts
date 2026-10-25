@@ -156,7 +156,7 @@ it("does not infer an unknown edit base from a fresh server read", async () => {
   const result = await writeProfileAppearancePrefs(
     a.writer.state.client,
     { sidebarEntries: [usage] },
-    true,
+    () => true,
     "a",
   );
   expect(result).toMatchObject({ ok: false, reason: "rejected" });
@@ -309,7 +309,7 @@ it("does not write after an incomplete first read", async () => {
   const writer = createServerPrefsWriter(request, scope);
   expect(await readProfileAppearancePrefs(writer.state.client!, "a")).toBeNull();
   expect(
-    await writeProfileAppearancePrefs(writer.state.client, { sidebarEntries: [] }, true, "a"),
+    await writeProfileAppearancePrefs(writer.state.client, { sidebarEntries: [] }, () => true, "a"),
   ).toMatchObject({ ok: false, reason: "unavailable" });
   expect(request.mock.calls.every(([method]) => method === "users.prefs.get")).toBe(true);
 });

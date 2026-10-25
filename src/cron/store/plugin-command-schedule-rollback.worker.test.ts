@@ -131,7 +131,7 @@ const create = (id: string): CronJobCreate => ({
   delivery: { mode: "none" },
 });
 
-async function acceptedBeforeRestart(label: string) {
+async function acceptedBeforeRestart(label: string, sourceDigest = host.sourceDigest) {
   const queue = await queueStore(
     fixture.statePath("cron", label + ".json"),
     [],
@@ -148,7 +148,7 @@ async function acceptedBeforeRestart(label: string) {
         options: {
           captured: false,
           pluginCommand: pluginCommandSchedule(now, { hostProcessId: previous, maxRuns: 3 }),
-          pluginCommandSourceDigest: host.sourceDigest,
+          pluginCommandSourceDigest: sourceDigest,
         },
       },
       snapshot: { nowMs: now },
@@ -160,11 +160,15 @@ async function acceptedBeforeRestart(label: string) {
   return queue;
 }
 
-async function claimAfterRestart(queue: Awaited<ReturnType<typeof acceptedBeforeRestart>>) {
+async function claimAfterRestart(
+  queue: Awaited<ReturnType<typeof acceptedBeforeRestart>>,
+  hosts: PluginCommandScheduleHost[] = [host],
+  receiptId = "cron:request:after-restart",
+) {
   const job = (await queue.read()).jobs[0]!;
-  const request = requestFor(job, { receiptId: "cron:request:after-restart", mode: "force" });
+  const request = requestFor(job, { receiptId, mode: "force" });
   const requested = await queue.request([request]);
-  return { requested, drained: await queue.drain([request], 1, false, [host]), job };
+  return { requested, drained: await queue.drain([request], 1, false, hosts), job };
 }
 
 it("an older reader ignores restart continuity and ends the schedule; upgrading never revives it", async () => {
@@ -203,5 +207,32 @@ it("a schedule an older reader never reached is re-armed after upgrading again",
       pluginIncarnation: host.pluginIncarnation,
       sourceDigest: host.sourceDigest,
     },
+  });
+});
+
+it("a reader without bundled build identities ends a core-bundled schedule; the same build never revives it", async () => {
+  // A core-bundled plugin's code identity is its exact loaded build, in the released binding field.
+  const bundled = { ...host, sourceDigest: "bundled-build:" + "b".repeat(64) };
+  const queue = await acceptedBeforeRestart("bundled-rolled-back", bundled.sourceDigest);
+  // Rollback: a Gateway with restart continuity but no bundled identities lists no loaded host for
+  // core-bundled plugins, so its claim finds no matching code and retires the schedule.
+  const rolledBack = await claimAfterRestart(queue, [], "cron:request:rolled-back");
+  expect(rolledBack.drained.launches).toEqual([]);
+  expect((await queue.read()).jobs[0]).toMatchObject({
+    enabled: false,
+    state: { pluginCommandRuns: 0, pluginCommandBinding: { hostProcessId: previous } },
+  });
+  // Upgrading again onto the accepting build: the retired schedule stays ended.
+  const { requested, drained, job } = await claimAfterRestart(
+    queue,
+    [bundled],
+    "cron:request:bundled-upgraded-again",
+  );
+  expect(job.enabled).toBe(false);
+  expect(requested.accepted).toEqual([]);
+  expect(drained.launches).toEqual([]);
+  expect((await queue.read()).jobs[0]).toMatchObject({
+    enabled: false,
+    state: { pluginCommandRuns: 0 },
   });
 });

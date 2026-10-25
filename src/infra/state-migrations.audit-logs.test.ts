@@ -9,7 +9,6 @@ import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-stor
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { SYSTEM_AGENT_AUDIT_SCOPE } from "../system-agent/audit.js";
 import * as fsSafe from "./fs-safe.js";
-import { acquireGatewayLock } from "./gateway-lock.js";
 import { createSqliteAuditRecordStore } from "./sqlite-audit-record-store.js";
 import { openLegacyAuditRawCheckpointStore } from "./state-migrations.audit-checkpoints.js";
 import { readLegacyAuditSourceSnapshot } from "./state-migrations.audit-recovery.js";
@@ -25,6 +24,7 @@ import {
   withAuditMigrationFixture,
   writeAuditRestoreJournal,
 } from "./state-migrations.audit.test-support.js";
+import { withGatewayLockHeld } from "./state-migrations.gateway-lock.test-support.js";
 
 const at = (day: string) => `2026-07-${day}T00:00:00.000Z`;
 const jsonLine = (record: unknown) => `${JSON.stringify(record)}\n`;
@@ -487,22 +487,7 @@ it("blocks newer generations until the older source is repaired", async ({ audit
 it("requires exclusive state ownership before claiming legacy audit files", async ({ audit }) => {
   const { source } = audit.system;
   await audit.writeJsonLines(source, [event("Restarted gateway")]);
-  const gatewayLock = await acquireGatewayLock({
-    allowInTests: true,
-    env: audit.env,
-    pollIntervalMs: 10,
-    port: 18_791,
-    timeoutMs: 100,
-  });
-  if (!gatewayLock) {
-    throw new Error("expected test Gateway lock");
-  }
-  let result: Awaited<ReturnType<typeof audit.migrate>>;
-  try {
-    result = await audit.migrate();
-  } finally {
-    await gatewayLock.release();
-  }
+  const result = await withGatewayLockHeld(audit.env, 18_791, () => audit.migrate());
   expectIncludes(result.warnings, "exclusive state ownership is unavailable");
   await fs.access(source);
   expect(audit.systemEntries()).toEqual([]);
@@ -585,24 +570,25 @@ it("reads legacy audit sources larger than the ordinary read limit", async ({ au
   expect(snapshot.size).toBe(original.length);
 });
 
-it("preserves byte offsets across invalid UTF-8", async ({ audit }) => {
-  const { raw: rawPath, source: sourcePath } = audit.system;
+it("retains malformed UTF-8 without importing replacement characters", async ({ audit }) => {
+  const { source: sourcePath, claim, raw, sanitized } = audit.system;
   const original = invalidUtf8Record();
   await audit.write(sourcePath, original);
-  await migrateClean(audit);
-  const blanked = await fs.readFile(rawPath);
-  expect(blanked).toHaveLength(original.length);
-  expect(blanked.every((byte) => byte === 0x20 || byte === 0x09)).toBe(true);
-  await audit.appendJsonLines(rawPath, [event("later", "04")]);
-  await migrateClean(audit);
-  expect(audit.systemSummaries()).toEqual(["�", "later"]);
+  await audit.writeJsonLines(audit.config.source, [configAuditRecord("independent")]);
+  const result = await audit.migrate();
+  expect(result.warnings.join("\n")).toContain("must be valid UTF-8");
+  expect(result.warningDisposition).toBe("recoverable");
+  expect(await fs.readFile(sourcePath)).toEqual(original);
+  await expectMissing(claim, raw, sanitized);
+  expect(audit.systemSummaries()).toEqual([]);
+  expect(audit.configRecords()).toHaveLength(1);
 });
 
 it("upgrades a legacy nonzero raw checkpoint to the blank append pad", async ({ audit }) => {
   const { raw: rawPath, source: sourcePath } = audit.system;
   await audit.writeJsonLines(sourcePath, [event("original")]);
   await audit.migrate();
-  const legacyRaw = invalidUtf8Record("\n");
+  const legacyRaw = Buffer.from(jsonLine(event("é")));
   await fs.writeFile(rawPath, legacyRaw);
   const { dev, ino, mtimeMs, size } = await fs.stat(rawPath);
   const checkpointStore = openLegacyAuditRawCheckpointStore(audit.stateDir);

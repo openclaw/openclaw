@@ -1,5 +1,6 @@
 import { createRoot, createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { page, userEvent } from "vitest/browser";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import { getRenderedModalDialog } from "../test-helpers/modal-dialog.ts";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
@@ -9,7 +10,13 @@ import "../styles.css";
 
 let controller: AbortController;
 let trigger: HTMLButtonElement;
-beforeEach(() => {
+async function setViewport(width: number, height: number) {
+  await page.viewport(width, height);
+  // The parent viewport command can finish before the test iframe resizes.
+  await expect.poll(() => window.innerWidth).toBe(width);
+}
+beforeEach(async () => {
+  await setViewport(1280, 720);
   controller = new AbortController();
   trigger = document.body.appendChild(document.createElement("button"));
   trigger.textContent = "Edit synthetic session";
@@ -85,12 +92,15 @@ describe("promise dialog native focus and dismissal", () => {
         message: "Change this session?",
         signal: controller.signal,
       };
+      if (kind === "alternative") {
+        await setViewport(390, 844);
+      }
       const result =
         kind === "alternative"
           ? showConfirmChoiceDialog({
               ...options,
-              confirmLabel: "Archive this session",
-              alternativeLabel: "Archive 2 sessions",
+              confirmLabel: "Save",
+              alternativeLabel: "Discard",
             })
           : showConfirmDialog({
               ...options,
@@ -108,11 +118,72 @@ describe("promise dialog native focus and dismissal", () => {
         flush();
         expect(button("Delete").disabled).toBe(false);
       }
-      button(kind === "alternative" ? "Archive 2 sessions" : "Cancel").click();
+      if (kind === "alternative") {
+        const controls = [button("Cancel"), button("Discard"), button("Save")];
+        for (const control of controls.slice(1)) {
+          expect(
+            Math.abs(
+              control.getBoundingClientRect().top - controls[0]!.getBoundingClientRect().top,
+            ),
+          ).toBeLessThanOrEqual(1);
+        }
+      }
+      button(kind === "alternative" ? "Discard" : "Cancel").click();
       expect(document.activeElement).toBe(trigger);
       await expect(result).resolves.toBe(kind === "alternative" ? "alternative" : false);
     },
   );
+
+  it("keeps grouped mobile choices in visual DOM order without losing keyboard focus", async () => {
+    await setViewport(390, 844);
+    const secondary = "Archive only this session";
+    const primary = "Archive all (3)";
+    const result = showConfirmChoiceDialog({
+      message: "Synthetic nested-session scope",
+      confirmLabel: primary,
+      alternativeLabel: secondary,
+      groupChoicesOnMobile: true,
+      signal: controller.signal,
+    });
+    await getRenderedModalDialog(document.body);
+    const order = () =>
+      [...document.querySelectorAll("openclaw-modal-actions button")].map((control) =>
+        control.textContent?.trim(),
+      );
+    await expect.poll(order).toEqual([secondary, primary, "Cancel"]);
+    expect(document.activeElement).toBe(button("Cancel"));
+    for (const name of [secondary, primary, "Cancel"]) {
+      // macOS WebKit uses Option-Tab to visit each control inside the dialog.
+      if (
+        navigator.platform.includes("Mac") &&
+        navigator.userAgent.includes("AppleWebKit") &&
+        !navigator.userAgent.includes("Chrome")
+      ) {
+        await userEvent.keyboard("{Alt>}{Tab}{/Alt}");
+      } else {
+        await userEvent.tab();
+      }
+      expect(document.activeElement).toBe(button(name));
+    }
+    for (const width of [1280, 390, 320, 390]) {
+      await setViewport(width, 844);
+      await expect
+        .poll(order)
+        .toEqual(width === 1280 ? ["Cancel", secondary, primary] : [secondary, primary, "Cancel"]);
+      await expect.poll(() => document.activeElement).toBe(button("Cancel"));
+    }
+    button(primary).focus();
+    for (const width of [1280, 390]) {
+      await setViewport(width, 844);
+      await expect
+        .poll(order)
+        .toEqual(width === 1280 ? ["Cancel", secondary, primary] : [secondary, primary, "Cancel"]);
+      await expect.poll(() => document.activeElement).toBe(button(primary));
+    }
+    controller.abort();
+    await expect(result).resolves.toBeNull();
+    expect(document.activeElement).toBe(trigger);
+  });
 
   it("keeps a pending input operation visible through native cancellation and preserves its text after rejection", async () => {
     const pending = createDeferred<string | null>();

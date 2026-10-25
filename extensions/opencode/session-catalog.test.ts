@@ -6,6 +6,7 @@ import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import type { SessionTranscriptWriteContext } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createSessionCatalogContinuationStore } from "../test-support/session-catalog-continuation.test-support.js";
 
 type ResolveAcpSessionAvailability =
   (typeof import("openclaw/plugin-sdk/acp-runtime"))["resolveAcpSessionAvailability"];
@@ -45,9 +46,6 @@ type NodeHostCommand = Parameters<OpenClawPluginApi["registerNodeHostCommand"]>[
 type NodeInvokePolicy = Parameters<OpenClawPluginApi["registerNodeInvokePolicy"]>[0];
 type CatalogListParams = Parameters<SessionCatalogProvider["list"]>[0];
 type CatalogReadParams = Parameters<SessionCatalogProvider["read"]>[0];
-type CreateSessionEntryParams = Parameters<
-  OpenClawPluginApi["runtime"]["agent"]["session"]["createSessionEntry"]
->[0];
 
 function bindTestCatalogOwner(provider: RegisteredSessionCatalogProvider): SessionCatalogProvider {
   return {
@@ -70,9 +68,10 @@ function bindTestCatalogOwner(provider: RegisteredSessionCatalogProvider): Sessi
   } as SessionCatalogProvider;
 }
 
-const nodeHostMocks = vi.hoisted(() => ({
-  runNodePtyCommand: vi.fn(async () => ({ exitCode: 0 })),
-}));
+const nodeHostMocks = await vi.hoisted(async () => {
+  const { createNodeHostMocks } = await import("../test-support/node-host.test-support.js");
+  return createNodeHostMocks();
+});
 const acpRuntimeMocks = vi.hoisted(() => ({
   resolveAcpSessionAvailability: vi.fn<ResolveAcpSessionAvailability>(() => ({ available: true })),
 }));
@@ -121,29 +120,8 @@ vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async (importOriginal)
   };
 });
 
-vi.mock("openclaw/plugin-sdk/node-host", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/node-host")>();
-  return {
-    ...actual,
-    runNodePtyCommand: nodeHostMocks.runNodePtyCommand,
-    resolveNodeHostExecutable: (
-      command: string,
-      options: {
-        env?: NodeJS.ProcessEnv;
-        pathEnv?: string;
-        includeExtensionless?: boolean;
-      },
-    ) => {
-      const env = options.env ?? process.env;
-      return actual.resolveNodeHostExecutable(command, {
-        env,
-        pathEnv: options.pathEnv ?? env.PATH ?? env.Path ?? "",
-        includeExtensionless: options.includeExtensionless,
-        strategy: "direct",
-      });
-    },
-  };
-});
+// mock-isolation: Shared owner preserves real exports with fresh command-resolution mocks.
+vi.mock("openclaw/plugin-sdk/node-host", nodeHostMocks.mockRuntime);
 
 import { registerOpenCodeSessionCatalog } from "./session-catalog-plugin.js";
 import {
@@ -260,39 +238,10 @@ async function expectPairedNodeListError(
 }
 
 function captureOpenCodeContinuationCatalog() {
-  const entries: Array<{ sessionKey: string; entry: Record<string, unknown> }> = [];
-  const createSessionEntry = vi.fn(async (params: CreateSessionEntryParams) => {
-    const sessionKey = `agent:${params.agentId ?? "main"}:${params.key}`;
-    const entry = {
-      sessionId: "adopted-opencode-session",
-      updatedAt: Date.now(),
-      pluginOwnerId: "opencode",
-      initializationPending: true as const,
-      ...(params.label ? { label: params.label } : {}),
-      ...(params.displayName ? { displayName: params.displayName } : {}),
-      ...(params.spawnedCwd ? { spawnedCwd: params.spawnedCwd } : {}),
-      pluginExtensions: params.initialEntry.pluginExtensions,
-    };
-    entries.push({ sessionKey, entry });
-    const created = {
-      key: sessionKey,
-      agentId: params.agentId ?? "main",
-      sessionId: entry.sessionId,
-      entry,
-    };
-    try {
-      const finalPatch = await params.afterCreate?.(created);
-      entry.pluginExtensions = finalPatch?.pluginExtensions ?? entry.pluginExtensions;
-      delete (entry as { initializationPending?: true }).initializationPending;
-      return created;
-    } catch (error) {
-      entries.splice(
-        entries.findIndex((candidate) => candidate.entry === entry),
-        1,
-      );
-      throw error;
-    }
-  });
+  const { entries, createSessionEntry } = createSessionCatalogContinuationStore(
+    "opencode",
+    "adopted-opencode-session",
+  );
   const session = { createSessionEntry, listSessionEntries: vi.fn(() => entries) };
   const runtime = {
     config: { current: () => ({}) },
@@ -580,12 +529,12 @@ describe("OpenCode session catalog", () => {
     const hosts = await provider!.list({ limitPerHost: 1 });
     expect(hosts[0]?.sessions.map((session) => session.threadId)).toEqual(["ses_test"]);
 
-    const now = Date.now();
-    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
+    const now = performance.now();
+    const perfSpy = vi.spyOn(performance, "now").mockReturnValue(now);
     const run = processRuntimeMocks.runCommandBuffered.getMockImplementation()!;
     processRuntimeMocks.runCommandBuffered.mockImplementationOnce(async (...args) => {
       const result = await run(...args);
-      nowSpy.mockReturnValue(now + 30_001);
+      perfSpy.mockReturnValue(now + 30_001);
       return result;
     });
     try {
@@ -593,7 +542,36 @@ describe("OpenCode session catalog", () => {
         listLocalOpenCodeSessionPage({ limit: 1 }, { forceRefresh: true }),
       ).rejects.toThrow("OpenCode session scan exceeded the time limit");
     } finally {
+      perfSpy.mockRestore();
+    }
+  });
+
+  itWithCli("bounds per-page CLI budgets when the wall clock runs backwards", async () => {
+    await installFakeOpenCode("hi", "Catalog session", {}, 2, true);
+    const { provider } = captureOpenCodeSessionRegistrations();
+    const wallNow = Date.now();
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(wallNow);
+    const captured: number[] = [];
+    const run = processRuntimeMocks.runCommandBuffered.getMockImplementation()!;
+    processRuntimeMocks.runCommandBuffered.mockImplementation(async (...args) => {
+      const [argv, opts] = args;
+      if (argv.includes("session.list") && typeof opts?.timeoutMs === "number") {
+        captured.push(opts.timeoutMs);
+      }
+      const result = await run(...args);
+      if (captured.length === 1) {
+        nowSpy.mockReturnValue(wallNow - 60_000);
+      }
+      return result;
+    });
+    try {
+      const hosts = await provider!.list({ limitPerHost: 1 });
+      expect(hosts[0]?.sessions.map((session) => session.threadId)).toEqual(["ses_test"]);
+      expect(captured).toHaveLength(2);
+      expect(captured[1]!).toBeLessThanOrEqual(captured[0]!);
+    } finally {
       nowSpy.mockRestore();
+      processRuntimeMocks.runCommandBuffered.mockImplementation(run);
     }
   });
 
@@ -1027,10 +1005,7 @@ describe("OpenCode session catalog", () => {
   });
 
   it("fans out paired-node listing instead of blocking later hosts", async () => {
-    let releaseSlow: ((value: unknown) => void) | undefined;
-    const slow = new Promise<unknown>((resolve) => {
-      releaseSlow = resolve;
-    });
+    const { promise: slow, resolve: releaseSlow } = Promise.withResolvers<unknown>();
     const page = (threadId: string) => pairedNodeSessionPage(pairedNodeSession({ threadId }));
     const invoke = vi.fn(({ nodeId }: { nodeId: string }) =>
       nodeId === "node-a" ? slow : Promise.resolve(page("session-b")),

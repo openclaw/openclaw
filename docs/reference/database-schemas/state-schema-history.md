@@ -76,6 +76,12 @@ node rows and root are durably installed. An interrupted conversion retains its
 legacy input for retry. Pending legacy receipts remain recoverable through the
 same owner until their conversion and settlement finish.
 
+Full baseline replacements build and encode their manifest trees in the existing
+workspace read worker. The Gateway forwards the prepared bytes to the writer,
+which decodes before the same acceptance transaction. Completed conversions do
+not rebuild on restart; new workspaces, base refreshes, and archive recovery can
+still request a full replacement.
+
 Archive and publication operations still materialize the complete manifest format.
 Fresh host Git-index admission remains per operation, and filesystem metadata
 discovery still enumerates additions and deletions. Watch events do not authorize

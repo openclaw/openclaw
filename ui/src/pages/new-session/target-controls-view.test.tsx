@@ -7,6 +7,7 @@ import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { CatalogBar } from "./catalog-target-view.tsx";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
+import { createNewSessionRouteData } from "./location.test-support.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import { NewSessionPlaceControls } from "./target-controls-view.tsx";
 
@@ -44,13 +45,7 @@ it("retains catalog retry readiness through coalesced requests and host completi
   const first = createDeferred();
   const second = createDeferred();
   const rendered = createDeferred();
-  const data: NewSessionRouteData = {
-    agentId: "main",
-    requestedAgentId: "main",
-    catalogId: "terminal",
-    catalogLabel: "",
-    startTerminal: false,
-  };
+  const data: NewSessionRouteData = { ...createNewSessionRouteData(), catalogId: "terminal" };
   const [revision, setRevision] = createSignal(0);
   const updateComplete = vi.fn(() => rendered.promise);
   const f = createDraftFixture({
@@ -137,53 +132,60 @@ it.each([
   { name: "WebKit IME Enter", writable: true, advertised: true, enter: true, composing: "end" },
   { name: "read-only Enter", writable: false, advertised: true, enter: true },
   { name: "unadvertised create", writable: true, advertised: false, enter: true },
-])("gates pasted Git URL selection for $name", ({ writable, advertised, enter, composing }) => {
-  const cloneUrl = "https://github.com/openclaw/openclaw.git";
-  const f = createDraftFixture({
-    scopes: ["operator.sessions.read", ...(writable ? ["operator.sessions.write"] : [])],
-    methods: ["projects.add", ...(advertised ? ["sessions.create"] : [])],
-  });
-  f.place.browser.changeProjectQuery(cloneUrl);
-  const { container } = mountSolid(() => (
-    <NewSessionPlaceControls
-      params={{
-        context: f.context,
-        data: undefined,
-        gateway: f.gateway,
-        place: f.place,
-        submitting: false,
-        pendingPlacement: false,
-        onConnectMachine: vi.fn(),
-        onNavigate: vi.fn(),
-        onFocusComposer: vi.fn(),
-        onChange: vi.fn(),
-      }}
-    />
-  ));
-  const available = writable && advertised;
-  const clone = container.querySelector<HTMLButtonElement>('[data-value="project-clone-url"]');
-  expect(clone !== null).toBe(available);
-  if (enter) {
-    const input = container.querySelector<HTMLInputElement>(
-      ".new-session-page__project-search input",
-    )!;
-    if (composing === "end") {
-      input.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
-    }
-    input.dispatchEvent(
-      new KeyboardEvent("keydown", {
-        key: "Enter",
-        isComposing: composing === "flag",
-        bubbles: true,
-        cancelable: true,
-      }),
+])(
+  "gates pasted Git URL selection for $name",
+  async ({ writable, advertised, enter, composing }) => {
+    const cloneUrl = "https://github.com/openclaw/openclaw.git";
+    const f = createDraftFixture({
+      scopes: ["operator.sessions.read", ...(writable ? ["operator.sessions.write"] : [])],
+      methods: ["projects.add", ...(advertised ? ["sessions.create"] : [])],
+    });
+    f.place.browser.popoverCallbacks("project").onPopoverShow();
+    f.place.browser.changeProjectQuery(cloneUrl);
+    const { container } = mountSolid(() => (
+      <NewSessionPlaceControls
+        params={{
+          context: f.context,
+          data: undefined,
+          gateway: f.gateway,
+          place: f.place,
+          submitting: false,
+          pendingPlacement: false,
+          onConnectMachine: vi.fn(),
+          onNavigate: vi.fn(),
+          onFocusComposer: vi.fn(),
+          onChange: vi.fn(),
+        }}
+      />
+    ));
+    await waitForSolid(() =>
+      expect(container.querySelector(".new-session-page__project-search input")).not.toBeNull(),
     );
-  } else {
-    expect(clone?.disabled).toBe(false);
-    clone!.click();
-  }
-  expect(f.place.browser.remoteProject).toEqual(
-    available && !composing ? { identity: cloneUrl, cloneUrl } : null,
-  );
-  expect(f.request).not.toHaveBeenCalledWith("projects.add", expect.anything());
-});
+    const available = writable && advertised;
+    const clone = container.querySelector<HTMLButtonElement>('[data-value="project-clone-url"]');
+    expect(clone !== null).toBe(available);
+    if (enter) {
+      const input = container.querySelector<HTMLInputElement>(
+        ".new-session-page__project-search input",
+      )!;
+      if (composing === "end") {
+        input.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
+      }
+      input.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          isComposing: composing === "flag",
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    } else {
+      expect(clone?.disabled).toBe(false);
+      clone!.click();
+    }
+    expect(f.place.browser.remoteProject).toEqual(
+      available && !composing ? { identity: cloneUrl, cloneUrl } : null,
+    );
+    expect(f.request).not.toHaveBeenCalledWith("projects.add", expect.anything());
+  },
+);

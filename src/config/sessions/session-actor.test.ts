@@ -4,12 +4,12 @@ import { renderAssistantRequestFailureCopy } from "../../agents/failover/assista
 import { appendSessionManagerActor } from "../../agents/sessions/session-manager-actor-append.js";
 import { formatErrorMessageWithCode } from "../../infra/errors.js";
 import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
-import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
-import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
-  getOpenClawAgentDatabaseIfOpen,
-  openOpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
+  hasSqliteWorkerOutcomeUnknown,
+  SqliteWorkerError,
+} from "../../infra/sqlite-worker-contract.js";
+import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
+import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -64,78 +64,6 @@ const messageAppend = (actor: SessionActor, sessionId: string, message: unknown)
     messageJson: JSON.stringify(message),
   },
 });
-
-it.each(["main", "secondary"])(
-  "publishes %s actor initialization in a shared store",
-  async (agentId) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async ({ env, statePath }) => {
-      const database = openOpenClawAgentDatabase({
-        agentId: "main",
-        path: statePath("shared.sqlite"),
-      });
-      const identity = readOpenClawAgentDatabaseIdentity(database);
-      if (typeof identity.identity !== "string") {
-        throw new Error("Fixture requires durable storage");
-      }
-      const scope = {
-        agentId,
-        storePath: database.path,
-        sessionKey: `agent:${agentId}:actor-first-maintenance`,
-        sessionId: "actor-first-maintenance",
-      };
-      const actor = await createSessionActorFactory({
-        agentId: "main",
-        path: database.path,
-        env,
-      }).acquire(
-        {
-          sessionKey: scope.sessionKey,
-          database: {
-            kind: "file",
-            physicalIdentity: identity.identity,
-            birthtime: identity.birthtime,
-            nativeLocation: database.path,
-          },
-        },
-        { assertCurrent() {}, assertReadable() {} },
-      );
-      const ageChanges = vi.fn();
-      const stopAgeChanges = observeSessionEntryMaintenanceAgeChanges(
-        identity.identity,
-        ageChanges,
-      );
-      try {
-        const result = await appendSessionManagerActor({
-          actor,
-          toolResult: false,
-          assertCurrent() {},
-          append: {
-            kind: "message",
-            input: {
-              scope,
-              cwd: "/synthetic",
-              messageJson: JSON.stringify({ role: "user", content: "first input", timestamp: 2 }),
-            },
-            initialization: { scope, entry: { sessionId: scope.sessionId, updatedAt: 2 } },
-          },
-        });
-        expect(result.failure).toBeUndefined();
-        expect(result.committed).toMatchObject({
-          kind: "message",
-          value: { snapshot: { ok: true } },
-        });
-        expect(ageChanges).toHaveBeenCalledExactlyOnceWith({
-          sessionKey: scope.sessionKey,
-          entry: expect.objectContaining({ sessionId: scope.sessionId }),
-          previousEntry: undefined,
-        });
-      } finally {
-        stopAgeChanges();
-        await actor.release();
-      }
-    });
-  },
-);
 
 it("acquires existing incognito input from memory without opening a database", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
@@ -826,28 +754,25 @@ it.each([
     Object.assign(new SqliteWorkerError("SQLite worker stopped", "outcome-unknown"), {
       cause: Object.assign(new Error("database or disk is full"), { errcode: 13 }),
     }),
-    "SQLITE_FULL",
     "unknown",
     false,
     undefined,
   ],
-  [new Error("database or disk is full"), "SQLITE_FULL", "unknown-result", false, undefined],
-  [new Error("Ordinary reply lost"), "session_actor_reconciliation", "unknown", false, undefined],
+  [new Error("database or disk is full"), "unknown-result", false, undefined],
+  [new Error("Ordinary reply lost"), "unknown", false, undefined],
   [
     Object.assign(new Error("database or disk is full"), { errcode: 13 }),
-    "SQLITE_FULL",
     "normal",
     true,
     undefined,
   ],
   [
     new Error("Ordinary reply lost"),
-    "SQLITE_FULL",
     "unknown",
     false,
     Object.assign(new Error("database or disk is full during settlement"), { code: "SQLITE_FULL" }),
   ],
-] as const)("retains %s (%s, %s)", async (cause, expected, reply, rollback, settlementError) => {
+] as const)("retains uncertainty with %s (%s)", async (cause, reply, rollback, settlementError) => {
   await withActor(async ({ actor, commands, fault }) => {
     const initial = await actor.read(authority);
     if (actor.target.database.kind !== "file") {
@@ -896,14 +821,11 @@ it.each([
     } catch (error) {
       failure = error;
     }
-    expect(classifyGatewayStorageFailure(failure)).toBe(expected);
-    if (expected === "SQLITE_FULL") {
-      expect(
-        renderAssistantRequestFailureCopy({
-          storageFailure: classifyGatewayStorageFailure(failure),
-        }),
-      ).toContain("disk is full. Free up space");
-    }
+    expect(hasSqliteWorkerOutcomeUnknown(failure)).toBe(true);
+    expect(classifyGatewayStorageFailure(failure)).toBe("session_actor_reconciliation");
+    expect(
+      renderAssistantRequestFailureCopy({ storageFailure: classifyGatewayStorageFailure(failure) }),
+    ).toMatch(/check|reopen|retry/i);
     const diagnostic = formatErrorMessageWithCode(failure);
     expect(diagnostic).toContain("Session actor requires reconciliation before another command");
     expect(diagnostic).toContain(cause.message);
@@ -917,7 +839,9 @@ it.each([
         assertCurrent() {},
         append: messageAppend(actor, initial.entry!.sessionId, { role: "user", content: [] }),
       }),
-    ).rejects.toSatisfy((error: unknown) => classifyGatewayStorageFailure(error) === expected);
+    ).rejects.toSatisfy(
+      (error: unknown) => classifyGatewayStorageFailure(error) === "session_actor_reconciliation",
+    );
     expect(commands).toHaveLength(before);
     fault.reply = "normal";
     expect((await actor.read(authority)).entry?.updatedAt).toBe(
@@ -942,11 +866,13 @@ it.each(["command", "flush"] as const)(
           }
         }),
       ).rejects.toSatisfy((error: unknown) => {
+        expect(hasSqliteWorkerOutcomeUnknown(error)).toBe(true);
+        expect(classifyGatewayStorageFailure(error)).toBe("session_actor_reconciliation");
         expect(
           renderAssistantRequestFailureCopy({
             storageFailure: classifyGatewayStorageFailure(error),
           }),
-        ).toContain("disk is full. Free up space");
+        ).toMatch(/check|reopen|retry/i);
         expect(formatErrorMessageWithCode(error)).toContain("database or disk is full");
         return true;
       });

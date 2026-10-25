@@ -1,5 +1,8 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { buffer as consumeBuffer } from "node:stream/consumers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import type { SessionCatalogTranscriptItem } from "openclaw/plugin-sdk/session-catalog";
 import * as sessionCatalogRuntime from "openclaw/plugin-sdk/session-catalog-runtime";
 import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
 import { withServer } from "openclaw/plugin-sdk/test-env";
@@ -39,21 +42,13 @@ vi.mock("openclaw/plugin-sdk/session-catalog-runtime", async (importOriginal) =>
   return { ...actual, listActiveSessionCatalogs: vi.fn(actual.listActiveSessionCatalogs) };
 });
 
-async function readRequestBody(req: IncomingMessage): Promise<string> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of req) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  return Buffer.concat(chunks).toString("utf8");
-}
-
 async function withMirrorServer(
   respond: (req: IncomingMessage, res: ServerResponse, body: string) => void,
   run: (origin: string) => Promise<void>,
 ) {
   await withServer((req, res) => {
-    void readRequestBody(req).then(
-      (body) => respond(req, res, body),
+    void consumeBuffer(req).then(
+      (body) => respond(req, res, body.toString("utf8")),
       (error: unknown) => res.destroy(error instanceof Error ? error : new Error(String(error))),
     );
   }, run);
@@ -79,21 +74,42 @@ describe("parseBeamMirrorConfig", () => {
 
 describe("buildBeamMirrorItems", () => {
   it("restores chronological text from newest-first catalog items and summarizes raw content", () => {
-    const reduced = buildBeamMirrorItems([
+    const display = createTestPluginApi({ id: "incidents" }).inlineView(
+      "incident",
+      { incidentId: "INC-42" },
+      { version: 3, summary: "INC-42 is investigating." },
+    );
+    const items: SessionCatalogTranscriptItem[] = [
       { type: "agentMessage", text: "Done." },
+      { type: "agentMessage", text: display.content[0].text, raw: display.details },
       { type: "reasoning", text: "private thoughts" },
       { type: "toolResult", raw: { output: "secret output" } },
       { type: "toolCall", text: "rm -rf /tmp/x", raw: { command: "secret" } },
       { type: "userMessage", text: "Fix it." },
-    ]);
-    expect(reduced.items).toEqual([
+    ];
+    const reduced = buildBeamMirrorItems(items);
+    const expected = [
       { type: "userMessage", text: "Fix it." },
       {
         type: "other",
         text: "1 tool calls, 1 tool results, 1 reasoning items; raw content dropped",
       },
+      { type: "agentMessage", text: "INC-42 is investigating." },
       { type: "agentMessage", text: "Done." },
-    ]);
+    ];
+    expect(reduced.items).toEqual(expected);
+    expect(
+      parseBeamUpload({
+        version: 1,
+        beamId: "a".repeat(32),
+        source: "openclaw",
+        title: "Incident",
+        updatedAt: "2026-10-19T12:00:00.000Z",
+        completed: true,
+        items: reduced.items,
+      }),
+    ).toMatchObject({ ok: true, value: { items: expected } });
+    expect(JSON.stringify(reduced.items)).not.toContain("pluginInlineView");
     expect(JSON.stringify(reduced.items)).not.toContain("secret");
     expect(JSON.stringify(reduced.items)).not.toContain("private thoughts");
   });
@@ -137,7 +153,6 @@ describe("createBeamMirrorRunner", () => {
           async (receiverOrigin) => {
             const runner = createBeamTestRunner({
               endpoint: `${receiverOrigin}/beam`,
-              listCatalogs: () => [createBeamTestCatalog()],
             });
             await runner.tick();
             expect(receiverBodies).toHaveLength(1);
@@ -168,7 +183,6 @@ describe("createBeamMirrorRunner", () => {
         const runner = createBeamTestRunner({
           endpoint: `${origin}/beam`,
           logger: { warn: (message) => warnings.push(message), info: () => {} },
-          listCatalogs: () => [createBeamTestCatalog()],
         });
         await runner.tick();
         await runner.tick();
@@ -195,7 +209,6 @@ describe("createBeamMirrorRunner", () => {
         const runner = createBeamTestRunner({
           endpoint: `${origin}/beam`,
           logger: { warn: (message) => warnings.push(message), info: () => {} },
-          listCatalogs: () => [createBeamTestCatalog()],
         });
         await runner.tick();
         await runner.tick();
@@ -458,14 +471,15 @@ describe("createBeamMirrorRunner", () => {
       async (origin) => {
         const { warnings, logger } = fixture;
         let signal: AbortSignal | undefined;
+        const realFetch = fetch;
         const fetchFn = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
           signal = init?.signal ?? undefined;
-          return fetch(input, init);
+          return realFetch(input, init);
         }) as unknown as typeof fetch;
+        vi.stubGlobal("fetch", fetchFn);
         const runner = createScheduledBeamTestRunner({
           endpoint: `${origin}/beam`,
           logger,
-          fetchFn,
         });
 
         try {

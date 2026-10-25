@@ -20,7 +20,10 @@ vi.mock("../config/sessions/session-delivery-generation.js", async (importOrigin
 
 const { admitScheduledOccurrence } = await import("./execution-context-admission.js");
 const { prepareCronRunAdmission } = await import("./run-admission.js");
+const { readScheduledMemoryParent, readScheduledToolTargets } =
+  await import("./execution-context-registry.js");
 const { buildScheduledParentPauseNotice } = await import("./scheduled-occurrence.js");
+const { sessionChanges } = await import("../sessions/session-row-changes.js");
 
 const PARENT_KEY = "agent:main:dashboard:parent";
 
@@ -115,6 +118,51 @@ const LINKED_JOB = {
 };
 
 describe("admitScheduledOccurrence", () => {
+  it("rechecks a stored Discord requester's owner status for each occurrence", async () => {
+    readSessionEntryInWorker.mockResolvedValue({
+      sessionId: "parent-session",
+      lifecycleRevision: "rev-1",
+    });
+    const stored = job({
+      ...LINKED_JOB,
+      toolsAllowProvenance: {
+        version: 1,
+        source: "authenticated-requester",
+        channelRequester: {
+          version: 1,
+          channel: "discord",
+          accountId: "default",
+          senderId: "100000000000000001",
+        },
+      },
+    });
+
+    // Reuse the persisted requester, not the creator's historical owner status.
+    for (const [senderId, owner] of [
+      ["100000000000000001", true],
+      ["100000000000000002", false],
+    ] as const) {
+      const cfg = { commands: { ownerAllowFrom: [`discord:${senderId}`] } };
+      const occurrence = await admitScheduledOccurrence({
+        cfg,
+        job: stored,
+        agentId: "main",
+        trigger: "cron",
+      });
+      try {
+        expect(occurrence.mint({ ...RUN, cfg }).result).toMatchObject({
+          status: "ready",
+          facts: {
+            authority: { owner, basis: owner ? "channel-owner" : "none" },
+            resources: { memory: { source: "parent", owner } },
+          },
+        });
+      } finally {
+        occurrence.release();
+      }
+    }
+  });
+
   it("binds the context to the admitted run and releases it on close", async () => {
     const { minted } = await mint(job({ scheduledToolPolicy: { version: 1, mode: "trusted" } }));
     expect(minted.result.status).toBe("ready");
@@ -127,7 +175,9 @@ describe("admitScheduledOccurrence", () => {
       deliveryAttemptFence: null,
       scheduledExecution: minted,
     });
-    await admission.preparedRunAdmission.admit("embedded");
+    const operatorRun = await admission.preparedRunAdmission.admit("embedded");
+    // An operator job keeps resolving memory from its own run row.
+    expect(readScheduledMemoryParent(operatorRun.operationalRunInstance)).toBeUndefined();
     const context = admission.readScheduledExecution();
     expect(context).toMatchObject({
       jobId: "job-1",
@@ -170,6 +220,44 @@ describe("admitScheduledOccurrence", () => {
     expect(prepareSessionGenerationFacts).toHaveBeenCalledWith(
       expect.objectContaining({ sessionId: "parent-session", lifecycleRevision: "rev-1" }),
     );
+  });
+
+  it("exposes a child's board, media and memory parent for the run", async () => {
+    readSessionEntryInWorker.mockResolvedValue({
+      sessionId: "parent-session",
+      lifecycleRevision: "rev-1",
+    });
+    const { occurrence, minted } = await mint(job(LINKED_JOB));
+    const admission = prepareCronRunAdmission({
+      cfg: {},
+      agentId: "main",
+      runId: "run-1",
+      sessionKey: "agent:main:cron:job-1:run:s1",
+      jobId: "job-1",
+      deliveryAttemptFence: null,
+      scheduledExecution: minted,
+    });
+    const admitted = await admission.preparedRunAdmission.admit("embedded");
+    const targets = readScheduledToolTargets(admitted);
+    expect(targets).toMatchObject({ boardSessionKey: PARENT_KEY });
+    expect(() => targets?.assertCurrent()).not.toThrow();
+    generationAssert.mockImplementationOnce(() => {
+      throw new Error("parent reset");
+    });
+    expect(() => targets?.assertCurrent()).toThrow("parent reset");
+    // No requester check ran for this occurrence, so the parent's audience is not owner-private.
+    expect(readScheduledMemoryParent(admitted.operationalRunInstance)).toEqual({
+      sessionKey: PARENT_KEY,
+      sessionId: "parent-session",
+      lifecycleRevision: "rev-1",
+      senderIsOwner: false,
+    });
+    admission.close();
+    expect(readScheduledToolTargets(admitted)).toBeUndefined();
+    expect(readScheduledMemoryParent(admitted.operationalRunInstance)).toBeUndefined();
+    // Tools built during the run keep the assertion; it must refuse after the run settles.
+    expect(() => targets?.assertCurrent()).toThrow("settled");
+    occurrence.release();
   });
 
   it("reports a removed parent as a pause without throwing", async () => {
@@ -331,6 +419,97 @@ describe("occurrence pause", () => {
     const occurrence = await admit(linked);
     expect(occurrence.pause).toBeUndefined();
     occurrence.release();
+  });
+
+  it("hands a child run its current parent's bound row, sandbox requirement and live check", async () => {
+    const parentEntry = {
+      sessionId: "parent-session",
+      lifecycleRevision: "rev-1",
+      sandbox: "required" as const,
+      spawnedCwd: "/work/project",
+    };
+    readSessionEntryInWorker.mockResolvedValue(parentEntry);
+    const occurrence = await admit(linked);
+    expect(occurrence.childParent).toEqual({
+      binding: { sessionKey: PARENT_KEY, entry: parentEntry },
+      sandbox: "required",
+      assertCurrent: expect.any(Function),
+      signal: expect.any(AbortSignal),
+    });
+    expect(() => occurrence.childParent?.assertCurrent()).not.toThrow();
+    generationAssert.mockImplementationOnce(() => {
+      throw new Error("parent reset");
+    });
+    expect(() => occurrence.childParent?.assertCurrent()).toThrow("parent reset");
+    occurrence.release();
+    expect(() => occurrence.childParent?.assertCurrent()).toThrow("settled");
+  });
+
+  it("aborts a bound child's signal once a parent row change ends the parent", async () => {
+    readSessionEntryInWorker.mockResolvedValue({
+      sessionId: "parent-session",
+      lifecycleRevision: "rev-1",
+      spawnedCwd: "/work/project",
+    });
+    const occurrence = await admit(linked);
+    const signal = occurrence.childParent?.signal;
+    const reset = new Error("parent reset");
+    generationAssert.mockImplementation(() => {
+      throw reset;
+    });
+    sessionChanges.invalidate({ sessionKey: "agent:main:dashboard:other", storePath: "/s" });
+    expect(signal?.aborted).toBe(false);
+    sessionChanges.invalidate({ sessionKey: PARENT_KEY, storePath: "/s" });
+    expect(signal?.aborted).toBe(true);
+    expect(signal?.reason).toBe(reset);
+    occurrence.release();
+  });
+
+  it("keeps a bound child's signal live while the parent stays current and after settlement", async () => {
+    readSessionEntryInWorker.mockResolvedValue({
+      sessionId: "parent-session",
+      lifecycleRevision: "rev-1",
+      spawnedCwd: "/work/project",
+    });
+    const occurrence = await admit(linked);
+    const signal = occurrence.childParent?.signal;
+    sessionChanges.invalidate({ sessionKey: PARENT_KEY, storePath: "/s" });
+    expect(signal?.aborted).toBe(false);
+    occurrence.release();
+    generationAssert.mockImplementation(() => {
+      throw new Error("parent reset");
+    });
+    sessionChanges.invalidate({ sessionKey: PARENT_KEY, storePath: "/s" });
+    expect(signal?.aborted).toBe(false);
+  });
+
+  it("hands an unbound parent's child only its sandbox requirement", async () => {
+    readSessionEntryInWorker.mockResolvedValue({
+      sessionId: "parent-session",
+      lifecycleRevision: "rev-1",
+      sandbox: "required",
+    });
+    const occurrence = await admit(linked);
+    expect(occurrence.childParent).toEqual({
+      sandbox: "required",
+      assertCurrent: expect.any(Function),
+    });
+    occurrence.release();
+  });
+
+  it("leaves an in-session job's own binding to the session it runs in", async () => {
+    readSessionEntryInWorker.mockResolvedValue({
+      sessionId: "parent-session",
+      lifecycleRevision: "rev-1",
+    });
+    const occurrence = await admit({ ...linked, sessionTarget: `session:${PARENT_KEY}` });
+    expect(occurrence.childParent).toBeUndefined();
+    occurrence.release();
+  });
+
+  it("hands no binding to a reset parent's unbound run", async () => {
+    readSessionEntryInWorker.mockResolvedValue({ sessionId: "new-session" });
+    expect((await admit(linked)).childParent).toBeUndefined();
   });
 
   it("never pauses on a failed read", async () => {

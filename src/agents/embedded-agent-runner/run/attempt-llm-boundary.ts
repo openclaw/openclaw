@@ -40,9 +40,8 @@ import {
   hasNonBlankUserText,
   projectPersistedSenderContext,
   resolveUserTranscriptMessages,
-  type CurrentUserTimestampMatch,
-  type UserTranscriptContext,
 } from "./attempt-history.js";
+import type { LlmBoundaryOptions, UserTranscriptContext } from "./attempt-llm-boundary.types.js";
 import {
   materializeSteeringRuntimeContext,
   type RuntimeContextCustomMessage,
@@ -62,18 +61,6 @@ const systemUpdateDetailsSchema = z.object({
   kind: z.enum(["prompt-update", "runtime-context"]),
   turnScoped: z.boolean(),
 });
-
-type LlmBoundaryOptions = {
-  sessionVersion?: number;
-  appendOnlyRuntimeContext?: boolean;
-  inHistorySystemUpdates?: boolean;
-  timezone?: string;
-  includeTimestamp?: boolean;
-  projectPersistedSenderContext?: boolean;
-  userTranscriptContexts?: readonly UserTranscriptContext[];
-  currentUserTimestampOverride?: CurrentUserTimestampMatch;
-  onRuntimeContextCarrierRemoved?: (removed: AgentMessage[]) => void;
-};
 
 /** A session keeps its model projection across replay and process restarts. */
 export function usesEscapedRuntimeContext(sessionVersion?: number): boolean {

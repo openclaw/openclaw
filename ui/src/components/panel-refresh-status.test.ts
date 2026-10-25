@@ -3,26 +3,20 @@ import { createComponent } from "solid-js";
 import { expect, it } from "vitest";
 import { GatewayRequestError } from "../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
+import { createApplicationGatewaySnapshot } from "../test-helpers/application-context-fixtures.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import {
   beginPanelRefresh,
   completePanelRefresh,
   createPanelRefreshStatus,
   failPanelRefresh,
-} from "./panel-refresh-status.ts";
+} from "./panel-refresh-status-state.ts";
 import { PanelRefreshStatus } from "./solid/panel-refresh-status.tsx";
 
-const connected: ApplicationGatewaySnapshot = {
+const connected: ApplicationGatewaySnapshot = createApplicationGatewaySnapshot({
   phase: "connected",
-  client: null,
-  offlineStable: false,
-  hello: null,
-  canvasPluginSurfaceUrl: null,
-  assistantAgentId: null,
   sessionKey: "agent:main:main",
-  lastError: null,
-  lastErrorCode: null,
-};
+});
 function renderStatus(
   status: Parameters<typeof PanelRefreshStatus>[0]["status"],
   errorMessage?: string,

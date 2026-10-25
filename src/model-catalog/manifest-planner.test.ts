@@ -101,6 +101,36 @@ describe("manifest model catalog planner", () => {
     ]);
   });
 
+  it("keeps bundled families under a hosted overlay, which cannot declare one", () => {
+    const families = (definition: ModelCatalogProvider, remote: ModelCatalogProvider) =>
+      Object.fromEntries(
+        planRows({
+          registry: catalog("host", {
+            api: "openai-responses",
+            baseUrl: "https://h",
+            ...definition,
+          }),
+          resolveRemoteProvider: () => remote,
+        }).rows.map((row) => [row.id, [row.source, row.family]]),
+      );
+    const remote = { models: [{ id: "listed", name: "Remote" }, { id: "new" }] };
+    expect(
+      families({ family: "anthropic", models: [{ id: "listed" }, { id: "kept" }] }, remote),
+    ).toEqual({
+      kept: ["manifest", "anthropic"],
+      listed: ["runtime-refresh", "anthropic"],
+      new: ["runtime-refresh", "anthropic"],
+    });
+    // A multi-developer host declares rows; a hosted-only row has no declaration.
+    expect(
+      families({ models: [{ id: "listed", family: "openai" }, { id: "kept" }] }, remote),
+    ).toEqual({
+      kept: ["manifest", undefined],
+      listed: ["runtime-refresh", "openai"],
+      new: ["runtime-refresh", undefined],
+    });
+  });
+
   describe("route-bound inference metadata", () => {
     const baseUrl = "https://fixture.invalid/v1";
     const inference = {

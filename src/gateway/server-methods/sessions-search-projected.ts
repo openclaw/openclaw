@@ -5,7 +5,6 @@ import type {
 import { withAgentRosterFactsBatch } from "../../agents/agent-scope-config.js";
 import { searchSessionTranscripts } from "../../config/sessions/session-transcript-search.js";
 import type { SessionStoreTarget } from "../../config/sessions/targets.js";
-import { runSynchronousWork } from "../../shared/synchronous-work.js";
 import { filterSessionEntries } from "../session-list-filters.js";
 import { withReadySessionRows } from "../session-row-prepared-read.js";
 import {
@@ -39,7 +38,7 @@ export async function searchProjectedSessionTranscripts(params: {
       searchIdentities,
     });
     const { entries } = withAgentRosterFactsBatch(prepared.cfg, () =>
-      runSynchronousWork(filterSessionEntries(filters)),
+      filterSessionEntries(filters),
     );
     type SelectedRow = NonNullable<ReturnType<typeof prepared.getTarget>>;
     const stores = new Map<
@@ -102,7 +101,7 @@ export async function searchProjectedSessionTranscripts(params: {
     const selected = select();
     // Filter every physical store before LIMIT. Never dispatch an empty key set.
     const pages = await Promise.all(
-      [...selected.stores].map(async ([path, { target, rows }]) => ({
+      Array.from(selected.stores, async ([path, { target, rows }]) => ({
         path,
         page: await searchSessionTranscripts(
           {
@@ -134,15 +133,16 @@ export async function searchProjectedSessionTranscripts(params: {
     const hits = matchingHits(current, pages);
     const matches = hits.slice(0, limit);
     const matchedRows = new Set(matches.map(({ row }) => row));
-    projection.setArchivePageSize(matchedRows.size);
     const published = await withReadySessionRows(
       projection,
-      () =>
-        [...matchedRows].map((row) => ({
+      () => {
+        projection.setArchivePageSize(matchedRows.size);
+        return [...matchedRows].map((row) => ({
           agentId: row.agentId,
           key: row.key,
           storePath: row.storeTarget.storePath,
-        })),
+        }));
+      },
       (read) => {
         if (getSessionRowProjection(params.context) !== projection) {
           throw new Error("Session search owner changed while reading; retry the request");

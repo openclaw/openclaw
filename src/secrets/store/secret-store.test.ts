@@ -78,8 +78,8 @@ function readHidden(name: string) {
 function removeHidden(name: string) {
   return deleteHiddenGitHubSecretRecord({ name });
 }
-function writeHidden(name: string, value: string, updatedBy?: string | null) {
-  return writeHiddenGitHubSecretRecord({ name, value, updatedBy, database });
+function writeHidden(name: string, value: string) {
+  return writeHiddenGitHubSecretRecord({ name, value });
 }
 
 function invalidGitHubNames(prefix: string) {
@@ -337,8 +337,8 @@ describe("secret store", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
     await write(setupName, "abandoned-value", { allowedHosts: [] });
-    await writeHidden(deviceName, "device-value", "test");
-    await writeHidden(oauthName, "oauth-value", "test");
+    await writeHidden(deviceName, "device-value");
+    await writeHidden(oauthName, "oauth-value");
     await write("UNRELATED_SECRET", "keep-value");
 
     expect(await listHiddenGitHubSecretRecords({ prefix: "github-device" })).toEqual([
@@ -421,8 +421,8 @@ describe("secret store", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
     await write(setupName, "setup-value", { allowedHosts: [] });
-    await writeHidden(deviceName, "device-value", "test");
-    await writeHidden(oauthName, "oauth-value", "test");
+    await writeHidden(deviceName, "device-value");
+    await writeHidden(oauthName, "oauth-value");
 
     vi.setSystemTime(new Date("2026-01-01T00:10:00.001Z"));
     expect(purge()).toBe(1);
@@ -550,8 +550,8 @@ describe("secret store", () => {
   it("validates and hard-deletes exact hidden GitHub device and OAuth records", async () => {
     const deviceName = "github-device-66666666666666666666666666666666";
     const oauthName = "github-oauth-66666666666666666666666666666666";
-    await writeHidden(deviceName, "device-value", null);
-    await writeHidden(oauthName, "oauth-value", undefined);
+    await writeHidden(deviceName, "device-value");
+    await writeHidden(oauthName, "oauth-value");
 
     await expect(write(oauthName, "oauth-value", { updatedBy: null })).rejects.toThrow(
       expect.objectContaining({ code: "SECRET_STORE_INVALID_NAME" }),
@@ -560,10 +560,10 @@ describe("secret store", () => {
       expect.objectContaining({ code: "SECRET_STORE_INVALID_NAME" }),
     );
     await expect(
-      writeHidden("github-device-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "wrong-case", null),
+      writeHidden("github-device-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "wrong-case"),
     ).rejects.toThrow(expect.objectContaining({ code: "SECRET_STORE_INVALID_NAME" }));
     await expect(
-      writeHidden("github-setup-66666666666666666666666666666666", "wrong-owner", null),
+      writeHidden("github-setup-66666666666666666666666666666666", "wrong-owner"),
     ).rejects.toThrow(expect.objectContaining({ code: "SECRET_STORE_INVALID_NAME" }));
 
     await removeHidden(deviceName);

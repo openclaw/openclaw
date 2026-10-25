@@ -14,6 +14,7 @@ import {
 import {
   chatPaneHeaderSessionMenu,
   mountChatPaneHeader,
+  openNativeMenu,
   renderPaneHeaderInto,
 } from "./components/chat-pane-header.test-support.ts";
 import type { SidebarPanelDefinition } from "./components/chat-sidebar-region-types.ts";
@@ -181,10 +182,10 @@ it("retains focused session menu controls through header refresh and restores fo
   const menu = mounted.container.querySelector("openclaw-chat-header-session-menu")!;
   await menu.updateComplete;
   const trigger = menu.querySelector<HTMLButtonElement>(".chat-header-session-menu__trigger")!;
-  trigger.click();
+  await openNativeMenu(menu, "submenu:advanced");
   await waitForSolid(() =>
-    expect(menu.querySelector(".chat-header-session-menu__panel")?.matches(":popover-open")).toBe(
-      true,
+    expect(menu.querySelector<HTMLButtonElement>('[data-value="submenu:advanced"]')?.disabled).toBe(
+      false,
     ),
   );
   menu.querySelector<HTMLButtonElement>('[data-value="submenu:advanced"]')!.click();
@@ -228,7 +229,7 @@ it("renders a native external link in the main panel header", () => {
   const mounted = mountChatPaneHeader([], {
     sidebarLayout: promoteSidebarPanel(openSlot({ columns: [] }, "workspace"), "workspace"),
     panelDefinitions,
-    panelActionDestinations: { main: true, side: false, dashboard: false },
+    panelActionDestinations: { main: true, side: false },
   });
   onTestFinished(mounted.unmount);
   const link = mounted.container.querySelector<HTMLAnchorElement>('a[aria-label="Open panel"]')!;

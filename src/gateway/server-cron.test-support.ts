@@ -206,6 +206,7 @@ vi.mock("../cron/trigger-script.js", () => ({
 }));
 
 import { buildGatewayCronService as buildGatewayCronServiceRuntime } from "./server-cron.js";
+import { runExit } from "./server-cron.process.test-support.js";
 
 function buildGatewayCronService(
   params: Omit<Parameters<typeof buildGatewayCronServiceRuntime>[0], "storePath">,
@@ -307,20 +308,6 @@ export function addAgentTurnJob(
   overrides: CronJobOverrides = {},
 ) {
   return addCronJob(service, name, { kind: "agentTurn", message }, overrides);
-}
-
-function runExit(overrides: Partial<RunExit> = {}): RunExit {
-  return {
-    reason: "manual-cancel",
-    exitCode: null,
-    exitSignal: null,
-    durationMs: 1,
-    stdout: "",
-    stderr: "",
-    timedOut: false,
-    noOutputTimedOut: false,
-    ...overrides,
-  };
 }
 
 export function createWatchedRun(settleOnCancel = true, exitResult: Partial<RunExit> = {}) {

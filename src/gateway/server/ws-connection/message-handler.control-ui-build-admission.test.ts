@@ -92,6 +92,7 @@ vi.mock("../../../version.js", async (importOriginal) => {
 });
 
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { gatewayRequest } from "../../request-frame.test-support.js";
 import { attachGatewayWsMessageHandler } from "./message-handler.js";
 
 // A stale Control UI browser still owns a device identity; the build check is
@@ -164,7 +165,12 @@ afterEach(() => {
 });
 
 describe("Control UI build admission over WebSocket", () => {
-  it.each([undefined, "stale-build"])("rejects build %s before admission", async (buildId) => {
+  it.each([
+    { buildId: undefined, protocol: PROTOCOL_VERSION },
+    { buildId: "stale-build", protocol: PROTOCOL_VERSION },
+    { buildId: "stale-build", protocol: PROTOCOL_VERSION + 1 },
+    { buildId: "stale-build", protocol: PROTOCOL_VERSION - 1 },
+  ])("rejects $protocol / $buildId", async ({ buildId, protocol }) => {
     const connectionWork = new GatewayConnectionWork();
     const wss = new WebSocketServer({ host: "127.0.0.1", port: 0 });
     await withDeadline(once(wss, "listening"), "listen");
@@ -237,13 +243,10 @@ describe("Control UI build admission over WebSocket", () => {
         ws.once("close", resolve);
       });
       ws.send(
-        JSON.stringify({
-          type: "req",
-          id: "connect-legacy-build",
-          method: "connect",
-          params: {
-            minProtocol: PROTOCOL_VERSION,
-            maxProtocol: PROTOCOL_VERSION,
+        JSON.stringify(
+          gatewayRequest("connect-legacy-build", "connect", {
+            minProtocol: protocol,
+            maxProtocol: protocol,
             client: {
               id: "openclaw-control-ui",
               version: "2026.8.1",
@@ -255,21 +258,30 @@ describe("Control UI build admission over WebSocket", () => {
             caps: [],
             auth: { token: "test-token" },
             device,
-          },
-        }),
+          }),
+        ),
       );
 
       const rejection = await response;
       expect(rejection).toMatchObject({
         ok: false,
         error: {
-          code: ErrorCodes.UNAVAILABLE,
-          message: "protocol mismatch: Control UI updated; reload this page to continue",
+          code: protocol === PROTOCOL_VERSION ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST,
+          message: expect.stringContaining("protocol mismatch"),
           retryable: false,
           details: {
             code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
             gatewayBuildId: "gateway-build",
             reloadRequired: true,
+            ...(protocol === PROTOCOL_VERSION
+              ? {}
+              : {
+                  clientMinProtocol: protocol,
+                  clientMaxProtocol: protocol,
+                  minProtocol: PROTOCOL_VERSION,
+                  maxProtocol: PROTOCOL_VERSION,
+                  expectedProtocol: PROTOCOL_VERSION,
+                }),
           },
         },
       });
@@ -278,15 +290,10 @@ describe("Control UI build admission over WebSocket", () => {
           (rejection.error as { details?: unknown } | undefined)?.details,
         ),
       ).toBe("gateway-build");
-      ws.send(
-        JSON.stringify({
-          type: "req",
-          id: "post-rejection-rpc",
-          method: "health",
-          params: {},
-        }),
+      ws.send(JSON.stringify(gatewayRequest("post-rejection-rpc", "health", {})));
+      expect(await withDeadline(closed, "socket close")).toBe(
+        protocol === PROTOCOL_VERSION ? 1008 : 1002,
       );
-      expect(await withDeadline(closed, "socket close")).toBe(1008);
       expect(handler?.getClient()).toBeNull();
       expect(await getPairedDevice(device.id)).toBeNull();
       expect(upsertPresenceMock).not.toHaveBeenCalled();

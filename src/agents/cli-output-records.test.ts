@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { createCliJsonlStreamingParser } from "./cli-output-stream.js";
 import { parseCliOutput } from "./cli-output.js";
 import {
   createOpenAiCompatibleCliUsageCases,
+  createClaudeParser,
+  createClaudeBackend,
   joinJsonlFrames,
   claudeTextDelta,
 } from "./cli-output.test-helpers.js";
@@ -30,22 +31,6 @@ function parseCliJson(raw: string, backend: ParseCliOutputParams["backend"], pro
 
 function parseCliJsonl(raw: string, backend: ParseCliOutputParams["backend"], providerId: string) {
   return parseCliOutput({ raw, backend, providerId, outputMode: "jsonl" });
-}
-
-function normalizedUsage(values: {
-  input?: number;
-  output?: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-  total?: number;
-}) {
-  return {
-    input: values.input,
-    output: values.output,
-    cacheRead: values.cacheRead,
-    cacheWrite: values.cacheWrite,
-    total: values.total,
-  };
 }
 
 describe("parseCliJson", () => {
@@ -294,20 +279,20 @@ describe("parseCliJson", () => {
 
   it("keeps earlier assistant text when a later terminal result is reply-less", () => {
     const result = parseCliJson(
-      [
-        JSON.stringify({
+      joinJsonlFrames(
+        {
           type: "assistant",
           message: { content: [{ type: "text", text: "partial answer" }] },
-        }),
-        JSON.stringify({
+        },
+        {
           type: "result",
           subtype: "success",
           session_id: "session-json-earlier-text",
           stop_reason: "tool_use",
           terminal_reason: "hook_stopped",
           result: "",
-        }),
-      ].join("\n"),
+        },
+      ),
       { command: "claude", output: "json", sessionIdFields: ["session_id"] },
       "claude-cli",
     );
@@ -393,7 +378,7 @@ describe("parseCliJson", () => {
       expected: {
         text: "Gemini says hello",
         sessionId: "gemini-session-123",
-        usage: normalizedUsage({ input: 5, output: 5, cacheRead: 8, total: 21 }),
+        usage: { input: 5, output: 5, cacheRead: 8, total: 21 },
       },
     },
     {
@@ -413,7 +398,7 @@ describe("parseCliJson", () => {
       expected: {
         text: "Gemini says hello",
         sessionId: "gemini-session-789",
-        usage: normalizedUsage({ input: 5, output: 5, cacheRead: 8, total: 21 }),
+        usage: { input: 5, output: 5, cacheRead: 8, total: 21 },
       },
     },
   ])("$name", ({ input, expected }) => {
@@ -665,40 +650,34 @@ describe("parseCliOutput", () => {
 
 describe("parseCliJsonl record usage", () => {
   it("ignores cumulative usage from result events to avoid cache_read inflation", () => {
-    const parser = createCliJsonlStreamingParser({
-      backend: {
-        command: "local-cli",
-        output: "jsonl",
-        jsonlDialect: "claude-stream-json",
-        sessionIdFields: ["session_id"],
-      },
+    const parser = createClaudeParser({
+      backend: createClaudeBackend(),
       providerId: "local-cli",
-      onAssistantDelta: () => {},
     });
 
     parser.push(
-      [
-        JSON.stringify({ type: "init", session_id: "session-stream" }),
-        JSON.stringify({
+      joinJsonlFrames(
+        { type: "init", session_id: "session-stream" },
+        {
           type: "assistant",
           message: {
             id: "msg-1",
             usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 100 },
           },
-        }),
-        JSON.stringify({
+        },
+        {
           type: "assistant",
           message: {
             id: "msg-2",
             usage: { input_tokens: 11, output_tokens: 6, cache_read_input_tokens: 125 },
           },
-        }),
-        JSON.stringify({
+        },
+        {
           type: "result",
           result: "done",
           usage: { input_tokens: 30, output_tokens: 15, cache_read_input_tokens: 300 },
-        }),
-      ].join("\n"),
+        },
+      ),
     );
     parser.finish();
 

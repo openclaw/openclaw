@@ -543,7 +543,8 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
             </Show>
           }
           checked={presentation().enabled()}
-          disabled={busy() || view().blocked}
+          disabled={view().blocked}
+          saving={busy()}
           onChange={(checked) => {
             const display = presentation();
             return setEnabled(props.agent, checked, (...args) => presentToggle(display, ...args));

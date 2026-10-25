@@ -233,10 +233,9 @@ suite.define(() => {
         const reader = page.locator("openclaw-link-reader-panel");
         await reader.getByRole("heading", { name: reviewRequest.title, exact: true }).waitFor();
         expect(new URL(page.url()).pathname).toBe("/activity");
-        await reader.getByRole("button", { name: "Link reader actions", exact: true }).click();
         const external = reader
-          .getByRole("menu", { name: "Link reader actions", exact: true })
-          .getByRole("menuitem", { name: "Open on " + TEST_LINK_READER.label, exact: true });
+          .locator(".lr-toolbar")
+          .getByRole("link", { name: "Open on " + TEST_LINK_READER.label, exact: true });
         expect(await external.getAttribute("href")).toBe(reviewRequest.url);
         expect(await external.getAttribute("target")).toBe("_blank");
         expect(await external.getAttribute("rel")).toBe("noopener noreferrer");

@@ -19,6 +19,7 @@ import {
 } from "../../../agents/auth-profiles/legacy-oauth-ref.js";
 import { resolveOAuthDir, resolveStateDir } from "../../../config/paths.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { decodeUtf8Input } from "../../../infra/utf8-input.js";
 import { shortenHomePath } from "../../../utils.js";
 import { listReferencedLegacyOAuthSidecarPaths } from "../../doctor-auth-legacy-paths.js";
 import {
@@ -122,11 +123,13 @@ export function resolveLegacyOAuthSecretKeyFiles(env: NodeJS.ProcessEnv): string
 function readLegacyOAuthSecretKeyFiles(env: NodeJS.ProcessEnv): string[] {
   return normalizeUniqueTrimmedStringList(
     resolveLegacyOAuthSecretKeyFiles(env).flatMap((keyPath) => {
+      let bytes: Buffer;
       try {
-        return [fs.readFileSync(keyPath, "utf8")];
+        bytes = fs.readFileSync(keyPath);
       } catch {
         return [];
       }
+      return [decodeUtf8Input(bytes, `Legacy OAuth key ${keyPath}`)];
     }),
   );
 }
@@ -192,6 +195,7 @@ function loadLegacyOAuthSidecarMaterial(params: {
     const decryptLegacyOAuthSecretMaterialWithSeed = (
       seed: string,
     ): LegacyOAuthSecretMaterial | null => {
+      let plaintext: Buffer;
       try {
         // Legacy #79006 compatibility: existing sidecars were encrypted with this
         // SHA-256 key derivation, so changing it would strand affected users.
@@ -204,11 +208,16 @@ function loadLegacyOAuthSidecarMaterial(params: {
           Buffer.from(`${params.ref.id}\0${params.profileId}\0${params.provider}`, "utf8"),
         );
         decipher.setAuthTag(Buffer.from(encrypted.tag, "base64url"));
-        const plaintext = Buffer.concat([
+        plaintext = Buffer.concat([
           decipher.update(Buffer.from(encrypted.ciphertext, "base64url")),
           decipher.final(),
-        ]).toString("utf8");
-        return normalizeLegacyOAuthSecretMaterial(JSON.parse(plaintext) as unknown);
+        ]);
+      } catch {
+        return null;
+      }
+      const text = decodeUtf8Input(plaintext, "Decrypted legacy OAuth sidecar");
+      try {
+        return normalizeLegacyOAuthSecretMaterial(JSON.parse(text) as unknown);
       } catch {
         return null;
       }

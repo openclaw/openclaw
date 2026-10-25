@@ -18,6 +18,12 @@ The workspace is the **default cwd**, not a hard sandbox. Tools resolve relative
 When sandboxing is enabled and `workspaceAccess` is not `"rw"`, tools operate inside a sandbox workspace under `~/.openclaw/sandboxes`, not your host workspace.
 </Warning>
 
+On the host, workspace-contained OpenClaw file tools also allow registered Git
+linked worktrees of the workspace's repository. Each write checks the current
+registration and resolves filesystem aliases; a copied `.git` file alone grants
+no access. Other repositories and Git metadata remain outside this scope.
+Container sandbox mounts keep their own boundaries.
+
 ## Default location
 
 - Default: `~/.openclaw/workspace`
@@ -44,6 +50,9 @@ Per-agent override: `agents.entries.*.workspace`. To keep `main` at an existing 
 Run workspace selection rejects an explicitly supplied blank or invalid agent ID. Omit the selector to use configured ownership, or supply the intended agent ID.
 
 `openclaw onboard`, `openclaw configure`, or `openclaw setup` create the workspace and seed the bootstrap files if they are missing.
+
+Already-provisioned workspaces can continue if packaged templates are unavailable.
+Creating missing files still requires a working template installation.
 
 <Note>
 Sandbox seed copies only accept regular in-workspace files; symlink/hardlink aliases that resolve outside the source workspace are ignored.

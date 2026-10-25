@@ -13,8 +13,7 @@ import { getSpawnBroker, runWithSpawnBroker } from "../process/spawn-broker/cont
 import { useSpawnBrokerTestFixture } from "../process/spawn-broker/host.test-support.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
-import type { GatewayCronServiceContract } from "./server-cron-contract.js";
-import type { GatewayCronState } from "./server-cron.js";
+import type { GatewayCronServiceContract, GatewayCronState } from "./server-cron-contract.js";
 
 const { buildGatewayCronService } = vi.hoisted(() => ({ buildGatewayCronService: vi.fn() }));
 // mock-isolation: Keep the heavy cron runtime unloaded to prove lazy service creation.
@@ -58,6 +57,8 @@ describe("createLazyGatewayCronState", () => {
     lazy = readers.run(() =>
       runWithSpawnBroker(broker, () => createLazyGatewayCronState(createParams())),
     );
+    state.readHeartbeatSummary = vi.fn(async () => []);
+    expect(lazy.readHeartbeatSummary).toBeUndefined();
     expect(buildGatewayCronService).not.toHaveBeenCalled();
     expect(lazy.cron.getJob("demo")).toBeUndefined();
     expect(lazy.cron.getDefaultAgentId()).toBeUndefined();
@@ -68,6 +69,7 @@ describe("createLazyGatewayCronState", () => {
     }
     expect(buildGatewayCronService).toHaveBeenCalledTimes(1);
     expect(cron.status).toHaveBeenCalledTimes(1);
+    expect(lazy.readHeartbeatSummary).toBe(state.readHeartbeatSummary);
     expect(observedBroker === broker).toBe(true);
     expect(observedReadOnlyScope).toBe(true);
   });

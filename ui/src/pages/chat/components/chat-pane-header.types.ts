@@ -31,6 +31,7 @@ export type ChatPaneHeaderProps = ChatPaneLayoutMenuProps & {
   mergedChrome: boolean;
   navDrawerOpen?: boolean;
   gatewayStatus?: GatewayStatusProps | null;
+  savedConversation?: boolean;
   title: string;
   agent?: AgentIdentity & { name: string };
   titlePending?: boolean;
@@ -63,7 +64,7 @@ export type ChatPaneHeaderProps = ChatPaneLayoutMenuProps & {
   runningSubagentCount?: number;
   dashboardWidgetMenu?: Parameters<typeof ChatDashboardMenu>[0]["widgetMenu"];
   setDashboardControls?: (action: Element | undefined) => void;
-  panelActionDestinations?: { main: boolean; side: boolean; dashboard: boolean };
+  panelActionDestinations?: { main: boolean; side: boolean };
   /** The surrounding desktop frame supplies the Panels toggle. */
   externalPanelsToggle?: boolean;
   detailsControl?: ChatDetailsViewProps;

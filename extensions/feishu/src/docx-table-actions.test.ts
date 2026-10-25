@@ -53,15 +53,28 @@ const actions = [
   },
 ];
 
-function createClient(httpInstance?: Lark.HttpInstance) {
+function createClient(domain: string | Lark.Domain = Lark.Domain.Feishu) {
   return new Lark.Client({
     appId: "loopback-table-app",
     appSecret: "loopback-table-placeholder", // pragma: allowlist secret
-    domain: Lark.Domain.Feishu,
+    domain,
     loggerLevel: Lark.LoggerLevel.error,
     disableTokenCache: true,
-    httpInstance,
   });
+}
+
+function createTableCellClient() {
+  const client = createClient();
+  vi.spyOn(client.docx.documentBlock, "get").mockResolvedValue({
+    code: 0,
+    data: {
+      block: {
+        block_type: 31,
+        table: { property: { row_size: 1, column_size: 1 }, cells: ["cell_existing"] },
+      },
+    },
+  });
+  return client;
 }
 
 function resolveTool(client: Lark.Client) {
@@ -108,16 +121,7 @@ describe("registered feishu_doc table patches", () => {
   });
 
   it("preserves existing table cell content when replacement Markdown conversion fails", async () => {
-    const client = createClient();
-    vi.spyOn(client.docx.documentBlock, "get").mockResolvedValue({
-      code: 0,
-      data: {
-        block: {
-          block_type: 31,
-          table: { property: { row_size: 1, column_size: 1 }, cells: ["cell_existing"] },
-        },
-      },
-    });
+    const client = createTableCellClient();
     vi.spyOn(client.docx.documentBlockChildren, "get").mockResolvedValue({
       code: 0,
       data: { items: [{ block_id: "text_existing", block_type: 2 }] },
@@ -159,16 +163,7 @@ describe("registered feishu_doc table patches", () => {
   });
 
   it("replaces cell content with sequential supported blocks in document order", async () => {
-    const client = createClient();
-    vi.spyOn(client.docx.documentBlock, "get").mockResolvedValue({
-      code: 0,
-      data: {
-        block: {
-          block_type: 31,
-          table: { property: { row_size: 1, column_size: 1 }, cells: ["cell_existing"] },
-        },
-      },
-    });
+    const client = createTableCellClient();
     const first = { block_id: "first", block_type: 2 };
     const second = { block_id: "second", block_type: 2 };
     vi.spyOn(client.docx.document, "convert").mockResolvedValue({
@@ -379,21 +374,7 @@ describe("registered feishu_doc table patches", () => {
     });
     try {
       const address = server.address() as AddressInfo;
-      const transport = Object.create(Lark.defaultHttpInstance) as Lark.HttpInstance;
-      transport.request = async (options) => {
-        const upstream = new URL(options.url ?? "");
-        const target = new URL(
-          `${upstream.pathname}${upstream.search}`,
-          `http://127.0.0.1:${address.port}`,
-        );
-        const response = await fetch(target, {
-          method: options.method,
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(options.data),
-        });
-        return response.json();
-      };
-      const tool = resolveTool(createClient(transport));
+      const tool = resolveTool(createClient(`http://127.0.0.1:${address.port}`));
       for (const sample of actions) {
         reply = { code: 0, data: { block, client_token: "table-client-token" } };
         expectResult(await tool.execute("http-patch", paramsFor(sample)), {

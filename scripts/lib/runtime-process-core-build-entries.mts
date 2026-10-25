@@ -8,7 +8,7 @@ export function createRuntimeProcessBuildEntries(
     currentModuleUrl: string;
     sourceWorkerName: string;
     distWorkerPath: string;
-    sourceExtension?: ".ts" | ".mts";
+    sourceExtension?: ".ts" | ".mts" | ".mjs";
   }[],
 ) {
   return Object.fromEntries(
@@ -25,7 +25,10 @@ export function createRuntimeProcessBuildEntries(
 }
 
 export const runtimeProcessCoreEntrypoints = [
-  ...Object.values(runtimeProcessEntrypoints),
+  // Recovery artifacts are built by the sealed handoff owner, never the shared graph.
+  ...Object.values(runtimeProcessEntrypoints).filter((entry) =>
+    entry.distWorkerPath.endsWith(".js"),
+  ),
   managedWindowsJobEntrypoint,
   managedMemoryEntrypoint,
 ];
@@ -37,6 +40,7 @@ export const standaloneRuntimeProcessBuildEntries = createRuntimeProcessBuildEnt
   runtimeProcessEntrypoints.sqliteReadOnly,
   runtimeProcessEntrypoints.sqliteSourceRevision,
   runtimeProcessEntrypoints.stateRead,
+  runtimeProcessEntrypoints.sessionTranscript,
   runtimeProcessEntrypoints.nativeHookRelayClient,
   runtimeProcessEntrypoints.spawnBroker,
   runtimeProcessEntrypoints.stateLeaseHeartbeat,
@@ -64,6 +68,9 @@ export function getStandaloneRuntimeProcessOutputOptions(name: string) {
   }
   if (name === sqliteReadEntry) {
     return { codeSplitting: true, chunkFileNames: "infra/sqlite-readonly-[name]-[hash].mjs" };
+  }
+  if (name === runtimeProcessEntrypoints.sessionTranscript.distWorkerPath.replace(/\.js$/u, "")) {
+    return { codeSplitting: true, chunkFileNames: "config/sessions/transcript-[name]-[hash].mjs" };
   }
   return { codeSplitting: false };
 }

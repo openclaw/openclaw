@@ -323,13 +323,14 @@ export async function preserveSessionCatalogHistory(params: {
               catalogId: params.catalogId,
               item: {
                 ...item,
+                // Normalize wrapper separators without trimming the recorded body.
                 text: wrapExternalContent(
                   item.text?.trim() ? item.text : "[Unsupported catalog transcript item]",
                   {
                     source: "unknown",
                     includeWarning: false,
                   },
-                ),
+                ).trim(),
               },
               fallbackTimestamp: fallbackTimestamp + index + 1,
             });

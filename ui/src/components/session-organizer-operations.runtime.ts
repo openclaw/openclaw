@@ -117,12 +117,21 @@ export async function deleteSessionsBatch(
     ...(row.archived === true ? { archivedOnly: true } : {}),
   }));
   for (const params of requests) {
-    if (!requireSessionMutationAccess(deps, scope, { method: "sessions.delete", params })) {
+    if (
+      !requireSessionMutationAccess(deps, scope, {
+        method: "sessions.delete",
+        params,
+        allowDeferred: true,
+      })
+    ) {
       return;
     }
   }
   try {
     const result = await scope.sessions.deleteMany(requests);
+    if (result.queued?.length) {
+      return;
+    }
     if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
       if (result.preservedWorktrees.length > 0) {
         showToast({ message: formatPreservedWorktreesNotice(result.preservedWorktrees) });
@@ -409,7 +418,6 @@ export async function assignSessionCategory(
   session: SessionActionRow,
   category: string | null,
   scope: SidebarSessionMutationScope,
-  patch: { pinned?: boolean } = {},
   options: { resolveSession?: () => SessionActionRow | null } = {},
 ): Promise<SidebarSessionMutationResult> {
   if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
@@ -429,17 +437,13 @@ export async function assignSessionCategory(
     });
     return "failed";
   }
-  if (
-    (currentSession.category ?? null) === category &&
-    patch.pinned === undefined &&
-    !needsGroupPromotion(currentSession)
-  ) {
+  if ((currentSession.category ?? null) === category && !needsGroupPromotion(currentSession)) {
     return "completed";
   }
   return patchSession(
     deps,
     currentSession,
-    { category, ...patch, ...(needsGroupPromotion(currentSession) ? { sidebarRoot: true } : {}) },
+    { category, ...(needsGroupPromotion(currentSession) ? { sidebarRoot: true } : {}) },
     scope,
   );
 }
@@ -571,6 +575,7 @@ export async function deleteSession(
     !requireSessionMutationAccess(deps, scope, {
       method: "sessions.delete",
       params: { key: session.key, ...deleteParams },
+      allowDeferred: true,
     })
   ) {
     return;
@@ -583,7 +588,7 @@ export async function deleteSession(
       isCurrent: () => deps.sessionData.isSessionMutationScopeCurrent(scope),
       request: () => scope.sessions.delete(session.key, deleteParams),
     });
-    if (!outcome) {
+    if (!outcome || outcome.queued) {
       return;
     }
     if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {

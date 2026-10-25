@@ -2,6 +2,7 @@ import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import { isWorkerTranscriptFrameWithinBudget } from "../worker-transcript-budget.js";
 import {
+  AgentToolSurfacePresentationSchema,
   isWorkerGatewayToolFrameWithinBudget,
   WorkerGatewayToolInvokeParamsSchema,
   WorkerGatewayToolResultSchema,
@@ -10,6 +11,31 @@ import {
 import { WORKER_PROTOCOL_MAX_PAYLOAD_BYTES } from "./worker-protocol-primitives.js";
 
 describe("worker Gateway tool transport", () => {
+  it("transports selectors without silently dropping them or accepting malformed selectors", () => {
+    const schema = AgentToolSurfacePresentationSchema.properties.toolSearch;
+    const base = { enabled: true, mode: "tools", searchDefaultLimit: 8, maxSearchLimit: 20 };
+    expect(Value.Check(schema, base)).toBe(true);
+    for (const key of ["include", "exclude"]) {
+      for (const selectors of [
+        [],
+        [{ source: "mcp" }],
+        [{ name: "*" }],
+        [{ source: "client", name: "pick_*" }],
+      ]) {
+        expect(Value.Check(schema, { ...base, [key]: selectors })).toBe(true);
+      }
+      for (const selector of [
+        {},
+        { source: "plugin" },
+        { name: "" },
+        { name: "  " },
+        { source: "mcp", unknown: true },
+      ]) {
+        expect(Value.Check(schema, { ...base, [key]: [selector] })).toBe(false);
+      }
+    }
+  });
+
   it("rejects a transcript whose image extraction fails", () => {
     const frame = {
       type: "req" as const,

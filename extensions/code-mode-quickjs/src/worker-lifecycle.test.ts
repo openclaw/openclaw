@@ -1,5 +1,5 @@
 /// <reference lib="es2024.promise" />
-import { readFile, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -22,6 +22,7 @@ import { EvalFlags, QuickJS, type Snapshot } from "quickjs-wasi";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   createQuickJsTestConfig,
+  quickJsTestModules as modules,
   runQuickJsExecutor as runCodeModeWorker,
   runQuickJsWire,
 } from "./executor.test-support.js";
@@ -35,13 +36,6 @@ const sleep = "await new Promise(resolve => setTimeout(resolve, 0));";
 type Pool = WorkerTaskPool<unknown, CodeModeWorkerResult>;
 type OnRequest = Parameters<Pool["run"]>[1]["onRequest"];
 const resolveModule = createRequire(import.meta.url).resolve;
-const modules = Promise.all([
-  readFile(resolveModule("quickjs-wasi/quickjs.wasm")).then((bytes) => WebAssembly.compile(bytes)),
-  readFile(resolveModule("quickjs-wasi/encoding.so")).then((bytes) => WebAssembly.compile(bytes)),
-]).then(([wasmModule, encoding]) => ({
-  wasmModule,
-  wasmExtensions: [{ name: "encoding", wasm: encoding }],
-}));
 
 function completeOutput(output: CodeModeOutputSource): unknown[] {
   expect(output.source.kind).toBe("complete");

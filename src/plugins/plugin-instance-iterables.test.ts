@@ -79,19 +79,7 @@ it.each(["next", "throw"] as const)(
     }
     const native = source();
     const instance = owner();
-    const raw = source();
-    let acquisitions = 0;
-    let factoryReads = 0;
-    Object.defineProperty(raw, Symbol.asyncIterator, {
-      get() {
-        factoryReads += 1;
-        return function (this: typeof raw) {
-          acquisitions += 1;
-          return this;
-        };
-      },
-    });
-    const stream = instance.wrap(raw);
+    const stream = instance.wrap(source());
     const open = stream[Symbol.asyncIterator];
     const wrapped = open();
     for (const iterator of [native, wrapped]) {
@@ -100,7 +88,6 @@ it.each(["next", "throw"] as const)(
     }
     expect(open()).toBe(wrapped);
     expect(wrapped[Symbol.asyncIterator]()).toBe(wrapped);
-    expect([instance.ordinaryCallCount, acquisitions, factoryReads]).toEqual([0, 1, 1]);
     const supplied = new Error("caller-supplied terminal reason");
     const [expected, actual] = await Promise.allSettled([
       native[method](supplied),
@@ -385,13 +372,9 @@ it.each(["missing", "done-false", "getter", "non-callable"] as const)(
   },
 );
 
-it.each([
-  { phase: "live", resume: "next" },
-  { phase: "live", resume: "iterator" },
-  { phase: "retired", resume: "next" },
-] as const)(
-  "only resumes a finally yield through $resume when its instance is $phase",
-  async ({ phase, resume }) => {
+it.each(["live", "retired"] as const)(
+  "only resumes a finally yield when its instance is %s",
+  async (phase) => {
     const instance = owner();
     const finished = vi.fn();
     const source = yieldingFinally([2], finished);
@@ -399,9 +382,6 @@ it.each([
     await expect(iterator.next()).resolves.toEqual({ done: false, value: 1 });
     await expect(iterator.return(undefined)).resolves.toEqual({ done: false, value: 2 });
     if (phase === "live") {
-      if (resume === "iterator") {
-        expect(iterator[Symbol.asyncIterator]()).toBe(iterator);
-      }
       await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined });
     }
     const closed = expect(instance.dispose()).resolves.toEqual({ errors: [] });

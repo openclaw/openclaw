@@ -57,6 +57,29 @@ async function hover(anchor: HTMLAnchorElement) {
   anchor.dispatchEvent(new MouseEvent("pointerover", { bubbles: true }));
   await vi.advanceTimersByTimeAsync(250);
 }
+async function rehover(anchor: HTMLAnchorElement, delay = 120) {
+  anchor.dispatchEvent(
+    new MouseEvent("pointerout", { bubbles: true, relatedTarget: document.body }),
+  );
+  await vi.advanceTimersByTimeAsync(delay);
+  await hover(anchor);
+}
+async function openPanel(props: Partial<HTMLElementTagNameMap["openclaw-link-reader-panel"]>) {
+  const panel = Object.assign(document.createElement("openclaw-link-reader-panel"), {
+    available: true,
+    readers: [reader],
+    ...props,
+  });
+  mountSolid(() => panel);
+  await panel.updateComplete;
+  panel.handleToggleRequest(
+    new CustomEvent(LINK_READER_PANEL_TOGGLE_EVENT, {
+      detail: { url, open: true },
+      cancelable: true,
+    }),
+  );
+  return panel;
+}
 const badge = () => document.querySelector(".link-reader-hovercard__state")?.textContent?.trim();
 beforeEach(() => {
   vi.useFakeTimers();
@@ -92,20 +115,11 @@ it.each([
       await hover(anchor);
       expect(badge()).toBe("Open");
     }
-    const panel = document.createElement("openclaw-link-reader-panel");
-    panel.client = scope === "other-client" ? createTestGatewayClient(request) : client;
-    panel.agentId = scope === "other-agent" ? "other" : "main";
-    panel.sessionKey = scope === "other-session" ? "agent:main:pane-two" : "agent:main:pane-one";
-    panel.available = true;
-    panel.readers = [reader];
-    mountSolid(() => panel);
-    await panel.updateComplete;
-    panel.handleToggleRequest(
-      new CustomEvent(LINK_READER_PANEL_TOGGLE_EVENT, {
-        detail: { url, open: true },
-        cancelable: true,
-      }),
-    );
+    const panel = await openPanel({
+      client: scope === "other-client" ? createTestGatewayClient(request) : client,
+      agentId: scope === "other-agent" ? "other" : "main",
+      sessionKey: scope === "other-session" ? "agent:main:pane-two" : "agent:main:pane-one",
+    });
     await waitForSolid(() =>
       expect(panel.querySelector(".lr-state")?.textContent).toContain("Merged"),
     );
@@ -121,11 +135,7 @@ it.each([
     } else {
       expect(badge()).toBe(scope === "same" ? "Merged" : "Open");
     }
-    anchor.dispatchEvent(
-      new MouseEvent("pointerout", { bubbles: true, relatedTarget: document.body }),
-    );
-    await vi.advanceTimersByTimeAsync(120);
-    await hover(anchor);
+    await rehover(anchor);
     expect(badge()).toBe(scope === "same" ? "Merged" : "Open");
     expect(document.querySelector(".link-reader-hovercard__metadata")?.textContent).toBe("+42");
     expect(request.mock.calls.filter(([method]) => method === "github.preview")).toHaveLength(
@@ -151,17 +161,9 @@ it.each([false, true])(
       "true",
     );
     expect(request).toHaveBeenCalledTimes(1);
-    anchor.dispatchEvent(
-      new MouseEvent("pointerout", { bubbles: true, relatedTarget: document.body }),
-    );
-    await vi.advanceTimersByTimeAsync(120);
-    await hover(anchor);
+    await rehover(anchor);
     expect(request).toHaveBeenCalledTimes(1);
-    anchor.dispatchEvent(
-      new MouseEvent("pointerout", { bubbles: true, relatedTarget: document.body }),
-    );
-    await vi.advanceTimersByTimeAsync(30_000);
-    await hover(anchor);
+    await rehover(anchor, 30_000);
     expect(badge()).toBe("Merged");
     expect(document.querySelector<HTMLElement>(".link-reader-hovercard")?.dataset.cached).toBe(
       "false",
@@ -184,17 +186,9 @@ it("labels still-stale metadata and retries only after short backoff", async () 
     "true",
   );
   expect(request).toHaveBeenCalledTimes(1);
-  anchor.dispatchEvent(
-    new MouseEvent("pointerout", { bubbles: true, relatedTarget: document.body }),
-  );
-  await vi.advanceTimersByTimeAsync(120);
-  await hover(anchor);
+  await rehover(anchor);
   expect(request).toHaveBeenCalledTimes(1);
-  anchor.dispatchEvent(
-    new MouseEvent("pointerout", { bubbles: true, relatedTarget: document.body }),
-  );
-  await vi.advanceTimersByTimeAsync(30_000);
-  await hover(anchor);
+  await rehover(anchor, 30_000);
   expect(request).toHaveBeenCalledTimes(2);
 });
 
@@ -207,18 +201,7 @@ it("does not let an older pending preview overwrite committed reader details", a
   const { host, anchor } = makeProvider();
   host.client = client;
   await hover(anchor);
-  const panel = document.createElement("openclaw-link-reader-panel");
-  panel.client = client;
-  panel.available = true;
-  panel.readers = [reader];
-  mountSolid(() => panel);
-  await panel.updateComplete;
-  panel.handleToggleRequest(
-    new CustomEvent(LINK_READER_PANEL_TOGGLE_EVENT, {
-      detail: { url, open: true },
-      cancelable: true,
-    }),
-  );
+  await openPanel({ client });
   await waitForSolid(() => expect(badge()).toBe("Merged"));
   pending.resolve(open);
   await vi.advanceTimersByTimeAsync(0);
@@ -244,27 +227,12 @@ it.each([false, true])(
     if (pendingPreview) {
       await hover(anchor);
     }
-    const panel = document.createElement("openclaw-link-reader-panel");
-    panel.client = client;
-    panel.available = true;
-    panel.readers = [reader];
-    mountSolid(() => panel);
-    await panel.updateComplete;
-    panel.handleToggleRequest(
-      new CustomEvent(LINK_READER_PANEL_TOGGLE_EVENT, {
-        detail: { url, open: true },
-        cancelable: true,
-      }),
-    );
+    const panel = await openPanel({ client });
     await waitForSolid(() =>
       expect(panel.querySelector(".lr-state")?.textContent).toContain("Merged"),
     );
     pending.resolve(open);
-    anchor.dispatchEvent(
-      new MouseEvent("pointerout", { bubbles: true, relatedTarget: document.body }),
-    );
-    await vi.advanceTimersByTimeAsync(120);
-    await hover(anchor);
+    await rehover(anchor);
     expect(badge()).toBe("Merged");
     expect(document.querySelector(".link-reader-hovercard__metadata")?.textContent).toBe("+42");
     expect(previewReads).toBe(pendingPreview ? 2 : 1);
@@ -280,18 +248,7 @@ it("keeps reader facts visible when compact preview enrichment fails", async () 
   const client = createTestGatewayClient(request);
   const { host, anchor } = makeProvider();
   host.client = client;
-  const panel = document.createElement("openclaw-link-reader-panel");
-  panel.client = client;
-  panel.available = true;
-  panel.readers = [reader];
-  mountSolid(() => panel);
-  await panel.updateComplete;
-  panel.handleToggleRequest(
-    new CustomEvent(LINK_READER_PANEL_TOGGLE_EVENT, {
-      detail: { url, open: true },
-      cancelable: true,
-    }),
-  );
+  await openPanel({ client });
   await waitForSolid(() => expect(anchor.getAttribute("aria-description")).toBe("Merged"));
   await hover(anchor);
   expect(anchor.getAttribute("aria-description")).toBe("Merged");
@@ -301,27 +258,15 @@ it("keeps reader facts visible when compact preview enrichment fails", async () 
   expect(document.querySelector<HTMLElement>(".link-reader-hovercard")?.dataset.cached).toBe(
     "true",
   );
-  anchor.dispatchEvent(
-    new MouseEvent("pointerout", { bubbles: true, relatedTarget: document.body }),
-  );
-  await vi.advanceTimersByTimeAsync(120);
-  await hover(anchor);
+  await rehover(anchor);
   expect(badge()).toBe("Merged");
   expect(request.mock.calls.filter(([method]) => method === "github.preview")).toHaveLength(1);
-  anchor.dispatchEvent(
-    new MouseEvent("pointerout", { bubbles: true, relatedTarget: document.body }),
-  );
-  await vi.advanceTimersByTimeAsync(30_000);
-  await hover(anchor);
+  await rehover(anchor, 30_000);
   expect(badge()).toBe("Merged");
   expect(anchor.getAttribute("aria-description")).toBe("Merged");
   expect(request.mock.calls.filter(([method]) => method === "github.preview")).toHaveLength(2);
   previewResponse = Promise.resolve(open);
-  anchor.dispatchEvent(
-    new MouseEvent("pointerout", { bubbles: true, relatedTarget: document.body }),
-  );
-  await vi.advanceTimersByTimeAsync(30_000);
-  await hover(anchor);
+  await rehover(anchor, 30_000);
   expect(badge()).toBe("Merged");
   expect(document.querySelector(".link-reader-hovercard__metadata")?.textContent).toBe("+42");
   expect(request.mock.calls.filter(([method]) => method === "github.preview")).toHaveLength(3);

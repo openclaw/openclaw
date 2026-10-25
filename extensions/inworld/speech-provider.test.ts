@@ -1,4 +1,5 @@
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { createSpeechDirectivePolicy } from "../test-support/speech-directive-policy.test-support.js";
 
 const { inworldTTSMock, listInworldVoicesMock } = vi.hoisted(() => ({
   inworldTTSMock: vi.fn(),
@@ -19,16 +20,7 @@ const request = {
   providerConfig: { apiKey: "key", voiceId: "Sarah", modelId: "inworld-tts-1.5-max" },
   timeoutMs: 30_000,
 };
-const policy = {
-  enabled: true,
-  allowText: true,
-  allowProvider: true,
-  allowVoice: true,
-  allowModelId: true,
-  allowVoiceSettings: true,
-  allowNormalization: true,
-  allowSeed: true,
-};
+const policy = createSpeechDirectivePolicy();
 const overrides = { voice: "Ashley", model: "inworld-tts-1.5-mini", temperature: 0.6 };
 const synthesisParams = {
   text: "Hello",

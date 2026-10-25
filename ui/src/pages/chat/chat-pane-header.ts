@@ -24,6 +24,7 @@ import {
   getChatBranchesQueryState,
   loadChatBranches,
 } from "./chat-history-branches.ts";
+import { isInitialChatHistoryUnavailable } from "./chat-history-state.ts";
 import { createChatMobilePeopleMentions } from "./chat-mobile-people-mentions.ts";
 import { ChatPaneDiscussion } from "./chat-pane-discussion.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
@@ -34,7 +35,6 @@ import {
   resolveChatPaneWorkspace,
 } from "./chat-pane-header-identity.ts";
 import { ChatPaneHeaderMemo } from "./chat-pane-header-memo.ts";
-import { buildHeaderPanelActions } from "./chat-pane-header-panel-actions.ts";
 import { ChatPaneHeaderPeople } from "./chat-pane-header-people.ts";
 import { ChatPaneNativeSessionActions } from "./chat-pane-native-session-actions.ts";
 import { resolveChatPaneDesktopTarget, resolveChatPanePlacement } from "./chat-pane-placement.ts";
@@ -251,23 +251,124 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
         ...panelDefinitions.flatMap(({ slot, label, available }) => [slot, label, available]),
         i18n.getLocale(),
       ],
-      () =>
-        buildHeaderPanelActions({
-          sessionWorkspace,
-          callbacks: this.headerPanelCallbacks,
-          desktopPanelAvailable,
-          discussion,
-          sessionRailVisible,
-          subagentsVisible,
-          processesVisible,
-          catalog,
-          currentLayout,
-          panelDefinitions,
-          panelControlsAvailable: Boolean(panelControls),
-          isPanelVisible,
-          readPanelControls: () => this.headerPanelControls,
-          requestBackgroundPanel: (slot) => this.requestBackgroundPanel(slot, "toggle"),
-        }),
+      () => {
+        const callbacks = this.headerPanelCallbacks;
+        const panelControlsAvailable = Boolean(panelControls);
+        const actions: HeaderPanelAction[] = [];
+        const represented = new Set<SidebarSlotId>();
+        const addPanelAction = (slot: SidebarSlotId | null, action: HeaderPanelAction) => {
+          actions.push({
+            ...action,
+            shortcut: panelDefinitions.find((definition) => definition.slot === slot)?.shortcut,
+          });
+          if (slot) {
+            represented.add(slot);
+          }
+        };
+        for (const [id, label, icon, onActivate] of [
+          [
+            "terminal",
+            t("terminal.toggle"),
+            "terminal",
+            sessionWorkspace.onToggleTerminal && callbacks.terminal,
+          ],
+          [
+            "browser",
+            t("browser.toggle"),
+            "globe",
+            sessionWorkspace.onToggleBrowser && callbacks.browser,
+          ],
+          [
+            "desktop",
+            t("desktop.toggle"),
+            "monitor",
+            desktopPanelAvailable && sessionWorkspace.onToggleDesktop && callbacks.desktop,
+          ],
+          [
+            "discussion",
+            discussion?.label ?? "",
+            "messageSquare",
+            discussion && callbacks.discussion,
+          ],
+          [
+            "changes",
+            t("chat.sessionDiff.show"),
+            "diff",
+            sessionWorkspace.onOpenDiff && callbacks.changes,
+          ],
+        ] as const) {
+          if (onActivate) {
+            addPanelAction(id === "changes" ? null : id, {
+              id,
+              label,
+              icon,
+              onActivate,
+              ...(id === "discussion" ? { active: discussion?.active } : {}),
+            });
+          }
+        }
+        addPanelAction("workspace", {
+          id: "session-files",
+          label: t(
+            sessionWorkspace.collapsed
+              ? "chat.workspaceFiles.showFiles"
+              : "chat.workspaceFiles.collapse",
+          ),
+          icon: "fileText",
+          active: !sessionWorkspace.collapsed,
+          onActivate: callbacks.files,
+        });
+        if (
+          panelDefinitions.some(
+            (definition) => definition.slot === "companion" && definition.available,
+          )
+        ) {
+          addPanelAction("companion", {
+            id: "session-companion",
+            label: t(sessionRailVisible ? "chat.rail.collapse" : "chat.rail.show"),
+            icon: "spark",
+            active: sessionRailVisible,
+            onActivate: callbacks.companion,
+          });
+        }
+        if (!catalog) {
+          for (const slot of ["subagents", "processes"] as const) {
+            const subagents = slot === "subagents";
+            addPanelAction(slot, {
+              id: `session-${slot}`,
+              label: t(subagents ? "chat.subagentsPanel.title" : "chat.processesPanel.title"),
+              icon: subagents ? "bot" : "terminal",
+              active: subagents ? subagentsVisible : processesVisible,
+              onActivate: () => this.requestBackgroundPanel(slot, "toggle"),
+            });
+          }
+        }
+        for (const definition of panelDefinitions) {
+          if (
+            !panelControlsAvailable ||
+            !definition.available ||
+            represented.has(definition.slot) ||
+            definition.slot === "conversation"
+          ) {
+            continue;
+          }
+          const slot = definition.slot;
+          addPanelAction(slot, {
+            id: `panel-${slot}`,
+            label: definition.label,
+            icon: definition.icon,
+            active: Boolean(currentLayout && isSidebarSlotVisible(currentLayout, slot)),
+            onActivate: () => {
+              if (isPanelVisible(slot)) {
+                this.headerPanelControls?.closePanelSlot(slot);
+              } else {
+                this.headerPanelControls?.openPanelSlot(slot);
+              }
+            },
+          });
+        }
+        return actions;
+      },
     );
     // Mobile projects panel geometry; shared defaults use the retained owner layout.
     const defaultAction =
@@ -375,6 +476,11 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       mergedChrome: this.mergedChrome,
       navDrawerOpen: this.navDrawerOpen,
       gatewayStatus: this.gatewayStatus,
+      savedConversation: Boolean(
+        this.state &&
+        (!this.state.connected || isInitialChatHistoryUnavailable(this.state)) &&
+        this.state.chatMessages.length,
+      ),
       title,
       titlePending: !catalog && !title ? true : undefined,
       agent:
@@ -392,7 +498,10 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       workspaceRoot: workspace.root,
       workspaceLabel: workspace.label,
       workspaceIcon: resolveChatPaneWorkspaceIcon({
-        sessionKey: workspace.root ? row?.key : undefined,
+        sessionKey:
+          workspace.root && this.state?.connected && !this.routeResolutionPending
+            ? row?.key
+            : undefined,
         resourceBasePath: this.context.resourceBasePath,
         hello: sharingSnapshot.hello,
         token: this.context.gateway.connection.token,
@@ -495,7 +604,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
         onPlacementRecover: () => row && void this.changeHeaderPlacement(row, "recover"),
       },
       sessionMenuAction:
-        row && this.state?.connected
+        row && this.state
           ? {
               session: this.headerSessionMenuData(row, headerAccess.pinnable),
               worktreePath:

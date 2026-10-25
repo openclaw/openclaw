@@ -36,6 +36,7 @@ import {
   personalSidebarOwnerProjection,
   personalSidebarOwnerFilterId,
   projectUnpinnedSessionRows,
+  sidebarVisibleRowsInOrder,
 } from "./app-sidebar-personal-navigation.ts";
 import { sidebarPresenceScope } from "./app-sidebar-presence.ts";
 import {
@@ -496,7 +497,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
   protected visibleSessionRowsInOrder(): SidebarRecentSession[] {
     const rows = this.selectedAgentSessionRows(this.getSessionNavigationState());
     const { visibleRows } = this.zonedVisibleSections(rows);
-    return this.sessionProjection.visibleRowsInOrder(this.reconciledSidebarZone(rows), visibleRows);
+    return sidebarVisibleRowsInOrder(this.reconciledSidebarZone(rows), visibleRows, this);
   }
 
   protected visibleSessionTreeInOrder(): SidebarRecentSession[] {

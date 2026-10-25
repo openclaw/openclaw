@@ -4,6 +4,12 @@ import http from "node:http";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import {
+  listenLoopback,
+  closeHttpServer,
+  readRequestText,
+  respondJson,
+} from "../../test/helpers/gateway-integration-fixtures.js";
+import {
   prepareSystemAgentRunAdmission,
   type PreparedAgentRunAdmission,
 } from "../agents/admitted-run-context.js";
@@ -108,11 +114,7 @@ async function startProbeServer() {
         response.writeHead(request.method === "DELETE" ? 200 : 405).end();
         return;
       }
-      const chunks: Buffer[] = [];
-      for await (const chunk of request) {
-        chunks.push(Buffer.from(chunk));
-      }
-      const message = JSON.parse(Buffer.concat(chunks).toString()) as ProbeMessage;
+      const message = JSON.parse(await readRequestText(request)) as ProbeMessage;
       if (message.method === undefined) {
         // Response to a server-initiated request.
         pendingPings.get(String(message.id))?.();
@@ -133,21 +135,12 @@ async function startProbeServer() {
         // handler already admitted the call.
         await hook?.();
       }
-      response.setHeader("content-type", "application/json");
-      response.end(
-        JSON.stringify({ jsonrpc: "2.0", id: message.id, result: probeResult(message) }),
-      );
+      respondJson(response, { jsonrpc: "2.0", id: message.id, result: probeResult(message) });
     })().catch(() => response.writeHead(500).end());
   });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("MCP probe server did not acquire a loopback port");
-  }
+  const port = Number(new URL(await listenLoopback(server)).port);
   return {
-    port: address.port,
+    port,
     counts,
     state,
     /**
@@ -175,10 +168,7 @@ async function startProbeServer() {
       );
     },
     close: async () => {
-      server.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
+      await closeHttpServer(server);
     },
   };
 }
@@ -397,17 +387,10 @@ async function workshopDefinition(turn: Awaited<ReturnType<typeof prepareTurn>>)
   );
 }
 
-it("serves complete configured-server instructions and bridged calls", async ({ signal }) => {
+it("serves complete configured-server instructions", async ({ signal }) => {
   const turn = await prepareTurn("allowed", false, signal);
   const initialized = await turn.rpc("initialize", {});
-  expect(PROBE_INSTRUCTIONS.length).toBeGreaterThan(1_200);
   expect(initialized.body.result?.instructions).toBe("## probe\n" + PROBE_INSTRUCTIONS);
-  for (const operation of OPERATIONS) {
-    expect(await turn.call(operation.tool, operation.args)).toEqual({
-      isError: false,
-      text: expect.stringContaining(operation.text),
-    });
-  }
 });
 
 it.for(

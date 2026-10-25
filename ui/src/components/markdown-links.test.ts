@@ -6,8 +6,8 @@ import {
   markdownSessionLinkFromKeyboardEvent,
   navigateMarkdownSession,
 } from "./markdown-session-links.ts";
-import { htmlFragment } from "./markdown.test-support.ts";
-import { toSanitizedMarkdownHtml, toStreamingMarkdownParts } from "./markdown.ts";
+import { htmlFragment, toStreamingMarkdownParts } from "./markdown.test-support.ts";
+import { toSanitizedMarkdownHtml } from "./markdown.ts";
 import { SessionLinkTitler } from "./session-link-titling.ts";
 
 const repoUrl = "https://github.com/openclaw/openclaw";

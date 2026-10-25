@@ -455,15 +455,15 @@ export function hydrateSessionActorState(
 
 /** Derives disclosure only from the actor's owned postimage, without touching SQLite. */
 export function projectSessionActorHotState(state: SessionActorStoredState): SessionActorHotState {
-  // Detach retained facts without cloning the derived collections replaced below.
+  // Entries are replaced, never mutated; retain the actor's owned entry across projections.
   const hot: SessionActorHotState = {
     ...structuredClone({
       target: state.hot.target,
       version: state.hot.version,
-      entry: state.hot.entry,
       participants: state.hot.participants,
       members: state.hot.members,
     }),
+    entry: state.hot.entry,
     writeToken: state.hot.writeToken,
     hasBoard: state.hasBoard,
     dependencySessionIds: [],

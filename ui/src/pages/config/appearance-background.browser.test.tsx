@@ -17,7 +17,7 @@ import {
   resetProfileAppearancePrefs,
 } from "../../app/server-prefs-profile.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
-import type { SessionBackground } from "../../components/session-background.tsx";
+import type { SessionBackground } from "../../components/session-background-host.tsx";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import {
@@ -285,7 +285,9 @@ it("passes live preferences to the shared renderer without enabling disabled pla
   await preview.updateComplete;
   expect(preview.preferenceOverride).toMatchObject({ ...disabledPlacement, visibility: 0.8 });
   expect(range.getAttribute("aria-valuetext")).toBe("80%");
-  expect(preview.querySelector(".session-background__image")).not.toBeNull();
+  await waitForSolid(() => {
+    expect(preview.querySelector(".session-background__image")).not.toBeNull();
+  });
   patchSettings({
     background: {
       ...DEFAULT_BACKGROUND_PREFERENCE,

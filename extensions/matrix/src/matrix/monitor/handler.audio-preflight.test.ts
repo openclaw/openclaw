@@ -115,6 +115,61 @@ describe("createMatrixRoomMessageHandler inbound media", () => {
     installMatrixMonitorTestRuntime();
   });
 
+  it.each([
+    { body: "clip.webm", expected: "<media:video>" },
+    { body: "Watch this clip", expected: "Watch this clip" },
+  ])("prepares resolved video body $body as $expected", async ({ body, expected }) => {
+    download.mockResolvedValue({
+      path: "/tmp/inbound/clip.webm",
+      contentType: "video/webm",
+      placeholder: "<media:video>",
+    });
+    const f = setup();
+    await f.receive("$video", {
+      msgtype: "m.video",
+      body,
+      filename: "clip.webm",
+      url: "mxc://example/video",
+      info: { mimetype: "video/webm" },
+    });
+    expect(f.runPrepared).toHaveBeenCalledOnce();
+    expect(f.context()).toMatchObject({
+      RawBody: expected,
+      CommandBody: expected,
+      BodyForAgent: expected,
+    });
+  });
+
+  it.each([false, true])(
+    "passes local audio and %s room context to transcription",
+    async (room) => {
+      const cfg = { channels: { matrix: { dm: { allowFrom: ["*"] } } } };
+      transcribe.mockResolvedValue("bot hello from voice");
+      const f = setup(room, { cfg, accountId: "ops" });
+      await f.voice(room ? { "m.relates_to": { rel_type: "m.thread", event_id: "$thread" } } : {});
+      expect(transcribe).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ctx: expect.objectContaining({
+            media: [{ path: media.path, contentType: "audio/ogg" }],
+            Provider: "matrix",
+            Surface: "matrix",
+            OriginatingChannel: "matrix",
+            OriginatingTo: "room:!room:example.org",
+            AccountId: "ops",
+            MessageThreadId: room ? "$thread" : undefined,
+            ChatType: room ? "channel" : "direct",
+            SessionKey: room ? "agent:ops:main:thread:$thread" : "agent:ops:main",
+          }),
+          cfg,
+        }),
+      );
+      expect(f.context()).toMatchObject({
+        BodyForAgent: expect.stringContaining("bot hello from voice"),
+        MediaTranscribedIndexes: [0],
+      });
+    },
+  );
+
   it("downloads encrypted image attachments when the top-level URL is blank", async () => {
     download.mockResolvedValue({
       path: "/tmp/inbound/encrypted-image.png",

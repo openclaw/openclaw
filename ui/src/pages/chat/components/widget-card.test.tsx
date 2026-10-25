@@ -21,9 +21,9 @@ import {
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { ToolPreview as DeferredToolPreview } from "./chat-message-deferred.tsx";
 import { SidebarPanel } from "./chat-sidebar-content.tsx";
 import { ToolPreview } from "./widget-card-view.tsx";
-import { ToolPreview as DeferredToolPreview } from "./widget-card.ts";
 import * as widgetExport from "./widget-export.ts";
 import { WidgetPinButton } from "./widget-pin-button.tsx";
 
@@ -158,6 +158,23 @@ afterEach(async () => {
 });
 
 describe("widget-card", () => {
+  it("retains saved geometry while active widget content waits for admission", () => {
+    const preview = documentPreview("saved-widget", { sandbox: "strict" });
+    const widgetLayout = { read: vi.fn(() => 700), write: vi.fn() };
+    const host = mountWidget(preview, { mediaReadAllowed: false, widgetLayout });
+    const shell = host.querySelector('[data-content-kind="canvas-html"]');
+    expect(shell).not.toBeNull();
+    expect(
+      shell?.querySelector<HTMLElement>(".chat-tool-card__preview-panel > div")?.style.minHeight,
+    ).toBe("700px");
+    expect(host.querySelector("iframe")).toBeNull();
+    expect(actionButton(host)).toBeNull();
+
+    mountWidget(preview, { mediaReadAllowed: true, widgetLayout }, host);
+    expect(host.querySelector('[data-content-kind="canvas-html"]')).toBe(shell);
+    expect(host.querySelector("iframe")?.style.height).toBe("700px");
+  });
+
   it.each(["transcript", "strict transcript", "sidebar"] as const)(
     "retains the %s document through a blip and retires it on identity or access change",
     async (surface) => {
@@ -266,8 +283,16 @@ describe("widget-card", () => {
     vi.stubGlobal(
       "ResizeObserver",
       class {
-        observe() {}
-        disconnect() {}
+        private readonly targets = new Set<Element>();
+        observe(target: Element) {
+          this.targets.add(target);
+        }
+        unobserve(target: Element) {
+          this.targets.delete(target);
+        }
+        disconnect() {
+          this.targets.clear();
+        }
       },
     );
     onTestFinished(() => {
@@ -507,7 +532,9 @@ describe("widget-card", () => {
       }),
       { boardProvider: provider },
     );
-    expect(canvas.querySelector("openclaw-canvas-widget-view")).not.toBeNull();
+    await waitForSolid(() =>
+      expect(canvas.querySelector("openclaw-canvas-widget-view")).not.toBeNull(),
+    );
     pinButton(canvas)?.click();
     await vi.waitFor(() => {
       expect(pinWidget).toHaveBeenCalledWith({
@@ -579,34 +606,45 @@ describe("widget-card", () => {
     expect(button.hasAttribute("data-pinned")).toBe(false);
   });
 
-  it("announces a connected pin failure once across title updates", async () => {
-    const showToast = vi.spyOn(toast, "showToast").mockImplementation(() => true);
+  it("keeps pin failure feedback focused through title updates and clears it on membership changes without replaying its toast", async () => {
+    const pending = Promise.withResolvers<void>();
+    const { provider, snapshot } = boardProvider({ pinWidget: vi.fn(() => pending.promise) });
+    const showToast = vi.spyOn(toast, "showToast").mockReturnValue(true);
     onTestFinished(() => showToast.mockRestore());
-    const completion = Promise.withResolvers<void>();
-    const { provider } = boardProvider({ pinWidget: () => completion.promise });
     let setTitle!: (title: string) => void;
     const root = mountSolid(() => {
       const [title, updateTitle] = createSignal("Synthetic chart");
       setTitle = updateTitle;
       return (
         <WidgetPinButton
-          target={{ board: provider, name: "chart", viewId: "chart", mcpApp: false }}
+          target={{ board: provider, name: "widget", viewId: "view", mcpApp: false }}
           title={title()}
         />
       );
     });
     onTestFinished(root.unmount);
     const button = pinButton(root.container)!;
+    button.focus();
     button.click();
-    completion.reject(new Error("Synthetic pin failure"));
+    pending.reject(new Error("Synthetic pin failure"));
     await waitForSolid(() => expect(button.title).toBe("Could not pin to dashboard. Try again."));
+    expect(pinButton(root.container)).toBe(button);
+    expect(document.activeElement).toBe(button);
     expect(showToast).toHaveBeenCalledExactlyOnceWith({
       message: "Could not pin to dashboard. Try again.",
     });
+
     setTitle("Updated chart");
     flush();
     expect(pinButton(root.container)).toBe(button);
+    expect(document.activeElement).toBe(button);
     expect(button.title).toBe("Could not pin to dashboard. Try again.");
+    expect(showToast).toHaveBeenCalledTimes(1);
+
+    snapshot.set({ widgets: [{ name: "widget" }] });
+    await waitForSolid(() => expect(button.title).toBe("Pinned"));
+    snapshot.set({ widgets: [] });
+    await waitForSolid(() => expect(button.title).toBe("Pin to dashboard"));
     expect(showToast).toHaveBeenCalledTimes(1);
   });
 
@@ -697,14 +735,30 @@ describe("widget-card", () => {
   it("releases placement observation while a retained widget is hidden", () => {
     const observers: ResizeObserverStub[] = [];
     class ResizeObserverStub implements ResizeObserver {
-      observe = vi.fn();
-      unobserve = vi.fn();
-      disconnect = vi.fn();
+      private readonly targets = new Set<Element>();
+      observe = vi.fn((target: Element) => {
+        this.targets.add(target);
+      });
+      unobserve = vi.fn((target: Element) => {
+        this.targets.delete(target);
+      });
+      disconnect = vi.fn(() => {
+        this.targets.clear();
+      });
       constructor(private readonly callback: ResizeObserverCallback) {
         observers.push(this);
       }
       deliver() {
-        this.callback([], this);
+        this.callback(
+          [...this.targets].map((target) => ({
+            target,
+            contentRect: new DOMRectReadOnly(),
+            borderBoxSize: [],
+            contentBoxSize: [],
+            devicePixelContentBoxSize: [],
+          })),
+          this,
+        );
       }
     }
     vi.stubGlobal("ResizeObserver", ResizeObserverStub);
@@ -778,21 +832,29 @@ describe("widget-card", () => {
     ["strict", "scripts", false],
     ["trusted", undefined, true],
     ["trusted", "strict", false],
-  ] as const)("applies %s policy to preview sandbox %s", (embedSandboxMode, sandbox, scripted) => {
-    const { provider, snapshot } = boardProvider();
-    snapshot.value = { widgets: [{ name: "canvas-cv_clock" }] };
-    const host = mountWidget(
-      { ...preview, sandbox },
-      { embedSandboxMode, boardProvider: provider },
-    );
-    const managedView = host.querySelector("openclaw-canvas-widget-view");
-    expect(managedView !== null).toBe(sandbox !== "strict");
-    expect(pinButton(host) !== null).toBe(scripted);
-    if (managedView) {
-      expect(managedView.allowScripts).toBe(scripted);
-      expect(host.querySelector("iframe")).toBeNull();
-    } else {
-      expect(host.querySelector("iframe")?.getAttribute("sandbox")).toBe("");
-    }
-  });
+  ] as const)(
+    "applies %s policy to preview sandbox %s",
+    async (embedSandboxMode, sandbox, scripted) => {
+      const { provider, snapshot } = boardProvider();
+      snapshot.value = { widgets: [{ name: "canvas-cv_clock" }] };
+      const host = mountWidget(
+        { ...preview, sandbox },
+        { embedSandboxMode, boardProvider: provider },
+      );
+      await waitForSolid(() =>
+        expect(host.querySelector("openclaw-canvas-widget-view") !== null).toBe(
+          sandbox !== "strict",
+        ),
+      );
+      const managedView = host.querySelector("openclaw-canvas-widget-view");
+      expect(managedView !== null).toBe(sandbox !== "strict");
+      expect(pinButton(host) !== null).toBe(scripted);
+      if (managedView) {
+        expect(managedView.allowScripts).toBe(scripted);
+        expect(host.querySelector("iframe")).toBeNull();
+      } else {
+        expect(host.querySelector("iframe")?.getAttribute("sandbox")).toBe("");
+      }
+    },
+  );
 });

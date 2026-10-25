@@ -4,11 +4,11 @@ import {
   catalogDisplayFacts,
   catalogItemTextPrefix,
   projectCatalogItemForDisplay,
+  projectImportedMessageForDisplay,
   projectPreservedCatalogMessageForDisplay,
 } from "../../../../../src/chat/session-catalog-display.js";
 import { wrapExternalContent } from "../../../../../src/security/external-content.js";
 import { i18n } from "../../../i18n/index.ts";
-import { projectImportedMessageForDisplay } from "../../../lib/chat/imported-message-display.ts";
 import { resolveMessageDisplayMarkdown } from "../../../lib/chat/message-display.ts";
 import { extractText, extractTextCached } from "../../../lib/chat/message-extract.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
@@ -245,6 +245,12 @@ describe("imported history framing", () => {
       const content = prefix + framed;
       const message = { role, content, __openclaw: { idempotencyKey: importKey } };
       expect(projectImportedMessageForDisplay(message)).toEqual(message);
+      expect(
+        projectPreservedCatalogMessageForDisplay({
+          ...message,
+          __openclaw: { catalogDisplay: { type: "agentMessage" } },
+        }),
+      ).toMatchObject([{ content: [{ type: "text", text: content }] }]);
       // Assistant display removes leading blank lines, without unwrapping an ineligible frame.
       expect(displayed(message)).toBe(prefix === "\n" || prefix === "\r\n" ? framed : content);
       expect(extractText(message)).toContain("EXTERNAL_UNTRUSTED_CONTENT");

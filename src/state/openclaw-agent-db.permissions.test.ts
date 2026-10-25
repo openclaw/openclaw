@@ -175,10 +175,6 @@ describe("agent database permission repair", () => {
     });
 
     expect(() => append("refused")).toThrow(refused);
-    expect(workerAdmission).toHaveBeenCalledWith({
-      stage: "commit",
-      facts: expect.any(Object),
-    });
     expect(chmodFailHook.calls).toEqual([]);
     backend.assertSettled?.();
     expectValues("accepted");

@@ -129,6 +129,11 @@ chunks. Set these with `queryInputType` and `documentInputType`; see
 
 To move off Ollama, [llmman](/providers/llmman#advanced-configuration) serves the same `/api/embed`, so `provider: "ollama"` only needs a new `remote.baseUrl`.
 
+For models that require a query prefix, set
+[`memory.search.queryInstruction`](/reference/memory-config#query-instructions),
+for example `"search_query: "` for a Nomic model served under a generic alias.
+It changes query text only and does not require rebuilding the document index.
+
 ## How search works
 
 OpenClaw runs two retrieval paths in parallel and merges the results:
@@ -293,6 +298,9 @@ conversations. This is opt-in: set `experimental.sessionMemory: true` and add
 
 Use `corpus: "memory"` to search only memory notes. Results containing no session
 transcripts do not load session history or perform session-visibility lookups.
+For session hits, visibility checks read the matching sessions and their aliases
+instead of loading the full session catalog. Private recall also checks its anchor
+conversation and any shared aliases before returning transcript content.
 
 Session hits obey `tools.sessions.visibility`, which defaults to `"all"`.
 `memory_search` still searches the selected agent's indexed corpus; use

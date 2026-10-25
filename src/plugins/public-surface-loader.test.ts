@@ -98,7 +98,7 @@ describe("bundled plugin public surface loader", () => {
     );
   });
 
-  it("loads bundled artifacts from each caller's environment without changing process.env", async () => {
+  it("loads candidate artifacts from each caller's environment without changing process.env", async () => {
     const createEnvironment = (marker: string) => {
       const { bundledPluginsDir, pluginRoot } = pluginFixture();
       writeArtifact(
@@ -114,8 +114,8 @@ describe("bundled plugin public surface loader", () => {
     const firstEnvironment = createEnvironment("first");
     const secondEnvironment = createEnvironment("second");
     const loader = await freshLoader("caller-environment");
-    const load = (env: NodeJS.ProcessEnv) => loader.load({ ...publicArtifact, env });
-    expect(load(firstEnvironment).marker).toBe("first");
+    const load = (env: NodeJS.ProcessEnv) => loader.candidates({ ...candidateArtifacts, env });
+    expect(load(firstEnvironment)?.marker).toBe("first");
     expect(
       loader.candidates({
         dirName: "demo",
@@ -123,7 +123,7 @@ describe("bundled plugin public surface loader", () => {
         env: secondEnvironment,
       })?.marker,
     ).toBe("second");
-    expect(load(firstEnvironment).marker).toBe("first");
+    expect(load(firstEnvironment)?.marker).toBe("first");
   });
 
   it.each([false, true])(
@@ -238,7 +238,7 @@ describe("bundled plugin public surface loader", () => {
     });
   });
 
-  it("loads import-only dependencies under tsx and shares source artifacts for one cache generation", () => {
+  it("loads import-only dependencies under tsx and retains bundled code across cache generations", () => {
     const tempRoot = tempDirs.make("openclaw-public-surface-source-");
     const bundledPluginsDir = path.join(tempRoot, "extensions");
     const pluginRoot = path.join(bundledPluginsDir, "demo");
@@ -274,10 +274,10 @@ describe("bundled plugin public surface loader", () => {
         fs.writeFileSync(${JSON.stringify(dependencyPath)}, 'export const marker = "replacement";\\n');
         assert.equal(load(), first);
         clearPluginMetadataLifecycleCaches();
-        const replacement = load();
-        assert.notEqual(replacement, first);
-        assert.equal(replacement.marker, "replacement");
-        assert.equal(replacement.shared, first.shared);
+        const refreshed = load();
+        assert.notEqual(refreshed, first);
+        assert.equal(refreshed.marker, "original");
+        assert.equal(refreshed.shared, first.shared);
         console.log("source artifact import, identity, and lifecycle verified");
       `,
       {

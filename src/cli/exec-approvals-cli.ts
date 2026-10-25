@@ -55,6 +55,7 @@ import { callGatewayFromCli } from "./gateway-rpc.js";
 import { formatDocsHelp, formatHelpExamples } from "./help-format.js";
 import { nodesCallOpts, resolveCliNodeId } from "./nodes-cli/rpc.js";
 import type { NodesRpcOpts } from "./nodes-cli/types.js";
+import { parseOptionalPositiveInteger } from "./parse-positive-integer.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 
 type FileExecApprovalsSnapshot = Awaited<ReturnType<typeof loadSnapshotLocal>> & {
@@ -79,7 +80,6 @@ type ExecApprovalsSnapshot = FileExecApprovalsSnapshot | NativeExecApprovalsSnap
 type ConfigSnapshotLike = {
   config?: OpenClawConfig;
 };
-type ConfigLoadResult = Awaited<ReturnType<typeof loadConfigForApprovalsTarget>>;
 type ApprovalsTargetSource = "gateway" | "node" | "local";
 const APPROVALS_GET_DEFAULT_TIMEOUT_MS = 60_000;
 
@@ -424,62 +424,6 @@ async function loadConfigForApprovalsTarget(params: {
       timedOut: /^gateway timeout after \d+ms\b/i.test(formatCliError(err)),
     };
   }
-}
-
-function buildEffectivePolicyReport(params: {
-  configLoad: ConfigLoadResult;
-  source: ApprovalsTargetSource;
-  approvals?: ExecApprovalsFile;
-  resolvedDefaults?: Required<ExecApprovalsDefaults>;
-  hostPath: string;
-  nativePolicy: boolean;
-}) {
-  const cfg = params.configLoad.config;
-  const timeoutNote = params.configLoad.timedOut
-    ? "Config fetch timed out. Re-run with a higher --timeout to inspect Effective Policy."
-    : null;
-  if (!params.approvals) {
-    return {
-      scopes: [],
-      note: params.nativePolicy
-        ? "This node enforces a host-native exec policy; OpenClaw approvals-file policy math does not apply."
-        : "Host approvals policy unavailable.",
-    };
-  }
-  if (!cfg) {
-    return {
-      scopes: [],
-      note:
-        timeoutNote ??
-        (params.source === "node"
-          ? "Gateway config unavailable. Node output above shows host approvals state only, and final runtime policy still intersects with gateway tools.exec."
-          : "Config unavailable."),
-    };
-  }
-  if (params.source === "node" && !params.resolvedDefaults) {
-    return {
-      scopes: [],
-      note: "This node does not expose a complete resolved host policy, so Effective Policy is unavailable.",
-    };
-  }
-  return {
-    scopes: collectExecPolicyScopeSnapshots({
-      cfg,
-      approvals: params.approvals,
-      hostPath: params.hostPath,
-      ...(params.source === "node"
-        ? {
-            hostDefaults: params.resolvedDefaults,
-            hostDefaultSource: "node-reported resolved defaults",
-          }
-        : {}),
-    }),
-    note:
-      (params.source === "node"
-        ? "Effective exec policy is the node host approvals policy intersected with gateway tools.exec policy. "
-        : "Effective exec policy is the host approvals policy intersected with requested tools.exec policy. ") +
-      SESSION_EXEC_OVERRIDES_NOTE,
-  };
 }
 
 function renderApprovalsSummary(rows: Array<{ Field: string; Value: string }>, width: number) {
@@ -939,10 +883,7 @@ export function registerExecApprovalsCli(program: Command) {
     .option("--limit <n>", "Maximum rows to return (default 200)")
     .action(async (opts: ExecApprovalsCliOpts & { limit?: string }) => {
       await runApprovalsAction(opts, async () => {
-        const limit = parseStrictPositiveInteger(opts.limit);
-        if (opts.limit !== undefined && limit === undefined) {
-          throw new Error("--limit must be a positive integer.");
-        }
+        const limit = parseOptionalPositiveInteger(opts.limit, "--limit", ".");
         const result = (await callGatewayFromCli(
           "exec.approval.grants.list",
           opts,
@@ -1020,14 +961,57 @@ export function registerExecApprovalsCli(program: Command) {
           ? { config: null, timedOut: false }
           : await loadConfigForApprovalsTarget({ opts, source });
         const fileSnapshot = isFileApprovalsSnapshot(snapshot) ? snapshot : null;
-        const effectivePolicy = buildEffectivePolicyReport({
-          configLoad,
-          source,
-          approvals: fileSnapshot?.file,
-          resolvedDefaults: fileSnapshot?.resolvedDefaults,
-          hostPath: fileSnapshot?.path ?? "",
-          nativePolicy,
-        });
+        const policyApprovals = fileSnapshot?.file;
+        const resolvedDefaults = fileSnapshot?.resolvedDefaults;
+        const hostPath = fileSnapshot?.path ?? "";
+        const effectivePolicy = (() => {
+          const cfg = configLoad.config;
+          const timeoutNote = configLoad.timedOut
+            ? "Config fetch timed out. Re-run with a higher --timeout to inspect Effective Policy."
+            : null;
+          if (!policyApprovals) {
+            return {
+              scopes: [],
+              note: nativePolicy
+                ? "This node enforces a host-native exec policy; OpenClaw approvals-file policy math does not apply."
+                : "Host approvals policy unavailable.",
+            };
+          }
+          if (!cfg) {
+            return {
+              scopes: [],
+              note:
+                timeoutNote ??
+                (source === "node"
+                  ? "Gateway config unavailable. Node output above shows host approvals state only, and final runtime policy still intersects with gateway tools.exec."
+                  : "Config unavailable."),
+            };
+          }
+          if (source === "node" && !resolvedDefaults) {
+            return {
+              scopes: [],
+              note: "This node does not expose a complete resolved host policy, so Effective Policy is unavailable.",
+            };
+          }
+          return {
+            scopes: collectExecPolicyScopeSnapshots({
+              cfg,
+              approvals: policyApprovals,
+              hostPath,
+              ...(source === "node"
+                ? {
+                    hostDefaults: resolvedDefaults,
+                    hostDefaultSource: "node-reported resolved defaults",
+                  }
+                : {}),
+            }),
+            note:
+              (source === "node"
+                ? "Effective exec policy is the node host approvals policy intersected with gateway tools.exec policy. "
+                : "Effective exec policy is the host approvals policy intersected with requested tools.exec policy. ") +
+              SESSION_EXEC_OVERRIDES_NOTE,
+          };
+        })();
         if (opts.json) {
           const outputSnapshot = fileSnapshot ? redactExecApprovals(fileSnapshot) : snapshot;
           defaultRuntime.writeJson({ ...outputSnapshot, effectivePolicy }, 0);

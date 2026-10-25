@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { i18n } from "../i18n/index.ts";
+import { restorePropertyDescriptor } from "../test-helpers/property-descriptor.ts";
 import { MarkdownBlocks } from "./markdown-blocks-owner.ts";
 import {
   handleMarkdownCodeBlockClick,
@@ -8,12 +9,8 @@ import {
 } from "./markdown-code-blocks.ts";
 import { parseMarkdownJson } from "./markdown-json.ts";
 import type { MarkdownRenderOptions } from "./markdown-render-options.ts";
-import { htmlFragment } from "./markdown.test-support.ts";
-import {
-  toSanitizedJsonHtml,
-  toSanitizedMarkdownHtml,
-  toStreamingMarkdownParts,
-} from "./markdown.ts";
+import { htmlFragment, toStreamingMarkdownParts } from "./markdown.test-support.ts";
+import { toSanitizedJsonHtml, toSanitizedMarkdownHtml } from "./markdown.ts";
 
 function render(source: string, options?: MarkdownRenderOptions) {
   return interactiveHtml(toSanitizedMarkdownHtml(source, options));
@@ -30,11 +27,7 @@ const originalExecCommand = Object.getOwnPropertyDescriptor(document, "execComma
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
-  if (originalExecCommand) {
-    Object.defineProperty(document, "execCommand", originalExecCommand);
-  } else {
-    Reflect.deleteProperty(document, "execCommand");
-  }
+  restorePropertyDescriptor(document, "execCommand", originalExecCommand);
   document.body.replaceChildren();
 });
 

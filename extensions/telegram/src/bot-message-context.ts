@@ -11,14 +11,14 @@ import type {
   TelegramGroupConfig,
 } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import { deriveLastRoutePolicy, normalizeAccountId } from "openclaw/plugin-sdk/routing";
+import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
   expandTelegramAllowFromWithAccessGroups,
   resolveTelegramDmAllow,
 } from "./access-groups.js";
 import { resolveTelegramAccountOwnerAgentId } from "./account-owner.js";
-import { resolveDefaultTelegramAccountId } from "./accounts.js";
+import { resolveDefaultTelegramAccountId, resolveTelegramAccountConfig } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { normalizeAllowFrom, resolveTelegramEffectiveDmPolicy } from "./bot-access.js";
 import { resolveTelegramInboundBody } from "./bot-message-context.body.js";
@@ -36,10 +36,11 @@ import {
   resolveTelegramThreadSpec,
 } from "./bot/helpers.js";
 import {
+  applyTelegramTargetSession,
   resolveTelegramConversationRoute,
-  resolveTelegramTargetSession,
 } from "./conversation-route.js";
 import { enforceTelegramDmAccess } from "./dm-access.js";
+import { isTelegramForumTopicTitleUpdate } from "./forum-service-message.js";
 import { resolveTelegramForumTopicMetadata } from "./forum-topic-metadata.js";
 import { evaluateTelegramGroupBaseAccess } from "./group-access.js";
 import { resolveTelegramNativeCommandAdmission } from "./ingress.js";
@@ -51,6 +52,7 @@ import {
   resolveTelegramReactionVariant,
   resolveTelegramStatusReactionEmojis,
 } from "./status-reaction-variants.js";
+import { resolveTelegramDirectTopicNameCacheScope } from "./topic-name-cache.js";
 
 export type {
   BuildTelegramMessageContextParams,
@@ -296,7 +298,29 @@ export const buildTelegramMessageContext = async ({
     return null;
   }
 
-  const sessionKey = resolveTelegramTargetSession({
+  // Private bot forums use message_thread_id/is_topic_message. They are direct
+  // conversations, not group forums or channel Direct Messages topics.
+  if (
+    !isGroup &&
+    threadSpec.scope === "dm" &&
+    dmThreadId != null &&
+    (msg.is_topic_message === true || isTelegramForumTopicTitleUpdate(msg))
+  ) {
+    const topicRuntime = await loadTelegramMessageContextSessionRuntime(sessionRuntime);
+    const topicNameCacheScope = topicRuntime.resolveStorePath(cfg.session?.store, {
+      agentId:
+        ownerAgentId?.trim() ||
+        resolveTelegramAccountOwnerAgentId({ cfg, accountId: account.accountId }),
+    });
+    const topic = await resolveTelegramForumTopicMetadata({
+      msg,
+      threadId: dmThreadId,
+      scope: resolveTelegramDirectTopicNameCacheScope(topicNameCacheScope, account.accountId),
+    });
+    topicName = topic.topicName;
+  }
+
+  route = applyTelegramTargetSession({
     cfg,
     route,
     chatId,
@@ -304,17 +328,11 @@ export const buildTelegramMessageContext = async ({
     senderId,
     dmThreadId,
     botHasTopicsEnabled:
-      (threadSpec.scope === "dm" && msg.is_topic_message === true) ||
+      (threadSpec.scope === "dm" &&
+        (msg.is_topic_message === true || isTelegramForumTopicTitleUpdate(msg))) ||
       resolveTelegramBotHasTopicsEnabled(primaryCtx.me),
   });
-  route = {
-    ...route,
-    sessionKey,
-    lastRoutePolicy: deriveLastRoutePolicy({
-      sessionKey,
-      mainSessionKey: route.mainSessionKey,
-    }),
-  };
+  const { sessionKey } = route;
   const activationOverride = await resolveGroupActivation({
     sessionKey,
     agentId: route.agentId,
@@ -374,7 +392,7 @@ export const buildTelegramMessageContext = async ({
     sessionKey,
     acpBinding: bindingMode.kind === "configured",
     effectiveDmAllow: dmAllow.effectiveAllow,
-    providerMentionPatterns: cfg.channels?.telegram?.accounts?.[account.accountId]?.mentionPatterns,
+    providerMentionPatterns: resolveTelegramAccountConfig(cfg, account.accountId)?.mentionPatterns,
     requireMention,
     isBotOwnedThread,
     requireMentionInBotThreads,
@@ -447,10 +465,7 @@ export const buildTelegramMessageContext = async ({
     statusReactionsConfig?.enabled === true &&
     shouldSendAckReaction;
   const resolvedStatusReactionEmojis = statusReactionsEnabled
-    ? resolveTelegramStatusReactionEmojis({
-        initialEmoji: ackReaction,
-        overrides: undefined,
-      })
+    ? resolveTelegramStatusReactionEmojis(ackReaction)
     : null;
   const statusReactionVariantsByEmoji = resolvedStatusReactionEmojis
     ? buildTelegramStatusReactionVariants(resolvedStatusReactionEmojis)

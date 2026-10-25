@@ -15,6 +15,7 @@ import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gate
 import { createPluginRecord } from "../../plugins/status.test-helpers.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { gatewayConnect } from "../server/client-fixtures.test-support.js";
 import type { GatewayClient, GatewayRequestHandlerOptions } from "./types.js";
 
 const inspectManagedPlugin = vi.hoisted(() => vi.fn());
@@ -35,13 +36,7 @@ const acquisitionOwner = {
 // Use accepted handshake facts without creating a transport or starting a Gateway.
 function adminClient(): GatewayClient {
   return {
-    connect: {
-      minProtocol: 3,
-      maxProtocol: 3,
-      client: { id: "test", version: "test", platform: "test", mode: "test" },
-      role: "operator",
-      scopes: ["operator.admin"],
-    },
+    connect: gatewayConnect(["operator.admin"], { id: "test", mode: "test" }, 3),
   };
 }
 

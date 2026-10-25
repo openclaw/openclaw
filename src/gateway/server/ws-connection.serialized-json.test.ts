@@ -258,3 +258,31 @@ it.each(["small", "large"])("owns and reuses %s compressed segments per window",
   }
   expect(retained.get(10)).not.toBe(retained.get(15));
 });
+
+it.each([15, 10])(
+  "compresses offset Uint8Array segments with a %i-bit negotiated window",
+  async (windowBits) => {
+    const payload = JSON.stringify({ text: "shared broadcast é🦞 ".repeat(200) });
+    const storage = new Uint8Array(Buffer.byteLength(payload) + 16).fill(0xff);
+    storage.set(Buffer.from(payload), 8);
+    const bytes = storage.subarray(8, -8);
+    // Preserve a coalesced prefix, a shared large segment, and a single small suffix.
+    const frame = new SerializedGatewayFrame([
+      bytes.subarray(0, 1),
+      bytes.subarray(1, 2),
+      bytes.subarray(2, -2),
+      bytes.subarray(-2),
+    ]);
+    const { peer, socket, request } = await connect({ serverMaxWindowBits: windowBits });
+    const transport = createGatewayWebSocketTransport(
+      socket,
+      request.socket,
+      installGatewayDeflateCodec(socket),
+    );
+    const received = once(peer, "message");
+    transport.send(frame, { binary: false });
+    const [data, binary] = await received;
+    expect(binary).toBe(false);
+    expect(data.toString()).toBe(payload);
+  },
+);

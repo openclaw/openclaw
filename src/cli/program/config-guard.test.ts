@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { note } from "../../../packages/terminal-core/src/note.js";
+import { createPluginPackagingConfigIssues } from "../../commands/test-runtime-config-helpers.js";
 import type { ConfigSnapshotReadMeasure } from "../../config/io.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "../../config/types.js";
 import { getGatewayPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-state.js";
@@ -386,21 +387,7 @@ describe("ensureConfigReady", () => {
   );
 
   it("replaces doctor fix advice for plugin packaging-only invalid config", async () => {
-    setInvalidSnapshot({
-      issues: [
-        {
-          path: "plugins.slots.memory",
-          message: "plugin not found: source-only-pack",
-        },
-      ],
-      warnings: [
-        {
-          path: "plugins",
-          message:
-            "plugin source-only-pack: installed plugin package requires compiled runtime output for TypeScript entry index.ts: expected ./dist/index.js. This is a plugin packaging issue, not a local config problem.",
-        },
-      ],
-    });
+    setInvalidSnapshot(createPluginPackagingConfigIssues());
     const messageRuntime = await runGuard("message");
     const calls = plainErrorCalls(messageRuntime);
 

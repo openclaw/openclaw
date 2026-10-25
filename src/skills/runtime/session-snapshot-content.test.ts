@@ -219,3 +219,44 @@ it("ignores losing skill edits but refreshes when the precedence winner disappea
   expect(fallback.snapshot.prompt).toContain("Loser");
   expect(skillFile(fallback)).toBe(path.join(loser, "SKILL.md"));
 });
+
+it("shares immutable catalog skills across interleaved agent selections and unchanged scans", async () => {
+  await writeDemo(skillDir, "Shared", "Original body");
+  await writeSkill({
+    dir: path.join(workspaceDir, "skills", "other"),
+    name: "other",
+    description: "Other",
+  });
+  const scopedConfig = {
+    ...config,
+    agents: { entries: { writer: { skills: ["demo"] }, reader: { skills: ["demo", "other"] } } },
+  };
+  const read = (agentId: string) =>
+    readSnapshot(undefined, { config: scopedConfig, agentId, watch: false });
+  const first = await read("writer");
+  const second = await read("reader");
+  await refreshSkillsDiscovery({ workspaceDir });
+  const third = await read("writer");
+  const shared = first.snapshot.resolvedSkills![0]!;
+  expect(first.snapshot.skills.map((skill) => skill.name)).toEqual(["demo"]);
+  expect(second.snapshot.skills.map((skill) => skill.name)).toEqual(["demo", "other"]);
+  expect(
+    new Set([shared, second.snapshot.resolvedSkills![0], third.snapshot.resolvedSkills![0]]).size,
+  ).toBe(1);
+  expect(second.snapshot.discoverySkills![0]).toBe(shared);
+  expect(Object.isFrozen(shared)).toBe(true);
+  expect(Object.isFrozen(shared.sourceInfo)).toBe(true);
+  expect(Object.isFrozen(shared.discoveryRoot)).toBe(true);
+
+  await refreshSkillsDiscovery({ workspaceDir, reason: "config-change" });
+  expect((await read("reader")).snapshot.resolvedSkills![0]).toBe(shared);
+
+  await writeDemo(skillDir, "Shared", "Changed instructions");
+  await refreshSkillsDiscovery({ workspaceDir });
+  const edited = await read("reader");
+  const next = edited.snapshot.resolvedSkills![0]!;
+  expect(next).not.toBe(shared);
+  expect(next.contentHash).not.toBe(shared.contentHash);
+  expect(edited.snapshot.resolvedSkills![1]).toBe(second.snapshot.resolvedSkills![1]);
+  expect((await read("writer")).snapshot.resolvedSkills![0]).toBe(next);
+});

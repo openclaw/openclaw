@@ -14,6 +14,7 @@ import {
   createTestAdmittedRunContext,
   withTestRunAdmission,
 } from "./admitted-run-context.test-support.js";
+import { createRunExit } from "./bash-tools.exec-runtime.test-support.js";
 import { runPreparedCliAgent } from "./cli-runner.js";
 import { buildPreparedCliRunContext } from "./cli-runner.test-helpers.js";
 import { createManagedRun, supervisorSpawnMock } from "./cli-runner/execute.test-support.js";
@@ -146,17 +147,7 @@ function fallbackConfig(fallbacks: string[] = []): OpenClawConfig {
 }
 
 function makeExit(overrides: Partial<RunExit> = {}): RunExit {
-  return {
-    reason: "exit",
-    exitCode: 0,
-    exitSignal: null,
-    durationMs: 10,
-    stdout: "",
-    stderr: "",
-    timedOut: false,
-    noOutputTimedOut: false,
-    ...overrides,
-  };
+  return createRunExit({ durationMs: 10, ...overrides });
 }
 
 function managedRun(overrides: Partial<RunExit> = {}) {

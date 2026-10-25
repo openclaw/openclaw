@@ -2,10 +2,11 @@ import { assert, expect, vi } from "vitest";
 import type WebSocket from "ws";
 import { runEmbeddedAgent } from "../agents/embedded-agent-runner/run.js";
 import { withFullRuntimeReplyConfig } from "../auto-reply/reply/get-reply-fast-path.js";
+import { prewarmReplyRunRuntimes } from "../auto-reply/reply/get-reply-run-helpers.js";
 import { getReplyFromConfig } from "../auto-reply/reply/get-reply.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { CronJobCreate } from "../cron/types.js";
-import type { GatewayCronState } from "./server-cron.js";
+import type { GatewayCronState } from "./server-cron-contract.js";
 import {
   gatewayReplyMock,
   onceMessage,
@@ -57,6 +58,8 @@ export function makeCronJob(name: string, overrides: Partial<CronJobCreate> = {}
 /** Minimal Gateway fixtures execute scheduled events through ordinary reply admission. */
 export async function installCronSystemEventConsumer(summary = "hello") {
   await prepareGatewayReplyRuntimeForTest({ force: true });
+  // Match production readiness; the minimal Gateway fixture mocks its warmup hook.
+  await prewarmReplyRunRuntimes();
   const model = vi.mocked(runEmbeddedAgent);
   const previousReply = gatewayReplyMock.getMockImplementation();
   const previousModel = model.getMockImplementation();

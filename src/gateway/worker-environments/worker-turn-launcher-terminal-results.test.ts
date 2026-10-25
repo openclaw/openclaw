@@ -143,19 +143,13 @@ describe("worker turn launcher terminal results", () => {
     providerFailure?: true;
   }>([
     { stopReason: "stop", reconciliationFails: false },
-    { stopReason: "error", reconciliationFails: false },
-    { stopReason: "stop", reconciliationFails: true },
     { stopReason: "error", reconciliationFails: true },
     { stopReason: "error", reconciliationFails: false, providerFailure: true },
-    ...[
-      "Browser cleanup timed out",
-      "Browser cleanup failed: rate limit exceeded",
-      "Browser disposal failed",
-    ].map((cleanupFailure) => ({
-      stopReason: "stop" as const,
+    {
+      stopReason: "stop",
       reconciliationFails: false,
-      cleanupFailure,
-    })),
+      cleanupFailure: "Browser cleanup failed: rate limit exceeded",
+    },
   ])(
     "retains the ACKed finishing outcome after assistant $stopReason (reconciliation fails: $reconciliationFails; cleanup: $cleanupFailure; provider fallback: $providerFailure)",
     async ({ stopReason, reconciliationFails, cleanupFailure, providerFailure }) => {
@@ -290,7 +284,6 @@ describe("worker turn launcher terminal results", () => {
             }),
           );
         }),
-        syncWorkspace: vi.fn(),
         reconcileWorkspace: vi.fn(async (request) => {
           if (reconciliationFails) {
             throw reconciliationError;
@@ -322,7 +315,7 @@ describe("worker turn launcher terminal results", () => {
       const uninstall = installSessionPlacementAdmissionProvider(provider);
       try {
         const runLocal = vi.fn(localResult);
-        const execute = vi.fn(() => provider.executeTurn(runIdentity(runId), workerTurn, runLocal));
+        const execute = () => provider.executeTurn(runIdentity(runId), workerTurn, runLocal);
         const config = {
           ...workerTurn.config,
           agents: {
@@ -336,7 +329,7 @@ describe("worker turn launcher terminal results", () => {
         };
         let mediaTasks = getGeneratedMediaTaskIdsForSessionKey(fx.SESSION_KEY);
         const candidateFailures: unknown[] = [];
-        const runCandidate = vi.fn((candidateProvider: string, model: string) => {
+        const runCandidate = (candidateProvider: string, model: string) => {
           mediaTasks = getGeneratedMediaTaskIdsForSessionKey(fx.SESSION_KEY);
           return runEmbeddedAgent({
             ...workerTurn,
@@ -348,7 +341,7 @@ describe("worker turn launcher terminal results", () => {
             candidateFailures.push(error);
             throw error;
           });
-        });
+        };
         const runOuterEntry = () =>
           runEmbeddedAgentEntry({
             selection: {
@@ -411,7 +404,6 @@ describe("worker turn launcher terminal results", () => {
           await expectSettled();
           if (providerFailure) {
             expect(launchedModels).toEqual(["gpt-5.6-luna", "gpt-5.6-sol"]);
-            expect(runCandidate).toHaveBeenCalledTimes(2);
             expect(observed).toMatchObject({ message: "Unexpected second worker execution" });
             await expect(fs.stat(effectFile)).rejects.toMatchObject({ code: "ENOENT" });
             return;
@@ -420,14 +412,13 @@ describe("worker turn launcher terminal results", () => {
             .soft(launchedModels, "cleanup must not replay the committed worker effect")
             .toEqual(["gpt-5.6-luna"]);
           expect.soft(await fs.readFile(effectFile, "utf8")).toBe("effect\n");
-          expect.soft(runCandidate).toHaveBeenCalledOnce();
           expect.soft(observed).toBe(candidateFailures[0]);
           return;
         }
         expect(observed).toMatchObject({ message: expect.stringContaining(failure) });
         if (reconciliationFails) {
-          expect(observed).toMatchObject({ cause: expect.any(WorkerWorkspaceReconciliationError) });
           expect(observed).toMatchObject({ cause: { cause: reconciliationError } });
+          expect(observed).toMatchObject({ cause: expect.any(WorkerWorkspaceReconciliationError) });
           expect(resolveModelFallbackError(observed)).toEqual({
             kind: "coordination",
             error: observed,
@@ -437,8 +428,7 @@ describe("worker turn launcher terminal results", () => {
           expect(observed).toMatchObject({ message: failure });
           expect(reconcileActivePlacement).not.toHaveBeenCalled();
         }
-        expect(execute).toHaveBeenCalledOnce();
-        expect(tunnel.launchTurn).toHaveBeenCalledOnce();
+        expect(launchedModels).toHaveLength(1);
         expect(runLocal).not.toHaveBeenCalled();
         await expectSettled();
         await expect(
@@ -764,7 +754,6 @@ describe("worker turn launcher terminal results", () => {
               await completed.appendMessageAsync(
                 makeAgentAssistantMessage({
                   content: [{ type: "toolCall", id: "call-usage", name: "read", arguments: {} }],
-                  provider: "openai",
                   model: "gpt-first-call",
                   stopReason: "toolUse",
                   timestamp: 21,

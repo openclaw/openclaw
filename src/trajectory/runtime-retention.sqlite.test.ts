@@ -36,6 +36,7 @@ import {
 import {
   appendSqliteTrajectoryRuntimeEvents,
   createTrajectoryEvent,
+  trajectoryEventBytes as eventBytes,
 } from "./runtime-store.test-support.js";
 import type { TrajectoryEvent } from "./types.js";
 
@@ -72,10 +73,6 @@ function startCurrent(payloadSize?: number) {
   const current = currentEvent("current", { payloadSize });
   append("session-1", [current]);
   return current;
-}
-
-function eventBytes(events: readonly TrajectoryEvent[]) {
-  return events.reduce((total, row) => total + Buffer.byteLength(JSON.stringify(row)) + 1, 0);
 }
 
 function nextWindow(...retained: TrajectoryEvent[]) {

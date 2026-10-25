@@ -8,6 +8,7 @@ import { createApplicationGateway } from "../test-helpers/application-context-fi
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { createAgentSelectionCapability } from "./agent-selection.ts";
 import {
+  isResolvedDefaultLanding,
   resolveInitialApplicationLocation,
   subscribeForegroundChatBootstrap,
 } from "./bootstrap-location.ts";
@@ -98,6 +99,27 @@ it("hydrates the roster when a literal route commits before its Gateway connects
   }
 });
 
+describe("isResolvedDefaultLanding", () => {
+  it("reads the browser location only after startup resolves the landing", async () => {
+    const restored = makeLocation("/chat/main/~key/welcome");
+    let current = makeLocation("/chat");
+    let resolve!: (location: typeof restored) => void;
+    const resolved = new Promise<typeof restored>((settle) => {
+      resolve = settle;
+    });
+    const landing = isResolvedDefaultLanding(resolved, { location: () => current }, "");
+    // The guest opens another session while startup is still resolving the landing.
+    current = makeLocation("/chat/main/~key/other");
+    resolve(restored);
+    await expect(landing).resolves.toBe(false);
+
+    current = restored;
+    await expect(
+      isResolvedDefaultLanding(Promise.resolve(restored), { location: () => current }, ""),
+    ).resolves.toBe(true);
+  });
+});
+
 describe("resolveInitialApplicationLocation", () => {
   it("resolves a malformed persisted session without aborting bootstrap", async () => {
     const location = makeLocation("/", "?draft=hello");
@@ -135,16 +157,20 @@ describe("resolveInitialApplicationLocation", () => {
   );
 
   it.each([
-    ["/settings/appearance", "", "main"],
-    ["/sessions", "?session=agent%3Amain%3Amain", "agent:main:main"],
+    ["/settings/appearance", "", "main", ""],
+    ["/sessions", "?session=agent%3Amain%3Amain", "agent:main:main", ""],
+    ["/chat/main", "", "agent:research:workspace", ""],
+    ["/chat/main/", "", "agent:research:workspace", ""],
+    ["/openclaw/chat/main", "", "agent:research:workspace", "/openclaw"],
+    ["/openclaw/chat/main/", "", "agent:research:workspace", "/openclaw"],
   ])(
     "preserves explicit %s state without waiting for defaults",
-    async (pathname, search, sessionKey) => {
+    async (pathname, search, sessionKey, basePath) => {
       const cold = gateway({ phase: "connecting", client: null });
       const location = { pathname, search, hash: "" };
-      await expect(resolveLocation({ location, sessionKey, gateway: cold })).resolves.toBe(
-        location,
-      );
+      await expect(
+        resolveLocation({ location, basePath, sessionKey, gateway: cold }),
+      ).resolves.toBe(location);
       expect(cold.subscribe).not.toHaveBeenCalled();
     },
   );

@@ -104,6 +104,13 @@ export function appendSqliteTrajectoryRuntimeEvents(
   );
 }
 
+export function trajectoryEventBytes(events: readonly TrajectoryEvent[], initial = 0) {
+  return events.reduce(
+    (bytes, event) => bytes + Buffer.byteLength(JSON.stringify(event)) + 1,
+    initial,
+  );
+}
+
 export function createTrajectoryEvent(options: {
   payloadSize?: number;
   runId?: string;

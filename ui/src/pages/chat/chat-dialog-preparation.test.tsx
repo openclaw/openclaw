@@ -13,7 +13,6 @@ import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   activePlacementSession,
   createGatewayBrowserClientFixture,
-  createSessionCapabilityFixture,
   createTestChatPane,
 } from "./chat-pane.test-support.ts";
 import {
@@ -21,6 +20,7 @@ import {
   reviewRetainedFileDrafts,
   setFileDraft,
 } from "./components/chat-file-drafts.ts";
+import { createSessionWorkspaceHost } from "./components/chat-session-workspace-host.test-support.ts";
 import {
   getSessionWorkspace,
   openSessionWorkspacePreview,
@@ -29,8 +29,8 @@ import {
 } from "./components/chat-session-workspace-state.ts";
 import type { SessionWorkspaceHost } from "./components/chat-session-workspace-types.ts";
 import type { FileSidebarContent } from "./components/chat-sidebar-content-types.ts";
-import { ChatSubagentMobileHeader } from "./components/chat-subagents-mobile.tsx";
-import * as draftDialog from "./components/file-draft-recovery-dialog-view.tsx";
+import { ChatSubagentMobileHeader } from "./components/chat-subagent-mobile-header.tsx";
+import * as draftDialog from "./components/file-draft-recovery-dialog-loading.tsx";
 import * as stopDialog from "./components/session-worker-stop-dialog.tsx";
 
 vi.mock("../../lib/toast.ts", async (importOriginal) => ({
@@ -170,16 +170,7 @@ it("drops a mobile preparation failure when the retained header changes runs", a
 });
 
 function dirtyPreview(editable: boolean) {
-  const state: SessionWorkspaceHost = {
-    sessionKey: "agent:main:files",
-    connectionEpoch: 1,
-    connected: true,
-    client: createGatewayBrowserClientFixture(),
-    sessions: createSessionCapabilityFixture(),
-    hello: null,
-    sidebarContent: null,
-    handleOpenSidebar: vi.fn(),
-  };
+  const state: SessionWorkspaceHost = createSessionWorkspaceHost();
   const file: FileSidebarContent = {
     kind: "file",
     path: "notes.md",

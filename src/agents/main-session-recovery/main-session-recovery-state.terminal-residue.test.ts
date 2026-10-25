@@ -5,6 +5,8 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
+import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { registerAgentRunContext, clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { transitionMainSessionRecovery as transition } from "./main-session-recovery-state.js";
@@ -87,6 +89,126 @@ function unfinishedEntry(overrides: Partial<SessionEntry> = {}) {
 }
 
 describe("main session recovery terminal-only residue", () => {
+  it("releases an ownerless killed fence without reviving it or discarding delivery custody", async () => {
+    await withStore(async ({ read, write, mark, storePath }) => {
+      const killed: SessionEntry = {
+        sessionId: "killed-session",
+        updatedAt: 100,
+        status: "killed",
+        abortedLastRun: false,
+        restartRecoveryRuns: [{ runId: "stopped-run", lifecycleGeneration: "dead-generation" }],
+        restartRecoveryTerminalRunIds: Array.from({ length: 8 }, (_, index) => `other-${index}`),
+      };
+      const cases: Array<{ key: string; patch: Partial<SessionEntry> }> = [
+        { key: "orphan", patch: {} },
+        { key: "live", patch: {} },
+        { key: "aborted", patch: { abortedLastRun: true } },
+        {
+          key: "agent-live",
+          patch: {
+            restartRecoveryRuns: [{ runId: "active-run", lifecycleGeneration: "dead-generation" }],
+          },
+        },
+        {
+          key: "harness",
+          patch: {
+            restartRecoveryHarnessCompletion: {
+              taskId: "task",
+              taskStatus: "succeeded",
+              taskRunId: "task-run",
+              sourceRunId: "stopped-run",
+              requesterSessionKey: "agent:main:harness",
+              requesterAgentId: "main",
+              sessionId: "harness",
+            },
+          },
+        },
+        {
+          key: "tombstone",
+          patch: {
+            mainRestartRecovery: {
+              cycleId: "stopped",
+              revision: 1,
+              chargedAttempts: 0,
+              tombstone: { reason: "exhausted" },
+            },
+          },
+        },
+        {
+          key: "pending",
+          patch: { pendingFinalDelivery: { kind: "replayable", text: "owed", createdAt: 1 } },
+        },
+        { key: "delivery", patch: { restartRecoveryDeliveryRunId: "delivery-run" } },
+        {
+          key: "reserved",
+          patch: {
+            mainRestartRecovery: {
+              cycleId: "reserved",
+              revision: 1,
+              chargedAttempts: 1,
+              reservation: {
+                attempt: 1,
+                runId: "reserved-run",
+                lifecycleGeneration: "current-generation",
+              },
+            },
+          },
+        },
+        {
+          key: "claimed",
+          patch: {
+            mainRestartRecovery: {
+              cycleId: "claimed",
+              revision: 1,
+              chargedAttempts: 0,
+              foregroundClaims: { tokens: ["owner"], lifecycleGeneration: "current-generation" },
+            },
+          },
+        },
+      ];
+      const before = new Map<string, SessionEntry | undefined>();
+      for (const { key, patch } of cases) {
+        await write({ ...killed, sessionId: key, ...patch }, `agent:main:${key}`);
+        before.set(key, read(`agent:main:${key}`));
+      }
+      const work = await beginSessionEffect({
+        scope: storePath,
+        identities: ["agent:main:live", "live"],
+        assertAllowed: () => {},
+      });
+      registerAgentRunContext("active-run", {
+        sessionKey: "agent:main:agent-live",
+        sessionId: "agent-live",
+        lifecycleGeneration: getAgentEventLifecycleGeneration(),
+        projectSessionActive: true,
+      });
+      try {
+        await mark();
+        expect(read("agent:main:orphan")).toMatchObject({
+          sessionId: "orphan",
+          status: "killed",
+          abortedLastRun: false,
+          restartRecoveryTerminalRunIds: killed.restartRecoveryTerminalRunIds,
+        });
+        expectRetired(read("agent:main:orphan"));
+        expectRetired(read("agent:main:aborted"));
+        expect(read("agent:main:pending")).toMatchObject({
+          pendingFinalDelivery: before.get("pending")?.pendingFinalDelivery,
+          restartRecoveryRuns: killed.restartRecoveryRuns,
+          abortedLastRun: true,
+        });
+        for (const { key } of cases.filter(
+          (candidate) => !["orphan", "aborted", "pending"].includes(candidate.key),
+        )) {
+          expect(read(`agent:main:${key}`)).toEqual(before.get(key));
+        }
+      } finally {
+        clearAgentRunContext("active-run");
+        work.release();
+      }
+    });
+  });
+
   it.each([false, true])(
     "retires foreground residue only if every fence is terminal (%s)",
     (live) => {

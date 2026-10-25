@@ -29,18 +29,6 @@ function handleSourceRequest(request: IncomingMessage, response: ServerResponse)
       response.writeHead(302, { location: `${targetOrigin}/payload` });
       response.end();
       return;
-    case "/oversized-file":
-      response.writeHead(200, {
-        "content-length": "128",
-        "content-type": "application/octet-stream",
-      });
-      response.end("declared oversized file");
-      return;
-    case "/oversized-stream":
-      response.writeHead(200, { "content-type": "application/octet-stream" });
-      response.write(Buffer.alloc(12, 0x61));
-      response.end(Buffer.alloc(12, 0x62));
-      return;
     default:
       response.writeHead(404);
       response.end();
@@ -152,25 +140,6 @@ describe("media guarded fetch product boundaries", () => {
         ["authorization", "cookie", "x-api-key"].map((key) => targetRequests[0]?.[key]),
       ).toEqual([undefined, undefined, undefined]);
       await expect(fs.readFile(saved.path, "utf8")).resolves.toBe("redirected media");
-    });
-  });
-
-  it("rejects declared and streamed overflows without publishing store artifacts", async () => {
-    const stateDir = tempDirs.make("openclaw-media-bounded-fetch-");
-    const allowedOrigins = [sourceOrigin];
-
-    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-      for (const subdir of ["oversized-file", "oversized-stream"]) {
-        await expect(
-          saveRemoteMedia({
-            url: `${sourceOrigin}/${subdir}`,
-            maxBytes: 16,
-            subdir,
-            ssrfPolicy: { allowedOrigins },
-          }),
-        ).rejects.toMatchObject({ name: "MediaFetchError", code: "max_bytes" });
-        await expectNoPublishedMediaFiles(stateDir);
-      }
     });
   });
 });

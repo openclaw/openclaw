@@ -20,6 +20,7 @@ import { discoverAgentDatabaseMigrationTargets } from "../infra/state-migrations
 import { createLegacyDatabaseFixture } from "../infra/state-migrations.media-persistence.test-support.js";
 import { createAgentDatabaseHandleCloser } from "./openclaw-agent-db-close.js";
 import { registerOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
+import * as provenance from "./openclaw-agent-db-lease-provenance.js";
 import {
   claimOpenClawAgentDatabaseLease,
   releaseOpenClawAgentDatabaseLease,
@@ -57,6 +58,7 @@ import {
   resolveQuarantineStorePath,
 } from "./openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
+import { createUnsafeIndexDrift } from "./sqlite-index-drift.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const children = new Set<ChildProcess>();
@@ -189,8 +191,16 @@ it.each(process.platform === "win32" ? [false] : [false, true])(
         path: owner.database.path,
       });
       reopened.db.exec("INSERT INTO auth_profile_state VALUES ('alias-writer', '{}', 1)");
+    } else {
+      // Let the child verify the file itself; a peer that borrows admission cannot certify it.
+      closeOpenClawAgentDatabaseByPath(owner.database.path);
     }
     const child = await openChild(childPath, owner.env);
+    if (!alias) {
+      openOpenClawAgentDatabase({ agentId: "integrity-lease", env: owner.env }).db.exec(
+        "INSERT INTO auth_profile_state VALUES ('parent-writer', '{}', 1)",
+      );
+    }
     expect(owner.cleanClose()).toBe(false);
 
     closeOpenClawAgentDatabaseByPath(owner.database.path);
@@ -281,6 +291,117 @@ it.each(["forced cleanup", "stale admission"])(
     expect(owner.cleanClose()).toBe(true);
   },
 );
+
+// Lease provenance (boot, PID namespace, build, inode) is only available on Linux.
+it.runIf(process.platform === "linux")(
+  "reuses a live peer process admission instead of rescanning the file",
+  async () => {
+    const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-integrity-lease-peer-") };
+    const pathname = resolveOpenClawAgentSqlitePath({ agentId: "integrity-lease", env });
+    // A claim records provenance only for an existing file, so another process creates it first.
+    const creator = await openChild(pathname, env);
+    const created = once(creator, "exit");
+    creator.send("close");
+    expect(await created).toEqual([0, null]);
+    // A live Gateway that has written since its last close has no reusable seal.
+    fs.rmSync(`${pathname}.seal`);
+    const child = await openChild(pathname, env);
+    const gate = schema.agentDatabaseIntegrityBeforeMutationSteps;
+    let diagnostics: SqliteIntegrityDiagnostics | undefined;
+    vi.spyOn(schema, "agentDatabaseIntegrityBeforeMutationSteps").mockImplementation(function* (
+      ...args
+    ) {
+      const result = yield* gate(...args);
+      diagnostics = args[3];
+      return result;
+    });
+
+    const database = openOpenClawAgentDatabase({ agentId: "integrity-lease", env });
+
+    expect(diagnostics).toMatchObject({ integrityGateOutcome: "cached" });
+    expect(diagnostics?.integrityGateMode).toBeUndefined();
+    database.db.exec("INSERT INTO auth_profile_state VALUES ('peer-borrow', '{}', 1)");
+    const exited = once(child, "exit");
+    child.send("close");
+    expect(await exited).toEqual([0, null]);
+    // The borrower never checked the file, so closing last leaves verification to the next opener.
+    closeOpenClawAgentDatabaseByPath(database.path);
+    expect(readSqliteCleanCloseSeal(pathname, fs.statSync(pathname, { bigint: true }))).toBe(
+      undefined,
+    );
+  },
+);
+
+it.each([
+  { swapped: false, outcome: "cached" },
+  { swapped: true, outcome: "healthy" },
+] as const)(
+  "borrows a live peer admission only for the file opened after the claim (swapped: $swapped)",
+  async ({ swapped, outcome }) => {
+    const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-integrity-lease-race-") };
+    const pathname = resolveOpenClawAgentSqlitePath({ agentId: "integrity-lease", env });
+    const creator = await openChild(pathname, env);
+    const created = once(creator, "exit");
+    creator.send("close");
+    expect(await created).toEqual([0, null]);
+    fs.rmSync(`${pathname}.seal`);
+    const child = await openChild(pathname, env);
+    openOpenClawStateDatabase({ env })
+      .db.prepare("UPDATE agent_database_leases SET provenance = ? WHERE owner_pid = ?")
+      .run("process-v1:admitted", child.pid!);
+    let opened = false;
+    vi.spyOn(provenance, "readAgentDatabaseLeaseProvenance").mockImplementation(() =>
+      swapped && opened ? "process-v1:replacement" : "process-v1:admitted",
+    );
+    const open = nodeSqlite.openNodeSqliteDatabase;
+    vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((...args) => {
+      opened ||= args[0] === pathname;
+      return open(...args);
+    });
+    const gate = schema.agentDatabaseIntegrityBeforeMutationSteps;
+    let diagnostics: SqliteIntegrityDiagnostics | undefined;
+    vi.spyOn(schema, "agentDatabaseIntegrityBeforeMutationSteps").mockImplementation(function* (
+      ...args
+    ) {
+      const result = yield* gate(...args);
+      diagnostics = args[3];
+      return result;
+    });
+
+    const database = openOpenClawAgentDatabase({ agentId: "integrity-lease", env });
+
+    expect(opened).toBe(true);
+    expect(diagnostics?.integrityGateOutcome).toBe(outcome);
+    database.db.exec("INSERT INTO auth_profile_state VALUES ('race-writer', '{}', 1)");
+    const exited = once(child, "exit");
+    child.send("close");
+    expect(await exited).toEqual([0, null]);
+    closeOpenClawAgentDatabaseByPath(pathname);
+    // Only a process that actually checked the file can certify it on its last close.
+    expect(
+      readSqliteCleanCloseSeal(pathname, fs.statSync(pathname, { bigint: true })) !== undefined,
+    ).toBe(swapped);
+  },
+);
+
+it("does not lend a live peer admission to a file replaced at the same path", async () => {
+  const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-integrity-lease-replaced-") };
+  const options = { agentId: "integrity-lease", env };
+  const pathname = openOpenClawAgentDatabase(options).path;
+  closeOpenClawAgentDatabaseByPath(pathname);
+  const replacement = `${pathname}.replacement`;
+  fs.copyFileSync(pathname, replacement);
+  createUnsafeIndexDrift(replacement);
+  const child = await openChild(pathname, env);
+  fs.renameSync(replacement, pathname);
+
+  expect(() => openOpenClawAgentDatabase(options)).toThrow(
+    /integrity_check failed.*missing from index unsafe_index_records_value/iu,
+  );
+  const exited = once(child, "exit");
+  child.send("close");
+  expect(await exited).toEqual([0, null]);
+});
 
 it("does not certify a failed checkpoint or native close", () => {
   const owner = openOwner();

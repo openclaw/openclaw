@@ -378,24 +378,19 @@ function FormBody(props: ViewProps & { feedback: LoginFailureFeedback | null }) 
   );
 }
 
-function LoginGateContent(
-  props: {
-    model: LoginGateProps;
-  },
-  host: LoginGateElement,
-): SolidJSX.Element {
+function LoginGateContent(model: () => LoginGateProps, host: LoginGateElement): SolidJSX.Element {
   host.style.display = "contents";
   const refreshIdentity = createMemo(
     () =>
       [
-        props.model.lastError,
-        props.model.lastErrorCode,
-        props.model.lastErrorAuthReason,
-        props.model.gatewayUrl,
-        props.model.resourceBasePath,
-        props.model.secret,
-        props.model.connected,
-        Boolean(props.model.reconnectPending),
+        model().lastError,
+        model().lastErrorCode,
+        model().lastErrorAuthReason,
+        model().gatewayUrl,
+        model().resourceBasePath,
+        model().secret,
+        model().connected,
+        Boolean(model().reconnectPending),
       ] as const,
     { equals: (previous, next) => previous.every((value, index) => value === next[index]) },
   );
@@ -413,9 +408,9 @@ function LoginGateContent(
   const [now, setNow] = createSignal(Date.now());
   useVisiblePoll(1_000, () => setNow(Date.now()), {
     enabled: () =>
-      Boolean(props.model.reconnectPending) &&
-      props.model.lastErrorCode === "GATEWAY_BUSY" &&
-      (props.model.reconnectAt ?? 0) > now(),
+      Boolean(model().reconnectPending) &&
+      model().lastErrorCode === "GATEWAY_BUSY" &&
+      (model().reconnectAt ?? 0) > now(),
     immediate: true,
   });
   type RefreshAttempt = {
@@ -451,7 +446,7 @@ function LoginGateContent(
       ).every((key) => current[key] === attempt.props[key])
     );
   };
-  const feedback = createMemo(() => resolveLoginFailureFeedback(props.model));
+  const feedback = createMemo(() => resolveLoginFailureFeedback(model()));
   onSettled(() => {
     const stopDisconnect = listen(host, "login-gate-disconnect", cancelRefresh);
     const stopChange = listen(host, "login-gate-props-change", () => {
@@ -517,9 +512,9 @@ function LoginGateContent(
     // Retired views still consume their admitted operation's rejection.
     await completion.catch(() => undefined);
   };
-  const branding = () => props.model.branding ?? currentThemeBranding();
+  const branding = () => model().branding ?? currentThemeBranding();
   const brandIcon = () =>
-    props.model.branding?.brandIcon ?? (props.model.mascot === "none" ? "mark" : "claw");
+    model().branding?.brandIcon ?? (model().mascot === "none" ? "mark" : "claw");
   return (
     <div
       class="login-gate"
@@ -537,7 +532,7 @@ function LoginGateContent(
               class="login-gate__logo"
               src={controlUiPublicAssetPath(
                 "favicon.svg",
-                normalizeBasePath(props.model.resourceBasePath),
+                normalizeBasePath(model().resourceBasePath),
               )}
               alt=""
             />
@@ -555,12 +550,12 @@ function LoginGateContent(
         <Show
           when={feedback()?.placement === "status" ? feedback() : null}
           fallback={
-            <FormBody model={props.model} feedback={feedback()} cancelRefresh={cancelRefresh} />
+            <FormBody model={model()} feedback={feedback()} cancelRefresh={cancelRefresh} />
           }
         >
           {(value) => (
             <StatusBody
-              model={props.model}
+              model={model()}
               feedback={value()}
               cancelRefresh={cancelRefresh}
               refreshing={refreshing()}
@@ -570,12 +565,12 @@ function LoginGateContent(
             />
           )}
         </Show>
-        {props.model.onOpenGatewaySettings && (
+        {model().onOpenGatewaySettings && (
           <footer class="login-gate__recovery">
             <button
               type="button"
               class="btn btn--ghost"
-              onClick={() => props.model.onOpenGatewaySettings?.()}
+              onClick={() => model().onOpenGatewaySettings?.()}
             >
               {t("login.gatewaySettings")}
             </button>
@@ -588,20 +583,7 @@ function LoginGateContent(
 
 export const LoginGate = defineSolidBridge<BridgeProps>(
   "openclaw-login-gate",
-  (props, host) => (
-    <Show when={props.props}>
-      {(model) =>
-        LoginGateContent(
-          {
-            get model() {
-              return model();
-            },
-          },
-          host,
-        )
-      }
-    </Show>
-  ),
+  (props, host) => <Show when={props.props}>{(model) => LoginGateContent(model, host)}</Show>,
   {
     properties: { props: { default: undefined, attribute: false } },
     disconnected: (host) => host.dispatchEvent(new Event("login-gate-disconnect")),

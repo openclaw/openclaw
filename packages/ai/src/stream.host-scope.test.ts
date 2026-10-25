@@ -27,6 +27,7 @@ import {
   textBlock,
   userMessage,
 } from "./provider-transport-parity.test-support.js";
+import { makeProviderModel } from "./providers/provider-model.test-support.js";
 import { cleanupSessionResources, registerSessionResourceCleanup } from "./session-resources.js";
 import { createLlmRuntime, createNodeLlmRuntime } from "./stream.js";
 
@@ -36,18 +37,13 @@ const context = { messages: [] };
 const host = (prefix: string) => ({ resolveSecretSentinel: (value: string) => prefix + value });
 const resolveSecret = (value: string) => getAiTransportHost().resolveSecretSentinel(value);
 const textContent = (text: string) => [textBlock(text)];
-const model: Model = {
-  id: "scoped",
+const model: Model = makeProviderModel("test-scoped", "fixture", "scoped", {
   name: "Scoped",
-  provider: "fixture",
-  api: "test-scoped",
   baseUrl: "https://fixture.invalid",
   reasoning: false,
-  input: ["text"],
   contextWindow: 1000,
   maxTokens: 100,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-};
+});
 function message(text: string): AssistantMessage {
   return assistantMessage(model, textContent(text));
 }

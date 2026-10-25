@@ -73,11 +73,6 @@ export type SessionManagementAction =
 
 export type SessionManagementActionKind = SessionManagementAction["kind"];
 
-type SessionMenuActionsHost = {
-  readonly updateComplete: Promise<boolean>;
-  focusCurrentView(): void;
-};
-
 export type SessionMenuActionsState = {
   involvingMeContext?: boolean;
   session: SessionMenuData;
@@ -113,7 +108,7 @@ export class SessionMenuActions {
   }
 
   constructor(
-    private readonly host: SessionMenuActionsHost,
+    readonly focusCurrentView: () => void,
     private readonly readState: () => SessionMenuActionsState,
     private readonly onAction: (action: SessionManagementAction) => void,
     private readonly onClose: () => void,
@@ -283,10 +278,6 @@ export class SessionMenuActions {
       return true;
     }
     return false;
-  }
-
-  focusCurrentView(): void {
-    void this.host.updateComplete.then(() => this.host.focusCurrentView());
   }
 
   handleKeydown(event: KeyboardEvent, appearancePicker: { showIconGrid: () => void }): boolean {

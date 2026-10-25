@@ -92,7 +92,8 @@ vi.mock("openclaw/plugin-sdk/markdown-table-runtime", () => ({
   resolveMarkdownTableMode: mockState.resolveMarkdownTableMode,
 }));
 
-vi.mock("./accounts.js", () => ({
+vi.mock("./accounts.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./accounts.js")>()),
   resolveMattermostAccount: mockState.resolveMattermostAccount,
 }));
 
@@ -214,7 +215,11 @@ describe("sendMessageMattermost", () => {
   });
 
   it("builds interactive button props when buttons are provided", async () => {
-    mockState.resolveMattermostAccount.mockReturnValue(makeAccount("bot-token"));
+    mockState.resolveMattermostAccount.mockReturnValue(
+      makeAccount("bot-token", {
+        interactions: { callbackBaseUrl: "https://callbacks.example.test/" },
+      }),
+    );
 
     await sendMessageMattermost("channel:town-square", "Pick a model", {
       cfg: TEST_CFG,
@@ -228,10 +233,23 @@ describe("sendMessageMattermost", () => {
         channelId: "town-square",
         message: "Pick a model",
         props: {
-          attachments: [{ actions: [{ id: "mdlprov", name: "Browse providers" }] }],
+          attachments: [
+            {
+              actions: [
+                {
+                  id: "mdlprov",
+                  name: "Browse providers",
+                  integration: {
+                    url: "https://callbacks.example.test/mattermost/interactions/default",
+                  },
+                },
+              ],
+            },
+          ],
         },
       },
     ]);
+    expect(mockState.resolveMattermostAccount).toHaveBeenCalledTimes(1);
   });
 
   it("falls back to a channel target when bare Mattermost id is not a user", async () => {

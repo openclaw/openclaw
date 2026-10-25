@@ -57,17 +57,14 @@ export function ChatHeaderSessionMenuContent(inputs: HeaderMenuContentProps) {
   };
   const onAction = (action: HeaderMenuAction) => props.onAction(action);
   const actions = new SessionMenuActions(
-    {
-      get updateComplete() {
-        return inputs.host.updateComplete;
-      },
-      focusCurrentView() {
+    () => {
+      void inputs.host.updateComplete.then(() => {
         if (inputs.compactView === "icon") {
           view.appearance.focusFirst();
         } else {
           inputs.readMenu()?.focusFirst();
         }
-      },
+      });
     },
     readState,
     onAction,
@@ -162,7 +159,6 @@ export function ChatHeaderSessionMenuContent(inputs: HeaderMenuContentProps) {
     currentOwner: () => props.currentOwner,
     category: () => props.session.category,
     viewOptions,
-    palette,
     host: () => props.mobileHost,
     source: () => inputs.readMenu()?.overlay.trigger,
     closeMenu: close,
@@ -437,7 +433,7 @@ export function ChatHeaderSessionMenuContent(inputs: HeaderMenuContentProps) {
     }
     if (
       value.startsWith("visibility:") ||
-      value.startsWith("member:") ||
+      value.startsWith("permission:") ||
       value.startsWith("public:")
     ) {
       if (props.sharing) {
