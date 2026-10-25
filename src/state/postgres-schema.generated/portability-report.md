@@ -13,9 +13,9 @@
 
 | Database | Object        | Total | Translated | Reported |
 | -------- | ------------- | ----: | ---------: | -------: |
-| state    | table         |   133 |        133 |        0 |
-| state    | column        |  1402 |       1400 |        2 |
-| state    | index         |   288 |        288 |        0 |
+| state    | table         |   134 |        134 |        0 |
+| state    | column        |  1417 |       1415 |        2 |
+| state    | index         |   295 |        295 |        0 |
 | state    | foreignKey    |    33 |         33 |        0 |
 | state    | check         |   297 |        297 |        0 |
 | state    | trigger       |     0 |          0 |        0 |
@@ -34,6 +34,7 @@
 
 - audit_events.sequence: rowid alias becomes identity; AUTOINCREMENT/sqlite_sequence never-reuse semantics differ: PostgreSQL sequences are nontransactional and explicit values do not advance them.
 - audit_identity_keys.id: rowid alias becomes identity; rowid reuse semantics differ: PostgreSQL sequences are nontransactional and explicit values do not advance them.
+- audit_skill_selection_events.sequence: rowid alias becomes identity; rowid reuse semantics differ: PostgreSQL sequences are nontransactional and explicit values do not advance them.
 - capture_events.id: rowid alias becomes identity; rowid reuse semantics differ: PostgreSQL sequences are nontransactional and explicit values do not advance them.
 - claw_mcp_server_refs.independent_owner: 0/1 boolean candidate retained as bigint.
 - claw_package_refs.independent_owner: 0/1 boolean candidate retained as bigint.

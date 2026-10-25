@@ -458,6 +458,22 @@
       "file": "fragment-device_pairing_join_codes.postgres.sql"
     },
     {
+      "id": "audit_skill_selection_events",
+      "tables": [
+        "audit_skill_selection_events"
+      ],
+      "indexes": [
+        "idx_audit_skill_selection_events_agent_sequence",
+        "idx_audit_skill_selection_events_session_sequence",
+        "idx_audit_skill_selection_events_run_sequence",
+        "idx_audit_skill_selection_events_status_sequence",
+        "idx_audit_skill_selection_events_occurred_sequence"
+      ],
+      "dependencies": [],
+      "activation": "version-additive",
+      "file": "fragment-audit_skill_selection_events.postgres.sql"
+    },
+    {
       "id": "skill_workshop_changes",
       "tables": [
         "skill_workshop_changes"

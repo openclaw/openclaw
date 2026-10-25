@@ -40,10 +40,9 @@ import {
 } from "./agent-tools.before-tool-call.diagnostics.js";
 import { runBeforeToolCallHook } from "./agent-tools.before-tool-call.policy.js";
 import {
-  buildAdjustedParamsKey,
   clearTrackedToolExecution,
-  preExecutionBlockedToolCallIds,
   recordAdjustedParamsForToolCall,
+  recordPreExecutionBlockedToolCall,
   recordStructuredReplaySafeToolCall,
   recordToolExecutionStarted,
   recordToolExecutionTracked,
@@ -654,15 +653,6 @@ export function rewrapToolWithBeforeToolCallHook(
   }
   return rebuilt;
 }
-
-function recordPreExecutionBlockedToolCall(toolCallId?: string, runId?: string): void {
-  if (!toolCallId) {
-    return;
-  }
-  preExecutionBlockedToolCallIds.add(buildAdjustedParamsKey({ runId, toolCallId }));
-  pruneTrackedToolCallIds(preExecutionBlockedToolCallIds);
-}
-
 function pruneTrackedToolCallIds(ids: Set<string>): void {
   while (ids.size > MAX_TRACKED_TOOL_CALL_IDS) {
     const oldest = ids.values().next().value;
