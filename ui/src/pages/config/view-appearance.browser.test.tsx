@@ -1,10 +1,11 @@
 import { beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { SelectPicker } from "../../components/select-picker.ts";
 import { warmJson5 } from "../../lib/json5-runtime.ts";
+import { createFrameClock } from "../../test-helpers/animation-frame-clock.ts";
 import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import { updatePickers, openPicker, choosePickerValue } from "../../test-helpers/select-picker.ts";
-import { renderAppearance, renderConfigInto } from "./config-view.test-support.tsx";
 import "../../styles.css";
+import { renderAppearance, renderConfigInto } from "./config-view.test-support.tsx";
 
 function settingsRow(container: HTMLElement, title: string) {
   const row = [...container.querySelectorAll<HTMLElement>(".settings-row")].find(
@@ -261,16 +262,14 @@ describe("config appearance preferences", () => {
       renderConfigInto(props, container);
     };
     renderConfigInto(props, container);
-    const frames = new Map<number, FrameRequestCallback>();
-    let frameId = 0;
+    const framesClock = createFrameClock();
+    const frames = framesClock.frames;
+
     const requestFrame = vi
       .spyOn(window, "requestAnimationFrame")
-      .mockImplementation((callback) => {
-        frames.set(++frameId, callback);
-        return frameId;
-      });
+      .mockImplementation(framesClock.request);
     const cancelFrame = vi.spyOn(window, "cancelAnimationFrame").mockImplementation((id) => {
-      frames.delete(id);
+      framesClock.cancel(id);
     });
     onTestFinished(() => {
       cleanupSolid();
@@ -285,11 +284,7 @@ describe("config appearance preferences", () => {
     props.textScale = 110;
     renderConfigInto(props, container);
     const input = required(container, ".settings-theme-import__input", HTMLInputElement);
-    const pending = [...frames.values()];
-    frames.clear();
-    for (const frame of pending) {
-      frame(0);
-    }
+    framesClock.flush(0);
     expect(document.activeElement).toBe(input);
     expect(input.selectionStart).toBe(0);
     expect(input.selectionEnd).toBe("amethyst-haze".length);

@@ -9,6 +9,7 @@ import {
   type PanelHostedTabsElement,
 } from "../../../components/panel-hosted-tabs.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { createSidebarRegionCallbackMocks } from "../../../test-helpers/sidebar-region-callbacks.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { sidebarPanelDefinitions } from "../chat-pane-embedded-panels.ts";
 import { createMountedPanes } from "../chat-pane-mounted.test-support.ts";
@@ -80,16 +81,7 @@ async function mount(
     }),
   );
   region.fetchFavicon = options.fetchFavicon;
-  region.callbacks = {
-    activatePanel: vi.fn(),
-    togglePanelExpanded: vi.fn(),
-    setDock: vi.fn(),
-    closeSlot: vi.fn(),
-    openSlot: vi.fn(),
-    reorderPanel: vi.fn(),
-    resizePanel: vi.fn(),
-    setOpen: vi.fn(),
-  };
+  region.callbacks = createSidebarRegionCallbackMocks();
   const shell = div("sidebar-region"),
     outlet = div("sidebar-region__right-runtime");
   const header = div(),

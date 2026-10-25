@@ -29,6 +29,17 @@ describe("resolveRuntimeWorkerUrl", () => {
       ),
     ).toBe(path.join(root, "src/agents/code-mode.worker.ts"));
 
+    expect(
+      fileURLToPath(
+        resolveRuntimeWorkerUrl({
+          currentModuleUrl: pathToFileURL(path.join(root, "src/agents/code-mode-worker.ts")).href,
+          sourceWorkerName: "generated.worker",
+          sourceExtension: ".mjs",
+          distWorkerPath: "agents/generated.worker.js",
+        }),
+      ),
+    ).toBe(path.join(root, "src/agents/generated.worker.mjs"));
+
     for (const currentModuleUrl of [
       pathToFileURL(path.join(root, "dist/agents/code-mode.js")).href,
       pathToFileURL(path.join(root, "dist/selection-abc123.js")).href,

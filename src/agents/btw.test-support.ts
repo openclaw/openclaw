@@ -11,6 +11,7 @@ import * as mocks from "./btw.mocks.test-support.js";
 import { guardModelFixtureWorkspace } from "./embedded-agent-runner/model.fixture.test-support.js";
 import { resetModelGenerationFixtureState } from "./embedded-agent-runner/model.generation-scope.test-support.js";
 import type { AgentHarness } from "./harness/types.js";
+import { createUsageFixture } from "./test-helpers/usage-fixtures.js";
 export let state: OpenClawTestState;
 let workspaceGuard: ReturnType<typeof guardModelFixtureWorkspace>;
 beforeAll(async () => {
@@ -46,14 +47,7 @@ const MATH_QUESTION = "What is 17 * 19?";
 export const MATH_ANSWER = "323";
 let defaultPluginMetadataSnapshot: ReturnType<typeof resolvePluginMetadataSnapshot> | undefined;
 
-const DEFAULT_USAGE = {
-  input: 1,
-  output: 2,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 3,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
+const DEFAULT_USAGE = createUsageFixture(1, 2, 3);
 
 export function makeAsyncEvents(events: unknown[]) {
   // Minimal async iterable that matches provider stream shape without loading

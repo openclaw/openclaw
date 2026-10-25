@@ -1858,6 +1858,21 @@ jobs:
             echo "Selected release candidate predates plugins:assets:check; skipping unavailable check."
           fi
 
+      - name: Check generated schema validators
+        if: ${{ !cancelled() && (steps.dist_build.outcome == 'success' || steps.dist_build_cache.outputs.cache-hit == 'true') }}
+        run: |
+          set -euo pipefail
+          if node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs";
+          const pkg = JSON.parse(readFileSync("package.json", "utf8"));
+          process.exit(pkg.scripts?.["validators:check"] ? 0 : 1);
+          NODE
+          then
+            pnpm validators:check
+          else
+            echo "Selected release candidate predates validators:check; skipping unavailable check."
+          fi
+
       - name: Package runtime for native policy tests
         id: native_runtime_package
         if: ${{ needs.preflight.outputs.run_macos_swift == 'true' && hashFiles('apps/macos/Sources/OpenClaw/NativeExecPolicyOwner.swift') != '' }}

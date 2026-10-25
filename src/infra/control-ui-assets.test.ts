@@ -4,17 +4,11 @@ import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 
 const state = vi.hoisted(() => ({ runCommandWithTimeout: vi.fn() }));
 
-const successfulBuild = {
-  stdout: "",
-  stderr: "",
-  code: 0,
-  signal: null,
-  killed: false,
-  termination: "exit",
-};
+const successfulBuild = createCommandResult();
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let root = "";
@@ -278,6 +272,8 @@ process.exitCode = 1;
   });
 
   it("builds the source checkout selected by canonical package-root discovery", async () => {
+    // Keep a built checkout outside the fixture from satisfying discovery.
+    using _ = vi.spyOn(process, "cwd").mockReturnValue(root);
     const packagedRoot = abs("fixtures/package-owner");
     const checkoutRoot = sourceCheckout("fixtures/checkout-owner");
     const indexPath = uiIndex(checkoutRoot);

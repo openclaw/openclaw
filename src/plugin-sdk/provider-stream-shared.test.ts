@@ -2,6 +2,7 @@ import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { AssistantMessage, Model } from "openclaw/plugin-sdk/llm";
 import { createZeroUsageFixture } from "openclaw/plugin-sdk/test-fixtures";
 import { expect, it, vi } from "vitest";
+import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import {
   createDeepSeekV4OpenAICompatibleThinkingWrapper,
@@ -114,18 +115,15 @@ function errorEvent(error: MessageFixture, partial?: MessageFixture) {
   };
 }
 
-const streamTestModel = {
+const streamTestModel = makeProviderModelFixture<"openai-completions">({
   id: "test-model",
   name: "Test Model",
   api: "openai-completions",
   provider: "test",
   baseUrl: "https://example.test/v1",
-  reasoning: false,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 8_192,
   maxTokens: 1_024,
-} satisfies Model<"openai-completions">;
+}) satisfies Model<"openai-completions">;
 
 function localModel(id: string, compat?: Model<"openai-completions">["compat"]) {
   return {

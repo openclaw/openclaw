@@ -1,6 +1,7 @@
 import { EventEmitter, once } from "node:events";
 import { createServer, type Server, type Socket } from "node:net";
 import { authenticate } from "mailauth";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenClawPluginServiceContextV2 } from "openclaw/plugin-sdk/plugin-entry";
 import {
   createGatewaySchedulerClock,
@@ -270,14 +271,8 @@ export async function startWatcher(
     withTimeout(waitForAccountCursor("inbox", { uidValidity, lastSeenUid }), timeoutMs, {
       message: `IMAP inbox cursor did not reach UIDVALIDITY ${uidValidity}, UID ${lastSeenUid}`,
     });
-  let resolveStartup!: () => void;
-  const startup = new Promise<void>((resolve) => {
-    resolveStartup = resolve;
-  });
-  let resolveFailure!: (error: unknown) => void;
-  const connectionFailure = new Promise<unknown>((resolve) => {
-    resolveFailure = resolve;
-  });
+  const { promise: startup, resolve: resolveStartup } = createDeferred<void>();
+  const { promise: connectionFailure, resolve: resolveFailure } = createDeferred<unknown>();
   const context: OpenClawPluginServiceContextV2 = {
     scheduler: createTestPluginServiceScheduler(
       options.clock ? createTestGatewayScheduler(options.clock.clock) : undefined,

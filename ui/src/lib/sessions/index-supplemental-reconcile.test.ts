@@ -4,6 +4,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { publishActiveSessionLineage } from "../../components/app-sidebar-child-session-data.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { createActiveSessionPlacement } from "../../test-helpers/session-placement.ts";
 import {
   createGatewayHarness,
   createTestSessionCapability,
@@ -94,19 +95,15 @@ function publishLineage(
 }
 
 function placement(status: "available" | "offline") {
-  return {
-    state: "active" as const,
+  return createActiveSessionPlacement({
     generation: 4,
-    createdAtMs: 1,
     updatedAtMs: 2,
     stateChangedAtMs: 2,
     environmentId: "environment-device",
     activeOwnerEpoch: 7,
-    workerBundleHash: "a".repeat(64),
     workspaceBaseManifestRef: "manifest-device",
-    remoteWorkspaceDir: "/workspace",
     runner: { kind: "device" as const, status },
-  };
+  });
 }
 
 describe("supplemental session reconciliation", () => {

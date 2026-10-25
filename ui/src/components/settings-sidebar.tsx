@@ -1,5 +1,5 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { createEffect, createMemo, For, onSettled, Show } from "solid-js";
+import { createEffect, createMemo, For, Show } from "solid-js";
 import type { ThemeBranding } from "../../../packages/gateway-protocol/src/theme.ts";
 import type { AgentsListResult } from "../api/types.ts";
 import {
@@ -26,10 +26,8 @@ import { isComposingKeyboardEvent } from "../lib/ime.ts";
 import { handleNavigationClick } from "../lib/navigation-click.ts";
 import { projectAgentSelection } from "../lib/reactive/application.ts";
 import { i18nRevision, t } from "../lib/reactive/i18n.ts";
-import { listen } from "../lib/reactive/listener.ts";
 import { liveValue } from "../lib/reactive/live-value.ts";
 import { projectOwner, projectSource } from "../lib/reactive/projection.ts";
-import { cancelRoutePreload, scheduleRoutePreload } from "../lib/route-preload.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import {
   settingsNavigationLabelForRoute,
@@ -76,9 +74,7 @@ export type SettingsSidebarProps = {
   onExit: () => void;
   onRetryConnect: () => void;
   onNavigate: (routeId: RouteId, options?: ApplicationNavigationOptions) => void;
-  onPreload?: (routeId: RouteId) => Promise<void> | void;
   onSearchQueryChange: (query: string) => void;
-  preloadTimers: Map<EventTarget, ReturnType<typeof globalThis.setTimeout>>;
   saveIndicator: SettingsSaveIndicatorProps;
   canAdmin?: boolean;
   nativeDeviceSettings?: NativeDeviceSettingsCapability | null;
@@ -135,29 +131,11 @@ function SettingsNavigationItem(props: {
   branding: ThemeBranding;
 }) {
   const active = () => settingsNavigationOwnerRoute(props.sidebar.activeRouteId) === props.routeId;
-  const preload = (event: Event, touch = false) =>
-    scheduleRoutePreload(
-      props.sidebar.preloadTimers,
-      props.routeId,
-      event,
-      props.sidebar.onPreload,
-      active(),
-      touch,
-    );
-  let anchor!: HTMLAnchorElement;
-  onSettled(() => listen(anchor, "touchstart", (event) => preload(event, true), { passive: true }));
   return (
     <a
-      ref={(element) => {
-        anchor = element;
-      }}
       href={pathForRoute(props.routeId, props.sidebar.basePath)}
       class={["settings-sidebar__item", { "settings-sidebar__item--active": active() }]}
       aria-current={active() ? "page" : undefined}
-      onFocus={preload}
-      onBlur={(event) => cancelRoutePreload(props.sidebar.preloadTimers, event)}
-      onPointerEnter={preload}
-      onPointerLeave={(event) => cancelRoutePreload(props.sidebar.preloadTimers, event)}
       onClick={(event) =>
         handleNavigationClick(event, () => props.sidebar.onNavigate(props.routeId))
       }

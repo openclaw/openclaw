@@ -663,9 +663,7 @@ export async function finalizeCodexAttempt(
     });
     if (settledTurnFinalizationEligible) {
       await params.onSettledTurn?.(finalizedResult, async () => {
-        // A same-run continuation suppresses its internal prompt, so its native turn has
-        // none. Its tools settle under the prompt this run persisted on an earlier turn;
-        // the verifier still requires that row in history and binds the boundary to this turn.
+        // A same-run continuation retains the original prompt's transcript identity.
         const continuedPrompt = params.suppressNextUserMessagePersistence
           ? params.userTurnTranscriptRecorder?.getPersistedMessage?.()
           : undefined;

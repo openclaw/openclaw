@@ -3,7 +3,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/client-info.js";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/index.js";
 import { ModelsListResultSchema } from "../../../packages/gateway-protocol/src/schema/model-catalog.js";
-import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import * as ownership from "../../agents/harness/session-runtime-ownership.js";
 import { resolveOpenClawPluginToolsForOptions } from "../../agents/openclaw-plugin-tools.js";
@@ -47,7 +47,7 @@ import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-store.js";
+import { activePlacement } from "../worker-environments/placement-suite.test-support.js";
 import { createChatMetadataOwner } from "./chat-metadata-runtime.test-support.js";
 import {
   createModelsListTestContext,
@@ -364,28 +364,12 @@ it("matches session model admission for the exact active worker placement", asyn
       () => ({ authProfileOverride: undefined, authProfileOverrideSource: undefined }),
       { skipMaintenance: true },
     );
-    const placement = {
-      sessionId,
+    const placement = activePlacement(sessionId, {
       sessionKey,
-      agentId: "main",
-      state: "active",
-      executionMode: "worker-turn",
       environmentId: "device-environment",
       activeOwnerEpoch: 7,
       generation: 1,
-      workspaceBaseManifestRef: "manifest",
-      remoteWorkspaceDir: "/workspace",
-      workerBundleHash: "a".repeat(64),
-      lastTranscriptAckCursor: null,
-      lastLiveEventAckCursor: null,
-      recoveryError: null,
-      terminalReason: null,
-      terminalAtMs: null,
-      turnClaim: null,
-      createdAtMs: 1,
-      updatedAtMs: 1,
-      stateChangedAtMs: 1,
-    } satisfies WorkerSessionPlacementRecord;
+    });
     const environment = {
       environmentId: placement.environmentId,
       ownerEpoch: 7,
@@ -452,14 +436,8 @@ it("rejects an in-flight config change and retries against the new published con
       () => createPluginRequesterModels(requesters[0]!.readerParams)!,
     );
     const original = ownership.readSessionRuntimeOwnershipAsync;
-    let release!: () => void;
-    let entered!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const started = new Promise<void>((resolve) => {
-      entered = resolve;
-    });
+    const { promise: gate, resolve: release } = createDeferred();
+    const { promise: started, resolve: entered } = createDeferred();
     vi.spyOn(ownership, "readSessionRuntimeOwnershipAsync").mockImplementationOnce(
       async (params) => {
         entered();
@@ -633,14 +611,8 @@ it.each(["reset", "revocation", "retirement", "account publication"])(
     await fixture(async ({ requesters, owner, accountCatalog, refreshAccount }) => {
       const requester = requesters[0]!;
       const original = ownership.readSessionRuntimeOwnershipAsync;
-      let release!: () => void;
-      let entered!: () => void;
-      const gate = new Promise<void>((resolve) => {
-        release = resolve;
-      });
-      const started = new Promise<void>((resolve) => {
-        entered = resolve;
-      });
+      const { promise: gate, resolve: release } = createDeferred();
+      const { promise: started, resolve: entered } = createDeferred();
       vi.spyOn(ownership, "readSessionRuntimeOwnershipAsync").mockImplementationOnce(
         async (params) => {
           entered();

@@ -74,6 +74,7 @@ vi.mock("../../config/io.js", () => ({
   getRuntimeConfig: loadConfigMock,
 }));
 
+import { waitForFast } from "../../../test/helpers/vitest-wait.js";
 import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
@@ -93,13 +94,6 @@ vi.mock("./hooks-request-handler.js", () => ({
 const { createGatewayHookDispatcher, createGatewayHooksRequestHandler } =
   await import("./hooks.js");
 const createBroker = useSpawnBrokerTestFixture(afterEach);
-
-function waitForFast<T>(
-  callback: () => T | Promise<T>,
-  options: { timeout?: number; interval?: number } = {},
-) {
-  return vi.waitFor(callback, { interval: 1, ...options });
-}
 
 function buildMinimalParams(overrides: { agentStartAdmissionTimeoutMs?: number } = {}) {
   return {

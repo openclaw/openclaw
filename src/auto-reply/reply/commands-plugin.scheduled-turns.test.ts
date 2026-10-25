@@ -238,14 +238,6 @@ describe("requester-admitted scheduled commands", () => {
   });
 });
 
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
-
 describe("native scheduled command execution", () => {
   it("runs the final allowed attempt, then retires the schedule instead of rearming it", async () => {
     await withCommandPlugin(async (fixture) => {
@@ -544,9 +536,9 @@ describe("native scheduled command execution", () => {
     async (change) => {
       await withCommandPlugin(async (fixture) => {
         const id = await createContinuation(fixture);
-        const entered = deferred();
-        const release = deferred();
-        const settled = deferred();
+        const entered = createDeferredCore();
+        const release = createDeferredCore();
+        const settled = createDeferredCore();
         let retained: PluginCommandContext["runtimeContext"];
         fixture.handler.mockImplementation(async (ctx) => {
           retained = ctx.runtimeContext;

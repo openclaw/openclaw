@@ -17,6 +17,7 @@ import { countSensitiveConfigValues } from "../../components/config-form.shared.
 import { HighlightedJson } from "../../components/solid/highlighted-json.tsx";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
+import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import "../../components/tooltip.ts";
 import { SettingsSegmented, SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
@@ -570,25 +571,17 @@ export function Config(props: ConfigProps) {
               <div class="config-toolbar">
                 <label class="field">
                   <span>{t("configView.channelSettings")}</span>
-                  <select
-                    class="settings-select"
+                  <SettingsSelect
                     value={channelGroup().key ?? ""}
                     onChange={(event) => {
                       props.onSubsectionChange(event.currentTarget.value || null);
                       resetContentScroll();
                     }}
-                  >
-                    <For each={state().channelGroups} keyed={(group) => group.key}>
-                      {(group) => (
-                        <option
-                          value={group().key ?? ""}
-                          selected={group().key === channelGroup().key}
-                        >
-                          {group().label}
-                        </option>
-                      )}
-                    </For>
-                  </select>
+                    options={state().channelGroups.map((group) => ({
+                      value: group.key ?? "",
+                      label: group.label,
+                    }))}
+                  />
                 </label>
               </div>
             )}

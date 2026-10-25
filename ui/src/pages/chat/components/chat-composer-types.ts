@@ -172,6 +172,8 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   toolOverrides?: SessionToolOverrides;
   capabilityMenu?: ChatComposerCapabilityMenuProps;
   providerUsage?: ProviderUsageDisplayProps;
+  contextGateway?: ApplicationGateway;
+  onOpenContext?: () => void;
   assistantName: string;
   sendShortcut?: ChatSendShortcut;
   followUpMode?: ControlUiFollowUpMode;

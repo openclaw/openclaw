@@ -1,13 +1,11 @@
 import path from "node:path";
-import { embeddedAgentLog, type AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
-import {
-  createAdmittedHostCapabilityTestFixture,
-  loadUserTurnTranscriptRecorderFactoryForTest,
-} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { loadUserTurnTranscriptRecorderFactoryForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
+import { makeTextToolResult } from "../../../test-support/message-fixtures.test-support.js";
 import { readMirroredSessionHistoryMessages } from "./attempt-context.js";
-import type { CodexServerNotification, CodexTurnStartParams } from "./protocol.js";
+import type { CodexTurnStartParams } from "./protocol.js";
 import {
   assistantMessage,
   createResumeHarness,
@@ -16,15 +14,10 @@ import {
   runCodexAppServerAttempt,
   setupRunAttemptTestHooks,
   tempDir,
-  turnStartResult,
   userMessage,
 } from "./run-attempt-test-harness.js";
 import { writeCodexAppServerBinding } from "./session-binding.test-helpers.js";
 import { attachSqliteSessionTarget } from "./sqlite-session.test-helpers.js";
-import {
-  createCodexAppServerUserMessagePersistenceNotifier,
-  mirrorPromptAtTurnStartBestEffort,
-} from "./transcript-mirror.js";
 
 setupRunAttemptTestHooks({ sessionOwner: null });
 
@@ -72,14 +65,13 @@ describe("Codex transient retry continuation", () => {
               ],
               stopReason: "toolUse",
             },
-            {
-              role: "toolResult",
-              toolCallId: "receipt-call",
-              toolName: "create_receipt",
-              content: [{ type: "text", text: "Created amber receipt AMBER-731." }],
-              isError: false,
-              timestamp: 5,
-            },
+            makeTextToolResult(
+              "receipt-call",
+              "create_receipt",
+              "Created amber receipt AMBER-731.",
+              false,
+              5,
+            ),
           ] satisfies AgentMessage[])
         : [];
       const currentManager = await SessionManager.openAsync(target, params.workspaceDir);
@@ -136,100 +128,4 @@ describe("Codex transient retry continuation", () => {
       }
     },
   );
-
-  it("captures settled evidence when the continuation runs on a new native turn", async () => {
-    const params = createTestParams();
-    params.agentId = "main";
-    await attachSqliteSessionTarget(params, path.join(tempDir, "sessions.sqlite"), "session-1");
-    const target = {
-      agentId: "main",
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey!,
-      storePath: params.sessionTarget!.storePath!,
-    };
-    const currentRequest = "Create the amber inventory receipt.";
-    const createRecorder = await loadUserTurnTranscriptRecorderFactoryForTest();
-    const recorder = createRecorder({
-      input: { text: currentRequest, idempotencyKey: `${params.runId}:user` },
-      target: { ...target, sessionEntry: undefined },
-    });
-    await recorder.persistApproved();
-    params.userTurnTranscriptRecorder = recorder;
-    const host = await createAdmittedHostCapabilityTestFixture(params);
-    try {
-      // The first native turn annotates the admitted prompt before the provider is overloaded.
-      const firstAttempt = { ...params, hostCapabilities: host.hostCapabilities };
-      await mirrorPromptAtTurnStartBestEffort({
-        params: firstAttempt,
-        agentId: target.agentId,
-        sessionKey: target.sessionKey,
-        cwd: params.workspaceDir,
-        threadId: "thread-1",
-        turnId: "turn-1",
-        upstreamUserText: currentRequest,
-        notifyUserMessagePersisted:
-          createCodexAppServerUserMessagePersistenceNotifier(firstAttempt),
-      });
-      expect(recorder.getPersistedMessage?.()).toMatchObject({
-        __openclaw: { mirrorIdentity: "turn-1:prompt" },
-      });
-
-      // The transient retry continues the same run with a suppressed internal prompt.
-      const retry = {
-        ...params,
-        prompt: "Continue the current task from the existing transcript.",
-        suppressNextUserMessagePersistence: true,
-        onSettledTurn: async (attempt, captureContext) => {
-          attempt.settledTurnFinalizationContext = await captureContext();
-        },
-      } satisfies typeof params;
-      const second = createStartedThreadHarness(async (method) =>
-        method === "turn/start" ? turnStartResult("turn-2") : undefined,
-      );
-      const warn = vi.spyOn(embeddedAgentLog, "warn");
-      const retryRun = runCodexAppServerAttempt(retry);
-      await retryRun.waitForTurnAccepted();
-      const tool = {
-        type: "commandExecution",
-        id: "receipt-call",
-        command: "echo AMBER-731",
-        cwd: params.workspaceDir,
-        status: "inProgress",
-      };
-      for (const notification of [
-        { method: "item/started", item: tool },
-        {
-          method: "item/completed",
-          item: { ...tool, status: "completed", aggregatedOutput: "AMBER-731\n", exitCode: 0 },
-        },
-      ]) {
-        await second.notify({
-          method: notification.method,
-          params: { threadId: "thread-1", turnId: "turn-2", item: notification.item },
-        } as CodexServerNotification);
-      }
-      await second.completeTurn({ threadId: "thread-1", turnId: "turn-2" });
-      const result = await retryRun;
-
-      expect(warn).not.toHaveBeenCalledWith(
-        "codex settled-turn finalization context capture failed",
-        expect.anything(),
-      );
-      expect(result.settledTurnFinalizationContext).toMatchObject({
-        source: "harness",
-        data: [
-          {
-            type: "message",
-            role: "user",
-            content: [{ type: "input_text", text: expect.stringContaining(currentRequest) }],
-          },
-          expect.objectContaining({ type: "function_call", call_id: "receipt-call" }),
-          { type: "function_call_output", call_id: "receipt-call", output: "AMBER-731\n" },
-        ],
-      });
-    } finally {
-      host.closeHost();
-      host.closeAdmission();
-    }
-  });
 });

@@ -441,11 +441,12 @@ export class PreparedModelRuntimeAuthPublicationOwner {
 
 export function invalidatePreparedModelRuntimeOwnersForAuthMutation(
   owners: Map<string, PreparedModelRuntimeOwner>,
-  normalizedEvent: PreparedModelRuntimeAuthMutation,
+  event: PreparedModelRuntimeAuthMutation,
 ): {
   invalidatedOwners: PreparedModelRuntimeOwner[];
   invalidatedConfiguredAgentIds: Set<string>;
 } {
+  const agentDir = normalizeOptionalDir(event.agentDir);
   const staleError = new Error("prepared model runtime owner is stale after auth mutation");
   const invalidatedOwners: PreparedModelRuntimeOwner[] = [];
   const invalidatedConfiguredAgentIds = new Set<string>();
@@ -460,9 +461,9 @@ export function invalidatePreparedModelRuntimeOwnersForAuthMutation(
           normalizeOptionalDir(
             resolveLegacyInheritedAuthDir(owner.input.config, owner.input.env),
           )) ||
-      (!normalizedEvent.affectsInheritedStores &&
-        owner.input.agentDir !== normalizedEvent.agentDir &&
-        owner.input.inheritedAuthDir !== normalizedEvent.agentDir)
+      (!event.affectsInheritedStores &&
+        owner.input.agentDir !== agentDir &&
+        owner.input.inheritedAuthDir !== agentDir)
     ) {
       continue;
     }
@@ -471,7 +472,7 @@ export function invalidatePreparedModelRuntimeOwnersForAuthMutation(
     retirePreparedModelRuntimeGeneration(owner);
     owner.needsRefresh = true;
     owner.refreshError = staleError;
-    if (normalizedEvent.profileSetChanged) {
+    if (event.profileSetChanged) {
       owner.catalogStale = true;
     }
     if (owner.provenance === "configured" && owner.input.agentId) {

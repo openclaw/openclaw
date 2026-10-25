@@ -355,6 +355,7 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
         "internal/tool-schema",
         "internal/runtime",
         "internal/openai-responses-payload-policy",
+        "internal/google",
         "internal/google-model-family",
         "internal/retry-after",
       ],

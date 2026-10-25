@@ -1,6 +1,7 @@
 import { vi } from "vitest";
 import { createInfoWarnErrorLogger } from "../../test/helpers/mock-logger.js";
 import type { ConfigWriteNotification } from "../config/config.js";
+import { createSnapshot } from "../config/mutate.test-support.js";
 import {
   attachRuntimeConfigWriteApplication,
   createRuntimeConfigWriteApplication,
@@ -118,21 +119,7 @@ export function createValidConfigSnapshot(
   config: OpenClawConfig,
   hash: string,
 ): ConfigFileSnapshot {
-  return {
-    path: "/tmp/openclaw.json",
-    exists: true,
-    raw: JSON.stringify(config),
-    parsed: config,
-    sourceConfig: config,
-    resolved: config,
-    valid: true,
-    runtimeConfig: config,
-    config,
-    issues: [],
-    warnings: [],
-    legacyIssues: [],
-    hash,
-  };
+  return createSnapshot({ sourceConfig: config, hash, raw: JSON.stringify(config) });
 }
 
 export function createConfigWriteNotification(

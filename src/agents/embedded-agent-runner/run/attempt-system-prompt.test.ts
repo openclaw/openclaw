@@ -13,7 +13,6 @@ import {
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import { addSession, deleteSession } from "../../bash-process-registry.js";
 import { createProcessSessionFixture } from "../../bash-process-registry.test-helpers.js";
-import { buildBootstrapBudgetState } from "../../bootstrap-budget.js";
 import * as referencePaths from "../../docs-path.js";
 import * as runtimePrompt from "../../runtime-prompt.js";
 import type { AgentTool } from "../../runtime/index.js";
@@ -21,6 +20,7 @@ import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixt
 import type { ToolSearchCatalogRef } from "../../tool-search-types.js";
 import { createAttemptSetupFixture } from "./attempt-setup.test-support.js";
 import { buildAttemptSystemPrompt } from "./attempt-system-prompt.js";
+import { createEmptyPromptBootstrap } from "./attempt-system-prompt.test-support.js";
 import { buildTurnDeliveryContextFragments } from "./turn-delivery-context.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
@@ -170,14 +170,7 @@ async function preparePermissionPrompt({
   const prepared = await prepareEmbeddedAttemptSystemPrompt({
     attempt,
     activeContextEngine: undefined,
-    bootstrap: {
-      ...buildBootstrapBudgetState({ files: [] }),
-      bootstrapMode: "full",
-      contextFiles: [],
-      bootstrapInjectionStats: [],
-      shouldRecordCompletedBootstrapTurn: false,
-      workspaceNotes: [],
-    },
+    bootstrap: createEmptyPromptBootstrap(),
     capabilityToolNames,
     effectiveTools: skills?.initialToolNames
       ? tools.filter(({ name }) => skills.initialToolNames?.includes(name))
@@ -526,14 +519,7 @@ describe("buildAttemptSystemPrompt", () => {
     const prepared = await prepareEmbeddedAttemptSystemPrompt({
       attempt,
       activeContextEngine: undefined,
-      bootstrap: {
-        ...buildBootstrapBudgetState({ files: [] }),
-        bootstrapMode: "full",
-        contextFiles: [],
-        bootstrapInjectionStats: [],
-        shouldRecordCompletedBootstrapTurn: false,
-        workspaceNotes: [],
-      },
+      bootstrap: createEmptyPromptBootstrap(),
       setup: createAttemptSetupFixture({ getProviderRuntimeHandle }),
       capabilityToolNames: new Set(),
       effectiveTools: [],

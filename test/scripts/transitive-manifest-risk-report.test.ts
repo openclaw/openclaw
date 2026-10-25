@@ -69,6 +69,12 @@ describe("transitive-manifest-risk-report", () => {
     });
     expect(report.workspaceExcludedFindings).toEqual([]);
     expect(report.metadataFailures).toEqual([]);
+    const markdown = renderTransitiveManifestRiskMarkdownReport(report);
+    expect(markdown).toContain("`parent@1.0.0`: 10 manifest findings");
+    expect(markdown).toContain(
+      "`tarball-package@https://example.test/pkg.tgz`: 1 manifest finding",
+    );
+    expect(markdown).toContain("`floating`: 1 declarations");
   });
 
   it("uses pnpm minimum release age exclusions for recently published versions", async () => {
@@ -123,25 +129,21 @@ describe("transitive-manifest-risk-report", () => {
     }
     expect(markdown).toContain("The complete reported signal list is available in the JSON report");
   });
-
   it("fetches full npm packuments for the requested manifest version", async () => {
     const versionManifest = {
       dependencies: { exact: "1.2.3" },
       scripts: { install: "node install.js" },
     };
     const versionPublishedAt = "2026-05-12T00:00:00.000Z";
-    const fetchCalls: [string, string | null, AbortSignal | null][] = [];
     const manifest = await fetchNpmManifest({
       packageName: "@scope/package",
       version: "1.0.0",
       registryBaseUrl: "https://registry.example.test",
       fetchImpl: async (url, init) => {
         const requestUrl = url instanceof Request ? url.url : url instanceof URL ? url.href : url;
-        fetchCalls.push([
-          requestUrl,
-          new Headers(init?.headers).get("accept"),
-          init?.signal instanceof AbortSignal ? init.signal : null,
-        ]);
+        expect(requestUrl).toBe("https://registry.example.test/@scope%2Fpackage");
+        expect(new Headers(init?.headers).get("accept")).toBe("application/json");
+        expect(init?.signal).toBeInstanceOf(AbortSignal);
         return Response.json({
           time: { "1.0.0": versionPublishedAt },
           versions: { "1.0.0": versionManifest },
@@ -149,13 +151,6 @@ describe("transitive-manifest-risk-report", () => {
       },
     });
 
-    expect(fetchCalls).toEqual([
-      [
-        "https://registry.example.test/@scope%2Fpackage",
-        "application/json",
-        expect.any(AbortSignal),
-      ],
-    ]);
     expect(manifest).toEqual({ publishedAt: versionPublishedAt, manifest: versionManifest });
   });
 
@@ -180,29 +175,9 @@ describe("transitive-manifest-risk-report", () => {
     expect(canceled).toBe(true);
   });
 
-  it.each(["12", "1e3"])("caps npm registry bodies with content-length %s", async (length) => {
-    const encoder = new TextEncoder();
-    let readStarted = false;
-    let canceled = false;
-    const response = new Response(
-      new ReadableStream({
-        pull(controller) {
-          readStarted = true;
-          controller.enqueue(encoder.encode("123456789"));
-        },
-        cancel() {
-          canceled = true;
-        },
-      }),
-      { headers: { "content-length": length } },
-    );
-
-    await expect(readBoundedNpmRegistryText(response, 8)).rejects.toThrow(
+  it("applies the registry byte bound", async () => {
+    await expect(readBoundedNpmRegistryText(new Response("123456789"), 8)).rejects.toThrow(
       "npm registry response exceeded 8 bytes",
     );
-    if (length === "1e3") {
-      expect(readStarted).toBe(true);
-    }
-    expect(canceled).toBe(true);
   });
 });

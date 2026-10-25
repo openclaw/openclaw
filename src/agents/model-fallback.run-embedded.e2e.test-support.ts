@@ -14,6 +14,7 @@ import type { AuthProfileFailureReason } from "./auth-profiles.js";
 import { ensureAuthProfileStore, saveAuthProfileStore } from "./auth-profiles/store-runtime.js";
 import type { RunEmbeddedAgentParams } from "./embedded-agent-runner/run/params.js";
 import type { EmbeddedRunAttemptResult } from "./embedded-agent-runner/run/types.js";
+import { modelDefinition } from "./model-auth.fixtures.test-support.js";
 import type { ModelFallbackStepFields } from "./model-fallback-observation.js";
 import type { ModelFallbackAttemptProvenance } from "./model-fallback.types.js";
 import {
@@ -142,15 +143,12 @@ export function makeModelFallbackConfig(primaryProvider = "openai"): OpenClawCon
           [apiKeyField]: `${primaryProvider}-test-key`, // pragma: allowlist secret
           baseUrl: `https://example.com/${primaryProvider}`,
           models: [
-            {
-              id: "mock-1",
+            modelDefinition("mock-1", {
               name: "Mock 1",
               reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
               contextWindow: 16_000,
               maxTokens: 2048,
-            },
+            }),
           ],
         },
         groq: {
@@ -158,15 +156,12 @@ export function makeModelFallbackConfig(primaryProvider = "openai"): OpenClawCon
           [apiKeyField]: "groq-test-key", // pragma: allowlist secret
           baseUrl: "https://example.com/groq",
           models: [
-            {
-              id: "mock-2",
+            modelDefinition("mock-2", {
               name: "Mock 2",
               reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
               contextWindow: 16_000,
               maxTokens: 2048,
-            },
+            }),
           ],
         },
       },

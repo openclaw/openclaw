@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import { afterEach, beforeEach, vi } from "vitest";
 import type { PluginRuntime, PluginStateKeyedStore } from "../api.js";
@@ -28,18 +27,7 @@ export function useVisitorFixtures() {
   });
 }
 
-export function visitorGate() {
-  const entered = createDeferred<void>();
-  const release = createDeferred<void>();
-  return {
-    entered: entered.promise,
-    release: release.resolve,
-    wait: async () => {
-      entered.resolve();
-      await release.promise;
-    },
-  };
-}
+export { createAsyncGate as visitorGate } from "../../test-support/async-gate.test-support.js";
 
 export function closeVisitorFixtures(): void {
   services.forEach((service) => service.close());

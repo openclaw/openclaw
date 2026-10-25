@@ -1,11 +1,11 @@
 import { createAbortError as createNamedAbortError } from "../../../infra/abort-signal.js";
-import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import { isCronRunSessionKey } from "../../../sessions/session-key-utils.js";
-import { sleep } from "../../../utils/sleep.js";
+import { createDeferredCore } from "../../../shared/deferred.js";
 import {
   findMediaGenerationOperation,
   isTerminalMediaGenerationStatus,
   listMediaGenerationOperations,
+  onMediaGenerationOperationChanged,
   type MediaGenerationOperation,
 } from "../../media-generation-activity.js";
 
@@ -16,11 +16,6 @@ export type AsyncStartedToolMeta = {
   asyncTaskId?: string;
 };
 
-export type CompletionRequiredAsyncTaskWaitResult = {
-  timedOutRunIds: string[];
-};
-
-const DEFAULT_ASYNC_TASK_POLL_INTERVAL_MS = 500;
 const COMPLETION_REQUIRED_TASK_KINDS = new Set([
   "image_generation",
   "music_generation",
@@ -104,57 +99,79 @@ export async function waitForCompletionRequiredAsyncTasks(params: {
   getToolMetas: () => readonly AsyncStartedToolMeta[];
   sessionKey?: string;
   getDeadlineAtMs: () => number | undefined;
-  pollIntervalMs?: number;
+  onDeadlineChanged: (listener: () => void) => () => void;
   abortSignal?: AbortSignal;
-}): Promise<CompletionRequiredAsyncTaskWaitResult> {
-  const pollIntervalMs =
-    params.pollIntervalMs ?? (isFastTestRuntimeEnv() ? 10 : DEFAULT_ASYNC_TASK_POLL_INTERVAL_MS);
+}) {
   const waitedRunIds = new Set<string>();
   const timedOutRunIds = new Set<string>();
-
-  waitForTasks: while (true) {
-    throwIfAborted(params.abortSignal);
-    // Re-read metadata every outer loop; tool calls may record async run ids
-    // after an earlier task wait finished.
-    const runIds = [
-      ...new Set(iterateAsyncTaskRunIds(params.getToolMetas(), params.sessionKey)),
-    ].filter((runId) => !waitedRunIds.has(runId));
-    if (runIds.length === 0) {
-      break;
+  let changed = createDeferredCore();
+  const wake = () => changed.resolve();
+  const sessionKey = params.sessionKey?.trim();
+  const stopMedia = onMediaGenerationOperationChanged((operation) => {
+    if (
+      operation.requesterSessionKey === sessionKey ||
+      (operation.runId && waitedRunIds.has(operation.runId))
+    ) {
+      wake();
     }
+  });
+  const stopDeadline = params.onDeadlineChanged(wake);
+  params.abortSignal?.addEventListener("abort", wake, { once: true });
+  let timer: ReturnType<typeof setTimeout> | undefined;
 
-    for (const runId of runIds) {
-      waitedRunIds.add(runId);
-    }
-
-    let pendingRunIds = runIds;
-    while (pendingRunIds.length > 0) {
+  try {
+    waitForTasks: while (true) {
       throwIfAborted(params.abortSignal);
-      pendingRunIds = pendingRunIds.filter((runId) => {
-        const task = findMediaGenerationOperation(runId);
-        // Queued delivery needs this same session; waiting would hold its lane.
-        if (task?.completionDelivery === "queued") {
-          return false;
-        }
-        return !task || !isTerminalMediaGenerationStatus(task.status);
-      });
-      if (pendingRunIds.length === 0) {
+      // Re-read metadata every outer loop; tool calls may record async run ids
+      // after an earlier task wait finished.
+      const runIds = [
+        ...new Set(iterateAsyncTaskRunIds(params.getToolMetas(), params.sessionKey)),
+      ].filter((runId) => !waitedRunIds.has(runId));
+      if (runIds.length === 0) {
         break;
       }
-      // Approval pauses and resumed grace windows replace the owner's deadline.
-      // Unlimited waits still use finite sleeps and remain abort-responsive.
-      const deadlineAtMs = params.getDeadlineAtMs();
-      const remainingMs = deadlineAtMs === undefined ? pollIntervalMs : deadlineAtMs - Date.now();
-      if (remainingMs <= 0) {
-        for (const runId of pendingRunIds) {
-          timedOutRunIds.add(runId);
-        }
-        break waitForTasks;
+
+      for (const runId of runIds) {
+        waitedRunIds.add(runId);
       }
-      await sleep(Math.min(pollIntervalMs, remainingMs), params.abortSignal);
+
+      let pendingRunIds = runIds;
+      while (pendingRunIds.length > 0) {
+        throwIfAborted(params.abortSignal);
+        pendingRunIds = pendingRunIds.filter((runId) => {
+          const task = findMediaGenerationOperation(runId);
+          // Queued delivery needs this same session; waiting would hold its lane.
+          if (task?.completionDelivery === "queued") {
+            return false;
+          }
+          return !task || !isTerminalMediaGenerationStatus(task.status);
+        });
+        if (pendingRunIds.length === 0) {
+          break;
+        }
+        // Approval pauses and resumed grace windows publish a replacement deadline.
+        const deadlineAtMs = params.getDeadlineAtMs();
+        const remainingMs = deadlineAtMs === undefined ? undefined : deadlineAtMs - Date.now();
+        if (remainingMs !== undefined && remainingMs <= 0) {
+          for (const runId of pendingRunIds) {
+            timedOutRunIds.add(runId);
+          }
+          break waitForTasks;
+        }
+        if (remainingMs !== undefined) {
+          timer = setTimeout(wake, remainingMs);
+        }
+        await changed.promise;
+        clearTimeout(timer);
+        timer = undefined;
+        changed = createDeferredCore();
+      }
     }
+    return { timedOutRunIds: [...timedOutRunIds] };
+  } finally {
+    clearTimeout(timer);
+    params.abortSignal?.removeEventListener("abort", wake);
+    stopDeadline();
+    stopMedia();
   }
-  return {
-    timedOutRunIds: [...timedOutRunIds],
-  };
 }

@@ -8,6 +8,7 @@ import {
 import { controlUiBundledSettingsStorageKey } from "../test-helpers/control-ui-e2e.ts";
 import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { revealSidebarTarget } from "../test-helpers/control-ui-sidebar-window.ts";
 import { expectRequestCountStable } from "./chat-flow.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import { replaceGatewayClient } from "./new-session-page.test-support.ts";
@@ -982,19 +983,20 @@ suite.define(() => {
       const loadMore = page
         .locator('[data-session-section="ungrouped"]')
         .getByRole("button", { name: "Show more" });
+      const viewport = page.locator(".sidebar-shell__body");
       for (let pageIndex = 0; pageIndex < 3 && (await loadMore.isVisible()); pageIndex += 1) {
-        const visibleRows = await page.locator(".sidebar-recent-session").count();
+        const before = await viewport.evaluate((element) => element.scrollHeight);
         await loadMore.click();
         await expect
-          .poll(() => page.locator(".sidebar-recent-session").count())
-          .toBeGreaterThan(visibleRows);
+          .poll(() => viewport.evaluate((element) => element.scrollHeight))
+          .toBeGreaterThan(before);
       }
-      await page.locator(".sidebar-shell__body").evaluate((element) => {
-        element.scrollTop = 0;
-      });
-      await expect
-        .poll(() => page.locator(".sidebar-recent-session").count(), { timeout: 15_000 })
-        .toBe(rows.length);
+      await revealSidebarTarget(
+        viewport,
+        page.locator('.sidebar-recent-session[data-session-key="agent:main:chat-29"]'),
+      );
+      await viewport.evaluate((element) => element.scrollTo(0, 0));
+      await page.locator('.sidebar-recent-session[data-session-key="agent:main:work-0"]').waitFor();
       await captureUiProof(suite, page, "short-window-session-sections.png");
 
       // Sections must stack below each other, not paint over the rows above.

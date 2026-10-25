@@ -15,6 +15,7 @@ import type { ResolvedGatewayAuth } from "../../auth.js";
 import type { HealthSummary } from "../../health/types.js";
 import type { GatewayAttributedIngress } from "../../ingress-attribution.js";
 import { getGatewayLocalUserIngress } from "../../local-user-ingress.js";
+import { gatewayRequest } from "../../request-frame.test-support.js";
 import { GatewayConnectionWork } from "../../server-connection-work.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "../../server-constants.js";
 import type { GatewayRequestContext } from "../../server-methods/types.js";
@@ -502,24 +503,10 @@ export function attachGatewayHarness(options: {
     socketSend,
     sendMessage,
     sendRequest: (id: string, method: string, params: Record<string, unknown> = {}) => {
-      sendMessage(
-        JSON.stringify({
-          type: "req",
-          id,
-          method,
-          params,
-        }),
-      );
+      sendMessage(JSON.stringify(gatewayRequest(id, method, params)));
     },
     sendConnect: (id: string, params: Record<string, unknown>) => {
-      sendMessage(
-        JSON.stringify({
-          type: "req",
-          id,
-          method: "connect",
-          params,
-        }),
-      );
+      sendMessage(JSON.stringify(gatewayRequest(id, "connect", params)));
     },
     get client() {
       return client;

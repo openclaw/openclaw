@@ -181,11 +181,7 @@ suite.define(() => {
         expect(await environment.textContent()).not.toContain(
           "/workspace/openclaw/session-details",
         );
-        const context = details.locator('[data-details-group="context"]');
-        expect(await context.locator("summary").textContent()).toContain("50%");
-        await context.locator("summary").click();
-        expect(await context.textContent()).toContain("64k / 128k");
-        await context.locator("summary").click();
+        expect(await details.locator('[data-details-group="context"]').count()).toBe(0);
         // A dock is nonmodal: composing, including Escape, must not close it.
         await composer.click();
         await page.keyboard.press("Escape");
@@ -201,12 +197,6 @@ suite.define(() => {
         await expect
           .poll(() =>
             environment.locator(":scope > summary").evaluate((el) => el === document.activeElement),
-          )
-          .toBe(true);
-        await page.keyboard.press("Tab");
-        await expect
-          .poll(() =>
-            context.locator(":scope > summary").evaluate((el) => el === document.activeElement),
           )
           .toBe(true);
         await page.emulateMedia({ colorScheme: "dark" });
@@ -312,6 +302,7 @@ suite.define(() => {
         await page.setViewportSize({ width: 430, height: 900 });
         await trigger.waitFor({ state: "hidden" });
         expect(await details.isVisible()).toBe(false);
+        await page.getByRole("button", { name: "Panels", exact: true }).waitFor();
         const mobileDetails = await openChatDetails(page);
         const mobileProgress = mobileDetails.locator('[data-details-destination="task-progress"]');
         await mobileProgress.waitFor();

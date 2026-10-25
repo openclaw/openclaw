@@ -34,12 +34,12 @@ class GeometryPane extends ChatPaneRuntime {
   private messages: unknown[] = [];
   private rowHeight = 120;
 
-  initialize(context: ApplicationContext, followEnd = false) {
+  initialize(context: ApplicationContext, followEnd = false, rowHeight = followEnd ? 360 : 120) {
     projectChatFields(this, ["fixtureStream"]);
     this.context = context;
     this.paneId = "geometry-render";
     this.sessionKey = "agent:main:geometry-render";
-    this.rowHeight = followEnd ? 360 : 120;
+    this.rowHeight = rowHeight;
     this.messages = Array.from({ length: 100 }, (_, index) => ({
       role: index % 2 === 0 ? "user" : "assistant",
       content: `Row ${index}`,
@@ -147,7 +147,7 @@ async function settleLayout() {
   }
 }
 
-async function mountPane(followEnd = false) {
+async function mountPane(followEnd = false, rowHeight?: number) {
   const fixture = createMountedPanes([
     { key: "agent:main:geometry-render", kind: "direct", updatedAt: 1 },
   ]);
@@ -158,7 +158,7 @@ async function mountPane(followEnd = false) {
   });
   pane = createPaneTestHost("test-transcript-geometry-pane", GeometryPane);
   Object.assign(pane, { render: pane.renderGeometry.bind(pane) });
-  pane.initialize(fixture.context, followEnd);
+  pane.initialize(fixture.context, followEnd, rowHeight);
   pane.style.cssText = "display: block; width: 800px";
   document.body.append(pane.element);
   await pane.updateComplete;
@@ -175,39 +175,52 @@ async function mountPane(followEnd = false) {
   };
 }
 
-it("keeps the initial tail rows mounted while their estimated sizes settle", async () => {
-  const mounted = new Map<string, Set<Element>>();
-  const observer = new MutationObserver((records) => {
-    for (const record of records) {
-      for (const node of record.addedNodes) {
-        if (!(node instanceof Element)) {
-          continue;
-        }
-        const rows = node.matches(".chat-virtual-row")
-          ? [node]
-          : node.querySelectorAll(".chat-virtual-row");
-        for (const row of rows) {
-          const key = row.getAttribute("data-virtual-row-key")!;
-          const elements = mounted.get(key) ?? new Set<Element>();
-          elements.add(row);
-          mounted.set(key, elements);
+it.each([120, 360, 1200])(
+  "prepares only the tail window while initial %ipx rows settle",
+  async (rowHeight) => {
+    const mounted = new Map<string, Set<Element>>();
+    const observer = new MutationObserver((records) => {
+      for (const record of records) {
+        for (const node of record.addedNodes) {
+          if (!(node instanceof Element)) {
+            continue;
+          }
+          const rows = node.matches(".chat-virtual-row")
+            ? [node]
+            : node.querySelectorAll(".chat-virtual-row");
+          for (const row of rows) {
+            const key = row.getAttribute("data-virtual-row-key")!;
+            const elements = mounted.get(key) ?? new Set<Element>();
+            elements.add(row);
+            mounted.set(key, elements);
+          }
         }
       }
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+    try {
+      const { host, viewport, virtualizer } = await mountPane(true, rowHeight);
+      const tail = expectDefined(host.querySelector('[data-index="99"]'), "last transcript row");
+      expect([...mounted.values()][0]).toEqual(new Set([tail]));
+      expect([...mounted.get(tail.getAttribute("data-virtual-row-key")!)!]).toEqual([tail]);
+      expect([...mounted.keys()].some((key) => key.includes("geometry-row-0:"))).toBe(false);
+      expect(mounted.size).toBe(host.querySelectorAll(".chat-virtual-row").length);
+      expect(
+        [...mounted.values()].every((elements) => [...elements].every((row) => row.isConnected)),
+      ).toBe(true);
+      expect(
+        virtualizer.getVirtualItems().reduce((height, row) => height + row.size, 0) +
+          Number.parseFloat(getComputedStyle(viewport).paddingBottom),
+      ).toBeGreaterThanOrEqual(viewport.clientHeight);
+      expect(getComputedStyle(tail).visibility).toBe("visible");
+      expect(
+        viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop,
+      ).toBeLessThanOrEqual(1);
+    } finally {
+      observer.disconnect();
     }
-  });
-  observer.observe(document.body, { childList: true, subtree: true });
-  try {
-    const { host, viewport } = await mountPane(true);
-    const tail = expectDefined(host.querySelector('[data-index="99"]'), "last transcript row");
-    expect([...mounted.get(tail.getAttribute("data-virtual-row-key")!)!]).toEqual([tail]);
-    expect([...mounted.keys()].some((key) => key.includes("geometry-row-0:"))).toBe(false);
-    expect(viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop).toBeLessThanOrEqual(
-      1,
-    );
-  } finally {
-    observer.disconnect();
-  }
-});
+  },
+);
 
 it("commits each settled pane width without preparing the whole pane", async () => {
   const { host, viewport, virtualizer } = await mountPane();

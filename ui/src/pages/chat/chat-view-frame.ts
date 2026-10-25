@@ -36,7 +36,6 @@ import type { ChatDetailsProps } from "./components/chat-details-types.ts";
 import { createChatSelectionAttachment } from "./components/chat-selection-attachment.ts";
 import { showChatAnnotationEditor } from "./components/chat-selection-popup.tsx";
 import type { SidebarContent, SidebarOpenResult } from "./components/chat-sidebar-content-types.ts";
-import type { ChatSwarmProgressProps } from "./components/chat-swarm-progress-types.ts";
 import type { ChatTaskSuggestionTrayProps } from "./components/chat-task-suggestions.tsx";
 import { getTranscriptState, type ChatThreadProps } from "./components/chat-thread-interactions.ts";
 import type { ChatTranscript } from "./components/chat-transcript-controller.ts";
@@ -113,7 +112,6 @@ export type ChatProps = Omit<
     ) => void | Promise<void>;
     workspaceConflict?: WorkspaceResultConflict;
     onDismissWorkspaceConflict?: () => void;
-    swarm?: ChatSwarmProgressProps;
     chatMessageMaxWidth?: string | null;
     showNewMessages?: boolean;
     onScrollToBottom?: (options?: { smooth?: boolean }) => void;

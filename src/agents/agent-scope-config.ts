@@ -443,6 +443,11 @@ export function resolveAgentConfig(
   };
 }
 
+/** The agent's verbose default; agents without an entry inherit the global default. */
+export function resolveAgentVerboseDefault(cfg: OpenClawConfig, agentId: string) {
+  return resolveAgentConfig(cfg, agentId)?.verboseDefault ?? cfg.agents?.defaults?.verboseDefault;
+}
+
 export function resolveAgentContextLimits(
   cfg: OpenClawConfig | undefined,
   agentId?: string | null,

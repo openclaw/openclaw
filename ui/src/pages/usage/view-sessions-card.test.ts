@@ -2,6 +2,7 @@ import { createSignal } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { restorePropertyDescriptor } from "../../test-helpers/property-descriptor.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { SessionsCard } from "./view-sessions-card.tsx";
 import { createUsageProps, usageSession } from "./view.test-support.ts";
@@ -13,11 +14,7 @@ afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
-  if (execCommandDescriptor) {
-    Object.defineProperty(document, "execCommand", execCommandDescriptor);
-  } else {
-    Reflect.deleteProperty(document, "execCommand");
-  }
+  restorePropertyDescriptor(document, "execCommand", execCommandDescriptor);
 });
 
 it("retires pending usage session label copying when its payload changes", async () => {

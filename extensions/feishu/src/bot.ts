@@ -45,9 +45,8 @@ import {
   resolveBroadcastAgents,
 } from "./bot-broadcast.js";
 import {
-  checkBotMentioned,
   normalizeFeishuCommandProbeBody,
-  parseMessageContent,
+  parseFeishuMessageEvent,
   resolveFeishuGroupSession,
   resolveFeishuMediaList,
 } from "./bot-content.js";
@@ -66,12 +65,7 @@ import { resolveFeishuMessageDedupeKey } from "./dedupe-key.js";
 import { maybeCreateDynamicAgent } from "./dynamic-agent.js";
 import type { FeishuMessageEvent } from "./event-types.js";
 import type { FeishuIngressLifecycle } from "./feishu-ingress.js";
-import {
-  extractMentionTargets,
-  isFeishuBroadcastMention,
-  isMentionForwardRequest,
-  normalizeMentions,
-} from "./mention.js";
+import { isFeishuBroadcastMention } from "./mention.js";
 import {
   hasExplicitFeishuGroupConfig,
   normalizeFeishuAllowEntry,
@@ -92,6 +86,7 @@ import {
   type FeishuMessageContext,
   type FeishuMessageInfo,
 } from "./types.js";
+export { parseFeishuMessageEvent } from "./bot-content.js";
 export type { FeishuBotAddedEvent, FeishuMessageEvent } from "./event-types.js";
 
 // App-scoped cooldown prevents repeated permission notifications.
@@ -102,58 +97,6 @@ function isFeishuTopicSessionScope(
   scope: ReturnType<typeof resolveConfiguredFeishuGroupSessionScope>,
 ): boolean {
   return scope === "group_topic" || scope === "group_topic_sender";
-}
-
-export function parseFeishuMessageEvent(
-  event: FeishuMessageEvent,
-  botOpenId?: string,
-  preparedContent?: string,
-): FeishuMessageContext {
-  const mentionedBot = checkBotMentioned(event, botOpenId);
-  const hasAnyMention = (event.message.mentions?.length ?? 0) > 0;
-  // Strip bot addressing for commands (#35994); debounced content already expanded
-  // each message's own keys, so never reinterpret placeholder-like display names.
-  const content =
-    preparedContent ??
-    normalizeMentions(
-      parseMessageContent(event.message.content, event.message.message_type),
-      event.message.mentions,
-      botOpenId,
-    );
-  const senderOpenId = event.sender.sender_id.open_id?.trim();
-  const senderUserId = event.sender.sender_id.user_id?.trim();
-  const senderFallbackId = senderOpenId || senderUserId || "";
-
-  const ctx: FeishuMessageContext = {
-    chatId: event.message.chat_id,
-    messageId: event.message.message_id,
-    replyTargetMessageId: event.message.reply_target_message_id?.trim() || undefined,
-    typingTargetMessageId: event.message.typing_target_message_id?.trim() || undefined,
-    suppressReplyTarget: event.message.suppress_reply_target === true,
-    senderId: senderUserId || senderOpenId || "",
-    // Keep the historical field name, but fall back to user_id when open_id is unavailable
-    // (common in some mobile app deliveries).
-    senderOpenId: senderFallbackId,
-    senderType: event.sender.sender_type === "bot" ? "bot" : "user",
-    chatType: event.message.chat_type,
-    mentionedBot,
-    hasAnyMention,
-    rootId: event.message.root_id || undefined,
-    parentId: event.message.parent_id || undefined,
-    threadId: event.message.thread_id || undefined,
-    content,
-    contentType: event.message.message_type,
-  };
-
-  const mentionForwardBotOpenId = botOpenId?.trim();
-  if (mentionForwardBotOpenId && isMentionForwardRequest(event, mentionForwardBotOpenId)) {
-    const mentionTargets = extractMentionTargets(event, mentionForwardBotOpenId);
-    if (mentionTargets.length > 0) {
-      ctx.mentionTargets = mentionTargets;
-    }
-  }
-
-  return ctx;
 }
 
 async function shouldIncludeFetchedGroupContextMessage(params: {
@@ -1328,6 +1271,23 @@ export async function handleFeishuMessage(params: {
       : isTopicSession || configReplyInThread
         ? topicReplyTargetMessageId
         : defaultReplyTargetMessageId;
+    // Inline directives still permit ordinary chat; only control messages stop here.
+    if (
+      isGroup &&
+      commandAuthorized === false &&
+      core.channel.commands.isControlCommandMessage(effectiveCommandProbeBody, effectiveCfg)
+    ) {
+      await sendMessageFeishu({
+        cfg: effectiveCfg,
+        to: feishuReplyTarget,
+        text: "You are not authorized to use this command. Ask an admin to add your user ID to the Feishu allowFrom list (or this group's allowFrom).",
+        replyToMessageId: replyTargetMessageId,
+        replyInThread,
+        mentions: requiredMentionTargets,
+        accountId: account.accountId,
+      });
+      return;
+    }
     const typingTargetMessageId =
       ctx.typingTargetMessageId ?? (ctx.suppressReplyTarget ? undefined : ctx.messageId);
     const threadReply = isGroup ? (groupSession?.threadReply ?? false) : directThreadReply;

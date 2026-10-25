@@ -727,7 +727,7 @@ extensions/slack/src/outbound-adapter.ts	5
 extensions/slack/src/probe.ts	2
 extensions/slack/src/progress-blocks.ts	1
 extensions/slack/src/reply-action-ids.ts	1
-extensions/slack/src/reply-blocks.ts	5
+extensions/slack/src/reply-blocks.ts	4
 extensions/slack/src/security-audit.ts	6
 extensions/slack/src/send.ts	1
 extensions/slack/src/setup-core.ts	4
@@ -740,7 +740,6 @@ extensions/sms/src/status.ts	1
 extensions/sms/src/twilio.ts	1
 extensions/synology-chat/src/accounts.ts	1
 extensions/synology-chat/src/client.ts	1
-extensions/synology-chat/src/inbound-event.ts	1
 extensions/synology-chat/src/outbound-media.ts	1
 extensions/synology-chat/src/setup-surface.ts	3
 extensions/synology-chat/src/test-http-utils.ts	6
@@ -964,7 +963,6 @@ packages/gateway-client/src/pending-request.ts	2
 packages/gateway-client/src/protocol-client.ts	1
 packages/gateway-client/src/scope-upgrade.ts	4
 packages/gateway-protocol/src/connect-error-details.ts	4
-packages/gateway-protocol/src/protocol-validator.ts	1
 packages/gateway-protocol/src/schema/audit-activity.ts	1
 packages/gateway-protocol/src/schema/devices.ts	1
 packages/gateway-protocol/src/schema/failover-reason.ts	1
@@ -994,7 +992,7 @@ packages/model-catalog-core/src/model-catalog-types.ts	1
 packages/model-catalog-core/src/remote-catalog-bundle.ts	2
 packages/net-policy/src/ip.ts	1
 packages/normalization-core/src/error-coercion.ts	1
-packages/normalization-core/src/json-schema.ts	2
+packages/normalization-core/src/json-schema.ts	1
 packages/normalization-core/src/promise-like.ts	1
 packages/normalization-core/src/record-coerce.ts	1
 packages/normalization-core/src/stable-stringify.ts	1
@@ -1091,7 +1089,7 @@ src/agents/cron-creator-authority-context.ts	1
 src/agents/custom-api-registry.ts	1
 src/agents/delegation-capability.ts	1
 src/agents/embedded-agent-helpers/bootstrap.ts	2
-src/agents/embedded-agent-helpers/images.ts	6
+src/agents/embedded-agent-helpers/images.ts	3
 src/agents/embedded-agent-helpers/openai.ts	11
 src/agents/embedded-agent-helpers/turns.ts	8
 src/agents/embedded-agent-live-edit-diff.ts	1
@@ -1205,7 +1203,7 @@ src/agents/model-tool-support.ts	1
 src/agents/models-config.merge.ts	1
 src/agents/models-config.plan.ts	2
 src/agents/models-config.providers.policy.lookup.ts	1
-src/agents/modes/interactive/theme/theme.ts	11
+src/agents/modes/interactive/theme/theme.ts	10
 src/agents/openai-model-routes.ts	2
 src/agents/openclaw-tools.requester-yield.ts	2
 src/agents/plugin-model-catalog.ts	3
@@ -1330,7 +1328,7 @@ src/agents/transcript-policy.ts	1
 src/agents/transport-message-transform.ts	2
 src/agents/utils/frontmatter.ts	2
 src/agents/workspace-legacy-state.ts	2
-src/agents/workspace.ts	4
+src/agents/workspace.ts	3
 src/agents/worktrees/run-lease.ts	1
 src/audit/execution-identity-admission.ts	3
 src/audit/execution-identity-context-build.ts	3
@@ -1348,7 +1346,6 @@ src/auto-reply/reply/commands-acp/diagnostics.ts	2
 src/auto-reply/reply/commands-allowlist.ts	6
 src/auto-reply/reply/commands-context-report.ts	1
 src/auto-reply/reply/commands-context.ts	1
-src/auto-reply/reply/commands-mcp.ts	2
 src/auto-reply/reply/commands-plugin.ts	1
 src/auto-reply/reply/commands-plugins.ts	1
 src/auto-reply/reply/commands-private-route.ts	1
@@ -1751,7 +1748,6 @@ src/gateway/probe.ts	1
 src/gateway/restart-trace.ts	2
 src/gateway/secret-input-paths.ts	1
 src/gateway/server-broadcast.ts	1
-src/gateway/server-channels.ts	1
 src/gateway/server-chat-state.ts	1
 src/gateway/server-chat.ts	3
 src/gateway/server-core-runtime.ts	1
@@ -1882,7 +1878,6 @@ src/infra/clawhub-client.ts	2
 src/infra/clawhub-install-trust.ts	2
 src/infra/delivery-queue-sqlite-bound.ts	2
 src/infra/delivery-recovery.shared.ts	4
-src/infra/diagnostic-events.ts	2
 src/infra/diagnostic-model-request.ts	1
 src/infra/diagnostic-semantic-run-progress.ts	1
 src/infra/diagnostic-trace-propagation.ts	1
@@ -1897,7 +1892,6 @@ src/infra/fetch-headers.ts	3
 src/infra/fetch.ts	5
 src/infra/file-lock-manager.ts	1
 src/infra/fs-safe-remove.ts	4
-src/infra/gateway-lock.ts	2
 src/infra/gateway-processes.ts	1
 src/infra/git-commit.ts	1
 src/infra/install-package-dir.ts	2
@@ -2188,7 +2182,7 @@ src/plugins/runtime.ts	1
 src/plugins/runtime/channel-runtime-contexts.ts	1
 src/plugins/runtime/runtime-agent.ts	1
 src/plugins/runtime/runtime-llm-isolated.ts	2
-src/plugins/schema-validator.ts	5
+src/plugins/schema-validator.ts	4
 src/plugins/session-catalog-history-import.ts	1
 src/plugins/setup-registry.ts	2
 src/plugins/slots.ts	1

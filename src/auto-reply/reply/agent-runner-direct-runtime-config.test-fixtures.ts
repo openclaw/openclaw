@@ -2,7 +2,7 @@ import type { TemplateContext } from "../templating.js";
 import type { runReplyAgent } from "./agent-runner-run.js";
 import { createTestFollowupRun } from "./agent-runner.test-fixtures.js";
 import type { QueueSettings } from "./queue.js";
-import { createMockTypingController } from "./test-helpers.js";
+import { createReplyParams } from "./test-helpers.js";
 
 export const staleCfg = {
   runtimeFresh: false,
@@ -48,24 +48,16 @@ export function createDirectRuntimeReplyParams({
   followupRun.originatingChannel = "telegram";
   followupRun.originatingTo = "12345";
   const resolvedQueue = { mode: queueMode } as QueueSettings;
-  const replyParams: Parameters<typeof runReplyAgent>[0] = {
+  const replyParams: Parameters<typeof runReplyAgent>[0] = createReplyParams(followupRun, {
     commandBody: "hello",
-    followupRun,
     queueKey: sessionKey,
     resolvedQueue,
-    shouldSteer: false,
     shouldFollowup,
     isActive,
-    typing: createMockTypingController(),
     sessionCtx: createTelegramSessionCtx(),
     defaultModel: "openai/gpt-5.4",
-    resolvedVerboseLevel: "off",
-    isNewSession: false,
-    blockStreamingEnabled: false,
-    resolvedBlockStreamingBreak: "message_end",
-    shouldInjectGroupIntro: false,
     typingMode: "instant",
-  };
+  });
 
   return { followupRun, resolvedQueue, replyParams };
 }

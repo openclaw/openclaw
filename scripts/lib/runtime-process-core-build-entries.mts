@@ -8,7 +8,7 @@ export function createRuntimeProcessBuildEntries(
     currentModuleUrl: string;
     sourceWorkerName: string;
     distWorkerPath: string;
-    sourceExtension?: ".ts" | ".mts";
+    sourceExtension?: ".ts" | ".mts" | ".mjs";
   }[],
 ) {
   return Object.fromEntries(
@@ -25,7 +25,10 @@ export function createRuntimeProcessBuildEntries(
 }
 
 export const runtimeProcessCoreEntrypoints = [
-  ...Object.values(runtimeProcessEntrypoints),
+  // Recovery artifacts are built by the sealed handoff owner, never the shared graph.
+  ...Object.values(runtimeProcessEntrypoints).filter((entry) =>
+    entry.distWorkerPath.endsWith(".js"),
+  ),
   managedWindowsJobEntrypoint,
   managedMemoryEntrypoint,
 ];

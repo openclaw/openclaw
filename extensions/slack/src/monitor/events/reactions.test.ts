@@ -341,10 +341,61 @@ describe("Slack common events", () => {
     });
   });
 
-  it("never introduces the bot into a direct-message conversation", async () => {
-    await createMemberHarness().emit(makeMemberEvent({ channel: "D1", user: "U_BOT" }));
+  it.each([
+    { name: "direct message", channel: "D1", type: "im" as const, nativeType: "D" },
+    { name: "group DM", channel: "G1", type: "mpim" as const, nativeType: "G" },
+    { name: "C-prefixed group DM", channel: "C1", type: "mpim" as const, nativeType: "C" },
+    { name: "unresolved room", channel: "G1", type: undefined, nativeType: "G" },
+  ])("does not introduce the bot into a $name", async ({ channel, type, nativeType }) => {
+    const { ctx, emit } = createMemberHarness();
+    ctx.resolveChannelName = vi.fn(async () => ({ type }));
+    ctx.runtime.log = vi.fn();
+
+    await emit({
+      ...makeMemberEvent({ channel, user: "U_BOT" }),
+      channel_type: nativeType,
+    });
 
     expect(reportJoinMock).not.toHaveBeenCalled();
+    if (type === undefined) {
+      expect(ctx.runtime.log).toHaveBeenCalledWith(
+        expect.stringContaining("reason=channel-type-unavailable"),
+      );
+    }
+  });
+
+  it("qualifies enterprise introduction claims and delivery by listener workspace", async () => {
+    const { ctx, handler } = createReactionHarness(
+      { channelType: "channel" },
+      true,
+      "member_joined_channel",
+    );
+    ctx.cfg = { channels: { slack: { groupPolicy: "open" } } };
+    vi.spyOn(ctx, "resolveSlackSystemEventRoute").mockImplementation(async (input) => ({
+      agentId: "main",
+      sessionKey: `session:${input.eventScope?.teamId}`,
+    }));
+
+    for (const teamId of ["T111", "T222"]) {
+      await handler({
+        event: makeMemberEvent({ channel: "C1", user: "U_BOT" }),
+        ...buildEnterpriseListenerArgs(teamId),
+      });
+    }
+
+    expect(reportJoinMock.mock.calls.map(([request]) => request)).toEqual([
+      expect.objectContaining({
+        conversationId: "team:T111:C1",
+        deliverTo: "team:T111:channel:C1",
+        route: { agentId: "main", sessionKey: "session:T111" },
+      }),
+      expect.objectContaining({
+        conversationId: "team:T222:C1",
+        deliverTo: "team:T222:channel:C1",
+        route: { agentId: "main", sessionKey: "session:T222" },
+      }),
+    ]);
+    expect(reactionQueueMock).not.toHaveBeenCalled();
   });
 
   it("uses the stable user ID when the post-auth name lookup fails", async () => {

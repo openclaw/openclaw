@@ -332,10 +332,6 @@ describe("OpenClaw shell source initialization", () => {
     };
     shell.activeSessionKey = "agent:old:main";
     shell.commandPaletteTarget = { owner: trigger, onSlashCommand: vi.fn() };
-    shell.settingsPreloadTimers.set(
-      trigger,
-      globalThis.setTimeout(() => undefined, 60_000),
-    );
 
     shell.disconnect();
 
@@ -346,7 +342,6 @@ describe("OpenClaw shell source initialization", () => {
       activeSessionKey: "",
       commandPaletteTarget: undefined,
     });
-    expect(shell.settingsPreloadTimers.size).toBe(0);
   });
 
   it("initializes replacement capabilities even when the Gateway client is unchanged", () => {

@@ -155,6 +155,24 @@ describe("buildSystemPromptReport", () => {
     ]);
   });
 
+  it.each(["long-synthetic-skill-name", "技能🦞-long-skill-name", "lone-\ud800-surrogate-name"])(
+    "preserves the UTF-16 skill name %j while trimming whitespace",
+    (name) => {
+      const skillsPrompt = `<skill><name>  ${name}\n</name></skill>`;
+      const report = makeReport({ systemPrompt: `## Skills\n${skillsPrompt}`, skillsPrompt });
+      expect(report.skills.entries).toEqual([{ name, blockChars: skillsPrompt.length }]);
+    },
+  );
+
+  it("uses the first complete plain-text name, including mixed-case tags", () => {
+    const skillsPrompt =
+      "<skill><name><invalid/></name><NAME> valid-skill-name-after-markup </NAME><name>later</name></skill>";
+    const report = makeReport({ systemPrompt: `## Skills\n${skillsPrompt}`, skillsPrompt });
+    expect(report.skills.entries).toEqual([
+      { name: "valid-skill-name-after-markup", blockChars: skillsPrompt.length },
+    ]);
+  });
+
   it("keeps reporting when a tool schema cannot be stringified", () => {
     const circularSchema: Record<string, unknown> = {
       type: "object",

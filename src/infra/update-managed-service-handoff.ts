@@ -36,7 +36,7 @@ import {
   type ControlPlaneUpdateSentinelMetaFile,
 } from "./update-control-plane-sentinel.js";
 import { applyDevUpdateTargetEnv } from "./update-dev-target.js";
-import { resolvePnpmGlobalInstallOwner, verifyPackageUpdateRecovery } from "./update-global.js";
+import { verifyPackageUpdateRecovery } from "./update-global.js";
 import { resolveUpdateInstallRoot } from "./update-install-root.js";
 import { MANAGED_SERVICE_UPDATE_HANDOFF_TEMP_PREFIX } from "./update-managed-service-handoff-cleanup.js";
 import { MANAGED_HANDOFF_COMMAND_SOURCE } from "./update-managed-service-handoff-command-source.js";
@@ -63,7 +63,10 @@ import {
   assertManagedUpdateLeaseDatabaseIdentity,
   prepareManagedHandoffLeaseDatabaseIdentity,
 } from "./update-managed-service-handoff-database.js";
-import { readHandoffStartupFailure } from "./update-managed-service-handoff-diagnostics.js";
+import {
+  describeManagedHandoffBlocker,
+  readHandoffStartupFailure,
+} from "./update-managed-service-handoff-diagnostics.js";
 import { MANAGED_HANDOFF_LEASE_SOURCE } from "./update-managed-service-handoff-lease-source.js";
 import {
   prepareManagedHandoffLeaseStore,
@@ -1437,40 +1440,12 @@ async function spawnManagedServiceUpdateHandoff(
     : {
         ...result,
         status: "joined",
+        message: describeManagedHandoffBlocker(rootIdentity, handoffId, identityStore, serviceEnv),
         ...(handoffId ? { handoffId } : {}),
       };
 }
 
-export async function assertManagedServiceUpdateHandoffRoot(params: {
-  expectedRoot: string;
-  root: string;
-  executingRoot: string | null;
-  postCore: boolean;
-}): Promise<void> {
-  const expectedRoot = resolveUpdateInstallRoot(params.expectedRoot);
-  const root = params.executingRoot ? resolveUpdateInstallRoot(params.executingRoot) : null;
-  const activeExecution = root !== null && resolveUpdateInstallRoot(params.root) === root;
-  if (activeExecution && expectedRoot === root) {
-    return;
-  }
-  if (activeExecution && params.postCore) {
-    const [previous, current] = await Promise.all([
-      resolvePnpmGlobalInstallOwner(expectedRoot),
-      resolvePnpmGlobalInstallOwner(root),
-    ]);
-    if (
-      previous &&
-      current &&
-      previous.ownerRoot === current.ownerRoot &&
-      resolveUpdateInstallRoot(current.packageRoot) === root
-    ) {
-      return;
-    }
-  }
-  throw new Error(
-    `Managed update handoff root mismatch: expected ${params.expectedRoot}, running from ${params.root}.`,
-  );
-}
+export { assertManagedServiceUpdateHandoffRoot } from "./update-managed-service-handoff-root.js";
 
 export async function startManagedServiceUpdateHandoff(
   params: ManagedServiceUpdateHandoffParams,
@@ -1531,6 +1506,17 @@ export async function startManagedServiceUpdateHandoff(
     const handoffId = unsettledOwner ?? joined.handoffId;
     return {
       status: "joined",
+      message: describeManagedHandoffBlocker(
+        root,
+        handoffId,
+        active.leaseStore,
+        params.env ?? process.env,
+        active.cancelling
+          ? "cancellation settlement is pending"
+          : active.claimed && !active.transferred
+            ? "the Gateway still holds an untransferred handoff claim"
+            : "helper exit or settlement has not been confirmed",
+      ),
       command: joined.command,
       logPath: joined.logPath,
       ...(joined.pid ? { pid: joined.pid } : {}),

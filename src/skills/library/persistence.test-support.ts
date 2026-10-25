@@ -256,16 +256,15 @@ export function assertPersistenceSelection(
   pins: SkillLibrarySelection[],
 ) {
   assert.equal(reply.kind, "selected", "Expected reopened selection");
-  const files = persistenceFiles("old")
-    .toSorted(byPath)
-    .map((file) => ({
+  const artifacts = (files: SkillLibraryFile[]) =>
+    files.map((file) => ({
       path: file.path,
-      content: bytesOf(file).toString("base64"),
-      encoding: "base64",
+      bytes: bytesOf(file),
       executable: file.executable === true,
     }));
+  const files = artifacts(persistenceFiles("old").toSorted(byPath));
   assert.deepEqual(
-    [reply.pins, reply.catalog, reply.files],
+    [reply.pins, reply.catalog, reply.files.map(artifacts)],
     [
       pins,
       pins.map((pin) => ({ name: pin.name, baseDir: persistenceRevisionDir(root, pin) })),

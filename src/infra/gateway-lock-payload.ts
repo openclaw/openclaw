@@ -157,7 +157,7 @@ export function classifyGatewayOwnerProcessNamespace(
   return "unknown";
 }
 
-const LockPayloadSchema = z.object({
+export const LockPayloadSchema = z.object({
   pid: z.number(),
   ownerId: z.string().min(1).optional(),
   /** A cold opener may wait for this transient owner, never enter while it is held. */

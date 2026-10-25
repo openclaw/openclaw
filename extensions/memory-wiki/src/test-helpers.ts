@@ -80,7 +80,11 @@ export function createChatGptConversation(user: string, assistant: string) {
 }
 
 export function createCompiledSnapshot(
-  digest: MemoryWikiCompiledCacheSnapshot["digest"],
+  digest: MemoryWikiCompiledCacheSnapshot["digest"] = {
+    claimCount: 0,
+    contradictionCount: 0,
+    pages: [],
+  },
 ): MemoryWikiCompiledCacheSnapshot {
   return {
     digest,

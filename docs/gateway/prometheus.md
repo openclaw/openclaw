@@ -628,10 +628,30 @@ These observations use the existing bounded diagnostic queue when diagnostics
 and an interested trusted consumer are enabled. Compare each stage's count;
 this metric is attribution for waiting callers, not total host work.
 
+### Chat startup stages
+
+`openclaw_gateway_rpc_stage_seconds{method="chat.startup",phase}` attributes
+completed startup work with fixed labels:
+
+| Phase                | Observation                                                            |
+| -------------------- | ---------------------------------------------------------------------- |
+| `session_entry`      | Exact session row preparation and initial access check                 |
+| `pending_inputs`     | Pending-input page and orphaned-input reconciliation                   |
+| `history_page`       | Transcript page read and display projection                            |
+| `startup_projection` | Command preparation and optional settled model projections             |
+| `projection_final`   | Final session row readiness, access revalidation and response assembly |
+| `session_info`       | Synchronous session snapshot presentation                              |
+
+Only entered phases contribute samples, including when they fail. These are
+elapsed durations, including worker queues and scheduling; they do not report
+CPU time. Phases can overlap: `session_info` is included in `projection_final`.
+Startup projection preparation can overlap the history read. Do not sum
+these phases as a request total; use the RPC handler duration for that total.
+Labels contain no agent, session, account or transcript identifiers.
+
 ### Catalog list stages
 
-The stage histograms currently cover only `sessions.catalog.list`. They use
-six fixed phase labels:
+For `sessions.catalog.list`, the stage histograms use six fixed phase labels:
 
 | Phase                | Observation                                                                          |
 | -------------------- | ------------------------------------------------------------------------------------ |

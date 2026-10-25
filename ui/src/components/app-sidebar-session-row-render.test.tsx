@@ -18,6 +18,7 @@ import "../test-helpers/app-sidebar-suite.ts";
 import { domProbe } from "../test-helpers/dom-probe.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { sidebarBootSnapshot } from "../test-helpers/sidebar-boot-snapshot.test-support.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { renderAppSidebarOnline } from "./app-sidebar-online.tsx";
 import { renderSidebarAgentCard } from "./app-sidebar-render.tsx";
@@ -34,29 +35,8 @@ import {
 import { installTitleTooltips } from "./tooltip-title.ts";
 
 const emptySnapshot: SidebarSnapshotModel = {
-  routingDefaults: { mainKey: "main", scope: "per-sender" },
-  roster: null,
+  ...sidebarBootSnapshot(null),
   mode: "chip",
-  navigationView: "sessions",
-  pages: [],
-  pageScopeId: null,
-  pinnedSessions: [],
-  entries: [],
-  sessions: [],
-  sections: [],
-  cards: [],
-  collapsedAgentIds: [],
-  collapsedSections: [],
-  plugins: [],
-  onlineUsers: [],
-  onlineCounts: [],
-  peopleSortMode: "presence",
-  peopleStatusFilter: "all",
-  peoplePresenceFilter: "online",
-  offlineUsers: [],
-  ownerId: null,
-  involvingMe: false,
-  footer: null,
   brand: { name: "Harbor", avatar: null, icon: "claw", environment: null },
 };
 
@@ -137,41 +117,7 @@ function mountObservedHost(
   return observed.update;
 }
 
-it("hides archived pages in the restored sidebar before live data arrives", async () => {
-  const { host, context, dom } = await createCachedHost();
-  host.restoreSidebarSnapshot({
-    ...emptySnapshot,
-    mode: "roster",
-    navigationView: "pages",
-    pageScopeId: context.agentSelection.state.scopeId,
-    pages: snapshotSessions([
-      projectSidebarSession({
-        key: "agent:main:active",
-        label: "Active dashboard",
-        hasBoard: true,
-      }),
-      projectSidebarSession({
-        key: "agent:main:archived",
-        label: "Archived dashboard",
-        hasBoard: true,
-        archived: true,
-      }),
-    ]),
-  });
-  host.invalidate();
-  await host.updateComplete;
-  await waitForSolid(() =>
-    expect(
-      dom.present(
-        '.sidebar-pages [data-session-key="agent:main:active"]',
-        '.sidebar-pages [data-session-key="agent:main:archived"]',
-        ".sidebar-pages .sidebar-session-sort",
-      ),
-    ).toEqual([true, false, false]),
-  );
-});
-
-it("sorts built-in Pages alphabetically without reordering dashboards", async () => {
+it("restores only active dashboards in saved order after alphabetized built-in Pages", async () => {
   const { host, context, dom } = await createCachedHost();
   const dashboardKeys = ["agent:main:dashboard:zulu", "agent:main:dashboard:alpha"];
   host.restoreSidebarSnapshot({
@@ -179,12 +125,22 @@ it("sorts built-in Pages alphabetically without reordering dashboards", async ()
     mode: "roster",
     navigationView: "pages",
     pageScopeId: context.agentSelection.state.scopeId,
-    pages: snapshotSessions(
-      dashboardKeys.map((key) => projectSidebarSession({ key, label: key, hasBoard: true })),
-    ),
+    pages: snapshotSessions([
+      ...dashboardKeys.map((key) => projectSidebarSession({ key, label: key, hasBoard: true })),
+      projectSidebarSession({ key: "agent:main:archived", hasBoard: true, archived: true }),
+    ]),
   });
   host.invalidate();
   await host.updateComplete;
+  await waitForSolid(() =>
+    expect(
+      dom.present(
+        `.sidebar-pages [data-session-key="${dashboardKeys[0]}"]`,
+        '.sidebar-pages [data-session-key="agent:main:archived"]',
+        ".sidebar-pages .sidebar-session-sort",
+      ),
+    ).toEqual([true, false, false]),
+  );
   const entries = [...dom.all(".sidebar-pages [data-sidebar-entry]")];
   const routes = entries
     .map((entry) => entry.getAttribute("data-sidebar-entry"))

@@ -7,6 +7,7 @@ import path from "node:path";
 import { text as readRequestBody } from "node:stream/consumers";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 
 const resolverPath = fileURLToPath(new URL("../vault-secret-ref-resolver.js", import.meta.url));
 const secretIdHelperPath = fileURLToPath(new URL("../vault-secret-id.js", import.meta.url));
@@ -138,13 +139,7 @@ async function writeTempFile(name: string, value: string): Promise<string> {
 
 async function startVaultServer(handler: RequestListener): Promise<string> {
   const server = createServer(handler);
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
+  const port = await listenOnLoopback(server);
   servers.push({
     close: () =>
       new Promise<void>((resolve, reject) => {
@@ -153,11 +148,7 @@ async function startVaultServer(handler: RequestListener): Promise<string> {
         server.closeAllConnections();
       }),
   });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("fixture server did not bind to a TCP port");
-  }
-  return `http://127.0.0.1:${address.port}`;
+  return `http://127.0.0.1:${port}`;
 }
 
 async function startVaultFixture(jwt = false) {

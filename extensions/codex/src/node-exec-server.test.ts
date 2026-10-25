@@ -99,10 +99,7 @@ function createNodeFrames(testSignal?: AbortSignal) {
   const signal = testSignal ? AbortSignal.any([controller.signal, testSignal]) : controller.signal;
   const messages = new EventEmitter();
   let receive: ((message: Uint8Array) => void | Promise<void>) | undefined;
-  let signalReady = () => {};
-  const ready = new Promise<void>((resolve) => {
-    signalReady = resolve;
-  });
+  const { promise: ready, resolve: signalReady } = Promise.withResolvers<void>();
   const outbound: JsonRpcRecord[] = [];
   const io: OpenClawPluginNodeHostCommandIo = {
     signal,

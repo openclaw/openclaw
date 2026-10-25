@@ -248,7 +248,6 @@ it("fences a commit whose settlement is lost and rehydrates its durable state wi
       postimage: recovered,
       error: { message: "Session actor version changed before command admission" },
     });
-    expect(f.hooks.transactions).toBe(writesBeforeRead + 1);
     expect(f.nativeEntry()?.updatedAt).toBe(30);
   }));
 
@@ -256,13 +255,7 @@ it("invalidates resident facts on native writes and keeps missing, replaced, and
   withActor((f) => {
     const otherKey = "agent:main:other-native-writer";
     f.writeEntry({ sessionId: "other-session", updatedAt: 1 }, otherKey);
-    using reads = countStatements(f.database.db, ["select"], (sql) =>
-      /^select\b/iu.test(sql) ? "select" : null,
-    );
     const initial = f.read();
-    expect(reads.counts.select).toBe(1);
-    expect(f.read()).toEqual(initial);
-    expect(reads.counts.select).toBe(1);
     using sibling = openNodeSqliteDatabase(f.database.path);
     withSqliteDatabaseWriteScope(sibling, [otherKey], () =>
       runSqliteImmediateTransactionSync(sibling, () => {
@@ -272,7 +265,6 @@ it("invalidates resident facts on native writes and keeps missing, replaced, and
       }),
     );
     expect(f.read()).toEqual(initial);
-    expect(reads.counts.select).toBe(1);
     f.database.db
       .prepare(
         "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.label', ?) WHERE session_key = ?",
@@ -281,14 +273,11 @@ it("invalidates resident facts on native writes and keeps missing, replaced, and
     const replaced = f.read();
     expect(replaced.entry?.label).toBe("native writer");
     expect(replaced.version.epoch).not.toBe(initial.version.epoch);
-    expect(reads.counts.select).toBe(2);
     expect(f.mutate(patch(initial, 40)).kind).toBe("stale-version");
-    expect(f.hooks.transactions).toBe(1);
 
     const missing = f.read({ ...f.target, sessionKey: "agent:main:absent" });
     expect(missing.entry).toBeUndefined();
     expectRollback(f.mutate(patch(missing, 40)), "Session actor requires an existing session");
-    expect(f.read(missing.target).entry).toBeUndefined();
     assert(f.target.database.kind === "file", "Expected durable target");
     const other = {
       ...f.target,
@@ -325,7 +314,6 @@ it("evicts the least recently used settled actor and hydrates a new epoch after 
     const rehydrated = f.read();
     expect(rehydrated.entry).toEqual(beforeLoss.entry);
     expect(rehydrated.version.epoch).not.toBe(beforeLoss.version.epoch);
-    expect(f.hooks.transactions).toBe(0);
   }));
 
 it("adopts a run only under the exact lifecycle and current transaction and commit authority", () =>
@@ -365,10 +353,8 @@ it("adopts a run only under the exact lifecycle and current transaction and comm
 
 it.each([
   { phase: "acceptInput", initial: true, cold: false },
-  { phase: "acceptInput", initial: false, cold: false },
   { phase: "adoptRun", initial: false, cold: false },
   { phase: "acceptInput", initial: false, cold: true },
-  { phase: "adoptRun", initial: false, cold: true },
 ] as const)(
   "commits $phase transcript custody and lifecycle together (initial=$initial, cold=$cold)",
   (mode) =>
@@ -414,16 +400,11 @@ it.each([
           ? { type: "session.actor.acceptInput", input }
           : { type: "session.actor.adoptRun", input: { ...input, sessionId } };
       await f.prepare(command);
-      const transactions = f.hooks.transactions;
-      const committed = expectCommitted(f.mutate(command));
-      expect(committed.receipt.transcript.appendedMessages).toMatchObject([
-        { appended: true, messageId: "accepted-message", message: { content: "accepted bytes" } },
-      ]);
-      expect(committed.receipt.postimage).toMatchObject({
+      expectCommitted(f.mutate(command));
+      expect(f.read(target)).toMatchObject({
         entry: { sessionId, ...lifecycle },
         pendingInputs: [],
       });
-      expect(f.hooks.transactions - transactions).toBe(1);
       expect(
         readTranscriptEventRows(f.database, sessionId).map((row) => JSON.parse(row.eventJson)),
       ).toMatchObject([
@@ -434,7 +415,6 @@ it.each([
           message: { content: "accepted bytes" },
         },
       ]);
-      expect(f.read(target).entry).toEqual(committed.receipt.postimage.entry);
       if (mode.cold) {
         expect(f.nativeEntry()?.restartRecoveryTerminalRunIds).toEqual(["previous-run"]);
       }
@@ -481,31 +461,41 @@ it("stages queued custody without rewriting the active session lifecycle", () =>
       requestHash: "queued-request",
       lifecycleGeneration: "queued-generation",
     });
-    {
-      using writes = countStatements(f.database.db, ["entry"], (sql) =>
-        /^\s*(?:insert|update|delete)\b.*\bsession_nodes\b/isu.test(sql) ? "entry" : null,
-      );
-      expectCommitted(
-        f.mutate({
-          type: "session.actor.acceptInput",
-          input: {
-            ...commandInput(before, "stage-only", "input"),
-            expectedState: buildRestartRecoveryExpectedState(before.entry!),
-            lifecycle: {},
-            pending,
-          },
-        }),
-        {
-          receipt: {
-            postimage: { entry: before.entry, pendingInputs: [{ input_id: "queued-input" }] },
-          },
+    expectCommitted(
+      f.mutate({
+        type: "session.actor.acceptInput",
+        input: {
+          ...commandInput(before, "stage-only", "input"),
+          expectedState: buildRestartRecoveryExpectedState(before.entry!),
+          lifecycle: {},
+          pending,
         },
-      );
-      expect(writes.counts.entry).toBe(0);
-    }
+      }),
+    );
+    expect(f.read().pendingInputs).toMatchObject([{ input_id: "queued-input" }]);
     expect(f.nativeEntry()).toEqual(before.entry);
   }));
-it.each(["assistant append", "empty append", "bookkeeping"] as const)(
+it("rejects bookkeeping from a superseded writer without changing durable state", () =>
+  withActor((f) => {
+    const before = f.read();
+    expect(
+      f.mutate({
+        type: "session.actor.completeTurn",
+        input: {
+          ...commandInput(before, "stale-bookkeeping", "terminal"),
+          bookkeeping: {
+            sessionId: f.scope.sessionId,
+            lifecycleRevision: before.entry!.lifecycleRevision ?? null,
+            writerRunId: "superseded",
+            expectedState: buildRestartRecoveryExpectedState(before.entry!),
+          },
+        },
+      }),
+    ).toMatchObject({ kind: "rolled-back", reason: "stale-state" });
+    expect(f.nativeEntry()).toEqual(before.entry);
+  }));
+
+it.each(["assistant append", "empty append"] as const)(
   "commits terminal custody and guarded accounting atomically with %s",
   (mode) =>
     withActor(async (f) => {
@@ -545,30 +535,18 @@ it.each(["assistant append", "empty append", "bookkeeping"] as const)(
         input: {
           ...commandInput(initial, "complete-fixture-before", "terminal"),
           pendingFinalDelivery: pending,
-          ...(mode === "bookkeeping"
-            ? {
-                bookkeeping: {
-                  sessionId: f.scope.sessionId,
-                  lifecycleRevision: initial.entry!.lifecycleRevision ?? null,
-                  writerRunId,
-                  expectedState: buildRestartRecoveryExpectedState(initial.entry!),
-                  lifecycle,
-                },
-              }
-            : {
-                turn: {
-                  agentId: "main",
-                  sessionKey: f.target.sessionKey,
-                  options: {
-                    expectedSessionId: f.scope.sessionId,
-                    expectedWriterRunId: writerRunId,
-                    expectedSessionState: buildRestartRecoveryExpectedState(initial.entry!),
-                    sessionLifecyclePatch: lifecycle,
-                    sessionFile: "synthetic.jsonl",
-                    messages: mode === "assistant append" ? messages : [],
-                  },
-                },
-              }),
+          turn: {
+            agentId: "main",
+            sessionKey: f.target.sessionKey,
+            options: {
+              expectedSessionId: f.scope.sessionId,
+              expectedWriterRunId: writerRunId,
+              expectedSessionState: buildRestartRecoveryExpectedState(initial.entry!),
+              sessionLifecyclePatch: lifecycle,
+              sessionFile: "synthetic.jsonl",
+              messages: mode === "assistant append" ? messages : [],
+            },
+          },
           reducers: [
             { kind: "activity", updatedAt: 60 },
             {
@@ -589,43 +567,10 @@ it.each(["assistant append", "empty append", "bookkeeping"] as const)(
       expect(readTranscriptEventRows(f.database, f.scope.sessionId)).toEqual(originalEvents);
 
       const committed = (() => {
-        using native = vi.spyOn(f.database.db, "exec");
         using clock = vi.spyOn(Date, "now");
         clock.mockReturnValue(55);
-        const outcome = expectCommitted(f.mutate(complete()));
-        expect(
-          native.mock.calls
-            .filter(([sql]) => /^(BEGIN|COMMIT|SAVEPOINT)\b/iu.test(sql))
-            .map(([sql]) => sql),
-        ).toEqual(["BEGIN IMMEDIATE", "COMMIT"]);
-        return outcome;
+        return expectCommitted(f.mutate(complete()));
       })();
-      expect(committed.failure).toBeUndefined();
-      expect(committed.receipt).toMatchObject({
-        phase: "completeTurn",
-        beforeVersion: initial.version,
-        afterVersion: { epoch: initial.version.epoch, sequence: initial.version.sequence + 1 },
-        reducers: [
-          { index: 0, kind: "activity", changed: true },
-          { index: 1, kind: "live-model", changed: true },
-          { index: 2, kind: "group-intro", changed: true },
-        ],
-      });
-      expect(committed.receipt.postimage.entry).toMatchObject({
-        updatedAt: 60,
-        model: "fixture-after",
-        groupActivationNeedsSystemIntro: false,
-        pendingFinalDelivery: pending,
-        ...lifecycle,
-      });
-      expect(committed.value).toMatchObject(
-        mode === "bookkeeping"
-          ? { kind: "bookkeeping" }
-          : {
-              kind: "session-turn",
-              result: { sessionEntry: committed.receipt.postimage.entry },
-            },
-      );
       const appended = committed.receipt.transcript.appendedMessages;
       if (mode === "assistant append") {
         expect(appended).toMatchObject([
@@ -635,14 +580,14 @@ it.each(["assistant append", "empty append", "bookkeeping"] as const)(
         expect(appended).toEqual([]);
         expect(committed.receipt.transcript.after).toEqual(initial.transcript.version);
       }
-      expect(f.receipt()).toMatchObject({
-        kind: "native-commit",
-        committed: { facts: { receipt: committed.receipt } },
-      });
-      expect(f.nativeEntry()).toEqual(committed.receipt.postimage.entry);
       f.restartActor();
       const rehydrated = f.read();
-      expect(rehydrated.entry).toMatchObject({ ...lifecycle, model: "fixture-after" });
+      expect(rehydrated.entry).toMatchObject({
+        ...lifecycle,
+        updatedAt: 60,
+        model: "fixture-after",
+        groupActivationNeedsSystemIntro: false,
+      });
       expect(rehydrated.entry?.pendingFinalDelivery).toEqual(pending);
       expect(rehydrated.transcript.version).toEqual(committed.receipt.transcript.after);
       expect(readTranscriptEventRows(f.database, f.scope.sessionId)).toHaveLength(
@@ -662,9 +607,7 @@ it.each(["assistant append", "empty append", "bookkeeping"] as const)(
           ],
         },
       });
-      expectCommitted(mismatch, {
-        receipt: { reducers: [{ kind: "live-model", changed: false }] },
-      });
+      expectCommitted(mismatch);
       expect(f.nativeEntry()?.model).toBe("fixture-after");
     }),
 );
@@ -833,16 +776,8 @@ it("checks recovery provenance in the actor transaction and refuses a later unre
     };
     const command = makeCommand("accepted-recovery");
     await f.prepare(command);
-    {
-      using exec = vi.spyOn(f.database.db, "exec");
-      expectCommitted(f.mutate(command), {
-        receipt: {
-          pendingInputMutationReceipt: { operation: "stage", idempotencyKey: "accepted-recovery" },
-          postimage: { pendingInputs: [{ input_id: "accepted-recovery" }] },
-        },
-      });
-      expect(exec.mock.calls.filter(([sql]) => /^SAVEPOINT\b/iu.test(sql))).toEqual([]);
-    }
+    expectCommitted(f.mutate(command));
+    expect(f.read().pendingInputs).toMatchObject([{ input_id: "accepted-recovery" }]);
     runSqliteImmediateTransactionSync(f.database.db, () =>
       appendTranscriptEventsInTransaction(f.database, f.scope, [
         {

@@ -7,6 +7,7 @@ import { runUntilCompleted, resetCodeModeTestState } from "../../agents/code-mod
 import { createAgentHarnessToolSurfaceRuntimeCore } from "../../agents/harness/tool-surface-bridge.js";
 import { createFixtureSkillEntry } from "../../skills/test-support/test-helpers.js";
 import { createWorkerGatewayToolProxies } from "../../worker/worker-gateway-tools.js";
+import { createWorkerConnectionIdentity } from "./connection-identity.test-support.js";
 import { getWorkerTurnToolSurface } from "./placement-turn-claim-events.js";
 import { WorkerRunnerCapacityError } from "./tunnel-contract.js";
 import {
@@ -48,18 +49,15 @@ it("searches and reads installed skills from a worker RPC outside the launching 
   const tunnel = createWorkerTurnTunnel({
     reconcileWorkspace: reconcileUnchangedLocalWorkspace,
     launchTurn: async ({ plan, turnClaim }) => {
-      const identity = {
+      const identity = createWorkerConnectionIdentity(turnClaim, {
         environmentId: plan.admission.environmentId,
         ownerEpoch: plan.admission.ownerEpoch,
         sessionId: input.sessionId,
         runId: input.runId,
-        turnClaim,
         credentialHash: "fixture-credential-hash",
-        bundleHash: "a".repeat(64),
-        rpcSetVersion: 1,
         protocolFeatures: ["worker-gateway-tools-v1"],
         credentialExpiresAtMs: Number.MAX_SAFE_INTEGER,
-      };
+      });
       const gateway = getWorkerTurnToolSurface(identity)!;
       const surface = await gateway.getSurface(identity);
       result = await rpc.runInAsyncScope(async () => {

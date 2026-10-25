@@ -24,7 +24,13 @@ import {
   type ReplyToolAuthorityContinuation,
 } from "./host-private-capabilities.js";
 import { withPreparedEmbeddedRunToolAuthority } from "./tool-authority.runtime.js";
-import { admitted, attempt, sessionId, sessionKey } from "./tool-authority.runtime.test-support.js";
+import {
+  admitted,
+  attempt,
+  createDirectReplyOperation,
+  sessionId,
+  sessionKey,
+} from "./tool-authority.runtime.test-support.js";
 
 afterEach(() => {
   testing.resetActiveEmbeddedRuns();
@@ -42,15 +48,7 @@ describe("host-prepared embedded tool authority", () => {
     "allows direct harness execution only under current prepared authority (%s, %s)",
     async (authority, source) => {
       await admitted(async ({ admittedRunContext, close }) => {
-        const operation =
-          source === "inherited"
-            ? createReplyOperation({
-                sessionId,
-                sessionKey,
-                resetTriggered: false,
-                turnKind: "direct",
-              })
-            : undefined;
+        const operation = source === "inherited" ? createDirectReplyOperation() : undefined;
         let observed: ReplyOperation | undefined;
         const run = vi.fn(
           async (prepared: {
@@ -125,12 +123,7 @@ describe("host-prepared embedded tool authority", () => {
 
   it("retries direct authority preparation after a failed snapshot bind", async () => {
     await admitted(async ({ admittedRunContext }) => {
-      const operation = createReplyOperation({
-        sessionId,
-        sessionKey,
-        resetTriggered: false,
-        turnKind: "direct",
-      });
+      const operation = createDirectReplyOperation();
       const joinObservation = captureReplyMessageJoinObservation({
         run: attempt,
         sessionEntry: undefined,
@@ -177,12 +170,7 @@ describe("host-prepared embedded tool authority", () => {
     "preserves valid source fallback when projection loses its target (%s)",
     async (transition) => {
       await admitted(async ({ admittedRunContext }) => {
-        const operation = createReplyOperation({
-          sessionId,
-          sessionKey,
-          resetTriggered: false,
-          turnKind: "direct",
-        });
+        const operation = createDirectReplyOperation();
         try {
           await withPreparedEmbeddedRunToolAuthority(
             { admittedRunContext, replyOperation: operation },
@@ -277,12 +265,7 @@ describe("host-prepared embedded tool authority", () => {
 
   it("prepares direct successor attempts on one controller and revokes retained attempt authority", async () => {
     await admitted(async ({ admittedRunContext }) => {
-      const operation = createReplyOperation({
-        sessionId,
-        sessionKey,
-        resetTriggered: false,
-        turnKind: "direct",
-      });
+      const operation = createDirectReplyOperation();
       let previousCaller: ReturnType<typeof getGatewayToolCallerIdentity>;
       let previousFingerprint: string | undefined;
       try {
@@ -332,12 +315,7 @@ describe("host-prepared embedded tool authority", () => {
 
   it("revokes a selected continuation when an equivalent-policy attempt replaces its snapshot", async () => {
     await admitted(async ({ admittedRunContext }) => {
-      const operation = createReplyOperation({
-        sessionId,
-        sessionKey,
-        resetTriggered: false,
-        turnKind: "direct",
-      });
+      const operation = createDirectReplyOperation();
       const joinObservation = captureReplyMessageJoinObservation({
         run: attempt,
         sessionEntry: undefined,

@@ -22,6 +22,7 @@ import { resolveSessionKey } from "../../lib/sessions/index.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import { takeCreatedComposer } from "../new-session/creation-composer-registry.ts";
 import * as chatAvatars from "./chat-avatar.ts";
+import { exportCurrentChat } from "./chat-export.ts";
 import { CHAT_ROUTE_READY_EVENT } from "./chat-history-events.ts";
 import { retireInitialChatSnapshot } from "./chat-history-state.ts";
 import { syncSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
@@ -43,7 +44,7 @@ import { resolveSidebarPanelShortcut } from "./chat-pane-panel-shortcuts.ts";
 import { openPreferredSidebarPanel, releaseAttachmentWorkspaceOwner } from "./chat-pane-rails.ts";
 import { ChatPaneSessionObservation } from "./chat-pane-session-observation.ts";
 import { createChatPaneSessionPanelToggles } from "./chat-pane-session-panel-toggle.ts";
-import { focusChatComposerFromPrintableKeydown } from "./chat-pane-shared.ts";
+import { focusChatComposerFromKeydown } from "./chat-pane-shared.ts";
 import { resolveSidebarLayoutForBoard } from "./chat-pane-sidebar-layout.ts";
 import { subscribeChatPaneSnapshotInvalidation } from "./chat-pane-startup-subscriptions.ts";
 import type { ChatPaneInputChanges } from "./chat-pane-state-owner.ts";
@@ -69,7 +70,6 @@ import { openSessionWorkspaceFile } from "./components/chat-session-workspace.ts
 import { resetThreadPresentation } from "./components/chat-thread-interactions.ts";
 import { retainCreatedIncognitoComposerScope } from "./composer-persistence-state.ts";
 import { connectCreatedComposerQueue } from "./creation-composer-recovery.ts";
-import { exportChatMarkdown } from "./export.ts";
 import { admitChatSubmission } from "./history-merge.ts";
 import {
   admitInitialChatTurn,
@@ -254,10 +254,11 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
       return;
     }
 
-    focusChatComposerFromPrintableKeydown(
+    focusChatComposerFromKeydown(
       this.element,
       event,
       getChatComposerState(this.presentationId).composerTextarea,
+      { allowPaste: true },
     );
   };
 
@@ -326,7 +327,10 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     pageState.createChatSession = () => this.createSession();
     pageState.confirmConversationReset = () => this.confirmConversationReset();
     pageState.exportCurrentChat = () =>
-      exportChatMarkdown(pageState.chatMessages, pageState.assistantName);
+      exportCurrentChat(
+        pageState,
+        () => this.state === pageState && this.presented && this.isConnected,
+      );
     pageState.refreshCurrentChat = async () => {
       await refreshPageChat(pageState);
     };

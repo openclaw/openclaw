@@ -12,6 +12,8 @@ import type { ChatPanePlacementProps } from "./chat-pane-placement.tsx";
 import type { ChatPullRequestsProps } from "./chat-pull-request-shared.tsx";
 import type { ChatThreadProps } from "./chat-thread-interactions.ts";
 
+export type ChatProcessShowRequest = { instanceId: string | null; fromDetails: boolean };
+
 type ChatDetailsWorkspace = { root: string | null; label: string | null; branch?: string };
 
 export type ChatDetailsDesktopSectionId =
@@ -111,7 +113,7 @@ export type ChatDetailsProps = ChatSessionProgressProps &
     onOpenSessionDiff?: () => void;
     onOpenWorkspace?: () => void;
     /** Opens this pane's Processes panel; absent where the pane has none. */
-    onOpenProcesses?: () => void;
+    onOpenProcesses?: (instanceId?: string) => void;
     onCompact?: () => void | Promise<unknown>;
     onDismissPullRequest?: (pullRequest: ControlUiSessionPullRequest) => void;
     onDismissPullRequestsBranch?: (branch: ControlUiSessionBranch) => void;

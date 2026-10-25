@@ -401,6 +401,13 @@ Turns with remaining custody retain the existing recovery block. **Resume** in
 WebChat supplies current operator authority to continue the saved task in the same
 session after its outstanding delivery settles.
 
+If a child finishes before its restart-tombstoned parent can accept the result, it stays
+pending with the child owner. The parent receives one local notice that the result
+is waiting for **Resume**. The pending completion does not reserve the parent's
+message queue or grant permission to restart it. After an authorized in-place
+Resume, the same completion can continue once. Resetting or replacing the parent
+does not deliver the old child's result into the replacement session.
+
 Messages sent while restart recovery is waiting to start stay pending. Once
 recovery starts, they follow the session's normal message queue policy. You do
 not need to resend a message just because recovery is waiting for capacity.

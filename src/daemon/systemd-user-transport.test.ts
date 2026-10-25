@@ -16,6 +16,7 @@ import {
 import type { GatewayServiceEnv } from "./service-types.js";
 import { withGatewayServiceUpdateAuthority } from "./service-update-authority.js";
 import { execBusctlUser as busctl, execSystemctlUser as systemctl } from "./systemd-exec.js";
+import { nativeExit } from "./systemd-exec.test-support.js";
 import { stopSystemdService } from "./systemd-lifecycle.js";
 import { openSystemdUserManager } from "./systemd-peer-native.js";
 import {
@@ -443,12 +444,7 @@ const commandEnv = (name: string) => ({
   XDG_RUNTIME_DIR: `/runtime/${name}`,
   DBUS_SESSION_BUS_ADDRESS: `unix:path=/runtime/${name}/bus`,
 });
-const unavailableCommand = {
-  code: 1,
-  termination: "exit" as const,
-  stdout: "",
-  stderr: "Failed to connect to bus: No medium found",
-};
+const unavailableCommand = nativeExit("", "Failed to connect to bus: No medium found", 1);
 function fallback(spent: number, onProbe = () => {}) {
   vi.spyOn(process, "geteuid").mockReturnValue(1001);
   const clock = { elapsed: 0 };

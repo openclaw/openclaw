@@ -22,35 +22,15 @@ import type { CommandRunner } from "./update-global-command-runner.js";
 import {
   detectGlobalInstallManagerForRoot,
   listActivePnpmIsolatedGlobalPackages,
-  resolveGlobalInstallTarget,
   cleanupGlobalRenameDirs,
   resolvePnpmGlobalInstallOwner,
 } from "./update-global.js";
+import { commandResult, resolveTarget } from "./update-global.test-support.js";
 import { resolvePnpmGlobalDirFromGlobalRoot } from "./update-native-package-owner.js";
 import { resolveUpdateInstallSurface } from "./update-runner-install-surface.js";
 import { createGatewayUpdateCheck } from "./update-startup.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
-
-function commandResult(stdout: string, code = 0) {
-  return { stdout, stderr: "", code };
-}
-
-function resolveTarget(
-  runCommand: CommandRunner,
-  pkgRoot?: string,
-  options: Partial<
-    Omit<Parameters<typeof resolveGlobalInstallTarget>[0], "runCommand" | "pkgRoot" | "timeoutMs">
-  > = {},
-) {
-  return resolveGlobalInstallTarget({
-    manager: "npm",
-    runCommand,
-    timeoutMs: 1000,
-    pkgRoot,
-    ...options,
-  });
-}
 
 let base: string;
 const runHostCommandBuffered = exec.runCommandBuffered;

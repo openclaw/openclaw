@@ -1,5 +1,5 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { CodexHistoryRejection, type CodexHistoryRejectionReason } from "./history-rejection.js";
+import { CodexHistoryRejection } from "./history-rejection.js";
 import type { JsonValue } from "./protocol.js";
 import { projectSettledCodexMessages, SettledTurnPriorContext } from "./settled-turn-projection.js";
 import { serializeCodexMirrorSourceEvidence } from "./transcript-mirror-attestation.js";
@@ -9,14 +9,14 @@ export type SettledTurnMessages = {
   mirroredMessages: readonly AgentMessage[];
   settledMessages: readonly AgentMessage[];
   turnId: string;
-  /** The run's persisted prompt when a same-run continuation started a later native turn. */
+  /** The run's persisted prompt when a continuation started a later native turn. */
   promptIdentity?: string;
   /** The run mirrored no prompt for this turn: an internal system turn without a recorder. */
   promptSuppressed?: boolean;
 };
 
-function rejectEvidence(reason: CodexHistoryRejectionReason): never {
-  throw new CodexHistoryRejection(reason);
+function rejectEvidence(): never {
+  throw new CodexHistoryRejection("provenance_rejected");
 }
 
 /** The worker consumes this verifier lazily; rejection never acquires the remaining payloads. */
@@ -52,38 +52,28 @@ function* verifiedSettledMessages(
   // A turn without a mirrored prompt starts at its first mirrored row; the user turn
   // that produced it is then prior context, never borrowed as this turn's prompt.
   const anchorIdentity = params.promptSuppressed ? requiredIds[0] : promptIdentity;
-  if (!boundaryIdentity?.startsWith(`${params.turnId}:tool:`)) {
-    rejectEvidence("provenance_missing_boundary");
-  }
-  if (requiredIds.length !== boundaryIndex + 1) {
-    rejectEvidence("provenance_unattested_prefix");
-  }
-  if (new Set(requiredIds).size !== requiredIds.length) {
-    rejectEvidence("provenance_duplicate_identity");
-  }
-  if (params.promptSuppressed) {
-    if (requiredIds.includes(promptIdentity)) {
-      rejectEvidence("provenance_unexpected_prompt");
-    }
-    if (!anchorIdentity?.startsWith(`${params.turnId}:`)) {
-      rejectEvidence("provenance_foreign_anchor");
-    }
-  } else if (!requiredIds.includes(promptIdentity)) {
-    rejectEvidence("provenance_missing_prompt");
+  const hasPrompt = requiredIds.includes(promptIdentity);
+  if (
+    !boundaryIdentity?.startsWith(`${params.turnId}:tool:`) ||
+    requiredIds.length !== boundaryIndex + 1 ||
+    new Set(requiredIds).size !== requiredIds.length ||
+    (params.promptSuppressed
+      ? hasPrompt || !anchorIdentity?.startsWith(`${params.turnId}:`)
+      : !hasPrompt)
+  ) {
+    rejectEvidence();
   }
   const mirrored = params.mirroredMessages;
   const mirroredIds = mirrored.flatMap((message) => readMirrorIdentity(message) ?? []);
   const mirroredBoundaryIndex = mirrored.findIndex(
     (message) => readMirrorIdentity(message) === boundaryIdentity,
   );
-  if (new Set(mirroredIds).size !== mirroredIds.length) {
-    rejectEvidence("provenance_duplicate_identity");
-  }
   if (
+    new Set(mirroredIds).size !== mirroredIds.length ||
     mirroredBoundaryIndex + 1 !== requiredIds.length ||
     requiredIds.some((id, index) => readMirrorIdentity(mirrored[index]!) !== id)
   ) {
-    rejectEvidence("provenance_mirror_prefix");
+    rejectEvidence();
   }
   const required = new Map(requiredIds.map((id, index) => [id, mirrored[index]!]));
   const seen = new Set<string>();
@@ -94,19 +84,17 @@ function* verifiedSettledMessages(
     const identity = readMirrorIdentity(message);
     if (identity) {
       if (seen.has(identity)) {
-        rejectEvidence("provenance_duplicate_identity");
+        rejectEvidence();
       }
       seen.add(identity);
       const expected = required.get(identity);
       if (expected) {
-        if (identity !== requiredIds[matched]) {
-          rejectEvidence("provenance_history_order");
-        }
         if (
+          identity !== requiredIds[matched] ||
           serializeCodexMirrorSourceEvidence(message) !==
-          serializeCodexMirrorSourceEvidence(expected)
+            serializeCodexMirrorSourceEvidence(expected)
         ) {
-          rejectEvidence("provenance_fingerprint_drift");
+          rejectEvidence();
         }
         matched += 1;
       }
@@ -120,6 +108,6 @@ function* verifiedSettledMessages(
     throughBoundary ||= identity === boundaryIdentity;
   }
   if (!throughBoundary || matched !== requiredIds.length) {
-    rejectEvidence("provenance_history_incomplete");
+    rejectEvidence();
   }
 }

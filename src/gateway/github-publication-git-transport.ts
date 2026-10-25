@@ -58,8 +58,8 @@ export async function runPublicationCommand(argv: string[], options: GitCommandO
           ...(options.cwd ? { cwd: options.cwd } : {}),
           env: {
             ...(argv[0] === "git"
-              ? gitReadOnlyEnvironment(argv.slice(1), options.env ?? process.env)
-              : (options.env ?? process.env)),
+              ? gitReadOnlyEnvironment(argv.slice(1), options.env ?? {})
+              : (options.env ?? {})),
             GIT_NO_REPLACE_OBJECTS: "1",
             // Pin every command against repository hooks; explicit hook-disabling -c flags stay stronger.
             ...appendGitConfig(gitMaintenanceEnvironment(), [["core.hooksPath", os.devNull]]),

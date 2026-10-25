@@ -29,6 +29,16 @@ const loopbackRuntime = () => ({
   nonOwnerToken: "loopback-non-owner-token",
 });
 
+export function createCliMcpTool(name: string, label: string, description: string) {
+  return {
+    name,
+    label,
+    description,
+    parameters: { type: "object", properties: {} },
+    execute: vi.fn(),
+  };
+}
+
 export function mockCliMcpPreparation(overrides: Record<string, unknown> = {}) {
   const mint = vi.fn(createTestMcpLoopbackClientGrant);
   const revoke = vi.fn(() => true);
@@ -68,15 +78,7 @@ export function registerCliMcpPreparationTests({
       transferMcpLoopbackClientGrant: transferGrant,
       resolveMcpLoopbackScopedTools: () => ({
         agentId: "main",
-        tools: [
-          {
-            name: "message",
-            label: "Message",
-            description: "Send a message",
-            parameters: { type: "object", properties: {} },
-            execute: vi.fn(),
-          },
-        ],
+        tools: [createCliMcpTool("message", "Message", "Send a message")],
       }),
     });
     setRawCliBackendForPrepareTest({

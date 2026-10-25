@@ -21,6 +21,13 @@
     "undici": "8.12.2"
   },
   "openclaw": {
+    "build": {
+      "workerEntries": [
+        "./native-host-entry.ts",
+        "./relay-daemon-entry.ts",
+        "./setup-entry.ts"
+      ]
+    },
     "extensions": [
       "./index.ts"
     ],

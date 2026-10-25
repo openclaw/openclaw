@@ -225,6 +225,7 @@ export async function describeStandaloneRuntime(root) {
  * openclaw: import("../../cli-invocation.mjs").StandaloneBuildInfo["openclaw"],
  * embedded: {modules: number, plugins: number, workers: number, inlineWorkers: number},
  * plugins: {embedded: string[], omitted: string[]},
+ * pluginContract: ReturnType<typeof import("./bun-standalone-plugins.mjs").createStandalonePluginContract>,
  * pruning: {categories: Record<string, {files: number, bytes: number}>, sidecarPlugins: string[], policy?: string, removedFiles?: number, removedBytes?: number, removedSymlinks?: number},
  * sqlite: {version: string, [key: string]: unknown},
  * packageManager?: {name: string, version: string, entrypoint: string, fileCount: number, sizeBytes: number},
@@ -240,6 +241,7 @@ export async function createStandaloneManifest({
   openclaw,
   embedded,
   plugins,
+  pluginContract,
   pruning,
   sqlite,
   packageManager,
@@ -275,6 +277,7 @@ export async function createStandaloneManifest({
     plugins: {
       embedded: plugins.embedded.toSorted(),
       omitted: plugins.omitted.toSorted(),
+      contract: pluginContract,
     },
     pruning: pruningSummary,
     ...(process.platform === "darwin"

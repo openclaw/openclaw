@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { MockInstance } from "vitest";
 import { afterEach, assert, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { hangingFetchUntilAbort } from "../../test-support/hanging-fetch.test-support.js";
 import { createStreamingResponse } from "../../test-support/streaming-error-response.js";
 import { createDuckDuckGoWebSearchProvider } from "../web-search-contract-api.js";
 import { runDuckDuckGoSearch } from "./ddg-client.js";
@@ -256,20 +257,8 @@ it("keeps an explicit count ahead of the configured maxResults", async () => {
   expect(result.results).toHaveLength(2);
 });
 
-function mockHangingFetchUntilAbort() {
-  fetch.mockImplementation(
-    (_url, init) =>
-      new Promise<Response>((_resolve, reject) => {
-        init?.signal?.addEventListener("abort", () => {
-          const reason = init.signal?.reason;
-          reject(reason instanceof Error ? reason : new Error("aborted"));
-        });
-      }) as Promise<Response>,
-  );
-}
-
 it("cancels a slow DuckDuckGo search at the configured deadline", async () => {
-  mockHangingFetchUntilAbort();
+  fetch.mockImplementation(hangingFetchUntilAbort);
   const tool = createDuckDuckGoWebSearchProvider().createTool({
     config: {},
     searchConfig: { timeoutSeconds: 1 },
@@ -290,7 +279,7 @@ it("cancels a slow DuckDuckGo search at the configured deadline", async () => {
 it("keeps the client fallback deadline when timeoutSeconds is not configured", async () => {
   vi.useFakeTimers();
   try {
-    mockHangingFetchUntilAbort();
+    fetch.mockImplementation(hangingFetchUntilAbort);
     const tool = createSearchTool({ tools: { web: { search: { cacheTtlMinutes: 0 } } } });
     const pending = expect(tool.execute({ query: "fallback deadline" })).rejects.toThrow(
       /timed out|TimeoutError|aborted/i,

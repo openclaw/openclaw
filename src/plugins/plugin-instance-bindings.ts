@@ -104,24 +104,23 @@ type PluginInstanceBindingOwner = {
 /** Registration facts and captured stream scopes share the instance's lifetime. */
 export function createPluginInstanceBindings(bindings: PluginInstanceBindingOwner) {
   const factories = new WeakMap<object, true | "tool" | readonly PropertyKey[]>();
-  const admitFactory = (
-    factory: (...args: never[]) => unknown,
-    resultCallbacks?: "tool" | readonly PropertyKey[],
-  ): void => {
-    factories.set(factory, resultCallbacks ?? true);
-  };
   return {
-    admitFactory,
+    admitFactory: (
+      factory: (...args: never[]) => unknown,
+      resultCallbacks?: "tool" | readonly PropertyKey[],
+    ): void => void factories.set(factory, resultCallbacks ?? true),
     create(
       admit: <T>(run: () => T) => T,
       admitCallback: <T>(run: () => T) => T = (run) => admit(() => bindings.invoke(run)),
     ) {
-      return createPluginBindings(bindings, factories, admit, admitCallback);
+      // Unused custody needs no callable cache; each admission still owns its views.
+      let wrap: ReturnType<typeof createPluginBindings> | undefined;
+      return <T>(value: T): T =>
+        (wrap ??= createPluginBindings(bindings, factories, admit, admitCallback))(value);
     },
   };
 }
 
-/** Builds callable views while the exact instance continues to own admission and leases. */
 function createPluginBindings(
   bindings: PluginInstanceBindingOwner,
   factories: WeakMap<object, true | "tool" | readonly PropertyKey[]>,

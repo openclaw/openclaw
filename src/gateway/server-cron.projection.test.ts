@@ -56,6 +56,47 @@ describe("Gateway legacy heartbeat projection lifecycle", () => {
     }));
   });
 
+  it("broadcasts retained automation status and check freshness after a run", async () => {
+    await withOpenClawTestState({ label: "cron-result-broadcast" }, async () => {
+      const broadcast = vi.fn();
+      const service = loadCronService(projectionConfig(), { broadcast });
+      assert(typeof service.cron.stopAndDrain === "function");
+      const job = projectionJob("projection-result", Date.now());
+      job.state.lastTriggerEvalAtMs = job.createdAtMs - 1_000;
+      runCronSessionTurnMock.mockResolvedValue({
+        status: "ok",
+        summary: "Waiting for release approval.",
+        result: { outcome: "blocked", summary: "Waiting for release approval." },
+      });
+      try {
+        await saveCronJobsStore(service.storePath, { version: 1, jobs: [job] });
+        await service.cron.start();
+        await service.cron.run(job.id, "force");
+        expect(broadcast).toHaveBeenCalledWith(
+          "cron",
+          expect.objectContaining({
+            action: "finished",
+            job: expect.objectContaining({
+              id: job.id,
+              state: expect.objectContaining({
+                lastDurationMs: expect.any(Number),
+                lastTriggerEvalAtMs: job.state.lastTriggerEvalAtMs,
+                lastMeaningfulResult: {
+                  outcome: "blocked",
+                  summary: "Waiting for release approval.",
+                  atMs: expect.any(Number),
+                },
+              }),
+            }),
+          }),
+          expect.anything(),
+        );
+      } finally {
+        await service.cron.stopAndDrain();
+      }
+    });
+  });
+
   it("loads once per start and reopens receipt membership after the same service restarts", async () => {
     await withOpenClawTestState({ label: "cron-projection-restart" }, async () => {
       const service = loadCronService(projectionConfig());

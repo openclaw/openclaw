@@ -4,7 +4,10 @@ import type { SecretStoreEntry } from "../../../../packages/gateway-protocol/src
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context-types.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
-import { createApplicationGateway } from "../../test-helpers/application-context-fixtures.ts";
+import {
+  createApplicationGatewaySnapshot,
+  createApplicationGateway,
+} from "../../test-helpers/application-context-fixtures.ts";
 import {
   createGatewayRequestMock,
   createTestGatewayClient,
@@ -30,22 +33,17 @@ function entry(name: string): SecretStoreEntry {
 }
 
 function mountPage(request: ReturnType<typeof createGatewayRequestMock>) {
-  const snapshot: ApplicationGatewaySnapshot = {
+  const snapshot: ApplicationGatewaySnapshot = createApplicationGatewaySnapshot({
     client: createTestGatewayClient(request),
     phase: "connected",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
-    assistantAgentId: null,
     sessionKey: "main",
-    lastError: null,
-    lastErrorCode: null,
     hello: {
       type: "hello-ok",
       protocol: 1,
       auth: { role: "operator", scopes: ["operator.admin"] },
       features: { methods: ["secrets.store.list", "secrets.store.set"], events: [] },
     },
-  };
+  });
   const source = createApplicationGateway(snapshot);
   let pathname = "/settings/secrets";
   const listeners = new Set<() => void>();

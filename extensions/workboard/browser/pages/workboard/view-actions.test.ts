@@ -17,6 +17,38 @@ import {
 } from "./view.test-support.ts";
 
 describe("WorkboardView", () => {
+  it.each(["board", "list"] as const)(
+    "returns focus to a visible selected card in the same %s view when clearing selection",
+    (viewMode) => {
+      const other = createWorkboardView({ canWrite: true });
+      const current = createWorkboardView({ canWrite: true });
+      for (const view of [other, current]) {
+        view.state.viewMode = viewMode;
+        view.state.cards = [
+          createWorkboardCard({ id: "collapsed", status: "todo" }),
+          createWorkboardCard({ id: "unselected", status: "running" }),
+          createWorkboardCard({ id: "selected", status: "running", position: 2000 }),
+        ];
+        view.state.selectedCardIds = new Set(["collapsed", "selected"]);
+        view.renderView();
+      }
+      current.state.collapsedStatuses.add("todo");
+      current.renderView();
+      const selected = expectDefined(
+        current.container.querySelector<HTMLElement>(".workboard-card--selected"),
+        "visible selected card",
+      );
+      const clear = requireButton(current.container, "Clear selection");
+      clear.focus();
+      clear.click();
+      current.renderView();
+      expect(current.state.selectedCardIds.size).toBe(0);
+      expect(current.container.querySelector(".workboard-selection")).toBeNull();
+      expect(document.activeElement).toBe(selected);
+      expect(other.state.selectedCardIds).toEqual(new Set(["collapsed", "selected"]));
+    },
+  );
+
   it("retries only pending bulk edits after the second card fails", async () => {
     const first = createWorkboardCard({ id: "first", agentId: "writer" });
     const second = createWorkboardCard({ id: "second", agentId: "writer", position: 2000 });

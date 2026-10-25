@@ -1195,6 +1195,53 @@ describe("package-openclaw-for-docker", () => {
     expect(entries).not.toContain("package/dist/runtime-OLDHASH.js");
   });
 
+  it.each([false, true])(
+    "packs hardlinked bundled assets as regular files (pnpm=%s)",
+    async (pnpmPack) => {
+      const sourceDir = createPackageSourceFixture("openclaw-package-hardlinks-source-");
+      const outputDir = tempDirs.make("openclaw-package-hardlinks-output-");
+      const bundleDir = path.join(sourceDir, "node_modules/fixture-bundle");
+      fs.mkdirSync(bundleDir);
+      fs.mkdirSync(path.join(sourceDir, "dist"));
+      fs.writeFileSync(path.join(sourceDir, "dist/index.js"), "export {};\n");
+      fs.writeFileSync(
+        path.join(sourceDir, "package.json"),
+        JSON.stringify({
+          name: "openclaw",
+          version: "2026.8.26",
+          files: ["dist"],
+          dependencies: { "fixture-bundle": "1.0.0" },
+          bundleDependencies: ["fixture-bundle"],
+        }),
+      );
+      fs.writeFileSync(
+        path.join(bundleDir, "package.json"),
+        '{"name":"fixture-bundle","version":"1.0.0"}',
+      );
+      const contents = "body { color: red; }\n";
+      const assets = ["original.css", "duplicate.css"] as const;
+      fs.writeFileSync(path.join(bundleDir, assets[0]), contents);
+      fs.linkSync(path.join(bundleDir, assets[0]), path.join(bundleDir, assets[1]));
+
+      const tarball = await packOpenClawPackageForDocker(sourceDir, outputDir, {
+        ...skipDocsMapLifecycle,
+        pnpmPack,
+        prepareChangelog: async () => {},
+        restoreChangelog: async () => {},
+      });
+      const types = new Map<string, string>();
+      await tar.t({ file: tarball, onentry: (entry) => types.set(entry.path, entry.type) });
+      const extracted = tempDirs.make("openclaw-package-hardlinks-extracted-");
+      await tar.x({ file: tarball, cwd: extracted });
+      for (const asset of assets) {
+        const relativePath = `package/node_modules/fixture-bundle/${asset}`;
+        expect(types.get(relativePath)).toBe("File");
+        expect(fs.readFileSync(path.join(extracted, relativePath), "utf8")).toBe(contents);
+        expect(fs.statSync(path.join(bundleDir, asset)).nlink).toBe(2);
+      }
+    },
+  );
+
   it.skipIf(process.platform === "win32").each([false, true])(
     "reports portable artifacts from owner-only sources (pnpm=%s)",
     async (pnpmPack) => {

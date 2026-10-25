@@ -78,6 +78,17 @@ function expectAgentWaitRequest(
   expect(paramTimeoutMs).toBeLessThanOrEqual(maxParamTimeoutMs);
 }
 
+function cappedHistoryReply() {
+  return {
+    messages: [
+      {
+        ...textAssistant("Report head\n...(truncated)..."),
+        __openclaw: { id: "msg-1", truncated: true, reason: "display-cap" },
+      },
+    ],
+  };
+}
+
 describe("readLatestAssistantReply", () => {
   beforeEach(() => {
     callGatewayMock.mockReset();
@@ -214,14 +225,7 @@ describe("readLatestAssistantReply", () => {
   it("reads the full message when history returns a display-capped preview", async () => {
     callGatewayMock.mockImplementation(async (request) => {
       if (request.method === "chat.history") {
-        return {
-          messages: [
-            {
-              ...textAssistant("Report head\n...(truncated)..."),
-              __openclaw: { id: "msg-1", truncated: true, reason: "display-cap" },
-            },
-          ],
-        };
+        return cappedHistoryReply();
       }
       return { ok: true, message: textAssistant("Report head and the full remainder.") };
     });
@@ -241,14 +245,7 @@ describe("readLatestAssistantReply", () => {
   it("returns no reply when the full-message lookup is rejected", async () => {
     callGatewayMock.mockImplementation(async (request) => {
       if (request.method === "chat.history") {
-        return {
-          messages: [
-            {
-              ...textAssistant("Report head\n...(truncated)..."),
-              __openclaw: { id: "msg-1", truncated: true, reason: "display-cap" },
-            },
-          ],
-        };
+        return cappedHistoryReply();
       }
       throw new Error("session changed while reading history; reload the conversation");
     });

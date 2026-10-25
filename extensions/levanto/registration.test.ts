@@ -7,11 +7,9 @@ import {
   type DecisionProviderContextV2,
 } from "openclaw/plugin-sdk/decisions";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import plugin from "./index.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
+import { registerLevantoTestProvider } from "./registration.test-support.js";
 
 const batch: DecisionBatchV2 = {
   state: { type: "text", text: "Explicit synthetic evidence" },
@@ -55,19 +53,8 @@ function fixture(response?: Response) {
     fetch.mockResolvedValue(response);
   }
   vi.stubGlobal("fetch", fetch);
-  const registerDecisionProvider = vi.fn<OpenClawPluginApi["registerDecisionProvider"]>();
-  const api = createTestPluginApi({ id: "levanto", registerDecisionProvider });
   const probe = vi.fn(async () => ({ width: 1, height: 1 }));
-  api.runtime.media = {
-    getImageMetadata: probe,
-    loadWebMedia: vi.fn(),
-    detectMime: vi.fn(),
-    mediaKindFromMime: vi.fn(),
-    isVoiceCompatibleAudio: vi.fn(),
-    resizeToJpeg: vi.fn(),
-  };
-  plugin.register(api);
-  const provider = registerDecisionProvider.mock.calls[0]?.[0];
+  const provider = registerLevantoTestProvider(probe);
   assert(provider?.contractVersion === 2);
   const context: DecisionProviderContextV2 = {
     model: {

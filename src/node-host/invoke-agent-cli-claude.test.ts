@@ -847,10 +847,7 @@ process.stdout.write(Buffer.concat([
     const controller = new AbortController();
     const request = { argv: ["-p"], idleTimeoutMs: 5_000, timeoutMs: 10_000 };
     const calls: Calls = [];
-    let resolveProgress!: () => void;
-    const progressObserved = new Promise<void>((resolve) => {
-      resolveProgress = resolve;
-    });
+    const { promise: progressObserved, resolve: resolveProgress } = createDeferred();
     const run = runCommand(executable, request, {
       client: client(calls, resolveProgress),
       signal: controller.signal,

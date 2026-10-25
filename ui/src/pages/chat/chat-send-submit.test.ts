@@ -438,6 +438,23 @@ describe("Home work context admission", () => {
 });
 
 describe("handleSendChat immediate local commands", () => {
+  it("shows export read failures without clearing the draft or staged attachments", async () => {
+    const attachment = createStagedAttachment("failed-export-att");
+    const host = makeChatHost({
+      chatMessage: "/export",
+      chatAttachments: [attachment],
+      exportCurrentChat: async () => {
+        throw new Error("History unavailable; retry export.");
+      },
+      requestHandlers: {},
+    });
+    await handleSendChat(host);
+    expect(host.chatError).toContain("History unavailable; retry export.");
+    expect(host.chatMessage).toBe("/export");
+    expect(host.chatAttachments).toEqual([attachment]);
+    expect(host.request).not.toHaveBeenCalled();
+  });
+
   it.each(["draft", "session"])("keeps a newer %s intact when export finishes", async (change) => {
     const exported = createDeferred<"downloaded">();
     const attachment = createStagedAttachment("pending-export-att");

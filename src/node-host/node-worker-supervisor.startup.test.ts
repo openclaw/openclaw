@@ -32,15 +32,15 @@ import type { NodeWorkerChildAdapter } from "./node-worker-launch-transport.js";
 import * as workerProcessIdentity from "./node-worker-process-identity.js";
 import { createNodeWorkerLaunchRecovery } from "./node-worker-supervisor-recovery.js";
 import {
-  createNodeWorkerSupervisorFixture,
+  createObservedNodeWorkerSupervisorFixture,
   observeNodeWorkerAdapters,
-  waitForNodeWorkerTerminal as waitForTerminal,
 } from "./node-worker-supervisor.fixture.test-support.js";
 import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
 import {
   TEST_WORKER_ENDPOINT,
   testNodeWorkerEnvironmentIdentity,
   testNodeWorkerLaunchIdentity,
+  testIsolatedWorkerLaunchInput as launchInput,
   testWorkerLaunchInput,
 } from "./node-worker-supervisor.test-support.js";
 import * as workerTreeControl from "./node-worker-tree-control.js";
@@ -65,31 +65,17 @@ afterEach(() => {
 });
 
 function fixture(options: Parameters<typeof createNodeWorkerSupervisor>[0] = {}) {
-  const capacities: Array<{ total: number; available: number }> = [];
-  const value = createNodeWorkerSupervisorFixture(tempDirs.make("node-worker-startup-"), {
-    onCapacityChanged: (capacity) => capacities.push(capacity),
-    ...options,
-  });
-  const { supervisor, env, workspaceDir } = value;
+  const value = createObservedNodeWorkerSupervisorFixture(
+    tempDirs.make("node-worker-startup-"),
+    options,
+  );
+  const { supervisor, env } = value;
   return {
     ...value,
-    capacities,
     store: () => new NodeWorkerLaunchStore(new NodeWorkerJournalWorker({ env })),
-    receipt: (id: string) =>
-      new NodeWorkerLaunchStore(new NodeWorkerJournalWorker({ env })).get(id),
     launch: (input: ReturnType<typeof launchInput>, signal?: AbortSignal) =>
       supervisor.launch(input, TEST_WORKER_ENDPOINT, signal),
-    terminal: (id: string) => waitForTerminal(supervisor, id),
-    file: (name: string) => path.join(workspaceDir, name),
-    [Symbol.asyncDispose]: () => supervisor.close(),
   };
-}
-
-function launchInput(workspaceDir: string, launchId: string, prompt = "success") {
-  const input = testWorkerLaunchInput(workspaceDir, launchId, prompt);
-  input.descriptor.admission.environmentId = `environment-${launchId}`;
-  input.descriptor.admission.sessionId = `session-${launchId}`;
-  return input;
 }
 
 function writeWorker(bundleRoot: string, input: ReturnType<typeof launchInput>, source: string) {

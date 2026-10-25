@@ -136,12 +136,11 @@ function visibilityProbe() {
   };
 }
 
-it("pauses offscreen session indicators and resumes them when their rows scroll into view", async () => {
+it("unmounts offscreen session content and restores its live indicators when scrolled back", async () => {
   const probe = visibilityProbe();
-  const { observers, activeObservers, intersections } = probe;
   const harness = createSessionsHarness("main", []);
-  const roster = runState({ icon: "🦞" });
-  roster.result!.owners = [
+  const rows = runState({ icon: "🦞" });
+  rows.result!.owners = [
     { type: "human", id: "ada", label: "Ada" },
     { type: "human", id: "bob", label: "Bob" },
   ];
@@ -149,98 +148,86 @@ it("pauses offscreen session indicators and resumes them when their rows scroll 
     createGateway({} as GatewayBrowserClient),
     harness.sessions,
   );
-  let scroller = sizeSidebar(sidebar, 240);
-  expect(observers).toHaveLength(0);
-  harness.publishList(roster);
+  const scroller = sizeSidebar(sidebar, 240);
+  harness.publishList(rows);
   await settleRoster(sidebar);
-  const revealRunningRows = async () => {
-    await revealPages(sidebar);
-    await waitForSolid(() => {
-      const running = runningRows(sidebar, indicatorSelector);
-      expect(running).toHaveLength(11);
-      expect(running.every((row) => intersections.has(row))).toBe(true);
-    });
-  };
-  await revealRunningRows();
-  expect(observers).toHaveLength(1);
-  expect(observers[0]!.root).toBe(scroller);
-  const rows = runningRows(sidebar);
-  expect(rows).toHaveLength(11);
-  expect(scroller.scrollHeight).toBeGreaterThan(scroller.clientHeight);
-  const first = rows[0]!;
-  const last = rows.at(-1)!;
-  const scrollTo = async (row: HTMLElement, ready = () => true) => {
-    probe.reset(ready);
-    scroller.scrollTop += row.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
-    await waitForSolid(() => expect(offscreen(ring(first))).toBe(true));
-  };
-  expect(first.getBoundingClientRect().top).toBeLessThan(scroller.getBoundingClientRect().bottom);
+  await revealPages(sidebar);
+  const row = (index: number) =>
+    sidebar.querySelector<HTMLElement>(`[data-session-key="agent:main:run-${index}"]`);
+  await waitForSolid(() => {
+    expect(row(0)).not.toBeNull();
+    expect(row(29)).toBeNull();
+    expect(sidebar.querySelectorAll("[data-session-key]").length).toBeLessThan(40);
+  });
+  const first = row(0)!;
   expectIndicator(ring(first), false, "running");
-  await waitForSolid(() => expect(offscreen(ring(last))).toBe(true));
-  expect(getComputedStyle(ring(last)).animationPlayState).toBe("paused");
-
-  scroller.scrollTop += last.getBoundingClientRect().top - scroller.getBoundingClientRect().bottom;
-  await waitForSolid(() => expect(intersections.get(last)?.isIntersecting).toBe(true));
-  expect(intersections.get(last)?.intersectionRatio).toBe(0);
-  expect(offscreen(ring(last))).toBe(false);
-
-  await scrollTo(last, () => intersections.get(first)?.isIntersecting === false);
-  expectIndicator(ring(first), true, "paused");
-  expectIndicator(ring(last), false, "running");
-
+  expect(probe.activeObservers.size).toBe(1);
+  const totalHeight = scroller.scrollHeight;
+  scroller.scrollTop = 25 * 32;
+  scroller.dispatchEvent(new Event("scroll"));
+  await waitForSolid(() => {
+    expect(row(0)).toBeNull();
+    expect(row(29)).not.toBeNull();
+  });
+  expect(first.isConnected).toBe(false);
+  const last = row(29)!;
+  await waitForSolid(() => expect(offscreen(ring(last))).toBe(false));
+  expect(scroller.scrollHeight).toBe(totalHeight);
   const updateRows = async (patch: Partial<GatewaySessionRow>) => {
     const result = harness.sessions.state.result!;
     harness.publishList({
       result: {
         ...result,
-        sessions: result.sessions.map((row) =>
-          rows.some((element) => element.dataset.sessionKey === row.key)
-            ? Object.assign({}, row, patch)
-            : row,
-        ),
+        sessions: result.sessions.map((session) => Object.assign({}, session, patch)),
       },
     });
     await settleRoster(sidebar);
   };
   await updateRows({ status: "queued" });
-  await waitForSolid(() => expect(offscreen(ring(first))).toBe(true));
-  expectIndicator(ring(last), false, "paused");
-  expect(ring(first).classList.contains("session-glyph__ring--queued")).toBe(true);
-  expect(getComputedStyle(ring(first)).animationPlayState).toBe("paused");
+  await waitForSolid(() =>
+    expect(ring(row(29)!).classList.contains("session-glyph__ring--queued")).toBe(true),
+  );
+  expectIndicator(ring(row(29)!), false, "paused");
   await updateRows({ status: "running", icon: "", ...pair });
-  await waitForSolid(() => expect(offscreen(trace(first))).toBe(true));
-  expect(getComputedStyle(trace(first)).animationPlayState).toBe("paused");
-  expectIndicator(trace(last), false, "running");
-
-  expect(activeObservers.size).toBe(1);
-  const unobserve = vi.spyOn([...activeObservers][0]!, "unobserve");
+  await waitForSolid(() => expect(offscreen(trace(row(29)!))).toBe(false));
+  expectIndicator(trace(row(29)!), false, "running");
+  const viewportTop = scroller.getBoundingClientRect().top;
+  const anchor = [...sidebar.querySelectorAll<HTMLElement>("[data-session-key]")].find(
+    (element) => element.getBoundingClientRect().top >= viewportTop,
+  )!;
+  const anchorKey = anchor.dataset.sessionKey;
+  const anchorOffset = anchor.getBoundingClientRect().top - viewportTop;
+  sidebar.navigationView = "pages";
+  await settleRoster(sidebar);
+  sidebar.navigationView = "sessions";
+  await settleRoster(sidebar);
+  await waitForSolid(() => {
+    const restored = sidebar.querySelector<HTMLElement>(`[data-session-key="${anchorKey}"]`);
+    expect(restored).not.toBeNull();
+    expect(
+      Math.abs(restored!.getBoundingClientRect().top - viewportTop - anchorOffset),
+    ).toBeLessThan(1);
+  });
+  scroller.scrollTop = 0;
+  scroller.dispatchEvent(new Event("scroll"));
+  await waitForSolid(() => expect(row(0)).not.toBeNull());
+  await waitForSolid(() => expect(offscreen(trace(row(0)!))).toBe(false));
+  expectIndicator(trace(row(0)!), false, "running");
   await updateRows({ hasActiveRun: false, status: "done" });
-  expect(unobserve).toHaveBeenCalledTimes(11);
   expect(sidebar.querySelector(indicatorSelector)).toBeNull();
-  expect(activeObservers.size).toBe(0);
+  expect(probe.activeObservers.size).toBe(0);
   await updateRows({ hasActiveRun: true, status: "running" });
-  expect(activeObservers.size).toBe(1);
-  await waitForSolid(() => expect(offscreen(trace(first))).toBe(true));
-
-  const disconnect = vi.spyOn([...activeObservers][0]!, "disconnect");
+  expect(probe.activeObservers.size).toBe(1);
+  const disconnect = vi.spyOn([...probe.activeObservers][0]!, "disconnect");
   sidebar.remove();
   await sidebar.updateComplete;
   expect(disconnect).toHaveBeenCalledOnce();
-  expect(activeObservers.size).toBe(0);
-  probe.reset();
+  expect(probe.activeObservers.size).toBe(0);
   provider.append(sidebar.hostElement);
   await settleRoster(sidebar);
-  scroller = sizeSidebar(sidebar, 240);
-  await revealRunningRows();
-  expect(activeObservers.size).toBe(1);
-  const reconnectedRows = runningRows(sidebar, ".session-glyph__trace-run");
-  expect(reconnectedRows).toHaveLength(11);
-  probe.reset();
-  scroller.scrollTop +=
-    reconnectedRows.at(-1)!.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
-  await probe.delivered;
-  await waitForSolid(() => expect(offscreen(trace(reconnectedRows[0]!))).toBe(true));
-  expect(getComputedStyle(trace(reconnectedRows.at(-1)!)).animationPlayState).toBe("running");
+  sizeSidebar(sidebar, 240);
+  await waitForSolid(() => expect(row(0)).not.toBeNull());
+  expect(probe.activeObservers.size).toBe(1);
 });
 
 it("registers the aggregate agent run ring without exposing session rows", async () => {

@@ -13,6 +13,12 @@ awaits operations, retains owner-published facts, and checks current authority
 before effects. Moving a query to a worker is not enough: reuse those facts and
 batch related work so ordinary requests do not repeat database calls.
 
+Recovered operator runs retain validated profile facts until the bound catalog's
+profile row changes. Each policy check still verifies the original catalog's
+lifetime, mutation settlement, canonical identity, and required email bindings,
+including after access-policy callbacks. An unchanged row avoids rebuilding the
+same facts; pending or uncertain mutations and retired owners still refuse use.
+
 Transcript reads capture scalar anchor and turn-admission fields before yielding,
 including whether an optional idempotency key is present. These private copies
 keep later caller mutations out of the read. Message payloads retain separate
@@ -59,6 +65,9 @@ includes its shared revision cells; later publications send only new or replaced
 facts, session scopes, and reference cells. Existing cells carry invalidation
 directly, so changing one fact does not resend every session's shared buffer.
 A new worker or database generation receives a complete snapshot.
+Worker exit republishes only databases that held that worker's reference; an
+unrelated exit does not rescan retained session scopes. Interrupted-write
+settlement and shared reference revocation still precede publication.
 
 Use the existing read-only worker scope for descriptive reads and the store's
 writer broker for mutations. Keep multi-statement snapshot reads together; use
@@ -6661,7 +6670,7 @@ the existing commit receipts. Manager ordering, live write authority, and commit
 view adoption remain unchanged. Released synchronous persistence methods retain
 their separate native adapter.
 
-Transcript rewrite preparation and publication copy mutable view containers while
+Transcript hydration residency, rewrite preparation, and publication copy mutable view containers while
 retaining already-owned string values, so old tool results and image payloads do
 not require another full byte copy on the main thread. Prepared views remain
 independently mutable. Opaque structured-cloneable SDK data retains native snapshot

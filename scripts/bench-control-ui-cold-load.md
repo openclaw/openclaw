@@ -178,6 +178,31 @@ For a boot-weight comparison, use `--bundle-dir <base> --compare-bundle-dir <hea
 each build's own warm state. Every run records `presentation.firstNonemptyTranscriptMs`
 and `presentation.firstEnabledComposerMs` from visible DOM observed on animation
 frames; these are readiness observations, not compositor paint timestamps.
+
+Every run also records browser paint entries (`presentation.firstPaintMs` and
+`firstContentfulPaintMs`), the first visible `#openclaw-boot-shell` frame and its
+geometry, and the first live shell's geometry. Layout-shift entries retain their
+source rectangles and `hadRecentInput` flag. `presentation.cls` uses the largest
+five-second session window with less than one second between non-input shifts;
+`nonRecentInputShiftSum` retains the total for the measured boot. A zero CLS alone
+does not prove matching geometry when DOM nodes are replaced: inspect the static
+and live frame/sidebar/composer rectangles and the filmstrip too.
+
+For a first-paint diagnostic, use the same built bundles with `--filmstrip-only`
+instead of `--untraced`. This saves `run-N.filmstrip/*.jpg` without the heavy
+warm-reload probes. `visual.visuallyCompleteMs` estimates the earliest compositor
+frame in the final stable suffix; at 344×236, fewer than 0.4% of pixels may differ
+from the final frame by a channel value of at least 32. This excludes small/JPEG
+changes and includes skeleton animation, so inspect frames rather than treating
+it as a browser-standard paint metric. Traced filmstrip and untraced readiness
+samples are separate populations. Compare cold (`--first-load`) and warm (omit
+`--first-load`) runs independently, on localhost and with
+`--network-latency-ms 100 --download-kbps 10000` for a simulated remote link.
+Add `--hold-boot-assets --first-load --runs 1` to a filmstrip diagnostic to hold all
+external scripts and stylesheets, capture `boot-assets-held.png` plus completed
+resource counts/geometry, then release them and verify ordinary chat readiness.
+This deliberately blocked-assets sample is structural HTML-only paint proof,
+not a latency sample.
 Keep profiling and the optional warm-reload probes out of this timing run.
 Console progress contains readiness and host load; full RPC and resource records
 are serialized to `summary.json` after all runs, outside the preview-server workload.
@@ -189,6 +214,15 @@ before reload through settlement (and any requested `--capture-ms` extension).
 These are CPU deltas rather than elapsed wall time; later live, streaming, and
 session-switch phases retain the same selected time domain. Default runs keep
 CDP's `timeTicks` domain.
+
+Use a separate `--coverage --runs 1 --first-load --cold-http-cache --untraced`
+capture to inspect JavaScript exercised by cold boot. Each `run-N.coverage.json`
+records V8 function/block ranges and loaded, executed, and unused UTF-8 bytes per
+asset through settlement; nested block counts override enclosing function counts.
+Keep coverage captures separate from timing comparisons because instrumentation
+changes execution cost. Source maps and the exact saved bundle allow attribution
+of the unused ranges; preload transfer budgets remain the performance checker's
+authority, including assets that have not executed.
 
 On a noisy host, run an A/A control before interpreting candidate differences.
 First copy the baseline bundle to a separate directory (`cp -R <base> <control>`):
@@ -205,12 +239,19 @@ so those scores identify expensive modules but are not additive transfer costs;
 the existing shipped gzip sidecars remain the route budget authority.
 
 Every reload replays the warm visit's persisted sidebar and trimmed v8 transcript
-(after unloading the app), local storage and session storage; the HTTP cache stays warm.
+(after unloading the app), local storage and session storage. `--gateway-http`
+serves synthetic HTTP fixtures natively so production JS/CSS can use the browser's
+cache during warm reloads. Without that option, Playwright's synthetic HTTP routes
+disable caching: "warm" then describes persisted application state only.
+`http.waterfall[].transferBytes` records the actual transfer.
 
-`--warm-reload --probe-dir /path/to/probes` adds cache/paint diagnostics. The probe directory supplies `loaf-mutation.init.js` and
-`ws-rpc-census.init.js`. The output records cache reads, cached transcript visibility,
+`--warm-reload` adds self-contained cache/paint diagnostics. An optional
+`--probe-dir /path/to/probes` supplies `mutattr.init.js`, `loaf-mutation.init.js`,
+and `ws-rpc-census.init.js` for additional attribution; `externalRig` records which
+extra instruments are available. The output records cache reads, cached transcript visibility,
 hello, live catch-up, enabled input, layout shifts, mutation batches, and retained
-row elements. Visibility and enabled-input milestones are DOM observations;
+row elements, duplicate visible row keys, and the same visible row's viewport offset
+at the cached-to-live handoff. Visibility and enabled-input milestones are DOM observations;
 FCP is the browser's paint metric. Diagnostic runs also save filmstrip frames.
 Use `--untraced` for timing comparisons without boot tracing or CPU sampling,
 then collect separate traced runs for the storyboard and attribution.
@@ -394,3 +435,21 @@ missed. The largest source-attributed native getter is `scrollHeight` from
 `ui/src/components/scroll-state-observer.ts:19` (107–199 ms sampled self time).
 The Online attempt returned to Sessions after reload and is excluded from these
 numbers; the fixture E2E opens Online explicitly to verify all 120 people.
+
+### Initial completed and active transcript
+
+Use `scripts/bench-control-ui-rich-boot.ts` to isolate first-screen transcript
+content from the larger inventory workload. It serves production bundles through
+the Gateway HTTP owner with synthetic RPC, starts with one completed tool run and
+one active answer, and records the first visible composer, completed answer, and
+active answer. It interleaves base, an identical base control, and head with cold
+HTTP caches, renderer thread CPU, host load, screenshots, and resource timing.
+
+```sh
+node --import ./scripts/tsx.mjs scripts/bench-control-ui-rich-boot.ts \
+  --bundle-dir /path/to/base --compare-bundle-dir /path/to/head \
+  --pairs 20 --network-latency-ms 100 --output .artifacts/rich-boot-rtt
+```
+
+Omit network latency for localhost; a positive latency also applies 10 Mbps
+throughput. These results cover browser rendering, not provider latency.

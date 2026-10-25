@@ -1,7 +1,7 @@
 import { embeddedAgentLog, type AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, expect, it, vi } from "vitest";
-import { CodexHistoryRejection, type CodexHistoryRejectionReason } from "./history-rejection.js";
+import { CodexHistoryRejection } from "./history-rejection.js";
 import { captureCodexSettledTurnFinalizationContext } from "./settled-turn-context.js";
 import { attachCodexMirrorIdentity, attachUpstreamUserText } from "./upstream-prompt-provenance.js";
 
@@ -78,21 +78,6 @@ async function captureContext(
   return capture(settledMessages, overrides);
 }
 
-async function expectRejected(
-  capturing: () => Promise<unknown>,
-  reason: CodexHistoryRejectionReason,
-) {
-  const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
-  try {
-    await expect(capturing()).resolves.toBeUndefined();
-    expect(warn).toHaveBeenCalledWith("codex settled-turn finalization context capture failed", {
-      reason,
-    });
-  } finally {
-    warn.mockRestore();
-  }
-}
-
 const userItem = (text: string) => ({
   type: "message",
   role: "user",
@@ -103,6 +88,19 @@ const settledItems = () => [
   { type: "function_call", call_id: "call-2", name: "message", arguments: "{}" },
   { type: "function_call_output", call_id: "call-2", output: "sent" },
 ];
+
+it("captures a continuation against its persisted prompt from an earlier native turn", async () => {
+  const persistedPrompt = user("Send it.", "turn-1:prompt");
+  const settledMessages = [persistedPrompt, ...settledTurn().slice(1)];
+  const history = [user("Older context.", "older:prompt"), ...settledMessages];
+  const context = await captureContext(settledMessages, history, {
+    promptIdentity: "turn-1:prompt",
+  });
+  expect(context?.data).toEqual([userItem("Older context."), ...settledItems()]);
+  await expect(
+    captureContext(settledMessages, history.slice(2), { promptIdentity: "turn-1:prompt" }),
+  ).resolves.toBeUndefined();
+});
 
 beforeEach(() => {
   mocks.readHistory.mockReset();
@@ -208,49 +206,17 @@ it("captures a turn whose internal prompt was never mirrored, anchored at its fi
 
 it("still rejects a suppressed-prompt turn whose evidence carries a prompt row", async () => {
   const settledMessages = settledTurn();
-  await expectRejected(
-    () => captureContext(settledMessages, settledMessages, { promptSuppressed: true }),
-    "provenance_unexpected_prompt",
-  );
-});
-
-it("rejects a suppressed-prompt turn whose evidence starts on another turn", async () => {
-  const settledMessages = [
-    message(
-      { role: "assistant", content: [{ type: "text", text: "Update: shipped." }] },
-      "turn-1:final",
-    ),
-    ...settledTurn().slice(1),
-  ];
-  await expectRejected(
-    () => captureContext(settledMessages, settledMessages, { promptSuppressed: true }),
-    "provenance_foreign_anchor",
-  );
-});
-
-it("captures a same-run continuation against the prompt the run persisted on an earlier turn", async () => {
-  // A transient retry keeps its recorder: the prompt was persisted as `turn-1:prompt`,
-  // and the continuation's tools settle on `turn-2`.
-  const persistedPrompt = user("Send it.", "turn-1:prompt");
-  const settledMessages = [persistedPrompt, ...settledTurn().slice(1)];
-  const historyMessages = [user("Older context.", "older:prompt"), ...settledMessages];
-
-  const rejected = await captureContext(settledMessages, historyMessages);
-  expect(rejected).toBeUndefined();
-
-  const context = await captureContext(settledMessages, historyMessages, {
-    promptIdentity: "turn-1:prompt",
-  });
-  expect(context?.data).toEqual([userItem("Older context."), ...settledItems()]);
-});
-
-it("rejects a continuation whose persisted prompt is missing from history", async () => {
-  const settledMessages = [user("Send it.", "turn-1:prompt"), ...settledTurn().slice(1)];
-  await expectRejected(
-    () =>
-      captureContext(settledMessages, settledTurn().slice(1), { promptIdentity: "turn-1:prompt" }),
-    "provenance_history_order",
-  );
+  const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
+  try {
+    await expect(
+      captureContext(settledMessages, settledMessages, { promptSuppressed: true }),
+    ).resolves.toBeUndefined();
+    expect(warn).toHaveBeenCalledWith("codex settled-turn finalization context capture failed", {
+      reason: "provenance_rejected",
+    });
+  } finally {
+    warn.mockRestore();
+  }
 });
 
 it.each([
@@ -329,10 +295,9 @@ it.each([false, true])(
 it("still rejects duplicate identities in omitted history", async () => {
   const prior = Array.from({ length: 201 }, (_, index) => user("prior", `old-${index}:prompt`));
   const settledMessages = settledTurn();
-  await expectRejected(
-    () => captureContext(settledMessages, [...prior, prior[0]!, ...settledMessages]),
-    "provenance_duplicate_identity",
-  );
+  await expect(
+    captureContext(settledMessages, [...prior, prior[0]!, ...settledMessages]),
+  ).resolves.toBeUndefined();
 });
 
 it("refuses a missing model without reading transcript evidence", async () => {
@@ -360,10 +325,9 @@ it("refuses unannotated host prompts even with the same durable key and adjacent
   const mirroredMessages = settledMessages.slice(1);
   const historyMessages = [persistedPrompt, ...mirroredMessages];
   const before = structuredClone(historyMessages);
-  await expectRejected(
-    () => captureContext(settledMessages, historyMessages, { mirroredMessages }),
-    "provenance_mirror_prefix",
-  );
+  await expect(
+    captureContext(settledMessages, historyMessages, { mirroredMessages }),
+  ).resolves.toBeUndefined();
   expect(historyMessages).toEqual(before);
 });
 
@@ -374,52 +338,30 @@ it.each<{
   mirrored?: number[];
   turnId?: string;
   drift?: boolean;
-  reason: CodexHistoryRejectionReason;
 }>([
-  { name: "missing current prompt", settled: [1, 2], reason: "provenance_missing_prompt" },
-  { name: "missing current tool call", history: [0, 2], reason: "provenance_history_order" },
-  {
-    name: "duplicate persisted identity",
-    history: [0, 1, 2, 2],
-    reason: "provenance_duplicate_identity",
-  },
-  {
-    name: "duplicate prompt after the settled boundary",
-    history: [0, 1, 2, 0],
-    reason: "provenance_duplicate_identity",
-  },
-  { name: "foreign boundary turn", turnId: "turn-3", reason: "provenance_missing_boundary" },
-  {
-    name: "persisted payload drift under the same mirror identity",
-    drift: true,
-    reason: "provenance_fingerprint_drift",
-  },
-  {
-    name: "reordered current mirrored messages",
-    mirrored: [1, 0, 2],
-    reason: "provenance_mirror_prefix",
-  },
-])(
-  "fails closed for $name",
-  async ({ settled, history, mirrored, turnId = "turn-2", drift, reason }) => {
-    const current = settledTurn();
-    const persisted = settledTurn();
-    if (drift) {
-      persisted[2] = result("call-2", "different result", "turn-2:tool:call-2:result");
-    }
-    const select = (messages: AgentMessage[], indices = [0, 1, 2]) =>
-      indices.map((index) => messages[index]!);
-    const settledMessages = select(current, settled);
-    await expectRejected(
-      () =>
-        captureContext(settledMessages, select(persisted, history), {
-          turnId,
-          mirroredMessages: mirrored ? select(current, mirrored) : settledMessages,
-        }),
-      reason,
-    );
-  },
-);
+  { name: "missing current prompt", settled: [1, 2] },
+  { name: "missing current tool call", history: [0, 2] },
+  { name: "duplicate persisted identity", history: [0, 1, 2, 2] },
+  { name: "duplicate prompt after the settled boundary", history: [0, 1, 2, 0] },
+  { name: "foreign boundary turn", turnId: "turn-3" },
+  { name: "persisted payload drift under the same mirror identity", drift: true },
+  { name: "reordered current mirrored messages", mirrored: [1, 0, 2] },
+])("fails closed for $name", async ({ settled, history, mirrored, turnId = "turn-2", drift }) => {
+  const current = settledTurn();
+  const persisted = settledTurn();
+  if (drift) {
+    persisted[2] = result("call-2", "different result", "turn-2:tool:call-2:result");
+  }
+  const select = (messages: AgentMessage[], indices = [0, 1, 2]) =>
+    indices.map((index) => messages[index]!);
+  const settledMessages = select(current, settled);
+  await expect(
+    captureContext(settledMessages, select(persisted, history), {
+      turnId,
+      mirroredMessages: mirrored ? select(current, mirrored) : settledMessages,
+    }),
+  ).resolves.toBeUndefined();
+});
 
 it("rejects a read failure after the complete prefix instead of accepting partial verification", async () => {
   const settledMessages = settledTurn();

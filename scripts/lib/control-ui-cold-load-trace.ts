@@ -7,6 +7,35 @@ import { z } from "zod";
 
 const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
 
+/** V8 offsets are UTF-16; nested block counts override their containing function. */
+export function summarizeScriptCoverage(entry: {
+  source?: string;
+  functions: readonly {
+    ranges: readonly { startOffset: number; endOffset: number; count: number }[];
+  }[];
+}) {
+  const source = entry.source ?? "";
+  const executed = new Uint8Array(source.length);
+  const ranges = entry.functions
+    .flatMap((fn) => fn.ranges)
+    .toSorted(
+      (left, right) => right.endOffset - right.startOffset - (left.endOffset - left.startOffset),
+    );
+  for (const range of ranges) {
+    executed.fill(range.count > 0 ? 1 : 0, range.startOffset, range.endOffset);
+  }
+  let executedBytes = 0;
+  let start = 0;
+  for (let index = 0; index <= source.length; index++) {
+    if (!executed[index]) {
+      executedBytes += Buffer.byteLength(source.slice(start, index));
+      start = index + 1;
+    }
+  }
+  const loadedBytes = Buffer.byteLength(source);
+  return { loadedBytes, executedBytes, unusedBytes: loadedBytes - executedBytes };
+}
+
 export type ColdLoadTraceEvent = {
   name?: string;
   ph: string;

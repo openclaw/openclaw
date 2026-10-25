@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { afterEach, expect, it, beforeEach, describe, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runCommandBuffered } from "../process/exec.js";
@@ -29,7 +28,10 @@ import {
   readUpdateCandidateStateInventoryInProcess,
   snapshotUpdateCandidateState,
 } from "./update-candidate-state.js";
-import { runUpdateCandidateSnapshotWorker } from "./update-candidate-state.test-support.js";
+import {
+  createStateSnapshotInput,
+  runUpdateCandidateSnapshotWorker,
+} from "./update-candidate-state.test-support.js";
 
 describe("snapshot inventory", () => {
   const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -431,19 +433,7 @@ describe("snapshot row identities", () => {
       db.close();
     }
     const original = await fs.readFile(source);
-    const input = {
-      stateDir,
-      targetStateDir,
-      candidateRoot: fileURLToPath(new URL("../../", import.meta.url)),
-      config: {},
-      env: {
-        ...process.env,
-        OPENCLAW_HOME: root,
-        OPENCLAW_STATE_DIR: stateDir,
-        OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
-        OPENCLAW_WORKSPACE_DIR: path.join(root, "workspace"),
-      },
-    };
+    const input = createStateSnapshotInput(root, stateDir, targetStateDir);
     const inventory = await readUpdateCandidateStateInventoryInProcess(input);
     await snapshotUpdateCandidateState({
       ...input,
@@ -504,19 +494,7 @@ describe("snapshot FTS integrity", () => {
       installSqliteFtsTokenizerMismatch(source, table);
     }
     const original = await fs.readFile(source);
-    const input = {
-      stateDir,
-      targetStateDir,
-      candidateRoot: fileURLToPath(new URL("../../", import.meta.url)),
-      config: {},
-      env: {
-        ...process.env,
-        OPENCLAW_HOME: root,
-        OPENCLAW_STATE_DIR: stateDir,
-        OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
-        OPENCLAW_WORKSPACE_DIR: path.join(root, "workspace"),
-      },
-    };
+    const input = createStateSnapshotInput(root, stateDir, targetStateDir);
     const inventory = await readUpdateCandidateStateInventoryInProcess(input);
     const snapshot = snapshotUpdateCandidateState({
       ...input,

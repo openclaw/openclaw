@@ -5,6 +5,7 @@ import {
 } from "openclaw/plugin-sdk/provider-http-test-mocks";
 import type { SpeechSynthesisRequest } from "openclaw/plugin-sdk/speech-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createSpeechDirectivePolicy } from "../test-support/speech-directive-policy.test-support.js";
 import { assertSupportedGoogleTtsModel, normalizeGoogleTtsModel } from "./speech-models.js";
 
 const transcode = vi.hoisted(() =>
@@ -383,16 +384,7 @@ describe("Google speech provider", () => {
       model: LEGACY,
       voiceName: "Leda",
     });
-    const policy = {
-      enabled: true,
-      allowText: true,
-      allowProvider: true,
-      allowVoice: true,
-      allowModelId: true,
-      allowVoiceSettings: true,
-      allowNormalization: true,
-      allowSeed: true,
-    };
+    const policy = createSpeechDirectivePolicy();
     expect(provider.parseDirectiveToken?.({ key: "google_voice", value: "Aoede", policy })).toEqual(
       { handled: true, overrides: { voiceName: "Aoede" } },
     );

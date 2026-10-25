@@ -64,6 +64,7 @@
     "node-compile-cache.mjs",
     "gateway-prewarm.mjs",
     "openclaw.mjs",
+    "standalone-runtime-profile.mjs",
     "worker-heap-flag.mjs",
     "pnpm-workspace.yaml",
     "README.md",
@@ -554,6 +555,10 @@
       "types": "./dist/plugin-sdk/runtime-env.d.ts",
       "default": "./dist/plugin-sdk/runtime-env.js"
     },
+    "./plugin-sdk/runtime-profile": {
+      "types": "./dist/plugin-sdk/runtime-profile.d.ts",
+      "default": "./dist/plugin-sdk/runtime-profile.js"
+    },
     "./plugin-sdk/proxy-capture": {
       "types": "./dist/plugin-sdk/proxy-capture.d.ts",
       "default": "./dist/plugin-sdk/proxy-capture.js"
@@ -660,6 +665,10 @@
     },
     "./plugin-sdk/json-schema-runtime": {
       "default": "./dist/plugin-sdk/json-schema-runtime.js"
+    },
+    "./plugin-sdk/json-schema-validator": {
+      "types": "./dist/plugin-sdk/json-schema-validator.d.ts",
+      "default": "./dist/plugin-sdk/json-schema-validator.js"
     },
     "./plugin-sdk/json-unsafe-integers": {
       "default": "./dist/plugin-sdk/json-unsafe-integers.js"
@@ -1809,6 +1818,8 @@
     "check:opengrep-rule-metadata": "node security/opengrep/check-rule-metadata.mjs",
     "check:protocol-coverage": "node scripts/check-protocol-event-coverage.mjs",
     "check:runtime-sidecar-loaders": "node --import ./scripts/tsx.mjs scripts/check-runtime-sidecar-loaders.mts",
+    "runtime:scripts:gen": "node scripts/generate-runtime-script-assets.mjs",
+    "runtime:scripts:check": "node scripts/generate-runtime-script-assets.mjs --check",
     "check:script-erasability": "node --disable-warning=ExperimentalWarning scripts/check-script-erasability.mjs",
     "check:static-import-sccs": "pnpm check:madge-import-cycles",
     "check:temp-path-guardrails": "node --import ./scripts/tsx.mjs scripts/check-temp-path-guardrails.ts",
@@ -1832,6 +1843,8 @@
     "clean:dist": "node -e \"require('fs').rmSync('dist', {recursive: true, force: true})\"",
     "codex-app-server:protocol:check": "node --import ./scripts/tsx.mjs scripts/check-codex-app-server-protocol.ts",
     "codex-app-server:protocol:sync": "node --import ./scripts/tsx.mjs scripts/sync-codex-app-server-protocol.ts",
+    "codex-app-server:validators:gen": "node --import ./scripts/tsx.mjs scripts/generate-codex-validators.mts",
+    "codex-app-server:validators:check": "node --import ./scripts/tsx.mjs scripts/generate-codex-validators.mts --check",
     "codex-supervisor:mcp": "node --import ./scripts/tsx.mjs src/mcp/codex-supervision-tools-serve.ts",
     "codex:mcp": "node --import ./scripts/tsx.mjs src/mcp/codex-supervision-tools-serve.ts",
     "config:channels:check": "node --import ./scripts/tsx.mjs scripts/generate-bundled-channel-config-metadata.ts --check",
@@ -1895,6 +1908,8 @@
     "format:swift": "./scripts/format-swift.sh",
     "gateway:dev": "node --import ./scripts/tsx.mjs scripts/run-with-env.mts OPENCLAW_SKIP_CHANNELS=1 -- node scripts/run-node.mjs --dev gateway",
     "gateway:dev:reset": "node --import ./scripts/tsx.mjs scripts/run-with-env.mts OPENCLAW_SKIP_CHANNELS=1 -- node scripts/run-node.mjs --dev gateway --reset",
+    "gateway:validators:gen": "node --import ./scripts/tsx.mjs scripts/generate-gateway-validators.mts",
+    "gateway:validators:check": "node --import ./scripts/tsx.mjs scripts/generate-gateway-validators.mts --check",
     "gateway:watch": "node --import ./scripts/tsx.mjs scripts/gateway-watch-tmux.mts gateway --force",
     "gateway:watch:raw": "node scripts/watch-node.mjs gateway --force",
     "gen:browser-inspect-script:swift": "node --import ./scripts/tsx.mjs scripts/generate-browser-inspect-script-swift.mts --write",
@@ -1969,6 +1984,8 @@
     "lint:ui:styles": "stylelint --config config/stylelint.config.mjs \"ui/src/**/*.css\" \"ui/public/themes/*.css\"",
     "lint:web-fetch-provider-boundaries": "node --import ./scripts/tsx.mjs scripts/check-web-fetch-provider-boundaries.mts",
     "lint:webhook:no-low-level-body-read": "node --import ./scripts/tsx.mjs scripts/check-webhook-auth-body-order.mts",
+    "lobster:validators:gen": "node --import ./scripts/tsx.mjs scripts/generate-lobster-schema-validators.mts",
+    "lobster:validators:check": "node --import ./scripts/tsx.mjs scripts/generate-lobster-schema-validators.mts --check",
     "mac:open": "open dist/OpenClaw.app",
     "mac:package": "/bin/bash scripts/package-mac-app.sh",
     "mac:restart": "/bin/bash scripts/restart-mac.sh",
@@ -2336,6 +2353,9 @@
     "ui:install": "node scripts/ui.js install",
     "update:compat:gen": "node scripts/update-compat-inventory.mts",
     "update:compat:check": "node scripts/update-compat-inventory.mts --check",
+    "static:validators:gen": "node --import ./scripts/tsx.mjs scripts/generate-static-validators.mts",
+    "static:validators:check": "node --import ./scripts/tsx.mjs scripts/generate-static-validators.mts --check",
+    "validators:check": "pnpm gateway:validators:check && pnpm ui:validators:check && pnpm codex-app-server:validators:check && pnpm static:validators:check && pnpm lobster:validators:check",
     "verify": "node --import ./scripts/tsx.mjs scripts/verify.mts"
   },
   "bundleDependencies": [
@@ -2445,6 +2465,7 @@
     "@vitest/browser-playwright": "5.0.5",
     "@vitest/coverage-v8": "5.0.5",
     "acpx": "0.19.6",
+    "ajv": "8.20.0",
     "apache-arrow": "21.2.0",
     "baileys": "7.0.0-rc14",
     "ipaddr.js": "2.5.0",

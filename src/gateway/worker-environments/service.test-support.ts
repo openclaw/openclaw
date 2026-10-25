@@ -31,6 +31,7 @@ import {
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import type { WorkerConnectionIdentity, WorkerInferenceExecutor } from "./connection-identity.js";
+import { createWorkerConnectionIdentity } from "./connection-identity.test-support.js";
 import { hashWorkerCredential } from "./credential.js";
 import { createWorkerInferenceStore } from "./inference-store.js";
 import * as inferenceManager from "./inference.js";
@@ -50,12 +51,7 @@ import {
   type WorkerEnvironmentTransitionPatch,
 } from "./store.js";
 
-export function waitForFast<T>(
-  callback: () => T | Promise<T>,
-  options: { timeout?: number; interval?: number } = {},
-) {
-  return vi.waitFor(callback, { interval: 1, ...options });
-}
+export { waitForFast } from "../../../test/helpers/vitest-wait.js";
 
 const HOST_KEY = [["ssh", "ed25519"].join("-"), "AAAA"].join(" ");
 export type WorkerEnvironmentServiceOptions = Parameters<
@@ -144,7 +140,9 @@ export const testState = {} as {
   bootstrapWorker: WorkerEnvironmentServiceOptions["bootstrapWorker"];
 };
 
-export function setupWorkerEnvironmentServiceSuite() {
+export function setupWorkerEnvironmentServiceSuite(
+  configureConfig?: (config: OpenClawConfig, root: string) => void,
+) {
   beforeEach(async () => {
     testState.releaseTurnOwners = [];
     testState.root = await fs.mkdtemp(
@@ -170,6 +168,7 @@ export function setupWorkerEnvironmentServiceSuite() {
         },
       },
     };
+    configureConfig?.(testState.config, testState.root);
     // The Gateway publishes its runtime config at startup.
     setRuntimeConfigSnapshot(testState.config);
     testState.prepareInstallation = vi.fn(async (install) =>
@@ -471,24 +470,20 @@ export async function seedAttachedIdentity(
   if (!credential || !attached.bootstrapReceipt) {
     throw new Error("attached worker fixture is incomplete");
   }
-  return {
-    environmentId,
+  const turnClaim: NonNullable<WorkerConnectionIdentity["turnClaim"]> = {
+    sessionId,
+    claimId: "claim-run-1",
+    runId: "run-1",
+    placementGeneration: 1,
+    owner: { kind: "worker", environmentId, ownerEpoch: attached.ownerEpoch },
+  };
+  return createWorkerConnectionIdentity(turnClaim, {
     credentialHash: credential.credentialHash,
     bundleHash: credential.bundleHash,
-    sessionId,
-    runId: "run-1",
-    turnClaim: {
-      sessionId,
-      claimId: "claim-run-1",
-      runId: "run-1",
-      placementGeneration: 1,
-      owner: { kind: "worker", environmentId, ownerEpoch: attached.ownerEpoch },
-    },
-    ownerEpoch: attached.ownerEpoch,
     rpcSetVersion: credential.rpcSetVersion,
     protocolFeatures: [...attached.bootstrapReceipt.protocolFeatures],
     credentialExpiresAtMs: credential.expiresAtMs,
-  };
+  });
 }
 
 export function inferenceRequest(

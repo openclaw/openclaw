@@ -6,16 +6,18 @@ import { getEnvironmentData, MessageChannel, type MessagePort, Worker } from "no
 import type { WorkerLifecycle } from "@openclaw/worker-runtime/lifecycle";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withEngineStoreAdmission } from "./database-engine/admission-scope.js";
-import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { PostgresSyncConnection } from "./postgres-sync/connection.js";
 import { runPostgresTransactionSync } from "./postgres-sync/transaction.js";
 import type { RuntimeWorkerGeneration } from "./runtime-worker-generation.js";
 import type { PostgresSqlConnection } from "./sql-connection.js";
 import { SQLITE_DATABASE_ADMISSIONS_KEY } from "./sqlite-database-admission-key.js";
-import { readSqliteDatabaseAdmissionFact as readFact } from "./sqlite-database-admission-record.js";
+import {
+  readSqliteDatabaseAdmissionFact as readFact,
+  SqliteDatabaseAdmissionRegistry,
+} from "./sqlite-database-admission-record.js";
 import {
   beginSqliteDatabaseAdmissionOperation as beginOperation,
   discardSqliteDatabaseTransactionAdmissions as discardFacts,
@@ -125,6 +127,37 @@ function recordsFor(location: string) {
   return captureAdmissions().filter((record) => record.location === location);
 }
 
+it("worker release leaves unrelated receipt scopes unvisited", () => {
+  using affected = databaseFixture("sqlite-release-affected-");
+  using unrelated = databaseFixture("sqlite-release-unrelated-");
+  scopedToken(affected.database, "affected-session");
+  scopedToken(unrelated.database, "unrelated-session");
+  const registry = new SqliteDatabaseAdmissionRegistry();
+  registry.install([...recordsFor(affected.location), ...recordsFor(unrelated.location)]);
+  const record = registry.forLocation(affected.location)!;
+  const sibling = registry.forLocation(unrelated.location)!;
+  const owner = 123456;
+  const references = new SharedArrayBuffer(2 * Int32Array.BYTES_PER_ELEMENT);
+  Atomics.store(new Int32Array(references), 0, 1);
+  record.references.set(owner, references);
+  registry.publish(record);
+  const stale = structuredClone(registry.capture());
+  const visits = vi.spyOn(sibling.writeScopes, "forEach");
+  try {
+    registry.releaseWorker(owner + 1);
+    registry.releaseWorker(owner);
+    expect(visits).not.toHaveBeenCalled();
+    expect(Atomics.load(new Int32Array(references), 0)).toBe(-1);
+    expect(record.references.has(owner)).toBe(false);
+    registry.install(stale);
+    expect(record.references.has(owner)).toBe(false);
+    expect(registry.forLocation(affected.location)).toBe(record);
+    expect(registry.forLocation(unrelated.location)).toBe(sibling);
+  } finally {
+    visits.mockRestore();
+  }
+});
+
 it("keeps cold pinned receipts current across physical-fact reads until release", () => {
   using fixture = databaseFixture("sqlite-admission-cold-pins-");
   const { database, location } = fixture;
@@ -228,6 +261,7 @@ it("retires the final closed handle's facts while preserving open siblings and d
   admitSqliteSchema(second);
   const original = recordsFor(location)[0]!;
   const stale = structuredClone([original]);
+  publishFact(first, key, "connection-scoped");
   first.close();
   expect(recordsFor(location)).toHaveLength(1);
   expect(schemaFacts(second)?.tables.has("proof")).toBe(true);
@@ -247,6 +281,7 @@ it("retires the final closed handle's facts while preserving open siblings and d
   expect(recordsFor(location)).toEqual([]);
 
   first.open();
+  expect(getFact(first, key)).toBeUndefined();
   expect(schemaFacts(first)?.admissionId).toBe(admittedSchema?.admissionId);
   admitSqliteSchema(first);
   expect(first.prepare("SELECT value FROM proof").get()).toEqual({ value: 42 });
@@ -258,33 +293,6 @@ it("retires the final closed handle's facts while preserving open siblings and d
   expect(recordsFor(location)).toEqual([]);
   retireAdmission(location);
   expect(() => fstatSync(original.descriptor)).toThrow();
-});
-
-it("reuses physical catalog facts after unsealed close and invalidates them on DDL", () => {
-  using fixture = databaseFixture("sqlite-admission-process-facts-");
-  const { database } = fixture;
-  const admitted = schemaFacts(database);
-  publishFact(database, key, "connection-scoped");
-  database.close();
-
-  database.open();
-  const observation = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
-  try {
-    admitSqliteSchema(database);
-    expect(schemaFacts(database)?.admissionId).toBe(admitted?.admissionId);
-    expect(observation.queries).toEqual([]);
-  } finally {
-    observation.restore();
-  }
-  expect(getFact(database, key)).toBeUndefined();
-  database.exec("ALTER TABLE proof ADD COLUMN added TEXT");
-  database.close();
-  database.open();
-  admitSqliteSchema(database);
-  expect(schemaFacts(database)?.tableSql.get("proof")).toContain("added TEXT");
-  expect(schemaFacts(database)?.admissionId).not.toBe(admitted?.admissionId);
-  database.prepare("UPDATE proof SET value = 43").run();
-  expect(database.prepare("SELECT value FROM proof").get()).toEqual({ value: 43 });
 });
 
 it.each([undefined, "process"] as const)(
@@ -404,8 +412,8 @@ it("inherits only open database facts after 300 databases close", async () => {
 it.each(["reference-first", "close-first", "explicit-retirement", "path-replaced"] as const)(
   "settles native-open reference admission before exposing the handle (%s)",
   async (ordering) => {
-    const location = path.join(tempDirs.make("sqlite-admission-open-reference-"), "proof.sqlite");
-    const database = createDatabase(location);
+    using fixture = databaseFixture("sqlite-admission-open-reference-");
+    const { database, location } = fixture;
     const relay = createSqliteDatabaseAdmissionRelay(() => {});
     const bridge = new MessageChannel();
     let firstReference: SharedArrayBuffer | undefined;
@@ -488,10 +496,6 @@ it.each(["reference-first", "close-first", "explicit-retirement", "path-replaced
       await worker?.terminate();
       bridge.port1.close();
       relay.finish();
-      if (database.isOpen) {
-        database.close();
-      }
-      retireAdmission(location);
       if (ordering === "path-replaced") {
         retireAdmission(path.join(path.dirname(location), "previous.sqlite"));
       }
@@ -502,13 +506,12 @@ it.each(["reference-first", "close-first", "explicit-retirement", "path-replaced
 it.each([false, true])(
   "retains sibling facts across worker exit but invalidates committed writes (retained: %s)",
   async (retained) => {
-    const root = tempDirs.make("sqlite-admission-worker-retention-");
-    const location = path.join(root, "proof.sqlite");
-    const database = createDatabase(location);
-    const closedLocation = path.join(root, "closed.sqlite");
-    const closedDatabase = createDatabase(closedLocation);
-    const unrelatedLocation = path.join(root, "unrelated.sqlite");
-    const unrelatedDatabase = createDatabase(unrelatedLocation);
+    using fixture = databaseFixture("sqlite-admission-worker-retention-");
+    using closed = databaseFixture("sqlite-admission-closed-");
+    using unrelated = databaseFixture("sqlite-admission-unrelated-");
+    const { database, location } = fixture;
+    const closedLocation = closed.location;
+    const unrelatedLocation = unrelated.location;
     const relay = createSqliteDatabaseAdmissionRelay(() => {});
     let closeSource: Parameters<RuntimeWorkerGeneration["retain"]>[1] | undefined;
     const source = retained
@@ -564,10 +567,10 @@ it.each([false, true])(
     let reply = createDeferred<unknown>();
     worker.on("message", (message: unknown) => reply.resolve(message));
     worker.on("error", (error: Error) => reply.reject(error));
-    const command = async (message: string) => {
+    const command = async (message: string, expected: unknown = message) => {
       reply = createDeferred<unknown>();
       worker.postMessage(message, []);
-      return await reply.promise;
+      expect(await reply.promise).toEqual(expected);
     };
     let sibling:
       | { worker: Worker; relay: ReturnType<typeof createSqliteDatabaseAdmissionRelay> }
@@ -587,10 +590,10 @@ it.each([false, true])(
       expect((await once(siblingWorker, "message"))[0]).toEqual({ value: 42, admissionId });
       database.close();
       expect(recordsFor(location)).toHaveLength(1);
-      expect(await command("close")).toBe("close");
+      await command("close");
       expect(recordsFor(location)).toHaveLength(1);
-      expect(await command("open")).toEqual({ value: 42, admissionId });
-      expect(await command("close")).toBe("close");
+      await command("open", { value: 42, admissionId });
+      await command("close");
       const siblingReply = once(siblingWorker, "message");
       siblingWorker.postMessage("read", []);
       expect((await siblingReply)[0]).toEqual({ value: 42, admissionId });
@@ -598,24 +601,18 @@ it.each([false, true])(
       siblingRelay.finish();
       sibling = undefined;
       expect(recordsFor(location)).toEqual([]);
-      expect(await command("open")).toEqual({ value: 42, admissionId });
-      expect(await command("close")).toBe("close");
+      await command("open", { value: 42, admissionId });
+      await command("close");
       expect(recordsFor(location)).toEqual([]);
-      expect(await command("retire")).toBe("retire");
+      await command("retire");
       expect(() => fstatSync(descriptor)).toThrow();
 
       database.open();
       admitSqliteSchema(database);
-      expect(await command("open")).toEqual({
-        value: 42,
-        admissionId: schemaFacts(database)?.admissionId,
-      });
+      await command("open", { value: 42, admissionId: schemaFacts(database)?.admissionId });
       const beforeWrite = pathToken(location);
       const scopedBeforeWrite = scopedToken(database, "proof");
-      expect(await command("write")).toEqual({
-        value: 43,
-        admissionId: schemaFacts(database)?.admissionId,
-      });
+      await command("write", { value: 43, admissionId: schemaFacts(database)?.admissionId });
       expect(pathToken(location)).not.toBe(beforeWrite);
       expect(scopedToken(database, "proof")).not.toBe(scopedBeforeWrite);
       expect(database.prepare("SELECT value FROM proof").get()).toEqual({ value: 43 });
@@ -649,14 +646,9 @@ it.each([false, true])(
       sibling?.relay.finish();
       await worker.terminate();
       relay.finish();
-      if (database.isOpen) {
-        database.close();
-      }
-      retireAdmission(location);
-      closedDatabase.close();
-      unrelatedDatabase.close();
-      retireAdmission(closedLocation);
-      retireAdmission(unrelatedLocation);
+      fixture[Symbol.dispose]();
+      closed[Symbol.dispose]();
+      unrelated[Symbol.dispose]();
       const retireSource = await closeSource?.();
       await retireSource?.();
     }
@@ -664,9 +656,8 @@ it.each([false, true])(
 );
 
 it("path revocation invalidates scoped receipts and admission facts with a live handle", () => {
-  const root = tempDirs.make("sqlite-admission-path-revocation-");
-  const location = path.join(root, "proof.sqlite");
-  using database = createDatabase(location);
+  using fixture = databaseFixture("sqlite-admission-path-revocation-");
+  const { database, location } = fixture;
   const beforeRevocation = scopedToken(database, "proof");
   publishFact(database, key, "healthy");
   publishFact(database, schemaKey, "admitted");
@@ -814,8 +805,7 @@ it("PostgreSQL keeps publications local until commit and restores nested and out
         throw new Error("outer rollback");
       }),
     ).toThrow("outer rollback");
-    expect(getFact(connection, key)).toBe("outer");
-    expect(getFact(peer, key)).toBe("outer");
+    expect([getFact(connection, key), getFact(peer, key)]).toEqual(["outer", "outer"]);
     publishFact(connection, key, "autocommit");
     expect(getFact(peer, key)).toBe("autocommit");
   }));
@@ -863,8 +853,7 @@ it("keeps PostgreSQL publications independent of native SQLite callback facts an
     try {
       publishFact(anchor, key, "native callback");
       publishFact(connection, key, "postgres");
-      expect(getFact(connection, key)).toBe("postgres");
-      expect(getFact(peer, key)).toBe("postgres");
+      expect([getFact(connection, key), getFact(peer, key)]).toEqual(["postgres", "postgres"]);
       suspendAdmission(anchor, true);
       expect(getFact(connection, key)).toBeUndefined();
       publishFact(connection, key, "suspended");

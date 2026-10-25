@@ -5,6 +5,7 @@ import { en } from "./en.ts";
 // This copy follows its lazy rendering consumers; shared labels stay in en.ts.
 const enChatSession = {
   chat: {
+    savedConversation: "Saved conversation · {status}",
     sessionAutomation: {
       emptyHint: "Automations attached to this session will appear here.",
       scheduleUnavailable: "Schedule unavailable",
@@ -113,6 +114,8 @@ const enChatSession = {
       automationEmpty: en.chat.sessionDetails.automationEmpty,
       automationMore: en.chat.sessionDetails.automationMore,
       automationAttention: en.chat.sessionDetails.automationAttention,
+      automationChecked: "Checked",
+      automationCheckFailed: "Check failed",
       automationPaused: en.chat.sessionDetails.automationPaused,
       automationEnabled: en.chat.sessionDetails.automationEnabled,
     },

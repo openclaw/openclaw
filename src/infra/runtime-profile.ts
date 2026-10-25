@@ -1,44 +1,73 @@
-import {
-  getStandaloneRuntimeBuild,
-  isEmbeddedStandaloneModule,
-  type StandaloneBuildInfo,
-} from "../../cli-invocation.mjs";
+import { getEnvironmentData, setEnvironmentData } from "node:worker_threads";
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
+import { isEmbeddedStandaloneModule } from "../../cli-invocation.mjs";
+import { getRuntimeExecutionProfile } from "../../standalone-runtime-profile.mjs";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
-export type RuntimeExecutionProfile = "dynamic-execution" | "embedded-aot";
+export {
+  getRuntimeExecutionProfile,
+  resolveRuntimeExecutionProfile,
+  type RuntimeExecutionProfile,
+} from "../../standalone-runtime-profile.mjs";
+export type RuntimeDynamicExecutionFeature = "plugins" | "code-mode" | "qa";
 
-let runtimeExecutionProfile: RuntimeExecutionProfile | undefined;
+const features = {
+  plugins: { bit: 1, label: "Fetched plugin code" },
+  "code-mode": { bit: 2, label: "Node Code Mode" },
+  qa: { bit: 4, label: "QA expression code" },
+} satisfies Record<RuntimeDynamicExecutionFeature, { bit: number; label: string }>;
 
-export function resolveRuntimeExecutionProfile(
-  build: Pick<StandaloneBuildInfo, "mode"> | undefined,
-): RuntimeExecutionProfile {
-  return build?.mode === "aot" ? "embedded-aot" : "dynamic-execution";
-}
+// Workers inherit the shared bitmap before executing plugin or Code Mode code.
+// Duplicate SDK modules use the same slot; a reload must not repeat these notices.
+const notices = resolveGlobalSingleton(Symbol.for("openclaw.runtimeExecutionNotices"), () => {
+  const key = "openclaw.runtimeExecutionNotices";
+  const inherited: unknown = getEnvironmentData(key);
+  const buffer = inherited instanceof SharedArrayBuffer ? inherited : new SharedArrayBuffer(4);
+  setEnvironmentData(key, buffer);
+  return new Int32Array(buffer);
+});
 
-/** Artifact capabilities stay fixed for this process, including its workers. */
-export function getRuntimeExecutionProfile(): RuntimeExecutionProfile {
-  return (runtimeExecutionProfile ??= resolveRuntimeExecutionProfile(getStandaloneRuntimeBuild()));
-}
-
-const DYNAMIC_EXECUTION_NEXT_STEP =
-  "Run the Gateway with a Node/Bun installation or a JIT/bytecode standalone build.";
-
-/** Compatibility admission, not an authorization or sandbox boundary. */
-export function assertRuntimeSupportsDynamicExecution(feature: string): void {
-  if (getRuntimeExecutionProfile() === "embedded-aot") {
-    throw new Error(
-      `${feature} requires the dynamic-execution runtime profile; this host uses embedded-aot. ` +
-        DYNAMIC_EXECUTION_NEXT_STEP,
+/** Performance information only; trust and execution authority stay with their owners. */
+export function noteRuntimeDynamicExecution(feature: RuntimeDynamicExecutionFeature): void {
+  if (getRuntimeExecutionProfile() !== "embedded-aot") {
+    return;
+  }
+  const { bit, label } = features[feature];
+  if ((Atomics.or(notices, 0, bit) & bit) === 0) {
+    process.emitWarning(
+      `${label} runs interpreted in this AOT build; use a JIT build for full speed.`,
+      {
+        code: "AOT_INTERPRETED",
+      },
     );
   }
 }
 
-/** Only compiler-owned membership establishes that a module is already embedded. */
-export function assertRuntimeSupportsPluginModule(modulePath: string): void {
+export function noteRuntimePluginExecution(modulePath: string): void {
   if (getRuntimeExecutionProfile() === "embedded-aot" && !isEmbeddedStandaloneModule(modulePath)) {
-    throw new Error(
-      `Plugin module ${modulePath} is not embedded in this AOT host and requires the dynamic-execution runtime profile. ` +
-        "Rebuild the complete standalone artifact with this plugin. " +
-        DYNAMIC_EXECUTION_NEXT_STEP,
-    );
+    noteRuntimeDynamicExecution("plugins");
   }
+}
+
+/** Add guidance only after the runtime actually rejects code or cannot find a module. */
+export function annotateRuntimeExecutionError(error: unknown, feature: string): unknown {
+  const message = formatErrorMessage(error);
+  let guidance: string;
+  if (/code generation from strings disallowed/i.test(message)) {
+    guidance =
+      "Runtime code generation is disabled. Use a Node/Bun or JIT build without " +
+      "--disallow-code-generation-from-strings (including =strict).";
+  } else if (
+    getRuntimeExecutionProfile() === "embedded-aot" &&
+    /(?:not in this executable|not compiled into this executable|isn't in this executable|cannot find (?:module|package)|cannot resolve (?:module|package)|cannot load module)/i.test(
+      message,
+    )
+  ) {
+    guidance =
+      "This module is not available in this AOT build. Install missing code on disk through the plugin loader, " +
+      "or rebuild the complete standalone artifact with the module. Use a JIT build for unrestricted runtime imports.";
+  } else {
+    return error;
+  }
+  return new Error(`${feature}: ${message} ${guidance}`, { cause: error });
 }

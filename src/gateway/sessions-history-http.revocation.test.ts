@@ -159,6 +159,7 @@ vi.mock("./session-history-state.js", () => ({
   },
 }));
 
+import { closeHttpServer } from "../../test/helpers/gateway-integration-fixtures.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-accessor.js";
 import { WorkerTaskError } from "../infra/worker-task-pool.js";
@@ -299,10 +300,7 @@ async function withRealStream(
   } finally {
     client.destroy();
     pair.res.destroy();
-    server.closeAllConnections();
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
+    await closeHttpServer(server);
   }
 }
 

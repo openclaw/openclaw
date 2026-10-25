@@ -16,6 +16,7 @@ import {
 import { extractBuiltClawArtifact } from "../../claws/project-build.js";
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
+import { gatewayProfile } from "../server/client-fixtures.test-support.js";
 import { clawsDraftsHandlers } from "./claws-drafts.js";
 import type { GatewayClient } from "./client-types.js";
 import { coreGatewayHandlers } from "./core-handlers.js";
@@ -35,12 +36,7 @@ async function requestDraft(
   // SAFETY: These are the live socket fields read by draft authority.
   const client = {
     connId: "draft-author",
-    authenticatedUserProfile: {
-      profileId: "creator",
-      displayName: null,
-      hasAvatar: false,
-      updatedAt: 1,
-    },
+    authenticatedUserProfile: gatewayProfile("creator"),
     connect: { role: "operator", scopes: ["operator.admin"] },
     internal: { syntheticClient: condition === "synthetic", operatorRoleActor: { kind: "system" } },
   } as GatewayClient;

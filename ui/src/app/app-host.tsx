@@ -122,7 +122,6 @@ export class ShellOwner
   private lastNativeNavState: NativeNavState | undefined;
   didConsiderNativeRouteRestore = false;
   pendingNativeNewSession = false;
-  readonly settingsPreloadTimers = new Map<EventTarget, ReturnType<typeof globalThis.setTimeout>>();
   readonly shellNavigation = new ShellNavigationOwner(this);
   private readonly shellChrome = new ShellChromeOwner(this);
   private readonly shellGateway = new ShellGatewayOwner(this);
@@ -274,26 +273,19 @@ export class ShellOwner
         ),
       );
       let active = true;
-      let disconnectFavicon: (() => void) | undefined;
       const startedAt = Date.now();
-      const favicon = createIdleImport(
-        () => import("./control-ui-favicon-status.runtime.ts"),
-        ({ connectControlUiFavicon }) => {
+      const idle = createIdleImport(
+        () => import("./app-shell-idle.runtime.ts"),
+        ({ connectShellIdle }) => {
           if (active) {
-            disconnectFavicon = connectControlUiFavicon(
-              this.element,
-              context,
-              () => this.queryRenderedElements("openclaw-chat-pane"),
-              startedAt,
-            );
+            this.cleanups.push(connectShellIdle(this, context, startedAt));
           }
         },
       );
-      favicon.schedule();
+      idle.schedule();
       this.cleanups.push(() => {
         active = false;
-        favicon.dispose();
-        disconnectFavicon?.();
+        idle.dispose();
       });
       if (this.pendingNativeNewSession) {
         this.pendingNativeNewSession = false;
@@ -377,10 +369,6 @@ export class ShellOwner
     this.settingsSearchQuery = "";
     this.commandPaletteTarget = undefined;
     this.shellGateway.reset();
-    for (const timer of this.settingsPreloadTimers.values()) {
-      globalThis.clearTimeout(timer);
-    }
-    this.settingsPreloadTimers.clear();
   }
 
   private readonly handleGatewayEvent = this.shellGateway.handleGatewayEvent.bind(

@@ -3,6 +3,7 @@ import { installTitleTooltips } from "../../../components/tooltip-title.ts";
 import { i18n, t } from "../../../i18n/index.ts";
 import { KEYBOARD_SHORTCUT_COMBOS } from "../../../lib/keyboard-shortcut-contract.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { createSidebarRegionCallbackMocks } from "../../../test-helpers/sidebar-region-callbacks.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import "../../../styles.css";
 import "../../../styles/chat/startup-layout.css";
@@ -221,16 +222,7 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
         <DesktopFrameControls
           layout={openSlot({ columns: [] }, "subagents")}
           panelDefinitions={sidebarPanelDefinitions()}
-          callbacks={{
-            activatePanel: vi.fn(),
-            togglePanelExpanded,
-            setDock,
-            closeSlot: vi.fn(),
-            openSlot: vi.fn(),
-            reorderPanel: vi.fn(),
-            resizePanel: vi.fn(),
-            setOpen: vi.fn(),
-          }}
+          callbacks={createSidebarRegionCallbackMocks({ togglePanelExpanded, setDock })}
           onCloseAll={() => Promise.resolve()}
           closing={false}
           closable={false}

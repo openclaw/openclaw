@@ -3,6 +3,7 @@ import { createHmac } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { postRawWebhook } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
+import { listenOnLoopback } from "../../../test-support/hanging-loopback-server.js";
 import { buildButtonAttachments } from "../../api.js";
 import type { PluginRuntime } from "../../runtime-api.js";
 import { setMattermostRuntime } from "../runtime.js";
@@ -724,21 +725,11 @@ describe("createMattermostInteractionHandler body limits", () => {
       void handler(req, res);
     });
     try {
-      await new Promise<void>((resolve, reject) => {
-        server.once("error", reject);
-        server.listen(0, "127.0.0.1", () => {
-          server.removeListener("error", reject);
-          resolve();
-        });
-      });
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("expected the interaction test server to have a TCP address");
-      }
+      const port = await listenOnLoopback(server);
 
       // Declared and sent in one write: the shape whose rejection used to race the flush.
       const result = await postRawWebhook({
-        url: `http://127.0.0.1:${address.port}/mattermost/interactions`,
+        url: `http://127.0.0.1:${port}/mattermost/interactions`,
         body: "x".repeat(64 * 1024 + 1),
         headers: { "content-type": "application/json" },
       });

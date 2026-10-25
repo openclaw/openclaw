@@ -34,10 +34,11 @@ import { requesterCreatorProfileId, type RequesterOrigin } from "../../requester
 import { createSessionsSendTool } from "../../tools/sessions-send-tool.js";
 import { createSessionsSpawnTool } from "../../tools/sessions-spawn-tool.js";
 import { observeRootWork } from "../registry/subagent-registry.browser-cleanup.test-support.js";
-import { closeSwarmScheduler, enqueueSwarmRun, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
+import { closeSwarmScheduler, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
 import {
   createBoundSpawnInvocation,
   createSpawnOperatorSource,
+  holdSpawnCapacity,
   type createSpawnBoundaryParent,
 } from "./subagent-spawn.production-boundary.test-support.js";
 
@@ -123,18 +124,10 @@ export function registerParticipantSpawnCases(
       const groupId = "participant-queued";
       if (queued) {
         context.getRuntimeConfig = () => currentConfig;
-        const capacity = createDeferred();
-        enqueueSwarmRun({
-          groupId: JSON.stringify(["main", parentSessionKey, groupId]),
-          runId: "participant-capacity",
-          maxConcurrent: 1,
-          activeRunIds: [],
-          start: async () => {
-            capacity.resolve();
-          },
-          onStartFailure: () => true,
-        });
-        await capacity.promise;
+        await holdSpawnCapacity(
+          JSON.stringify(["main", parentSessionKey, groupId]),
+          "participant-capacity",
+        );
       }
       const modelResult = createDeferred<EmbeddedAgentRunResult>();
       let entered = createDeferred<ChildExecution>();

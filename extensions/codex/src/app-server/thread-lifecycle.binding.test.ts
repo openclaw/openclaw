@@ -63,6 +63,7 @@ import { registerRequiredRootThreadPolicyTests } from "./thread-lifecycle-rooted
 import { startOrResumeThread as startOrResumeThreadImpl } from "./thread-lifecycle-run.js";
 import { registerThreadWebSearchBindingTests } from "./thread-lifecycle-web-search.test-support.js";
 import {
+  createAppServerOptions,
   createLeasedCodexLifecycleHarness,
   DEFAULT_CODEX_RUNTIME_THREAD_CONFIG,
   createLifecycleRequest,
@@ -76,6 +77,19 @@ import {
 } from "./thread-ownership.js";
 import { CodexIncognitoPolicyChangeError } from "./thread-policy.js";
 import { buildThreadResumeParams } from "./thread-requests.js";
+
+function createUnobservedThreadClient(
+  instanceId: string,
+  request: (method: string, params?: unknown) => Promise<unknown>,
+) {
+  return {
+    getInstanceId: () => instanceId,
+    request,
+    addNotificationHandler: () => () => undefined,
+    addRequestHandler: () => () => undefined,
+    addCloseHandler: () => () => undefined,
+  };
+}
 
 function createFixedThreadRequest(threadId: string, methods: string[]) {
   return createLifecycleRequest(async (method) => {
@@ -884,18 +898,10 @@ describe("Codex app-server thread lifecycle bindings", () => {
     const params = createParams(sessionFile, workspaceDir);
     const fake = await createLeasedCodexLifecycleHarness({
       agentDir: path.join(tempDir, "agent"),
-      respond: async (method: string) => {
-        if (method === "config/read") {
-          return { config: {}, origins: {}, layers: [] };
-        }
-        if (method === "configRequirements/read") {
-          return { requirements: null };
-        }
-        if (method === "thread/start" || method === "thread/resume") {
-          return threadStartResult("thread-warm-cleared-hooks");
-        }
-        throw new Error(`unexpected method: ${method}`);
-      },
+      respond: createFixedThreadRequest("thread-warm-cleared-hooks", [
+        "thread/start",
+        "thread/resume",
+      ]),
     });
     const client = fake.client;
     ensureCodexAppServerClientRuntime(client, { agentDir: workspaceDir });
@@ -985,13 +991,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
     const sessionFile = path.join(tempDir, "environment-session.jsonl");
     const workspaceDir = path.join(tempDir, "environment-workspace");
     const request = createFixedThreadRequest("thread-environments", ["thread/start"]);
-    const client = {
-      getInstanceId: () => "client-environments",
-      request,
-      addNotificationHandler: () => () => undefined,
-      addRequestHandler: () => () => undefined,
-      addCloseHandler: () => () => undefined,
-    } as never;
+    const client = createUnobservedThreadClient("client-environments", request) as never;
     ensureCodexAppServerClientRuntime(client, { agentDir: workspaceDir });
     const common = {
       client,
@@ -1418,13 +1418,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
       }
       throw new Error(`unexpected method: ${method}`);
     });
-    const client = {
-      getInstanceId: () => "client-warm-context",
-      request,
-      addNotificationHandler: () => () => undefined,
-      addRequestHandler: () => () => undefined,
-      addCloseHandler: () => () => undefined,
-    } as never;
+    const client = createUnobservedThreadClient("client-warm-context", request) as never;
     ensureCodexAppServerClientRuntime(client, { agentDir: workspaceDir });
     const common = {
       client,
@@ -1460,18 +1454,10 @@ describe("Codex app-server thread lifecycle bindings", () => {
     const sessionFile = path.join(tempDir, "warm-skills-session.jsonl");
     const workspaceDir = path.join(tempDir, "warm-skills-workspace");
     const params = createParams(sessionFile, workspaceDir);
-    const respond = vi.fn(async (method: string) => {
-      if (method === "config/read") {
-        return { config: {}, origins: {}, layers: [] };
-      }
-      if (method === "configRequirements/read") {
-        return { requirements: null };
-      }
-      if (method === "thread/start" || method === "thread/resume") {
-        return threadStartResult("thread-warm-skills");
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
+    const respond = createFixedThreadRequest("thread-warm-skills", [
+      "thread/start",
+      "thread/resume",
+    ]);
     const fixture = await createLeasedCodexLifecycleHarness({
       agentDir: path.join(tempDir, "agent"),
       respond,
@@ -1591,13 +1577,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
       }
       throw new Error(`unexpected method: ${method}`);
     });
-    const client = {
-      getInstanceId: () => "client-incognito",
-      request,
-      addNotificationHandler: () => () => undefined,
-      addRequestHandler: () => () => undefined,
-      addCloseHandler: () => () => undefined,
-    } as never;
+    const client = createUnobservedThreadClient("client-incognito", request) as never;
     ensureCodexAppServerClientRuntime(client, { agentDir: workspaceDir });
     const common = {
       client,
@@ -1854,13 +1834,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
         }
         throw new Error(`unexpected method: ${method}`);
       });
-      const client = {
-        getInstanceId: () => "client-incognito",
-        request,
-        addNotificationHandler: () => () => undefined,
-        addRequestHandler: () => () => undefined,
-        addCloseHandler: () => () => undefined,
-      } as never;
+      const client = createUnobservedThreadClient("client-incognito", request) as never;
       ensureCodexAppServerClientRuntime(client, { agentDir: workspaceDir });
       const common = {
         client,
@@ -2906,13 +2880,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
       }
       throw new Error(`unexpected method: ${method}`);
     });
-    const client = {
-      getInstanceId: () => "client-report-only",
-      request,
-      addNotificationHandler: () => () => undefined,
-      addRequestHandler: () => () => undefined,
-      addCloseHandler: () => () => undefined,
-    } as never;
+    const client = createUnobservedThreadClient("client-report-only", request) as never;
     ensureCodexAppServerClientRuntime(client, { agentDir: workspaceDir });
 
     const started = await startOrResumeThread({
@@ -3682,37 +3650,12 @@ describe("Codex app-server thread lifecycle bindings", () => {
     const fixture = await createLeasedCodexLifecycleHarness({
       agentDir: params.agentDir,
       persistedThreads: ["thread-existing"],
-      respond: async (method) => {
-        if (method === "config/read") {
-          return { config: {}, origins: {}, layers: [] };
-        }
-        if (method === "configRequirements/read") {
-          return { requirements: null };
-        }
-        if (method === "thread/resume") {
-          return threadStartResult("thread-existing");
-        }
-        throw new Error(`unexpected method: ${method}`);
-      },
+      respond: createFixedThreadRequest("thread-existing", ["thread/resume"]),
     });
     const binding = await startOrResumeThread({
       client: fixture.client,
       params,
-      appServer: {
-        start: {
-          transport: "stdio",
-          command: "codex",
-          args: ["app-server"],
-          headers: {},
-        },
-        codeModeOnly: false,
-        loopDetectionPreToolUseRelay: true,
-        requestTimeoutMs: 60_000,
-        approvalPolicy: "never",
-        approvalsReviewer: "user",
-        sandbox: "workspace-write",
-        connectionClass: "local-loopback",
-      },
+      appServer: { ...createAppServerOptions(), connectionClass: "local-loopback" },
     });
 
     expect(binding.authProfileId).toBe("openai:bound");

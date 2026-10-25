@@ -1,5 +1,6 @@
 import { withGoalContinuationSettlement } from "../../../auto-reply/reply/goal-continuation-return.js";
 import { getRuntimeConfig } from "../../../config/config.js";
+import { isRestartRecoveryTombstone } from "../../../config/sessions/session-work-start.js";
 import { isSystemEventStoreCurrent } from "../../../infra/system-event-ownership.js";
 import { getSharedGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import {
@@ -405,9 +406,6 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
     if (await retireReplacedStore()) {
       return false;
     }
-    if (params.signal?.aborted || !refreshBatch()) {
-      return false;
-    }
     // Recheck owned descendants after loading findings and before dispatch.
     const currentDescendants = await readRequesterDescendants();
     if (
@@ -472,11 +470,7 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
       return isRequesterRunCurrent(getRequesterRun(), directIdempotencyKey);
     };
     const areCompletionRowsCurrent = () => {
-      const current = readCurrentBatch();
-      if (!current) {
-        return false;
-      }
-      const currentRows = currentCompletionRows(current);
+      const currentRows = currentCompletionRows(readCurrentBatch() ?? []);
       return completionRows.every((observed) =>
         currentRows.some((row) => isSameSubagentRunOwner(row, observed)),
       );
@@ -490,6 +484,14 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
       areCompletionRowsCurrent() &&
       isRequesterCurrent() &&
       !isBatchDeliveryClosed();
+    if (privateOwner !== "owned" && isRestartRecoveryTombstone(requesterEntry)) {
+      // Keep the owed result with its owner; a child completion cannot authorize Resume.
+      await sourceReceiptAdmission.appendRecoveryWaitNotice(
+        `${batchKey}:restart-wait:${requesterEntry.mainRestartRecovery?.cycleId}`,
+        isSourceSessionEffectsAllowed,
+      );
+      return false;
+    }
     const continuationCaller = captureRequesterContinuationCaller({
       requesterSessionKey,
       requesterSessionId: requesterIdentity.sessionId,

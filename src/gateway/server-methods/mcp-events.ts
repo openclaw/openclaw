@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { MCP_EVENTS_PROTOCOL_VERSION, requestMcpEvent } from "../../agents/mcp-event-request.js";
 import {
@@ -42,7 +43,7 @@ function projectCatalog(value: unknown) {
     return {
       name: event.name,
       ...(typeof event.description === "string"
-        ? { description: event.description.slice(0, 4096) }
+        ? { description: truncateUtf16Safe(event.description, 4096) }
         : {}),
       delivery: event.delivery,
       inputSchema: event.inputSchema,

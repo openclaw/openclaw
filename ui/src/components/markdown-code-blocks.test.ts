@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { i18n } from "../i18n/index.ts";
+import { restorePropertyDescriptor } from "../test-helpers/property-descriptor.ts";
 import { MarkdownBlocks } from "./markdown-blocks-owner.ts";
 import {
   handleMarkdownCodeBlockClick,
@@ -30,11 +31,7 @@ const originalExecCommand = Object.getOwnPropertyDescriptor(document, "execComma
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
-  if (originalExecCommand) {
-    Object.defineProperty(document, "execCommand", originalExecCommand);
-  } else {
-    Reflect.deleteProperty(document, "execCommand");
-  }
+  restorePropertyDescriptor(document, "execCommand", originalExecCommand);
   document.body.replaceChildren();
 });
 

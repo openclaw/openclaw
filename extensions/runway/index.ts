@@ -6,8 +6,12 @@ import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-entry";
 import {
+  assertOkOrThrowHttpError,
   createProviderOperationDeadline,
+  createProviderOperationTimeoutError,
   createProviderOperationTimeoutResolver,
+  executeProviderOperationWithRetry,
+  fetchWithTimeoutGuarded,
   pollProviderOperationJson,
   postJsonResponse,
   resolveProviderOperationTimeoutMs,
@@ -353,6 +357,39 @@ export default definePluginEntry({
               maxBytes,
               validateBinaryResponse: true,
               metadata: { sourceUrl: url },
+              fetchResponse: ({ deadline: downloadDeadline, timeoutMs: downloadTimeoutMs }) =>
+                executeProviderOperationWithRetry({
+                  provider: "runway",
+                  stage: "download",
+                  operation: async () => {
+                    // Result URLs never inherit task credentials or private-network trust.
+                    const result = await fetchWithTimeoutGuarded(
+                      url,
+                      { method: "GET" },
+                      downloadTimeoutMs(),
+                      fetchFn,
+                      {
+                        mode: "strict",
+                        dispatcherPolicy: dispatcherPolicy ?? { mode: "env-proxy" },
+                      },
+                    );
+                    try {
+                      await assertOkOrThrowHttpError(
+                        result.response,
+                        "Runway generated video download failed",
+                        {
+                          bodyTimeoutMs: downloadTimeoutMs,
+                          onBodyTimeout: () =>
+                            createProviderOperationTimeoutError(downloadDeadline),
+                        },
+                      );
+                      return result;
+                    } catch (error) {
+                      await result.release();
+                      throw error;
+                    }
+                  },
+                }),
             }),
           );
         }

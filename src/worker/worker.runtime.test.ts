@@ -63,6 +63,7 @@ import { runExecProcess } from "../agents/bash-tools.exec-runtime.js";
 import { hasModelFallbackStop } from "../agents/failover-error.js";
 import { prepareCoreToolPolicy } from "../agents/prepared-tool-surface.js";
 import * as agentSessionSdk from "../agents/sessions/sdk.js";
+import { createUsageFixture } from "../agents/test-helpers/usage-fixtures.js";
 import { createToolSurfacePresentationForTest } from "../agents/tool-surface-plan.test-support.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -202,14 +203,7 @@ type InferenceOutput = {
   event: (event: WorkerInferenceEventFrame["payload"]["event"]) => void;
   finish: (outcome: WorkerInferenceTerminalOutcome) => void;
 };
-const USAGE = {
-  input: 2,
-  output: 3,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 5,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
+const USAGE = createUsageFixture(2, 3, 5);
 
 type FakeGatewayOptions = WorkerExecFixtureOptions & {
   admissionFailure?: "gateway-unavailable" | "invalid-credential" | "owner-epoch-mismatch";

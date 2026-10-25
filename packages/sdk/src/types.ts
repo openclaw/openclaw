@@ -318,30 +318,17 @@ type SDKSessionCreateKeys =
   | "emitCommandHooks"
   | "succeedsParent"
   | "task"
-  | "message"
-  | "attachments";
+  | "message";
 
 /** SDK session-create projection with transport-neutral attachment inputs. */
-export type SessionCreateParams = Omit<
-  Pick<GatewaySessionsCreateParamsType, SDKSessionCreateKeys>,
-  "attachments"
-> & {
+export type SessionCreateParams = Pick<GatewaySessionsCreateParamsType, SDKSessionCreateKeys> & {
   attachments?: unknown[];
 };
 
-type SDKSessionSendKeys =
-  | "key"
-  | "message"
-  | "thinking"
-  | "attachments"
-  | "timeoutMs"
-  | "idempotencyKey";
+type SDKSessionSendKeys = "key" | "message" | "thinking" | "timeoutMs" | "idempotencyKey";
 
 /** SDK session-send projection with transport-neutral attachment inputs. */
-export type SessionSendParams = Omit<
-  Pick<GatewaySessionsSendParamsType, SDKSessionSendKeys>,
-  "attachments"
-> & {
+export type SessionSendParams = Pick<GatewaySessionsSendParamsType, SDKSessionSendKeys> & {
   attachments?: unknown[];
 };
 

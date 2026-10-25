@@ -147,6 +147,7 @@ async function createWarmSurface(warm = true, startup?: Promise<void>, authMetho
     return () => listeners.delete(listener);
   });
   host = document.createElement("openclaw-app");
+  host.innerHTML = '<main id="openclaw-boot-shell">Loading…</main>';
   document.body.append(host);
   dispose = mountOpenClawApp(host, runtime);
   const publish = () => {
@@ -177,6 +178,12 @@ async function createOfflineSurface(warm = false) {
   await surface.draw({ phase: "offline", lastError: "Connect to continue" });
   return surface;
 }
+
+it("retires the static HTML frame in the first application commit", async () => {
+  const { container } = await createWarmSurface(false, new Promise(() => {}));
+  expect(container.querySelector("#openclaw-boot-shell")).toBeNull();
+  expect(container.querySelectorAll(".connect-splash--skeleton")).toHaveLength(1);
+});
 
 describe("warm boot app root", () => {
   it("loads a focused dashboard after startup and reports its committed result to automation", async () => {

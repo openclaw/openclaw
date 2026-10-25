@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withinTest } from "../../../test/helpers/promise.js";
@@ -24,7 +23,10 @@ import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordina
 import { REQUEST } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
 import { createWorkerPlacementIdleSweep } from "./placement-idle-sweep.js";
+import { makeClaimInput } from "./placement-lifecycle.test-support.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
+import { journalOwner } from "./placement-suite.test-support.js";
+import { workspaceJournal } from "./workspace-manifest-fixtures.test-support.js";
 
 const tempDirs = useStateDatabaseTempDirs();
 
@@ -96,23 +98,6 @@ describe("worker placement idle suspension", () => {
       warn,
     });
     return { harness, idleSweep, profile, info, warn, isPlacementOperationInFlight };
-  }
-
-  function claimWorkerTurn(claimId = "busy-worker-claim") {
-    const active = placements.get(REQUEST.sessionId);
-    if (active?.state !== "active") {
-      throw new Error("expected an active worker placement");
-    }
-    return placements.claimTurn({
-      ...REQUEST,
-      claimId,
-      runId: `run-${claimId}`,
-      owner: {
-        kind: "worker",
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
-      },
-    });
   }
 
   it("reports suspension only when enabled", async () => {
@@ -244,10 +229,12 @@ describe("worker placement idle suspension", () => {
 
   it("starts the idle clock at the latest authoritative turn-claim release", async () => {
     const { harness, idleSweep } = await createIdleFixture();
-    await harness.service.dispatch(REQUEST);
+    const active = await harness.service.dispatch(REQUEST);
 
     nowMs += 50_000;
-    const claim = await claimWorkerTurn("recent-turn");
+    const claim = await placements.claimTurn(
+      makeClaimInput(active, "recent-turn", "run-recent-turn"),
+    );
     nowMs += 5_000;
     await placements.releaseTurn(claim);
 
@@ -341,18 +328,13 @@ describe("worker placement idle suspension", () => {
         kind === "local-claim" || kind === "pending-result" ? "remote-exec" : "worker-turn";
       const active = await harness.service.dispatch({ ...REQUEST, executionMode });
       if (kind === "worker-claim") {
-        await claimWorkerTurn();
+        await placements.claimTurn(
+          makeClaimInput(active, "busy-worker-claim", "run-busy-worker-claim"),
+        );
       } else if (kind === "local-claim" || kind === "pending-result") {
-        const claim = await placements.claimTurn({
-          ...REQUEST,
-          claimId: "busy-local-claim",
-          runId: "busy-local-run",
-          owner: {
-            kind: "local",
-            environmentId: active.environmentId,
-            ownerEpoch: active.activeOwnerEpoch,
-          },
-        });
+        const claim = await placements.claimTurn(
+          makeClaimInput(active, "busy-local-claim", "busy-local-run"),
+        );
         if (kind === "pending-result") {
           await placements.markWorkspaceResultPending(claim);
           await placements.clearLocalTurnClaimsAfterRestartAsync();
@@ -362,23 +344,10 @@ describe("worker placement idle suspension", () => {
       } else if (kind === "reconciling-result") {
         const basePack = Buffer.from("idle workspace journal");
         await placements.beginWorkspaceReconciliation(
-          {
-            sessionId: active.sessionId,
-            environmentId: active.environmentId,
-            ownerEpoch: active.activeOwnerEpoch,
-            placementGeneration: active.generation,
-          },
-          {
-            version: 1,
-            temporaryNonce: "a".repeat(32),
-            baseManifestRef: active.workspaceBaseManifestRef,
-            currentManifestRef: `sha256:${"c".repeat(64)}`,
-            baseEntries: [],
-            appliedEntries: [],
-            baseTree: "f".repeat(40),
-            basePackSha256: createHash("sha256").update(basePack).digest("hex"),
+          journalOwner(active),
+          workspaceJournal(active.workspaceBaseManifestRef, `sha256:${"c".repeat(64)}`, {
             basePack,
-          },
+          }),
         );
         expect(placements.get(REQUEST.sessionId)?.turnClaim).toBeNull();
       } else if (kind === "draining") {
@@ -478,7 +447,13 @@ describe("worker placement idle suspension", () => {
         await reclaimStarted.promise;
 
         if (change === "activity") {
-          const claim = await claimWorkerTurn("turn-during-idle-reclaim-wait");
+          const claim = await placements.claimTurn(
+            makeClaimInput(
+              active,
+              "turn-during-idle-reclaim-wait",
+              "run-turn-during-idle-reclaim-wait",
+            ),
+          );
           nowMs += 1_000;
           await placements.releaseTurn(claim);
         } else {

@@ -34,9 +34,13 @@ import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { markTestRpcSourceExecutionStarted } from "./agent-turn/rpc-source.test-support.js";
 import { readUserTurnCompletionForTest } from "./pending-input-commit.test-support.js";
 import * as inProcessDispatch from "./server-plugin-in-process-dispatch.js";
+import { captureGatewayKernel } from "./server.capture-kernel.test-support.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import { runPublicSettleRecoveryCase } from "./server.subagent-settle-replay-recovery.test-support.js";
-import { createRequesterFinalResult as finalResult } from "./server.subagent-settle-replay.test-support.js";
+import {
+  createRequesterFinalResult as finalResult,
+  runTombstonedRequesterSettleCase,
+} from "./server.subagent-settle-replay.test-support.js";
 import {
   agentCommandMock,
   installGatewayTestHooks,
@@ -78,18 +82,10 @@ describe("public yielded settle replay with real Gateway admission", () => {
   });
 
   async function start() {
-    const module = await import("./server-kernel.js");
-    const create = module.createGatewayKernel;
-    const capture = vi.spyOn(module, "createGatewayKernel").mockImplementation(async (...args) => {
-      kernel = await create(...args);
-      return kernel;
-    });
-    try {
+    kernel = await captureGatewayKernel(async () => {
       harness = await startGatewayServerHarness();
       resetClient = await harness.openClient({ scopes: ["operator.admin"] });
-    } finally {
-      capture.mockRestore();
-    }
+    });
   }
   installGatewayTestHooks({ scope: "suite", setup: start, cleanup: async () => harness?.close() });
 
@@ -675,6 +671,22 @@ describe("public yielded settle replay with real Gateway admission", () => {
       }
     }
   });
+
+  it.for(["resume", "replace"] as const)(
+    "retains a tombstoned parent's exact completion until authorized %s",
+    async (action) => {
+      await runTombstonedRequesterSettleCase(action, {
+        child,
+        harness,
+        requesterScope,
+        saveChild,
+        restoreChildren,
+        wake,
+        markCommandExecutionStarted,
+        recoverViaRpc: (params) => rpcReq(resetClient.ws, "sessions.recover", params),
+      });
+    },
+  );
 
   it.for([
     "visible final",

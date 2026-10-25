@@ -43,6 +43,7 @@ import {
   watchRowFacts as observeRowFacts,
 } from "./session-row-projection.read-fixture.test-support.js";
 import {
+  acpProjectionMeta,
   requestSessionRow,
   withSessionRowProjectionState as withProjectionState,
 } from "./session-row-projection.test-support.js";
@@ -58,6 +59,13 @@ const mainConfig = { agents: { entries: { main: {} } } };
 function write(key: string, entry: SessionEntry, agentId = "main", storePath?: string) {
   replaceSessionEntrySync({ agentId, sessionKey: key, storePath }, entry);
 }
+
+const modelEntry = (sessionId: string, modelOverride: string, updatedAt = 1): SessionEntry => ({
+  sessionId,
+  updatedAt,
+  providerOverride: "unit-test",
+  modelOverride,
+});
 
 function snapshotRow(
   projection: SessionRowProjection,
@@ -245,15 +253,7 @@ it.each(["config", "static", "unowned-map", "empty-map"] as const)(
         }
       });
       for (const target of targets) {
-        write(
-          target.key,
-          {
-            sessionId: target.key,
-            updatedAt: 1,
-            displayName: fromConfig ? "Policy fixture" : "Publication fixture",
-          },
-          target.agentId,
-        );
+        write(target.key, { sessionId: target.key, updatedAt: 1 }, target.agentId);
       }
       using projection = await createTestProjection({
         cfg,
@@ -364,27 +364,14 @@ it("keeps cross-agent inheritance bound to a stored qualified parent", () =>
       ["work", "global", "work-global"],
       ["work", "agent:work:main", "work"],
     ] as const) {
-      write(
-        sessionKey,
-        {
-          sessionId: `${label}-parent`,
-          updatedAt: 1,
-          providerOverride: "unit-test",
-          modelOverride: `${label}-model`,
-        },
-        agentId,
-      );
+      write(sessionKey, modelEntry(`${label}-parent`, `${label}-model`), agentId);
     }
     const key = "agent:main:child";
     write(key, { sessionId: "child", updatedAt: 2, parentSessionKey: "agent:work:main" });
     const projection = await create({ cfg });
     const parentKey = "agent:work:main";
     const writeParent = (sessionId: string, updatedAt: number, modelOverride: string) =>
-      write(
-        parentKey,
-        { sessionId, updatedAt, providerOverride: "unit-test", modelOverride },
-        "work",
-      );
+      write(parentKey, modelEntry(sessionId, modelOverride, updatedAt), "work");
     const children = (parentSessionKey: string, agentId?: string) =>
       projection.selectEntries({ agentId, parentSessionKey }).map((child) => child.key);
     const expectInherited = (parentSessionKey: string, model: string) =>
@@ -437,12 +424,7 @@ it.each(["global", "unknown"])(
         session: { scope: "global" as const, store: storePath },
       };
       openOpenClawAgentDatabase({ agentId: "main", path: storePath });
-      const parent = {
-        sessionId: "work-parent",
-        updatedAt: 1,
-        providerOverride: "unit-test",
-        modelOverride: "before",
-      };
+      const parent = modelEntry("work-parent", "before");
       write(sentinel, parent, "work", storePath);
       const key = "agent:main:child";
       write(
@@ -542,14 +524,7 @@ it("searches cold archives with worker-prepared facts across publications and li
       seedCanonicalAcpSessionMeta({
         sessionKey: key,
         lifecycleRevision: "first",
-        meta: {
-          backend,
-          agent: "main",
-          runtimeSessionName: "archived",
-          mode: "persistent",
-          state: "idle",
-          lastActivityAt: 1,
-        },
+        meta: acpProjectionMeta(backend, "archived"),
       });
     publishAcp("fixture-runtime-first");
     using cleanup = new DisposableStack();
@@ -642,8 +617,8 @@ function sessionDescriber(context: ReturnType<typeof requestContext>, key: strin
 }
 
 it("publishes local placement receipts without rereading or adopting another store's facts", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const cfg = { agents: { entries: { main: {} } } };
+  await withProjectionState(async (create, state, cleanup) => {
+    const cfg = mainConfig;
     const target = {
       agentId: "main",
       sessionKey: "agent:main:local-placement-receipt",
@@ -653,7 +628,7 @@ it("publishes local placement receipts without rereading or adopting another sto
     const database = openOpenClawStateDatabase();
     let nowMs = 10;
     const placements = createWorkerSessionPlacementStore({ database, now: () => nowMs });
-    const projection = await createSessionRowProjection({
+    const projection = await create({
       cfg,
       modelCatalog: [],
       placementFactsReader: placements,
@@ -669,66 +644,60 @@ it("publishes local placement receipts without rereading or adopting another sto
       owner: { kind: "local" as const },
     };
     const resumeRead = createDeferredCore();
-    try {
-      await projection.ensureMaterialized();
-      const readProjection = placements.readProjection.bind(placements);
-      const reads = vi.spyOn(placements, "readProjection");
-      const rowReads = vi.spyOn(history, "withSessionHistoryWorkerDatabases");
-      const metadataReads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
-      const claim = await placements.claimTurn(claimInput);
-      await describe(10);
-      nowMs = 20;
-      await placements.releaseTurn(claim);
-      await describe(20);
-      expect(reads).not.toHaveBeenCalled();
-      expect(rowReads).not.toHaveBeenCalled();
-      expect(
-        metadataReads.mock.calls.filter(
-          ([, command]) => command.type === "sessionRows.sharedFacts",
-        ),
-      ).toEqual([]);
+    cleanup.defer(resumeRead.resolve);
+    await projection.ensureMaterialized();
+    const readProjection = placements.readProjection.bind(placements);
+    const reads = vi.spyOn(placements, "readProjection");
+    const rowReads = vi.spyOn(history, "withSessionHistoryWorkerDatabases");
+    const metadataReads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+    const claim = await placements.claimTurn(claimInput);
+    await describe(10);
+    nowMs = 20;
+    await placements.releaseTurn(claim);
+    await describe(20);
+    expect(reads).not.toHaveBeenCalled();
+    expect(rowReads).not.toHaveBeenCalled();
+    expect(
+      metadataReads.mock.calls.filter(([, command]) => command.type === "sessionRows.sharedFacts"),
+    ).toEqual([]);
 
-      const reading = createDeferredCore();
-      reads.mockImplementationOnce(async (...args) => {
-        const snapshot = await readProjection(...args);
-        reading.resolve();
-        await resumeRead.promise;
-        return snapshot;
-      });
-      sessionChanges.emit(target);
-      await reading.promise;
-      nowMs = 30;
-      const next = await placements.claimTurn({ ...claimInput, claimId: "next-receipt-claim" });
-      resumeRead.resolve();
-      await describe(30);
-      expect(reads).toHaveBeenCalledTimes(1);
-      await placements.releaseTurn(next);
+    const reading = createDeferredCore();
+    reads.mockImplementationOnce(async (...args) => {
+      const snapshot = await readProjection(...args);
+      reading.resolve();
+      await resumeRead.promise;
+      return snapshot;
+    });
+    sessionChanges.emit(target);
+    await reading.promise;
+    nowMs = 30;
+    const next = await placements.claimTurn({ ...claimInput, claimId: "next-receipt-claim" });
+    resumeRead.resolve();
+    await describe(30);
+    expect(reads).toHaveBeenCalledTimes(1);
+    await placements.releaseTurn(next);
 
-      reads.mockClear();
-      const other = createWorkerSessionPlacementStore({
-        database: openOpenClawStateDatabase({ path: state.statePath("other-state.sqlite") }),
-        now: () => 99,
-      });
-      const otherClaim = await other.claimTurn(claimInput);
-      await describe(30);
-      expect(reads).toHaveBeenCalled();
-      await other.releaseTurn(otherClaim);
-      await projection.ensureMaterialized();
+    reads.mockClear();
+    const other = createWorkerSessionPlacementStore({
+      database: openOpenClawStateDatabase({ path: state.statePath("other-state.sqlite") }),
+      now: () => 99,
+    });
+    const otherClaim = await other.claimTurn(claimInput);
+    await describe(30);
+    expect(reads).toHaveBeenCalled();
+    await other.releaseTurn(otherClaim);
+    await projection.ensureMaterialized();
 
-      reads.mockClear();
-      const shared = createWorkerSessionPlacementStore({ database, now: () => nowMs });
-      nowMs = 40;
-      const sharedClaim = await shared.claimTurn(claimInput);
-      await describe(40);
-      expect(reads).not.toHaveBeenCalled();
-      nowMs = 50;
-      await shared.releaseTurn(sharedClaim);
-      await describe(50);
-      expect(reads).not.toHaveBeenCalled();
-    } finally {
-      resumeRead.resolve();
-      projection.dispose();
-    }
+    reads.mockClear();
+    const shared = createWorkerSessionPlacementStore({ database, now: () => nowMs });
+    nowMs = 40;
+    const sharedClaim = await shared.claimTurn(claimInput);
+    await describe(40);
+    expect(reads).not.toHaveBeenCalled();
+    nowMs = 50;
+    await shared.releaseTurn(sharedClaim);
+    await describe(50);
+    expect(reads).not.toHaveBeenCalled();
   });
 });
 

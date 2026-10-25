@@ -166,121 +166,6 @@ async function cancelSessionPlacement(
     : ({ status: "cancelled" } as const);
 }
 
-async function resolveActivePlacement(
-  requests: SessionPlacementRequests & { client: Pick<GatewayBrowserClient, "request"> },
-  params: {
-    key: string;
-    agentId: string;
-    initial?: SessionPlacement;
-    sessionId?: string;
-    expectedSessionId?: string;
-    mode: SessionPlacementStartMode;
-    cleanupOnCancellation: () => boolean;
-  },
-  isCurrent: () => boolean,
-): Promise<PlacementResolution> {
-  const { client } = requests;
-  let next: PlacementReadResult | undefined = params.initial
-    ? { status: "read", placement: params.initial, sessionId: params.sessionId }
-    : undefined;
-  let lookupFailures = 0;
-  let emptyPlacements = 0;
-  let placementPending = false;
-  for (let attempt = 0; attempt < DISPATCH_RECONCILE_ATTEMPTS; attempt += 1) {
-    const result = next ?? (await readPlacement(requests, params.key));
-    placementPending =
-      result.status === "read" &&
-      result.placement !== undefined &&
-      PENDING_PLACEMENT_STATES.has(result.placement.state);
-    next = undefined;
-    if (result.status === "missing") {
-      return { status: "missing" };
-    }
-    if (result.status === "rejected") {
-      return { status: "cleanup-rejected", error: result.error };
-    }
-    if (result.status === "unavailable" || result.status === "awaiting-gateway") {
-      // A planned Gateway interruption says nothing about the worker's health.
-      lookupFailures = result.status === "awaiting-gateway" ? 0 : lookupFailures + 1;
-      const submissionCancelled = !isCurrent();
-      if (submissionCancelled) {
-        return cancelSessionPlacement(client, params, params.cleanupOnCancellation);
-      }
-      if (lookupFailures >= PLACEMENT_LOOKUP_FAILURE_LIMIT) {
-        const cleanupError = await reclaimSessionPlacement(client, params);
-        const placementError = "session placement could not be verified";
-        return {
-          status: "cleanup-rejected",
-          error: cleanupError
-            ? `${placementError}; cleanup failed: ${cleanupError}`
-            : placementError,
-        };
-      }
-      await sleepWithAbort(DISPATCH_RECONCILE_INTERVAL_MS);
-      continue;
-    }
-    lookupFailures = 0;
-    if (result.status === "read") {
-      if (
-        params.expectedSessionId &&
-        result.sessionId &&
-        params.expectedSessionId !== result.sessionId
-      ) {
-        return {
-          status: "cleanup-rejected",
-          error: "The conversation changed. Review this message before retrying.",
-        };
-      }
-      const placement = result.placement;
-      if (!placement) {
-        emptyPlacements += 1;
-        if (emptyPlacements >= EMPTY_PLACEMENT_LIMIT) {
-          return {
-            status: "cleanup-rejected",
-            error: "session placement could not be verified",
-          };
-        }
-      } else {
-        emptyPlacements = 0;
-      }
-      if (!isCurrent()) {
-        return cancelSessionPlacement(client, params, params.cleanupOnCancellation);
-      } else if (placement?.state === "active") {
-        return { status: "active", placement, sessionId: result.sessionId };
-      } else if (
-        params.mode === "retry" &&
-        (!placement ||
-          placement.state === "local" ||
-          placement.state === "reclaimed" ||
-          placement.state === "failed")
-      ) {
-        // Explicit Retry may allocate again; the Gateway still owns failed-worker cleanup gates.
-        return { status: "dispatch", sessionId: result.sessionId };
-      } else if (placement && !PENDING_PLACEMENT_STATES.has(placement.state)) {
-        if (placement.state === "failed") {
-          const cleanupError = await reclaimSessionPlacement(client, params);
-          if (cleanupError) {
-            return { status: "cleanup-rejected", error: cleanupError };
-          }
-        }
-        return { status: "rejected", placement };
-      }
-    }
-    await sleepWithAbort(DISPATCH_RECONCILE_INTERVAL_MS);
-  }
-  if (!isCurrent()) {
-    return cancelSessionPlacement(client, params, params.cleanupOnCancellation);
-  }
-  return {
-    status: "cleanup-rejected",
-    error: t(
-      placementPending
-        ? "newSession.placementStillStarting"
-        : "newSession.placementCompletionUnconfirmed",
-    ),
-  };
-}
-
 export async function deleteSessionPlacementDraft(
   requests: SessionPlacementRequests,
   key: string,
@@ -367,24 +252,110 @@ export async function startSessionPlacementInitialTurn(
   const message = params.message;
   const mentions = params.mentions;
   const cleanupOnCancellation = params.cleanupOnCancellation ?? (() => true);
-  const resolvePlacement = (
+  const resolvePlacement = async (
     mode: SessionPlacementStartMode,
     initial?: SessionPlacement,
     sessionId?: string,
-  ) =>
-    resolveActivePlacement(
-      requests,
-      {
-        key: params.key,
-        agentId: params.agentId,
-        mode,
-        initial,
-        sessionId,
-        expectedSessionId: params.sessionId,
-        cleanupOnCancellation,
-      },
-      isCurrent,
-    );
+  ): Promise<PlacementResolution> => {
+    const target = { key: params.key, agentId: params.agentId };
+    const expectedSessionId = params.sessionId;
+    const { client: placementClient } = requests;
+    let next: PlacementReadResult | undefined = initial
+      ? { status: "read", placement: initial, sessionId }
+      : undefined;
+    let lookupFailures = 0;
+    let emptyPlacements = 0;
+    let placementPending = false;
+    for (let attempt = 0; attempt < DISPATCH_RECONCILE_ATTEMPTS; attempt += 1) {
+      const result = next ?? (await readPlacement(requests, target.key));
+      placementPending =
+        result.status === "read" &&
+        result.placement !== undefined &&
+        PENDING_PLACEMENT_STATES.has(result.placement.state);
+      next = undefined;
+      if (result.status === "missing") {
+        return { status: "missing" };
+      }
+      if (result.status === "rejected") {
+        return { status: "cleanup-rejected", error: result.error };
+      }
+      if (result.status === "unavailable" || result.status === "awaiting-gateway") {
+        // A planned Gateway interruption says nothing about the worker's health.
+        lookupFailures = result.status === "awaiting-gateway" ? 0 : lookupFailures + 1;
+        const submissionCancelled = !isCurrent();
+        if (submissionCancelled) {
+          return cancelSessionPlacement(placementClient, target, cleanupOnCancellation);
+        }
+        if (lookupFailures >= PLACEMENT_LOOKUP_FAILURE_LIMIT) {
+          const cleanupError = await reclaimSessionPlacement(placementClient, target);
+          const placementError = "session placement could not be verified";
+          return {
+            status: "cleanup-rejected",
+            error: cleanupError
+              ? `${placementError}; cleanup failed: ${cleanupError}`
+              : placementError,
+          };
+        }
+        await sleepWithAbort(DISPATCH_RECONCILE_INTERVAL_MS);
+        continue;
+      }
+      lookupFailures = 0;
+      if (result.status === "read") {
+        if (expectedSessionId && result.sessionId && expectedSessionId !== result.sessionId) {
+          return {
+            status: "cleanup-rejected",
+            error: "The conversation changed. Review this message before retrying.",
+          };
+        }
+        const placement = result.placement;
+        if (!placement) {
+          emptyPlacements += 1;
+          if (emptyPlacements >= EMPTY_PLACEMENT_LIMIT) {
+            return {
+              status: "cleanup-rejected",
+              error: "session placement could not be verified",
+            };
+          }
+        } else {
+          emptyPlacements = 0;
+        }
+        if (!isCurrent()) {
+          return cancelSessionPlacement(placementClient, target, cleanupOnCancellation);
+        } else if (placement?.state === "active") {
+          return { status: "active", placement, sessionId: result.sessionId };
+        } else if (
+          mode === "retry" &&
+          (!placement ||
+            placement.state === "local" ||
+            placement.state === "reclaimed" ||
+            placement.state === "failed")
+        ) {
+          // Explicit Retry may allocate again; the Gateway still owns failed-worker cleanup gates.
+          return { status: "dispatch", sessionId: result.sessionId };
+        } else if (placement && !PENDING_PLACEMENT_STATES.has(placement.state)) {
+          if (placement.state === "failed") {
+            const cleanupError = await reclaimSessionPlacement(placementClient, target);
+            if (cleanupError) {
+              return { status: "cleanup-rejected", error: cleanupError };
+            }
+          }
+          return { status: "rejected", placement };
+        }
+      }
+      await sleepWithAbort(DISPATCH_RECONCILE_INTERVAL_MS);
+    }
+    if (!isCurrent()) {
+      return cancelSessionPlacement(placementClient, target, cleanupOnCancellation);
+    }
+    return {
+      status: "cleanup-rejected",
+      error: t(
+        placementPending
+          ? "newSession.placementStillStarting"
+          : "newSession.placementCompletionUnconfirmed",
+      ),
+    };
+  };
   let resolution: PlacementResolution = { status: "dispatch" };
   let dispatchError = "";
   const requiredTarget =

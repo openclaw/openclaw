@@ -1,25 +1,15 @@
 // Tool warning tests ensure failed actions remain visible without exposing
 // verbose execution details unless the operator explicitly requests them.
-import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
-import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
 import {
   buildPayloads,
+  makePayloadAssistant as makeAssistant,
+  makePayloadToolAssistant,
   expectSinglePayloadText,
   expectSingleToolErrorPayload,
 } from "./payloads.test-helpers.js";
 
 describe("buildEmbeddedRunPayloads tool warnings", () => {
-  const errorJson =
-    '{"type":"error","error":{"details":null,"type":"overloaded_error","message":"Overloaded"},"request_id":"req_011CX7DwS7tSvggaNHmefwWg"}';
-  const makeAssistant = (overrides: Partial<AssistantMessage>): AssistantMessage =>
-    // Default to an overloaded provider error so each test can override only
-    // the assistant fields relevant to user-visible payload sanitization.
-    makeAssistantMessageFixture({
-      errorMessage: errorJson,
-      content: [{ type: "text", text: errorJson }],
-      ...overrides,
-    });
   const makeStoppedAssistant = (text = "") =>
     makeAssistant({
       stopReason: "stop",
@@ -47,11 +37,7 @@ describe("buildEmbeddedRunPayloads tool warnings", () => {
   function expectNoSyntheticCompletionForSession(sessionKey: string) {
     expectNoPayloads({
       sessionKey,
-      lastAssistant: makeAssistant({
-        stopReason: "stop",
-        errorMessage: undefined,
-        content: [],
-      }),
+      lastAssistant: makeStoppedAssistant(),
     });
   }
 
@@ -88,11 +74,7 @@ describe("buildEmbeddedRunPayloads tool warnings", () => {
     expectNoPayloads({
       sessionKey: "agent:main:discord:direct:u123",
       didSendViaMessagingTool: true,
-      lastAssistant: makeAssistant({
-        stopReason: "stop",
-        errorMessage: undefined,
-        content: [],
-      }),
+      lastAssistant: makeStoppedAssistant(),
     });
   });
 
@@ -104,18 +86,7 @@ describe("buildEmbeddedRunPayloads tool warnings", () => {
 
   it("adds compact tool error fallback when the assistant only invoked tools and verbose mode is on", () => {
     const payloads = buildPayloads({
-      lastAssistant: makeAssistant({
-        stopReason: "toolUse",
-        errorMessage: undefined,
-        content: [
-          {
-            type: "toolCall",
-            id: "toolu_01",
-            name: "exec",
-            arguments: { command: "echo hi" },
-          },
-        ],
-      }),
+      lastAssistant: makePayloadToolAssistant("exec", { command: "echo hi" }),
       lastToolError: { toolName: "exec", error: "Command exited with code 1" },
       verboseLevel: "on",
     });
@@ -129,17 +100,9 @@ describe("buildEmbeddedRunPayloads tool warnings", () => {
   it("does not add tool error fallback when assistant text exists after tool calls", () => {
     const payloads = buildPayloads({
       assistantTexts: ["Checked the page and recovered with final answer."],
-      lastAssistant: makeAssistant({
-        stopReason: "toolUse",
-        errorMessage: undefined,
-        content: [
-          {
-            type: "toolCall",
-            id: "toolu_01",
-            name: "browser",
-            arguments: { action: "search", query: "openclaw docs" },
-          },
-        ],
+      lastAssistant: makePayloadToolAssistant("browser", {
+        action: "search",
+        query: "openclaw docs",
       }),
       currentAssistant: makeStoppedAssistant("Checked the page and recovered with final answer."),
       lastToolError: { toolName: "browser", error: "connection timeout" },

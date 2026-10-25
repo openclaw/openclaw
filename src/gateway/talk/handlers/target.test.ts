@@ -261,6 +261,7 @@ it.each(["read-only", "draft", "incognito"] as const)(
 it("creates Talk in its custom suffixed store without adopting an unsuffixed decoy", async () => {
   config.session = { store: state.statePath("shared.json") };
   config.agents!.defaults = { sessionStore: { agentId: "primary" } };
+  setRuntimeConfigSnapshot(config);
   const unsuffixed = openOpenClawAgentDatabase({
     agentId: "main",
     path: state.statePath("shared.sqlite"),
@@ -292,6 +293,7 @@ it("shares the global fixed-store target while retaining the exact voice key", a
     store: state.statePath("shared", "sessions.sqlite"),
   };
   config.agents!.defaults = { sessionStore: { agentId } };
+  setRuntimeConfigSnapshot(config);
   const params = Object.freeze({ ...createParams, sessionKey: voiceKey });
   const respond = await dispatch("talk.client.create", params);
   expectCreated(respond);

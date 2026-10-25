@@ -23,7 +23,6 @@ import {
   readFileDescriptorBoundedSync,
 } from "../../src/infra/boundary-file-read.js";
 import { readRootJsonObjectSync } from "../../src/infra/json-files.js";
-import { assertRuntimeSupportsPluginModule } from "../../src/infra/runtime-profile.js";
 import { tryProcessCwd } from "../../src/infra/safe-cwd.js";
 import {
   resolveImmutableInstallIdentity,
@@ -231,7 +230,6 @@ function fixture({
     getPluginCacheRoot: getRoot,
     getPluginCache: () => ({ sdk: sdkCache }),
     getPluginSdkHostFacts,
-    assertRuntimeSupportsPluginModule,
     isRecord,
     PUBLIC_SURFACE_SOURCE_EXTENSIONS,
     openClawRootFsSync: observedFs,

@@ -19,6 +19,7 @@ import { requestContext } from "../server-methods/sessions-read-cache.test-suppo
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionRowProjection } from "../session-row-projection.js";
 import { placementTurnOwner, projectWorkerSessionTurnClaim } from "./placement-record.js";
+import { journalOwner } from "./placement-suite.test-support.js";
 import {
   WorkerRunnerCapacityError,
   WorkerRunnerUnavailableError,
@@ -36,6 +37,7 @@ import {
   runIdentity,
 } from "./worker-turn-launcher-flow.test-support.js";
 import * as fx from "./worker-turn-launcher.test-support.js";
+import { workspaceJournal } from "./workspace-manifest-fixtures.test-support.js";
 
 afterAll(closeStateDatabaseForTest);
 
@@ -456,12 +458,7 @@ describe("worker turn launcher failure recovery", () => {
   it("preserves an unresolved rollback journal when pre-launch recovery conflicts", async () => {
     await fx.seedActivePlacement();
     const active = activePlacement();
-    const owner = {
-      sessionId: active.sessionId,
-      environmentId: active.environmentId,
-      ownerEpoch: active.activeOwnerEpoch,
-      placementGeneration: active.generation,
-    };
+    const owner = journalOwner(active);
     const basePack = Buffer.from("conflicted journal snapshot");
     const fileEntry = (text: string) => ({
       path: "blocked.txt",
@@ -470,17 +467,16 @@ describe("worker turn launcher failure recovery", () => {
       size: Buffer.byteLength(text),
       sha256: createHash("sha256").update(text).digest("hex"),
     });
-    await fx.placements.beginWorkspaceReconciliation(owner, {
-      version: 1,
-      temporaryNonce: "e".repeat(32),
-      baseManifestRef: active.workspaceBaseManifestRef,
-      currentManifestRef: `sha256:${"f".repeat(64)}`,
-      baseEntries: [fileEntry("base\n")],
-      appliedEntries: [fileEntry("worker\n")],
-      baseTree: "d".repeat(40),
-      basePackSha256: createHash("sha256").update(basePack).digest("hex"),
-      basePack,
-    });
+    await fx.placements.beginWorkspaceReconciliation(
+      owner,
+      workspaceJournal(active.workspaceBaseManifestRef, `sha256:${"f".repeat(64)}`, {
+        temporaryNonce: "e".repeat(32),
+        baseEntries: [fileEntry("base\n")],
+        appliedEntries: [fileEntry("worker\n")],
+        baseTree: "d".repeat(40),
+        basePack,
+      }),
+    );
     await fs.writeFile(path.join(fx.root, "blocked.txt"), "local\n");
     const environments: fx.WorkerTurnEnvironmentService = {
       ...fx.unusedEnvironments(),

@@ -31,6 +31,7 @@ import { stopLaunchAgent } from "./launchd-stop.js";
 import { withGatewayServiceOperationLock } from "./service-operation-lock.js";
 import * as serviceMembership from "./service-process-membership.js";
 import { withGatewayServiceUpdateAuthority } from "./service-update-authority.js";
+import { nativeExit } from "./systemd-exec.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const stdout = new Writable({ write: (_chunk, _encoding, done) => done() });
@@ -98,12 +99,7 @@ function interceptIntent(after: (recorded: boolean) => void, fail = false) {
     },
   );
 }
-const nativeResult = (code: number, output = "", stderr = "") => ({
-  code,
-  stdout: output,
-  stderr,
-  termination: "exit" as const,
-});
+const nativeResult = (code: number, output = "", stderr = "") => nativeExit(output, stderr, code);
 const notLoaded = () => nativeResult(113, "", "Could not find service");
 async function stop(updateOwned = true, disable = false, output = stdout) {
   const invoke = () =>

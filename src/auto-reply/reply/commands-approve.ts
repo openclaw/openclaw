@@ -100,11 +100,7 @@ export async function handleApproveCommandFromContext(
     return commandReply(parsed.error);
   }
 
-  const effectiveAccountId = resolveChannelAccountId({
-    cfg: params.cfg,
-    ctx: params.ctx,
-    command: params.command,
-  });
+  const effectiveAccountId = resolveChannelAccountId(params);
   const approvalCapability = resolveChannelApprovalCapability(
     getChannelPlugin(params.command.channel),
   );

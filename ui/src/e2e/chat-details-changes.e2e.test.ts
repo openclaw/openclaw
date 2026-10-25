@@ -1,12 +1,137 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import { expect, it } from "vitest";
+import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway, pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { closeChatDetails, openChatDetails } from "./chat-details.test-support.ts";
+import {
+  publicationMethods,
+  publicationOptions,
+  waitForWatchedSessionKey,
+} from "./chat-github-publication.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Details Environment changes" });
 
 suite.define(() => {
+  it.each(["published", "failed"] as const)(
+    "shows local changes beside an existing PR after a %s publication",
+    async (status) => {
+      await suite.withPage(
+        { viewport: { width: 1180, height: 800 }, recordVideo: { dir: suite.artifactDir } },
+        async ({ page }) => {
+          const branch = "feature/workspace-navigation";
+          const publication = {
+            requestId: "existing-pr-publication",
+            status,
+            publisher: publicationOptions.shared,
+            ...(status === "published"
+              ? {
+                  repository: "example/workspace",
+                  branch,
+                  url: "https://github.com/example/workspace/pull/42",
+                  headCommit: "a".repeat(40),
+                }
+              : {
+                  code: "unavailable",
+                  message: "The earlier publication failed.",
+                  nextAction: "Check the existing pull request.",
+                }),
+          };
+          const gateway = await installMockGateway(page, {
+            featureMethods: [...publicationMethods, "sessions.diff"],
+            workspace: "/workspace/openclaw",
+            workspaceGit: true,
+            historyMessages: [
+              {
+                role: "user",
+                content: "Refine workspace navigation and keep the pull request up to date.",
+              },
+              {
+                role: "assistant",
+                content:
+                  "The navigation pull request is open. I am adjusting the keyboard behavior and adding the remaining focus checks.",
+              },
+            ],
+            sessions: [
+              createControlUiSessionRow("agent:main:main", "Refine workspace navigation", 1, {
+                repository: { url: "https://github.com/example/workspace", branch },
+              }),
+            ],
+            methodResponses: {
+              "sessions.github.options": {
+                ...publicationOptions,
+                latestShared: { result: publication, confirmation: null },
+              },
+              "sessions.diff": {
+                sessionKey: "main",
+                branch,
+                baseRef: "HEAD",
+                files: [
+                  { path: "src/navigation.ts", status: "modified", additions: 18, deletions: 4 },
+                ],
+                additions: 18,
+                deletions: 4,
+              },
+            },
+          });
+          await page.goto(suite.server.baseUrl + "chat");
+          const details = await openChatDetails(page);
+          const key = await waitForWatchedSessionKey(gateway);
+          await gateway.waitForRequest("sessions.github.options");
+          await gateway.waitForRequest("sessions.diff");
+          // The Gateway omits branch publication facts when this checkout already
+          // has a live PR, including a PR whose base is the fork's parent.
+          await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
+            sessions: {
+              [key]: {
+                status: "ready",
+                rateLimited: false,
+                repository: { owner: "example", repo: "workspace" },
+                pullRequests: [
+                  {
+                    owner: "example",
+                    repo: "workspace",
+                    branch,
+                    number: 42,
+                    title: "Refine workspace navigation",
+                    url: "https://github.com/example/workspace/pull/42",
+                    state: "open",
+                  },
+                ],
+              },
+            },
+          });
+          const environment = details.locator('[data-details-group="environment"]');
+          const pr = details
+            .locator('a[href="https://github.com/example/workspace/pull/42"]')
+            .first();
+          await pr.waitFor();
+          const frame = await takeControlUiScreenshotFrame(page, details, [pr, environment], {
+            elements: [details],
+            animations: "disabled",
+          });
+          await writeFile(path.join(suite.artifactDir, status + ".png"), frame.png);
+          expect.soft(await environment.locator(".chat-pr__publication-actions").count()).toBe(0);
+          const changes = environment.locator(".chat-pr__diff");
+          await expect.poll(() => changes.textContent()).toContain("+18");
+          expect(await changes.textContent()).toContain("−4");
+          await changes.click();
+          const review = page.locator(".session-diff");
+          await expect.poll(() => review.textContent()).toContain("navigation.ts");
+          expect(
+            await review
+              .getByRole("button", { name: "Choose change scope", exact: true })
+              .textContent(),
+          ).toBe("Uncommitted");
+          expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
+        },
+      );
+    },
+  );
+
   it("shares read-only Uncommitted demand between Environment and Review and recovers retained counts", async () => {
     await suite.withPage({ viewport: { width: 1180, height: 800 } }, async ({ page }) => {
       await page.clock.install();

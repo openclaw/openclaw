@@ -69,10 +69,6 @@ export function createPatchServer() {
   return { store, request };
 }
 
-export function configSnapshot(config: Config, hash = "hash-1", raw = JSON.stringify(config)) {
-  return { config, raw, hash, valid: true, issues: [] };
-}
-
 export async function expectStoredConfig(
   server: { request: (method: string) => Promise<unknown> },
   config: Config,

@@ -25,26 +25,24 @@ import {
   recoverConfigFromLastKnownGoodCore,
 } from "./io.observe-recovery.js";
 import {
+  approveRecoveryCandidate,
   clobberedUpdateChannelConfig,
   clobberedUpdateChannelRaw,
+  createRecoveryConfigEnv,
   largeRecoverableCoreConfig,
+  makeDeps,
+  makeSnapshot,
   recoverableCoreConfig,
   recoverableTelegramConfig,
+  resolveLastKnownGoodConfigPath,
+  seedConfig,
+  writeConfigRaw,
 } from "./io.observe-recovery.test-support.js";
 import * as configObserveState from "./io.observe-state.js";
 import { createConfigIoWorkerFixture } from "./io.worker.test-support.js";
 import type { ConfigFileSnapshot } from "./types.js";
 
 type ObserveRecoveryDeps = Parameters<typeof maybeRecoverSuspiciousConfigRead>[0]["deps"];
-const approveRecoveryCandidate = <T extends { raw: string; parsed: unknown }>(candidate: T) => ({
-  ok: true as const,
-  candidate,
-});
-
-function resolveLastKnownGoodConfigPath(configPath: string): string {
-  return `${configPath}.last-good`;
-}
-
 describe("config observe recovery", () => {
   let fixtureRoot = "";
   let homeCaseId = 0;
@@ -75,20 +73,9 @@ describe("config observe recovery", () => {
     closeOpenClawStateDatabaseForTest();
   });
 
-  async function seedConfig(configPath: string, config: Record<string, unknown>) {
-    await fsp.mkdir(path.dirname(configPath), { recursive: true });
-    return writeConfigRaw(configPath, config);
-  }
-
   async function seedConfigBackup(configPath: string, config: Record<string, unknown>) {
     await seedConfig(configPath, config);
     await fsp.copyFile(configPath, `${configPath}.bak`);
-  }
-
-  async function writeConfigRaw(configPath: string, config: Record<string, unknown>) {
-    const raw = `${JSON.stringify(config, null, 2)}\n`;
-    await fsp.writeFile(configPath, raw, "utf-8");
-    return { raw, parsed: config };
   }
 
   async function writeClobberedUpdateChannel(configPath: string) {
@@ -148,13 +135,12 @@ describe("config observe recovery", () => {
     const error = vi.fn();
     // Keep recovery validation out of host/workspace plugin state. Preserve the
     // caller's env identity because rollback tests inspect that exact object.
-    const env = options.env ?? ({} as NodeJS.ProcessEnv);
-    env.HOME ??= fixtureHome;
-    env.USERPROFILE ??= fixtureHome;
-    env.OPENCLAW_CONFIG_PATH ??= configPath;
-    env.OPENCLAW_STATE_DIR ??= path.join(fixtureHome, ".openclaw");
-    env.OPENCLAW_DISABLE_BUNDLED_PLUGINS ??= "1";
-    env.VITEST ??= "true";
+    const env = createRecoveryConfigEnv(
+      fixtureHome,
+      configPath,
+      path.join(fixtureHome, ".openclaw"),
+      options.env,
+    );
     const ioOptions = {
       fs,
       env,
@@ -166,24 +152,6 @@ describe("config observe recovery", () => {
     return { configPath, warn, error, ioOptions, io: createConfigIO(ioOptions) };
   }
 
-  async function makeSnapshot(configPath: string, config: Record<string, unknown>) {
-    const { raw } = await seedConfig(configPath, config);
-    return {
-      path: configPath,
-      exists: true,
-      raw,
-      parsed: config,
-      sourceConfig: config,
-      resolved: config,
-      valid: true,
-      runtimeConfig: config,
-      config,
-      issues: [],
-      warnings: [],
-      legacyIssues: [],
-    } satisfies ConfigFileSnapshot;
-  }
-
   function invalidSnapshot(snapshot: ConfigFileSnapshot, raw: string): ConfigFileSnapshot {
     return {
       ...snapshot,
@@ -191,29 +159,6 @@ describe("config observe recovery", () => {
       parsed: { gateway: { mode: 123 } },
       valid: false,
       issues: [{ path: "gateway.mode", message: "Expected string" }],
-    };
-  }
-
-  function makeDeps(
-    fixtureHome: string,
-    warn = vi.fn(),
-  ): {
-    deps: ObserveRecoveryDeps;
-    configPath: string;
-    auditPath: string;
-    warn: ReturnType<typeof vi.fn>;
-  } {
-    const configPath = path.join(fixtureHome, ".openclaw", "openclaw.json");
-    return {
-      deps: {
-        fs,
-        env: {} as NodeJS.ProcessEnv,
-        homedir: () => fixtureHome,
-        logger: { warn },
-      },
-      configPath,
-      auditPath: path.join(fixtureHome, ".openclaw", "logs", "config-audit.jsonl"),
-      warn,
     };
   }
 

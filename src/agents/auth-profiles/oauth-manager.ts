@@ -1017,13 +1017,8 @@ export function createOAuthManager() {
     }
   }
 
-  function resetRefreshQueuesForTest(): void {
-    refreshQueue.reset();
-  }
-
   return {
     resolveOAuthAccess,
-    resetRefreshQueuesForTest,
   };
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

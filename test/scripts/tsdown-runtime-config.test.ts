@@ -54,6 +54,35 @@ async function inputOptions(config: UserConfig) {
 afterEach(() => vi.unstubAllEnvs());
 
 describe("tsdown config", () => {
+  it("keeps isolated and unselected plugin workers out of the host build graph", async () => {
+    vi.stubEnv("OPENCLAW_BUILD_PRIVATE_QA", "0");
+    const { default: selectedConfigs } = await importFreshModule<
+      typeof import("../../tsdown.config.ts")
+    >(import.meta.url, "../../tsdown.config.ts?isolated-worker-build");
+    const host = expectDefined(
+      selectedConfigs.find((config) =>
+        Object.hasOwn(entrySources(config), "plugins/runtime/index"),
+      ),
+      "host build graph",
+    );
+    const sources = Object.values(entrySources(host))
+      .flat()
+      .map((source) =>
+        path.relative(process.cwd(), path.resolve(source)).replaceAll(path.sep, "/"),
+      );
+    for (const plugin of [
+      "codex",
+      "discord",
+      "imessage",
+      "memory-lancedb",
+      "onnx",
+      "team-reports",
+      "qa-lab",
+    ]) {
+      expect(sources.filter((source) => source.startsWith(`extensions/${plugin}/`))).toEqual([]);
+    }
+  });
+
   it.each(["0", "1"])(
     "emits QA transport facades only for private QA builds (%s)",
     async (mode) => {
@@ -177,7 +206,11 @@ describe("tsdown config", () => {
       "extensions/telegram/src/telegram-ingress-worker.runtime.ts",
     ],
   ])("keeps %s behind its stable root dist entry", (entry, source) => {
-    expect(entrySources(runtimeGraph("plugins/runtime/index"))[entry]).toBe(source);
+    const actual = entrySources(runtimeGraph("plugins/runtime/index"))[entry];
+    if (typeof actual !== "string") {
+      throw new Error(`expected one source for ${entry}`);
+    }
+    expect(path.resolve(actual)).toBe(path.resolve(source));
   });
 
   it("bundles SDK-owned helpers while retaining native package ownership", async () => {

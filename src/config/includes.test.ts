@@ -12,28 +12,9 @@ import {
   type IncludeResolver,
   resolveConfigIncludes as resolveIncludes,
 } from "./includes.js";
+import { CONFIG_FILE, ROOT_DIR, configPath, createMockResolver } from "./includes.test-support.js";
 
-const ROOT_DIR = path.parse(process.cwd()).root;
-const CONFIG_DIR = path.join(ROOT_DIR, "config");
 const SHARED_DIR = path.join(ROOT_DIR, "shared");
-
-const CONFIG_FILE = path.join(CONFIG_DIR, "openclaw.json");
-
-function configPath(...parts: string[]) {
-  return path.join(CONFIG_DIR, ...parts);
-}
-
-function createMockResolver(files: Record<string, unknown>): IncludeResolver {
-  return {
-    readFile: (filePath: string) => {
-      if (filePath in files) {
-        return JSON.stringify(files[filePath]);
-      }
-      throw new Error(`ENOENT: no such file: ${filePath}`);
-    },
-    parseJson: JSON.parse,
-  };
-}
 
 function resolve(obj: unknown, files: Record<string, unknown> = {}) {
   return resolveIncludes(obj, CONFIG_FILE, createMockResolver(files));

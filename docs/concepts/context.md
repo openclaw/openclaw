@@ -49,15 +49,16 @@ the meter omits context usage instead of borrowing the agent's default model
 capacity; available provider plan usage remains visible. Stale token totals remain
 approximate and do not trigger the context warning.
 
-In the Control UI, expand **Context** in session details to inspect the last saved
-report. **Workspace files** groups files by their recorded source: agent workspace,
+In the Control UI, open the context ring beside the composer's model picker for a
+compact usage breakdown, latest-run tokens, and provider plan limits when available.
+Select **View context** to open the complete report in one side panel. **Workspace files** groups files by their recorded source: agent workspace,
 execution project, or personal instructions. File paths distinguish matching names
 such as two `AGENTS.md` files. Reports without source metadata show neutral file
 groups rather than guessing their role.
 
-**Tool schemas** groups loaded tools by source and MCP server. When available,
-**Available on demand** lists deferred schemas separately; their potential sizes
-are not added to current usage. Discovery descriptions and schemas retrieved into
+**Tool schemas** groups tools in the direct tool surface by source and MCP server.
+The secondary **Tools loaded on use** section lists catalog entries outside that
+surface; their potential schema sizes are not added to current usage. Discovery descriptions and schemas retrieved into
 the conversation still consume context. Native-harness reports may cover only
 OpenClaw-provided tools, and unmeasured sizes remain unverified rather than zero.
 

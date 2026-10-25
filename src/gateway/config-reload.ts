@@ -844,7 +844,6 @@ export function startGatewayConfigReloader(
     clearReloadTimer();
     let attemptedCandidate: GatewayConfigReloadCandidate | null = null;
     try {
-      assertLeaseOwned();
       if (pendingInProcessConfig) {
         const pendingWrite = pendingInProcessConfig;
         attemptedCandidate = pendingWrite;
@@ -908,7 +907,6 @@ export function startGatewayConfigReloader(
         return;
       }
       await source.observePaths(snapshot.includedPaths ?? []);
-      assertLeaseOwned();
       const observedRawHash = hashConfigRaw(snapshot.raw);
       const previousObservedRawHash = lastObservedRawHash;
       const newObservedRawHash = observedRawHash !== previousObservedRawHash;

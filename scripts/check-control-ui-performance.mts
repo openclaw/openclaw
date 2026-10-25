@@ -61,6 +61,10 @@ const controlUiPerformanceBudgets = {
   // Route consolidation saves 4,189 B total CSS gzip while merging always-loaded
   // sheets. Approved 2026-10-22: 57,154 B plus the prior 53,400 / 52,337 headroom.
   largestCssGzipBytes: 58_315,
+  // Vyctor approved the restored mobile topbar in #182599 (2026-10-24).
+  // Fixed bundle ceilings, not a repeatable per-PR growth allowance.
+  totalCssGzipBytes: 303_372,
+  totalCssRawBytes: 1_595_521,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 
@@ -204,6 +208,8 @@ function collectControlUiPerformanceBudgetChecks(
     ["startup CSS gzip", metrics.startup.css.gzipBytes, budgets.startupCssGzipBytes, "bytes"],
     ["largest JS gzip", metrics.largest.js.gzipBytes, budgets.largestJsGzipBytes, "bytes"],
     ["largest CSS gzip", metrics.largest.css.gzipBytes, budgets.largestCssGzipBytes, "bytes"],
+    ["total CSS gzip", metrics.total.css.gzipBytes, budgets.totalCssGzipBytes, "bytes"],
+    ["total CSS raw", metrics.total.css.rawBytes, budgets.totalCssRawBytes, "bytes"],
     ["isolated Mermaid JS assets", metrics.mermaidRenderer.length, 1, "count"],
     [
       "isolated Mermaid JS gzip",
@@ -325,27 +331,12 @@ export function evaluateControlUiPerformanceBudgets(
     }
   }
   if (baseMetrics) {
-    for (const area of ["startup", "total"] as const) {
-      const limit =
-        area === "startup"
-          ? CONTROL_UI_CSS_GZIP_GROWTH_BYTES - 1
-          : CONTROL_UI_GZIP_BUILD_VARIANCE_BYTES;
-      const growth = metrics[area].css.gzipBytes - baseMetrics[area].css.gzipBytes;
-      if (growth > limit) {
-        violations.push({
-          metric: `${area} CSS gzip growth`,
-          actual: growth,
-          limit,
-          unit: "bytes",
-        });
-      }
-    }
-    const rawGrowth = metrics.total.css.rawBytes - baseMetrics.total.css.rawBytes;
-    if (rawGrowth > CONTROL_UI_GZIP_BUILD_VARIANCE_BYTES) {
+    const growth = metrics.startup.css.gzipBytes - baseMetrics.startup.css.gzipBytes;
+    if (growth >= CONTROL_UI_CSS_GZIP_GROWTH_BYTES) {
       violations.push({
-        metric: "total CSS raw growth",
-        actual: rawGrowth,
-        limit: CONTROL_UI_GZIP_BUILD_VARIANCE_BYTES,
+        metric: "startup CSS gzip growth",
+        actual: growth,
+        limit: CONTROL_UI_CSS_GZIP_GROWTH_BYTES - 1,
         unit: "bytes",
       });
     }
@@ -463,7 +454,7 @@ export function formatControlUiPerformanceReport(
     `  largest ordinary JS: ${metrics.largest.js.file}, ${formatControlUiPerformanceBytes(metrics.largest.js.gzipBytes)} gzip (limit: ${formatControlUiPerformanceBytes(budgets.largestJsGzipBytes)})`,
     `  largest CSS: ${metrics.largest.css.file}, ${metrics.largest.css.gzipBytes} B gzip (hard ceiling ${budgets.largestCssGzipBytes} B; headroom ${budgets.largestCssGzipBytes - metrics.largest.css.gzipBytes} B)`,
     `  all JS: ${formatAssetSummary(metrics.total.js)}`,
-    `  all CSS: ${formatAssetSummary(metrics.total.css)}`,
+    `  all CSS: ${formatAssetSummary(metrics.total.css)} (fixed ceilings: ${budgets.totalCssGzipBytes} B gzip, ${budgets.totalCssRawBytes} B raw)`,
   );
   if (metrics.routeBoot) {
     lines.push(
@@ -497,20 +488,24 @@ export function formatControlUiPerformanceReport(
     lines.push(
       `  startup JS gzip vs base: ${baseMetrics.startup.js.gzipBytes} B -> ${metrics.startup.js.gzipBytes} B (${startupGrowth >= 0 ? "+" : ""}${startupGrowth} B); requests ${baseMetrics.startup.js.requests} -> ${metrics.startup.js.requests}`,
     );
-    for (const area of ["startup", "total"] as const) {
-      const limit =
-        area === "startup"
-          ? CONTROL_UI_CSS_GZIP_GROWTH_BYTES - 1
-          : CONTROL_UI_GZIP_BUILD_VARIANCE_BYTES;
-      const growth = metrics[area].css.gzipBytes - baseMetrics[area].css.gzipBytes;
+    const cssGrowth = metrics.startup.css.gzipBytes - baseMetrics.startup.css.gzipBytes;
+    lines.push(
+      `  startup CSS gzip vs base: ${baseMetrics.startup.css.gzipBytes} B -> ${metrics.startup.css.gzipBytes} B (${cssGrowth >= 0 ? "+" : ""}${cssGrowth} B; growth up to ${CONTROL_UI_CSS_GZIP_GROWTH_BYTES - 1} B allowed)`,
+    );
+    for (const [metric, bytes, baseBytes, cap] of [
+      [
+        "gzip",
+        metrics.total.css.gzipBytes,
+        baseMetrics.total.css.gzipBytes,
+        budgets.totalCssGzipBytes,
+      ],
+      ["raw", metrics.total.css.rawBytes, baseMetrics.total.css.rawBytes, budgets.totalCssRawBytes],
+    ] as const) {
+      const growth = bytes - baseBytes;
       lines.push(
-        `  ${area} CSS gzip vs base: ${baseMetrics[area].css.gzipBytes} B -> ${metrics[area].css.gzipBytes} B (${growth >= 0 ? "+" : ""}${growth} B; growth up to ${limit} B allowed)`,
+        `  total CSS ${metric} vs base: ${baseBytes} B -> ${bytes} B (${growth >= 0 ? "+" : ""}${growth} B; fixed ceiling ${cap} B)`,
       );
     }
-    const rawGrowth = metrics.total.css.rawBytes - baseMetrics.total.css.rawBytes;
-    lines.push(
-      `  total CSS raw vs base: ${baseMetrics.total.css.rawBytes} B -> ${metrics.total.css.rawBytes} B (${rawGrowth >= 0 ? "+" : ""}${rawGrowth} B; growth up to ${CONTROL_UI_GZIP_BUILD_VARIANCE_BYTES} B allowed)`,
-    );
   }
   for (const warning of controlUiPerformanceWarnings(metrics, budgets)) {
     lines.push(`  warning: ${warning}`);

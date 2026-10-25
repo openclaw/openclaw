@@ -9,9 +9,12 @@ import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { interruptCodexTurnAndWaitBestEffort } from "./attempt-client-cleanup.js";
 import type { CodexAppServerClient } from "./client.js";
-import { resolveCodexAppServerRuntimeOptions } from "./config.js";
 import { setManagedCodexPluginRoot } from "./managed-binary.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
+import {
+  createNativeSubagentClientOptions,
+  createNativeSubagentThreadParams,
+} from "./native-subagent-monitor.live.test-support.js";
 import { readCodexNativeSubagentNotification } from "./native-subagent-notification.js";
 import type { JsonObject } from "./protocol.js";
 import { isJsonObject } from "./protocol.js";
@@ -88,20 +91,9 @@ describeLive("codex native subagent monitor live", () => {
     await withTempDir("openclaw-codex-native-followup-", async (root) => {
       const workspace = path.join(root, "workspace");
       await fs.mkdir(workspace, { recursive: true });
-      const options = resolveCodexAppServerRuntimeOptions({
-        pluginConfig: { appServer: { homeScope: "user" } },
-        env: {},
-      });
-      const client = await createIsolatedCodexAppServerClient({
-        startOptions: {
-          ...options.start,
-          env: { CODEX_HOME: path.join(root, "codex-home") },
-          clearEnv: ["CODEX_API_KEY", "OPENAI_API_KEY"],
-        },
-        agentDir: path.join(root, "agent"),
-        authProfileId: null,
-        timeoutMs: 120_000,
-      });
+      const client = await createIsolatedCodexAppServerClient(
+        createNativeSubagentClientOptions(root),
+      );
       try {
         await client.request(
           "account/login/start",
@@ -110,15 +102,7 @@ describeLive("codex native subagent monitor live", () => {
         );
         const started = await client.request(
           "thread/start",
-          {
-            model: "gpt-5.5",
-            cwd: workspace,
-            approvalPolicy: "never",
-            sandbox: "read-only",
-            threadSource: "user",
-            experimentalRawEvents: true,
-            config: { "features.multi_agent": true },
-          },
+          createNativeSubagentThreadParams(workspace),
           { timeoutMs: 120_000 },
         );
         const parentThreadId = started.thread.id;
@@ -264,20 +248,9 @@ describeLive("codex native subagent monitor live", () => {
     await withTempDir("openclaw-codex-native-reused-stop-", async (root) => {
       const workspace = path.join(root, "workspace");
       await fs.mkdir(workspace, { recursive: true });
-      const options = resolveCodexAppServerRuntimeOptions({
-        pluginConfig: { appServer: { homeScope: "user" } },
-        env: {},
-      });
-      const client = await createIsolatedCodexAppServerClient({
-        startOptions: {
-          ...options.start,
-          env: { CODEX_HOME: path.join(root, "codex-home") },
-          clearEnv: ["CODEX_API_KEY", "OPENAI_API_KEY"],
-        },
-        agentDir: path.join(root, "agent"),
-        authProfileId: null,
-        timeoutMs: 120_000,
-      });
+      const client = await createIsolatedCodexAppServerClient(
+        createNativeSubagentClientOptions(root),
+      );
       const releasePriorDelivery = createDeferred<void>();
       try {
         await client.request(
@@ -287,15 +260,7 @@ describeLive("codex native subagent monitor live", () => {
         );
         const started = await client.request(
           "thread/start",
-          {
-            model: "gpt-5.5",
-            cwd: workspace,
-            approvalPolicy: "never",
-            sandbox: "read-only",
-            threadSource: "user",
-            experimentalRawEvents: true,
-            config: { "features.multi_agent": true },
-          },
+          createNativeSubagentThreadParams(workspace),
           { timeoutMs: 120_000 },
         );
         const parentThreadId = started.thread.id;
@@ -562,24 +527,9 @@ describeLive("codex native subagent monitor live", () => {
       traceNativeLive("detached-scenario-start");
       let client: CodexAppServerClient | undefined;
       try {
-        const codexHome = path.join(root, "codex-home");
         const workspace = path.join(root, "workspace");
         await fs.mkdir(workspace, { recursive: true });
-        const runtime = resolveCodexAppServerRuntimeOptions({
-          pluginConfig: { appServer: { homeScope: "user" } },
-          env: {},
-        });
-        const startOptions = {
-          ...runtime.start,
-          env: { CODEX_HOME: codexHome },
-          clearEnv: ["CODEX_API_KEY", "OPENAI_API_KEY"],
-        };
-        client = await createIsolatedCodexAppServerClient({
-          startOptions,
-          agentDir: path.join(root, "agent"),
-          authProfileId: null,
-          timeoutMs: 120_000,
-        });
+        client = await createIsolatedCodexAppServerClient(createNativeSubagentClientOptions(root));
         traceNativeLive("app-server-ready");
         await client.request(
           "account/login/start",
@@ -641,15 +591,7 @@ describeLive("codex native subagent monitor live", () => {
 
         const started = await client.request(
           "thread/start",
-          {
-            model: "gpt-5.5",
-            cwd: workspace,
-            approvalPolicy: "never",
-            sandbox: "read-only",
-            threadSource: "user",
-            experimentalRawEvents: true,
-            config: { "features.multi_agent": true },
-          },
+          createNativeSubagentThreadParams(workspace),
           { timeoutMs: 120_000 },
         );
         parentThreadId = started.thread.id;

@@ -26,6 +26,7 @@ import {
   registerPreparedModelRuntimePublicationListener,
 } from "./prepared-model-runtime.js";
 import { getPreparedModelRuntimeStartupStatus } from "./prepared-model-runtime.startup-status.js";
+import { observeSettlement } from "./promise-settlement.test-support.js";
 import { AuthStorage } from "./sessions/auth-storage.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
@@ -200,24 +201,16 @@ describe("prepared fleet batches", () => {
       },
     );
     let admission: ReturnType<typeof loadPublishedGatewayReplyDispatchRuntime> | undefined;
-    let settled = false;
     try {
       await firstAuth.promise;
       admission = loadPublishedGatewayReplyDispatchRuntime({ agentId: "first" });
-      void admission.then(
-        () => {
-          settled = true;
-        },
-        () => {
-          settled = true;
-        },
-      );
+      const settled = observeSettlement(admission);
       await vi.advanceTimersByTimeAsync(120_000);
       await publication;
       finishFirstAuth.resolve();
       await secondAuth.promise;
       await nextTurn();
-      expect(settled).toBe(false);
+      expect(settled()).toBe(false);
       finishSecondAuth.resolve();
       await expect(admission).resolves.toMatchObject({ agentId: "first" });
     } finally {

@@ -41,6 +41,7 @@ import {
 import { createCronAutomationActions } from "./cron-tool-automation.js";
 import {
   isEmptyRecoveredCronPatch,
+  prepareCronToolArguments,
   readCronToolJob,
   stripCronCreateNullClears,
 } from "./cron-tool-canonicalize.js";
@@ -174,6 +175,7 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
       nextCheckEnabled,
       management: managementAuthority && (managementAuthority.managementOnly ? "only" : "also"),
     }),
+    prepareArguments: prepareCronToolArguments,
     execute: async (_toolCallId, args, operationSignal) => {
       operationSignal?.throwIfAborted();
       assertCurrentRun?.();

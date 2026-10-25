@@ -44,7 +44,8 @@
     "build": {
       "openclawVersion": "2026.10.7",
       "workerEntries": [
-        "./catalog-page.worker.ts"
+        "./catalog-page.worker.ts",
+        "./session-history.worker.ts"
       ]
     },
     "release": {

@@ -4,7 +4,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
-import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
+import {
+  createClaudeCliBackends,
+  testing as cliBackendsTesting,
+} from "./cli-backends.test-support.js";
 import { configFor, modelDefinition } from "./model-auth.fixtures.test-support.js";
 import { prepareModelChoice } from "./model-runtime-choice.js";
 import { createModelRuntimeChoiceOwnerFixture } from "./model-runtime-choice.test-support.js";
@@ -49,6 +52,20 @@ function publish(
   const owner = createModelRuntimeChoiceOwnerFixture(config, isCurrent, facts);
   published.owner = owner;
   return owner;
+}
+
+function createSpawnReachingGateway(config: OpenClawConfig) {
+  const callGateway = vi.fn(async () => {
+    throw new Error("Reached session creation");
+  });
+  const tool = createSessionsSpawnTool({
+    agentSessionKey: "agent:main:main",
+    config,
+    callGateway,
+    registerRun: vi.fn(),
+    countActiveRuns: () => 0,
+  });
+  return { callGateway, tool };
 }
 
 function renderPublishedAliases(owner: PreparedModelRuntimeSnapshot) {
@@ -273,16 +290,7 @@ describe("prepared model support admission", () => {
             profiles: { personal: { provider: "personal", type: "api_key", key: "synthetic-key" } },
           },
         });
-        const callGateway = vi.fn(async () => {
-          throw new Error("Reached session creation");
-        });
-        const tool = createSessionsSpawnTool({
-          agentSessionKey: "agent:main:main",
-          config,
-          callGateway,
-          registerRun: vi.fn(),
-          countActiveRuns: () => 0,
-        });
+        const { callGateway, tool } = createSpawnReachingGateway(config);
         const model = `personal/${testCase.model}`;
         if (testCase.authored && testCase.admitted) {
           expect(
@@ -610,16 +618,7 @@ describe("prepared model support admission", () => {
           },
         },
       };
-      const callGateway = vi.fn(async () => {
-        throw new Error("Reached session creation");
-      });
-      const tool = createSessionsSpawnTool({
-        agentSessionKey: "agent:main:main",
-        config,
-        callGateway,
-        registerRun: vi.fn(),
-        countActiveRuns: () => 0,
-      });
+      const { callGateway, tool } = createSpawnReachingGateway(config);
       await expect(
         tool.execute("retired-fallback", { task: "test", visible: true }),
       ).rejects.toThrow("Reached session creation");
@@ -804,14 +803,7 @@ describe("prepared model support admission", () => {
     "rechecks recovered native auth before admitting %s without a catalog refresh",
     async (provider) => {
       cliBackendsTesting.setDepsForTest({
-        resolveRuntimeCliBackends: () => [
-          {
-            id: "claude-cli",
-            modelProvider: "anthropic",
-            pluginId: "anthropic",
-            config: { command: "claude" },
-          },
-        ],
+        resolveRuntimeCliBackends: createClaudeCliBackends,
       });
       try {
         const raw = `${provider}/claude-opus-5-5`;

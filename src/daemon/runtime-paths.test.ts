@@ -12,16 +12,8 @@ const fsMocks = vi.hoisted(() => ({
 
 vi.mock("node:fs/promises", async () => {
   const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
-  return {
-    ...actual,
-    default: {
-      ...actual,
-      access: fsMocks.access,
-      realpath: fsMocks.realpath,
-    },
-    access: fsMocks.access,
-    realpath: fsMocks.realpath,
-  };
+  const mocked = { ...actual, ...fsMocks };
+  return { ...mocked, default: mocked };
 });
 
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";

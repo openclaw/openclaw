@@ -22,16 +22,12 @@ vi.mock("./inspect.js", async (importOriginal) => {
 
 import { discoverManagedGatewayBindings } from "./managed-gateway-bindings.js";
 import { readGatewayServiceState, resolveGatewayService } from "./service.js";
+import { nativeExit } from "./systemd-exec.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 const property = (type: string, data: unknown) => ({ type, data });
-const success = (stdout: string): ExecResult => ({
-  code: 0,
-  termination: "exit",
-  stdout,
-  stderr: "",
-});
+const success = (stdout: string): ExecResult => nativeExit(stdout);
 const failure = (stderr: string): ExecResult => ({ ...success(""), code: 1, stderr });
 const jsonProperty = (type: string, data: unknown) => success(JSON.stringify(property(type, data)));
 const unitObject = "/org/freedesktop/systemd1/unit/openclaw_2eservice";

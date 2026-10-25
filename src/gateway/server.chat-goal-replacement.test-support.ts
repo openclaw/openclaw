@@ -19,6 +19,7 @@ import { ABORTED_PARTIAL_PERSISTENCE_WARNING } from "./server-methods/chat-abort
 import * as chatHandler from "./server-methods/chat-send-handler.js";
 import * as partials from "./server-methods/chat-transcript-persistence.js";
 import type { RespondFn, GatewayRequestContext, GatewayClient } from "./server-methods/types.js";
+import { gatewayProfile } from "./server/client-fixtures.test-support.js";
 
 export function registerGoalReplacementCases(
   scope: () => { agentId: string; sessionKey: string; sessionId: string; storePath: string },
@@ -60,23 +61,13 @@ export function registerGoalReplacementCases(
         ? {
             ...client,
             connect: { ...client.connect, scopes: ["operator.read", "operator.write"] },
-            authenticatedUserProfile: {
-              profileId: profile.id,
-              displayName: null,
-              hasAvatar: false,
-              updatedAt: 1,
-            },
+            authenticatedUserProfile: gatewayProfile(profile.id),
           }
         : client;
       const originalRequester: GatewayClient = secured
         ? {
             ...client,
-            authenticatedUserProfile: {
-              profileId: GATEWAY_OWNER_PROFILE_ID,
-              displayName: null,
-              hasAvatar: false,
-              updatedAt: 1,
-            },
+            authenticatedUserProfile: gatewayProfile(GATEWAY_OWNER_PROFILE_ID),
           }
         : client;
       const policy: OpenClawConfig = {

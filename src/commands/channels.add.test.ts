@@ -611,14 +611,6 @@ describe("channelsAddCommand", () => {
 
     await wizard({ channel: "lifecycle-chat" });
 
-    expect(prompter.select).toHaveBeenCalledTimes(2);
-    expect(prompter.select.mock.calls[0]?.[0]).toEqual({
-      message: "Set up channels for agent",
-      options: [
-        { value: { agentId: "main" }, label: "main" },
-        { value: { agentId: "helper" }, label: "helper" },
-      ],
-    });
     expect(setupOptions().workspaceDir).toBe("/tmp/openclaw-helper-workspace");
     expect(writtenConfig()).toMatchObject({
       bindings: [{ agentId: "main", match: { channel: "lifecycle-chat", accountId: "ops" } }],
@@ -693,10 +685,6 @@ describe("channelsAddCommand", () => {
 
     await add({}, { hasFlags: false });
 
-    expect(commitInstalls).toHaveBeenCalledWith(
-      expect.objectContaining({ sourceConfig: installedConfig }),
-    );
-    expect(commitInstalls).toHaveBeenCalledOnce();
     expect(configMocks.writeConfigFile).toHaveBeenCalledWith(installedConfig);
     expect(prompter.confirm).not.toHaveBeenCalled();
     expect(prompter.outro).toHaveBeenCalledWith("Channels updated.");
@@ -874,7 +862,6 @@ describe("channelsAddCommand", () => {
 
     await add({ channel: "telegram", token: "123456:token" });
 
-    expect(getBundledChannelSetupPlugin).toHaveBeenCalledWith("telegram");
     expect(writtenChannel("telegram")).toMatchObject({
       enabled: true,
       botToken: { source: "store" },

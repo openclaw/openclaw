@@ -34,8 +34,16 @@ export function resolveChatPaneWorkspace(params: {
     worktree?.branch ||
     (remote || !workspace.root ? null : branches.get(workspace.root)?.value) ||
     null;
+  const defaultWorkspace =
+    !remote &&
+    !worktree &&
+    !session?.repository &&
+    !session?.repositoryWorkspaceId &&
+    !session?.deviceFolder &&
+    workspace.root === agentWorkspace?.trim();
   return {
     ...workspace,
+    label: defaultWorkspace ? null : workspace.label,
     branch,
     canReveal: Boolean(
       workspace.root && params.methodAdvertised && params.hasAdminAccess && !remote,
