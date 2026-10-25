@@ -3,7 +3,6 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import type {
-  RealtimeVoiceBridge,
   RealtimeVoiceBridgeCreateRequest,
   RealtimeVoiceProviderPlugin,
 } from "openclaw/plugin-sdk/realtime-voice";
@@ -14,6 +13,7 @@ import { createVoiceCallStateRuntimeForTests } from "./manager.test-harness.js";
 import { MockProvider } from "./providers/mock.js";
 import { createVoiceCallRuntime, type VoiceCallRuntime } from "./runtime.js";
 import { createVoiceCallBaseConfig } from "./test-fixtures.js";
+import { makeBridge } from "./webhook/realtime-call-control.test-helpers.js";
 import { connectWs, startUpgradeWsServer, waitForClose } from "./websocket-test-support.js";
 
 const mocks = vi.hoisted(() => ({
@@ -36,18 +36,9 @@ function createOwner(agentId: string, id: string, model: string) {
     id,
     label: id,
     isConfigured: () => true,
-    createBridge: vi.fn((request): RealtimeVoiceBridge => {
+    createBridge: vi.fn((request) => {
       requests.push(request);
-      return {
-        connect,
-        sendAudio: vi.fn(),
-        setMediaTimestamp: vi.fn(),
-        submitToolResult: vi.fn(),
-        acknowledgeMark: vi.fn(),
-        close: vi.fn(),
-        isConnected: () => true,
-        triggerGreeting: vi.fn(),
-      };
+      return makeBridge({ connect });
     }),
   };
   return {

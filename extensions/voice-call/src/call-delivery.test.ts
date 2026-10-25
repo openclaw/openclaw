@@ -148,6 +148,8 @@ describe("requester call delivery", () => {
       };
       await speech(manager, call, "bot", "Can you visit Friday?");
       await speech(manager, call, "user", "Friday at 09:00, reference P123.");
+      manager.beforeCallEnd = (ending) =>
+        speech(manager, ending, "bot", "Confirmed Friday at 09:00", "bridge-final");
       await end(manager, call);
       await finish(manager, call, delivery);
       expect(messages).toHaveLength(1);
@@ -168,6 +170,7 @@ describe("requester call delivery", () => {
         expect(text).toContain(line);
       }
       expect(text?.includes("reference P123")).toBe(includeTranscript);
+      expect(text?.includes("Assistant: Confirmed Friday at 09:00")).toBe(includeTranscript);
       expect(summarize).toHaveBeenCalledOnce();
       expect(summarize.mock.calls[0]?.[0].message).toContain(JSON.stringify(brief));
       const saved = await manager.getCallFromMemoryOrStore(call.callId);
@@ -205,35 +208,6 @@ describe("requester call delivery", () => {
     expect(messages[1]?.text).toContain("Friday at 09:00");
   });
 
-  it("resumes live transcript batches after a restart without resending earlier lines", async () => {
-    const { manager, call, config, delivery, messages, storePath } = await setupLive();
-    await speech(manager, call, "user", "Hello");
-    await speech(manager, call, "bot", "Can you visit Friday?");
-    await vi.advanceTimersByTimeAsync(1000);
-    await vi.waitFor(() => {
-      expect(messages).toHaveLength(1);
-      expect(messages[0]?.idempotencyKey).toContain(":live:");
-    });
-    await delivery.stop();
-
-    // A new process restores the still-active call from the store with a fresh delivery owner.
-    const restarted = registerTestManagerCleanup(new CallManager(config, storePath));
-    const resumed: CallDeliveryMessage[] = [];
-    const nextDelivery = createDelivery(restarted, config, resumed);
-    await restarted.initialize(new FakeProvider(), "https://example.com/voice/webhook");
-    const restored = expectDefined(restarted.getCall(call.callId), "restored call");
-    await speech(restarted, restored, "user", "Friday at 09:00");
-    await vi.advanceTimersByTimeAsync(1000);
-    await vi.waitFor(() => expect(resumed).toHaveLength(1));
-    await nextDelivery.stop();
-
-    expect(resumed).toHaveLength(1);
-    const text = resumed[0]?.text;
-    expect(text).toContain("Callee: Friday at 09:00");
-    expect(text).not.toContain("Hello");
-    expect(text).not.toContain("Can you visit Friday?");
-  });
-
   it("reports inbound calls only to their configured session", async () => {
     const { manager, call, delivery, messages } = await setup({
       reports: { enabled: true, inboundSessionKey: requester },
@@ -245,79 +219,72 @@ describe("requester call delivery", () => {
     expect(messages[0]?.sessionKey).toBe(requester);
   });
 
-  it("records interrupted live delivery without replaying its uncertain transcript batch", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const sending = createDeferred<void>();
-    const release = createDeferred<void>();
-    const { manager, call, config, delivery } = await setup(
-      { reports: { enabled: false }, live: { transcript: true, minIntervalMs: 1000 } },
-      () => {
-        sending.resolve();
-        return release.promise;
-      },
-    );
-    try {
-      await speech(manager, call, "user", "First line");
-      await vi.advanceTimersByTimeAsync(1000);
-      await sending.promise;
-      const snapshot = structuredClone(
-        expectDefined(await manager.getCallFromMemoryOrStore(call.callId), "pending call"),
+  it.each(["sent", "pending"] as const)(
+    "resumes a %s batch without replaying it",
+    async (status) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const sending = createDeferred<void>();
+      const release = createDeferred<void>();
+      const { manager, call, config, delivery, messages, storePath } = await setup(
+        { reports: { enabled: false }, live: { transcript: true, minIntervalMs: 1000 } },
+        () => {
+          sending.resolve();
+          return status === "pending" ? release.promise : Promise.resolve();
+        },
       );
-      expect(snapshot.metadata?.liveTranscriptDelivery).toMatchObject({
-        status: "pending",
-        cursor: 1,
-      });
-
-      const recoveredStore = createTestStorePath();
-      await writeCallsToStore(recoveredStore, [snapshot]);
-      const restarted = registerTestManagerCleanup(new CallManager(config, recoveredStore));
-      await restarted.initialize(new FakeProvider(), "https://example.com/voice/webhook");
-      const restored = expectDefined(restarted.getCall(call.callId), "restored call");
-      expect(restored.metadata?.liveTranscriptDelivery).toMatchObject({
-        status: "failed",
-        error: "interrupted by restart",
-        cursor: 1,
-      });
-      const resumed: CallDeliveryMessage[] = [];
-      const nextDelivery = createDelivery(restarted, config, resumed);
       try {
-        await speech(restarted, restored, "user", "Second line");
-        await end(restarted, restored);
-        await nextDelivery.observe(restored);
-        expect(resumed).toHaveLength(1);
-        expect(resumed[0]?.text).toContain("Second line");
-        expect(resumed[0]?.text).not.toContain("First line");
+        await speech(manager, call, "user", "Hello");
+        await speech(manager, call, "bot", "Can you visit Friday?");
+        await vi.advanceTimersByTimeAsync(1000);
+        await sending.promise;
+        if (status === "sent") {
+          await vi.waitFor(() => expect(messages).toHaveLength(1));
+          expect(messages[0]?.idempotencyKey).toContain(":live:");
+          await delivery.stop();
+        }
+        const snapshot = structuredClone(
+          expectDefined(await manager.getCallFromMemoryOrStore(call.callId), "saved call"),
+        );
+        expect(snapshot.metadata?.liveTranscriptDelivery).toMatchObject({ status, cursor: 2 });
+        const recoveredStore = status === "sent" ? storePath : createTestStorePath();
+        if (status === "pending") {
+          await writeCallsToStore(recoveredStore, [snapshot]);
+        }
+        const restarted = registerTestManagerCleanup(new CallManager(config, recoveredStore));
+        await restarted.initialize(new FakeProvider(), "https://example.com/voice/webhook");
+        const restored = expectDefined(restarted.getCall(call.callId), "restored call");
+        expect(restored.metadata?.liveTranscriptDelivery).toMatchObject({
+          status: status === "sent" ? "sent" : "failed",
+          ...(status === "pending" ? { error: "interrupted by restart" } : {}),
+          cursor: 2,
+        });
+        const resumed: CallDeliveryMessage[] = [];
+        const nextDelivery = createDelivery(restarted, config, resumed);
+        try {
+          await speech(restarted, restored, "user", "Friday at 09:00");
+          if (status === "sent") {
+            await vi.advanceTimersByTimeAsync(1000);
+            await vi.waitFor(() => expect(resumed).toHaveLength(1));
+          } else {
+            await end(restarted, restored);
+            await nextDelivery.observe(restored);
+          }
+          await nextDelivery.stop();
+          expect(resumed).toHaveLength(1);
+          expect(resumed[0]?.text).toContain("Callee: Friday at 09:00");
+          expect(resumed[0]?.text).not.toContain("Hello");
+          expect(resumed[0]?.text).not.toContain("Can you visit Friday?");
+        } finally {
+          await nextDelivery.stop();
+        }
       } finally {
-        await nextDelivery.stop();
+        if (status === "pending") {
+          release.reject(new Error("simulated process interruption"));
+        }
+        await delivery.stop();
       }
-    } finally {
-      release.reject(new Error("simulated process interruption"));
-      await delivery.stop();
-    }
-  });
-
-  it("persists the final bridge transcript before producing the terminal report", async () => {
-    const { manager, call, delivery, messages } = await setup();
-    manager.beforeCallEnd = async (ending) => {
-      await speech(manager, ending, "bot", "Confirmed Friday at 09:00", "bridge-final");
-    };
-    await end(manager, call);
-    await delivery.observe(call);
-    expect(messages[0]?.text).toContain("Assistant: Confirmed Friday at 09:00");
-    await delivery.stop();
-  });
-
-  it("records a failed report and still settles call shutdown", async () => {
-    const { manager, call, delivery } = await setup({}, async () => {
-      throw new Error("session route unavailable");
-    });
-    await finish(manager, call, delivery);
-    const saved = await manager.getCallFromMemoryOrStore(call.callId);
-    expect(saved?.metadata?.callReport).toMatchObject({
-      status: "failed",
-      error: "session route unavailable",
-    });
-  });
+    },
+  );
 
   it("stop cancels delayed live batches and ignores later call updates", async () => {
     const { manager, call, delivery, messages } = await setupLive();

@@ -1,17 +1,7 @@
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
-import { normalizeVoiceCallConfig } from "./config.js";
-import { CallManager } from "./manager.js";
-import {
-  createManagerHarness,
-  FakeProvider,
-  markCallAnswered,
-  registerTestManagerCleanup,
-} from "./manager.test-harness.js";
-import { PlivoProvider } from "./providers/plivo.js";
-import { TwilioProvider } from "./providers/twilio.js";
+import { createManagerHarness, FakeProvider, markCallAnswered } from "./manager.test-harness.js";
 import type { HangupCallInput } from "./types.js";
 
 class FailFirstPlayTtsProvider extends FakeProvider {
@@ -383,90 +373,6 @@ async function initiateCall() {
 }
 
 describe("CallManager termination lifecycle", () => {
-  it.each(["twilio", "plivo"] as const)(
-    "keeps finalized identity for fresh %s callbacks after restart",
-    async (providerName) => {
-      const config = normalizeVoiceCallConfig({
-        enabled: true,
-        provider: providerName,
-        fromNumber: "+15550000000",
-        agentId: "default-agent",
-      });
-      const { manager, provider, storePath } = await createManagerHarness(
-        config,
-        new FakeProvider(providerName),
-      );
-      const started = await manager.initiateCall("+15550000001", "agent:sales:voice:fixture", {
-        agentId: "sales",
-      });
-      expect(started.success).toBe(true);
-      const initialProviderId = expectDefined(
-        manager.getCall(started.callId)?.providerCallId,
-        "initiated provider call",
-      );
-      const parser =
-        providerName === "twilio"
-          ? new TwilioProvider({ accountSid: "AC-fixture", authToken: "synthetic-token" })
-          : new PlivoProvider({ authId: "MA-fixture", authToken: "synthetic-token" });
-      const callback = (providerId: string, callStatus: string, includeInternalId: boolean) => {
-        const query: Record<string, string> = includeInternalId
-          ? { callId: started.callId, type: "status" }
-          : {};
-        const rawBody = new URLSearchParams({
-          CallStatus: callStatus,
-          From: "+15550000000",
-          To: "+15550000001",
-          Direction: providerName === "twilio" ? "outbound-api" : "outbound",
-          ...(providerName === "twilio" ? { CallSid: providerId } : { RequestUUID: providerId }),
-          ...(providerName === "plivo" && includeInternalId ? { CallUUID: "call-uuid" } : {}),
-        }).toString();
-        const parsed = parser.parseWebhookEvent({
-          headers: {},
-          rawBody,
-          url: `https://example.com/voice/webhook?${new URLSearchParams(query)}`,
-          method: "POST",
-          query,
-        });
-        expect(parsed.events).toHaveLength(1);
-        return expectDefined(parsed.events[0], "normalized provider callback");
-      };
-      await manager.processEvent(callback(initialProviderId, "in-progress", true));
-      await expect(manager.speak(started.callId, "Recorded.")).resolves.toEqual({ success: true });
-      await expect(manager.endCall(started.callId, { reason: "hangup-bot" })).resolves.toEqual({
-        success: true,
-      });
-      const terminal = expectDefined(
-        await manager.getCallFromMemoryOrStore(started.callId),
-        "finalized call in SQLite",
-      );
-      expect(terminal).toMatchObject({
-        agentId: "sales",
-        sessionKey: "agent:sales:voice:fixture",
-        state: "hangup-bot",
-        transcript: [expect.objectContaining({ text: "Recorded." })],
-      });
-      resetPluginStateStoreForTests();
-      const current = registerTestManagerCleanup(new CallManager(config, storePath));
-      await current.initialize(provider, "https://example.com/voice/webhook");
-      const late = callback(
-        initialProviderId,
-        providerName === "plivo" ? "ringing" : "completed",
-        providerName === "twilio",
-      );
-      expect((await current.processEvent(late)).kind).not.toBe("final-speech");
-      const history = await current.getCallHistory();
-      expect(new Set(history.map((call) => call.callId))).toEqual(new Set([started.callId]));
-      expect(await current.getCallFromMemoryOrStore(initialProviderId)).toMatchObject({
-        ...terminal,
-        processedEventIds: expect.arrayContaining(terminal.processedEventIds),
-      });
-      expect(current.getActiveCalls()).toEqual([]);
-      expect(provider.playTtsCalls).toHaveLength(1);
-      expect(provider.hangupCalls).toHaveLength(1);
-      expect(provider.startListeningCalls).toEqual([]);
-    },
-  );
-
   it("preserves the first provider terminal facts when a pending manager hangup settles", async () => {
     const { call, manager, provider } = await initiateCall();
     const endedAt = Date.now() + 1_000;

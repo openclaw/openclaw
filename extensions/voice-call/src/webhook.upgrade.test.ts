@@ -212,24 +212,21 @@ describe("VoiceCallWebhookServer shutdown lifecycle", () => {
     streamLifecycle.disconnect("provider-call", "stream-1");
 
     const firstStop = server.stop();
-    const secondStop = server.stop();
-    let stopped = false;
-    void firstStop.then(() => {
-      stopped = true;
-    });
+    const stopped = vi.fn();
+    void firstStop.then(stopped);
 
     try {
-      expect(secondStop).toBe(firstStop);
+      expect(server.stop()).toBe(firstStop);
       expect(handlerClose).toHaveBeenCalledTimes(1);
       await vi.advanceTimersByTimeAsync(2_100);
-      expect(stopped).toBe(false);
+      expect(stopped).not.toHaveBeenCalled();
       expect(delayedHangup).not.toHaveBeenCalled();
     } finally {
       handlerClosed.resolve();
       await firstStop;
       vi.useRealTimers();
     }
-    expect(stopped).toBe(true);
+    expect(stopped).toHaveBeenCalledOnce();
   });
 });
 

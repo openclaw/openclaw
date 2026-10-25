@@ -190,17 +190,6 @@ async function withPausedPersistence(
 }
 
 type TestCall = Awaited<ReturnType<typeof startCall>>;
-async function replaceStream() {
-  const call = await startCall(true);
-  const old = await call.openStream("stream-old");
-  old.callbacks.onTranscript?.("old question");
-  const first = await responseAt(0);
-  const replacement = await call.openStream("stream-new");
-  replacement.callbacks.onTranscript?.("new question");
-  const current = await responseAt(1);
-  return { call, old, first, replacement, current };
-}
-
 async function deliverAcrossIgnoredEvent(
   call: TestCall,
   first: Awaited<ReturnType<typeof responseAt>>,
@@ -277,7 +266,7 @@ describe("automatic phone reply ownership", () => {
     },
   );
 
-  it("does not revive a pending transcript reply after newer stream speech starts", async () => {
+  it("revokes a pending transcript on speech-start but still allows explicit speech after STT fails", async () => {
     const call = await startCall(true);
     const { callbacks } = await call.openStream("stream-pending-transcript");
     await withPausedPersistence(call.manager, async (persistence, processEvent) => {
@@ -293,6 +282,9 @@ describe("automatic phone reply ownership", () => {
       await new Promise<void>((resolve) => {
         setImmediate(resolve);
       });
+      callbacks.onError?.(new Error("transcription failed"));
+      expect(await call.manager.speak(call.callId, "Please try again")).toEqual({ success: true });
+      call.expectPlayback("Please try again");
       callbacks.onTranscript?.("replacement question");
       await vi.waitFor(() =>
         expect(mocks.generate.mock.calls.map(([params]) => params.userMessage)).toEqual([
@@ -301,21 +293,13 @@ describe("automatic phone reply ownership", () => {
       );
       expect(call.manager.getCall(call.callId)?.transcript.map((entry) => entry.text)).toEqual([
         "obsolete question",
+        "Please try again",
         "replacement question",
       ]);
       const current = await responseAt(0);
       await current.finish("current reply");
-      call.expectPlayback("current reply");
+      call.expectPlayback("Please try again", "current reply");
     });
-  });
-
-  it("keeps explicit speech available after a speech-start with no final transcript", async () => {
-    const call = await startCall(true);
-    const { callbacks } = await call.openStream("stream-1");
-    callbacks.onSpeechStart?.();
-    callbacks.onError?.(new Error("transcription failed"));
-    expect(await call.manager.speak(call.callId, "Please try again")).toEqual({ success: true });
-    call.expectPlayback("Please try again");
   });
 
   it("binds delivery to the exact live call rather than a restored copy of its ID", async () => {
@@ -363,25 +347,26 @@ describe("automatic phone reply ownership", () => {
     expect(mocks.generate).toHaveBeenCalledTimes(1);
   });
 
-  it("ignores a late final transcript from a predecessor stream", async () => {
-    const { call, old, current } = await replaceStream();
+  it("fences predecessor transcripts and disconnects without disrupting the replacement stream", async () => {
+    const call = await startCall(true);
+    const old = await call.openStream("stream-old");
+    old.callbacks.onTranscript?.("old question");
+    const first = await responseAt(0);
+    const replacement = await call.openStream("stream-new");
+    replacement.callbacks.onTranscript?.("new question");
+    const current = await responseAt(1);
     call.provider.clearTtsQueue.mockClear();
     old.callbacks.onTranscript?.("late old transcript");
     expect(await current.early("current reply")).toBe(true);
-    await current.finish("");
     expect(mocks.generate).toHaveBeenCalledTimes(2);
     expect(call.provider.clearTtsQueue).not.toHaveBeenCalled();
     call.expectPlayback("current reply");
-  });
-
-  it("fences a disconnected stream's generation without disrupting its replacement", async () => {
-    const { call, old, first, replacement, current } = await replaceStream();
     const closed = waitForClose(old.ws);
     old.ws.close();
     await closed;
     await first.finish("obsolete reply");
     await current.finish("replacement reply");
-    call.expectPlayback("replacement reply");
+    call.expectPlayback("current reply", "replacement reply");
     const disconnected = waitForClose(replacement.ws);
     replacement.callbacks.onTranscript?.("last question");
     const third = await responseAt(2);
@@ -389,6 +374,6 @@ describe("automatic phone reply ownership", () => {
     await disconnected;
     await vi.waitFor(() => expect(call.provider.hasRegisteredStream("request-uuid")).toBe(false));
     await third.finish("disconnected reply");
-    call.expectPlayback("replacement reply");
+    call.expectPlayback("current reply", "replacement reply");
   });
 });

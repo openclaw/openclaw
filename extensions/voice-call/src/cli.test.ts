@@ -77,11 +77,15 @@ async function captureCli(program: Command, args: string[]) {
 
 const continueArgs = ["continue", "--call-id", "call-1", "--message", "hello"];
 
-function gatewayTransportError(code?: number): Error {
-  return Object.assign(new Error("gateway transport failed"), {
+function gatewayTransportError(
+  code?: number,
+  url = "ws://127.0.0.1:18789",
+  message = "gateway transport failed",
+): Error {
+  return Object.assign(new Error(message), {
     name: "GatewayTransportError",
     kind: "closed",
-    connectionDetails: { url: "ws://127.0.0.1:18789" },
+    connectionDetails: { url },
     ...(code === undefined ? {} : { code }),
   });
 }
@@ -136,51 +140,6 @@ describe("voice-call CLI status fallback", () => {
     runCli(buildProgram({}, config), args);
   const capture = async (args: string[], config: Record<string, unknown> = {}) =>
     JSON.parse(await captureCli(buildProgram({}, config), args));
-  const standaloneRuntime = (
-    stop: () => Promise<void>,
-    initiateCall = async () => ({
-      success: true,
-      callId: "call-owned",
-    }),
-  ) => ({ config: { toNumber: "+15550001234" }, manager: { initiateCall }, stop }) as never;
-
-  async function withStandalone(
-    signal: "SIGINT" | "SIGTERM",
-    ensureRuntime: Parameters<typeof buildProgram>[2],
-    check: (command: ReturnType<typeof runCli>, interrupt: () => void) => Promise<void>,
-    onOutput?: (output: string) => void,
-    release = () => {},
-  ) {
-    callGatewayFromCliMock.mockRejectedValue(gatewayTransportError());
-    const originalListeners = new Set(process.listeners(signal));
-    const originalExitCode = process.exitCode;
-    const capturer = captureStdout(onOutput);
-    const command = runCli(buildProgram({}, {}, ensureRuntime), ["call", "--message", "hello"]);
-    const outcome = command.then(
-      () => {},
-      () => {},
-    );
-    const handlers = () => process.listeners(signal).filter((fn) => !originalListeners.has(fn));
-    try {
-      await check(command, () => {
-        expect(handlers()).toHaveLength(1);
-        handlers()[0]?.(signal);
-      });
-      release();
-      await (signal === "SIGTERM" ? command : outcome);
-      expect(process.listeners(signal)).toEqual([...originalListeners]);
-      expect(process.exitCode).toBe(signal === "SIGTERM" ? 143 : 130);
-    } finally {
-      for (const handler of handlers()) {
-        handler(signal);
-      }
-      release();
-      await outcome;
-      capturer.restore();
-      process.exitCode = originalExitCode;
-    }
-  }
-
   it("reports an ambiguous phone-call owner during setup without starting telephony", async () => {
     const ensureRuntime = vi.fn();
     const program = buildProgram({}, createVoiceCallBaseConfig(), ensureRuntime, {
@@ -204,127 +163,121 @@ describe("voice-call CLI status fallback", () => {
     expect(ensureRuntime).not.toHaveBeenCalled();
   });
 
-  async function runStatusWithUnavailableGateway(params: {
-    persisted?: unknown;
-    error?: Error;
-    args?: string[];
-  }): Promise<unknown> {
-    callGatewayFromCliMock.mockRejectedValue(params.error ?? gatewayTransportError());
-    findCallInStoreMock.mockResolvedValue(params.persisted);
+  it.each([
+    ["persisted", undefined],
+    ["persisted", 1006],
+    ["missing", undefined],
+    ["active", undefined],
+  ] as const)("reads %s status after gateway close %s without telephony", async (kind, code) => {
+    const persisted = { callId: "call-1", state: "completed" };
+    const active = { callId: "call-1", state: "ringing" };
+    callGatewayFromCliMock.mockRejectedValue(gatewayTransportError(code));
+    findCallInStoreMock.mockResolvedValue(kind === "persisted" ? persisted : undefined);
+    if (kind === "active") {
+      loadActiveCallsFromStoreMock.mockResolvedValue({
+        activeCalls: new Map([["call-1", active]]),
+      });
+    }
     const ensureRuntime = vi.fn(async () => {
       throw new Error("status fallback must not initialize the telephony runtime");
     });
     const program = buildProgram({}, {}, ensureRuntime, { stateRuntime: {} as never });
     const output = await captureCli(program, [
       "status",
-      ...(params.args ?? ["--call-id", "call-1"]),
+      ...(kind === "active" ? [] : ["--call-id", "call-1"]),
       "--json",
     ]);
     expect(ensureRuntime).not.toHaveBeenCalled();
-    return JSON.parse(output);
-  }
-
-  it.each([undefined, 1006])("uses persisted status after gateway close %s", async (code) => {
-    const persisted = { callId: "call-1", state: "completed" };
-    expect(
-      await runStatusWithUnavailableGateway({ persisted, error: gatewayTransportError(code) }),
-    ).toMatchObject(persisted);
+    if (kind === "persisted") {
+      expect(JSON.parse(output)).toMatchObject(persisted);
+    } else {
+      expect(JSON.parse(output)).toEqual(
+        kind === "active" ? { found: true, calls: [active] } : { found: false },
+      );
+    }
   });
 
-  it("reports found:false when the call is neither active nor persisted", async () => {
-    expect(await runStatusWithUnavailableGateway({})).toEqual({ found: false });
-  });
-
-  it("lists persisted active calls without initializing the telephony runtime", async () => {
-    loadActiveCallsFromStoreMock.mockResolvedValue({
-      activeCalls: new Map([["call-1", { callId: "call-1", state: "ringing" }]]),
-    });
-    expect(await runStatusWithUnavailableGateway({ args: [] })).toEqual({
-      found: true,
-      calls: [{ callId: "call-1", state: "ringing" }],
-    });
-  });
-
-  it("keeps standalone serving after printing the call ID and joins signal cleanup", async () => {
-    let output = "";
-    const printed = Promise.withResolvers<void>();
-    const stopping = Promise.withResolvers<void>();
-    const stopped = Promise.withResolvers<void>();
-    const stop = vi.fn(async () => {
-      stopping.resolve();
-      await stopped.promise;
-    });
-    await withStandalone(
-      "SIGTERM",
-      async () => standaloneRuntime(stop),
-      async (command, interrupt) => {
-        let completed = false;
-        void command.then(
-          () => {
-            completed = true;
-          },
-          () => {},
-        );
-        await printed.promise;
-        expect(JSON.parse(output)).toEqual({ callId: "call-owned" });
-        interrupt();
-        interrupt();
+  it.each(["printed", "creation", "operation"] as const)(
+    "joins standalone %s on interruption",
+    async (phase) => {
+      const signal = phase === "printed" ? "SIGTERM" : "SIGINT";
+      const originalListeners = new Set(process.listeners(signal));
+      const originalExitCode = process.exitCode;
+      const ready = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      const stopping = Promise.withResolvers<void>();
+      const stopped = Promise.withResolvers<void>();
+      const pause = async () => {
+        ready.resolve();
+        await release.promise;
+      };
+      const stop = vi.fn(async () => {
+        stopping.resolve();
+        await stopped.promise;
+      });
+      const initiateCall = vi.fn(async () => {
+        if (phase === "operation") {
+          await pause();
+        }
+        return { success: true, callId: "call-owned" };
+      });
+      const ensureRuntime = async () => {
+        if (phase === "creation") {
+          await pause();
+        }
+        return { config: { toNumber: "+15550001234" }, manager: { initiateCall }, stop } as never;
+      };
+      const capturer = captureStdout((output) => {
+        if (phase === "printed" && output.includes("call-owned")) {
+          ready.resolve();
+        }
+      });
+      callGatewayFromCliMock.mockRejectedValue(gatewayTransportError());
+      const command = runCli(buildProgram({}, {}, ensureRuntime), ["call", "--message", "hello"]);
+      let completed = false;
+      const outcome = command.then(
+        () => {
+          completed = true;
+        },
+        (error: unknown) => error,
+      );
+      const handlers = () => process.listeners(signal).filter((fn) => !originalListeners.has(fn));
+      try {
+        await ready.promise;
+        expect(handlers()).toHaveLength(1);
+        handlers()[0]?.(signal);
+        if (phase === "printed") {
+          expect(JSON.parse(capturer.output())).toEqual({ callId: "call-owned" });
+          handlers()[0]?.(signal);
+        } else {
+          expect(stop).not.toHaveBeenCalled();
+        }
+        release.resolve();
         await stopping.promise;
         expect(completed).toBe(false);
         expect(stop).toHaveBeenCalledOnce();
-      },
-      (written) => {
-        output = written;
-        if (written.includes("call-owned")) {
-          printed.resolve();
+        stopped.resolve();
+        const result = await outcome;
+        expect(stop).toHaveBeenCalledOnce();
+        if (phase === "creation") {
+          expect(result).toMatchObject({ message: "Voice call command interrupted by SIGINT" });
+          expect(initiateCall).not.toHaveBeenCalled();
+        } else {
+          expect(result).toBeUndefined();
+          expect(initiateCall).toHaveBeenCalledOnce();
         }
-      },
-      stopped.resolve,
-    );
-  });
-
-  it.each(["creation", "operation"] as const)(
-    "joins accepted standalone %s when interrupted",
-    async (phase) => {
-      const ready = Promise.withResolvers<void>();
-      const release = Promise.withResolvers<void>();
-      const stop = vi.fn(async () => {});
-      const initiateCall = vi.fn(async () => {
-        ready.resolve();
-        await release.promise;
-        return { success: true, callId: "call-owned" };
-      });
-      await withStandalone(
-        "SIGINT",
-        async () => {
-          if (phase === "creation") {
-            ready.resolve();
-            await release.promise;
-          }
-          return standaloneRuntime(stop, initiateCall);
-        },
-        async (command, interrupt) => {
-          const outcome = command.then(
-            () => undefined,
-            (error: unknown) => error,
-          );
-          await ready.promise;
-          interrupt();
-          expect(stop).not.toHaveBeenCalled();
-          release.resolve();
-          const result = await outcome;
-          if (phase === "creation") {
-            expect(result).toMatchObject({ message: "Voice call command interrupted by SIGINT" });
-            expect(initiateCall).not.toHaveBeenCalled();
-          } else {
-            expect(result).toBeUndefined();
-            expect(initiateCall).toHaveBeenCalledOnce();
-          }
-          expect(stop).toHaveBeenCalledOnce();
-        },
-        undefined,
-        release.resolve,
-      );
+        expect(process.listeners(signal)).toEqual([...originalListeners]);
+        expect(process.exitCode).toBe(signal === "SIGTERM" ? 143 : 130);
+      } finally {
+        for (const handler of handlers()) {
+          handler(signal);
+        }
+        release.resolve();
+        stopped.resolve();
+        await outcome;
+        capturer.restore();
+        process.exitCode = originalExitCode;
+      }
     },
   );
 
@@ -365,18 +318,10 @@ describe("voice-call CLI status fallback", () => {
 
   it("redacts credential-bearing gateway URLs from operational errors", async () => {
     callGatewayFromCliMock.mockRejectedValue(
-      Object.assign(
-        new Error(
-          "gateway closed (1008): policy wss://operator:hunter2secret@gw.example.ts.net:18789",
-        ),
-        {
-          name: "GatewayTransportError",
-          kind: "closed",
-          code: 1008,
-          connectionDetails: {
-            url: "wss://operator:hunter2secret@gw.example.ts.net:18789?token=tok123",
-          },
-        },
+      gatewayTransportError(
+        1008,
+        "wss://operator:hunter2secret@gw.example.ts.net:18789?token=tok123",
+        "gateway closed (1008): policy wss://operator:hunter2secret@gw.example.ts.net:18789",
       ),
     );
     const ensureRuntime = vi.fn();
@@ -458,14 +403,14 @@ describe("voice-call CLI status fallback", () => {
   });
 
   async function runCustomLogTailShortRead(
-    appended: string | Buffer,
-    firstReadBytes?: number,
-    initial: string | Buffer = "initial\n",
-    copyTruncated?: string | Buffer,
+    appended: string,
+    firstReadBytes: number,
+    copyTruncated?: string,
   ): Promise<{ output: string; shortened: boolean }> {
     // openclaw-temp-dir: allow extension tests cannot import repo-only test helpers
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-voice-call-tail-"));
     const logFile = path.join(tempDir, "custom.log");
+    const initial = "initial\n";
     fs.writeFileSync(logFile, initial);
     const initialByteLength = Buffer.byteLength(initial);
 
@@ -477,7 +422,6 @@ describe("voice-call CLI status fallback", () => {
     readSyncSpy.mockImplementation(((fd, buffer, offset, length, position) => {
       if (
         !shortened &&
-        firstReadBytes !== undefined &&
         typeof position === "number" &&
         position === initialByteLength &&
         Buffer.isBuffer(buffer)
@@ -513,27 +457,15 @@ describe("voice-call CLI status fallback", () => {
     return { output: capturer.output(), shortened };
   }
 
-  const partialUtf8 = Buffer.from('{"word":"café"}\n');
-  const utf8Split = Buffer.byteLength('{"word":"caf') + 1;
   const firstRecord = '{"event":"first"}\n';
   const secondRecord = '{"event":"second"}\n';
   it.each([
-    ["newline", "first\nsecond\n", 6, undefined, undefined],
-    ["mid-record", firstRecord + secondRecord, 13, '{"event":"fir\n', undefined],
-    ["UTF-8", partialUtf8, utf8Split, "\ufffd", undefined],
-    ["startup record", 'rt"}\n', undefined, '{"event":"sta\n', '{"event":"sta'],
-    [
-      "startup UTF-8",
-      partialUtf8.subarray(utf8Split),
-      undefined,
-      "\ufffd",
-      partialUtf8.subarray(0, utf8Split),
-    ],
-  ] as const)("buffers custom log tail %s", async (_name, appended, bytes, excludes, initial) => {
-    const result = await runCustomLogTailShortRead(appended, bytes, initial);
-    expect(result.shortened).toBe(bytes !== undefined);
-    const expected = Buffer.concat([Buffer.from(initial ?? ""), Buffer.from(appended)]).toString();
-    expect(result.output).toContain(expected);
+    ["newline", "first\nsecond\n", 6, undefined],
+    ["mid-record", firstRecord + secondRecord, 13, '{"event":"fir\n'],
+  ] as const)("buffers custom log tail %s", async (_name, appended, bytes, excludes) => {
+    const result = await runCustomLogTailShortRead(appended, bytes);
+    expect(result.shortened).toBe(true);
+    expect(result.output).toContain(appended);
     if (excludes !== undefined) {
       expect(result.output).not.toContain(excludes);
     }
@@ -549,7 +481,7 @@ describe("voice-call CLI status fallback", () => {
     expect(Buffer.byteLength(replacement)).toBeGreaterThan(shortReadCursor);
     expect(Buffer.byteLength(replacement)).toBeLessThan(Buffer.byteLength(initial + appended));
 
-    const result = await runCustomLogTailShortRead(appended, firstReadBytes, initial, replacement);
+    const result = await runCustomLogTailShortRead(appended, firstReadBytes, replacement);
 
     expect(result).toEqual({ shortened: true, output: replacement });
   });

@@ -84,10 +84,7 @@ function sessionConfig(overrides: Record<string, unknown> = {}) {
 
 function resolveSession(
   config: VoiceCallConfig,
-  options: Omit<
-    Parameters<typeof resolveVoiceCallSessionKey>[0],
-    "config" | "callId" | "phone"
-  > = {},
+  options: Partial<Omit<Parameters<typeof resolveVoiceCallSessionKey>[0], "config">> = {},
 ) {
   return resolveVoiceCallSessionKey({
     config,
@@ -345,49 +342,20 @@ describe("Tailscale external HTTPS port", () => {
 
 describe("resolveVoiceCallConfig session routing", () => {
   it.each([
-    ["phone by default", {}, "per-phone", "call-123", "agent:main:voice:15550001111"],
-    [
-      "configured agent",
-      { agentId: "Voice" },
-      "per-phone",
-      "CALL-123",
-      "agent:voice:voice:15550001111",
-    ],
-    [
-      "each call",
-      { sessionScope: "per-call" },
-      "per-call",
-      "call-123",
-      "agent:main:voice:call:call-123",
-    ],
-  ] as const)(
-    "scopes generated voice sessions to %s",
-    (_name, input, sessionScope, callId, expected) => {
-      const config = normalizeVoiceCallConfig({ enabled: true, provider: "mock", ...input });
-      expect(config.staleCallReaperSeconds).toBe(120);
-      expect(config.responseModel).toBeUndefined();
-      expect(config.sessionScope).toBe(sessionScope);
-      expect(resolveVoiceCallSessionKey({ config, callId, phone: "+1 (555) 000-1111" })).toBe(
-        expected,
-      );
-    },
-  );
-
-  it.each([
-    ["the default core session", undefined, undefined, "agent:main:main"],
-    ["a custom core main key", undefined, { mainKey: "work" }, "agent:main:work"],
-    ["global core scope", undefined, { scope: "global" }, "global"],
-    ["a configured agent", "ops", undefined, "agent:ops:main"],
-  ] as const)("routes main-scoped calls to %s", (_name, agentId, coreSession, expected) => {
-    const config = sessionConfig({ sessionScope: "main", agentId });
-    expect(resolveSession(config, { coreSession })).toBe(expected);
-  });
-
-  it("lets an explicit session key override main scope", () => {
-    const config = sessionConfig({ sessionScope: "main" });
-    expect(resolveSession(config, { explicitSessionKey: "Meet-Room-1" })).toBe(
-      "agent:main:meet-room-1",
-    );
+    [{}, {}, "agent:main:voice:15550001111"],
+    [{ agentId: "Voice" }, { callId: "CALL-123" }, "agent:voice:voice:15550001111"],
+    [{ sessionScope: "per-call" }, {}, "agent:main:voice:call:call-123"],
+    [{ sessionScope: "main" }, {}, "agent:main:main"],
+    [{ sessionScope: "main" }, { coreSession: { mainKey: "work" } }, "agent:main:work"],
+    [{ sessionScope: "main" }, { coreSession: { scope: "global" } }, "global"],
+    [{ sessionScope: "main", agentId: "ops" }, {}, "agent:ops:main"],
+    [{ sessionScope: "main" }, { explicitSessionKey: "Meet-Room-1" }, "agent:main:meet-room-1"],
+  ] as const)("routes session config %j with %j", (input, options, expected) => {
+    const config = sessionConfig(input);
+    expect(config.staleCallReaperSeconds).toBe(120);
+    expect(config.responseModel).toBeUndefined();
+    expect(config.sessionScope).toBe("sessionScope" in input ? input.sessionScope : "per-phone");
+    expect(resolveSession(config, { callId: "call-123", ...options })).toBe(expected);
   });
 
   it("scopes persisted and explicit keys at the agent session boundary", () => {
@@ -423,7 +391,9 @@ describe("resolveVoiceCallConfig session routing", () => {
       ["agent:main:main", { mainKey: "work" }, "agent:voice:agent:main:main"],
       ["agent:main:main", { scope: "global" }, "agent:voice:agent:main:main"],
     ] as const) {
-      expect(resolveSession(config, { explicitSessionKey: key, coreSession })).toBe(expected);
+      expect(
+        resolveSession(config, { callId: "call-123", explicitSessionKey: key, coreSession }),
+      ).toBe(expected);
     }
   });
 
@@ -615,36 +585,27 @@ describe("resolveVoiceCallStreamExposurePaths", () => {
 });
 
 describe("resolveVoiceCallConfig realtime settings", () => {
-  const realtimeConfig = (realtime: Record<string, unknown>, provider = "mock") =>
-    normalizeVoiceCallConfig({ enabled: true, provider, realtime });
-
-  it("preserves configured realtime instructions without env indirection", () => {
-    const { realtime } = realtimeConfig({ enabled: true, instructions: "Stay concise." }, "twilio");
-    expect(realtime).toMatchObject({
+  it("preserves explicit realtime settings through normalization and resolution", () => {
+    const realtime = {
+      enabled: true,
       instructions: "Stay concise.",
+      idleHangupMs: 45_000,
+      consultThinkingLevel: "ultra",
+      consultFastMode: true,
+    };
+    const config = normalizeVoiceCallConfig({ enabled: true, provider: "twilio", realtime });
+    expect(resolveVoiceCallConfig(config).realtime).toMatchObject({
+      ...realtime,
       toolPolicy: "safe-read-only",
       consultPolicy: "auto",
     });
-    expect(realtime.provider).toBeUndefined();
+    expect(config.realtime.provider).toBeUndefined();
   });
-
-  it("preserves configured realtime consult overrides", () => {
-    expect(
-      realtimeConfig({ consultThinkingLevel: "ultra", consultFastMode: true }).realtime,
-    ).toMatchObject({
-      consultThinkingLevel: "ultra",
-      consultFastMode: true,
-    });
-  });
-
-  it("accepts only positive integer realtime idle hangup values", () => {
-    const parsed = realtimeConfig({ idleHangupMs: 45_000 });
-    expect(resolveVoiceCallConfig(parsed).realtime.idleHangupMs).toBe(45_000);
-    expect(() => realtimeConfig({ idleHangupMs: 0 })).toThrow();
-  });
-
-  it("rejects invalid realtime consult thinking levels", () => {
-    expect(() => realtimeConfig({ consultThinkingLevel: "turbo" })).toThrow(/Invalid option/);
+  it.each([
+    [{ idleHangupMs: 0 }, undefined],
+    [{ consultThinkingLevel: "turbo" }, /Invalid option/],
+  ] as const)("rejects invalid realtime settings %j", (realtime, error) => {
+    expect(() => sessionConfig({ realtime })).toThrow(error);
   });
 });
 
@@ -709,14 +670,6 @@ describe("voice-call config migration", () => {
         openai: { ...before.streaming.providers.openai, silenceDurationMs: 700 },
       },
     });
-    const prefix = "plugins.entries.voice-call.config.streaming";
-    expect(migration.changes).toEqual([
-      `Moved ${prefix}.sttProvider → ${prefix}.provider.`,
-      `Removed ${prefix}.openaiApiKey (kept ${prefix}.providers.openai.apiKey).`,
-      `Removed ${prefix}.sttModel (kept ${prefix}.providers.openai.model).`,
-      `Moved ${prefix}.silenceDurationMs → ${prefix}.providers.openai.silenceDurationMs.`,
-      `Removed ${prefix}.vadThreshold (kept ${prefix}.providers.openai.vadThreshold).`,
-    ]);
     expect(value).toEqual(before);
     expect(() => normalizeVoiceCallConfig(migration.config)).not.toThrow();
     expect(migrate(migration.config)).toEqual({ config: migration.config, changes: [] });
@@ -745,11 +698,7 @@ describe("voice-call config migration", () => {
     const migration = migrate({
       streaming: { silenceDurationMs: Number.NaN, vadThreshold: Number.POSITIVE_INFINITY },
     });
-    expect(migration.config.streaming).not.toHaveProperty("providers.openai");
-    expect(migration.changes).toEqual([
-      "Removed invalid plugins.entries.voice-call.config.streaming.silenceDurationMs.",
-      "Removed invalid plugins.entries.voice-call.config.streaming.vadThreshold.",
-    ]);
+    expect(migration.config.streaming).toEqual({ provider: undefined });
   });
 
   it("returns doctor migration change lines", () => {

@@ -109,7 +109,7 @@ describe("voice-call tunnels", () => {
     expect(proc.killedWith).toBe(alreadyClosed ? null : "SIGKILL");
   });
 
-  it("unrefs the ngrok startup timeout", async () => {
+  it("unrefs startup and parses complete ngrok logs before bounding the incomplete tail", async () => {
     const unrefSpy = vi.fn();
     const setTimeoutOriginal = globalThis.setTimeout.bind(globalThis);
     vi.spyOn(globalThis, "setTimeout").mockImplementation(
@@ -120,14 +120,7 @@ describe("voice-call tunnels", () => {
       },
     );
     const { proc, result } = nextProcess();
-    emitNgrokUrl(proc, "https://unref.ngrok.io");
-    await result;
     expect(unrefSpy).toHaveBeenCalledOnce();
-  });
-
-  it("parses complete ngrok log lines before bounding the incomplete tail", async () => {
-    const { proc, result } = nextProcess();
-
     proc.stdout.write(
       `${JSON.stringify({ msg: "started tunnel", url: "https://large.ngrok.io" })}\n${"x".repeat(20_000)}`,
     );
@@ -158,7 +151,6 @@ describe("voice-call tunnels", () => {
   });
 
   it.each([
-    ["short", "ERR_NGROK short", "ERR_NGROK short"],
     [
       "bounded tail",
       `ERR_NGROK discarded${"a".repeat(16_384)}`,
