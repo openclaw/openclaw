@@ -355,7 +355,7 @@ describe("completion announcement", () => {
           model: "automation-result",
         }),
       ]);
-      await fixture.assertNoOtherResults();
+      await fixture.assertText("Scheduled command failed.");
       expect(onDeliverySettled).toHaveBeenCalledExactlyOnceWith({
         delivered: true,
         status: "delivered",
