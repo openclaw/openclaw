@@ -1,4 +1,3 @@
-import { createHmac } from "node:crypto";
 import { request, type RequestListener } from "node:http";
 import { createConnection } from "node:net";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -17,6 +16,7 @@ import {
   advanceSmsTestAccountId,
   createSmsTestAccount,
   createSmsTestDeliveryRecorder,
+  signSmsTestForm,
 } from "./webhook.test-support.js";
 
 const enqueueSmsIngress = vi.hoisted(() =>
@@ -172,21 +172,13 @@ it("closes overflow uploads and recovers capacity for a signed callback", async 
           Body: "boundary proof",
           MessageSid: "SM00000000000000000000000000000985",
         };
-        const body = new URLSearchParams(form).toString();
-        const signed =
-          account.publicWebhookUrl +
-          Object.keys(form)
-            .toSorted()
-            .map((key) => `${key}${form[key] ?? ""}`)
-            .join("");
+        const { body, signature } = signSmsTestForm(form, account);
         const admitted = await fetch(`${baseUrl}/webhooks/sms`, {
           method: "POST",
           body,
           headers: {
             "content-type": "application/x-www-form-urlencoded",
-            "x-twilio-signature": createHmac("sha1", account.authToken)
-              .update(signed)
-              .digest("base64"),
+            "x-twilio-signature": signature,
           },
         });
 
