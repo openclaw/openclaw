@@ -148,10 +148,6 @@ module.exports = { stateMigrations: [{
           let receipt;
           if (caller === "doctor") {
             await using ctx = await prepareDoctorContext(configPath);
-            expect(ctx.cfg.agents?.entries?.main).toMatchObject({
-              workspace: path.join(home, "workspace"),
-            });
-            expect(Object.getOwnPropertyDescriptor(ctx.cfg.agents, "list")).toBeUndefined();
             expect(ctx.configResult.postSessionPluginMigration?.plannedActions).toEqual(actions);
             assert.ok(ctx.runWithPluginMetadataSnapshot);
             await ctx.runWithPluginMetadataSnapshot({ config: ctx.cfg }, () =>

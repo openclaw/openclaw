@@ -74,9 +74,6 @@ vi.mock("../agents/agent-create.js", async (importOriginal) => ({
     return {
       status: "created",
       agentId: entry.id,
-      name: entry.name,
-      workspace: entry.workspace,
-      agentDir: path.join(entry.workspace, "agent"),
       bootstrapPending: true,
       configHash: mutation.persistedHash,
     };
