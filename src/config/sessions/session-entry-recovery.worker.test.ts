@@ -38,30 +38,33 @@ function seed(
   writeSessionEntry(database, `agent:main:${name}`, { sessionId: name, updatedAt: 1, ...fields });
 }
 
-function stageInput(
-  scope: InputScope,
-  runId: string,
-  message: Partial<InputOptions["message"]> = {},
-  trackCompletion = false,
-) {
-  return stageSessionPendingInput(scope, {
-    runId,
-    message: {
-      role: "user",
-      content: `Synthetic ${runId} input`,
-      timestamp: 1,
-      idempotencyKey: `${runId}:user`,
-      __openclaw: { sessionSendDelivery: { version: 1 } },
-      ...message,
-    },
-    assertCurrent() {},
-    trackCompletion,
-  }).then((receipt) => expectDefined(receipt, "Expected accepted input custody"));
-}
-
-function inputReceipts() {
+function inputReceipts(scope: InputScope | ((runId: string) => InputScope)) {
   const receipts: SessionPendingInputReceipt[] = [];
   return Object.assign(receipts, {
+    async stage(
+      runId: string,
+      message: Partial<InputOptions["message"]> = {},
+      trackCompletion = false,
+    ) {
+      const receipt = expectDefined(
+        await stageSessionPendingInput(typeof scope === "function" ? scope(runId) : scope, {
+          runId,
+          message: {
+            role: "user",
+            content: `Synthetic ${runId} input`,
+            timestamp: 1,
+            idempotencyKey: `${runId}:user`,
+            __openclaw: { sessionSendDelivery: { version: 1 } },
+            ...message,
+          },
+          assertCurrent() {},
+          trackCompletion,
+        }),
+        "Expected accepted input custody",
+      );
+      receipts.push(receipt);
+      return receipt;
+    },
     async [Symbol.asyncDispose]() {
       for (const receipt of receipts) {
         receipt.finish("interrupted");
@@ -230,14 +233,13 @@ test("pages saved deliveries while preserving live custody", async ({
 }) => {
   const scope = { ...store, sessionKey: "agent:main:mixed-recovery", sessionId: "mixed-recovery" };
   seed(database, scope.sessionId);
-  await using receipts = inputReceipts();
+  await using receipts = inputReceipts(scope);
   for (let index = 0; index < 24; index++) {
-    const receipt = await stageInput(scope, `input-${index}`, {
+    const receipt = await receipts.stage(`input-${index}`, {
       content: `Synthetic input ${index}`,
       timestamp: index,
       ...(index === 22 ? { __openclaw: undefined } : {}),
     });
-    receipts.push(receipt);
     if (index !== 21) {
       await finishInput(receipt, index === 23 ? "cancelled" : "interrupted");
     }
@@ -258,13 +260,12 @@ test("reconciles interrupted and crash-left chat inputs at startup", async ({
 }) => {
   const scope = { ...store, sessionKey: "agent:main:chat-recovery", sessionId: "chat-recovery" };
   seed(database, scope.sessionId);
-  await using receipts = inputReceipts();
+  await using receipts = inputReceipts(scope);
   for (const runId of ["terminated", "killed", "legacy"]) {
-    const receipt = await stageInput(scope, runId, {
+    const receipt = await receipts.stage(runId, {
       content: `Saved ${runId} chat input`,
       __openclaw: runId === "legacy" ? undefined : { chatInputRecovery: { version: 1 } },
     });
-    receipts.push(receipt);
     await finishInput(receipt);
     if (runId !== "terminated") {
       // Crash-left rows have no live receipt for lifecycle rotation to finish.
@@ -325,24 +326,14 @@ test("refreshes empty recovery reads with only recoverable inputs", async ({
   for (const name of states) {
     seed(database, scope(name).sessionId);
   }
-  await using receipts = inputReceipts();
-  const stage = async (name: string, trackCompletion = false) => {
-    const receipt = await stageInput(
-      scope(name),
-      name,
-      name === "ordinary" ? { __openclaw: undefined } : {},
-      trackCompletion,
-    );
-    receipts.push(receipt);
-    return receipt;
-  };
+  await using receipts = inputReceipts(scope);
 
   expect(await readPendingInputRecoveryEntriesInWorker(store)).toEqual([]);
-  await stage("queued");
-  await finishInput(await stage("ordinary"));
-  await finishInput(await stage("interrupted"));
-  await finishInput(await stage("cancelled"), "cancelled");
-  const completed = await stage("completed", true);
+  await receipts.stage("queued");
+  await finishInput(await receipts.stage("ordinary", { __openclaw: undefined }));
+  await finishInput(await receipts.stage("interrupted"));
+  await finishInput(await receipts.stage("cancelled"), "cancelled");
+  const completed = await receipts.stage("completed", {}, true);
   await expectDefined(
     completed.completeAsync,
     "Expected completion owner",
@@ -350,7 +341,7 @@ test("refreshes empty recovery reads with only recoverable inputs", async ({
   await finishInput(completed);
 
   // Collected sources retain their queued row with a consumption receipt.
-  const consumed = await stage("consumed");
+  const consumed = await receipts.stage("consumed");
   const aggregate = expectDefined(
     bindSessionPendingInputSources([consumed], {
       role: "user",
@@ -366,7 +357,7 @@ test("refreshes empty recovery reads with only recoverable inputs", async ({
   );
   expect(consumed.state).toBe("consumed");
 
-  await finishInput(await stage("old"));
+  await finishInput(await receipts.stage("old"));
   seed(database, "recovery-old", { sessionId: "replacement-session", updatedAt: 2 });
 
   const candidates = await readPendingInputRecoveryEntriesInWorker(store);
