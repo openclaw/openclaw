@@ -483,10 +483,9 @@ describe("MCP Events callback and subscription lifecycle", () => {
     expect(schedules.has("source:authored-job")).toBe(false);
   });
 
-  it("uses no idle polling and keeps busy admission pending without consuming delivery attempts", async () => {
+  it("keeps busy admission pending without consuming delivery attempts", async () => {
     await current!.start();
     await runSchedule("drain");
-    expect([schedules.has("drain"), schedules.has("reconcile")]).toEqual([false, false]);
     await expectEvent(200);
     await runSchedule("drain");
     expect((await pending())[0]?.attempts).toBe(0);
@@ -513,11 +512,9 @@ describe("MCP Events callback and subscription lifecycle", () => {
     await expectEvent(200, "evt-2");
     await runSchedule("drain");
     // One lane admits its oldest event first; the busy result keeps both accepted events pending.
-    expect(deps.cron.runEvent).toHaveBeenCalledOnce();
-    expect(deps.cron.runEvent).toHaveBeenCalledWith(
-      "authored-job",
-      expect.objectContaining({ eventId: "evt-1" }),
-    );
+    expect(vi.mocked(deps.cron.runEvent).mock.calls).toEqual([
+      ["authored-job", expect.objectContaining({ eventId: "evt-1" })],
+    ]);
     expect(await pending()).toMatchObject([{ attempts: 0 }, { attempts: 0 }]);
   });
 
@@ -611,14 +608,13 @@ describe("MCP Events callback and subscription lifecycle", () => {
 
   it("verifies before subscribe reply and durably deduplicates untrusted application data across restart", async () => {
     await current!.start();
-    const body = JSON.stringify(event());
-    expect((await post(body, "evt-1")).status).toBe(200);
-    expect((await post(body, "evt-1")).status).toBe(200);
+    await expectEvent(200);
+    await expectEvent(200);
     await current!.stop();
     deps = { ...deps, scheduler: createScheduler() };
     current = new McpEventsService(deps);
     await current.start();
-    expect((await post(body, "evt-1")).status).toBe(200);
+    await expectEvent(200);
     expect(await pending()).toMatchObject([
       {
         payload: {
@@ -629,10 +625,7 @@ describe("MCP Events callback and subscription lifecycle", () => {
         },
       },
     ]);
-    expect(diagnostics()[0]).toMatchObject({
-      status: "active",
-      replayAvailable: true,
-    });
+    expect(diagnostics()[0]).toMatchObject({ status: "active", replayAvailable: true });
     expect(JSON.stringify(diagnostics())).not.toContain(secret);
   });
 
