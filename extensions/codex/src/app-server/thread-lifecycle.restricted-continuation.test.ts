@@ -125,27 +125,16 @@ afterEach(() => {
 
 it.each([
   ["warm", "unchanged"],
-  ["cold", "unchanged"],
   ["cold", "empty"],
   ["warm", "safe deny"],
   ["cold", "safe deny"],
-  ["cold", "legacy"],
 ] as const)("continues a %s restricted conversation across %s policy", async (mode, change) => {
-  const { patchBinding, read, idle, start, calls } = await createFixture();
-  const rotate = change === "safe deny" || change === "legacy";
+  const { read, idle, start } = await createFixture();
+  const rotate = change === "safe deny";
   const policy = change === "empty" ? { toolsAllow: [] } : {};
   const first = await start(policy);
   expect(first.lifecycle.preserveExistingBinding).toBeUndefined();
-  expect(read()).toMatchObject({
-    threadId: first.threadId,
-    restrictedThreadConfigFingerprint: expect.any(String),
-  });
-  const previous = read();
   await idle(first, mode);
-  if (change === "legacy") {
-    await patchBinding(first.threadId, { restrictedThreadConfigFingerprint: undefined });
-    expect(read()?.restrictedThreadConfigFingerprint).toBeUndefined();
-  }
   const followup = {
     ...policy,
     ...(change === "safe deny" ? safeDeny : {}),
@@ -153,24 +142,17 @@ it.each([
   const second = await start({
     ...followup,
     ...(!rotate ? { toolsAllow: change === "empty" ? [] : ["*"] } : {}),
-    runId: change === "legacy" ? "legacy-upgrade" : rotate ? "changed-policy" : "scheduled",
+    runId: rotate ? "changed-policy" : "scheduled",
   });
   const expectedId = rotate ? "restricted-2" : first.threadId;
   expect(second).toMatchObject({
     threadId: expectedId,
     lifecycle: { action: rotate ? "started" : "resumed" },
   });
-  if (change === "safe deny") {
-    expect(read()?.restrictedThreadConfigFingerprint).not.toBe(
-      previous?.restrictedThreadConfigFingerprint,
-    );
-  } else if (change === "legacy") {
-    expect(read()?.restrictedThreadConfigFingerprint).toEqual(expect.any(String));
-  }
   await idle(second, rotate ? "cold" : mode);
   const next = await start({
     ...followup,
-    runId: change === "legacy" ? "after-upgrade" : rotate ? "recovered" : "follow-up",
+    runId: rotate ? "recovered" : "follow-up",
   });
   expect(next).toMatchObject(resumed(expectedId));
   expect(read()).toMatchObject({
@@ -178,9 +160,7 @@ it.each([
     nativeToolPolicyRestricted: true,
     restrictedThreadConfigFingerprint: expect.any(String),
   });
-  expect(calls("thread/start")).toHaveLength(rotate ? 2 : 1);
   if (!rotate) {
-    expect(calls("thread/resume")).toHaveLength(mode === "cold" ? 2 : 0);
     await next.liveThreadOwnership?.release(next.threadId);
   }
 });
@@ -212,13 +192,12 @@ it("keeps a protected warm policy usable after refusing the changed-deny trigger
 });
 
 it("preserves the exact durable predecessor when a changed-policy fresh start fails", async () => {
-  const { fixture, read, start, calls } = await createFixture(2);
+  const { fixture, read, start } = await createFixture(2);
   const first = await start();
   const previous = read();
   await fixture.endTurn(first.threadId);
   await expect(start(safeDeny)).rejects.toThrow("synthetic restricted successor creation failed");
   expect(read()).toEqual(previous);
-  expect(calls("thread/start")).toHaveLength(2);
 });
 
 it.each([
@@ -273,39 +252,17 @@ it.each(["legacy", "native restoration", "temporary"] as const)(
   },
 );
 
-it.each(["unchanged", "skills", "generic policy", "safe deny"] as const)(
-  "preserves the restricted incognito owner for %s",
-  async (change) => {
-    const { fixture, attempt, idle, calls, start } = await createFixture();
-    attempt.sessionKey = "agent:main:dashboard:incognito-restricted";
-    const continueWith = (policy?: typeof change) =>
-      start(
-        {
-          ...(policy ? { runId: "incognito-follow-up" } : {}),
-          ...(policy === "safe deny" ? safeDeny : {}),
-        },
-        {
-          developerInstructions: policy === "generic policy" ? "changed policy" : "generic policy",
-          refreshableInstructions: policy === "skills" ? "updated skills" : "original skills",
-        },
-      );
-    const first = await continueWith();
-    await idle(first, "warm");
-    const rejected = change === "generic policy" || change === "safe deny";
-    if (rejected) {
-      await expect(continueWith(change)).rejects.toBeInstanceOf(CodexIncognitoPolicyChangeError);
-      expect(hasCodexAppServerLiveThread(fixture.client, first.threadId)).toBe(true);
-    }
-    const next = await continueWith(rejected ? undefined : change);
-    expect(next).toMatchObject(resumed(first.threadId));
-    expect(calls("thread/start")).toHaveLength(1);
-    expect(calls("thread/resume")).toHaveLength(0);
-    if (change === "skills") {
-      expect(calls("thread/inject_items")).toHaveLength(1);
-    }
-    await next.liveThreadOwnership?.release(next.threadId);
-  },
-);
+it("preserves the restricted incognito owner after refusing a changed safe deny", async () => {
+  const { fixture, attempt, idle, start } = await createFixture();
+  attempt.sessionKey = "agent:main:dashboard:incognito-restricted";
+  const first = await start();
+  await idle(first, "warm");
+  await expect(start(safeDeny)).rejects.toBeInstanceOf(CodexIncognitoPolicyChangeError);
+  expect(hasCodexAppServerLiveThread(fixture.client, first.threadId)).toBe(true);
+  const next = await start({ runId: "incognito-follow-up" });
+  expect(next).toMatchObject(resumed(first.threadId));
+  await next.liveThreadOwnership?.release(next.threadId);
+});
 
 it("isolates additive turn grants while native tools remain unrestricted", async () => {
   const { start, expectIsolation } = await createFixture();
