@@ -44,6 +44,8 @@ async function runNode(root: string, entry = "openclaw.mjs") {
   return stdout.trim();
 }
 
+const chunk = (source: string, extensions: string[]): OwnedRuntimeChunk => ({ source, extensions });
+
 describe("node bootstrap distribution", () => {
   it.each([false, true])(
     "omits unselected plugin chunks while preserving selected imports (selected: %s)",
@@ -55,22 +57,15 @@ describe("node bootstrap distribution", () => {
       });
       await write(packageRoot, "dist/extensions/omitted-plugin/index.js", "export {};\n");
       await writeOwnedChunks(packageRoot, {
-        "omitted-owned.mjs": {
-          source: 'import "./extensions/omitted-plugin/index.js";\n',
-          extensions: ["omitted-plugin"],
-        },
-        "selected-owned.mjs": {
-          source: "export const selected = true;\n",
-          extensions: ["remote-runtime"],
-        },
-        "shared-owned.mjs": {
-          source: "export const shared = true;\n",
-          extensions: ["omitted-plugin", "remote-runtime"],
-        },
-        "selected-import.mjs": {
-          source: "export const reachable = true;\n",
-          extensions: ["omitted-plugin"],
-        },
+        "omitted-owned.mjs": chunk('import "./extensions/omitted-plugin/index.js";\n', [
+          "omitted-plugin",
+        ]),
+        "selected-owned.mjs": chunk("export const selected = true;\n", ["remote-runtime"]),
+        "shared-owned.mjs": chunk("export const shared = true;\n", [
+          "omitted-plugin",
+          "remote-runtime",
+        ]),
+        "selected-import.mjs": chunk("export const reachable = true;\n", ["omitted-plugin"]),
       });
       await write(packageRoot, "dist/unowned.mjs", "export const unowned = true;\n");
       if (selected) {
@@ -216,14 +211,11 @@ describe("node bootstrap distribution", () => {
       const privateChunks: Record<string, OwnedRuntimeChunk> =
         mode === "source"
           ? {
-              "opaque-A1b2C3.mjs": {
-                source: 'import "./opaque-D4e5F6.mjs";\n',
-                extensions: ["qa-lab"],
-              },
-              "opaque-D4e5F6.mjs": {
-                source: 'import "./qa-runtime-private.mjs";\n',
-                extensions: ["qa-channel", "qa-lab"],
-              },
+              "opaque-A1b2C3.mjs": chunk('import "./opaque-D4e5F6.mjs";\n', ["qa-lab"]),
+              "opaque-D4e5F6.mjs": chunk('import "./qa-runtime-private.mjs";\n', [
+                "qa-channel",
+                "qa-lab",
+              ]),
             }
           : {};
       if (mode === "source") {
@@ -269,14 +261,14 @@ describe("node bootstrap distribution", () => {
           /(?:\.env|private\.ts|host-native|\.map|\.buildstamp)$/u.test(entry),
         ),
       ).toBe(false);
-      expect(entries.some((entry) => entry.startsWith("package/dist/worker/"))).toBe(false);
-      expect(entries.some((entry) => entry.startsWith("package/dist/worker-artifacts/"))).toBe(
-        false,
-      );
-      expect(entries.some((entry) => entry.startsWith("package/dist/control-ui/"))).toBe(false);
-      for (const [file, chunk] of Object.entries(privateChunks)) {
+      expect(
+        entries.filter((entry) =>
+          /^package\/dist\/(?:worker|worker-artifacts|control-ui)\//u.test(entry),
+        ),
+      ).toEqual([]);
+      for (const [file, owned] of Object.entries(privateChunks)) {
         expect(entries).not.toContain(`package/dist/${file}`);
-        await expectFiles(packageRoot, { [`dist/${file}`]: chunk.source });
+        await expectFiles(packageRoot, { [`dist/${file}`]: owned.source });
       }
       if (mode === "source") {
         expect(entries).not.toContain("package/dist/qa-runtime-private.mjs");
@@ -345,11 +337,8 @@ describe("node bootstrap distribution", () => {
   ])("retains complete runtime chunks required by $name", async ({ extensions, entry }) => {
     const { root, packageRoot, provider } = await fixture();
     const chunks = {
-      "opaque-A1b2C3.mjs": {
-        source: 'export { retained } from "./opaque-D4e5F6.mjs";\n',
-        extensions,
-      },
-      "opaque-D4e5F6.mjs": { source: "export const retained = true;\n", extensions },
+      "opaque-A1b2C3.mjs": chunk('export { retained } from "./opaque-D4e5F6.mjs";\n', extensions),
+      "opaque-D4e5F6.mjs": chunk("export const retained = true;\n", extensions),
     };
     await writeOwnedChunks(packageRoot, chunks);
     const importer =
@@ -381,8 +370,8 @@ describe("node bootstrap distribution", () => {
       await promisify(execFile)(process.execPath, [path.join(target, "scripts/preinstall.mjs")]);
     }
     expect(await runNode(target)).toBe("local-ai:cloud-ready");
-    for (const [file, chunk] of Object.entries(chunks)) {
-      await expectFiles(target, { [`dist/${file}`]: chunk.source });
+    for (const [file, owned] of Object.entries(chunks)) {
+      await expectFiles(target, { [`dist/${file}`]: owned.source });
     }
   });
 
@@ -394,7 +383,7 @@ describe("node bootstrap distribution", () => {
     const { packageRoot, provider } = await fixture();
     const source = 'import "./qa-runtime-private.mjs";\n';
     await writeOwnedChunks(packageRoot, {
-      "opaque-A1b2C3.mjs": { source, extensions: ["qa-lab"] },
+      "opaque-A1b2C3.mjs": chunk(source, ["qa-lab"]),
     });
     await write(packageRoot, "dist/qa-runtime-private.mjs", "export {};\n");
     if (metadata === "stale") {

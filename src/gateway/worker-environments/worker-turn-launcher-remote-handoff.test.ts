@@ -136,14 +136,8 @@ describe("worker turn launcher remote handoff", () => {
         expect(await placements.listPendingWorkspaceResultsAsync()).toMatchObject([
           { stagedResultRef: request.source.stagedResult!.ref, workspaceAcceptedAtMs: null },
         ]);
-        await request.source.journal.commit(MANIFEST_REF);
         return {
-          manifestRef: MANIFEST_REF,
-          changed: false,
-          verifyStable: async () => {},
-          verifyLocalStable: async () => {},
-          publishStagedResult: async () => {},
-          discardPreparedStagedResult: async () => {},
+          ...(await reconcileUnchangedLocalWorkspace(request)),
           getAppliedWorkspaceResult: () => ({
             manifestRef: MANIFEST_REF,
             manifest: { version: 1 as const, baseCommit: null, entries: [] },
