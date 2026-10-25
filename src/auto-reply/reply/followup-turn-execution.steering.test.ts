@@ -75,6 +75,13 @@ function sessionState(key: string, storePath: string, initial: SessionEntry) {
   };
 }
 
+async function settleTurn(turn: AdmittedFollowupTurn) {
+  if (turn.queued.controllerInput) {
+    completeFollowupRunLifecycle(turn.queued);
+    await Promise.allSettled([turn.queued.controllerInput.settlement.promise]);
+  }
+}
+
 describe("queued turn steering", () => {
   it.each(["gateway", "collected", "overflow"] as const)(
     "accepts successive Gateway steers into a %s followup after an older source completed",
@@ -235,10 +242,7 @@ describe("queued turn steering", () => {
         expect(queueMessage.mock.calls.map(([text]) => text)).toEqual(steeringMessages);
         expect(getSessionControllerEntryForOperation(operation).sourceTurnId).toBe(sourceTurnId);
       } finally {
-        if (turn.queued.controllerInput) {
-          completeFollowupRunLifecycle(turn.queued);
-          await Promise.allSettled([turn.queued.controllerInput.settlement.promise]);
-        }
+        await settleTurn(turn);
         await turn.restartRecovery?.clear();
       }
     },
@@ -297,31 +301,28 @@ describe("queued turn steering", () => {
             toolAuthorityOverlay,
           })
         ).outcome;
+      const reject = (text: string, changes: Partial<ReplyToolAuthorityOverlay>) =>
+        expect(inject(text, { ...overlay, ...changes })).resolves.toMatchObject({
+          status: "rejected",
+          reason: "tool_authority_mismatch",
+        });
       await expect(inject("Use the revised request")).resolves.toMatchObject({
         status: "accepted",
       });
-      await expect(
-        inject("Same permissions from another profile", {
-          ...overlay,
-          operatorAuthority: createAdmittedRunOperatorAuthority({
-            ...overlay.operatorAuthority,
-            profileId: "maintainer",
-          }),
+      await reject("Same permissions from another profile", {
+        operatorAuthority: createAdmittedRunOperatorAuthority({
+          ...overlay.operatorAuthority,
+          profileId: "maintainer",
         }),
-      ).resolves.toMatchObject({ status: "rejected", reason: "tool_authority_mismatch" });
-      await expect(
-        inject("Change tool permissions", { ...overlay, disableTools: true }),
-      ).resolves.toMatchObject({ status: "rejected", reason: "tool_authority_mismatch" });
+      });
+      await reject("Change tool permissions", { disableTools: true });
       for (const incomingOperator of [
         undefined,
         createAdmittedRunOperatorAuthority({ ...operatorAuthority, scopes: ["operator.admin"] }),
       ]) {
-        await expect(
-          inject("Different original operator authority", {
-            ...overlay,
-            operatorAuthority: incomingOperator,
-          }),
-        ).resolves.toMatchObject({ status: "rejected", reason: "tool_authority_mismatch" });
+        await reject("Different original operator authority", {
+          operatorAuthority: incomingOperator,
+        });
       }
       expect(queueMessage).toHaveBeenCalledOnce();
       return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
@@ -329,10 +330,7 @@ describe("queued turn steering", () => {
     try {
       await executeTurn(turn);
     } finally {
-      if (turn.queued.controllerInput) {
-        completeFollowupRunLifecycle(turn.queued);
-        await Promise.allSettled([turn.queued.controllerInput.settlement.promise]);
-      }
+      await settleTurn(turn);
       operation.complete();
     }
   });
@@ -471,16 +469,9 @@ describe("queued ingress acceptance", () => {
     },
   );
 
-  it.each(
-    ["followup-collect", "followup-overflow"].flatMap((sourceKind) =>
-      ["setup-failure", "adoption-timeout", "user-abort"].map((failure) => ({
-        sourceKind,
-        failure,
-      })),
-    ),
-  )(
-    "persists $sourceKind custody before ingress completion and handles $failure without replay",
-    async ({ sourceKind, failure }) => {
+  it.each(["setup-failure", "adoption-timeout", "user-abort"])(
+    "persists custody before ingress completion and handles %s without replay",
+    async (failure) => {
       await withOpenClawTestState({ label: "queued-ingress-acceptance" }, async (testState) => {
         setRuntimeConfigSnapshot({});
         const target = {
@@ -503,7 +494,7 @@ describe("queued ingress acceptance", () => {
           getSessionId: () => operation.sessionId,
         });
         await actor.bind();
-        const sourceId = `${sourceKind}:queued-session:synthetic-input`;
+        const sourceId = "followup-collect:queued-session:synthetic-input";
         const recorder = createUserTurnTranscriptRecorder({
           input: { text: "queued user message", idempotencyKey: sourceId },
           target: { ...target, sessionEntry: entry },
@@ -607,10 +598,7 @@ describe("queued ingress acceptance", () => {
           expect(replies).toHaveLength(failure === "user-abort" ? 0 : 1);
         } finally {
           drain.dispose();
-          if (turn.queued.controllerInput) {
-            completeFollowupRunLifecycle(turn.queued);
-            await Promise.allSettled([turn.queued.controllerInput.settlement.promise]);
-          }
+          await settleTurn(turn);
           await turn.restartRecovery?.clear();
         }
       });

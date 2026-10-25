@@ -34,6 +34,18 @@ async function routeDirectives(body: string, cfg: OpenClawConfig) {
   return result.directives;
 }
 
+const luna = { provider: "openai", id: "gpt-5.6-luna", name: "GPT-5.6-Luna" };
+const continuedLuna = { kind: "continue", provider: luna.provider, model: luna.id };
+const patchedSession = { sessionKey: "agent:main:dm:1", agentId: "main", reason: "patch" };
+
+function applyLunaDirectives(params: Parameters<typeof applyMixedDirectives>[0]) {
+  return applyMixedDirectives({ allowedModels: [luna], ...params });
+}
+
+function expectQueuedUpdate(fields: Record<string, unknown>) {
+  expect(refreshQueuedFollowupSession).toHaveBeenCalledWith(expect.objectContaining(fields));
+}
+
 type PersistenceResult =
   | { status: "current"; entry: SessionEntry }
   | { status: "model-selection-locked"; entry: SessionEntry }
@@ -148,14 +160,12 @@ describe("mixed inline directives", () => {
       contextTokens: 24_000,
     });
     expect(sessionEntry.thinkingLevel).toBe("max");
-    expect(refreshQueuedFollowupSession).toHaveBeenCalledWith(
-      expect.objectContaining({
-        nextThinking: expect.objectContaining({
-          level: "max",
-          catalog: expect.arrayContaining([selected]),
-        }),
+    expectQueuedUpdate({
+      nextThinking: expect.objectContaining({
+        level: "max",
+        catalog: expect.arrayContaining([selected]),
       }),
-    );
+    });
   });
 
   it.each([
@@ -222,10 +232,8 @@ describe("mixed inline directives", () => {
     persistence.resolve({ status: "current", entry: persisted });
     const { result } = await pending;
 
-    expect(result).toMatchObject({ kind: "continue", provider: "openai", model: "gpt-5.6-luna" });
-    expect(lifecycleEvents).toEqual([
-      { sessionKey: "agent:main:dm:1", agentId: "main", reason: "patch", catalogChanged: true },
-    ]);
+    expect(result).toMatchObject(continuedLuna);
+    expect(lifecycleEvents).toEqual([{ ...patchedSession, catalogChanged: true }]);
     expect(sessionEntry.authProfileOverrideSource).toBe("user");
     expect(persistStickyModelSelectionBestEffort).not.toHaveBeenCalled();
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
@@ -247,9 +255,7 @@ describe("mixed inline directives", () => {
     expect(sessionEntry.reasoningLevel).toBe("on");
     expect(persistenceMocks.persist).toHaveBeenCalledOnce();
     expect(enqueueSystemEvent).toHaveBeenCalledOnce();
-    expect(lifecycleEvents).toEqual([
-      { sessionKey: "agent:main:dm:1", agentId: "main", reason: "patch" },
-    ]);
+    expect(lifecycleEvents).toEqual([patchedSession]);
   });
 
   it("commits the model switch while keeping its thinking hint on the current turn", async () => {
@@ -261,20 +267,18 @@ describe("mixed inline directives", () => {
         },
       },
     } as OpenClawConfig;
-    const { result, sessionEntry } = await applyMixedDirectives({
+    const { result, sessionEntry } = await applyLunaDirectives({
       body: "please reply /model openai/gpt-5.6-luna /think high",
       cfg,
       sessionEntry: createSessionEntry({ thinkingLevel: "ultra" }),
       storePath: "/tmp/sessions.json",
       provider: "openai",
       model: "gpt-5.6-sol",
-      allowedModels: [{ provider: "openai", id: "gpt-5.6-luna", name: "GPT-5.6-Luna" }],
       senderIsOwner: true,
     });
 
-    expect(result).toMatchObject({ kind: "continue", provider: "openai", model: "gpt-5.6-luna" });
+    expect(result).toMatchObject({ ...continuedLuna, directives: { thinkLevel: "high" } });
     expect(sessionEntry.thinkingLevel).toBe("ultra");
-    expect(result).toMatchObject({ kind: "continue", directives: { thinkLevel: "high" } });
     if (result.kind !== "continue") {
       throw new Error("Expected the model switch to continue the task");
     }
@@ -312,22 +316,16 @@ describe("mixed inline directives", () => {
       authProfileOverride: "openai:work",
       authProfileOverrideCompactionCount: 0,
     });
-    await applyMixedDirectives({
+    await applyLunaDirectives({
       body: "/model openai/gpt-5.6-luna -s",
       senderIsOwner: true,
       provider: "openai",
       model: "gpt-5.6-sol",
       sessionEntry,
-      allowedModels: [{ provider: "openai", id: "gpt-5.6-luna", name: "GPT-5.6-Luna" }],
     });
     expect(sessionEntry.authProfileOverrideSource).toBeUndefined();
     expect(sessionEntry.authProfileOverrideCompactionCount).toBe(0);
-    expect(refreshQueuedFollowupSession).toHaveBeenCalledWith(
-      expect.objectContaining({
-        nextAuthProfileId: "openai:work",
-        nextAuthProfileIdSource: "auto",
-      }),
-    );
+    expectQueuedUpdate({ nextAuthProfileId: "openai:work", nextAuthProfileIdSource: "auto" });
   });
 
   it("preserves a mixed alias named list as a model selection", async () => {
@@ -338,14 +336,13 @@ describe("mixed inline directives", () => {
     };
     const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider: "openai" });
     const directives = await routeDirectives(body, cfg);
-    const { result, sessionEntry } = await applyMixedDirectives({
+    const { result, sessionEntry } = await applyLunaDirectives({
       body,
       cfg,
       directives,
       modelAliases: ["list"],
       aliasIndex,
       senderIsOwner: true,
-      allowedModels: [{ provider: "openai", id: "gpt-5.6-luna", name: "GPT-5.6-Luna" }],
     });
 
     expect(directives).toMatchObject({
@@ -354,11 +351,7 @@ describe("mixed inline directives", () => {
       modelDirectiveSource: "alias",
       rawModelDirective: "list",
     });
-    expect(result).toMatchObject({
-      kind: "continue",
-      provider: "openai",
-      model: "gpt-5.6-luna",
-    });
+    expect(result).toMatchObject(continuedLuna);
     expect(sessionEntry).toMatchObject({
       providerOverride: "openai",
       modelOverride: "gpt-5.6-luna",
@@ -368,10 +361,9 @@ describe("mixed inline directives", () => {
 
   it("reports immutable config for a mixed agent-default selection", async () => {
     vi.mocked(persistStickyModelSelectionBestEffort).mockReturnValueOnce("skipped-immutable");
-    const { result } = await applyMixedDirectives({
+    const { result } = await applyLunaDirectives({
       body: "please reply /model openai/gpt-5.6-luna -a",
       senderIsOwner: true,
-      allowedModels: [{ provider: "openai", id: "gpt-5.6-luna", name: "GPT-5.6-Luna" }],
     });
     expect(result).toMatchObject({
       kind: "continue",
@@ -385,16 +377,13 @@ describe("mixed inline directives", () => {
     const provider = "anthropic";
     const model = "claude-opus-4-6";
     await prepareSharedAuthStoreOwnership();
-    const authPin = {
-      authProfileOverride: "openai:work",
-      authProfileOverrideSource: "user" as const,
-      authProfileOverrideCompactionCount: 2,
-    };
     const sessionEntry = createSessionEntry({
       providerOverride: "openai",
       modelOverride: "gpt-5.6-sol",
       modelOverrideSource: "user",
-      ...authPin,
+      authProfileOverride: "openai:work",
+      authProfileOverrideSource: "user",
+      authProfileOverrideCompactionCount: 2,
     });
     const { result } = await applyMixedDirectives({
       cfg: { agents: { defaults: { model: `${provider}/${model}` } } },
@@ -420,23 +409,43 @@ describe("mixed inline directives", () => {
     expect(sessionEntry.authProfileOverride).toBeUndefined();
     expect(sessionEntry.authProfileOverrideSource).toBeUndefined();
     expect(sessionEntry.authProfileOverrideCompactionCount).toBeUndefined();
-    expect(refreshQueuedFollowupSession).toHaveBeenCalledWith(
-      expect.objectContaining({ nextModelOverrideSource: undefined }),
-    );
+    expectQueuedUpdate({ nextModelOverrideSource: undefined });
     expect(persistStickyModelSelectionBestEffort).not.toHaveBeenCalled();
   });
 
-  it("keeps mixed queue options on the current message", async () => {
-    const { result, sessionEntry } = await applyMixedDirectives({
+  it.each([
+    {
+      name: "queue options",
       body: "please reply\n/queue collect debounce:1500 cap:4 drop:old",
+      expected: {
+        perMessageQueueMode: "collect",
+        perMessageQueueOptions: { debounceMs: 1500, cap: 4, dropPolicy: "old" },
+      },
+    },
+    {
+      name: "valid turn hints alongside an invalid exec option",
+      body: "please reply\n/exec host=node security=bogus\n/reasoning on",
+      expected: {
+        directives: { reasoningLevel: "on" },
+        directiveAck: { text: expect.stringContaining('Unrecognized exec security "bogus"') },
+      },
+    },
+    {
+      name: "turn hints alongside informational and unauthorized siblings",
+      body: "please reply\n/trace raw\n/verbose nonsense\n/reasoning on",
+      gatewayClientScopes: [],
+      expected: {
+        directives: { reasoningLevel: "on" },
+        directiveAck: { text: expect.stringContaining("/trace is restricted to owners") },
+      },
+    },
+  ])("keeps $name on the current message", async ({ body, expected, gatewayClientScopes }) => {
+    const { result, sessionEntry } = await applyMixedDirectives({
+      body,
       storePath: "/tmp/sessions.json",
+      gatewayClientScopes,
     });
-
-    expect(result).toMatchObject({
-      kind: "continue",
-      perMessageQueueMode: "collect",
-      perMessageQueueOptions: { debounceMs: 1500, cap: 4, dropPolicy: "old" },
-    });
+    expect(result).toMatchObject({ kind: "continue", ...expected });
     expect(sessionEntry).toEqual(createSessionEntry());
     expect(persistenceMocks.persist).not.toHaveBeenCalled();
   });
@@ -498,38 +507,6 @@ describe("mixed inline directives", () => {
     expect(sessionEntry).toEqual(createSessionEntry());
     expect(persistenceMocks.persist).not.toHaveBeenCalled();
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
-  });
-
-  it("keeps valid turn hints when a sibling exec option is invalid", async () => {
-    const { result, sessionEntry } = await applyMixedDirectives({
-      body: "please reply\n/exec host=node security=bogus\n/reasoning on",
-      storePath: "/tmp/sessions.json",
-    });
-
-    expect(result).toMatchObject({
-      kind: "continue",
-      directives: { reasoningLevel: "on" },
-      directiveAck: { text: expect.stringContaining('Unrecognized exec security "bogus"') },
-    });
-    expect(sessionEntry).toEqual(createSessionEntry());
-    expect(persistenceMocks.persist).not.toHaveBeenCalled();
-  });
-
-  it("keeps informational and unauthorized siblings from persisting turn hints", async () => {
-    const { result, sessionEntry } = await applyMixedDirectives({
-      body: "please reply\n/trace raw\n/verbose nonsense\n/reasoning on",
-      storePath: "/tmp/sessions.json",
-      gatewayClientScopes: [],
-    });
-
-    expect(result).toMatchObject({
-      kind: "continue",
-      directives: { reasoningLevel: "on" },
-      directiveAck: { text: expect.stringContaining("/trace is restricted to owners") },
-    });
-    expect(sessionEntry.reasoningLevel).toBeUndefined();
-    expect(sessionEntry.traceLevel).toBeUndefined();
-    expect(persistenceMocks.persist).not.toHaveBeenCalled();
   });
 
   it("rejects operator-denied directives without session or provider effects", async () => {
@@ -598,11 +575,10 @@ describe("mixed inline directives", () => {
   ] as const)(
     "resolves scope=$scope flag=$flag owner=$owner without widening authority",
     async ({ prefix, scope, flag, owner, target }) => {
-      const { result, sessionEntry } = await applyMixedDirectives({
+      const { result, sessionEntry } = await applyLunaDirectives({
         body: `${prefix}/model openai/gpt-5.6-luna${flag}`,
         cfg: { agents: { defaults: { modelSelectionScope: scope } } },
         senderIsOwner: owner,
-        allowedModels: [{ provider: "openai", id: "gpt-5.6-luna", name: "GPT-5.6-Luna" }],
       });
       expect(sessionEntry).toMatchObject({
         providerOverride: "openai",

@@ -51,6 +51,46 @@ function expectNotCalled(...mocks: ReturnType<typeof vi.fn>[]) {
   }
 }
 
+function enqueue(key: string, run: FollowupRun, followup: SteerParams["runFollowup"]) {
+  return enqueueFollowupRun(
+    key,
+    run,
+    { mode: "followup", debounceMs: 0 },
+    "message-id",
+    followup,
+    false,
+  );
+}
+
+function fifoProbe(first: FollowupRun) {
+  const firstEntered = createDeferred();
+  const secondEntered = createDeferred();
+  const releaseFirst = createDeferred();
+  const followup = vi.fn(async (run: FollowupRun) => {
+    if (run.messageId === first.messageId) {
+      firstEntered.resolve();
+      await releaseFirst.promise;
+    } else {
+      secondEntered.resolve();
+    }
+  });
+  return { firstEntered, secondEntered, releaseFirst, followup };
+}
+
+async function expectFifo(
+  probe: ReturnType<typeof fifoProbe>,
+  first: string,
+  second: string,
+  signal: AbortSignal,
+) {
+  await withinTest(probe.firstEntered.promise, signal);
+  expect(probe.followup).toHaveBeenCalledOnce();
+  expect(probe.followup.mock.calls[0]?.[0].prompt).toBe(first);
+  probe.releaseFirst.resolve();
+  await withinTest(probe.secondEntered.promise, signal);
+  expect(probe.followup.mock.calls.map(([run]) => run.prompt)).toEqual([first, second]);
+}
+
 function startSteer(
   key: string,
   run: FollowupRun,
@@ -71,17 +111,8 @@ describe("question response custody through reply adoption", () => {
   it("leaves unmatched hidden-run input in visible FIFO followups", async ({ signal }) => {
     const key = "agent:main:hidden-followup";
     const first = createQueueTestRun({ prompt: "first input", messageId: "hidden-first" });
-    const firstEntered = createDeferred();
-    const secondEntered = createDeferred();
-    const releaseFirst = createDeferred();
-    const followup = vi.fn(async (run: FollowupRun) => {
-      if (run.messageId === first.messageId) {
-        firstEntered.resolve();
-        await releaseFirst.promise;
-      } else {
-        secondEntered.resolve();
-      }
-    });
+    const probe = fifoProbe(first);
+    const { followup, releaseFirst } = probe;
     try {
       await withQuestionCreator(key, first, async (operation, fingerprint) => {
         const queueMessage = vi.fn(async () => {});
@@ -114,15 +145,7 @@ describe("question response custody through reply adoption", () => {
         operation.complete();
       });
       // The creator callback retains real execution custody until it returns.
-      await withinTest(firstEntered.promise, signal);
-      expect(followup).toHaveBeenCalledOnce();
-      expect(followup.mock.calls[0]?.[0].prompt).toBe("first input");
-      releaseFirst.resolve();
-      await withinTest(secondEntered.promise, signal);
-      expect(followup.mock.calls.map(([run]) => run.prompt)).toEqual([
-        "first input",
-        "second input",
-      ]);
+      await expectFifo(probe, "first input", "second input", signal);
     } finally {
       releaseFirst.resolve();
       await Promise.allSettled(followup.mock.results.map((result) => result.value));
@@ -186,13 +209,13 @@ describe("question response custody through reply adoption", () => {
         expectNotCalled(adopted, firstAdopted, firstAbandoned);
         expect(queueMessage.mock.calls.map(([message]) => message)).toEqual(["first input"]);
         expect(
-          enqueueFollowupRun(
+          enqueue(
             key,
-            createQueueTestRun({ prompt: "waiting input", messageId: second.messageId }),
-            { mode: "followup", debounceMs: 0 },
-            "message-id",
+            createQueueTestRun({
+              prompt: "waiting input",
+              messageId: second.messageId,
+            }),
             followup,
-            false,
           ),
         ).toBe(true);
       } finally {
@@ -237,16 +260,13 @@ describe("question response custody through reply adoption", () => {
         const adoption = startSteer(key, run, operation, followup, state);
         void adoption.catch(() => undefined);
         const tryDuplicate = () =>
-          enqueueFollowupRun(
+          enqueue(
             key,
             {
               ...createQueueTestRun({ prompt: text, messageId: run.messageId }),
               run: { ...run.run },
             },
-            { mode: "followup", debounceMs: 0 },
-            "message-id",
             followup,
-            false,
           );
         try {
           await awaitGateBeforeSettlement(
@@ -268,16 +288,7 @@ describe("question response custody through reply adoption", () => {
           sibling.run = { ...run.run };
           sibling.abortSignal = siblingSource.signal;
           sibling.turnAdoptionLifecycle = { onAdopted: async () => {}, onSettled: siblingSettled };
-          expect(
-            enqueueFollowupRun(
-              key,
-              sibling,
-              { mode: "followup", debounceMs: 0 },
-              "message-id",
-              siblingCleanup,
-              false,
-            ),
-          ).toBe(true);
+          expect(enqueue(key, sibling, siblingCleanup)).toBe(true);
           // An ordinary source's sweep must also respect the parked injection owner.
           siblingSource.abort();
           await captureSessionControllerSourceSettlement(sibling.controllerInput!);
@@ -528,17 +539,8 @@ describe("question response custody through reply adoption", () => {
     const key = "agent:main:question-v1-fallback";
     const id = "ask_v1_fallback";
     const first = createQueueTestRun({ prompt: text, messageId: "v1-first" });
-    const firstEntered = createDeferred();
-    const secondEntered = createDeferred();
-    const releaseFirst = createDeferred();
-    const followup = vi.fn(async (run: FollowupRun) => {
-      if (run.messageId === first.messageId) {
-        firstEntered.resolve();
-        await releaseFirst.promise;
-      } else {
-        secondEntered.resolve();
-      }
-    });
+    const probe = fifoProbe(first);
+    const { followup, releaseFirst } = probe;
     await withQuestionGateway(async (fixture) => {
       let claim: ReturnType<typeof registerPendingAgentQuestion> | undefined;
       let answerOutcome: Promise<unknown> | undefined;
@@ -609,12 +611,7 @@ describe("question response custody through reply adoption", () => {
           await expectPendingQuestionAnswerClaimable(key, true);
           operation.complete();
         });
-        await withinTest(firstEntered.promise, signal);
-        expect(followup).toHaveBeenCalledOnce();
-        expect(followup.mock.calls[0]?.[0].prompt).toBe(text);
-        releaseFirst.resolve();
-        await withinTest(secondEntered.promise, signal);
-        expect(followup.mock.calls.map(([run]) => run.prompt)).toEqual([text, "next input"]);
+        await expectFifo(probe, text, "next input", signal);
         expect(fixture.manager.get(id)?.status).toBe("pending");
       } finally {
         releaseFirst.resolve();
