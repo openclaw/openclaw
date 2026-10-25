@@ -2,12 +2,6 @@ import { oversizedJsonResponse } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { detectZaiEndpoint, type ZaiEndpointId } from "./detect.js";
 
-type FetchResponse = {
-  status: number;
-  body?: unknown;
-  bytes?: Uint8Array;
-};
-
 const ZAI_DETECT_ERROR_BODY_MAX_BYTES = 16 * 1024 * 1024;
 const urls = {
   global: "https://api.z.ai/api/paas/v4/chat/completions",
@@ -17,6 +11,8 @@ const urls = {
 };
 const detect = (params: Omit<Parameters<typeof detectZaiEndpoint>[0], "apiKey">) =>
   detectZaiEndpoint({ apiKey: "sk-test", ...params }); // pragma: allowlist secret
+const errorResponse = (body: UnderlyingDefaultSource<Uint8Array>) =>
+  new Response(new ReadableStream(body), { status: 400 });
 
 async function expectBodyDeadline(
   body: UnderlyingDefaultSource<Uint8Array>,
@@ -28,16 +24,13 @@ async function expectBodyDeadline(
     timeoutMs: 80,
     fetchFn: async (url) => {
       expect(url).toBe(urls.global);
-      return new Response(
-        new ReadableStream({
-          ...body,
-          cancel(reason) {
-            state.cancelled = true;
-            return body.cancel?.(reason);
-          },
-        }),
-        { status: 400 },
-      );
+      return errorResponse({
+        ...body,
+        cancel(reason) {
+          state.cancelled = true;
+          return body.cancel?.(reason);
+        },
+      });
     },
   }).then((value) => {
     state.settled = true;
@@ -53,18 +46,22 @@ async function expectBodyDeadline(
   expect(await result).toBeNull();
 }
 
-function makeFetch(map: Record<string, FetchResponse>, calls?: string[]) {
+type Reply = [ZaiEndpointId, string, number, unknown?];
+function makeFetch(replies: Reply[], calls?: string[]) {
   return (async (url: string, init?: RequestInit) => {
     const rawBody = typeof init?.body === "string" ? JSON.parse(init.body) : null;
     calls?.push(String(rawBody?.model ?? ""));
-    const entry = map[`${url}::${rawBody?.model ?? ""}`] ?? map[url];
+    const entry = replies.find(
+      ([endpoint, model]) => urls[endpoint] === url && model === rawBody?.model,
+    );
     if (!entry) {
       throw new Error(`unexpected url: ${url} model=${String(rawBody?.model ?? "")}`);
     }
     // Copy byte fixtures into an ArrayBuffer-backed view accepted by BodyInit.
-    const body = entry.bytes ? new Uint8Array(entry.bytes) : JSON.stringify(entry.body ?? {});
+    const body =
+      entry[3] instanceof Uint8Array ? new Uint8Array(entry[3]) : JSON.stringify(entry[3] ?? {});
     return new Response(body, {
-      status: entry.status,
+      status: entry[2],
       headers: { "content-type": "application/json" },
     });
   }) as typeof fetch;
@@ -76,7 +73,6 @@ describe("detectZaiEndpoint", () => {
   });
 
   it("resolves preferred/fallback endpoints and null when probes fail", async () => {
-    type Reply = [ZaiEndpointId, string, number, unknown?];
     async function check(
       endpoint: ZaiEndpointId | undefined,
       expected: [ZaiEndpointId, string] | null,
@@ -84,14 +80,7 @@ describe("detectZaiEndpoint", () => {
     ) {
       const detected = await detect({
         endpoint,
-        fetchFn: makeFetch(
-          Object.fromEntries(
-            responses.map(([replyEndpoint, model, status, body]) => [
-              `${urls[replyEndpoint]}::${model}`,
-              { status, body },
-            ]),
-          ),
-        ),
+        fetchFn: makeFetch(responses),
       });
 
       if (expected === null) {
@@ -112,12 +101,7 @@ describe("detectZaiEndpoint", () => {
     await check(
       "coding-global",
       ["coding-global", "glm-4.7"],
-      [
-        "coding-global",
-        "glm-5.3",
-        400,
-        { code: 1311, msg: "model not included in the current plan" },
-      ],
+      ["coding-global", "glm-5.3", 400, { code: 1311 }],
       ["coding-global", "glm-5.1", 400, { code: 1211, msg: "model does not exist" }],
       ["coding-global", "glm-4.7", 200],
     );
@@ -151,7 +135,6 @@ describe("detectZaiEndpoint", () => {
   });
 
   it("rejects sub-cap error bodies that are not valid UTF-8 instead of classifying substituted text", async () => {
-    const codingGlobal = "https://api.z.ai/api/coding/paas/v4/chat/completions";
     // Invalid UTF-8 must not turn into a trusted error code via replacement characters.
     const corrupt = new TextEncoder().encode('{"code":1211,"msg":"x\u{1F99E}"}');
     const lobsterStart = corrupt.indexOf(0xf0);
@@ -163,11 +146,11 @@ describe("detectZaiEndpoint", () => {
     const detected = await detect({
       endpoint: "coding-global",
       fetchFn: makeFetch(
-        {
-          [`${codingGlobal}::glm-5.3`]: { status: 400, bytes: corrupt },
-          [`${codingGlobal}::glm-5.1`]: { status: 400, bytes: corrupt },
-          [`${codingGlobal}::glm-4.7`]: { status: 200, bytes: new TextEncoder().encode("{}") },
-        },
+        [
+          ["coding-global", "glm-5.3", 400, corrupt],
+          ["coding-global", "glm-5.1", 400, corrupt],
+          ["coding-global", "glm-4.7", 200],
+        ],
         calls,
       ),
     });
@@ -209,20 +192,17 @@ describe("detectZaiEndpoint", () => {
           if (calls > 1) {
             return new Response("{}", { status: 200 });
           }
-          return new Response(
-            new ReadableStream<Uint8Array>({
-              start(controller) {
-                timer = setTimeout(() => {
-                  controller.enqueue(new TextEncoder().encode('{"error":{"code":"1211"}}'));
-                  controller.close();
-                }, scenario.bodyDelayMs);
-              },
-              cancel() {
-                clearTimeout(timer);
-              },
-            }),
-            { status: 400 },
-          );
+          return errorResponse({
+            start(controller) {
+              timer = setTimeout(() => {
+                controller.enqueue(new TextEncoder().encode('{"error":{"code":"1211"}}'));
+                controller.close();
+              }, scenario.bodyDelayMs);
+            },
+            cancel() {
+              clearTimeout(timer);
+            },
+          });
         },
       });
 

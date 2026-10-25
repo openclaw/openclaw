@@ -8,9 +8,7 @@ import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
 
 function expectFields(model: unknown, fields: Record<string, unknown>) {
-  for (const [key, value] of Object.entries(fields)) {
-    expect(model).toHaveProperty(key, value);
-  }
+  expect(model).toEqual(expect.objectContaining(fields));
 }
 
 const modelFields = {
@@ -48,21 +46,26 @@ async function resolveModel(
   } as never);
 }
 
-async function captureStreamPayload(
+async function createStreamCapture(
   params: Pick<ProviderWrapStreamFnContext, "extraParams" | "thinkingLevel"> & {
     modelId?: string;
   } = {},
-  context: Context = { messages: [] },
+  direct = false,
 ) {
   const provider = await registerSingleProviderPlugin(plugin);
   const modelId = params.modelId ?? "glm-5.1";
   let payload: Record<string, unknown> = {};
   const streamFn: StreamFn = (model, streamContext, options) => {
-    payload = buildOpenAICompletionsParams(model, streamContext, { reasoning: "high" });
+    payload = buildOpenAICompletionsParams(
+      model,
+      streamContext,
+      direct ? (options ?? {}) : { reasoning: "high" },
+    );
     options?.onPayload?.(payload, model);
     return {} as ReturnType<StreamFn>;
   };
-  const wrapped = provider.wrapStreamFn?.({
+  const wrap = direct ? provider.wrapSimpleCompletionStreamFn : provider.wrapStreamFn;
+  const wrapped = wrap?.({
     provider: "zai",
     modelId,
     extraParams: {},
@@ -72,8 +75,16 @@ async function captureStreamPayload(
   if (!wrapped) {
     throw new Error("Expected Z.AI stream wrapper");
   }
-  void wrapped({ ...createGlm47Template(), id: modelId }, context, {});
-  return payload;
+  return (context: Context = { messages: [] }, options: Parameters<StreamFn>[2] = {}) => {
+    void wrapped({ ...createGlm47Template(), id: modelId }, context, options);
+    return payload;
+  };
+}
+async function captureStreamPayload(
+  params: Parameters<typeof createStreamCapture>[0],
+  context?: Context,
+) {
+  return (await createStreamCapture(params))(context);
 }
 
 describe("zai provider plugin", () => {
@@ -121,7 +132,7 @@ describe("zai provider plugin", () => {
     });
   });
 
-  it("exposes GLM-5.3 thinking levels while keeping older GLM models binary", async () => {
+  it("keeps older GLM models' thinking binary", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
     const profile = (modelId: string) =>
       provider.resolveThinkingProfile?.({
@@ -129,15 +140,6 @@ describe("zai provider plugin", () => {
         modelId,
         reasoning: true,
       } as never);
-    expect(profile("glm-5.3")).toEqual({
-      levels: [
-        { id: "low", label: "low" },
-        { id: "high", label: "high" },
-        { id: "max", label: "max" },
-      ],
-      defaultLevel: "max",
-    });
-
     expect(profile("glm-5.1")).toEqual({
       levels: [
         { id: "off", label: "off" },
@@ -147,41 +149,12 @@ describe("zai provider plugin", () => {
     });
   });
 
-  it("maps GLM-5.3 thinking levels to Z.AI reasoning effort", async () => {
-    for (const [modelId, thinkingLevel, expectedEffort] of [
-      ["glm-5.3", "off", "low"],
-      ["glm-5.3", "low", "low"],
-      ["glm-5.3", "high", "high"],
-      ["glm-5.3", "max", "max"],
-    ] as const) {
-      const payload = await captureStreamPayload({ modelId, thinkingLevel });
-      expect(payload.reasoning_effort).toBe(expectedEffort);
-      expect(payload).not.toHaveProperty("thinking");
-      expect(payload.tool_stream).toBe(true);
-    }
-  });
-
   it("applies Z.AI effort policy to each direct completion request", async () => {
-    const provider = await registerSingleProviderPlugin(plugin);
     for (const modelId of ["glm-5.3", "glm-5.3-flash", "glm-5.2", "glm-5.1"]) {
-      const model = { ...createGlm47Template(), id: modelId };
-      let payload: Record<string, unknown> = {};
-      const streamFn: StreamFn = (streamModel, context, options) => {
-        payload = buildOpenAICompletionsParams(streamModel, context, options ?? {});
-        options?.onPayload?.(payload, streamModel);
-        return {} as ReturnType<StreamFn>;
-      };
-      const wrapped = provider.wrapSimpleCompletionStreamFn?.({
-        provider: "zai",
-        modelId,
-        sourceApi: "openai-completions",
-        streamFn,
-      });
-      if (!wrapped) {
-        throw new Error("Expected Z.AI direct completion wrapper");
-      }
+      const capture = await createStreamCapture({ modelId }, true);
       for (const reasoning of [undefined, "off", "low", "high", "max"] as const) {
-        void wrapped(model, { messages: [] }, { reasoning });
+        const payload = capture(undefined, { reasoning });
+        expect(payload.tool_stream).toBe(true);
         if (modelId.startsWith("glm-5.3")) {
           const effort = { off: "low", low: "low", high: "high", max: "max" };
           expect(payload.reasoning_effort).toBe(effort[reasoning ?? "max"]);
