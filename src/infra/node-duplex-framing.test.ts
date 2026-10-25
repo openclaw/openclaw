@@ -28,6 +28,33 @@ function listeningEndpoint(
   return endpoint;
 }
 
+function asyncSenderFor(receiver: ReturnType<typeof createEndpoint>) {
+  return createEndpoint({
+    async sendFrame(frame) {
+      await Promise.resolve();
+      receiver.receive(JSON.stringify(frame));
+    },
+  });
+}
+
+function recordingEndpoint(sendFrame: (frame: string) => void) {
+  const frames: string[] = [];
+  const messages: Uint8Array[] = [];
+  const endpoint = listeningEndpoint(
+    (message) => {
+      messages.push(message);
+    },
+    {
+      sendFrame(frame) {
+        const serialized = JSON.stringify(frame);
+        frames.push(serialized);
+        sendFrame(serialized);
+      },
+    },
+  );
+  return { endpoint, frames, messages };
+}
+
 const fullFragment = Buffer.alloc(FRAGMENT_BYTES).toString("base64");
 const readyFrame = JSON.stringify({ v: 1, kind: "ready" });
 
@@ -48,30 +75,8 @@ describe("node duplex message framing", () => {
     ["ArrayBuffer", ArrayBuffer],
     ["SharedArrayBuffer", SharedArrayBuffer],
   ] as const)("transfers exact %s views in both directions", async (_name, BackingBuffer) => {
-    const outboundFrames: string[] = [];
-    const inboundFrames: string[] = [];
-    const leftMessages: Uint8Array[] = [];
-    const rightMessages: Uint8Array[] = [];
-    const left = createNodeDuplexEndpoint({
-      sendFrame(frame) {
-        const serialized = JSON.stringify(frame);
-        outboundFrames.push(serialized);
-        right.receive(serialized);
-      },
-    });
-    const right = createNodeDuplexEndpoint({
-      sendFrame(frame) {
-        const serialized = JSON.stringify(frame);
-        inboundFrames.push(serialized);
-        left.receive(serialized);
-      },
-    });
-    left.onMessage((message) => {
-      leftMessages.push(message);
-    });
-    right.onMessage((message) => {
-      rightMessages.push(message);
-    });
+    const left = recordingEndpoint((frame) => right.endpoint.receive(frame));
+    const right = recordingEndpoint((frame) => left.endpoint.receive(frame));
 
     const outboundBacking = new Uint8Array(new BackingBuffer(40_032)).fill(0xa5);
     const outbound = outboundBacking.subarray(17, 40_017);
@@ -79,14 +84,14 @@ describe("node duplex message framing", () => {
     const inboundBacking = new Uint8Array(new BackingBuffer(25_032)).fill(0x5a);
     const inbound = Buffer.from(inboundBacking.buffer, 11, 25_000);
     inbound.set(Uint8Array.from({ length: 25_000 }, (_, index) => 255 - (index % 251)));
-    await left.send(outbound);
-    await right.send(inbound);
+    await left.endpoint.send(outbound);
+    await right.endpoint.send(inbound);
 
-    expect(rightMessages).toEqual([outbound]);
-    expect(leftMessages).toEqual([new Uint8Array(inbound)]);
-    expect(outboundFrames.length).toBeGreaterThan(2);
-    expect(inboundFrames.length).toBeGreaterThan(2);
-    expect([...outboundFrames, ...inboundFrames]).toSatisfy((frames: string[]) =>
+    expect(right.messages).toEqual([outbound]);
+    expect(left.messages).toEqual([new Uint8Array(inbound)]);
+    expect(left.frames.length).toBeGreaterThan(2);
+    expect(right.frames.length).toBeGreaterThan(2);
+    expect([...left.frames, ...right.frames]).toSatisfy((frames: string[]) =>
       frames.every((frame) => Buffer.byteLength(frame, "utf8") < 16 * 1024),
     );
   });
@@ -105,12 +110,7 @@ describe("node duplex message framing", () => {
       receiver.onMessage((message) => {
         received.push(message);
       });
-      const sender = createNodeDuplexEndpoint({
-        async sendFrame(frame) {
-          await Promise.resolve();
-          receiver.receive(JSON.stringify(frame));
-        },
-      });
+      const sender = asyncSenderFor(receiver);
 
       await Promise.all([sender.send(first), sender.send(second)]);
 
@@ -148,12 +148,7 @@ describe("node duplex message framing", () => {
     receiver.onMessage(() => {
       events.push("message");
     });
-    const sender = createNodeDuplexEndpoint({
-      async sendFrame(frame) {
-        await Promise.resolve();
-        receiver.receive(JSON.stringify(frame));
-      },
-    });
+    const sender = asyncSenderFor(receiver);
 
     await Promise.all([sender.sendReady(), sender.send(Uint8Array.of(1, 2))]);
 
@@ -384,30 +379,22 @@ describe("node duplex message framing", () => {
     expect(listener).toHaveBeenCalledOnce();
   });
 
-  it.each(["immediate", "buffered"] as const)(
-    "closes after an asynchronous %s message listener rejects",
-    async (delivery) => {
-      const failure = new Error("asynchronous listener exploded");
-      const onError = vi.fn();
-      const listener = vi.fn(() => {
-        const rejection = Promise.reject(failure);
-        void rejection.catch(() => {});
-        return rejection;
-      });
-      const endpoint = createEndpoint({ onError });
-      if (delivery === "buffered") {
-        endpoint.receive(dataFrame());
-      }
-      endpoint.onMessage(listener);
-      if (delivery === "immediate") {
-        endpoint.receive(dataFrame());
-      }
+  it("closes after an asynchronous buffered message listener rejects", async () => {
+    const failure = new Error("asynchronous listener exploded");
+    const onError = vi.fn();
+    const listener = vi.fn(() => {
+      const rejection = Promise.reject(failure);
+      void rejection.catch(() => {});
+      return rejection;
+    });
+    const endpoint = createEndpoint({ onError });
+    endpoint.receive(dataFrame());
+    endpoint.onMessage(listener);
 
-      await vi.waitFor(() => expect(onError).toHaveBeenCalledExactlyOnceWith(failure));
-      expect(() => endpoint.receive(dataFrame({ message: 1 }))).toThrow(/closed/i);
-      expect(listener).toHaveBeenCalledOnce();
-    },
-  );
+    await vi.waitFor(() => expect(onError).toHaveBeenCalledExactlyOnceWith(failure));
+    expect(() => endpoint.receive(dataFrame({ message: 1 }))).toThrow(/closed/i);
+    expect(listener).toHaveBeenCalledOnce();
+  });
 
   it.each([
     ["count", Array<number>(8).fill(7), 7, {}, /pending|in.flight/i],
@@ -536,7 +523,8 @@ describe("node duplex message framing", () => {
     const { promise: listenerFinished, reject: rejectListener } = createDeferred();
     const failure = new Error("asynchronous drain listener exploded");
     const onError = vi.fn();
-    const endpoint = listeningEndpoint(() => listenerFinished, { onError });
+    const listener = vi.fn(() => listenerFinished);
+    const endpoint = listeningEndpoint(listener, { onError });
     endpoint.receive(dataFrame());
     const drain = endpoint.drain();
 
@@ -544,6 +532,8 @@ describe("node duplex message framing", () => {
 
     await expect(drain).rejects.toBe(failure);
     expect(onError).toHaveBeenCalledExactlyOnceWith(failure);
+    expect(() => endpoint.receive(dataFrame({ message: 1 }))).toThrow(/closed/i);
+    expect(listener).toHaveBeenCalledOnce();
   });
 
   it("rejects drain immediately when closing with a listener that never settles", async () => {

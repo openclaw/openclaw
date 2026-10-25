@@ -48,6 +48,22 @@ const retainedBytes = 4 * 1024 * 1024;
 type NativeHeap = Awaited<ReturnType<Worker["getHeapStatistics"]>>;
 type Lifecycle = ReturnType<typeof getTrackedWorkerLifecycleSnapshot>;
 
+function registerWorker(threadId: number, script: string) {
+  const worker = Object.assign(new EventEmitter(), {
+    threadId,
+    cpuUsage: async () => ({ user: 0, system: 0 }),
+    getHeapStatistics: async () => getHeapStatistics(),
+  });
+  trackNativeWorkerForCpu(worker, new URL(script, import.meta.url));
+  return worker;
+}
+
+async function sampledMemory() {
+  sampleTrackedWorkerMemory();
+  await Promise.resolve();
+  return sampleTrackedWorkerMemory();
+}
+
 async function createWorker(filename: string | URL = idleSource) {
   const worker = createCpuTrackedWorker(filename, { eval: typeof filename === "string" });
   workers.push(worker);
@@ -87,15 +103,7 @@ const retiredCount = (snapshot: Lifecycle, script: string, reason: string) =>
 describe("worker CPU lifecycle", () => {
   it("retains task heap and GC totals across worker retirement without retaining worker ids", async () => {
     const register = (id: number) => {
-      const worker = Object.assign(new EventEmitter(), {
-        threadId: id,
-        cpuUsage: async () => ({ user: 0, system: 0 }),
-        getHeapStatistics: async () => getHeapStatistics(),
-      });
-      trackNativeWorkerForCpu(
-        worker,
-        new URL("./provider-prompt-state.worker.ts", import.meta.url),
-      );
+      const worker = registerWorker(id, "./provider-prompt-state.worker.ts");
       attributeWorkerToPool(worker, {}, "compute");
       return worker;
     };
@@ -185,49 +193,30 @@ describe("worker CPU lifecycle", () => {
   });
 
   it("keeps Code Mode slots until native exit and bounds them across worker churn", async () => {
-    const handles: (EventEmitter & {
-      threadId: number;
-      cpuUsage: Worker["cpuUsage"];
-      getHeapStatistics: Worker["getHeapStatistics"];
-    })[] = [];
+    const handles: ReturnType<typeof registerWorker>[] = [];
     const register = () => {
-      const worker = Object.assign(new EventEmitter(), {
-        threadId: handles.length + 1000,
-        cpuUsage: async () => ({ user: 0, system: 0 }),
-        getHeapStatistics: async () => getHeapStatistics(),
-      });
+      const worker = registerWorker(handles.length + 1000, "../agents/code-mode-node.worker.ts");
       handles.push(worker);
-      trackNativeWorkerForCpu(
-        worker,
-        new URL("../agents/code-mode-node.worker.ts", import.meta.url),
-      );
       return worker;
     };
     try {
       for (let index = 0; index < 65; index++) {
         register();
       }
-      sampleTrackedWorkerMemory();
-      await Promise.resolve();
-      const initial = sampleTrackedWorkerMemory().workerHeaps;
+      const initial = (await sampledMemory()).workerHeaps;
       expect(initial.map((worker) => worker.workerSlot)).toEqual([
         ...Array.from({ length: 64 }, (_, index) => index + 1),
         undefined,
       ]);
       markWorkerRetirement(handles[0]!, "idle_timeout");
       const retiring = register();
-      sampleTrackedWorkerMemory();
-      await Promise.resolve();
       expect(
-        sampleTrackedWorkerMemory().workerHeaps.find(
-          (worker) => worker.threadId === retiring.threadId,
-        )?.workerSlot,
+        (await sampledMemory()).workerHeaps.find((worker) => worker.threadId === retiring.threadId)
+          ?.workerSlot,
       ).toBeUndefined();
       handles[0]!.emit("exit");
       const replacement = register();
-      sampleTrackedWorkerMemory();
-      await Promise.resolve();
-      const live = sampleTrackedWorkerMemory().workerHeaps;
+      const live = (await sampledMemory()).workerHeaps;
       expect(live.find((worker) => worker.threadId === replacement.threadId)?.workerSlot).toBe(1);
       expect(live.find((worker) => worker.threadId === handles[1]!.threadId)?.workerSlot).toBe(2);
     } finally {
@@ -430,9 +419,7 @@ describe("worker CPU lifecycle", () => {
       .spyOn(worker, "getHeapStatistics")
       .mockResolvedValueOnce(native)
       .mockReturnValue(stalled.promise);
-    sampleTrackedWorkerMemory();
-    await Promise.resolve();
-    expect(sampleTrackedWorkerMemory().workerHeaps).toEqual([
+    expect((await sampledMemory()).workerHeaps).toEqual([
       expect.objectContaining({
         script: "other",
         heapUsed: native.used_heap_size,

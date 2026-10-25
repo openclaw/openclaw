@@ -75,16 +75,17 @@ describe("async login-shell PATH preparation", () => {
       child = Object.assign(new ChildProcess(), { stdin: null, stdout, stderr, stdio, kill });
       return child;
     });
-    const sync = vi.fn<typeof childProcess.execFileSync>(() => {
-      throw new Error("unexpected synchronous probe");
-    });
-    vi.doMock("node:child_process", () => ({ ...childProcess, spawn: exec, execFileSync: sync }));
+    vi.doMock("node:child_process", () => ({
+      ...childProcess,
+      spawn: exec,
+      execFileSync: syncExec,
+    }));
     vi.resetModules();
     ({ prepareShellPathFromLoginShell, getShellPathFromLoginShell } =
       await import("./shell-env.js"));
     return {
       exec,
-      sync,
+      sync: syncExec,
       kill,
       get child() {
         return child;
@@ -294,25 +295,12 @@ describe("shell env fallback", () => {
     });
   }
 
-  function makeUnsafeStartupEnv(): NodeJS.ProcessEnv {
-    return {
-      SHELL: "/bin/bash",
-      HOME: "/tmp/evil-home",
-      ZDOTDIR: "/tmp/evil-zdotdir",
-      BASH_ENV: "/tmp/evil-bash-env",
-      PS4: "$(touch /tmp/pwned)",
-    };
-  }
-
   function expectSanitizedStartupEnv(receivedEnv: NodeJS.ProcessEnv | undefined) {
-    if (receivedEnv === undefined) {
-      throw new Error("expected sanitized startup env");
+    expect(receivedEnv).toBeDefined();
+    for (const key of ["BASH_ENV", "PS4", "ZDOTDIR", "SHELL"]) {
+      expect(receivedEnv?.[key]).toBeUndefined();
     }
-    expect(receivedEnv.BASH_ENV).toBeUndefined();
-    expect(receivedEnv.PS4).toBeUndefined();
-    expect(receivedEnv.ZDOTDIR).toBeUndefined();
-    expect(receivedEnv.SHELL).toBeUndefined();
-    expect(receivedEnv.HOME).toBe(os.homedir());
+    expect(receivedEnv?.HOME).toBe(os.homedir());
   }
 
   function withEtcShells(shells: string[], fn: () => void) {
@@ -514,14 +502,16 @@ describe("shell env fallback", () => {
   });
 
   it.each(["environment", "PATH"])("sanitizes %s startup and caps its exec timeout", (mode) => {
-    const env = makeUnsafeStartupEnv();
-    let receivedEnv: NodeJS.ProcessEnv | undefined;
-    let receivedTimeout: number | undefined;
-    const exec = syncExec.mockImplementation((_shell, _args, options) => {
-      receivedEnv = options?.env;
-      receivedTimeout = options?.timeout;
-      return framedShellEnv("OPENAI_API_KEY=from-shell\0PATH=/usr/local/bin:/usr/bin\0HOME=/tmp\0");
-    });
+    const env = {
+      SHELL: "/bin/bash",
+      HOME: "/tmp/evil-home",
+      ZDOTDIR: "/tmp/evil-zdotdir",
+      BASH_ENV: "/tmp/evil-bash-env",
+      PS4: "$(touch /tmp/pwned)",
+    };
+    const exec = syncExec.mockReturnValue(
+      framedShellEnv("OPENAI_API_KEY=from-shell\0PATH=/usr/local/bin:/usr/bin\0HOME=/tmp\0"),
+    );
     const timeoutMs = Number.MAX_SAFE_INTEGER;
     if (mode === "environment") {
       expect(runShellEnvFallback({ env, timeoutMs })).toEqual(["OPENAI_API_KEY"]);
@@ -529,8 +519,9 @@ describe("shell env fallback", () => {
       expect(getShellPathFromLoginShell({ env, timeoutMs })).toBe("/usr/local/bin:/usr/bin");
     }
     expect(exec).toHaveBeenCalledTimes(1);
-    expectSanitizedStartupEnv(receivedEnv);
-    expect(receivedTimeout).toBe(MAX_TIMER_TIMEOUT_MS);
+    const options = exec.mock.calls[0]?.[2];
+    expectSanitizedStartupEnv(options?.env);
+    expect(options?.timeout).toBe(MAX_TIMER_TIMEOUT_MS);
   });
 
   it("uses interactive Bash login startup before nounset reads PS1", () => {

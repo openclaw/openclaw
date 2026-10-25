@@ -60,6 +60,12 @@ async function writePnpmProject(installDir: string, dependencies: Record<string,
   );
 }
 
+async function writeSharedStoreProject(installDir: string, packageRoot: string) {
+  await fs.mkdir(path.join(installDir, "node_modules"), { recursive: true });
+  await writePnpmProject(installDir, { openclaw: "2026.7.1" });
+  await fs.symlink(packageRoot, path.join(installDir, "node_modules/openclaw"), "dir");
+}
+
 function probeRunner(responses: Record<string, ReturnType<typeof commandResult>>): CommandRunner {
   return async (argv) => {
     const result = responses[argv.join(" ")];
@@ -202,23 +208,16 @@ describe("pnpm isolated global install discovery", () => {
     const globalRoot = path.join(base, "pnpm-home/global/v11");
     const activeInstallRoot = path.join(globalRoot, "active");
     const orphanInstallRoot = path.join(globalRoot, "orphan");
-    const activePackageRoot = path.join(activeInstallRoot, "node_modules/openclaw");
     const orphanPackageRoot = path.join(orphanInstallRoot, "node_modules/openclaw");
     const sharedPackageRoot = path.join(base, "store/openclaw");
+    await fs.mkdir(sharedPackageRoot, { recursive: true });
+    await writeGlobalPackageJson(sharedPackageRoot, "2026.7.1");
     await Promise.all([
-      fs.mkdir(path.dirname(activePackageRoot), { recursive: true }),
-      fs.mkdir(path.dirname(orphanPackageRoot), { recursive: true }),
-      fs.mkdir(sharedPackageRoot, { recursive: true }),
+      writeSharedStoreProject(activeInstallRoot, sharedPackageRoot),
+      writeSharedStoreProject(orphanInstallRoot, sharedPackageRoot),
     ]);
     await Promise.all([
-      writeGlobalPackageJson(sharedPackageRoot, "2026.7.1"),
-      writePnpmProject(activeInstallRoot, { openclaw: "2026.7.1" }),
-      writePnpmProject(orphanInstallRoot, { openclaw: "2026.7.1" }),
       fs.writeFile(path.join(orphanInstallRoot, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n"),
-    ]);
-    await Promise.all([
-      fs.symlink(sharedPackageRoot, activePackageRoot, "dir"),
-      fs.symlink(sharedPackageRoot, orphanPackageRoot, "dir"),
       fs.symlink(activeInstallRoot, path.join(globalRoot, "hash-active"), "dir"),
     ]);
     const runCommand = probeRunner({
