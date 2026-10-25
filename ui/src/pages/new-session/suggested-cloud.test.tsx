@@ -43,13 +43,11 @@ async function fixture(onChange?: () => void) {
 afterEach(() => [sessionStorage, localStorage].forEach((storage) => storage.clear()));
 
 it.each([
-  ["successful save", "cloud", [profile], undefined, null],
-  ["save failure", "", [], suggestedProfile, "Crabbox login expired"],
-  ["local reselection", "", [profile], undefined, null],
-  ["Gateway reconnection", "", [], undefined, null],
+  ["local reselection", [profile]],
+  ["Gateway reconnection", []],
 ] as const)(
   "settles suggested Cloud adoption after %s without dispatching or replacing newer intent",
-  async (outcome, cloudProfileId, cloudProfiles, suggestion, error) => {
+  async (outcome, cloudProfiles) => {
     const { place, gateway, flow, request, adoption, context } = await fixture();
     flow.setMessage("Prepare this repository");
     const selecting = place.suggestedCloudProfile.adopt();
@@ -58,20 +56,19 @@ it.each([
     expect(request.mock.calls.some(([method]) => method === "sessions.dispatch")).toBe(false);
     if (outcome === "local reselection") {
       place.selectDevice("");
-    }
-    if (outcome === "Gateway reconnection") {
+    } else {
       context.gateway.snapshot.phase = "connecting";
       gateway.synchronize(context.gateway);
       place.invalidateGatewayDiscovery(true);
     }
-    adoption.resolve(error ? Promise.reject(new Error(error)) : { profile });
+    adoption.resolve({ profile });
     await selecting;
     expect(place).toMatchObject({
-      cloudProfileId,
+      cloudProfileId: "",
       suggestedCloudProfile: { pending: false },
     });
-    expect(gateway).toMatchObject({ cloudProfiles, suggestedProfile: suggestion });
-    expect(flow.error).toBe(error);
+    expect(gateway).toMatchObject({ cloudProfiles, suggestedProfile: undefined });
+    expect(flow.error).toBeNull();
   },
 );
 

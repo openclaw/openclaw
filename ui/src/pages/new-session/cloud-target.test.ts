@@ -11,12 +11,39 @@ import {
   resolveAutomaticDevicePlacementDisabledReason,
 } from "./device-placement.ts";
 
-function mountSessionItem(
-  item: Parameters<typeof SessionMenuItem>[0]["item"],
-  submitting: boolean,
-  container: HTMLElement,
-) {
-  return mountSolid(() => createComponent(SessionMenuItem, { item, submitting }), { container });
+function mountSessionItem(item: Partial<Parameters<typeof SessionMenuItem>[0]["item"]>) {
+  return mountSolid(() =>
+    createComponent(SessionMenuItem, {
+      item: {
+        value: "auto",
+        label: "Auto",
+        compact: true,
+        disabled: true,
+        checked: false,
+        onSelect: vi.fn(),
+        ...item,
+      },
+      submitting: false,
+    }),
+  ).container.querySelector('[slot="content"]');
+}
+
+type CloudParams = Parameters<typeof mountCloudProfiles>[0];
+function cloud(params: Partial<CloudParams>) {
+  const container = document.createElement("div");
+  const initial = {
+    selectedId: "aws",
+    submitting: false,
+    onSelect: vi.fn(),
+    profiles: [],
+    ...params,
+  };
+  const mounted = mountCloudProfiles(initial, container);
+  return {
+    container,
+    find: (value: string) => container.querySelector<HTMLButtonElement>(`[data-value="${value}"]`),
+    update: (changes: Partial<CloudParams>) => mounted.update({ ...initial, ...changes }),
+  };
 }
 
 describe("cloud target menu", () => {
@@ -44,22 +71,12 @@ describe("cloud target menu", () => {
   });
 
   it("renders saved-pairing remediation commands without redeeming a new join URL", () => {
-    const container = document.createElement("div");
-    mountSessionItem(
-      {
-        value: "device:disabled",
-        label: "Device",
-        compact: true,
-        disabled: true,
-        checked: false,
-        title: "Hosting disabled",
-        remediation: "enable-session-hosting",
-        onSelect: vi.fn(),
-      },
-      false,
-      container,
-    );
-    const card = container.querySelector('[slot="content"]');
+    const card = mountSessionItem({
+      value: "device:disabled",
+      label: "Device",
+      title: "Hosting disabled",
+      remediation: "enable-session-hosting",
+    });
     expect(card?.textContent).toContain(
       "Session hosting is disabled. Run these commands on the paired device:",
     );
@@ -78,31 +95,21 @@ describe("cloud target menu", () => {
         sessionHost: false,
       },
     ];
-    const devices = projectDevicePlacements(environments);
-    const container = document.createElement("div");
-    mountSessionItem(
-      {
-        value: "auto",
-        label: "Auto",
-        compact: true,
-        disabled: true,
-        checked: false,
-        title: resolveAutomaticDevicePlacementDisabledReason(environments, devices),
-        onSelect: vi.fn(),
-      },
-      false,
-      container,
-    );
-    expect(container.querySelector('[slot="content"]')?.textContent?.trim()).toBe(
+    const card = mountSessionItem({
+      title: resolveAutomaticDevicePlacementDisabledReason(
+        environments,
+        projectDevicePlacements(environments),
+      ),
+    });
+    expect(card?.textContent?.trim()).toBe(
       "No devices have session hosting enabled. Connect a machine with session hosting enabled, or enable it on a paired device.",
     );
   });
 
   it("shows unselected provider defaults as suggestions and selects the provider before an explicit choice", () => {
-    const container = document.createElement("div");
     const onSelect = vi.fn();
     const onSelectOs = vi.fn();
-    const params = {
+    const { update, find } = cloud({
       profiles: [
         {
           id: "aws",
@@ -118,27 +125,19 @@ describe("cloud target menu", () => {
         },
       ],
       selectedId: "",
-      submitting: false,
       onSelect,
       onSelectOs,
-    };
-    const { update } = mountCloudProfiles(params, container);
-    const suggested = container.querySelector<HTMLButtonElement>('[data-value="os:linux"]')!;
+    });
+    const suggested = find("os:linux")!;
     expect(suggested.dataset.suggested).toBe("true");
     expect(suggested.getAttribute("aria-pressed")).toBe("true");
-    expect(
-      container.querySelector('[data-value="machine:small"]')?.getAttribute("aria-pressed"),
-    ).toBe("true");
+    expect(find("machine:small")?.getAttribute("aria-pressed")).toBe("true");
     suggested.click();
     expect(onSelect).toHaveBeenCalledExactlyOnceWith("aws", true);
     expect(onSelectOs).toHaveBeenCalledExactlyOnceWith("linux");
-    update({ ...params, selectedId: "aws" });
-    expect(
-      container.querySelector('[data-value="os:linux"]')?.getAttribute("data-suggested"),
-    ).toBeNull();
-    expect(container.querySelector('[data-value="os:linux"]')?.getAttribute("aria-pressed")).toBe(
-      "true",
-    );
+    update({ selectedId: "aws" });
+    expect(find("os:linux")?.getAttribute("data-suggested")).toBeNull();
+    expect(find("os:linux")?.getAttribute("aria-pressed")).toBe("true");
   });
 
   it.each([
@@ -150,28 +149,20 @@ describe("cloud target menu", () => {
     { machine: { id: "memory", label: "Memory", memoryGb: 256 }, expected: "256 GB" },
     { machine: { id: "custom", label: "Custom" }, expected: "Custom" },
   ])("renders a single machine as fixed provider configuration", ({ machine, expected }) => {
-    const container = document.createElement("div");
-    mountCloudProfiles(
-      {
-        profiles: [{ id: "aws", providerId: "aws", machines: [machine] }],
-        selectedId: "aws",
-        selectedMachine: machine.id,
-        submitting: false,
-        onSelect: vi.fn(),
-      },
-      container,
-    );
-    const machineLabel = container.querySelector(`[data-value="machine:${machine.id}"]`);
+    const { find } = cloud({
+      profiles: [{ id: "aws", providerId: "aws", machines: [machine] }],
+      selectedMachine: machine.id,
+    });
+    const machineLabel = find(`machine:${machine.id}`);
     expect(machineLabel?.classList.contains("new-session-page__fixed-machine")).toBe(true);
     expect(machineLabel?.textContent).toContain(expected);
     expect(machineLabel?.tagName).toBe("SPAN");
   });
 
   it("forwards configuration choices and disables them while submitting", () => {
-    const container = document.createElement("div");
     const onSelectMachine = vi.fn();
     const onSelectOs = vi.fn();
-    const params = {
+    const { update, find, container } = cloud({
       profiles: [
         {
           id: "aws",
@@ -186,98 +177,69 @@ describe("cloud target menu", () => {
           ],
         },
       ],
-      selectedId: "aws",
       selectedOs: "linux",
       selectedMachine: "small",
-      submitting: false,
       onSelectMachine,
       onSelectOs,
-      onSelect: vi.fn(),
-    };
-    const { update } = mountCloudProfiles(params, container);
-    container.querySelector<HTMLButtonElement>('[data-value="machine:large"]')!.click();
-    container.querySelector<HTMLButtonElement>('[data-value="os:macos"]')!.click();
+    });
+    find("machine:large")!.click();
+    find("os:macos")!.click();
     expect(onSelectMachine).toHaveBeenCalledExactlyOnceWith("large");
     expect(onSelectOs).toHaveBeenCalledExactlyOnceWith("macos");
-    update({ ...params, submitting: true });
+    update({ submitting: true });
     expect([...container.querySelectorAll("button")].every((button) => button.disabled)).toBe(true);
   });
 
   it("omits unavailable OS choices even when they are the current selection", () => {
-    const container = document.createElement("div");
-    mountCloudProfiles(
-      {
-        profiles: [
-          {
-            id: "aws",
-            providerId: "aws",
-            operatingSystems: [
-              { id: "linux", label: "Linux" },
-              { id: "windows", label: "Windows", disabledReason: "Install WSL2" },
-            ],
-          },
-        ],
-        selectedId: "aws",
-        selectedOs: "windows",
-        submitting: false,
-        onSelect: vi.fn(),
-      },
-      container,
-    );
-    const fixedOs = container.querySelector('[data-value="os:linux"]');
+    const { find, container } = cloud({
+      profiles: [
+        {
+          id: "aws",
+          providerId: "aws",
+          operatingSystems: [
+            { id: "linux", label: "Linux" },
+            { id: "windows", label: "Windows", disabledReason: "Install WSL2" },
+          ],
+        },
+      ],
+      selectedOs: "windows",
+    });
+    const fixedOs = find("os:linux");
     expect(fixedOs?.textContent).toBe("Linux");
     expect(fixedOs?.tagName).toBe("SPAN");
     expect(fixedOs?.hasAttribute("aria-pressed")).toBe(false);
-    expect(container.querySelector('[data-value="os:windows"]')).toBeNull();
+    expect(find("os:windows")).toBeNull();
     expect(
       container.querySelector('.new-session-page__cloud-configuration [aria-pressed="true"]'),
     ).toBeNull();
   });
 
-  it("disables cloud profiles with the runtime preflight reason", () => {
-    const container = document.createElement("div");
-    mountCloudProfiles(
-      {
-        profiles: [{ id: "aws", providerId: "crabbox" }],
-        selectedId: "",
-        submitting: false,
-        disabled: true,
-        disabledReason: "The acpx runtime does not support cloud workers.",
-        onSelect: vi.fn(),
-      },
-      container,
-    );
+  it.each([true, false])("disables cloud profiles with a runtime-wide blocker: %s", (global) => {
+    const reason = "This runtime cannot use the cloud worker.";
+    const { find } = cloud({
+      profiles: [
+        { id: "aws", providerId: "crabbox" },
+        { id: "ssh", providerId: "static-ssh" },
+      ],
+      selectedId: "",
+      ...(global
+        ? { disabled: true, disabledReason: reason }
+        : {
+            profileDisabledReason: (profile: CloudParams["profiles"][number]) =>
+              profile.id === "aws" ? reason : undefined,
+          }),
+    });
 
-    const button = container.querySelector<HTMLButtonElement>('[data-value="cloud:aws"]');
-    expect(button?.getAttribute("aria-disabled")).toBe("true");
-    expect(button?.getAttribute("aria-description")).toContain(
-      "The acpx runtime does not support cloud workers.",
-    );
-  });
-
-  it("disables only the cloud profile with a profile-specific reason", () => {
-    const reason =
-      "The codex runtime cannot use this cloud worker. Choose a compatible cloud worker or run locally.";
-    const container = document.createElement("div");
-    mountCloudProfiles(
-      {
-        profiles: [
-          { id: "aws", providerId: "crabbox" },
-          { id: "ssh", providerId: "static-ssh" },
-        ],
-        selectedId: "",
-        submitting: false,
-        profileDisabledReason: (profile) => (profile.id === "aws" ? reason : undefined),
-        onSelect: vi.fn(),
-      },
-      container,
-    );
-
-    const disabled = container.querySelector<HTMLButtonElement>('[data-value="cloud:aws"]');
-    const enabled = container.querySelector<HTMLButtonElement>('[data-value="cloud:ssh"]');
+    const disabled = find("cloud:aws");
+    const enabled = find("cloud:ssh");
     expect(disabled?.getAttribute("aria-disabled")).toBe("true");
     expect(disabled?.getAttribute("aria-description")).toContain(reason);
     expect(enabled?.disabled).toBe(false);
-    expect(enabled?.getAttribute("aria-description")).toBe("Cloud worker provider: static-ssh");
+    expect(enabled?.getAttribute("aria-disabled")).toBe(global ? "true" : null);
+    if (global) {
+      expect(enabled?.getAttribute("aria-description")).toContain(reason);
+    } else {
+      expect(enabled?.getAttribute("aria-description")).toBe("Cloud worker provider: static-ssh");
+    }
   });
 });
