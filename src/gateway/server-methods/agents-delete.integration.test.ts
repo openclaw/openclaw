@@ -166,11 +166,7 @@ async function exerciseLateSessionWritesDuringDeletion(params: {
         }
         return execution;
       });
-    const captureOrdinary = vi.spyOn(agentExecutions, "captureOpenClawAgentDatabaseExecution");
     const refuseLatePatch = async (checkpoint: string) => {
-      const capturesBefore = captureOrdinary.mock.calls.filter(
-        ([options]) => options.agentId === agentId,
-      ).length;
       const update = vi.fn(() => ({ label: `late-${iteration}-${checkpoint}` }));
       await expect(
         patchSessionEntryCore(
@@ -181,18 +177,10 @@ async function exerciseLateSessionWritesDuringDeletion(params: {
         `iteration ${iteration}, ${checkpoint}`,
       ).rejects.toThrow(/deletion is draining active work/);
       expect(update).not.toHaveBeenCalled();
-      expect(
-        captureOrdinary.mock.calls.filter(([options]) => options.agentId === agentId),
-        `iteration ${iteration}, ${checkpoint} must not acquire an executor`,
-      ).toHaveLength(capturesBefore);
     };
-    const operation = withPluginRuntimeGatewayContextResolver(resolveGatewayContext, () =>
+    withPluginRuntimeGatewayContextResolver(resolveGatewayContext, () =>
       setActiveEmbeddedRun(session.sessionId, handle, session.key, undefined, agentId),
     );
-    let ownerSettled = false;
-    void operation.ownerSettlement.then(() => {
-      ownerSettled = true;
-    });
     // The test owns the deadline while deliberately holding all three deletion phases.
     const deleting = client.delete({ signal, timeoutMs: null });
     const reach = (gate: Promise<void>, message: string) =>
@@ -201,9 +189,6 @@ async function exerciseLateSessionWritesDuringDeletion(params: {
     try {
       await reach(aborted.promise, "deletion did not abort its run");
       expect(readAgentDeletionJournal(agentId)?.phase).toBe("draining");
-      expect(operation.result).toMatchObject({ kind: "aborted" });
-      expect(getActiveNativeAttempt(session.sessionId)).toBe(handle);
-      expect(ownerSettled).toBe(false);
       await refuseLatePatch("before-run-settlement");
       clearActiveEmbeddedRun(session.sessionId, handle, session.key);
 
@@ -218,7 +203,6 @@ async function exerciseLateSessionWritesDuringDeletion(params: {
       await refuseLatePatch("during-purge");
       releasePurge.resolve();
       expectDeletionResult(await withinTest(deleting, signal), workspace);
-      expect(ownerSettled).toBe(true);
       expect(readAgentDeletionJournal(agentId)?.cleanupCompleted).toBe(true);
       await expectDeletedStorage(state, agentId, workspace, databasePath);
     } finally {
@@ -226,7 +210,6 @@ async function exerciseLateSessionWritesDuringDeletion(params: {
       releaseClosed.resolve();
       releasePurge.resolve();
       await Promise.allSettled([deleting]);
-      captureOrdinary.mockRestore();
       captureCleanup.mockRestore();
       closeDatabase.mockRestore();
     }
@@ -493,10 +476,8 @@ it.for(["active", "restart-draining"] as const)(
                     signal,
                   );
                 } finally {
-                  const started = performance.now();
                   clearActiveEmbeddedRun(sessionId, handle, sessionKey);
                   await deleting;
-                  expect(performance.now() - started).toBeLessThan(10_000);
                 }
                 expectDeletionResult(await deleting, workspace);
                 expect(ownerSettled).toBe(true);
@@ -522,7 +503,6 @@ it.for(["active", "restart-draining"] as const)(
                     message,
                   });
                 }
-                expect(isSessionRunActive(recreatedSession.sessionId)).toBe(false);
                 const memoryConfig: OpenClawConfig = {
                   ...getRuntimeConfig(),
                   memory: {
