@@ -77,8 +77,7 @@ async function expectPreserved(state: ReturnType<typeof fixture>, warning = "", 
   expect(state.read()).toEqual(state.original);
   expect(result.warningDisposition).toBe("recoverable");
   if (exact) {
-    expect(result.changes).toEqual([]);
-    expect(result.warnings).toEqual([expect.stringContaining(warning)]);
+    expect(result).toMatchObject({ changes: [], warnings: [expect.stringContaining(warning)] });
   } else if (warning) {
     expect(result.warnings.join(" ")).toContain(warning);
   }
@@ -142,21 +141,19 @@ function fixture(assignments: unknown[], extra: Fields = {}, evidence?: "absent"
   };
 }
 
-beforeEach(() => {
-  getSessionEntryByIdAsync.mockReset().mockResolvedValue({
+function sessionEntry(lifecycleRevision?: string) {
+  return {
     sessionKey: identity.sessionKey,
-    entry: {
-      sessionId: identity.sessionId,
-      lifecycleRevision: owner.lifecycleRevision,
-    },
-  });
+    entry: { sessionId: identity.sessionId, lifecycleRevision },
+  };
+}
+
+beforeEach(() => {
+  getSessionEntryByIdAsync.mockReset().mockResolvedValue(sessionEntry(owner.lifecycleRevision));
 });
 
 it("skips valid cleared bindings without warnings", async () => {
-  const state = fixture(duplicateAssignments, {
-    state: "cleared",
-    binding: undefined,
-  });
+  const state = fixture(duplicateAssignments, { state: "cleared", binding: undefined });
   expect(await migration.detectLegacyState(state.params)).toBeNull();
   expect(await migration.migrateLegacyState(state.params)).toEqual(unchanged);
   expect(state.read()).toEqual(state.original);
@@ -170,9 +167,7 @@ it.each([
   { field: "appServerRuntimeFingerprint", value: "" },
 ])("preserves uninspectable ownership: $field=$value", async ({ field, value }) => {
   const rows = field === "cwd" ? duplicateAssignments : [assignment];
-  const state = fixture(rows, {
-    binding: { ...binding, [field]: value },
-  });
+  const state = fixture(rows, { binding: { ...binding, [field]: value } });
   const warning =
     field === "cwd"
       ? "binding could not be decoded"
@@ -186,10 +181,7 @@ it.each(["assignment", "session"])("preserves missing %s lifecycle evidence", as
       ? { ...assignment, owner: { ...owner, lifecycleRevision: undefined } }
       : assignment;
   if (missing === "session") {
-    getSessionEntryByIdAsync.mockResolvedValue({
-      sessionKey: identity.sessionKey,
-      entry: { sessionId: identity.sessionId },
-    });
+    getSessionEntryByIdAsync.mockResolvedValue(sessionEntry());
   }
   await expectPreserved(fixture([legacy]), "unknown lifecycle evidence");
 });
@@ -230,11 +222,7 @@ it("removes stale ownership and only its matching receipts", async () => {
   ];
   const receipt = submission("old-lifecycle", "stale-call");
   const retainedReceipt = { ...receipt, callId: "retained-call", submissionId: "different-turn" };
-  const submissions = {
-    version: 1,
-    owner: stale[1]!.owner,
-    receipts: [receipt, retainedReceipt],
-  };
+  const submissions = { version: 1, owner: stale[1]!.owner, receipts: [receipt, retainedReceipt] };
   const state = fixture([assignment, ...stale], { nativeSubagentSubmissions: submissions });
   await migration.migrateLegacyState(state.params);
   state.expectAssignments([assignment], {
