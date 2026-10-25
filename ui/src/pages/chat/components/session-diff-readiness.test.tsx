@@ -84,9 +84,7 @@ describe("SessionDiffPanel readiness", () => {
     "defers an inactive owner read without holding its sibling's transition: %s",
     async (outcome) => {
       vi.useFakeTimers();
-      onTestFinished(() => {
-        vi.useRealTimers();
-      });
+      onTestFinished(() => vi.useRealTimers());
       const pending = deferred<SessionsDiffResult>();
       const loader = vi
         .fn<NonNullable<SessionDiffProps["loader"]>>()
@@ -167,9 +165,7 @@ describe("SessionDiffPanel readiness", () => {
 
   it("keeps computing responses pending and retains the last diff during refresh", async () => {
     vi.useFakeTimers();
-    onTestFinished(() => {
-      vi.useRealTimers();
-    });
+    onTestFinished(() => vi.useRealTimers());
     const computing = { ...result("feature/test"), computing: true };
     const slow = deferred<SessionsDiffResult>();
     const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
@@ -219,9 +215,7 @@ describe("SessionDiffPanel readiness", () => {
 
   it("stops computing polls while hidden or inactive and retires them with the request owner", async () => {
     vi.useFakeTimers();
-    onTestFinished(() => {
-      vi.useRealTimers();
-    });
+    onTestFinished(() => vi.useRealTimers());
     const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
     const loader = vi.fn().mockResolvedValue({ ...result("feature/test"), computing: true });
     const { panel, update, unmount } = mountPanel();

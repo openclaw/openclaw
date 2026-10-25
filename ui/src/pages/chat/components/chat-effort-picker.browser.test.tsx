@@ -17,6 +17,45 @@ import { installChatComposerPickerDismissal } from "./chat-picker-overlay.ts";
 
 let host: HTMLDivElement | undefined;
 let updatePicker: ((props: Parameters<typeof ChatEffortPicker>[0]) => void) | undefined;
+const query = <T extends Element = HTMLElement>(selector: string) =>
+  host!.querySelector<T>(selector)!;
+const speed = (value: string) => query<HTMLButtonElement>(`[data-chat-speed-option="${value}"]`);
+const summary = () => query("summary");
+const noBoost = { fill: "none", glow: "none" };
+
+function speedState(
+  mode: boolean | "ultrafast",
+  tiers?: string[],
+  supportsFastMode = true,
+  inherited = false,
+) {
+  return resolveChatFastModeSelectState({
+    connected: true,
+    gatewayAvailable: true,
+    loading: false,
+    sessionsResult: null,
+    currentModelOverride: "openai/model",
+    fastModeTarget: {
+      model: "model",
+      modelProvider: "openai",
+      ...(inherited ? { effectiveFastMode: mode } : { fastMode: mode }),
+    },
+    catalog: [
+      {
+        id: "model",
+        name: "Model",
+        provider: "openai",
+        available: true,
+        supportsFastMode,
+        ...(!inherited && { supportsServiceTierRecovery: true }),
+        serviceTiers: tiers,
+      },
+    ],
+  });
+}
+
+const speedFixture = (state: ChatFastModeSelectState) =>
+  fixture(["low", "medium", "high"], "high", false, state);
 
 afterEach(() => {
   if (host) {
@@ -78,7 +117,7 @@ async function fixture(
     );
   }
   flush();
-  const details = host.querySelector("details")!;
+  const details = query<HTMLDetailsElement>("details");
   if (open && !details.open) {
     const opened = new Promise<void>((resolve) => {
       details.addEventListener("toggle", () => resolve(), { once: true });
@@ -87,14 +126,12 @@ async function fixture(
     // The details toggle commits its native top-layer surface.
     await opened;
   }
-  expect(host.querySelector("[data-anchored-overlay]")!.matches(":popover-open")).toBe(open);
+  expect(query("[data-anchored-overlay]").matches(":popover-open")).toBe(open);
   await expect
-    .poll(
-      () => host?.querySelector<HTMLInputElement>("input[type=range]")?.checkVisibility() ?? false,
-    )
+    .poll(() => query<HTMLInputElement>("input[type=range]")?.checkVisibility() ?? false)
     .toBe(open);
   return {
-    input: host.querySelector<HTMLInputElement>("input[type=range]")!,
+    input: query<HTMLInputElement>("input[type=range]"),
     onThinkingSelect,
     onFastModeSelect,
   };
@@ -134,39 +171,15 @@ describe("effort bar colour and flow", () => {
     await page.elementLocator(trigger).click();
     await expect.poll(() => surface.matches(":popover-open")).toBe(true);
     expect(document.activeElement).toBe(textarea);
-    try {
-      await expect
-        .poll(() =>
-          surface.getAnimations().every((animation) => animation.playState === "finished"),
-        )
-        .toBe(true);
-    } catch (error) {
-      console.error(
-        "Unfinished effort picker animations",
-        surface.getAnimations().map((animation) => {
-          const effect = animation.effect;
-          const target = effect instanceof KeyframeEffect ? effect.target : null;
-          return {
-            name: animation instanceof CSSAnimation ? animation.animationName : null,
-            target: target instanceof Element ? `${target.tagName}.${target.className}` : null,
-            playState: animation.playState,
-            pending: animation.pending,
-            currentTime: animation.currentTime,
-            playbackRate: animation.playbackRate,
-            timing: effect?.getComputedTiming(),
-          };
-        }),
-      );
-      throw error;
-    }
+    await expect
+      .poll(() => surface.getAnimations().every((animation) => animation.playState === "finished"))
+      .toBe(true);
     await userEvent.keyboard("{Escape}");
     await expect.poll(() => details.open).toBe(false);
     await userEvent.keyboard("{Enter}");
     await expect.poll(() => surface.matches(":popover-open")).toBe(true);
     await userEvent.keyboard("{Tab}");
-    await expect
-      .poll(() => document.activeElement)
-      .toBe(composer.querySelector<HTMLInputElement>("input[type=range]")!);
+    await expect.poll(() => document.activeElement).toBe(query("input[type=range]"));
     await userEvent.keyboard("{Escape}");
     await expect.poll(() => details.open).toBe(false);
     await expect.poll(() => surface.matches(":popover-open")).toBe(false);
@@ -175,106 +188,44 @@ describe("effort bar colour and flow", () => {
 
   it("keeps inherited speed selectable", async () => {
     document.documentElement.dataset.themeMode = "dark";
-    const fastMode = resolveChatFastModeSelectState({
-      connected: true,
-      gatewayAvailable: true,
-      loading: false,
-      sessionsResult: null,
-      currentModelOverride: "openai/speed-fixture",
-      fastModeTarget: {
-        model: "speed-fixture",
-        modelProvider: "openai",
-        effectiveFastMode: "ultrafast",
-      },
-      catalog: [
-        {
-          id: "speed-fixture",
-          name: "Speed fixture",
-          provider: "openai",
-          available: true,
-          supportsFastMode: true,
-          serviceTiers: ["default", "priority", "ultrafast"],
-        },
-      ],
-    });
-    const { onFastModeSelect } = await fixture(["low", "medium", "high"], "high", false, fastMode);
+    const { onFastModeSelect } = await speedFixture(
+      speedState("ultrafast", ["default", "priority", "ultrafast"], true, true),
+    );
     for (const value of ["off", "on", "ultrafast"]) {
-      const option = host!.querySelector<HTMLButtonElement>(
-        '[data-chat-speed-option="' + value + '"]',
-      )!;
+      const option = speed(value);
       expect(option.disabled).toBe(false);
       option.click();
       expect(onFastModeSelect).toHaveBeenLastCalledWith(value, "effort-preview");
     }
   });
   it("keeps speed names accessible without chip labels and only exposes entitled choices", async () => {
-    const state = (mode: boolean | "ultrafast", tiers?: string[], supportsFastMode = true) =>
-      resolveChatFastModeSelectState({
-        connected: true,
-        gatewayAvailable: true,
-        loading: false,
-        sessionsResult: null,
-        currentModelOverride: "openai/model",
-        fastModeTarget: { model: "model", modelProvider: "openai", fastMode: mode },
-        catalog: [
-          {
-            id: "model",
-            name: "Model",
-            provider: "openai",
-            available: true,
-            supportsFastMode,
-            supportsServiceTierRecovery: true,
-            serviceTiers: tiers,
-          },
-        ],
-      });
-    await fixture(["low", "medium", "high"], "high", false, state(false));
-    expect(host!.querySelector("summary")!.textContent?.trim()).toBe("High");
+    await speedFixture(speedState(false));
+    expect(summary().textContent?.trim()).toBe("High");
     expect(host!.querySelectorAll("[data-chat-speed-option]")).toHaveLength(2);
     expect(host!.textContent).not.toContain("higher usage");
-    const { onFastModeSelect } = await fixture(
-      ["low", "medium", "high"],
-      "high",
-      false,
-      state("ultrafast", ["priority", "ultrafast"]),
+    const { onFastModeSelect } = await speedFixture(
+      speedState("ultrafast", ["priority", "ultrafast"]),
     );
-    expect(host!.querySelector("summary")!.textContent?.trim()).toBe("High");
-    expect(host!.querySelector("summary")!.getAttribute("aria-label")).toContain(
-      "High · Ultrafast",
-    );
-    expect(host!.querySelector("summary")!.title).toBe("High · Ultrafast");
+    expect(summary().textContent?.trim()).toBe("High");
+    expect(summary().getAttribute("aria-label")).toContain("High · Ultrafast");
+    expect(summary().title).toBe("High · Ultrafast");
     expect(
       [...host!.querySelectorAll("[data-chat-speed-option]")].map((option) =>
         option.textContent?.trim(),
       ),
     ).toEqual(["Standard", "Fast", "Ultrafast"]);
-    const ultra = host!.querySelector<HTMLButtonElement>('[data-chat-speed-option="ultrafast"]')!;
+    const ultra = speed("ultrafast");
     expect(ultra.getAttribute("aria-checked")).toBe("true");
     ultra.focus();
     ultra.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
     expect(onFastModeSelect).toHaveBeenLastCalledWith("on", "effort-preview");
-    const standard = host!.querySelector<HTMLButtonElement>('[data-chat-speed-option="off"]')!;
-    standard.click();
+    speed("off").click();
     expect(onFastModeSelect).toHaveBeenLastCalledWith("off", "effort-preview");
-    await fixture(
-      ["low", "medium", "high"],
-      "high",
-      false,
-      state("ultrafast", ["priority", "ultrafast"], false),
-    );
-    expect(
-      host!.querySelector<HTMLButtonElement>('[data-chat-speed-option="ultrafast"]')!.disabled,
-    ).toBe(true);
-    expect(host!.querySelector('[data-chat-speed-option="on"]')).toBeNull();
-    const standardOnly = await fixture(
-      ["low", "medium", "high"],
-      "high",
-      false,
-      state("ultrafast", ["default"], false),
-    );
-    expect(
-      host!.querySelector('[data-chat-speed-option="off"]')?.getAttribute("aria-checked"),
-    ).toBe("true");
+    await speedFixture(speedState("ultrafast", ["priority", "ultrafast"], false));
+    expect(speed("ultrafast").disabled).toBe(true);
+    expect(speed("on")).toBeNull();
+    const standardOnly = await speedFixture(speedState("ultrafast", ["default"], false));
+    expect(speed("off").getAttribute("aria-checked")).toBe("true");
     for (const option of host!.querySelectorAll<HTMLButtonElement>("[data-chat-speed-option]")) {
       expect(option.disabled).toBe(true);
       option.click();
@@ -282,20 +233,12 @@ describe("effort bar colour and flow", () => {
     expect(standardOnly.onFastModeSelect).not.toHaveBeenCalled();
     expect(standardOnly.input.disabled).toBe(false);
     expect(host!.querySelector(".chat-controls__effort-zap")).toBeNull();
-    await fixture(["low", "medium", "high"], "high", false, state("ultrafast"));
-    expect(
-      host!.querySelector<HTMLButtonElement>('[data-chat-speed-option="ultrafast"]')!.disabled,
-    ).toBe(true);
-    expect(host!.querySelector("summary")!.getAttribute("aria-label")).toContain("Ultrafast");
-    expect(
-      host!.querySelector('[data-chat-speed-option="ultrafast"]')?.getAttribute("aria-checked"),
-    ).toBe("true");
-    expect(host!.querySelector('[data-chat-speed-option="off"]')?.getAttribute("tabindex")).toBe(
-      "0",
-    );
-    expect(
-      host!.querySelector('[data-chat-speed-option="ultrafast"]')?.getAttribute("tabindex"),
-    ).toBe("-1");
+    await speedFixture(speedState("ultrafast"));
+    expect(speed("ultrafast").disabled).toBe(true);
+    expect(summary().getAttribute("aria-label")).toContain("Ultrafast");
+    expect(speed("ultrafast").getAttribute("aria-checked")).toBe("true");
+    expect(speed("off").getAttribute("tabindex")).toBe("0");
+    expect(speed("ultrafast").getAttribute("tabindex")).toBe("-1");
   });
 
   it.each(["dark", "light"])("highlights the highest discrete effort in %s mode", async (theme) => {
@@ -312,19 +255,13 @@ describe("effort bar colour and flow", () => {
       expect(ultraStyle.fill).not.toBe(maximumStyle.fill);
       expect(ultraStyle.glow).not.toBe(maximumStyle.glow);
       for (const value of ["off", "low", "adaptive", "unsupported"]) {
-        expect(appearance((await fixture(levels, value)).input)).toEqual({
-          fill: "none",
-          glow: "none",
-        });
+        expect(appearance((await fixture(levels, value)).input)).toEqual(noBoost);
       }
     }
-    expect(appearance((await fixture(["off", "on"], "on")).input)).toEqual({
-      fill: "none",
-      glow: "none",
-    });
+    expect(appearance((await fixture(["off", "on"], "on")).input)).toEqual(noBoost);
     for (const id of ["low", "high"]) {
       const { input } = await fixture(["off", { id, label: "on" }, "ultra"], id);
-      expect(appearance(input)).toEqual({ fill: "none", glow: "none" });
+      expect(appearance(input)).toEqual(noBoost);
     }
   });
 
@@ -347,7 +284,7 @@ describe("effort bar colour and flow", () => {
     input.value = "0";
     input.dispatchEvent(new Event("input", { bubbles: true }));
     flush();
-    expect(appearance(input)).toEqual({ fill: "none", glow: "none" });
+    expect(appearance(input)).toEqual(noBoost);
     input.dispatchEvent(new Event("change"));
     flush();
     expect(onThinkingSelect).toHaveBeenCalledExactlyOnceWith("low", "effort-preview");

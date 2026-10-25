@@ -5,51 +5,74 @@ import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import type { SessionDiffProps } from "./chat-sidebar-content-types.ts";
 import { SessionDiffPanel } from "./session-diff-panel.tsx";
 
 const browserMode = "__vitest_browser__" in globalThis;
 const branch = "openclaw/investigating-why-a-pr-was-not-merged";
 const root = "/workspace/investigating-why-a-pr-was-not-merged";
+const addedFile = { path: "added.ts", status: "added", additions: 1, deletions: 0 } as const;
+const result = (overrides: Partial<SessionsDiffResult> = {}): SessionsDiffResult => ({
+  sessionKey: "main",
+  root,
+  branch,
+  baseRef: "main",
+  additions: 1,
+  deletions: 0,
+  files: [addedFile],
+  ...overrides,
+});
+
+async function mountBrowserPanel(props: Partial<SessionDiffProps> = {}, width = 1200) {
+  const browser = await import("vitest/browser");
+  await browser.page.viewport(width, 800);
+  const mounted = mountSolid(() =>
+    createComponent(SessionDiffPanel, {
+      mobile: false,
+      owner: null,
+      execNode: null,
+      loadFileText: null,
+      openFile: null,
+      revealFile: null,
+      loader: async () => result(),
+      ...props,
+    }),
+  );
+  const panel = mounted.container.querySelector<HTMLElement>("openclaw-session-diff")!;
+  const button = (selector: string) => panel.querySelector<HTMLButtonElement>(selector)!;
+  const surface = () => panel.querySelector<HTMLElement>(".session-diff-menu__surface")!;
+  const menuOpen = () => waitForSolid(() => expect(surface()?.matches(":popover-open")).toBe(true));
+  const menuClosed = () =>
+    waitForSolid(() => expect(panel.querySelector("openclaw-session-diff-menu")).toBeNull());
+  return { panel, button, surface, menuOpen, menuClosed, userEvent: browser.userEvent };
+}
 
 afterEach(() => document.body.replaceChildren());
 
 describe.runIf(browserMode)("Review header layout", () => {
   it("settles Review navigation before focusing and scrolling its destination", async () => {
-    const { page, userEvent } = await import("vitest/browser");
-    await page.viewport(1200, 800);
     const paths = ["first.txt", "selected.txt", "last.txt"];
-    const mounted = mountSolid(() =>
-      createComponent(SessionDiffPanel, {
-        mobile: false,
-        owner: null,
-        execNode: null,
-        loadFileText: null,
-        openFile: null,
-        revealFile: null,
-        loader: async () => ({
-          sessionKey: "main",
-          additions: 90,
+    const { panel, button, userEvent } = await mountBrowserPanel({
+      loader: async () => ({
+        sessionKey: "main",
+        additions: 90,
+        deletions: 0,
+        files: paths.map((path) => ({
+          path,
+          status: "added",
+          additions: 30,
           deletions: 0,
-          files: paths.map((path) => ({
-            path,
-            status: "added",
-            additions: 30,
-            deletions: 0,
-            patch: `@@ -0,0 +1,30 @@\n${Array.from({ length: 30 }, (_, index) => `+line ${index + 1}`).join("\n")}`,
-          })),
-        }),
+          patch: `@@ -0,0 +1,30 @@\n${Array.from({ length: 30 }, (_, index) => `+line ${index + 1}`).join("\n")}`,
+        })),
       }),
-    );
-    const panel = mounted.container.querySelector<HTMLElement>("openclaw-session-diff")!;
+    });
     panel.style.cssText = "display:flex;position:fixed;left:0;top:0;width:1100px;height:500px";
     await waitForSolid(() => expect(panel.querySelectorAll(".session-diff__file")).toHaveLength(3));
     const files = [...panel.querySelectorAll<HTMLElement>(".session-diff__file")];
     const selected = files[1]!;
     const toggle = selected.querySelector<HTMLButtonElement>(".session-diff__file-toggle")!;
     const viewport = selected.parentElement!;
-    const searchTrigger = panel.querySelector<HTMLButtonElement>(
-      'button[aria-label="Search changed files"]',
-    )!;
+    const searchTrigger = button('button[aria-label="Search changed files"]');
     searchTrigger.focus();
     await userEvent.keyboard("{Enter}");
     const search = panel.querySelector<HTMLInputElement>(
@@ -75,10 +98,10 @@ describe.runIf(browserMode)("Review header layout", () => {
     await userEvent.keyboard("{Enter}");
     expect(lastToggle.getAttribute("aria-expanded")).toBe("true");
 
-    const jump = panel.querySelector<HTMLButtonElement>(".session-diff__jump")!;
+    const jump = button(".session-diff__jump");
     jump.focus();
     await userEvent.keyboard("{Enter}");
-    const destination = panel.querySelector<HTMLButtonElement>('button[data-value="jump:1"]')!;
+    const destination = button('button[data-value="jump:1"]');
     await userEvent.click(destination);
     expect(document.activeElement).toBe(toggle);
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
@@ -103,20 +126,9 @@ describe.runIf(browserMode)("Review header layout", () => {
   });
 
   it("uses available width before truncating and preserves keyboard access to sync actions", async () => {
-    const { page, userEvent } = await import("vitest/browser");
-    await page.viewport(1200, 800);
-    const mounted = mountSolid(() =>
-      createComponent(SessionDiffPanel, {
-        owner: null,
-        execNode: null,
-        loadFileText: null,
-        openFile: null,
-        revealFile: null,
-        loader: async () => ({
-          sessionKey: "main",
-          root,
-          branch,
-          baseRef: "main",
+    const { panel, button, surface, menuOpen, menuClosed, userEvent } = await mountBrowserPanel({
+      loader: async () =>
+        result({
           additions: 700,
           deletions: 120,
           files: [
@@ -125,9 +137,7 @@ describe.runIf(browserMode)("Review header layout", () => {
             { path: "changed.ts", status: "modified", additions: 100, deletions: 100 },
           ],
         }),
-      }),
-    );
-    const panel = mounted.container.querySelector<HTMLElement>("openclaw-session-diff")!;
+    });
     panel.style.cssText = "display:block;width:1100px;padding:8px";
     await waitForSolid(() =>
       expect(panel.querySelector(".session-diff__branch-label")?.textContent).toBe(
@@ -162,19 +172,13 @@ describe.runIf(browserMode)("Review header layout", () => {
       });
     }
 
-    const sync = panel.querySelector<HTMLButtonElement>(".session-diff__toolbar-button")!;
-    const view = panel.querySelector<HTMLButtonElement>(".session-diff__toolbar-icon")!;
+    const sync = button(".session-diff__toolbar-button");
+    const view = button(".session-diff__toolbar-icon");
     await userEvent.click(sync);
-    await waitForSolid(() =>
-      expect(panel.querySelector(".session-diff-menu__surface")?.matches(":popover-open")).toBe(
-        true,
-      ),
-    );
-    const command = panel.querySelector<HTMLButtonElement>(
-      'button[aria-label="Copy sync command"]',
-    );
-    const checkout = panel.querySelector<HTMLButtonElement>('button[aria-label="Checkout path"]');
-    const branchCopy = panel.querySelector<HTMLButtonElement>('button[aria-label="Branch name"]');
+    await menuOpen();
+    const command = button('button[aria-label="Copy sync command"]');
+    const checkout = button('button[aria-label="Checkout path"]');
+    const branchCopy = button('button[aria-label="Branch name"]');
     expect(command).toBeInstanceOf(HTMLButtonElement);
     expect(checkout).toBeInstanceOf(HTMLButtonElement);
     expect(branchCopy).toBeInstanceOf(HTMLButtonElement);
@@ -193,18 +197,18 @@ describe.runIf(browserMode)("Review header layout", () => {
       { once: true },
     );
     await userEvent.tab();
-    await waitForSolid(() => expect(panel.querySelector("openclaw-session-diff-menu")).toBeNull());
+    await menuClosed();
     expect(returnedToSync).toBe(true);
     // Native Tab continues past the restored Sync trigger.
     expect(document.activeElement).toBe(view);
 
     const writeText = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();
     onTestFinished(() => writeText.mockRestore());
-    const fileMenu = panel.querySelector<HTMLButtonElement>(".session-diff__file-menu")!;
+    const fileMenu = button(".session-diff__file-menu");
     fileMenu.focus();
     await userEvent.keyboard("{Enter}");
-    const fileSurface = panel.querySelector<HTMLElement>(".session-diff-menu__surface")!;
-    await waitForSolid(() => expect(fileSurface.matches(":popover-open")).toBe(true));
+    const fileSurface = surface();
+    await menuOpen();
     const copyPath = fileSurface.querySelector<HTMLButtonElement>(
       'button[aria-label="Copy Path"]',
     )!;
@@ -222,8 +226,6 @@ describe.runIf(browserMode)("Review header layout", () => {
     }
   });
   it("keeps a disabled path copy mounted through clipboard fallback focus changes", async () => {
-    const { page, userEvent } = await import("vitest/browser");
-    await page.viewport(1200, 800);
     let rejectWrite: ((error: Error) => void) | undefined;
     const write = vi.spyOn(navigator.clipboard, "writeText").mockImplementation(
       () =>
@@ -237,34 +239,16 @@ describe.runIf(browserMode)("Review header layout", () => {
       write.mockRestore();
       fallback.mockRestore();
     });
-    const mounted = mountSolid(() =>
-      createComponent(SessionDiffPanel, {
-        mobile: false,
-        owner: null,
-        execNode: null,
-        loadFileText: null,
-        openFile: null,
-        revealFile: null,
-        loader: async () => ({
-          sessionKey: "main",
-          root,
-          branch,
-          baseRef: "main",
-          additions: 1,
-          deletions: 0,
-          files: [{ path: "added.ts", status: "added", additions: 1, deletions: 0 }],
-        }),
-      }),
-    );
-    const panel = mounted.container.querySelector<HTMLElement>("openclaw-session-diff")!;
+    const browser = await mountBrowserPanel();
+    const { panel, button, userEvent } = browser;
     panel.style.cssText = "display:block;position:fixed;left:0;top:0;width:1100px;height:600px";
     await waitForSolid(() =>
       expect(panel.querySelector(".session-diff__file-menu")).not.toBeNull(),
     );
-    const trigger = panel.querySelector<HTMLButtonElement>(".session-diff__file-menu")!;
+    const trigger = button(".session-diff__file-menu");
     await userEvent.click(trigger);
-    const surface = panel.querySelector<HTMLElement>(".session-diff-menu__surface")!;
-    await waitForSolid(() => expect(surface.matches(":popover-open")).toBe(true));
+    const surface = browser.surface();
+    await browser.menuOpen();
     const copy = surface.querySelector<HTMLButtonElement>('[data-value="copy-path"]')!;
     await userEvent.click(copy);
     expect(write).toHaveBeenCalledExactlyOnceWith("added.ts");
@@ -275,73 +259,49 @@ describe.runIf(browserMode)("Review header layout", () => {
     expect(copy.isConnected).toBe(true);
     expect(surface.matches(":popover-open")).toBe(true);
     await userEvent.keyboard("{Escape}");
-    await waitForSolid(() => expect(panel.querySelector("openclaw-session-diff-menu")).toBeNull());
+    await browser.menuClosed();
     expect(document.activeElement).toBe(trigger);
   });
 
   it("keeps mobile Review menus reachable inside a translated dock and restores the real trigger", async () => {
-    const { page, userEvent } = await import("vitest/browser");
-    await page.viewport(390, 800);
     const openPage = vi.fn();
     const pending = Promise.withResolvers<SessionsDiffResult>();
 
-    const mounted = mountSolid(() =>
-      createComponent(SessionDiffPanel, {
+    const browser = await mountBrowserPanel(
+      {
         mobile: true,
         onOpenMobilePage: openPage,
-        owner: null,
-        execNode: null,
-        loadFileText: null,
-        openFile: null,
-        revealFile: null,
         loader: () => pending.promise,
-      }),
+      },
+      390,
     );
-    const panel = mounted.container.querySelector<HTMLElement>("openclaw-session-diff")!;
+    const { panel, button, userEvent } = browser;
     // The sheet's resting translate establishes a fixed-position containing block.
     panel.style.cssText =
       "display:block;position:fixed;left:0;top:400px;width:390px;height:400px;translate:0 0";
     await waitForSolid(() =>
       expect(panel.querySelector(".session-diff-mobile__rail")).not.toBeNull(),
     );
-    const view = panel.querySelector<HTMLButtonElement>(
-      ".session-diff-mobile__rail .session-diff__toolbar-icon",
-    )!;
+    const view = button(".session-diff-mobile__rail .session-diff__toolbar-icon");
     await userEvent.click(view);
-    await waitForSolid(() =>
-      expect(panel.querySelector(".session-diff-menu__surface")?.matches(":popover-open")).toBe(
-        true,
-      ),
-    );
-    const surface = panel.querySelector<HTMLElement>(".session-diff-menu__surface")!;
+    await browser.menuOpen();
+    const surface = browser.surface();
     const bounds = surface.getBoundingClientRect();
     expect(bounds.top).toBeGreaterThanOrEqual(0);
     expect(bounds.left).toBeGreaterThanOrEqual(0);
     expect(bounds.bottom).toBeLessThanOrEqual(window.innerHeight);
     expect(bounds.right).toBeLessThanOrEqual(window.innerWidth);
-    pending.resolve({
-      sessionKey: "main",
-      root,
-      branch,
-      baseRef: "main",
-      additions: 1,
-      deletions: 0,
-      files: [{ path: "added.ts", status: "added", additions: 1, deletions: 0 }],
-    });
+    pending.resolve(result());
     await waitForSolid(() => expect(panel.querySelector(".session-diff__file")).not.toBeNull());
     expect(panel.querySelector(".session-diff-mobile__rail .session-diff__toolbar-icon")).toBe(
       view,
     );
     await userEvent.keyboard("{Escape}");
-    await waitForSolid(() => expect(panel.querySelector("openclaw-session-diff-menu")).toBeNull());
+    await browser.menuClosed();
     expect(document.activeElement).toBe(view);
     await userEvent.click(view);
-    await waitForSolid(() =>
-      expect(panel.querySelector(".session-diff-menu__surface")?.matches(":popover-open")).toBe(
-        true,
-      ),
-    );
-    await userEvent.click(panel.querySelector<HTMLButtonElement>('[data-value="sync"]')!);
+    await browser.menuOpen();
+    await userEvent.click(button('[data-value="sync"]'));
     await waitForSolid(() => expect(openPage).toHaveBeenCalledTimes(1));
     expect(panel.querySelector("openclaw-session-diff-menu")).toBeNull();
     expect(view.style.getPropertyValue("anchor-name")).toBe("");
