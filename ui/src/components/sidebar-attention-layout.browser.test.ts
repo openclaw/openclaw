@@ -32,6 +32,12 @@ const query = (root: ParentNode, selector: string) => root.querySelector<HTMLEle
 const part = (root: ParentNode, name: string) => query(root, `.sidebar-issues-panel__${name}`);
 const bounds = (target: Element | Range) => target.getBoundingClientRect();
 const style = (target: Element) => getComputedStyle(target);
+function backgroundAlpha(target: Element) {
+  const paint = document.createElement("canvas").getContext("2d")!;
+  paint.fillStyle = style(target).backgroundColor;
+  paint.fillRect(0, 0, 1, 1);
+  return paint.getImageData(0, 0, 1, 1).data[3];
+}
 function horizontalOverflow(inner: Element | Range, outer: Element) {
   const child = bounds(inner);
   const parent = bounds(outer);
@@ -335,7 +341,11 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
         backgroundColor: style(header).backgroundColor,
         paddingBottom: "2px",
       });
-      expect(style(group).backgroundColor).not.toBe(style(list!).backgroundColor);
+      expect(style(group).backgroundColor).toBe("rgba(0, 0, 0, 0)");
+      expect(backgroundAlpha(fixture)).toBe(255);
+      expect(style(part(fixture, "list-wrap")).backgroundColor).toBe(
+        style(fixture).backgroundColor,
+      );
       const colorProbe = document.createElement("span");
       colorProbe.style.cssText = "position: absolute; color: var(--track-color);";
       group.append(colorProbe);
@@ -403,7 +413,8 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
     expect(bounds(close)).toMatchObject({ width: 36, height: 36 });
     expect(style(close)).toMatchObject({ borderTopWidth: "1px", borderRadius: "9999px" });
     expect(style(close).backgroundColor).not.toBe("rgba(0, 0, 0, 0)");
-    expect(style(sheet).backgroundColor).toBe(style(header).backgroundColor);
-    expect(style(header).backgroundColor).not.toBe(style(list).backgroundColor);
+    expect(style(header).backgroundColor).toBe("rgba(0, 0, 0, 0)");
+    expect(backgroundAlpha(sheet)).toBe(255);
+    expect(style(list).backgroundColor).toBe(style(sheet).backgroundColor);
   });
 });

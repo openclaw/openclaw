@@ -47,7 +47,7 @@ const cardsResponse = (cards: WorkboardCard[]) => ({
   statuses: ["todo", "done"],
 });
 
-async function expectNativeFocus(locator: Locator, context: string, within = false) {
+async function expectNativeFocus(locator: Locator, description: string, checkWithin = false) {
   await expect
     .poll(async () => {
       const observation = await locator.evaluate(
@@ -61,7 +61,7 @@ async function expectNativeFocus(locator: Locator, context: string, within = fal
           activeClass: document.activeElement?.className,
           activeText: document.activeElement?.textContent?.trim().slice(0, 160),
         }),
-        { context, within },
+        { context: description, within: checkWithin },
       );
       return observation.focused ? "focused" : JSON.stringify(observation);
     })

@@ -98,7 +98,7 @@ suite.define(() => {
           await waitForProgressThreadIdle(thread);
           // Transcript input cannot collapse the adjacent desktop disclosure.
           const bounds = expectDefined(await thread.boundingBox(), "transcript bounds");
-          await page.mouse.move(bounds.x + 8, bounds.y + bounds.height / 2);
+          await page.mouse.move(bounds.x + bounds.width / 4, bounds.y + bounds.height / 2);
           await page.mouse.wheel(0, -640);
           await expect
             .poll(() => thread.evaluate((el) => el.scrollHeight - el.clientHeight - el.scrollTop))

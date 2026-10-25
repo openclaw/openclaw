@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
 import { parseErrorResponse } from "@modelcontextprotocol/client";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import {
+  closeHttpServer,
+  listenLoopback,
+} from "../../test/helpers/gateway-integration-fixtures.js";
 import { buildMcpHttpFetch, buildMcpOAuthHttpFetch } from "./mcp-http-fetch.js";
 import { withMcpOAuthBearer } from "./mcp-oauth-fetch.js";
 import { operatorMcpOAuthIdentity } from "./mcp-oauth-identity.js";
@@ -56,22 +59,9 @@ async function hangingServer(stage: "headers" | "body"): Promise<string> {
       response.write('{"access_token":');
     }
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
-  const address = server.address() as AddressInfo;
-  onTestFinished(async () => {
-    const closed = new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
-    server.closeAllConnections();
-    await closed;
-  });
-  return `http://127.0.0.1:${address.port}`;
+  const url = await listenLoopback(server);
+  onTestFinished(() => closeHttpServer(server));
+  return url;
 }
 
 function expectBoundedTimeout(error: unknown, undiciCode: string): void {
@@ -99,8 +89,7 @@ describe("MCP HTTP fetch helpers", () => {
       vi.stubEnv(key, "");
       vi.stubEnv(key.toLowerCase(), "");
     }
-    lookupMock.mockReset();
-    lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+    lookupMock.mockReset().mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
     oauthResolveMock.mockReset();
     useFetch(async (_url, init) => {
       fetchCalls.push(init);
@@ -122,9 +111,7 @@ describe("MCP HTTP fetch helpers", () => {
     await fetch("https://mcp.example.com/token");
     await fetch("https://auth.example.com/token");
 
-    expect(connectOptions(fetchCalls[0])).toMatchObject({
-      rejectUnauthorized: false,
-    });
+    expect(connectOptions(fetchCalls[0])?.rejectUnauthorized).toBe(false);
     expect(connectOptions(fetchCalls[1])?.["rejectUnauthorized"]).toBeUndefined();
   });
 
@@ -150,7 +137,7 @@ describe("MCP HTTP fetch helpers", () => {
       identity: operatorMcpOAuthIdentity("docs", resourceUrl),
     });
 
-    const response = await fetch(resourceUrl, {
+    const options = {
       method: "POST",
       headers: { "content-type": "application/json" },
       body,
@@ -158,7 +145,8 @@ describe("MCP HTTP fetch helpers", () => {
       credentials: "include",
       keepalive: true,
       mode: "cors",
-    });
+    } satisfies RequestInit;
+    const response = await fetch(resourceUrl, options);
 
     expect(await response.text()).toBe("ok");
     expect(bodies).toEqual([body, body]);
@@ -209,7 +197,6 @@ describe("MCP HTTP fetch helpers", () => {
       const fetch = buildMcpHttpFetch({ resourceUrl: `${baseUrl}/mcp`, timeoutMs: 500 });
       const pending = fetch(`${baseUrl}/token`, { method: "POST" });
       const error = await captureRejection(stage === "headers" ? pending : (await pending).json());
-      expect(error).toBeDefined();
       expectBoundedTimeout(
         error,
         stage === "headers" ? "UND_ERR_HEADERS_TIMEOUT" : "UND_ERR_BODY_TIMEOUT",

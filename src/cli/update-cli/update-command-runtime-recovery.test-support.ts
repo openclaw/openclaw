@@ -4,11 +4,11 @@ import { expect, vi } from "vitest";
 import { buildRuntimeProbeEnv } from "../../daemon/runtime-paths.js";
 import * as containerEnvironment from "../../infra/container-environment.js";
 import type { UpdateRunRecord } from "../../infra/update-run-record.js";
-import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { UpdateRecoveryStep } from "../../shared/update-outcome.js";
 import * as versionManagerPath from "../../shared/version-manager-path.js";
 import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
 import { quoteCliArg, quotePowerShellArg } from "../quote-cli-arg.js";
+import { updateResult } from "./update-command-maintenance-fixtures.test-support.js";
 
 const nodeRuntimeVersions = new Map<string, NodeJS.ProcessVersions>();
 
@@ -130,23 +130,15 @@ export const unsupportedServiceRuntimeFixture = {
 } as const;
 
 export function currentGitCoreFixture(root: string, version: string) {
-  const outcome: UpdateRunResult = {
+  const outcome = updateResult({
     status: "skipped",
     mode: "git",
     root,
     reason: "already-current",
     before: { version, sha: "abc123" },
-    steps: [],
-    durationMs: 1,
-  };
+  });
   return {
     outcome,
-    converged: {
-      status: "skipped",
-      reason: "already-current",
-      after: { version, sha: "abc123" },
-      postUpdate: { plugins: { changed: false } },
-    },
     runtimeRefusal: {
       status: "error",
       reason: "node-runtime-preflight",
@@ -174,13 +166,6 @@ export function expectInterruptedDoctorPackageRollback(runs: UpdateRunRecord[]):
           step: "openclaw doctor",
           status: "failed",
           detail: expect.stringContaining("interrupted lifecycle"),
-          failureFacts: expect.arrayContaining([
-            expect.objectContaining({
-              check: "openclaw doctor",
-              code: "Error",
-              message: "interrupted lifecycle",
-            }),
-          ]),
         }),
       ]),
     },

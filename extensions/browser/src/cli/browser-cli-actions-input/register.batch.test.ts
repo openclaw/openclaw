@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { createNonExitingRuntime, defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -8,17 +9,15 @@ import {
   getBrowserCliRuntimeCapture,
   mockBrowserGateway,
 } from "../browser-cli.test-support.js";
-import * as batchSharedModule from "./shared.js";
 
 const mocks = vi.hoisted(() => ({
   callBrowserRequest: vi.fn<
     typeof browserCliSharedModule.callBrowserRequest<Record<string, unknown>>
   >(async () => ({ results: [{ ok: true }] })),
-  readActionsPayload: vi.fn(async () => ""),
 }));
 
 vi.spyOn(browserCliSharedModule, "callBrowserRequest").mockImplementation(mocks.callBrowserRequest);
-vi.spyOn(batchSharedModule, "readActionsPayload").mockImplementation(mocks.readActionsPayload);
+const realpath = vi.spyOn(fs, "realpath");
 mockBrowserCliRuntime();
 
 const { registerBrowserActionInputCommands } = await import("./register.js");
@@ -42,7 +41,6 @@ const actionsJson = JSON.stringify(SAMPLE_ACTIONS);
 const capture = getBrowserCliRuntimeCapture();
 
 function runBatch(options: string[] = [], parentOptions: string[] = []) {
-  mocks.readActionsPayload.mockResolvedValueOnce(actionsJson);
   return run(...parentOptions, "batch", "--actions", actionsJson, ...options);
 }
 
@@ -155,22 +153,19 @@ describe("browser action input batch command", () => {
       run("batch", "--actions", "[]", "--actions-file", "/tmp/browser-actions.json"),
     ).rejects.toThrow("Specify only one of --actions or --actions-file");
     expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
-    expect(mocks.readActionsPayload).not.toHaveBeenCalled();
+    expect(realpath).not.toHaveBeenCalled();
   });
 
   it("rejects malformed actions JSON before dispatch", async () => {
-    mocks.readActionsPayload.mockResolvedValueOnce("NOT JSON {{{");
     await expectRejected(["--actions", "NOT JSON {{{"], "actions must be valid JSON");
   });
 
   it("rejects non-array actions before dispatch", async () => {
     const payload = JSON.stringify({ kind: "click" });
-    mocks.readActionsPayload.mockResolvedValueOnce(payload);
     await expectRejected(["--actions", payload], "actions must be a JSON array");
   });
 
   it("rejects empty actions before dispatch", async () => {
-    mocks.readActionsPayload.mockResolvedValueOnce("[]");
     await expectRejected(["--actions", "[]"], "actions must contain at least one entry");
   });
 

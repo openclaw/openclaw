@@ -162,6 +162,11 @@ function ChatFooterContent(
               props={{
                 approval: input.props.inlineApproval!,
                 sourceSession: input.frame.approvalSourceSession,
+                nodeDisplayName: input.props.approvalNodeNames?.get(
+                  input.props.inlineApproval!.request.nodeId ?? "",
+                ),
+                pendingCount: input.props.approvalPendingCount,
+                onOpenPending: input.props.onOpenPendingApprovals,
                 busy: input.props.approvalBusy === true,
                 connected: input.props.connected,
                 canGrant: input.props.approvalCanGrant,
@@ -299,6 +304,11 @@ function ChatComposerView(input: ChatViewInput) {
                 props={{
                   approval: input.props.inlineApproval!,
                   sourceSession: input.frame.approvalSourceSession,
+                  nodeDisplayName: input.props.approvalNodeNames?.get(
+                    input.props.inlineApproval!.request.nodeId ?? "",
+                  ),
+                  pendingCount: input.props.approvalPendingCount,
+                  onOpenPending: input.props.onOpenPendingApprovals,
                   busy: input.props.approvalBusy ?? false,
                   connected: input.props.connected,
                   canGrant: input.props.approvalCanGrant,

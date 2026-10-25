@@ -115,6 +115,9 @@ export type ChatProps = Omit<
     approvalBusy?: boolean;
     approvalCanGrant: boolean;
     approvalErrors?: ReadonlyMap<string, string>;
+    approvalNodeNames?: ReadonlyMap<string, string>;
+    approvalPendingCount?: number;
+    onOpenPendingApprovals?: () => void;
     onApprovalDecision?: (
       approvalId: string,
       decision: ExecApprovalDecision,

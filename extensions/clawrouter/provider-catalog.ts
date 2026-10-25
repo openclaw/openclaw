@@ -1,3 +1,4 @@
+import { ModelInferenceCapabilitiesSchema } from "openclaw/plugin-sdk/decisions";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import {
   getCachedLiveProviderModelRows,
@@ -15,7 +16,14 @@ import {
   normalizeTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeClawRouterRootUrl } from "./base-url.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { CLAWROUTER_ROUTE_METADATA_KEY as ROUTE_METADATA_KEY } from "./provider-policy-api.js";
+
+export const decisionCapabilities = ModelInferenceCapabilitiesSchema.parse(
+  manifest.modelCatalog.providers.clawrouter.models.find(
+    (model) => model.id === "openai/gpt-6-luna",
+  )?.inference,
+);
 
 const PROVIDER_ID = "clawrouter";
 // Inventory changes infrequently; inference still enforces current grants and budgets.
@@ -269,6 +277,14 @@ function buildRoutedModel(
     name: normalizeOptionalString(row?.displayName) ?? `${provider.displayName} · ${modelLabel}`,
     api,
     baseUrl,
+    // Reaching this point proves this credential grants a compatible chat route.
+    // Static typed-only support must not veto that independent grant.
+    inference: {
+      ...(provider.id === "openai" && id === "openai/gpt-6-luna" && api === "openai-responses"
+        ? decisionCapabilities
+        : {}),
+      chat: true,
+    },
     reasoning:
       supportedReasoningEfforts !== undefined ||
       /(?:claude-|gemini-|gpt-5|gpt-oss|deepseek-v|reasoner|glm-5|grok-4|minimax-m)/u.test(

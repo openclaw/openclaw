@@ -23,7 +23,7 @@
 }
 
 .chat-outputs__row:hover {
-  background: var(--bg-hover);
+  background: var(--surface-hover);
 }
 
 .chat-outputs__row:focus-visible,

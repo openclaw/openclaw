@@ -45,7 +45,7 @@ const successfulRequest = () =>
 const isDecision = (method: string) => method.endsWith(".resolve");
 const replyRequest = (response: Promise<unknown>) =>
   vi.fn<RequestFn>((method) => (method.endsWith(".list") ? Promise.resolve([]) : response));
-const reviewOnly = "Review only. Sign in with approval access to record a decision.";
+const reviewOnly = "You don’t have permission to approve.";
 const failed = "Approval failed: gateway unavailable";
 function pendingRequests(matches: string | ((method: string) => boolean)) {
   const first = deferred<unknown>();
@@ -170,6 +170,99 @@ describe("Control UI refresh nudge", () => {
 });
 
 describe("application approval overlays", () => {
+  it("shares remote names across pending approvals and drops names after the queue drains", async () => {
+    const nodes = deferred<unknown>();
+    const request = vi.fn<RequestFn>((method) =>
+      method === "node.list" ? nodes.promise : Promise.resolve([]),
+    );
+    const { harness, overlays } = fixture(request, ["operator.read", "operator.approvals"]);
+    await flushMicrotasks();
+    for (const id of ["first", "second"]) {
+      harness.emitEvent("exec.approval.requested", {
+        ...approval(id, 1_000),
+        request: { command: "git status", host: "node", nodeId: "remote" },
+      });
+    }
+    expect(request.mock.calls.filter(([method]) => method === "node.list")).toHaveLength(1);
+    nodes.resolve({
+      nodes: [
+        { nodeId: "remote", displayName: "Build Mac" },
+        { nodeId: "unrelated", displayName: "Other machine" },
+      ],
+    });
+    await vi.waitFor(() =>
+      expect(overlays.snapshot.approvalNodeNames).toEqual(new Map([["remote", "Build Mac"]])),
+    );
+    await overlays.decideApproval("allow-once", "first");
+    expect(overlays.snapshot.approvalNodeNames?.get("remote")).toBe("Build Mac");
+    await overlays.decideApproval("deny", "second");
+    expect(overlays.snapshot.approvalNodeNames?.size).toBe(0);
+  });
+
+  it.each(["access", "connection"] as const)(
+    "discards a remote name after its %s scope changes",
+    async (boundary) => {
+      const { request, first, second } = pendingRequests("node.list");
+      const { harness, overlays } = fixture(request, ["operator.read", "operator.approvals"]);
+      await flushMicrotasks();
+      const remote = {
+        ...approval("remote-request", 1_000),
+        request: { command: "git status", host: "node", nodeId: "remote" },
+      };
+      harness.emitEvent("exec.approval.requested", remote);
+      if (boundary === "access") {
+        harness.setScopes(["operator.approvals"]);
+      } else {
+        harness.update({ client: client(request) });
+        await flushMicrotasks();
+        harness.emitEvent("exec.approval.requested", remote);
+      }
+      first.resolve({ nodes: [{ nodeId: "remote", displayName: "Previous account" }] });
+      await flushMicrotasks();
+      expect(overlays.snapshot.approvalNodeNames?.size).toBe(0);
+      if (boundary === "access") {
+        harness.setScopes(["operator.read", "operator.approvals"]);
+      }
+      second.resolve({ nodes: [{ nodeId: "remote", displayName: "Current machine" }] });
+      await vi.waitFor(() =>
+        expect(overlays.snapshot.approvalNodeNames?.get("remote")).toBe("Current machine"),
+      );
+    },
+  );
+
+  it.each(["unavailable", "not permitted"] as const)(
+    "keeps decisions available when node names are %s",
+    async (failure) => {
+      const request = vi.fn<RequestFn>((method) =>
+        method === "node.list" ? Promise.reject(new Error("Unavailable")) : Promise.resolve([]),
+      );
+      const { harness, overlays } = fixture(
+        request,
+        failure === "not permitted"
+          ? ["operator.approvals"]
+          : ["operator.approvals", "operator.read"],
+      );
+      await flushMicrotasks();
+      harness.emitEvent("exec.approval.requested", {
+        ...approval("remote-request", 1_000),
+        request: { command: "git status", host: "node", nodeId: "remote" },
+      });
+      await flushMicrotasks();
+      expect(overlays.snapshot.approvalErrors.size).toBe(0);
+      expect(overlays.snapshot.approvalCanGrant).toBe(true);
+      await overlays.decideApproval("allow-once", "remote-request");
+      await flushMicrotasks();
+      expectQueue(overlays);
+      expect(request).toHaveBeenCalledWith("exec.approval.resolve", {
+        id: "remote-request",
+        decision: "allow-once",
+      });
+      expect(request.mock.calls.filter(([method]) => method === "node.list")).toHaveLength(
+        failure === "not permitted" ? 0 : 1,
+      );
+    },
+  );
+
   it.each(["account", "recovery scope", "access", "epoch"] as const)(
     "retires old approval reads when the same client's %s changes",
     async (boundary) => {

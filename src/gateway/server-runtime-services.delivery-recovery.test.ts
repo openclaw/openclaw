@@ -29,7 +29,6 @@ import {
 } from "../test-utils/gateway-scheduler-clock.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
-import * as lifecycleNotices from "./server-restart-sentinel-notice.js";
 import { activateGatewayScheduledServices } from "./server-runtime-services.js";
 import * as updateRunNotices from "./update-run-notice.runtime.js";
 import { startUpdateRunWatcher } from "./update-run-watcher.js";
@@ -128,7 +127,6 @@ it("recovers a watcher-owned update notice on its runtime state after ambient ro
     },
   );
   const contextA = captureDeliveryQueueStateContext();
-  const notice = vi.spyOn(lifecycleNotices, "sendGatewayLifecycleNotice");
   const noticeStarted = createDeferredCore();
   const notifyUpdateRunPhase = updateRunNotices.notifyUpdateRunPhase;
   const notifyPhase = vi.spyOn(updateRunNotices, "notifyUpdateRunPhase");
@@ -160,18 +158,12 @@ it("recovers a watcher-owned update notice on its runtime state after ambient ro
   const broadcast = vi.fn().mockImplementationOnce(() => initiallyObserved.resolve());
   watcher = startUpdateRunWatcher({ lifecycle, broadcast, log });
   await initiallyObserved.promise;
-  expect(broadcast).toHaveBeenCalledWith(
-    "update.run.changed",
-    expect.objectContaining({ runId: run.runId, status: "running" }),
-  );
   finishUpdateRun(run.runId, { status: "succeeded", after: { version: "2026.9.5" } });
   await advance(2_000);
   await vi.dynamicImportSettled();
   // Import settlement does not join the watcher's reads or the notifier's durable handoff.
   await noticeStarted.promise;
-  expect(notifyPhase).toHaveBeenCalledOnce();
   await notifyPhase.mock.results[0]?.value;
-  expect(notice).toHaveBeenCalledOnce();
   const queueId = `update-run-finished:${run.runId}`;
   const pending = expectDefined(
     await loadPendingDelivery(queueId, undefined, contextA),

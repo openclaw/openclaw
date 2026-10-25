@@ -513,7 +513,8 @@ test.each(["unchanged", "caller", "runtime"] as const)(
         expect(preparedWorktreePath).toEqual(expect.any(String));
         // A separate connection cannot publish into either admitted source's host projection.
         if (change !== "unchanged") {
-          const foreign = new (requireNodeSqlite().DatabaseSync)(storePath);
+          // Another thread (e.g. a WAL checkpoint owner) may briefly hold the write lock.
+          const foreign = new (requireNodeSqlite().DatabaseSync)(storePath, { timeout: 5_000 });
           try {
             const sessionKey = change === "caller" ? caller.sessionKey : identity.sessionKey;
             const database = { agentId: "main", db: foreign };

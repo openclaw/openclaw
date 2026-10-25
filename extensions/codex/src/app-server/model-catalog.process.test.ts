@@ -172,7 +172,11 @@ process.stdin.on("end", () => process.exit(0));
         }
         check(readiness?.accountType).toBe(accountType);
         check(result.outcomes).toEqual([
-          { provider: "openai", status: mode === "absent-key" ? "unavailable" : "ready" },
+          {
+            provider: "openai",
+            status: mode === "absent-key" ? "unavailable" : "ready",
+            ...(accountType === "chatgpt" ? { modelAccessPrograms: [] } : {}),
+          },
         ]);
         check(result.entries).toContainEqual(expect.objectContaining({ id: "synthetic-model" }));
         check(await readAccount()).toEqual({

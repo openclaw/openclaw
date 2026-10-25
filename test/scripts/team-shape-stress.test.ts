@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, expect, it } from "vitest";
+import { createTeamStressFanoutReceipts } from "../../scripts/perf/team-shape-stress-receipts.ts";
 import {
   compareStressRuns,
   summarizeStressRun,
@@ -15,6 +16,124 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const temporary = useAutoCleanupTempDirTracker(afterEach);
 const executeFile = promisify(execFile);
+
+it("checks continuous workload receipts when a background fanout crosses the timing boundary", () => {
+  const receipts = createTeamStressFanoutReceipts(2, ["churn"]);
+  receipts.trackForeground(["foreground"]);
+  let measuring = false;
+  const timedMessages = [0, 0];
+  const receive = (client: number, sessionKey: string, messageId: string) => {
+    if (measuring) {
+      timedMessages[client]!++;
+    }
+    receipts.observe(client, "session.message", { sessionKey, messageId });
+  };
+  receive(0, "cron", "background");
+  receive(0, "foreground", "answer");
+  measuring = true;
+  receive(1, "cron", "background");
+  receive(1, "foreground", "answer");
+  // A message may be republished with updated contents; compare delivery multiplicity.
+  for (const client of [0, 1]) {
+    receive(client, "foreground", "answer");
+    receipts.observe(client, "sessions.changed", {
+      sessionKey: "foreground",
+      reason: "updated",
+      ts: 123,
+    });
+    receive(client, "churn", "committed");
+  }
+  // The publication can precede the RPC response that names the committed message.
+  receipts.expectInjection("churn", "committed");
+  expect(timedMessages).toEqual([2, 4]);
+  expect(() => receipts.assertComplete()).not.toThrow();
+  // A successful checkpoint consumes receipts; a prior round cannot satisfy a later one.
+  receipts.trackForeground(["foreground"]);
+  expect(() => receipts.assertComplete()).toThrow("missing foreground session.message");
+});
+
+it.each([false, true])(
+  "checks early native child receipts selected after spawn acceptance (missing: %s)",
+  (missing) => {
+    const receipts = createTeamStressFanoutReceipts(2, []);
+    // Setup publishes before all subscribers connect; collection starts with the workload.
+    receipts.observe(0, "sessions.changed", { sessionKey: "parent", reason: "created" });
+    receipts.trackForeground(["parent"], false);
+    for (const client of [0, 1]) {
+      receipts.observe(client, "session.message", { sessionKey: "parent", messageId: "spawn" });
+      if (!missing || client === 0) {
+        receipts.observe(client, "session.message", { sessionKey: "child", messageId: "early" });
+      }
+    }
+    receipts.trackForeground(["child"], false);
+    if (missing) {
+      expect(() => receipts.assertComplete()).toThrow('incomplete foreground fanout ["child"');
+      return;
+    }
+    expect(() => receipts.assertComplete()).not.toThrow();
+    // Retired children and an idle parent are not mandatory in the next workload.
+    receipts.observe(0, "session.message", { sessionKey: "next-child", messageId: "next" });
+    receipts.observe(1, "session.message", { sessionKey: "next-child", messageId: "next" });
+    receipts.trackForeground(["next-child"], false);
+    expect(() => receipts.assertComplete()).not.toThrow();
+  },
+);
+
+it.each(["one client", "all clients"])(
+  "rejects a named committed injection omitted for %s",
+  (missing) => {
+    const receipts = createTeamStressFanoutReceipts(2, ["churn"]);
+    if (missing === "one client") {
+      receipts.observe(0, "session.message", { sessionKey: "churn", messageId: "committed" });
+    }
+    receipts.expectInjection("churn", "committed");
+    expect(() => receipts.assertComplete()).toThrow(
+      'incomplete chat.inject fanout ["churn","committed"]',
+    );
+  },
+);
+
+it.each([false, true])(
+  "keeps an acknowledged injection pending until every client receives it (duplicate: %s)",
+  (duplicate) => {
+    const receipts = createTeamStressFanoutReceipts(2, ["churn"]);
+    receipts.expectInjection("churn", "committed");
+    const pending = ['["churn","committed"]'];
+    // No recent subscriber event is needed for a successful RPC to leave publication pending.
+    expect(receipts.pendingInjections()).toEqual(pending);
+    const payload = { sessionKey: "churn", messageId: "committed" };
+    receipts.observe(0, "session.message", payload);
+    if (duplicate) {
+      receipts.observe(0, "session.message", payload);
+    }
+    expect(receipts.pendingInjections()).toEqual(pending);
+    receipts.observe(1, "session.message", payload);
+    expect(receipts.pendingInjections()).toEqual([]);
+    if (duplicate) {
+      expect(() => receipts.assertComplete()).toThrow("incomplete chat.inject fanout");
+    } else {
+      expect(() => receipts.assertComplete()).not.toThrow();
+      expect(receipts.pendingInjections()).toEqual([]);
+    }
+  },
+);
+
+it.each(["session.message", "sessions.changed"])(
+  "rejects different foreground %s deliveries even when aggregate counts match",
+  (event) => {
+    const receipts = createTeamStressFanoutReceipts(2, []);
+    receipts.trackForeground(["foreground"]);
+    for (const client of [0, 1]) {
+      for (const kind of ["session.message", "sessions.changed"]) {
+        receipts.observe(client, kind, {
+          sessionKey: "foreground",
+          messageId: kind === event ? `missing-on-peer-${client}` : "shared",
+        });
+      }
+    }
+    expect(() => receipts.assertComplete()).toThrow("incomplete foreground fanout");
+  },
+);
 
 it("loads source worker telemetry through built package exports without redirecting built imports", async () => {
   const root = temporary.make("team-stress-worker-telemetry-");

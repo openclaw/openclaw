@@ -289,6 +289,7 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
 };
 
 export type EmbeddedRunAttemptResult = {
+  cyberAccessProgram?: "standard" | "daybreak_blue" | "daybreak_red";
   terminal: AgentRunAttemptTerminal;
   preparedTerminalReply?: PreparedAgentRunTerminalReply;
   /** Prepared policy that explains unavailable tools without another session read. */

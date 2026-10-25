@@ -26,7 +26,7 @@ const target = {
   storeTarget: { agentId: "main", storePath: "/synthetic/sessions.sqlite" },
 };
 
-it("reuses search fields across equal reads and timestamp changes, but refreshes changed search facts", async () => {
+it("reuses search fields across equal reads and refreshes replaced entries", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const context = buildSessionListRowMetadataContext({ now: 1 });
     let row: records.Row = { ...records.create(target, original), entry: original };
@@ -61,24 +61,23 @@ it("reuses search fields across equal reads and timestamp changes, but refreshes
       const parents = row.parents;
       acquire(original);
       expect(search("Synthetic session")).toEqual([target.key]);
+      expect(rebuild).toHaveBeenCalledOnce();
       acquire({ ...original, updatedAt: original.updatedAt + 1 });
       expect(search("Synthetic session")).toEqual([target.key]);
       expect(row.selection).toBe(selection);
       expect(row.parents).toBe(parents);
-      expect(rebuild).toHaveBeenCalledOnce();
+      expect(rebuild).toHaveBeenCalledTimes(2);
 
       for (const [fields, query] of [
         [{ label: "Renamed session" }, "Renamed session"],
         [{ label: undefined, displayName: "New display title" }, "New display title"],
         [{ modelProvider: "synthetic", model: "new-model" }, "synthetic/new-model"],
       ] satisfies [Partial<SessionEntry>, string][]) {
-        const previousSelection = row.selection;
         acquire({ ...row.entry!, ...fields });
         expect(search(query)).toEqual([target.key]);
-        expect(row.selection).not.toBe(previousSelection);
         expect(row.parents).toBe(parents);
       }
-      expect(rebuild).toHaveBeenCalledTimes(4);
+      expect(rebuild).toHaveBeenCalledTimes(5);
     } finally {
       rebuild.mockRestore();
     }

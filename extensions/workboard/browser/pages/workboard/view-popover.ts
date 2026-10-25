@@ -1,4 +1,123 @@
 import { onSettled } from "solid-js";
+import { listen } from "../../lib/listener.ts";
+
+type StatusDismissal = {
+  outside: (event: Event) => void;
+  scroll: (event: Event) => void;
+  escape: (event: KeyboardEvent) => void;
+};
+type PopoverEnvironment = {
+  positions: Set<() => void>;
+  statuses: Set<StatusDismissal>;
+  stopPositions?: () => void;
+  stopStatuses?: () => void;
+};
+const environments = new WeakMap<Document, PopoverEnvironment>();
+
+function environmentFor(doc: Document): PopoverEnvironment {
+  let environment = environments.get(doc);
+  if (!environment) {
+    environment = { positions: new Set(), statuses: new Set() };
+    environments.set(doc, environment);
+  }
+  return environment;
+}
+
+function notifyEnvironment<T>(entries: Set<T>, deliver: (entry: T) => void) {
+  const delivery = [...entries];
+  for (const entry of delivery) {
+    if (entries.has(entry)) {
+      try {
+        deliver(entry);
+      } catch (error) {
+        // Independent native listeners report errors without skipping their siblings.
+        reportError(error);
+      }
+    }
+  }
+}
+
+function observePopoverPosition(doc: Document, position: () => void): () => void {
+  const view = doc.defaultView;
+  if (!view) {
+    return () => {};
+  }
+  const environment = environmentFor(doc);
+  if (!environment.positions.size) {
+    const update = () => notifyEnvironment(environment.positions, (notify) => notify());
+    const stopResize = listen(view, "resize", update);
+    const stopScroll = listen(view, "scroll", update, true);
+    environment.stopPositions = () => {
+      stopResize();
+      stopScroll();
+    };
+  }
+  environment.positions.add(position);
+  return () => {
+    if (!environment.positions.delete(position)) {
+      return;
+    }
+    if (!environment.positions.size) {
+      environment.stopPositions?.();
+      environment.stopPositions = undefined;
+    }
+    if (!environment.positions.size && !environment.statuses.size) {
+      environments.delete(doc);
+    }
+  };
+}
+
+/** Status dismissal is needed while open or while a hover deadline could still open it. */
+export function observeWorkboardStatusDismissal(
+  doc: Document,
+  status: StatusDismissal,
+): () => void {
+  const environment = environmentFor(doc);
+  if (!environment.statuses.size) {
+    const stopScroll = listen(
+      doc,
+      "scroll",
+      (event) => {
+        notifyEnvironment(environment.statuses, (entry) => entry.scroll(event));
+      },
+      true,
+    );
+    const stopPointer = listen(
+      doc,
+      "pointerdown",
+      (event) => {
+        notifyEnvironment(environment.statuses, (entry) => entry.outside(event));
+      },
+      true,
+    );
+    const stopKey = listen(
+      doc,
+      "keydown",
+      (event) => {
+        notifyEnvironment(environment.statuses, (entry) => entry.escape(event));
+      },
+      true,
+    );
+    environment.stopStatuses = () => {
+      stopScroll();
+      stopPointer();
+      stopKey();
+    };
+  }
+  environment.statuses.add(status);
+  return () => {
+    if (!environment.statuses.delete(status)) {
+      return;
+    }
+    if (!environment.statuses.size) {
+      environment.stopStatuses?.();
+      environment.stopStatuses = undefined;
+    }
+    if (!environment.positions.size && !environment.statuses.size) {
+      environments.delete(doc);
+    }
+  };
+}
 
 export function closeWorkboardPopoverOnAction(event: Event) {
   if (!(event.target instanceof Element) || !event.target.closest("button")) {
@@ -46,23 +165,21 @@ export function workboardPopoverRef(
       element.style.left = `${Math.max(12, Math.min(left, innerWidth - bounds.width - 12))}px`;
       element.style.top = `${opensBelow ? anchor.bottom + 6 : Math.max(12, anchor.top - bounds.height - 6)}px`;
     };
-    let tracking = false;
-    const trackPosition = (open: boolean) => {
-      if (tracking === open) {
-        return;
-      }
-      tracking = open;
-      if (open) {
-        window.addEventListener("resize", position);
-        window.addEventListener("scroll", position, true);
+    let stopPosition: (() => void) | undefined;
+    const synchronizePosition = () => {
+      if (element.matches(":popover-open")) {
+        stopPosition ??= observePopoverPosition(element.ownerDocument, position);
       } else {
-        window.removeEventListener("resize", position);
-        window.removeEventListener("scroll", position, true);
+        stopPosition?.();
+        stopPosition = undefined;
       }
     };
     const toggle = () => {
-      trackPosition(element.matches(":popover-open"));
-      trigger()?.setAttribute("aria-expanded", String(element.matches(":popover-open")));
+      synchronizePosition();
+      trigger()?.setAttribute(
+        "aria-expanded",
+        String(element.matches(":popover-open")),
+      );
       position();
     };
     const keydown = (event: KeyboardEvent) => {
@@ -120,14 +237,22 @@ export function workboardPopoverRef(
     }
     element.addEventListener("toggle", toggle);
     element.addEventListener("keydown", keydown);
-    let frame = 0;
-    const beforeToggle = (event: ToggleEvent) => {
-      trackPosition(event.newState === "open");
+    let frame: number | undefined;
+    const beforeToggle = () => {
       // Position before the first paint; the toggle event can arrive after it.
-      cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(position);
+      if (frame !== undefined) {
+        cancelAnimationFrame(frame);
+      }
+      frame = requestAnimationFrame(() => {
+        frame = undefined;
+        position();
+      });
     };
     element.addEventListener("beforetoggle", beforeToggle);
+    synchronizePosition();
+    if (element.matches(":popover-open")) {
+      beforeToggle();
+    }
     return () => {
       clearTimeout(hoverTimer);
       if (hover) {
@@ -139,11 +264,13 @@ export function workboardPopoverRef(
         element.removeEventListener("pointerenter", enter);
         element.removeEventListener("pointerleave", leave);
       }
-      cancelAnimationFrame(frame);
+      if (frame !== undefined) {
+        cancelAnimationFrame(frame);
+      }
+      stopPosition?.();
       element.removeEventListener("beforetoggle", beforeToggle);
       element.removeEventListener("toggle", toggle);
       element.removeEventListener("keydown", keydown);
-      trackPosition(false);
     };
   });
   return (element: HTMLElement) => {

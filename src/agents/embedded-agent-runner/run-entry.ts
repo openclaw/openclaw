@@ -23,7 +23,6 @@ import { selectAgentHarness } from "../harness/selection.js";
 import type { ModelFallbackResultClassification } from "../model-fallback-attempt.js";
 import { runWithModelFallback } from "../model-fallback-runner.js";
 import type { FallbackAttempt } from "../model-fallback.types.js";
-import { modelKey } from "../model-ref-shared.js";
 import { forgetPromptBuildDrainCacheForRun } from "../plugin-turn-context.js";
 import { settleFailedRequesterRun, settleRequesterRun } from "../requester-run-settlement.js";
 import { resolveAgentRunAbortLifecycleFields } from "../run-termination.js";
@@ -37,10 +36,8 @@ import {
   didEmbeddedCyberFailoverTargetCommitWork,
   EMBEDDED_CYBER_FAILOVER_TRIGGER_CODE,
   isEmbeddedCyberFailoverTargetUsable,
-  isEmbeddedModelSelectionStrict,
   recordEmbeddedCyberFailoverTargetUnavailable,
   resolveEmbeddedCyberFailoverConfig,
-  resolveEmbeddedCyberFailoverTarget,
 } from "./embedded-cyber-failover.js";
 import { persistModelFallbackTranscriptNotice } from "./model-fallback-transcript.js";
 import {
@@ -237,12 +234,21 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
       : undefined;
   const hasCommittedSideEffect = canFallback ? () => !canFallback() : undefined;
   try {
-    let capturedCyberRefusal: { provider: string; model: string } | undefined;
+    let capturedCyberRefusal:
+      | { provider: string; model: string; authProfileId?: string }
+      | undefined;
     const runFallbackSearch = async (
       selection: EmbeddedAgentRunEntryParams<T>["selection"],
-      runOptions: { captureCyberRefusal?: boolean; forceFallbackRetry?: boolean } = {},
-    ) =>
-      runWithModelFallback<RunEntryCandidate<T>>({
+      runOptions: {
+        captureCyberRefusal?: boolean;
+        forceFallbackRetry?: boolean;
+        authProfileId?: string;
+      } = {},
+    ) => {
+      const resolveCandidateRuntime = runOptions.forceFallbackRetry
+        ? () => "openclaw"
+        : resolveRuntimeOverride;
+      return runWithModelFallback<RunEntryCandidate<T>>({
         ...selection,
         ...params.identity,
         operatorAuthority,
@@ -255,11 +261,11 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
               hookSelection.modelId === params.selection.model)),
         skipAuthProfileRuntime: await sessionPlacementUsesWorkerInference(params.identity),
         abortSignal: params.abortSignal,
-        resolveAgentHarnessRuntimeOverride: resolveRuntimeOverride,
+        resolveAgentHarnessRuntimeOverride: resolveCandidateRuntime,
         prepareCandidateChain: async (candidates) => {
           for (const candidate of candidates) {
             try {
-              const agentHarnessRuntimeOverride = resolveRuntimeOverride(
+              const agentHarnessRuntimeOverride = resolveCandidateRuntime(
                 candidate.provider,
                 candidate.model,
               );
@@ -338,11 +344,13 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
           }
           const isFallbackRetry = runOptions.forceFallbackRetry === true || candidateIndex > 0;
           // A hook-supplied chain owns subsequent candidates; legacy hooks may reroute each one.
-          const resolvedModelSelection = hookOwnsFallbacks
-            ? { provider, modelId: model, fallbacksOverride: selection.fallbacksOverride }
-            : candidateIndex === 0 && options.modelRoutingProvenance.stage === "initial"
-              ? hookSelection
-              : undefined;
+          const resolvedModelSelection = runOptions.forceFallbackRetry
+            ? { provider, modelId: model, fallbacksOverride: [] }
+            : hookOwnsFallbacks
+              ? { provider, modelId: model, fallbacksOverride: selection.fallbacksOverride }
+              : candidateIndex === 0 && options.modelRoutingProvenance.stage === "initial"
+                ? hookSelection
+                : undefined;
           candidateIndex += 1;
           let contextEngineTurnCandidate: ContextEngineTurnAttemptFacts | undefined;
           let classified:
@@ -366,13 +374,14 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
                   result.acceptedSessionSpawns = accepted;
                 }
               }
+              const agentMeta = result.meta.agentMeta;
               const classification =
                 params.behavior.kind === "maintenance"
                   ? undefined
                   : classifyEmbeddedAgentRunResultForModelFallback({
                       result,
-                      provider,
-                      model,
+                      provider: agentMeta?.provider ?? provider,
+                      model: agentMeta?.model ?? model,
                       ...readChannelDeliveryEvidence?.(),
                     });
               const effectiveClassification =
@@ -385,8 +394,20 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
                 effectiveClassification.code === EMBEDDED_CYBER_FAILOVER_TRIGGER_CODE;
               if (runOptions.captureCyberRefusal) {
                 // Finalization can replace the result; only its current classification
-                // may authorize policy escalation.
-                capturedCyberRefusal = cyberRefusal ? { provider, model } : undefined;
+                // may authorize escalation. Its physical model includes hook routing;
+                // the fallback callback can still name the pre-hook candidate.
+                const refusal = agentMeta?.providerRefusal;
+                capturedCyberRefusal =
+                  cyberRefusal &&
+                  agentMeta &&
+                  refusal?.accessProgram !== "daybreak_blue" &&
+                  refusal?.accessProgram !== "daybreak_red"
+                    ? {
+                        provider: agentMeta.provider,
+                        model: agentMeta.model,
+                        authProfileId: refusal?.authProfileId,
+                      }
+                    : undefined;
               }
               classified = {
                 result,
@@ -402,13 +423,17 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
             const result = await params.runCandidate(provider, model, {
               resolvedModelSelection,
               modelFallbacksOverride: selection.fallbacksOverride,
-              agentHarnessRuntimeOverride: resolveRuntimeOverride(provider, model),
+              agentHarnessRuntimeOverride: resolveCandidateRuntime(provider, model),
               assistantErrorTranscript,
               // The original OpenAI refusal proves this turn's credential already
               // reached the provider. Keep a target-only entitlement rejection from
               // poisoning shared auth health for ordinary OpenAI model selection.
               ...(runOptions.forceFallbackRetry
-                ? { authProfileFailurePolicy: "local" as const }
+                ? {
+                    authProfileFailurePolicy: "local" as const,
+                    cyberAccessProgram: "daybreak_blue" as const,
+                    authProfileId: runOptions.authProfileId,
+                  }
                 : {}),
               classifyResult,
               allowTransientCooldownProbe: options.allowTransientCooldownProbe,
@@ -439,6 +464,7 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
           }
         },
       });
+    };
 
     const originalFallbackResult = await runFallbackSearch(runSelection, {
       captureCyberRefusal: true,
@@ -448,23 +474,15 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
     let policyEscalated = false;
     const cyberFailover = resolveEmbeddedCyberFailoverConfig(params.selection.cfg);
     const target =
-      capturedCyberRefusal && cyberFailover.mode === "auto"
-        ? resolveEmbeddedCyberFailoverTarget({
-            cfg: params.selection.cfg,
-            agentId: params.identity.agentId,
-            raw: cyberFailover.model,
-            manifestPlugins: params.selection.manifestPlugins,
-          })
-        : null;
-    const authScope = params.selection.userLockedAuthProfileId?.trim() || undefined;
+      capturedCyberRefusal && cyberFailover.mode === "auto" ? capturedCyberRefusal : null;
+    // Access denials must not cool down ordinary calls to this same model.
+    const authProfileId =
+      capturedCyberRefusal?.authProfileId ?? params.selection.userLockedAuthProfileId;
+    const authScope = `cyber-blue:${authProfileId ?? ""}`;
     if (
       capturedCyberRefusal &&
       target &&
-      !hookOwnsFallbacks &&
       (!operatorAuthority?.modelPolicy || operatorAuthority.modelPolicy.allows(target)) &&
-      !isEmbeddedModelSelectionStrict(runSelection) &&
-      modelKey(capturedCyberRefusal.provider, capturedCyberRefusal.model) !==
-        modelKey(target.provider, target.model) &&
       !isFallbackCandidateSkipped({
         sessionId: params.identity.sessionId,
         provider: target.provider,
@@ -494,9 +512,10 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
             provider: target.provider,
             model: target.model,
             requestedRouteResolution: "resolved",
+            userLockedAuthProfileId: authProfileId,
             fallbacksOverride: [],
           },
-          { forceFallbackRetry: true },
+          { forceFallbackRetry: true, authProfileId },
         );
         const usable =
           targetFallbackResult.outcome === "completed" &&

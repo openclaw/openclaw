@@ -37,6 +37,7 @@ import {
   summarizeLongTaskCpuProfiles,
   type InteractionStyleSheet,
 } from "./lib/control-ui-interaction-trace.ts";
+import { launchControlUiObservationBrowser } from "./lib/control-ui-observation-browser.ts";
 import {
   createProjectionBoardResponses,
   disposeProjectionFixture,
@@ -48,11 +49,17 @@ import {
   readControlUiResourceCounts,
   type ControlUiResourceCounts,
 } from "./lib/control-ui-resource-counts.ts";
+import {
+  createWorkboardResourceFixture,
+  prepareWorkboardResourceSource,
+} from "./lib/control-ui-workboard-resource-fixture.ts";
 
 const { values } = parseArgs({
   options: {
     "bundle-dir": { type: "string", default: "dist/control-ui" },
     "compare-bundle-dir": { type: "string" },
+    "workboard-source-root": { type: "string" },
+    "compare-workboard-source-root": { type: "string" },
     output: { type: "string", default: ".artifacts/control-ui-interactions" },
     steps: { type: "string" },
     viewport: { type: "string", default: "both" },
@@ -126,10 +133,17 @@ async function settle(page: Page) {
   );
 }
 
-async function metrics(cdp: CDPSession) {
+async function metrics(
+  cdp: CDPSession,
+): Promise<Record<string, number> & { JSHeapUsedSize: number }> {
   const result: { metrics: Array<{ name: string; value: number }> } =
     await cdp.send("Performance.getMetrics");
-  return Object.fromEntries(result.metrics.map(({ name, value }) => [name, value]));
+  const measured = Object.fromEntries(result.metrics.map(({ name, value }) => [name, value]));
+  const heapUsed = measured.JSHeapUsedSize;
+  if (heapUsed === undefined) {
+    throw new Error("Chromium did not report the required JS heap metric");
+  }
+  return { ...measured, JSHeapUsedSize: heapUsed };
 }
 
 function distribution(numbers: number[]) {
@@ -270,6 +284,9 @@ type Result = {
   taskMs?: number;
   layoutMs?: number;
   styleMs?: number;
+  heapBeforeBytes?: number;
+  heapAfterBytes?: number;
+  heapDeltaBytes?: number;
   durationBreakdownMs?: Record<string, number>;
   longTasks?: { count: number; totalMs: number; maxMs: number };
   requests?: Record<string, number>;
@@ -305,6 +322,7 @@ const servers: Array<{
   directory: string;
   build: { buildId: string; version: string };
   indexSha256: string;
+  workboardSource?: Awaited<ReturnType<typeof prepareWorkboardResourceSource>>;
   projectionBuild?: { entry: string; descriptorSha256: string; entrySha256: string };
   server: Awaited<ReturnType<typeof startControlUiBenchGatewayServer>>;
 }> = [];
@@ -334,8 +352,9 @@ if (values["process-wakeups"]) {
     }
   }
 }
+const browserExecutable = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const browser = await chromium.launch({
-  executablePath: resolvePlaywrightChromiumExecutablePath(chromium.executablePath()),
+  executablePath: browserExecutable,
   headless: !values.headed,
 });
 
@@ -445,7 +464,7 @@ try {
       sandboxPort: address.port,
     };
   }
-  for (const directory of bundles) {
+  for (const [bundleIndex, directory] of bundles.entries()) {
     const resolved = path.resolve(directory);
     const html = await readFile(path.join(resolved, "index.html"), "utf8");
     const raw = html.match(
@@ -455,6 +474,15 @@ try {
       throw new Error(`Missing build identity: ${directory}`);
     }
     const build: { buildId: string; version: string } = JSON.parse(raw);
+    const sourceRoot = [values["workboard-source-root"], values["compare-workboard-source-root"]][
+      bundleIndex
+    ];
+    const needsWorkboard = scenarios.some((scenario) => scenario.fixture?.workboardResources);
+    if (needsWorkboard && !sourceRoot) {
+      throw new Error(`Missing explicit Workboard source root for bundle ${bundleIndex}`);
+    }
+    const workboardSource =
+      needsWorkboard && sourceRoot ? await prepareWorkboardResourceSource(sourceRoot) : undefined;
     let projectionBuild: (typeof servers)[number]["projectionBuild"];
     if (values["projection-fixtures"]) {
       const descriptor = await readFile(path.join(resolved, "projection-fixture.json"), "utf8");
@@ -476,6 +504,7 @@ try {
     }
     servers.push({
       directory: resolved,
+      workboardSource,
       build,
       indexSha256: createHash("sha256").update(html).digest("hex"),
       projectionBuild,
@@ -488,6 +517,7 @@ try {
       {
         revision: execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
         browser: browser.version(),
+        browserExecutable,
         host: {
           platform: os.platform(),
           arch: os.arch(),
@@ -536,8 +566,21 @@ try {
                 "board-pins": { A: 400, B: 80 },
                 "sdk-avatars": { A: 120, B: 40 },
                 "sdk-avatar-identities": { A: 120, B: 40 },
+                tooltips: { A: 100 },
+                "link-providers": { A: 100, B: 30 },
+                "link-metadata": { A: 100, B: 30 },
+                "ci-pairs": { A: 100, B: 30 },
+                "clawhub-cards": { A: 100, B: 30 },
               },
               publications: 20,
+              nativeResourceWork: {
+                tooltips: "20 native child-list mutation batches",
+                "link-providers": "20 native child-list mutation batches in A",
+                "link-metadata": "20 replay request events; two actual panel producers",
+                "ci-pairs": "20 native A Gateway snapshots",
+                "clawhub-cards": "20 native A Gateway snapshots",
+                idle: "No deliberate publication; three native-clock seconds",
+              },
               note: "Extra benchmark-only entry changes the build graph; compare identical entry builds and measure shipping bytes separately.",
             }
           : undefined,
@@ -548,19 +591,23 @@ try {
           "No sidebar text input exists; measure command palette search separately",
           "No fake clocks, Lit probes or simulated transport delay",
         ],
-        scenarios: scenarios.map(({ id, route, expected, fixture }) => ({
+        scenarios: scenarios.map(({ id, route, expected, fixture, observationBrowser }) => ({
           id,
           route,
           expected,
           fixture,
+          observationBrowser,
         })),
         viewports,
-        bundles: servers.map(({ directory, build, indexSha256, projectionBuild }) => ({
-          directory,
-          ...build,
-          indexSha256,
-          projectionBuild,
-        })),
+        bundles: servers.map(
+          ({ directory, build, indexSha256, workboardSource, projectionBuild }) => ({
+            directory,
+            ...build,
+            indexSha256,
+            workboardSource,
+            projectionBuild,
+          }),
+        ),
       },
       null,
       2,
@@ -572,12 +619,27 @@ try {
         const startedAt = new Date().toISOString();
         const startLoad = os.loadavg();
         for (const [bundle, slot] of servers.entries()) {
+          const artifactPrefix = `${viewport.name}-${theme}-${scenario.id}-${pair + 1}-${bundle}`;
           const nativeVisibility =
             scenario.visibility === "hidden" && values.headed
               ? await launchNativeVisibilityContext()
               : undefined;
+          const observationBrowser =
+            scenario.observationBrowser && !nativeVisibility
+              ? await launchControlUiObservationBrowser({
+                  viewport: { width: viewport.width, height: viewport.height },
+                  artifactDir,
+                  artifactPrefix,
+                  headless: !values.headed,
+                  colorScheme: theme,
+                  isMobile: viewport.name === "mobile",
+                  hasTouch: viewport.name === "mobile",
+                })
+              : undefined;
+          const ownedBrowserPid = nativeVisibility?.processId ?? observationBrowser?.processId;
           const context =
             nativeVisibility?.context ??
+            observationBrowser?.context ??
             (await browser.newContext({
               viewport: { width: viewport.width, height: viewport.height },
               isMobile: viewport.name === "mobile",
@@ -622,11 +684,11 @@ try {
             }
           } catch (error) {
             await nativeVisibility?.close();
+            await observationBrowser?.close();
             throw error;
           }
           const errors: string[] = [];
           page.on("pageerror", (error) => errors.push(error.message));
-          const artifactPrefix = `${viewport.name}-${theme}-${scenario.id}-${pair + 1}-${bundle}`;
           const result: Result = {
             step: scenario.id,
             viewport: viewport.name,
@@ -639,7 +701,7 @@ try {
               ? {
                   processWakeups: {
                     complete: false,
-                    nativeBrowserPid: nativeVisibility?.processId,
+                    nativeBrowserPid: ownedBrowserPid,
                     reason: processWakeupSetupError ?? "Sampling not reached",
                   },
                 }
@@ -656,17 +718,31 @@ try {
           try {
             cdp = await context.newCDPSession(page);
             await cdp.send("Emulation.setCPUThrottlingRate", { rate: cpuThrottle });
-            if (nativeVisibility && scenario.fixture?.boardFrameResources) {
+            if (
+              nativeVisibility &&
+              (scenario.fixture?.boardFrameResources ||
+                scenario.fixture?.browserResources ||
+                scenario.fixture?.workboardResources)
+            ) {
               // Native default contexts allow service workers, which hide fixture fetches from page.route.
               await cdp.send("Network.enable");
               await cdp.send("Network.setBypassServiceWorker", { bypass: true });
             }
-            const fixture = createInteractionFixture(
-              slot.build.buildId,
-              slot.build.version,
-              scenario.fixture,
-              sandbox,
-            );
+            const workboardSource = scenario.fixture?.workboardResources
+              ? slot.workboardSource
+              : undefined;
+            const fixture = workboardSource
+              ? createWorkboardResourceFixture(
+                  slot.build.buildId,
+                  slot.build.version,
+                  workboardSource.root,
+                )
+              : createInteractionFixture(
+                  slot.build.buildId,
+                  slot.build.version,
+                  scenario.fixture,
+                  sandbox,
+                );
             const sessions = createTeamScaleSidebarListOwner({
               rows: fixture.sessions,
               viewerProfileId: "interaction-viewer",
@@ -704,7 +780,12 @@ try {
             await page.goto(new URL(scenario.route, slot.server.baseUrl).href);
             await waitForControlUiInitialRoster(page, 15_000 * cpuThrottle);
             await scenario.prepare(page, gateway);
-            if (nativeVisibility && scenario.fixture?.boardFrameResources) {
+            if (
+              nativeVisibility &&
+              (scenario.fixture?.boardFrameResources ||
+                scenario.fixture?.browserResources ||
+                scenario.fixture?.workboardResources)
+            ) {
               await cdp.send("Network.setBypassServiceWorker", { bypass: false });
               await cdp.send("Network.disable");
             }
@@ -719,8 +800,11 @@ try {
                 scenario.projectionFamily,
                 values["projection-counts"],
               );
-              await page.waitForFunction(() => window.openclawControlUi !== undefined);
-              await settleSidebarBackgroundWork(page);
+              // Native instance fixtures have no shell or navigation prefetch owner.
+              if (scenario.route !== "/instance-resource-fixture.html") {
+                await page.waitForFunction(() => window.openclawControlUi !== undefined);
+                await settleSidebarBackgroundWork(page);
+              }
             }
             // Slow CPUs can still be loading boot modules after the first ready frame.
             await page.waitForLoadState("networkidle");
@@ -846,7 +930,7 @@ try {
               observation.reason = processWakeupSetupError ?? "Process observation did not finish";
               if (processWakeupReader) {
                 try {
-                  if (nativeVisibility && nativeVisibility.processId === undefined) {
+                  if ((nativeVisibility || observationBrowser) && ownedBrowserPid === undefined) {
                     throw new Error("Native owned Chromium launch did not retain its PID");
                   }
                   const ownedBrowser = context.browser();
@@ -857,7 +941,7 @@ try {
                   observation.before = await readProcessWakeups(
                     processSession,
                     processWakeupReader,
-                    nativeVisibility?.processId,
+                    ownedBrowserPid,
                   );
                 } catch (error) {
                   observation.reason = String(error);
@@ -895,6 +979,9 @@ try {
               result.projectionCoverageArtifact = artifact;
             }
             const after = await metrics(cdp);
+            result.heapBeforeBytes = before.JSHeapUsedSize;
+            result.heapAfterBytes = after.JSHeapUsedSize;
+            result.heapDeltaBytes = after.JSHeapUsedSize - before.JSHeapUsedSize;
             result.longTasks = await taskProbe.evaluate(({ durations, observer }) => {
               durations.push(...observer.takeRecords().map((entry) => entry.duration));
               observer.disconnect();
@@ -910,7 +997,7 @@ try {
                 result.processWakeups.after = await readProcessWakeups(
                   processSession,
                   processWakeupReader,
-                  nativeVisibility?.processId,
+                  ownedBrowserPid,
                 );
                 finishProcessWakeups(result.processWakeups);
               } catch (error) {
@@ -975,13 +1062,26 @@ try {
               const sdk =
                 scenario.projectionFamily === "sdk-avatars" ||
                 scenario.projectionFamily === "sdk-avatar-identities";
+              const resourceFamily = [
+                "tooltips",
+                "link-providers",
+                "link-metadata",
+                "ci-pairs",
+                "clawhub-cards",
+              ].includes(scenario.projectionFamily);
               const method =
                 scenario.projectionFamily === "board-pins"
                   ? "board.get"
-                  : scenario.projectionFamily === "sdk-avatar-identities"
-                    ? "agent.identity.get"
-                    : "agents.list";
-              const expected = scenario.projectionIdle ? 0 : sdk ? 10 : 20;
+                  : scenario.projectionFamily === "ci-pairs"
+                    ? "controlUi.sessionPullRequests.checks"
+                    : scenario.projectionFamily === "clawhub-cards"
+                      ? "plugins.catalog.get"
+                      : resourceFamily
+                        ? "forge.detail"
+                        : scenario.projectionFamily === "sdk-avatar-identities"
+                          ? "agent.identity.get"
+                          : "agents.list";
+              const expected = scenario.projectionIdle || resourceFamily ? 0 : sdk ? 10 : 20;
               if ((result.requests[method] ?? 0) !== expected) {
                 throw new Error(
                   `Expected ${expected} measured ${method} requests, got ${result.requests[method] ?? 0}`,
@@ -1126,7 +1226,13 @@ try {
                 await capture(() => disposeProjectionFixture(page));
               }
               await capture(async () => cdp?.detach());
-              await capture(() => (nativeVisibility ? nativeVisibility.close() : context.close()));
+              await capture(() =>
+                nativeVisibility
+                  ? nativeVisibility.close()
+                  : observationBrowser
+                    ? observationBrowser.close()
+                    : context.close(),
+              );
             }
             if (errors.length) {
               result.status = "failed";

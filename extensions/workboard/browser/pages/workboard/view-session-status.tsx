@@ -1,12 +1,12 @@
 /** @jsxImportSource @solidjs/web */
-import { createEffect, createMemo, onSettled } from "solid-js";
+import { createEffect, onSettled } from "solid-js";
 import { t } from "../../i18n/index.ts";
 import { formatDurationCompact } from "../../lib/format.ts";
-import { listen } from "../../lib/listener.ts";
 import { getCardStaleAgeMs } from "../../lib/workboard/card-alerts.ts";
 import { getCardSessionState, type CardSessionState } from "../../lib/workboard/session-state.ts";
 import type { WorkboardCard, WorkboardLifecycle } from "../../lib/workboard/types.ts";
 import { formatLifecycle } from "./view-helpers.tsx";
+import { observeWorkboardStatusDismissal } from "./view-popover.ts";
 export type SessionStatusPresentation = {
   state: CardSessionState;
   title?: string;
@@ -87,7 +87,32 @@ export function SessionStatus(props: {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let pointerInside = false;
   let open = false;
-  let stopWatching: (() => void) | undefined;
+  let stopEnvironment: (() => void) | undefined;
+  const releaseEnvironment = () => {
+    stopEnvironment?.();
+    stopEnvironment = undefined;
+  };
+  const watchEnvironment = () => {
+    stopEnvironment ??= observeWorkboardStatusDismissal(host.ownerDocument, {
+      outside: (event) => {
+        if (!event.composedPath().includes(host)) {
+          dismiss();
+        }
+      },
+      scroll: (event) => {
+        if (!(event.target instanceof Node && panel?.contains(event.target))) {
+          dismiss();
+        }
+      },
+      escape: (event) => {
+        if (event.key === "Escape" && open) {
+          event.preventDefault();
+          event.stopPropagation();
+          dismiss();
+        }
+      },
+    });
+  };
   const clearTimer = () => {
     if (timer !== undefined) {
       clearTimeout(timer);
@@ -96,8 +121,7 @@ export function SessionStatus(props: {
   };
   const dismiss = () => {
     clearTimer();
-    stopWatching?.();
-    stopWatching = undefined;
+    releaseEnvironment();
     if (open && panel?.isConnected) {
       panel.hidePopover();
     }
@@ -109,48 +133,14 @@ export function SessionStatus(props: {
   const show = () => {
     clearTimer();
     if (!host.isConnected || !panel || !trigger || open) {
+      if (!open) {
+        releaseEnvironment();
+      }
       return;
     }
+    watchEnvironment();
     panel.showPopover();
     open = true;
-    const doc = host.ownerDocument;
-    const stopScroll = listen(
-      doc,
-      "scroll",
-      (event) => {
-        if (!(event.target instanceof Node && panel?.contains(event.target))) {
-          dismiss();
-        }
-      },
-      true,
-    );
-    const stopPointer = listen(
-      doc,
-      "pointerdown",
-      (event) => {
-        if (!event.composedPath().includes(host)) {
-          dismiss();
-        }
-      },
-      true,
-    );
-    const stopKey = listen(
-      doc,
-      "keydown",
-      (event) => {
-        if (event.key === "Escape") {
-          event.preventDefault();
-          event.stopPropagation();
-          dismiss();
-        }
-      },
-      true,
-    );
-    stopWatching = () => {
-      stopScroll();
-      stopPointer();
-      stopKey();
-    };
     trigger.setAttribute("aria-expanded", "true");
     const anchor = trigger.getBoundingClientRect();
     const bounds = panel.getBoundingClientRect();
@@ -162,21 +152,26 @@ export function SessionStatus(props: {
     pointerInside = true;
     clearTimer();
     if (!open) {
+      watchEnvironment();
       timer = setTimeout(show, 350);
     }
   };
   const leave = () => {
     pointerInside = false;
     clearTimer();
+    watchEnvironment();
     timer = setTimeout(() => {
+      timer = undefined;
       if (!pointerInside && !host.contains(host.ownerDocument.activeElement)) {
         dismiss();
       }
+      if (!open) {
+        releaseEnvironment();
+      }
     }, 150);
   };
-  const identity = createMemo(() => `${props.context.id}:${props.presentation.visible}`);
-  createEffect(identity, dismiss);
-  onSettled(() => dismiss);
+  createEffect(() => `${props.context.id}:${props.presentation.visible}`, dismiss);
+  onSettled(() => () => dismiss());
   return (
     <openclaw-workboard-session-status
       ref={(element) => {

@@ -37,6 +37,8 @@ minimumReleaseAgeExclude:
   - "@pnpm/exe.win32-x64@12.15.0"
   # Reviewed Edge TTS 403 fix; remove after 2026-10-19T16:27:27.581Z.
   - "node-edge-tts@1.2.11"
+  # Reviewed acpx 0.21.0 release (agent process env controls, openclaw/acpx#897); remove after 2026-10-31T00:42:33.101Z.
+  - "acpx@0.21.0"
   # Reviewed fs-safe 0.26.13 release and native helpers; remove after 2026-10-31T07:48:44.970Z.
   - "@openclaw/fs-safe@0.26.13"
   - "@openclaw/fs-safe-darwin-arm64@0.26.13"
