@@ -367,7 +367,12 @@ it("resolves cold and warm bare users with the selected account policy", async (
           cfg,
           accountId: "selected",
         });
-        expect(result).toMatchObject({ messageId: "post-1", channelId: LOOPBACK_CHANNEL_ID });
+        expect(result).toMatchObject({
+          messageId: "post-1",
+          channelId: LOOPBACK_CHANNEL_ID,
+          content: "target proof",
+          receipt: { primaryPlatformMessageId: "post-1", platformMessageIds: ["post-1"] },
+        });
       }
       expect(requests.map(({ path }) => path)).toEqual([
         "/api/v4/users/" + USER_ID,

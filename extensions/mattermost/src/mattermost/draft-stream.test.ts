@@ -20,10 +20,11 @@ type DraftStreamOptions = Omit<
   "client" | "channelId"
 > & {
   request?: MattermostClient["request"];
+  beforeRequest?: (path: string) => Promise<void>;
 };
 
 function createDraftStreamFixture(options: DraftStreamOptions = {}) {
-  const { request, ...streamOptions } = options;
+  const { request, beforeRequest, ...streamOptions } = options;
   const calls: RequestRecord[] = [];
   let nextId = 1;
   const requestImpl: MattermostClient["request"] = async <T>(
@@ -31,6 +32,7 @@ function createDraftStreamFixture(options: DraftStreamOptions = {}) {
     init?: RequestInit,
   ): Promise<T> => {
     calls.push({ path, init });
+    await beforeRequest?.(path);
     if (path === "/posts") {
       return { id: `post-${nextId++}` } as T;
     }
@@ -122,22 +124,6 @@ function createProviderPostFixture(
 }
 
 describe("createMattermostDraftStream", () => {
-  it("creates a preview post and updates it on later changes", async () => {
-    const { calls, stream, publish } = createDraftStreamFixture({ rootId: "root-1" });
-    await publish("Running `read`…");
-    await publish("Running `read`…");
-
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.path).toBe("/posts");
-
-    expect(parseRequestJson(calls[0]?.init)).toEqual({
-      channel_id: "channel-1",
-      root_id: "root-1",
-      message: "Running `read`…",
-    });
-    expect(stream.postId()).toBe("post-1");
-  });
-
   it.each([{ timing: "immediately after retraction" }, { timing: "while deletion is pending" }])(
     "keeps the identical plan replacement $timing",
     async ({ timing }) => {
@@ -281,34 +267,28 @@ describe("createMattermostDraftStream", () => {
     }
   });
 
-  it("seal keeps the preview post and cancels pending final overwrites", async () => {
-    const { calls, stream, publish } = createDraftStreamFixture({ rootId: "root-1" });
-    await publish("Working...");
-    stream.update("Stale final draft");
-    await stream.seal();
-    await stream.forceNewMessage();
-
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.path).toBe("/posts");
-    expect(stream.postId()).toBe("post-1");
-  });
-
-  it("stop flushes the last pending update and ignores later ones", async () => {
-    const { calls, stream, publish } = createDraftStreamFixture({ rootId: "root-1" });
-    await publish("Working...");
-    stream.update("Stale partial");
-    await stream.stop();
-    stream.update("Late partial");
-    await stream.flush();
-
-    expect(calls).toHaveLength(2);
-    expect(calls[0]?.path).toBe("/posts");
-    expect(calls[1]?.path).toBe("/posts/post-1/patch");
-    expect(parseRequestJson(calls[1]?.init)).toEqual({
-      id: "post-1",
-      message: "Stale partial",
-    });
-  });
+  it.each(["seal", "stop"] as const)(
+    "%s preserves the preview and ignores later updates",
+    async (finish) => {
+      const { calls, stream, publish } = createDraftStreamFixture({ rootId: "root-1" });
+      await publish("Working...");
+      stream.update("Stale partial");
+      await stream[finish]();
+      await stream.forceNewMessage();
+      stream.update("Late partial");
+      await stream.flush();
+      expect(stream.postId()).toBe("post-1");
+      expect(calls).toHaveLength(finish === "seal" ? 1 : 2);
+      expect(calls[0]?.path).toBe("/posts");
+      if (finish === "stop") {
+        expect(calls[1]?.path).toBe("/posts/post-1/patch");
+        expect(parseRequestJson(calls[1]?.init)).toEqual({
+          id: "post-1",
+          message: "Stale partial",
+        });
+      }
+    },
+  );
 
   it("retains an accepted preview failure after its background flush has settled", async () => {
     const warn = vi.fn();
@@ -380,23 +360,22 @@ describe("createMattermostDraftStream forceNewMessage", () => {
     expect(requestMock).toHaveBeenCalledOnce();
   });
 
-  it("restores and chunks an already-flushed over-limit block before rotating", async () => {
+  it("deduplicates previews and restores an over-limit block before rotating", async () => {
     const firstChunk = "a".repeat(4000);
     const secondChunk = "b".repeat(4000);
     const chunkText = vi.fn(() => [firstChunk, secondChunk]);
-    const {
-      calls,
-      stream: configuredStream,
-      publish,
-    } = createDraftStreamFixture({
-      chunkText,
-    });
-
+    const { calls, stream, publish } = createDraftStreamFixture({ chunkText, rootId: "root-1" });
     await publish(`${firstChunk}${secondChunk}`);
-    expect(parseRequestJson(calls[0]?.init)?.message).toBe(`${"a".repeat(3997)}...`);
-
-    await configuredStream.forceNewMessage();
-    expect(configuredStream.postId()).toBeUndefined();
+    await publish(`${firstChunk}${secondChunk}`);
+    expect(calls).toHaveLength(1);
+    expect(stream.postId()).toBe("post-1");
+    expect(parseRequestJson(calls[0]?.init)).toEqual({
+      channel_id: "channel-1",
+      root_id: "root-1",
+      message: `${"a".repeat(3997)}...`,
+    });
+    await stream.forceNewMessage();
+    expect(stream.postId()).toBeUndefined();
     await publish("tool");
 
     expect(calls.map((call) => call.path)).toEqual([
@@ -412,40 +391,25 @@ describe("createMattermostDraftStream forceNewMessage", () => {
     ];
     expect(chunkText).toHaveBeenCalledWith(`${firstChunk}${secondChunk}`);
     expect(finalizedChunks).toEqual([firstChunk, secondChunk]);
-    expect(finalizedChunks.join("")).toBe(`${firstChunk}${secondChunk}`);
     expect(parseRequestJson(calls[3]?.init)?.message).toBe("tool");
-    expect(configuredStream.postId()).toBe("post-3");
+    expect(stream.postId()).toBe("post-3");
   });
 
   it("publishes overlapping fire-and-forget boundaries in generation order", async () => {
-    const calls: RequestRecord[] = [];
-    let nextId = 1;
     const firstCreate = createDeferred<void>();
     const boundaryPatch = createDeferred<void>();
     const secondCreate = createDeferred<void>();
     let createdCount = 0;
-    const requestImpl: MattermostClient["request"] = async <T>(
-      path: string,
-      init?: RequestInit,
-    ): Promise<T> => {
-      calls.push({ path, init });
-      if (path === "/posts") {
-        createdCount += 1;
-        if (createdCount === 1) {
-          await firstCreate.promise;
+    const { calls, stream } = createDraftStreamFixture({
+      beforeRequest: async (path) => {
+        if (path === "/posts") {
+          const gate = [firstCreate, secondCreate][createdCount++];
+          await gate?.promise;
+        } else if (path.startsWith("/posts/")) {
+          await boundaryPatch.promise;
         }
-        if (createdCount === 2) {
-          await secondCreate.promise;
-        }
-        return { id: `post-${nextId++}` } as T;
-      }
-      if (path.startsWith("/posts/")) {
-        await boundaryPatch.promise;
-        return { id: "patched" } as T;
-      }
-      return {} as T;
-    };
-    const { stream } = createDraftStreamFixture({ request: requestImpl });
+      },
+    });
 
     stream.update("tool start");
     stream.update("tool complete");
@@ -467,10 +431,12 @@ describe("createMattermostDraftStream forceNewMessage", () => {
     await Promise.all([firstBoundary, secondBoundary, flush]);
 
     expect(calls.map((c) => c.path)).toEqual(["/posts", "/posts/post-1/patch", "/posts", "/posts"]);
-    expect(parseRequestJson(calls[0]?.init)?.message).toBe("tool start");
-    expect(parseRequestJson(calls[1]?.init)?.message).toBe("tool complete");
-    expect(parseRequestJson(calls[2]?.init)?.message).toBe("assistant progress");
-    expect(parseRequestJson(calls[3]?.init)?.message).toBe("final answer");
+    expect(calls.map(({ init }) => parseRequestJson(init).message)).toEqual([
+      "tool start",
+      "tool complete",
+      "assistant progress",
+      "final answer",
+    ]);
     expect(stream.postId()).toBe("post-3");
   });
 
@@ -564,17 +530,11 @@ describe("createMattermostDraftStream forceNewMessage", () => {
     expect(warn).toHaveBeenCalledOnce();
     expect(resolutionAtWarning).toEqual(expectedResolution);
     expect(stream.resolveFinalText(finalText)).toEqual(expectedResolution);
-    expect(
-      requestMock.mock.calls.map(([requestPath, init]) => ({
-        path: requestPath,
-        method: init?.method,
-        message: parseRequestJson(init).message,
-      })),
-    ).toEqual([
-      { path: "/posts", method: "POST", message: "First Second Third" },
-      { path: "/posts/post-1/patch", method: "PUT", message: "First" },
-      { path: "/posts", method: "POST", message: "Second" },
-      { path: "/posts", method: "POST", message: "Third" },
+    expect(requestMock.mock.calls.map(([, init]) => parseRequestJson(init).message)).toEqual([
+      "First Second Third",
+      "First",
+      "Second",
+      "Third",
     ]);
   });
 });

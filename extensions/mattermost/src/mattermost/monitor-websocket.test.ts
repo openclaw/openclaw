@@ -1,6 +1,5 @@
 import { EventEmitter, once } from "node:events";
 import net from "node:net";
-import { expectDefined } from "@openclaw/normalization-core";
 import { WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { listenOnLoopback } from "../../../test-support/hanging-loopback-server.js";
@@ -207,41 +206,24 @@ it("terminates the connection when the authentication reply never arrives", asyn
 
 it("retries when first attempt errors before open and next attempt succeeds", async () => {
   const patches: Array<Record<string, unknown>> = [];
-  const sockets: FakeWebSocket[] = [];
-
-  createWebSocket.mockImplementation(() => {
-    const socket = new FakeWebSocket();
-    const attempt = sockets.length;
-    sockets.push(socket);
-    queueMicrotask(() => {
-      if (attempt === 0) {
-        socket.emit("error", new Error("boom"));
-        socket.emitClose(1006, "connection refused");
-        return;
-      }
-      socket.emit("open");
-      expect(patches).not.toContainEqual(expect.objectContaining({ lifecycle: "ready" }));
-      socket.emit("message", authOkFrame(1));
-      expect(patches).toContainEqual(expect.objectContaining({ lifecycle: "ready" }));
-      socket.emitClose(1000);
-    });
-    return socket;
-  });
-  const connectOnce = createConnection(undefined, {
+  const firstSocket = new FakeWebSocket();
+  const connectOnce = createConnection(firstSocket, {
     nextSeq: sequence(),
-    statusSink: (patch) => {
-      patches.push(patch as Record<string, unknown>);
-    },
+    statusSink: (patch) => patches.push(patch as Record<string, unknown>),
   });
-
   const firstAttempt = connectOnce();
+  firstSocket.emit("error", new Error("boom"));
+  firstSocket.emitClose(1006, "connection refused");
   await expect(firstAttempt).rejects.toMatchObject({ name: "WebSocketClosedBeforeOpenError" });
-
-  await connectOnce();
-
-  expect(sockets).toHaveLength(2);
-  const firstSocket = expectDefined(sockets[0], "first Mattermost socket");
   expect(firstSocket.closeCalls).toBe(1);
+  const secondSocket = new FakeWebSocket();
+  createWebSocket.mockReturnValue(secondSocket);
+  const connected = connectOnce();
+  secondSocket.emit("open");
+  expect(patches).not.toContainEqual(expect.objectContaining({ lifecycle: "ready" }));
+  secondSocket.emit("message", authOkFrame(1));
+  expect(patches).toContainEqual(expect.objectContaining({ lifecycle: "ready" }));
+  await closeConnection(secondSocket, connected);
   expect(patches.filter((patch) => patch.connected === true).length).toBe(2);
   expect(patches.filter((patch) => patch.connected === false).length).toBe(3);
   expect(patches).toContainEqual(expect.objectContaining({ lifecycle: "starting" }));

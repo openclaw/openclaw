@@ -116,56 +116,80 @@ function json(res: ServerResponse, status: number, body: unknown) {
   res.end(JSON.stringify(body));
 }
 
-type Boundary = {
-  address: { port: number };
-  account: ResolvedMattermostAccount;
-  command: MattermostRegisteredCommand;
-  commandB: MattermostRegisteredCommand;
-  currentCommands: Map<string, MattermostRegisteredCommand>;
-  runtime: ReturnType<typeof createRuntime>;
-  dispatch: ReturnType<typeof vi.fn>;
-  errors: unknown[];
-  routeRuns: Set<Promise<void>>;
-  callbackSourceAddresses: string[];
-  validBody: string;
-  post: (command?: MattermostRegisteredCommand) => ReturnType<typeof postForm>;
-  channelRequests: ReturnType<typeof vi.fn>;
-  holdChannel: (gate: Promise<void>) => void;
-};
+class Boundary {
+  readonly dispatch = vi.fn(async (_params: unknown) => undefined);
+  readonly runtime = createRuntime(this.dispatch);
+  readonly currentCommands = new Map<string, MattermostRegisteredCommand>();
+  readonly routeRuns = new Set<Promise<void>>();
+  readonly errors: unknown[] = [];
+  readonly channelRequests = vi.fn();
+  readonly callbackSourceAddresses: string[] = [];
+  readonly address = { port: 0 };
+  readonly account: ResolvedMattermostAccount = {
+    accountId: "default",
+    enabled: true,
+    botToken: "bot-token",
+    botTokenSource: "config",
+    baseUrl: "",
+    baseUrlSource: "config",
+    streamingMode: "partial",
+    config: { groupPolicy: "open", network: { dangerouslyAllowPrivateNetwork: true } },
+  };
+  readonly command: MattermostRegisteredCommand = {
+    id: "command-1",
+    teamId: "team-1",
+    trigger: "oc_status",
+    token: TOKEN,
+    url: "",
+    managed: false,
+  };
+  readonly commandB = {
+    ...this.command,
+    id: "command-2",
+    trigger: "oc_help",
+    token: "boundary-token-b",
+  };
+  private channelGate: Promise<void> = Promise.resolve();
+  private readonly slashRoute: SlashRouteHandler;
 
-async function withBoundary(runBoundary: (boundary: Boundary) => Promise<void>) {
-  const registerHttpRoute =
-    vi.fn<(route: { path: string; auth?: string; handler: SlashRouteHandler }) => void>();
-  const dispatch = vi.fn(async (_params: unknown) => undefined);
-  const runtime = createRuntime(dispatch);
-  const currentCommands = new Map<string, MattermostRegisteredCommand>();
-  const routeRuns = new Set<Promise<void>>();
-  const errors: unknown[] = [];
-  const channelRequests = vi.fn();
-  let channelGate: Promise<void> = Promise.resolve();
-  setMattermostRuntime(runtime as never);
-  registerSlashCommandRoute({
-    config: {
-      channels: { mattermost: { commands: { native: true, callbackPath: CALLBACK_PATH } } },
-    },
-    logger: { warn() {} },
-    registerHttpRoute,
-  } as never);
-
-  expect(registerHttpRoute).toHaveBeenCalledWith(
-    expect.objectContaining({ path: CALLBACK_PATH, auth: "plugin" }),
-  );
-  const slashRoute = registerHttpRoute.mock.calls.find(
-    ([route]) => route.path === CALLBACK_PATH,
-  )?.[0].handler;
-  if (!slashRoute) {
-    throw new Error("expected Mattermost to register its slash route");
+  constructor() {
+    const registerHttpRoute =
+      vi.fn<(route: { path: string; auth?: string; handler: SlashRouteHandler }) => void>();
+    setMattermostRuntime(this.runtime as never);
+    registerSlashCommandRoute({
+      config: {
+        channels: { mattermost: { commands: { native: true, callbackPath: CALLBACK_PATH } } },
+      },
+      logger: { warn() {} },
+      registerHttpRoute,
+    } as never);
+    expect(registerHttpRoute).toHaveBeenCalledWith(
+      expect.objectContaining({ path: CALLBACK_PATH, auth: "plugin" }),
+    );
+    const route = registerHttpRoute.mock.calls.find(([entry]) => entry.path === CALLBACK_PATH)?.[0];
+    if (!route) {
+      throw new Error("expected Mattermost to register its slash route");
+    }
+    this.slashRoute = route.handler;
   }
 
-  const callbackSourceAddresses: string[] = [];
-  const handleRequest = (req: IncomingMessage, res: ServerResponse) => {
+  activate(baseUrl: string) {
+    this.address.port = Number(new URL(baseUrl).port);
+    this.account.baseUrl = baseUrl;
+    for (const command of [this.command, this.commandB]) {
+      command.url = `${baseUrl}${CALLBACK_PATH}`;
+      this.currentCommands.set(command.id, command);
+    }
+    activateSlashCommands({
+      account: this.account,
+      registeredCommands: [this.command, this.commandB],
+      api: { cfg: {}, runtime: { log() {}, error() {}, exit() {} } },
+    });
+  }
+
+  readonly handleRequest = (req: IncomingMessage, res: ServerResponse) => {
     if (req.url?.startsWith("/api/v4/commands/")) {
-      const command = currentCommands.get(req.url.slice("/api/v4/commands/".length));
+      const command = this.currentCommands.get(req.url.slice("/api/v4/commands/".length));
       json(
         res,
         command ? 200 : 404,
@@ -188,8 +212,8 @@ async function withBoundary(runBoundary: (boundary: Boundary) => Promise<void>) 
       return;
     }
     if (req.url === "/api/v4/channels/channel-1") {
-      channelRequests();
-      void channelGate.then(() =>
+      this.channelRequests();
+      void this.channelGate.then(() =>
         json(res, 200, {
           id: "channel-1",
           name: "town-square",
@@ -201,101 +225,59 @@ async function withBoundary(runBoundary: (boundary: Boundary) => Promise<void>) 
       return;
     }
     if (req.url === CALLBACK_PATH) {
-      callbackSourceAddresses.push(req.socket.remoteAddress ?? "unknown");
-      const run = slashRoute(req, res)
+      this.callbackSourceAddresses.push(req.socket.remoteAddress ?? "unknown");
+      const run = this.slashRoute(req, res)
         .catch((error: unknown) => {
-          errors.push(error);
+          this.errors.push(error);
           res.statusCode = 500;
           res.end("Injected handler failure");
         })
-        .finally(() => routeRuns.delete(run));
-      routeRuns.add(run);
+        .finally(() => this.routeRuns.delete(run));
+      this.routeRuns.add(run);
       return;
     }
     res.statusCode = 404;
     res.end("Not Found");
   };
 
+  private bodyFor(selected = this.command) {
+    return new URLSearchParams({
+      token: selected.token,
+      team_id: "team-1",
+      channel_id: "channel-1",
+      user_id: "user-1",
+      user_name: "boundary-user",
+      command: `/${selected.trigger}`,
+      text: "hello",
+      trigger_id: "trigger-1",
+    }).toString();
+  }
+
+  get validBody() {
+    return this.bodyFor();
+  }
+  post(selected = this.command) {
+    return postForm({
+      port: this.address.port,
+      localAddress: "127.0.0.1",
+      authorization: `Token ${selected.token}`,
+      body: this.bodyFor(selected),
+    });
+  }
+  holdChannel(gate: Promise<void>) {
+    this.channelGate = gate;
+  }
+}
+
+async function withBoundary(runBoundary: (boundary: Boundary) => Promise<void>) {
+  const boundary = new Boundary();
   try {
-    await withServer(handleRequest, async (baseUrl) => {
-      const address = { port: Number(new URL(baseUrl).port) };
-      const callbackUrl = `${baseUrl}${CALLBACK_PATH}`;
-
-      const account: ResolvedMattermostAccount = {
-        accountId: "default",
-        enabled: true,
-        botToken: "bot-token",
-        botTokenSource: "config",
-        baseUrl,
-        baseUrlSource: "config",
-        streamingMode: "partial",
-        config: {
-          groupPolicy: "open",
-          network: { dangerouslyAllowPrivateNetwork: true },
-        },
-      };
-      const command: MattermostRegisteredCommand = {
-        id: "command-1",
-        teamId: "team-1",
-        trigger: "oc_status",
-        token: TOKEN,
-        url: callbackUrl,
-        managed: false,
-      };
-      const commandB = {
-        ...command,
-        id: "command-2",
-        trigger: "oc_help",
-        token: "boundary-token-b",
-      };
-      currentCommands.set(command.id, command);
-      currentCommands.set(commandB.id, commandB);
-      activateSlashCommands({
-        account,
-        registeredCommands: [command, commandB],
-        api: { cfg: {}, runtime: { log() {}, error() {}, exit() {} } },
-      });
-
-      const bodyFor = (selected = command) =>
-        new URLSearchParams({
-          token: selected.token,
-          team_id: "team-1",
-          channel_id: "channel-1",
-          user_id: "user-1",
-          user_name: "boundary-user",
-          command: `/${selected.trigger}`,
-          text: "hello",
-          trigger_id: "trigger-1",
-        }).toString();
-
-      const validBody = bodyFor();
-      await runBoundary({
-        address,
-        account,
-        command,
-        commandB,
-        currentCommands,
-        runtime,
-        dispatch,
-        errors,
-        routeRuns,
-        callbackSourceAddresses,
-        validBody,
-        post: (selected = command) =>
-          postForm({
-            port: address.port,
-            localAddress: "127.0.0.1",
-            authorization: `Token ${selected.token}`,
-            body: bodyFor(selected),
-          }),
-        channelRequests,
-        holdChannel: (gate: Promise<void>) => {
-          channelGate = gate;
-        },
-      });
+    await withServer(boundary.handleRequest, async (baseUrl) => {
+      boundary.activate(baseUrl);
+      await runBoundary(boundary);
     });
   } finally {
-    await Promise.all(routeRuns);
+    await Promise.all(boundary.routeRuns);
   }
 }
 

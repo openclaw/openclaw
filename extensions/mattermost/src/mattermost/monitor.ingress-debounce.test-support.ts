@@ -52,14 +52,13 @@ export function registerMattermostIngressDebounceTests(harness: {
     ingressQueue: unknown;
     dispatchInboundMessage: Mock;
     sendMessageMattermost: Mock;
-    resolveMattermostMedia: Mock;
     resolveChannelInfo: Mock;
   };
   startTransport: (config: OpenClawConfig, abort: AbortController, ready: () => void) => Transport;
 }) {
   const { testConfig, mockState } = harness;
   const dirs = useAutoCleanupTempDirTracker(afterEach);
-  function fixture(signal: AbortSignal, debounceMs = 1_000) {
+  function fixture(signal: AbortSignal, debounceMs = 1_000, liveConfig = false) {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
     const queue = createChannelIngressQueueForTests<{
       version: 1;
@@ -73,6 +72,7 @@ export function registerMattermostIngressDebounceTests(harness: {
     mockState.ingressQueue = queue;
     const config: OpenClawConfig = {
       ...testConfig,
+      ...(liveConfig ? { messages: { inbound: { debounceMs: 0 } } } : {}),
       channels: {
         ...testConfig.channels,
         mattermost: {
@@ -89,7 +89,7 @@ export function registerMattermostIngressDebounceTests(harness: {
     let enqueued = 0;
     const arrivals = new Map<number, ReturnType<typeof createDeferred<void>>>();
     mockState.runtimeCore = harness.createRuntimeCore(config, undefined, {
-      inboundDebounceMs: debounceMs,
+      ...(liveConfig ? { resolveInboundDebounceMs } : { inboundDebounceMs: debounceMs }),
       isControlCommandMessage: (text) => text?.trim().startsWith("/") ?? false,
       shouldHandleTextCommands: () => true,
       createInboundDebouncer: (params) => {
@@ -183,125 +183,81 @@ export function registerMattermostIngressDebounceTests(harness: {
         vi.useRealTimers();
       }
     };
-    return { queue, start, post, arrived, join, bodies, drain, close };
+    const flush = async (id: string) => {
+      const done = observeChannelIngressQueueWrite(queue, "complete", id);
+      await vi.advanceTimersByTimeAsync(debounceMs);
+      expect(await join(done)).toBe(true);
+      await drain();
+    };
+    const expectQueue = async (pending: string[] = []) => {
+      expect(await queue.listClaims()).toEqual([]);
+      expect(await queue.listPending({ limit: "all" })).toEqual(
+        pending.map((id) => expect.objectContaining({ id, attempts: 0 })),
+      );
+    };
+    return { config, queue, start, post, arrived, join, bodies, drain, flush, expectQueue, close };
   }
 
   it("changes Mattermost delay at collector admission without replacing the socket", async ({
     signal,
   }) => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
-    const config = { ...testConfig, messages: { inbound: { debounceMs: 0 } } };
-    setRuntimeConfigSnapshot(config, config);
+    const f = fixture(signal, 0, true);
+    setRuntimeConfigSnapshot(f.config, f.config);
     const delivered = new Map(
       ["immediate", "buffered", "after disable"].map((body) => [body, createDeferred<void>()]),
     );
     mockState.dispatchInboundMessage.mockImplementation(async (params) =>
       delivered.get(params.ctx.BodyForAgent)?.resolve(),
     );
-    const interrupted = createDeferred<never>();
-    const onAbort = () => interrupted.reject(new Error("Config refresh dispatch did not settle"));
-    signal.addEventListener("abort", onAbort, { once: true });
-    void interrupted.promise.catch(() => {});
-    const dispatched = (body: string) =>
-      Promise.race([delivered.get(body)?.promise, interrupted.promise]);
-    mockState.runtimeCore = harness.createRuntimeCore(config, undefined, {
-      createInboundDebouncer,
-      resolveInboundDebounceMs,
-    });
-    const ready = createDeferred<void>();
-    const abort = new AbortController();
-    const transport = harness.startTransport(config, abort, ready.resolve);
-    const bodies = () =>
-      mockState.dispatchInboundMessage.mock.calls.map(([p]) => p.ctx.BodyForAgent);
+    const dispatched = (body: string) => f.join(delivered.get(body)!.promise);
     const publish = (debounceMs: number) => {
       const current = {
-        ...config,
+        ...f.config,
         messages: { inbound: { byChannel: { mattermost: debounceMs } } },
       };
       setRuntimeConfigSnapshot(current, current);
     };
     try {
-      await Promise.race([
-        ready.promise,
-        interrupted.promise,
-        transport.monitor.then(() => {
-          throw new Error("Mattermost monitor ended before opening its socket");
-        }),
-      ]);
-      transport.open();
-      await transport.post({ id: "debounce-1", message: "immediate" });
+      const transport = await f.start();
+      await f.post(transport, { id: "debounce-1", message: "immediate" });
       await dispatched("immediate");
-      expect(bodies()).toEqual(["immediate"]);
+      expect(f.bodies()).toEqual(["immediate"]);
       publish(500);
-      await transport.post({ id: "debounce-2", message: "buffered" });
+      await f.post(transport, { id: "debounce-2", message: "buffered" });
       await vi.advanceTimersByTimeAsync(50);
-      expect(bodies()).toEqual(["immediate"]);
+      expect(f.bodies()).toEqual(["immediate"]);
       publish(0);
       await vi.advanceTimersByTimeAsync(450);
       await dispatched("buffered");
-      expect(bodies()).toEqual(["immediate", "buffered"]);
-      await transport.post({ id: "debounce-3", message: "after disable" });
+      expect(f.bodies()).toEqual(["immediate", "buffered"]);
+      await f.post(transport, { id: "debounce-3", message: "after disable" });
       await dispatched("after disable");
-      expect(bodies()).toEqual(["immediate", "buffered", "after disable"]);
+      expect(f.bodies()).toEqual(["immediate", "buffered", "after disable"]);
       expect(transport.connectionCount()).toBe(1);
     } finally {
-      abort.abort();
-      transport.close();
       try {
-        await transport.monitor;
+        await f.close();
       } finally {
-        signal.removeEventListener("abort", onAbort);
         clearRuntimeConfigSnapshot();
-        vi.useRealTimers();
       }
     }
   });
 
-  it("merges durable same-sender posts before the debounce flush", async ({ signal }) => {
-    const f = fixture(signal);
-    try {
-      const provider = await f.start();
-      await f.post(provider, { id: "batch-1", message: "first" });
-      await f.post(provider, { id: "batch-2", message: "second" });
-      expect(mockState.dispatchInboundMessage).not.toHaveBeenCalled();
-      const done = observeChannelIngressQueueWrite(f.queue, "complete", "batch-2");
-      await vi.advanceTimersByTimeAsync(1_000);
-      expect(await f.join(done)).toBe(true);
-      await f.drain();
-      expect(f.bodies()).toEqual(["first\nsecond"]);
-      expect(await f.queue.listPending({ limit: "all" })).toEqual([]);
-      expect(await f.queue.listClaims()).toEqual([]);
-    } finally {
-      await f.close();
-    }
-  });
-
-  it.for([
-    { name: "sender", middle: { senderId: "user-2", senderName: "bob", rootId: undefined } },
-    {
-      name: "thread",
-      middle: { rootId: "thread-root", senderId: undefined, senderName: undefined },
-    },
-  ])("keeps channel admission ordered across $name changes", async ({ middle }, { signal }) => {
+  it("keeps channel admission ordered across thread changes", async ({ signal }) => {
     const f = fixture(signal);
     try {
       const provider = await f.start();
       await f.post(provider, { id: "a1", message: "A1" });
-      await f.post(provider, { id: "b1", message: "B1", ...middle });
+      await f.post(provider, { id: "b1", message: "B1", rootId: "thread-root" });
       await f.post(provider, { id: "a2", message: "A2" });
-      const done = observeChannelIngressQueueWrite(f.queue, "complete", "a2");
-      await vi.advanceTimersByTimeAsync(1_000);
-      expect(await f.join(done)).toBe(true);
-      await f.drain();
+      await f.flush("a2");
       expect(f.bodies()).toEqual(["A1", "B1", "A2"]);
       const contexts = mockState.dispatchInboundMessage.mock.calls.map(([p]) => p.ctx);
-      if (middle.senderId) {
-        expect(contexts.map((ctx) => ctx.SenderId)).toEqual(["user-1", "user-2", "user-1"]);
-      } else {
-        expect(contexts[1].MessageThreadId).toBe("thread-root");
-        expect(contexts[0].MessageThreadId).toBeUndefined();
-        expect(contexts[2].MessageThreadId).toBeUndefined();
-      }
+      expect(contexts.map((ctx) => ctx.MessageThreadId)).toEqual([
+        undefined,
+        "thread-root",
+        undefined,
+      ]);
       expect(await f.queue.listClaims()).toEqual([]);
     } finally {
       await f.close();
@@ -329,10 +285,7 @@ export function registerMattermostIngressDebounceTests(harness: {
           expect(mockState.dispatchInboundMessage.mock.calls[1]?.[0].ctx.CommandBody).toBe("/new");
         }
         await f.post(provider, { id: "after", message: "after" });
-        const done = observeChannelIngressQueueWrite(f.queue, "complete", "after");
-        await vi.advanceTimersByTimeAsync(1_000);
-        expect(await f.join(done)).toBe(true);
-        await f.drain();
+        await f.flush("after");
         expect(f.bodies()).toEqual(["before", expected, "after"]);
         expect(await f.queue.listClaims()).toEqual([]);
       } finally {
@@ -373,6 +326,11 @@ export function registerMattermostIngressDebounceTests(harness: {
       await vi.advanceTimersByTimeAsync(1_000);
       expect(await f.join(done)).toBe(true);
       expect(f.bodies()).toEqual(["A1", "B1", "A2"]);
+      expect(mockState.dispatchInboundMessage.mock.calls.map(([p]) => p.ctx.SenderId)).toEqual([
+        "user-1",
+        "user-2",
+        "user-1",
+      ]);
       finish.resolve();
       await f.drain();
     } finally {
@@ -390,48 +348,40 @@ export function registerMattermostIngressDebounceTests(harness: {
       name: "",
       display_name: "",
     });
-    const activeAdopted = createDeferred<void>();
-    const normalAdopted = createDeferred<void>();
-    const steerAdopted = createDeferred<void>();
+    const adopted = new Map(
+      ["active", "normal", "steer"].map((body) => [body, createDeferred<void>()]),
+    );
     const followupAdoption = createDeferred<() => void | Promise<void>>();
     const finishActive = createDeferred<void>();
-    const chatTypes: InboundDispatchParams["ctx"]["ChatType"][] = [];
     let activeFinished = false;
     mockState.dispatchInboundMessage.mockImplementation(async (params: InboundDispatchParams) => {
       const lifecycle = params.replyOptions?.turnAdoptionLifecycle;
       if (!lifecycle?.onDeferred) {
         throw new Error("Missing Mattermost turn adoption lifecycle");
       }
-      chatTypes.push(params.ctx.ChatType);
       if (params.ctx.BodyForAgent === "followup") {
         lifecycle.onDeferred();
         followupAdoption.resolve(lifecycle.onAdopted);
         return;
       }
       await lifecycle.onAdopted();
-      switch (params.ctx.BodyForAgent) {
-        case "active":
-          activeAdopted.resolve();
-          await finishActive.promise;
-          activeFinished = true;
-          break;
-        case "normal":
-          normalAdopted.resolve();
-          break;
-        case "steer":
-          steerAdopted.resolve();
-          break;
-        default:
-          throw new Error("Unexpected Mattermost regression input");
+      const arrival = adopted.get(params.ctx.BodyForAgent);
+      if (!arrival) {
+        throw new Error("Unexpected Mattermost regression input");
+      }
+      arrival.resolve();
+      if (params.ctx.BodyForAgent === "active") {
+        await finishActive.promise;
+        activeFinished = true;
       }
     });
     let adoptFollowup: (() => void | Promise<void>) | undefined;
     try {
       const provider = await f.start();
       await f.post(provider, { id: "dm-active", message: "active" });
-      await f.join(activeAdopted.promise);
+      await f.join(adopted.get("active")!.promise);
       await f.post(provider, { id: "dm-normal", message: "normal" });
-      await f.join(normalAdopted.promise);
+      await f.join(adopted.get("normal")!.promise);
       expect(activeFinished).toBe(false);
 
       await f.post(provider, { id: "dm-followup", message: "followup" });
@@ -439,9 +389,14 @@ export function registerMattermostIngressDebounceTests(harness: {
       expect(await f.queue.listClaims()).toEqual([expect.objectContaining({ id: "dm-followup" })]);
       // Queue ownership must not block a newer input from reaching steering.
       await f.post(provider, { id: "dm-steer", message: "steer" });
-      await f.join(steerAdopted.promise);
+      await f.join(adopted.get("steer")!.promise);
       expect(activeFinished).toBe(false);
-      expect(chatTypes).toEqual(["direct", "direct", "direct", "direct"]);
+      expect(mockState.dispatchInboundMessage.mock.calls.map(([p]) => p.ctx.ChatType)).toEqual([
+        "direct",
+        "direct",
+        "direct",
+        "direct",
+      ]);
       expect(await f.queue.listClaims()).toEqual([expect.objectContaining({ id: "dm-followup" })]);
       expect(await f.queue.listPending({ limit: "all" })).toEqual([]);
 
@@ -450,8 +405,7 @@ export function registerMattermostIngressDebounceTests(harness: {
       await f.drain();
       expect(activeFinished).toBe(true);
       expect(f.bodies()).toEqual(["active", "normal", "followup", "steer"]);
-      expect(await f.queue.listClaims()).toEqual([]);
-      expect(await f.queue.listPending({ limit: "all" })).toEqual([]);
+      await f.expectQueue();
     } finally {
       await adoptFollowup?.();
       finishActive.resolve();
@@ -526,11 +480,7 @@ export function registerMattermostIngressDebounceTests(harness: {
       await provider.stop();
       expect(f.bodies()).toEqual(["active"]);
       expect(mockState.sendMessageMattermost).not.toHaveBeenCalled();
-      expect(await f.queue.listClaims()).toEqual([]);
-      expect(await f.queue.listPending({ limit: "all" })).toEqual([
-        expect.objectContaining({ id: "cancel-active", attempts: 0 }),
-        expect.objectContaining({ id: "cancel-immediate", attempts: 0 }),
-      ]);
+      await f.expectQueue(["cancel-active", "cancel-immediate"]);
       await vi.advanceTimersByTimeAsync(1_000);
       expect(f.bodies()).toEqual(["active"]);
     } finally {
@@ -549,11 +499,7 @@ export function registerMattermostIngressDebounceTests(harness: {
       await provider.stop();
       expect(f.bodies()).toEqual([]);
       expect(mockState.sendMessageMattermost).not.toHaveBeenCalled();
-      expect(await f.queue.listClaims()).toEqual([]);
-      expect(await f.queue.listPending({ limit: "all" })).toEqual([
-        expect.objectContaining({ id: "replay-1", attempts: 0 }),
-        expect.objectContaining({ id: "replay-2", attempts: 0 }),
-      ]);
+      await f.expectQueue(["replay-1", "replay-2"]);
       await vi.advanceTimersByTimeAsync(1_000);
       expect(f.bodies()).toEqual([]);
       const done = observeChannelIngressQueueWrite(f.queue, "complete", "replay-2");
@@ -564,8 +510,7 @@ export function registerMattermostIngressDebounceTests(harness: {
       expect(await f.join(done)).toBe(true);
       await f.drain();
       expect(f.bodies()).toEqual(["first\nsecond"]);
-      expect(await f.queue.listPending({ limit: "all" })).toEqual([]);
-      expect(await f.queue.listClaims()).toEqual([]);
+      await f.expectQueue();
     } finally {
       await f.close();
     }

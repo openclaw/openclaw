@@ -5,9 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { waitForEffectPreparation } from "../../../test-support/effect-preparation.test-support.js";
 
 let prepareRequest: (() => Promise<void>) | undefined;
-const fetchFixture = vi.hoisted((): { current: typeof fetch } => ({
-  current: vi.fn<typeof fetch>(),
-}));
+const fetchImpl = vi.hoisted(() => vi.fn<typeof fetch>());
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
@@ -46,8 +44,8 @@ function failingBody(operation: "pull" | "cancel" = "pull", status = 200, messag
 }
 
 function responseClient(response: Response) {
-  const fetchImpl = (fetchFixture.current = vi.fn<typeof fetch>().mockResolvedValueOnce(response));
-  return { client: createMattermostClient(clientParams), fetchImpl };
+  fetchImpl.mockResolvedValueOnce(response);
+  return createMattermostClient(clientParams);
 }
 
 function guardedClient(response: Response) {
@@ -56,7 +54,7 @@ function guardedClient(response: Response) {
   return { client: createMattermostClient(clientParams), release };
 }
 
-function requestBody(fetchImpl: ReturnType<typeof vi.fn<typeof fetch>>): unknown {
+function requestBody(): unknown {
   const body = fetchImpl.mock.calls[0]?.[1]?.body;
   if (typeof body !== "string") {
     throw new Error("expected JSON request body");
@@ -82,14 +80,13 @@ async function expectAccepted(promise: Promise<unknown>) {
   expect(error.deliveryResult).toEqual({ messageIds: [], visibleReplySent: true });
 }
 
-function retryRequest(fetchImpl: typeof fetch) {
-  fetchFixture.current = fetchImpl;
+function retryRequest() {
   return createMattermostDirectChannelWithRetry(createMattermostClient(clientParams), ["u1", "u2"]);
 }
 
 beforeEach(() => {
   prepareRequest = undefined;
-  fetchFixture.current = vi.fn<typeof fetch>();
+  fetchImpl.mockReset();
   fetchWithSsrFGuardMock.mockReset();
   fetchWithSsrFGuardMock.mockImplementation(
     async (
@@ -98,7 +95,7 @@ beforeEach(() => {
       await prepareRequest?.();
       params.beforeRequest?.();
       return {
-        response: await fetchFixture.current(params.url, params.init),
+        response: await fetchImpl(params.url, params.init),
         release: async () => {},
       };
     },
@@ -122,10 +119,10 @@ describe("Mattermost request boundary", () => {
         preparing.resolve();
         await prepared.promise;
       };
-      const fetchImpl = (fetchFixture.current = vi.fn<typeof fetch>(() => {
+      fetchImpl.mockImplementation(() => {
         dispatched.resolve();
         return response.promise;
-      }));
+      });
       const client = createMattermostClient({
         ...clientParams,
         assertRequestCurrent: () => caller.signal.throwIfAborted(),
@@ -184,7 +181,7 @@ describe("Mattermost request boundary", () => {
   });
 
   it("rejects raw, encoded, and URL-normalized traversal before fetch", async () => {
-    const { client, fetchImpl } = responseClient(Response.json({}));
+    const client = responseClient(Response.json({}));
     for (const path of [
       "/posts/../users/me",
       "/posts/%2e%2e/users/me",
@@ -237,13 +234,13 @@ describe("Mattermost request boundary", () => {
   });
 
   it("reports accepted typing as sent despite an unreadable body", async () => {
-    const { client, fetchImpl } = responseClient(failingBody());
+    const client = responseClient(failingBody());
     await expect(
       sendMattermostTyping(client, { channelId: "ch1", parentId: "root1" }),
     ).resolves.toBeUndefined();
     expect(fetchImpl).toHaveBeenCalledOnce();
     expect(fetchImpl.mock.calls[0]?.[1]?.method).toBe("POST");
-    expect(requestBody(fetchImpl)).toEqual({ channel_id: "ch1", parent_id: "root1" });
+    expect(requestBody()).toEqual({ channel_id: "ch1", parent_id: "root1" });
   });
 
   it("reports accepted deletion as done even when releasing its body fails", async () => {
@@ -269,7 +266,7 @@ describe("Mattermost credential diagnostics", () => {
     );
     const json = vi.spyOn(response, "json");
     const text = vi.spyOn(response, "text");
-    const { client, fetchImpl } = responseClient(response);
+    const client = responseClient(response);
     await expect(client.request("/users/me")).rejects.toThrow("Mattermost API 401 : ***");
     expect(new Headers(fetchImpl.mock.calls[0]?.[1]?.headers).get("Authorization")).toBe(
       `Bearer ${botToken}`,
@@ -279,7 +276,7 @@ describe("Mattermost credential diagnostics", () => {
   });
 
   it("redacts malformed JSON served with a JSON content type", async () => {
-    const { client } = responseClient(
+    const client = responseClient(
       jsonResponse(`upstream error: Bearer ${botToken}`, { status: 502 }),
     );
     await expect(client.request("/users/me")).rejects.toThrow(
@@ -288,7 +285,7 @@ describe("Mattermost credential diagnostics", () => {
   });
 
   it("redacts a bare upload credential in an object-valued error message", async () => {
-    const { client, fetchImpl } = responseClient(
+    const client = responseClient(
       Response.json({ message: { context: "retry later", echoed: botToken } }, { status: 503 }),
     );
     await expect(
@@ -322,20 +319,20 @@ describe("Mattermost post receipts", () => {
     ["undecodable", () => jsonResponse("{")],
     ["no-content", () => new Response(null, { status: 204 })],
   ] as const)("preserves accepted visibility for a %s post receipt", async (_name, response) => {
-    const { client, fetchImpl } = responseClient(response());
+    const client = responseClient(response());
     await expectAccepted(createMattermostPost(client, postParams));
     expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
   it("sends post attachments and trims the provider identity", async () => {
-    const { client, fetchImpl } = responseClient(Response.json({ id: "  post1  " }));
+    const client = responseClient(Response.json({ id: "  post1  " }));
     const props = {
       attachments: [{ text: "Choose:", actions: [{ id: "btn1", type: "button", name: "Click" }] }],
     };
     await expect(
       createMattermostPost(client, { ...postParams, fileIds: ["file1", "file2"], props }),
     ).resolves.toEqual({ id: "post1" });
-    expect(requestBody(fetchImpl)).toEqual({
+    expect(requestBody()).toEqual({
       channel_id: "ch1",
       message: "hello",
       file_ids: ["file1", "file2"],
@@ -395,7 +392,7 @@ describe("Mattermost post reads and edits", () => {
   );
 
   it("rejects invalid limits before provider access", async () => {
-    const { client, fetchImpl } = responseClient(Response.json({}));
+    const client = responseClient(Response.json({}));
     for (const limit of [0, 1.5]) {
       await expect(fetchMattermostChannelPosts(client, "ch1", { limit })).rejects.toThrow(
         "Mattermost read limit must be a positive integer",
@@ -405,7 +402,7 @@ describe("Mattermost post reads and edits", () => {
   });
 
   it("rejects mutually exclusive cursors before provider access", async () => {
-    const { client, fetchImpl } = responseClient(Response.json({}));
+    const client = responseClient(Response.json({}));
     await expect(
       fetchMattermostChannelPosts(client, "ch1", { before: "older", after: "newer" }),
     ).rejects.toThrow("Mattermost read accepts either before or after, not both");
@@ -413,7 +410,7 @@ describe("Mattermost post reads and edits", () => {
   });
 
   it("rejects a post list referencing a missing post", async () => {
-    const { client } = responseClient(Response.json({ order: ["missing-post"], posts: {} }));
+    const client = responseClient(Response.json({ order: ["missing-post"], posts: {} }));
     await expect(fetchMattermostChannelPosts(client, "ch1")).rejects.toThrow(
       "Unexpected Mattermost channel posts response",
     );
@@ -447,11 +444,10 @@ describe("Mattermost DM retries", () => {
     ],
     ["legacy timeout diagnostic", new Error("request timed out")],
   ] as const)("retries %s with capped exponential jitter", async (_name, failure) => {
-    const fetchImpl = (fetchFixture.current = vi
-      .fn<typeof fetch>()
+    fetchImpl
       .mockRejectedValueOnce(failure)
       .mockRejectedValueOnce(failure)
-      .mockResolvedValueOnce(Response.json({ id: "dm1" })));
+      .mockResolvedValueOnce(Response.json({ id: "dm1" }));
     const client = createMattermostClient(clientParams);
     const onRetry = vi.fn();
     const run = createMattermostDirectChannelWithRetry(client, ["u1", "u2"], {
@@ -472,7 +468,7 @@ describe("Mattermost DM retries", () => {
   });
 
   it("does not retry HTTP 400 with misleading provider details", async () => {
-    const fetchImpl = vi.fn<typeof fetch>(async () =>
+    fetchImpl.mockImplementation(async () =>
       Response.json(
         {
           message: "Invalid request; upstream Mattermost API 503 Service Unavailable",
@@ -480,7 +476,7 @@ describe("Mattermost DM retries", () => {
         { status: 400 },
       ),
     );
-    const outcome = expect(retryRequest(fetchImpl)).rejects.toThrow("Mattermost API 400");
+    const outcome = expect(retryRequest()).rejects.toThrow("Mattermost API 400");
     await vi.runAllTimersAsync();
     await outcome;
     expect(fetchImpl).toHaveBeenCalledOnce();
@@ -491,8 +487,8 @@ describe("Mattermost DM retries", () => {
       cause: new Error("Mattermost API 503 Service Unavailable"),
       retryable: false,
     });
-    const fetchImpl = vi.fn<typeof fetch>().mockRejectedValue(failure);
-    const outcome = expect(retryRequest(fetchImpl)).rejects.toBe(failure);
+    fetchImpl.mockRejectedValue(failure);
+    const outcome = expect(retryRequest()).rejects.toBe(failure);
     await vi.runAllTimersAsync();
     await outcome;
     expect(fetchImpl).toHaveBeenCalledOnce();
@@ -501,10 +497,8 @@ describe("Mattermost DM retries", () => {
   it.each([400, 429, 503])(
     "preserves HTTP %s retry policy when the error response body fails",
     async (status) => {
-      const fetchImpl = vi.fn<typeof fetch>(async () =>
-        failingBody("pull", status, "network error"),
-      );
-      const outcome = rejection(retryRequest(fetchImpl));
+      fetchImpl.mockImplementation(async () => failingBody("pull", status, "network error"));
+      const outcome = rejection(retryRequest());
       await vi.runAllTimersAsync();
       expect(fetchImpl).toHaveBeenCalledTimes(status === 429 || status >= 500 ? 4 : 1);
       expect(await outcome).toMatchObject({
