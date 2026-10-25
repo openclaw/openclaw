@@ -5,7 +5,7 @@ import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite
 import { participantRecordsBySessionKey } from "../../config/sessions/session-accessor.sqlite-participant-projection.js";
 import { hydrateSessionActorState } from "../../config/sessions/session-actor-hydration.worker.js";
 import { sessionActorFileTarget } from "../../config/sessions/session-actor-worker.test-support.js";
-import { listTranscriptInstancesFromDatabase } from "../../config/sessions/session-history-read.js";
+import { listSessionTranscriptInstances } from "../../config/sessions/session-history-read.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { runSqliteImmediateTransactionSync } from "../sqlite-transaction.js";
@@ -119,11 +119,10 @@ describe.each(mixedAgentConnection ? (["sqlite", "postgres"] as const) : (["sqli
           }
         });
         const read = (includeAllWindows: boolean) =>
-          listTranscriptInstancesFromDatabase({
-            database,
-            currentEntries: new Map(),
-            options: { includeAllWindows },
-          }).map((row) => row.sessionId);
+          listSessionTranscriptInstances(
+            { agentId: "windows", storePath: database.path },
+            { includeAllWindows },
+          ).map((row) => row.sessionId);
         expect
           .soft(read(true))
           .toEqual([
