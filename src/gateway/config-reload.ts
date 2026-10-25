@@ -893,7 +893,6 @@ export function startGatewayConfigReloader(
       const intentCandidate = retryCandidate;
       attemptedCandidate = intentCandidate;
       const snapshot = await source.readSnapshot();
-      assertLeaseOwned();
       if (source.observation.revision !== transactionEpoch) {
         throw new GatewayConfigReloadSupersededError();
       }

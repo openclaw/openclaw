@@ -115,6 +115,11 @@ export function startCall(
   client?: { connect?: { scopes?: string[] }; connId?: string; connectionSignal?: AbortSignal },
   contextOverrides: Record<string, unknown> = {},
 ) {
+  // Keep caller identity stable for shared lists and live scope updates.
+  if (client) {
+    client.connect ??= {};
+    client.connect.scopes ??= [];
+  }
   const respond = vi.fn();
   const completion = Promise.resolve(
     sessionCatalogHandlers[method]?.({

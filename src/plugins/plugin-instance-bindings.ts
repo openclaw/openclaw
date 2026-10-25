@@ -43,15 +43,13 @@ const DATA_FIELDS = new Set([
 ]);
 
 function pluginMemberDescriptor(object: object, key: PropertyKey) {
-  let descriptor: PropertyDescriptor | undefined;
-  for (
-    let source: object | null = object;
-    source && !descriptor;
-    source = Object.getPrototypeOf(source)
-  ) {
-    descriptor = Object.getOwnPropertyDescriptor(source, key);
+  for (let source: object | null = object; source; source = Object.getPrototypeOf(source)) {
+    const descriptor = Object.getOwnPropertyDescriptor(source, key);
+    if (descriptor) {
+      return descriptor;
+    }
   }
-  return descriptor;
+  return undefined;
 }
 
 function pluginMemberNeedsAdmission(object: object, key: PropertyKey, getters = true): boolean {
@@ -207,11 +205,9 @@ function createPluginBindings(
     ) {
       return value;
     }
-    if (!Array.isArray(value)) {
-      return wrap(value, "", undefined, callbacks);
-    }
-    // SAFETY: Each member keeps its declared shape while native iteration sees its bound methods.
-    return value.map((entry) => wrap(entry, "", undefined, callbacks)) as T;
+    return Array.isArray(value)
+      ? (value.map((entry) => wrap(entry, "", undefined, callbacks)) as T) // SAFETY: Binding preserves each member's shape.
+      : wrap(value, "", undefined, callbacks);
   };
   const wrapResult = <T>(
     result: T,
@@ -267,15 +263,21 @@ function createPluginBindings(
     if (DATA_FIELDS.has(field) || (typeof value === "object" && isNativePluginData(value))) {
       return value;
     }
-    const object: object = value;
-    if (PluginFactoryBinding.belongsTo(object, factory)) {
+    if (PluginFactoryBinding.belongsTo(value, factory)) {
       return value;
     }
-    const cached = wrapped.get(object);
-    if (cached) {
-      // SAFETY: The cache stores only the view created for this exact input value.
-      return cached as T;
-    }
+    // SAFETY: The cache stores only the view created for this exact input value.
+    return (wrapped.get(value) ?? createView(value, field, callbackIndex, resultCallbacks)) as T;
+  };
+
+  // Keep closure contexts off primitive reads and already-bound value lookups.
+  const createView = <T extends object>(
+    value: T,
+    field: string,
+    callbackIndex?: 0 | null,
+    resultCallbacks?: readonly PropertyKey[],
+  ): T => {
+    const object: object = value;
     const methods = new Map<
       PropertyKey,
       { original: Function; receiver: object; wrapped: unknown }

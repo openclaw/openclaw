@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import type { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import * as processExec from "../../process/exec.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -285,25 +286,20 @@ it.for([
     const pending = stage("publication-authority", {
       ...(publication ? input : {}),
       assertCurrent: guard.assertCurrent,
-    })
-      .then(async (prepared) => {
-        if (boundary === "final-input") {
-          finalPrepared = prepared;
-          await prepared.publish();
-        }
-        return prepared;
-      })
-      .then(
-        (value) => ({ ok: true as const, value }),
-        (error: unknown) => ({ ok: false as const, error }),
-      );
+    }).then(async (prepared) => {
+      finalPrepared = prepared;
+      if (boundary === "final-input") {
+        await prepared.publish();
+      }
+      return prepared;
+    });
+    void pending.catch(() => undefined);
     try {
-      await Promise.race([
+      await awaitGateBeforeSettlement(
         entered.promise,
-        pending.then((outcome) => {
-          throw new Error("Checkpoint settled before boundary", { cause: outcome });
-        }),
-      ]);
+        pending,
+        "Checkpoint settled before boundary",
+      );
       if (finalPrepared) {
         expect(await listRefs(artifact, "worker-results/")).toBe("");
       }
@@ -319,21 +315,14 @@ it.for([
       }
       const atRelease = await current();
       release.resolve();
-      const outcome = await pending;
-      await finalPrepared?.discard();
-      if (outcome.ok) {
-        await outcome.value.publish();
-      }
-      await queueOwner;
-      expect(outcome).toMatchObject({
-        ok: false,
-        error: {
-          message:
-            closure === "authority"
-              ? "checkpoint authority closed"
-              : "Repository workspace revision changed",
-        },
+      await expect(pending).rejects.toMatchObject({
+        message:
+          closure === "authority"
+            ? "checkpoint authority closed"
+            : "Repository workspace revision changed",
       });
+      await finalPrepared?.discard();
+      await queueOwner;
       expect(await current()).toEqual(atRelease);
       for (const directory of importRoots) {
         await expect(fs.stat(directory)).rejects.toMatchObject({ code: "ENOENT" });
@@ -347,12 +336,9 @@ it.for([
     } finally {
       resume();
       signal.removeEventListener("abort", resume);
-      const outcome = await pending;
+      await pending.catch(() => undefined);
       await queueOwner;
       await finalPrepared?.discard();
-      if (outcome.ok) {
-        await outcome.value.discard();
-      }
     }
   },
 );

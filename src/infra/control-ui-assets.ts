@@ -13,6 +13,7 @@ import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { openRootFileSync, readFileDescriptorBoundedSync } from "./boundary-file-read.js";
 import { FsSafeError } from "./fs-safe.js";
 import { resolveOpenClawPackageRoot, resolveOpenClawPackageRootSync } from "./openclaw-root.js";
+import { resolveExternalPackageRuntimeEntrypointUrl } from "./runtime-process-url.js";
 
 export function formatControlUiSourceCommand(root: string, action: "build" | "dev"): string {
   const directory = process.platform === "win32" ? quotePowerShellArg(root) : quoteCliArg(root);
@@ -339,7 +340,9 @@ export async function ensureControlUiAssetsBuilt(
     );
   }
 
-  const uiScript = path.join(repoRoot, "scripts", "ui.js");
+  const uiScript = fileURLToPath(
+    resolveExternalPackageRuntimeEntrypointUrl("sourceUiBuild", repoRoot),
+  );
   if (!fs.existsSync(uiScript)) {
     return controlUiAssetsFailure(`Control UI assets missing but ${uiScript} is unavailable.`);
   }
