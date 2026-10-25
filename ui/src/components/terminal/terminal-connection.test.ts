@@ -10,6 +10,7 @@ import {
 
 type TerminalSink = Parameters<TerminalConnection["open"]>[1];
 type TerminalOpenParams = Parameters<TerminalConnection["open"]>[0];
+type RequestOptions = Parameters<TerminalGatewayClient["request"]>[2];
 type TestSessionResult = {
   sessionId: string;
   agentId: string;
@@ -32,45 +33,34 @@ function sessionResult(overrides: Partial<TestSessionResult> = {}): TestSessionR
   };
 }
 
-/** Fake gateway client that records requests and lets tests push events. */
-function makeFakeClient() {
-  const listeners = new Set<(evt: { event: string; payload: unknown }) => void>();
-  const requests: Array<{
-    method: string;
-    params: unknown;
-    options?: { timeoutMs?: number | null };
-  }> = [];
-  const forceReconnects: string[] = [];
-  const client: TerminalGatewayClient & {
-    requests: typeof requests;
-    emit: (event: string, payload: unknown) => void;
-    listenerCount: () => number;
-    forceReconnects: string[];
-    nextResponse: unknown;
-  } = {
-    requests,
-    nextResponse: sessionResult(),
-    forceReconnects,
-    request: <T>(method: string, params?: unknown, options?: { timeoutMs?: number | null }) => {
-      requests.push({ method, params, ...(options ? { options } : {}) });
-      return Promise.resolve(client.nextResponse as T);
-    },
-    addEventListener: (listener) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-    emit: (event, payload) => {
-      for (const l of listeners) {
-        l({ event, payload });
-      }
-    },
-    forceReconnect: (reason) => forceReconnects.push(reason),
-    listenerCount: () => listeners.size,
-  };
-  return client;
-}
+class FakeClient implements TerminalGatewayClient {
+  private listeners = new Set<Parameters<TerminalGatewayClient["addEventListener"]>[0]>();
+  requests: Array<{ method: string; params: unknown; options?: RequestOptions }> = [];
+  replies = new Map<string, (options?: RequestOptions) => unknown>();
+  forceReconnects: string[] = [];
+  nextResponse: unknown = sessionResult();
 
-type FakeClient = ReturnType<typeof makeFakeClient>;
+  request<T>(method: string, params?: unknown, options?: RequestOptions): Promise<T> {
+    this.requests.push({ method, params, ...(options ? { options } : {}) });
+    const reply = this.replies.get(method);
+    return Promise.resolve((reply ? reply(options) : this.nextResponse) as T);
+  }
+  addEventListener(listener: Parameters<TerminalGatewayClient["addEventListener"]>[0]) {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+  emit(event: string, payload: unknown) {
+    for (const listener of this.listeners) {
+      listener({ event, payload });
+    }
+  }
+  forceReconnect(reason: string) {
+    this.forceReconnects.push(reason);
+  }
+  listenerCount() {
+    return this.listeners.size;
+  }
+}
 
 let client: FakeClient;
 let conn: TerminalConnection;
@@ -79,7 +69,7 @@ let replays: string[];
 let exits: unknown[];
 let sink: TerminalSink;
 beforeEach(() => {
-  client = makeFakeClient();
+  client = new FakeClient();
   conn = new TerminalConnection(client);
   data = [];
   replays = [];
@@ -124,24 +114,10 @@ function emitExit(
 }
 
 function deferRequest<T>(method: string, pending: ReturnType<typeof createDeferred<T>>): void {
-  const baseRequest = client.request.bind(client);
-  client.request = (<R>(
-    candidate: string,
-    params?: unknown,
-    options?: { timeoutMs?: number | null },
-  ): Promise<R> => {
-    if (candidate === method) {
-      client.requests.push({ method: candidate, params, ...(options ? { options } : {}) });
-      return pending.promise as unknown as Promise<R>;
-    }
-    return baseRequest<R>(candidate, params, options);
-  }) as typeof client.request;
+  client.replies.set(method, () => pending.promise);
 }
 
 describe("TerminalConnection", () => {
-  // The gateway creates the session before answering, so a response that cannot
-  // drive a tab must not simply throw: the live server session would keep its
-  // slot against the connection cap with nothing able to close it.
   it("closes the opened session when the response omits shell", async () => {
     const { shell: _dropped, ...incomplete } = sessionResult();
     client.nextResponse = incomplete;
@@ -168,10 +144,8 @@ describe("TerminalConnection", () => {
     emitData(0, "nope", "other");
     expect(data).toEqual([]);
     emitData(5, "hello");
-    // startOfChunk=7, but expected=5. The missing bytes are already in the ring.
+    // Missing bytes are in the ring; the racing frame below is covered by replay.
     emitData(12, "world");
-    // This frame races before the server takes its attach snapshot. It must be
-    // covered by replay, not rendered twice or treated as another gap.
     emitData(19, "covered");
     emitExit({ exitCode: null, signal: null, reason: "detached" });
     recovery.resolve(sessionResult({ buffer: "hello??worldcovered", seq: 19 }));
@@ -213,15 +187,17 @@ describe("TerminalConnection", () => {
     const newReplayEvents: string[] = [];
     const newData: string[] = [];
     client.nextResponse = sessionResult({ buffer: "new snapshot", seq: 20 });
-    const newAttach = conn.attach("s1", {
-      onData: (chunk) => newData.push(chunk),
-      onReplay: async () => {
-        newReplayEvents.push("start");
-        await newReplay.promise;
-        newReplayEvents.push("done");
-      },
-      onExit: () => {},
-    });
+    const newAttach = conn.attach(
+      "s1",
+      testSink({
+        onData: (chunk) => newData.push(chunk),
+        onReplay: async () => {
+          newReplayEvents.push("start");
+          await newReplay.promise;
+          newReplayEvents.push("done");
+        },
+      }),
+    );
     await vi.waitFor(() => expect(newReplayEvents).toEqual(["start"]));
     expect(oldReplaySignal?.aborted).toBe(true);
     emitData(21, "!");
@@ -282,10 +258,8 @@ describe("TerminalConnection", () => {
   it("keeps a queued exit behind recovery started while flushing early events", async () => {
     const openResult = createDeferred<TestSessionResult>();
     const recovery = createDeferred<TestSessionResult>();
-    client.request = ((method: string, params: unknown) => {
-      client.requests.push({ method, params });
-      return method === "terminal.open" ? openResult.promise : recovery.promise;
-    }) as typeof client.request;
+    deferRequest("terminal.open", openResult);
+    deferRequest("terminal.attach", recovery);
     const opening = openSession(sink);
     emitData(7, "first");
     emitExit({ exitCode: 0, signal: null });
@@ -301,16 +275,11 @@ describe("TerminalConnection", () => {
   });
 
   it("reconnects when the browser watchdog cannot receive the Gateway deadline", async () => {
-    client.request = <T>(
-      method: string,
-      params?: unknown,
-      options?: { timeoutMs?: number | null },
-    ) => {
-      client.requests.push({ method, params, ...(options ? { options } : {}) });
+    client.replies.set("terminal.open", (options) => {
       return Promise.reject(
-        new Error(`gateway request timed out after ${options?.timeoutMs}ms: ${method}`),
-      ) as Promise<T>;
-    };
+        new Error(`gateway request timed out after ${options?.timeoutMs}ms: terminal.open`),
+      );
+    });
     await expect(openSession()).rejects.toBeInstanceOf(TerminalOpenTimeoutError);
     expect(client.forceReconnects).toEqual(["terminal open watchdog timeout"]);
   });
@@ -355,7 +324,6 @@ describe("TerminalConnection", () => {
     const openPromise = openSession({
       onExit: (info) => (exit = info),
     });
-    // A shell that fails to exec exits before the client has a sink.
     emitData(4, "boom");
     emitExit({ exitCode: 127, signal: null, reason: "process_exit" });
     expect(exit).toBeUndefined();
@@ -364,21 +332,17 @@ describe("TerminalConnection", () => {
     await openPromise;
     expect(data).toEqual(["boom"]);
     expect(exit).toEqual({ exitCode: 127, signal: null, reason: "process_exit", error: undefined });
-    // Replaying the early exit releases the session — no leaked sink/listener.
     expectRetired();
   });
 
   it("keeps the listener while an open is in flight even if every session closes", async () => {
     await openSession(sink);
 
-    // Second open held in flight while the only registered session closes.
     const opening = createDeferred<TestSessionResult>();
     deferRequest("terminal.open", opening);
     const openPromise = openSession({ onData: (chunk) => data.push(chunk) });
 
     await conn.close("s1");
-    // The in-flight open must keep the subscription so s2's early output
-    // is buffered instead of silently lost.
     expect(client.listenerCount()).toBe(1);
     emitData(5, "early", "s2");
 
@@ -389,23 +353,15 @@ describe("TerminalConnection", () => {
 
   it("drops the final exit the server emits while a close RPC is in flight", async () => {
     await openSession(sink);
-    // A second session keeps the event subscription alive across the close.
     client.nextResponse = sessionResult({ sessionId: "s2" });
     await openSession();
 
-    // The server finalizes the session (emitting terminal.exit) before it
-    // responds to terminal.close, so the event arrives with no sink.
-    const baseRequest = client.request.bind(client);
-    client.request = ((method: string, params: unknown) => {
-      if (method === "terminal.close") {
-        emitExit({ exitCode: null, signal: null, reason: "closed" });
-      }
-      return baseRequest(method, params);
-    }) as typeof client.request;
+    client.replies.set("terminal.close", () => {
+      emitExit({ exitCode: null, signal: null, reason: "closed" });
+      return client.nextResponse;
+    });
     await conn.close("s1");
 
-    // If that exit were buffered, reusing the id would replay it into the new
-    // session's sink and instantly mark a live tab as exited.
     client.nextResponse = sessionResult();
     let staleExit = false;
     await openSession({
@@ -459,14 +415,15 @@ describe("TerminalConnection", () => {
 
     let replaySignal: AbortSignal | undefined;
     await expect(
-      conn.attach("s1", {
-        onData: () => {},
-        onReplay: async ({ signal }) => {
-          replaySignal = signal;
-          throw new Error("replay failed");
-        },
-        onExit: () => {},
-      }),
+      conn.attach(
+        "s1",
+        testSink({
+          onReplay: async ({ signal }) => {
+            replaySignal = signal;
+            throw new Error("replay failed");
+          },
+        }),
+      ),
     ).rejects.toThrow("replay failed");
     expect(replaySignal?.aborted).toBe(true);
     expectRetired();
@@ -505,21 +462,15 @@ describe("TerminalConnection", () => {
 
     const response = createDeferred<{ ok: boolean }>();
     deferRequest("terminal.input", response);
-    const baseRequest = client.request.bind(client);
-    client.request = <T>(
-      method: string,
-      params?: unknown,
-      options?: { timeoutMs?: number | null },
-    ): Promise<T> => {
+    client.replies.set("terminal.input", (options) => {
       const timeoutMs = options?.timeoutMs;
       if (timeoutMs != null) {
-        client.requests.push({ method, params, options });
-        return new Promise<T>((_, reject) => {
+        return new Promise((_, reject) => {
           setTimeout(() => reject(new Error("Gateway application response timed out")), timeoutMs);
         });
       }
-      return baseRequest<T>(method, params, options);
-    };
+      return response.promise;
+    });
 
     let settled = false;
     const input = conn.input("s1", "echo ready\n").then(() => {
@@ -545,7 +496,6 @@ describe("TerminalConnection", () => {
     }
   });
 
-  // A reply after panel teardown must not retain a sink or event subscription.
   it.each([
     ["attach", "terminal.attach"],
     ["open", "terminal.open"],
@@ -558,8 +508,6 @@ describe("TerminalConnection", () => {
         kind === "attach"
           ? conn.attach("s1", testSink())
           : conn.open({ cols: 80, rows: 24 }, testSink());
-      // Panel teardown (reconnect or element removal) discards the connection
-      // while the RPC is still in flight.
       conn.dispose();
       response.resolve({ ...sessionResult(), buffer: "replayed\n", seq: 9 });
       await expect(settle).resolves.toMatchObject({ sessionId: "s1" });

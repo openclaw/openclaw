@@ -1,17 +1,20 @@
 /* @vitest-environment jsdom */
 
 import type { GhosttyTerminalController } from "@openclaw/libterminal/browser";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { createApplicationConfigCapability } from "../../app/config.ts";
 import { i18n } from "../../i18n/index.ts";
 import { createInitializationContext } from "../../pages/chat/chat-pane.test-support.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
-import { mountPanel as mount } from "./terminal-panel-lifecycle.test-support.ts";
+import {
+  mountPanel as mount,
+  panelButton,
+  panelTestStorage,
+} from "./terminal-panel-lifecycle.test-support.ts";
 import { createTerminalPanelUpload, type TerminalPanelUpload } from "./terminal-panel-upload.ts";
 import {
   createTerminalController,
@@ -28,9 +31,10 @@ const TERMINAL_UPLOAD_RETENTION_MS = 24 * 60 * 60 * 1000;
 const createGhosttyTerminalMock: CreateGhosttyTerminalMock = vi.fn();
 const panelTag = defineTestTerminalPanelElement(createGhosttyTerminalMock);
 
-function createUploadPanel(): OpenClawTerminalPanel {
-  return createTestTerminalPanel(panelTag);
-}
+panelTestStorage(createGhosttyTerminalMock, false, () => {
+  vi.restoreAllMocks();
+  return i18n.setLocale("en");
+});
 
 function terminalUploadFile(name: string, content: string): File {
   const file = new File([content], name);
@@ -45,10 +49,19 @@ async function mountReadyPanel(client: TerminalGatewayClient) {
   panel.toggle();
   await panel.updateComplete;
   await vi.dynamicImportSettled();
-  await waitForFast(() => {
-    expect(panel.querySelector<HTMLButtonElement>(".tp-upload")?.disabled).toBe(false);
-  });
+  await waitForFast(() => expect(panelButton(panel, ".tp-upload")?.disabled).toBe(false));
   return panel;
+}
+
+function uploadClient(upload: (params: unknown, signal?: AbortSignal) => unknown) {
+  return createTerminalGatewayClient(
+    async <T>(method: string, params?: unknown, options?: { signal?: AbortSignal }) =>
+      (method === "terminal.open"
+        ? terminalOpenResult("session-1")
+        : method === "terminal.upload"
+          ? await upload(params, options?.signal)
+          : { ok: true }) as T,
+  );
 }
 
 function dropFiles(panel: OpenClawTerminalPanel, files: File[]) {
@@ -60,10 +73,6 @@ function dropFiles(panel: OpenClawTerminalPanel, files: File[]) {
 }
 
 describe("OpenClawTerminalPanel upload lifecycle", () => {
-  beforeAll(async () => {
-    await import("@openclaw/libterminal/browser");
-  });
-
   it("does not request an upload after a pending file read is disabled", async () => {
     const base = createApplicationConfigCapability({ resourceBasePath: "" });
     const config = { ...base, current: { ...base.current, uploadsEnabled: true } };
@@ -105,10 +114,11 @@ describe("OpenClawTerminalPanel upload lifecycle", () => {
   it("reacts to mobile upload policy changes without intercepting text drops", async () => {
     const config = createApplicationConfigCapability({ resourceBasePath: "" });
     const host = createApplicationContextProvider({ ...createInitializationContext(), config });
-    const panel = createUploadPanel();
-    panel.embedded = true;
-    panel.mobile = true;
-    panel.available = true;
+    const panel = Object.assign(createTestTerminalPanel(panelTag), {
+      embedded: true,
+      mobile: true,
+      available: true,
+    });
     host.append(panel);
     document.body.append(host);
     await panel.updateComplete;
@@ -153,21 +163,6 @@ describe("OpenClawTerminalPanel upload lifecycle", () => {
     expect(panel.querySelector(".tp-file-input")).not.toBeNull();
     expect(panel.querySelector(".tp-upload")).not.toBeNull();
   });
-  beforeEach(async () => {
-    vi.stubGlobal("localStorage", createStorageMock());
-    vi.stubGlobal("sessionStorage", createStorageMock());
-    await i18n.setLocale("en");
-  });
-
-  afterEach(async () => {
-    document.body.replaceChildren();
-    await Promise.resolve();
-    createGhosttyTerminalMock.mockReset();
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
-    await i18n.setLocale("en");
-  });
-
   it.each(["retry", "expired-retry", "expired-insert", "expired-completion"] as const)(
     "preserves completed upload paths during %s recovery",
     async (recovery) => {
@@ -176,29 +171,19 @@ describe("OpenClawTerminalPanel upload lifecycle", () => {
       vi.spyOn(Date, "now").mockImplementation(() => readNow() + elapsedMs);
       const controller = createTerminalController();
       createGhosttyTerminalMock.mockResolvedValue(controller);
-      const requests: Array<{ method: string; params: unknown; signal?: AbortSignal }> = [];
+      const uploads: string[] = [];
       const failedUpload = createDeferred<{ path: string; size: number }>();
       let notesAttempts = 0;
-      const client: TerminalGatewayClient = createTerminalGatewayClient(
-        async <T>(method: string, params?: unknown, options?: { signal?: AbortSignal }) => {
-          requests.push({ method, params, signal: options?.signal });
-          if (method === "terminal.open") {
-            return terminalOpenResult("session-1") as T;
-          }
-          if (method === "terminal.upload") {
-            const name = (params as { name: string }).name;
-            if (name === "scan final.pdf") {
-              return { path: "/tmp/openclaw upload/scan final.pdf", size: 3 } as T;
-            }
-            notesAttempts += 1;
-            if (notesAttempts === 1) {
-              return (await failedUpload.promise) as T;
-            }
-            return { path: "/tmp/openclaw upload/notes.txt", size: 4 } as T;
-          }
-          return { ok: true } as T;
-        },
-      );
+      const client = uploadClient((params) => {
+        const name = (params as { name: string }).name;
+        uploads.push(name);
+        if (name === "scan final.pdf") {
+          return { path: "/tmp/openclaw upload/scan final.pdf", size: 3 };
+        }
+        return ++notesAttempts === 1
+          ? failedUpload.promise
+          : { path: "/tmp/openclaw upload/notes.txt", size: 4 };
+      });
       const panel = await mountReadyPanel(client);
       dropFiles(panel, [
         terminalUploadFile("scan final.pdf", "pdf"),
@@ -223,7 +208,7 @@ describe("OpenClawTerminalPanel upload lifecycle", () => {
           expect(panel.querySelector(".tp-upload-insert")).toBeNull();
         });
         expect(controller.terminal.paste).not.toHaveBeenCalled();
-        expect(requests.filter(({ method }) => method === "terminal.upload")).toHaveLength(2);
+        expect(uploads).toHaveLength(2);
       };
       if (recovery === "expired-completion") {
         elapsedMs = TERMINAL_UPLOAD_RETENTION_MS;
@@ -242,23 +227,22 @@ describe("OpenClawTerminalPanel upload lifecycle", () => {
         const failed = panel.querySelector(".tp-upload-card--failed");
         expect(failed?.textContent).toContain("Upload failed");
         expect(failed?.textContent).toContain("terminal upload staging is full");
-        expect(panel.querySelector<HTMLButtonElement>(".tp-upload-retry")).not.toBeNull();
+        expect(panelButton(panel, ".tp-upload-retry")).not.toBeNull();
         if (recovery === "expired-insert") {
-          expect(panel.querySelector<HTMLButtonElement>(".tp-upload-insert")).not.toBeNull();
+          expect(panelButton(panel, ".tp-upload-insert")).not.toBeNull();
         }
       });
 
       if (recovery === "expired-retry" || recovery === "expired-insert") {
         elapsedMs = TERMINAL_UPLOAD_RETENTION_MS;
-        panel
-          .querySelector<HTMLButtonElement>(
-            recovery === "expired-retry" ? ".tp-upload-retry" : ".tp-upload-insert",
-          )
-          ?.click();
+        panelButton(
+          panel,
+          recovery === "expired-retry" ? ".tp-upload-retry" : ".tp-upload-insert",
+        )?.click();
         await expectExpiredBatch();
         return;
       }
-      panel.querySelector<HTMLButtonElement>(".tp-upload-retry")?.click();
+      panelButton(panel, ".tp-upload-retry")?.click();
 
       await waitForFast(() => {
         expect(controller.terminal.paste).toHaveBeenCalledWith(
@@ -266,11 +250,7 @@ describe("OpenClawTerminalPanel upload lifecycle", () => {
         );
         expect(panel.querySelector(".tp-upload-card")).toBeNull();
       });
-      expect(
-        requests
-          .filter(({ method }) => method === "terminal.upload")
-          .map(({ params }) => (params as { name: string }).name),
-      ).toEqual(["scan final.pdf", "notes.txt", "notes.txt"]);
+      expect(uploads).toEqual(["scan final.pdf", "notes.txt", "notes.txt"]);
     },
   );
 
@@ -281,36 +261,27 @@ describe("OpenClawTerminalPanel upload lifecycle", () => {
       createGhosttyTerminalMock.mockResolvedValue(controller);
       const pendingUpload = createDeferred<{ path: string; size: number }>();
       let uploadSignal: AbortSignal | undefined;
-      const client: TerminalGatewayClient = createTerminalGatewayClient(
-        async <T>(method: string, _params?: unknown, options?: { signal?: AbortSignal }) => {
-          if (method === "terminal.open") {
-            return terminalOpenResult("session-1") as T;
-          }
-          if (method === "terminal.upload") {
-            uploadSignal = options?.signal;
-            return (await pendingUpload.promise) as T;
-          }
-          return { ok: true } as T;
-        },
-      );
+      const client = uploadClient((_params, signal) => {
+        uploadSignal = signal;
+        return pendingUpload.promise;
+      });
       const panel = await mountReadyPanel(client);
       dropFiles(panel, [terminalUploadFile("archive.zip", "zip")]);
       await waitForFast(() => {
         expect(panel.querySelector(".tp-upload-card")?.textContent).toContain("Uploading 1 of 1");
       });
 
-      panel
-        .querySelector<HTMLButtonElement>(
-          trigger === "cancel button" ? ".tp-upload-cancel" : ".tabstrip-tab__close",
-        )
-        ?.click();
+      panelButton(
+        panel,
+        trigger === "cancel button" ? ".tp-upload-cancel" : ".tabstrip-tab__close",
+      )?.click();
       await panel.updateComplete;
       await waitForFast(() => {
         expect(uploadSignal?.aborted).toBe(true);
         expect(panel.querySelector(".tp-upload-card")).toBeNull();
       });
       if (trigger === "cancel button") {
-        expect(panel.querySelector<HTMLButtonElement>(".tp-upload")?.disabled).toBe(false);
+        expect(panelButton(panel, ".tp-upload")?.disabled).toBe(false);
         pendingUpload.resolve({ path: "/tmp/openclaw upload/archive.zip", size: 3 });
       } else {
         pendingUpload.reject(new Error("terminal closed"));
