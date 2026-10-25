@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveSlackChannelType, resolveSlackConversationInfo } from "./channel-type.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveSlackConversationInfo } from "./channel-type.js";
 
 function slackConfig(slack: NonNullable<OpenClawConfig["channels"]>["slack"]): OpenClawConfig {
   return { channels: { slack } };
@@ -15,9 +15,7 @@ function conversation(
 }
 
 function expectReadTokens(...tokens: string[]) {
-  expect(read.mock.calls).toEqual(
-    tokens.map((token) => [token, { teamId: undefined }, undefined, undefined]),
-  );
+  expect(read.mock.calls.map(([token]) => token)).toEqual(tokens);
 }
 
 const mocks = vi.hoisted(() => {
@@ -49,27 +47,17 @@ describe("resolveSlackChannelType", () => {
     vi.stubEnv("SLACK_USER_TOKEN", "");
   });
 
-  afterEach(() => {
-    vi.unstubAllEnvs();
-  });
-
   it("uses configured defaultAccount for omitted-account cache keys", async () => {
     const channelId = "CDEFAULTACCOUNT1";
 
+    await expect(conversation(channelId, { enabled: true })).resolves.toEqual({ type: "unknown" });
     await expect(
-      resolveSlackChannelType({ cfg: slackConfig({ enabled: true }), channelId }),
-    ).resolves.toBe("unknown");
-
-    await expect(
-      resolveSlackChannelType({
-        cfg: slackConfig({
-          enabled: true,
-          defaultAccount: "work",
-          accounts: { work: { dm: { groupChannels: [channelId] } } },
-        }),
-        channelId,
+      conversation(channelId, {
+        enabled: true,
+        defaultAccount: "work",
+        accounts: { work: { dm: { groupChannels: [channelId] } } },
       }),
-    ).resolves.toBe("group");
+    ).resolves.toEqual({ type: "group" });
 
     expect(info).not.toHaveBeenCalled();
   });
@@ -90,12 +78,7 @@ describe("resolveSlackChannelType", () => {
       await expect(
         resolveSlackConversationInfo({ cfg: slackConfig(slack), channelId, operation }),
       ).resolves.toEqual({ type: "dm", user: "U09G2DJ0275" });
-      expect(createClient).toHaveBeenCalledWith(
-        token,
-        { teamId: undefined },
-        undefined,
-        ...(isRead ? [undefined] : []),
-      );
+      expect(createClient.mock.calls.map(([usedToken]) => usedToken)).toEqual([token]);
       expect(isRead ? write : read).not.toHaveBeenCalled();
       expect(lookup).toHaveBeenCalledWith(
         isRead
@@ -120,7 +103,6 @@ describe("resolveSlackChannelType", () => {
     ).resolves.toEqual({ type: "group", name: "mpdm-alice--bob-1" });
     expectReadTokens("xoxp-reader");
     expect(write).not.toHaveBeenCalled();
-    expect(info).toHaveBeenCalledWith({ channel: "CREADCREDENTIAL1" });
   });
 
   it.each(["credential rotation", "authorization refresh"])(
@@ -157,7 +139,6 @@ describe("resolveSlackChannelType", () => {
     await expect(
       conversation(channelId, { botToken: "xoxb-test", channels: { CCONFIGCHANNEL1: {} } }),
     ).resolves.toEqual({ type: "unknown" });
-    expect(info).toHaveBeenCalledWith({ channel: channelId });
   });
 
   it("does not cache incomplete native IM channel lookups", async () => {

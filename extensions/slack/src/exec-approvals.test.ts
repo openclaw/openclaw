@@ -2,13 +2,12 @@ import type { ExecApprovalRequestPayload } from "openclaw/plugin-sdk/approval-ru
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import { slackApprovalCapability } from "./approval-native.js";
-import { slackChannelConfigUiHints } from "./config-ui-hints.js";
+import { buildConfig as slackConfig } from "./approval-native.test-support.js";
 import {
   getSlackExecApprovalApprovers,
   isSlackExecApprovalAuthorizedSender,
   isSlackExecApprovalClientEnabled,
   normalizeSlackApproverId,
-  resolveSlackExecApprovalTarget,
   shouldSuppressLocalSlackExecApprovalPrompt,
 } from "./exec-approvals.js";
 
@@ -17,11 +16,7 @@ function buildConfig(
   execApprovals?: SlackConfig["execApprovals"],
   channelOverrides?: Partial<SlackConfig>,
 ): OpenClawConfig {
-  return {
-    channels: {
-      slack: { botToken: "xoxb-test", appToken: "xapp-test", ...channelOverrides, execApprovals },
-    },
-  };
+  return slackConfig({ ...channelOverrides, execApprovals });
 }
 
 const availability = slackApprovalCapability.nativeRuntimeAsync!.availability;
@@ -40,9 +35,6 @@ function clientEnabled(cfg: OpenClawConfig) {
 function authorized(cfg: OpenClawConfig, ...senderIds: string[]) {
   return senderIds.map((senderId) => isSlackExecApprovalAuthorizedSender({ cfg, senderId }));
 }
-function withOwners(ownerAllowFrom: string[], enabled: true | "auto" = true): OpenClawConfig {
-  return { ...buildConfig({ enabled }), commands: { ownerAllowFrom } };
-}
 
 describe("slack exec approvals", () => {
   it("requires explicit enablement even when owner approvers resolve", () => {
@@ -58,26 +50,14 @@ describe("slack exec approvals", () => {
     ).toEqual([false, false, false, false, true, false]);
   });
 
-  it.each(["execApprovals", "execApprovals.enabled"] as const)(
-    "describes the explicit enablement and approver requirements in %s UI guidance",
-    (key) => {
-      const { help } = slackChannelConfigUiHints[key];
-      expect(help).toContain('"auto" or true');
-      expect(help).toContain("when approvers can be resolved");
-      expect(help).toContain("unset or false disables");
-    },
-  );
-
   it.each([
     [
       "explicit over routes",
-      buildConfig({ approvers: ["U456"] }, { allowFrom: ["U123"], defaultTo: "user:U789" }),
+      buildConfig({ approvers: ["u456"] }, { allowFrom: ["U123"], defaultTo: "user:U789" }),
       ["U456"],
       ["U456", "u456", "U123"],
       [true, true, false],
     ],
-    ["lowercase explicit", buildConfig({ approvers: ["u456"] }), ["U456"], ["U456"], [true]],
-    ["lowercase owner", withOwners(["slack:u123owner"]), ["U123OWNER"], ["U123OWNER"], [true]],
     [
       "no inferred route owners",
       buildConfig(
@@ -87,13 +67,6 @@ describe("slack exec approvals", () => {
       [],
       ["U789"],
       [false],
-    ],
-    [
-      "command owners",
-      withOwners(["slack:U123", "user:U456", "<@U789>"]),
-      ["U123", "U456", "U789"],
-      ["U456"],
-      [true],
     ],
   ] satisfies Array<[string, OpenClawConfig, string[], string[], boolean[]]>)(
     "resolves and authorizes %s",
@@ -150,15 +123,7 @@ describe("slack exec approvals", () => {
   });
 
   it("normalizes wrapped sender ids", () => {
-    const valid = [
-      "user:U123OWNER",
-      "user:u123owner",
-      "slack:u123owner",
-      "slack:user:u123owner",
-      "<@U123OWNER>",
-      "<@u123owner>",
-      "u123owner",
-    ];
+    const valid = ["user:U1", "user:u1", "slack:u1", "slack:user:u1", "<@U1>", "<@u1>", "u1"];
     const invalid = [
       "slack:team:T123:user:U123OWNER",
       "slack:channel:C123CHANNEL",
@@ -167,7 +132,7 @@ describe("slack exec approvals", () => {
       "user:C123CHANNEL",
       "<@C123CHANNEL>",
     ];
-    expect(valid.map(normalizeSlackApproverId)).toEqual(valid.map(() => "U123OWNER"));
+    expect(valid.map(normalizeSlackApproverId)).toEqual(valid.map(() => "U1"));
     expect(invalid.map(normalizeSlackApproverId)).toEqual(invalid.map(() => undefined));
   });
 

@@ -1,12 +1,7 @@
 import { withServer } from "openclaw/plugin-sdk/test-env";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createSlackActions } from "./channel-actions.js";
 import { registerSlackInstallationState } from "./installation-identity-state.js";
-
-afterEach(() => {
-  vi.restoreAllMocks();
-  vi.unstubAllEnvs();
-});
 
 const createdChannel = { id: "C01234567", name: "proj-launch-pixel-peak" };
 const createRequest = {
