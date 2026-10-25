@@ -38,6 +38,74 @@ function expectProjections(result: ReturnType<typeof redactConfigSnapshot>, expe
 }
 
 describe("redactConfigSnapshot", () => {
+  it.each([true, false])(
+    "redacts authored secret fallbacks when env is present=%s",
+    (envPresent) => {
+      const authored = {
+        gateway: { auth: { token: "${PROOF_KEY:-synthetic-fallback\ncredential}" } },
+        mcp: {
+          servers: { proof: { headers: { Authorization: "${PROOF_KEY:-synthetic-header}" } } },
+        },
+      };
+      const runtime = {
+        gateway: {
+          auth: { token: envPresent ? "synthetic-active" : "synthetic-fallback\ncredential" },
+        },
+        mcp: {
+          servers: {
+            proof: {
+              headers: { Authorization: envPresent ? "synthetic-active" : "synthetic-header" },
+            },
+          },
+        },
+      };
+      const hints = buildConfigSchemaCore().uiHints;
+      const snapshot = { ...makeSnapshot(authored), config: runtime, runtimeConfig: runtime };
+      const result = redactConfigSnapshot(snapshot, hints);
+      for (const projection of [
+        result.config,
+        result.runtimeConfig,
+        result.parsed,
+        result.sourceConfig,
+        result.resolved,
+      ]) {
+        expect(projection).toEqual({
+          gateway: { auth: { token: REDACTED_SENTINEL } },
+          mcp: { servers: { proof: { headers: { Authorization: REDACTED_SENTINEL } } } },
+        });
+      }
+      // Escaped raw literals cannot safely be replaced using resolved runtime values.
+      expect(result.raw).toBeNull();
+      expect(restoreRedactedValues(result.config, runtime, hints)).toEqual(runtime);
+      expect(snapshot.parsed).toEqual(authored);
+    },
+  );
+
+  it.each([undefined, mainSchemaHints])("uses the same fallback rule with hints=%s", (hints) => {
+    const snapshot = makeSnapshot({
+      gateway: { auth: { token: "${PROOF_KEY:-synthetic-fallback}" } },
+    });
+    expect(redactConfigSnapshot(snapshot, hints).parsed).toEqual({
+      gateway: { auth: { token: REDACTED_SENTINEL } },
+    });
+  });
+
+  it.each(["", "   ", "${PROOF_KEY}", "${PROOF_KEY:-}"])(
+    "keeps secret-free reference %j editable",
+    (token) => {
+      const snapshot = makeSnapshot({ gateway: { auth: { token } } });
+      expect(redactConfigSnapshot(snapshot, mainSchemaHints).parsed).toEqual(snapshot.parsed);
+      expect(redactConfigSnapshot(snapshot, mainSchemaHints).raw).toBe(snapshot.raw);
+    },
+  );
+
+  it("keeps non-sensitive fallbacks visible", () => {
+    const snapshot = makeSnapshot({ messages: { responsePrefix: "${PROOF_PREFIX:-safe-prefix}" } });
+    const result = redactConfigSnapshot(snapshot, mainSchemaHints);
+    expect(result.parsed).toEqual(snapshot.parsed);
+    expect(result.raw).toBe(snapshot.raw);
+  });
+
   it("redacts whole serviceAccount objects without schema hints", () => {
     const serviceAccount = {
       type: "service_account",
