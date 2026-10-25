@@ -5,13 +5,14 @@ import {
 } from "@openclaw/ai/internal/runtime";
 import { isCompactionReplayCheckpoint } from "@openclaw/ai/transports";
 import { sameSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
+import type { SessionMetadataCommit } from "../../config/sessions/transcript-write-context-store.js";
 import {
   captureOwnedTranscriptWriteAssertion,
   withSessionMetadataPublication,
   withSessionTranscriptWriteAssertion,
-  type SessionMetadataCommit,
 } from "../../config/sessions/transcript-write-context.js";
 import type { Model, AssistantMessage } from "../../llm/types.js";
+import { assertionSucceeds } from "../../shared/assertion.js";
 import {
   type ThinkingLevel,
   calculateContextTokens,
@@ -237,14 +238,7 @@ export abstract class AgentSessionInspection extends AgentSessionPrompting {
       manager,
       runner,
       assertCurrent,
-      isCurrent: () => {
-        try {
-          assertCurrent();
-          return true;
-        } catch {
-          return false;
-        }
-      },
+      isCurrent: () => assertionSucceeds(assertCurrent),
       run: <T>(operation: () => Promise<T>): Promise<T> => {
         const write = () => withSessionManagerAppend(manager, operation);
         return target ? withSessionTranscriptWriteAssertion(target, assertCurrent, write) : write();

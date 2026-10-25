@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createNoisyPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
@@ -199,11 +200,29 @@ describe("anonymous published session reader", () => {
 
   it("authorizes nested and top-level widget receipts only in the published generation", async () => {
     await withPublicTestState(async () => {
-      const details = (id: string) => ({
-        kind: "canvas",
-        presentation: { target: "assistant_message" },
-        view: { id, url: `/__openclaw__/canvas/documents/${id}/index.html` },
-      });
+      const documents = new Map<string, string>();
+      for (const name of [
+        "top-level-chart",
+        "nested-chart",
+        "hidden-chart",
+        "internal-chart",
+        "other-chart",
+      ]) {
+        const document = await createCanvasDocument({
+          html: `<p>${name}</p>`,
+          cspSandbox: "scripts",
+        });
+        documents.set(name, document.id);
+      }
+      const documentId = (name: string) => expectDefined(documents.get(name), "widget fixture ID");
+      const details = (name: string) => {
+        const id = documentId(name);
+        return {
+          kind: "canvas",
+          presentation: { target: "assistant_message" },
+          view: { id, url: `/__openclaw__/canvas/documents/${id}/index.html` },
+        };
+      };
       await seed([
         {
           role: "toolResult",
@@ -248,7 +267,10 @@ describe("anonymous published session reader", () => {
         },
       ]);
       const read = (docId: string, target = locator) =>
-        readPublicSessionWidget(cfg, target, { docId, projection: currentProjection() });
+        readPublicSessionWidget(cfg, target, {
+          docId: documentId(docId),
+          projection: currentProjection(),
+        });
       expect(await read("top-level-chart")).toBe(true);
       expect(await read("nested-chart")).toBe(true);
       expect(await read("hidden-chart")).toBe(false);
@@ -267,8 +289,7 @@ describe("anonymous published session reader", () => {
           ["internal-chart", 404],
           ["other-chart", 404],
         ] as const) {
-          await createCanvasDocument({ id: docId, html: `<p>${docId}</p>`, cspSandbox: "scripts" });
-          const token = await mintPublicSessionWidgetToken(locator, docId);
+          const token = await mintPublicSessionWidgetToken(locator, documentId(docId));
           const response = createResponse();
           await serveControlUiPublicSessionMedia({
             req: createRequest({
@@ -444,7 +465,7 @@ describe("anonymous published session reader", () => {
               const readers = createReaders(...args);
               const readMembership = readers.readMembershipFacts;
               readers.readMembershipFacts = async (...input) => {
-                const result = await readMembership(...input);
+                const result = await readMembership.call(readers, ...input);
                 if (holdMembership) {
                   membershipRead.resolve();
                   await withinTest(releaseMembership.promise, signal);

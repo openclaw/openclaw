@@ -26,8 +26,9 @@ controls signed-in people. None of those settings creates a public link.
 
 The session creator or a Gateway admin can explicitly enable **Public access**.
 Anyone with the normal thread URL can then read existing and future conversation
-text without signing in, while tools, reasoning, files, images, widgets, hidden
-messages, and internal metadata remain excluded. **Log in** returns to that same
+text, shared images, saved inline widgets, and tool-step summaries without signing
+in, while tool results, reasoning, file downloads, hidden messages, and internal
+metadata remain excluded. **Log in** returns to that same
 thread with the person's existing permissions. Assigning a different owner does
 not transfer publication authority. Disabling public access stops anonymous
 reads; enabling it again makes the same normal URL readable. Previously revoked
@@ -240,6 +241,8 @@ Mentions work for ordinary messages, queued or steered input, and the first mess
 Open **Inbox → Mentions** to see messages addressed to your signed-in profile across accessible agents. Opening a mention opens its session without dismissing it. Select **Dismiss** to remove the entry from your Inbox. That change follows the same profile across connected browsers, without deleting the chat message.
 
 Mentions and dismissals survive Gateway restarts and upgrades. Entries keep their original identifiers and expiry times: **up to seven days**, with at most **100 entries per profile** and **10,000 across the Gateway**. Older entries can be evicted earlier by capacity limits. Refreshing or reconnecting reloads the retained Inbox without resending old browser alerts. Old transcript messages are not scanned to rebuild missing entries.
+
+Gateway features can also add an agent message that mentions someone on behalf of a signed-in profile, without a model run. The mention appears as a person chip in the agent's message, and the Inbox names that profile as the sender. The same rules apply as for a typed mention: the recipient must be able to read the session, nobody can mention themselves, and incognito sessions never carry mentions. A retried insert reuses the same message and Inbox entry. Clients cannot request these messages.
 
 Personal involvement and hide/show choices live in private metadata on the logical session node, independently of Inbox retention. Reset and session relocation preserve them; deleting the session removes them, and forks do not inherit them. Existing transcript messages are not scanned to backfill involvement. The last committed mention position prevents replay of an old message from undoing a later hide choice, even after the Inbox entry expires.
 

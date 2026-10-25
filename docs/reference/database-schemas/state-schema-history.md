@@ -52,10 +52,41 @@ Doctor completes recognized schema-1 databases that predate the audit ledger bef
 | 28      | GitHub publication requests retain their explicit draft choice across execution and recovery                                                                                                                                                                                                                                                   | Unreleased          |
 | 29      | Client private identities, token caches, and native socket credentials move to a separately versioned local store                                                                                                                                                                                                                              | Unreleased          |
 | 30      | Ordinary automation execution and delivery policies; metadata-only downgrade fence                                                                                                                                                                                                                                                             | Unreleased          |
+| 31      | Local workspace baselines stored by path with subtree digests and recoverable checkpoint deltas                                                                                                                                                                                                                                                | Unreleased          |
 
 Earlier beta releases first included schema 1 in `v2026.5.30-beta.1`, schema 2
 in `v2026.7.2-beta.1`, schema 3 in `v2026.7.2-beta.2`, schema 5 in
 `v2026.7.2-beta.4`, and schema 6 in `v2026.7.2-beta.5`.
+
+### State schema 31
+
+Schema 31 moves local sandbox checkpoint baselines from complete manifest documents
+to `local_workspace_manifest_nodes`, owned by the existing local workspace
+projection. `checkpoint_json` retains the changed nodes, deletion tombstones,
+and previous and resulting roots needed to settle an interrupted checkpoint.
+Acceptance advances the affected nodes, root, and receipt in one shared-state
+transaction. The agent database version is unchanged.
+
+The backed-up schema migration preserves existing baseline bytes, pending result
+references, rollback journals, and paused-runtime records. It adds the checkpoint
+column and node table only when local projection storage already exists; unused
+installations retain first-use creation. Existing projections convert under their
+reconciliation owner, which clears `baseline_json` only when the corresponding
+node rows and root are durably installed. An interrupted conversion retains its
+legacy input for retry. Pending legacy receipts remain recoverable through the
+same owner until their conversion and settlement finish.
+
+Full baseline replacements build and encode their manifest trees in the existing
+workspace read worker. The Gateway forwards the prepared bytes to the writer,
+which decodes before the same acceptance transaction. Completed conversions do
+not rebuild on restart; new workspaces, base refreshes, and archive recovery can
+still request a full replacement.
+
+Archive and publication operations still materialize the complete manifest format.
+Fresh host Git-index admission remains per operation, and filesystem metadata
+discovery still enumerates additions and deletions. Watch events do not authorize
+skipping that discovery. Older binaries cannot safely advance these baselines;
+rollback requires the verified pre-upgrade backup and its matching build.
 
 ### State schema 30
 

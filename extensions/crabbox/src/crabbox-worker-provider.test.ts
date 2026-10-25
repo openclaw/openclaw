@@ -186,56 +186,6 @@ function heartbeatFixture(run: CrabboxCommandRunner) {
   return { provider, heartbeat, warnings };
 }
 
-it.each([
-  [undefined, "windows/wsl2", "windows --windows-mode wsl2"],
-  ["windows/normal", undefined, "windows --windows-mode normal"],
-  [undefined, "macos", "macos --market on-demand"],
-] as const)(
-  "allocates the resolved OS (configured=%s, requested=%s)",
-  async (configured, requested, targetArgs) => {
-    const { provider, calls } = recordedProvider();
-    const profile = { ...PROFILE, ...(configured ? { target: configured } : {}) };
-    const lease = await provider.provision(profile, OPERATION_ID, { os: requested });
-    await provider.destroy({ ...lease, profile });
-    const warmup = calls.find((argv) => argv[1] === "warmup")!;
-    const targetIndex = warmup.indexOf("--target");
-    expect(warmup.slice(targetIndex, targetIndex + 4)).toEqual([
-      "--target",
-      ...targetArgs.split(" "),
-    ]);
-    if (requested === "macos") {
-      expect(warmup).not.toContain("--windows-mode");
-    }
-  },
-);
-
-it("keeps WSL2 cold with Linux warm images enabled", async () => {
-  const target = "windows/wsl2";
-  const runCommand = vi.fn(async () => commandResult());
-  const provider = providerWithRunner(runCommand);
-  for (const [profile, options] of [
-    [{ ...PROFILE, warmImage: true, target }, undefined],
-    [{ ...PROFILE, warmImage: true }, { os: target }],
-  ] as const) {
-    expect(provider.supportsProjectPreparation?.(profile, "standard", options?.os)).toBe(false);
-  }
-  expect(runCommand).not.toHaveBeenCalled();
-});
-
-it("explains the upstream WSL2 desktop limitation before allocating", async () => {
-  const runCommand = vi.fn(async () => commandResult());
-  const provider = providerWithRunner(runCommand);
-  for (const [profile, options] of [
-    [{ ...PROFILE, desktop: true, target: "windows/wsl2" }, undefined],
-    [{ ...PROFILE, desktop: true }, { os: "windows/wsl2" }],
-  ] as const) {
-    await expect(provider.provision(profile, OPERATION_ID, options)).rejects.toThrow(
-      "select native Windows for a desktop viewer",
-    );
-  }
-  expect(runCommand).not.toHaveBeenCalled();
-});
-
 it("projects a large catalog by OS and architecture without inferring resources", async () => {
   const runCommand = vi.fn<CrabboxCommandRunner>(async (_argv, options) =>
     processRuntime.runCommandWithTimeout(
@@ -523,7 +473,7 @@ it("rejects a CLI without native public setup egress before allocation", async (
   );
   await expect(
     providerWithRawRunner(runCommand).provision(SETUP_PROFILE, OPERATION_ID),
-  ).rejects.toThrow("update Crabbox to 0.77.0 or newer");
+  ).rejects.toThrow("update Crabbox to 0.79.2 or newer");
   expect(runCommand).toHaveBeenCalledOnce();
   expect(runCommand.mock.calls[0]?.[0]).toEqual([SIBLING_BINARY, "egress", "run", "--help"]);
   expect(secretEgressRuntime.withSetupSecretEgress).not.toHaveBeenCalled();

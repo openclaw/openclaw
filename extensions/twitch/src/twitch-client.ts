@@ -1,4 +1,4 @@
-import { RefreshingAuthProvider, StaticAuthProvider } from "@twurple/auth";
+import { StaticAuthProvider, type AuthProvider } from "@twurple/auth";
 import { ChatClient, LogLevel } from "@twurple/chat";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-resolution";
 import {
@@ -11,6 +11,7 @@ import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
 import { TWITCH_CHAT_MESSAGE_LIMIT } from "./constants.js";
+import { createManagedTwitchAuthProvider } from "./oauth-owner.js";
 import { resolveTwitchToken } from "./token.js";
 import type {
   ChannelAccountSnapshot,
@@ -19,8 +20,6 @@ import type {
   TwitchChatMessage,
 } from "./types.js";
 import { normalizeToken } from "./utils/twitch.js";
-
-const TWITCH_CHAT_AUTH_INTENTS = ["chat"];
 
 export class TwitchClientManager {
   // The registry gives each account its own manager and transport lifetime.
@@ -52,39 +51,11 @@ export class TwitchClientManager {
     account: TwitchAccountConfig,
     normalizedToken: string,
     clientId: string,
-  ): Promise<StaticAuthProvider | RefreshingAuthProvider> {
-    if (account.clientSecret) {
-      const authProvider = new RefreshingAuthProvider({
-        clientId,
-        clientSecret: account.clientSecret,
-      });
-
-      try {
-        await authProvider.addUserForToken(
-          {
-            accessToken: normalizedToken,
-            refreshToken: account.refreshToken ?? null,
-            expiresIn: account.expiresIn ?? null,
-            obtainmentTimestamp: account.obtainmentTimestamp ?? Date.now(),
-          },
-          TWITCH_CHAT_AUTH_INTENTS,
-        );
-      } catch (err) {
-        throw new Error(
-          `Failed to add user to RefreshingAuthProvider: ${formatErrorMessage(err)}`,
-          {
-            cause: err,
-          },
-        );
-      }
-
-      authProvider.onRefreshFailure((userId, error) => {
-        this.logger.error(`Failed to refresh access token for user ${userId}: ${error.message}`);
-      });
-
-      return authProvider;
+    accountId?: string,
+  ): Promise<AuthProvider> {
+    if (account.clientSecret && account.refreshToken) {
+      return await createManagedTwitchAuthProvider(account, normalizedToken, accountId);
     }
-
     return new StaticAuthProvider(clientId, normalizedToken);
   }
 
@@ -140,7 +111,12 @@ export class TwitchClientManager {
 
     const normalizedToken = normalizeToken(tokenResolution.token);
 
-    const authProvider = await this.createAuthProvider(account, normalizedToken, account.clientId);
+    const authProvider = await this.createAuthProvider(
+      account,
+      normalizedToken,
+      account.clientId,
+      accountId,
+    );
     if (!ownsConnection()) {
       throw new Error(`Twitch connection cancelled for ${account.username}`);
     }

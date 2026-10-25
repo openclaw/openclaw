@@ -7,12 +7,12 @@ import { coercePluginDoctorContractModule } from "./doctor-contract-module.js";
 import type { PluginDoctorStateMigration } from "./doctor-contract-module.js";
 import { preparePluginDoctorMigrationBackupResources } from "./doctor-contract-registry.js";
 import { clearPluginDoctorContractRegistryCache } from "./doctor-contract-registry.test-fixtures.js";
-import { writeDoctorFiles } from "./doctor-contract.test-support.js";
 import {
   type PluginDoctorMigrationResourceCollectionParams,
   preparePluginDoctorMigrationResources,
 } from "./doctor-migration-resources.js";
 import { waitForPluginCacheRetirement } from "./plugin-cache.js";
+import { writeArtifacts as writeDoctorFiles } from "./public-surface.test-support.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 let noDataMigrations: { pluginId: string; migration: PluginDoctorStateMigration }[];

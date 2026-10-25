@@ -1,9 +1,8 @@
-import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as browserCliSharedModule from "../browser-cli-shared.js";
 import {
   createBrowserProgram,
-  getBrowserCliRuntime,
+  mockBrowserCliRuntime,
   getBrowserCliRuntimeCapture,
 } from "../browser-cli.test-support.js";
 
@@ -18,11 +17,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.spyOn(browserCliSharedModule, "callBrowserRequest").mockImplementation(mocks.callBrowserRequest);
-const browserCliRuntime = getBrowserCliRuntime();
-vi.spyOn(defaultRuntime, "log").mockImplementation(browserCliRuntime.log);
-vi.spyOn(defaultRuntime, "writeJson").mockImplementation(browserCliRuntime.writeJson);
-vi.spyOn(defaultRuntime, "error").mockImplementation(browserCliRuntime.error);
-vi.spyOn(defaultRuntime, "exit").mockImplementation(browserCliRuntime.exit);
+mockBrowserCliRuntime();
 
 const { registerBrowserActionInputCommands } = await import("./register.js");
 
@@ -42,6 +37,30 @@ beforeEach(() => {
   vi.clearAllMocks();
   capture.resetRuntimeCapture();
 });
+
+it.each([
+  [["click", "   "], "ref is required"],
+  [["type", "   ", "synthetic"], "ref is required"],
+  [["scrollintoview", "   "], "ref is required"],
+  [["click-coords", "0x10", "20"], "Invalid x: must be a finite number"],
+  [["click-coords", "10", "NaN"], "Invalid y: must be a finite number"],
+  [["dialog", "--accept", "--dismiss"], "Specify only one of --accept or --dismiss"],
+  [["dialog"], "Specify --accept or --dismiss"],
+  [["evaluate"], "Missing --fn"],
+  [
+    ["batch", "--actions", "[]", "--actions-file", "never-read.json"],
+    "Specify only one of --actions or --actions-file",
+  ],
+  [["batch"], "Provide --actions, --actions-file, or --actions-file -"],
+] satisfies [string[], string][])(
+  "returns the %j input refusal to the root JSON renderer before dispatch",
+  async (args, message) => {
+    await expect(run("--json", ...args)).rejects.toThrow(message);
+    expect(capture.runtimeErrors).toEqual([]);
+    expect(capture.defaultRuntime.writeJson).not.toHaveBeenCalled();
+    expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
+  },
+);
 
 async function expectRejected(args: string[], message: string) {
   await expect(run(...args)).rejects.toThrow("__exit__:1");

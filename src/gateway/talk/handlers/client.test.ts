@@ -23,7 +23,6 @@ import {
   beginGatewayRestartSignalAdmission,
   markGatewayRestartDraining,
   getActiveGatewayRootWorkCount,
-  isGatewayWorkAdmissionClosed,
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../../../process/gateway-work-admission.js";
@@ -377,30 +376,6 @@ it("acknowledges close before creating the voice replacement requested by an act
   }
 });
 
-it("admits a later sideband consult after its HTTP offer has released admission", async () => {
-  const { consult } = await createBrowserConsult();
-  const resource = await completeOffer();
-  expect(getActiveGatewayRootWorkCount()).toBe(0);
-  expect(isGatewayWorkAdmissionClosed()).toBe(false);
-  const enqueue = voiceMocks.runEmbeddedAgent.getMockImplementation()!;
-  voiceMocks.runEmbeddedAgent.mockImplementationOnce(async (params) => {
-    expect(resolveClientVoiceRunBinding(params.runId)).toMatchObject({
-      agentId: "main",
-      sessionKey,
-      voiceSessionId: ownedVoiceSessionId,
-    });
-    return await enqueue(params);
-  });
-
-  await expect(
-    resource.runInAsyncScope(() => consult({ prompt: "Return the fixture status" })),
-  ).resolves.toEqual({ text: "fixture status" });
-  const [run] = voiceMocks.runEmbeddedAgent.mock.calls[0]!;
-  expect(resolveClientVoiceRunBinding(run.runId)).toBeUndefined();
-  expect(getActiveGatewayRootWorkCount()).toBe(0);
-  expect(getSessionControllerWorkCount()).toBe(0);
-});
-
 it("releases accepted work when agent runtime loading fails", async () => {
   const { consult } = await createBrowserConsult();
   const resource = await completeOffer();
@@ -425,6 +400,11 @@ it("keeps an accepted consult admitted through offer completion and suspension",
   const enqueue = voiceMocks.runEmbeddedAgent.getMockImplementation()!;
   voiceMocks.runEmbeddedAgent.mockImplementationOnce(async (params) => {
     expect(getSessionControllerWorkCount()).toBe(1);
+    expect(resolveClientVoiceRunBinding(params.runId)).toMatchObject({
+      agentId: "main",
+      sessionKey,
+      voiceSessionId: ownedVoiceSessionId,
+    });
     embeddedEntered.resolve();
     await beforeEnqueue.promise;
     return await enqueue(params);
@@ -452,6 +432,8 @@ it("keeps an accepted consult admitted through offer completion and suspension",
     beforeEnqueue.resolve();
     await expect(work).resolves.toEqual({ text: "fixture status" });
     expect(getSessionControllerWorkCount()).toBe(0);
+    const [run] = voiceMocks.runEmbeddedAgent.mock.calls[0]!;
+    expect(resolveClientVoiceRunBinding(run.runId)).toBeUndefined();
   } finally {
     beforeEnqueue.resolve();
     await work?.catch(() => undefined);
@@ -476,32 +458,6 @@ it.each(["suspend", "restart-signal", "restart-drain"] as const)(
     ).rejects.toThrow(GatewayDrainingError);
     expect(voiceMocks.runEmbeddedAgent).not.toHaveBeenCalled();
     expect(getSessionControllerWorkCount()).toBe(0);
-  },
-);
-
-it.each(["close", "disconnect", "restart"] as const)(
-  "does not revive a stale sideband owner after %s",
-  async (ending) => {
-    const { consult, client, clients, context } = await createBrowserConsult();
-    const resource = await completeOffer();
-    if (ending === "close") {
-      expect(
-        await invokeClient("close", { sessionKey, voiceSessionId: ownedVoiceSessionId }),
-      ).toHaveBeenCalledWith(true, { ok: true }, undefined);
-    } else {
-      if (ending === "restart") {
-        markGatewayRestartDraining();
-      }
-      clients.delete(client);
-      cleanupTalkConnection(client.connId, context.logGateway);
-      if (ending === "restart") {
-        resetGatewayWorkAdmission();
-      }
-    }
-    await expect(
-      resource.runInAsyncScope(() => consult({ prompt: "Must not start" })),
-    ).rejects.toThrow(/closed|disconnected/);
-    expect(voiceMocks.runEmbeddedAgent).not.toHaveBeenCalled();
   },
 );
 

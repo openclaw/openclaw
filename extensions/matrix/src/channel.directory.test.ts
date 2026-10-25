@@ -1,10 +1,9 @@
 import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { withEnv } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it } from "vitest";
-import type { RuntimeEnv } from "../runtime-api.js";
 import { matrixPlugin } from "./channel.js";
 import { resolveMatrixAccount } from "./matrix/accounts.js";
-import { resolveMatrixConfigForAccount } from "./matrix/client/config.js";
+import { resolveMatrixAuthContext } from "./matrix/client/config.js";
 import type { MatrixSetupInput } from "./setup-config.js";
 import { installMatrixTestRuntime } from "./test-runtime.js";
 import type { CoreConfig } from "./types.js";
@@ -21,6 +20,18 @@ function warnings(cfg: CoreConfig, accountId = "default") {
     account: resolveMatrixAccount({ cfg, accountId }),
   });
 }
+const auth = {
+  homeserver: "https://matrix.example.org",
+  userId: "@ops:example.org",
+  accessToken: "ops-token",
+};
+function validateEnv() {
+  return matrixPlugin.setupContract!.validateInput?.({
+    cfg: {},
+    accountId: "ops",
+    input: { useEnv: true },
+  });
+}
 
 describe("matrix target classification", () => {
   it("distinguishes users from rooms", () => {
@@ -33,28 +44,10 @@ describe("matrix target classification", () => {
   });
 });
 
-function requireMatrixDirectory() {
-  const directory = matrixPlugin.directory;
-  if (!directory?.listPeers || !directory.listGroups) {
-    throw new Error("expected Matrix directory listPeers/listGroups");
-  }
-  return { listPeers: directory.listPeers, listGroups: directory.listGroups };
-}
-
-function requireDirectoryEntry(
-  entries: readonly { kind: string; id: string; name?: string }[],
-  kind: string,
-  id: string,
-) {
-  const entry = entries.find((candidate) => candidate.kind === kind && candidate.id === id);
-  if (!entry) {
-    throw new Error(`expected Matrix directory entry ${kind}:${id}`);
-  }
-  return entry;
-}
-
 describe("matrix directory", () => {
-  const runtimeEnv: RuntimeEnv = createRuntimeEnv();
+  const runtime = createRuntimeEnv();
+  const threading = matrixPlugin.threading!;
+  const requireMention = matrixPlugin.groups!.resolveRequireMention!;
 
   beforeEach(() => {
     installMatrixTestRuntime();
@@ -70,19 +63,21 @@ describe("matrix directory", () => {
       },
     });
 
-    const directory = requireMatrixDirectory();
-
-    const peers = await directory.listPeers({ cfg, runtime: runtimeEnv });
-    expect(requireDirectoryEntry(peers, "user", "user:@alice:example.org").name).toBeUndefined();
-    expect(requireDirectoryEntry(peers, "user", "bob").name).toBe(
-      "incomplete id; expected @user:server",
+    const directory = matrixPlugin.directory!;
+    expect(await directory.listPeers!({ cfg, runtime })).toEqual(
+      expect.arrayContaining([
+        { kind: "user", id: "user:@alice:example.org" },
+        { kind: "user", id: "bob", name: "incomplete id; expected @user:server" },
+        { kind: "user", id: "user:@carol:example.org" },
+        { kind: "user", id: "user:@dana:example.org" },
+      ]),
     );
-    expect(requireDirectoryEntry(peers, "user", "user:@carol:example.org").name).toBeUndefined();
-    expect(requireDirectoryEntry(peers, "user", "user:@dana:example.org").name).toBeUndefined();
-
-    const groups = await directory.listGroups({ cfg, runtime: runtimeEnv });
-    expect(requireDirectoryEntry(groups, "group", "room:!room1:example.org").name).toBeUndefined();
-    expect(requireDirectoryEntry(groups, "group", "#alias:example.org").name).toBeUndefined();
+    expect(await directory.listGroups!({ cfg, runtime })).toEqual(
+      expect.arrayContaining([
+        { kind: "group", id: "room:!room1:example.org" },
+        { kind: "group", id: "#alias:example.org" },
+      ]),
+    );
   });
 
   it("resolves replyToMode from account config", () => {
@@ -93,89 +88,45 @@ describe("matrix directory", () => {
       },
     });
 
-    const resolveReplyToMode = matrixPlugin.threading!.resolveReplyToMode!;
+    const resolveReplyToMode = threading.resolveReplyToMode!;
     expect(resolveReplyToMode({ cfg, accountId: "assistant", chatType: "direct" })).toBe("all");
     expect(resolveReplyToMode({ cfg, accountId: "default", chatType: "direct" })).toBe("off");
   });
 
-  it("only exposes real Matrix thread ids in tool context", () => {
+  it.each([
+    [{ ReplyToId: "$reply" }, false, undefined, undefined],
+    [{ ReplyToId: "$reply", MessageThreadId: "$thread" }, true, "$thread", undefined],
+    [
+      { From: "matrix:@alice:example.org", ChatType: "direct", MessageThreadId: "$thread" },
+      false,
+      "$thread",
+      "@alice:example.org",
+    ],
+  ] as const)("builds tool context from %j", (context, value, thread, user) => {
     expect(
-      matrixPlugin.threading?.buildToolContext?.({
-        cfg: {} as CoreConfig,
-        context: { To: "room:!room:example.org", ReplyToId: "$reply" },
-        hasRepliedRef: { value: false },
+      threading.buildToolContext?.({
+        cfg: {},
+        context: { To: "room:!room:example.org", ...context },
+        hasRepliedRef: { value },
       }),
     ).toEqual({
       currentChannelId: "room:!room:example.org",
-      currentThreadTs: undefined,
-      hasRepliedRef: { value: false },
-    });
-
-    expect(
-      matrixPlugin.threading?.buildToolContext?.({
-        cfg: {} as CoreConfig,
-        context: { To: "room:!room:example.org", ReplyToId: "$reply", MessageThreadId: "$thread" },
-        hasRepliedRef: { value: true },
-      }),
-    ).toEqual({
-      currentChannelId: "room:!room:example.org",
-      currentThreadTs: "$thread",
-      hasRepliedRef: { value: true },
-    });
-  });
-
-  it("exposes Matrix direct user id in dm tool context", () => {
-    expect(
-      matrixPlugin.threading?.buildToolContext?.({
-        cfg: {} as CoreConfig,
-        context: {
-          From: "matrix:@alice:example.org",
-          To: "room:!dm:example.org",
-          ChatType: "direct",
-          MessageThreadId: "$thread",
-        },
-        hasRepliedRef: { value: false },
-      }),
-    ).toEqual({
-      currentChannelId: "room:!dm:example.org",
-      currentThreadTs: "$thread",
-      currentDirectUserId: "@alice:example.org",
-      hasRepliedRef: { value: false },
+      currentThreadTs: thread,
+      currentDirectUserId: user,
+      hasRepliedRef: { value },
     });
   });
 
   it("resolves group mention policy from account config", () => {
     const cfg = config({
-      groups: {
-        "!room:example.org": { requireMention: true },
-      },
-      accounts: {
-        Assistant: {
-          groups: {
-            "!room:example.org": { requireMention: false },
-          },
-        },
-      },
+      groups: { "!room:example.org": { requireMention: true } },
+      accounts: { Assistant: { groups: { "!room:example.org": { requireMention: false } } } },
     });
 
-    expect(matrixPlugin.groups!.resolveRequireMention!({ cfg, groupId: "!room:example.org" })).toBe(
-      true,
-    );
-    expect(
-      matrixPlugin.groups!.resolveRequireMention!({
-        cfg,
-        accountId: "assistant",
-        groupId: "!room:example.org",
-      }),
-    ).toBe(false);
-
-    expect(
-      matrixPlugin.groups!.resolveRequireMention!({
-        cfg,
-        accountId: "assistant",
-        groupId: "matrix:room:!room:example.org",
-      }),
-    ).toBe(false);
+    expect(requireMention({ cfg, groupId: "!room:example.org" })).toBe(true);
+    for (const groupId of ["!room:example.org", "matrix:room:!room:example.org"]) {
+      expect(requireMention({ cfg, accountId: "assistant", groupId })).toBe(false);
+    }
   });
 
   it("does not trust prefixed Matrix aliases in group context", () => {
@@ -186,7 +137,7 @@ describe("matrix directory", () => {
     });
 
     expect(
-      matrixPlugin.groups!.resolveRequireMention!({
+      requireMention({
         cfg,
         groupId: "matrix:room:!room:example.org",
         groupChannel: "matrix:channel:#ops:example.org",
@@ -234,11 +185,7 @@ describe("matrix directory", () => {
       },
     });
 
-    const updated = applyAccount(cfg, "ops", {
-      homeserver: "https://matrix.example.org",
-      userId: "@ops:example.org",
-      accessToken: "ops-token",
-    });
+    const updated = applyAccount(cfg, "ops", auth);
 
     const matrix = updated.channels?.matrix;
     expect([matrix?.accessToken, matrix?.deviceId, matrix?.avatarUrl]).toEqual([
@@ -257,18 +204,13 @@ describe("matrix directory", () => {
     });
     expect(defaultAccount?.groups).toEqual({ "!room:example.org": { requireMention: true } });
     const opsAccount = updated.channels?.["matrix"]?.accounts?.ops;
-    expect(opsAccount).toMatchObject({
-      enabled: true,
-      homeserver: "https://matrix.example.org",
-      userId: "@ops:example.org",
-      accessToken: "ops-token",
-    });
-    const resolvedOps = resolveMatrixConfigForAccount(updated, "ops", {});
-    expect(resolvedOps).toMatchObject({
-      homeserver: "https://matrix.example.org",
-      userId: "@ops:example.org",
-      accessToken: "ops-token",
-    });
+    expect(opsAccount).toMatchObject({ enabled: true, ...auth });
+    const resolvedOps = resolveMatrixAuthContext({
+      cfg: updated,
+      accountId: "ops",
+      env: {},
+    }).resolved;
+    expect(resolvedOps).toMatchObject(auth);
     expect(resolvedOps.deviceId).toBeUndefined();
   });
 
@@ -278,19 +220,10 @@ describe("matrix directory", () => {
       accessToken: "legacy-token",
     });
 
-    const updated = applyAccount(cfg, "default", {
-      homeserver: "https://matrix.example.org",
-      userId: "@bot:example.org",
-      accessToken: "bot-token",
-    });
+    const updated = applyAccount(cfg, "default", auth);
 
     const matrixConfig = updated.channels?.["matrix"];
-    expect(matrixConfig).toMatchObject({
-      enabled: true,
-      homeserver: "https://matrix.example.org",
-      userId: "@bot:example.org",
-      accessToken: "bot-token",
-    });
+    expect(matrixConfig).toMatchObject({ enabled: true, ...auth });
     expect(updated.channels?.["matrix"]?.accounts).toBeUndefined();
   });
 
@@ -303,12 +236,7 @@ describe("matrix directory", () => {
         MATRIX_OPS_PASSWORD: undefined,
       },
       () => {
-        const error = matrixPlugin.setupContract!.validateInput?.({
-          cfg: {} as CoreConfig,
-          accountId: "ops",
-          input: { useEnv: true },
-        });
-        expect(error).toBe(
+        expect(validateEnv()).toBe(
           'Set per-account env vars for "ops" (for example MATRIX_OPS_HOMESERVER + MATRIX_OPS_ACCESS_TOKEN or MATRIX_OPS_USER_ID + MATRIX_OPS_PASSWORD).',
         );
       },
@@ -322,12 +250,7 @@ describe("matrix directory", () => {
         MATRIX_OPS_ACCESS_TOKEN: "ops-token",
       },
       () => {
-        const error = matrixPlugin.setupContract!.validateInput?.({
-          cfg: {} as CoreConfig,
-          accountId: "ops",
-          input: { useEnv: true },
-        });
-        expect(error).toBeNull();
+        expect(validateEnv()).toBeNull();
       },
     );
   });
@@ -357,19 +280,16 @@ describe("matrix directory", () => {
         });
 
         const updated = applyAccount(cfg, "ops", { useEnv: true, name: "Ops" });
-
-        const opsAccount = updated.channels?.["matrix"]?.accounts?.ops;
-        expect(opsAccount).toMatchObject({ name: "Ops", enabled: true, encryption: true });
-        expect([
-          opsAccount?.homeserver,
-          opsAccount?.proxy,
-          opsAccount?.userId,
-          opsAccount?.accessToken,
-          opsAccount?.password,
-          opsAccount?.deviceId,
-          opsAccount?.deviceName,
-        ]).toEqual(Array(7).fill(undefined));
-        const resolvedOps = resolveMatrixConfigForAccount(updated, "ops", process.env);
+        expect(updated.channels?.matrix?.accounts?.ops).toEqual({
+          name: "Ops",
+          enabled: true,
+          encryption: true,
+        });
+        const resolvedOps = resolveMatrixAuthContext({
+          cfg: updated,
+          accountId: "ops",
+          env: process.env,
+        }).resolved;
         expect(resolvedOps).toMatchObject({
           homeserver: "https://ops.env.example.org",
           accessToken: "ops-env-token",

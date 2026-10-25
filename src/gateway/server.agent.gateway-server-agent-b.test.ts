@@ -106,16 +106,13 @@ test("write-scoped callers cannot reset conversations via agent", async () => {
       sessionKey: "main",
       idempotencyKey: "idem-agent-write-reset",
     });
+    const missingScope = "operator.admin";
     expect(viaAgent).toMatchObject({
       ok: false,
       error: {
         code: "FORBIDDEN",
-        message: "missing scope: operator.admin",
-        details: {
-          code: "MISSING_SCOPE",
-          missingScope: "operator.admin",
-          requiredScopes: ["operator.admin"],
-        },
+        message: `missing scope: ${missingScope}`,
+        details: { code: "MISSING_SCOPE", missingScope, requiredScopes: [missingScope] },
       },
     });
 
@@ -192,30 +189,26 @@ test.each(["completion", "abort"] as const)(
 
 test("agent returns a wire error when durable user-turn admission fails", async () => {
   await writeMainSessionEntry("sess-durable-agent-failure");
-  const refusal = refusePendingInputCommit({
+  using refusal = refusePendingInputCommit({
     operation: "stage",
     message: "injected agent transcript admission failure",
     sessionId: "sess-durable-agent-failure",
     runId: "idem-agent-durable-failure",
   });
-  try {
-    const response = await rpcReq(ws, "agent", {
-      message: "this turn must not be acknowledged",
-      sessionKey: "main",
-      idempotencyKey: "idem-agent-durable-failure",
-    });
-
-    expect(response).toMatchObject({
-      ok: false,
-      error: {
-        code: "UNAVAILABLE",
-        message: expect.stringContaining("injected agent transcript admission failure"),
-      },
-    });
-    expect(vi.mocked(agentCommandMock)).not.toHaveBeenCalled();
-  } finally {
-    refusal.mockRestore();
-  }
+  const response = await rpcReq(ws, "agent", {
+    message: "this turn must not be acknowledged",
+    sessionKey: "main",
+    idempotencyKey: "idem-agent-durable-failure",
+  });
+  expect(response).toMatchObject({
+    ok: false,
+    error: {
+      code: "UNAVAILABLE",
+      message: expect.stringContaining("injected agent transcript admission failure"),
+    },
+  });
+  expect(vi.mocked(agentCommandMock)).not.toHaveBeenCalled();
+  refusal.mockRestore();
 });
 
 test("agent final response surfaces redacted ACP runtime cause details", async () => {

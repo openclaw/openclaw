@@ -2,6 +2,7 @@ import { createOpenAIResponsesTransportStreamFn } from "@openclaw/ai/transports"
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
 import clawrouter from "../../extensions/clawrouter/index.js";
+import { sseResponse } from "../../packages/ai/src/transports/openai-responses-prompt-observer.test-support.js";
 import { completedResponse } from "../../packages/ai/src/transports/openai-stream-cases.test-support.js";
 import {
   createEmptyAgentDiscoveryStores,
@@ -66,14 +67,11 @@ it.each([
       }
       expect(url).toBe(`${baseUrl}/v1/responses`);
       requests.push(await request.json());
-      return new Response(
-        `data: ${JSON.stringify(
-          completedResponse("resp_synthetic", [], {
-            usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
-          }),
-        )}\n\n`,
-        { headers: { "content-type": "text/event-stream" } },
-      );
+      return sseResponse([
+        completedResponse("resp_synthetic", [], {
+          usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+        }),
+      ]);
     });
     vi.stubGlobal("fetch", fetchMock);
     const provider = await registerSingleProviderPlugin(clawrouter);

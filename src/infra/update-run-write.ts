@@ -96,6 +96,21 @@ export function applyUpdateRunStep(
   record: UpdateRunRecord,
   { reason, ...step }: UpdateRunStep & { reason?: string },
 ): void {
+  // Post-success retirement is advisory; it may add diagnostics, never change the terminal outcome.
+  if (
+    record.finishedAtMs !== null &&
+    (record.status === "succeeded" ||
+      (record.status === "skipped" && record.reason === "already-current")) &&
+    step.status === "completed" &&
+    [
+      "recovery-artifact-cleanup",
+      "warning:recovery-artifact-cleanup",
+      "diagnostic:recovery-artifact-cleanup",
+    ].includes(step.step)
+  ) {
+    upsertStep(record, step);
+    return;
+  }
   if (record.status === "running") {
     upsertStep(record, step);
     if (reason !== undefined) {
@@ -274,15 +289,7 @@ export function recordUpdateRunDiagnostics(
   options: UpdateRunLedgerOptions = {},
 ): UpdateRunRecord | undefined {
   try {
-    if (
-      typeof diagnostics !== "function" &&
-      !(
-        diagnostics.failure ||
-        diagnostics.recovery ||
-        diagnostics.rollbackOutcome ||
-        diagnostics.verification
-      )
-    ) {
+    if (typeof diagnostics !== "function" && !hasUpdateRunDiagnostics(diagnostics)) {
       return undefined;
     }
     return mutateRun(runId, (record) => applyUpdateRunDiagnostics(record, diagnostics), options);
@@ -338,4 +345,13 @@ export function applyFinishUpdateRun(record: UpdateRunRecord, result: FinishUpda
       }
     }
   }
+}
+
+export function hasUpdateRunDiagnostics(diagnostics: UpdateRunDiagnostics): boolean {
+  return Boolean(
+    diagnostics.failure ||
+    diagnostics.recovery ||
+    diagnostics.rollbackOutcome ||
+    diagnostics.verification,
+  );
 }

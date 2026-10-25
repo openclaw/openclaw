@@ -2,8 +2,6 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import fsAsync from "node:fs/promises";
 import path from "node:path";
-import { deserialize } from "node:v8";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import {
@@ -26,7 +24,6 @@ import {
 } from "../infra/diagnostic-events.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
-import * as brokerReply from "../infra/sqlite-worker-broker-reply.js";
 import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { appendSessionTranscriptMessageByIdentity } from "../plugin-sdk/session-transcript-runtime.js";
 import { withChannelReadAuthority } from "../shared/channel-read-authority.js";
@@ -49,7 +46,10 @@ import {
   MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX,
   resolveManagedOutgoingMediaArtifactDownload,
 } from "./managed-image-attachments.js";
-import { createFixture } from "./managed-image-attachments.test-support.js";
+import {
+  createFixture,
+  interceptManagedImageMutationReplies,
+} from "./managed-image-attachments.test-support.js";
 import {
   insertManagedImageRecord,
   listManagedImageRecordEntries,
@@ -64,6 +64,7 @@ import {
   readSessionMessagesMatchingIdAsync,
   readSessionMessagesWithSourceAsync,
 } from "./session-transcript-readers.js";
+import { iterateSessionTranscriptSourcePages } from "./session-transcript-source-pages.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const timestamp = "2026-09-04T00:00:00.000Z";
@@ -159,27 +160,14 @@ describe("managed attachment SQLite visibility", () => {
   }) => {
     const nowMs = 2_000_000;
     const originals = path.join(stateDir, "media", MANAGED_OUTGOING_ORIGINALS_SUBDIR);
-    const kept = path.join(originals, "kept.png");
-    await insertManagedImageRecord(
-      {
-        attachmentId: "11111111-1111-4111-8111-111111111111",
-        sessionKey: "agent:main:main",
-        messageId: null,
-        createdAt: new Date(nowMs).toISOString(),
-        alt: "Retained transient image",
-        original: {
-          mediaRoot: path.join(stateDir, "media"),
-          mediaId: "kept.png",
-          mediaSubdir: MANAGED_OUTGOING_ORIGINALS_SUBDIR,
-          contentType: "image/png",
-          width: 1,
-          height: 1,
-          sizeBytes: 4,
-          filename: "kept.png",
-        },
-      },
-      stateDir,
-    );
+    const { originalPath: kept } = await createFixture(stateDir, {
+      messageId: null,
+      createdAt: new Date(nowMs).toISOString(),
+      body: Buffer.from("kept"),
+      filename: "kept.png",
+    });
+    await fsAsync.unlink(kept);
+    await fsAsync.rmdir(originals);
     const reads: string[] = [];
     onTestFinished(
       onInternalDiagnosticEvent(
@@ -282,6 +270,85 @@ describe("managed attachment SQLite visibility", () => {
     },
   );
 
+  it.each(["active", "off-path", "archive"] as const)(
+    "selects recorded attachment messages without returning unrelated %s payloads",
+    async (source) => {
+      const f = await fixture();
+      const second = await createFixture(stateDir, {
+        attachmentId: randomUUID(),
+        sessionKey: f.scope.sessionKey,
+        agentId: "main",
+        messageId: "second",
+        createdAt: timestamp,
+        body: Buffer.from("second managed original"),
+        filename: "second.png",
+      });
+      const secondBlock = {
+        type: "image",
+        url: `/api/chat/media/outgoing/${encodeURIComponent(f.scope.sessionKey)}/${second.attachmentId}/full`,
+      };
+      const events = [
+        message("root", null, "root"),
+        ...Array.from({ length: 129 }, (_, index) =>
+          message(
+            `unrelated-${index}`,
+            index ? `unrelated-${index - 1}` : "root",
+            "x".repeat(1024),
+          ),
+        ),
+        message(f.messageId, "unrelated-128", [f.block]),
+        message("second", source === "off-path" ? "root" : f.messageId, [secondBlock]),
+      ];
+      await seed(f, source === "archive" ? [] : events);
+      if (source === "archive") {
+        archive(f, events);
+      }
+      const selected: unknown[] = [];
+      for await (const page of iterateSessionTranscriptSourcePages(
+        readSessionMessagesWithSourceAsync,
+        f.scope,
+        {
+          allowResetArchiveFallback: true,
+          includeOffPathMessages: true,
+          messageIds: [f.messageId, "second"],
+        },
+      )) {
+        selected.push(...page.messages);
+      }
+      expect(selected).toHaveLength(2);
+      expect(selected).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ __openclaw: expect.objectContaining({ id: f.messageId }) }),
+          expect.objectContaining({ __openclaw: expect.objectContaining({ id: "second" }) }),
+        ]),
+      );
+      await cleanupManagedOutgoingMediaRecords({ stateDir, sessionKey: f.scope.sessionKey });
+      expect(await readManagedImageRecord(f.attachmentId, stateDir)).not.toBeNull();
+      expect(await readManagedImageRecord(second.attachmentId, stateDir)).not.toBeNull();
+      expect(fs.existsSync(f.originalPath)).toBe(true);
+      expect(fs.existsSync(second.originalPath)).toBe(true);
+    },
+  );
+
+  it.each(["sqlite", "archive"] as const)(
+    "retains attachments whose %s message ID comes from legacy metadata",
+    async (source) => {
+      const f = await fixture();
+      const legacy = {
+        type: "message",
+        timestamp,
+        message: { role: "assistant", content: [f.block], __openclaw: { id: f.messageId } },
+      };
+      await seed(f, source === "sqlite" ? [legacy] : []);
+      if (source === "archive") {
+        archive(f, [legacy]);
+      }
+      await cleanupManagedOutgoingMediaRecords({ stateDir, sessionKey: f.scope.sessionKey });
+      expect(await readManagedImageRecord(f.attachmentId, stateDir)).not.toBeNull();
+      expect(fs.existsSync(f.originalPath)).toBe(true);
+    },
+  );
+
   it("preserves archive duplicates and full-reader oversized recovery", async () => {
     const f = await fixture("   ");
     await seed(f, []);
@@ -315,6 +382,8 @@ describe("managed attachment SQLite visibility", () => {
     expect(full).toHaveLength(2);
     expect(await readSessionMessagesMatchingIdAsync(f.scope, f.messageId)).toEqual(full);
     expect(await f.download()).not.toBeNull();
+    await cleanupManagedOutgoingMediaRecords({ stateDir, sessionKey: f.scope.sessionKey });
+    expect(await readManagedImageRecord(f.attachmentId, stateDir)).not.toBeNull();
   });
 
   it("uses the admitted bounds for both matching and missing IDs", async () => {
@@ -599,41 +668,16 @@ describe("managed media worker custody", () => {
               },
             });
           });
-        const dispatch = brokerReply.dispatchSqliteWorkerJob;
-        const insertRequests = new WeakSet<object>();
-        const dispatchSpy = vi
-          .spyOn(brokerReply, "dispatchSqliteWorkerJob")
-          .mockImplementation((slot, job, onRejected) => {
-            if (job.request.type === "execute") {
-              const command: unknown = deserialize(job.request.input);
-              if (isRecord(command) && command.type === "managedImages.insert") {
-                insertRequests.add(job.request);
-              }
-            }
-            return dispatch(slot, job, onRejected);
-          });
-        const receive = brokerReply.receiveSqliteWorkerReply;
-        const replySpy = vi
-          .spyOn(brokerReply, "receiveSqliteWorkerReply")
-          .mockImplementation((slot, reply, owner) => {
-            if (
-              slot.current?.request.type === "execute" &&
-              reply.ok &&
-              !reply.transfer &&
-              !reply.input
-            ) {
-              if (insertRequests.has(slot.current.request)) {
-                nativeReplies++;
-                if (failure === "revoked after commit") {
-                  active = false;
-                }
-                if (failure === "lost ordinary reply" || failure === "lost native receipt") {
-                  return receive(slot, { ...reply, value: new Uint8Array([0]) }, owner);
-                }
-              }
-            }
-            return receive(slot, reply, owner);
-          });
+        const restoreReplies = interceptManagedImageMutationReplies((commandType) => {
+          if (commandType !== "managedImages.insert") {
+            return false;
+          }
+          nativeReplies++;
+          if (failure === "revoked after commit") {
+            active = false;
+          }
+          return failure === "lost ordinary reply" || failure === "lost native receipt";
+        });
         try {
           const outcome = await withChannelReadAuthority(
             assertCurrent,
@@ -645,8 +689,7 @@ describe("managed media worker custody", () => {
             (error: unknown) => ({ error }),
           );
           // Stop injecting transport faults before independently reading the persisted result.
-          replySpy.mockRestore();
-          dispatchSpy.mockRestore();
+          restoreReplies();
           admissionSpy.mockRestore();
           const entries = await listManagedImageRecordEntries({ stateDir: state.stateDir });
           const originals = state.statePath("media", "outgoing", "originals");
@@ -672,8 +715,7 @@ describe("managed media worker custody", () => {
             expect(nativeReplies).toBe(failure === "refused commit" ? 0 : 1);
           }
         } finally {
-          replySpy.mockRestore();
-          dispatchSpy.mockRestore();
+          restoreReplies();
           admissionSpy.mockRestore();
         }
       },

@@ -76,25 +76,6 @@ function expectCalls(counts: Partial<Record<Operation, number>>) {
   }
 }
 const shutdownFailure = "shutdown failed while waiting for active Matrix SDK operations";
-const makeEvent = (
-  eventId: string,
-  extra: Partial<MatrixQaObservedEvent> = {},
-): MatrixQaObservedEvent => ({
-  eventId,
-  kind: "message",
-  roomId: "!room:matrix-qa.test",
-  sender: "@bot:matrix-qa.test",
-  type: "m.room.message",
-  ...extra,
-});
-function recording() {
-  const observed: MatrixQaObservedEvent[] = [];
-  const recorder = createMatrixQaE2eeObservedEventRecorder({
-    append: (event) => observed.push(event),
-  });
-  return { observed, recorder };
-}
-
 describe("matrix qa e2ee client", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   let client: Awaited<ReturnType<typeof createMatrixQaE2eeScenarioClient>>;
@@ -261,31 +242,14 @@ describe("matrix qa e2ee client", () => {
     expect(debug).not.toHaveBeenCalled();
   });
 
-  it("shares one stop promise across concurrent and repeated shutdown requests", async () => {
-    const first = client.stop();
-    const second = client.stop();
-    await Promise.all([first, second]);
-    const third = client.stop();
-
-    expect(second).toBe(first);
-    expect(third).toBe(first);
-    await expect(sendText("must not send")).rejects.toThrow("shutdown has started");
-    expect(runtimeFixture.send).not.toHaveBeenCalled();
-    expect(runtimeFixture.detach.mock.calls.map(([event]) => event)).toEqual([
-      "room.message",
-      "verification.summary",
-    ]);
-    expectCalls({ drain: 1, persist: 1, discard: 0 });
-  });
-
-  it("gives an admitted send a bounded grace period before draining and persisting", async () => {
+  it("shares shutdown while giving admitted sends a grace period before draining and persisting", async () => {
     const calls: string[] = [];
     const finish = createDeferred<string>();
     runtimeFixture.send.mockImplementation(() => {
       calls.push("operation");
       return finish.promise;
     });
-    runtimeFixture.detach.mockImplementation(() => calls.push("detach"));
+    runtimeFixture.detach.mockImplementation((event) => calls.push(`detach:${event}`));
     runtimeFixture.drain.mockImplementation(async () => {
       calls.push("drain");
     });
@@ -296,14 +260,23 @@ describe("matrix qa e2ee client", () => {
     await vi.advanceTimersByTimeAsync(0);
     const stop = client.stop();
     try {
-      expect(calls).toEqual(["operation", "detach", "detach"]);
+      expect(client.stop()).toBe(stop);
+      expect(calls).toEqual(["operation", "detach:room.message", "detach:verification.summary"]);
     } finally {
       finish.resolve("$sent");
     }
     await expect(operation).resolves.toBe("$sent");
     await stop;
-    expect(calls).toEqual(["operation", "detach", "detach", "drain", "stop-and-persist"]);
-    expectCalls({ abort: 0, discard: 0 });
+    expect(client.stop()).toBe(stop);
+    await expect(sendText("must not send")).rejects.toThrow("shutdown has started");
+    expect(calls).toEqual([
+      "operation",
+      "detach:room.message",
+      "detach:verification.summary",
+      "drain",
+      "stop-and-persist",
+    ]);
+    expectCalls({ send: 1, drain: 1, persist: 1, abort: 0, discard: 0 });
     expect(vi.getTimerCount()).toBe(0);
   });
 
@@ -354,50 +327,45 @@ describe("matrix qa e2ee client", () => {
 });
 
 describe("matrix qa e2ee event recording", () => {
-  it("records late-decrypted payload updates for an existing event id", () => {
-    const previous = makeEvent("$reply");
-    const { observed, recorder } = recording();
+  it("deduplicates late decryption and rehydrates replacements of the threaded target", () => {
+    const observed: MatrixQaObservedEvent[] = [];
+    const recorder = createMatrixQaE2eeObservedEventRecorder({
+      append: (event) => observed.push(event),
+    });
+    const previous: MatrixQaObservedEvent = {
+      eventId: "$preview",
+      kind: "message",
+      roomId: "!room:matrix-qa.test",
+      sender: "@bot:matrix-qa.test",
+      type: "m.room.message",
+    };
+    const replacement = {
+      ...previous,
+      eventId: "$final",
+      body: "final",
+      msgtype: "m.text",
+      replacesEventId: "$preview",
+    };
     const decrypted = {
       ...previous,
       body: "MATRIX_QA_E2EE_CLI_GATEWAY_OK",
       msgtype: "m.text",
+      relatesTo: {
+        eventId: "$root",
+        inReplyToId: "$driver",
+        isFallingBack: true,
+        relType: "m.thread",
+      },
     };
-
+    recorder.record(replacement);
     recorder.record(previous);
     recorder.record(decrypted);
     recorder.record(decrypted);
-
-    expect(observed).toEqual([previous, decrypted]);
-  });
-
-  it("rehydrates a replacement when its threaded target decrypts later", () => {
-    const { observed, recorder } = recording();
-    const replacement = makeEvent("$final", {
-      body: "final",
-      msgtype: "m.text",
-      replacesEventId: "$preview",
-    });
-    const relation = {
-      eventId: "$root",
-      inReplyToId: "$driver",
-      isFallingBack: true,
-      relType: "m.thread",
-    };
-
-    recorder.record(replacement);
-    recorder.record(
-      makeEvent("$preview", {
-        kind: "notice",
-        body: "preview",
-        msgtype: "m.notice",
-        relatesTo: relation,
-      }),
-    );
-
     expect(observed).toEqual([
       replacement,
-      expect.objectContaining({ eventId: "$preview", relatesTo: relation }),
-      { ...replacement, relatesTo: relation },
+      previous,
+      decrypted,
+      { ...replacement, relatesTo: decrypted.relatesTo },
     ]);
   });
 });

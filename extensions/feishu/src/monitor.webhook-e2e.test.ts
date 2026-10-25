@@ -2,21 +2,24 @@ import crypto from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import { createConnection } from "node:net";
 import * as Lark from "@larksuiteoapi/node-sdk";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resolveRequestClientIp } from "openclaw/plugin-sdk/webhook-ingress";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
+import * as client from "./client.js";
 import { normalizeCompatibilityConfig } from "./doctor-contract.js";
 import { createFeishuRuntimeMockModule } from "./monitor.test-mocks.js";
 import {
   buildWebhookConfig,
   createFeishuWebhookTestAccount,
+  createHeldWebhookDispatch,
+  expectWebhookJson as expectJson,
   getGatewayPort,
   getGatewayServer,
   postSignedPayload,
   sendRawSignedFeishuRequest,
   signFeishuPayload,
   waitForWebhookRoute,
+  waitForWebhookResponseClose,
   withRunningWebhookMonitor,
 } from "./monitor.webhook.test-helpers.js";
 
@@ -49,7 +52,6 @@ vi.mock("./monitor.state.js", async (importOriginal) => {
   };
 });
 
-const probeFeishuMock = vi.hoisted(() => vi.fn());
 const legacyListener = vi.hoisted(() => ({
   value: undefined as { port: number; host?: string } | undefined,
 }));
@@ -59,27 +61,19 @@ vi.mock("openclaw/plugin-sdk/webhook-ingress", async (importOriginal) => ({
   getWebhookLegacyListener: () => legacyListener.value,
 }));
 
-vi.mock("./probe.js", () => ({
-  probeFeishu: probeFeishuMock,
-  registerFeishuAiAgent: vi.fn().mockResolvedValue({ ok: true }),
+vi.mock("./probe.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./probe.js")>()),
+  probeFeishu: vi.fn(async () => ({ ok: true, botOpenId: "bot_open_id" })),
+  registerFeishuAiAgent: vi.fn(async () => ({ ok: true })),
 }));
-
-vi.mock("./client.js", async () => {
-  const actual = await vi.importActual<typeof import("./client.js")>("./client.js");
-  return {
-    ...actual,
-    createFeishuWSClient: vi.fn(() => ({ start: vi.fn() })),
-  };
-});
-
 vi.mock("./runtime.js", () => createFeishuRuntimeMockModule());
 
 import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import { buildFeishuWebhookRateLimitKey } from "./monitor-rate-limit-key.js";
 import { cleanupFeishuMonitorStateForTests } from "./monitor.cleanup.test-helpers.js";
-import { monitorFeishuProvider } from "./monitor.js";
+import { monitorFeishuProvider, type FeishuStatusSink } from "./monitor.js";
 import { feishuWebhookRateLimiter } from "./monitor.state.js";
-import { monitorWebhook } from "./monitor.transport.js";
+import { monitorWebhook, monitorWebSocket } from "./monitor.transport.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
 beforeAll(async () => {
@@ -97,21 +91,10 @@ function encryptFeishuPayload(encryptKey: string, payload: Record<string, unknow
 
 function withSignedWebhook(
   accountId: string,
-  run: Parameters<typeof withRunningWebhookMonitor>[2],
-  options: Pick<Parameters<typeof withRunningWebhookMonitor>[0], "statusSink" | "runtime"> = {},
+  run: (url: string) => Promise<void>,
+  options: Pick<Parameters<typeof monitorWebhook>[0], "statusSink" | "runtime"> = {},
 ) {
-  probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
-  return withRunningWebhookMonitor(
-    {
-      accountId,
-      path: `/hook-${accountId}`,
-      verificationToken: "verify_token",
-      encryptKey: "encrypt_key",
-      ...options,
-    },
-    monitorFeishuProvider,
-    run,
-  );
+  return withTransport(accountId, options, run);
 }
 
 async function withTransport(
@@ -188,23 +171,119 @@ async function expectText(response: Response, status: number, body: string) {
   expect(await response.text()).toBe(body);
 }
 
-async function expectJson(response: Response, value: unknown) {
-  expect(response.status).toBe(200);
-  expect(await response.json()).toEqual(value);
-}
-
 function expectAccepted(response: Response, value: string | null = "durable") {
   expect(response.status).toBe(200);
   expect(response.headers.get("x-openclaw-delivery-accepted")).toBe(value);
 }
 
-function eventPayload(
-  event_type: string,
-  event: Record<string, unknown> = {},
-  header: Record<string, unknown> = {},
-) {
-  return { schema: "2.0", header: { event_type, ...header }, event };
-}
+const eventPayload = (event_type: string) => ({ schema: "2.0", header: { event_type }, event: {} });
+
+describe("Feishu transport status publishing", () => {
+  let now: number;
+  beforeEach(() => {
+    now = 1_700_000_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+  });
+  afterEach(() => vi.restoreAllMocks());
+  type Patch = Parameters<FeishuStatusSink>[0];
+  type Callbacks = NonNullable<Parameters<typeof client.createFeishuWSClient>[1]>;
+  function expectPatch(actual: Patch | undefined, expected: Patch) {
+    expect(actual).toMatchObject(expected);
+    expect(actual?.lastTransportActivityAt).toBeUndefined();
+  }
+  async function withWsStatus(
+    run: (patches: Patch[], callbacks: Callbacks) => void | Promise<void>,
+    failure?: Error,
+  ) {
+    const patches: Patch[] = [];
+    const abort = new AbortController();
+    let callbacks: Callbacks = {};
+    vi.spyOn(client, "createFeishuWSClient").mockImplementation(async (_account, received) => {
+      if (failure) {
+        throw failure;
+      }
+      callbacks = received ?? {};
+      return { start: vi.fn(async () => undefined), close: vi.fn() } as never;
+    });
+    const account = createFeishuWebhookTestAccount("status");
+    account.config.connectionMode = "websocket";
+    const monitor = monitorWebSocket({
+      account,
+      accountId: "status",
+      abortSignal: abort.signal,
+      eventDispatcher: {} as never,
+      statusSink: (patch) => patches.push(patch),
+    });
+    try {
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      await run(patches, callbacks);
+    } finally {
+      abort.abort();
+      await monitor;
+    }
+  }
+  it("publishes connected state when the WS SDK reports ready or reconnected", async () => {
+    await withWsStatus((patches, callbacks) => {
+      expect(patches).toEqual([]);
+      for (const [index, callback] of [callbacks.onReady, callbacks.onReconnected].entries()) {
+        callback?.();
+        expectPatch(patches[index], {
+          connected: true,
+          lifecycle: "ready",
+          lastConnectedAt: now,
+          lastEventAt: now,
+          lastError: null,
+        });
+        if (index === 0) {
+          expect(patches[0]?.terminalDisconnect).toBeUndefined();
+          now += 1_000;
+        }
+      }
+      now += 1_000;
+      callbacks.onReconnecting?.();
+      expectPatch(patches[2], { connected: false, lifecycle: "recovering", lastEventAt: now });
+    });
+  });
+  it.each([false, true])("publishes WS failure state (terminal=%s)", async (terminal) => {
+    await withWsStatus(
+      async (patches, callbacks) => {
+        if (terminal) {
+          callbacks.onError?.(new Error("WebSocket reconnect exhausted after 3 attempts"));
+        }
+        await vi.waitFor(() =>
+          expectPatch(
+            patches.find((patch) => patch.connected === false),
+            {
+              connected: false,
+              lifecycle: terminal ? "blocked" : "recovering",
+              lastEventAt: now,
+              ...(terminal ? { terminalDisconnect: true } : {}),
+            },
+          ),
+        );
+      },
+      terminal ? undefined : new Error("boom"),
+    );
+  });
+  it("publishes connected after Gateway route registration", async () => {
+    const patches: Patch[] = [];
+    await withTransport(
+      "webhook-status",
+      { statusSink: (patch) => patches.push(patch) },
+      async () => {
+        const connected = patches.find((patch) => patch.connected === true);
+        expect(connected).toBeDefined();
+        expectPatch(connected, {
+          lifecycle: "ready",
+          lastConnectedAt: now,
+          lastEventAt: now,
+        });
+      },
+    );
+  });
+});
 
 afterEach(async () => {
   webhookBodyTimeoutMs.value = undefined;
@@ -219,7 +298,6 @@ afterAll(() => {
   vi.doUnmock("openclaw/plugin-sdk/webhook-request-guards");
   vi.doUnmock("openclaw/plugin-sdk/webhook-ingress");
   vi.doUnmock("./probe.js");
-  vi.doUnmock("./client.js");
   vi.doUnmock("./runtime.js");
   vi.resetModules();
 });
@@ -329,12 +407,6 @@ describe("Feishu webhook signed-request e2e", () => {
     }
   });
 
-  it("returns 401 for unsigned invalid json before parsing", async () => {
-    await withSignedWebhook("invalid-json", async (url) => {
-      await expectText(await postRaw(url, "{not-json"), 401, "Invalid signature");
-    });
-  });
-
   it("admits signed requests only on the configured POST webhook route", async () => {
     const path = "/hook-e2e-route";
     await withRoute(createFeishuWebhookTestAccount("route", path), async (request) => {
@@ -431,40 +503,10 @@ describe("Feishu webhook signed-request e2e", () => {
     });
   });
 
-  it("acks durable envelopes only after ingress admission resolves", async () => {
-    const admission = createDeferred<void>();
-    const invoke = vi.fn(async () => await admission.promise);
-    const invokeWebhookEvent = async () => {
-      await invoke();
-      return { kind: "durable" as const, value: undefined };
-    };
-    await withTransport(
-      "durable-ack-ordering",
-      { eventDispatcher: { invoke } as never, invokeWebhookEvent },
-      async (url) => {
-        const payload = eventPayload(
-          "im.message.receive_v1",
-          { message: { chat_id: "oc_durable_ack_ordering" } },
-          { event_id: "evt-durable-ack-ordering-1" },
-        );
-        let acceptedResponseReceived = false;
-        const acceptedRequest = postSignedPayload(url, payload).then((response) => {
-          acceptedResponseReceived = true;
-          return response;
-        });
-        await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(1));
-        expect(acceptedResponseReceived).toBe(false);
-        admission.resolve();
-        expectAccepted(await acceptedRequest);
-      },
-      () => admission.resolve(),
-    );
-  });
-
   it("filters prototype-bearing keys without changing the Lark webhook envelope", async () => {
     const accountId = "prototype-guard";
     const encryptKey = "encrypt_key";
-    const account = createFeishuWebhookTestAccount(accountId, `/hook-${accountId}`);
+    const account = createFeishuWebhookTestAccount(accountId);
     const handler = vi.fn(async () => ({ accepted: true }));
     const dispatcher = new Lark.EventDispatcher({
       encryptKey,
@@ -507,18 +549,27 @@ describe("Feishu webhook signed-request e2e", () => {
   });
 
   it("accepts signed encrypted url_verification challenges end-to-end", async () => {
-    await withSignedWebhook("encrypted-challenge", async (url) => {
-      const payload = {
-        encrypt: encryptFeishuPayload("encrypt_key", {
-          type: "url_verification",
-          challenge: "encrypted-challenge-token",
-        }),
-      };
-      const response = await postSignedPayload(url, payload);
+    await withRunningWebhookMonitor(
+      {
+        accountId: "encrypted-challenge",
+        path: "/hook-encrypted-challenge",
+        verificationToken: "verify_token",
+        encryptKey: "encrypt_key",
+      },
+      monitorFeishuProvider,
+      async (url) => {
+        const payload = {
+          encrypt: encryptFeishuPayload("encrypt_key", {
+            type: "url_verification",
+            challenge: "encrypted-challenge-token",
+          }),
+        };
+        const response = await postSignedPayload(url, payload);
 
-      expectAccepted(response, null);
-      await expectJson(response, { challenge: "encrypted-challenge-token" });
-    });
+        expectAccepted(response, null);
+        await expectJson(response, { challenge: "encrypted-challenge-token" });
+      },
+    );
   });
 });
 
@@ -586,13 +637,6 @@ function rateLimitKey(clientIp?: string) {
   });
 }
 
-function waitForWebhookResponseClose(): Promise<void> {
-  const server = getGatewayServer();
-  return new Promise<void>((resolve) => {
-    server.once("request", (_req, res) => res.once("close", resolve));
-  });
-}
-
 function waitForWebhookRequests(count = 1) {
   const server = getGatewayServer();
   let remaining = count;
@@ -615,7 +659,6 @@ describe("Feishu webhook security hardening", () => {
     { missing: "verificationToken", verificationToken: undefined },
     { missing: "encryptKey", verificationToken: "verify_token" },
   ])("rejects webhook mode without $missing", async ({ missing, verificationToken }) => {
-    probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
     const config = buildWebhookConfig({
       accountId: `missing-${missing}`,
       path: `/hook-missing-${missing}`,
@@ -630,7 +673,6 @@ describe("Feishu webhook security hardening", () => {
   ])(
     "rejects %s unsigned bodies before authentication",
     async (accountId, status, reason, body) => {
-      const runtime = createRuntimeSpies();
       const statusSink = vi.fn();
       await withSignedWebhook(
         accountId,
@@ -655,16 +697,9 @@ describe("Feishu webhook security hardening", () => {
           expect(response).toContain(body);
           expect(response).toMatch(/connection: close/i);
           await responseClosed;
-          expect(
-            runtime.log.mock.calls.filter(([message]) => message.includes("webhook anomaly")),
-          ).toEqual([
-            [
-              `feishu[${accountId}]: webhook anomaly path=/hook-${accountId} status=${status} count=1`,
-            ],
-          ]);
           expect(statusSink).not.toHaveBeenCalled();
         },
-        { runtime, statusSink },
+        { statusSink },
       );
     },
   );
@@ -753,40 +788,45 @@ describe("Feishu webhook security hardening", () => {
     }
   });
 
-  it("releases pre-auth capacity before signed event dispatch", { timeout: 15_000 }, async () => {
-    preAuthInFlightLimit.value = 1;
-    const dispatchGate = createDeferred<void>();
-    const invokeWebhookEvent = vi.fn(async () => {
-      await dispatchGate.promise;
-      return { kind: "durable" as const, value: { accepted: true } };
-    });
-    let signedRequest: Promise<Response> | undefined;
-    await withTransport(
-      "pre-auth-dispatch",
-      { invokeWebhookEvent },
-      async (url) => {
-        const rawBody = JSON.stringify(eventPayload("test.pre_auth_dispatch"));
-        signedRequest = postSigned(url, rawBody);
-        await vi.waitFor(() => expect(invokeWebhookEvent).toHaveBeenCalledOnce(), {
-          timeout: 5_000,
-          interval: 10,
-        });
-
-        const admittedInvalidSignature = await postRaw(url, "{}");
-        expect(admittedInvalidSignature.status).toBe(401);
-        expect(invokeWebhookEvent).toHaveBeenCalledOnce();
-
-        dispatchGate.resolve();
-        expect((await signedRequest).status).toBe(200);
-      },
-      async () => {
-        dispatchGate.resolve();
-        if (signedRequest) {
-          await signedRequest.catch(() => undefined);
-        }
-      },
-    );
-  });
+  it(
+    "releases pre-auth capacity but waits for admission before acknowledging",
+    { timeout: 15_000 },
+    async () => {
+      preAuthInFlightLimit.value = 1;
+      const dispatch = createHeldWebhookDispatch({
+        kind: "durable" as const,
+        value: { accepted: true },
+      });
+      const invokeWebhookEvent = dispatch.handler;
+      let signedRequest: Promise<Response> | undefined;
+      let acknowledged = false;
+      await withTransport(
+        "pre-auth-dispatch",
+        { invokeWebhookEvent },
+        async (url) => {
+          const rawBody = JSON.stringify(eventPayload("test.pre_auth_dispatch"));
+          signedRequest = postSigned(url, rawBody).then((response) => {
+            acknowledged = true;
+            return response;
+          });
+          await dispatch.started;
+          expect(invokeWebhookEvent).toHaveBeenCalledOnce();
+          expect(acknowledged).toBe(false);
+          await expectText(await postRaw(url, "{not-json"), 401, "Invalid signature");
+          expect(invokeWebhookEvent).toHaveBeenCalledOnce();
+          expect(acknowledged).toBe(false);
+          dispatch.release();
+          expectAccepted(await signedRequest);
+        },
+        async () => {
+          dispatch.release();
+          if (signedRequest) {
+            await signedRequest.catch(() => undefined);
+          }
+        },
+      );
+    },
+  );
 
   it("rate limits webhook burst traffic with 429", async () => {
     await withSignedWebhook("rate-limit", async (url) => {

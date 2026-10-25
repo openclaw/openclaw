@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { MsgContext } from "../auto-reply/templating.js";
-import { selectAttachments } from "./attachments.js";
 import { normalizeAttachments } from "./attachments.normalize.js";
+import { selectAttachments } from "./attachments.select.js";
 import type { MediaAttachment } from "./types.js";
 
 describe("media-understanding selectAttachments guards", () => {

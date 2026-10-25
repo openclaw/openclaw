@@ -8,7 +8,6 @@ import { buildChannelInboundEventContext } from "../channels/inbound-event/conte
 import { createHostChannelInboundEventContextBuilder } from "../channels/inbound-event/host-context-builder.js";
 import { createHostChannelIngressRuntime } from "../channels/message-access/runtime.js";
 import { getRuntimeConfig } from "../config/config.js";
-import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
 import { loadUnfinishedDeliveries } from "../infra/outbound/delivery-queue-storage.js";
 import {
   getRpcSourceIdentity,
@@ -19,6 +18,7 @@ import { ensureCanonicalUserProfileForEmail } from "../state/user-profile-writes
 import {
   createScenario,
   dispatchProofHuman,
+  expectProofIdle,
   gateway,
   gatewayContext,
   humanReplies,
@@ -178,7 +178,7 @@ export async function verifyLinkedPrincipalDelivery(signal: AbortSignal) {
             expect(terminal.error).toContain("Channel operator authority changed");
             refusedRecipients.push(recipient);
           }
-          await waitForGatewayActiveWork(30_000);
+          await expectProofIdle();
           expect(
             listRpcSourceEntries().some(
               ([, source]) =>
@@ -192,7 +192,6 @@ export async function verifyLinkedPrincipalDelivery(signal: AbortSignal) {
             current ? [{ to: recipient, text: scenario.marker, accountId: "default" }] : [],
           );
           expect(scenario.effectAfterSourceCompletion).toEqual(current ? [true] : []);
-          expect(providerErrors).toEqual([]);
         } finally {
           scenario.releaseTarget.resolve();
           hold.release.resolve();

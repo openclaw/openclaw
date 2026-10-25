@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as browserCliSharedModule from "../browser-cli-shared.js";
 import {
   createBrowserProgram,
-  getBrowserCliRuntime,
+  mockBrowserCliRuntime,
   getBrowserCliRuntimeCapture,
   mockBrowserGateway,
 } from "../browser-cli.test-support.js";
@@ -23,11 +23,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.spyOn(browserCliSharedModule, "callBrowserRequest").mockImplementation(mocks.callBrowserRequest);
 vi.spyOn(batchSharedModule, "readActionsPayload").mockImplementation(mocks.readActionsPayload);
-const browserCliRuntime = getBrowserCliRuntime();
-vi.spyOn(defaultRuntime, "log").mockImplementation(browserCliRuntime.log);
-vi.spyOn(defaultRuntime, "writeJson").mockImplementation(browserCliRuntime.writeJson);
-vi.spyOn(defaultRuntime, "error").mockImplementation(browserCliRuntime.error);
-vi.spyOn(defaultRuntime, "exit").mockImplementation(browserCliRuntime.exit);
+mockBrowserCliRuntime();
 
 const { registerBrowserActionInputCommands } = await import("./register.js");
 
@@ -159,10 +155,10 @@ describe("browser action input batch command", () => {
   });
 
   it("rejects conflicting inline and file actions before reading either source", async () => {
-    await expectRejected(
-      ["--actions", "[]", "--actions-file", "/tmp/browser-actions.json"],
-      "Specify only one of --actions or --actions-file",
-    );
+    await expect(
+      run("batch", "--actions", "[]", "--actions-file", "/tmp/browser-actions.json"),
+    ).rejects.toThrow("Specify only one of --actions or --actions-file");
+    expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
     expect(mocks.readActionsPayload).not.toHaveBeenCalled();
   });
 
@@ -183,6 +179,9 @@ describe("browser action input batch command", () => {
   });
 
   it("requires actions from --actions, --actions-file, or stdin", async () => {
-    await expectRejected([], "Provide --actions, --actions-file, or --actions-file -");
+    await expect(run("batch")).rejects.toThrow(
+      "Provide --actions, --actions-file, or --actions-file -",
+    );
+    expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
   });
 });

@@ -71,7 +71,6 @@ it.each(["agent_end", "subagent_ended"] as const)(
       log: createNoopLogger(),
       enqueueSystemEvent: vi.fn(),
       runSessionEvent: executeJob,
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
       onEvent: finished.onEvent,
     });

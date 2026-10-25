@@ -3,7 +3,7 @@ import path from "node:path";
 import { validateDevicePairRenameParams } from "@openclaw/gateway-protocol";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import { listDevicePairing, type PairedDevice } from "../../../src/infra/device-pairing.js";
+import { listDevicePairing } from "../../../src/infra/device-pairing.js";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
@@ -19,39 +19,8 @@ const suite = createControlUiE2eSuite({
     `Playwright Chromium is not available at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
 });
 
-const captureEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-
-async function captureUiProof(
-  page: Page,
-  fileName: string,
-  observed: Record<string, unknown> = {},
-) {
-  if (!captureEnabled) {
-    return;
-  }
-  await page.screenshot({
-    animations: "disabled",
-    path: path.join(suite.artifactDir, fileName),
-  });
-  const bundle = await readUiBundle(page);
-  await writeFile(
-    path.join(suite.artifactDir, fileName.replace(/\.png$/u, ".json")),
-    `${JSON.stringify({ ...observed, bundle }, null, 2)}\n`,
-    "utf8",
-  );
-}
-
 const DISPLAY_NAME = "office-workstation.example.test";
 const NEW_ALIAS = "🙂".repeat(33);
-
-function pairedDeviceProof(device: PairedDevice | undefined) {
-  if (!device) {
-    return undefined;
-  }
-  // Internal pairing rows include credentials; proof needs only identity and naming facts.
-  const { deviceId, operatorLabel, displayName, roles } = device;
-  return { deviceId, operatorLabel, displayName, roles };
-}
 
 // Reload remembers the confirmed URL and may not ask again.
 async function confirmGatewayUrl(page: Page, options: { required: boolean }) {
@@ -128,22 +97,17 @@ suite.define(() => {
           locale: "en-US",
           serviceWorkers: "block",
           viewport: { height: 900, width: 1280 },
-          ...(captureEnabled
-            ? { recordVideo: { dir: suite.artifactDir, size: { width: 1280, height: 900 } } }
-            : {}),
         },
         async ({ page }) => {
           await page.goto(devicesPageUrl(port));
           await confirmGatewayUrl(page, { required: true });
           const row = page.locator(".device-entry", { hasText: DISPLAY_NAME });
           await row.waitFor();
-          await captureUiProof(page, "01-real-gateway-devices-inventory.png");
 
           await row.locator(".device-entry__menu-trigger").click();
           await row.locator('[role="menuitem"][data-value="editAlias"]').click();
           const dialog = page.locator("openclaw-modal-dialog").last();
           await dialog.locator('input[name="value"]').waitFor();
-          await captureUiProof(page, "02-real-gateway-alias-dialog-open.png");
 
           const protocolAccepted = validateDevicePairRenameParams({
             deviceId: identity.deviceId,
@@ -153,12 +117,7 @@ suite.define(() => {
           const input = dialog.locator('input[name="value"]');
           await input.click();
           await page.keyboard.insertText(NEW_ALIAS);
-          const entered = await input.inputValue();
-          await captureUiProof(page, "03-real-gateway-alias-dialog-filled.png", {
-            requestedAlias: NEW_ALIAS,
-            enteredAlias: entered,
-          });
-          expect(entered).toBe(NEW_ALIAS);
+          expect(await input.inputValue()).toBe(NEW_ALIAS);
           await dialog.getByRole("button", { name: "Save" }).click();
 
           await waitForAlias(page);
@@ -166,21 +125,28 @@ suite.define(() => {
           // Independent readback proves a durable write, not a client-side label swap.
           const paired = await readPairing(identity.deviceId);
           expect(paired).toMatchObject({ operatorLabel: NEW_ALIAS, displayName: DISPLAY_NAME });
-          await captureUiProof(page, "04-real-gateway-alias-applied.png", {
-            paired: pairedDeviceProof(paired),
-          });
 
           await waitForAlias(page, true);
-          await captureUiProof(page, "05-real-gateway-alias-after-reload.png");
 
           await gateway.close();
           await gateway.start();
           await waitForAlias(page, true);
           const afterRestart = await readPairing(identity.deviceId);
           expect(afterRestart?.operatorLabel).toBe(NEW_ALIAS);
-          await captureUiProof(page, "06-real-gateway-alias-after-restart.png", {
-            paired: pairedDeviceProof(afterRestart),
-          });
+          if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+            await page.screenshot({
+              animations: "disabled",
+              path: path.join(suite.artifactDir, "06-real-gateway-alias-after-restart.png"),
+            });
+            await writeFile(
+              path.join(suite.artifactDir, "06-real-gateway-alias-after-restart.json"),
+              JSON.stringify({
+                bundle: await readUiBundle(page),
+                deviceId: identity.deviceId,
+                alias: afterRestart?.operatorLabel,
+              }),
+            );
+          }
         },
       );
     } finally {

@@ -241,18 +241,16 @@ export function createPluginSessionOwnership(
     return target.entry;
   };
   const resolveStoredSessionExecutionOwner = async (params: {
-    action: string;
-    agentId?: string;
     sessionKey: string;
     storePath?: string;
   }): Promise<string | undefined> => {
     const target = await resolveStoredSessionOwnershipTarget(params);
     const { entry, sessionKey } = target;
     const locked = entry
-      ? resolveLockedSessionHarnessRegistration(sessionKey, entry, params.action)
+      ? resolveLockedSessionHarnessRegistration(sessionKey, entry, "admit work on")
       : undefined;
     if (!entry || !locked || locked.ownerPluginId === pluginId) {
-      assertSessionEntryOwned({ action: params.action, ...target });
+      assertSessionEntryOwned({ action: "admit work on", ...target });
       return undefined;
     }
     const registration = "registration" in locked ? locked.registration : undefined;
@@ -262,7 +260,7 @@ export function createPluginSessionOwnership(
       );
     }
     if (!registration.harness.delegatedExecutionPluginIds?.includes(pluginId)) {
-      assertLockedSessionEntryOwned(sessionKey, entry, params.action);
+      assertLockedSessionEntryOwned(sessionKey, entry, "admit work on");
     }
     return locked.ownerPluginId;
   };

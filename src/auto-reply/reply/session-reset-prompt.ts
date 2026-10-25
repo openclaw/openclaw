@@ -76,7 +76,6 @@ export async function resolveBareResetBootstrapFileAccess(params: {
 export async function resolveBareSessionResetPromptState(params: {
   cfg?: OpenClawConfig;
   workspaceDir?: string;
-  nowMs?: number;
   isPrimaryRun?: boolean;
   isCanonicalWorkspace?: boolean;
   hasBootstrapFileAccess?: boolean | (() => boolean | Promise<boolean>);
@@ -111,7 +110,7 @@ export async function resolveBareSessionResetPromptState(params: {
           ? BARE_SESSION_RESET_PROMPT_BOOTSTRAP_LIMITED
           : BARE_SESSION_RESET_PROMPT_BASE,
       params.cfg ?? {},
-      params.nowMs ?? Date.now(),
+      Date.now(),
     ),
     shouldPrependStartupContext: bootstrapMode === "none",
   };

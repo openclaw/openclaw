@@ -10,16 +10,8 @@ import {
   type FixtureReceiptChannel,
 } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { isProcessAlive } from "../../test-support/process.test-support.js";
 import { startTunnel } from "./tunnel.js";
-
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 let receipts: FixtureReceiptChannel;
 beforeAll(async () => {

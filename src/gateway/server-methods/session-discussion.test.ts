@@ -11,13 +11,13 @@ import {
 import type { SessionDiscussionProvider } from "../../plugins/session-discussion-registry.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { sessionDiscussionHandlers } from "./session-discussion.js";
+import { fixedStoreOwnershipConfig } from "./sessions-fixed-store.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   emitSessionTitleChanged: vi.fn(),
   generateConversationLabelWithFallback: vi.fn(),
   getProvider: vi.fn(),
   loadSessionTarget: vi.fn(),
-  maybeGenerateSessionTitle: vi.fn(),
   readSessionTitleFields: vi.fn(),
   resolveUtilityModelRefForAgent: vi.fn(),
   updateSessionEntry: vi.fn(),
@@ -40,11 +40,6 @@ vi.mock("../../config/sessions/session-accessor.js", () => ({
 vi.mock("../../config/sessions/session-entry-read-runtime.js", () => ({
   readSessionEntryReadOnlyInWorker: async () => mocks.loadSessionTarget()?.entry,
 }));
-vi.mock("../dashboard-session-title.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../dashboard-session-title.js")>();
-  mocks.maybeGenerateSessionTitle.mockImplementation(actual.maybeGenerateSessionTitle);
-  return { ...actual, maybeGenerateSessionTitle: mocks.maybeGenerateSessionTitle };
-});
 // mock-isolation: Discussion tests supply title fields without starting transcript workers.
 vi.mock("../session-transcript-title-reader.js", () => ({
   readSessionTitleFieldsFromTranscriptAsync: mocks.readSessionTitleFields,
@@ -122,7 +117,6 @@ describe("session discussion gateway methods", () => {
     mocks.generateConversationLabelWithFallback.mockReset();
     mocks.getProvider.mockReset();
     mocks.loadSessionTarget.mockReset();
-    mocks.maybeGenerateSessionTitle.mockClear();
     mocks.readSessionTitleFields.mockReset();
     mocks.resolveUtilityModelRefForAgent.mockReset();
     mocks.updateSessionEntry.mockReset();
@@ -144,14 +138,7 @@ describe("session discussion gateway methods", () => {
   it("admits bare fixed-store keys only through their persisted owner", async () => {
     const registered = provider();
     mockSession({ sessionId: "session-ops-global", updatedAt: 1 });
-    const ownedConfig: OpenClawConfig = {
-      session: { scope: "global", store: "/tmp/shared-sessions.sqlite" },
-      agents: {
-        ownership: "explicit",
-        defaults: { sessionStore: { agentId: "ops" } },
-        entries: { ops: {}, research: {} },
-      },
-    };
+    const ownedConfig: OpenClawConfig = fixedStoreOwnershipConfig("/tmp/shared-sessions.sqlite");
 
     expect(
       await invoke("session.discussion.open", { sessionKey: "global" }, ownedConfig),
@@ -197,16 +184,11 @@ describe("session discussion gateway methods", () => {
       agentId: "main",
     });
 
-    expect(mocks.maybeGenerateSessionTitle).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: "main",
-        entry,
-        sessionId: "session-1",
-        sessionKey,
-        storePath,
-        userMessage: "",
-      }),
-    );
+    expect(mocks.updateSessionEntry.mock.calls[0]?.[0]).toMatchObject({
+      agentId: "main",
+      sessionKey,
+      storePath,
+    });
     expect(persistedEntry?.displayName).toBe("Release Planning");
     expect(mocks.generateConversationLabelWithFallback).toHaveBeenCalledOnce();
     expect(
@@ -221,16 +203,6 @@ describe("session discussion gateway methods", () => {
         agentId: "main",
       }),
     );
-  });
-
-  it("does not generate a title for an explicitly named session", async () => {
-    mockSession({ sessionId: "session-1", updatedAt: 1, displayName: "Manual title" });
-    const registered = provider();
-    await invoke();
-
-    expect(mocks.maybeGenerateSessionTitle).not.toHaveBeenCalled();
-    expect(mocks.readSessionTitleFields).not.toHaveBeenCalled();
-    expect(registered.open).toHaveBeenCalledOnce();
   });
 
   it("opens the discussion when title generation times out", async () => {

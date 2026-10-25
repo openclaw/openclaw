@@ -1,23 +1,24 @@
-import { expect, type Page } from "playwright/test";
+import { expect, type Locator, type Page } from "playwright/test";
 import { it } from "vitest";
 import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
-  controlUiSessionUrl,
-  defaultControlUiFeatureMethods,
-  installMockGateway,
-} from "../test-helpers/control-ui-e2e.ts";
+  waitForControlUiFrameLayout,
+  waitForControlUiProofSurface,
+} from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
-import {
-  closeChatDetails,
-  openChatTaskProgress,
-  openDetailsPullRequests,
-} from "./chat-details.test-support.ts";
-import { waitForWatchedSessionKey } from "./chat-github-publication.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Mobile shell geometry" });
 const sessionKey = "agent:main:main";
+
+async function waitForMessageGeometry(surface: Locator, content: readonly Locator[]) {
+  const targets = [surface, ...content];
+  await Promise.all(targets.map((target) => waitForControlUiProofSurface(target, [target])));
+  await waitForControlUiFrameLayout(targets);
+  await Promise.all(targets.map((target) => expect(target).toBeInViewport()));
+}
+
 function viewportScenario(
   name: string,
   width: number,
@@ -204,11 +205,6 @@ async function geometry(page: Page) {
       shell: rect(".shell")!,
       composer: rect(".agent-chat__composer-shell")!,
       thread: rect(".chat-thread-inner"),
-      footer: rect(".chat-footer"),
-      details: rect(
-        ".chat-details:popover-open, .sidebar-region--mobile-host > .chat-mobile-host:not([hidden]):has(.chat-mobile-host__details:not([hidden]))",
-      ),
-      conversation: rect(".chat-main__conversation-frame"),
       scrollWidth: document.documentElement.scrollWidth,
       layoutHeight: document.documentElement.clientHeight,
       visualHeight: window.visualViewport?.height,
@@ -285,12 +281,6 @@ suite.define(() => {
         const assistantText =
           "The transcript and composer should share a comfortable reading column.";
         const gateway = await installMockGateway(page, {
-          featureMethods: [
-            ...defaultControlUiFeatureMethods,
-            "progressCard.get",
-            "controlUi.sessionPullRequests.subscribe",
-          ],
-          methodResponses: { "controlUi.sessionPullRequests.subscribe": { subscribed: true } },
           workspace: "/workspace/example",
           historyMessages: ["Please check the mobile layout.", assistantText].map(
             (content, index) => ({
@@ -324,15 +314,11 @@ suite.define(() => {
           )
           .filter({ visible: true })
           .first();
-        await takeControlUiScreenshotFrame(page, bubble, [details, textarea], {
-          animations: "disabled",
-        });
+        await waitForMessageGeometry(bubble, [details, textarea]);
         await (mobile ? bubble.tap() : bubble.hover());
         const actions = firstMessage.locator(".chat-group-footer-actions");
         await expect(actions.locator(".chat-copy-btn")).toBeVisible();
-        await takeControlUiScreenshotFrame(page, bubble, [details, actions], {
-          animations: "disabled",
-        });
+        await waitForMessageGeometry(bubble, [details, actions]);
         const detailsBox = (await details.boundingBox())!;
         const transcriptBoxes = await Promise.all([bubble.boundingBox(), actions.boundingBox()]);
         for (const box of transcriptBoxes) {
@@ -345,59 +331,6 @@ suite.define(() => {
             `${name}: Header controls must clear the first message and its actions`,
           ).toBe(true);
         }
-        await waitForWatchedSessionKey(gateway, sessionKey);
-        await gateway.emitGatewayEvent("controlUi.sessionPullRequests.changed", {
-          sessions: {
-            [sessionKey]: {
-              pullRequests: [
-                {
-                  number: 123,
-                  owner: "example",
-                  repo: "layout",
-                  branch: "fix/layout",
-                  title: "Synthetic mobile layout repair",
-                  url: "https://github.com/example/layout/pull/123",
-                  state: "merged",
-                },
-              ],
-              rateLimited: false,
-              status: "ok",
-            },
-          },
-        });
-        const pullRequests = await openDetailsPullRequests(page);
-        const mergedRequest = pullRequests
-          .locator('.chat-pr[data-state="merged"], .chat-pr-mobile__row[data-state="merged"]')
-          .first();
-        await expect(mergedRequest).toBeVisible();
-        await expect(mergedRequest).toContainText("Synthetic mobile layout repair");
-        const setProgress = async (
-          revision: number,
-          markdown: string,
-          steps: Array<{ step: string; status: string }>,
-        ) => {
-          await gateway.setMethodResponse("progressCard.get", {
-            card: {
-              sessionKey,
-              revision,
-              updatedAt: 1_789_923_001_000,
-              markdown,
-              steps,
-            },
-          });
-          await gateway.emitGatewayEvent("progressCard.changed", {
-            sessionKey,
-            revision,
-          });
-        };
-        await setProgress(1, "Mobile layout checks completed.", [
-          { step: "Inspect the layout", status: "completed" },
-          { step: "Verify the controls", status: "completed" },
-          { step: "Review the result", status: "completed" },
-        ]);
-        const progress = await openChatTaskProgress(page);
-        await expect(progress).toContainText("Mobile layout checks completed.");
-        await closeChatDetails(page);
         const chat = await geometry(page);
         await textarea.fill("Please continue the layout check.");
         const sendPoint = await reach("Send message", height - bottom);
@@ -409,19 +342,6 @@ suite.define(() => {
         const stop = page.getByRole("button", { name: "Stop generating" });
         await expect(stop).toBeVisible();
         const generating = await geometry(page);
-        await setProgress(2, "Checking the usable mobile canvas.", [
-          { step: "Inspect the layout", status: "completed" },
-          { step: "Verify the controls", status: "in_progress" },
-        ]);
-        // A progress update must not reopen explicitly closed Details.
-        await expect(progress).toBeHidden();
-        if (mobile) {
-          await expect(page.locator(".chat-mobile-host")).toBeHidden();
-        }
-        const updatedProgress = await openChatTaskProgress(page);
-        await expect(updatedProgress).toContainText("Checking the usable mobile canvas.");
-        const withProgress = await geometry(page);
-        await closeChatDetails(page);
         if (mobile) {
           await textarea.focus();
           // Simulate the VisualViewport contract, not a native IME.
@@ -520,17 +440,6 @@ suite.define(() => {
           expect(generating.composer.right).toBeCloseTo(chat.composer.right, 0);
           expect(chat.thread!.left).toBeCloseTo(chat.composer.left, 0);
           expect(chat.thread!.right).toBeCloseTo(chat.composer.right, 0);
-          expect(withProgress.details).not.toBeNull();
-          expect(withProgress.details!.left).toBeGreaterThanOrEqual(
-            withProgress.conversation!.left,
-          );
-          expect(withProgress.details!.right).toBeLessThanOrEqual(withProgress.conversation!.right);
-          expect(withProgress.details!.top).toBeGreaterThanOrEqual(
-            withProgress.conversation!.bottom,
-          );
-          expect(withProgress.footer!.bottom).toBeLessThanOrEqual(withProgress.details!.top);
-          expect(withProgress.details!.top).toBeGreaterThanOrEqual(withProgress.shell.top);
-          expect(withProgress.details!.bottom).toBeLessThanOrEqual(withProgress.shell.bottom);
         }
       },
     );

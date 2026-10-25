@@ -5,6 +5,7 @@ import { GatewaySuspendPrepareResultSchema } from "../../packages/gateway-protoc
 import type { EmbeddedAgentQueueHandle } from "../agents/embedded-agent-runner/run-state.js";
 import {
   clearTestEmbeddedRun as clearActiveEmbeddedRun,
+  createEmbeddedRunHandle,
   registerTestEmbeddedRun as setActiveEmbeddedRun,
 } from "../agents/embedded-agent-runner/runs.test-support.js";
 import { createQueueTestRun } from "../auto-reply/reply/queue.test-helpers.js";
@@ -22,6 +23,7 @@ import {
   createGatewayActiveWorkSnapshot,
   waitForGatewayActiveWork,
 } from "./gateway-active-work.js";
+import { inspectors } from "./gateway-suspend-coordinator.test-support.js";
 import { beginLifecycleWriteCustody } from "./lifecycle-write-custody.js";
 
 const activeRuns = new Map<string, EmbeddedAgentQueueHandle>();
@@ -141,23 +143,14 @@ describe("waitForGatewayActiveWork", () => {
   ] as const)(
     "reports native $kind ownership alongside background processes",
     ({ agentRuns, acpRuns, mediaRuns, kind }) => {
-      const snapshot = createGatewayActiveWorkSnapshot({
-        getQueueSize: () => 0,
-        getPendingReplies: () => 0,
-        getEmbeddedRuns: () => 0,
-        getBackgroundExecSessions: () => 1,
-        getCronRuns: () => 0,
-        getAgentRuns: () => agentRuns,
-        getAcpRuns: () => acpRuns,
-        getMediaRuns: () => mediaRuns,
-        getRootRequests: () => 0,
-        getSessionAdmissions: () => 0,
-        getSessionMutations: () => 0,
-        getChatRuns: () => 0,
-        getQueuedTurns: () => 0,
-        getTerminalPersistence: () => 0,
-        getTerminalSessions: () => 0,
-      });
+      const snapshot = createGatewayActiveWorkSnapshot(
+        inspectors({
+          getBackgroundExecSessions: () => 1,
+          getAgentRuns: () => agentRuns,
+          getAcpRuns: () => acpRuns,
+          getMediaRuns: () => mediaRuns,
+        }),
+      );
       expect(snapshot.idle).toBe(false);
       expect(snapshot.counts).toMatchObject({
         backgroundExecSessions: 1,
@@ -182,12 +175,7 @@ describe("waitForGatewayActiveWork", () => {
 
   it("returns the final canonical blockers when its deadline expires", async () => {
     const sessionId = "probe-gateway-active-work-timeout";
-    const handle: EmbeddedAgentQueueHandle = {
-      queueMessage: async () => {},
-      isStreaming: () => true,
-      isCompacting: () => false,
-      abort: () => {},
-    };
+    const handle = createEmbeddedRunHandle();
     activeRuns.set(sessionId, handle);
     setActiveEmbeddedRun(sessionId, handle);
 

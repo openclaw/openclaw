@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import { prepareAgentSessionStoreDeletionSafety } from "../agents/agent-delete-session-store-safety.targets.js";
 import { enableOpenClawCompileCache } from "../entry.compile-cache.js";
+import { listDirectoryTreeStrictSync } from "./directory-walk.js";
 import {
   captureSqliteReadOnlyWorkerLaunch,
   createScopedSqliteReadOnlyWorker,
@@ -19,13 +20,14 @@ const installRoot = path.join(root, "installed");
 fs.mkdirSync(installRoot);
 fs.writeFileSync(path.join(installRoot, "package.json"), '{"version":"2026.9.6"}');
 assert.equal(getCompileCacheDir(), undefined);
+process.env.NODE_COMPILE_CACHE = path.join(root, "native-cache");
 const beforeEnable = { ...process.env };
 enableOpenClawCompileCache({
   currentFile: path.join(installRoot, "dist", "entry.js"),
   installRoot,
-  env: { ...process.env, NODE_COMPILE_CACHE: path.join(root, "native-cache") },
 });
 assert.deepEqual({ ...process.env }, beforeEnable);
+delete process.env.NODE_COMPILE_CACHE;
 const activeDirectory = getCompileCacheDir();
 assert.ok(activeDirectory);
 const stagingRoot = path.join(root, "staging");
@@ -61,8 +63,8 @@ const source = path.join(root, "source.sqlite");
 }
 const before = fs.readFileSync(source);
 const cacheEntries = () =>
-  fs
-    .readdirSync(activeDirectory, { recursive: true, withFileTypes: true })
+  listDirectoryTreeStrictSync(activeDirectory)
+    .map((walkEntry) => walkEntry.dirent)
     .filter((entry) => entry.isFile()).length;
 let retainedLocation: string | undefined;
 const worker = createScopedSqliteReadOnlyWorker(captureSqliteReadOnlyWorkerLaunch());

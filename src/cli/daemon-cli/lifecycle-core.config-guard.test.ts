@@ -1,6 +1,8 @@
 // Daemon lifecycle config guard tests cover config checks before service lifecycle actions.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createPluginPackagingConfigIssues } from "../../commands/test-runtime-config-helpers.js";
 import {
+  createGatewayServiceRunArgs as createServiceRunArgs,
   lifecycleTestRuntime,
   resetLifecycleRuntimeLogs,
   resetLifecycleServiceMocks,
@@ -79,29 +81,8 @@ function setPluginPackagingInvalidSnapshot() {
   setConfigSnapshot({
     exists: true,
     valid: false,
-    issues: [
-      {
-        path: "plugins.slots.memory",
-        message: "plugin not found: source-only-pack",
-      },
-    ],
-    warnings: [
-      {
-        path: "plugins",
-        message:
-          "plugin source-only-pack: installed plugin package requires compiled runtime output for TypeScript entry index.ts: expected ./dist/index.js. This is a plugin packaging issue, not a local config problem.",
-      },
-    ],
+    ...createPluginPackagingConfigIssues(),
   });
-}
-
-function createServiceRunArgs() {
-  return {
-    serviceNoun: "Gateway",
-    service,
-    renderStartHints: () => [],
-    opts: { json: true },
-  };
 }
 
 import {

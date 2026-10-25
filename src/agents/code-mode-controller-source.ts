@@ -1,8 +1,7 @@
 /** Guest globals and host bridge shared by Code Mode JavaScript executors. */
-import { CODE_MODE_CONSOLE_SOURCE } from "./code-mode-console-source.js";
-import { CODE_MODE_SWARM_CONTROLLER_SOURCE } from "./code-mode-swarm-controller-source.js";
 import { MAX_CODE_MODE_PENDING_TOOL_CALLS } from "./code-mode-worker-types.js";
 
+/** Console is guest-only diagnostic text, not a host logging capability. */
 export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
 (() => {
   const output = [];
@@ -62,7 +61,87 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
     hostObserveNetworkContent();
   }
 
-  ${CODE_MODE_CONSOLE_SOURCE}
+  
+  // The counter lives in the VM snapshot. JSON code units are a conservative
+  // bound (at most three UTF-8 bytes each), including empty-message overhead.
+  let consoleUnits = 0;
+  const consoleLimit = 16_384;
+  const consoleMarker = "[console output truncated]";
+  function consoleWrite(level, args) {
+    if (consoleUnits >= consoleLimit) return;
+    let nodes = 100;
+    const seen = new Set();
+    const clip = (value, limit) => {
+      if (value.length <= limit) return value;
+      // Do not split a surrogate pair at a diagnostic boundary.
+      let end = limit;
+      const last = value.charCodeAt(end - 1);
+      if (last >= 0xd800 && last <= 0xdbff) end--;
+      return value.slice(0, end) + "…[truncated]";
+    };
+    const inspect = (value, depth = 0) => {
+      if (--nodes < 0) return "[truncated]";
+      if (typeof value === "string") return clip(value, 512);
+      if (value === null || typeof value === "boolean" || typeof value === "number") return value;
+      if (typeof value === "undefined") return "undefined";
+      if (typeof value === "bigint") return clip(String(value), 512) + "n";
+      if (typeof value === "symbol") return clip(String(value), 512);
+      if (typeof value === "function") return "[Function]";
+      if (seen.has(value)) return "[Circular]";
+      if (depth >= 4) return "[truncated]";
+      seen.add(value);
+      try {
+        if (value instanceof GuestPromise) return promiseOutput;
+        const array = Array.isArray(value);
+        const result = array ? [] : Object.create(null);
+        let count = 0;
+        for (const key in value) {
+          if (!Object.prototype.hasOwnProperty.call(value, key)) continue;
+          if (count++ >= 50 || nodes <= 0) {
+            if (array) result.push("[truncated]");
+            else result["…"] = "[truncated]";
+            break;
+          }
+          const descriptor = Object.getOwnPropertyDescriptor(value, key);
+          const item = descriptor && "value" in descriptor
+            ? inspect(descriptor.value, depth + 1) : "[Accessor]";
+          if (array) result.push(item);
+          else result[clip(key, 512)] = item;
+        }
+        if (value instanceof Error) {
+          const message = Object.getOwnPropertyDescriptor(value, "message");
+          result.message = message && "value" in message ? inspect(message.value, depth + 1) : "[Accessor]";
+        }
+        return result;
+      } finally {
+        seen.delete(value);
+      }
+    };
+    let message = level === "log" ? "" : "[" + level + "] ";
+    for (let i = 0; i < args.length; i++) {
+      if (i > 0) message += " ";
+      if (nodes <= 0 || message.length >= 4096) { message += "[truncated]"; break; }
+      try {
+        const value = inspect(args[i]);
+        message += typeof value === "string" ? value : JSON.stringify(value);
+      } catch {
+        message += "[Unserializable]";
+      }
+    }
+    const entry = { type: "text", text: clip(message, 4096) };
+    const units = JSON.stringify(entry).length;
+    if (consoleUnits + units > consoleLimit - 100) {
+      emitOutput({ type: "text", text: consoleMarker });
+      consoleUnits = consoleLimit;
+      return;
+    }
+    consoleUnits += units;
+    emitOutput(entry);
+  }
+  const guestConsole = Object.freeze(Object.fromEntries(
+    ["log", "info", "warn", "error", "debug"].map((level) => [level, (...args) => consoleWrite(level, args)]),
+  ));
+
 
   function safe(value, diagnosePromises = false) {
     if (value === undefined) return null;
@@ -173,7 +252,49 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
     entry.resolve(null);
   }
 
-  ${CODE_MODE_SWARM_CONTROLLER_SOURCE}
+
+  class SwarmAgentError extends Error {
+    constructor(runId, status, detail) {
+      super("Swarm agent " + runId + " " + status + ": " + detail);
+      this.name = "SwarmAgentError";
+      this.runId = runId;
+      this.status = status;
+    }
+  }
+
+  function swarmNote(kind, value) {
+    if (typeof value !== "string" || !value.trim()) {
+      throw new TypeError(kind + " note must be a non-empty string");
+    }
+    void request("swarmNote", [{ kind, text: value }], { queue: true }).catch(() => {});
+  }
+
+  async function runAgent(prompt, options = {}) {
+    if (typeof prompt !== "string" || !prompt.trim()) {
+      throw new TypeError("agents.run prompt must be a non-empty string");
+    }
+    if (options === null || typeof options !== "object" || Array.isArray(options)) {
+      throw new TypeError("agents.run options must be an object");
+    }
+    if (options.phase !== undefined && (typeof options.phase !== "string" || !options.phase.trim())) {
+      throw new TypeError("agents.run phase must be a non-empty string");
+    }
+    // Match the submitted contract even when callers reuse options while the child runs.
+    const structured = options.schema !== undefined;
+    if (options.phase !== undefined) swarmNote("phase", options.phase);
+    const spawned = await request("agentSpawn", [prompt, options], { queue: true });
+    const completion = await request("agentWait", [spawned.runId], { queue: true });
+    if (!completion || completion.status !== "done") {
+      const runId = completion?.runId ?? spawned.runId ?? "unknown";
+      const status = completion?.status ?? "failed";
+      const detail = [completion?.error, completion?.schemaError, completion?.result].find(
+        (value) => typeof value === "string" && value.trim()
+      ) || "collector returned no result";
+      throw new SwarmAgentError(runId, status, detail);
+    }
+    return structured ? completion.structured : completion.result;
+  }
+
 
   function namespaceFunction(namespaceId, path) {
     const callablePath = Object.freeze((Array.isArray(path) ? path : []).map((entry) => String(entry)));

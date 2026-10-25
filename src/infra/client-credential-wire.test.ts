@@ -22,6 +22,7 @@ it("produces the shared Swift wire fixture from actual typed owner operations", 
     cases.push({ name, operation, result });
     return result;
   };
+  // The shared Swift fixture below asserts every recorded operation and exact result.
   const material = normalizeLegacyDeviceIdentity({
     deviceId: "56475aa75463474c0285df5dbf2bcab73da651358839e9b77481b2eab107708c",
     publicKey: "A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=",
@@ -39,45 +40,27 @@ it("produces the shared Swift wire fixture from actual typed owner operations", 
     created_at_ms: 123,
     updated_at_ms: 456,
   };
-  expect(record("fixed identity", { kind: "identity.create", identity })).toEqual({
-    kind: "identity",
-    identity,
-  });
+  record("fixed identity", { kind: "identity.create", identity });
   const fallback = {
     socket_key: "current" as const,
     socket_path: "/synthetic/exec.sock",
     socket_token: "socket/é雪",
     updated_at_ms: 10,
   };
-  expect(record("socket first ensure", { kind: "socket.ensure", fallback })).toEqual({
-    kind: "socket",
-    socket: fallback,
-  });
-  expect(
-    record("socket preserves bytes and timestamp", {
-      kind: "socket.ensure",
-      fallback: {
-        ...fallback,
-        socket_path: "/other.sock",
-        socket_token: "discarded",
-        updated_at_ms: 20,
-      },
-    }),
-  ).toEqual({ kind: "socket", socket: fallback });
-  expect(
-    record("socket requested replacement", {
-      kind: "socket.ensure",
-      fallback: { ...fallback, updated_at_ms: 30 },
-      requested: { path: " /synthetic/replaced.sock ", token: " replacement/é " },
-    }),
-  ).toEqual({
-    kind: "socket",
-    socket: {
+  record("socket first ensure", { kind: "socket.ensure", fallback });
+  record("socket preserves bytes and timestamp", {
+    kind: "socket.ensure",
+    fallback: {
       ...fallback,
-      socket_path: "/synthetic/replaced.sock",
-      socket_token: "replacement/é",
-      updated_at_ms: 30,
+      socket_path: "/other.sock",
+      socket_token: "discarded",
+      updated_at_ms: 20,
     },
+  });
+  record("socket requested replacement", {
+    kind: "socket.ensure",
+    fallback: { ...fallback, updated_at_ms: 30 },
+    requested: { path: " /synthetic/replaced.sock ", token: " replacement/é " },
   });
   const token = {
     device_id: "wire-device",
@@ -87,152 +70,121 @@ it("produces the shared Swift wire fixture from actual typed owner operations", 
     updated_at_ms: 40,
   };
   const key = { device_id: token.device_id, role: token.role };
-  expect(
-    record("token unconditional create omitted expected", { kind: "token.replace", key, token }),
-  ).toEqual({ kind: "changed", changed: true });
-  expect(
-    record("token null means absent", {
-      kind: "token.replace",
-      key,
-      token: { ...token, token: "must-not-win" },
-      expectedToken: null,
-    }),
-  ).toEqual({ kind: "changed", changed: false });
-  expect(
-    record("token stale expected", {
-      kind: "token.replace",
-      key,
-      token: { ...token, token: "must-not-win" },
-      expectedToken: "stale",
-    }),
-  ).toEqual({ kind: "changed", changed: false });
-  expect(
-    record("token matching expected", {
-      kind: "token.replace",
-      key,
-      token: { ...token, token: "refreshed/é" },
-      expectedToken: token.token,
-    }),
-  ).toEqual({ kind: "changed", changed: true });
-  expect(
-    record("token stale observation cannot revoke", {
-      kind: "token.remove",
-      key,
-      observedToken: token.token,
-    }),
-  ).toEqual({ kind: "changed", changed: false });
+  record("token unconditional create omitted expected", { kind: "token.replace", key, token });
+  record("token null means absent", {
+    kind: "token.replace",
+    key,
+    token: { ...token, token: "must-not-win" },
+    expectedToken: null,
+  });
+  record("token stale expected", {
+    kind: "token.replace",
+    key,
+    token: { ...token, token: "must-not-win" },
+    expectedToken: "stale",
+  });
+  record("token matching expected", {
+    kind: "token.replace",
+    key,
+    token: { ...token, token: "refreshed/é" },
+    expectedToken: token.token,
+  });
+  record("token stale observation cannot revoke", {
+    kind: "token.remove",
+    key,
+    observedToken: token.token,
+  });
   const removals: {
     name: string;
     persistedToken: string;
     expectedToken?: string | null;
     observedToken?: string;
-    changed: boolean;
   }[] = [
     {
       name: "normalized expected accepts exact raw observation",
       persistedToken: " cached-token ",
       expectedToken: "cached-token",
       observedToken: " cached-token ",
-      changed: true,
     },
     {
       name: "normalized expected rejects a different raw token with the same trim",
       persistedToken: "\tcached-token\n",
       expectedToken: "cached-token",
       observedToken: " cached-token ",
-      changed: false,
     },
     {
       name: "raw observation must normalize to expected",
       persistedToken: "unrelated-token",
       expectedToken: "cached-token",
       observedToken: "unrelated-token",
-      changed: false,
     },
     {
       name: "exact expected does not require a matching observation",
       persistedToken: "cached-token",
       expectedToken: "cached-token",
       observedToken: "unrelated-token",
-      changed: true,
     },
     {
       name: "observed-only removal rejects trim-equivalent bytes",
       persistedToken: "cached-token",
       observedToken: " cached-token ",
-      changed: false,
     },
     {
       name: "observed-only removal accepts exact bytes",
       persistedToken: " cached-token ",
       observedToken: " cached-token ",
-      changed: true,
     },
     {
       name: "explicit null does not allow a raw observation fallback",
       persistedToken: " cached-token ",
       expectedToken: null,
       observedToken: " cached-token ",
-      changed: false,
     },
     {
       name: "omitted expected and observation remove unconditionally",
       persistedToken: " cached-token ",
-      changed: true,
     },
     {
       name: "normalization preserves composed and decomposed UTF8 bytes",
       persistedToken: " e\u0301 ",
       expectedToken: "\u00e9",
       observedToken: " e\u0301 ",
-      changed: false,
     },
     {
       name: "raw observation uses ECMAScript BOM trimming",
       persistedToken: "\ufeffcached-token\ufeff",
       expectedToken: "cached-token",
       observedToken: "\ufeffcached-token\ufeff",
-      changed: true,
     },
     {
       name: "raw observation does not trim Unicode next-line",
       persistedToken: "\u0085cached-token\u0085",
       expectedToken: "cached-token",
       observedToken: "\u0085cached-token\u0085",
-      changed: false,
     },
   ];
   for (const removal of removals) {
     const persisted = { ...token, token: removal.persistedToken };
     record(`${removal.name}: seed`, { kind: "token.replace", key, token: persisted });
-    expect(
-      record(removal.name, {
-        kind: "token.remove",
-        key,
-        expectedToken: removal.expectedToken,
-        observedToken: removal.observedToken,
-      }),
-    ).toEqual({ kind: "changed", changed: removal.changed });
-    expect(record(`${removal.name}: durable result`, { kind: "token.read", key })).toEqual({
-      kind: "token",
-      token: removal.changed ? null : persisted,
+    record(removal.name, {
+      kind: "token.remove",
+      key,
+      expectedToken: removal.expectedToken,
+      observedToken: removal.observedToken,
     });
+    record(`${removal.name}: durable result`, { kind: "token.read", key });
   }
   const native = { ...token, role: "opérateur", token: "native/token/雪", updated_at_ms: 50 };
   const nativeKey = { device_id: native.device_id, role: native.role };
   const scopedKey = { ...nativeKey, role: "v2.d3NzOi8v5L6LLmludmFsaWQvw6k.b3DDqXJhdGV1cg" };
   record("native unscoped token", { kind: "token.replace", key: nativeKey, token: native });
-  expect(
-    record("native Unicode claim", {
-      kind: "native.token.claim",
-      device_id: native.device_id,
-      role: native.role,
-      gateway: "wss://例.invalid/é",
-    }),
-  ).toEqual({ kind: "changed", changed: true });
-  expect(
-    record("native independently encoded key", { kind: "token.read", key: scopedKey }),
-  ).toEqual({ kind: "token", token: { ...native, role: scopedKey.role } });
+  record("native Unicode claim", {
+    kind: "native.token.claim",
+    device_id: native.device_id,
+    role: native.role,
+    gateway: "wss://例.invalid/é",
+  });
+  record("native independently encoded key", { kind: "token.read", key: scopedKey });
   record("native new unscoped token", {
     kind: "token.replace",
     key: nativeKey,
@@ -244,14 +196,8 @@ it("produces the shared Swift wire fixture from actual typed owner operations", 
     role: native.role,
     gateway: "wss://例.invalid/é",
   });
-  expect(record("native scoped winner survives", { kind: "token.read", key: scopedKey })).toEqual({
-    kind: "token",
-    token: { ...native, role: scopedKey.role },
-  });
-  expect(record("native unscoped consumed", { kind: "token.read", key: nativeKey })).toEqual({
-    kind: "token",
-    token: null,
-  });
+  record("native scoped winner survives", { kind: "token.read", key: scopedKey });
+  record("native unscoped consumed", { kind: "token.read", key: nativeKey });
 
   // Swift reconstructs the same fixed seed; the shared trace never stores a private PEM.
   const fixture = `${JSON.stringify({ format: 1, cases }, null, 2)}\n`.replaceAll(

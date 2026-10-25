@@ -76,20 +76,18 @@ test("retains ACP batch bounds while clean lists and canonical metadata updates 
       lastActivityAt: 1,
     };
     const markerEntry = makeEntry("marker-session", 1);
-    const stateMeta = {
-      ...markerMeta,
-      backend: "acpx",
-      agent: "codex",
-      runtimeSessionName: stateKey,
-      lastActivityAt: 2,
-    };
     seedCanonicalAcpSessionMeta({
       sessionKey: stateKey,
       sessionId: stateEntry.sessionId,
-      meta: stateMeta,
+      meta: {
+        ...markerMeta,
+        backend: "acpx",
+        agent: "codex",
+        runtimeSessionName: stateKey,
+        lastActivityAt: 2,
+      },
       now: () => 100,
     });
-
     seedCanonicalAcpSessionMeta({
       sessionKey: markerKey,
       sessionId: markerEntry.sessionId,
@@ -155,13 +153,6 @@ test("retains ACP batch bounds while clean lists and canonical metadata updates 
         [[key(stateKey, "other")], stateEntry, null],
         [[key(stateKey), key(stateKey)], stateEntry, stateKey],
       ];
-      for (let index = 0; index < 52; index++) {
-        cohort.push([
-          [key(`agent:default:webchat:dm:cohort-missing-${index}`)],
-          missingEntry,
-          null,
-        ]);
-      }
       const metadata = await readMetadata(
         cohort.map(([keys, entry]) => ({ keys, entry })),
         1,
@@ -170,14 +161,9 @@ test("retains ACP batch bounds while clean lists and canonical metadata updates 
         cohort.map((scenario) => scenario[2]),
       );
       acpSelects.counts.metadata = 0;
-      // Canonical identities share the production 500-key chunks.
-      // Cross a boundary without materializing tens of thousands of rows.
       const aboveBatchChunkSize = Array.from({ length: 501 }, (_, index) => ({
         sessionKey: `agent:default:webchat:dm:missing-${index}`,
-        entry: {
-          sessionId: `missing-session-${index}`,
-          updatedAt: index,
-        } satisfies SessionEntry,
+        entry: { sessionId: `missing-session-${index}`, updatedAt: index },
       }));
       const chunkedBatch = await readMetadata(
         aboveBatchChunkSize.map(({ sessionKey, entry }) => ({
@@ -216,41 +202,31 @@ test("retains ACP batch bounds while clean lists and canonical metadata updates 
       await list();
       await list("runtime");
       acpSelects.counts.metadata = 0;
-      const rows = vi.spyOn(rowProjection, "readSessionRowInputs");
-      const metadataReads = vi.spyOn(acpSessionMeta, "readAcpSessionMetaForEntryAsync");
-      try {
-        const result = await list();
-        expect(result.sessions).toHaveLength(3);
+      using rows = vi.spyOn(rowProjection, "readSessionRowInputs");
+      using metadataReads = vi.spyOn(acpSessionMeta, "readAcpSessionMetaForEntryAsync");
+      const result = await list();
+      expect(result.sessions).toHaveLength(3);
+      expect(acpSelects.counts.metadata).toBe(0);
+      for (const search of ["openclaw", "unmatched-runtime"]) {
+        const searched = await list("runtime", search);
+        expect(searched.totalCount).toBe(search === "openclaw" ? 55 : 0);
+        expect(rows).not.toHaveBeenCalled();
         expect(acpSelects.counts.metadata).toBe(0);
-        for (const search of ["openclaw", "unmatched-runtime"]) {
-          const searched = await list("runtime", search);
-          expect(searched.totalCount).toBe(search === "openclaw" ? 55 : 0);
-          expect(rows).not.toHaveBeenCalled();
-          expect(acpSelects.counts.metadata).toBe(0);
-        }
-        expect(locked()).toBe(false);
-        seedCanonicalAcpSessionMeta({
-          sessionKey: missingKey,
-          sessionId: missingEntry.sessionId,
-          meta: { ...markerMeta, runtimeSessionName: missingKey },
-        });
-        writeResidentEntries(
-          {
-            [missingKey]: missingEntry,
-          },
-          1,
-        );
-        acpSelects.counts.metadata = 0;
-        await projection.ensureMaterialized();
-        expect(rows).toHaveBeenCalledOnce();
-        expect(rows.mock.calls[0]?.[0].key).toBe(missingKey);
-        expect(metadataReads).not.toHaveBeenCalled();
-        expect(acpSelects.counts.metadata).toBe(0);
-        expect(locked()).toBe(true);
-      } finally {
-        metadataReads.mockRestore();
-        rows.mockRestore();
       }
+      expect(locked()).toBe(false);
+      seedCanonicalAcpSessionMeta({
+        sessionKey: missingKey,
+        sessionId: missingEntry.sessionId,
+        meta: { ...markerMeta, runtimeSessionName: missingKey },
+      });
+      writeResidentEntries({ [missingKey]: missingEntry }, 1);
+      acpSelects.counts.metadata = 0;
+      await projection.ensureMaterialized();
+      expect(rows).toHaveBeenCalledOnce();
+      expect(rows.mock.calls[0]?.[0].key).toBe(missingKey);
+      expect(metadataReads).not.toHaveBeenCalled();
+      expect(acpSelects.counts.metadata).toBe(0);
+      expect(locked()).toBe(true);
     } finally {
       projection?.dispose();
       acpSelects.restore();

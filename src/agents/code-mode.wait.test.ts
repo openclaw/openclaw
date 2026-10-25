@@ -38,6 +38,8 @@ import {
 } from "./tools/gateway-caller-context.js";
 
 const cleanups: (() => void)[] = [];
+const mockClock = () =>
+  vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
 function harness(
   targets: AnyAgentTool[],
   options: Parameters<typeof createCodeModeHarness>[0] = {},
@@ -147,7 +149,7 @@ it("rejects a completed run without replaying its action", async () => {
   expect(target.execute).toHaveBeenCalledOnce();
 });
 it("keeps one execution allowance across event-driven required waits", async () => {
-  vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+  mockClock();
   const releases = [createDeferred(), createDeferred()];
   const parked = [createDeferred(), createDeferred()];
   let calls = 0;
@@ -249,7 +251,7 @@ it.each([
     { error: expect.stringContaining("cannot yield an unfinished program") },
   ],
 ] as const)("refuses an unfinished guest %s for required work", async (kind, code, failure) => {
-  vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+  mockClock();
   const parked = createDeferred();
   observeSettlement(parked.resolve);
   const result = harness([], { codeMode: { timeoutMs: 1_000 } }).run(
@@ -273,7 +275,7 @@ it.each([
 ] as const)(
   "keeps $mode approval paused until $outcome without extending its budget",
   async ({ mode, outcome }) => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
+    mockClock();
     const timeoutMs = 1_000;
     const callAbort = new AbortController();
     const requested = createDeferred();
@@ -455,7 +457,7 @@ it("allocates distinct replay identities when a later turn reuses a tool-call id
 });
 
 it("keeps an admitted wait alive past idle expiry and expires it only after reparking", async () => {
-  vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+  mockClock();
   const timeoutMs = 10_000;
   const { tool: target, started } = pendingTool("slow_action", { delivered: true });
   const { exec, wait } = harness([target], { codeMode: { timeoutMs, snapshotTtlSeconds: 1 } });
@@ -481,33 +483,26 @@ it("keeps an admitted wait alive past idle expiry and expires it only after repa
   expect(testing.activeRuns.size).toBe(0);
 });
 
-it("preserves accepted output when wait expiry exceeds the Date range", async () => {
-  const target = pluginTool("expiry_fixture", "Expiry fixture");
-  const { run, wait } = harness([target], { codeMode: { snapshotTtlSeconds: 1 } });
-  const limit = 8_640_000_000_000_000;
-  const now = vi.spyOn(Date, "now").mockReturnValue(limit - 1_000);
-  const first = await run(
-    `text("delivered"); await yield_control();
-        text("accepted first"); await expiry_fixture({}); text("accepted inline"); await yield_control("pause"); return "done";`,
-    "park",
-  );
-  expect(first).toMatchObject({
-    status: "waiting",
-    output: [{ type: "text", text: "delivered" }],
-  });
-  now.mockReturnValue(limit - 1);
-  const details = resultDetails(await wait.execute("resume", { runId: first.runId }));
-  expect(details).toMatchObject({
-    status: "failed",
-    error: "code mode run expiry is unavailable.",
-    output: [
-      { type: "text", text: "accepted first" },
-      { type: "text", text: "accepted inline" },
-    ],
-  });
-  expect(target.execute).toHaveBeenCalledOnce();
-  expect(testing.activeRuns.size).toBe(0);
-});
+it.each([-60_000, 60_000])(
+  "expires a parked run after its TTL despite a %d ms wall-clock step",
+  async (wallStep) => {
+    mockClock();
+    const { exec } = harness([], { codeMode: { snapshotTtlSeconds: 60 } });
+    const first = resultDetails(
+      await exec.execute("clock-step", { code: 'await yield_control(); return "done";' }),
+    );
+    const state = parkedState(first);
+    vi.setSystemTime(Date.now() + wallStep);
+    // Parking another run rearms the shared timer against the first run's deadline.
+    await exec.execute("clock-step-2", { code: 'await yield_control(); return "done";' });
+    await vi.advanceTimersByTimeAsync(59_999);
+    expect(state.owner.signal.aborted).toBe(false);
+    expect(testing.activeRuns.has(String(first.runId))).toBe(true);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(state.owner.signal.aborted).toBe(true);
+    expect(testing.activeRuns.has(String(first.runId))).toBe(false);
+  },
+);
 
 describe("suspended-run owner scope", () => {
   const identities = ["runId", "sessionId", "sessionKey", "agentId"] as const;
@@ -549,10 +544,6 @@ it("rejects concurrent waits for the same suspended run", async () => {
   expectCompleted(await pending, "done");
 });
 
-async function runCode(code: string, targets: AnyAgentTool[]) {
-  return harness(targets).run(code, "preflight");
-}
-
 it.each([
   { kind: "input", code: "input_contract", calls: 0 },
   { kind: "schema", code: "invalid_contract", calls: 0 },
@@ -572,11 +563,11 @@ it.each([
     kind === "schema"
       ? ({ type: "not-a-type" } as never)
       : Type.Object({ count: Type.Number() }, { additionalProperties: false });
-  const result = await runCode(
+  const result = await harness([target]).run(
     "try { await contract_target({ count: " +
       (kind === "input" ? '"wrong"' : "1") +
       " }); } catch (e) { return { code: e.code, effectStatus: e.effectStatus, location: e.location, message: e.message }; }",
-    [target],
+    "preflight",
   );
   expect(result).toMatchObject({
     status: "completed",
@@ -606,9 +597,9 @@ it("reports bounded output validation details after a mutation without exposing 
     { additionalProperties: false },
   );
 
-  const details = await runCode(
+  const details = await harness([target]).run(
     "try { await update_receipt({}); } catch (e) { return { code:e.code, effectStatus:e.effectStatus, message:e.message }; }",
-    [target],
+    "preflight",
   );
 
   expect(target.execute).toHaveBeenCalledOnce();
@@ -633,7 +624,10 @@ it("rejects stale exec timeout input before starting the command", async () => {
   const exec = createExecTool({ host: "gateway", security: "full", ask: "off" });
   const execute = vi.spyOn(exec, "execute");
 
-  const details = await runCode('await exec({ command: "printf ok", timeout: 5 });', [exec]);
+  const details = await harness([exec]).run(
+    'await exec({ command: "printf ok", timeout: 5 });',
+    "preflight",
+  );
 
   expect(execute).not.toHaveBeenCalled();
   expect(details).toMatchObject({
@@ -652,13 +646,10 @@ it("refuses aggregate overflow across a parked boundary", async () => {
     "await yield_control(); " +
     'return (await pages).map(item => item.status === "fulfilled" ? { length: item.value.length } : { error: item.reason.message });';
   const result = await harness([tool], { codeMode: { maxOutputBytes: 1024 } }).complete(code);
-  expect(result, JSON.stringify(result)).toMatchObject({
-    status: "completed",
-    value: [
-      { length: bytes },
-      { error: expect.stringMatching(/program-data budget exceeded.*Paginate/) },
-    ],
-  });
+  expectCompleted(result, [
+    { length: bytes },
+    { error: expect.stringMatching(/program-data budget exceeded.*Paginate/) },
+  ]);
   expect(tool.execute).toHaveBeenCalledTimes(2);
 });
 it("clears host and worker-input aliases after bridge settlement", async () => {

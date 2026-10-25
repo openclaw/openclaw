@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createMobileSheetScrollFadeConnection } from "./chat-mobile-scroll-fades.runtime.ts";
 import { createMobileSheetScrollFades } from "./chat-mobile-scroll-fades.ts";
 
 const releases: Array<() => void> = [];
@@ -51,7 +52,11 @@ it("paints retained and late scroll ports in document order with the existing in
   const first = port(host, 30);
   const second = port(host, 50);
   const fades = createMobileSheetScrollFades();
-  releases.push(fades.register(second), fades.register(first), fades.connect(host));
+  releases.push(
+    fades.register(second),
+    fades.register(first),
+    fades.connect((ports) => createMobileSheetScrollFadeConnection(ports, host)),
+  );
   vi.advanceTimersToNextFrame();
 
   expect(edges(host).map((edge) => edge.style.left)).toEqual(["22px", "22px", "42px", "42px"]);
@@ -95,7 +100,9 @@ it("reconnects retained ports only within the current shell and releases dispose
   const fades = createMobileSheetScrollFades();
   const releaseRetained = fades.register(retained);
   releases.push(releaseRetained, fades.register(outside));
-  const disconnect = fades.connect(firstHost);
+  const disconnect = fades.connect((ports) =>
+    createMobileSheetScrollFadeConnection(ports, firstHost),
+  );
   vi.advanceTimersToNextFrame();
   expect(edges(firstHost)).toHaveLength(2);
   expect(edges(nextHost)).toHaveLength(0);
@@ -107,7 +114,7 @@ it("reconnects retained ports only within the current shell and releases dispose
   expect(edges(firstHost)).toHaveLength(0);
 
   nextHost.prepend(retained);
-  releases.push(fades.connect(nextHost));
+  releases.push(fades.connect((ports) => createMobileSheetScrollFadeConnection(ports, nextHost)));
   vi.advanceTimersToNextFrame();
   expect(edges(nextHost)).toHaveLength(4);
   releaseRetained();

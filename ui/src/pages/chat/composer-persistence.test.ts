@@ -8,7 +8,10 @@ import {
   readChatOutboxRecovery as readRecovery,
   restoreChatOutboxRecovery as restoreRecovery,
 } from "../../lib/chat/outbox-recovery.ts";
-import { createStoredChatOutboxReader } from "../../lib/chat/outbox-store-projection.ts";
+import {
+  createStoredChatOutboxReader,
+  listStoredChatOutboxes as listOutboxes,
+} from "../../lib/chat/outbox-store-projection.ts";
 import {
   captureChatOutboxAdmission,
   storageTargetForComposer,
@@ -17,6 +20,10 @@ import {
 } from "../../lib/chat/outbox-store.ts";
 import { resolveUiConversationIdentity as resolveIdentity } from "../../lib/sessions/session-key.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import {
+  loadChatComposerState as load,
+  persistChatComposerState as persist,
+} from "./composer-draft-storage.ts";
 import {
   legacyStorageKeyForGateway as legacyKey,
   createState,
@@ -29,15 +36,11 @@ import {
   startPersistence,
   reloadStorage,
 } from "./composer-persistence.test-support.ts";
+import { ChatComposerPersistence } from "./composer-persistence.ts";
 import {
-  type ChatComposerPersistence,
-  admitStoredChatComposerQueueItem,
-  listStoredChatOutboxes as listOutboxes,
-  loadChatComposerState as load,
-  persistChatComposerState as persist,
-  restoreChatComposerState as restore,
+  admitStoredChatComposerQueueItemResult,
   updateStoredChatComposerQueueItems as updateItems,
-} from "./composer-persistence.ts";
+} from "./composer-queue-persistence.ts";
 
 type ComposerState = ReturnType<typeof createState>;
 
@@ -118,8 +121,7 @@ function heldItem(state: ComposerState, fields: Partial<ChatQueueItem> = {}): Ch
 }
 const privateMentions = [{ profileId: "alex", start: 0, end: 5 }];
 const privateGoal = { action: "start" as const, sessionId: "private-session" };
-const recoveredError =
-  "Recovered message. Review this destination and retry only if it did not arrive.";
+const recoveredError = "Recovered message. Review this destination and retry when ready.";
 function reviewed(state: ComposerState, item: ChatQueueItem, sendError = recoveredError) {
   return { ...item, storageScope: scopeFor(state), sendState: "failed" as const, sendError };
 }
@@ -187,7 +189,7 @@ it("restores selected recipients and gives same-text recipient changes their own
   expect(persist(state, state.sessionKey, { draftRevision: 10 })).toBe(true);
   roundtripQueue(state, "keep-draft-mentions");
   const restored = createState();
-  expect(restore(restored)).toBe(true);
+  expect(new ChatComposerPersistence(() => restored).restore()).toBe(true);
   expect(restored.chatMentions).toEqual(first);
   expect(persist(state, state.sessionKey, { draftRevision: 10, mentions: second })).toBe(false);
 
@@ -216,7 +218,7 @@ it("restores objective-edit mode with its literal draft and exact target", () =>
     agentsList: { defaultId: "lily", mainKey: "main" },
   });
   const restored = createState();
-  expect(restore(restored)).toBe(true);
+  expect(new ChatComposerPersistence(() => restored).restore()).toBe(true);
   expect(restored).toMatchObject({ chatMessage: state.chatMessage, chatGoalDraftMode: goalMode });
   expect(snapshot(state, "agent:lily:other")).toBeNull();
   roundtripQueue(state, "other-message");
@@ -227,7 +229,7 @@ it("normalizes an existing whitespace-only stored draft during restore", () => {
   const state = createState();
   seedSession({ draft: "  \n  ", draftRevision: 1 }, 4);
 
-  expect(restore(state)).toBe(false);
+  expect(new ChatComposerPersistence(() => state).restore()).toBe(false);
   expect(state.chatMessage).toBe("");
 });
 
@@ -249,7 +251,7 @@ it("reviews legacy steer rows as generic mode-bearing sends and never rewrites o
     storageScope: scopeFor(state),
     queueMode: "steer",
     sendRunId: "steer-request",
-    sendState: "unconfirmed",
+    sendState: "failed",
   });
   expect(restored).not.toHaveProperty("kind");
   expect(restored).not.toHaveProperty("steerTargetRunId");
@@ -374,8 +376,16 @@ it("keeps unresolved bare main and raw global independent until their owners res
   const mainBox = outbox(mainItem, "global", "work");
   const globalBox = outbox(globalItem, "global", "alpha");
   expect(listOutboxes(resolved)).toEqual([mainBox, globalBox]);
-  const attemptedMain = { ...mainBox.queue[0]!, sendAttempts: 1 };
-  const attemptedGlobal = { ...globalBox.queue[0]!, sendAttempts: 1 };
+  const attemptedMain = {
+    ...mainBox.queue[0]!,
+    sessionId: "resolved-main-session",
+    sendAttempts: 1,
+  };
+  const attemptedGlobal = {
+    ...globalBox.queue[0]!,
+    sessionId: "resolved-global-session",
+    sendAttempts: 1,
+  };
   expect(replaceItem(resolved, mainBox.queue[0]!, attemptedMain)).toBe(true);
   expect(replaceItem(resolved, globalBox.queue[0]!, attemptedGlobal)).toBe(true);
   expect(updateItems(resolved, "global", [{ expected: attemptedMain, next: null }])).toBe(true);
@@ -509,6 +519,12 @@ it("reviews full v1 main and global queues while consuming legacy tombstones", (
 it.each([
   ["sending", "waiting-reconnect", undefined, undefined],
   [
+    "executing-command",
+    "failed",
+    undefined,
+    "Command was interrupted. Review the conversation before retrying.",
+  ],
+  [
     "waiting-model",
     "failed",
     "previous attempt failed",
@@ -629,7 +645,7 @@ it("retains an unresolved custom-main clear through draft and outbox capacity pr
   expect(admitItem(resolved, queued)).toBe(true);
 
   const offline = savedState({ sessionKey: "workspace", chatMessage: "stale resolved draft" });
-  expect(restore(offline)).toBe(true);
+  expect(new ChatComposerPersistence(() => offline).restore()).toBe(true);
   expect(offline.chatMessage).toBe("stale resolved draft");
   const persistence = startPersistence(offline);
   edit(offline, persistence, "");
@@ -747,12 +763,12 @@ it("keeps failed attachment sends durable and retryable, including stack-overflo
   };
 
   expect(
-    admitStoredChatComposerQueueItem(
+    admitStoredChatComposerQueueItemResult(
       state,
       captureChatOutboxAdmission(state, state.sessionKey),
       failed,
     ),
-  ).toBe(true);
+  ).toBe("admitted");
   expect(load(state, state.sessionKey).snapshot?.queue).toMatchObject([
     {
       id: "overflow-attachment",
@@ -803,7 +819,7 @@ it.each(["canonical key", "arriving metadata"] as const)(
     expect([row.draft, row.draftMentions, row.goalMode, row.replyTarget]).toEqual(
       Array(4).fill(undefined),
     );
-    expect(restore(state)).toBe(true);
+    expect(new ChatComposerPersistence(() => state).restore()).toBe(true);
     expect(state).toMatchObject({
       chatMessage: "@Alex private objective",
       chatMentions: [expect.anything()],
@@ -811,7 +827,7 @@ it.each(["canonical key", "arriving metadata"] as const)(
     });
     reloadStorage(state);
     const restored = createState({ sessionKey: state.sessionKey });
-    expect(restore(restored)).toBe(true);
+    expect(new ChatComposerPersistence(() => restored).restore()).toBe(true);
     expect(restored).toMatchObject({ chatMessage: "", chatQueue: [queued] });
     persistence.stop();
   },

@@ -324,11 +324,13 @@ describe("info command handlers", () => {
       shouldContinue: false,
       reply: { text: "plugins status reply" },
     });
-    expect(buildStatusPluginsReply).toHaveBeenCalledWith({
-      cfg: params.cfg,
-      command: params.command,
-      workspaceDir: params.workspaceDir,
-    });
+    expect(buildStatusPluginsReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: params.cfg,
+        command: params.command,
+        workspaceDir: params.workspaceDir,
+      }),
+    );
     expect(buildStatusReply).not.toHaveBeenCalled();
   });
 

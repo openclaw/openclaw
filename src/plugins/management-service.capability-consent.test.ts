@@ -6,6 +6,7 @@ import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resolvePluginArtifactDeclaredSurface } from "./capability-artifact.js";
 import {
   createManagedPluginArtifactConsentHandler,
+  resolvePendingPluginCapabilityReview,
   resolvePluginCapabilityConsent,
   type PluginCapabilityConsentHandler,
 } from "./capability-consent.js";
@@ -601,6 +602,27 @@ describe("managed plugin capability consent", () => {
       resolvePluginCapabilityConsent({ config: {}, env: {}, pluginId: "community-plugin" }),
     ).rejects.toThrow("ambiguous package ownership");
     expect(mocks.writeRecords).not.toHaveBeenCalled();
+  });
+
+  it("bounds pending reviews while refreshing a repeated rejection", async () => {
+    const reject = async (pluginId: string) => {
+      const handler = createManagedPluginArtifactConsentHandler({ config: {}, source: "npm" });
+      await expect(
+        handler.onBeforePluginArtifactCommit({
+          pluginId,
+          stagedArtifactDir: createConsentArtifact(pluginId),
+          mode: "install",
+        }),
+      ).rejects.toMatchObject({ capabilityConsent: { pluginId } });
+    };
+    for (let index = 0; index < 32; index += 1) {
+      await reject(`pending-${index}`);
+    }
+    await reject("pending-0");
+    await reject("pending-32");
+    expect(resolvePendingPluginCapabilityReview("pending-1")).toBeUndefined();
+    expect(resolvePendingPluginCapabilityReview("pending-0")?.pluginId).toBe("pending-0");
+    expect(resolvePendingPluginCapabilityReview("pending-32")?.pluginId).toBe("pending-32");
   });
 
   it("retains a rejected community install for inspection and refreshes stale reviews", async () => {

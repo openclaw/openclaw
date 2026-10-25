@@ -3,7 +3,7 @@ import type { SpeechProviderPlugin } from "../plugins/types.js";
 import { createSpeechDirectiveParser } from "./directive-parser.js";
 import { createTtsDirectiveTextStreamCleaner, parseTtsDirectives } from "./directives.js";
 import type { SpeechModelOverridePolicy } from "./provider-types.js";
-import { speechProvider } from "./speech-provider.test-support.js";
+import { createFullSpeechPolicy, speechProvider } from "./speech-provider.test-support.js";
 
 const speed: NonNullable<SpeechProviderPlugin["parseDirectiveToken"]> = ({ key, value }) =>
   key === "speed" ? { handled: true, overrides: { speed: Number(value) } } : { handled: false };
@@ -14,16 +14,7 @@ const elevenlabs = speechProvider("elevenlabs", {
 });
 const minimax = speechProvider("minimax", { autoSelectOrder: 20, parseDirectiveToken: speed });
 
-const fullPolicy: SpeechModelOverridePolicy = {
-  enabled: true,
-  allowText: true,
-  allowProvider: true,
-  allowVoice: true,
-  allowModelId: true,
-  allowVoiceSettings: true,
-  allowNormalization: true,
-  allowSeed: true,
-};
+const fullPolicy: SpeechModelOverridePolicy = createFullSpeechPolicy();
 
 function parse(
   text: string,

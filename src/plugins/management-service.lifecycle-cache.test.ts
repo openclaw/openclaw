@@ -3,7 +3,7 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as bundledDiscoveryState from "./bundled-discovery-state.js";
-import { hostedFeedDiffsEntry } from "./management-service.test-helpers.js";
+import { emptyMetadataSnapshot, hostedFeedDiffsEntry } from "./management-service.test-helpers.js";
 import {
   clearPluginMetadataLifecycleCaches,
   registerPluginMetadataProcessMemoLifecycleClear,
@@ -59,16 +59,13 @@ registerPluginMetadataProcessMemoLifecycleClear(() => {
 
 function metadataSnapshot(pluginId?: string) {
   return {
+    ...emptyMetadataSnapshot(),
     index: {
       plugins: pluginId
         ? [{ pluginId, packageName: `community/${pluginId}`, origin: "global", enabled: true }]
         : [],
       installRecords: {},
     },
-    byPluginId: new Map(),
-    plugins: [],
-    diagnostics: [],
-    normalizePluginId: (rawPluginId: string) => rawPluginId,
   };
 }
 

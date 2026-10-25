@@ -24,7 +24,7 @@ describe.each([
   "anthropic.claude.terminal.start.v1",
   "codex.terminal.resume.v1",
   "anthropic.claude.terminal.resume.v1",
-])("final node dispatch authority for %s", (command) => {
+])("final node dispatch authority for %s with Gateway-local terminals disabled", (command) => {
   it.each([
     "unchanged",
     "terminal disabled",
@@ -63,7 +63,10 @@ describe.each([
       },
     };
     const policy = createTerminalLaunchPolicy(config);
-    const manager = new TerminalSessionManager({ emit: vi.fn() });
+    const manager = new TerminalSessionManager({
+      emit: vi.fn(),
+      disableGatewayLocalTerminals: true,
+    });
     const respond = vi.fn();
     const isConnectionActive = vi.fn(() => true);
     const opts = {
@@ -85,6 +88,7 @@ describe.each([
       cols: 80,
       rows: 24,
       requireCliAgents,
+      catalogNodeId: "node-1",
       resolveCatalogPlan: async () => ({
         kind: "node",
         nodeId: "node-1",

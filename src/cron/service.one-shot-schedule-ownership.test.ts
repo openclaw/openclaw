@@ -39,10 +39,7 @@ beforeEach(async () => {
 function createCron(
   params: Pick<CronServiceDeps, "runIsolatedAgentJob"> &
     Partial<
-      Pick<
-        CronServiceDeps,
-        "runSessionEvent" | "runCommandJob" | "onEvent" | "enqueueSystemEvent" | "requestHeartbeat"
-      >
+      Pick<CronServiceDeps, "runSessionEvent" | "runCommandJob" | "onEvent" | "enqueueSystemEvent">
     >,
 ) {
   return createCronServiceWithStateForTest({
@@ -51,7 +48,6 @@ function createCron(
     cronEnabled: true,
     log: logger,
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
     ...params,
   });
 }
@@ -625,12 +621,10 @@ it("recovers an overdue interrupted replacement without deleting it", async () =
   const runSessionEvent = vi.fn<NonNullable<CronServiceDeps["runSessionEvent"]>>(async () => ({
     status: "ok",
   }));
-  const requestHeartbeat = vi.fn();
   const onEvent = vi.fn((event: CronEvent) => event);
   const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
   const { cron, state } = createCron({
     runSessionEvent,
-    requestHeartbeat,
     runIsolatedAgentJob,
     onEvent,
   });
@@ -643,7 +637,6 @@ it("recovers an overdue interrupted replacement without deleting it", async () =
     clock.setTime(now + DEFAULT_STARTUP_DEFERRED_MISSED_AGENT_JOB_DELAY_MS);
     await onTimer(state);
     expect(runSessionEvent).toHaveBeenCalledOnce();
-    expect(requestHeartbeat).not.toHaveBeenCalled();
     expect(runIsolatedAgentJob).not.toHaveBeenCalled();
     expect(runSessionEvent.mock.calls[0]?.[0].text).toBe("run the replacement once");
     for (const jobs of await jobViews(cron)) {

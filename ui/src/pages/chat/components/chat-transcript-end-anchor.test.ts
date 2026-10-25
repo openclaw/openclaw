@@ -20,7 +20,7 @@ function fixture(offset = 600) {
     scrollHeight: { get: readContent },
   });
   element.scrollTop = offset;
-  const anchor = new TranscriptEndAnchor();
+  const anchor = new TranscriptEndAnchor(() => {});
   anchor.reconcile(element, false, false, vi.fn());
   const commit = (changed: boolean, canFollow: boolean) =>
     anchor.commitComposerResize(element, changed, canFollow, false);
@@ -42,6 +42,7 @@ it.each([
   ["near end", 594, 594, 300, true, 700, false],
   ["reader", 200, 200, 300, true, 200, false],
   ["native return", 0, 600, 300, false, 700, true],
+  ["native return before viewport resize", 0, 600, 400, false, 600, true],
   ["ancestor displacement", 600, 572, 376, true, 624, false],
 ] as const)(
   "preserves composer resize intent after %s",
@@ -54,8 +55,10 @@ it.each([
     resize(height);
     expect(commit(true, canFollow)).toEqual({ before, after, resumeFollow });
     expect(element.scrollTop).toBe(after);
-    if (height === 400) {
+    if (height === 400 && !resumeFollow) {
       expect(resized).not.toHaveBeenCalled();
+    } else {
+      expect(resized).toHaveBeenCalledWith(expect.objectContaining({ resumeFollow }));
     }
   },
 );

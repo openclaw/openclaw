@@ -123,7 +123,6 @@ export class VoiceCallWebhookServer {
     private readonly manager: CallManager,
     private readonly provider: VoiceCallProvider,
     private readonly coreConfig?: OpenClawConfig,
-    private readonly fullConfig?: OpenClawConfig,
     private readonly agentRuntime?: OpenClawPluginApi["runtime"]["agent"],
     logger?: PluginLogger,
   ) {
@@ -250,7 +249,7 @@ export class VoiceCallWebhookServer {
 
   private async initializeMediaStreaming(): Promise<void> {
     const streaming = this.config.streaming;
-    const pluginConfig = this.fullConfig ?? this.coreConfig ?? undefined;
+    const pluginConfig = this.coreConfig;
     const { getRealtimeTranscriptionProvider, listRealtimeTranscriptionProviders } =
       await loadRealtimeTranscriptionRuntime();
     const resolution = await resolveConfiguredCapabilityProviderAsync({
@@ -662,9 +661,22 @@ export class VoiceCallWebhookServer {
           };
         }
 
-        const realtimeParams = this.getRealtimeTwimlParams(ctx);
-        if (realtimeParams) {
-          const direction = realtimeParams.get("Direction");
+        const realtimeParams =
+          this.realtimeHandler && this.provider.name === "twilio"
+            ? new URLSearchParams(ctx.rawBody)
+            : null;
+        const direction = realtimeParams?.get("Direction");
+        const callStatus = realtimeParams?.get("CallStatus");
+        // Only initial TwiML fetches without gathered input enter realtime handling.
+        if (
+          realtimeParams &&
+          (!direction || direction === "inbound" || direction.startsWith("outbound")) &&
+          ctx.query?.type !== "status" &&
+          ctx.query?.type !== "amd" &&
+          (!callStatus || !isProviderStatusTerminal(callStatus)) &&
+          !realtimeParams.get("SpeechResult") &&
+          !realtimeParams.get("Digits")
+        ) {
           const isInboundRealtimeRequest = !direction || direction === "inbound";
           if (
             isInboundRealtimeRequest &&
@@ -818,33 +830,6 @@ export class VoiceCallWebhookServer {
       normalizedPathname === normalizedPattern ||
       normalizedPathname.startsWith(`${normalizedPattern}/`)
     );
-  }
-
-  private getRealtimeTwimlParams(ctx: WebhookContext): URLSearchParams | null {
-    if (!this.realtimeHandler || this.provider.name !== "twilio") {
-      return null;
-    }
-
-    const params = new URLSearchParams(ctx.rawBody);
-    const direction = params.get("Direction");
-    const isSupportedDirection =
-      !direction || direction === "inbound" || direction.startsWith("outbound");
-    if (!isSupportedDirection) {
-      return null;
-    }
-
-    if (ctx.query?.type === "status" || ctx.query?.type === "amd") {
-      return null;
-    }
-
-    const callStatus = params.get("CallStatus");
-    if (callStatus && isProviderStatusTerminal(callStatus)) {
-      return null;
-    }
-
-    // Initial TwiML fetches without gathered input may enter realtime handling.
-    // Replay checks run before this helper so retries cannot mint new stream tokens.
-    return !params.get("SpeechResult") && !params.get("Digits") ? params : null;
   }
 
   private async processParsedEvents(events: NormalizedEvent[]): Promise<boolean> {

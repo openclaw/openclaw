@@ -922,6 +922,27 @@ describe("delivery-queue recovery", () => {
     });
   });
 
+  it.each([
+    ["permanent", "chat not found", undefined],
+    ["transient", "provider lookup timed out", 1],
+  ] as const)(
+    "classifies a thrown %s unknown-send reconciliation with the delivery error policy",
+    async (_kind, error, retryCount) => {
+      const id = await enqueueUnknown({ text: "unknown" });
+      const reconcileUnknownSend = vi.fn().mockRejectedValue(new Error(error));
+      installReconciler(reconcileUnknownSend);
+      const { result } = await recover({ deliver });
+      expect(reconcileUnknownSend).toHaveBeenCalledOnce();
+      expect(deliver).not.toHaveBeenCalled();
+      expect(result.failed).toBe(1);
+      if (retryCount === undefined) {
+        await expectRemoved(id);
+      } else {
+        await expectPending({ id, retryCount, recoveryState: "unknown_after_send" });
+      }
+    },
+  );
+
   it.each(["recovered", "exhausted", "untyped"] as const)(
     "preserves bounded final-text recovery across storage restart: %s",
     async (outcome) => {

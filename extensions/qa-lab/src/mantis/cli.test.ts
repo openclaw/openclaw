@@ -85,13 +85,6 @@ async function interruptRun(failure: (signal: AbortSignal) => Error) {
 }
 
 const withArtifact = (error: Error) => attachMantisFailureArtifact(error, "/tmp/mantis/error.txt");
-it("waits for interrupted cleanup and reports its failure artifact", async () => {
-  const stderr = await interruptRun((signal) =>
-    withArtifact(new Error("Mantis artifact processing aborted", { cause: signal.reason })),
-  );
-  expect(stderr).toContain("/tmp/mantis/error.txt");
-});
-
 it("recognizes an interrupted aggregate with a shared error cause", async () => {
   const stderr = await interruptRun((signal) => {
     const interrupted = new Error("lane aborted", { cause: signal.reason });

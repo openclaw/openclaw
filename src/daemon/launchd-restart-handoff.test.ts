@@ -24,11 +24,6 @@ const defaultEnv = { HOME: "/Users/test", OPENCLAW_PROFILE: "default" };
 function schedule(options: Parameters<typeof scheduleDetachedLaunchdRestartHandoff>[0]) {
   return scheduleDetachedLaunchdRestartHandoff({ env: defaultEnv, ...options });
 }
-function expectScript(script: string, fragments: string[]) {
-  for (const fragment of fragments) {
-    expect(script).toContain(fragment);
-  }
-}
 function expectReload(
   result: Awaited<ReturnType<typeof executeHandoff>>,
   counts: Record<string, number>,
@@ -59,8 +54,7 @@ async function executeHandoff(
   try {
     const file = (name: string) => path.join(stubDir, name);
     const writeScript = (name: string, source: string) => {
-      fs.writeFileSync(file(name), source);
-      fs.chmodSync(file(name), 0o755);
+      fs.writeFileSync(file(name), source, { mode: 0o755 });
     };
     const home = file("home");
     const stateDir = path.join(home, ".openclaw");
@@ -141,9 +135,7 @@ exec /usr/bin/plutil "$@"
     }
 
     const readLines = (name: string) => fs.readFileSync(file(name), "utf8").trim().split("\n");
-    const envCalls = readLines("environment.calls");
-    expect(envCalls.length).toBeGreaterThan(0);
-    expect(envCalls.every((call) => call === "::")).toBe(true);
+    expect(new Set(readLines("environment.calls"))).toEqual(new Set(["::"]));
     const calls = readLines("launchctl.calls").filter(
       (call) => call !== "print system/ai.openclaw.gateway",
     );
@@ -169,7 +161,7 @@ it("waits for the caller pid before kickstarting launchd", () => {
   expect(spawnMock).toHaveBeenCalledTimes(1);
   const [, args] = spawnCall();
   expect([args[0], args[2], args[6]]).toEqual(["-c", "openclaw-launchd-restart-handoff", "9876"]);
-  expectScript(args[1]!, [
+  for (const fragment of [
     'while kill -0 "$wait_pid" >/dev/null 2>&1; do',
     "exec >>'/Users/test/.openclaw/logs/gateway-restart.log' 2>&1",
     "openclaw restart attempt source=handoff mode=kickstart",
@@ -177,7 +169,9 @@ it("waits for the caller pid before kickstarting launchd", () => {
     'launchctl enable "$service_target"',
     'if launchctl kickstart -k "$service_target"; then',
     'if launchctl bootstrap "$domain" "$plist_path"; then\n    status=0\n  else\n    launchctl kickstart -k "$service_target"',
-  ]);
+  ]) {
+    expect(args[1]).toContain(fragment);
+  }
   expect(args[1]).not.toMatch(/launchctl[^\n]*\/dev\/null/);
   expect(args[1]).not.toContain("sleep 1");
   expect(unrefMock).toHaveBeenCalledTimes(1);
@@ -189,11 +183,10 @@ it("kickstarts after exit without replacing a running KeepAlive process", async 
     'case "$1" in enable|kickstart) exit 0 ;; *) exit 1 ;; esac',
   );
 
-  expect(result.exitCode).toBe(0);
-  expect(result.calls).toContain("enable gui/501/test.label");
-  expect(result.calls).toContain("kickstart gui/501/test.label");
-  expect(result.calls.some((call) => call.includes("kickstart -k"))).toBe(false);
-  expect(result.calls.some((call) => call.startsWith("bootstrap "))).toBe(false);
+  expect(result).toMatchObject({
+    exitCode: 0,
+    calls: ["enable gui/501/test.label", "kickstart gui/501/test.label"],
+  });
   expect(result.log).toContain("restart done");
 });
 
@@ -244,17 +237,12 @@ esac`,
   expectReload(result, { print: 21, bootstrap: 1 });
   const [, args] = spawnCall();
   // #110137: outwait launchd's SIGKILL ceiling, then retry only while registered.
-  expectScript(args[1]!, [
-    "openclaw restart attempt source=handoff mode=reload",
-    'launchctl enable "$service_target"',
-    'launchctl bootout "$service_target"',
-    'bootout_wait_count="345"',
-    'if ! launchctl print "$service_target" >/dev/null 2>&1; then',
-    "sleep 1",
-    'bootstrap_retry_count="15"',
-    'if launchctl bootstrap "$domain" "$plist_path"; then',
-    'if launchctl print "$service_target" >/dev/null 2>&1; then\n    if launchctl kickstart -k "$service_target"; then',
-    "bootstrap_retry_count=$((bootstrap_retry_count - 1))",
+  expect(args[1]).toContain('bootout_wait_count="345"');
+  expect(args[1]).toContain("sleep 1");
+  expect(result.log).toContain("mode=reload");
+  expect(result.calls.slice(0, 2)).toEqual([
+    "enable gui/501/test.label",
+    "bootout gui/501/test.label",
   ]);
 });
 

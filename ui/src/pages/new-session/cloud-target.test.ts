@@ -1,10 +1,11 @@
 /* @vitest-environment jsdom */
 
-import { createComponent, createSignal, flush } from "solid-js";
+import { createComponent } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { CloudProfileMenuItems, SessionMenuItem } from "./cloud-target-view.tsx";
-import { requestPlaceCatalog, type CloudProfileMenuItemsOptions } from "./cloud-target.ts";
+import { SessionMenuItem } from "./cloud-target-view.tsx";
+import { mountCloudProfiles } from "./cloud-target.test-support.ts";
+import { requestPlaceCatalog } from "./cloud-target.ts";
 import {
   projectDevicePlacements,
   resolveAutomaticDevicePlacementDisabledReason,
@@ -16,26 +17,6 @@ function mountSessionItem(
   container: HTMLElement,
 ) {
   return mountSolid(() => createComponent(SessionMenuItem, { item, submitting }), { container });
-}
-
-function mountCloudProfiles(initial: CloudProfileMenuItemsOptions, container: HTMLElement) {
-  const [params, setParams] = createSignal(initial);
-  const mounted = mountSolid(
-    () =>
-      createComponent(CloudProfileMenuItems, {
-        get params() {
-          return params();
-        },
-      }),
-    { container },
-  );
-  return {
-    ...mounted,
-    update: (next: CloudProfileMenuItemsOptions) => {
-      setParams(next);
-      flush();
-    },
-  };
 }
 
 describe("cloud target menu", () => {
@@ -137,7 +118,6 @@ describe("cloud target menu", () => {
         },
       ],
       selectedId: "",
-      compact: true,
       submitting: false,
       onSelect,
       onSelectOs,
@@ -175,7 +155,6 @@ describe("cloud target menu", () => {
       {
         profiles: [{ id: "aws", providerId: "aws", machines: [machine] }],
         selectedId: "aws",
-        compact: true,
         selectedMachine: machine.id,
         submitting: false,
         onSelect: vi.fn(),
@@ -208,7 +187,6 @@ describe("cloud target menu", () => {
         },
       ],
       selectedId: "aws",
-      compact: true,
       selectedOs: "linux",
       selectedMachine: "small",
       submitting: false,
@@ -240,7 +218,6 @@ describe("cloud target menu", () => {
           },
         ],
         selectedId: "aws",
-        compact: true,
         selectedOs: "windows",
         submitting: false,
         onSelect: vi.fn(),
@@ -272,8 +249,10 @@ describe("cloud target menu", () => {
     );
 
     const button = container.querySelector<HTMLButtonElement>('[data-value="cloud:aws"]');
-    expect(button?.disabled).toBe(true);
-    expect(button?.title).toBe("The acpx runtime does not support cloud workers.");
+    expect(button?.getAttribute("aria-disabled")).toBe("true");
+    expect(button?.getAttribute("aria-description")).toContain(
+      "The acpx runtime does not support cloud workers.",
+    );
   });
 
   it("disables only the cloud profile with a profile-specific reason", () => {
@@ -296,9 +275,9 @@ describe("cloud target menu", () => {
 
     const disabled = container.querySelector<HTMLButtonElement>('[data-value="cloud:aws"]');
     const enabled = container.querySelector<HTMLButtonElement>('[data-value="cloud:ssh"]');
-    expect(disabled?.disabled).toBe(true);
-    expect(disabled?.title).toBe(reason);
+    expect(disabled?.getAttribute("aria-disabled")).toBe("true");
+    expect(disabled?.getAttribute("aria-description")).toContain(reason);
     expect(enabled?.disabled).toBe(false);
-    expect(enabled?.title).toBe("Cloud worker provider: static-ssh");
+    expect(enabled?.getAttribute("aria-description")).toBe("Cloud worker provider: static-ssh");
   });
 });

@@ -1,9 +1,8 @@
-import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as browserCliSharedModule from "../browser-cli-shared.js";
 import {
   createBrowserProgram,
-  getBrowserCliRuntime,
+  mockBrowserCliRuntime,
   getBrowserCliRuntimeCapture,
 } from "../browser-cli.test-support.js";
 
@@ -18,11 +17,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.spyOn(browserCliSharedModule, "callBrowserRequest").mockImplementation(mocks.callBrowserRequest);
-const browserCliRuntime = getBrowserCliRuntime();
-vi.spyOn(defaultRuntime, "log").mockImplementation(browserCliRuntime.log);
-vi.spyOn(defaultRuntime, "writeJson").mockImplementation(browserCliRuntime.writeJson);
-vi.spyOn(defaultRuntime, "error").mockImplementation(browserCliRuntime.error);
-vi.spyOn(defaultRuntime, "exit").mockImplementation(browserCliRuntime.exit);
+mockBrowserCliRuntime();
 
 const { registerBrowserActionInputCommands } = await import("./register.js");
 
@@ -124,10 +119,10 @@ describe("browser element commands", () => {
   );
 
   it("rejects a blank required ref before dispatch", async () => {
-    await expect(run("click", "   ")).rejects.toThrow("__exit__:1");
+    await expect(run("click", "   ")).rejects.toThrow("ref is required");
 
     const capture = getBrowserCliRuntimeCapture();
-    expect(capture.runtimeErrors.join("\n")).toContain("ref is required");
+    expect(capture.runtimeErrors).toEqual([]);
     expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
   });
 
@@ -146,10 +141,12 @@ describe("browser element commands", () => {
   });
 
   it("rejects non-decimal coordinate values before dispatch", async () => {
-    await expect(run("click-coords", "0x10", "20")).rejects.toThrow("__exit__:1");
+    await expect(run("click-coords", "0x10", "20")).rejects.toThrow(
+      "Invalid x: must be a finite number",
+    );
 
     const capture = getBrowserCliRuntimeCapture();
-    expect(capture.runtimeErrors.join("\n")).toContain("Invalid x: must be a finite number");
+    expect(capture.runtimeErrors).toEqual([]);
     expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
   });
 

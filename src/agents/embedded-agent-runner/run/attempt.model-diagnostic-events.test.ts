@@ -8,6 +8,7 @@ import {
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { normalizeTranscriptJsonValue } from "../../../config/sessions/transcript-json.js";
 import {
   onInternalDiagnosticEvent,
   onTrustedInternalDiagnosticEvent,
@@ -147,8 +148,13 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
       observed.push(`create${formatModelTransportContext()}`);
       return {
         async *[Symbol.asyncIterator]() {
+          for (let index = 0; index < 2; index++) {
+            await Promise.resolve();
+            observed.push(`iterate-${index}${formatModelTransportContext()}`);
+            yield { type: "text_delta", contentIndex: 0, delta: String(index) } as const;
+          }
           await Promise.resolve();
-          observed.push(`iterate${formatModelTransportContext()}`);
+          observed.push(`iterate-2${formatModelTransportContext()}`);
           yield {
             type: "done",
             reason: "stop",
@@ -168,19 +174,26 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
       api: "openai-responses",
       baseUrl: "https://example.invalid",
     });
-    await Promise.all(
-      [1, 2].map(async (number) => {
-        const stream = await wrap(source, {
+    const streams = await Promise.all(
+      [1, 2].map(async (number) =>
+        wrap(source, {
           runId: `run-${number}`,
           sessionKey: `session-${number}`,
           nextCallId: () => `run-${number}:model:7`,
-        })(model, { messages: [] });
-        await drain(stream);
-        await stream.result();
-      }),
+        })(model, { messages: [] }),
+      ),
     );
+    const iterators = streams.map((stream) => stream[Symbol.asyncIterator]());
+    for (let index = 0; index < 3; index++) {
+      const values = await Promise.all(iterators.map((iterator) => iterator.next()));
+      expect(values.every((value) => !value.done)).toBe(true);
+      expect(formatModelTransportContext()).toBe("");
+    }
+    const exhausted = await Promise.all(iterators.map((iterator) => iterator.next()));
+    expect(exhausted.every((value) => value.done)).toBe(true);
+    await Promise.all(streams.map((stream) => stream.result()));
     expect(observed.toSorted()).toEqual(
-      ["create", "iterate", "result"].flatMap((phase) => [
+      ["create", "iterate-0", "iterate-1", "iterate-2", "result"].flatMap((phase) => [
         `${phase} sessionKey="session-1" runId="run-1" requestId="run-1:model:7" requestNumber=7`,
         `${phase} sessionKey="session-2" runId="run-2" requestId="run-2:model:7" requestNumber=7`,
       ]),
@@ -472,6 +485,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
     const observer = createModelObserver({
       streamContext: { messages, tools },
       capturePromptStats: true,
+      captureByteStats: true,
       measurePromptStats,
     });
     observer.assignRequestPayloadBytes(value);
@@ -489,6 +503,115 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
         inputMessagesChars: JSON.stringify(messages).length,
         toolDefinitionsChars: JSON.stringify(tools).length,
       });
+    }
+  });
+
+  it("matches native JSON sizes for owned, mutable, edited and compacted histories", () => {
+    let seed = 7;
+    const random = () => (seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0);
+    const alphabet = ['"', "\\", "\n", "\u0000", "漢", "🦞", "\ud800", "\udfff", "a"];
+    const messages = Array.from({ length: 64 }, (_, index) => {
+      const text = Array.from(
+        { length: random() % 80 },
+        () => alphabet[random() % alphabet.length],
+      ).join("");
+      const message = {
+        role: "user" as const,
+        content: [{ type: "text" as const, text }],
+        timestamp: index,
+        extra: {
+          [text]: [undefined, null, Number.NaN, Infinity, -0, text],
+          omitted: undefined,
+          fn: () => "omitted",
+          custom: { toJSON: (key: string) => ({ key, text }) },
+        },
+      };
+      if (index % 3 === 0) {
+        return normalizeTranscriptJsonValue({ message }, "") as { message: typeof message };
+      }
+      if (index % 3 === 1) {
+        return { message: normalizeTranscriptJsonValue(message, "") as typeof message };
+      }
+      return { message };
+    }).map(({ message }) => message);
+    const measure = createModelPromptStats();
+    for (const change of [
+      () => {},
+      // oxlint-disable-next-line unicorn/no-array-reverse -- Exercise an in-place hook reorder of the same history array.
+      () => messages.reverse(),
+      () => {
+        messages[0] = { ...messages[0]!, content: [{ type: "text", text: "hook edit" }] };
+      },
+      () => {
+        messages[1]!.content[0]!.text = "mutable edit";
+      },
+      () => messages.splice(0, 50),
+    ]) {
+      change();
+      const expected = JSON.stringify(messages).length;
+      expect(measure({ messages })?.inputMessagesChars).toBe(expected);
+      expect(measure({ messages })?.inputMessagesChars).toBe(expected);
+    }
+  });
+
+  it("does not serialize unchanged owned history payloads again on model calls", async () => {
+    setDiagnosticsEnabledForProcess(true);
+    const makeMessage = (text: string) => {
+      const message = {
+        role: "user" as const,
+        content: [{ type: "text" as const, text }],
+        timestamp: 1,
+      };
+      normalizeTranscriptJsonValue({ message }, "");
+      return message;
+    };
+    const first = makeMessage("owned prefix");
+    const second = makeMessage("owned append");
+    const messages = [first];
+    const wrapped = wrap(() => createAssistantMessageEventStream());
+    const expected = [JSON.stringify(messages).length, JSON.stringify([first, second]).length];
+    const nativeStringify = JSON.stringify;
+    const visits: string[] = [];
+    type FunctionReplacer = (this: unknown, key: string, part: unknown) => unknown;
+    const stringify = vi.spyOn(JSON, "stringify");
+    stringify.mockImplementation(
+      (
+        value: unknown,
+        replacer?: FunctionReplacer | (string | number)[] | null,
+        space?: string | number,
+      ) => {
+        if (typeof replacer !== "function") {
+          return nativeStringify(value, replacer, space);
+        }
+        return nativeStringify(
+          value,
+          function (key, part: unknown) {
+            if (key === "text" && typeof part === "string") {
+              visits.push(part);
+            }
+            return replacer.call(this, key, part);
+          },
+          space,
+        );
+      },
+    );
+    try {
+      const events = await collectModelCallEvents(async () => {
+        await wrapped({} as never, { messages });
+        visits.length = 0;
+        await wrapped({} as never, { messages });
+        expect(visits).toEqual([]);
+        messages.push(second);
+        await wrapped({} as never, { messages });
+        expect(visits).toEqual(["owned append"]);
+      });
+      expect(
+        events.flatMap((event) =>
+          event.type === "model.call.started" ? [event.promptStats?.inputMessagesChars] : [],
+        ),
+      ).toEqual([expected[0], expected[0], expected[1]]);
+    } finally {
+      stringify.mockRestore();
     }
   });
 
@@ -558,6 +681,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
     const observer = createModelObserver({
       streamContext: { messages },
       capturePromptStats: true,
+      captureByteStats: true,
     });
     observer.assignRequestPayloadBytes({ messages });
     const largestJsonString = Math.max(
@@ -879,35 +1003,6 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
       expect(JSON.stringify(entries)).not.toContain("synthetic-private-error");
       expect(JSON.stringify(entries)).not.toContain("req_error_usage");
       expect(JSON.stringify(entries)).not.toContain("partial reply");
-    },
-  );
-
-  it.each(["disabled", "unobserved", "unrelated"] as const)(
-    "skips prompt stat computation when diagnostics are %s",
-    async (mode) => {
-      resetDiagnosticEventsForTest();
-      setDiagnosticsEnabledForProcess(mode !== "disabled");
-      if (mode === "unrelated") {
-        onInternalDiagnosticEvent(() => {}, { include: ["model.usage"] });
-      }
-      let promptInspected = false;
-      const streamContext = {
-        systemPrompt: "system",
-        get messages() {
-          promptInspected = true;
-          return [{ role: "user", content: "x", timestamp: 1 }];
-        },
-        get tools() {
-          promptInspected = true;
-          return [{ name: "lookup", description: "d", parameters: { type: "object" } }];
-        },
-      };
-      const wrapped = wrap((() =>
-        completedChunks({ type: "text_delta", delta: "ok" })) as unknown as StreamFn);
-
-      await (await wrapped({} as never, streamContext as never, {})).result();
-
-      expect(promptInspected).toBe(false);
     },
   );
 

@@ -10,6 +10,7 @@ import {
 import { markReplyOperationExecutionStarted } from "../sessions/session-controller.state.js";
 import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import type { SessionMessageSubscriberRegistry } from "./server-chat-state.js";
+import { createSessionGoalFixture } from "./session-goal.test-support.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 import { createRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
@@ -265,17 +266,7 @@ function createHandler(
   return { broadcastToConnIds, handler };
 }
 
-const ownerGoal = {
-  schemaVersion: 1 as const,
-  id: "goal-ops",
-  objective: "Ops only",
-  status: "active" as const,
-  createdAt: 1,
-  updatedAt: 2,
-  tokenStart: 0,
-  tokensUsed: 3,
-  continuationTurns: 0,
-};
+const ownerGoal = createSessionGoalFixture("goal-ops", "Ops only", { updatedAt: 2, tokensUsed: 3 });
 
 function expectPrivateSessionInvalidation(payload: unknown) {
   expectAbsentFields(

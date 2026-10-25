@@ -1,4 +1,5 @@
 import { once } from "node:events";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { PassThrough } from "node:stream";
@@ -26,9 +27,31 @@ vi.mock("node:fs", async (importOriginal) => {
   };
 });
 
-afterEach(() => vi.useRealTimers());
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const archivePathFor = (prefix: string) => path.join(tempDirs.make(prefix), "partial.tar.gz");
+type ReportProgress = Parameters<
+  Parameters<typeof writeArchiveStreamToFile>[0]["createArchiveStream"]
+>[0];
+
+function startArchive() {
+  const archivePath = archivePathFor("backup-stream-");
+  const archiveStream = new PassThrough();
+  let reportProgress: ReportProgress = () => {};
+  const writePromise = writeStream(archivePath, (report) => {
+    reportProgress = report;
+    return archiveStream;
+  });
+  return {
+    archivePath,
+    archiveStream,
+    writePromise,
+    reportProgress: (progress: Parameters<ReportProgress>[0]) => reportProgress(progress),
+  };
+}
 const retry = (
   controller: AbortController,
   options: Parameters<typeof writeTarArchiveWithRetry>[0],
@@ -42,6 +65,48 @@ function writeStream(
     writeArchiveStreamToFile({ archivePath, createArchiveStream, onPartialArchive() {} });
   return controller ? withCommandProcessScope(run, controller.signal) : run();
 }
+
+it("removes the exclusive partial archive when its initial descriptor stat fails", async () => {
+  vi.spyOn(fsSync, "fstatSync").mockImplementationOnce(() => {
+    throw Object.assign(new Error("fstat failed"), { code: "EIO" });
+  });
+  const { archivePath, archiveStream, writePromise } = startArchive();
+  archiveStream.end("partial archive");
+  await expect(writePromise).rejects.toThrow("fstat failed");
+  await expect(fs.lstat(archivePath)).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+it.each([false, true])("cleans a stalled archive (entry suffix=%s)", async (withEntry) => {
+  vi.useFakeTimers();
+  const { archivePath, archiveStream, writePromise, reportProgress } = startArchive();
+  const suffix = `${"a".repeat(170)}/${"b".repeat(170)}/${"c".repeat(169)}`;
+  if (withEntry) {
+    reportProgress({ phase: "raw", entryPath: `/source/🤖${suffix}`, bytes: 16 });
+  }
+  archiveStream.write("partial archive");
+  const message = "Backup archive write stalled: no progress observed for 300000ms";
+  const rejection = expect(writePromise).rejects.toThrow(
+    withEntry
+      ? `${message} (phase=output, entry=${JSON.stringify(suffix)}, rawBytes=16, outputBytes=15)`
+      : message,
+  );
+  await vi.advanceTimersByTimeAsync(300_001);
+  await rejection;
+  expect(archiveStream.destroyed).toBe(true);
+  await expect(fs.lstat(archivePath)).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+it("keeps the archive alive through more than five minutes of one entry's raw bytes", async () => {
+  vi.useFakeTimers();
+  const { archivePath, archiveStream, writePromise, reportProgress } = startArchive();
+  for (let elapsed = 0; elapsed < 360_000; elapsed += 60_000) {
+    await vi.advanceTimersByTimeAsync(60_000);
+    reportProgress({ phase: "raw", entryPath: "/source/large.pack", bytes: 16 });
+  }
+  archiveStream.end("archive after one large entry");
+  await expect(writePromise).resolves.toMatchObject({ archivePath });
+  await expect(fs.readFile(archivePath, "utf8")).resolves.toBe("archive after one large entry");
+});
 
 it("cancels an EOF retry backoff without starting another archive", async () => {
   vi.useFakeTimers();

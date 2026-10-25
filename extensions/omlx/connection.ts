@@ -4,6 +4,7 @@ import {
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
+import { omitNullRequestHeaders } from "openclaw/plugin-sdk/provider-request-headers";
 import { resolveConfiguredSecretInputString } from "openclaw/plugin-sdk/secret-input-runtime";
 import { OMLX_DEFAULT_BASE_URL, OMLX_PROVIDER_ID } from "./defaults.js";
 
@@ -131,7 +132,7 @@ export async function resolveOmlxHeaders(
       }),
     }) ?? {};
   return {
-    headers,
+    headers: omitNullRequestHeaders(headers) ?? {},
     hasHeaderAuth:
       (auth !== undefined && auth.mode !== "provider-default") ||
       Object.keys(headers).some((name) => name.toLowerCase() === "authorization"),

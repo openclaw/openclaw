@@ -9,7 +9,10 @@ import {
 import { createDeferred } from "../../test/helpers/promise.js";
 import * as pidAlive from "../shared/pid-alive.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
-import { completePendingPackageLifecycle } from "./package-lifecycle.js";
+import {
+  completePendingPackageLifecycle,
+  type PackageLifecycleScript,
+} from "./package-lifecycle.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -22,7 +25,7 @@ function observeLifecycleContention() {
     contended.resolve();
     return alive;
   });
-  return async (contender: Promise<boolean>) => {
+  return async (contender: Promise<void>) => {
     await Promise.race([
       contended.promise,
       contender.then(() => {
@@ -46,10 +49,12 @@ describe("package lifecycle completion", () => {
     await withTestDir({ prefix: "openclaw-package-lifecycle-" }, async (packageRoot) => {
       const markerPath = await markModernLifecyclePending(packageRoot);
       const calls: string[] = [];
+      const scriptPaths: string[] = [];
       const { promise: preinstallBlocked, resolve: releasePreinstall } = createDeferred();
       const { promise: firstPreinstall, resolve: firstPreinstallStarted } = createDeferred();
-      const runScript = vi.fn(async (script: { name: string }) => {
+      const runScript = vi.fn(async (script: PackageLifecycleScript) => {
         calls.push(script.name);
+        scriptPaths.push(script.relativePath);
         if (script.name === "preinstall") {
           firstPreinstallStarted?.();
           await preinstallBlocked;
@@ -58,7 +63,7 @@ describe("package lifecycle completion", () => {
         }
       });
 
-      const callers: Promise<boolean>[] = [];
+      const callers: Promise<void>[] = [];
       const startCaller = () => {
         const caller = completePendingPackageLifecycle({ packageRoot, runScript });
         void caller.catch(() => {});
@@ -72,11 +77,15 @@ describe("package lifecycle completion", () => {
         await waitForContention(startCaller());
         expect(calls).toEqual(["preinstall"]);
         releasePreinstall();
-        await expect(Promise.all(callers)).resolves.toEqual([true, false]);
+        await Promise.all(callers);
 
         void startCaller();
-        await expect(Promise.all(callers)).resolves.toEqual([true, false, false]);
+        await Promise.all(callers);
         expect(calls).toEqual(["preinstall", "postinstall"]);
+        expect(scriptPaths).toEqual([
+          path.join("scripts", "preinstall-package-manager-warning.mjs"),
+          path.join("scripts", "postinstall-bundled-plugins.mjs"),
+        ]);
       } finally {
         releasePreinstall();
         await Promise.allSettled(callers);
@@ -151,7 +160,7 @@ describe("package lifecycle completion", () => {
         expect(returned).not.toHaveBeenCalled();
         expect(contenderScript).not.toHaveBeenCalled();
         releasePost.resolve();
-        await expect(Promise.all(completions)).resolves.toEqual([true, false]);
+        await Promise.all(completions);
       } finally {
         releasePre.resolve();
         releasePost.resolve();
@@ -175,7 +184,7 @@ describe("package lifecycle completion", () => {
       });
       const first = completePendingPackageLifecycle({ packageRoot, runScript, timeoutMs: 1000 });
       const completion = Promise.allSettled([first]);
-      let second: Promise<boolean> | undefined;
+      let second: Promise<void> | undefined;
       let clock: MockInstance<() => number> | undefined;
       try {
         await started;
@@ -188,8 +197,8 @@ describe("package lifecycle completion", () => {
         expect(runScript.mock.calls.map(([script]) => script.name)).toEqual(["preinstall"]);
         clock.mockRestore();
         release();
-        await expect(first).resolves.toBe(true);
-        await expect(second).resolves.toBe(false);
+        await first;
+        await second;
       } finally {
         clock?.mockRestore();
         release();
@@ -225,9 +234,7 @@ describe("package lifecycle completion", () => {
           interrupted = false;
           runScript.mockClear();
         }
-        await expect(completePendingPackageLifecycle({ packageRoot, runScript })).resolves.toBe(
-          true,
-        );
+        await completePendingPackageLifecycle({ packageRoot, runScript });
         expect(runScript.mock.calls.map(([script]) => script.name)).toEqual([
           "preinstall",
           "postinstall",

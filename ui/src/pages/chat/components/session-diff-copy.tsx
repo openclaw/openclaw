@@ -2,6 +2,7 @@ import { handleCopyButton } from "../../../components/copy-button-state.ts";
 import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { MenuItem } from "../../../components/solid/menu.tsx";
+import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 
@@ -51,7 +52,9 @@ export function CopyRow(props: {
   return (
     <div class={["session-diff-menu__copy-row", { "is-command": props.command }]}>
       <span class="session-diff-menu__copy-label">{props.label}</span>
-      <code title={props.value}>{props.value}</code>
+      <code ref={createTextOverflow(() => props.value)} title={props.value}>
+        {props.value}
+      </code>
       <CopyButton
         ref={props.ref}
         text={props.value}

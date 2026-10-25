@@ -83,10 +83,10 @@ function holdModelBuild() {
   const entered = createDeferred();
   const release = createDeferred();
   pendingBuildReleases.push(release);
-  mocks.ensureOpenClawModelsJson.mockImplementationOnce(async (_config, agentDir) => {
+  mocks.ensureOpenClawModelsJson.mockImplementationOnce(async (_config, _agentDir) => {
     entered.resolve();
     await release.promise;
-    return { agentDir: String(agentDir), wrote: false };
+    return {};
   });
   return { entered, release };
 }

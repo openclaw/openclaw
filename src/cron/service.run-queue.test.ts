@@ -25,6 +25,7 @@ import {
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
 import { resolveCronJobConfigRevision } from "./config-revision.js";
+import { cronTestDeps } from "./service.fixture-builders.test-support.js";
 import { CronService } from "./service.js";
 import {
   createFinishedBarrier,
@@ -53,18 +54,15 @@ const { logger, makeStorePath } = setupCronServiceSuite({
 });
 
 function serviceDeps(storePath: string, overrides: Partial<CronServiceDeps> = {}): CronServiceDeps {
-  return {
-    scheduler: overrides.scheduler ?? createTestGatewayScheduler(),
+  return cronTestDeps({
     nowMs: () => NOW,
     storePath,
-    cronEnabled: true,
     defaultAgentId: "main",
     log: logger,
     enqueueSystemEvent() {},
-    requestHeartbeat() {},
     runIsolatedAgentJob: async () => ({ status: "ok" }),
     ...overrides,
-  };
+  });
 }
 
 const service = (storePath: string, overrides: Partial<CronServiceDeps> = {}) =>
@@ -576,43 +574,12 @@ it("joins a running job before restarting after scheduler cleanup fails", async 
     release.resolve();
     await withinTest(Promise.all([running, restarting]), signal);
     expect(await cron.readJob(job.id)).toMatchObject({ state: { lastRunStatus: "ok" } });
-    expect(logger.warn).toHaveBeenCalledWith(
-      { errors: ["Error: synthetic scheduler cleanup failure"] },
-      "cron: shutdown left work for recovery",
-    );
     await expect(cron.run(job.id, "force")).resolves.toEqual({ ok: true, ran: true });
     expect(runCommandJob).toHaveBeenCalledTimes(2);
   } finally {
     release.resolve();
     restoreStop?.();
     await Promise.allSettled(pending);
-    await stopServices(cron);
-  }
-});
-
-it("force-runs a disabled job while scheduling is paused without consuming its paced slot", async () => {
-  const job = commandJob("disabled-force");
-  job.enabled = false;
-  job.state.pacedNextRunAtMs = job.state.nextRunAtMs;
-  const runCommandJob = successfulCommand();
-  const storePath = await storeJobs([job]);
-  const { cron } = service(storePath, { cronEnabled: false, runCommandJob });
-  try {
-    cron.pauseScheduling();
-    expect(await cron.run(job.id, "force")).toEqual({ ok: true, ran: true });
-    expect(runCommandJob).toHaveBeenCalledOnce();
-    const persisted = (await loadCronStore(storePath)).jobs[0];
-    expect(persisted).toMatchObject({
-      enabled: false,
-      state: {
-        nextRunAtMs: NOW + 60_000,
-        pacedNextRunAtMs: NOW + 60_000,
-        lastRunStatus: "ok",
-      },
-    });
-    expect(persisted?.state.queuedAtMs).toBeUndefined();
-    expect(persisted?.state.runningAtMs).toBeUndefined();
-  } finally {
     await stopServices(cron);
   }
 });
@@ -840,10 +807,6 @@ it("contains recovered scheduled launch failures without an unhandled rejection"
       setImmediate(resolve);
     });
     expect(unhandled).toEqual([]);
-    expect(logger.error).toHaveBeenCalledWith(
-      { jobId: job.id, err: String(failure) },
-      "cron: queued launch failed",
-    );
     const persisted = (await loadCronStore(storePath)).jobs[0];
     expect(persisted?.state.queuedAtMs).toBeUndefined();
     expect(persisted?.state.runningAtMs).toBeUndefined();

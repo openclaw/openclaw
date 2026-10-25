@@ -618,9 +618,12 @@ describe("sidebar attention refresh ownership", () => {
         id: "selected",
         decision: "allow-once",
       });
+      await waitForFast(() =>
+        expect(element.querySelector<HTMLButtonElement>(decisionSelector)?.disabled).toBe(true),
+      );
       if (reopen) {
         element.dismissPanel();
-        flush();
+        await waitForFast(() => expect(issues(element, "panel")).toBeNull());
         trigger.click();
         await waitForFast(() =>
           expect(document.activeElement).toBe(issues(element, "panel__list")),

@@ -34,16 +34,6 @@ it("discovers the default account from a configured private-key SecretRef", () =
 
   expect(listBuzzAccountIds(cfg)).toEqual(["default"]);
 });
-it("defaults group access to allowlist", () => {
-  const cfg = buzzConfig({
-    relayUrl: "wss://buzz.example.com",
-    privateKey: PRIVATE_KEY,
-    groups: { "7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c": {} },
-  });
-
-  expect(resolveBuzzAccount({ cfg }).config.groupPolicy).toBe("allowlist");
-});
-
 it("isolates named identities and never fills missing fields from root credentials", () => {
   const cfg = rootWithAmbientCredentials({
     groupPolicy: "open",
@@ -78,6 +68,7 @@ it("treats an explicit default account as a complete identity boundary", () => {
     accountId: "default",
     name: "Explicit default",
     ...EMPTY_IDENTITY,
+    config: { groupPolicy: "allowlist" },
   });
 });
 

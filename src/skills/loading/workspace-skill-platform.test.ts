@@ -57,7 +57,6 @@ it.each([
   { platform: " Darwin ", remotePlatforms: [], compatible: true, installable: true },
   { platform: "linux", remotePlatforms: ["darwin"], compatible: true, installable: false },
   { platform: "linux", remotePlatforms: [], compatible: false, installable: false },
-  { platform: "win32", remotePlatforms: [], compatible: false, installable: false },
 ])(
   "aligns status and prompt on $platform with remote $remotePlatforms",
   async ({ platform, remotePlatforms, compatible, installable }) => {

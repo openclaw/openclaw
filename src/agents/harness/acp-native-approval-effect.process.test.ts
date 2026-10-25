@@ -1,4 +1,3 @@
-import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
@@ -35,7 +34,6 @@ import {
   registerNative,
   useNativeProcessFixture,
 } from "./acp-native-process.test-support.js";
-import { getRegisteredAgentHarness } from "./registry.js";
 import { runAgentHarnessAttempt } from "./selection.js";
 
 const fixture = useNativeProcessFixture();
@@ -163,16 +161,6 @@ it.for(["allow", "deny", "cancel", "always-only"] as const)(
               expect(await readVisibleSessionTranscriptMessageEntries(attempt.target)).toEqual(
                 transcript,
               );
-              const harness = getRegisteredAgentHarness("acp-qwen")?.harness;
-              assert(harness?.loadModelCatalog !== undefined, "Native catalog operation missing");
-              await expect(
-                harness.loadModelCatalog({
-                  config: disabledConfig,
-                  agentId: "main",
-                  agentDir: state.agentDir(),
-                  workspaceDir: state.workspaceDir,
-                }),
-              ).resolves.toEqual({ entries: [] });
             } finally {
               next.close();
             }

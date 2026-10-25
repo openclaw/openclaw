@@ -28,6 +28,16 @@ function cleanupSession(session: WizardSession, release: () => void = () => {}) 
   });
 }
 
+async function expectTerminal(session: WizardSession, status = "done") {
+  expect(await session.next()).toMatchObject({ done: true, status });
+}
+
+function textSession(options: Parameters<WizardPrompter["text"]>[0] = { message: "Name" }) {
+  return new WizardSession(async (prompter) => {
+    await prompter.text(options);
+  });
+}
+
 describe("WizardSession", () => {
   test.each([true, false, "false"])(
     "only literal true confirms a wire answer (%j)",
@@ -58,16 +68,21 @@ describe("WizardSession", () => {
     expect(wizardStepAwaitsInput({ id: "step", type, executor })).toBe(expected);
   });
 
-  test("steps progress in order", async () => {
+  test("steps progress in order through a spread prompter with a note adapter", async () => {
     const session = new WizardSession(async (prompter) => {
-      await prompter.note("Welcome");
-      const name = await prompter.text({ message: "Name" });
-      await prompter.note(`Hello ${name}`);
+      const adapted: WizardPrompter = { ...prompter, note: async () => {} };
+      await adapted.note("Hidden install details");
+      await adapted.intro("Welcome");
+      const name = await adapted.text({ message: "Name" });
+      await prompter.note(`Hello ${name}`, "Greeting");
+      await adapted.outro("Finished");
     });
+    cleanupSession(session);
 
     const first = await session.next();
     expect(first.done).toBe(false);
     expect(first.step?.type).toBe("note");
+    expect(first.step).toMatchObject({ title: "Welcome", message: "", executor: "client" });
 
     const secondPeek = await session.next();
     expect(secondPeek.step?.id).toBe(first.step?.id);
@@ -82,8 +97,21 @@ describe("WizardSession", () => {
 
     const third = await session.next();
     expect(third.step?.type).toBe("note");
+    expect(third.step).toMatchObject({
+      title: "Greeting",
+      message: "Hello Peter",
+      executor: "client",
+    });
 
     await session.answer(expectDefined(third.step, "wizard step").id, null);
+
+    const last = await nextStep(session, {
+      type: "note",
+      title: "Done",
+      message: "Finished",
+      executor: "client",
+    });
+    await session.answer(last.id, null);
 
     const done = await session.next();
     expect(done.done).toBe(true);
@@ -95,9 +123,9 @@ describe("WizardSession", () => {
       await prompter.plain?.('{"ok":true}');
     });
     const step = await nextStep(session, { type: "note", message: '{"ok":true}', format: "plain" });
+    expect((await session.next()).step?.id).toBe(step.id);
     await session.answer(step.id, null);
-    const done = await session.next();
-    expect(done.done).toBe(true);
+    await expectTerminal(session);
   });
 
   test.each(["prepared", "activated", "utility"] as const)(
@@ -216,7 +244,7 @@ describe("WizardSession", () => {
       }
       callback.resolve();
       await session.whenSettled();
-      expect(await session.next()).toMatchObject({ done: true, status });
+      await expectTerminal(session, status);
     },
   );
 
@@ -250,23 +278,13 @@ describe("WizardSession", () => {
       },
     });
     await session.whenSettled();
-    expect(await session.next()).toMatchObject({ done: true, status: "done" });
+    await expectTerminal(session);
   });
 
   test.each([
-    {
-      name: "invalid scalar",
-      invalid: "banana",
-      value: "18789",
-      error: "Enter the expected port",
-    },
-    {
-      name: "non-scalar",
-      invalid: ["token"],
-      value: "token",
-      error: "wizard: text answer must be a scalar value",
-    },
-  ])("keeps a text step pending after an $name answer", async ({ invalid, value, error }) => {
+    ["banana", "18789", "Enter the expected port"],
+    [["token"], "token", "wizard: text answer must be a scalar value"],
+  ] as const)("keeps a text step pending after answer %j", async (invalid, value, error) => {
     const resolved = vi.fn();
     const session = new WizardSession(async (prompter) => {
       resolved(
@@ -277,28 +295,13 @@ describe("WizardSession", () => {
       );
     });
     const step = await nextStep(session);
+    expect(step.sensitive).toBeUndefined();
     await expect(session.answer(step.id, invalid)).resolves.toBe(error);
     expect(session.getStatus()).toBe("running");
     expect((await session.next()).step?.id).toBe(step.id);
     await session.answer(step.id, value);
     expect((await session.next()).status).toBe("done");
     expect(resolved).toHaveBeenCalledWith(value);
-  });
-
-  test("cancel marks session and unblocks", async () => {
-    const session = new WizardSession(async (prompter) => {
-      await prompter.text({ message: "Name" });
-    });
-
-    const step = await session.next();
-    expect(step.step?.type).toBe("text");
-
-    session.cancel();
-
-    const done = await session.next();
-    expect(done.done).toBe(true);
-    expect(done.status).toBe("cancelled");
-    expect(session.signal.aborted).toBe(true);
   });
 
   test("returns cancellation when progress is retired before a waiting next resumes", async () => {
@@ -367,7 +370,7 @@ describe("WizardSession", () => {
       const step = await nextStep(session);
       finish.resolve();
       await session.whenSettled();
-      expect(await session.next()).toMatchObject({ done: true, status });
+      await expectTerminal(session, status);
       await expect(session.answer(step.id, "late-code")).rejects.toThrow("no pending step");
       await expect(promptFinished.promise).resolves.toMatchObject({ name: "WizardCancelledError" });
     },
@@ -424,14 +427,11 @@ describe("WizardSession", () => {
   });
 
   test("does not lose terminal completion when the last answer finishes the runner immediately", async () => {
-    const session = new WizardSession(async (prompter) => {
-      await prompter.text({ message: "Token" });
-    });
+    const session = textSession({ message: "Token" });
     const step = await nextStep(session, { type: "text" });
     await session.answer(step.id, "ok");
     await Promise.resolve();
-    const done = await session.next();
-    expect(done).toMatchObject({ done: true, status: "done" });
+    await expectTerminal(session);
   });
 
   test("forwards sensitive flag to the emitted text step", async () => {

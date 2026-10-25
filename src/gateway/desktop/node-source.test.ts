@@ -143,17 +143,12 @@ it.each(["release", "stop"] as const)(
       return result;
     });
     const { controller, identity } = createRequester();
-    let current = true;
-    const owner = { ...identity, connId: "desktop-panel-client", isCurrent: () => current };
+    const owner = { ...identity, connId: "desktop-panel-client" };
     try {
       const observed = await fixture.observeAttached(owner);
       const mintedRequester = mint.mock.calls[0]?.[0].requester;
       expect(mintedRequester).toBe(owner);
-      expect(mintedRequester?.isCurrent()).toBe(true);
-      current = false;
-      expect(mintedRequester?.isCurrent()).toBe(false);
       expect(controller.signal.aborted).toBe(false);
-      current = true;
       const retiring = (
         firstAction === "release"
           ? observeBridge.releaseDesktopObserverToken(observed.wsPath, owner)

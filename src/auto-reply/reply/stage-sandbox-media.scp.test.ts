@@ -12,6 +12,7 @@ import { createHostSandboxFsBridge } from "../../agents/test-helpers/host-sandbo
 import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import * as globals from "../../globals.js";
+import { listDirectoryTreeStrict } from "../../infra/directory-walk.js";
 import * as mediaRoots from "../../media/channel-inbound-roots.js";
 import * as mediaReference from "../../media/media-reference.js";
 import { getMediaDir } from "../../media/store.js";
@@ -43,6 +44,13 @@ const SUCCESS = {
   killed: false,
   termination: "exit",
 } satisfies Awaited<ReturnType<typeof processExec.runCommandWithTimeout>>;
+
+function mockSuccessfulScp(body: string) {
+  return vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation(async (argv) => {
+    await fs.writeFile(argv.at(-1)!, body);
+    return SUCCESS;
+  });
+}
 
 const hasUnpairedUtf16Surrogate = (text: string): boolean =>
   /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(text);
@@ -295,16 +303,10 @@ describe("stageSandboxMedia SCP", () => {
   it("stages bytes and both contexts through the strict bounded SCP command", async () => {
     await withOpenClawTestState({ label: "scp-stage" }, async (state) => {
       const params = remoteStageParams(state);
-      let download = "";
-      const runScp = vi
-        .spyOn(processExec, "runCommandWithTimeout")
-        .mockImplementation(async (argv) => {
-          download = argv.at(-1)!;
-          await fs.writeFile(download, "synthetic attachment bytes");
-          return SUCCESS;
-        });
+      const runScp = mockSuccessfulScp("synthetic attachment bytes");
 
       const result = await stageSandboxMedia(params);
+      const download = runScp.mock.calls.at(-1)![0].at(-1)!;
 
       expect(runScp).toHaveBeenCalledExactlyOnceWith(
         [
@@ -340,16 +342,10 @@ describe("stageSandboxMedia SCP", () => {
       await withEmptyBundledPlugins(state, async () => {
         publishInstalledOwnerSnapshot(params.cfg, params.pluginDir);
         try {
-          let download = "";
-          const runScp = vi
-            .spyOn(processExec, "runCommandWithTimeout")
-            .mockImplementation(async (argv) => {
-              download = argv.at(-1)!;
-              await fs.writeFile(download, "installed channel bytes");
-              return SUCCESS;
-            });
+          const runScp = mockSuccessfulScp("installed channel bytes");
 
           const result = await stageSandboxMedia(params);
+          const download = runScp.mock.calls.at(-1)![0].at(-1)!;
 
           expect(runScp).toHaveBeenCalledExactlyOnceWith(
             [
@@ -424,12 +420,7 @@ describe("stageSandboxMedia SCP", () => {
       await withEmptyBundledPlugins(state, async () => {
         publishInstalledOwnerSnapshot(enabled.cfg, enabled.pluginDir);
         try {
-          const runScp = vi
-            .spyOn(processExec, "runCommandWithTimeout")
-            .mockImplementation(async (argv) => {
-              await fs.writeFile(argv.at(-1)!, "first transfer");
-              return SUCCESS;
-            });
+          const runScp = mockSuccessfulScp("first transfer");
 
           expect((await stageSandboxMedia(enabled)).staged.size).toBe(1);
           expect(runScp).toHaveBeenCalledTimes(1);
@@ -569,7 +560,11 @@ describe("stageSandboxMedia SCP", () => {
       expect(log).toHaveBeenCalledWith(
         `Blocking attempt to stage media from outside media directory: ${sourcePath}`,
       );
-      expect(await fs.readdir(state.workspaceDir, { recursive: true })).toEqual([]);
+      expect(
+        (await listDirectoryTreeStrict(state.workspaceDir)).map(
+          (walkEntry) => walkEntry.relativePath,
+        ),
+      ).toEqual([]);
       expect([ctx, sessionCtx]).toEqual(before);
     });
   });
@@ -579,12 +574,7 @@ describe("stageSandboxMedia SCP", () => {
       const controller = new AbortController();
       const params = remoteStageParams(state, controller.signal);
       const before = structuredClone([params.ctx, params.sessionCtx]);
-      const runScp = vi
-        .spyOn(processExec, "runCommandWithTimeout")
-        .mockImplementation(async (argv) => {
-          await fs.writeFile(argv.at(-1)!, "unexpected transfer");
-          return SUCCESS;
-        });
+      const runScp = mockSuccessfulScp("unexpected transfer");
       const reason = "synthetic cancellation before staging";
       controller.abort(reason);
 
@@ -665,7 +655,9 @@ describe("stageSandboxMedia SCP", () => {
 
       expect(resolver).toHaveBeenCalledWith(alias);
       // Disk staging may already be complete; cancellation forbids publishing its facts.
-      const stagedFiles = await fs.readdir(state.workspaceDir, { recursive: true });
+      const stagedFiles = (await listDirectoryTreeStrict(state.workspaceDir)).map(
+        (walkEntry) => walkEntry.relativePath,
+      );
       const copied = stagedFiles.find((file) => file.endsWith("input-alias-source.txt"));
       expect(copied).toBeDefined();
       expect(await fs.readFile(path.join(state.workspaceDir, copied!), "utf8")).toBe(

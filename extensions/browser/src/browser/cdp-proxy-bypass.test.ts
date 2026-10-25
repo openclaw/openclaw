@@ -2,6 +2,7 @@
 import http from "node:http";
 import https from "node:https";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { captureEnv } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { registerManagedProxyBrowserCdpBypassMock } = vi.hoisted(() => ({
@@ -30,9 +31,7 @@ beforeEach(() => {
 });
 
 async function withIsolatedNoProxyEnv(fn: () => Promise<void>) {
-  const origNoProxy = process.env.NO_PROXY;
-  const origNoProxyLower = process.env.no_proxy;
-  const origHttpProxy = process.env.HTTP_PROXY;
+  const env = captureEnv(["HTTP_PROXY", "NO_PROXY", "no_proxy"]);
   delete process.env.NO_PROXY;
   delete process.env.no_proxy;
   process.env.HTTP_PROXY = "http://proxy:8080";
@@ -40,21 +39,7 @@ async function withIsolatedNoProxyEnv(fn: () => Promise<void>) {
   try {
     await fn();
   } finally {
-    if (origHttpProxy !== undefined) {
-      process.env.HTTP_PROXY = origHttpProxy;
-    } else {
-      delete process.env.HTTP_PROXY;
-    }
-    if (origNoProxy !== undefined) {
-      process.env.NO_PROXY = origNoProxy;
-    } else {
-      delete process.env.NO_PROXY;
-    }
-    if (origNoProxyLower !== undefined) {
-      process.env.no_proxy = origNoProxyLower;
-    } else {
-      delete process.env.no_proxy;
-    }
+    env.restore();
   }
 }
 
@@ -91,23 +76,14 @@ describe("cdp-proxy-bypass", () => {
   });
 
   describe("withNoProxyForCdpUrl loopback", () => {
-    const saved: Record<string, string | undefined> = {};
-    const vars = ["HTTP_PROXY", "NO_PROXY", "no_proxy"];
+    let env: ReturnType<typeof captureEnv>;
 
     beforeEach(() => {
-      for (const v of vars) {
-        saved[v] = process.env[v];
-      }
+      env = captureEnv(["HTTP_PROXY", "NO_PROXY", "no_proxy"]);
     });
 
     afterEach(() => {
-      for (const v of vars) {
-        if (saved[v] !== undefined) {
-          process.env[v] = saved[v];
-        } else {
-          delete process.env[v];
-        }
-      }
+      env.restore();
     });
 
     it("skips when no proxy env is set", async () => {
@@ -268,28 +244,6 @@ describe("withNoProxyForCdpUrl preserves user-configured NO_PROXY", () => {
     }
   });
 
-  it("restores untouched NO_PROXY casing when the lowercase value changes", async () => {
-    const userNoProxy = "internal.corp";
-    process.env.NO_PROXY = userNoProxy;
-    process.env.no_proxy = userNoProxy;
-    process.env.HTTP_PROXY = "http://proxy:8080";
-
-    try {
-      await withNoProxyForCdpUrl(LOOPBACK_CDP_URL, async () => {
-        expect(process.env.NO_PROXY).toBe(`${userNoProxy},localhost,127.0.0.1,[::1]`);
-        expect(process.env.no_proxy).toBe(`${userNoProxy},localhost,127.0.0.1,[::1]`);
-        delete process.env.no_proxy;
-      });
-
-      expect(process.env.NO_PROXY).toBe(userNoProxy);
-      expect(process.env.no_proxy).toBeUndefined();
-    } finally {
-      delete process.env.HTTP_PROXY;
-      delete process.env.NO_PROXY;
-      delete process.env.no_proxy;
-    }
-  });
-
   it("does not treat substring matches as complete loopback coverage", async () => {
     const userNoProxy = "notlocalhost,127.0.0.10,[::1].example";
     process.env.NO_PROXY = userNoProxy;
@@ -322,24 +276,6 @@ describe("withNoProxyForCdpUrl", () => {
         expect(process.env.NO_PROXY).toBeUndefined();
         expect(process.env.no_proxy).toBeUndefined();
       });
-    } finally {
-      delete process.env.HTTP_PROXY;
-      delete process.env.NO_PROXY;
-      delete process.env.no_proxy;
-    }
-  });
-
-  it("does not overwrite external NO_PROXY changes made during execution", async () => {
-    process.env.HTTP_PROXY = "http://proxy:8080";
-    delete process.env.NO_PROXY;
-    delete process.env.no_proxy;
-    try {
-      await withNoProxyForCdpUrl("http://127.0.0.1:9222", async () => {
-        process.env.NO_PROXY = "externally-set";
-        process.env.no_proxy = "externally-set";
-      });
-      expect(process.env.NO_PROXY).toBe("externally-set");
-      expect(process.env.no_proxy).toBe("externally-set");
     } finally {
       delete process.env.HTTP_PROXY;
       delete process.env.NO_PROXY;

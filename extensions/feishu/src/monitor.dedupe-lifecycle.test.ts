@@ -48,7 +48,7 @@ const mocks = vi.hoisted(() => ({
   warmup: vi.fn(),
   claim: vi.fn(),
   menu: vi.fn(),
-  handleMessage: vi.fn(),
+  handleMessage: vi.fn<typeof handleFeishuMessage>(),
   parseMessage: vi.fn(),
   stopBindings: vi.fn(),
   createBindings: vi.fn(),

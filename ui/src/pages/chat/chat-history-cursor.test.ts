@@ -14,7 +14,7 @@ import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { retireDeliveredQueuedUserTurn } from "./chat-send-support.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
-import { admitStoredChatComposerQueueItem } from "./composer-persistence.ts";
+import { admitStoredChatComposerQueueItemResult } from "./composer-queue-persistence.ts";
 import { getChatSessionProjection, reduceChatSessionProjection } from "./history-merge.ts";
 import { applySessionMessagePayload } from "./session-message-apply.ts";
 import {
@@ -197,12 +197,12 @@ describe("chat history cursor revalidation", () => {
       sender: { id: "bob-profile", name: "Bob Proof" },
     };
     expect(
-      admitStoredChatComposerQueueItem(
+      admitStoredChatComposerQueueItemResult(
         state,
         captureChatOutboxAdmission(state, sessionKey, queued.agentId),
         queued,
       ),
-    ).toBe(true);
+    ).toBe("admitted");
     state.chatQueue = [queued];
     const renderedBobMessages = () =>
       buildChatItems({

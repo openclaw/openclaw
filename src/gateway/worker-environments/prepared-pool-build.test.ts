@@ -1,5 +1,4 @@
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   IDLE_TIMEOUT_MS,
   usePreparedPoolFixture,
@@ -19,9 +18,7 @@ it.each(["new build", "promoted reserve"] as const)(
       admission === "promoted reserve"
         ? await f.seed("reserve-b", { reserve: true, projectKey, preparationKey })
         : undefined;
-    const entered = createDeferred();
-    const release = createDeferred();
-    f.releases.push(() => release.resolve());
+    const { entered, release } = f.gate();
     const reconcile = vi.fn<PoolOptions["reconcile"]>(async () => {});
     const prepareIntent = vi.fn<PoolOptions["prepareIntent"]>();
     const owner = f.pool({
@@ -124,35 +121,25 @@ it("records build demand for subsequent ordinary reserve refill", async () => {
   );
 });
 
-it.each([
-  [
-    "expiry",
-    (): void => {
-      f.nowMs += IDLE_TIMEOUT_MS;
-    },
-  ],
-  [
-    "removed profile",
-    (): void => {
-      delete f.config.cloudWorkers!.profiles!.development;
-    },
-  ],
-  [
-    "replaced provider",
-    (): void => {
-      f.developmentProfile.provider = "other-provider";
-    },
-  ],
-  [
-    "global cap",
-    (): void => {
-      f.config.cloudWorkers!.preparedPool = { maxTotal: 0 };
-    },
-  ],
-] as const)("retires an unfinished build on %s", async (_invalidation, invalidate) => {
-  f.developmentProfile.readyWorkers = 0;
-  const build = await f.seed("build", { purpose: "build" });
-  invalidate();
-  await f.schedule(f.pool());
-  expect(f.store.get(build.environmentId)?.destroyRequestedAtMs).toBe(f.nowMs);
-});
+it.each(["expiry", "removed profile", "replaced provider", "global cap"] as const)(
+  "retires an unfinished build on %s",
+  async (invalidation) => {
+    f.developmentProfile.readyWorkers = 0;
+    const build = await f.seed("build", { purpose: "build" });
+    switch (invalidation) {
+      case "expiry":
+        f.nowMs += IDLE_TIMEOUT_MS;
+        break;
+      case "removed profile":
+        delete f.config.cloudWorkers!.profiles!.development;
+        break;
+      case "replaced provider":
+        f.developmentProfile.provider = "other-provider";
+        break;
+      case "global cap":
+        f.config.cloudWorkers!.preparedPool = { maxTotal: 0 };
+    }
+    await f.schedule(f.pool());
+    expect(f.store.get(build.environmentId)?.destroyRequestedAtMs).toBe(f.nowMs);
+  },
+);

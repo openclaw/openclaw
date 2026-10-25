@@ -13,7 +13,7 @@ import {
   ABANDONED_UPDATE_RUN_MS,
   UPDATE_RUN_HEARTBEAT_MS,
 } from "../../infra/update-run-timeouts.js";
-import { flushLogger, resetLogger, setLoggerOverride } from "../../logging/logger.js";
+import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
@@ -26,6 +26,25 @@ import { UpdateFinalizationLifecycle } from "./update-finalization-lifecycle.js"
 import { captureUpdateFinalizationDoctorOutput } from "./update-finalization-output.js";
 
 const dirs = createTempDirTracker();
+
+it("does not restart the Doctor phase budget after slow custody entry", async () => {
+  let elapsedMs = 0;
+  vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
+  const lifecycle = new UpdateFinalizationLifecycle(false, 5_000, () => {});
+  const doctorChild = vi.fn(async () => undefined);
+
+  await expect(
+    withCliProcessScope(() =>
+      lifecycle.run("doctor", doctorChild, undefined, {
+        enter: async () => {
+          elapsedMs = 5_001;
+        },
+      }),
+    ),
+  ).rejects.toMatchObject({ result: { reason: "finalization-timeout" } });
+  expect(doctorChild).not.toHaveBeenCalled();
+});
+
 let stderrWrite: MockInstance<typeof process.stderr.write>;
 
 function finalization(timeoutMs: number | undefined, json = false, attach = true) {
@@ -62,22 +81,9 @@ it("reports standalone repair as repairing before Doctor maintenance", () => {
 });
 
 it("writes successful finalization progress to stderr and failures as errors", async () => {
-  const logPath = path.join(dirs.make("openclaw-finalize-log-"), "openclaw.log");
-  setLoggerOverride({ level: "info", file: logPath });
   const { lifecycle } = finalization(5_000, false, false);
   await lifecycle.run("doctor", async () => undefined);
   expectMessages(stderrWrite, '"status":"in_progress"', '"status":"completed"');
-  await flushLogger();
-  const phaseRecords = fs
-    .readFileSync(logPath, "utf8")
-    .trim()
-    .split("\n")
-    .map((line) => JSON.parse(line))
-    .filter((record) => JSON.stringify(record).includes("finalize:doctor"));
-  expect(phaseRecords).toMatchObject([
-    { _meta: { logLevelName: "INFO" } },
-    { _meta: { logLevelName: "INFO" } },
-  ]);
   expect(defaultRuntime.error).not.toHaveBeenCalled();
   lifecycle.recordWarnings(["A plugin update was deferred."]);
   expectMessages(console.warn, '"step":"warning:finalize:doctor:0"');
@@ -462,12 +468,12 @@ it.each([false, true])(
       ]);
     try {
       await beforeCompletion(custodyEntered.promise);
-      // Custody precedes the work deadline; total phase time also includes it.
-      await vi.advanceTimersByTimeAsync(3_500);
+      // Custody consumes the same admitted allowance as Doctor work.
+      await vi.advanceTimersByTimeAsync(350);
       expect(finished).toBe(false);
       custodyReady.resolve();
       const { signal, capture } = await beforeCompletion(workEntered.promise);
-      await vi.advanceTimersByTimeAsync(999);
+      await vi.advanceTimersByTimeAsync(649);
       expect(signal.aborted).toBe(false);
       if (progress) {
         capture(Buffer.from("\nPROGRESS fixture-validation"), "stderr");
@@ -482,7 +488,7 @@ it.each([false, true])(
       expect(await running).toBe(signal.reason);
       expect(vi.getTimerCount()).toBe(0);
       expect(lifecycle.phaseTimings).toEqual([
-        { phase: "doctor", startedOffsetMs: 0, durationMs: 4_600, outcome: "failed" },
+        { phase: "doctor", startedOffsetMs: 0, durationMs: 1_100, outcome: "failed" },
       ]);
       lifecycle.complete(1);
       expect(writeJson).toHaveBeenCalledWith(

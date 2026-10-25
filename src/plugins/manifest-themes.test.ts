@@ -78,6 +78,35 @@ function expectRejected(
   });
 }
 
+describe("manifest theme metadata", () => {
+  it.each([null, []])("rejects non-record entries: %j", (entry) => {
+    expect(normalizeManifestThemes([entry], "theme-pack")).toEqual({
+      ok: false,
+      error: "themes[0] must be an object",
+    });
+  });
+
+  it.each([{ name: "name\u0000" }, { description: "description\u007f" }])(
+    "rejects ASCII controls: %j",
+    (metadata) => {
+      expect(normalizeManifestThemes([{ ...declaration, ...metadata }], "theme-pack")).toEqual({
+        ok: false,
+        error: "themes[0] requires a unique safe id, name, description, and JSON source",
+      });
+    },
+  );
+
+  it("retains C1 and Unicode text while trimming surrounding spaces", () => {
+    const metadata = { name: "\u0080🦞\ud800", description: "description\u009f" };
+    expect(
+      normalizeManifestThemes(
+        [{ ...declaration, ...metadata, name: ` ${metadata.name} ` }],
+        "theme-pack",
+      ),
+    ).toEqual({ ok: true, themes: [{ ...declaration, ...metadata }] });
+  });
+});
+
 describe("manifest theme artwork", () => {
   const hats = Object.fromEntries(
     Array.from({ length: 8 }, (_, i) => [`${i}${"a".repeat(31)}`, "hat.svg"]),

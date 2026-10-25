@@ -15,8 +15,8 @@ import {
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { listOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.test-support.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { clearCronJobActive, markCronJobActive } from "./active-jobs.js";
+import { cronTestDeps, cronTestInput } from "./service.fixture-builders.test-support.js";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
 import * as cronCleanup from "./service/locked.js";
@@ -77,15 +77,10 @@ async function setup(initialSession?: string, options: JobOptions = {}) {
   const target = { agentId: "main", storePath: sessionStorePath };
   const createCron = () =>
     new CronService({
-      scheduler: createTestGatewayScheduler(),
-      storePath,
-      cronEnabled: true,
+      ...cronTestDeps({ storePath, nowMs: undefined }),
       defaultAgentId: "main",
       resolveSessionStorePath: () => sessionStorePath,
       log: logger,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
   const read = (sessionKey: string) => loadExactSessionEntry({ ...target, sessionKey });
   const write = (sessionKey: string, sessionId: string) => {
@@ -104,16 +99,14 @@ async function setup(initialSession?: string, options: JobOptions = {}) {
 }
 
 function addJob(cron: CronService, id: string, overrides: JobOptions = {}) {
-  return cron.add({
-    id,
-    name: id,
-    enabled: true,
-    schedule: { kind: "every", everyMs: 60_000 },
-    sessionTarget: "isolated",
-    wakeMode: "next-heartbeat",
-    payload: { kind: "agentTurn", message: "work" },
-    ...overrides,
-  });
+  return cron.add(
+    cronTestInput({
+      id,
+      name: id,
+      payload: { kind: "agentTurn", message: "work" },
+      ...overrides,
+    }),
+  );
 }
 
 describe("CronService.remove session cleanup", () => {

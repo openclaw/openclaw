@@ -22,6 +22,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createPresenceRecipientProjection } from "./presence-projection.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import { makeClient as makePresenceClient } from "./server-broadcast.test-helpers.js";
+import { broadcastFor as broadcaster } from "./server-broadcast.test-support.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
 import { createTranscriptUpdateBroadcastHandler } from "./server-session-events.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
@@ -67,16 +68,6 @@ const profile = (profileId: string, displayName: string | null = null, updatedAt
   avatarRevision: "1",
   hasAvatar: false,
 });
-
-function broadcaster(
-  peers: ReturnType<typeof makeClient>[],
-  options: Omit<Parameters<typeof createGatewayBroadcaster>[0], "clients"> = {},
-) {
-  return createGatewayBroadcaster({
-    clients: new GatewayClientRegistry(peers.map(({ client }) => client)),
-    ...options,
-  });
-}
 
 async function seedSession(
   sessionKey: string,

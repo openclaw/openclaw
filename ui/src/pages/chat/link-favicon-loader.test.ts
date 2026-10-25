@@ -1,11 +1,77 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { hydrateLinkFavicons, resolveChatLinkFaviconFetcher } from "./link-favicon-loader.ts";
+import {
+  hydrateLinkFavicons,
+  releaseLinkFavicons,
+  resolveChatLinkFaviconFetcher,
+} from "./link-favicon-loader.ts";
 
 afterEach(() => {
+  releaseLinkFavicons(document.body);
   document.body.replaceChildren();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   vi.useRealTimers();
+});
+
+it("defers offscreen links and releases their shared URL after the last image leaves", async () => {
+  const enter = new Map<Element, () => void>();
+  vi.stubGlobal(
+    "IntersectionObserver",
+    class implements IntersectionObserver {
+      readonly root = null;
+      readonly rootMargin = "240px 0px";
+      readonly scrollMargin = "0px";
+      readonly thresholds = [0];
+      constructor(private callback: IntersectionObserverCallback) {}
+      observe(element: Element) {
+        enter.set(element, () => {
+          const rect = element.getBoundingClientRect();
+          this.callback(
+            [
+              {
+                target: element,
+                isIntersecting: true,
+                intersectionRatio: 1,
+                boundingClientRect: rect,
+                intersectionRect: rect,
+                rootBounds: rect,
+                time: 0,
+              },
+            ],
+            this,
+          );
+        });
+      }
+      unobserve(element: Element) {
+        enter.delete(element);
+      }
+      disconnect() {}
+      takeRecords() {
+        return [];
+      }
+    },
+  );
+  const first = appendPlaceholder();
+  const second = appendPlaceholder();
+  const fetcher = vi.fn().mockResolvedValue("blob:visible-favicon");
+  const revoke = vi.spyOn(URL, "revokeObjectURL");
+  hydrateLinkFavicons(document.body, fetcher);
+  expect(fetcher).not.toHaveBeenCalled();
+  enter.get(first)?.();
+  await vi.waitFor(() => expect(first.src).toBe("blob:visible-favicon"));
+  enter.get(second)?.();
+  expect(second.src).toBe(first.src);
+  expect(fetcher).toHaveBeenCalledOnce();
+  const remounted = appendPlaceholder();
+  hydrateLinkFavicons(document.body, fetcher);
+  expect(remounted.src).toBe(first.src);
+  expect(enter.has(remounted)).toBe(false);
+  first.remove();
+  hydrateLinkFavicons(document.body, fetcher);
+  expect(revoke).not.toHaveBeenCalled();
+  releaseLinkFavicons(document.body);
+  expect(revoke).toHaveBeenCalledExactlyOnceWith("blob:visible-favicon");
+  expect(second.hasAttribute("src")).toBe(false);
 });
 
 function appendPlaceholder(): HTMLImageElement {
@@ -35,6 +101,7 @@ it("shares a hostname miss across transcript links and later renders", async () 
 
   const later = appendPlaceholder();
   hydrateLinkFavicons(document.body, resolveChatLinkFaviconFetcher({ ...localState }));
+  await vi.advanceTimersByTimeAsync(0);
   expect(later.dataset.linkFaviconState).toBe("failed");
   expect(fetchMock).toHaveBeenCalledOnce();
 });

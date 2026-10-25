@@ -9,6 +9,7 @@ import { makeChatHost } from "./chat-host.test-support.ts";
 import { createTestTranscript } from "./chat-view.test-helpers.ts";
 import { mountChatThread } from "./components/chat-thread.test-support.ts";
 import {
+  flushDeferredRowPrune,
   installTranscriptDomMocks,
   resetTranscriptTestDom,
   threadProps,
@@ -82,6 +83,7 @@ describe("forwarded avatar publication", () => {
       };
       try {
         rerender();
+        await flushDeferredRowPrune();
         const researchRow = expectDefined(
           container.querySelector('[data-entry-id="report-research"]'),
           "forwarded report",

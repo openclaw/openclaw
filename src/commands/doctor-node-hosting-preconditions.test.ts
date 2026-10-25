@@ -153,16 +153,14 @@ describe("node-hosting preconditions", () => {
   );
 
   it.each([
-    {
-      name: "device-pair is explicitly disabled",
-      cfg: {
-        plugins: { entries: { "device-pair": { enabled: false } } },
-      },
-      requirement: "node-onboarding-plugin",
-    },
-    {
-      name: "every configured agent resolves to an incompatible runtime",
-      cfg: {
+    [
+      "device-pair is explicitly disabled",
+      { plugins: { entries: { "device-pair": { enabled: false } } } },
+      "node-onboarding-plugin",
+    ],
+    [
+      "every configured agent resolves to an incompatible runtime",
+      {
         agents: {
           ownership: "explicit",
           entries: {
@@ -171,11 +169,11 @@ describe("node-hosting preconditions", () => {
           },
         },
       },
-      requirement: "device-session-runtime",
-    },
-  ] satisfies Array<{ name: string; cfg: OpenClawConfig; requirement: string }>)(
-    "warns when $name",
-    async ({ cfg, requirement }) => {
+      "device-session-runtime",
+    ],
+  ] satisfies Array<[string, OpenClawConfig, string]>)(
+    "warns when %s",
+    async (_name, cfg, requirement) => {
       expect(
         (await findingsFor({ ...healthyBase, ...cfg })).map((finding) => finding.requirement),
       ).toContain(requirement);

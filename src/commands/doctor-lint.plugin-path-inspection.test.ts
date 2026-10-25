@@ -10,12 +10,13 @@ import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clearHealthChecksForTest } from "../flows/health-check-registry.js";
 import { parseUpdateDoctorLintReport } from "../infra/update-doctor-lint.js";
-import * as pluginDiscovery from "../plugins/discovery.js";
 import { discoverConfiguredPluginLoadPaths } from "../plugins/discovery.js";
 import * as manifestRegistry from "../plugins/manifest-registry.js";
+import * as pluginCacheFiles from "../plugins/plugin-cache-files.js";
 import { resetPluginCache } from "../plugins/plugin-cache.js";
 import * as exec from "../process/exec.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { runDoctorLintCli } from "./doctor-lint.js";
 import { maybeRepairInvalidPluginConfig } from "./doctor/shared/invalid-plugin-config.js";
 import { inspectPluginMigrationAvailability } from "./doctor/shared/plugin-migration-availability.js";
@@ -178,16 +179,17 @@ it.skipIf(process.platform === "win32").each(blockedPaths)(
     if (block === "world-writable") {
       fs.chmodSync(pluginPath, 0o777);
     } else {
-      // Override only discovery's invoking UID: spoofing process.getuid also changes
-      // unrelated secure-temp admission and does not create a real second OS user.
-      const discoverAll = pluginDiscovery.discoverOpenClawPlugins;
-      const discoverConfigured = pluginDiscovery.discoverConfiguredPluginLoadPaths;
-      vi.spyOn(pluginDiscovery, "discoverOpenClawPlugins").mockImplementation((params) =>
-        discoverAll({ ...params, ownershipUid: ownerUid + 1 }),
-      );
-      vi.spyOn(pluginDiscovery, "discoverConfiguredPluginLoadPaths").mockImplementation((params) =>
-        discoverConfigured({ ...params, ownershipUid: ownerUid + 1 }),
-      );
+      // Keep unrelated secure-temp authority real while observing a foreign-owned plugin.
+      const pluginRealPath = fs.realpathSync(pluginPath);
+      const stat = pluginCacheFiles.pluginCacheStatSync;
+      vi.spyOn(pluginCacheFiles, "pluginCacheStatSync").mockImplementation((...args) => {
+        const observed = stat(...args);
+        if (observed && (args[0] === pluginPath || args[0] === pluginRealPath)) {
+          observed.uid = ownerUid + 1;
+        }
+        return observed;
+      });
+      resetPluginCache();
     }
     try {
       await withEnvAsync(f.configEnv, async () => {
@@ -230,8 +232,7 @@ it.skipIf(process.platform === "win32").each(blockedPaths)(
         if (block === "world-writable") {
           fs.chmodSync(pluginPath, 0o755);
         } else {
-          vi.mocked(pluginDiscovery.discoverOpenClawPlugins).mockRestore();
-          vi.mocked(pluginDiscovery.discoverConfiguredPluginLoadPaths).mockRestore();
+          vi.mocked(pluginCacheFiles.pluginCacheStatSync).mockRestore();
         }
         resetPluginCache();
         expect(
@@ -286,14 +287,9 @@ it.skipIf(process.platform === "win32")(
           source: pluginPath,
           fixHint: guidance,
         });
-        vi.spyOn(exec, "runUtf8CommandWithTimeout").mockResolvedValue({
-          stdout: reportText,
-          stderr: "",
-          code: 0,
-          signal: null,
-          killed: false,
-          termination: "exit",
-        });
+        vi.spyOn(exec, "runUtf8CommandWithTimeout").mockResolvedValue(
+          createCommandResult({ stdout: reportText }),
+        );
         const readiness = await applyPostPluginUpdateReadiness({
           root: f.root,
           entryPath: path.join(f.root, "openclaw.mjs"),

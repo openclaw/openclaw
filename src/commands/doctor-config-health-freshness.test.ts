@@ -161,7 +161,7 @@ it.each(
                 await closeOpenClawStateDatabaseAsync();
               }
             }
-            await store.updateAfterFileCommit(...updateArgs);
+            return store.updateAfterFileCommit(...updateArgs);
           },
         };
       });

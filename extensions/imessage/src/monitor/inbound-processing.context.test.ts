@@ -28,7 +28,7 @@ async function buildContext(
   messageOverrides: Partial<InboundDecisionParams["message"]>,
   overrides: Parameters<typeof resolveDecision>[0] = {},
 ) {
-  const message = makeMessage(messageOverrides);
+  const { message } = createInboundDecisionParams({ message: messageOverrides });
   const admitted = await resolveDecision({ ...overrides, message });
   expect(admitted.kind).toBe("dispatch");
   if (admitted.kind !== "dispatch") {
@@ -42,17 +42,6 @@ async function buildContext(
     historyLimit: 0,
     groupHistories: new Map(),
   });
-}
-
-function makeMessage(overrides: Partial<InboundDecisionParams["message"]> = {}) {
-  return {
-    id: 42,
-    sender: "+15555550123",
-    text: "ok",
-    is_from_me: false,
-    is_group: false,
-    ...overrides,
-  };
 }
 
 describe("buildIMessageInboundContext presentation", () => {
@@ -79,6 +68,18 @@ describe("buildIMessageInboundContext presentation", () => {
 });
 
 describe("resolveIMessageInboundDecision command auth", () => {
+  it("treats a failed pairing read as an empty allowlist", async () => {
+    await expect(
+      resolveDecision({
+        allowFrom: [],
+        dmPolicy: "pairing",
+        readStoreAllowFrom: async () => {
+          throw new Error("pairing store unavailable");
+        },
+      }),
+    ).resolves.toEqual({ kind: "pairing", senderId: "+15555550123" });
+  });
+
   it("does not auto-authorize DM commands in open mode without allowlists", async () => {
     const decision = await resolveDecision({
       message: { id: 100, text: "/status" },
@@ -91,7 +92,11 @@ describe("resolveIMessageInboundDecision command auth", () => {
   it("marks authorized iMessage control commands as text command turns", async () => {
     const { ctxPayload } = await buildContext(
       { id: 102, guid: "p:0/GUID-command", text: "/new" },
-      { allowFrom: [], dmPolicy: "pairing", storeAllowFrom: ["+15555550123"] },
+      {
+        allowFrom: [],
+        dmPolicy: "pairing",
+        readStoreAllowFrom: async () => ["+15555550123"],
+      },
     );
 
     expect(ctxPayload).toMatchObject({
@@ -123,7 +128,6 @@ describe("iMessage bot-owned thread mention policy", () => {
 
   async function resolveThreadReply(overrides: Parameters<typeof resolveDecision>[0] = {}) {
     return resolveDecision({
-      isKnownFromMeMessageId: undefined,
       cfg: {
         messages: { groupChat: { mentionPatterns: ["@openclaw"] } },
         channels: {

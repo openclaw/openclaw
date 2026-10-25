@@ -65,6 +65,12 @@ const siblingKey = "agent:main:dashboard:incognito-sibling";
 const otherKey = "agent:work:dashboard:incognito-other";
 const authority: SessionActorStorageAuthority = { assertCurrent() {}, authorize() {} };
 const actors: SessionActor[] = [];
+const sessionScope = { agentId: "main", sessionKey, sessionId: sessionKey, env };
+
+async function retainedMediaPolicy(selection: Parameters<typeof resolveAssistantMediaPolicy>[0]) {
+  const value = await resolveAssistantMediaPolicy(selection);
+  return { value, [Symbol.dispose]: () => value?.placementRead?.release() };
+}
 
 async function patch(actor: SessionActor, fields: Partial<InternalSessionEntry>) {
   await mutate(actor, {
@@ -283,12 +289,7 @@ it("uses current actor media policy for unbound incognito reads and refuses clos
   const { actor, owner } = await fixture();
   const requestAuth = { authMethod: "token" as const, operatorScopes: ["operator.admin"] };
   const selection = { config: cfg, sessionKey, agentId: "main", requestAuth };
-  using policyRead = {
-    value: await resolveAssistantMediaPolicy(selection),
-    [Symbol.dispose]() {
-      this.value?.placementRead?.release();
-    },
-  };
+  using policyRead = await retainedMediaPolicy(selection);
   const policy = policyRead.value;
   expect(policy?.session).toEqual({ sessionKey, agentId: "main", sessionId: sessionKey });
   expect(policy?.localRoots).toContain("/synthetic/workspace");
@@ -296,12 +297,7 @@ it("uses current actor media policy for unbound incognito reads and refuses clos
   expect(() => assertAssistantMediaPolicyCurrent(selection, policy!, false, requestAuth)).toThrow(
     "Media access changed",
   );
-  using currentRead = {
-    value: await resolveAssistantMediaPolicy(selection),
-    [Symbol.dispose]() {
-      this.value?.placementRead?.release();
-    },
-  };
+  using currentRead = await retainedMediaPolicy(selection);
   const current = currentRead.value;
   expect(current?.localRoots).toContain("/synthetic/changed");
   expect(() =>
@@ -325,17 +321,14 @@ it("retains the memory transcript source through managed media reads and refuses
   expect(await withManagedImageSessionRead(params, async () => "unexpected")).toBeNull();
   expect(memorySessionActorOwners.list()).toEqual([]);
   const { owner } = await fixture();
-  await persistSessionTranscriptTurn(
-    { agentId: "main", sessionKey, sessionId: sessionKey, env },
-    {
-      messages: [
-        {
-          eventId: "media-message",
-          message: { role: "assistant", content: "Media", __openclaw: { id: "media-message" } },
-        },
-      ],
-    },
-  );
+  await persistSessionTranscriptTurn(sessionScope, {
+    messages: [
+      {
+        eventId: "media-message",
+        message: { role: "assistant", content: "Media", __openclaw: { id: "media-message" } },
+      },
+    ],
+  });
   await withManagedImageSessionRead(params, async (scope, assertCurrent) => {
     expect(scope.sessionId).toBe(sessionKey);
     const messages = await readSessionMessagesMatchingIdAsync(scope, "media-message");

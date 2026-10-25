@@ -26,7 +26,8 @@ const recordSchema = z.object({ version: z.literal(1), pin: pinSchema, definitio
 
 type PinScope = { kind: "gateway" | "node"; env: NodeJS.ProcessEnv };
 function resolveKey({ kind, env }: PinScope) {
-  const nativeEnv = kind === "node" ? { ...env, ...resolveNodeServiceIdentityEnvironment() } : env;
+  const nativeEnv =
+    kind === "node" ? { ...env, ...resolveNodeServiceIdentityEnvironment(env) } : env;
   const name =
     process.platform === "darwin"
       ? resolveLaunchAgentLabel(nativeEnv)

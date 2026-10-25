@@ -209,7 +209,7 @@ function assertReadyLease(
   );
 }
 
-export function assertReadySuspensionResponse(
+function assertReadySuspensionResponse(
   response: GatewayAdminResponse,
   now = Date.now(),
 ): GatewayPayload & { expiresAtMs: number; suspensionId: string } {
@@ -260,7 +260,7 @@ export async function prepareReadySuspension(
   }
 }
 
-export function assertGatewaySuspendingError(response: GatewayFrame) {
+function assertGatewaySuspendingError(response: GatewayFrame) {
   assert.equal(response?.ok, false, "normal RPC must fail during suspension");
   assert.equal(response.error?.code, "UNAVAILABLE", "normal RPC must be unavailable");
   assert.equal(response.error?.retryable, true, "suspension error must be retryable");
@@ -276,10 +276,7 @@ export function assertGatewaySuspendingError(response: GatewayFrame) {
   );
 }
 
-export function assertSuspendedProbes(
-  health: GatewayProbeResponse,
-  readiness: GatewayProbeResponse,
-) {
+function assertSuspendedProbes(health: GatewayProbeResponse, readiness: GatewayProbeResponse) {
   assert.equal(health.status, 200, "/healthz must remain live during suspension");
   assert.equal(health.body?.status, "live", "/healthz must report live");
   assert.equal(health.body?.ok, true, "/healthz must report live");

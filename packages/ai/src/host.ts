@@ -3,7 +3,7 @@
 // the embedding application (OpenClaw core installs its implementations via
 // configureAiTransportHost); the library defaults below are inert so external
 // consumers get safe, dependency-free behavior without wiring anything.
-import type { Api, Context, Model, StreamFn } from "@openclaw/llm-core";
+import type { Api, Context, Model, ModelRequestHeaders, StreamFn } from "@openclaw/llm-core";
 import type { ApiRegistry } from "./api-registry.js";
 import { transformMessages } from "./transcript-transform.js";
 
@@ -174,11 +174,11 @@ export interface AiTransportHost {
     provider?: string;
     api?: string;
     baseUrl?: string;
-    providerHeaders?: Record<string, string>;
-    callerHeaders?: Record<string, string>;
+    providerHeaders?: ModelRequestHeaders;
+    callerHeaders?: ModelRequestHeaders;
     precedence?: "caller-wins" | "defaults-win";
     model?: object;
-  }): Record<string, string> | undefined;
+  }): ModelRequestHeaders | undefined;
   /** Returns the host-configured request timeout attached to a model. */
   resolveModelRequestTimeoutMs(model: Model): number | undefined;
   /** With scope "fetch", requires guarded fetch dispatch; native WebSockets must also exclude it. */
@@ -205,13 +205,11 @@ export interface AiTransportHost {
 
 const MAX_PENDING_CUSTOM_API_REGISTRATIONS = 32;
 
-type PendingCustomApiRegistration = {
+const pendingCustomApiRegistrations: Array<{
   registry: ApiRegistry;
   api: Api;
   streamFn: StreamFn;
-};
-
-const pendingCustomApiRegistrations: PendingCustomApiRegistration[] = [];
+}> = [];
 
 function queueCustomApiRegistration(registry: ApiRegistry, api: Api, streamFn: StreamFn): boolean {
   const existing = pendingCustomApiRegistrations.find(
@@ -392,17 +390,16 @@ export function getAiTransportHost(): ActiveAiTransportHost {
 
 /** Resolves sentinel substrings in custom headers at a no-fetch adapter boundary. */
 export function resolveAiTransportHeaderSentinels(
-  headers: Record<string, string> | undefined,
-): Record<string, string> | undefined {
+  headers: ModelRequestHeaders | undefined,
+): ModelRequestHeaders | undefined {
   if (!headers) {
     return undefined;
   }
   const host = getAiTransportHost();
-  let resolvedHeaders: Record<string, string> | undefined;
+  let resolvedHeaders: ModelRequestHeaders | undefined;
   for (const [name, value] of Object.entries(headers)) {
     if (value === null) {
-      // applyLocalNoAuthHeaderOverride marks no-auth local providers with a
-      // runtime null marker outside the public string-only Model contract.
+      // Keep SDK deletion sentinels opaque to credential resolution.
       continue;
     }
     const resolved = host.resolveSecretSentinel(value);

@@ -11,6 +11,7 @@ import {
   closeOpenClawStateDatabaseAsync,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../../test-support/hanging-loopback-server.js";
 import { setMattermostRuntime } from "../runtime.js";
 import { resolveMattermostAccount } from "./accounts.js";
 import { createMattermostClient, type MattermostPost } from "./client.js";
@@ -99,14 +100,8 @@ beforeEach(async () => {
       response.destroy(error instanceof Error ? error : new Error(String(error)));
     });
   });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("missing HTTP address");
-  }
-  baseUrl = `http://127.0.0.1:${address.port}`;
+  const port = await listenOnLoopback(server);
+  baseUrl = `http://127.0.0.1:${port}`;
 });
 
 afterEach(async () => {
@@ -238,27 +233,31 @@ it("filters concurrent later history from the older turn without losing it", asy
   expect(requests).toHaveLength(1);
 });
 
-it("preserves fetched history for an older turn that coalesces behind a newer trigger", async () => {
-  const f = await setup("channel");
-  const newer = { ...posts[2]!, id: "newer-trigger", create_at: 50 };
-  posts.push({ ...posts[1]!, id: "middle", create_at: 40 }, newer);
-  const { entered, release } = holdResponse();
-  const first = receive(f.handler, newer);
-  await entered.promise;
-  const olderReady = createDeferred<void>();
-  vi.mocked(f.monitor.core.channel.activity.record).mockImplementationOnce(() => {
-    olderReady.resolve();
-  });
-  const older = receive(f.handler, posts[2]!);
-  await olderReady.promise;
-  release.resolve();
-  await Promise.all([first, older]);
-  const context = dispatch.mock.calls.find(
-    (call) => call[1].ctxPayload.MessageSid === "current",
-  )?.[1].ctxPayload;
-  expect(historyIds(context.InboundHistory)).toEqual(["root", "reply"]);
-  expect(requests).toHaveLength(1);
-});
+it.each(["channel", "direct"] as const)(
+  "recovers chronological %s history for an older coalesced turn",
+  async (kind) => {
+    const f = await setup(kind);
+    const newer = { ...posts[2]!, id: "newer-trigger", create_at: 50 };
+    posts.push({ ...posts[1]!, id: "middle", create_at: 40 }, newer);
+    const { entered, release } = holdResponse();
+    const first = receive(f.handler, newer);
+    await entered.promise;
+    const olderReady = createDeferred<void>();
+    vi.mocked(f.monitor.core.channel.activity.record).mockImplementationOnce(() => {
+      olderReady.resolve();
+    });
+    const older = receive(f.handler, posts[2]!);
+    await olderReady.promise;
+    release.resolve();
+    await Promise.all([first, older]);
+    const context = dispatch.mock.calls.find(
+      (call) => call[1].ctxPayload.MessageSid === "current",
+    )?.[1].ctxPayload;
+    expect(historyIds(context.InboundHistory)).toEqual(["root", "reply"]);
+    expect(context.Body).toContain("Next year France");
+    expect(requests).toHaveLength(1);
+  },
+);
 
 it("does not adopt a completed missing-session success across an unobserved reset", async () => {
   const f = await setup("channel");
@@ -404,13 +403,4 @@ it("store-reader failure cannot admit recovered DM history even with a configure
   };
   await f.recover(f.turn);
   expect(f.histories.size).toBe(0);
-});
-
-it("recovers cold direct thread context in chronological order, excluding the trigger", async () => {
-  const { handler } = await setup("direct");
-  await receive(handler, posts[2]!);
-  const context = dispatch.mock.calls[0]?.[1].ctxPayload;
-  expect(historyIds(context.InboundHistory)).toEqual(["root", "reply"]);
-  expect(context.Body).toContain("Next year France");
-  expect(requests.filter((url) => url.includes("/thread"))).toHaveLength(1);
 });

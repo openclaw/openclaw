@@ -8,7 +8,6 @@ import type {
   QaBusSnapshotConversation,
   QaBusStateSnapshot,
   QaBusThread,
-  QaBusToolCall,
 } from "openclaw/plugin-sdk/qa-channel-protocol";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
@@ -20,21 +19,11 @@ export function normalizeAccountId(raw?: string): string {
 }
 
 export function cloneMessage(message: QaBusMessage): QaBusMessage {
-  return {
+  return structuredClone({
     ...message,
-    conversation: { ...message.conversation },
-    attachments: (message.attachments ?? []).map((attachment) => Object.assign({}, attachment)),
-    ...(message.nativeCommand ? { nativeCommand: { ...message.nativeCommand } } : {}),
-    toolCalls: message.toolCalls?.map(cloneToolCall),
-    reactions: message.reactions.map((reaction) => ({ ...reaction })),
-  };
-}
-
-function cloneToolCall(toolCall: QaBusToolCall): QaBusToolCall {
-  return {
-    name: toolCall.name,
-    ...(toolCall.arguments ? { arguments: structuredClone(toolCall.arguments) } : {}),
-  };
+    attachments: message.attachments ?? [],
+    toolCalls: message.toolCalls,
+  });
 }
 
 function cloneEvent(event: QaBusEvent): QaBusEvent {

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import type { RuntimeEnv } from "../runtime-api.js";
+import { FeishuConfigSchema } from "./config-schema.js";
 import { startBotIdentityRecovery } from "./monitor.bot-identity.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
@@ -22,17 +23,14 @@ const account: ResolvedFeishuAccount = {
   domain: "feishu",
   appId: "cli_person_2",
   appSecret: "fixture-secret",
-  config: {
-    domain: "feishu",
-    connectionMode: "websocket",
-    webhookPath: "/feishu/events",
-    dmPolicy: "pairing",
-    reactionNotifications: "own",
-    groupPolicy: "allowlist",
-    typingIndicator: true,
-    resolveSenderNames: true,
-  },
+  config: FeishuConfigSchema.parse({ connectionMode: "websocket" }),
 };
+
+function startRecovery(
+  options: Omit<Parameters<typeof startBotIdentityRecovery>[0], "account" | "accountId">,
+) {
+  startBotIdentityRecovery({ account, accountId: account.accountId, ...options });
+}
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -54,12 +52,7 @@ describe("Feishu bot identity recovery", () => {
       });
     const runtime = createRuntimeSpies() satisfies RuntimeEnv;
 
-    startBotIdentityRecovery({
-      account,
-      accountId: "person-2",
-      runtime,
-      currentSource: "cache",
-    });
+    startRecovery({ runtime, currentSource: "cache" });
 
     await vi.advanceTimersByTimeAsync(60_000);
     expect(fetchBotIdentityForMonitorMock).toHaveBeenCalledTimes(1);
@@ -93,11 +86,7 @@ describe("Feishu bot identity retry failures", () => {
     process.on("unhandledRejection", onUnhandledRejection);
 
     try {
-      startBotIdentityRecovery({
-        account,
-        accountId: "person-2",
-        runtime,
-      });
+      startRecovery({ runtime });
 
       await vi.advanceTimersByTimeAsync(60_000);
       const nextTurn = new Promise<void>((resolve) => {
@@ -122,12 +111,7 @@ describe("Feishu bot identity retry failures", () => {
     const runtime = createRuntimeSpies() satisfies RuntimeEnv;
     const controller = new AbortController();
 
-    startBotIdentityRecovery({
-      account,
-      accountId: "person-2",
-      runtime,
-      abortSignal: controller.signal,
-    });
+    startRecovery({ runtime, abortSignal: controller.signal });
     controller.abort();
     await vi.advanceTimersByTimeAsync(0);
 

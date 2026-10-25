@@ -2,10 +2,7 @@ import { expect, it } from "vitest";
 import { FailoverError } from "../../agents/failover-error.js";
 import { AUTH_PROFILE_COOLDOWN_ERROR_CODE } from "../../agents/failover/error.js";
 import { ContextPreparationTimeoutError } from "../../agents/failover/local-preparation-error.js";
-import {
-  GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
-  HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
-} from "../../agents/failover/user-copy.js";
+import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../../agents/failover/user-copy.js";
 import { AgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import { SkillResourceDeliveryLimitError } from "../../skills/runtime/resource-delivery-error.js";
@@ -102,7 +99,7 @@ it("uses preserved format diagnostics without exposing raw details", () => {
   expect(reply.text).not.toContain("PRIVATE_CANARY");
 });
 
-it("keeps overloaded preflight diagnostics verbose-gated except for heartbeats", () => {
+it("keeps overloaded preflight diagnostics verbose-gated", () => {
   const message = `529 overloaded; reconnect before continuing. diagnostic-canary ${"x".repeat(1500)}`;
   const input = {
     message,
@@ -114,36 +111,11 @@ it("keeps overloaded preflight diagnostics verbose-gated except for heartbeats",
     knownReply(input.error, { Provider: "discord", Surface: "discord", ChatType: "group" }),
   ).toBeUndefined();
   expect(buildExternalRunFailureReply(input)).toEqual(genericFailure);
-  const heartbeat = buildExternalRunFailureReply(input, {
-    isHeartbeat: true,
-    includeDetails: true,
-  });
-  expect(heartbeat.isGenericRunnerFailure).toBe(false);
-  expect(heartbeat.text).not.toContain("x".repeat(1500));
-  expect(heartbeat.text).toContain("reconnect before continuing");
-  expect(heartbeat.text).toContain("diagnostic-canary");
-  expect(heartbeat.text).not.toContain("/new");
   const verbose = buildExternalRunFailureReply(input, { includeDetails: true });
   expect(verbose.isGenericRunnerFailure).toBe(true);
   expect(verbose.text).toContain("reconnect before continuing");
   expect(verbose.text).toContain("diagnostic-canary");
   expect(verbose.text).not.toContain("x".repeat(1500));
-});
-
-it("keeps raw heartbeat failure details behind verbose opt-in", () => {
-  const message = "Gateway SDK resource host is not bound";
-  const input = { message, error: new Error(message) };
-  expect(buildExternalRunFailureReply(input, { isHeartbeat: true })).toEqual({
-    text: HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
-    isGenericRunnerFailure: false,
-  });
-  const verbose = buildExternalRunFailureReply(input, {
-    isHeartbeat: true,
-    includeDetails: true,
-  });
-  expect(verbose.text).toContain(`\n\nDetails: ${message}.\n`);
-  expect(verbose.text).not.toContain("/new");
-  expect(verbose.isGenericRunnerFailure).toBe(false);
 });
 
 it.each([

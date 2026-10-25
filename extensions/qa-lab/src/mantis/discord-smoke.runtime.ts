@@ -6,7 +6,7 @@ import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtim
 import { readSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString as trimToValue } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "../cli-paths.js";
+import { ensureRepoBoundDirectory, resolveTimestampedQaOutputDir } from "../cli-paths.js";
 import { isTruthyOptIn } from "../mantis-options.runtime.js";
 
 export type MantisDiscordSmokeOptions = {
@@ -14,7 +14,6 @@ export type MantisDiscordSmokeOptions = {
   env?: NodeJS.ProcessEnv;
   guildId?: string;
   message?: string;
-  now?: () => Date;
   outputDir?: string;
   redactPublicMetadata?: boolean;
   repoRoot?: string;
@@ -135,11 +134,6 @@ function resolveRequiredSnowflake(
     throw new Error(`${envKey} must be a Discord snowflake.`);
   }
   return resolved;
-}
-
-function defaultMantisDiscordSmokeOutputDir(repoRoot: string, startedAt: Date) {
-  const stamp = startedAt.toISOString().replace(/[:.]/gu, "-");
-  return path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", `discord-smoke-${stamp}`);
 }
 
 async function callDiscordApi<T>(params: {
@@ -296,14 +290,13 @@ export async function runMantisDiscordSmoke(
   opts: MantisDiscordSmokeOptions = {},
 ): Promise<MantisDiscordSmokeResult> {
   const env = opts.env ?? process.env;
-  const startedAt = (opts.now ?? (() => new Date()))();
+  const startedAt = new Date();
   const redactPublicMetadata =
     opts.redactPublicMetadata ?? isTruthyOptIn(env[QA_REDACT_PUBLIC_METADATA_ENV]);
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
   const outputDir = await ensureRepoBoundDirectory(
     repoRoot,
-    resolveRepoRelativeOutputDir(repoRoot, opts.outputDir) ??
-      defaultMantisDiscordSmokeOutputDir(repoRoot, startedAt),
+    resolveTimestampedQaOutputDir(repoRoot, opts.outputDir, startedAt, "mantis/discord-smoke"),
     "Mantis Discord smoke output directory",
     { mode: 0o755 },
   );

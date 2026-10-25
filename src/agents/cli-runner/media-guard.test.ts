@@ -1,8 +1,7 @@
 /** Paired-node attachment guard behavior through the real CLI execution entry point. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type * as nodeRuntime from "../../gateway/node-agent-cli-runtime.js";
+import * as nodeRuntime from "../../gateway/node-agent-cli-runtime.js";
 import { buildPreparedCliRunContext } from "../cli-runner.test-helpers.js";
-import { executeDeps } from "./execute-deps.js";
 import { executePreparedCliRun as executePreparedCliRunImpl } from "./execute.js";
 import {
   supervisorSpawnMock,
@@ -36,7 +35,7 @@ describe("paired-node media guard", () => {
         };
       },
     );
-    vi.spyOn(executeDeps, "invokeNodeClaudeCliRun").mockImplementation(invokeNode);
+    vi.spyOn(nodeRuntime, "invokeNodeClaudeCliRun").mockImplementation(invokeNode);
     const context = buildPreparedCliRunContext({
       sessionEntry: {
         sessionId: "openclaw-session",

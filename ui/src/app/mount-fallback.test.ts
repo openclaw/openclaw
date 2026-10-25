@@ -88,6 +88,18 @@ function pendingProbe(stalled = true) {
 }
 
 describe("Control UI document shell", () => {
+  it.each(["load", "error"])("activates the nonblocking entry stylesheet on %s", (eventType) => {
+    const win = createIsolatedWindow();
+    installShell(win, "__zod_globalConfig");
+    const link = win.document.createElement("link");
+    link.id = "openclaw-boot-styles";
+    link.rel = "stylesheet";
+    link.media = "print";
+    win.document.head.append(link);
+    link.dispatchEvent(new win.Event(eventType));
+    expect(link.media).toBe("all");
+  });
+
   it("requests the web app manifest with credentials", async () => {
     const parsed = new DOMParser().parseFromString(html, "text/html");
     const manifest = parsed.querySelector<HTMLLinkElement>('link[rel="manifest"]');
@@ -184,6 +196,21 @@ describe("Control UI mount fallback", () => {
     await vi.advanceTimersByTimeAsync(mountTimeoutMs - 1);
     expect(fetch).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+
+  it("waits for the entry stylesheet before starting failed-mount recovery", async () => {
+    const fetch = vi.fn().mockRejectedValue(new Error("offline"));
+    const win = boot(fetch, undefined, "loading");
+    const styles = win.document.createElement("link");
+    styles.id = "openclaw-boot-styles";
+    styles.media = "print";
+    win.document.head.append(styles);
+    win.document.dispatchEvent(new win.Event("DOMContentLoaded"));
+    await vi.advanceTimersByTimeAsync(mountTimeoutMs + 1_000);
+    expect(fetch).not.toHaveBeenCalled();
+    styles.dispatchEvent(new win.Event("load"));
+    await vi.advanceTimersByTimeAsync(mountTimeoutMs);
     expect(fetch).toHaveBeenCalledOnce();
   });
 

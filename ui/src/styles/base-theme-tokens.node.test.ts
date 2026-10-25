@@ -2,10 +2,14 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import postcss, { type AnyNode } from "postcss";
 import { describe, expect, it } from "vitest";
+import { readThemeBlocks } from "./theme-palette.test-support.ts";
 
 const stylesDir = path.dirname(fileURLToPath(import.meta.url));
-const uiSrcDir = path.dirname(stylesDir);
+const readStyle = (name: string) => fs.readFileSync(path.join(stylesDir, name), "utf8");
+const themeBlocks = readThemeBlocks(stylesDir);
+
 // Undefined aliases silently drop declarations or invalidate color-mix.
 const undefinedTokenMappings = {
   "bg-subtle": "bg-muted",
@@ -22,132 +26,104 @@ const undefinedTokenMappings = {
   "warning-subtle": "warn-subtle",
 } as const;
 
-function collectFiles(directory: string, extensions: readonly string[]): string[] {
+function collectStyleSources(directory: string): string[] {
   return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
-    const entryPath = path.join(directory, entry.name);
+    const file = path.join(directory, entry.name);
     if (entry.isDirectory()) {
-      return entry.name === "node_modules" ? [] : collectFiles(entryPath, extensions);
+      return entry.name === "node_modules" ? [] : collectStyleSources(file);
     }
-    return entry.isFile() && extensions.some((extension) => entry.name.endsWith(extension))
-      ? [entryPath]
+    return entry.isFile() && /\.(css|ts)$/u.test(entry.name) && !entry.name.endsWith(".test.ts")
+      ? [file]
       : [];
   });
 }
 
 describe("Control UI base theme tokens", () => {
   it("defines every canonical replacement", () => {
-    const baseCss = fs.readFileSync(path.join(stylesDir, "base.css"), "utf8");
-
     for (const token of new Set(Object.values(undefinedTokenMappings))) {
-      expect(baseCss, `missing --${token} in base.css`).toMatch(
+      expect(readStyle("base.css"), `missing --${token} in base.css`).toMatch(
         new RegExp(`^\\s*--${token}\\s*:`, "mu"),
       );
     }
   });
 
   it("does not reference undefined theme token names", () => {
-    const referencePattern = new RegExp(
+    const pattern = new RegExp(
       `var\\(--(?:${Object.keys(undefinedTokenMappings).join("|")})(?:\\s*\\)|\\s*,)`,
       "u",
     );
-    // Include inline styles and CSS templates, not just stylesheets.
-    const violations = collectFiles(uiSrcDir, [".css", ".ts"])
-      .filter((filePath) => !filePath.endsWith(".test.ts"))
-      .filter((filePath) =>
-        fs
-          .readFileSync(filePath, "utf8")
-          .split("\n")
-          .some((line) => referencePattern.test(line)),
-      )
-      .map((filePath) => path.relative(uiSrcDir, filePath));
-
-    expect(violations).toEqual([]);
+    const root = path.dirname(stylesDir);
+    expect(
+      collectStyleSources(root)
+        .filter((file) => pattern.test(fs.readFileSync(file, "utf8")))
+        .map((file) => path.relative(root, file)),
+    ).toEqual([]);
   });
 });
 
-// Absolutely palette edits left both --bg mirrors stale. Pre-paint needs a color
-// before CSS loads; preview chips must remain independent of the active theme.
+// Absolutely palette edits left both mirrors stale: pre-paint and preview chips
+// need each palette's own --bg, independent of the active theme.
 describe("Control UI theme --bg mirrors", () => {
-  function readCanonicalBackgrounds(): Map<string, string> {
-    const themesDir = path.join(stylesDir, "..", "..", "public", "themes");
-    const baseCss = [
-      fs.readFileSync(path.join(stylesDir, "base.css"), "utf8"),
-      ...fs
-        .readdirSync(themesDir)
-        .filter((entry) => entry.endsWith(".css"))
-        .toSorted()
-        .map((entry) => fs.readFileSync(path.join(themesDir, entry), "utf8")),
-    ].join("\n");
-    const selectors = [
-      ["dark", ":root"],
-      ["light", ':root:where([data-theme-mode="light"])'],
-      ...Array.from(
-        baseCss.matchAll(/:root\[data-theme="([^"]+)"\]\s*\{/gu),
-        (match) => [match[1] ?? "", `:root[data-theme="${match[1] ?? ""}"]`] as const,
-      ),
-    ] as const;
-    const backgrounds = new Map<string, string>();
-    for (const [resolved, selector] of selectors) {
-      const escaped = selector.replaceAll(/[.*+?^${}()|[\]\\]/gu, String.raw`\$&`);
-      const body = baseCss.split(new RegExp(`${escaped}\\s*\\{`, "u"))[1]?.split("}")[0];
-      const value = body?.match(/--bg:\s*([^;]+);/u)?.[1]?.trim();
-      if (value) {
-        backgrounds.set(resolved, value);
-      }
-    }
-    return backgrounds;
-  }
+  const canonical = new Map(
+    [...themeBlocks].flatMap(([selector, tokens]) => {
+      const name =
+        selector === ":root"
+          ? "dark"
+          : selector === ':root:where([data-theme-mode="light"])'
+            ? "light"
+            : selector.match(/^:root\[data-theme="([^"]+)"\]$/u)?.[1];
+      const bg = tokens.get("--bg");
+      return name && bg ? [[name, bg] as const] : [];
+    }),
+  );
 
   it("keeps the index.html pre-paint background on every theme's --bg", () => {
-    const indexHtml = fs.readFileSync(path.join(uiSrcDir, "..", "index.html"), "utf8");
-    const canonical = readCanonicalBackgrounds();
-
-    // Bare `html` is the default dark paint; the -mode selector is light.
+    const html = fs.readFileSync(path.join(stylesDir, "..", "..", "index.html"), "utf8");
     const prePaint = new Map(
       Array.from(
-        indexHtml.matchAll(
+        html.matchAll(
           /html(?:\[data-theme(?:-mode)?="([^"]+)"\])?\s*\{\s*background:\s*([^;]+);/gu,
         ),
-        (match) => [match[1] ?? "dark", (match[2] ?? "").trim()],
+        (match) => [match[1] ?? "dark", (match[2] ?? "").trim().toLowerCase()],
       ),
     );
-
-    for (const [resolved, background] of canonical) {
-      expect(prePaint.get(resolved)?.toLowerCase(), `${resolved}: pre-paint background`).toBe(
-        background.toLowerCase(),
-      );
+    for (const [name, bg] of canonical) {
+      expect(prePaint.get(name), `${name}: pre-paint background`).toBe(bg.toLowerCase());
     }
-
     expect(canonical.size).toBeGreaterThanOrEqual(2);
   });
 
   it("keeps the Appearance preview chips on every theme's --bg", () => {
-    const configCss = fs.readFileSync(path.join(stylesDir, "config.css"), "utf8");
-    const canonical = readCanonicalBackgrounds();
+    const css = postcss.parse(readStyle("config.css"));
     let checked = 0;
-
-    for (const match of configCss.matchAll(/\.settings-theme-card--([\w-]+)[^{]*\{([^}]*)\}/gu)) {
-      const chip = match[2]?.match(/--theme-chip-bg:\s*([^;]+);/u)?.[1]?.trim();
-      if (!chip || chip.startsWith("var(")) {
-        continue;
+    css.walkRules((rule) => {
+      const match = rule.selector.match(/\.settings-theme-card--([\w-]+)/u);
+      const declaration = rule.nodes.find(
+        (node) => node.type === "decl" && node.prop === "--theme-chip-bg",
+      );
+      if (!match || declaration?.type !== "decl") {
+        return;
       }
-      // The preceding selector determines whether the chip is light-mode.
-      const isLight = configCss
-        .slice(0, match.index ?? 0)
-        .split(".settings-theme-card--")
-        .at(-1)
-        ?.includes('data-theme-mode="light"');
+      const chip = declaration.value.trim();
+      if (chip.startsWith("var(")) {
+        return;
+      }
+      let light = rule.selector.includes('data-theme-mode="light"');
+      for (let parent: AnyNode | undefined = rule.parent; parent; parent = parent.parent) {
+        if (parent.type === "rule" && parent.selector.includes('data-theme-mode="light"')) {
+          light = true;
+        }
+      }
       const family = match[1] === "knot" ? "openknot" : (match[1] ?? "");
-      const resolved =
-        family === "claw" ? (isLight ? "light" : "dark") : `${family}${isLight ? "-light" : ""}`;
-      const background = canonical.get(resolved);
-      if (!background) {
-        continue;
+      const name =
+        family === "claw" ? (light ? "light" : "dark") : `${family}${light ? "-light" : ""}`;
+      const bg = canonical.get(name);
+      if (!bg) {
+        return;
       }
       checked += 1;
-      expect(chip.toLowerCase(), `${resolved}: chip background`).toBe(background.toLowerCase());
-    }
-
+      expect(chip.toLowerCase(), `${name}: chip background`).toBe(bg.toLowerCase());
+    });
     expect(checked).toBeGreaterThan(0);
   });
 });

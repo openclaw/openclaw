@@ -54,40 +54,60 @@ export abstract class ChatPaneSnapshotHydration extends ChatPaneReplyNavigation 
       sessionKey,
       connected: this.context.gateway.snapshot.phase === "connected",
       promise: reading
-        .then((storedSnapshot) => {
-          if (!isCurrent()) {
-            return hydration.complete?.();
-          }
-          const snapshot = mergeStoredChatSessionSnapshot(cache, state, target, storedSnapshot);
-          const boardRestored = restoreBoard(snapshot?.board);
-          if (requests.acceptedHistory || !snapshot) {
-            hydration.complete?.();
-            return boardRestored;
-          }
-          // A sibling can fill the shared cache while this pane still needs its
-          // own transcript. Adopt those messages before revalidating their cursor.
-          applyChatCacheSnapshot(state, snapshot);
-          const mergedSnapshot = { ...snapshot, messages: state.chatMessages };
-          cacheChatSessionSnapshot(cache, state, target, mergedSnapshot);
-          if (snapshot.progressCard !== undefined) {
-            const progressTarget = this.resolveChatReadTarget();
-            if (progressTarget) {
-              this.progressCards.hydrate(progressTarget, snapshot.progressCard);
+        .then(async (storedSnapshot) => {
+          // Keep cache rendering out of connect preparation. The subscription can
+          // adopt ready rows synchronously after dispatch, before reading their cursor.
+          hydration.adoptReadySnapshot = () => {
+            delete hydration.adoptReadySnapshot;
+            if (!isCurrent()) {
+              return;
             }
+            const snapshot = mergeStoredChatSessionSnapshot(cache, state, target, storedSnapshot);
+            if (requests.acceptedHistory || !snapshot) {
+              return;
+            }
+            // A sibling can fill the shared cache while this pane still needs its
+            // own transcript. Adopt those messages before revalidating their cursor.
+            applyChatCacheSnapshot(state, snapshot);
+            const mergedSnapshot = { ...snapshot, messages: state.chatMessages };
+            cacheChatSessionSnapshot(cache, state, target, mergedSnapshot);
+            if (snapshot.progressCard !== undefined) {
+              const progressTarget = this.resolveChatReadTarget();
+              if (progressTarget) {
+                this.progressCards.hydrate(progressTarget, snapshot.progressCard);
+              }
+            }
+          };
+          const gateway = this.context.gateway.snapshot;
+          if (
+            gateway.client &&
+            (gateway.phase === "connecting" || gateway.phase === "reconnecting")
+          ) {
+            await gateway.client.connectSent;
           }
-          // Release the history response before publishing the cached transcript.
-          hydration.complete?.();
-          return boardRestored;
+          // Let the initial composer commit before the saved rows do their layout work.
+          if (!hydration.connected && storedSnapshot && !storedSnapshot.board) {
+            await new Promise<void>((resolve) => {
+              window.setTimeout(resolve, 0);
+            });
+          }
+          // Scoped snapshots can paint while the route awaits live revalidation.
+          // The pending route still gates commands and authenticated resources.
+          if (!isCurrent()) {
+            return;
+          }
+          hydration.adoptReadySnapshot?.();
+          return restoreBoard(storedSnapshot?.board);
         })
-        .catch(() => hydration.complete?.())
+        .catch(() => undefined)
         .finally(() => {
           hydration.titlePending = false;
-          if (requests.initialSnapshotHydration === hydration && !hydration.wait) {
+          if (requests.initialSnapshotHydration === hydration) {
             delete requests.initialSnapshotHydration;
           }
         }),
     };
-    // Only the title observes cache readiness; history keeps its existing wait contract.
+    // The title observes cache readiness; network history never waits on it.
     requests.initialSnapshotHydration = projectChatFields(hydration, ["titlePending"]);
   }
 }

@@ -13,6 +13,7 @@ import {
   SettingsToggleRow,
 } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
+import { registerRouteSubtitlesEnglish } from "../../i18n/locales/en-route-subtitles.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { createConfigPage } from "./config-page-state.ts";
@@ -28,6 +29,8 @@ import { TalkSettingsPage } from "./talk-page.tsx";
 import { UpdatesPage } from "./updates-page.tsx";
 import type { ConfigProps } from "./view-types.ts";
 import { Config } from "./view.tsx";
+
+registerRouteSubtitlesEnglish();
 export type { ConfigPageId } from "./config-sections.ts";
 
 function renderConfigPageSubtitle(pageId: ConfigPageId) {
@@ -138,6 +141,9 @@ function ConfigBody(props: {
           nowMs={props.state.nowMs()}
           configBusy={props.state.mutationDisabled()}
           updateBusy={props.state.updateBusy()}
+          statusRead={props.state.updates.read()}
+          onCheckStatus={props.state.updates.refresh}
+          captureCommandPresentation={props.state.updates.captureCommandPresentation}
         />
       </Show>
       <Show when={props.pageId === "memory"}>
@@ -155,6 +161,7 @@ function ConfigBody(props: {
       </Show>
       <Show when={props.pageId === "talk"}>
         <TalkSettingsPage
+          presentationRetired={props.config.presentationRetired}
           configObject={props.configObject}
           mutationDisabled={props.state.mutationDisabled()}
           buildEditor={() => editor("talk", t("tabs.talk"))}
@@ -208,7 +215,7 @@ export function ConfigPage(props: ConfigPageProps) {
     <openclaw-config-page ref={(element) => (host = element)}>
       <Show when={props.pageId !== "memory"}>
         <SettingsPageHeader
-          title={titleForRoute(props.pageId)}
+          title={titleForRoute(props.pageId, t)}
           subtitle={renderConfigPageSubtitle(props.pageId)}
         />
       </Show>

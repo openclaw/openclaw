@@ -321,6 +321,8 @@ export function isToolCallContentBlock(item: {
 
 function extractToolCards(message: unknown): ToolCard[] {
   const m = message as Record<string, unknown>;
+  const catalogMetadata = asNullableRecord(m["__openclaw"]);
+  const catalogSource = catalogMetadata?.catalogSource === true;
   const role = typeof m.role === "string" ? m.role.toLowerCase() : "";
   const isStandaloneToolMessage =
     isToolResultMessage(message) ||
@@ -344,17 +346,21 @@ function extractToolCards(message: unknown): ToolCard[] {
     const text = extractToolText(item);
     const details = item.details ?? m.details;
     const metadata = asNullableRecord(item["__openclaw"]);
-    const isError = readToolErrorFlag(item) ?? messageIsError;
+    // Recorded catalog prose cannot establish an execution outcome.
+    const isError =
+      readToolErrorFlag(item) ?? messageIsError ?? (catalogSource ? false : undefined);
     const exitCode = readToolExitCode(
       item,
       details,
-      text ? safeParseJsonRecord(text.trim()) : undefined,
+      !catalogSource && text ? safeParseJsonRecord(text.trim()) : undefined,
       standalone ? undefined : m,
     );
     return {
       outputText: text,
-      resultMessageId:
-        !standalone && metadata && Object.hasOwn(metadata, "id")
+      ...(catalogSource && metadata?.catalogTruncated === true ? { catalogTruncated: true } : {}),
+      resultMessageId: catalogSource
+        ? undefined
+        : !standalone && metadata && Object.hasOwn(metadata, "id")
           ? readNonBlankString(metadata.id)
           : transcriptMessageId,
       outputTruncated:
@@ -366,7 +372,7 @@ function extractToolCards(message: unknown): ToolCard[] {
       ...(details !== undefined ? { details } : {}),
       ...(isError !== undefined ? { isError } : {}),
       ...(exitCode !== undefined ? { exitCode } : {}),
-      ...extractToolPresentation(details, text, browserToolName),
+      ...(catalogSource ? {} : extractToolPresentation(details, text, browserToolName)),
     };
   };
 
@@ -476,6 +482,9 @@ function extractToolCards(message: unknown): ToolCard[] {
   );
   let revision: number | undefined;
   for (const [index, card] of cards.entries()) {
+    if (catalogSource && catalogMetadata?.catalogTruncated === true) {
+      card.catalogTruncated = true;
+    }
     const activity = card.callId ? activityByCall.get(card.callId) : undefined;
     if (activity) {
       card.activity = activity;

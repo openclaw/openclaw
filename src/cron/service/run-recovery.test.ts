@@ -204,7 +204,6 @@ describe("worker-owned startup recovery", () => {
         nowMs: () => now + 1_000,
         log: logger,
         enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
         runIsolatedAgentJob: vi.fn(),
         runCommandJob,
         onEvent,
@@ -232,7 +231,6 @@ describe("worker-owned startup recovery", () => {
         expect(recovered.state.autoDisabled).toBeUndefined();
         expect(recovered.state.failureAlertIncident).toBeUndefined();
         expect(state.deps.enqueueSystemEvent).not.toHaveBeenCalled();
-        expect(state.deps.requestHeartbeat).not.toHaveBeenCalled();
         expect(runCommandJob).not.toHaveBeenCalled();
         expect(onEvent.mock.calls.filter(([event]) => event.action === "finished")).toHaveLength(1);
         stop(state);

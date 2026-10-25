@@ -237,3 +237,30 @@ it.each<[string, Partial<KernelProcess>]>([
   await rejected;
   expect(killSpy).toHaveBeenCalledExactlyOnceWith(100, "SIGTERM");
 });
+
+it("keeps SIGKILL escalation bounded when the wall clock rewinds", async () => {
+  add(100);
+  const child = add(101, { parentPid: 100 });
+  add(102, { parentPid: 101 });
+  onSignal = (pid, signal) => {
+    if (pid === 100) {
+      exit(pid);
+      add(103, { parentPid: 101 });
+    }
+    if (pid === 101 && signal === "SIGTERM") {
+      child.startedAt = 999;
+    }
+    if (signal === "SIGKILL") {
+      exit(pid);
+    }
+  };
+  const rewindWallClock = () => vi.setSystemTime(Date.now() - 60_000);
+  const result = reap();
+  rewindWallClock();
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(await result).toEqual([100]);
+  expect(killSpy).toHaveBeenCalledWith(102, "SIGKILL");
+  expect(killSpy).not.toHaveBeenCalledWith(101, "SIGKILL");
+  expect(killSpy).not.toHaveBeenCalledWith(103, expect.anything());
+  expect([...processes.keys()]).toEqual([101, 103]);
+});

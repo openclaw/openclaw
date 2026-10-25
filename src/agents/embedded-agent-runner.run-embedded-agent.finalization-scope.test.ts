@@ -10,6 +10,7 @@ import {
 } from "../config/runtime-snapshot.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
+import { installScriptedRunnerMocks } from "./embedded-agent-runner.mock-test-support.js";
 import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
@@ -17,13 +18,8 @@ import type {
 import {
   buildEmbeddedRunnerAssistant,
   createEmbeddedAgentRunnerOpenAiConfig,
-  createResolvedEmbeddedRunnerModel,
   makeEmbeddedRunnerAttempt,
 } from "./test-helpers/embedded-agent-runner-e2e-fixtures.js";
-import {
-  installEmbeddedRunnerBaseE2eMocks,
-  installEmbeddedRunnerFastRunE2eMocks,
-} from "./test-helpers/embedded-agent-runner-e2e-mocks.js";
 import { drainScenarioDatabase } from "./test-helpers/embedded-run-scenario.test-support.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "nested-finalization-");
@@ -34,17 +30,13 @@ beforeAll(async () => {
 });
 
 async function loadRuntime() {
-  installEmbeddedRunnerBaseE2eMocks({ hookRunner: "full" });
-  installEmbeddedRunnerFastRunE2eMocks({ runEmbeddedAttempt: (params) => runAttempt(params) });
   // Keep the real harness boundary, including its temporary tool-authority scope.
-  vi.doUnmock("./harness/selection.js");
-  vi.doMock("./models-config.js", () => ({
-    ensureOpenClawModelsJson: vi.fn(async () => ({ wrote: false })),
-  }));
-  vi.doMock("./embedded-agent-runner/model.js", () => ({
-    resolveModelAsync: async (provider: string, modelId: string) =>
-      createResolvedEmbeddedRunnerModel(provider, modelId),
-  }));
+  installScriptedRunnerMocks({
+    runEmbeddedAttempt: (params) => runAttempt(params),
+    hookRunner: "full",
+    realHarness: true,
+    modelsConfig: "mock",
+  });
   return {
     run: (await import("./embedded-agent-runner/run.js")).runEmbeddedAgent,
     prepare: (await import("./admitted-run-context.js")).prepareSystemAgentRunAdmission,

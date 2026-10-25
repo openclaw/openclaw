@@ -15,6 +15,7 @@ import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-ent
 import { readSessionHistoryPageInWorker } from "../config/sessions/session-history-worker-runtime.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import { readPluginInlineViewBlock } from "../shared/plugin-inline-view.js";
 import { isAssistantTextContentType } from "./chat-display-projection.helpers.js";
 import { projectChatDisplayMessages } from "./chat-display-projection.js";
 import { prepareSessionCatalogSourceParticipantProjector } from "./session-catalog-identity.js";
@@ -102,6 +103,15 @@ function projectContentItem(
   role: unknown,
   value: unknown,
 ): SessionCatalogTranscriptItem | undefined {
+  const record = asOptionalRecord(value);
+  const inline =
+    role !== "user" &&
+    (readPluginInlineViewBlock(value) ??
+      readPluginInlineViewBlock(asOptionalRecord(record?.details)?.pluginView));
+  if (inline) {
+    // The catalog is an explicitly text-only transfer: never forward component data or authority.
+    return { type: "agentMessage", ...boundedText(inline.summary) };
+  }
   if (role !== "user" && role !== "assistant") {
     return undefined;
   }
@@ -140,7 +150,8 @@ function projectMessageItems(
   const content = Array.isArray(message.content)
     ? message.content
     : [message.content ?? message.text];
-  return content
+  const inline = readPluginInlineViewBlock(asOptionalRecord(message.details)?.pluginView);
+  return (inline ? [inline] : content)
     .flatMap((block, index) => {
       const item = projectContentItem(message.role, block);
       if (!item) {
@@ -203,10 +214,10 @@ async function readCatalogPageFromEntry(
     storePath,
   };
   const scopeHash = createHash("sha256")
-    // Item offsets from the earlier tool-inclusive projection cannot resume this view.
+    // Item offsets from earlier projections (without inline summaries) cannot resume this view.
     .update(
       JSON.stringify([
-        "conversation",
+        "conversation-inline",
         params.agentId,
         params.sessionKey,
         entry.sessionId,

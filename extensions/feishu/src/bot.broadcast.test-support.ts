@@ -13,7 +13,12 @@ import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
 import { feishuGroupNameCache } from "./bot-group-name-state.js";
 import type { FeishuMessageEvent } from "./bot.js";
 import { handleFeishuMessage as handleFeishuMessageImpl } from "./bot.js";
-import { withFeishuRuntimeDefaults } from "./bot.test-support.js";
+import {
+  createFeishuTestConfig,
+  createFeishuTestEvent,
+  createFeishuTestRoute,
+  withFeishuRuntimeDefaults,
+} from "./bot.test-support.js";
 import { feishuDedupeState } from "./dedup-state.js";
 import { setFeishuRuntime } from "./runtime.js";
 
@@ -146,17 +151,17 @@ export function setupFeishuBroadcastTestHarness() {
   }
 
   function createBroadcastConfig(requireMention = true): ClawdbotConfig {
-    return {
-      broadcast: { "oc-broadcast-group": ["susan", "main"] },
-      agents: { entries: { main: {}, susan: {} } },
-      channels: {
-        feishu: {
-          appId: "cli_test",
-          appSecret: "sec_test", // pragma: allowlist secret
-          groups: { "oc-broadcast-group": { requireMention } },
-        },
+    return createFeishuTestConfig(
+      {
+        appId: "cli_test",
+        appSecret: "sec_test", // pragma: allowlist secret
+        groups: { "oc-broadcast-group": { requireMention } },
       },
-    };
+      {
+        broadcast: { "oc-broadcast-group": ["susan", "main"] },
+        agents: { entries: { main: {}, susan: {} } },
+      },
+    );
   }
 
   function createBroadcastEvent(options: {
@@ -167,17 +172,14 @@ export function setupFeishuBroadcastTestHarness() {
     const mentions = options.botMentioned
       ? [{ key: "@_user_1", id: { open_id: "bot-open-id" }, name: "Bot", tenant_key: "" }]
       : undefined;
-    return {
-      sender: { sender_id: { open_id: "ou-sender" } },
-      message: {
-        message_id: options.messageId,
-        chat_id: "oc-broadcast-group",
-        chat_type: "group",
-        message_type: "text",
-        content: JSON.stringify({ text: options.text }),
-        ...(mentions ? { mentions } : {}),
-      },
-    };
+    return createFeishuTestEvent({
+      messageId: options.messageId,
+      senderOpenId: "ou-sender",
+      chatId: "oc-broadcast-group",
+      chatType: "group",
+      text: options.text,
+      message: mentions ? { mentions } : {},
+    });
   }
 
   beforeEach(() => {
@@ -190,15 +192,9 @@ export function setupFeishuBroadcastTestHarness() {
     feishuGroupNameCache.clear();
     mocks.builtInboundContextCalls.length = 0;
     resolvedTurnCalls.length = 0;
-    mocks.mockResolveAgentRoute.mockReturnValue({
-      agentId: "main",
-      channel: "feishu",
-      accountId: "default",
-      sessionKey: "agent:main:feishu:group:oc-broadcast-group",
-      mainSessionKey: "agent:main:main",
-      lastRoutePolicy: "session",
-      matchedBy: "default",
-    });
+    mocks.mockResolveAgentRoute.mockReturnValue(
+      createFeishuTestRoute({ sessionKey: "agent:main:feishu:group:oc-broadcast-group" }),
+    );
     mocks.mockCreateFeishuReplyDispatcher.mockReturnValue(mocks.createReplyDispatcher());
     mocks.mockCreateFeishuClient.mockReturnValue({
       contact: { user: { get: vi.fn().mockResolvedValue({ data: { user: { name: "Sender" } } }) } },

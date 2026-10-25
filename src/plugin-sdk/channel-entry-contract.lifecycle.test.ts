@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createPluginCache, retirePluginCache, withPluginCache } from "../plugins/plugin-cache.js";
+import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
 import { getPluginSetupModuleLoader } from "../plugins/plugin-setup-module.js";
 import { loadBundledEntryExportSync } from "./channel-entry-contract.js";
 
@@ -35,18 +36,12 @@ function fixture(reference: string) {
   `,
   );
   const cache = createPluginCache();
-  const record = {
+  const record = createPluginManifestRecordFixture({
     id: "fixture",
-    origin: "global" as const,
+    origin: "global",
     rootDir,
     source,
-    manifestPath: path.join(rootDir, "openclaw.plugin.json"),
-    channels: [],
-    providers: [],
-    cliBackends: [],
-    hooks: [],
-    skills: [],
-  };
+  });
   const loader = withPluginCache(cache, () => getPluginSetupModuleLoader(record, source, rootDir));
   const module = loader(source) as {
     root: string;

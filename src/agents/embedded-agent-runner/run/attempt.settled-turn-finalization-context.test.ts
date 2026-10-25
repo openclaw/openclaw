@@ -1,4 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import { createOpenClawAgentHarness } from "../../harness/builtin-openclaw.js";
 import { SessionManager } from "../../sessions/session-manager.js";
@@ -40,14 +41,13 @@ describe("settled post-tool turn finalization context", () => {
       stopReason: "toolUse",
       content: [{ type: "toolCall", id: "call-read", name: "read", arguments: {} }],
     });
-    const toolResult = {
-      role: "toolResult" as const,
-      toolCallId: "call-read",
-      toolName: "read",
-      isError: false,
-      timestamp: 3,
-      content: [{ type: "text" as const, text: "file contents from completed read" }],
-    };
+    const toolResult = makeTextToolResult(
+      "call-read",
+      "read",
+      "file contents from completed read",
+      false,
+      3,
+    );
     const subscription = createSubscriptionMock();
     let toolCompleted = false;
     subscription.getItemLifecycle = () => ({
@@ -173,14 +173,7 @@ describe("settled post-tool turn finalization context", () => {
             timestamp: 2,
             content: [{ type: "toolCall", id: "call-read", name: "read", arguments: {} }],
           },
-          {
-            role: "toolResult",
-            toolCallId: "call-read",
-            toolName: "read",
-            isError: false,
-            timestamp: 3,
-            content: [{ type: "text", text: "file contents" }],
-          },
+          makeTextToolResult("call-read", "read", "file contents", false, 3),
         ];
         throw new Error(message);
       },

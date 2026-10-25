@@ -110,6 +110,10 @@ import {
 
 let preparedModelRuntime: PreparedModelRuntimeSnapshot;
 
+function modelStores() {
+  return { authStorage: { setRuntimeApiKey: hoisted.setRuntimeApiKeyMock }, modelRegistry: {} };
+}
+
 beforeEach(() => {
   hoisted.acquireRuntimeLeaseMock.mockReset();
   hoisted.resolveModelMock.mockReset();
@@ -155,10 +159,7 @@ beforeEach(() => {
       id: "claude-opus-4-6",
       api: "anthropic-messages",
     },
-    authStorage: {
-      setRuntimeApiKey: hoisted.setRuntimeApiKeyMock,
-    },
-    modelRegistry: {},
+    ...modelStores(),
   });
   hoisted.resolveModelAsyncMock.mockImplementation((...args: unknown[]) =>
     Promise.resolve(hoisted.resolveModelMock(...args)),
@@ -354,10 +355,7 @@ describe("prepareSimpleCompletionModel", () => {
   it("returns error when model resolution fails", async () => {
     hoisted.resolveModelMock.mockReturnValueOnce({
       error: "Unknown model: anthropic/missing-model",
-      authStorage: {
-        setRuntimeApiKey: hoisted.setRuntimeApiKeyMock,
-      },
-      modelRegistry: {},
+      ...modelStores(),
     });
 
     const result = await prepareSimpleCompletionModel({
@@ -404,10 +402,7 @@ describe("prepareSimpleCompletionModel", () => {
         id: "anthropic.claude-sonnet-4-6",
         api: "bedrock-converse-stream",
       },
-      authStorage: {
-        setRuntimeApiKey: hoisted.setRuntimeApiKeyMock,
-      },
-      modelRegistry: {},
+      ...modelStores(),
     });
     hoisted.getApiKeyForModelMock.mockResolvedValueOnce({
       source: "aws-sdk default chain",
@@ -440,10 +435,7 @@ describe("prepareSimpleCompletionModel", () => {
         api: "anthropic-messages",
         baseUrl: "https://bedrock-mantle.us-east-1.api.aws/anthropic",
       },
-      authStorage: {
-        setRuntimeApiKey: hoisted.setRuntimeApiKeyMock,
-      },
-      modelRegistry: {},
+      ...modelStores(),
     });
     hoisted.getApiKeyForModelMock.mockResolvedValueOnce({
       apiKey: "__amazon_bedrock_mantle_iam__",

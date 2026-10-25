@@ -12,6 +12,7 @@ import { resolvePersistedSessionStoreOwner } from "../../config/sessions/session
 import { listConfiguredSessionStoreAgentIds } from "../../config/sessions/targets-configured-agents.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+import { assertionSucceeds } from "../../shared/assertion.js";
 import { captureGatewayAuthPolicy, isGatewayAuthPolicyCurrent } from "../auth-policy.js";
 import { readGatewayAccessRevision } from "../gateway-access-revision.js";
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
@@ -222,14 +223,7 @@ export function createApprovalRequestAuthority(options: GatewayRequestHandlerOpt
     bindSource,
     assertCurrent,
     assertCommitCurrent: guard.assertCurrent,
-    isCurrent: () => {
-      try {
-        assertCurrent();
-        return true;
-      } catch {
-        return false;
-      }
-    },
+    isCurrent: () => assertionSucceeds(assertCurrent),
     [Symbol.dispose]() {
       closed = true;
       releaseConfig();

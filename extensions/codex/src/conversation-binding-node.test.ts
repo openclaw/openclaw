@@ -67,7 +67,6 @@ it.each(["unchanged", "detached", "replaced", "policy-refused"])(
           bindingStore,
           config: { tools: { exec: { host: "node", node: "mb-m5" } } },
           resumeCodexCliSessionOnNode,
-          timeoutMs: 1234,
         },
       );
 
@@ -96,7 +95,6 @@ it.each(["unchanged", "detached", "replaced", "policy-refused"])(
       ...nodeSession,
       sessionKey: "node-session",
       prompt: "continue the task",
-      timeoutMs: 1234,
     });
   },
 );

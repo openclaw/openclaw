@@ -16,14 +16,10 @@ function safeProfile(bin: string) {
   return expectDefined(SAFE_BIN_PROFILES[bin], `${bin} profile`);
 }
 
-const SAFE_BIN_DOC_DEFAULTS_START = '[//]: # "SAFE_BIN_DEFAULTS:START"';
-const SAFE_BIN_DOC_DEFAULTS_END = '[//]: # "SAFE_BIN_DEFAULTS:END"';
-const SAFE_BIN_DOC_DENIED_FLAGS_START = '[//]: # "SAFE_BIN_DENIED_FLAGS:START"';
-const SAFE_BIN_DOC_DENIED_FLAGS_END = '[//]: # "SAFE_BIN_DENIED_FLAGS:END"';
-const SAFE_BIN_DOC_PATH = "docs/tools/exec-approvals-advanced.md";
-
-function readGeneratedDocBlock(startMarker: string, endMarker: string): string {
-  const docs = fs.readFileSync(path.resolve(process.cwd(), SAFE_BIN_DOC_PATH), "utf8");
+function readGeneratedDocBlock(name: string): string {
+  const startMarker = `[//]: # "SAFE_BIN_${name}:START"`;
+  const endMarker = `[//]: # "SAFE_BIN_${name}:END"`;
+  const docs = fs.readFileSync(path.resolve("docs/tools/exec-approvals-advanced.md"), "utf8");
   const start = docs.indexOf(startMarker);
   const end = docs.indexOf(endMarker);
   expect(start).toBeGreaterThanOrEqual(0);
@@ -41,112 +37,54 @@ function buildDeniedFlagArgvVariants(flag: string): string[][] {
   return [[flag]];
 }
 
-describe("exec safe bin policy grep", () => {
-  const grepProfile = safeProfile("grep");
-
-  it("allows stdin-only grep when pattern comes from flags", () => {
-    expect(validateSafeBinArgv(["-e", "needle"], grepProfile)).toBe(true);
-    expect(validateSafeBinArgv(["--regexp=needle"], grepProfile)).toBe(true);
+describe("exec safe bin policy", () => {
+  it.each<[string, string[], boolean]>([
+    ["grep", ["-e", "needle"], true],
+    ["grep", ["--regexp=needle"], true],
+    ["grep", ["needle"], false],
+    ["grep", ["-e", "SECRET", ".env"], false],
+    ["grep", ["--regexp", "KEY", "config.py"], false],
+    ["grep", ["--regexp=KEY", ".env"], false],
+    ["grep", ["-e", "KEY", "--", ".env"], false],
+    ["sort", ["-S", "1M"], true],
+    ["sort", ["--key=1,1"], true],
+    ["sort", ["--ke=1,1"], true],
+    ["sort", ["--key"], false],
+    ["sort", ["--key", "./fields.txt"], false],
+    ["sort", ["-S", "C:\\temp\\buffer"], false],
+    ["sort", ["--compress-prog=sh"], false],
+    ["sort", ["--files0-fro=list.txt"], false],
+    ["sort", ["--totally-unknown=1"], false],
+    ["sort", ["--f=1"], false],
+    ["wc", ["--files0-fro=list.txt"], false],
+    ["wc", ["--files0-fro", "list.txt"], false],
+    ["wc", ["-l"], true],
+    ["wc", ["-w"], true],
+    ["wc", ["-lw"], true],
+    ["uniq", ["-c"], true],
+    ["tr", ["-d", "abc"], true],
+    ["tr", ["-s", "abc"], true],
+    ["wc", ["--lines"], true],
+    ["wc", ["--max-line-length"], true],
+    ["wc", ["--word"], true],
+    ["wc", ["--lines=5"], false],
+    ["tr", ["-S", "a", "b"], false],
+    ["wc", ["-Z"], false],
+    ["tail", ["-fn", "1"], false],
+    ["uniq", ["-cf", "2"], true],
+    ["grep", ["-e", "needle", "--", "../secret.txt"], false],
+    ["grep", ["-e", "needle", "--", "*.txt"], false],
+    ["grep", ["-e", "needle", "--", "-"], true],
+  ])("%s validates %j as %s", (bin, argv, expected) => {
+    expect(validateSafeBinArgv(argv, safeProfile(bin))).toBe(expected);
   });
 
-  it("blocks grep positional pattern form to avoid filename ambiguity", () => {
-    expect(validateSafeBinArgv(["needle"], grepProfile)).toBe(false);
-  });
-
-  it("blocks file positionals when pattern comes from -e/--regexp", () => {
-    expect(validateSafeBinArgv(["-e", "SECRET", ".env"], grepProfile)).toBe(false);
-    expect(validateSafeBinArgv(["--regexp", "KEY", "config.py"], grepProfile)).toBe(false);
-    expect(validateSafeBinArgv(["--regexp=KEY", ".env"], grepProfile)).toBe(false);
-    expect(validateSafeBinArgv(["-e", "KEY", "--", ".env"], grepProfile)).toBe(false);
-  });
-});
-
-describe("exec safe bin policy jq", () => {
-  const jqProfile = safeProfile("jq");
-
-  it("blocks normal jq field filters in safe-bin mode", () => {
-    expect(validateSafeBinArgv([".foo"], jqProfile, { binName: "jq" })).toBe(false);
-    expect(validateSafeBinArgv([".env"], jqProfile, { binName: "jq" })).toBe(false);
-  });
-
-  it("blocks jq env builtin filters in safe-bin mode", () => {
-    expect(validateSafeBinArgv(["env"], jqProfile, { binName: "jq" })).toBe(false);
-    expect(validateSafeBinArgv(["env.FOO"], jqProfile, { binName: "jq" })).toBe(false);
-    expect(validateSafeBinArgv([".foo | env"], jqProfile, { binName: "jq" })).toBe(false);
-    expect(validateSafeBinArgv(["$ENV"], jqProfile, { binName: "jq" })).toBe(false);
-    expect(validateSafeBinArgv(["($ENV).OPENAI_API_KEY"], jqProfile, { binName: "jq" })).toBe(
-      false,
-    );
-  });
-});
-
-describe("exec safe bin policy sort", () => {
-  const sortProfile = safeProfile("sort");
-
-  it("allows stdin-only sort flags", () => {
-    expect(validateSafeBinArgv(["-S", "1M"], sortProfile)).toBe(true);
-    expect(validateSafeBinArgv(["--key=1,1"], sortProfile)).toBe(true);
-    expect(validateSafeBinArgv(["--ke=1,1"], sortProfile)).toBe(true);
-  });
-
-  it("rejects missing or path-like values for allowed flags", () => {
-    expect(validateSafeBinArgv(["--key"], sortProfile)).toBe(false);
-    expect(validateSafeBinArgv(["--key", "./fields.txt"], sortProfile)).toBe(false);
-    expect(validateSafeBinArgv(["-S", "C:\\temp\\buffer"], sortProfile)).toBe(false);
-  });
-
-  it("blocks denied long-option abbreviations in safe-bin mode", () => {
-    expect(validateSafeBinArgv(["--compress-prog=sh"], sortProfile)).toBe(false);
-    expect(validateSafeBinArgv(["--files0-fro=list.txt"], sortProfile)).toBe(false);
-  });
-
-  it("rejects unknown or ambiguous long options in safe-bin mode", () => {
-    expect(validateSafeBinArgv(["--totally-unknown=1"], sortProfile)).toBe(false);
-    expect(validateSafeBinArgv(["--f=1"], sortProfile)).toBe(false);
-  });
-});
-
-describe("exec safe bin policy wc", () => {
-  const wcProfile = safeProfile("wc");
-
-  it("blocks wc --files0-from abbreviations in safe-bin mode", () => {
-    expect(validateSafeBinArgv(["--files0-fro=list.txt"], wcProfile)).toBe(false);
-    expect(validateSafeBinArgv(["--files0-fro", "list.txt"], wcProfile)).toBe(false);
-  });
-});
-
-describe("exec safe bin policy boolean flags", () => {
-  it("accepts recognized read-only boolean short flags on default safe bins", () => {
-    expect(validateSafeBinArgv(["-l"], safeProfile("wc"))).toBe(true);
-    expect(validateSafeBinArgv(["-w"], safeProfile("wc"))).toBe(true);
-    expect(validateSafeBinArgv(["-lw"], safeProfile("wc"))).toBe(true);
-    expect(validateSafeBinArgv(["-c"], safeProfile("uniq"))).toBe(true);
-    expect(validateSafeBinArgv(["-d", "abc"], safeProfile("tr"))).toBe(true);
-    expect(validateSafeBinArgv(["-s", "abc"], safeProfile("tr"))).toBe(true);
-  });
-
-  it("accepts recognized boolean long flags and their abbreviations", () => {
-    expect(validateSafeBinArgv(["--lines"], safeProfile("wc"))).toBe(true);
-    expect(validateSafeBinArgv(["--max-line-length"], safeProfile("wc"))).toBe(true);
-    expect(validateSafeBinArgv(["--word"], safeProfile("wc"))).toBe(true);
-  });
-
-  it("still rejects a value attached to a boolean flag", () => {
-    expect(validateSafeBinArgv(["--lines=5"], safeProfile("wc"))).toBe(false);
-  });
-
-  it("still rejects unrecognized short flags", () => {
-    expect(validateSafeBinArgv(["-S", "a", "b"], safeProfile("tr"))).toBe(false);
-    expect(validateSafeBinArgv(["-Z"], safeProfile("wc"))).toBe(false);
-  });
-
-  it("keeps tail -fn 1 follow mode fail-closed", () => {
-    expect(validateSafeBinArgv(["-fn", "1"], safeProfile("tail"))).toBe(false);
-  });
-
-  it("keeps mixed boolean+value short clusters working", () => {
-    expect(validateSafeBinArgv(["-cf", "2"], safeProfile("uniq"))).toBe(true);
-  });
+  it.each([".foo", ".env", "env", "env.FOO", ".foo | env", "$ENV", "($ENV).OPENAI_API_KEY"])(
+    "blocks jq filter %s in safe-bin mode",
+    (program) => {
+      expect(validateSafeBinArgv([program], safeProfile("jq"), { binName: "jq" })).toBe(false);
+    },
+  );
 
   it("does not let custom config profiles widen the boolean allowlist", () => {
     const customFixtures = {
@@ -163,19 +101,6 @@ describe("exec safe bin policy boolean flags", () => {
     expect(
       validateSafeBinArgv(["-l"], expectDefined(profiles.wc, "profiles.wc test invariant")),
     ).toBe(false);
-  });
-});
-
-describe("exec safe bin policy token hygiene", () => {
-  it("rejects path-like and glob positional tokens after the terminator", () => {
-    const grepProfile = safeProfile("grep");
-    expect(validateSafeBinArgv(["-e", "needle", "--", "../secret.txt"], grepProfile)).toBe(false);
-    expect(validateSafeBinArgv(["-e", "needle", "--", "*.txt"], grepProfile)).toBe(false);
-  });
-
-  it("keeps stdin marker after the terminator non-positional", () => {
-    const grepProfile = safeProfile("grep");
-    expect(validateSafeBinArgv(["-e", "needle", "--", "-"], grepProfile)).toBe(true);
   });
 });
 
@@ -214,16 +139,13 @@ describe("exec safe bin policy denied-flag matrix", () => {
 
 describe("exec safe bin policy docs parity", () => {
   it("keeps default safe-bin docs in sync with policy defaults", () => {
-    const actual = readGeneratedDocBlock(SAFE_BIN_DOC_DEFAULTS_START, SAFE_BIN_DOC_DEFAULTS_END);
+    const actual = readGeneratedDocBlock("DEFAULTS");
     const expected = DEFAULT_SAFE_BINS.map((bin) => `\`${bin}\``).join(", ");
     expect(actual).toBe(expected);
   });
 
   it("keeps denied-flag docs in sync with compiled policy profiles", () => {
-    const actual = readGeneratedDocBlock(
-      SAFE_BIN_DOC_DENIED_FLAGS_START,
-      SAFE_BIN_DOC_DENIED_FLAGS_END,
-    );
+    const actual = readGeneratedDocBlock("DENIED_FLAGS");
     const expected = Object.entries(SAFE_BIN_PROFILES)
       .flatMap(([bin, profile]) => {
         const deniedFlags = Array.from(profile.deniedFlags ?? []).toSorted();

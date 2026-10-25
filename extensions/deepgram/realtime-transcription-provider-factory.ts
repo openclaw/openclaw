@@ -296,7 +296,6 @@ export function buildDeepgramRealtimeTranscriptionProvider({
             // Finalize may produce no Results event when Deepgram has no buffered
             // audio left. Preserve already-finalized text before core force-closes.
             finalizeFallbackTimer = setTimeout(() => {
-              finalizeFallbackTimer = undefined;
               finalizeFallbackFired = true;
               try {
                 flushTurn();

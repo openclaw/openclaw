@@ -12,6 +12,7 @@ import {
   validateWakeParams,
   type ValidationError,
 } from "./index.js";
+import { CommandsListParamsSchema } from "./schema/commands.js";
 
 type ProtocolValidator = (value: unknown) => boolean;
 
@@ -38,12 +39,18 @@ function makeError(overrides: Partial<ValidationError>): ValidationError {
   };
 }
 
-describe("lazy protocol validators", () => {
-  it("validates through exported lazy validators", () => {
+describe("precompiled protocol validators", () => {
+  it("validates through exported checks and preserves schema and mutable error state", () => {
     expect(validateCommandsListParams({})).toBe(true);
     expect(validateCommandsListParams({ includeArgs: true })).toBe(true);
     expect(validateCommandsListParams({ includeArgs: "yes" })).toBe(false);
     expect(formatValidationErrors(validateCommandsListParams.errors)).toContain("must be boolean");
+    expect(validateCommandsListParams.schema).toBe(CommandsListParamsSchema);
+    const errors = validateCommandsListParams.errors;
+    validateCommandsListParams.errors = null;
+    expect(validateCommandsListParams.errors).toBeNull();
+    validateCommandsListParams.errors = errors;
+    expect(validateCommandsListParams.errors).toBe(errors);
   });
 
   it("requires ascending activity boundaries without coercing hostile elements", () => {
@@ -104,7 +111,21 @@ describe("lazy protocol validators", () => {
     expectRejected(protocol.validateSkillsWorkshopUndoParams, [{}, { runId: "" }, { name: "x" }]);
   });
 
-  it("can still compile every exported protocol validator", () => {
+  it("validates registered Board content through exported checks", () => {
+    const content = { kind: "registered", contentKind: "a2ui", source: "{}" };
+    const pin = { sessionKey: "agent:main:main", name: "legacy", content };
+    expect(protocol.validateBoardWidgetContent(content)).toBe(true);
+    expect(protocol.validateBoardWidgetPutParams(pin)).toBe(true);
+    for (const invalid of [
+      { ...content, contentKind: "A2UI" },
+      { ...content, source: "x".repeat(262_145) },
+    ]) {
+      expect(protocol.validateBoardWidgetContent(invalid)).toBe(false);
+      expect(protocol.validateBoardWidgetPutParams({ ...pin, content: invalid })).toBe(false);
+    }
+  });
+
+  it("invokes every exported protocol validator", () => {
     const failures: string[] = [];
     let count = 0;
     for (const [name, validate] of Object.entries(protocol)) {
@@ -129,23 +150,23 @@ describe("formatValidationErrors", () => {
     expect(formatValidationErrors(null)).toBe("unknown validation error");
   });
 
-  it("formats additionalProperties at root", () => {
+  it.each([
+    ["additionalProperties", "additionalProperty", "", "at root: unexpected property 'token'"],
+    [
+      "additionalProperties",
+      "additionalProperty",
+      "/auth",
+      "at /auth: unexpected property 'token'",
+    ],
+    ["required", "missingProperty", "", "must have required property 'token'"],
+    ["required", "missingProperty", "/auth", "at /auth: must have required property 'token'"],
+  ])("formats %s %s at %s", (keyword, field, instancePath, expected) => {
     const err = makeError({
-      keyword: "additionalProperties",
-      params: { additionalProperty: "token" },
+      keyword,
+      instancePath,
+      params: { [field]: "token" },
     });
-    expect(formatValidationErrors([err])).toBe("at root: unexpected property 'token'");
-  });
-
-  it("formats additionalProperties with instancePath", () => {
-    const err: ValidationError = {
-      keyword: "additionalProperties",
-      instancePath: "/auth",
-      params: { additionalProperty: "token" },
-      schemaPath: "#/",
-      message: "validation error",
-    };
-    expect(formatValidationErrors([err])).toBe("at /auth: unexpected property 'token'");
+    expect(formatValidationErrors([err])).toBe(expected);
   });
 
   it.each(["required", "additionalProperties"])(

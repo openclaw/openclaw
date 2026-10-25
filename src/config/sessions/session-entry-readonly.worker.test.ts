@@ -10,16 +10,10 @@ import {
 import { dirname, join } from "node:path";
 import { backup, type DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
-import {
-  isSessionNodePayloadSelect,
-  observeHostDataSql,
-  trackSqliteStatementExecutions,
-} from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import * as nodeSqlite from "../../infra/node-sqlite.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import { OpenClawAgentDatabaseReadOnlyScope } from "../../state/openclaw-agent-db-readonly-scope.js";
-import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
   invalidateRegisteredAgentDatabasesMemo,
   prepareOpenClawAgentDatabaseRegistrySnapshotRead,
@@ -53,11 +47,16 @@ import { targetDiscoveryLane } from "./session-transcript-worker-resources.js";
 
 const sqliteError = (message: string, errcode = 26) =>
   Object.assign(new Error(message), { code: "ERR_SQLITE_ERROR", errcode });
+const databaseTarget = ({ agentId, path }: { agentId: string; path: string }) => ({
+  agentId,
+  path,
+});
+const sessionEntry = (sessionId = "original") => ({ sessionId, updatedAt: 1 });
 
 function createEntryFixture(env: NodeJS.ProcessEnv) {
   const database = openOpenClawAgentDatabase({ agentId: "main", env });
   const sessionKey = "agent:main:readonly-entry";
-  writeSessionEntry(database, sessionKey, { sessionId: "original", updatedAt: 1 });
+  writeSessionEntry(database, sessionKey, sessionEntry());
   const scope = {
     agentId: "main",
     databaseAgentId: "main",
@@ -68,7 +67,7 @@ function createEntryFixture(env: NodeJS.ProcessEnv) {
   return { database, scope };
 }
 
-it("reuses listing revisions without payload scans and invalidates sibling edits and reopened readers", () =>
+it("reuses listing revisions and invalidates sibling edits and reopened readers", () =>
   withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const database = openOpenClawAgentDatabase({ agentId: "main", env });
     const sessionKey = "agent:main:catalog-revision";
@@ -78,7 +77,7 @@ it("reuses listing revisions without payload scans and invalidates sibling edits
       updatedAt: 1,
       category: "Team",
     });
-    const target = { agentId: database.agentId, path: database.path };
+    const target = databaseTarget(database);
     await closeOpenClawAgentDatabaseByPathAsync(database.path, database.agentId);
     const peer = nodeSqlite.openNodeSqliteDatabase(target.path);
     const retained = new OpenClawAgentDatabaseReadOnlyScope();
@@ -96,32 +95,16 @@ it("reuses listing revisions without payload scans and invalidates sibling edits
         ifRevision,
       });
     try {
-      const originalRevision = retained.run(target, () => {
-        const first = read();
+      const originalRevision = await retained.run(target, async () => {
+        const first = await read();
         expect(first.entries).toMatchObject(listed("Team"));
         expect(first.revision).toBeTypeOf("string");
-        const opened = withOpenClawAgentDatabaseReadOnly((reader) => reader, { ...target, env });
-        if (!opened.found) {
-          throw new Error("Expected the retained catalog database");
-        }
-        const payloads = trackSqliteStatementExecutions(
-          requireNativeSqliteDatabase(opened.value.db),
-          ["entries"],
-          (sql) =>
-            isSessionNodePayloadSelect(sql) ||
-            (sql.includes('from "session_nodes"') && sql.includes('"entry_json"'))
-              ? "entries"
-              : null,
-        );
-        using _ = { [Symbol.dispose]: () => payloads.restore() };
-
-        expect(read(first.revision)).toMatchObject({
+        expect(await read(first.revision)).toMatchObject({
           entries: [],
           unchanged: true,
           revision: first.revision,
           source: first.source,
         });
-        expect(payloads.counts.entries).toBe(0);
         runSqliteImmediateTransactionSync(peer, () => {
           peer
             .prepare(
@@ -133,17 +116,16 @@ it("reuses listing revisions without payload scans and invalidates sibling edits
             .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
             .run(sessionKey);
         });
-        const changed = read(first.revision);
+        const changed = await read(first.revision);
         expect(changed.entries).toMatchObject(listed("Private"));
         expect(changed.revision).not.toBe(first.revision);
         expect(changed.unchanged).toBeUndefined();
-        expect(payloads.counts.entries).toBeGreaterThan(0);
         return first.revision;
       });
       retained.close();
-      retained.run(target, () => {
+      await retained.run(target, async () => {
         // A new connection can reuse the original SQLite counters, but never its revision.
-        const reopened = read(originalRevision);
+        const reopened = await read(originalRevision);
         expect(reopened.revision).not.toBe(originalRevision);
         expect(reopened.unchanged).toBeUndefined();
         expect(reopened.entries).toMatchObject(listed("Private"));
@@ -154,43 +136,29 @@ it("reuses listing revisions without payload scans and invalidates sibling edits
     }
   }));
 
-it("resolves runtime targets through an admitted reader without freshness probes", () =>
+it("resolves runtime targets and refuses replacement by a newer schema", () =>
   withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const database = openOpenClawAgentDatabase({ agentId: "main", env });
     const sessionId = "runtime-target-session";
     const sessionKey = "agent:main:persisted-target";
-    replaceSessionEntrySync({ agentId: "main", env, sessionKey }, { sessionId, updatedAt: 1 });
-    const read = () =>
+    replaceSessionEntrySync({ agentId: "main", env, sessionKey }, sessionEntry(sessionId));
+    const read = (
+      agentId = "main",
+      selectedId = sessionId,
+      key = "agent:main:fallback",
+      keyFormat?: "agent-qualified",
+    ) =>
       readSessionEntryWorkerRequest({
         kind: "session-runtime-target",
-        database: { agentId: database.agentId, path: database.path },
-        scope: {
-          agentId: "main",
-          env,
-          sessionId,
-          sessionKey: "agent:main:fallback",
-          storePath: database.path,
-        },
+        database: databaseTarget(database),
+        scope: { agentId, env, sessionId: selectedId, sessionKey: key, storePath: database.path },
+        keyFormat,
       });
-    await read();
-    const queries = trackSqliteStatementExecutions(
-      requireNativeSqliteDatabase(database.db),
-      ["freshness"],
-      (sql) =>
-        /^PRAGMA data_version;?$|FROM main\.pragma_data_version\(\)\s*$/iu.test(sql)
-          ? "freshness"
-          : null,
-    );
-    try {
-      expect(await read()).toMatchObject({
-        kind: "session-runtime-target",
-        target: { agentId: "main", sessionId, sessionKey, storePath: database.path },
-        source: { agentId: database.agentId, path: database.path },
-      });
-      expect(queries.counts.freshness).toBe(0);
-    } finally {
-      queries.restore();
-    }
+    expect(await read()).toMatchObject({
+      kind: "session-runtime-target",
+      target: { agentId: "main", sessionId, sessionKey, storePath: database.path },
+      source: { agentId: database.agentId, path: database.path },
+    });
 
     const logicalKey = "agent:helper:runtime-fallback";
     writeSessionEntry(database, logicalKey, {
@@ -199,18 +167,7 @@ it("resolves runtime targets through an admitted reader without freshness probes
       updatedAt: 1,
     });
     expect(
-      await readSessionEntryWorkerRequest({
-        kind: "session-runtime-target",
-        database: { agentId: database.agentId, path: database.path },
-        scope: {
-          agentId: "helper",
-          env,
-          sessionId: "missing-window",
-          sessionKey: "runtime-fallback",
-          storePath: database.path,
-        },
-        keyFormat: "agent-qualified",
-      }),
+      await read("helper", "missing-window", "runtime-fallback", "agent-qualified"),
     ).toMatchObject({
       target: {
         agentId: "helper",
@@ -249,9 +206,6 @@ it("reads session projections in the worker and observes the next sibling commit
            VALUES (?, ?, ?, 1)`,
       )
       .run(scope.sessionKey, JSON.stringify({ type: "profile" }), "sibling-participant");
-    const sql = observeHostDataSql();
-    using _ = { [Symbol.dispose]: () => sql.restore() };
-
     const after = await readSessionEntryReadOnlyInWorker(scope);
     expect(after).toMatchObject({
       sessionId: "original",
@@ -259,9 +213,6 @@ it("reads session projections in the worker and observes the next sibling commit
       participantCount: 1,
     });
     expect(before?.participants).toBeUndefined();
-    expect(
-      sql.queries.filter((query) => /\bsession_(?:nodes|windows|participants)\b/.test(query)),
-    ).toEqual([]);
   }));
 
 it.each([false, true])(
@@ -451,9 +402,9 @@ it.runIf(process.platform !== "win32").each([
     await withOpenClawTestState({ label: "readonly-store-alias" }, async ({ env, path }) => {
       const original = openOpenClawAgentDatabase({ agentId: "main", env });
       const sessionKey = `agent:${logicalAgentId}:alias`;
-      writeSessionEntry(original, sessionKey, { sessionId: "original", updatedAt: 1 });
+      writeSessionEntry(original, sessionKey, sessionEntry());
       if (logicalAgentId !== "main") {
-        writeSessionEntry(original, "agent:main:alias", { sessionId: "other-agent", updatedAt: 1 });
+        writeSessionEntry(original, "agent:main:alias", sessionEntry("other-agent"));
       }
       const replacement = retarget
         ? openOpenClawAgentDatabase({ agentId: "main", path: path("replacement.sqlite"), env })

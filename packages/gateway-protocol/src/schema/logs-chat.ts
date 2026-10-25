@@ -125,7 +125,18 @@ export const ChatInputConsumptionsSchema = Type.Array(
 );
 export type ChatInputConsumptions = Static<typeof ChatInputConsumptionsSchema>;
 
+/** Legacy persisted activity receipts; retained so existing history still validates. */
+export const AgentActivityDelegationSchema = closedObject({
+  runId: Type.String({ minLength: 1, maxLength: 256 }),
+  childSessionKey: Type.String({ minLength: 1, maxLength: 1024 }),
+  label: Type.Optional(Type.String({ minLength: 1, maxLength: 512 })),
+  groupId: Type.Optional(Type.String({ minLength: 1, maxLength: 512 })),
+  runtimeMs: Type.Optional(Type.Number({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER })),
+  status: stringLiteralUnion(["accepted", "done", "failed", "killed", "timeout"]),
+});
+export type AgentActivityDelegation = Static<typeof AgentActivityDelegationSchema>;
 export const AgentActivityItemSchema = closedObject({
+  delegation: Type.Optional(Type.Array(AgentActivityDelegationSchema, { maxItems: 32 })),
   itemId: NonEmptyString,
   phase: stringLiteralUnion(["start", "update", "end"]),
   kind: Type.String(),
@@ -429,6 +440,7 @@ export const ChatRunStartupPhaseSchema = stringLiteralUnion([
   "waiting_for_state",
   "preparing_workspace",
   "naming_worktree",
+  "preparing_worktree_base",
   "creating_worktree",
   "running_setup",
   "provisioning_environment",

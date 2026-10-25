@@ -154,7 +154,7 @@ export async function executeSendAction(params: SendActionParams): Promise<{
     params.ctx.input.requireQueuePersistence === true;
   const channelPlugin = params.ctx.channelPlugin;
   const prepareSendPayload =
-    !requiresCoreDelivery && channelPlugin?.outbound
+    !requiresCoreDelivery && channelPlugin.outbound
       ? channelPlugin.actions?.prepareSendPayload
       : undefined;
   const preparedPayload = prepareSendPayload
@@ -172,7 +172,7 @@ export async function executeSendAction(params: SendActionParams): Promise<{
   const corePayload = requiresCoreDelivery
     ? defaultPayload
     : preparedPayload ||
-      (!prepareSendPayload && presentation && hasCorePresentationDelivery(channelPlugin?.outbound)
+      (!prepareSendPayload && presentation && hasCorePresentationDelivery(channelPlugin.outbound)
         ? defaultPayload
         : null);
   if (!corePayload) {
@@ -237,7 +237,7 @@ export async function executeSendAction(params: SendActionParams): Promise<{
   const message =
     corePayload &&
     normalizeMessagePresentation(corePayload.presentation) &&
-    channelPlugin?.outbound?.deliveryMode === "gateway"
+    channelPlugin.outbound?.deliveryMode === "gateway"
       ? materializeMessagePresentationFallback({ payload: corePayload, text: params.message })
       : params.message;
   const deliveredPayloads: NormalizedOutboundPayload[] = [];

@@ -60,58 +60,6 @@ function isAppOnlyTool(tool: McpCatalogTool): boolean {
   return tool.uiVisibility !== undefined && !tool.uiVisibility.includes("model");
 }
 
-function buildAppToolPolicyProjections(params: {
-  catalog: McpToolCatalog;
-  modelTools: readonly AnyAgentTool[];
-  reservedToolNames?: Iterable<string>;
-}): AnyAgentTool[] {
-  const tools = params.modelTools.filter(
-    (tool) => getPluginToolMeta(tool)?.mcp?.operation === "tool",
-  );
-  const reservedNames = normalizeReservedToolNames([
-    ...(params.reservedToolNames ?? []),
-    ...params.modelTools.map((tool) => tool.name),
-  ]);
-  const appOnlyTools = params.catalog.tools.filter(isAppOnlyTool).toSorted((a, b) => {
-    const serverOrder = a.safeServerName.localeCompare(b.safeServerName);
-    return serverOrder || a.toolName.localeCompare(b.toolName);
-  });
-  for (const tool of appOnlyTools) {
-    const server = params.catalog.servers[tool.serverName];
-    const name = buildSafeToolName({
-      serverName: tool.safeServerName,
-      toolName: tool.toolName,
-      reservedNames,
-    });
-    reservedNames.add(normalizeLowercaseStringOrEmpty(name));
-    const projection: AnyAgentTool = {
-      name,
-      label: tool.title ?? tool.toolName,
-      description: tool.description || tool.fallbackDescription,
-      parameters: normalizeToolParameterSchema(tool.inputSchema, { toolName: name }),
-      execute: async () => {
-        throw new Error("MCP App policy projections cannot execute tools");
-      },
-    };
-    setPluginToolMeta(projection, {
-      pluginId: "bundle-mcp",
-      optional: false,
-      mcp: {
-        serverName: tool.serverName,
-        safeServerName: tool.safeServerName,
-        toolName: tool.toolName,
-        operation: "tool",
-        codexApproval: {
-          mode: server?.codexApprovalMode,
-          ...(tool.codexAnnotations ? { annotations: tool.codexAnnotations } : {}),
-        },
-      },
-    });
-    tools.push(projection);
-  }
-  return tools.toSorted((a, b) => a.name.localeCompare(b.name));
-}
-
 function toJsonAgentToolResult(params: {
   serverName: string;
   operation: string;
@@ -623,15 +571,52 @@ export async function materializeBundleMcpToolsForRun(params: {
             })
         : undefined,
     });
-    const appTools = buildAppToolPolicyProjections({
-      catalog: materializedCatalog,
-      modelTools: tools,
-      reservedToolNames,
+    const appTools = tools.filter((tool) => getPluginToolMeta(tool)?.mcp?.operation === "tool");
+    const reservedNames = normalizeReservedToolNames([
+      ...(reservedToolNames ?? []),
+      ...tools.map((tool) => tool.name),
+    ]);
+    const appOnlyTools = materializedCatalog.tools.filter(isAppOnlyTool).toSorted((a, b) => {
+      const serverOrder = a.safeServerName.localeCompare(b.safeServerName);
+      return serverOrder || a.toolName.localeCompare(b.toolName);
     });
+    for (const tool of appOnlyTools) {
+      const server = materializedCatalog.servers[tool.serverName];
+      const name = buildSafeToolName({
+        serverName: tool.safeServerName,
+        toolName: tool.toolName,
+        reservedNames,
+      });
+      reservedNames.add(normalizeLowercaseStringOrEmpty(name));
+      const projection: AnyAgentTool = {
+        name,
+        label: tool.title ?? tool.toolName,
+        description: tool.description || tool.fallbackDescription,
+        parameters: normalizeToolParameterSchema(tool.inputSchema, { toolName: name }),
+        execute: async () => {
+          throw new Error("MCP App policy projections cannot execute tools");
+        },
+      };
+      setPluginToolMeta(projection, {
+        pluginId: "bundle-mcp",
+        optional: false,
+        mcp: {
+          serverName: tool.serverName,
+          safeServerName: tool.safeServerName,
+          toolName: tool.toolName,
+          operation: "tool",
+          codexApproval: {
+            mode: server?.codexApprovalMode,
+            ...(tool.codexAnnotations ? { annotations: tool.codexAnnotations } : {}),
+          },
+        },
+      });
+      appTools.push(projection);
+    }
 
     return {
       tools,
-      appTools,
+      appTools: appTools.toSorted((a, b) => a.name.localeCompare(b.name)),
       ...(catalog.diagnostics && catalog.diagnostics.length > 0
         ? { diagnostics: catalog.diagnostics }
         : {}),

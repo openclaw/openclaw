@@ -125,24 +125,28 @@ describe("canonical model-reference migration", () => {
     expect(config.agents?.defaults?.models).toBeUndefined();
   });
 
-  it("retires unselected legacy keys without losing nested authored fields", () => {
+  it("uses the same migration for image, video, and music model slots", () => {
+    const config = defaults({ mediaModels: mediaModels("google-gemini-cli") });
+    expect(normalizeRefs(config, []).agents?.defaults?.mediaModels).toEqual(mediaModels("google"));
+  });
+
+  it("merges unselected model entries without losing authored fields or retaining blocked keys", () => {
     const config = defaults({
       model: "openai/current-model",
       models: {
         "claude-cli/assistant-a": {
           alias: "Legacy alias",
-          params: { temperature: 0.3, maxTokens: 1200 },
+          params: { temperature: 0.3, maxTokens: 1200, constructor: { polluted: true } },
         },
         "anthropic/assistant-a": {
           alias: "Canonical alias",
-          params: { temperature: 0.8 },
+          params: { temperature: 0.8, ["__proto__"]: { polluted: true } },
           agentRuntime: { id: "openclaw" },
         },
       },
     });
     const changes: string[] = [];
     const result = normalizeRefs(config, changes);
-
     expect(result.agents?.defaults?.models).toEqual({
       "anthropic/assistant-a": {
         alias: "Canonical alias",
@@ -150,33 +154,10 @@ describe("canonical model-reference migration", () => {
         agentRuntime: { id: "openclaw" },
       },
     });
+    expect(Reflect.get(Object.prototype, "polluted")).toBeUndefined();
     expect(result.agents?.defaults?.model).toBe("openai/current-model");
     expect(changes).not.toEqual([]);
     expectIdempotent(result);
-  });
-
-  it("uses the same migration for image, video, and music model slots", () => {
-    const config = defaults({ mediaModels: mediaModels("google-gemini-cli") });
-    expect(normalizeRefs(config, []).agents?.defaults?.mediaModels).toEqual(mediaModels("google"));
-  });
-
-  it("removes blocked nested fields when legacy and canonical model entries collide", () => {
-    const config = defaults({
-      models: {
-        "claude-cli/assistant-a": { params: { maxTokens: 1200, constructor: { polluted: true } } },
-        "anthropic/assistant-a": {
-          params: { temperature: 0.8, ["__proto__"]: { polluted: true } },
-        },
-      },
-    });
-
-    expect(normalizeRefs(config, []).agents?.defaults?.models).toEqual({
-      "anthropic/assistant-a": {
-        params: { temperature: 0.8, maxTokens: 1200 },
-        agentRuntime: { id: "claude-cli" },
-      },
-    });
-    expect(Reflect.get(Object.prototype, "polluted")).toBeUndefined();
   });
 
   it("canonicalizes a seeded legacy Claude CLI allowlist in one doctor pass", () => {

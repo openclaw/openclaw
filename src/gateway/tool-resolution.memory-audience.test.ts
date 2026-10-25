@@ -36,3 +36,28 @@ describe("resolveGatewayScopedTools memory audience", () => {
     expect(createTools.mock.calls[0]?.[0]?.memoryAudience).toBe(expected);
   });
 });
+
+describe("resolveGatewayScopedTools input provenance", () => {
+  beforeEach(() => {
+    createTools.mockClear();
+  });
+
+  it("gives loopback plugin tools the run id and the grant's input provenance", async () => {
+    const inputProvenance = {
+      kind: "internal_system" as const,
+      sourceTool: "exec",
+      runId: "owner",
+    };
+    await resolveGatewayScopedTools({
+      cfg: {},
+      sessionKey: "agent:main:telegram:direct:owner",
+      runId: "wake-run",
+      senderIsOwner: false,
+      surface: "loopback",
+      inputProvenance,
+    });
+
+    expect(createTools).toHaveBeenCalledOnce();
+    expect(createTools.mock.calls[0]?.[0]).toMatchObject({ runId: "wake-run", inputProvenance });
+  });
+});

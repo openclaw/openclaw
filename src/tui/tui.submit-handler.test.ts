@@ -208,12 +208,11 @@ describe("createEditorSubmitHandler", () => {
 describe("createSubmitBurstCoalescer", () => {
   it("coalesces rapid single-line submits into one multiline submit when enabled", () => {
     const submit = vi.fn();
-    let now = 1_000;
-    const submitBurst = bufferSubmit(submit, { now: () => now });
+    const submitBurst = bufferSubmit(submit);
     submitBurst("Line 1");
-    now += 10;
+    vi.advanceTimersByTime(10);
     submitBurst("Line 2");
-    now += 10;
+    vi.advanceTimersByTime(10);
     submitBurst("Line 3");
     expect(submit).not.toHaveBeenCalled();
     vi.advanceTimersByTime(50);
@@ -274,8 +273,11 @@ it.each([
   { platform: "win32", env: { MSYSTEM: "MINGW64" }, enabled: true },
   { platform: "darwin", env: { TERM_PROGRAM: "Apple_Terminal" }, enabled: true },
   { platform: "linux", env: { MSYSTEM: "MINGW64" }, enabled: false },
-])("detects paste fallback for $platform/$env", ({ platform, env, enabled }) => {
-  expect(shouldEnableWindowsGitBashPasteFallback({ platform, env })).toBe(enabled);
+] as const)("detects paste fallback for $platform/$env", ({ platform, env, enabled }) => {
+  using mocks = new DisposableStack();
+  mocks.use(vi.spyOn(process, "platform", "get").mockReturnValue(platform));
+  mocks.use(vi.spyOn(process, "env", "get").mockReturnValue(env));
+  expect(shouldEnableWindowsGitBashPasteFallback()).toBe(enabled);
 });
 
 it.each([

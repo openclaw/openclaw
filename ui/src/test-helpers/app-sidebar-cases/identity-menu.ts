@@ -159,10 +159,12 @@ describe("AppSidebar footer identity menu", () => {
     const links = domProbe(helpRow!.parentElement!).all('[role="menu"] a[href]');
     expect([...links].map((link) => link.getAttribute("href"))).toEqual([
       "https://docs.openclaw.ai",
-      "https://docs.openclaw.ai/help",
+      "https://community.openclaw.ai/",
       "https://discord.gg/clawd",
       "https://docs.openclaw.ai/releases",
     ]);
+
+    expect([...links].find((link) => link.textContent?.includes("Get support"))).toBeDefined();
 
     view.query<HTMLElement>('[data-value="command:profile"]')?.focus();
     await dom.key(menu, "Escape", { cancelable: false });
@@ -201,7 +203,7 @@ describe("AppSidebar footer identity menu", () => {
       ] as const) {
         for (const target of targets) {
           await dom.key(current, key);
-          expect(document.activeElement).toBe(target);
+          await waitForSolid(() => expect(document.activeElement).toBe(target));
           current = target;
         }
       }
@@ -209,9 +211,9 @@ describe("AppSidebar footer identity menu", () => {
 
       items[0]?.focus();
       await dom.key(items[0], "ArrowUp");
-      expect(document.activeElement).toBe(theme);
+      await waitForSolid(() => expect(document.activeElement).toBe(theme));
       await dom.key(theme, "ArrowDown");
-      expect(document.activeElement).toBe(items[0]);
+      await waitForSolid(() => expect(document.activeElement).toBe(items[0]));
     },
   );
 });

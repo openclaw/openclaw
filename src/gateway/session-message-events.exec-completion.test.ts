@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { text } from "node:stream/consumers";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
@@ -11,35 +12,66 @@ import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
-import { createHeartbeatToolResponsePayload } from "../auto-reply/heartbeat-tool-response.js";
+import {
+  createOpenAiResponsesModelConfig,
+  startOpenAiResponsesModelServer,
+} from "../../test/helpers/openai-responses-model-fixture.js";
+import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import { withFullRuntimeReplyConfig } from "../auto-reply/reply/get-reply-fast-path.js";
+import { getReplyFromConfig } from "../auto-reply/reply/get-reply.js";
+import {
+  captureSessionEventTargetForHost,
+  enqueueSessionEventForHost,
+  type SessionEventReceipt,
+} from "../auto-reply/reply/session-event-handoff.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { runHeartbeatOnce } from "../infra/heartbeat-runner.js";
-import { enqueueSystemEvent, peekSystemEventEntries } from "../infra/system-events.js";
+import { peekSystemEventEntries } from "../infra/system-events.js";
 import { removeSessionTestDirectories } from "./session-test-directories.test-support.js";
 import { gatewayReplyMock, testState } from "./test-helpers.runtime-state.js";
 import {
   connectOk,
   createGatewaySuiteHarness,
   installGatewayTestHooks,
-  onceMessage,
+  prepareGatewayReplyRuntimeForTest,
   rpcReq,
   writeSessionStore,
 } from "./test-helpers.server.js";
 
-// Exercise accepted heartbeat publication through real Gateway sockets and history.
+// Exercise accepted session-event publication through real Gateway sockets and history.
 installGatewayTestHooks({ scope: "suite" });
 
 const cleanupDirs: string[] = [];
 const requireRecord = createRequireRecord("object", "expected-label-object");
 let harness: Awaited<ReturnType<typeof createGatewaySuiteHarness>>;
+let provider: Awaited<ReturnType<typeof startOpenAiResponsesModelServer>>;
+let completionText: string;
+const providerRequests: string[] = [];
 
 beforeAll(async () => {
+  // Keep embedded execution and transcript ownership; only the HTTP response is synthetic.
+  provider = await startOpenAiResponsesModelServer({
+    modelId: "exec-completion",
+    bindError: "Expected exec completion fixture provider address",
+    onRequest: async (request, response) => {
+      providerRequests.push(await text(request));
+      writeOpenAiResponsesText(response, {
+        text: completionText,
+        messageId: `msg_exec_${providerRequests.length}`,
+        responseId: `resp_exec_${providerRequests.length}`,
+      });
+    },
+  });
   harness = await createGatewaySuiteHarness();
 });
 
 afterAll(async () => {
-  if (harness) {
-    await harness.close();
+  try {
+    if (harness) {
+      await harness.close();
+    }
+  } finally {
+    await provider?.close();
   }
 });
 
@@ -56,30 +88,16 @@ async function createSessionStoreFile(): Promise<string> {
   return storePath;
 }
 
-// Observe the canonical session.message event on the subscribed connection.
-function waitForSessionMessageEvent(
-  ws: Awaited<ReturnType<Awaited<ReturnType<typeof createGatewaySuiteHarness>>["openWs"]>>,
-  sessionKey: string,
-  timeoutMs?: number,
-) {
-  return onceMessage(
-    ws,
-    (message) =>
-      message.type === "event" &&
-      message.event === "session.message" &&
-      asOptionalRecord(message.payload)?.sessionKey === sessionKey,
-    timeoutMs,
-  );
-}
-
 describe("exec completion WebChat publication", () => {
-  test.each([false, true])(
+  test.for([false, true])(
     "commits exec completion once with WebChat disconnected=%s",
-    async (disconnected) => {
+    async (disconnected, { signal }) => {
       const storePath = await createSessionStoreFile();
       const sessionId = `exec-completion-${disconnected}`;
       const sessionKey = `agent:main:dashboard:exec-completion-${disconnected}`;
       const marker = `EXEC_NOTIFICATION_${disconnected}`;
+      completionText = marker;
+      providerRequests.length = 0;
       await writeSessionStore({
         entries: {
           [sessionKey]: {
@@ -92,11 +110,21 @@ describe("exec completion WebChat publication", () => {
         },
         storePath,
       });
+      const modelConfig = createOpenAiResponsesModelConfig({
+        baseUrl: provider.baseUrl,
+        providerId: "exec-proof",
+        modelId: "exec-completion",
+        reasoning: false,
+        toolProfile: "full",
+      });
       const cfg: OpenClawConfig = {
+        ...modelConfig,
         agents: {
+          ...modelConfig.agents,
+          entries: { main: {} },
           defaults: {
+            ...modelConfig.agents?.defaults,
             workspace: path.dirname(storePath),
-            heartbeat: { every: "5m", target: "last" },
           },
         },
         messages: { visibleReplies: "message_tool" },
@@ -127,7 +155,9 @@ describe("exec completion WebChat publication", () => {
       };
       const ws = await connect();
       let reconnected: Awaited<ReturnType<typeof connect>> | undefined;
+      let receipt: SessionEventReceipt | undefined;
       const notifications: unknown[] = [];
+      const live = createDeferred<Record<string, unknown>>();
       const collect = (data: RawData) => {
         const event = asOptionalRecord(JSON.parse(rawDataToString(data)));
         const payload = asOptionalRecord(event?.payload);
@@ -137,6 +167,7 @@ describe("exec completion WebChat publication", () => {
           JSON.stringify(payload.message).includes(marker)
         ) {
           notifications.push(payload);
+          live.resolve(payload);
         }
       };
       ws.on("message", collect);
@@ -148,36 +179,38 @@ describe("exec completion WebChat publication", () => {
           ws.close();
           await closed;
         }
-        const live = disconnected ? undefined : waitForSessionMessageEvent(ws, sessionKey);
-        enqueueSystemEvent(`Exec completed (webchat-proof, code 0) :: ${marker}`, { sessionKey });
-        const reply = gatewayReplyMock.mockResolvedValue(
-          createHeartbeatToolResponsePayload({
-            outcome: "done",
-            notify: true,
-            summary: "Private execution summary",
-            notificationText: marker,
-          }),
+        await prepareGatewayReplyRuntimeForTest({ force: true, config: cfg });
+        gatewayReplyMock.mockImplementation((ctx, options, config) =>
+          getReplyFromConfig(ctx, options, withFullRuntimeReplyConfig(config ?? cfg)),
         );
-        const wake = () =>
-          runHeartbeatOnce({
-            cfg,
+        const expectedTarget = await captureSessionEventTargetForHost("main", sessionKey);
+        receipt = enqueueSessionEventForHost(
+          `Exec completed (webchat-proof, code 0) :: ${marker}`,
+          {
             agentId: "main",
             sessionKey,
-            source: "exec-event",
-            intent: "event",
-            reason: "exec-event",
-          });
-        expect((await wake()).status).toBe("ran");
+            source: "exec",
+            expectedTarget,
+            abortSignal: signal,
+          },
+        );
+        await expect(receipt.accepted).resolves.toEqual({ ok: true });
+        expect(await withinTest(receipt.settled, signal)).toMatchObject({
+          status: "completed",
+          executionStarted: true,
+        });
         expect(peekSystemEventEntries(sessionKey)).toEqual([]);
-        if (live) {
-          const event = requireRecord((await live).payload, "exec completion event");
+        if (!disconnected) {
+          const event = requireRecord(
+            await withinTest(live.promise, signal),
+            "exec completion event",
+          );
           expect(event.message).toMatchObject({
             role: "assistant",
             content: [{ type: "text", text: marker }],
           });
         }
-        expect((await wake()).status).toBe("skipped");
-        expect(reply).toHaveBeenCalledOnce();
+        expect(providerRequests.filter((request) => request.includes(marker))).toHaveLength(1);
         if (!disconnected) {
           const closed = new Promise<void>((resolve) => {
             ws.once("close", () => resolve());
@@ -196,6 +229,9 @@ describe("exec completion WebChat publication", () => {
         expect(completions).toHaveLength(1);
         expect(notifications).toHaveLength(disconnected ? 0 : 1);
       } finally {
+        receipt?.cancel();
+        await Promise.allSettled(receipt ? [receipt.settled] : []);
+        gatewayReplyMock.mockReset();
         ws.off("message", collect);
         ws.close();
         reconnected?.close();

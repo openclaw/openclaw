@@ -19,6 +19,9 @@ import {
   savedUser,
   savedReply,
   prompt as keyedUser,
+  persist,
+  pending as sendPending,
+  acknowledge,
 } from "./session-projection.test-support.js";
 
 describe("readSessionMessageIdentity", () => {
@@ -207,8 +210,19 @@ describe("session transcript projection", () => {
     });
     let state = project(projection(), native);
     state = project(state, imported);
-
-    expect(state.messages).toEqual([native, imported]);
+    const otherSession = {
+      ...imported,
+      __openclaw: { ...imported["__openclaw"], cliSessionId: "other" },
+    };
+    const partial = user("partial", { importedFrom: "claude-cli", seq: 3 });
+    state = project(project(project(state, otherSession), partial), imported);
+    expect(state.messages).toEqual([native, imported, otherSession, partial]);
+    expect(state.entries.map((entry) => entry.identity?.externalSource)).toEqual([
+      null,
+      JSON.stringify(["claude-cli", "cli-session", "provider-local"]),
+      JSON.stringify(["claude-cli", "other", "provider-local"]),
+      null,
+    ]);
   });
 
   it("adopts snapshot projections of partial imports by canonical session sequence", () => {
@@ -243,11 +257,7 @@ describe("session transcript projection", () => {
     const followingAssistant = reply("already working", { seq: 3 });
     let state = projection([peer, handoff, followingAssistant]);
 
-    state = reduce(state, {
-      type: "sendPending",
-      runId: "initial-run",
-      message: handoff,
-    });
+    state = sendPending(state, "initial-run", handoff);
 
     expect(state.entries).toMatchObject([
       { message: peer, pending: false },
@@ -262,14 +272,14 @@ describe("session transcript projection", () => {
     const wrongSequence = savedUser("continue", "wrong-sequence-user", 4, {
       idempotencyKey: "initial-run:user",
     });
-    state = reduce(state, { type: "messagePersisted", message: wrongSequence });
+    state = persist(state, wrongSequence);
     expect(state.messages).toEqual([peer, handoff, followingAssistant, wrongSequence]);
     expect(state.entries[1]).toMatchObject({ pending: true, pendingRunId: "initial-run" });
 
     const authoritative = savedUser("continue", "initial-user", 2, {
       idempotencyKey: "initial-run:user",
     });
-    state = reduce(state, { type: "messagePersisted", message: authoritative });
+    state = persist(state, authoritative);
 
     expect(state.messages).toEqual([peer, authoritative, followingAssistant, wrongSequence]);
     expect(state.entries[1]).toMatchObject({
@@ -288,13 +298,7 @@ describe("session transcript projection", () => {
       }),
     ]) {
       const protectedState = projection([protectedMessage]);
-      expect(
-        reduce(protectedState, {
-          type: "sendPending",
-          runId: "protected-run",
-          message: protectedMessage,
-        }),
-      ).toBe(protectedState);
+      expect(sendPending(protectedState, "protected-run", protectedMessage)).toBe(protectedState);
     }
   });
 
@@ -313,20 +317,16 @@ describe("session transcript projection", () => {
 
     expect(reconciled.messages).toEqual([persisted, response]);
     expect(reconciled.entries[0]?.identity?.runId).toBe("queued-execution");
-    expect(
-      reduce(reconciled, {
-        type: "sendPending",
-        runId: "queued-send",
-        message: pending,
-      }).messages,
-    ).toEqual([persisted, response]);
+    expect(sendPending(reconciled, "queued-send", pending).messages).toEqual([persisted, response]);
   });
 
   it("rejects a delayed old-epoch snapshot after the selected session resets", () => {
     const oldMessage = savedUser("before reset", "old", 1);
     let state = project(projection(), oldMessage);
-    state = reduce(state, { type: "sessionReset", lifecycleRevision: 2 });
+    const currentScope = { ...primaryScope, lifecycleRevision: 2, activeLeafEntryId: "reset-leaf" };
+    state = reduce(state, { type: "sessionReset", ...currentScope });
     const resetState = state;
+    expect(project(state, oldMessage, undefined, primaryScope)).toBe(resetState);
     state = reduce(state, {
       type: "snapshotLoaded",
       scope: primaryScope,
@@ -336,6 +336,10 @@ describe("session transcript projection", () => {
     expect(state).toBe(resetState);
     expect(state.scope.lifecycleRevision).toBe(2);
     expect(state.messages).toEqual([]);
+    const current = savedUser("after reset", "current", 1);
+    state = project(state, current, undefined, currentScope);
+    expect(state.scope).toEqual(currentScope);
+    expect(state.messages).toEqual([current]);
   });
 
   it("classifies only metadata-free or send-key-only local turns as optimistic", () => {
@@ -358,11 +362,7 @@ describe("session transcript projection", () => {
     const hiddenSnapshot = savedReply("hidden snapshot", "hidden-snapshot", 2);
     const hiddenLive = savedUser("hidden live", "hidden-live", 3);
     const hiddenPending = keyedUser("hidden pending", "hidden-run:user");
-    let state = reduce(projection(), {
-      type: "sendPending",
-      runId: "hidden-run",
-      message: hiddenPending,
-    });
+    let state = sendPending(projection(), "hidden-run", hiddenPending);
     state = project(state, hiddenLive);
     state = reduce(state, {
       type: "snapshotLoaded",
@@ -384,11 +384,7 @@ describe("session transcript projection", () => {
       runId: "provisional-run",
     });
     let state = project(projection([pending]), peer);
-    state = reduce(state, {
-      type: "sendAcknowledged",
-      previousRunId: "provisional-run",
-      runId: "accepted-run",
-    });
+    state = acknowledge(state, "provisional-run", "accepted-run");
 
     expect(state.messages).toEqual([pending, peer]);
     expect(state.entries[0]).toMatchObject({ pending: true, pendingRunId: "accepted-run" });
@@ -399,14 +395,9 @@ describe("session transcript projection", () => {
     expect(project(state, accepted).messages).toEqual([peer, accepted]);
 
     const persistedBeforeAck = project(projection([pending]), accepted);
-    const acknowledge = {
-      type: "sendAcknowledged",
-      previousRunId: "provisional-run",
-      runId: "accepted-run",
-    } as const;
-    const adopted = reduce(persistedBeforeAck, acknowledge);
+    const adopted = acknowledge(persistedBeforeAck, "provisional-run", "accepted-run");
     expect(adopted.messages).toEqual([accepted]);
-    expect(reduce(adopted, acknowledge)).toBe(adopted);
+    expect(acknowledge(adopted, "provisional-run", "accepted-run")).toBe(adopted);
   });
 
   it("removes only a failed pending turn while preserving same-text authoritative peers", () => {

@@ -7,6 +7,7 @@ import {
 } from "../../../../test/helpers/promise.js";
 import { tryFastAbortFromMessage } from "../../../auto-reply/reply/abort.js";
 import { buildTestCtx } from "../../../auto-reply/reply/test-ctx.js";
+import { createAcpTestBindingRegistry } from "../../../auto-reply/reply/test-fixtures/acp-runtime.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -24,10 +25,6 @@ import {
 } from "../../../plugins/runtime.js";
 import { captureSessionTarget } from "../../../sessions/session-controller.lifecycle.js";
 import { createReplyOperation } from "../../../sessions/session-controller.operation.js";
-import {
-  createChannelTestPluginBase,
-  createTestRegistry,
-} from "../../../test-utils/channel-plugins.js";
 import { captureExecRequestCancellation } from "../../bash-process-control.js";
 import {
   createSubagentRunRecord,
@@ -62,22 +59,44 @@ const stopResult = (stoppedSubagents: number) => ({
   failedSubagents: 0,
 });
 
+function holdOperation(
+  storePath: string,
+  sessionKey: string,
+  sessionId: string,
+  cancel: () => void,
+  runId?: string,
+) {
+  const operation = createReplyOperation({
+    sessionKey,
+    sessionId,
+    agentId: runId ? "main" : undefined,
+    resetTriggered: false,
+    target: captureSessionTarget({
+      storeScope: storePath,
+      sessionKey,
+      incarnation: sessionId,
+      agentId: "main",
+    }),
+  });
+  const finish = createDeferred();
+  const producer = finish.promise.finally(() => operation.complete());
+  operation.attachBackend({
+    kind: "embedded",
+    runId,
+    isStreaming: () => true,
+    cancel: () => {
+      cancel();
+      finish.resolve();
+    },
+  });
+  return { operation, finish, producer };
+}
+
 function holdConversationLookup(failure?: Error) {
   const entered = createDeferred();
   const released = createDeferred();
   const registry = captureActivePluginRegistrySnapshot();
-  setActivePluginRegistry(
-    createTestRegistry([
-      {
-        pluginId: "stop-lookup",
-        source: "test",
-        plugin: {
-          ...createChannelTestPluginBase({ id: "stop-lookup" }),
-          conversationBindings: { supportsCurrentConversationBinding: true },
-        },
-      },
-    ]),
-  );
+  setActivePluginRegistry(createAcpTestBindingRegistry("stop-lookup"));
   const service = getSessionBindingService();
   const resolve = service.resolveByConversationAsync.bind(service);
   const lookup = vi
@@ -175,72 +194,27 @@ export function registerQueuedStopControlTests({
         });
       }
       setSubagentControlDepsForTest({});
-      const runningOperation = createReplyOperation({
-        sessionKey: running.childSessionKey,
-        sessionId: "running-session",
-        agentId: "main",
-        resetTriggered: false,
-        target: captureSessionTarget({
-          storeScope: storePath,
-          sessionKey: running.childSessionKey,
-          incarnation: "running-session",
-          agentId: "main",
-        }),
-      });
-      const runningFinish = createDeferred();
-      const runningProducer = (async () => {
-        try {
-          await runningFinish.promise;
-        } finally {
-          runningOperation.complete();
-        }
-      })();
-      runningOperation.attachBackend({
-        kind: "embedded",
-        runId: running.runId,
-        isStreaming: () => true,
-        cancel: () => {
+      const runningWork = holdOperation(
+        storePath,
+        running.childSessionKey,
+        "running-session",
+        () => {
           if (!channelStop && kind !== "first cancellation await") {
             expect(releaseSwarmRun(running.runId)).toBe(true);
           }
-          runningFinish.resolve();
         },
-      });
+        running.runId,
+      );
       const controller = { ...controllerFor(controllerSessionKey), controllerAgentId: "main" };
       const cfg = cfgWithSessionStore(storePath);
-      const parent = channelStop
-        ? createReplyOperation({
-            sessionKey: controllerSessionKey,
-            sessionId: "parent-session",
-            resetTriggered: false,
-            target: captureSessionTarget({
-              storeScope: storePath,
-              sessionKey: controllerSessionKey,
-              incarnation: "parent-session",
-              agentId: "main",
-            }),
+      const parentWork = channelStop
+        ? holdOperation(storePath, controllerSessionKey, "parent-session", () => {
+            if (!duringLookup) {
+              expect(releaseSwarmRun(running.runId)).toBe(true);
+            }
           })
         : undefined;
-      const parentFinish = createDeferred();
-      const parentProducer =
-        parent &&
-        (async () => {
-          try {
-            await parentFinish.promise;
-          } finally {
-            parent.complete();
-          }
-        })();
-      parent?.attachBackend({
-        kind: "embedded",
-        cancel: () => {
-          if (!duringLookup) {
-            expect(releaseSwarmRun(running.runId)).toBe(true);
-          }
-          parentFinish.resolve();
-        },
-        isStreaming: () => true,
-      });
+      const parent = parentWork?.operation;
       let stopDuringLookup: ReturnType<typeof tryFastAbortFromMessage> | undefined;
       let lookup: ReturnType<typeof holdConversationLookup> | undefined;
       try {
@@ -315,9 +289,9 @@ export function registerQueuedStopControlTests({
         lookup?.release();
         await stopDuringLookup?.catch(() => {});
         lookup?.restore();
-        parentFinish.resolve();
-        runningFinish.resolve();
-        await Promise.all([parentProducer, runningProducer]);
+        parentWork?.finish.resolve();
+        runningWork.finish.resolve();
+        await Promise.all([parentWork?.producer, runningWork.producer]);
       }
     },
   );

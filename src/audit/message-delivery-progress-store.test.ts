@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import {
@@ -16,6 +17,7 @@ import {
   pruneExpiredOutboundMessageProgressInDatabase,
   recordOutboundMessageProgressInDatabase,
 } from "./message-delivery-progress-store.js";
+import { assertMessageProgressOverflowRetention } from "./message-progress-retention.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const OUTBOUND_PROGRESS_PRUNE_BATCH_ROWS_CONTRACT = 1_024;
@@ -26,6 +28,7 @@ function createStore() {
   const writeOptions = () => ({ ...options, database: open() });
   return {
     open,
+    count: (table: string) => open().db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get(),
     recordProgress: (input: OutboundMessageProgressInput) =>
       recordOutboundMessageProgressInDatabase(input, writeOptions()),
     recordTerminal: (input: ReturnType<typeof terminalInput>) =>
@@ -89,6 +92,23 @@ function outcomes(page: ReturnType<typeof pageOutboundMessageAuditEventsForRunIn
   return page.entries.map((entry) => entry.event.outcome);
 }
 
+function seedProgress(db: EngineConnection, count: number, occurredAt: number, paired = false) {
+  db.prepare(`WITH RECURSIVE numbers(n) AS (
+      SELECT 0 UNION ALL SELECT n + 1 FROM numbers WHERE n + 1 < ?
+    ), stages(stage, action, outcome) AS (VALUES
+      (0, 'message.outbound.queued', 'queued'),
+      (1, 'message.outbound.platform-started', 'platform_started')
+    ) INSERT INTO outbound_message_progress (
+      progress_id, source_id, source_sequence, schema_version, occurred_at,
+      action, outcome, actor_type, actor_id, agent_id, run_id, channel,
+      conversation_kind, duration_ms
+    ) SELECT 'progress:' || n || ':' || stage, 'source:' || n || ':' || stage,
+      n * 2 + stage + 1, 1, ? + n * ?, action, outcome, 'agent', 'main', 'main',
+      'run-progress', 'qa-channel', 'direct', 1
+    FROM numbers CROSS JOIN stages WHERE ? = 1 OR stage = 0 ORDER BY n, stage
+  `).run(count, occurredAt, Number(paired), Number(paired));
+}
+
 afterEach(closeOpenClawStateDatabaseForTest);
 
 describe("outbound message progress companion", () => {
@@ -129,10 +149,8 @@ describe("outbound message progress companion", () => {
     expect(first).toMatchObject({ action: "message.outbound.queued", outcome: "queued" });
     expect(recoveredReplay).toBeUndefined();
     const { db } = database.open();
-    expect(db.prepare("SELECT COUNT(*) AS count FROM outbound_message_progress").get()).toEqual({
-      count: 2,
-    });
-    expect(db.prepare("SELECT COUNT(*) AS count FROM audit_events").get()).toEqual({ count: 0 });
+    expect(database.count("outbound_message_progress")).toEqual({ count: 2 });
+    expect(database.count("audit_events")).toEqual({ count: 0 });
     const stored = JSON.stringify(
       db.prepare("SELECT * FROM outbound_message_progress ORDER BY sequence").all(),
     );
@@ -147,36 +165,7 @@ describe("outbound message progress companion", () => {
     database.recordProgress(progressInput("message.outbound.queued", { occurredAt }));
     const { db } = database.open();
     db.prepare("DELETE FROM outbound_message_progress").run();
-    const insert = db.prepare(`
-      INSERT INTO outbound_message_progress (
-        progress_id, source_id, source_sequence, schema_version, occurred_at,
-        action, outcome, actor_type, actor_id, agent_id, run_id, channel,
-        conversation_kind, duration_ms
-      ) VALUES (?, ?, ?, 1, ?, ?, ?, 'agent', 'main', 'main', 'run-progress',
-        'qa-channel', 'direct', 1)
-    `);
-    db.exec("BEGIN");
-    try {
-      for (let index = 0; index < 300; index += 1) {
-        for (const [stage, action, outcome] of [
-          ["queued", "message.outbound.queued", "queued"],
-          ["platform", "message.outbound.platform-started", "platform_started"],
-        ] as const) {
-          insert.run(
-            `progress:${index}:${stage}`,
-            `source:${index}:${stage}`,
-            index * 2 + (stage === "queued" ? 1 : 2),
-            occurredAt + index,
-            action,
-            outcome,
-          );
-        }
-      }
-      db.exec("COMMIT");
-    } catch (error) {
-      db.exec("ROLLBACK");
-      throw error;
-    }
+    seedProgress(db, 300, occurredAt, true);
 
     const page = database.readPage({ now: occurredAt, offset: 510, limit: 4 });
     expect(outcomes(page)).toEqual(["queued", "platform_started", "queued", "platform_started"]);
@@ -213,29 +202,16 @@ describe("outbound message progress companion", () => {
     db.exec("DELETE FROM outbound_message_progress");
     const now = Date.now();
     database.recordTerminal(terminalInput(now));
-    const expiredAt = now - 31 * 24 * 60 * 60_000;
-    db.prepare(
-      `WITH RECURSIVE numbers(n) AS (
-         SELECT 1
-         UNION ALL
-         SELECT n + 1 FROM numbers WHERE n < ?
-       )
-       INSERT INTO outbound_message_progress (
-         progress_id, source_id, source_sequence, schema_version, occurred_at, action,
-         outcome, actor_type, actor_id, agent_id, run_id, channel, conversation_kind
-       )
-       SELECT 'expired-progress-' || n, 'expired-progress-source-' || n, n, 1, ?,
-              'message.outbound.queued', 'queued', 'agent', 'main', 'main',
-              'expired-progress-run-' || n, 'qa-channel', 'direct'
-       FROM numbers`,
-    ).run(OUTBOUND_PROGRESS_PRUNE_BATCH_ROWS_CONTRACT + 1, expiredAt);
+    seedProgress(db, OUTBOUND_PROGRESS_PRUNE_BATCH_ROWS_CONTRACT + 1, now - 31 * 24 * 60 * 60_000);
 
     expect(database.prune(now)).toBe(OUTBOUND_PROGRESS_PRUNE_BATCH_ROWS_CONTRACT);
-    expect(db.prepare("SELECT COUNT(*) AS count FROM outbound_message_progress").get()).toEqual({
-      count: 1,
-    });
+    expect(database.count("outbound_message_progress")).toEqual({ count: 1 });
     expect(database.prune(now)).toBe(1);
     expect(database.prune(now)).toBe(0);
-    expect(db.prepare("SELECT COUNT(*) AS count FROM audit_events").get()).toEqual({ count: 1 });
+    expect(database.count("audit_events")).toEqual({ count: 1 });
+  });
+
+  it("prunes overflow with one delete and retains the newest rows across sequence gaps", () => {
+    assertMessageProgressOverflowRetention(createStore().open());
   });
 });

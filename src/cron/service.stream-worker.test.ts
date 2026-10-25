@@ -47,7 +47,6 @@ async function streamFixture(storePath: string) {
     },
     log: createNoopLogger(),
     enqueueSystemEvent,
-    requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: async () => ({ status: "ok" }),
     onEvent,
   });

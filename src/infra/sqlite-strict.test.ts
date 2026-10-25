@@ -1,3 +1,4 @@
+import type { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { readSqliteSchemaCatalog } from "../../scripts/lib/sqlite-schema-catalog.mts";
 import { DAEMON_RUNTIME_PIN_SCHEMA_SQL } from "../daemon/runtime-pin-schema.js";
@@ -10,22 +11,22 @@ import {
 
 const unchanged = { migratedTables: [] };
 
-function createDatabase(schema = ""): import("node:sqlite").DatabaseSync {
+function createDatabase(schema = ""): DatabaseSync {
   const sqlite = requireNodeSqlite();
   const database = new sqlite.DatabaseSync(":memory:");
   database.exec(schema);
   return database;
 }
 
-function query(database: import("node:sqlite").DatabaseSync, sql: string) {
+function query(database: DatabaseSync, sql: string) {
   return database.prepare(sql).get();
 }
 
-function rows(database: import("node:sqlite").DatabaseSync, sql: string) {
+function rows(database: DatabaseSync, sql: string) {
   return database.prepare(sql).all();
 }
 
-function schemaObjects(database: import("node:sqlite").DatabaseSync, names: string[]) {
+function schemaObjects(database: DatabaseSync, names: string[]) {
   return database
     .prepare(
       `SELECT type, name FROM sqlite_schema WHERE name IN (${names.map(() => "?").join(",")}) ORDER BY type`,
@@ -39,7 +40,7 @@ function strictSchema(schema: string) {
     .replace(/\);/g, ") STRICT;");
 }
 
-function strictFlags(database: import("node:sqlite").DatabaseSync, ...tables: string[]) {
+function strictFlags(database: DatabaseSync, ...tables: string[]) {
   const statement = database.prepare(
     "SELECT strict FROM pragma_table_list WHERE schema = 'main' AND name = ?",
   );
@@ -96,47 +97,26 @@ describe("withSqliteForeignKeysDisabled", () => {
 
 describe("migrateSqliteSchemaToStrict", () => {
   it("atomically rebuilds related tables and preserves their rows", () => {
-    const database = createDatabase();
-    database.exec(`
-      PRAGMA foreign_keys = ON;
+    const schema = `
       CREATE TABLE parents (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
-      CREATE TABLE children (
-        id INTEGER PRIMARY KEY,
-        parent_id INTEGER NOT NULL REFERENCES parents(id) ON DELETE CASCADE,
-        score INTEGER NOT NULL
-      );
+      CREATE TABLE children (id INTEGER PRIMARY KEY,
+        parent_id INTEGER NOT NULL REFERENCES parents(id) ON DELETE CASCADE, score INTEGER NOT NULL);
+    `;
+    using database = createDatabase(`PRAGMA foreign_keys = ON; ${schema}
       INSERT INTO parents (id, name) VALUES (1, 'parent');
       INSERT INTO children (id, parent_id, score) VALUES (2, 1, 3);
     `);
-
-    const result = migrate(
-      database,
-      `
-        CREATE TABLE IF NOT EXISTS parents (
-          id INTEGER PRIMARY KEY,
-          name TEXT NOT NULL
-        ) STRICT;
-        CREATE TABLE IF NOT EXISTS children (
-          id INTEGER PRIMARY KEY,
-          parent_id INTEGER NOT NULL REFERENCES parents(id) ON DELETE CASCADE,
-          score INTEGER NOT NULL
-        ) STRICT;
-      `,
-      { databaseLabel: "test.sqlite" },
-    );
-
+    const result = migrate(database, strictSchema(schema), { databaseLabel: "test.sqlite" });
     expect(result.migratedTables).toEqual(["children", "parents"]);
     expect(strictFlags(database, "parents", "children")).toEqual([1, 1]);
-    expect(database.prepare("SELECT * FROM parents").all()).toEqual([{ id: 1, name: "parent" }]);
-    expect(database.prepare("SELECT * FROM children").all()).toEqual([
-      { id: 2, parent_id: 1, score: 3 },
-    ]);
-    expect(database.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
+    expect(rows(database, "SELECT * FROM parents")).toEqual([{ id: 1, name: "parent" }]);
+    expect(rows(database, "SELECT * FROM children")).toEqual([{ id: 2, parent_id: 1, score: 3 }]);
+    expect(query(database, "PRAGMA foreign_keys")).toEqual({ foreign_keys: 1 });
   });
 
   it("keeps database-local indexes and triggers", () => {
-    using database = createDatabase(`
-      CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
+    const schema = "CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT NOT NULL);";
+    using database = createDatabase(`${schema}
       CREATE TABLE item_audit (item_id INTEGER NOT NULL, action TEXT NOT NULL);
       CREATE UNIQUE INDEX items_name_custom ON items(name);
       CREATE TRIGGER items_insert_custom AFTER INSERT ON items BEGIN
@@ -145,10 +125,7 @@ describe("migrateSqliteSchemaToStrict", () => {
       INSERT INTO items (id, name) VALUES (1, 'first');
     `);
 
-    migrate(
-      database,
-      `CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY, name TEXT NOT NULL) STRICT;`,
-    );
+    migrate(database, strictSchema(schema));
     database.prepare("INSERT INTO items (id, name) VALUES (?, ?)").run(2, "second");
 
     expect(schemaObjects(database, ["items_name_custom", "items_insert_custom"])).toEqual([
@@ -186,16 +163,16 @@ describe("migrateSqliteSchemaToStrict", () => {
   });
 
   it.each([false, true])("preserves AUTOINCREMENT high-water marks (catalog=%s)", (useCatalog) => {
-    using database = createDatabase(`
-      CREATE TABLE entries (id INTEGER PRIMARY KEY AUTOINCREMENT, value TEXT NOT NULL);
+    const schema =
+      "CREATE TABLE entries (id INTEGER PRIMARY KEY AUTOINCREMENT, value TEXT NOT NULL);";
+    using database = createDatabase(`${schema}
       INSERT INTO entries (value) VALUES ('first'), ('second'), ('third');
       DELETE FROM entries WHERE id = 3;
       UPDATE sqlite_sequence SET seq = 40.0 WHERE name = 'entries';
     `);
 
-    const schema =
-      "CREATE TABLE IF NOT EXISTS entries (id INTEGER PRIMARY KEY AUTOINCREMENT, value TEXT NOT NULL) STRICT;";
-    migrate(database, schema, catalogMigrationOptions(schema, useCatalog));
+    const strict = strictSchema(schema);
+    migrate(database, strict, catalogMigrationOptions(strict, useCatalog));
     database.prepare("INSERT INTO entries (value) VALUES (?)").run("fourth");
 
     expect(rows(database, "SELECT id, value FROM entries ORDER BY id")).toEqual([
@@ -215,16 +192,13 @@ describe("migrateSqliteSchemaToStrict", () => {
         CREATE TABLE integer_items (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
         CREATE TABLE without_items (id TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;
       `;
-      using database = createDatabase(
-        schema +
-          `
+      using database = createDatabase(`${schema}
         INSERT INTO implicit_items (rowid, value) VALUES (100, 'implicit');
         INSERT INTO composite_items (rowid, left_key, right_key, value) VALUES (200, 'left', 'right', 'composite');
         INSERT INTO shadowed_items (_rowid_, rowid, value) VALUES (300, 'named', 'shadowed');
         INSERT INTO integer_items (id, value) VALUES (400, 'integer-primary-key');
         INSERT INTO without_items (id, value) VALUES ('without', 'without-rowid');
-      `,
-      );
+      `);
       const strict = strictSchema(schema).replace(") WITHOUT ROWID;", ") STRICT, WITHOUT ROWID;");
       migrate(database, strict, catalogMigrationOptions(strict, useCatalog));
 
@@ -313,20 +287,14 @@ describe("migrateSqliteSchemaToStrict", () => {
   });
 
   it("ignores virtual tables while migrating ordinary tables", () => {
-    using database = createDatabase(`
-      CREATE TABLE documents (id INTEGER PRIMARY KEY, body TEXT NOT NULL);
-      CREATE VIRTUAL TABLE documents_fts USING fts5(body);
+    const schema = "CREATE TABLE documents (id INTEGER PRIMARY KEY, body TEXT NOT NULL);";
+    const virtual = "CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(body);";
+    using database = createDatabase(`${schema} ${virtual}
       INSERT INTO documents (id, body) VALUES (1, 'hello');
       INSERT INTO documents_fts (rowid, body) VALUES (1, 'hello');
     `);
 
-    const result = migrate(
-      database,
-      `
-        CREATE TABLE IF NOT EXISTS documents (id INTEGER PRIMARY KEY, body TEXT NOT NULL) STRICT;
-        CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(body);
-      `,
-    );
+    const result = migrate(database, `${strictSchema(schema)} ${virtual}`);
 
     expect(result.migratedTables).toEqual(["documents"]);
     expect(strictFlags(database, "documents")).toEqual([1]);

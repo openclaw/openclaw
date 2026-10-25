@@ -94,29 +94,23 @@ describe("resolveAssistantIdentity", () => {
     expect((await resolve(cfg)).avatar).toBe(DEFAULT_ASSISTANT_IDENTITY.avatar);
   });
 
-  it("preserves an exact shared-cap IDENTITY.md data URL without truncation", async () => {
-    await withTestDir({ prefix: "openclaw-assistant-identity-cap-" }, async (workspace) => {
-      const avatar = dataUrl();
-      expect(avatar).toHaveLength(AVATAR_MAX_DATA_URL_CHARS);
-      await fs.writeFile(path.join(workspace, "IDENTITY.md"), `- Avatar: ${avatar}\n`);
-      const cfg = {};
-      const first = await resolve(cfg, workspace);
-      expect(first.avatar).toBe(avatar);
-      expect(await resolve(cfg, workspace)).toBe(first);
-    });
-  });
-
-  it("rejects an oversized IDENTITY.md data URL without truncating it", async () => {
-    await withTestDir({ prefix: "openclaw-assistant-identity-overflow-" }, async (workspace) => {
-      const oversized = `${dataUrl()}A`;
-      expect(oversized).toHaveLength(AVATAR_MAX_DATA_URL_CHARS + 1);
-      await fs.writeFile(
-        path.join(workspace, "IDENTITY.md"),
-        `- Avatar: ${oversized}\n- Emoji: 🦞\n`,
-      );
-      expect((await resolve({}, workspace)).avatar).toBe("🦞");
-    });
-  });
+  it.each([false, true])(
+    "honors the IDENTITY.md data URL cap (oversized=%s)",
+    async (oversized) => {
+      await withTestDir({ prefix: "openclaw-assistant-identity-cap-" }, async (workspace) => {
+        const avatar = dataUrl() + (oversized ? "A" : "");
+        expect(avatar).toHaveLength(AVATAR_MAX_DATA_URL_CHARS + Number(oversized));
+        await fs.writeFile(
+          path.join(workspace, "IDENTITY.md"),
+          `- Avatar: ${avatar}\n- Emoji: 🦞\n`,
+        );
+        const cfg = {};
+        const first = await resolve(cfg, workspace);
+        expect(first.avatar).toBe(oversized ? "🦞" : avatar);
+        expect(await resolve(cfg, workspace)).toBe(first);
+      });
+    },
+  );
 
   it.each(["data:text/plain,avatar", "slack://avatar.png"])(
     "uses the configured emoji when the agent avatar is unsupported: %s",

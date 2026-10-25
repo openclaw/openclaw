@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { hermeticEnv } from "../commands/doctor-plugin-registry.test-support.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { makePluginMetadataIndex } from "./current-plugin-metadata.test-support.js";
@@ -40,15 +41,6 @@ afterEach(async () => {
 
 function makeTempDir(): string {
   return makeTrackedTempDir("openclaw-plugin-registry-inspection", tempDirs);
-}
-
-function hermeticEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
-  return {
-    OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
-    OPENCLAW_VERSION: "2026.4.25",
-    VITEST: "true",
-    ...overrides,
-  };
 }
 
 function writeManifest(rootDir: string, manifest: Record<string, unknown> = {}) {

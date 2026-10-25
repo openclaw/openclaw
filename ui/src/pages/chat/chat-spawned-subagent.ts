@@ -49,9 +49,8 @@ function readLaunch(card: LaunchCard) {
   }
   const args = asRecord(card.args);
   // History keeps the result as text; only a live result still carries its details.
-  const childKey =
-    text(asRecord(card.details)?.childSessionKey) ??
-    text(safeParseJsonRecord(card.outputText ?? "")?.childSessionKey);
+  const result = asRecord(card.details) ?? safeParseJsonRecord(card.outputText ?? "");
+  const childKey = text(result?.childSessionKey);
   return {
     label: text(args?.label),
     childKey,

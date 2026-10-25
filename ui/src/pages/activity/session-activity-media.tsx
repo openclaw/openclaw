@@ -1,4 +1,15 @@
-import { createEffect, createSignal, onSettled, Show } from "solid-js";
+import {
+  createDeferred,
+  createEffect,
+  createMemo,
+  createSignal,
+  Errored,
+  isPending,
+  latest,
+  Loading,
+  onSettled,
+  Show,
+} from "solid-js";
 import type { ArtifactsListResult } from "../../../../packages/gateway-protocol/src/index.ts";
 import { resolveArtifactDownloadSource } from "../../api/artifact-download.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
@@ -24,6 +35,7 @@ type ImageEntry = {
   images: ImageBlock[];
   loaded: boolean;
   pending?: Promise<void>;
+  read?: { promise: Promise<void> };
   cursor?: string;
   error?: boolean;
   omitted?: boolean;
@@ -278,6 +290,15 @@ function SessionMedia(
         target.pending = undefined;
         refresh();
       });
+    target.read = {
+      promise: target.pending.then(() => {
+        if (target.error) {
+          throw new Error(t("activity.images.failed"));
+        }
+      }),
+    };
+    // The shared cache can outlive a visible reader.
+    void target.read.promise.catch(() => undefined);
     refresh();
   };
 
@@ -375,6 +396,10 @@ function SessionMedia(
     revision();
     return owner && props.context.gateway.snapshot.client ? (settledEntry ?? entry) : undefined;
   };
+  const request = createMemo(() => displayEntry()?.read);
+  // Gallery/cache changes stay live while pagination readiness deliberately lags.
+  const read = createDeferred(() => request()?.promise);
+  const failed = createMemo(() => Boolean(displayEntry()?.error));
   const hasImages = () => {
     revision();
     return displayedImages.length > 0;
@@ -388,16 +413,36 @@ function SessionMedia(
     return Boolean(value?.error || value?.omitted || (!hasImages() && value?.cursor));
   };
   const loadDisplayed = () => load(displayEntry());
-  const loadLabel = () => t(displayEntry()?.pending ? "common.loading" : "activity.images.older");
-  const olderButton = (
-    <button
-      class="activity-feed__note-action"
-      disabled={Boolean(displayEntry()?.pending)}
-      onClick={loadDisplayed}
-    >
-      {loadLabel()}
-    </button>
-  );
+  function OlderButton() {
+    return (
+      <Loading
+        on={failed()}
+        fallback={
+          <button class="activity-feed__note-action" disabled onClick={loadDisplayed}>
+            {t("common.loading")}
+          </button>
+        }
+      >
+        <Errored
+          fallback={
+            <button class="activity-feed__note-action" onClick={loadDisplayed}>
+              {t("common.retry")}
+            </button>
+          }
+        >
+          {(latest(read), null)}
+          <button
+            class="activity-feed__note-action"
+            disabled={isPending(read)}
+            onClick={loadDisplayed}
+          >
+            {t(isPending(read) ? "common.loading" : "activity.images.older")}
+          </button>
+        </Errored>
+      </Loading>
+    );
+  }
+  const olderButton = <OlderButton />;
   const galleryImages = () => {
     revision();
     return displayedImages;
@@ -420,16 +465,10 @@ function SessionMedia(
           {showNote() && (
             <div class="activity-feed__note">
               {displayEntry()?.omitted && <span>{t("activity.images.incomplete")}</span>}
-              {displayEntry()?.error && <span role="status">{t("activity.images.failed")}</span>}
-              {(displayEntry()?.error || (!hasImages() && older())) && (
-                <button
-                  class="activity-feed__note-action"
-                  disabled={Boolean(displayEntry()?.pending)}
-                  onClick={loadDisplayed}
-                >
-                  {displayEntry()?.error ? t("common.retry") : loadLabel()}
-                </button>
-              )}
+              <Errored fallback={<span role="status">{t("activity.images.failed")}</span>}>
+                <Loading>{(latest(read), null)}</Loading>
+              </Errored>
+              {(displayEntry()?.error || (!hasImages() && older())) && <OlderButton />}
             </div>
           )}
         </div>

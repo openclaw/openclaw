@@ -217,7 +217,7 @@ export type UiState = {
   capturePayloadEventSort: "stream" | "name" | "size";
   capturePayloadEventFilter: string;
   captureErrorsOnly: boolean;
-  captureCoverage: CaptureCoverageSummary | null;
+  captureCoverage: Omit<CaptureCoverageSummary, "localPeers"> | null;
   captureStartupStatus: CaptureStartupStatus | null;
   evidence: EvidenceGalleryModel | null;
   evidenceArtifactFilter: "all" | EvidenceArtifactView["mediaKind"];

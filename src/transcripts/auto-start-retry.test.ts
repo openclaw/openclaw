@@ -11,13 +11,18 @@ import { transcriptSessionSelector, TranscriptsStore } from "./store.js";
 const fixture = useTranscriptStatusFixture();
 type Service = ReturnType<typeof createTranscriptsAutoStartService>;
 
-type RetryOptions = { whenOccupied?: boolean; title?: string; realTimers?: boolean };
+type RetryOptions = {
+  whenOccupied?: boolean;
+  title?: string;
+  realTimers?: boolean;
+  acceptFrom?: number;
+};
 
 function retryFixture(options: RetryOptions = {}) {
   if (!options.realTimers) {
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
   }
-  const { realTimers: _realTimers, ...source } = options;
+  const { realTimers: _realTimers, acceptFrom, ...source } = options;
   const f = fixture({ transcripts: { autoStart: [{ ...room, ...source }] } });
   if (options.whenOccupied !== undefined) {
     f.provider.watchOccupancy = async (request) => {
@@ -25,11 +30,11 @@ function retryFixture(options: RetryOptions = {}) {
       return { ok: true, value: { stop() {} } };
     };
   }
-  const start = vi.fn(
-    async (_request: TranscriptStartRequest): Promise<TranscriptsStartResult> => ({
-      ok: false,
-      error: "provider unavailable",
-    }),
+  let attempts = 0;
+  const start = vi.fn(async (request: TranscriptStartRequest): Promise<TranscriptsStartResult> =>
+    acceptFrom !== undefined && ++attempts >= acceptFrom
+      ? { ok: true, session: request.session }
+      : { ok: false, error: "provider unavailable" },
   );
   f.provider.start = start;
   return { f, start, service: createTranscriptsAutoStartService(f.ctx) };
@@ -162,12 +167,7 @@ describe("configured transcript failed-start custody", () => {
   );
 
   it("preserves a failed row adopted by a replacement service and lets its retry start", async () => {
-    const { f, service: retiring, start } = retryFixture({ whenOccupied: true });
-    start.mockImplementation(async (request) =>
-      start.mock.calls.length < 3
-        ? { ok: false as const, error: "provider unavailable" }
-        : { ok: true as const, session: request.session },
-    );
+    const { f, service: retiring, start } = retryFixture({ whenOccupied: true, acceptFrom: 3 });
     const replacement = createTranscriptsAutoStartService(f.ctx);
     try {
       await retiring.start().settled;
@@ -197,12 +197,7 @@ describe("configured transcript failed-start custody", () => {
   it.each(["discarded", "rewritten"] as const)(
     "reselects only a %s candidate before replacement admission",
     async (change) => {
-      const { f, service: retiring, start } = retryFixture({ whenOccupied: true });
-      start.mockImplementation(async (request) =>
-        start.mock.calls.length === 1
-          ? { ok: false as const, error: "provider unavailable" }
-          : { ok: true as const, session: request.session },
-      );
+      const { f, service: retiring, start } = retryFixture({ whenOccupied: true, acceptFrom: 2 });
       const replacement = createTranscriptsAutoStartService(f.ctx);
       const selected = createDeferred();
       const release = createDeferred();

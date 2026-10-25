@@ -1,4 +1,3 @@
-// Route CLI tests cover route command registration, channel routing, and output.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultRuntime } from "../runtime.js";
 import { captureEnv } from "../test-utils/env.js";
@@ -9,6 +8,20 @@ const ensureConfigReadyMock = vi.hoisted(() =>
 );
 const ensurePluginRegistryLoadedMock = vi.hoisted(() => vi.fn());
 const runRouteMock = vi.hoisted(() => vi.fn(async () => true));
+const statusDefaults = { json: false, deep: false, all: false, usage: false, verbose: false };
+const healthDefaults = {
+  url: undefined,
+  token: undefined,
+  password: undefined,
+  timeout: "10000",
+  expectFinal: false,
+  json: true,
+};
+const unsetArgs = (enabled: boolean) => ({
+  path: "update.channel",
+  cliOptions: { dryRun: enabled, allowExec: enabled, json: enabled },
+  localStateOwner: { method: "config unset", target: "update.channel" },
+});
 
 vi.mock("./banner.js", () => ({
   emitCliBanner: emitCliBannerMock,
@@ -85,63 +98,37 @@ describe("tryRouteCli", () => {
     originalEnv.restore();
   });
 
-  it.each([
-    {
-      command: "health --json --timeout 5000",
-      expected: { json: true, verbose: false, timeoutMs: 5000 },
-    },
-    {
-      command: "status --json --deep --all --usage --agent beta --timeout 5000",
-      expected: { deep: true, all: true, usage: true, agent: "beta", timeoutMs: 5000 },
-    },
-    {
-      command: "health --timeout nope --timeout 5000",
-      expected: { json: false, verbose: false, timeoutMs: 5000 },
-    },
-    {
-      command: "status --timeout 5000",
-      expected: {
-        json: false,
-        deep: false,
-        all: false,
-        usage: false,
-        verbose: false,
-        timeoutMs: 5000,
-      },
-    },
-    {
-      command: "status --timeout 250",
-      expected: {
-        json: false,
-        deep: false,
-        all: false,
-        usage: false,
-        verbose: false,
-        timeoutMs: 250,
-      },
-    },
-    {
-      command: "status",
-      expected: {
-        json: false,
-        deep: false,
-        all: false,
-        usage: false,
-        verbose: false,
-        timeoutMs: undefined,
-      },
-    },
-    {
-      command: "--profile work status --json",
-      expected: { deep: false, all: false, usage: false, timeoutMs: undefined },
-    },
-    {
-      command: "--profile work health --timeout=5000 --json",
-      expected: { json: true, verbose: false, timeoutMs: 5000 },
-    },
-    {
-      command: "sessions --agent=default --limit=25",
-      expected: {
+  it("falls back before bootstrap when the route cannot parse the argv", async () => {
+    await expect(
+      tryRouteCli(["node", "openclaw", "sessions", "--json", "--unknown"]),
+    ).resolves.toBe(false);
+
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
+    expect(runRouteMock).not.toHaveBeenCalled();
+  });
+
+  it.each<[string, object, boolean?]>([
+    ["health --json --timeout 5000", { json: true, verbose: false, timeoutMs: 5000 }],
+    [
+      "status --json --deep --all --usage --agent beta --timeout 5000",
+      { deep: true, all: true, usage: true, agent: "beta", timeoutMs: 5000 },
+    ],
+    ["health --timeout nope --timeout 5000", { json: false, verbose: false, timeoutMs: 5000 }],
+    ["status --timeout 5000", { ...statusDefaults, timeoutMs: 5000 }],
+    ["status --timeout 250", { ...statusDefaults, timeoutMs: 250 }],
+    ["status", { ...statusDefaults, timeoutMs: undefined }],
+    [
+      "--profile work status --json",
+      { deep: false, all: false, usage: false, timeoutMs: undefined },
+    ],
+    [
+      "--profile work health --timeout=5000 --json",
+      { json: true, verbose: false, timeoutMs: 5000 },
+    ],
+    [
+      "sessions --agent=default --limit=25",
+      {
         json: false,
         allAgents: false,
         agent: "default",
@@ -149,89 +136,61 @@ describe("tryRouteCli", () => {
         active: undefined,
         limit: "25",
       },
-    },
-    {
-      command: "--log-level=debug agents list --json",
-      expected: { json: true, bindings: false, tree: false },
-      singleArgument: true,
-    },
-    {
-      command: "agents --json --bindings",
-      expected: { json: true, bindings: true, tree: false },
-      singleArgument: true,
-    },
-    {
-      command:
-        "gateway status --url ws://127.0.0.1:18789 --token abc --password def --timeout 5000 --deep --require-rpc --json",
-      expected: {
+    ],
+    ["--log-level=debug agents list --json", { json: true, bindings: false, tree: false }, true],
+    ["agents --json --bindings", { json: true, bindings: true, tree: false }, true],
+    ["channels list", { json: false, all: false }],
+    [
+      "channels status --json",
+      { channel: undefined, json: true, probe: false, timeout: undefined },
+    ],
+    ["plugins list --json", { json: true, enabled: false, verbose: false }],
+    [
+      "gateway status --url ws://127.0.0.1:18789 --token abc --password def --timeout 5000 --deep --require-rpc --json",
+      {
         rpc: { url: "ws://127.0.0.1:18789", token: "abc", password: "def", timeout: "5000" },
         probe: true,
         requireRpc: true,
         deep: true,
         json: true,
       },
-      singleArgument: true,
-    },
-    {
-      command:
-        "gateway health --url ws://127.0.0.1:18789 --token abc --password def --timeout 5000 --expect-final --json",
-      expected: {
+      true,
+    ],
+    [
+      "gateway health --url ws://127.0.0.1:18789 --token abc --password def --timeout 5000 --expect-final --json",
+      {
         rpc: {
+          ...healthDefaults,
           url: "ws://127.0.0.1:18789",
           token: "abc",
           password: "def",
           timeout: "5000",
           expectFinal: true,
-          json: true,
         },
         localPortOverride: undefined,
       },
-    },
-    {
-      command: "gateway --port 19083 health --json",
-      expected: {
-        rpc: {
-          url: undefined,
-          token: undefined,
-          password: undefined,
-          timeout: "10000",
-          expectFinal: false,
-          json: true,
-        },
+    ],
+    [
+      "gateway --port 19083 health --json",
+      {
+        rpc: healthDefaults,
         localPortOverride: 19083,
       },
-    },
-    {
-      command: "--log-level debug config get update.channel --json",
-      expected: { path: "update.channel", json: true },
-      singleArgument: true,
-    },
-    {
-      command: "config unset --profile work update.channel",
-      expected: {
-        path: "update.channel",
-        cliOptions: { dryRun: false, allowExec: false, json: false },
-        localStateOwner: { method: "config unset", target: "update.channel" },
-      },
-      singleArgument: true,
-    },
-    {
-      command: "config unset --dry-run --json --allow-exec update.channel",
-      expected: {
-        path: "update.channel",
-        cliOptions: { dryRun: true, allowExec: true, json: true },
-        localStateOwner: { method: "config unset", target: "update.channel" },
-      },
-      singleArgument: true,
-    },
-    {
-      command: "models list --provider openai --all --local --json --plain",
-      expected: { provider: "openai", all: true, local: true, json: true, plain: true },
-    },
-    {
-      command:
-        "models status --probe-provider openai --probe-timeout 5000 --probe-concurrency 2 --probe-max-tokens 64 --probe-profile fast --probe-profile safe --agent default --json --plain --check --probe",
-      expected: {
+    ],
+    [
+      "--log-level debug config get update.channel --json",
+      { path: "update.channel", json: true },
+      true,
+    ],
+    ["config unset --profile work update.channel", unsetArgs(false), true],
+    ["config unset --dry-run --json --allow-exec update.channel", unsetArgs(true), true],
+    [
+      "models list --provider openai --all --local --json --plain",
+      { provider: "openai", all: true, local: true, json: true, plain: true },
+    ],
+    [
+      "models status --probe-provider openai --probe-timeout 5000 --probe-concurrency 2 --probe-max-tokens 64 --probe-profile fast --probe-profile safe --agent default --json --plain --check --probe",
+      {
         probeProvider: "openai",
         probeTimeout: "5000",
         probeConcurrency: "2",
@@ -243,8 +202,8 @@ describe("tryRouteCli", () => {
         check: true,
         probe: true,
       },
-    },
-  ])("forwards parsed arguments for $command", async ({ command, expected, singleArgument }) => {
+    ],
+  ])("forwards parsed arguments for %s", async (command, expected, singleArgument) => {
     await expect(tryRouteCli(["node", "openclaw", ...command.split(" ")])).resolves.toBe(true);
 
     expect(runRouteMock).toHaveBeenCalledExactlyOnceWith(
@@ -296,89 +255,29 @@ describe("tryRouteCli", () => {
   });
 
   it.each([
-    ["status", "--json"],
-    ["health"],
-    ["channels", "list"],
-    ["channels", "status", "--json"],
-    ["plugins", "list", "--json"],
-    ["gateway", "status", "--json"],
-    ["sessions", "--json"],
-  ])("dispatches %j without startup config observation or plugin activation", async (...args) => {
-    await expect(tryRouteCli(["node", "openclaw", ...args])).resolves.toBe(true);
+    ["config get gateway.port", true, true],
+    ["models status --json", false, true],
+    ["agents", false, false],
+  ] as const)(
+    "selects output stream for %s (machine=%s)",
+    async (command, machineOutput, stderr) => {
+      const captured: boolean[] = [];
+      runRouteMock.mockImplementationOnce(async () => {
+        captured.push(loggingState.forceConsoleToStderr);
+        return true;
+      });
 
-    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
-    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
-    expect(runRouteMock).toHaveBeenCalledOnce();
-  });
-
-  it("suppresses config get machine output without running an observing startup guard", async () => {
-    const captured: boolean[] = [];
-    runRouteMock.mockImplementationOnce(async () => {
-      captured.push(loggingState.forceConsoleToStderr);
-      return true;
-    });
-
-    await expect(
-      tryRouteCli(["node", "openclaw", "config", "get", "gateway.port"], {
-        machineOutput: true,
-      }),
-    ).resolves.toBe(true);
-
-    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
-    expect(captured).toEqual([true]);
-  });
-
-  it("lets routed gateway health own its config read", async () => {
-    await expect(tryRouteCli(["node", "openclaw", "gateway", "health", "--json"])).resolves.toBe(
-      true,
-    );
-
-    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
-    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
-  });
-
-  it("defers routed config mutation preparation to its state owner", async () => {
-    await expect(
-      tryRouteCli(["node", "openclaw", "config", "unset", "gateway.port"]),
-    ).resolves.toBe(true);
-
-    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
-    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
-    expect(runRouteMock).toHaveBeenCalledExactlyOnceWith({
-      path: "gateway.port",
-      cliOptions: { allowExec: false, dryRun: false, json: false },
-      localStateOwner: { method: "config unset", target: "gateway.port" },
-    });
-  });
-
-  it("routes command-run logs to stderr for config-guard-skipping --json routes", async () => {
-    const captured: boolean[] = [];
-    runRouteMock.mockImplementationOnce(async () => {
-      captured.push(loggingState.forceConsoleToStderr);
-      return true;
-    });
-
-    await expect(tryRouteCli(["node", "openclaw", "models", "status", "--json"])).resolves.toBe(
-      true,
-    );
-
-    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
-    expect(captured).toEqual([true]);
-  });
-
-  it("keeps human action output on stdout", async () => {
-    const captured: boolean[] = [];
-    runRouteMock.mockImplementationOnce(async () => {
-      captured.push(loggingState.forceConsoleToStderr);
-      return true;
-    });
-
-    await tryRouteCli(["node", "openclaw", "agents"]);
-
-    expect(runRouteMock).toHaveBeenCalledOnce();
-    expect(captured[0]).toBe(false);
-    expect(loggingState.forceConsoleToStderr).toBe(false);
-  });
+      await expect(
+        tryRouteCli(["node", "openclaw", ...command.split(" ")], { machineOutput }),
+      ).resolves.toBe(true);
+      expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+      expect(runRouteMock).toHaveBeenCalledOnce();
+      expect(captured).toEqual([stderr]);
+      if (!stderr) {
+        expect(loggingState.forceConsoleToStderr).toBe(false);
+      }
+    },
+  );
 
   it("uses the last valid routed log level option", async () => {
     await expect(
@@ -403,15 +302,5 @@ describe("tryRouteCli", () => {
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
     expect(runRouteMock).not.toHaveBeenCalled();
     expect(process.env.OPENCLAW_LOG_LEVEL).toBeUndefined();
-  });
-
-  it("falls back before bootstrap when the route cannot parse the argv", async () => {
-    await expect(
-      tryRouteCli(["node", "openclaw", "sessions", "--json", "--unknown"]),
-    ).resolves.toBe(false);
-
-    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
-    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
-    expect(runRouteMock).not.toHaveBeenCalled();
   });
 });

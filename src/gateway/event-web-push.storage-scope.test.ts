@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { PairedDevice } from "../infra/device-pairing.types.js";
 import { normalizeWebPushDevicePreferences } from "../infra/push-web-preferences.js";
@@ -18,6 +18,7 @@ import type { WebPushWorkerOperations } from "../infra/push-web-store.worker-con
 import type { prepareWebPushNotificationSender } from "../infra/push-web.js";
 import { SQLITE_WORKER_MAX_REQUESTS_PER_WORKER } from "../infra/sqlite-worker-broker.js";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
+import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import {
   captureOpenClawStateDatabaseReadAdmission,
   closeOpenClawStateDatabaseByPathAsync,
@@ -226,12 +227,9 @@ it("orders binding and pairing reads before rebinding without retaining provider
   // Publish the initial binding before exposing the held worker reply.
   await upsertBinding(stateDir, "profile-a", 1);
   order.length = 0;
-  const warn = vi.fn();
-  const delivery = createEventWebPushDelivery({
-    getRuntimeConfig: () => ({}),
-    stateDir,
-    log: { warn },
-  });
+  const warnings = createWarnLogCapture("web-push-storage-scope");
+  onTestFinished(() => warnings.cleanup());
+  const delivery = createEventWebPushDelivery(() => ({}));
   delivery.handleEvent("chat", { state: "final", runId: "scope-run" });
   await selected.promise;
   const mutation = upsertBinding(stateDir, "profile-b", 2).then(mutationSettled);
@@ -264,7 +262,7 @@ it("orders binding and pairing reads before rebinding without retaining provider
     await nextTurn();
   }
   expect(mocks.nativeDatabaseOpen).not.toHaveBeenCalled();
-  expect(warn).not.toHaveBeenCalled();
+  expect(await warnings.findText("event Web Push")).toBeUndefined();
 });
 
 function prepareQueuedRead(readError?: Error) {

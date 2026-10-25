@@ -30,7 +30,7 @@ it.each([
   async ({ phase, rows, failed, reaped, accepted }) => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
-    const { child, exit } = createSyntheticChild();
+    const { child, close } = createSyntheticChild();
     spawn.mockReturnValue(child);
     vi.spyOn(child, "kill").mockReturnValue(false);
     let signaled = false;
@@ -60,7 +60,7 @@ it.each([
       platform: "darwin",
       requireProcessTreeExit: true,
       cleanupDrainTimeoutMs: 50,
-      onReady: exit,
+      onReady: close,
     }).then(
       (value) => ({ value }),
       (error: unknown) => ({ error }),

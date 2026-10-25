@@ -134,109 +134,8 @@ describe("manifest auth choice dispatch", () => {
   });
 });
 
-function createSglangWizardProvider(params?: {
-  includeSetup?: boolean;
-  includeModelPicker?: boolean;
-}) {
-  return makeProvider({
-    id: "sglang",
-    label: "SGLang",
-    auth: [{ id: "server", label: "Server", kind: "custom", run: vi.fn() }],
-    wizard: {
-      ...((params?.includeSetup ?? true)
-        ? {
-            setup: {
-              choiceLabel: "SGLang setup",
-              groupId: "sglang",
-              groupLabel: "SGLang",
-            },
-          }
-        : {}),
-      ...(params?.includeModelPicker
-        ? {
-            modelPicker: {
-              label: "SGLang server",
-              methodId: "server",
-            },
-          }
-        : {}),
-    },
-  });
-}
-
-function createSglangConfig() {
-  return {
-    plugins: {
-      allow: ["sglang"],
-    },
-  };
-}
-
-function createHomeEnv(suffix = "", overrides?: Partial<NodeJS.ProcessEnv>) {
-  return {
-    OPENCLAW_HOME: `/tmp/openclaw-home${suffix}`,
-    ...overrides,
-  } as NodeJS.ProcessEnv;
-}
-
-function createWizardRuntimeParams(params?: {
-  config?: object;
-  env?: NodeJS.ProcessEnv;
-  workspaceDir?: string;
-}) {
-  return {
-    config: params?.config ?? createSglangConfig(),
-    workspaceDir: params?.workspaceDir ?? DEFAULT_WORKSPACE_DIR,
-    env: params?.env ?? createHomeEnv(),
-  };
-}
-
-function expectProviderResolutionCall(params?: {
-  config?: object;
-  env?: NodeJS.ProcessEnv;
-  workspaceDir?: string;
-  providerRefs?: readonly string[];
-  count?: number;
-}) {
-  expect(resolvePluginProvidersCore).toHaveBeenCalledTimes(params?.count ?? 1);
-  expect(resolvePluginProvidersCore).toHaveBeenCalledWith({
-    ...createWizardRuntimeParams(params),
-    mode: "setup",
-    ...(params?.providerRefs ? { providerRefs: params.providerRefs } : {}),
-  });
-}
-
-function setResolvedProviders(...providers: ProviderPlugin[]) {
-  resolvePluginProvidersCore.mockReturnValue(providers);
-}
-
-function expectSingleWizardChoice(params: {
-  provider: ProviderPlugin;
-  choice: string;
-  expectedWizard: unknown;
-}) {
-  expect(
-    resolveProviderPluginChoiceCore({
-      providers: [params.provider],
-      choice: params.choice,
-    }),
-  ).toEqual({
-    provider: params.provider,
-    method: params.provider.auth[0],
-    wizard: params.expectedWizard,
-  });
-}
-
-function expectModelPickerEntries(
-  provider: ProviderPlugin,
-  expected: Array<{
-    value: string;
-    label: string;
-    hint?: string;
-  }>,
-) {
-  setResolvedProviders(provider);
-  expect(resolveProviderModelPickerEntries({})).toEqual(expected);
+function createHomeEnv() {
+  return { OPENCLAW_HOME: "/tmp/openclaw-home" };
 }
 
 describe("provider wizard boundaries", () => {
@@ -342,10 +241,15 @@ describe("provider wizard boundaries", () => {
       resolveWizard: (provider: ProviderPlugin) => provider.auth[0]?.wizard,
     },
   ] as const)("$name", ({ provider, choice, resolveWizard }) => {
-    expectSingleWizardChoice({
+    expect(
+      resolveProviderPluginChoiceCore({
+        providers: [provider],
+        choice,
+      }),
+    ).toEqual({
       provider,
-      choice,
-      expectedWizard: resolveWizard(provider),
+      method: provider.auth[0],
+      wizard: resolveWizard(provider),
     });
   });
 
@@ -365,7 +269,8 @@ describe("provider wizard boundaries", () => {
         },
       },
     });
-    expectModelPickerEntries(provider, [
+    resolvePluginProvidersCore.mockReturnValue([provider]);
+    expect(resolveProviderModelPickerEntries({})).toEqual([
       {
         value: buildProviderPluginMethodChoice("sglang", "server"),
         label: "SGLang server",
@@ -375,15 +280,36 @@ describe("provider wizard boundaries", () => {
   });
 
   it("resolves providers in setup mode for the model picker", () => {
-    const provider = createSglangWizardProvider({ includeModelPicker: true });
+    const provider = makeProvider({
+      id: "sglang",
+      label: "SGLang",
+      auth: [{ id: "server", label: "Server", kind: "custom", run: vi.fn() }],
+      wizard: {
+        setup: {
+          choiceLabel: "SGLang setup",
+          groupId: "sglang",
+          groupLabel: "SGLang",
+        },
+        modelPicker: {
+          label: "SGLang server",
+          methodId: "server",
+        },
+      },
+    });
     const config = {};
     const env = createHomeEnv();
-    setResolvedProviders(provider);
+    resolvePluginProvidersCore.mockReturnValue([provider]);
 
-    const runtimeParams = createWizardRuntimeParams({ config, env });
+    const runtimeParams = { config, workspaceDir: DEFAULT_WORKSPACE_DIR, env };
     expect(resolveProviderModelPickerEntries(runtimeParams)).toHaveLength(1);
 
-    expectProviderResolutionCall({ config, env });
+    expect(resolvePluginProvidersCore).toHaveBeenCalledTimes(1);
+    expect(resolvePluginProvidersCore).toHaveBeenCalledWith({
+      config,
+      workspaceDir: DEFAULT_WORKSPACE_DIR,
+      env,
+      mode: "setup",
+    });
   });
 
   it("uses the prepared matching provider when the runtime inventory does not contain it", async () => {
@@ -411,7 +337,7 @@ describe("provider wizard boundaries", () => {
   it("resolves a different model owner instead of using the prepared authentication provider", async () => {
     const matchingHook = vi.fn(async () => {});
     const otherHook = vi.fn(async () => {});
-    setResolvedProviders(
+    resolvePluginProvidersCore.mockReturnValue([
       makeProvider({
         id: "ollama",
         label: "Ollama",
@@ -422,7 +348,7 @@ describe("provider wizard boundaries", () => {
         label: "vLLM",
         onModelSelected: matchingHook,
       }),
-    );
+    ]);
 
     const env = createHomeEnv();
     await runProviderModelSelectedHookCore({
@@ -435,9 +361,12 @@ describe("provider wizard boundaries", () => {
       preparedProvider: makeProvider({ id: "ollama", label: "Ollama", onModelSelected: otherHook }),
     });
 
-    expectProviderResolutionCall({
+    expect(resolvePluginProvidersCore).toHaveBeenCalledTimes(1);
+    expect(resolvePluginProvidersCore).toHaveBeenCalledWith({
       config: {},
+      workspaceDir: DEFAULT_WORKSPACE_DIR,
       env,
+      mode: "setup",
       providerRefs: ["vllm"],
     });
     expect(matchingHook).toHaveBeenCalledWith({

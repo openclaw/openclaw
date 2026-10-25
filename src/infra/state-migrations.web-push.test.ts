@@ -13,7 +13,6 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
-import { acquireGatewayLock } from "./gateway-lock.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import {
   hashWebPushEndpoint,
@@ -32,6 +31,7 @@ import {
   detectLegacyStateMigrations,
   runLegacyStateMigrations,
 } from "./state-migrations.doctor.js";
+import { withGatewayLockHeld } from "./state-migrations.gateway-lock.test-support.js";
 import { detectLegacyWebPush, migrateLegacyWebPush } from "./state-migrations.web-push.js";
 
 describe("legacy Web Push Doctor migration", () => {
@@ -145,6 +145,41 @@ describe("legacy Web Push Doctor migration", () => {
     }
   }
 
+  it.each([
+    { source: "subscriptions", claimed: false },
+    { source: "subscriptions", claimed: true },
+    { source: "vapid", claimed: false },
+    { source: "vapid", claimed: true },
+  ] as const)(
+    "retains malformed UTF-8 in $source without importing replacement characters (claim: $claimed)",
+    async ({ source, claimed }) => {
+      const paths = await writeLegacyState({
+        subscriptions: [subscription({ keys: { p256dh: "utf8-marker", auth: "auth" } })],
+        vapid: vapidKeys({ publicKey: "utf8-marker" }),
+      });
+      const sourcePath = source === "subscriptions" ? paths.subscriptionsPath : paths.vapidKeysPath;
+      const bytes = await fsp.readFile(sourcePath);
+      bytes[bytes.indexOf("utf8-marker")] = 0xff;
+      await fsp.writeFile(sourcePath, bytes);
+      const activePath = sourcePath + (claimed ? ".doctor-importing" : "");
+      if (claimed) {
+        await fsp.rename(sourcePath, activePath);
+      }
+      const result = await migrate();
+      expect(result.changes).toEqual([]);
+      expect(result.warningDisposition).toBe("recoverable");
+      expect(result.warnings.join("\n")).toContain("must be valid UTF-8");
+      expect(await fsp.readFile(activePath)).toEqual(bytes);
+      expectFiles(
+        true,
+        activePath,
+        source === "subscriptions" ? paths.vapidKeysPath : paths.subscriptionsPath,
+      );
+      expect(await listWebPushSubscriptions()).toEqual([]);
+      expect(await readPersistedVapidKeyPair()).toBeNull();
+    },
+  );
+
   it("detects original and interrupted-claim files only for explicit Doctor repair", async () => {
     const { subscriptionsPath } = await writeSubscriptions([]);
     expect(detectLegacyWebPush({ stateDir }).hasLegacy).toBe(false);
@@ -156,22 +191,7 @@ describe("legacy Web Push Doctor migration", () => {
   it("requires exclusive state ownership before reading or committing legacy state", async () => {
     const { subscriptionsPath } = await writeSubscriptions();
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-    const gatewayLock = await acquireGatewayLock({
-      allowInTests: true,
-      env,
-      pollIntervalMs: 10,
-      port: 18_789,
-      timeoutMs: 100,
-    });
-    if (!gatewayLock) {
-      throw new Error("expected test Gateway lock");
-    }
-    let blocked: Awaited<ReturnType<typeof migrateLegacyWebPush>>;
-    try {
-      blocked = await migrate({ env });
-    } finally {
-      await gatewayLock.release();
-    }
+    const blocked = await withGatewayLockHeld(env, 18_789, () => migrate({ env }));
     expect(blocked.warnings[0]).toContain("OpenClaw state database is busy");
     expect(fs.existsSync(subscriptionsPath)).toBe(true);
     expect(await listWebPushSubscriptions(stateDir)).toEqual([]);

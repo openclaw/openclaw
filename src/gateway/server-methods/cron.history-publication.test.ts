@@ -57,7 +57,6 @@ it.each([
       cronEnabled: false,
       defaultAgentId: "main",
       enqueueSystemEvent() {},
-      requestHeartbeat() {},
       runIsolatedAgentJob: async () => ({ status: "ok" }),
     });
     const job = createCronJob({

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mockClaudeManagedSettings } from "../../../test/helpers/claude-managed-settings.js";
 import { runWithCliHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { stageSessionPendingInput } from "../../config/sessions/session-accessor.pending-inputs.js";
@@ -12,17 +13,15 @@ import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
 import {
   buildDefaultTestCliBackend,
   createCliRunnerPrepareFixture,
-  createTestMcpLoopbackClientGrant,
   createTestMcpLoopbackServer,
-  createTestMcpLoopbackServerConfig,
 } from "../cli-runner.test-helpers.js";
 import { prepareCliHistoryBoundary } from "./history-boundary.js";
-import { setRawCliBackendForPrepareTest } from "./prepare-mcp.test-support.js";
-import { prepareCliRunContext } from "./prepare.js";
 import {
-  resetCliRunnerPrepareTestDeps,
-  setCliRunnerPrepareTestDeps,
-} from "./prepare.test-support.js";
+  mockCliMcpPreparation,
+  setRawCliBackendForPrepareTest,
+} from "./prepare-mcp.test-support.js";
+import { prepareCliRunContext } from "./prepare.js";
+import { resetCliRunnerPrepareTestDeps } from "./prepare.test-support.js";
 
 const getRuntimeConfigMock = vi.hoisted(() => vi.fn(() => ({})));
 // mock-isolation: preparation here needs an empty runtime config, not the host's.
@@ -89,29 +88,20 @@ describe("native Claude login history on preparation", () => {
         reseedFromRawTranscriptWhenUncompacted: true,
       },
     });
-    setCliRunnerPrepareTestDeps({
-      isWorkspaceBootstrapPending: vi.fn(async () => false),
-      makeBootstrapWarn: vi.fn(() => () => undefined),
-      resolveBootstrapContextForRun: vi.fn(async () => ({ bootstrapFiles: [], contextFiles: [] })),
+    mockCliMcpPreparation({
       getActiveMcpLoopbackRuntime: vi.fn(() => undefined),
       ensureMcpLoopbackServer: vi.fn(createTestMcpLoopbackServer),
-      createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),
-      mintMcpLoopbackClientGrant: vi.fn(createTestMcpLoopbackClientGrant),
-      bindMcpLoopbackClientGrantAdmission: vi.fn(() => true),
-      revokeMcpLoopbackClientGrant: vi.fn(() => true),
       resolveMcpLoopbackPolicyTools: vi.fn(() => ({ agentId: "main", tools: [] })),
       resolveMcpLoopbackScopedTools: vi.fn(() => ({ agentId: "main", tools: [] })),
-      resolveOpenClawReferencePaths: vi.fn(async () => ({ docsPath: null, sourcePath: null })),
       prepareClaudeCliSkillsPlugin: vi.fn(async () => ({
         args: [],
         cleanup: vi.fn(async () => undefined),
       })),
-      getCliLiveSessionGeneration: vi.fn(() => undefined),
-      loadManifestModelCatalog: vi.fn(() => []),
     });
     fixture = createCliRunnerPrepareFixture((params) =>
       prepareCliRunContext({ skillsSnapshot: { prompt: "", skills: [] }, ...params }),
     );
+    mockClaudeManagedSettings(path.join(fixture.session.dir, "managed"));
   });
 
   afterEach(async () => {

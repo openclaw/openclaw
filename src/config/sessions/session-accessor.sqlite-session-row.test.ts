@@ -11,8 +11,8 @@ import {
   upsertSessionEntryCore as upsertEntry,
 } from "./session-accessor.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
-import { readReferencedSessionIds } from "./session-accessor.sqlite-lifecycle-state.js";
 import { readSessionMaintenanceAgeQueries } from "./session-accessor.sqlite-maintenance-age-queries.js";
+import { readReferencedSessionIds } from "./session-accessor.sqlite-references.js";
 import {
   projectPublicSessionEntry,
   projectPublicSessionEntryPatch,

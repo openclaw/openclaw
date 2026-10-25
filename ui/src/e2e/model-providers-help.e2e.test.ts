@@ -85,7 +85,6 @@ describeControlUiE2e("Control UI Models help mocked Gateway E2E", () => {
           },
           "models.authStatus": { ts: NOW, providers: [] },
           "usage.status": { updatedAt: NOW, providers: [] },
-          "sessions.usage": { aggregates: { byProvider: [] } },
         },
       });
 

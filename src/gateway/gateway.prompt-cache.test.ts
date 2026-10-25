@@ -82,16 +82,29 @@ const { requests, sessionIds: requestSessionIds, errors: providerErrors } = fixt
 beforeAll(() => fixture.start(), 90_000);
 afterAll(() => fixture.close());
 
-it("preserves the provider prefix across chat.send, completion and Gateway restart", async ({
+it("keeps operator cache identity through WebChat, completion and restart turns", async ({
   signal,
 }) => {
   const sessionKey = `agent:main:cache-prefix-${randomUUID()}`;
   const requestStart = requests.length;
-  // The real first send establishes the conversation metadata used by command continuations.
+  // CLI/operator ingress must share cache identity with later WebChat and internal turns.
+  const initialized = await fixture.client.request<{ runId: string; status: string }>("agent", {
+    sessionKey,
+    message: "Remember this synthetic conversation for the completion update.",
+    deliver: false,
+    idempotencyKey: randomUUID(),
+  });
+  expect(initialized.status).toBe("accepted");
+  const initializedResult = await fixture.client.request<{ status: string }>(
+    "agent.wait",
+    { runId: initialized.runId, timeoutMs: 60_000 },
+    { timeoutMs: 65_000 },
+  );
+  expect(initializedResult.status).toBe("ok");
   const initializedRunId = await sendChatAndWait(
     fixture.client,
     sessionKey,
-    "Remember this synthetic conversation for the completion update.",
+    "Continue this synthetic conversation in WebChat.",
     60_000,
   );
   const completion = createDeferred();
@@ -176,20 +189,23 @@ it("preserves the provider prefix across chat.send, completion and Gateway resta
   const turnRequests = requests
     .slice(requestStart)
     .filter((_body, index) => requestSessionIds[requestStart + index] === parentSessionId);
-  expect(turnRequests, "parent requests include the tool loop and completion").toHaveLength(5);
+  expect(turnRequests, "parent requests include operator, tool loop and completion").toHaveLength(
+    6,
+  );
   const prefixes = turnRequests.map((body) => {
     const payload = JSON.parse(body) as { prompt_cache_key?: unknown };
-    expect(
-      typeof payload.prompt_cache_key === "string" && payload.prompt_cache_key.length > 0,
-      "the provider receives a nonempty session cache key",
-    ).toBe(true);
+    expect(payload.prompt_cache_key, "every ingress uses the session's boundary cache key").toBe(
+      `${parentSessionId}:0`,
+    );
     return snapshotProviderPrefix("openai-responses", payload);
   });
   expect(
-    prefixes[3]!.history.join("\n").includes("Synthetic child verification completed."),
+    prefixes[4]!.history.join("\n").includes("Synthetic child verification completed."),
     "the internal completion reached the provider",
   ).toBe(true);
-  for (let index = 1; index < prefixes.length; index += 1) {
+  // Preserve prefix coverage from WebChat initialization; the preceding operator
+  // turn also checks cache identity without coupling this test to ingress envelopes.
+  for (let index = 2; index < prefixes.length; index += 1) {
     assertStableProviderPrefix(prefixes[index - 1]!, prefixes[index]!, {
       label: `Gateway chat/completion turn ${index + 1}`,
     });

@@ -284,7 +284,7 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
   };
 
   const formatPeer = (value?: RoutePeer | null) =>
-    value?.kind && value?.id ? `${value.kind}:${value.id}` : "none";
+    value?.kind && value.id ? `${value.kind}:${value.id}` : "none";
   const formatNormalizedPeer = (value: NormalizedPeerConstraint) => {
     if (value.state === "none") {
       return "none";

@@ -1,9 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { isPinnableSessionEntry } from "../config/sessions/session-pin-policy.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
-import { sessionActivityTimestamp } from "../shared/session-activity-timestamp.js";
 import {
   isCronSessionDisplayKey,
   isSubagentSessionRow,
@@ -20,26 +18,35 @@ export function readSessionListSelectionFacts(
     category?: string;
     heartbeatIsolatedBaseSessionKey?: string;
     createdSurface?: "plugin-dock";
-  } & Pick<
-    SessionEntry,
-    | "pinnedAt"
-    | "parentSessionKey"
-    | "sidebarRoot"
-    | "lastActivityAt"
-    | "lastInteractionAt"
-    | "createdAt"
-  > &
-    Omit<Parameters<typeof isSystemCreatedSessionRow>[0], "key" | "classification">,
+    chatType?: string;
+    autoLabel?: string;
+    topicName?: string;
+    groupChannel?: string;
+    space?: string;
+    delivery?: SessionEntry["delivery"];
+    modelProvider?: string;
+    model?: string;
+  } & Omit<Parameters<typeof isSystemCreatedSessionRow>[0], "key" | "classification">,
 ) {
   const parsed = parseAgentSessionKey(key);
   return {
-    updatedAt: entry?.updatedAt ?? 0,
-    lastInteractionAt: entry?.lastInteractionAt ?? 0,
-    activity: entry ? sessionActivityTimestamp(entry) : 0,
-    pinnedAt:
-      entry?.pinnedAt !== undefined && isPinnableSessionEntry(key, entry)
-        ? entry.pinnedAt
-        : undefined,
+    // Search memoization shares this identity, independently of activity timestamps.
+    searchSource: [
+      entry?.sessionId,
+      entry?.label,
+      entry?.subject,
+      entry?.category,
+      entry?.displayName,
+      entry?.autoLabel,
+      entry?.topicName,
+      entry?.groupChannel,
+      entry?.space,
+      entry?.delivery,
+      entry?.chatType,
+      entry?.spawnedBy,
+      entry?.modelProvider,
+      entry?.model,
+    ],
     agentId: parsed ? normalizeAgentId(parsed.agentId) : undefined,
     isCronRun: isCronRunSessionKey(key),
     isCron: isCronSessionDisplayKey(key),
@@ -58,7 +65,7 @@ export function readSessionListSelectionFacts(
       entry?.updatedAt == null &&
       !normalizeOptionalString(entry?.sessionId) &&
       parsed?.rest === "sessions",
-  } as const;
+  };
 }
 
 export type SessionListTargetLookup = (key: string) =>

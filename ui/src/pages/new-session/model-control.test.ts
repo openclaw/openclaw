@@ -3,7 +3,8 @@ import { createDeferred as deferred } from "../../../../test/helpers/promise.js"
 import type { GatewayAgentRow, ModelCatalogEntry } from "../../api/types.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import { buildDraftSessionCreateParams } from "./create-params.ts";
+import { buildSelectedSessionCreateParams } from "./draft-create-params.ts";
+import { createRepositoryFixture } from "./draft-place-state.test-support.ts";
 import {
   modelOption,
   managedModelControls,
@@ -208,7 +209,7 @@ it("drops a stored model and reasoning when manual selection is denied", async (
 });
 
 it("clears xhigh when an interactive model switch targets a profile ending at high", async () => {
-  const { control, context, find, changed } = setup([
+  const { control, context, find, draw, changed } = setup([
     testModel("kimi", "k3", {
       reasoning: true,
       thinkingLevels: levels(["off", "low", "medium", "high", "xhigh"]),
@@ -224,6 +225,10 @@ it("clears xhigh when an interactive model switch targets a profile ending at hi
   await vi.waitFor(() => expect(find("model-option", "demo/limited")).not.toBeNull());
   control.selected = "kimi/k3";
   control.thinkingLevel = "xhigh";
+  const search = draw().querySelector<HTMLInputElement>("[data-chat-model-search]")!;
+  search.value = "demo/limited";
+  search.dispatchEvent(new InputEvent("input", { bubbles: true }));
+  flush();
   find("model-option", "demo/limited")!.click();
   expect(control).toMatchObject({ selected: "demo/limited", thinkingLevel: "" });
   expect(changed).toHaveBeenLastCalledWith({ model: "demo/limited", thinkingLevel: "" });
@@ -622,13 +627,16 @@ describe("runtime choices", () => {
         model: "openai/gpt-5.6-sol",
         agentRuntime: "codex",
       });
+      const { state } = createRepositoryFixture();
+      managed.track(state.modelControl);
+      state.modelControl.agentRuntime = control.agentRuntime;
+      vi.spyOn(state.modelControl, "modelForSubmission").mockReturnValue(
+        control.modelForSubmission(),
+      );
       expect(
-        buildDraftSessionCreateParams({
-          agentId: "main",
+        buildSelectedSessionCreateParams(state, {
           message: "hello",
-          worktree: false,
-          model: control.modelForSubmission(),
-          agentRuntime: control.agentRuntime,
+          visibility: "normal",
         }),
       ).toMatchObject({ model: "openai/gpt-5.6-sol", agentRuntime: "codex" });
       control.reset();

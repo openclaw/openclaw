@@ -11,6 +11,10 @@ const removeReactionSignalMock = vi
 const { signalMessageActions } = await import("./message-actions.js");
 
 const DEFAULT_CFG: OpenClawConfig = { channels: { signal: { account: "+15550001111" } } };
+const uuid = "123e4567-e89b-12d3-a456-426614174000";
+const disabledCfg = {
+  channels: { signal: { account: "+15550001111", actions: { reactions: false } } },
+};
 type ActionContext = Parameters<NonNullable<typeof signalMessageActions.handleAction>>[0];
 function react(
   params: ActionContext["params"],
@@ -45,17 +49,15 @@ function prepareReply(
   });
 }
 
-function createSignalAccountOverrideCfg(): OpenClawConfig {
-  return {
-    channels: {
-      signal: {
-        account: "+15550002222",
-        actions: { reactions: false },
-        accounts: { work: { account: "+15550001111", actions: { reactions: true } } },
-      },
+const overrideCfg: OpenClawConfig = {
+  channels: {
+    signal: {
+      account: "+15550002222",
+      actions: { reactions: false },
+      accounts: { work: { account: "+15550001111", actions: { reactions: true } } },
     },
-  } as OpenClawConfig;
-}
+  },
+};
 
 describe("signalMessageActions", () => {
   beforeEach(() => {
@@ -65,15 +67,10 @@ describe("signalMessageActions", () => {
 
   it.each([
     ["unconfigured", {}, undefined, []],
-    [
-      "reactions disabled",
-      { channels: { signal: { account: "+15550001111", actions: { reactions: false } } } },
-      undefined,
-      ["send"],
-    ],
-    ["any enabled account", createSignalAccountOverrideCfg(), undefined, ["send", "react"]],
-    ["default account", createSignalAccountOverrideCfg(), "default", ["send"]],
-    ["work account", createSignalAccountOverrideCfg(), "work", ["send", "react"]],
+    ["reactions disabled", disabledCfg, undefined, ["send"]],
+    ["any enabled account", overrideCfg, undefined, ["send", "react"]],
+    ["default account", overrideCfg, "default", ["send"]],
+    ["work account", overrideCfg, "work", ["send", "react"]],
   ] as const)("discovers actions for %s", (_name, cfg, accountId, actions) => {
     expect(
       signalMessageActions.describeMessageTool?.({ cfg, accountId })?.actions ?? [],
@@ -102,95 +99,59 @@ describe("signalMessageActions", () => {
   });
 
   it("blocks reactions when the action gate is disabled", async () => {
-    const cfg = {
-      channels: { signal: { account: "+15550001111", actions: { reactions: false } } },
-    } as OpenClawConfig;
     await expect(
-      react({ to: "+15550001111", messageId: "123", emoji: "✅" }, { cfg }),
+      react({ to: "+15550001111", messageId: "123", emoji: "✅" }, { cfg: disabledCfg }),
     ).rejects.toThrow(/actions\.reactions/);
   });
 
   it("maps reaction targets into sendReactionSignal calls", async () => {
     const cases: Array<{
-      name: string;
-      cfg?: OpenClawConfig;
-      accountId?: string;
       params: ActionContext["params"];
-      toolContext?: ActionContext["toolContext"];
-      expected: [
-        string,
-        number,
-        string,
-        Omit<Parameters<typeof sendReactionsModule.sendReactionSignal>[3], "cfg">,
-      ];
+      context?: Partial<Omit<ActionContext, "params">>;
+      recipient: string;
+      timestamp?: number;
+      options?: Omit<Parameters<typeof sendReactionsModule.sendReactionSignal>[3], "cfg">;
     }> = [
       {
-        name: "uses account-level actions when enabled",
-        cfg: createSignalAccountOverrideCfg(),
-        accountId: "work",
-        params: { to: "+15550001111", messageId: "123", emoji: "👍" },
-        expected: ["+15550001111", 123, "👍", { accountId: "work" }],
+        context: { cfg: overrideCfg, accountId: "work" },
+        params: { to: "+15550001111" },
+        recipient: "+15550001111",
+        options: { accountId: "work" },
       },
       {
-        name: "normalizes uuid recipients",
-        params: { to: "uuid:123e4567-e89b-12d3-a456-426614174000", messageId: "123", emoji: "🔥" },
-        expected: ["123e4567-e89b-12d3-a456-426614174000", 123, "🔥", { accountId: "default" }],
+        params: { to: `uuid:${uuid}` },
+        recipient: uuid,
       },
       {
-        name: "preserves UUID case while stripping mixed-case Signal and UUID prefixes",
-        params: {
-          to: " SiGnAl: UuId:123E4567-E89B-12D3-A456-426614174000 ",
-          messageId: "123",
-          emoji: "🔥",
-        },
-        expected: ["123E4567-E89B-12D3-A456-426614174000", 123, "🔥", { accountId: "default" }],
+        params: { to: ` SiGnAl: UuId:${uuid.toUpperCase()} ` },
+        recipient: uuid.toUpperCase(),
       },
       {
-        name: "passes groupId and targetAuthor for group reactions",
-        params: {
-          to: "signal:group:group-id",
-          targetAuthor: "uuid:123e4567-e89b-12d3-a456-426614174000",
-          messageId: "123",
-          emoji: "✅",
-        },
-        expected: [
-          "",
-          123,
-          "✅",
-          {
-            accountId: "default",
-            groupId: "group-id",
-            targetAuthor: "uuid:123e4567-e89b-12d3-a456-426614174000",
-          },
-        ],
+        params: { to: "signal:group:group-id", targetAuthor: `uuid:${uuid}` },
+        recipient: "",
+        options: { groupId: "group-id", targetAuthor: `uuid:${uuid}` },
       },
       {
-        name: "falls back to toolContext.currentMessageId when messageId is omitted",
-        params: { to: "+15559999999", emoji: "🔥" },
-        expected: ["+15559999999", 1737630212345, "🔥", { accountId: "default" }],
-        toolContext: { currentMessageId: "1737630212345" },
+        params: { to: "+15559999999", messageId: undefined },
+        recipient: "+15559999999",
+        context: { toolContext: { currentMessageId: "1737630212345" } },
+        timestamp: 1737630212345,
       },
     ];
     for (const testCase of cases) {
       sendReactionSignalMock.mockClear();
-      const [recipient, timestamp, emoji, expectedOptions] = testCase.expected;
-      const caseCfg = testCase.cfg ?? DEFAULT_CFG;
-      await react(testCase.params, {
-        cfg: caseCfg,
-        accountId: testCase.accountId,
-        toolContext: testCase.toolContext,
-      });
-
-      expect(sendReactionSignalMock, testCase.name).toHaveBeenCalledWith(
-        recipient,
-        timestamp,
-        emoji,
+      await react({ messageId: "123", emoji: "🔥", ...testCase.params }, testCase.context);
+      expect(sendReactionSignalMock, String(testCase.params.to)).toHaveBeenCalledWith(
+        testCase.recipient,
+        testCase.timestamp ?? 123,
+        "🔥",
         {
-          cfg: caseCfg,
-          accountId: expectedOptions.accountId,
-          groupId: expectedOptions.groupId,
-          targetAuthor: expectedOptions.targetAuthor,
-          targetAuthorUuid: expectedOptions.targetAuthorUuid,
+          cfg: testCase.context?.cfg ?? DEFAULT_CFG,
+          accountId: "default",
+          groupId: undefined,
+          targetAuthor: undefined,
+          targetAuthorUuid: undefined,
+          ...testCase.options,
         },
       );
     }

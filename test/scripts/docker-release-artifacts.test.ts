@@ -8,6 +8,7 @@ import {
   dockerReleaseArtifactName,
   preparedDockerEvidenceFromFullRelease,
   publishDockerRelease,
+  readDockerGithubJson,
   sealDockerRelease,
   validateDockerReleaseIdentity,
   validateDockerReleaseManifest,
@@ -458,6 +459,57 @@ function expectLines(value: unknown, lines: string[]) {
 }
 
 describe("prepared Docker publication", () => {
+  it("retries transient GitHub 5xx identity reads with a fresh request", () => {
+    const responses = [new Error("gh: Server Error (HTTP 502)"), '{"head_sha":"fresh"}'];
+    const runCommand = vi.fn(() => {
+      const response = responses.shift();
+      if (response instanceof Error) {
+        throw response;
+      }
+      return response!;
+    });
+    const sleep = vi.fn();
+
+    expect(
+      readDockerGithubJson("repos/openclaw/openclaw/actions/runs/100", {
+        runCommand,
+        sleep,
+        retryDelaysMs: [25],
+      }),
+    ).toEqual({ head_sha: "fresh" });
+    expect(runCommand).toHaveBeenCalledTimes(2);
+    expect(sleep).toHaveBeenCalledWith(25);
+  });
+
+  it("does not retry Docker identity reads after an authorization failure", () => {
+    const failure = new Error("gh: Resource not accessible by integration (HTTP 403)");
+    const runCommand = vi.fn(() => {
+      throw failure;
+    });
+
+    expect(() =>
+      readDockerGithubJson("repos/openclaw/openclaw/actions/runs/100", {
+        runCommand,
+        sleep: vi.fn(),
+        retryDelaysMs: [0],
+      }),
+    ).toThrow(failure);
+    expect(runCommand).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry an invalid Docker identity response", () => {
+    const runCommand = vi.fn(() => "not-json");
+
+    expect(() =>
+      readDockerGithubJson("repos/openclaw/openclaw/actions/runs/100", {
+        runCommand,
+        sleep: vi.fn(),
+        retryDelaysMs: [0],
+      }),
+    ).toThrow(SyntaxError);
+    expect(runCommand).toHaveBeenCalledTimes(1);
+  });
+
   it("adopts successful architecture producers across a failed-job retry", async () => {
     const fixture = await createPreparedRelease(false, defaultVersion, {
       artifactAttempt: "1",

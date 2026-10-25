@@ -21,6 +21,21 @@ const hardTimeout = (endedAt = 200) =>
 const cancellation = (stopReason: string, endedAt: number) =>
   buildOutcome({ status: "error", stopReason, endedAt });
 const timeoutOutcome = { reason: "hard_timeout", status: "timeout" } as const;
+const warning = { pendingStage: "checkpoint", elapsedMs: 120_000, timeoutMs: 120_000 };
+const observedCompaction = { kind: "timeout", phase: "compaction", source: "observation" } as const;
+const runtimeTimeout = { kind: "timeout", phase: "prompt", source: "runtime" } as const;
+const externalAbort = { kind: "aborted", source: "external" } as const;
+const runtimeAbort = { kind: "aborted", source: "runtime" } as const;
+const failedAttempt = (error: unknown, source: "prompt" | "compaction" = "prompt") =>
+  ({ kind: "failed", source, error }) as const;
+const timedOutAttempt = (error: unknown, source: "external" | "runtime") =>
+  ({
+    kind: "timeout",
+    phase: "compaction",
+    source,
+    aborted: true,
+    failure: { source: "prompt", error },
+  }) as const;
 
 describe("agent run terminal outcome", () => {
   it.each([
@@ -155,11 +170,7 @@ describe("agent run terminal outcome", () => {
 
 describe("agent run attempt terminal", () => {
   it("preserves a degraded completion through normalization, merging, and projection", () => {
-    const settlementWarning = {
-      pendingStage: "onPartialReply",
-      elapsedMs: 120_000,
-      timeoutMs: 120_000,
-    };
+    const settlementWarning = { ...warning, pendingStage: "onPartialReply" };
     const degraded = normalizeAttempt({ settlementWarning });
     expect(degraded).toEqual({ kind: "ok", settlementWarning });
     for (const [current, incoming] of [
@@ -179,10 +190,7 @@ describe("agent run attempt terminal", () => {
   });
 
   it("keeps failure precedence over a settlement warning", () => {
-    const degraded = {
-      kind: "ok",
-      settlementWarning: { pendingStage: "checkpoint", elapsedMs: 120_000, timeoutMs: 120_000 },
-    } as const;
+    const degraded = { kind: "ok", settlementWarning: warning } as const;
     const terminal = normalizeAttempt({
       promptError: "provider failed",
       settlementWarning: degraded.settlementWarning,
@@ -199,38 +207,22 @@ describe("agent run attempt terminal", () => {
   });
 
   it("merges observation-only timeout phases without creating a run timeout", () => {
-    const toolExecution = {
-      kind: "timeout",
-      phase: "tool_execution",
-      source: "observation",
-    } as const;
-    const compaction = { kind: "timeout", phase: "compaction", source: "observation" } as const;
+    const toolExecution = { ...observedCompaction, phase: "tool_execution" } as const;
 
     for (const [current, incoming] of [
-      [toolExecution, compaction],
-      [compaction, toolExecution],
+      [toolExecution, observedCompaction],
+      [observedCompaction, toolExecution],
     ] as const) {
       const terminal = mergeAttempt(current, incoming);
-      expect(terminal).toEqual(compaction);
+      expect(terminal).toEqual(observedCompaction);
       expect(projectAttempt(terminal).timedOut).toBe(false);
     }
   });
 
   it("keeps timeout phase and source precedence in the canonical owner", () => {
     const failure = new Error("provider failed while aborting");
-    const externalAbort = { kind: "aborted", source: "external" } as const;
-    const runtimeAbort = { kind: "aborted", source: "runtime" } as const;
-    const observedCompaction = {
-      kind: "timeout",
-      phase: "compaction",
-      source: "observation",
-    } as const;
-    const runtimeTimeout = { kind: "timeout", phase: "prompt", source: "runtime" } as const;
-    const compactionFailure = { kind: "failed", source: "compaction", error: failure } as const;
-    const failed = mergeAttempt(
-      { kind: "ok" },
-      { kind: "failed", source: "prompt", error: failure },
-    );
+    const compactionFailure = failedAttempt(failure, "compaction");
+    const failed = mergeAttempt({ kind: "ok" }, failedAttempt(failure));
     const externallyAborted = mergeAttempt(failed, externalAbort);
     const timedOut = mergeAttempt(externallyAborted, {
       kind: "timeout",
@@ -238,13 +230,7 @@ describe("agent run attempt terminal", () => {
       source: "run_budget",
     });
 
-    expect(timedOut).toEqual({
-      kind: "timeout",
-      phase: "compaction",
-      source: "external",
-      aborted: true,
-      failure: { source: "prompt", error: failure },
-    });
+    expect(timedOut).toEqual(timedOutAttempt(failure, "external"));
 
     expect([
       mergeAttempt({ kind: "timeout", phase: "prompt", source: "idle" }, externalAbort),
@@ -267,24 +253,14 @@ describe("agent run attempt terminal", () => {
       { kind: "timeout", phase: "compaction", source: "runtime", aborted: true },
       { kind: "timeout", phase: "compaction", source: "runtime" },
     ]);
-    const failedObservation = {
-      kind: "failed" as const,
-      source: "compaction" as const,
-      error: failure,
-      timeoutObservation: "compaction" as const,
-    };
+    const failedObservation = { ...compactionFailure, timeoutObservation: "compaction" } as const;
     expect(mergeAttempt(compactionFailure, observedCompaction)).toEqual(failedObservation);
     expect(mergeAttempt(observedCompaction, compactionFailure)).toEqual(failedObservation);
   });
 
   it("converges across terminal observation orderings", () => {
     const error = new Error("provider failed");
-    const facts = [
-      { kind: "failed", source: "prompt", error },
-      { kind: "aborted", source: "runtime" },
-      { kind: "timeout", phase: "compaction", source: "observation" },
-      { kind: "timeout", phase: "prompt", source: "runtime" },
-    ] as const;
+    const facts = [failedAttempt(error), runtimeAbort, observedCompaction, runtimeTimeout] as const;
     const orders = [
       [0, 1, 2, 3],
       [3, 2, 1, 0],
@@ -297,13 +273,7 @@ describe("agent run attempt terminal", () => {
         (current, index) => mergeAttempt(current, facts[index]),
         { kind: "ok" },
       );
-      expect(terminal).toEqual({
-        kind: "timeout",
-        phase: "compaction",
-        source: "runtime",
-        aborted: true,
-        failure: { source: "prompt", error },
-      });
+      expect(terminal).toEqual(timedOutAttempt(error, "runtime"));
     }
   });
 
@@ -316,13 +286,7 @@ describe("agent run attempt terminal", () => {
       promptErrorSource: "prompt",
       timedOut: true,
       timedOutDuringCompaction: true,
-    }).toEqual({
-      kind: "timeout",
-      phase: "compaction",
-      source: "external",
-      aborted: true,
-      failure: { source: "prompt", error },
-    });
+    }).toEqual(timedOutAttempt(error, "external"));
     for (const input of [
       { timedOut: true, idleTimedOut: true, timedOutByRunBudget: true },
       { timedOutByRunBudget: true },
@@ -333,20 +297,12 @@ describe("agent run attempt terminal", () => {
       timedOut: true,
       aborted: false,
     });
-    expectNormalized({ externalAbort: true }).toEqual({
-      kind: "aborted",
-      source: "external",
-    });
+    expectNormalized({ externalAbort: true }).toEqual(externalAbort);
     expectNormalized({
       promptError: error,
       promptErrorSource: "compaction",
       timedOutDuringCompaction: true,
-    }).toEqual({
-      kind: "failed",
-      source: "compaction",
-      error,
-      timeoutObservation: "compaction",
-    });
+    }).toEqual({ ...failedAttempt(error, "compaction"), timeoutObservation: "compaction" });
     const abortedCompaction = normalizeAttempt({
       aborted: true,
       timedOutDuringCompaction: true,
@@ -363,12 +319,7 @@ describe("agent run attempt terminal", () => {
     });
     expect(
       setAttemptFailure(
-        {
-          kind: "failed",
-          source: "compaction",
-          error,
-          timeoutObservation: "compaction",
-        },
+        { ...failedAttempt(error, "compaction"), timeoutObservation: "compaction" },
         { source: "prompt", error: new Error("replacement") },
       ),
     ).toMatchObject({

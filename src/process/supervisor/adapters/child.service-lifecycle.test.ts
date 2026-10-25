@@ -462,7 +462,7 @@ describeSpawnTransports(
         scriptPath,
         `
         process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
-        ${serviceChildHostTransportPrelude()}
+        ${await serviceChildHostTransportPrelude(tempDir)}
         const { createChildAdapter } = await import(${JSON.stringify(childModuleUrl)});
         const { adapter, ready } = await withTransport(() => createChildAdapter({
           argv: ["/bin/sh", "-c", ${JSON.stringify(groupCommand)}],

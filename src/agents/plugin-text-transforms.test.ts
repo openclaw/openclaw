@@ -1,10 +1,9 @@
-import {
-  createAssistantMessageEventStream,
-  type AssistantMessage,
-  type AssistantMessageEvent,
-  type Context,
-  type Model,
-  type ToolCall,
+import type {
+  AssistantMessage,
+  AssistantMessageEvent,
+  Context,
+  Model,
+  ToolCall,
 } from "openclaw/plugin-sdk/llm";
 import { expect, it } from "vitest";
 import {
@@ -12,6 +11,7 @@ import {
   mergePluginTextTransforms,
   wrapStreamFnTextTransforms,
 } from "./plugin-text-transforms.js";
+import { createQueuedAssistantStream } from "./test-helpers/assistant-event-stream.test-support.js";
 import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 
 const model = {
@@ -42,14 +42,11 @@ function transformFixture(
     ...transforms,
     streamFn: (_model, context) => {
       input = context;
-      const stream = createAssistantMessageEventStream();
-      queueMicrotask(() => {
+      return createQueuedAssistantStream((push) => {
         for (const event of events) {
-          stream.push(event);
+          push(event);
         }
-        stream.end();
       });
-      return stream;
     },
   });
   return {
@@ -70,29 +67,25 @@ it("merges registered transform groups in order", () => {
   const merged = mergePluginTextTransforms(
     { input: [{ from: /red basket/g, to: "blue basket" }] },
     { output: [{ from: /blue basket/g, to: "red basket" }] },
-    { input: [{ from: /paper ticket/g, to: "digital ticket" }] },
+    {
+      input: [
+        { from: /paper ticket/g, to: "digital ticket" },
+        { from: "digital ticket", to: "counter receipt" },
+      ],
+    },
   );
 
   expect(merged).toStrictEqual({
     input: [
       { from: /red basket/g, to: "blue basket" },
       { from: /paper ticket/g, to: "digital ticket" },
+      { from: "digital ticket", to: "counter receipt" },
     ],
     output: [{ from: /blue basket/g, to: "red basket" }],
   });
   expect(applyPluginTextReplacements("red basket paper ticket", merged?.input)).toBe(
-    "blue basket digital ticket",
+    "blue basket counter receipt",
   );
-});
-
-it("applies ordered string and regexp replacements", () => {
-  expect(
-    applyPluginTextReplacements("paper ticket on the left shelf", [
-      { from: /paper ticket/g, to: "digital ticket" },
-      { from: /left shelf/g, to: "right shelf" },
-      { from: "digital ticket", to: "counter receipt" },
-    ]),
-  ).toBe("counter receipt on the right shelf");
 });
 
 it("rewrites system prompt and message text content before transport", async () => {

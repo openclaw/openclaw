@@ -1,9 +1,10 @@
 import { execFile } from "node:child_process";
-import { link, writeFile } from "node:fs/promises";
+import { copyFile, link, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
+import { build } from "esbuild";
 import { describe, expect, it, vi } from "vitest";
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
@@ -15,6 +16,39 @@ import {
 } from "./runtime-worker-url.js";
 
 const requireFromHere = createRequire(import.meta.url);
+
+describe("runtime bootstrap entrypoint URLs", () => {
+  it.each([false, true])("resolves package-owned entries (bundled=%s)", async (bundled) => {
+    await withTempDir("openclaw-bootstrap-urls-", async (root) => {
+      const bootstrap = path.join(root, "runtime-process-bootstrap.generated.mjs");
+      await copyFile(
+        new URL("../../runtime-process-bootstrap.generated.mjs", import.meta.url),
+        bootstrap,
+      );
+      let entry = bootstrap;
+      if (bundled) {
+        entry = path.join(root, "dist", "chunks", "bootstrap.mjs");
+        await build({
+          entryPoints: [bootstrap],
+          outfile: entry,
+          bundle: true,
+          format: "esm",
+          platform: "node",
+        });
+      }
+      const { stdout } = await promisify(execFile)(process.execPath, [
+        "--input-type=module",
+        "-e",
+        `const { resolveRuntimeBootstrapExternalEntrypointUrl, resolveRuntimeBootstrapToolingEntrypointUrl } = await import(${JSON.stringify(pathToFileURL(entry).href)});
+console.log(JSON.stringify({ external: resolveRuntimeBootstrapExternalEntrypointUrl("cliLauncher").href, tooling: resolveRuntimeBootstrapToolingEntrypointUrl("kyselyTypes").href }));`,
+      ]);
+      expect(JSON.parse(stdout)).toEqual({
+        external: pathToFileURL(path.join(root, "openclaw.mjs")).href,
+        tooling: pathToFileURL(path.join(root, "scripts/generate-kysely-types.mts")).href,
+      });
+    });
+  });
+});
 
 describe("resolveRuntimeWorkerUrl", () => {
   it("resolves source siblings and stable packaged worker paths", () => {
@@ -28,6 +62,17 @@ describe("resolveRuntimeWorkerUrl", () => {
         }),
       ),
     ).toBe(path.join(root, "src/agents/code-mode.worker.ts"));
+
+    expect(
+      fileURLToPath(
+        resolveRuntimeWorkerUrl({
+          currentModuleUrl: pathToFileURL(path.join(root, "src/agents/code-mode-worker.ts")).href,
+          sourceWorkerName: "generated.worker",
+          sourceExtension: ".mjs",
+          distWorkerPath: "agents/generated.worker.js",
+        }),
+      ),
+    ).toBe(path.join(root, "src/agents/generated.worker.mjs"));
 
     for (const currentModuleUrl of [
       pathToFileURL(path.join(root, "dist/agents/code-mode.js")).href,
@@ -189,22 +234,67 @@ describe("resolveRuntimeWorkerArgv", () => {
 });
 
 describe("resolveRuntimeProcessEntrypointUrl", () => {
-  it("uses canonical launchers unless the sealed bundle registers a sibling", async () => {
+  it("registers only the sibling entries owned by the selected sealed bootstrap", async () => {
     vi.resetModules();
     try {
-      const { registerSealedRuntimeProcessEntrypoint, resolveRuntimeProcessEntrypointUrl } =
+      const { registerSealedRuntimeProcessEntrypoints, resolveRuntimeProcessEntrypointUrl } =
         await import("./runtime-process-url.js");
-      const { runtimeProcessEntrypoints } = await import("./runtime-process-entrypoints.js");
-      expect(resolveRuntimeProcessEntrypointUrl("githubExec")).toEqual(
-        resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.githubExec),
+      const originalGithub = resolveRuntimeProcessEntrypointUrl("githubExec");
+      registerSealedRuntimeProcessEntrypoints(
+        "serviceChildRelay",
+        "file:///relay/service-child-relay.mjs",
       );
-      const sqliteUrl = resolveRuntimeProcessEntrypointUrl("sqliteReadOnly");
-      const sealedUrl = new URL("file:///worker-bundle/github-exec-launcher.mjs");
-      registerSealedRuntimeProcessEntrypoint("githubExec", sealedUrl);
-      expect(resolveRuntimeProcessEntrypointUrl("githubExec")).toEqual(sealedUrl);
-      expect(resolveRuntimeProcessEntrypointUrl("sqliteReadOnly")).toEqual(sqliteUrl);
+      const anchor = new URL("file:///relay/service-child-group-anchor.mjs");
+      expect(resolveRuntimeProcessEntrypointUrl("serviceChildGroupAnchor")).toEqual(anchor);
+      expect(resolveRuntimeProcessEntrypointUrl("githubExec")).toEqual(originalGithub);
+      registerSealedRuntimeProcessEntrypoints("worker", "file:///worker/worker.mjs");
+      expect(resolveRuntimeProcessEntrypointUrl("githubExec")).toEqual(
+        new URL("file:///worker/github-exec-launcher.mjs"),
+      );
+      expect(resolveRuntimeProcessEntrypointUrl("sharedStateStore")).toEqual(
+        resolveRuntimeProcessEntrypointUrl("sqliteStore"),
+      );
+      expect(resolveRuntimeProcessEntrypointUrl("serviceChildGroupAnchor")).toEqual(anchor);
     } finally {
       vi.resetModules();
     }
+  });
+});
+
+describe("resolveExternalPackageRuntimeEntrypointUrl", () => {
+  it.each([
+    ["sourceCli", "src/entry.ts"],
+    ["cliLauncher", "openclaw.mjs"],
+    ["preinstall", "scripts/preinstall-package-manager-warning.mjs"],
+    ["postinstall", "scripts/postinstall-bundled-plugins.mjs"],
+  ] as const)("resolves %s in the selected package", async (name, relativePath) => {
+    const { resolveExternalPackageRuntimeEntrypointUrl } = await import("./runtime-process-url.js");
+    const packageRoot = path.resolve("external package with spaces");
+    expect(resolveExternalPackageRuntimeEntrypointUrl(name, packageRoot)).toEqual(
+      pathToFileURL(path.join(packageRoot, relativePath)),
+    );
+  });
+});
+
+describe("resolveRuntimeScriptEntrypointUrl", () => {
+  it("resolves the declared handoff script in its staging directory", async () => {
+    const { resolveRuntimeScriptEntrypointUrl } = await import("./runtime-process-url.js");
+    const directory = path.resolve("handoff directory #1");
+    expect(resolveRuntimeScriptEntrypointUrl("managedUpdateHandoff", directory)).toEqual(
+      pathToFileURL(path.join(directory, "handoff.cjs")),
+    );
+  });
+});
+
+describe("resolveRuntimeDeployEntrypointUrl", () => {
+  it.each([
+    ["worker", "worker.mjs"],
+    ["image-processor.worker", "image-processor.worker.mjs"],
+  ] as const)("resolves %s in the selected bundle", async (name, fileName) => {
+    const { resolveRuntimeDeployEntrypointUrl } = await import("./runtime-process-url.js");
+    const directory = path.resolve("worker bundle #1");
+    expect(resolveRuntimeDeployEntrypointUrl(name, directory)).toEqual(
+      pathToFileURL(path.join(directory, fileName)),
+    );
   });
 });

@@ -18,6 +18,10 @@ type PrewarmedSnapshot = {
 
 let pending: PrewarmedSnapshot | undefined;
 
+export function peekPrewarmedChatSnapshot(): PrewarmedSnapshot | undefined {
+  return pending;
+}
+
 export function discardPrewarmedChatSnapshot(cacheKey?: string): void {
   if (pending && (cacheKey === undefined || pending.cacheKey === cacheKey)) {
     pending.cancelled = true;
@@ -25,7 +29,7 @@ export function discardPrewarmedChatSnapshot(cacheKey?: string): void {
   }
 }
 
-export function prewarmChatSnapshot(cacheKey: string): void {
+export async function prewarmChatSnapshot(cacheKey: string): Promise<void> {
   discardPrewarmedChatSnapshot();
   const generation = snapshotStoreGeneration;
   const entry: PrewarmedSnapshot = {
@@ -39,11 +43,14 @@ export function prewarmChatSnapshot(cacheKey: string): void {
       .catch(() => undefined),
   };
   pending = entry;
+  // Load alongside storage so a warm transcript can send its cursor with connect.
+  // Keep board restoration independent of this optional metadata validator.
+  try {
+    await import("../../lib/protocol-validators.generated/history-state.js");
+  } catch {}
 }
 
-export function consumePrewarmedChatSnapshot(
-  cacheKey: string,
-): Pick<PrewarmedSnapshot, "promise"> | undefined {
+export function consumePrewarmedChatSnapshot(cacheKey: string): PrewarmedSnapshot | undefined {
   if (pending?.cacheKey !== cacheKey) {
     return undefined;
   }

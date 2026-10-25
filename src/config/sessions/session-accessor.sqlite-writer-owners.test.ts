@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createNativeSessionCommitFinalizer } from "../../agents/harness/native-session/deletion-participant.js";
 import * as logging from "../../logging/logger.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
@@ -37,8 +37,6 @@ import { enforceSqliteSessionHistoryDiskBudget } from "./session-history-evictio
 import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
 
-afterEach(() => vi.restoreAllMocks());
-
 function storeFixture(state: OpenClawTestState) {
   const storePath = path.join(state.sessionsDir(), "sessions.json");
   const scope = (sessionKey: string) => ({ sessionKey, storePath });
@@ -61,7 +59,13 @@ function storeFixture(state: OpenClawTestState) {
   };
 }
 const withStore = (run: (fixture: ReturnType<typeof storeFixture>) => Promise<void>) =>
-  withOpenClawTestState({ scenario: "minimal" }, (state) => run(storeFixture(state)));
+  withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    try {
+      await run(storeFixture(state));
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
 const numbers = (...keys: string[]) =>
   Object.fromEntries(keys.map((key) => [key, expect.any(Number)]));
 
@@ -171,27 +175,25 @@ it.each(
         expect(rows()).toEqual(before);
         order.push("callback");
       };
-      const replacements = <T>(entries: T[]) => {
+      const replacement = { sessionKey: targetKey, entry: updated };
+      const replacements = (canonical = false) => {
         prepared();
-        return { result: resultToken, replacements: entries };
+        return {
+          result: resultToken,
+          replacements: [{ ...replacement, previousSessionKeys: canonical ? [sourceKey] : [] }],
+        };
       };
       try {
         await withPluginRuntimeRegistryScope(registry, async () => {
           if (operation === "session.entry-replacements") {
+            const request = {
+              storePath,
+              sessionKeys: split ? [sourceKey, targetKey] : [sourceKey],
+              update: async () => replacements(split),
+            };
             const result = split
-              ? await applySessionEntryCanonicalReplacements({
-                  storePath,
-                  sessionKeys: [sourceKey, targetKey],
-                  update: async () =>
-                    replacements([
-                      { sessionKey: targetKey, entry: updated, previousSessionKeys: [sourceKey] },
-                    ]),
-                })
-              : await applySessionEntryReplacements({
-                  storePath,
-                  sessionKeys: [sourceKey],
-                  update: async () => replacements([{ sessionKey: targetKey, entry: updated }]),
-                });
+              ? await applySessionEntryCanonicalReplacements(request)
+              : await applySessionEntryReplacements(request);
             expect(result).toBe(resultToken);
           } else {
             const result = await applySessionEntryLifecycleMutation({
@@ -241,7 +243,6 @@ it.each(
         }
       } finally {
         markPluginRegistryRetired(registry);
-        vi.restoreAllMocks();
       }
     });
   },
@@ -264,61 +265,57 @@ it("records successful archive pruning stages", async () => {
     );
     const database = openDatabase(historyKey);
     const { writers, aggregates, pruning } = observeSlowWriters();
-    try {
-      expect(
-        await enforceSqliteSessionHistoryDiskBudget({
-          storePath,
-          mode: "enforce",
-          maintenance: { maxDiskBytes: 1, highWaterBytes: 0 },
-        }),
-      ).toMatchObject({ removedEntries: 2 });
-      const writerSegments = writers["session.history.archive-prune"] ?? [];
-      const pageWrites = writers["session.history.free-pages"] ?? [];
-      expect(writerSegments.length).toBeGreaterThan(0);
-      expect(pageWrites.length).toBeGreaterThan(0);
-      for (const fields of [...writerSegments, ...pageWrites]) {
-        expect(fields).toMatchObject(numbers("queueWaitMs", "writerExecutionMs"));
-      }
-      for (const fields of aggregates) {
-        expect(fields).toMatchObject({ elapsedMs: expect.any(Number) });
-        expect(fields).not.toHaveProperty("queueWaitMs");
-        expect(fields).not.toHaveProperty("writerExecutionMs");
-        expect(fields).not.toHaveProperty("completionDelayMs");
-      }
-      expect(pruning).toEqual([
-        expect.objectContaining({ trigger: "initial", completed: true }),
-        expect.objectContaining({ trigger: "after-eviction", completed: true }),
-        expect.objectContaining({ trigger: "final", completed: true }),
-      ]);
-      expect(pruning[0]).toMatchObject({ checkpointIncomplete: 0 });
-      for (const diagnostic of pruning) {
-        expect(diagnostic).toMatchObject(
-          numbers(
-            "checkpointCalls",
-            "checkpointMs",
-            "checkpointMaxMs",
-            "queryMs",
-            "measurementMs",
-            "measurements",
-            "legacyInventoryMs",
-          ),
-        );
-      }
-      expect(pruning[1]).toMatchObject({
-        fileRemovalMs: expect.any(Number),
-        removedFiles: 1,
-        rowDeletionMs: expect.any(Number),
-      });
-      expect(read(historyKey)?.sessionId).toBe("current");
-      expect(read(archivedKey)).toBeUndefined();
-      expect(
-        loadTranscriptEventsSync({ sessionKey: historyKey, sessionId: "old", storePath }),
-      ).toEqual([]);
-      expect(archives()).toEqual([]);
-      expect(database.db.prepare("PRAGMA freelist_count").get()?.freelist_count).toBe(0);
-    } finally {
-      vi.restoreAllMocks();
+    expect(
+      await enforceSqliteSessionHistoryDiskBudget({
+        storePath,
+        mode: "enforce",
+        maintenance: { maxDiskBytes: 1, highWaterBytes: 0 },
+      }),
+    ).toMatchObject({ removedEntries: 2 });
+    const writerSegments = writers["session.history.archive-prune"] ?? [];
+    const pageWrites = writers["session.history.free-pages"] ?? [];
+    expect(writerSegments.length).toBeGreaterThan(0);
+    expect(pageWrites.length).toBeGreaterThan(0);
+    for (const fields of [...writerSegments, ...pageWrites]) {
+      expect(fields).toMatchObject(numbers("queueWaitMs", "writerExecutionMs"));
     }
+    for (const fields of aggregates) {
+      expect(fields).toMatchObject({ elapsedMs: expect.any(Number) });
+      expect(fields).not.toHaveProperty("queueWaitMs");
+      expect(fields).not.toHaveProperty("writerExecutionMs");
+      expect(fields).not.toHaveProperty("completionDelayMs");
+    }
+    expect(pruning).toEqual([
+      expect.objectContaining({ trigger: "initial", completed: true }),
+      expect.objectContaining({ trigger: "after-eviction", completed: true }),
+      expect.objectContaining({ trigger: "final", completed: true }),
+    ]);
+    expect(pruning[0]).toMatchObject({ checkpointIncomplete: 0 });
+    for (const diagnostic of pruning) {
+      expect(diagnostic).toMatchObject(
+        numbers(
+          "checkpointCalls",
+          "checkpointMs",
+          "checkpointMaxMs",
+          "queryMs",
+          "measurementMs",
+          "measurements",
+          "legacyInventoryMs",
+        ),
+      );
+    }
+    expect(pruning[1]).toMatchObject({
+      fileRemovalMs: expect.any(Number),
+      removedFiles: 1,
+      rowDeletionMs: expect.any(Number),
+    });
+    expect(read(historyKey)?.sessionId).toBe("current");
+    expect(read(archivedKey)).toBeUndefined();
+    expect(
+      loadTranscriptEventsSync({ sessionKey: historyKey, sessionId: "old", storePath }),
+    ).toEqual([]);
+    expect(archives()).toEqual([]);
+    expect(database.db.prepare("PRAGMA freelist_count").get()?.freelist_count).toBe(0);
   });
 });
 
@@ -354,16 +351,7 @@ it("coalesces automatic maintenance through native planning and finalization", a
       }
       return result;
     });
-    const workerOutcomes: Parameters<
-      typeof reclamationDiagnostics.logSqliteReclamationWorkerOutcome
-    >[0][] = [];
-    const logWorkerOutcome = reclamationDiagnostics.logSqliteReclamationWorkerOutcome;
-    vi.spyOn(reclamationDiagnostics, "logSqliteReclamationWorkerOutcome").mockImplementation(
-      (outcome) => {
-        workerOutcomes.push(outcome);
-        logWorkerOutcome(outcome);
-      },
-    );
+    const diagnostics = vi.spyOn(reclamationDiagnostics, "logSqliteReclamationWorkerOutcome");
     const { operations } = observeSlowWriters();
     const request = {
       activeSessionKey: activeKey,
@@ -377,24 +365,21 @@ it("coalesces automatic maintenance through native planning and finalization", a
         maxEntries: 100,
       }),
     };
-    try {
-      kickSessionEntryMaintenanceAfterWrite(request);
-      kickSessionEntryMaintenanceAfterWrite(request);
-      await finalized.promise;
-      await maintenanceSettled.promise;
-      expect(
-        operations.filter((operation) => operation === "session.reclamation.worker-commit"),
-      ).toEqual(["session.reclamation.worker-commit"]);
-      expect(finalizer).toHaveBeenCalledOnce();
-      expect(workerOutcomes.map(({ kind }) => kind)).toEqual(["maintenance-finalize"]);
-      for (const outcome of workerOutcomes) {
-        expect(outcome.outcome).toBe("resolved");
-        expect(outcome.workerThreadId).toBeGreaterThan(0);
-      }
-      expect(read(staleKey)).toBeUndefined();
-      expect(read(activeKey)?.sessionId).toBe("active");
-    } finally {
-      vi.restoreAllMocks();
+    kickSessionEntryMaintenanceAfterWrite(request);
+    kickSessionEntryMaintenanceAfterWrite(request);
+    await finalized.promise;
+    await maintenanceSettled.promise;
+    expect(
+      operations.filter((operation) => operation === "session.reclamation.worker-commit"),
+    ).toEqual(["session.reclamation.worker-commit"]);
+    expect(finalizer).toHaveBeenCalledOnce();
+    const workerOutcomes = diagnostics.mock.calls.map(([outcome]) => outcome);
+    expect(workerOutcomes.map(({ kind }) => kind)).toEqual(["maintenance-finalize"]);
+    for (const outcome of workerOutcomes) {
+      expect(outcome.outcome).toBe("resolved");
+      expect(outcome.workerThreadId).toBeGreaterThan(0);
     }
+    expect(read(staleKey)).toBeUndefined();
+    expect(read(activeKey)?.sessionId).toBe("active");
   });
 });

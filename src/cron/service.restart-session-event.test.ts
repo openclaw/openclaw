@@ -85,9 +85,6 @@ async function prepareCronSessionFixture(state: OpenClawTestState, onQueued?: ()
     enqueueSystemEvent: () => {
       throw new Error("Main-session events must use the session controller");
     },
-    requestHeartbeat: () => {
-      throw new Error("Main-session events must not wake the retired executor");
-    },
     runIsolatedAgentJob: async () => {
       throw new Error("Main-session events must not use an isolated session");
     },

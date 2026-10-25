@@ -186,8 +186,12 @@ incompatible settings, or a changed model, route, session, or auth profile start
 a fresh request using the selected effort. Older transcripts without this
 metadata also start fresh after transport expiry.
 
-The native [Codex harness](/plugins/codex-harness) owns its own Responses loop;
-these built-in-runtime capabilities do not imply native Codex support.
+The native [Codex harness](/plugins/codex-harness) owns its own Responses loop.
+OpenClaw enables its cache-preserving reasoning-effort updates for managed
+threads, including when native code mode is disabled. Codex uses its model
+catalog to decide eligibility and keeps unsupported models on ordinary
+request-level effort. This does not enable the built-in-runtime async-tool or
+steering implementation inside Codex.
 
 ## GPT-6.1 Sol
 

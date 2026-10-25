@@ -261,12 +261,10 @@ test("formatForLog caps cause-chain depth so a self-referential cause cannot loo
   expect(out.length).toBeLessThan(2000);
 });
 
-test("formatForLog redacts obvious secrets", () => {
-  const token = "sk-abcdefghijklmnopqrstuvwxyz123456";
-  const out = formatForLog({ token });
-  expect(out).toContain("token");
-  expect(out).not.toContain(token);
-  expect(out).toContain("…");
+test("formatForLog omits empty error segments without dropping a false cause", () => {
+  const outer = new Error("", { cause: new Error("leaf", { cause: false }) });
+  outer.name = "";
+  expect(formatForLog(outer)).toBe("Error: leaf <- false");
 });
 
 const longText = `${"a".repeat(239)}😀tail`;

@@ -54,34 +54,6 @@ type WikiQueryParams = Omit<SharedMemorySearchParams, "query"> &
     config: ResolvedMemoryWikiConfig;
   };
 
-function mergeWikiSearchCorpusResults(params: {
-  wikiResults: WikiSearchResult[];
-  memoryResults: WikiSearchResult[];
-  maxResults: number;
-  balanceCorpora: boolean;
-}): WikiSearchResult[] {
-  const wikiResults = sortWikiSearchResults(params.wikiResults);
-  const memoryResults = sortWikiSearchResults(params.memoryResults);
-  if (!params.balanceCorpora || wikiResults.length === 0 || memoryResults.length === 0) {
-    return sortWikiSearchResults([...wikiResults, ...memoryResults]).slice(0, params.maxResults);
-  }
-
-  const perCorpusCap = Math.ceil(params.maxResults / 2);
-  const selectedWiki = wikiResults.slice(0, perCorpusCap);
-  const selectedMemory = memoryResults.slice(0, perCorpusCap);
-  const selected = [...selectedWiki, ...selectedMemory];
-  if (selected.length < params.maxResults) {
-    selected.push(
-      ...sortWikiSearchResults([
-        ...wikiResults.slice(selectedWiki.length),
-        ...memoryResults.slice(selectedMemory.length),
-      ]).slice(0, params.maxResults - selected.length),
-    );
-  }
-
-  return sortWikiSearchResults(selected).slice(0, params.maxResults);
-}
-
 function resolveWikiPageVisibility(params: {
   appConfig?: OpenClawConfig;
   agentId?: string;
@@ -152,50 +124,6 @@ function applySearchOverrides(
       corpus: overrides.searchCorpus ?? config.search.corpus,
     },
   };
-}
-
-async function searchWikiCorpus(params: {
-  config: ResolvedMemoryWikiConfig;
-  query: string;
-  maxResults: number;
-  mode: WikiSearchMode;
-  visibility: WikiPageVisibility | null;
-  signal?: AbortSignal;
-}): Promise<WikiSearchResult[]> {
-  params.signal?.throwIfAborted();
-  const snapshot = await loadMemoryWikiCompiledCache(params.config);
-  const rootDir = params.config.vault.path;
-  const candidatePaths = snapshot
-    ? buildDigestCandidatePaths({
-        snapshot,
-        query: params.query,
-        maxResults: params.maxResults,
-        mode: params.mode,
-      })
-    : [];
-  const search = (scope: Partial<Pick<WikiPageReadScope, "relativePaths" | "excludePaths">>) =>
-    readMemoryWikiPages(
-      {
-        rootDir,
-        visibility: params.visibility,
-        select: "search",
-        query: params.query,
-        mode: params.mode,
-        maxResults: params.maxResults,
-        ...scope,
-      },
-      params.signal ? { signal: params.signal } : {},
-    );
-  // Each read returns its top maxResults; the merge below only ever consumes that many.
-  const { results } = await search(
-    candidatePaths.length > 0 ? { relativePaths: candidatePaths } : {},
-  );
-  if (candidatePaths.length === 0 || results.length >= params.maxResults) {
-    return results;
-  }
-
-  const remaining = await search({ excludePaths: candidatePaths });
-  return [...results, ...remaining.results];
 }
 
 async function readWikiPage(
@@ -272,15 +200,48 @@ export async function searchMemoryWiki(
   const maxResults = resolveIntegerOption(params.maxResults, 10, { min: 1 });
   const mode = params.mode ?? "auto";
 
+  async function searchWikiCorpus(
+    visibility: WikiPageVisibility | null,
+  ): Promise<WikiSearchResult[]> {
+    const { query, signal } = params;
+    signal?.throwIfAborted();
+    const snapshot = await loadMemoryWikiCompiledCache(effectiveConfig);
+    const rootDir = effectiveConfig.vault.path;
+    const candidatePaths = snapshot
+      ? buildDigestCandidatePaths({
+          snapshot,
+          query,
+          maxResults,
+          mode,
+        })
+      : [];
+    const search = (scope: Partial<Pick<WikiPageReadScope, "relativePaths" | "excludePaths">>) =>
+      readMemoryWikiPages(
+        {
+          rootDir,
+          visibility,
+          select: "search",
+          query,
+          mode,
+          maxResults,
+          ...scope,
+        },
+        signal ? { signal } : {},
+      );
+    // Each read returns its top maxResults; the merge below only ever consumes that many.
+    const { results } = await search(
+      candidatePaths.length > 0 ? { relativePaths: candidatePaths } : {},
+    );
+    if (candidatePaths.length === 0 || results.length >= maxResults) {
+      return results;
+    }
+
+    const remaining = await search({ excludePaths: candidatePaths });
+    return [...results, ...remaining.results];
+  }
+
   const wikiResults = shouldSearchWiki(effectiveConfig)
-    ? await searchWikiCorpus({
-        config: effectiveConfig,
-        query: params.query,
-        maxResults,
-        mode,
-        visibility: resolveWikiPageVisibility(params),
-        ...(params.signal ? { signal: params.signal } : {}),
-      })
+    ? await searchWikiCorpus(resolveWikiPageVisibility(params))
     : [];
   params.signal?.throwIfAborted();
 
@@ -288,12 +249,27 @@ export async function searchMemoryWiki(
     ? await searchSharedMemory(params, { maxResults, mode, protectedSessionRecall })
     : [];
 
-  return mergeWikiSearchCorpusResults({
-    wikiResults,
-    memoryResults,
-    maxResults,
-    balanceCorpora: effectiveConfig.search.corpus === "all",
-  });
+  const balanceCorpora = effectiveConfig.search.corpus === "all";
+  const sortedWiki = sortWikiSearchResults(wikiResults);
+  const sortedMemory = sortWikiSearchResults(memoryResults);
+  if (!balanceCorpora || sortedWiki.length === 0 || sortedMemory.length === 0) {
+    return sortWikiSearchResults([...sortedWiki, ...sortedMemory]).slice(0, maxResults);
+  }
+
+  const perCorpusCap = Math.ceil(maxResults / 2);
+  const selectedWiki = sortedWiki.slice(0, perCorpusCap);
+  const selectedMemory = sortedMemory.slice(0, perCorpusCap);
+  const selected = [...selectedWiki, ...selectedMemory];
+  if (selected.length < maxResults) {
+    selected.push(
+      ...sortWikiSearchResults([
+        ...sortedWiki.slice(selectedWiki.length),
+        ...sortedMemory.slice(selectedMemory.length),
+      ]).slice(0, maxResults - selected.length),
+    );
+  }
+
+  return sortWikiSearchResults(selected).slice(0, maxResults);
 }
 
 export async function getMemoryWikiPage(

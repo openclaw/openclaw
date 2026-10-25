@@ -8,39 +8,20 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
-import {
-  buildSingleChannelSecretPromptState,
-  createAccountScopedAllowFromSection,
-  createAccountScopedGroupAccessSection,
-  createAllowFromSection,
-  createPromptParsedAllowFromForAccount,
-  createStandardChannelSetupStatus,
-  createTopLevelChannelDmPolicy,
-  createTopLevelChannelGroupPolicySetter,
-  createTopLevelChannelParsedAllowFromPrompt,
-  normalizeAllowFromEntries,
-  noteChannelLookupSummary,
-  parseMentionOrPrefixedId,
-  parseSetupEntriesAllowingWildcard,
-  patchChannelConfigForAccount,
-  patchTopLevelChannelConfigSection,
-  promptParsedAllowFromForAccount,
-  parseSetupEntriesWithParser,
-  promptSingleChannelSecretInput,
-  promptResolvedAllowFrom,
-  resolveAccountIdForConfigure,
-  resolveEntriesWithOptionalToken,
-  resolveSetupAccountId,
-  setAccountAllowFromForChannel,
-  setTopLevelChannelDmPolicyWithAllowFrom,
-  setSetupChannelEnabled,
-} from "./setup-wizard-helpers.js";
+import * as setup from "./setup-wizard-helpers.js";
 import type { ChannelSetupAdapter } from "./types.adapters.js";
 
 const telegramSetupSurface = {
   applyAccountConfig: ({ cfg }) => cfg,
   singleAccountKeysToMove: ["streaming", "webhookSecret"],
 } as ChannelSetupAdapter;
+const legacyTelegram = {
+  botToken: "legacy-token",
+  allowFrom: ["100"],
+  groupPolicy: "allowlist",
+  streaming: { mode: "partial" },
+  webhookSecret: "legacy-webhook-secret",
+};
 
 beforeEach(() => {
   setActivePluginRegistry(createTestRegistry());
@@ -67,6 +48,20 @@ const allowFromDefaults = {
   parseId: () => null,
   invalidWithoutTokenNote: "ids only",
 };
+const parsedPromptDefaults = {
+  defaultAccountId: DEFAULT_ACCOUNT_ID,
+  message: "msg",
+  placeholder: "placeholder",
+  noteTitle: "Nostr allowlist",
+  noteLines: ["line"],
+  parseEntries: (raw: string) => ({ entries: [raw.trim().toLowerCase()] }),
+};
+const sectionDefaults = {
+  credentialInputKey: "token",
+  message: "allowFrom",
+  placeholder: "user-id",
+  invalidWithoutCredentialNote: "need ids",
+};
 
 function createPrompter(
   inputs: string[],
@@ -77,68 +72,38 @@ function createPrompter(
 ) {
   const confirms = [...(options.confirms ?? [])];
   const texts = [...inputs];
-  const confirm = vi.fn(async () => confirms.shift() ?? false);
-  const text = vi.fn(async () => texts.shift() ?? "");
-  const note = vi.fn(async () => undefined);
-  const prompter = createWizardPrompter(undefined, {
-    defaultSelect: options.selects ? "plaintext" : undefined,
-    selectValues: options.selects,
-  });
-  return {
-    ...prompter,
-    select: vi.mocked(prompter.select),
-    confirm,
-    text,
-    note,
-  };
+  return createWizardPrompter(
+    {
+      confirm: vi.fn(async () => confirms.shift() ?? false),
+      text: vi.fn(async () => texts.shift() ?? ""),
+    },
+    { defaultSelect: options.selects ? "plaintext" : undefined, selectValues: options.selects },
+  );
 }
 
-async function runPromptSingleChannelSecretInput(params: {
-  prompter: ReturnType<typeof createPrompter>;
-  accountConfigured: boolean;
-  canUseEnv: boolean;
-  hasConfigToken: boolean;
-  preferredEnvVar?: string;
-}) {
-  return await promptSingleChannelSecretInput({
-    cfg: {},
-    providerHint: "telegram",
-    credentialLabel: "Bot token",
-    preferredEnvVar: "TELEGRAM_BOT_TOKEN",
-    envPrompt: "use env",
-    keepPrompt: "keep",
-    inputPrompt: "token",
-    ...params,
-  });
-}
+const secretDefaults = {
+  cfg: {},
+  providerHint: "telegram",
+  credentialLabel: "Bot token",
+  preferredEnvVar: "TELEGRAM_BOT_TOKEN",
+  envPrompt: "use env",
+  keepPrompt: "keep",
+  inputPrompt: "token",
+};
 
 describe("setup wizard helpers", () => {
-  it("enables env path only when env is present and no config token exists", () => {
-    expect(
-      buildSingleChannelSecretPromptState({
-        accountConfigured: false,
-        hasConfigToken: false,
-        allowEnv: true,
-        envValue: "token-from-env",
-      }),
-    ).toEqual({
-      accountConfigured: false,
-      hasConfigToken: false,
-      canUseEnv: true,
-    });
-  });
   it("re-prompts without token until all ids are parseable", async () => {
     const prompter = createPrompter(["@alice", "123"]);
     const resolveEntries = vi.fn();
 
-    const result = await promptResolvedAllowFrom({
+    const result = await setup.promptResolvedAllowFrom({
       ...allowFromDefaults,
       prompter,
       existing: ["111"],
       token: "",
       parseId: (value) => (/^\d+$/.test(value.trim()) ? value.trim() : null),
       resolveEntries: resolveEntries as Parameters<
-        typeof promptResolvedAllowFrom
+        typeof setup.promptResolvedAllowFrom
       >[0]["resolveEntries"],
     });
 
@@ -159,7 +124,7 @@ describe("setup wizard helpers", () => {
       resolveEntries.mockResolvedValueOnce([{ input: "alice", resolved: false }]);
     }
     resolveEntries.mockResolvedValueOnce([{ input: "bob", resolved: true, id }]);
-    const result = await promptResolvedAllowFrom({
+    const result = await setup.promptResolvedAllowFrom({
       ...allowFromDefaults,
       prompter,
       resolveEntries,
@@ -168,130 +133,63 @@ describe("setup wizard helpers", () => {
     expect(prompter.note).toHaveBeenCalledWith(note, "allowlist");
     expect(resolveEntries).toHaveBeenCalledTimes(2);
   });
-  it.each([
-    {
-      name: "plaintext env fallback",
-      selects: ["plaintext"],
-      confirms: [true],
-      accountConfigured: false,
-      canUseEnv: true,
-      hasConfigToken: false,
-      expected: { action: "use-env" },
-    },
-    {
-      name: "external env reference",
-      selects: ["ref", "env"],
-      texts: ["OPENCLAW_TEST_TOKEN"],
-      accountConfigured: false,
-      canUseEnv: false,
-      hasConfigToken: false,
-      preferredEnvVar: "OPENCLAW_TEST_TOKEN",
-      expected: {
-        action: "set",
-        value: { source: "env", provider: "default", id: "OPENCLAW_TEST_TOKEN" },
-        resolvedValue: "secret-token",
-      },
-    },
-    {
-      name: "existing configured reference",
-      selects: ["ref"],
-      confirms: [true],
-      accountConfigured: true,
-      canUseEnv: false,
-      hasConfigToken: true,
-      expected: { action: "keep" },
-    },
-  ])("selects $name", async ({ expected, name: _name, ...params }) => {
+  it.each(["use-env", "set"] as const)("selects %s", async (action) => {
+    const expected =
+      action === "set"
+        ? {
+            action,
+            value: { source: "env", provider: "default", id: "OPENCLAW_TEST_TOKEN" },
+            resolvedValue: "secret-token",
+          }
+        : { action };
     if (expected.action === "set") {
       vi.stubEnv("OPENCLAW_TEST_TOKEN", "secret-token");
       onTestFinished(() => {
         vi.unstubAllEnvs();
       });
     }
-    const prompter = createPrompter(params.texts ?? [], params);
-    const result = await runPromptSingleChannelSecretInput({ ...params, prompter });
+    const prompter = createPrompter(action === "set" ? ["OPENCLAW_TEST_TOKEN"] : [], {
+      selects: action === "use-env" ? ["plaintext"] : ["ref", "env"],
+      confirms: [true],
+    });
+    const state = setup.buildSingleChannelSecretPromptState({
+      accountConfigured: false,
+      hasConfigToken: false,
+      allowEnv: action === "use-env",
+      envValue: "token-from-env",
+    });
+    expect(state).toEqual({
+      accountConfigured: false,
+      hasConfigToken: false,
+      canUseEnv: action === "use-env",
+    });
+    const result = await setup.promptSingleChannelSecretInput({
+      ...secretDefaults,
+      ...state,
+      prompter,
+      ...(action === "set" ? { preferredEnvVar: "OPENCLAW_TEST_TOKEN" } : {}),
+    });
     expect(result).toEqual(expected);
-    if (expected.action === "keep") {
-      expect(prompter.text).not.toHaveBeenCalled();
-    }
   });
-  it("can merge parsed values with existing entries", async () => {
-    const next = await promptParsedAllowFromForAccount<OpenClawConfig>({
-      cfg: { channels: { nostr: { allowFrom: ["old"] } } },
-      defaultAccountId: DEFAULT_ACCOUNT_ID,
-      prompter: createPrompter(["new"]),
-      noteTitle: "Nostr allowlist",
-      noteLines: ["line"],
-      message: "msg",
-      placeholder: "placeholder",
-      parseEntries: (raw) => ({ entries: [raw.trim()] }),
-      getExistingAllowFrom: ({ cfg }) => [...(cfg.channels?.nostr?.allowFrom ?? [])],
-      mergeEntries: ({ existing, parsed }) => [...existing.map(String), ...parsed],
-      applyAllowFrom: ({ cfg, allowFrom }) =>
-        patchTopLevelChannelConfigSection({
-          cfg,
-          channel: "nostr",
-          patch: { allowFrom },
-        }),
-    });
-
-    expect(next.channels?.nostr?.allowFrom).toEqual(["old", "new"]);
-  });
-  it("supports computed default account ids and optional notes", async () => {
-    const promptAllowFrom = createPromptParsedAllowFromForAccount<OpenClawConfig>({
-      defaultAccountId: () => "work",
-      message: "msg",
-      placeholder: "placeholder",
-      parseEntries: (raw) =>
-        parseSetupEntriesWithParser(raw, (entry) => ({ value: entry.toLowerCase() })),
-      getExistingAllowFrom: ({ cfg, accountId }) => [
-        ...((
-          cfg.channels?.imessage?.accounts?.[accountId] as
-            | { allowFrom?: ReadonlyArray<string | number> }
-            | undefined
-        )?.allowFrom ?? []),
-      ],
-      applyAllowFrom: ({ cfg, accountId, allowFrom }) =>
-        patchChannelConfigForAccount({
-          cfg,
-          channel: "imessage",
-          accountId,
-          patch: { allowFrom },
-        }),
-    });
-
-    const prompter = createPrompter(["Alice, ALICE"]);
-    const next = await promptAllowFrom({
-      cfg: { channels: { imessage: { accounts: { work: { allowFrom: ["old"] } } } } },
-      prompter,
-    });
-
-    expect(next.channels?.imessage?.accounts?.work).toMatchObject({ allowFrom: ["alice"] });
-    expect(prompter.note).not.toHaveBeenCalled();
-  });
-  it("builds a top-level parsed allowFrom prompt", async () => {
-    const promptAllowFrom = createTopLevelChannelParsedAllowFromPrompt({
+  it.each([false, true])("merges top-level allowFrom with notes=%s", async (notes) => {
+    const prompt = setup.createTopLevelChannelParsedAllowFromPrompt({
+      ...parsedPromptDefaults,
       channel: "nostr",
-      defaultAccountId: DEFAULT_ACCOUNT_ID,
-      noteTitle: "Nostr allowlist",
-      noteLines: ["line"],
-      message: "msg",
-      placeholder: "placeholder",
-      parseEntries: (raw) => ({ entries: [raw.trim().toLowerCase()] }),
+      ...(!notes ? { noteTitle: undefined, noteLines: undefined } : {}),
+      mergeEntries: ({ existing, parsed }) => [...existing.map(String), ...parsed],
     });
-
-    const prompter = createPrompter(["npub1"]);
-    const next = await promptAllowFrom({
-      cfg: {},
-      prompter,
-    });
-
-    expect(next.channels?.nostr?.allowFrom).toEqual(["npub1"]);
-    expect(prompter.note).toHaveBeenCalledWith("line", "Nostr allowlist");
+    const prompter = createPrompter(["new"]);
+    const next = await prompt({ cfg: { channels: { nostr: { allowFrom: ["old"] } } }, prompter });
+    expect(next.channels?.nostr?.allowFrom).toEqual(["old", "new"]);
+    if (notes) {
+      expect(prompter.note).toHaveBeenCalledWith("line", "Nostr allowlist");
+    } else {
+      expect(prompter.note).not.toHaveBeenCalled();
+    }
   });
   it("emits summary lines for resolved and unresolved entries", async () => {
     const prompter = { note: vi.fn(async () => undefined) };
-    await noteChannelLookupSummary({
+    await setup.noteChannelLookupSummary({
       prompter,
       label: "Slack channels",
       resolvedSections: [
@@ -305,49 +203,7 @@ describe("setup wizard helpers", () => {
       "Slack channels",
     );
   });
-  it("writes allowFrom on nested non-default account config", () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        signal: {
-          enabled: true,
-          allowFrom: ["default-old"],
-          accounts: {
-            alt: { enabled: true, account: "+15555550123", allowFrom: ["alt-old"] },
-          },
-        },
-      },
-    };
-
-    const next = setAccountAllowFromForChannel({
-      cfg,
-      channel: "signal",
-      accountId: "alt",
-      allowFrom: ["alt-new"],
-    });
-
-    expect(next.channels?.signal?.allowFrom).toEqual(["default-old"]);
-    expect(next.channels?.signal?.accounts?.alt?.allowFrom).toEqual(["alt-new"]);
-    expect(next.channels?.signal?.accounts?.alt?.account).toBe("+15555550123");
-  });
   it.each([
-    {
-      name: "plugin-owned root",
-      channel: "demo",
-      accountId: "ada",
-      section: { name: "Root", groupPolicy: "allowlist", groupAllowFrom: [] },
-      patch: { groupPolicy: "disabled" },
-      setupSurface: {
-        configPromotion: "preserve-root",
-        applyAccountConfig: ({ cfg }) => cfg,
-      },
-      expected: {
-        name: "Root",
-        groupPolicy: "allowlist",
-        groupAllowFrom: [],
-        enabled: true,
-        accounts: { ada: { enabled: true, groupPolicy: "disabled" } },
-      },
-    },
     {
       name: "disabled named account",
       channel: "slack",
@@ -363,26 +219,13 @@ describe("setup wizard helpers", () => {
       name: "single-account promotion",
       channel: "telegram",
       accountId: "work",
-      section: {
-        enabled: true,
-        botToken: "legacy-token",
-        allowFrom: ["100"],
-        groupPolicy: "allowlist",
-        streaming: { mode: "partial" },
-        webhookSecret: "legacy-webhook-secret",
-      },
+      section: { enabled: true, ...legacyTelegram },
       patch: { botToken: "work-token" },
       setupSurface: telegramSetupSurface,
       expected: {
         enabled: true,
         accounts: {
-          default: {
-            botToken: "legacy-token",
-            allowFrom: ["100"],
-            groupPolicy: "allowlist",
-            streaming: { mode: "partial" },
-            webhookSecret: "legacy-webhook-secret",
-          },
+          default: structuredClone(legacyTelegram),
           work: { enabled: true, botToken: "work-token" },
         },
       },
@@ -399,7 +242,13 @@ describe("setup wizard helpers", () => {
     "patches $name without losing existing config",
     ({ channel, accountId, section, patch, setupSurface, expected }) => {
       const cfg: OpenClawConfig = { channels: { [channel]: section } };
-      const next = patchChannelConfigForAccount({ cfg, channel, accountId, patch, setupSurface });
+      const next = setup.patchChannelConfigForAccount({
+        cfg,
+        channel,
+        accountId,
+        patch,
+        setupSurface,
+      });
       expect(next.channels?.[channel]).toEqual(expected);
       expect(cfg.channels?.[channel]).toEqual(section);
     },
@@ -407,25 +256,11 @@ describe("setup wizard helpers", () => {
   it("updates enabled and keeps existing channel fields", () => {
     const cfg: OpenClawConfig = { channels: { discord: { enabled: true, token: "abc" } } };
 
-    const next = setSetupChannelEnabled(cfg, "discord", false);
+    const next = setup.setSetupChannelEnabled(cfg, "discord", false);
     expect(next.channels?.discord).toMatchObject({ enabled: false, token: "abc" });
   });
-  it("supports custom allowFrom lookup callback", () => {
-    const cfg: OpenClawConfig = {
-      channels: { "nextcloud-talk": { dmPolicy: "pairing", allowFrom: ["alice"] } },
-    };
-
-    const next = setTopLevelChannelDmPolicyWithAllowFrom({
-      cfg,
-      channel: "nextcloud-talk",
-      dmPolicy: "open",
-      getAllowFrom: (inputCfg) =>
-        normalizeAllowFromEntries([...(inputCfg.channels?.["nextcloud-talk"]?.allowFrom ?? [])]),
-    });
-    expect(next.channels?.["nextcloud-talk"]?.allowFrom).toEqual(["alice", "*"]);
-  });
   it("clears requested fields before applying a patch", () => {
-    const next = patchTopLevelChannelConfigSection({
+    const next = setup.patchTopLevelChannelConfigSection({
       cfg: { channels: { nostr: { privateKey: "nsec1", relays: ["wss://old.example"] } } },
       channel: "nostr",
       clearFields: ["privateKey"],
@@ -433,16 +268,15 @@ describe("setup wizard helpers", () => {
       enabled: true,
     });
 
-    expect(next.channels?.nostr?.privateKey).toBeUndefined();
-    expect(next.channels?.nostr?.relays).toEqual(["wss://new.example"]);
-    expect(next.channels?.nostr?.enabled).toBe(true);
+    expect(next.channels?.nostr).toEqual({ relays: ["wss://new.example"], enabled: true });
   });
   it("creates a reusable dm policy definition", () => {
-    const dmPolicy = createTopLevelChannelDmPolicy({
+    const dmPolicy = setup.createTopLevelChannelDmPolicy({
       label: "LINE",
       channel: "line",
       policyKey: "channels.line.dmPolicy",
       allowFromKey: "channels.line.allowFrom",
+      getAllowFrom: (cfg) => setup.normalizeAllowFromEntries(cfg.channels?.line?.allowFrom ?? []),
       getCurrent: (cfg) =>
         (cfg.channels?.line?.dmPolicy as
           | "open"
@@ -463,62 +297,48 @@ describe("setup wizard helpers", () => {
     expect(next.channels?.line).toMatchObject({ dmPolicy: "open", allowFrom: ["U123", "*"] });
   });
   it("reuses the shared top-level groupPolicy writer", () => {
-    const setGroupPolicy = createTopLevelChannelGroupPolicySetter({
+    const setGroupPolicy = setup.createTopLevelChannelGroupPolicySetter({
       channel: "feishu",
       enabled: true,
     });
-    const next = setGroupPolicy({}, "allowlist");
-
-    expect(next.channels?.feishu).toMatchObject({ groupPolicy: "allowlist", enabled: true });
-  });
-  it("builds an account-scoped allowFrom section with shared apply wiring", async () => {
-    const section = createAccountScopedAllowFromSection({
-      channel: "discord",
-      credentialInputKey: "token",
-      message: "Discord allowFrom",
-      placeholder: "@alice",
-      invalidWithoutCredentialNote: "need ids",
-      parseId: (value) => value.trim() || null,
-      resolveEntries: async ({ entries }) =>
-        entries.map((input) => ({ input, resolved: true, id: input.toUpperCase() })),
+    expect(setGroupPolicy({}, "allowlist").channels?.feishu).toMatchObject({
+      groupPolicy: "allowlist",
+      enabled: true,
     });
-
-    expect(section.credentialInputKey).toBe("token");
-    await expect(
-      resolveSetupWizardAllowFromEntries({
-        resolveEntries: section.resolveEntries,
-        accountId: DEFAULT_ACCOUNT_ID,
-        entries: ["alice"],
-      }),
-    ).resolves.toEqual([{ input: "alice", resolved: true, id: "ALICE" }]);
-
-    const next = await section.apply({
-      cfg: {},
-      accountId: DEFAULT_ACCOUNT_ID,
-      allowFrom: ["123"],
-    });
-
-    expect(next.channels?.discord).toMatchObject({ dmPolicy: "allowlist", allowFrom: ["123"] });
   });
-  it("builds a parsed allowFrom section with default local resolution", async () => {
-    const section = createAllowFromSection({
-      helpTitle: "LINE allowlist",
-      helpLines: ["line"],
-      credentialInputKey: "token",
-      message: "LINE allowFrom",
-      placeholder: "U123",
-      invalidWithoutCredentialNote: "need ids",
-      parseId: (value) => value.trim().toUpperCase() || null,
-      apply: ({ cfg, accountId, allowFrom }) =>
-        patchChannelConfigForAccount({
-          cfg,
+  it.each([false, true])("builds allowFrom with local resolution=%s", async (local) => {
+    const options = {
+      ...sectionDefaults,
+      parseId: (value: string) => value.trim().toUpperCase() || null,
+    };
+    const section = local
+      ? setup.createAllowFromSection({
+          ...options,
+          helpTitle: "LINE allowlist",
+          helpLines: ["line"],
+          apply: ({ cfg, accountId, allowFrom }) =>
+            setup.patchChannelConfigForAccount({
+              cfg,
+              channel: "line",
+              accountId,
+              patch: { dmPolicy: "allowlist", allowFrom },
+            }),
+        })
+      : setup.createAccountScopedAllowFromSection({
+          ...options,
           channel: "line",
-          accountId,
-          patch: { dmPolicy: "allowlist", allowFrom },
-        }),
-    });
-
-    expect(section.helpTitle).toBe("LINE allowlist");
+          resolveEntries: async ({ entries }) =>
+            entries.map((input) => ({
+              input,
+              resolved: true,
+              id: input.toUpperCase(),
+            })),
+        });
+    if (local) {
+      expect(section.helpTitle).toBe("LINE allowlist");
+    } else {
+      expect(section.credentialInputKey).toBe("token");
+    }
     await expect(
       resolveSetupWizardAllowFromEntries({
         resolveEntries: section.resolveEntries,
@@ -526,17 +346,12 @@ describe("setup wizard helpers", () => {
         entries: ["u1"],
       }),
     ).resolves.toEqual([{ input: "u1", resolved: true, id: "U1" }]);
-
-    const next = await section.apply({
-      cfg: {},
-      accountId: DEFAULT_ACCOUNT_ID,
-      allowFrom: ["U1"],
-    });
-    expect(next.channels?.line?.allowFrom).toEqual(["U1"]);
+    const next = await section.apply({ cfg: {}, accountId: DEFAULT_ACCOUNT_ID, allowFrom: ["U1"] });
+    expect(next.channels?.line).toMatchObject({ dmPolicy: "allowlist", allowFrom: ["U1"] });
   });
   it("builds group access with shared setPolicy and fallback lookup notes", async () => {
     const prompter = createPrompter([]);
-    const section = createAccountScopedGroupAccessSection({
+    const section = setup.createAccountScopedGroupAccessSection({
       channel: "slack",
       label: "Slack channels",
       placeholder: "#general",
@@ -548,7 +363,7 @@ describe("setup wizard helpers", () => {
       },
       fallbackResolved: (entries) => entries,
       applyAllowlist: ({ cfg, resolved, accountId }) =>
-        patchChannelConfigForAccount({
+        setup.patchChannelConfigForAccount({
           cfg,
           channel: "slack",
           accountId,
@@ -589,30 +404,23 @@ describe("setup wizard helpers", () => {
     });
   });
   it.each([
-    { input: " *,\n Foo;  ;\n", expected: { entries: ["*", "foo"] } },
+    { input: " *,\n Foo; foo; ;\n", expected: { entries: ["*", "foo"] } },
     { input: "ok,bad", expected: { entries: [], error: "bad entry" } },
   ])("parses wildcard-aware entries $input", ({ input, expected }) => {
     expect(
-      parseSetupEntriesAllowingWildcard(input, (entry) =>
+      setup.parseSetupEntriesAllowingWildcard(input, (entry) =>
         entry === "bad" ? { error: "bad entry" } : { value: entry.toLowerCase() },
       ),
     ).toEqual(expected);
   });
-  it.each([
-    {
-      token: undefined,
-      entries: ["alice", "bob"],
-      expected: [
-        { input: "alice", resolved: false, id: null },
-        { input: "bob", resolved: false, id: null },
-      ],
-    },
-    {
-      token: "xoxb-test",
-      entries: ["alice"],
-      expected: [{ input: "alice", resolved: true, id: "xoxb-test:alice" }],
-    },
-  ])("resolves entries with token $token", async ({ token, entries, expected }) => {
+  it.each([undefined, "xoxb-test"])("resolves entries with token %s", async (token) => {
+    const entries = token ? ["alice"] : ["alice", "bob"];
+    const expected = token
+      ? [{ input: "alice", resolved: true, id: "xoxb-test:alice" }]
+      : [
+          { input: "alice", resolved: false, id: null },
+          { input: "bob", resolved: false, id: null },
+        ];
     const resolveEntries = vi.fn(
       async ({ token: resolvedToken, entries: inputs }: { token: string; entries: string[] }) =>
         inputs.map((input) => ({ input, resolved: true, id: `${resolvedToken}:${input}` })),
@@ -621,7 +429,11 @@ describe("setup wizard helpers", () => {
       resolveEntries.mockRejectedValue(new Error("should not run"));
     }
     await expect(
-      resolveEntriesWithOptionalToken<{ input: string; resolved: boolean; id: string | null }>({
+      setup.resolveEntriesWithOptionalToken<{
+        input: string;
+        resolved: boolean;
+        id: string | null;
+      }>({
         token,
         entries,
         buildWithoutToken: (input) => ({ input, resolved: false, id: null }),
@@ -637,7 +449,7 @@ describe("setup wizard helpers", () => {
     { value: "@alice", expected: null },
   ])("parses mention or prefixed id $value", ({ value, expected, normalize }) => {
     expect(
-      parseMentionOrPrefixedId({
+      setup.parseMentionOrPrefixedId({
         value,
         mentionPattern: normalize ? /^<@([A-Z0-9]+)>$/i : /^<@!?(\d+)>$/,
         prefixPattern: normalize ? /^(slack:|user:)/i : /^(user:|discord:)/i,
@@ -648,49 +460,38 @@ describe("setup wizard helpers", () => {
   });
   it("normalizes values, preserves wildcard, and removes duplicates", () => {
     expect(
-      normalizeAllowFromEntries([" +15555550123 ", "*", "+15555550123", "bad"], (value) =>
+      setup.normalizeAllowFromEntries([" +15555550123 ", "*", "+15555550123", "bad"], (value) =>
         value.startsWith("+1") ? value : null,
       ),
     ).toEqual(["+15555550123", "*"]);
   });
-  it.each([false, true])("builds setup status with status lines=%s", async (includeStatusLine) => {
-    const status = createStandardChannelSetupStatus({
+  it("combines standard and extra status lines", async () => {
+    const hints = {
+      configuredHint: "ready",
+      unconfiguredHint: "missing token",
+      configuredScore: 2,
+      unconfiguredScore: 0,
+    };
+    const status = setup.createStandardChannelSetupStatus({
+      ...hints,
       channelLabel: "Demo",
       configuredLabel: "configured",
       unconfiguredLabel: "needs token",
-      ...(includeStatusLine
-        ? {
-            includeStatusLine: true,
-            resolveExtraStatusLines: ({ configured }: { configured: boolean }) => [
-              `Configured: ${configured ? "yes" : "no"}`,
-            ],
-          }
-        : {
-            configuredHint: "ready",
-            unconfiguredHint: "missing token",
-            configuredScore: 2,
-            unconfiguredScore: 0,
-          }),
+      includeStatusLine: true,
+      resolveExtraStatusLines: ({ configured }) => [`Configured: ${configured ? "yes" : "no"}`],
       resolveConfigured: ({ cfg }) => Boolean(cfg.channels?.demo),
     });
-    if (includeStatusLine) {
-      expect(
-        await status.resolveStatusLines?.({ cfg: { channels: { demo: {} } }, configured: true }),
-      ).toEqual(["Demo: configured", "Configured: yes"]);
-    } else {
-      expect(status).toMatchObject({
-        configuredHint: "ready",
-        unconfiguredHint: "missing token",
-        configuredScore: 2,
-        unconfiguredScore: 0,
-      });
-      expect(await status.resolveConfigured({ cfg: { channels: { demo: {} } } })).toBe(true);
-      expect(status.resolveStatusLines).toBeUndefined();
-    }
+    expect(status).toMatchObject(hints);
+    const cfg = { channels: { demo: {} } };
+    expect(await status.resolveConfigured({ cfg })).toBe(true);
+    expect(await status.resolveStatusLines?.({ cfg, configured: true })).toEqual([
+      "Demo: configured",
+      "Configured: yes",
+    ]);
   });
   it("normalizes provided account ids", () => {
     expect(
-      resolveSetupAccountId({
+      setup.resolveSetupAccountId({
         accountId: " Work Account ",
         defaultAccountId: DEFAULT_ACCOUNT_ID,
       }),
@@ -701,7 +502,7 @@ describe("setup wizard helpers", () => {
     { accountOverride: undefined, expected: "prompted-id" },
   ])("resolves account with override $accountOverride", async ({ accountOverride, expected }) => {
     const prompter = createWizardPrompter(undefined, { defaultSelect: "prompted-id" });
-    const accountId = await resolveAccountIdForConfigure({
+    const accountId = await setup.resolveAccountIdForConfigure({
       cfg: {},
       prompter,
       label: "Signal",

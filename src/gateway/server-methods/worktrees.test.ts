@@ -288,3 +288,26 @@ it.each([
     details: { mutationAccepted: false },
   });
 });
+
+it(
+  "fences recovery relocation through real paired requester and workspace authority",
+  { timeout: 90_000 },
+  async ({ signal }) => {
+    const { proveWorkspaceRecoveryAuthority } =
+      await import("./worktrees-recovery.test-support.js");
+    await proveWorkspaceRecoveryAuthority(signal);
+  },
+);
+
+it("requires an explicit state owner and administrator for file recovery", async () => {
+  const invoke = requests({});
+  const params = {
+    sessionKey: "agent:main:dashboard:recovery",
+    path: "artifacts/archive.tgz",
+    recoveryId: "4efcb376-a2d2-482e-98fe-9f5a79bbf466",
+  };
+  const missingOwner = await invoke("recoverFile", params, admin);
+  expect(missingOwner?.[0]).toBe(false);
+  expect(missingOwner?.[2]).toMatchObject({ code: "INVALID_REQUEST" });
+  expectForbidden(await invoke("recoverFile", { ...params, expectedOwnerId: "owner" }, writer));
+});

@@ -6,7 +6,6 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { tryResolveCronJobEffectiveAgentId } from "../cron/agent-id.js";
-import { isHeartbeatTaskCronJob } from "../cron/heartbeat-task.js";
 import {
   readDefaultProactiveJobReceiptInDatabase,
   recordConvertedProactiveJobInDatabase,
@@ -34,19 +33,23 @@ import { shortenHomePath } from "../utils.js";
 import { ensureHeartbeatMonitorJobs } from "./doctor-heartbeat-cadence-migration.js";
 import { resolveLegacyHeartbeatConfig } from "./doctor-heartbeat-legacy.js";
 import { resolveLegacyHeartbeatSession } from "./doctor-heartbeat-session.js";
+import { isHeartbeatTaskCronJob } from "./doctor-heartbeat-task-identity.js";
 import {
   commitHeartbeatTaskMigrationInDatabase,
   convertStoredHeartbeatTask,
   loadHeartbeatTaskPlanningSnapshot,
   planHeartbeatTaskMigration,
-  validateHeartbeatTasks,
   type AgentTaskMigrationPlan,
   type CronPlanningSnapshot,
   type MigrationCommitResult,
 } from "./doctor-heartbeat-task-migration.kernel.js";
 import { readLegacyHeartbeatScratch } from "./doctor-heartbeat-task-scratch.js";
 import { noteDoctorMigrationResult } from "./doctor-migration-notes.js";
-import { analyzeLegacyHeartbeatTasks, type LegacyHeartbeatTask } from "./heartbeat-task-legacy.js";
+import {
+  analyzeLegacyHeartbeatTasks,
+  validateHeartbeatTasks,
+  type LegacyHeartbeatTask,
+} from "./heartbeat-task-legacy.js";
 
 type HeartbeatTaskMigrationResult = { changes: string[]; warnings: string[] };
 
@@ -92,7 +95,7 @@ export async function collectHeartbeatTaskMigrationFindings(
       continue;
     }
     try {
-      validateHeartbeatTasks(document.tasks, document.taskEntryCount);
+      validateHeartbeatTasks(document);
       findings.push({
         ...finding,
         requirement: "heartbeat-tasks-in-scratch",
@@ -270,7 +273,7 @@ export async function maybeMigrateHeartbeatTasksToCron(params: {
     }
     const tasks = document.tasks;
     try {
-      validateHeartbeatTasks(tasks, document.taskEntryCount);
+      validateHeartbeatTasks(document);
     } catch (error) {
       warnings.push(
         `Agent "${agent.agentId}" heartbeat tasks were not migrated: ${errorMessage(error)}.`,

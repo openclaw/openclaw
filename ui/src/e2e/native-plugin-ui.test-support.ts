@@ -124,17 +124,6 @@ export async function captureNativeWorkspaceFailure(page: Page): Promise<void> {
   );
 }
 
-export async function captureNativePluginUiProof(
-  owner: { readonly artifactDir: string },
-  page: Page,
-  name: string,
-  options: { fullPage?: boolean } = {},
-): Promise<void> {
-  if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-    await page.screenshot({ ...options, path: path.join(owner.artifactDir, name) });
-  }
-}
-
 export type NativePluginWindow = Window & {
   nativeWorkspaceLitTrace?: { errors: unknown[] };
   nativePluginProof?: { release?: () => void };
@@ -290,9 +279,6 @@ export async function expectComposerFooterLayout(page: Page, composer: Locator, 
         transcriptBottom: threadBounds.bottom,
         content: style.content,
         background: style.backgroundImage,
-        left: footerBounds.left + Number.parseFloat(style.left) - threadBounds.left,
-        right: threadBounds.right - (footerBounds.right - Number.parseFloat(style.right)),
-        scrollbar: (threadBounds.width - thread.clientWidth) / 2,
       };
     });
     const description = `${variant} at ${width}px`;
@@ -300,10 +286,8 @@ export async function expectComposerFooterLayout(page: Page, composer: Locator, 
     expect.soft(geometry.composerTop, description).toBeGreaterThanOrEqual(geometry.footerTop);
     expect.soft(geometry.composerBottom, description).toBeLessThanOrEqual(geometry.footerBottom);
     expect.soft(geometry.inputOutsideContext, description).toBe(true);
-    expect.soft(geometry.content, description).toBe('""');
-    expect.soft(geometry.background, description).toContain("linear-gradient");
-    expect.soft(geometry.left, description).toBeGreaterThanOrEqual(geometry.scrollbar);
-    expect.soft(geometry.right, description).toBeGreaterThanOrEqual(geometry.scrollbar);
+    expect.soft(geometry.content, description).toBe("none");
+    expect.soft(geometry.background, description).toBe("none");
   }
   await page.setViewportSize({ width: 1280, height: 900 });
 }

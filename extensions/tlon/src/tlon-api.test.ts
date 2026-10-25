@@ -59,12 +59,6 @@ const CUSTOM_STORAGE = {
 
 let testClientConfig: ClientConfig;
 
-const createGuardedResult = (
-  response: Response,
-  finalUrl: string,
-  release: () => Promise<void> = mockRelease,
-) => ({ response, finalUrl, release });
-
 const responseWithCancelableBody = (
   status: number,
   cancelBody: () => void | PromiseLike<void>,
@@ -104,8 +98,9 @@ function mockMemexLookup(url = MEMEX_UPLOAD_URL, filePath = MEMEX_FILE): void {
 function mockGuardedResponse(
   finalUrl: string,
   response = new Response(null, { status: 200 }),
+  release: () => Promise<void> = mockRelease,
 ): void {
-  mockGuardedFetch.mockResolvedValueOnce(createGuardedResult(response, finalUrl));
+  mockGuardedFetch.mockResolvedValueOnce({ response, finalUrl, release });
 }
 
 const uploadAvatar = (clientConfig: ClientConfig = testClientConfig) =>
@@ -153,15 +148,12 @@ describe("uploadFile memex upload hardening", () => {
     expectGuardCleanup(2);
     const firstCall = expectGuardRequest(0, MEMEX_ENDPOINT, "tlon-memex-upload-url", 30_000);
     expect(firstCall?.init?.headers).toEqual({ "Content-Type": "application/json" });
-    const firstBodyRaw = firstCall?.init?.body;
-    expect(typeof firstBodyRaw).toBe("string");
-    const firstBody = JSON.parse(firstBodyRaw as string) as Record<string, unknown>;
-    expect(firstBody).toMatchObject({
+    expect(JSON.parse(firstCall?.init?.body as string)).toMatchObject({
       token: "genuine-secret",
       contentLength: 11,
       contentType: "image/png",
+      fileName: expect.any(String),
     });
-    expect(typeof firstBody.fileName).toBe("string");
     const secondCall = expectGuardRequest(1, MEMEX_UPLOAD_URL, "tlon-memex-upload", 300_000);
     expect(secondCall?.init?.headers).toEqual({
       "Cache-Control": "public, max-age=3600",
@@ -181,14 +173,10 @@ describe("uploadFile memex upload hardening", () => {
     const release = vi.fn(async () => {
       events.push("release");
     });
-    mockGuardedFetch.mockResolvedValueOnce(
-      createGuardedResult(responseWithCancelableBody(500, cancelBody), MEMEX_ENDPOINT, release),
-    );
+    mockGuardedResponse(MEMEX_ENDPOINT, responseWithCancelableBody(500, cancelBody), release);
 
     await expect(uploadAvatar()).rejects.toThrow("Memex upload request failed: 500");
 
-    expect(cancelBody).toHaveBeenCalledTimes(1);
-    expect(release).toHaveBeenCalledTimes(1);
     expect(events).toEqual(["cancel", "release"]);
   });
 
@@ -234,19 +222,17 @@ describe("uploadFile memex upload hardening", () => {
   it("rejects an oversized Memex upload JSON response", async () => {
     const cancelBody = vi.fn();
     let bodyReads = 0;
-    mockGuardedFetch.mockResolvedValueOnce(
-      createGuardedResult(
-        new Response(
-          new ReadableStream<Uint8Array>({
-            pull(controller) {
-              bodyReads += 1;
-              controller.enqueue(new Uint8Array(32 * 1024).fill(120));
-            },
-            cancel: cancelBody,
-          }),
-          { status: 200, headers: { "content-type": "application/json" } },
-        ),
-        MEMEX_ENDPOINT,
+    mockGuardedResponse(
+      MEMEX_ENDPOINT,
+      new Response(
+        new ReadableStream<Uint8Array>({
+          pull(controller) {
+            bodyReads += 1;
+            controller.enqueue(new Uint8Array(32 * 1024).fill(120));
+          },
+          cancel: cancelBody,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
       ),
     );
 
@@ -346,7 +332,11 @@ describe("uploadFile send authority", () => {
     mockGuardedFetch.mockImplementationOnce(async (request) => {
       request.beforeRequest?.();
       dispatch();
-      return createGuardedResult(new Response(null, { status: 200 }), S3_UPLOAD_URL);
+      return {
+        response: new Response(null, { status: 200 }),
+        finalUrl: S3_UPLOAD_URL,
+        release: mockRelease,
+      };
     });
 
     const upload = uploadAvatar({ ...testClientConfig, assertDirectAdapterHandoff });
@@ -379,7 +369,11 @@ describe("uploadFile send authority", () => {
         assertDirectAdapterHandoff.mockImplementation(() => {
           throw new Error("Tlon send authority revoked");
         });
-        return createGuardedResult(responseWithCancelableBody(200, cancelBody), uploadUrl);
+        return {
+          response: responseWithCancelableBody(200, cancelBody),
+          finalUrl: uploadUrl,
+          release: mockRelease,
+        };
       });
 
       const result = await uploadAvatar({ ...testClientConfig, assertDirectAdapterHandoff });

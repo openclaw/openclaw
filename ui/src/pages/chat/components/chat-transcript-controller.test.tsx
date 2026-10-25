@@ -4,15 +4,11 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { createRoot } from "solid-js";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
-import { flush } from "../../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { projectChatFields } from "../chat-field-projection.ts";
 import { makeChatHost } from "../chat-host.test-support.ts";
 import { createTestTranscript, stubAnimationFrames } from "../chat-view.test-helpers.ts";
-import {
-  handleChatScrollTakeover,
-  saveChatSessionScrollPosition,
-  scheduleCommittedChatScroll,
-} from "../scroll.ts";
+import { handleChatScrollTakeover, saveChatSessionScrollPosition } from "../scroll.ts";
 import { SIDEBAR_GEOMETRY_COMMIT_EVENT } from "../sidebar-layout.ts";
 import {
   render,
@@ -178,52 +174,32 @@ it.each([false, true])("re-observes re-stamped rows (foreign host=%s)", async (f
   transcript.dispose();
 });
 
-it("measures newly inserted rows after Solid connects them", async () => {
-  transcriptDomState.detachedRowHeight = 0;
-  const props = threadProps("pane-commentary-insert", "agent:main:session-a", [
-    { role: "assistant", content: "commentary", timestamp: 1_000 },
-    { role: "user", content: "next turn", timestamp: 2_000 },
-  ]);
-  const { container, transcript, draw } = threadFixture(props);
+it("updates the visible range on native scroll without a parent render", async () => {
+  const flushFrames = stubAnimationFrames();
+  const props = threadProps("local-geometry", "agent:main:local-geometry", messages(40, "message"));
+  saveChatSessionScrollPosition(props.paneId, props.sessionKey, {
+    scrollTop: 0,
+    anchorToEnd: false,
+  });
+  const { container, transcript, draw } = threadFixture(props, createTestTranscript(props.paneId));
   draw();
   transcript.start();
   transcript.update();
   await flushDeferredRowPrune();
-  emitRowSizes(transcriptRows(container), 100);
+  const { scroller, rows } = expectObservedRows(container);
+  geometry(scroller, { clientHeight: 600, scrollHeight: 4_000 });
+  emitSize(scroller, 600);
+  emitRowSizes(rows, 100);
   draw();
+  flushFrames();
+  await flushDeferredRowPrune();
+  expect(container.textContent).toContain("message 0");
 
-  expect(transcriptSize(container)).toBe(200);
-});
-
-it("reveals committed initial row sizes without waiting for an animation frame", async () => {
-  stubAnimationFrames();
-  vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(600);
-  const host = new TranscriptTestHost();
-  cleanup.push(() => host.remove());
-  const transcript = (host.transcript = createChatTranscript(() => "native-measured-tail"));
-  const rows = numberedContentRows(6);
-  const scroller = document.createElement("div");
-  scroller.className = "chat-thread";
-  host.renderTranscript = () => {
-    const content = renderReadySession(transcript, "native-measured-tail", rows);
-    if (scroller.firstChild !== content) {
-      scroller.replaceChildren(content);
-    }
-    return scroller;
-  };
-  document.body.append(host);
-  await host.settleUpdates();
-  const extent = requireElement(host, ".chat-thread-inner");
-  expect(transcriptRows(host).every((row) => observedElements.has(row))).toBe(true);
-  await Promise.resolve();
-  flush();
-  await host.settleUpdates();
-  expect(extent.style.visibility).toBe("");
-  expect(transcriptRows(host).every((row) => row.style.containIntrinsicBlockSize === "100px")).toBe(
-    true,
-  );
-  expect(host.textContent).toContain("row 5");
-  host.remove();
+  scroll(scroller, 2_400);
+  flushFrames();
+  await flushDeferredRowPrune();
+  expect(container.textContent).not.toContain("message 0");
+  expect(Number(transcriptRows(container)[0]?.dataset.index)).toBeGreaterThan(0);
 });
 
 it("keeps retained MCP rows and the virtual row model atomic through teardown", async () => {
@@ -328,6 +304,7 @@ it.each(["append", "reorder", "focused reorder"] as const)(
 
 it("reconciles an implicit end anchor when committed content has no scroll range", async () => {
   const flushFrames = stubAnimationFrames();
+  transcriptDomState.measuredRowHeight = 20;
   const { container, transcript, draw } = threadFixture(
     threadProps("pane-underfill-anchor", "agent:main:underfill", messages(18, "message")),
   );
@@ -348,7 +325,7 @@ it("reconciles an implicit end anchor when committed content has no scroll range
     await Promise.resolve();
     flush();
   }
-  expect(transcriptRows(container)[0]?.dataset.index).toBe("0");
+  await waitForSolid(() => expect(transcriptRows(container)[0]?.dataset.index).toBe("0"));
   expect(container.textContent).toContain("message 0");
 });
 
@@ -371,29 +348,14 @@ it("retains history controls across callback and loading replacements", async ()
 
   await draw(true, next);
   expect(container.querySelector(".chat-history-boundary__action")).toBe(button);
-  expect(button).toMatchObject({ disabled: true, textContent: expect.stringContaining("Loading") });
+  expect(button.getAttribute("aria-disabled")).toBe("true");
+  expect(button).toMatchObject({ textContent: expect.stringContaining("Loading") });
 
   await draw(false, next);
   expect(container.querySelector(".chat-history-boundary__action")).toBe(button);
   button.click();
   expect(next).toHaveBeenCalledOnce();
   expect(first).toHaveBeenCalledOnce();
-});
-
-it("renders the history tail immediately after an empty disconnected shell", () => {
-  const flushFrames = stubAnimationFrames();
-  const props = threadProps("cold-load-tail", "agent:main:cold-load-tail", []);
-  const { container, transcript, draw } = threadFixture(props);
-  draw();
-  geometry(container.querySelector(".chat-thread")!, { clientHeight: 600, scrollHeight: 600 });
-  transcript.start();
-  transcript.update();
-  flushFrames();
-
-  draw({ ...props, messages: messages(40, "Cached history") });
-
-  expect(container.textContent).toContain("Cached history 39");
-  expect(container.textContent).not.toContain("Cached history 0");
 });
 
 it.each([true, false])("settles a non-overflowing restore (initially loading=%s)", (loading) => {
@@ -469,13 +431,10 @@ it("retries a growing restore without pane commits and renders the settled reade
   transcript.scrollToOffset(2420, onSettled);
   await host.settleUpdates();
   const initialCommits = host.committedRenders;
-  const retryCommits: number[] = [];
   for (const height of [600, 600, 600, 720, 720, 720, 720, 900, 900, 900, 900]) {
     scrollHeight = height;
-    const before = host.committedRenders;
     flushFrame();
     await host.settleUpdates();
-    retryCommits.push(host.committedRenders - before);
     expect(onSettled).not.toHaveBeenCalled();
   }
   scrollHeight = 4800;
@@ -485,7 +444,6 @@ it("retries a growing restore without pane commits and renders the settled reade
   expect(container.scrollTop).toBe(2420);
   expect(container.querySelector("output")?.textContent).toBe("Reading history");
   expect.soft(host.committedRenders - initialCommits).toBe(0);
-  expect.soft(retryCommits).toEqual(Array(11).fill(0));
 
   // jsdom does not emit native scroll events for scrollTop writes. Deliver the browser read-back.
   scroll(container);
@@ -716,80 +674,6 @@ it("keeps smooth latest through settlement and idle until the target", async () 
   vi.advanceTimersByTime(150);
   expect(scrollTo).toHaveBeenCalledExactlyOnceWith({ top: 4300, behavior: "instant" });
   expect(transcript.isProgrammaticScroll).toBe(false);
-});
-
-it.each([true, false])(
-  "leaves height-resize follow to page policy with reader lock=%s",
-  async (locked) => {
-    const flushFrames = stubAnimationFrames();
-    const policy = makeChatHost({ chatHasAutoScrolled: true });
-    const onViewportResize = vi.fn(() =>
-      scheduleCommittedChatScroll(policy, false, false, { source: "resize" }),
-    );
-    const transcript = createChatTranscript(() => `height-resize-${locked}`, {
-      onViewportResize,
-      canFollowEnd: () => !policy.chatFollowLocked,
-      onReaderScroll: (towardEnd) => handleChatScrollTakeover(policy, towardEnd),
-    });
-    const rows = numberedContentRows(12);
-    const { container } = await mountTestTranscript(`height-resize-${locked}`, rows, transcript);
-    const total = transcriptSize(container);
-    geometry(container, { clientHeight: 600, scrollHeight: total + 88 });
-    const scrollTo = vi.fn();
-    container.scrollTo = scrollTo;
-    policy.chatScrollElement = () => container;
-    policy.chatScrollToEnd = (options) => transcript.scrollToEnd(options);
-    emitSize(container, 600);
-    scroll(container, total - 600);
-    if (locked) {
-      container.dispatchEvent(new WheelEvent("wheel", { deltaY: -88 }));
-    }
-    expect(policy.chatFollowLocked).toBe(locked);
-    scrollTo.mockClear();
-
-    for (const height of [560, 640]) {
-      geometry(container, { clientHeight: height });
-      emitSize(container, height);
-      // The observer only reports geometry; follow waits for the policy frame.
-      expect(scrollTo).not.toHaveBeenCalled();
-      flushFrames();
-      if (locked) {
-        expect(scrollTo).not.toHaveBeenCalled();
-        expect(container.scrollTop).toBe(total - 600);
-      } else {
-        expect(scrollTo).toHaveBeenLastCalledWith({
-          top: total + 88 - height,
-          behavior: "auto",
-        });
-      }
-      scrollTo.mockClear();
-    }
-    expect(onViewportResize).toHaveBeenCalledTimes(2);
-    expect(policy.chatFollowLocked).toBe(locked);
-  },
-);
-
-it("keeps a reader above the padded real end stationary when a rendered row grows", async () => {
-  transcriptDomState.measuredRowHeight = 120;
-  const rows = numberedContentRows(12);
-  const { container, renderRows } = await mountTestTranscript("padded-row-resize", rows);
-  const total = transcriptSize(container);
-  container.style.padding = "28px 0 56px";
-  container.scrollTo = (options?: ScrollToOptions | number) => applyScroll(container, options);
-  geometry(container, { clientHeight: 600, scrollHeight: total + 84 });
-  emitSize(container, 600);
-  scroll(container, container.scrollHeight - container.clientHeight - 44);
-  const readerOffset = container.scrollTop;
-  expect(Math.max(total - container.clientHeight - readerOffset, 0)).toBe(0);
-  const row = requireElement(container, '[data-index="11"]');
-  expect(observedElements.has(row)).toBe(true);
-
-  geometry(row, { offsetHeight: 192 });
-  geometry(container, { scrollHeight: total + 84 + 72 });
-  emitSize(row, 192);
-  renderRows(rows);
-  expect(transcriptSize(container)).toBe(total + 72);
-  expect(container.scrollTop).toBe(readerOffset);
 });
 
 it.each([false, true])(

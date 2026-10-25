@@ -1,7 +1,6 @@
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { CliPluginInvocationResources } from "../../cli/plugin-invocation-resources.js";
 import {
@@ -21,6 +20,7 @@ import {
   closeOpenClawAgentDatabasesForTest,
 } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
+import { createEnteredGate } from "../entered-gate.test-support.js";
 import { extensionFixture, sessionTarget } from "./agent-session-boundary.test-support.js";
 import {
   createTestSession,
@@ -114,17 +114,13 @@ it("retains a void extension message until its durable append and publication pr
       events.push(event.type);
     }
   });
-  const entered = createDeferred();
-  const releaseWriter = createDeferred();
+  const gate = createEnteredGate();
   // The blocker belongs to another writer, not the extension's managed work.
   const writer = runOpenClawAgentWorkerWrite(
     toDatabaseOptions(resolveSqliteReadScope(target)),
-    async () => {
-      entered.resolve();
-      await releaseWriter.promise;
-    },
+    gate.wait,
   );
-  await entered.promise;
+  await gate.entered;
   const owner = new CliPluginInvocationResources();
   const readDurableMessages = () =>
     SessionManager.open(target, cwd)
@@ -148,7 +144,7 @@ it("retains a void extension message until its durable append and publication pr
     const closing = owner.release();
     await nextTurn();
     expect(events).toEqual(["command-returned"]);
-    releaseWriter.resolve();
+    gate.release();
     await Promise.all([writer, closing]);
     expect(events).toEqual([
       "command-returned",
@@ -158,7 +154,7 @@ it("retains a void extension message until its durable append and publication pr
     ]);
     expect(durableAtRelease).toEqual([payload]);
   } finally {
-    releaseWriter.resolve();
+    gate.release();
     await writer;
     await owner.release();
     eventBus.clear();

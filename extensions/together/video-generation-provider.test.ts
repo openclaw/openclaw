@@ -1,19 +1,29 @@
 import {
+  capturePluginRegistration,
+  requireRegisteredProvider,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
   getProviderHttpMocks,
   installProviderHttpMockCleanup,
   oversizedJsonResponse,
   requireFirstPostJsonRecordRequest as requireFirstPostJsonRequest,
   streamedJsonResponse,
 } from "openclaw/plugin-sdk/provider-http-test-mocks";
-import type { VideoGenerationRequest } from "openclaw/plugin-sdk/video-generation";
+import type {
+  VideoGenerationProvider,
+  VideoGenerationRequest,
+} from "openclaw/plugin-sdk/video-generation";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { testVideoGenerationDeadlines } from "../test-support/video-generation-deadline.test-support.js";
 
 const { postJsonRequestMock, fetchWithTimeoutMock } = getProviderHttpMocks();
-let buildProvider: typeof import("./video-generation-provider.js").buildTogetherVideoGenerationProvider;
+let provider: VideoGenerationProvider;
 beforeAll(async () => {
-  ({ buildTogetherVideoGenerationProvider: buildProvider } =
-    await import("./video-generation-provider.js"));
+  const { default: plugin } = await import("./index.js");
+  provider = requireRegisteredProvider(
+    capturePluginRegistration(plugin).videoGenerationProviders,
+    "together",
+  );
 });
 installProviderHttpMockCleanup();
 
@@ -33,7 +43,7 @@ const inputImages = [
 ];
 
 function generateVideo(overrides: Partial<VideoGenerationRequest> = {}) {
-  return buildProvider().generateVideo({ ...request, ...overrides });
+  return provider.generateVideo({ ...request, ...overrides });
 }
 
 function mockSubmission(payload: unknown, response?: Response) {
@@ -101,7 +111,7 @@ describe("together video generation provider", () => {
   });
 
   it("uses Together's canonical video model ids", () => {
-    expect(buildProvider().models).toEqual([model, imageModel, "minimax/hailuo-02"]);
+    expect(provider.models).toEqual([model, imageModel, "minimax/hailuo-02"]);
   });
 
   it("creates, polls, and downloads a video", async () => {

@@ -10,6 +10,10 @@ import {
   workspaceTestPlugin,
 } from "../infra/outbound/message-action-runner.test-support.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import {
+  installScriptedRunnerMocks,
+  type RunParams,
+} from "./embedded-agent-runner.mock-test-support.js";
 import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
@@ -20,58 +24,34 @@ import {
   cleanupEmbeddedAgentRunnerTestWorkspace,
   createEmbeddedAgentRunnerOpenAiConfig,
   createEmbeddedAgentRunnerTestWorkspace,
-  createResolvedEmbeddedRunnerModel,
   makeEmbeddedRunnerAttempt,
   immediateEnqueue,
 } from "./test-helpers/embedded-agent-runner-e2e-fixtures.js";
-import {
-  installEmbeddedRunnerBackoffE2eMocks,
-  installEmbeddedRunnerBaseE2eMocks,
-  installEmbeddedRunnerFastRunE2eMocks,
-} from "./test-helpers/embedded-agent-runner-e2e-mocks.js";
 
 const runAttempt = vi.fn<(params: EmbeddedRunAttemptParams) => Promise<EmbeddedRunAttemptResult>>();
-let runEmbeddedAgent: typeof import("./embedded-agent-runner/run.js").runEmbeddedAgent;
-let prepareAdmission: typeof import("./admitted-run-context.js").prepareSystemAgentRunAdmission;
-let createReplyOperation: typeof import("../sessions/session-controller.js").createReplyOperation;
-let createMessageTool: typeof import("./tools/message-tool-execution.js").createMessageTool;
-let mintCapability: typeof import("../gateway/message-action-turn-capability.js").mintMessageActionTurnCapability;
-let revokeCapability: typeof import("../gateway/message-action-turn-capability.js").revokeMessageActionTurnCapability;
-let setRegistry: typeof import("../plugins/runtime.js").setActivePluginRegistry;
-let resetRegistry: typeof import("../plugins/runtime.js").resetPluginRuntimeStateForTest;
-let setConfig: typeof import("../config/config.js").setRuntimeConfigSnapshot;
-let clearConfig: typeof import("../config/config.js").clearRuntimeConfigSnapshot;
-let workspace: Awaited<ReturnType<typeof createEmbeddedAgentRunnerTestWorkspace>>;
-
+let runtime: Awaited<ReturnType<typeof loadRuntime>>;
+async function loadRuntime() {
+  installScriptedRunnerMocks({
+    runEmbeddedAttempt: (params) => runAttempt(params),
+    hookRunner: "full",
+    modelsConfig: "plain",
+    backoff: { computeBackoff: () => 0, sleepWithAbort: async () => {} },
+  });
+  return {
+    run: (await import("./embedded-agent-runner/run.js")).runEmbeddedAgent,
+    prepare: (await import("./admitted-run-context.js")).prepareSystemAgentRunAdmission,
+    operation: (await import("../sessions/session-controller.js")).createReplyOperation,
+    tool: (await import("./tools/message-tool-execution.js")).createMessageTool,
+    capability: await import("../gateway/message-action-turn-capability.js"),
+    registry: await import("../plugins/runtime.js"),
+    config: await import("../config/config.js"),
+    workspace: await createEmbeddedAgentRunnerTestWorkspace("source-reply-retry-"),
+  };
+}
 beforeAll(async () => {
-  installEmbeddedRunnerBaseE2eMocks({ hookRunner: "full" });
-  installEmbeddedRunnerFastRunE2eMocks({ runEmbeddedAttempt: (params) => runAttempt(params) });
-  installEmbeddedRunnerBackoffE2eMocks({ computeBackoff: () => 0, sleepWithAbort: async () => {} });
-  // mock-isolation: synthetic routes must not regenerate shared provider configuration.
-  vi.doMock("./models-config.js", () => ({
-    ensureOpenClawModelsJson: async () => ({ wrote: false }),
-  }));
-  // mock-isolation: resolve only fixture models without booting provider discovery.
-  vi.doMock("./embedded-agent-runner/model.js", () => ({
-    resolveModelAsync: async (provider: string, modelId: string) =>
-      createResolvedEmbeddedRunnerModel(provider, modelId),
-  }));
-  ({ runEmbeddedAgent } = await import("./embedded-agent-runner/run.js"));
-  ({ prepareSystemAgentRunAdmission: prepareAdmission } =
-    await import("./admitted-run-context.js"));
-  ({ createReplyOperation } = await import("../sessions/session-controller.js"));
-  ({ createMessageTool } = await import("./tools/message-tool-execution.js"));
-  ({
-    mintMessageActionTurnCapability: mintCapability,
-    revokeMessageActionTurnCapability: revokeCapability,
-  } = await import("../gateway/message-action-turn-capability.js"));
-  ({ setActivePluginRegistry: setRegistry, resetPluginRuntimeStateForTest: resetRegistry } =
-    await import("../plugins/runtime.js"));
-  ({ setRuntimeConfigSnapshot: setConfig, clearRuntimeConfigSnapshot: clearConfig } =
-    await import("../config/config.js"));
-  workspace = await createEmbeddedAgentRunnerTestWorkspace("source-reply-retry-");
+  runtime = await loadRuntime();
 });
-afterAll(async () => await cleanupEmbeddedAgentRunnerTestWorkspace(workspace));
+afterAll(async () => await cleanupEmbeddedAgentRunnerTestWorkspace(runtime.workspace));
 beforeEach(() => {
   runAttempt.mockReset();
 });
@@ -91,15 +71,14 @@ function completedAttempt(sessionId: string, text?: string) {
 
 function run(
   id: string,
-  config: Parameters<typeof runEmbeddedAgent>[0]["config"],
-  options: Pick<Parameters<typeof runEmbeddedAgent>[0], "sessionKey" | "preparedRunAdmission"> &
-    Partial<Parameters<typeof runEmbeddedAgent>[0]>,
+  config: RunParams["config"],
+  options: Pick<RunParams, "sessionKey" | "preparedRunAdmission"> & Partial<RunParams>,
 ) {
-  return runEmbeddedAgent({
+  return runtime.run({
     agentId: "test",
     sessionId: id,
-    workspaceDir: workspace.workspaceDir,
-    agentDir: workspace.agentDir,
+    workspaceDir: runtime.workspace.workspaceDir,
+    agentDir: runtime.workspace.agentDir,
     config,
     provider: "openai",
     model: "mock-1",
@@ -127,14 +106,14 @@ it.each([
     const id = [mode, fault, failures].join("-");
     const sessionId = id;
     const sessionKey = "agent:test:workspace:group:c123:" + id;
-    const operation = createReplyOperation({ sessionId, sessionKey, resetTriggered: false });
+    const operation = runtime.operation({ sessionId, sessionKey, resetTriggered: false });
     const config = {
       ...createEmbeddedAgentRunnerOpenAiConfig(["mock-1"]),
       channels: workspaceConfig.channels,
       tools: { message: { crossContext: { allowWithinProvider: true } } },
     };
-    setConfig(config);
-    const admission = prepareAdmission(config, id, "test", "source-reply-retry-test");
+    runtime.config.setRuntimeConfigSnapshot(config);
+    const admission = runtime.prepare(config, id, "test", "source-reply-retry-test");
     const channelSend = vi.fn(async ({ params }: ChannelMessageActionContext) => {
       if (mode === "ambiguous") {
         throw new Error("synthetic transport closed before receipt");
@@ -149,7 +128,7 @@ it.each([
         },
       };
     });
-    setRegistry(
+    runtime.registry.setActivePluginRegistry(
       createTestRegistry([
         {
           pluginId: "workspace",
@@ -170,14 +149,14 @@ it.each([
       currentMessagingTarget: "C123",
       currentMessageId: "inbound-message",
     };
-    const capability = mintCapability({
+    const capability = runtime.capability.mintMessageActionTurnCapability({
       agentId: "test",
       runId: id,
       sessionKey,
       requesterAccountId: "default",
       toolContext: source,
     });
-    const tool = createMessageTool({
+    const tool = runtime.tool({
       config,
       ...source,
       agentId: "test",
@@ -266,9 +245,9 @@ it.each([
     } finally {
       admission.close();
       operation.complete();
-      revokeCapability(capability);
-      clearConfig();
-      resetRegistry();
+      runtime.capability.revokeMessageActionTurnCapability(capability);
+      runtime.config.clearRuntimeConfigSnapshot();
+      runtime.registry.resetPluginRuntimeStateForTest();
     }
   },
 );
@@ -281,14 +260,14 @@ it.each(
   const sessionKey = name === "private" ? "agent:test:private" : `agent:test:${name}:required`;
   const config = createEmbeddedAgentRunnerOpenAiConfig(["mock-1"]);
   const id = `internal-${name}-${raw === "NO_REPLY" ? "silent" : raw ? "rendered-empty" : "empty"}`;
-  const admission = prepareAdmission(config, id, "test", "internal-result-recovery");
+  const admission = runtime.prepare(config, id, "test", "internal-result-recovery");
   const answer = `Recovered ${name} result`;
   let attempt = 0;
   runAttempt.mockImplementation(async (params) => {
     return completedAttempt(params.sessionId, attempt++ === 0 ? raw : answer);
   });
-  setRegistry(createTestRegistry([]));
-  setConfig(config);
+  runtime.registry.setActivePluginRegistry(createTestRegistry([]));
+  runtime.config.setRuntimeConfigSnapshot(config);
   try {
     const result = await run(id, config, {
       sessionKey,
@@ -310,7 +289,7 @@ it.each(
     expect(result.meta.error).toBeUndefined();
   } finally {
     admission.close();
-    clearConfig();
-    resetRegistry();
+    runtime.config.clearRuntimeConfigSnapshot();
+    runtime.registry.resetPluginRuntimeStateForTest();
   }
 });

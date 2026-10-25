@@ -44,6 +44,7 @@ export type MutableSession = {
     options?: { deliverAs?: "nextTurn"; triggerTurn?: boolean },
   ) => Promise<void>;
   getActiveToolNames: () => string[];
+  getToolDefinition: AgentSession["getToolDefinition"];
   setActiveToolsByName: (toolNames: string[]) => void;
   abort: () => Promise<void>;
   dispose: () => void;

@@ -443,7 +443,6 @@ describe("native subagent submission receipts in the binding store", () => {
         return true;
       });
       const monitor = new CodexNativeSubagentMonitor(client.client, runtime, {
-        recoveryPollDelaysMs: [],
         interruptChildAndWait: interrupt,
       });
       const requestCustody = Object.freeze({});

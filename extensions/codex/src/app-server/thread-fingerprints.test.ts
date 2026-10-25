@@ -2,11 +2,34 @@ import { describe, expect, it } from "vitest";
 import type { CodexDynamicToolFunctionSpec, JsonObject } from "./protocol.js";
 import {
   codexDynamicToolsFingerprint,
+  codexLegacyDynamicToolsFingerprint,
   fingerprintCodexThreadConfig,
   fingerprintRestrictedThreadConfig,
   fingerprintUserMcpServersConfigPatch,
   readActiveCodexTurnIdsFromResume,
 } from "./thread-fingerprints.js";
+
+it("preserves legacy JSON bytes, including literal prototype keys and escaped descriptions", () => {
+  const tools = [
+    {
+      type: "function",
+      name: "message",
+      inputSchema: {
+        type: "object",
+        required: ["text", "__proto__"],
+        properties: {
+          text: { type: "string", description: 'Line one\n"Line two"' },
+          ["__proto__"]: { type: "string" },
+        },
+      },
+      description: "Send a message.",
+    },
+  ];
+  expect(codexLegacyDynamicToolsFingerprint(tools)).toBe(
+    '[{"description":"Send a message.","inputSchema":{"properties":{"__proto__":{"type":"string"},"text":{"description":"Line one\\n\\\"Line two\\\"","type":"string"}},"required":["text","__proto__"],"type":"object"},"name":"message","type":"function"}]',
+  );
+  expect(codexLegacyDynamicToolsFingerprint([])).toBe("[]");
+});
 
 it("keeps tool fingerprints stable when tools and schema properties are reordered", () => {
   const message: CodexDynamicToolFunctionSpec = {

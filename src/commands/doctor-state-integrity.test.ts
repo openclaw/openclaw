@@ -243,17 +243,28 @@ describe("doctor state integrity", () => {
   });
 
   it.each(["pairing", "explicit"])(
-    "requires missing OAuth storage for %s configuration",
+    "warns without blocking readiness when legacy OAuth storage is missing for %s configuration",
     async (mode) => {
       if (mode === "explicit") {
         setTestEnvValue("OPENCLAW_OAUTH_DIR", path.join(tempHome, ".oauth"));
       }
       const cfg: OpenClawConfig =
         mode === "pairing" ? { channels: { telegram: { dmPolicy: "pairing" } } } : {};
+      const findings = detectStateIntegrityHealthIssues(cfg).map(
+        stateIntegrityIssueToHealthFinding,
+      );
+      expect(findings).toContainEqual(
+        expect.objectContaining({
+          message: "OAuth dir is missing.",
+          severity: "warning",
+        }),
+      );
+      expect(findings.some((finding) => finding.severity === "error")).toBe(false);
       const confirmRuntimeRepair = decline();
       await noteStateIntegrity(cfg, { confirmRuntimeRepair });
       expect(hasRepairPromptMessage(confirmRuntimeRepair, "Create OAuth dir at")).toBe(true);
-      expect(stateIntegrityText()).toContain("CRITICAL: OAuth dir missing");
+      expect(stateIntegrityText()).toContain("OAuth dir missing");
+      expect(stateIntegrityText()).not.toContain("CRITICAL: OAuth dir missing");
     },
   );
 
@@ -339,6 +350,7 @@ describe("doctor state integrity", () => {
           attemptedProbes.push(`readdir ${String(target)}`);
           throw new Error("another profile's state is outside integrity diagnostics");
         }
+        // oxlint-disable-next-line openclaw-boundaries/no-recursive-readdir -- Transparent access-denial spy; preserve the Doctor caller options.
         return readdir(target, options);
       });
       vi.spyOn(fs, "existsSync").mockImplementation((target) => {

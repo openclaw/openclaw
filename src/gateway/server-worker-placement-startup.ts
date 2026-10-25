@@ -409,6 +409,7 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
       diskSpace.invalidate();
       scheduleDiskSpaceSweep?.();
     });
+    const uninstallOrphanWorkspaceChanges = dispatchService.subscribeOrphanWorkspaceChanges();
     const uninstallConfigChanges = sessionChanges.subscribeFacts((change) => {
       if (
         "all" in change &&
@@ -571,6 +572,7 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
           uninstallSessionIdentityMutation();
           uninstallPlacementChanges();
           uninstallConfigChanges();
+          uninstallOrphanWorkspaceChanges();
           uninstallSessionMaintenancePreservation();
           uninstallPlacementAdmission();
         }
@@ -640,12 +642,7 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
               isStopping,
             }),
           ),
-        async () => {
-          await reconcilePhase("startup.active", () => dispatchService.reconcile("startup"));
-          if (!isStopping()) {
-            await reconcilePhase("startup.publications", () => reconcilePublications(isStopping));
-          }
-        },
+        () => reconcilePhase("startup.active", () => dispatchService.reconcile("startup")),
       ]) {
         await trackOperation("reconcile", reconcile());
         if (isStopping() || hooks.isClosePreludeStarted()) {
@@ -664,14 +661,18 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
         "reconcile",
         reconcilePhase("reconcile.session-retirement", () =>
           sessionRetirement.reconcile(optionalWorkSignal),
+        ).then(() =>
+          // Git/network recovery must drain on close, but cannot hold Gateway readiness.
+          reconcilePhase("startup.publications", () =>
+            reconcilePublications(isReconciliationPaused),
+          ),
         ),
         "Worker placement reconcile sweep failed",
       );
       void sweepDiskSpace();
-      const atMs = scope.now() + WORKER_PLACEMENT_RECONCILE_INTERVAL_MS;
       scope.schedule({
         id: "worker-placements:reconcile",
-        atMs,
+        atMs: scope.now() + WORKER_PLACEMENT_RECONCILE_INTERVAL_MS,
         everyMs: WORKER_PLACEMENT_RECONCILE_INTERVAL_MS,
         run: sweepActivePlacements,
       });

@@ -3,28 +3,10 @@ import {
   signalAccountConfig as accountConfig,
   signalJsonServer,
   listenSignalServer as listen,
-  closeSignalServer as close,
   type SignalRpcEnvelope,
 } from "./signal-rpc.test-support.js";
 
-const reactionStores = vi.hoisted(() => new Set<{ clearForTest(): void }>());
-
-vi.mock("openclaw/plugin-sdk/approval-reaction-runtime", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("openclaw/plugin-sdk/approval-reaction-runtime")>();
-  return {
-    ...actual,
-    createApprovalReactionTargetStore: <TTarget>(
-      params: Parameters<typeof actual.createApprovalReactionTargetStore<TTarget>>[0],
-    ) => {
-      const store = actual.createApprovalReactionTargetStore<TTarget>(params);
-      if (params.namespace === "signal.approval-reactions.v2") {
-        reactionStores.add(store);
-      }
-      return store;
-    },
-  };
-});
+const reactionStores = await vi.hoisted(() => import("./approval-reactions.test-support.js"));
 
 const signalRpcRequestMock = vi.hoisted(() => vi.fn());
 const resolveOutboundAttachmentFromUrlMock = vi.hoisted(() =>
@@ -67,7 +49,7 @@ function receiptAt(timestamp: number) {
 
 describe("sendMessageSignal receipts", () => {
   beforeEach(() => {
-    reactionStores.forEach((store) => store.clearForTest());
+    reactionStores.clearSignalApprovalReactionStoresForTest();
     signalRpcRequestMock.mockReset();
     resolveOutboundAttachmentFromUrlMock.mockClear();
   });
@@ -288,7 +270,7 @@ describe("Signal quoted-message provider replay safety", () => {
         testCase.transportKind === "container" ? "quote_timestamp" : "params.quoteTimestamp";
       expect(requests[0]).toHaveProperty(quoteTimestampPath, 1700000000001);
     } finally {
-      await close(server);
+      await server[Symbol.asyncDispose]();
     }
   });
 });
@@ -403,7 +385,7 @@ describe("Signal native JSON-RPC recipient delivery", () => {
       ]);
       expect(responses).toHaveLength(0);
     } finally {
-      await close(server);
+      await server[Symbol.asyncDispose]();
     }
   });
 });

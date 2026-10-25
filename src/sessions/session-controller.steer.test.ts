@@ -80,6 +80,7 @@ function startTurn(
     target?: SessionTarget;
     adapter?: SessionControllerSourceAdapter;
     direct?: boolean;
+    turnKind?: "direct";
   } = {},
 ) {
   const sessionKey = params.target?.sessionKey ?? key;
@@ -88,6 +89,7 @@ function startTurn(
     sessionKey,
     sessionId,
     resetTriggered: false,
+    turnKind: params.turnKind,
     target: params.target,
   });
   operation.setPhase("running");
@@ -202,6 +204,57 @@ function revocableAuthority(message: string) {
 }
 
 describe("submitSessionControllerSteer", () => {
+  it.each([
+    { turnKind: undefined, terminalReplyExpectation: "required" },
+    { turnKind: undefined, terminalReplyExpectation: "optional" },
+    { turnKind: "direct", terminalReplyExpectation: "required" },
+    { turnKind: "direct", terminalReplyExpectation: "result-required" },
+    { turnKind: "direct", terminalReplyExpectation: "optional" },
+  ] as const)(
+    "preserves human input custody with a $turnKind $terminalReplyExpectation reply owner",
+    async ({ turnKind, terminalReplyExpectation }) => {
+      const { operation, input } = startTurn({ turnKind });
+      const received: string[] = [];
+      const fingerprint = "human-reply-contract-tools";
+      operation.attachBackend({
+        ...makeBackend("human-reply-contract-run", {
+          queueMessage: async (text, options) => {
+            received.push(text);
+            options?.onQueueAccepted?.(true);
+          },
+        }),
+        toolAuthorityFingerprint: fingerprint,
+        terminalReplyExpectation,
+      });
+      const result = await steer(
+        input,
+        {
+          isInboundUserMessage: true,
+          terminalReplyExpectation: "required",
+          toolAuthorityFingerprint: fingerprint,
+        },
+        undefined,
+        "Answer this human correction",
+      );
+
+      if (terminalReplyExpectation !== "optional") {
+        expect(result).toMatchObject({
+          status: "accepted",
+          targetRunId: "human-reply-contract-run",
+        });
+        await input.settlement.promise;
+        expect(input.phase).toBe("consumed");
+        expect(received).toEqual(["Answer this human correction"]);
+        expectNoInput(input);
+      } else {
+        expect(result).toMatchObject({ status: "rejected", reason: "reply_expectation_mismatch" });
+        expect(received).toEqual([]);
+        expectQueued(input);
+      }
+      expect(operation.result).toBeNull();
+    },
+  );
+
   it("preserves the published backend transcript-wait contract without a native capability observation", async () => {
     const received: unknown[] = [];
     const operation: NonNullable<AgentHarnessAttemptParams["replyOperation"]> =
@@ -388,6 +441,8 @@ describe("submitSessionControllerSteer", () => {
     const released: NonNullable<AgentHarnessAttemptParams["replyOperation"]> = operation;
     const internal = readSessionControllerOperationState(operation);
     expect(released).toMatchObject({ phase: "running", result: null });
+    expect(findSessionControllerOperationByRunId("steer-run")).toBe(operation);
+    expect(findSessionControllerOperationByRunId("other-run")).toBeUndefined();
 
     expect(operation.yield()).toBe(true);
     expect(operation.yield()).toBe(false);
@@ -405,6 +460,7 @@ describe("submitSessionControllerSteer", () => {
     const completed = released.result;
     expect(released.result).toBe(completed);
     expect(internal?.phase).toBe("yielded");
+    expect(findSessionControllerOperationByRunId("steer-run")).toBeUndefined();
   });
 
   it.each(["stop", "failure"] as const)(
@@ -676,13 +732,5 @@ describe("steerSessionControllerOperation", () => {
       reason: "no_active_run",
     });
     expectNoInput(input);
-  });
-  it("resolves the slot-owning operation by its backend run ID only while it owns the slot", () => {
-    const { operation } = startTurn();
-
-    expect(findSessionControllerOperationByRunId("steer-run")).toBe(operation);
-    expect(findSessionControllerOperationByRunId("other-run")).toBeUndefined();
-    operation.complete();
-    expect(findSessionControllerOperationByRunId("steer-run")).toBeUndefined();
   });
 });

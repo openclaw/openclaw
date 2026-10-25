@@ -7,7 +7,7 @@ import type { FileEntry } from "./session-manager-types.js";
 // Content is the immutable revision. Eviction only ends sharing, never changes a live prompt.
 const prefixes = resolveGlobalSingleton(
   Symbol.for("openclaw.systemPromptPrefixes"),
-  () => new LruCache<string>(64, { maxBytes: 8 * 1024 * 1024, sizeOf: (text) => text.length * 2 }),
+  () => new LruCache<string>(128, { maxBytes: 32 * 1024 ** 2, sizeOf: (text) => text.length * 2 }),
   (cache) => cache.clear(),
 );
 

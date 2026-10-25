@@ -1,9 +1,11 @@
 // Synthetic owner-boundary benchmark; each source runs in an isolated Node process.
 import assert from "node:assert/strict";
+import { createHook, executionAsyncId } from "node:async_hooks";
 import { execFile, fork } from "node:child_process";
 import { createHash } from "node:crypto";
 import { channel } from "node:diagnostics_channel";
 import { once } from "node:events";
+import { createWriteStream, writeSync } from "node:fs";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import type { HeapProfiler } from "node:inspector";
@@ -25,11 +27,23 @@ import {
 import { startBenchmarkIntervalDelay } from "./lib/benchmark-interval-delay.ts";
 import { createBuildSmokeEnv } from "./lib/build-smoke-env.mts";
 import { stopChild } from "./lib/gateway-bench-child.ts";
+import { startGatewayBenchDiagnostics } from "./lib/gateway-bench-diagnostics.ts";
+import { GATEWAY_GC_TRACE_MARKER, readGatewayGcTrace } from "./lib/gateway-bench-profile.ts";
 
 const exec = promisify(execFile);
 const diagnostics = channel("openclaw.worker.task");
 const gitDiagnostics = channel("openclaw.git.operation");
-const scenarios = ["inventory", "manifest", "delta", "unchanged", "compare", "reconcile"] as const;
+const scenarios = [
+  "inventory",
+  "manifest",
+  "delta",
+  "unchanged",
+  "compare",
+  "reconcile",
+  "checkpoint",
+  "startup",
+  "baseline-build",
+] as const;
 type Scenario = (typeof scenarios)[number];
 type Options = {
   baseline?: string;
@@ -44,6 +58,7 @@ type Options = {
   changedFiles: number;
   timeoutMs: number;
   startAt?: number;
+  startBarrier?: string;
   samplingInterval: number;
   prepareRoot?: string;
   reuseRoot?: string;
@@ -58,6 +73,8 @@ type Measurement = {
   entriesPerSecond: number;
   eventLoopDelayMaxMs: number;
   eventLoopDelayP99Ms: number;
+  eventLoopDelaySamples: number;
+  mainCallback: { count: number; maxMs: number };
   intervalDelayMs: Summary;
   eventLoopUtilization: number;
   memoryBefore: NodeJS.MemoryUsage;
@@ -66,6 +83,7 @@ type Measurement = {
   workerTasks: Array<Record<string, unknown>>;
   operations: Record<string, number>;
   allocation?: ReturnType<typeof summarizeAllocation>;
+  diagnostics: ReturnType<ReturnType<typeof startGatewayBenchDiagnostics>>;
 };
 type Summary = ReturnType<typeof summarize>;
 type Sample = Measurement & {
@@ -74,15 +92,22 @@ type Sample = Measurement & {
   externalPeakRssBytes: number | null;
   requestFailures: number;
   evidence: string[];
+  gcTrace?: ReturnType<typeof readGatewayGcTrace>;
 };
 type ChildMessage =
   | { type: "ready"; port: number; moduleLoadMs: number }
   | { type: "measured"; value: Measurement }
   | { type: "verified"; evidence: string[] }
   | { type: "error"; message: string };
+type SourceResult = {
+  moduleLoadMs: number;
+  samples: Sample[];
+  restart?: SourceResult;
+};
 
 const digest = (value: string | Uint8Array) => createHash("sha256").update(value).digest("hex");
-const nameAt = (index: number) => `file-${String(index).padStart(6, "0")}.txt`;
+const nameAt = (index: number, scenario?: Scenario) =>
+  `${scenario === "startup" ? `src/group-${Math.floor(index / 32)}/` : ""}file-${String(index).padStart(6, "0")}.txt`;
 
 function summarize(values: number[]) {
   assert(values.length > 0, "measurement has no samples");
@@ -95,6 +120,39 @@ function summarize(values: number[]) {
     p95: percentile(0.95),
     p99: percentile(0.99),
     max: ordered.at(-1)!,
+  };
+}
+
+function startMainCallbackMeasurement() {
+  const starts = new Map<number, number>();
+  let count = 0;
+  let maxMs = 0;
+  const finish = (id: number, now: number) => {
+    const start = starts.get(id);
+    if (start !== undefined) {
+      count++;
+      maxMs = Math.max(maxMs, now - start);
+      starts.delete(id);
+    }
+  };
+  const hook = createHook({
+    before: (id) => starts.set(id, performance.now()),
+    after: (id) => finish(id, performance.now()),
+  });
+  hook.enable();
+  // The already-running continuation has no matching before event. Its direct
+  // work ends when the caller constructs its pending operation, before awaiting.
+  const initialStart = performance.now();
+  return {
+    finishInitialSlice: () => {
+      count++;
+      maxMs = Math.max(maxMs, performance.now() - initialStart);
+    },
+    stop: () => {
+      finish(executionAsyncId(), performance.now());
+      hook.disable();
+      return { count, maxMs };
+    },
   };
 }
 
@@ -142,7 +200,7 @@ function parseOptions(argv: string[]): Options {
         options.concurrency = parseBenchmarkIntegerList(value, "--concurrency", 4);
       },
       "--runs": (options, value) => {
-        options.runs = parseBenchmarkInteger(value, "--runs", 1, 100);
+        options.runs = parseBenchmarkInteger(value, "--runs", 1, 1_000);
       },
       "--warmup": (options, value) => {
         options.warmup = parseBenchmarkInteger(value, "--warmup", 0, 10);
@@ -151,13 +209,16 @@ function parseOptions(argv: string[]): Options {
         options.fileBytes = parseBenchmarkInteger(value, "--file-bytes", 1, 64 * 1024 * 1024);
       },
       "--changed-files": (options, value) => {
-        options.changedFiles = parseBenchmarkInteger(value, "--changed-files", 1, 5_000);
+        options.changedFiles = parseBenchmarkInteger(value, "--changed-files", 0, 5_000);
       },
       "--timeout-ms": (options, value) => {
         options.timeoutMs = parseBenchmarkInteger(value, "--timeout-ms", 1_000, 3_600_000);
       },
       "--start-at": (options, value) => {
         options.startAt = parseBenchmarkInteger(value, "--start-at", 1, Number.MAX_SAFE_INTEGER);
+      },
+      "--start-barrier": (options, value) => {
+        options.startBarrier = path.resolve(value);
       },
       "--sampling-interval": (options, value) => {
         options.samplingInterval = parseBenchmarkInteger(
@@ -190,6 +251,7 @@ async function createFixture(params: {
 }) {
   const { root, source, scenario, size, concurrency, options } = params;
   const reconciliation = scenario === "reconcile";
+  const checkpoint = ["checkpoint", "startup", "baseline-build"].includes(scenario);
   assert(
     size * options.fileBytes <= 4 * 1024 ** 3,
     "fixture exceeds the production 4 GiB inventory limit",
@@ -199,19 +261,20 @@ async function createFixture(params: {
   const changed = Buffer.from("worker change\n");
   const sha256 = digest(content);
   const entries = Array.from({ length: size }, (_, index): WorkerWorkspaceManifestEntry => ({
-    path: nameAt(index),
+    path: nameAt(index, scenario),
     type: "file",
     mode: 0o644,
     size: content.length,
     sha256,
   }));
-  const changedFiles =
-    scenario === "delta" || scenario === "compare" || reconciliation ? options.changedFiles : 0;
+  const changedFiles = ["delta", "compare", "reconcile", "checkpoint", "startup"].includes(scenario)
+    ? options.changedFiles
+    : 0;
   assert(changedFiles <= size, "--changed-files exceeds the fixture entry count");
   const changedEntries = Array.from(
     { length: changedFiles },
     (_, index): WorkerWorkspaceManifestEntry => ({
-      path: nameAt(index),
+      path: nameAt(index, scenario),
       type: "file",
       mode: 0o644,
       size: changed.length,
@@ -240,16 +303,21 @@ async function createFixture(params: {
       scenario === "inventory" ||
       scenario === "delta" ||
       scenario === "unchanged" ||
-      reconciliation
+      reconciliation ||
+      checkpoint
     ) {
       await exec("git", ["-c", `core.hooksPath=${os.devNull}`, "init", "--quiet", workspace], {
         env: isolatedEnv(root),
       });
     }
-    if (reconciliation) {
+    if (reconciliation || checkpoint) {
       assert(size * options.fileBytes <= 128 * 1024 ** 2, "reconciliation fixture exceeds 128 MiB");
       for (let index = 0; index < size; index++) {
-        await fs.writeFile(path.join(workspace, nameAt(index)), content, { mode: 0o644 });
+        const file = path.join(workspace, nameAt(index, scenario));
+        if (scenario === "startup" && index % 32 === 0) {
+          await fs.mkdir(path.dirname(file), { recursive: true });
+        }
+        await fs.writeFile(file, content, { mode: 0o644 });
         if (index % 256 === 0) {
           await checkDirtyPages();
         }
@@ -262,6 +330,26 @@ async function createFixture(params: {
             await fs.writeFile(path.join(workspace, nameAt(next++)), content, { mode: 0o644 });
           }
         }),
+      );
+    }
+    if (checkpoint) {
+      const git = (...args: string[]) =>
+        exec("git", ["-C", workspace, ...args], {
+          env: isolatedEnv(root),
+        });
+      await git("symbolic-ref", "HEAD", "refs/heads/main");
+      await git("add", ".");
+      await git(
+        "-c",
+        "user.name=Synthetic fixture",
+        "-c",
+        "user.email=fixture@example.invalid",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "--quiet",
+        "-m",
+        "Synthetic baseline",
       );
     }
     if (scenario === "delta" || scenario === "unchanged" || reconciliation) {
@@ -285,6 +373,7 @@ async function createFixture(params: {
     fileBytes: options.fileBytes,
     samplingInterval: options.samplingInterval,
     startAt: options.startAt,
+    startBarrier: options.startBarrier,
     startSample: options.warmup + 1,
     inventorySha256: digest(entries.map((entry) => `${entry.path}\0`).join("")),
   };
@@ -356,8 +445,29 @@ async function importOwner<T>(root: string, relative: string): Promise<T> {
   return (await import(pathToFileURL(path.join(root, relative)).href)) as T;
 }
 
-async function childMain(fixturePath: string): Promise<void> {
+async function childMain(fixturePath: string, reopening: boolean): Promise<void> {
   const fixture = JSON.parse(await fs.readFile(fixturePath, "utf8")) as Fixture;
+  const baselineBuild = fixture.scenario === "baseline-build";
+  const startup = fixture.scenario === "startup";
+  // Checkpoint GC runs must also work without allocation sampling, whose
+  // start/stop cycle forces collections between measured operations.
+  const traceGc =
+    fixture.scenario === "checkpoint" || startup || baselineBuild || fixture.samplingInterval > 0;
+  const inspector = traceGc ? new Session() : undefined;
+  inspector?.connect();
+  const markGc = (phase: string, profilePath?: string) => {
+    if (inspector) {
+      writeSync(
+        1,
+        `${GATEWAY_GC_TRACE_MARKER}${JSON.stringify({ phase, pid: process.pid, profilePath })}\n`,
+      );
+    }
+  };
+  if (inspector) {
+    markGc("identify-start");
+    await inspector.post("HeapProfiler.collectGarbage");
+    markGc("identify-stop");
+  }
   const reconciliation = fixture.scenario === "reconcile";
   const loadedAt = performance.now();
   const inventory =
@@ -418,6 +528,146 @@ async function childMain(fixturePath: string): Promise<void> {
         current: parser.parseWorkerWorkspaceManifest(currentRaw, fixture.currentRef),
       }))
     : undefined;
+  const checkpointOwner =
+    fixture.scenario === "checkpoint" || startup || baselineBuild
+      ? await importOwner<
+          typeof import("../src/gateway/worker-environments/local-workspace-projection.js")
+        >(fixture.source, "src/gateway/worker-environments/local-workspace-projection.ts")
+      : undefined;
+  const checkpointStore = checkpointOwner
+    ? await importOwner<
+        typeof import("../src/gateway/worker-environments/local-workspace-store.js")
+      >(fixture.source, "src/gateway/worker-environments/local-workspace-store.ts")
+    : undefined;
+  const checkpoints: Array<{
+    id: string;
+    workspace: string;
+    projection?: NonNullable<
+      Awaited<
+        ReturnType<
+          typeof import("../src/agents/sandbox/local-workspace.js").prepareLocalSandboxWorkspace
+        >
+      >
+    >;
+    prepare: () => ReturnType<
+      typeof import("../src/agents/sandbox/local-workspace.js").prepareLocalSandboxWorkspace
+    >;
+    baseline?: { rawManifest: string; manifestRef: string; root: string };
+  }> = [];
+  if (checkpointOwner) {
+    const [registry, sessions, paths, sandbox, config] = await Promise.all([
+      importOwner<typeof import("../src/agents/worktrees/registry.js")>(
+        fixture.source,
+        "src/agents/worktrees/registry.ts",
+      ),
+      importOwner<typeof import("../src/config/sessions/session-accessor.js")>(
+        fixture.source,
+        "src/config/sessions/session-accessor.ts",
+      ),
+      importOwner<typeof import("../src/config/sessions/paths.js")>(
+        fixture.source,
+        "src/config/sessions/paths.ts",
+      ),
+      importOwner<typeof import("../src/agents/sandbox/local-workspace.js")>(
+        fixture.source,
+        "src/agents/sandbox/local-workspace.ts",
+      ),
+      importOwner<typeof import("../src/agents/sandbox/config.js")>(
+        fixture.source,
+        "src/agents/sandbox/config.ts",
+      ),
+    ]);
+    const { setRuntimeConfigSnapshot } = await importOwner<
+      typeof import("../src/config/runtime-snapshot.js")
+    >(fixture.source, "src/config/runtime-snapshot.ts");
+    setRuntimeConfigSnapshot({});
+    for (let lane = 0; lane < fixture.concurrency; lane++) {
+      const root = path.join(fixture.root, `workspace-${lane}`);
+      const sessionKey = `agent:main:benchmark:${lane}`;
+      const owner: import("../src/gateway/worker-environments/local-workspace-types.js").LocalWorkspaceOwner =
+        {
+          agentId: "main",
+          sessionKey,
+          sessionId: `benchmark-${lane}`,
+          lifecycleRevision: null,
+          assertCurrent() {},
+          worktree: {
+            id: `00000000-0000-4000-8000-${String(lane).padStart(12, "0")}`,
+            name: "benchmark",
+            repoFingerprint: "synthetic",
+            repoRoot: root,
+            path: root,
+            branch: "main",
+            baseRef: "HEAD",
+            ownerKind: "session",
+            ownerId: sessionKey,
+            createdAt: 0,
+            lastActiveAt: 0,
+          },
+        };
+      if (!reopening) {
+        await registry.insertRegistryWorktree(process.env, owner.worktree);
+        await sessions.replaceSessionEntry(
+          {
+            agentId: owner.agentId,
+            sessionKey,
+            storePath: paths.resolveSessionStorePathCore(undefined, { agentId: owner.agentId }),
+          },
+          {
+            sessionId: owner.sessionId,
+            updatedAt: 1,
+            worktree: { id: owner.worktree.id, repoRoot: root, branch: "main" },
+          },
+        );
+      }
+      const cfg = { worktreeAcceleration: false };
+      const prepare = () =>
+        sandbox.prepareLocalSandboxWorkspace({
+          cfg,
+          agentId: owner.agentId,
+          sessionKey,
+          workspaceDir: root,
+          sandbox: config.resolveSandboxConfigForAgent(cfg, owner.agentId),
+        });
+      const projection = reopening ? undefined : await prepare();
+      assert(reopening || projection, "managed checkpoint workspace was not prepared");
+      const retained: {
+        workspace: string;
+        root?: string;
+        rawManifest?: string;
+        manifestRef?: string;
+      } = await checkpointStore!.withLocalWorkspaceStore(
+        { worktreeId: owner.worktree.id },
+        async (store) => {
+          const row = store.get();
+          assert(row?.baseline_ref, "managed workspace baseline is missing");
+          if (!baselineBuild) {
+            return { workspace: row.projection_path };
+          }
+          assert.equal(row.baseline_json, null, "converted baseline was not persisted");
+          if (reopening) {
+            return { workspace: row.projection_path, root: row.baseline_ref };
+          }
+          const document = await store.manifest(row, { kind: "materialize" });
+          assert(document.kind === "materialize");
+          return { workspace: row.projection_path, root: row.baseline_ref, ...document };
+        },
+      );
+      checkpoints.push({
+        id: owner.worktree.id,
+        projection,
+        workspace: retained.workspace,
+        prepare,
+        baseline: baselineBuild
+          ? {
+              root: retained.root!,
+              rawManifest: retained.rawManifest ?? "",
+              manifestRef: retained.manifestRef ?? "",
+            }
+          : undefined,
+      });
+    }
+  }
   const moduleLoadMs = performance.now() - loadedAt;
   const server = createServer((_request, response) => response.writeHead(200).end("ready\n"));
   let address;
@@ -456,9 +706,8 @@ async function childMain(fixturePath: string): Promise<void> {
   };
   diagnostics.subscribe(observe);
   gitDiagnostics.subscribe(observeOperation);
-  const inspector = fixture.samplingInterval > 0 ? new Session() : undefined;
-  inspector?.connect();
   let stopIntervalDelay: (() => number[]) | undefined;
+  let mainCallbacks: ReturnType<typeof startMainCallbackMeasurement> | undefined;
   try {
     while ((await nextCommand()) === "run") {
       const sample = sequence++;
@@ -468,6 +717,48 @@ async function childMain(fixturePath: string): Promise<void> {
           for (const entry of fixture.changedEntries) {
             await fs.writeFile(path.join(fixture.root, `workspace-${lane}`, entry.path), content);
           }
+        }
+      }
+      const checkpointContent = `checkpoint content ${sample}\n`;
+      for (const checkpoint of checkpoints) {
+        if (baselineBuild && !reopening) {
+          checkpoint.projection?.[Symbol.dispose]();
+          checkpoint.projection = undefined;
+          await checkpointStore!.withLocalWorkspaceStore(
+            { worktreeId: checkpoint.id },
+            async (store) => {
+              const row = store.get();
+              assert(row?.baseline_ref && checkpoint.baseline);
+              assert(checkpoint.baseline.rawManifest && checkpoint.baseline.manifestRef);
+              const empty = await store.update(row, {}, undefined, {
+                previousRoot: row.baseline_ref,
+                resultingRoot: row.baseline_ref,
+                records: [],
+                removed: [],
+                replace: true,
+              });
+              await store.update(empty, {
+                baseline_json: checkpoint.baseline.rawManifest,
+                baseline_ref: checkpoint.baseline.manifestRef,
+              });
+            },
+          );
+        }
+        for (const entry of fixture.changedEntries) {
+          await fs.writeFile(path.join(checkpoint.workspace, entry.path), checkpointContent);
+        }
+      }
+      if (sample === fixture.startSample && fixture.startBarrier !== undefined) {
+        await fs.writeFile(`${fixture.startBarrier}.ready`, "ready\n");
+        const deadline = Date.now() + fixture.timeoutMs;
+        while (
+          !(await fs.access(`${fixture.startBarrier}.go`).then(
+            () => true,
+            () => false,
+          ))
+        ) {
+          assert(Date.now() < deadline, "coordinated start barrier timed out");
+          await delay(20);
         }
       }
       if (sample === fixture.startSample && fixture.startAt !== undefined) {
@@ -481,7 +772,8 @@ async function childMain(fixturePath: string): Promise<void> {
       await delay(20);
       histogram.reset();
       stopIntervalDelay = startBenchmarkIntervalDelay();
-      if (inspector) {
+      const stopDiagnostics = startGatewayBenchDiagnostics();
+      if (inspector && fixture.samplingInterval > 0) {
         await inspector.post("HeapProfiler.startSampling", {
           samplingInterval: fixture.samplingInterval,
           includeObjectsCollectedByMajorGC: true,
@@ -491,8 +783,10 @@ async function childMain(fixturePath: string): Promise<void> {
       const memoryBefore = process.memoryUsage();
       const cpu = process.cpuUsage();
       const utilization = performance.eventLoopUtilization();
+      markGc("heap-start", `workspace-sample-${sample}`);
       const start = performance.now();
-      const results = await Promise.all(
+      mainCallbacks = startMainCallbackMeasurement();
+      const pendingResults = Promise.all(
         Array.from({ length: fixture.concurrency }, async (_, lane) => {
           const root = path.join(fixture.root, `workspace-${lane}`);
           if (inventory) {
@@ -530,6 +824,90 @@ async function childMain(fixturePath: string): Promise<void> {
               return result.manifestRef;
             };
           }
+          if (checkpointOwner && checkpointStore) {
+            const checkpoint = checkpoints[lane]!;
+            const { id } = checkpoint;
+            if (baselineBuild) {
+              const projection = await checkpoint.prepare();
+              assert(projection, "managed workspace was not reopened");
+              checkpoint.projection = projection;
+              return async () => {
+                const row = await checkpointStore.withLocalWorkspaceStore(
+                  { worktreeId: id },
+                  async (store) => store.get(),
+                );
+                assert(row && checkpoint.baseline);
+                assert.equal(row.baseline_json, null, "legacy baseline was not converted");
+                assert.equal(row.baseline_ref, checkpoint.baseline.root, "baseline root changed");
+                assert.equal(row.pending_ref, null);
+                assert.equal(row.checkpoint_json, null);
+                const document = await checkpointStore.withLocalWorkspaceStore(
+                  { worktreeId: id },
+                  async (store) => store.manifest(store.get()!, { kind: "materialize" }),
+                );
+                assert(document.kind === "materialize");
+                const materialized = JSON.parse(document.rawManifest) as {
+                  entries: WorkerWorkspaceManifestEntry[];
+                };
+                assert.equal(materialized.entries.length, fixture.size);
+                if (reopening) {
+                  const edited = nameAt(0);
+                  const editedPath = path.join(projection.workspaceDir, edited);
+                  const editedContent = `${await fs.readFile(editedPath, "utf8")}\nrestart edit\n`;
+                  await fs.writeFile(editedPath, editedContent);
+                  await projection.checkpoint();
+                  assert.equal(await fs.readFile(path.join(root, edited), "utf8"), editedContent);
+                  const accepted = await checkpointStore.withLocalWorkspaceStore(
+                    { worktreeId: id },
+                    async (store) => store.get(),
+                  );
+                  assert(accepted?.baseline_ref);
+                  assert.notEqual(accepted.baseline_ref, row.baseline_ref);
+                  assert.equal(accepted.baseline_json, null);
+                  assert.equal(accepted.pending_ref, null);
+                  if (fixture.size > 1) {
+                    assert.deepEqual(
+                      await fs.readFile(path.join(root, nameAt(fixture.size - 1))),
+                      Buffer.alloc(fixture.fileBytes, 65),
+                    );
+                  }
+                }
+                return `${reopening ? "restart-reuse-and-checkpoint" : "baseline-build"}:${fixture.size}`;
+              };
+            }
+            const projection = checkpoint.projection;
+            assert(projection);
+            if (startup) {
+              projection[Symbol.dispose]();
+              checkpoint.projection = await checkpoint.prepare();
+              assert(checkpoint.projection, "managed workspace was not reopened");
+            } else {
+              await projection.checkpoint();
+            }
+            return async () => {
+              const row = await checkpointStore.withLocalWorkspaceStore(
+                { worktreeId: id },
+                async (store) => store.get(),
+              );
+              assert(row?.baseline_ref, "checkpoint did not publish its baseline");
+              assert.equal(row.pending_ref, null);
+              assert.equal(row.pending_target, null);
+              assert.equal(row.journal_json, null);
+              for (const entry of fixture.changedEntries) {
+                assert.equal(
+                  await fs.readFile(path.join(root, entry.path), "utf8"),
+                  checkpointContent,
+                );
+              }
+              if (fixture.changedEntries.length < fixture.size) {
+                assert.deepEqual(
+                  await fs.readFile(path.join(root, nameAt(fixture.size - 1, fixture.scenario))),
+                  Buffer.alloc(fixture.fileBytes, 65),
+                );
+              }
+              return `${startup ? "startup" : "checkpoint"}:${fixture.changedEntries.length}`;
+            };
+          }
           if (reconcile) {
             const { current, base } = comparisons![lane]!;
             let committedRef: string | undefined;
@@ -556,7 +934,7 @@ async function childMain(fixturePath: string): Promise<void> {
               },
             });
             return async () => {
-              assert(began, "reconciliation did not apply changed files");
+              assert.equal(began, fixture.changedEntries.length > 0);
               assert.equal(committedRef, fixture.currentRef);
               assert.equal(result.manifestRef, fixture.currentRef);
               assert.deepEqual(result.conflictPaths, []);
@@ -604,13 +982,20 @@ async function childMain(fixturePath: string): Promise<void> {
           };
         }),
       );
+      mainCallbacks.finishInitialSlice();
+      const results = await pendingResults;
+      const mainCallback = mainCallbacks.stop();
+      mainCallbacks = undefined;
       const wallMs = performance.now() - start;
+      markGc("heap-stop", `workspace-sample-${sample}`);
       const usedCpu = process.cpuUsage(cpu);
       const eventLoopUtilization = performance.eventLoopUtilization(utilization).utilization;
       const memoryAfter = process.memoryUsage();
-      const allocation = inspector
-        ? summarizeAllocation((await inspector.post("HeapProfiler.stopSampling")).profile)
-        : undefined;
+      const collectedDiagnostics = stopDiagnostics();
+      const allocation =
+        inspector && fixture.samplingInterval > 0
+          ? summarizeAllocation((await inspector.post("HeapProfiler.stopSampling")).profile)
+          : undefined;
       // Give the histogram's already-due sample a turn before reading it.
       await delay(15);
       histogram.disable();
@@ -622,6 +1007,8 @@ async function childMain(fixturePath: string): Promise<void> {
         entriesPerSecond: (fixture.size * fixture.concurrency * 1_000) / wallMs,
         eventLoopDelayMaxMs: histogram.max / 1e6,
         eventLoopDelayP99Ms: histogram.percentile(99) / 1e6,
+        eventLoopDelaySamples: histogram.count,
+        mainCallback,
         intervalDelayMs,
         eventLoopUtilization,
         memoryBefore,
@@ -630,6 +1017,7 @@ async function childMain(fixturePath: string): Promise<void> {
         workerTasks: [...taskEvents],
         operations: { ...operations },
         allocation,
+        diagnostics: collectedDiagnostics,
       };
       process.send?.({ type: "measured", value });
       // Keep validation outside both the timed operation and the external probes.
@@ -638,16 +1026,19 @@ async function childMain(fixturePath: string): Promise<void> {
       process.send?.({ type: "verified", evidence });
     }
   } finally {
+    mainCallbacks?.stop();
     stopIntervalDelay?.();
     diagnostics.unsubscribe(observe);
     gitDiagnostics.unsubscribe(observeOperation);
     inspector?.disconnect();
+    for (const { projection } of checkpoints) {
+      projection?.[Symbol.dispose]();
+    }
     await lifecycle.drainGlobalSingletonLifecycleState();
     server.closeAllConnections();
     await new Promise<void>((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()));
     });
-    process.disconnect?.();
   }
 }
 
@@ -669,20 +1060,43 @@ async function externalRss(pid: number): Promise<number | null> {
 async function runSource(
   fixture: Fixture,
   options: Options,
-): Promise<{ moduleLoadMs: number; samples: Sample[] }> {
+  reopening = false,
+): Promise<SourceResult> {
+  const baselineBuild = fixture.scenario === "baseline-build";
+  if (["checkpoint", "startup", "baseline-build"].includes(fixture.scenario) && !reopening) {
+    // Each child owns a fresh synthetic database/projection; source files persist
+    // to avoid bulk fixture generation inside the measurement window.
+    await fs.rm(path.join(fixture.root, "state"), { recursive: true, force: true });
+  }
   const fixturePath = path.join(fixture.root, "fixture.json");
   await fs.writeFile(fixturePath, JSON.stringify(fixture));
-  const child = fork(fileURLToPath(import.meta.url), ["--worker", fixturePath], {
-    cwd: fixture.source,
-    execArgv: ["--import", path.join(fixture.source, "scripts/tsx.mjs")],
-    env: isolatedEnv(fixture.root),
-    detached: process.platform !== "win32",
-    silent: true,
-  });
+  const traceGc =
+    fixture.scenario === "checkpoint" ||
+    fixture.scenario === "startup" ||
+    baselineBuild ||
+    fixture.samplingInterval > 0;
+  const child = fork(
+    fileURLToPath(import.meta.url),
+    ["--worker", fixturePath, ...(reopening ? ["--reopen"] : [])],
+    {
+      cwd: fixture.source,
+      execArgv: [
+        ...(traceGc ? ["--trace-gc-nvp"] : []),
+        "--import",
+        path.join(fixture.source, "scripts/tsx.mjs"),
+      ],
+      env: isolatedEnv(fixture.root),
+      detached: process.platform !== "win32",
+      silent: true,
+    },
+  );
   let output = "";
+  const tracePath = path.join(fixture.root, reopening ? "restart-gc-trace.log" : "gc-trace.log");
+  const trace = traceGc ? createWriteStream(tracePath) : undefined;
   for (const stream of [child.stdout, child.stderr]) {
     stream?.on("data", (chunk: Buffer) => {
       output = (output + chunk.toString()).slice(-16_384);
+      trace?.write(chunk);
     });
   }
   const inbox: ChildMessage[] = [];
@@ -733,7 +1147,8 @@ async function runSource(
     const initial = await fetch(url, { signal: AbortSignal.timeout(options.timeoutMs) });
     assert.equal(initial.status, 200);
     await initial.text();
-    for (let sample = 0; sample < 1 + options.warmup + options.runs; sample++) {
+    const sampleCount = reopening ? 1 : 1 + options.warmup + options.runs;
+    for (let sample = 0; sample < sampleCount; sample++) {
       const sampling = new AbortController();
       const latencies: number[] = [];
       let requestFailures = 0;
@@ -797,8 +1212,21 @@ async function runSource(
     child.send("stop");
     const [code, signal] = await exited;
     assert.equal(code, 0, `benchmark cleanup failed (${signal})\n${output}`);
-    return { moduleLoadMs: ready.moduleLoadMs, samples };
+    if (trace) {
+      await new Promise<void>((resolve, reject) => {
+        trace.end((error?: Error | null) => (error ? reject(error) : resolve()));
+      });
+      for (const [sample, result] of samples.entries()) {
+        result.gcTrace = readGatewayGcTrace(tracePath, `workspace-sample-${sample}`);
+      }
+    }
+    return {
+      moduleLoadMs: ready.moduleLoadMs,
+      samples,
+      ...(baselineBuild && !reopening ? { restart: await runSource(fixture, options, true) } : {}),
+    };
   } finally {
+    trace?.destroy();
     await stopChild(child);
   }
 }
@@ -812,17 +1240,18 @@ node --import ./scripts/tsx.mjs scripts/bench-workspace-computation.ts [options]
   --baseline <root>    Optional frozen baseline checkout with ready dependencies
   --candidate <root>   Candidate checkout (default: current directory)
   --source-commit <sha> Archive revision supplied by operator; single candidate only, not independently verified
-  --scenarios <list>   inventory,manifest,delta,unchanged,compare,reconcile (default: all)
+  --scenarios <list>   inventory,manifest,delta,unchanged,compare,reconcile,checkpoint,startup,baseline-build (default: all)
   --sizes <list>       Entries per workspace (default: 1000; max: 100000)
   --concurrency <list> Independent workspaces (default: 1; max: 4)
   --runs <n>           Warm measured samples (default: 3)
   --warmup <n>         Extra warmup samples after separately reported cold sample (default: 1)
   --file-bytes <n>     Bytes per file (default: 1024; inventory capped at 4 GiB)
-  --changed-files <n>  Changed files in delta/compare/reconcile (default: 1; max: 5000)
+  --changed-files <n>  Changed files in delta/compare/reconcile/checkpoint (default: 1; range: 0–5000)
   --timeout-ms <n>     Per-operation/probe deadline (default: 300000)
   --prepare-root <dir> Seed fixtures only into a new persistent directory
   --reuse-root <dir>   Measure prepared fixtures (same scenario/size/concurrency/source)
   --start-at <ms>      Coordinated epoch time for first warm measurement (one case only)
+  --start-barrier <path> Write <path>.ready after warmup, wait for <path>.go before measuring
   --sampling-interval <bytes> Main-isolate allocation sampling; 0 disables (default: 0)
   --output <path>      Write JSON report
   --json              Print JSON report
@@ -832,6 +1261,11 @@ CPU includes Node worker threads, but excludes spawned Git processes. Peak RSS i
 sampled externally on macOS/Linux; process high-water RSS is also recorded.
 Cold means the first owner/pool invocation; fixture creation warms filesystem caches.
 Timer interval drift supplements the native event-loop histogram for synchronous stalls.
+Async hooks measure maximum main-thread callback/Promise-job slices, including the
+initial synchronous slice. Hooks add overhead; adjacent microtasks are separate slices,
+so this is not the total time until the event loop can serve another request.
+Baseline-build seeds a legacy full-document baseline outside each timed owner prepare;
+its restart section reopens persisted conversion in a fresh child and checkpoints an edit.
 The HTTP probe measures the owner process, not a full Gateway RPC workload.`);
     return;
   }
@@ -844,14 +1278,15 @@ The HTTP probe measures the owner process, not a full Gateway RPC workload.`);
     !(options.sourceCommit && options.baseline),
     "--source-commit requires a single candidate",
   );
-  if (options.startAt !== undefined) {
+  assert(!(options.startAt && options.startBarrier), "choose start-at or start-barrier");
+  if (options.startAt !== undefined || options.startBarrier !== undefined) {
     assert.equal(
       variants.length *
         options.scenarios.length *
         options.sizes.length *
         options.concurrency.length,
       1,
-      "--start-at requires one source/scenario/size/concurrency",
+      "coordinated start requires one source/scenario/size/concurrency",
     );
   }
   const sources = await Promise.all(
@@ -892,6 +1327,7 @@ The HTTP probe measures the owner process, not a full Gateway RPC workload.`);
     variant: string;
     moduleLoadMs: number;
     samples: Sample[];
+    restart?: SourceResult;
   }> = [];
   try {
     for (const scenario of options.scenarios) {
@@ -926,12 +1362,16 @@ The HTTP probe measures the owner process, not a full Gateway RPC workload.`);
               );
               assert.equal(
                 fixture.changedEntries.length,
-                ["delta", "compare", "reconcile"].includes(scenario) ? options.changedFiles : 0,
+                ["delta", "compare", "reconcile", "checkpoint", "startup"].includes(scenario)
+                  ? options.changedFiles
+                  : 0,
                 "prepared fixture changed count differs",
               );
               fixture.startAt = options.startAt;
+              fixture.startBarrier = options.startBarrier;
               fixture.startSample = options.warmup + 1;
               fixture.samplingInterval = options.samplingInterval;
+              fixture.timeoutMs = options.timeoutMs;
             }
             if (options.prepareRoot) {
               await fs.writeFile(fixtureFile, JSON.stringify(fixture));
@@ -972,6 +1412,12 @@ The HTTP probe measures the owner process, not a full Gateway RPC workload.`);
             "Main-isolate V8 sampled allocated bytes including collected objects; excludes workers and Git; compare separate equally instrumented runs",
           reconciliation:
             "Real staged apply per invocation, after a sparse staged-write burst; no file-watch callback or Gateway is simulated. Journal adapter is in memory.",
+          checkpoint:
+            "Prepared managed workspace checkpoint, including capture, real Git staging/application and SQLite receipts. Synthetic file edits precede each checkpoint; no model or container is invoked.",
+          baselineBuild:
+            "Real managed workspace prepare migrating a legacy full-document baseline; legacy fixture seeding excluded. Fresh-child restart must preserve the converted root and checkpoint a real edit.",
+          mainCallback:
+            "Maximum async_hooks before/after synchronous callback or Promise-job slice, including initial in-flight slice. Hook overhead included; adjacent microtasks are separate, so not total event-loop turn occupancy.",
         },
         sources,
         options,
@@ -981,7 +1427,12 @@ The HTTP probe measures the owner process, not a full Gateway RPC workload.`);
       (report) =>
         report.results.map((result) => {
           const warm = result.samples.filter((sample) => sample.phase === "warm");
-          return `${result.variant} ${result.scenario} ${result.size} x ${result.concurrency}: warm wall p50=${summarize(warm.map((sample) => sample.wallMs)).p50.toFixed(1)} ms; HTTP p99 max=${Math.max(...warm.map((sample) => sample.requestLatencyMs.p99)).toFixed(1)} ms`;
+          const wall = summarize(warm.map((sample) => sample.wallMs));
+          const callbackMax = Math.max(...warm.map((sample) => sample.mainCallback.maxMs));
+          const restart = result.restart
+            ? `, fresh-process reuse callback max=${result.restart.samples[0]!.mainCallback.maxMs.toFixed(1)} ms`
+            : "";
+          return `${result.variant} ${result.scenario} ${result.size} x ${result.concurrency}: warm wall p50=${wall.p50.toFixed(1)} ms, p95=${wall.p95.toFixed(1)} ms (n=${wall.count}${wall.count < 200 ? "; context only" : ""}), callback max=${callbackMax.toFixed(1)} ms${restart}`;
         }),
     );
   } finally {
@@ -994,14 +1445,15 @@ The HTTP probe measures the owner process, not a full Gateway RPC workload.`);
 await runBenchmarkEntrypoint("workspace-computation", async () => {
   if (process.argv[2] === "--worker") {
     try {
-      await childMain(process.argv[3]!);
+      await childMain(process.argv[3]!, process.argv[4] === "--reopen");
     } catch (error) {
       process.send?.({
         type: "error",
         message: error instanceof Error ? (error.stack ?? error.message) : String(error),
       });
-      process.disconnect?.();
       throw error;
+    } finally {
+      process.disconnect?.();
     }
   } else {
     await main();

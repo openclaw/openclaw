@@ -86,10 +86,18 @@ describe("doctor reserved incognito session key repair", () => {
     sql`INSERT INTO board_widgets (session_key, name, tab_id, content_kind, html, sha256, view_generation, revision, size_w, size_h, position, created_by, created_at, updated_at) VALUES (${oldKey}, 'widget-1', 'tab-1', 'html', X'00', 'sha', 'view-1', 1, 1, 1, 0, 'user', 1, 1)`.run();
     sql`INSERT INTO session_members (session_key, identity_id, added_by, added_at) VALUES (${oldKey}, 'member-1', 'owner-1', 1)`.run();
     expect(listEntries({ agentId: "main", clone: false, env })[0]?.sessionKey).toBe(oldKey);
+    expect(listEntries({ agentId: "work", clone: false, env })[0]?.entry.parentSessionKey).toBe(
+      oldKey,
+    );
 
     expect(await repairKeys({ apply: false, cfg: {}, env })).toEqual({ found: 1, repaired: 0 });
     expect(await repairKeys({ apply: true, cfg: {}, env })).toEqual({ found: 1, repaired: 1 });
     expect(listEntries({ agentId: "main", clone: false, env })[0]?.sessionKey).toBe(newKey);
+    expect(listEntries({ agentId: "work", clone: false, env })[0]?.entry).toMatchObject({
+      parentSessionKey: newKey,
+      spawnedBy: newKey,
+      updatedAt: 1,
+    });
 
     for (const [owner, table, columns] of [
       [

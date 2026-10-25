@@ -9,6 +9,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { PluginRuntimeCloseRetainedError } from "../plugins/runtime-close-error.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
+import { createPendingPromiseTracker } from "../shared/pending-promises.js";
 import { observeAgentRunApprovalWait } from "./agent-run-approval-wait.js";
 import { raceWithAbortSignal } from "./agent-tools.abort.js";
 import { runBridgeRequest } from "./code-mode-bridge.js";
@@ -112,6 +113,7 @@ export function createCodeModeRunOwner(
   let continuation: CodeModeExecutorContinuation | undefined;
   let closing: Promise<void> | undefined;
   const executions = new Set<Promise<CodeModeWorkerResult>>();
+  const trackExecution = createPendingPromiseTracker(executions);
   const disposals = new Map<CodeModeExecutorContinuation, Promise<void>>();
   const cleanupFailures = new Map<CodeModeExecutorContinuation, unknown>();
   const disposeContinuation = (value: CodeModeExecutorContinuation): Promise<void> => {
@@ -236,12 +238,7 @@ export function createCodeModeRunOwner(
           await retainContinuation(result.status === "waiting" ? result.continuation : undefined);
           return result;
         });
-      executions.add(execution);
-      void execution.then(
-        () => executions.delete(execution),
-        () => executions.delete(execution),
-      );
-      return execution;
+      return trackExecution(execution);
     },
     approvalWait,
     releaseCall() {
@@ -299,13 +296,13 @@ function scheduleActiveRunExpiry(): void {
         removeExpiredRuns();
         scheduleActiveRunExpiry();
       },
-      Math.max(1, nextExpiresAt - Date.now()),
+      Math.max(1, nextExpiresAt - performance.now()),
     ),
   );
-  activeRunExpiryTimer.unref?.();
+  activeRunExpiryTimer.unref();
 }
 
-export function removeExpiredRuns(now = Date.now()): void {
+export function removeExpiredRuns(now = Math.floor(performance.now())): void {
   for (const [runId, state] of activeRuns) {
     if (!isFutureDateTimestampMs(state.expiresAt, { nowMs: now })) {
       // Parked collectors extend idle TTL, bounded so a lost terminal event cannot pin all slots.
@@ -593,7 +590,7 @@ export function createPendingBridgeStates(
         const active = activeRuns.get(params.activeRunId);
         if (active?.pending.includes(state)) {
           const renewed = resolveExpiresAtMsFromDurationSeconds(active.config.snapshotTtlSeconds, {
-            nowMs: Date.now(),
+            nowMs: Math.floor(performance.now()),
           });
           if (renewed !== undefined) {
             active.expiresAt = renewed;
@@ -619,7 +616,7 @@ export function storeSuspendedRun(
     cancelPendingBridgeStates(params.pending);
     return codeModeAbortedResult(params);
   }
-  const now = Date.now();
+  const now = Math.floor(performance.now());
   const expiresAt = resolveExpiresAtMsFromDurationSeconds(params.config.snapshotTtlSeconds, {
     nowMs: now,
   });

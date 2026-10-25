@@ -42,25 +42,21 @@ describe("iMessage outbound session routing", () => {
     expect(await routeTo(target)).toMatchObject({ recipientSessionExact: exact });
   });
 
-  it.each([
-    ["direct reply", "chat_id:42", false],
-    ["explicit chat ID send", "chat_id:42", true],
-    ["explicit GUID send", "chat_guid:iMessage;-;+15551234567", true],
-    ["explicit identifier send", "chat_identifier:+15551234567", true],
-  ] as const)("keeps a %s on the direct session", async (_name, target, explicit) => {
-    const cfg = { session: { dmScope: "per-channel-peer" as const } };
-    if (explicit) {
+  it.each(["chat_id:42", "chat_guid:iMessage;-;+15551234567", "chat_identifier:+15551234567"])(
+    "keeps explicit target %s on the direct session",
+    async (target) => {
+      const cfg = { session: { dmScope: "per-channel-peer" as const } };
       expect(await resolveTarget(target, cfg)).toMatchObject({ to: target, kind: "user" });
-    }
-    expect(await routeTo(target, cfg)).toMatchObject({
-      sessionKey: "agent:main:imessage:direct:+15551234567",
-      peer: { kind: "direct", id: "+15551234567" },
-      chatType: "direct",
-      from: "imessage:+15551234567",
-      to: target,
-      recipientSessionExact: true,
-    });
-  });
+      expect(await routeTo(target, cfg)).toMatchObject({
+        sessionKey: "agent:main:imessage:direct:+15551234567",
+        peer: { kind: "direct", id: "+15551234567" },
+        chatType: "direct",
+        from: "imessage:+15551234567",
+        to: target,
+        recipientSessionExact: true,
+      });
+    },
+  );
 
   it.each([
     ["native group", "chat_id:43", {}, "43"],

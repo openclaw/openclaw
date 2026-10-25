@@ -25,6 +25,7 @@ import {
   type LinkPreview,
 } from "./link-reader-preview.tsx";
 import {
+  LINK_READER_METADATA_REQUEST_EVENT,
   LINK_READER_METADATA_UPDATED_EVENT,
   type LinkReaderMetadataUpdate,
 } from "./link-reader-response.ts";
@@ -92,6 +93,12 @@ export class HovercardOwner {
       this.host.dispatchEvent(new Event("link-reader-capabilities-changed"));
     }
     this.update();
+    if (
+      this.connected &&
+      (key === "client" || key === "agentId" || key === "sessionKey" || key === "readers")
+    ) {
+      window.dispatchEvent(new Event(LINK_READER_METADATA_REQUEST_EVENT));
+    }
   }
 
   private watchPageContext(): void {
@@ -340,6 +347,8 @@ export class HovercardOwner {
       attributeFilter: ["href"],
     });
     this.watchPageContext();
+    // Reader details may have settled before this lazy provider was loaded.
+    window.dispatchEvent(new Event(LINK_READER_METADATA_REQUEST_EVENT));
     // Restore focus intent after the bridge finishes adopting its caller's nodes.
     queueMicrotask(() => {
       const root = this.host.getRootNode();

@@ -169,10 +169,7 @@ describe("session descriptor reads", () => {
         h.event(revision % 2 ? "session.message" : "sessions.changed", {
           agentId: "main",
           reason: "patch",
-          session: {
-            ...next,
-            ...enrichment,
-          },
+          session: { ...next, ...enrichment },
           ancestorSessions: [],
         });
         expect(await h.sessions.describe(params)).toEqual({
@@ -284,24 +281,20 @@ describe("session descriptor reads", () => {
         spawnedBy: key,
       };
       const emit = (snapshotAt: number, changed = false) =>
-        h.emitEvent({
-          type: "event",
-          event: snapshotAt % 2 ? "sessions.changed" : "session.message",
-          payload: {
-            agentId: "main",
-            reason: "send",
-            session: { ...child, updatedAt: snapshotAt, snapshotAt },
-            ancestorSessions: changed
-              ? [{ ...parent, snapshotAt, ancestorRevision: "parent-content" }]
-              : [],
-            ...(changed
-              ? {}
-              : {
-                  ancestorSessionRefs: [
-                    { key, sessionId: parent.sessionId, revision: "parent-content", snapshotAt },
-                  ],
-                }),
-          },
+        h.event(snapshotAt % 2 ? "sessions.changed" : "session.message", {
+          agentId: "main",
+          reason: "send",
+          session: { ...child, updatedAt: snapshotAt, snapshotAt },
+          ancestorSessions: changed
+            ? [{ ...parent, snapshotAt, ancestorRevision: "parent-content" }]
+            : [],
+          ...(changed
+            ? {}
+            : {
+                ancestorSessionRefs: [
+                  { key, sessionId: parent.sessionId, revision: "parent-content", snapshotAt },
+                ],
+              }),
         });
       emit(2, true);
       const pending = h.pending();

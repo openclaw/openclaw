@@ -102,6 +102,12 @@ const pluginAssetStep = (phase: "build" | "copy") =>
     phase,
   ]);
 export const BUILD_ALL_STEPS: BuildAllStep[] = [
+  nodeStep("runtime:scripts:check", [
+    "--import",
+    "./scripts/tsx.mjs",
+    "scripts/generate-runtime-script-assets.mjs",
+    "--check",
+  ]),
   nodeStep("native-protocol", ["scripts/prepare-native-protocol.mjs"]),
   nodeStep("clean:dist", [
     "-e",
@@ -166,7 +172,9 @@ const RUNTIME_FINALIZE_STEP_LABELS = [
   "runtime-postbuild-stamp",
 ] as const;
 const RUNTIME_STEP_LABELS = [...RUNTIME_SETUP_STEP_LABELS, ...RUNTIME_FINALIZE_STEP_LABELS];
+const RUNTIME_SOURCE_CHECK_STEP_LABELS = ["runtime:scripts:check"];
 const ASSET_RUNTIME_STEP_LABELS = [
+  ...RUNTIME_SOURCE_CHECK_STEP_LABELS,
   "plugins:assets:build",
   "tsdown",
   ...RUNTIME_SETUP_STEP_LABELS,
@@ -219,10 +227,15 @@ const BUILD_ALL_PROFILES: Record<string, string[]> = {
     ...FULL_RUNTIME_STEP_LABELS.filter((step) => !step.startsWith("plugins:assets:")),
     "check-plugin-sdk-exports",
   ],
-  gatewayWatch: ["tsdown", ...RUNTIME_STEP_LABELS],
+  gatewayWatch: [...RUNTIME_SOURCE_CHECK_STEP_LABELS, "tsdown", ...RUNTIME_STEP_LABELS],
   qaRuntime: [...ASSET_RUNTIME_STEP_LABELS],
   sourcePerformance: [...ASSET_RUNTIME_STEP_LABELS, "write-build-info"],
-  cliStartup: ["tsdown", ...RUNTIME_STEP_LABELS, "write-cli-startup-metadata"],
+  cliStartup: [
+    ...RUNTIME_SOURCE_CHECK_STEP_LABELS,
+    "tsdown",
+    ...RUNTIME_STEP_LABELS,
+    "write-cli-startup-metadata",
+  ],
 };
 
 const FULL_BUILD_PROFILE_STEP_ENV = {

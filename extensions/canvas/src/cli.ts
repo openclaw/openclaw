@@ -39,42 +39,6 @@ function parseCanvasFiniteNumberOption(raw: string | undefined, flag: string): n
   return parsed;
 }
 
-function parseNodeCandidates(raw: unknown): NodeMatchCandidate[] {
-  const payload = raw && typeof raw === "object" ? (raw as { nodes?: unknown }) : {};
-  const list = Array.isArray(payload.nodes) ? payload.nodes : [];
-  return list
-    .map((entry) => {
-      if (!entry || typeof entry !== "object") {
-        return null;
-      }
-      const node = entry as {
-        nodeId?: unknown;
-        displayName?: unknown;
-        remoteIp?: unknown;
-        connected?: unknown;
-        clientId?: unknown;
-      };
-      if (typeof node.nodeId !== "string") {
-        return null;
-      }
-      const candidate: NodeMatchCandidate = { nodeId: node.nodeId };
-      if (typeof node.displayName === "string") {
-        candidate.displayName = node.displayName;
-      }
-      if (typeof node.remoteIp === "string") {
-        candidate.remoteIp = node.remoteIp;
-      }
-      if (typeof node.connected === "boolean") {
-        candidate.connected = node.connected;
-      }
-      if (typeof node.clientId === "string") {
-        candidate.clientId = node.clientId;
-      }
-      return candidate;
-    })
-    .filter((entry): entry is NodeMatchCandidate => entry !== null);
-}
-
 async function callGatewayCli(
   method: string,
   opts: CanvasNodesRpcOpts,
@@ -88,48 +52,77 @@ async function callGatewayCli(
   });
 }
 
-async function resolveNodeId(opts: CanvasNodesRpcOpts): Promise<string> {
-  const { resolveNodeFromNodeList } = await import("openclaw/plugin-sdk/gateway-runtime");
-  const raw = await callGatewayCli("node.list", opts, {});
-  return resolveNodeFromNodeList(parseNodeCandidates(raw), normalizeOptionalString(opts.node) ?? "")
-    .nodeId;
-}
-
-async function invokeCanvas(
-  opts: CanvasNodesRpcOpts,
-  command: string,
-  params?: Record<string, unknown>,
-) {
-  const invokeTimeoutMs = parseStrictPositiveInteger(opts.invokeTimeout);
-  if (opts.invokeTimeout != null && invokeTimeoutMs === undefined) {
-    throw new Error("--invoke-timeout must be a positive integer.");
-  }
-  const timeoutMs =
-    clampPositiveTimerTimeoutMs(invokeTimeoutMs ?? DEFAULT_CANVAS_NODE_INVOKE_TIMEOUT_MS) ??
-    DEFAULT_CANVAS_NODE_INVOKE_TIMEOUT_MS;
-  const nodeId = await resolveNodeId(opts);
-  const invokeParams = buildNodeInvokeParams({ nodeId, command, params, timeoutMs });
-  const configuredGatewayTimeoutMs = parseStrictPositiveInteger(opts.timeout ?? 10_000);
-  if (configuredGatewayTimeoutMs === undefined) {
-    // Preserve the existing Gateway parser's actionable invalid --timeout error.
-    return await callGatewayCli("node.invoke", opts, invokeParams);
-  }
-  // Node work owns its deadline; Gateway transport needs extra time to deliver that result.
-  const transportTimeoutMs = Math.max(
-    clampPositiveTimerTimeoutMs(configuredGatewayTimeoutMs) ??
-      DEFAULT_CANVAS_NODE_INVOKE_TIMEOUT_MS,
-    addTimerTimeoutGraceMs(timeoutMs, CANVAS_NODE_INVOKE_TRANSPORT_GRACE_MS) ?? timeoutMs,
-  );
-  return await callGatewayCli("node.invoke", opts, invokeParams, transportTimeoutMs);
-}
-
 async function runCanvasCommand(
   opts: CanvasNodesRpcOpts,
   action: "present" | "hide" | "navigate",
   params?: () => Record<string, unknown>,
 ): Promise<void> {
   await runNodesCommand(`canvas ${action}`, async () => {
-    const result = await invokeCanvas(opts, `canvas.${action}`, params?.());
+    const preparedParams = params?.();
+    const invokeTimeoutMs = parseStrictPositiveInteger(opts.invokeTimeout);
+    if (opts.invokeTimeout != null && invokeTimeoutMs === undefined) {
+      throw new Error("--invoke-timeout must be a positive integer.");
+    }
+    const timeoutMs =
+      clampPositiveTimerTimeoutMs(invokeTimeoutMs ?? DEFAULT_CANVAS_NODE_INVOKE_TIMEOUT_MS) ??
+      DEFAULT_CANVAS_NODE_INVOKE_TIMEOUT_MS;
+    const { resolveNodeFromNodeList } = await import("openclaw/plugin-sdk/gateway-runtime");
+    const raw = await callGatewayCli("node.list", opts, {});
+    const payload = raw && typeof raw === "object" ? (raw as { nodes?: unknown }) : {};
+    const list = Array.isArray(payload.nodes) ? payload.nodes : [];
+    const candidates = list
+      .map((entry) => {
+        if (!entry || typeof entry !== "object") {
+          return null;
+        }
+        const node = entry as {
+          nodeId?: unknown;
+          displayName?: unknown;
+          remoteIp?: unknown;
+          connected?: unknown;
+          clientId?: unknown;
+        };
+        if (typeof node.nodeId !== "string") {
+          return null;
+        }
+        const candidate: NodeMatchCandidate = { nodeId: node.nodeId };
+        if (typeof node.displayName === "string") {
+          candidate.displayName = node.displayName;
+        }
+        if (typeof node.remoteIp === "string") {
+          candidate.remoteIp = node.remoteIp;
+        }
+        if (typeof node.connected === "boolean") {
+          candidate.connected = node.connected;
+        }
+        if (typeof node.clientId === "string") {
+          candidate.clientId = node.clientId;
+        }
+        return candidate;
+      })
+      .filter((entry): entry is NodeMatchCandidate => entry !== null);
+    const nodeId = resolveNodeFromNodeList(
+      candidates,
+      normalizeOptionalString(opts.node) ?? "",
+    ).nodeId;
+    const invokeParams = buildNodeInvokeParams({
+      nodeId,
+      command: `canvas.${action}`,
+      params: preparedParams,
+      timeoutMs,
+    });
+    const configuredGatewayTimeoutMs = parseStrictPositiveInteger(opts.timeout ?? 10_000);
+    // Preserve the existing Gateway parser's actionable invalid --timeout error.
+    // Node work owns its deadline; Gateway transport needs extra time to deliver that result.
+    const transportTimeoutMs =
+      configuredGatewayTimeoutMs === undefined
+        ? undefined
+        : Math.max(
+            clampPositiveTimerTimeoutMs(configuredGatewayTimeoutMs) ??
+              DEFAULT_CANVAS_NODE_INVOKE_TIMEOUT_MS,
+            addTimerTimeoutGraceMs(timeoutMs, CANVAS_NODE_INVOKE_TRANSPORT_GRACE_MS) ?? timeoutMs,
+          );
+    const result = await callGatewayCli("node.invoke", opts, invokeParams, transportTimeoutMs);
     if (opts.json) {
       defaultRuntime.writeJson(result);
     } else {

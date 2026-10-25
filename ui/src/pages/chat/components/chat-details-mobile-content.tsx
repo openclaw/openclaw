@@ -1,14 +1,10 @@
-import { dynamic } from "@solidjs/web";
-import { Match, Show, Switch, createMemo, onSettled } from "solid-js";
+import { Match, Show, Switch, createMemo, isPending, lazy, onSettled } from "solid-js";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
-import type { SessionPlacementPresentation } from "../../../components/session-placement-move-dialog.tsx";
 import { StepMarker } from "../../../components/session-progress-card-content.tsx";
 import {
   progressCardNoteSummary,
   progressCardPresentation,
 } from "../../../components/session-progress-card.ts";
-import { Icon } from "../../../components/solid/icon.tsx";
-import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { listSubagents } from "../chat-subagent-wait.ts";
@@ -16,12 +12,7 @@ import {
   SessionAutomationMobileList,
   type SessionAutomationMobileListProps,
 } from "./chat-automation-mobile.tsx";
-import { getContextNoticeViewModel } from "./chat-composer-context.tsx";
-import { ChatDetailsContextContent, ChatDetailsContextSummary } from "./chat-details-context.tsx";
-import {
-  ChatDetailsEnvironmentMobile,
-  type ChatDetailsEnvironmentMobileProps,
-} from "./chat-details-environment-mobile.tsx";
+import { ChatDetailsEnvironmentMobile } from "./chat-details-environment-mobile.tsx";
 import { ChatDetailsGoal, type ChatDetailsGoalProps } from "./chat-details-goal.tsx";
 import {
   ChatDetailsMobileProcesses,
@@ -38,13 +29,11 @@ import {
   type MobileTaskProgressProps,
 } from "./chat-details-progress.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
-import {
-  GitHubPublicationMobile,
-  type GitHubPublicationMobileProps,
-} from "./chat-github-publication-mobile.tsx";
-import { ChatMachine, type ChatMachineProps } from "./chat-machine.tsx";
+import type { GitHubPublicationMobileProps } from "./chat-github-publication-mobile.tsx";
+import "../../../styles/chat/github-publication-mobile.css";
+import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import { ChatMobilePeopleBody, type ChatMobilePeopleBodyProps } from "./chat-mobile-people.tsx";
-import { ChatOutputsMobile, getChatOutputsCount } from "./chat-outputs.tsx";
+import { getChatOutputsCount } from "./chat-outputs-data.ts";
 import {
   ChatPullRequestMobileCollection,
   ChatPullRequestMobileDetail,
@@ -64,11 +53,23 @@ import {
   ChatSessionVersionsMobile,
   type ChatSessionVersionsMobileProps,
 } from "./chat-session-versions-mobile.tsx";
-import type { SessionAutomationInventory } from "./chat-summary-automations.tsx";
+import {
+  SessionAutomationRead,
+  type SessionAutomationInventory,
+} from "./chat-summary-automations.tsx";
 import "../../../styles/chat/details.css";
-import { sessionAutomationSchedule } from "./session-automation-schedule.ts";
+import { SessionAutomationResult } from "./session-automation-result.tsx";
+import { createSessionAutomationSchedule } from "./session-automation-schedule-loader.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
+
+const ChatOutputsMobile = lazy(() => import("./chat-outputs.tsx"), {
+  export: "ChatOutputsMobile",
+});
+
+const GitHubPublicationMobile = lazy(() => import("./chat-github-publication-mobile.tsx"), {
+  export: "GitHubPublicationMobile",
+});
 
 type ChatDetailsMobileRegionProps = {
   details: ChatDetailsProps;
@@ -92,10 +93,8 @@ type ChatDetailsMobileRootContent = {
     | "taskProgressNotice"
     | "automations"
   >;
-  /** Review's Uncommitted snapshot and the host's actual navigation callbacks. */
-  environment?: Omit<ChatDetailsEnvironmentMobileProps, "details" | "presented">;
   /** Labels only; facts/actions/demand come from the native details.outputs binding. */
-  outputs?: { label: string; accessibleLabel?: string };
+  outputs?: { label: string };
   /** The native Sharing adapter, constructed under the retained session host. */
   sharing?: ChatSessionSharingMobileAdapter;
   /** The publication owner supplies the review entry, including retained publication/recovery states. */
@@ -116,13 +115,9 @@ type ChatDetailsMobilePeopleContent = Omit<ChatMobilePeopleBodyProps, "sharingOp
   sharing?: ChatSessionSharingMobileAdapter;
 };
 
-type ChatDetailsMobileMoveRequest = Parameters<SessionPlacementPresentation>[0];
-
 /** Only supplied mobile bodies belong here. Missing peer bodies stay with their owners. */
 export type ChatDetailsMobilePage =
   | { kind: "root"; content: ChatDetailsMobileRootContent }
-  | { kind: "machine"; content: Omit<ChatMachineProps, "session"> }
-  | { kind: "move"; content: ChatDetailsMobileMoveRequest }
   | { kind: "people"; content: ChatDetailsMobilePeopleContent }
   | { kind: "task-progress"; content: ChatDetailsMobileProgressPreference }
   | { kind: "pull-requests"; content: ChatPullRequestMobileCollectionProps }
@@ -133,7 +128,6 @@ export type ChatDetailsMobilePage =
     }
   | { kind: "versions"; content: ChatSessionVersionsMobileProps }
   | { kind: "outputs" }
-  | { kind: "context" }
   | { kind: "automations"; content: SessionAutomationMobileListProps }
   | { kind: "sharing"; content: ChatSessionSharingMobileAdapter }
   | { kind: "session-access"; content: ChatSessionSharingMobileAdapter }
@@ -156,6 +150,7 @@ export type ChatDetailsMobileContentProps = ChatDetailsMobileRegionProps & {
 function MobileRoot(
   props: ChatDetailsMobileRegionProps & { content: ChatDetailsMobileRootContent },
 ) {
+  const formatSchedule = createSessionAutomationSchedule();
   const outputs = (): ChatDetailsMobileEntry | undefined => {
     const data = props.details.outputs;
     if (!data) {
@@ -164,13 +159,9 @@ function MobileRoot(
     const count = getChatOutputsCount(data);
     return {
       label: props.content.outputs?.label ?? props.content.entries.labels.generatedFiles,
-      accessibleLabel: props.content.outputs?.accessibleLabel,
       metadata: count === null ? undefined : count,
     };
   };
-  const hasContext = createMemo(() =>
-    Boolean(getContextNoticeViewModel(props.details.selectedSession)),
-  );
   const progress = createMemo(() => {
     const card = props.details.progressCard;
     return card
@@ -196,6 +187,37 @@ function MobileRoot(
       }),
     );
   });
+  const automationNotice = (
+    <Show when={props.content.automations}>
+      {(input) => (
+        <SessionAutomationRead
+          inventory={input().inventory}
+          readDeniedOnly
+          error={
+            input().inventory.connected() && (
+              <div class="chat-details-mobile-root__notice" role="status">
+                <span>
+                  {t(
+                    input().inventory.loaded()
+                      ? "chat.sessionDetails.automationUpdateError"
+                      : "chat.sessionDetails.automationError",
+                  )}
+                </span>
+                <button
+                  type="button"
+                  class="chip"
+                  disabled={!props.presented || isPending(input().inventory.read)}
+                  onClick={() => void input().inventory.refresh()}
+                >
+                  {t("common.retry")}
+                </button>
+              </div>
+            )
+          }
+        />
+      )}
+    </Show>
+  );
   const automations = (): ChatDetailsMobileRootProps["automations"] => {
     const input = props.content.automations;
     if (!input) {
@@ -206,47 +228,23 @@ function MobileRoot(
       items: inventory.jobs().map((job) => ({
         value: job.id,
         label: job.name.trim() || job.id,
-        description: job.autoDisabled
-          ? t("chat.sessionDetails.automationAttention")
-          : !job.enabled
-            ? t("chat.sessionDetails.automationPaused")
-            : inventory.connected() && job.runningAtMs !== undefined
-              ? t("common.running")
-              : job.schedule
-                ? sessionAutomationSchedule(job.schedule)
-                : undefined,
+        status: <SessionAutomationResult job={job} />,
+        // Keep asynchronous schedule reads inside the rendered automations section.
+        get description() {
+          return job.autoDisabled
+            ? t("chat.sessionDetails.automationAttention")
+            : !job.enabled
+              ? t("chat.sessionDetails.automationPaused")
+              : inventory.connected() && job.runningAtMs !== undefined
+                ? t("common.running")
+                : job.schedule
+                  ? formatSchedule(job.schedule)
+                  : undefined;
+        },
       })),
       total: inventory.loaded() ? inventory.total() : undefined,
       summary: input.summary,
-      notice:
-        inventory.error() && inventory.connected() ? (
-          <div class="chat-details-mobile-root__notice" role="status">
-            <span>
-              {t(
-                inventory.loaded()
-                  ? "chat.sessionDetails.automationUpdateError"
-                  : "chat.sessionDetails.automationError",
-              )}
-            </span>
-            <button
-              type="button"
-              class="chip"
-              disabled={!props.presented || inventory.loading()}
-              onClick={() => void inventory.refresh()}
-            >
-              {t("common.retry")}
-            </button>
-          </div>
-        ) : !inventory.loaded() &&
-          inventory.loading() &&
-          inventory.available() &&
-          inventory.connected() ? (
-          <PanelLoadingSkeleton
-            variant="file-list"
-            label={t("chat.sessionDetails.automationLoading")}
-            compact
-          />
-        ) : undefined,
+      notice: automationNotice,
     };
   };
   return (
@@ -277,32 +275,17 @@ function MobileRoot(
           : undefined
       }
       taskProgressNotice={
-        props.details.progressCardInitialLoading || props.details.progressCardError ? (
-          <Show
-            when={props.details.progressCardError}
-            fallback={
-              <PanelLoadingSkeleton
-                variant="document"
-                label={t("sessionProgressCard.widgetLoading")}
-                compact
-              />
-            }
-          >
-            <div class="chat-details-mobile-root__notice" role="status">
-              {t(
-                props.details.progressCardError === "access-denied"
-                  ? "sessionProgressCard.widgetAccessDenied"
-                  : "sessionProgressCard.widgetUnavailable",
-              )}
-            </div>
-          </Show>
+        props.details.progressCardError === "access-denied" ? (
+          <div class="chat-details-mobile-root__notice" role="status">
+            {t("sessionProgressCard.widgetAccessDenied")}
+          </div>
         ) : undefined
       }
       subagents={{ ...props.content.subagents, rows: listSubagents(props.details) }}
       automations={automations()}
       environment={
         <ChatDetailsEnvironmentMobile
-          {...(props.content.environment ?? props.details.environment)}
+          {...props.details.environment}
           details={props.details}
           presented={props.presented}
         />
@@ -316,29 +299,8 @@ function MobileRoot(
       publicationEntry={
         props.details.githubPublication ? props.content.publicationEntry : undefined
       }
-      context={
-        hasContext() ? (
-          <button
-            type="button"
-            class="chat-details-mobile-root__entry chat-details-mobile-context__summary"
-            data-details-destination="context"
-            aria-label={props.content.entries.labels.context}
-            disabled={!props.presented}
-            onClick={(event) =>
-              props.content.entries.onNavigate(
-                { kind: "context" },
-                { kind: "details-root", trigger: event.currentTarget },
-              )
-            }
-          >
-            <ChatDetailsContextSummary details={props.details} />
-            <Icon name="chevronRight" class="chat-details-mobile-root__chevron" />
-          </button>
-        ) : undefined
-      }
       processes={
-        props.content.processes &&
-        (props.content.processes.rows.length > 0 || props.content.processes.error) ? (
+        props.content.processes ? (
           <ChatDetailsMobileProcesses
             data={props.content.processes}
             presented={props.presented}
@@ -381,12 +343,6 @@ export function ChatDetailsMobileContent(props: ChatDetailsMobileContentProps) {
           />
         )}
       </Match>
-      <Match when={props.page.kind === "machine" && props.page}>
-        {(page) => <ChatMachine {...page().content} session={props.details.selectedSession} />}
-      </Match>
-      <Match when={props.page.kind === "move" && props.page}>
-        {(page) => <MobileMove request={page().content} />}
-      </Match>
       <Match when={props.page.kind === "people" && props.page}>
         {(page) => (
           <ChatMobilePeopleBody
@@ -423,17 +379,13 @@ export function ChatDetailsMobileContent(props: ChatDetailsMobileContentProps) {
       <Match when={props.page.kind === "versions" && props.page}>
         {(page) => <ChatSessionVersionsMobile {...page().content} />}
       </Match>
-      <Match when={props.page.kind === "context"}>
-        <div class="chat-details-mobile-context">
-          <div class="chat-details-mobile-context__summary">
-            <ChatDetailsContextSummary details={props.details} />
-          </div>
-          <ChatDetailsContextContent details={props.details} presented={props.presented} />
-        </div>
-      </Match>
       <Match when={props.page.kind === "outputs"}>
         <Show when={props.details.outputs}>
-          {(outputs) => <ChatOutputsMobile {...outputs()} />}
+          {(outputs) => (
+            <ChatLazyBoundary>
+              <ChatOutputsMobile {...outputs()} />
+            </ChatLazyBoundary>
+          )}
         </Show>
       </Match>
       <Match when={props.page.kind === "automations" && props.page}>
@@ -457,11 +409,13 @@ export function ChatDetailsMobileContent(props: ChatDetailsMobileContentProps) {
       </Match>
       <Match when={props.page.kind === "publication" && props.page}>
         {(page) => (
-          <GitHubPublicationMobile
-            {...page().content}
-            branch={props.details.pullRequestsBranch}
-            presented={props.presented}
-          />
+          <ChatLazyBoundary>
+            <GitHubPublicationMobile
+              {...page().content}
+              branch={props.details.pullRequestsBranch}
+              presented={props.presented}
+            />
+          </ChatLazyBoundary>
         )}
       </Match>
     </Switch>,
@@ -499,10 +453,4 @@ export function ChatDetailsMobileControls(props: ChatDetailsMobileContentProps) 
       )}
     </Show>
   );
-}
-
-/** The factory identity belongs to the native request, not the changing placement snapshot. */
-function MobileMove(props: { request: ChatDetailsMobileMoveRequest }) {
-  const Picker = dynamic(() => props.request.render);
-  return <Picker />;
 }

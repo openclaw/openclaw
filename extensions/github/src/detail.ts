@@ -437,25 +437,23 @@ async function loadGitHubDetailWithIdentity(
 
       const { preview } = parseControlUiGitHubPreviewResponse(parsed, value);
       const content = markdownBody(value.body, BODY_MAX_CHARS);
-      const discussion = includeDiscussion
-        ? await fetchComments(
-            repositoryUrl + "/issues/" + parsed.number + "/comments",
-            "discussion",
-            requiredCount(value, "comments"),
-            readPage,
-            host,
-          )
-        : undefined;
-      const review =
-        parsed.kind === "pull" && includeDiscussion
-          ? await fetchComments(
-              itemUrl + "/comments",
-              "review",
-              requiredCount(value, "review_comments"),
+      const discussionCount = includeDiscussion ? requiredCount(value, "comments") : 0;
+      const reviewCount =
+        includeDiscussion && parsed.kind === "pull" ? requiredCount(value, "review_comments") : 0;
+      const [discussion, review] = includeDiscussion
+        ? await Promise.all([
+            fetchComments(
+              repositoryUrl + "/issues/" + parsed.number + "/comments",
+              "discussion",
+              discussionCount,
               readPage,
               host,
-            )
-          : undefined;
+            ),
+            parsed.kind === "pull"
+              ? fetchComments(itemUrl + "/comments", "review", reviewCount, readPage, host)
+              : undefined,
+          ])
+        : [];
       const comments = (discussion?.comments ?? [])
         .concat(review?.comments ?? [])
         .toSorted(

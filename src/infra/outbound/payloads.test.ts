@@ -24,6 +24,8 @@ const presentation = (block: NonNullable<ReplyPayload["presentation"]>["blocks"]
   mirror({ presentation: { blocks: [block] } });
 const choices = (...labels: string[]) =>
   labels.map((label, index) => ({ label, value: String(index) }));
+const image = (name: string) => `https://x.test/${name}.png`;
+const images = (...names: string[]) => names.map(image);
 
 describe("outbound payloads", () => {
   it("deduplicates a file URL directive with its explicit local path: café 100% image.png", () => {
@@ -44,19 +46,14 @@ describe("outbound payloads", () => {
     const plan = createPlan(
       [
         {
-          text: "Caption ![one](\nhttps://x.test/one.png\n) ![two](\nhttps://x.test/two.png\n)",
-          mediaUrl: "https://x.test/primary.png",
-          mediaUrls: ["https://x.test/explicit.png", "https://x.test/one.png"],
+          text: `Caption ![one](\n${image("one")}\n) ![two](\n${image("two")}\n)`,
+          mediaUrl: image("primary"),
+          mediaUrls: images("explicit", "one"),
         },
       ],
       { extractMarkdownImages: true },
     );
-    const mediaUrls = [
-      "https://x.test/explicit.png",
-      "https://x.test/one.png",
-      "https://x.test/primary.png",
-      "https://x.test/two.png",
-    ];
+    const mediaUrls = images("explicit", "one", "primary", "two");
 
     expect(toDelivery(plan)).toMatchObject([{ text: "Caption", mediaUrl: undefined, mediaUrls }]);
     expect(toOutbound(plan)).toMatchObject([{ text: "Caption", mediaUrls }]);
@@ -66,8 +63,8 @@ describe("outbound payloads", () => {
 
   it("keeps parsed attachment order before an explicit singular attachment", () => {
     const source: ReplyPayload = {
-      text: "MEDIA:https://x.test/one.png\nMEDIA:https://x.test/two.png",
-      mediaUrl: "https://x.test/primary.png",
+      text: `MEDIA:${image("one")}\nMEDIA:${image("two")}`,
+      mediaUrl: image("primary"),
       attachments: [{ name: "Explicit photo.png", mimeType: "image/png" }],
     };
     const originalSource = structuredClone(source);
@@ -75,7 +72,7 @@ describe("outbound payloads", () => {
 
     expect(payload).toMatchObject({
       mediaUrl: undefined,
-      mediaUrls: ["https://x.test/one.png", "https://x.test/two.png", "https://x.test/primary.png"],
+      mediaUrls: images("one", "two", "primary"),
     });
     expect(payload?.attachments).toEqual([{}, {}, ...originalSource.attachments!]);
     expect(source).toEqual(originalSource);
@@ -120,7 +117,7 @@ describe("outbound payloads", () => {
   });
   it("projects text and media variants to JSON", () => {
     const mediaUrl = "https://x.test/a.jpg";
-    const mediaUrls = ["https://x.test/1.png"];
+    const mediaUrls = images("1");
     const input = [
       { text: "hi" },
       { text: "photo", mediaUrl, audioAsVoice: true },
@@ -141,8 +138,8 @@ describe("outbound payloads", () => {
   const matrix: ReplyPayload[] = [
     { text: "hello" },
     { text: "NO_REPLY", audioAsVoice: true },
-    { text: "NO_REPLY", mediaUrl: "https://x.test/1.png" },
-    { text: "MEDIA:https://x.test/2.png\nworld" },
+    { text: "NO_REPLY", mediaUrl: image("1") },
+    { text: `MEDIA:${image("2")}\nworld` },
     { text: '{"action":"NO_REPLY","note":"keep"}' },
     { text: "reasoning", isReasoning: true },
     { text: " \n", channelData: { mode: "flex" } },
@@ -163,8 +160,8 @@ describe("outbound payloads", () => {
     expect(toOutbound(plan)).toEqual([
       { text: "hello", mediaUrls: [], audioAsVoice: undefined },
       { text: "NO_REPLY", mediaUrls: [], audioAsVoice: true },
-      { text: "NO_REPLY", mediaUrls: ["https://x.test/1.png"], audioAsVoice: undefined },
-      { text: "world", mediaUrls: ["https://x.test/2.png"], audioAsVoice: undefined },
+      { text: "NO_REPLY", mediaUrls: images("1"), audioAsVoice: undefined },
+      { text: "world", mediaUrls: images("2"), audioAsVoice: undefined },
       { text: '{"action":"NO_REPLY","note":"keep"}', mediaUrls: [], audioAsVoice: undefined },
       { text: "", mediaUrls: [], channelData: { mode: "flex" }, audioAsVoice: undefined },
     ]);
@@ -245,7 +242,7 @@ describe("outbound payloads", () => {
     const visibleText =
       "Here is the config.\n\n```yaml\nserver:\n  host: 0.0.0.0\n  ports:\n    - 80\n```\n\nThe service is ready.";
     const [planned] = createPlan(
-      [{ text: `${visibleText}\n\n![chart](https://x.test/config.png)`, attachments }],
+      [{ text: `${visibleText}\n\n![chart](${image("config")})`, attachments }],
       { extractMarkdownImages: true },
     );
 
@@ -253,7 +250,7 @@ describe("outbound payloads", () => {
       planned?.payload.text,
       planned?.payload.mediaUrls,
       planned?.payload.attachments,
-    ]).toEqual([visibleText, ["https://x.test/config.png"], attachments]);
+    ]).toEqual([visibleText, images("config"), attachments]);
   });
   it("text with attachment lines", () => {
     expect(

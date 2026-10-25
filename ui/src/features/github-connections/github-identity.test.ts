@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { sourceConfigSnapshot } from "../../lib/config/config-snapshot.test-support.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
@@ -73,15 +74,6 @@ function createController(behavior: { beforeDispatch?: () => void; refreshError?
   const runExternalMutation = createMutationRunner(client, behavior);
   return { ...createIdentityFixture(client, { runExternalMutation }), client, requests };
 }
-
-const configSnapshot = (config: Record<string, unknown> = {}, hash = "poll-hash") => ({
-  config,
-  sourceConfig: config,
-  raw: JSON.stringify(config),
-  hash,
-  valid: true,
-  issues: [],
-});
 
 it("keeps independent identity drafts isolated and clears only the inherited target", async () => {
   const { identity, sync, requests } = createController();
@@ -173,7 +165,7 @@ it("config.set drains drafts before managed and refreshes both edits", async () 
   const request = vi.fn(async (method: string, params?: unknown) => {
     order.push(method);
     if (method === "config.get") {
-      return configSnapshot(storedConfig, `hash-${hashCounter}`);
+      return sourceConfigSnapshot(storedConfig, `hash-${hashCounter}`);
     }
     if (method === "config.set") {
       storedConfig = JSON.parse((params as { raw: string }).raw) as Record<string, unknown>;
@@ -244,7 +236,7 @@ it("keeps UUID generation failures inside configure handling", async () => {
 
   expect(requests).toEqual([]);
   expect(identity.read().busy).toBe(false);
-  expect(identity.read().error).toContain("Web Crypto is required");
+  await expect(identity.read().mutationCompletion).rejects.toThrow("Web Crypto is required");
 });
 
 it("does not dispatch without the required operator scopes", async () => {
@@ -320,10 +312,11 @@ it("invalidates an in-flight status on effective identity change and verifies on
   expect(request).toHaveBeenCalledTimes(2);
   expect(identity.read().draft.name).toBe("dirty author");
 
+  await initial;
+  expect(identity.read().status).toBeNull();
   first.resolve(availableStatus("system"));
   second.resolve(availableStatus("system"));
-  await initial;
-  await Promise.resolve();
+  await identity.read().statusCompletion;
   expect(identity.read().status).toEqual(availableStatus("system"));
   expect(request).toHaveBeenCalledTimes(2);
 });
@@ -344,7 +337,8 @@ it.each(["unused", "pending", "loaded", "failed"])(
         await initial;
       } else if (initialState === "failed") {
         first.reject(new Error("Status unavailable"));
-        await initial;
+        await expect(initial).rejects.toThrow("Status unavailable");
+        initial = undefined;
       }
     }
     identity.setDraft("name", "Unsaved author");
@@ -391,9 +385,8 @@ it("rejects status returned for a different agent", async () => {
     ...availableStatus("system"),
     agentId: "reviewer",
   }));
-  await identity.verify();
+  await expect(identity.verify()).rejects.toThrow("different target");
   expect(identity.read().status).toBeNull();
-  expect(identity.read().error).toContain("different target");
 });
 
 it("waits for each authoritative poll deadline and adopts successful OAuth status", async () => {
@@ -406,7 +399,7 @@ it("waits for each authoritative poll deadline and adopts successful OAuth statu
   ];
   const request = vi.fn(async (method: string) => {
     if (method === "config.get") {
-      return configSnapshot();
+      return sourceConfigSnapshot({}, "poll-hash");
     }
     if (method === "tools.github.authorize.start") {
       return authorizationCode;

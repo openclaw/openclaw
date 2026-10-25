@@ -38,9 +38,6 @@ async function mediaFixture(failProcessing = false) {
   let nextMediaId = 700;
   let nextPostId = 900;
   const api = createXTestApi({
-    clientId: "test-client",
-    clientSecret: "test-secret",
-    refreshToken: "test-refresh",
     fetch: async (url, init) => {
       const route = new URL(url).pathname;
       if (route.endsWith("/oauth2/token")) {

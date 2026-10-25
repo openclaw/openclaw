@@ -1,5 +1,6 @@
-import { AsyncLocalStorage } from "node:async_hooks";
+import { AsyncContext } from "../shared/async-context.js";
 import { runWithAsyncStore } from "../shared/async-store.js";
+import { throwSettledAggregate } from "./error-graph-internal.js";
 import type { SqliteReadOnlyWorkerSession } from "./sqlite-readonly-worker-session-types.js";
 
 export type SqliteReadOnlyWorkerScope = {
@@ -11,7 +12,9 @@ export type SqliteReadOnlyWorkerScope = {
   worker?: SqliteReadOnlyWorkerSession;
   releaseReadWorker?: () => Promise<void>;
 };
-export const readOnlyWorkerScope = new AsyncLocalStorage<SqliteReadOnlyWorkerScope>();
+export const readOnlyWorkerScope = new AsyncContext<SqliteReadOnlyWorkerScope>(
+  Symbol("sqliteReadOnlyWorkerScope"),
+);
 
 export class SqliteReadOnlyWorkerScopeClosedError extends Error {
   readonly code = "SQLITE_READONLY_WORKER_SCOPE_CLOSED";
@@ -53,12 +56,7 @@ export function createSqliteReadOnlyWorkerScope(options?: {
           scope.worker?.close(),
           scope.releaseReadWorker?.(),
         ]);
-        const failures = closed.flatMap((result) =>
-          result.status === "rejected" ? [result.reason] : [],
-        );
-        if (failures.length > 0) {
-          throw new AggregateError(failures, "SQLite read-only worker scope cleanup failed");
-        }
+        throwSettledAggregate(closed, "SQLite read-only worker scope cleanup failed");
       })();
       return closing;
     },

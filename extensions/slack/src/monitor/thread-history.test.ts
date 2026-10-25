@@ -21,6 +21,7 @@ const botMessage = <T extends object>(ts: string, content: T) => ({
 const botText = (text: string) =>
   expect.objectContaining({ text, botId: "BMONITOR", userId: undefined, files: undefined });
 const mrkdwn = (text: string) => ({ type: "mrkdwn", text });
+const section = (text: string) => ({ type: "section", text: mrkdwn(text) });
 
 function replyPage(start: number, count: number, nextCursor = "") {
   return {
@@ -113,25 +114,20 @@ describe("resolveSlackThreadHistory", () => {
         botMessage("1.000", {
           attachments: [
             {
-              title: "Filesystem on /dev/sda1 has only 14.93% available space left.",
-              fallback: "Alert: filesystem space is low",
-              fields: [{ title: "Host", value: "dc2.ipa.mgt" }],
+              title: "Low disk",
+              fallback: "Alert",
+              fields: [{ title: "Host", value: "example" }],
             },
           ],
         }),
-        botMessage("2.000", {
-          blocks: [{ type: "section", text: mrkdwn("Pod restart rate is high") }],
-        }),
+        botMessage("2.000", { blocks: [section("Restarting")] }),
         botMessage("3.000", {
           attachments: [
             {
               blocks: [
                 { type: "header", text: { type: "plain_text", text: "Alert firing" } },
-                {
-                  type: "section",
-                  fields: [mrkdwn("*host:* dc2.ipa.mgt"), mrkdwn("*device:* /dev/sda1")],
-                },
-                { type: "section", text: mrkdwn("Free space below threshold") },
+                { type: "section", fields: [mrkdwn("*host:* example"), mrkdwn("*device:* disk")] },
+                section("Free space below threshold"),
               ],
             },
           ],
@@ -143,13 +139,9 @@ describe("resolveSlackThreadHistory", () => {
         },
       ],
       expected: [
-        botText(
-          "Filesystem on /dev/sda1 has only 14.93% available space left.\nAlert: filesystem space is low\nHost\ndc2.ipa.mgt",
-        ),
-        botText("Pod restart rate is high"),
-        botText(
-          "Alert firing\n*host:* dc2.ipa.mgt\n*device:* /dev/sda1\nFree space below threshold",
-        ),
+        botText("Low disk\nAlert\nHost\nexample"),
+        botText("Restarting"),
+        botText("Alert firing\n*host:* example\n*device:* disk\nFree space below threshold"),
         expect.objectContaining({ text: "line one\nline two", botId: undefined }),
         expect.objectContaining({ text: "[Slack media attachment]", botId: undefined }),
       ],

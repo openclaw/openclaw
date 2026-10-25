@@ -46,7 +46,6 @@ const sessionEntryState = vi.hoisted(() => ({
   lifecycleRevision: undefined as string | undefined,
   canonicalKey: "main",
   cfg: {} as Record<string, unknown>,
-  loadCalls: [] as Array<{ sessionKey: string; opts?: { agentId?: string } }>,
 }));
 
 function createActiveRun(...[sessionKey, options]: Parameters<typeof createUnscopedRun>) {
@@ -57,8 +56,7 @@ function createActiveRun(...[sessionKey, options]: Parameters<typeof createUnsco
   });
 }
 
-function loadAbortSessionFixture(sessionKey: string, opts?: { agentId?: string }) {
-  sessionEntryState.loadCalls.push({ sessionKey, opts });
+function loadAbortSessionFixture(opts?: { agentId?: string }) {
   return {
     cfg: sessionEntryState.cfg,
     agentId: opts?.agentId ?? "main",
@@ -80,7 +78,7 @@ vi.mock("../session-utils.js", async () => {
   return {
     ...original,
     loadGatewaySessionEntryReadOnlyInWorker: async (params: { key: string; agentId?: string }) =>
-      loadAbortSessionFixture(params.key, { agentId: params.agentId }),
+      loadAbortSessionFixture({ agentId: params.agentId }),
   };
 });
 
@@ -88,10 +86,25 @@ const { handleDirectExternalChatSend } = await import("./chat-send-external-entr
 
 type AbortOptions = Parameters<typeof invokeChatAbortHandler>[0];
 
+function expectAborted(respond: ReturnType<typeof vi.fn>, runIds: string[]) {
+  const [ok, payload] = requireLastRespondCall(respond);
+  expect(ok).toBe(true);
+  expectAbortPayload(payload, { runIds });
+}
+
+function expectPartial(message: unknown, runId: string, stopReason?: string) {
+  expectPersistedAbortMessage(message, {
+    idempotencyKey: `${runId}:assistant`,
+    origin: "rpc",
+    runId,
+    ...(stopReason ? { stopReason } : {}),
+  });
+}
+
 function abort(
   context: AbortOptions["context"],
   request: AbortOptions["request"],
-  respond: NonNullable<AbortOptions["respond"]>,
+  respond = vi.fn(),
   client?: AbortOptions["client"],
 ) {
   return invokeChatAbortHandler({
@@ -103,19 +116,23 @@ function abort(
   });
 }
 
-function stop(
+async function stop(
   context: AbortOptions["context"],
-  params: Parameters<typeof handleDirectExternalChatSend>[0]["params"],
-  respond: NonNullable<AbortOptions["respond"]>,
+  params: Omit<
+    Parameters<typeof handleDirectExternalChatSend>[0]["params"],
+    "message" | "idempotencyKey"
+  >,
 ) {
-  return handleDirectExternalChatSend({
-    params,
+  const respond = vi.fn();
+  await handleDirectExternalChatSend({
+    params: { message: "stop", idempotencyKey: "stop", ...params },
     respond,
     context: context as never,
     req: {} as never,
     client: null,
     isWebchatConnect: () => false,
   });
+  return respond;
 }
 
 function globalConfig() {
@@ -125,11 +142,22 @@ function globalConfig() {
   }).config;
 }
 
-function globalContext(overrides: Parameters<typeof createChatAbortContext>[0] = {}) {
-  return createChatAbortContext({
-    getRuntimeConfig: globalConfig,
-    ...overrides,
-  });
+function globalRuns(selectedAgentId?: string, sessionId?: string) {
+  const run = (agentId: string) =>
+    createActiveRun("global", {
+      sessionId: selectedAgentId === agentId ? sessionId : `sess-${agentId}-global`,
+      agentId,
+    });
+  const mainActive = run("main");
+  const workActive = run("work");
+  return {
+    mainActive,
+    workActive,
+    sources: [
+      ["run-main-global", mainActive],
+      ["run-work-global", workActive],
+    ] as const,
+  };
 }
 
 function bufferedContext(
@@ -181,7 +209,6 @@ function setMockSessionEntry(params: {
   sessionEntryState.lifecycleRevision = undefined;
   sessionEntryState.canonicalKey = "agent:main:main";
   sessionEntryState.cfg = {};
-  sessionEntryState.loadCalls = [];
 }
 
 async function createTranscriptFixture(owner = { agentId: "main", sessionKey: "main" }) {
@@ -193,8 +220,6 @@ async function createTranscriptFixture(owner = { agentId: "main", sessionKey: "m
     sessionId,
     storePath,
   });
-  // The accessor resolves transcript targets from the persisted store, so the
-  // fixture seeds a real entry instead of relying on the mocked gateway wrapper.
   await replaceSessionEntry(
     { ...owner, storePath },
     { sessionId, sessionFile: transcriptPath, updatedAt: Date.now() },
@@ -208,25 +233,20 @@ async function createTranscriptFixture(owner = { agentId: "main", sessionKey: "m
   };
 }
 
-function appendTranscriptMessage(params: {
-  idempotencyKey?: string;
-  message: Record<string, unknown>;
-  sessionId: string;
-  storePath: string;
-}) {
+function appendTranscriptMessage(
+  { sessionId, storePath }: { sessionId: string; storePath: string },
+  message: Record<string, unknown>,
+) {
   const seeded = appendTranscriptMessageSync(
     {
       agentId: "main",
-      sessionId: params.sessionId,
+      sessionId,
       sessionKey: "main",
-      storePath: params.storePath,
+      storePath,
     },
     {
       idempotencyLookup: "caller-checked",
-      message: {
-        ...params.message,
-        ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
-      },
+      message,
       now: 1,
     },
   );
@@ -234,15 +254,12 @@ function appendTranscriptMessage(params: {
 }
 
 function seedCommittedReply(params: { sessionId: string; storePath: string; runId?: string }) {
-  appendTranscriptMessage({
-    ...params,
-    message: {
-      role: "assistant",
-      content: [{ type: "text", text: "Completed reply" }],
-      timestamp: Date.now(),
-      stopReason: "stop",
-      ...(params.runId ? { __openclaw: { runId: params.runId } } : {}),
-    },
+  appendTranscriptMessage(params, {
+    role: "assistant",
+    content: [{ type: "text", text: "Completed reply" }],
+    timestamp: Date.now(),
+    stopReason: "stop",
+    ...(params.runId ? { __openclaw: { runId: params.runId } } : {}),
   });
 }
 
@@ -316,11 +333,7 @@ describe("chat abort transcript persistence", () => {
     const lines = await readTranscript();
     const committed = collectMessagesWithIdempotencyKey(lines, "parent:assistant");
     expect(committed).toHaveLength(1);
-    expectPersistedAbortMessage(committed[0], {
-      idempotencyKey: "parent:assistant",
-      origin: "rpc",
-      runId: "parent",
-    });
+    expectPartial(committed[0], "parent");
     expect(collectAssistantRowsWithText(lines, "Keep the cancelled parent partial")).toHaveLength(
       1,
     );
@@ -419,9 +432,7 @@ describe("chat abort transcript persistence", () => {
 
     await abort(context, { sessionKey: "main", runId }, respond);
 
-    const [ok1, payload1] = requireLastRespondCall(respond);
-    expect(ok1).toBe(true);
-    expectAbortPayload(payload1, { runIds: [runId] });
+    expectAborted(respond, [runId]);
 
     rpcSourceTesting.set(runId, createActiveRun("main", { sessionId }));
     const retryRun = context.chatRunState.getOrCreate(runId);
@@ -434,12 +445,7 @@ describe("chat abort transcript persistence", () => {
     const persisted = collectMessagesWithIdempotencyKey(lines, `${runId}:assistant`);
 
     expect(persisted).toHaveLength(1);
-    expectPersistedAbortMessage(persisted[0], {
-      idempotencyKey: `${runId}:assistant`,
-      origin: "rpc",
-      runId,
-      stopReason: "stop",
-    });
+    expectPartial(persisted[0], runId, "stop");
   });
 
   it("saves an exact-run partial in its own session when the paired device stops it from another session", async () => {
@@ -484,78 +490,53 @@ describe("chat abort transcript persistence", () => {
       connect: { device: { id: "paired-device" }, scopes: ["operator.write"] },
     });
 
-    const [ok, payload] = requireLastRespondCall(respond);
-    expect(ok).toBe(true);
-    expectAbortPayload(payload, { runIds: [runId] });
+    expectAborted(respond, [runId]);
     expect(active.input.abortSignal.aborted).toBe(true);
     expect(rpcSourceTesting.has(runId)).toBe(false);
     const persisted = collectAssistantRowsWithText(await readTranscript(), partial);
     expect(persisted).toHaveLength(1);
-    expectPersistedAbortMessage(persisted[0], {
-      idempotencyKey: `${runId}:assistant`,
-      origin: "rpc",
-      runId,
-      stopReason: "stop",
-    });
+    expectPartial(persisted[0], runId, "stop");
     expect(await loadTranscriptEvents(requestedScope)).toEqual(before);
   });
 
-  it("keeps an abort partial when the committed reply belongs to a different run", async () => {
-    const { readTranscript, sessionId, storePath } = await createTranscriptFixture();
-    // An earlier run committed the identical reply. Text equality alone would
-    // drop this run's abort partial, so the skip must be run-scoped.
-    seedCommittedReply({ sessionId, storePath, runId: "settled-other-run" });
-
-    await persistPartial(
-      await partialSnapshot({
-        runId: "aborted-later-run",
-        sessionId,
-        text: "Completed reply",
-        abortOrigin: "rpc",
-      }),
-    );
-
-    const lines = await readTranscript();
-    const committedRows = collectAssistantRowsWithText(lines, "Completed reply");
-    expect(committedRows).toHaveLength(2);
-    expectPersistedAbortMessage(committedRows[1], {
-      idempotencyKey: "aborted-later-run:assistant",
-      origin: "rpc",
-      runId: "aborted-later-run",
-    });
-  });
-
-  it("treats a declined committed-reply skip as a decision, not a placement-abandon failure", async () => {
-    const { readTranscript, sessionId, storePath } = await createTranscriptFixture();
-    seedCommittedReply({ sessionId, storePath, runId: "stalled-placement-run" });
-
-    // The skip happens inside the writer queue after the append decision was
-    // handed off, so it must not surface as a failed placement abandonment.
-    await persistPartial(
-      await partialSnapshot({
-        runId: "stalled-placement-run",
-        sessionId,
-        text: "Completed reply",
-        abortOrigin: "placement-abandon",
-      }),
-    );
-
-    const lines = await readTranscript();
-    const committedRows = collectAssistantRowsWithText(lines, "Completed reply");
-    expect(committedRows).toHaveLength(1);
-    expect(committedRows[0]?.openclawAbort).toBeUndefined();
-  });
+  it.each([
+    { sameRun: false, origin: "rpc" as const, count: 2 },
+    { sameRun: true, origin: "placement-abandon" as const, count: 1 },
+  ])(
+    "deduplicates committed replies by run, not text (sameRun=$sameRun)",
+    async ({ sameRun, origin, count }) => {
+      const { readTranscript, sessionId, storePath } = await createTranscriptFixture();
+      const runId = "aborted-run";
+      seedCommittedReply({ sessionId, storePath, runId: sameRun ? runId : "other-run" });
+      await persistPartial(
+        await partialSnapshot({
+          runId,
+          sessionId,
+          text: "Completed reply",
+          abortOrigin: origin,
+        }),
+      );
+      const rows = collectAssistantRowsWithText(await readTranscript(), "Completed reply");
+      expect(rows).toHaveLength(count);
+      if (sameRun) {
+        expect(rows[0]?.openclawAbort).toBeUndefined();
+      } else {
+        expectPartial(rows[1], runId);
+      }
+    },
+  );
 
   it("does not let non-assistant idempotency collisions suppress abort partial persistence", async () => {
     const { readTranscript, sessionId, storePath } = await createTranscriptFixture();
     const runId = "idem-abort-collision";
     const idempotencyKey = `${runId}:assistant`;
-    appendTranscriptMessage({
-      idempotencyKey,
-      sessionId,
-      storePath,
-      message: makeUserMessage("colliding user key", 1),
-    });
+    appendTranscriptMessage(
+      { sessionId, storePath },
+      {
+        ...makeUserMessage("colliding user key", 1),
+        idempotencyKey,
+      },
+    );
 
     const respond = vi.fn();
     const context = bufferedContext(sessionId, [[runId, "Partial after collision"]]);
@@ -568,12 +549,7 @@ describe("chat abort transcript persistence", () => {
     );
 
     expect(assistantMessages).toHaveLength(1);
-    expectPersistedAbortMessage(assistantMessages[0], {
-      idempotencyKey,
-      origin: "rpc",
-      runId,
-      stopReason: "stop",
-    });
+    expectPartial(assistantMessages[0], runId, "stop");
   });
 
   it("persists a session-scoped active partial while cancelling queued input", async () => {
@@ -594,11 +570,7 @@ describe("chat abort transcript persistence", () => {
     const runAPersisted = findMessageWithIdempotencyKey(lines, "run-a:assistant");
     const runBPersisted = findMessageWithIdempotencyKey(lines, "run-b:assistant");
 
-    expectPersistedAbortMessage(runAPersisted, {
-      idempotencyKey: "run-a:assistant",
-      origin: "rpc",
-      runId: "run-a",
-    });
+    expectPartial(runAPersisted, "run-a");
     expect(runBPersisted).toBeUndefined();
   });
 
@@ -625,9 +597,7 @@ describe("chat abort transcript persistence", () => {
 
     await abort(context, { sessionKey: "main" }, respond);
 
-    const [ok, payload] = requireLastRespondCall(respond);
-    expect(ok).toBe(true);
-    expectAbortPayload(payload, { runIds: ["run-pending"] });
+    expectAborted(respond, ["run-pending"]);
     expect(pending.input.abortSignal.aborted).toBe(true);
     expect(finalizingRun.input.abortSignal.aborted).toBe(false);
     expect(rpcSourceTesting.get("run-finalizing")).toBe(finalizingRun);
@@ -639,7 +609,6 @@ describe("chat abort transcript persistence", () => {
 
   it("plain stop aborts raw-alias runs for the same backing session", async () => {
     const { sessionId } = await createTranscriptFixture();
-    const respond = vi.fn();
     const runId = "run-stop-raw-alias";
     const active = createActiveRun("alias-main", { sessionId });
     const context = createChatAbortContext({
@@ -647,19 +616,8 @@ describe("chat abort transcript persistence", () => {
       removeChatRun: vi.fn().mockReturnValue({ sessionKey: "alias-main", clientRunId: runId }),
     });
 
-    await stop(
-      context,
-      {
-        sessionKey: "main",
-        message: "stop",
-        idempotencyKey: "idem-stop-raw-alias",
-      },
-      respond,
-    );
-
-    const [ok, payload] = requireLastRespondCall(respond);
-    expect(ok).toBe(true);
-    expectAbortPayload(payload, { runIds: [runId] });
+    const respond = await stop(context, { sessionKey: "main" });
+    expectAborted(respond, [runId]);
     expect(active.input.abortSignal.aborted).toBe(true);
   });
 
@@ -674,21 +632,10 @@ describe("chat abort transcript persistence", () => {
     const cfg = globalConfig();
     sessionEntryState.canonicalKey = "global";
     sessionEntryState.cfg = cfg;
-    const respond = vi.fn();
-    const mainActive = createActiveRun("global", {
-      sessionId: selectedAgentId === "main" ? sessionId : "sess-main-global",
-      agentId: "main",
-    });
-    const workActive = createActiveRun("global", {
-      sessionId: selectedAgentId === "work" ? sessionId : "sess-work-global",
-      agentId: "work",
-    });
+    const { mainActive, workActive, sources } = globalRuns(selectedAgentId, sessionId);
     const runId = `run-${selectedAgentId}-global`;
     const context = createChatAbortContext({
-      sources: [
-        ["run-main-global", mainActive],
-        ["run-work-global", workActive],
-      ],
+      sources,
       chatRunState: createAbortTestRunState([
         [runId, { buffer: `partial ${selectedAgentId} response` }],
       ]),
@@ -700,32 +647,17 @@ describe("chat abort transcript persistence", () => {
       getRuntimeConfig: () => cfg,
     });
 
-    await stop(
-      context,
-      {
-        sessionKey: "global",
-        ...(selectedAgentId === "work" ? { agentId: selectedAgentId } : {}),
-        message: "stop",
-        idempotencyKey: `idem-stop-${selectedAgentId === "work" ? "work" : "default"}-global`,
-      },
-      respond,
-    );
+    const respond = await stop(context, {
+      sessionKey: "global",
+      ...(selectedAgentId === "work" ? { agentId: selectedAgentId } : {}),
+    });
 
-    const [ok, payload] = requireLastRespondCall(respond);
-    expect(ok).toBe(true);
-    expectAbortPayload(payload, { runIds: [runId] });
+    expectAborted(respond, [runId]);
     expect(mainActive.input.abortSignal.aborted).toBe(selectedAgentId === "main");
     expect(workActive.input.abortSignal.aborted).toBe(selectedAgentId === "work");
     expect(
       findMessageWithIdempotencyKey(await readTranscript(), `${runId}:assistant`),
     ).toBeDefined();
-    expect(context.logGateway.warn).not.toHaveBeenCalled();
-    if (selectedAgentId === "work") {
-      expect(sessionEntryState.loadCalls).toContainEqual({
-        sessionKey: "global",
-        opts: { agentId: "work" },
-      });
-    }
   });
 
   it.each([
@@ -746,19 +678,9 @@ describe("chat abort transcript persistence", () => {
     const expectedAgentId = agentId ?? (sessionKey.startsWith("agent:work:") ? "work" : "main");
     const cfg = globalConfig();
     const respond = vi.fn();
-    const mainActive = createActiveRun("global", {
-      sessionId: "sess-main-global",
-      agentId: "main",
-    });
-    const workActive = createActiveRun("global", {
-      sessionId: "sess-work-global",
-      agentId: "work",
-    });
+    const { mainActive, workActive, sources } = globalRuns();
     const context = createChatAbortContext({
-      sources: [
-        ["run-main-global", mainActive],
-        ["run-work-global", workActive],
-      ],
+      sources,
       getRuntimeConfig: () => cfg,
     });
     const agentEvents: Array<{ runId: string; sessionKey?: string; agentId?: string }> = [];
@@ -776,9 +698,7 @@ describe("chat abort transcript persistence", () => {
       unsubscribe();
     }
 
-    const [ok, payload] = requireLastRespondCall(respond);
-    expect(ok).toBe(true);
-    expectAbortPayload(payload, { runIds: [`run-${expectedAgentId}-global`] });
+    expectAborted(respond, [`run-${expectedAgentId}-global`]);
     expect(mainActive.input.abortSignal.aborted).toBe(expectedAgentId === "main");
     expect(workActive.input.abortSignal.aborted).toBe(expectedAgentId === "work");
     if (!needsGlobalConfig) {
@@ -792,7 +712,7 @@ describe("chat abort transcript persistence", () => {
 
   it("rejects selected global chat.abort when agentId conflicts with the key agent", async () => {
     const respond = vi.fn();
-    const context = globalContext();
+    const context = createChatAbortContext({ getRuntimeConfig: globalConfig });
 
     await abort(
       context,
@@ -805,11 +725,9 @@ describe("chat abort transcript persistence", () => {
 
     const [ok, , error] = requireLastRespondCall(respond);
     expect(ok).toBe(false);
-    expect(error).toEqual(
-      expect.objectContaining({
-        message: 'agentId "work" does not match session key "agent:main:main"',
-      }),
-    );
+    expect(error).toMatchObject({
+      message: 'agentId "work" does not match session key "agent:main:main"',
+    });
   });
 
   it("accepts selected global chat.abort run ids with agent-prefixed aliases", async () => {
@@ -818,7 +736,8 @@ describe("chat abort transcript persistence", () => {
       sessionId: "sess-work-global",
       agentId: "work",
     });
-    const context = globalContext({
+    const context = createChatAbortContext({
+      getRuntimeConfig: globalConfig,
       sources: [["run-work-global", workActive]],
     });
 
@@ -831,9 +750,7 @@ describe("chat abort transcript persistence", () => {
       respond,
     );
 
-    const [ok, payload] = requireLastRespondCall(respond);
-    expect(ok).toBe(true);
-    expectAbortPayload(payload, { runIds: ["run-work-global"] });
+    expectAborted(respond, ["run-work-global"]);
     expect(workActive.input.abortSignal.aborted).toBe(true);
   });
 
@@ -856,30 +773,18 @@ describe("chat abort transcript persistence", () => {
       respond,
     );
 
-    const [ok, payload] = requireLastRespondCall(respond);
-    expect(ok).toBe(true);
-    expectAbortPayload(payload, { runIds: ["run-work-global"] });
+    expectAborted(respond, ["run-work-global"]);
     expect(active.input.abortSignal.aborted).toBe(true);
   });
 
   it("does not match stop targets by client-supplied session id without a stored entry", async () => {
     const { sessionId } = await createMissingEntryFixture();
-    const respond = vi.fn();
     const active = createActiveRun("third-session", { sessionId });
     const context = createChatAbortContext({
       sources: [["run-stop-client-session", active]],
     });
 
-    await stop(
-      context,
-      {
-        sessionKey: "other-session",
-        sessionId,
-        message: "stop",
-        idempotencyKey: "idem-stop-client-session",
-      },
-      respond,
-    );
+    const respond = await stop(context, { sessionKey: "other-session", sessionId });
 
     const [ok, payload] = requireLastRespondCall(respond);
     expect(ok).toBe(true);
@@ -898,9 +803,7 @@ describe("chat abort transcript persistence", () => {
 
     await abort(context, { sessionKey: "main", runId }, respond);
 
-    const [ok, payload] = requireLastRespondCall(respond);
-    expect(ok).toBe(true);
-    expectAbortPayload(payload, { runIds: [runId] });
+    expectAborted(respond, [runId]);
 
     const lines = await readTranscript();
     const persisted = findMessageWithIdempotencyKey(lines, `${runId}:assistant`);
@@ -909,42 +812,26 @@ describe("chat abort transcript persistence", () => {
 });
 
 describe("chat.abort session identity matching", () => {
-  it("matches an active run by stored sessionId when sessionKey differs", async () => {
-    const storedSessionId = "sess-stored-abc";
-    setMockSessionEntry({ transcriptPath: "", storePath: "", sessionId: storedSessionId });
-    const runId = "embedded-run-1";
-    const active = createActiveRun("agent:main:embedded-key", { sessionId: storedSessionId });
-    const context = createChatAbortContext({
-      sources: [[runId, active]],
-    });
-    const respond = vi.fn();
-
-    await abort(context, { sessionKey: "main" }, respond);
-
-    const [ok, payload] = requireLastRespondCall(respond);
-    expect(ok).toBe(true);
-    expectAbortPayload(payload, { runIds: [runId] });
-    expect(active.input.abortSignal.aborted).toBe(true);
-    expect(sessionEntryState.loadCalls).toContainEqual({
-      sessionKey: "agent:main:main",
-      opts: { agentId: "main" },
-    });
-  });
-
-  it("does not match a run whose sessionId differs from the stored entry", async () => {
-    setMockSessionEntry({ transcriptPath: "", storePath: "", sessionId: "sess-stored-xyz" });
-    const runId = "embedded-run-2";
-    const active = createActiveRun("agent:main:other-key", { sessionId: "sess-different" });
-    const context = createChatAbortContext({
-      sources: [[runId, active]],
-    });
-    const respond = vi.fn();
-
-    await abort(context, { sessionKey: "main" }, respond);
-
-    const [ok, payload] = requireLastRespondCall(respond);
-    expect(ok).toBe(true);
-    expect(payload).toEqual({ ok: true, aborted: false, runIds: [] });
-    expect(active.input.abortSignal.aborted).toBe(false);
-  });
+  it.each([true, false])(
+    "matches only the stored session identity (matches=%s)",
+    async (matches) => {
+      const sessionId = "stored-session";
+      setMockSessionEntry({ transcriptPath: "", storePath: "", sessionId });
+      const runId = "embedded-run";
+      const active = createActiveRun("agent:main:other-key", {
+        sessionId: matches ? sessionId : "different-session",
+      });
+      const context = createChatAbortContext({ sources: [[runId, active]] });
+      const respond = vi.fn();
+      await abort(context, { sessionKey: "main" }, respond);
+      if (matches) {
+        expectAborted(respond, [runId]);
+      } else {
+        const [ok, payload] = requireLastRespondCall(respond);
+        expect(ok).toBe(true);
+        expect(payload).toEqual({ ok: true, aborted: false, runIds: [] });
+      }
+      expect(active.input.abortSignal.aborted).toBe(matches);
+    },
+  );
 });

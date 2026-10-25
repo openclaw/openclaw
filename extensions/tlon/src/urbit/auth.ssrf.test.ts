@@ -44,30 +44,22 @@ describe("tlon urbit auth ssrf", () => {
     expect(fetch).toHaveBeenCalled();
   });
 
-  it("cancels an open body stream as soon as the drain cap is reached", async () => {
-    let canceled = false;
-    mockResponse(
-      openBody(new Uint8Array(64 * 1024).fill(0x78), () => {
-        canceled = true;
-      }),
-    );
-    expect(await privateLogin()).toContain("urbauth-~zod=123");
-    expect(canceled).toBe(true);
-  });
-
-  it("cancels failed login bodies before throwing", async () => {
-    let canceled = false;
-    mockResponse(
-      openBody(new TextEncoder().encode("login failed"), () => {
-        canceled = true;
-      }),
-      401,
-    );
-    await expect(privateLogin()).rejects.toMatchObject({
-      name: "UrbitAuthError",
-      message: "Login failed with status 401",
-    });
-    expect(canceled).toBe(true);
+  it.each([200, 401])("cancels open login bodies (status %s)", async (status) => {
+    const cancel = vi.fn();
+    const bytes =
+      status === 200
+        ? new Uint8Array(64 * 1024).fill(0x78)
+        : new TextEncoder().encode("login failed");
+    mockResponse(openBody(bytes, cancel), status);
+    if (status === 200) {
+      expect(await privateLogin()).toContain("urbauth-~zod=123");
+    } else {
+      await expect(privateLogin()).rejects.toMatchObject({
+        name: "UrbitAuthError",
+        message: "Login failed with status 401",
+      });
+    }
+    expect(cancel).toHaveBeenCalledOnce();
   });
 
   it("rejects failed logins promptly when a response clone keeps cancellation pending", async () => {

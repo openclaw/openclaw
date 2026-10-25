@@ -1,3 +1,4 @@
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { listAgentIds, resolveConfiguredAgentId } from "../agents/agent-scope-config.js";
 import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -127,7 +128,9 @@ export async function backupGitInitCommand(
   if (options.json) {
     writeRuntimeJson(runtime, result);
   } else {
-    runtime.log(`Git backup repository ready: ${shortenHomePath(result.repositoryPath)}`);
+    runtime.log(
+      `Git backup repository ready: ${sanitizeTerminalText(shortenHomePath(result.repositoryPath))}`,
+    );
   }
   return result;
 }
@@ -166,15 +169,19 @@ export async function backupGitCreateCommand(runtime: RuntimeEnv, options: Backu
     if (options.json) {
       writeRuntimeJson(runtime, result);
     } else if (result.noChanges) {
-      runtime.log(`Git backup: no changes (${shortenHomePath(repositoryPath)})`);
+      runtime.log(
+        `Git backup: no changes (${sanitizeTerminalText(shortenHomePath(repositoryPath))})`,
+      );
     } else {
       runtime.log(`Git backup committed: ${result.commit}`);
     }
     if (result.pushWarning) {
-      runtime.error(`Warning: Git backup committed, but push failed: ${result.pushWarning}`);
+      runtime.error(
+        `Warning: Git backup committed, but push failed: ${sanitizeTerminalText(result.pushWarning)}`,
+      );
     }
     for (const warning of result.warnings) {
-      runtime.error(`Warning: ${warning}`);
+      runtime.error(`Warning: ${sanitizeTerminalText(warning)}`);
     }
     return result;
   } catch (error) {
@@ -200,10 +207,14 @@ export async function backupGitLogCommand(
   if (options.json) {
     writeRuntimeJson(runtime, { repositoryPath, entries });
   } else if (entries.length === 0) {
-    runtime.log(`No Git backup commits in ${shortenHomePath(repositoryPath)}.`);
+    runtime.log(
+      `No Git backup commits in ${sanitizeTerminalText(shortenHomePath(repositoryPath))}.`,
+    );
   } else {
     runtime.log(
-      entries.map((entry) => `${entry.commit}\t${entry.date}\t${entry.message}`).join("\n"),
+      entries
+        .map((entry) => `${entry.commit}\t${entry.date}\t${sanitizeTerminalText(entry.message)}`)
+        .join("\n"),
     );
   }
   return entries;
@@ -222,7 +233,9 @@ export async function backupGitVerifyCommand(
     writeRuntimeJson(runtime, result);
   } else {
     for (const table of result.tables) {
-      runtime.log(`${table.ok ? "ok" : "failed"}\t${table.table}\t${table.rows}\t${table.sha256}`);
+      runtime.log(
+        `${table.ok ? "ok" : "failed"}\t${sanitizeTerminalText(table.table)}\t${table.rows}\t${table.sha256}`,
+      );
     }
     runtime.log(`Git backup verified: ${result.commit}`);
   }
@@ -247,15 +260,17 @@ export async function backupGitRestoreCommand(
   if (options.json) {
     writeRuntimeJson(runtime, result);
   } else {
-    runtime.log(`Git backup restored: ${shortenHomePath(result.targetPath)} (${result.commit})`);
+    runtime.log(
+      `Git backup restored: ${sanitizeTerminalText(shortenHomePath(result.targetPath))} (${result.commit})`,
+    );
     if (result.excludedTables.length > 0) {
       runtime.error(
-        `Warning: this redacted backup omits tables: ${result.excludedTables.join(", ")}`,
+        `Warning: this redacted backup omits tables: ${result.excludedTables.map(sanitizeTerminalText).join(", ")}`,
       );
     }
     if (result.excludedConfigStateKeyPrefixes.length > 0) {
       runtime.error(
-        `Warning: this redacted backup omits machine-state values under: ${result.excludedConfigStateKeyPrefixes.join(", ")}`,
+        `Warning: this redacted backup omits machine-state values under: ${result.excludedConfigStateKeyPrefixes.map(sanitizeTerminalText).join(", ")}`,
       );
     }
   }

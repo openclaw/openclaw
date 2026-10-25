@@ -96,6 +96,28 @@ function bytes(state: OpenClawTestState, stores: Store[]) {
 }
 
 describe("database port local credential ownership", () => {
+  it("explains a copied state file's receipt mismatch without offering nonexistent recovery", async () => {
+    await fixture(async (state, stores) => {
+      await state.writeConfig({
+        ...config,
+        database: { postgres: { connection: "postgres://synthetic.invalid/unused" } },
+      });
+      const store = stores[0]!;
+      const original = fs.statSync(store.shared, { bigint: true });
+      fs.copyFileSync(store.shared, `${store.shared}.copy`);
+      fs.renameSync(`${store.shared}.copy`, store.shared);
+      expect(fs.statSync(store.shared, { bigint: true }).ino).not.toBe(original.ino);
+      const before = bytes(state, stores);
+      await expect(
+        doctorDatabasePort({ family: "state", to: "postgres", dryRun: true }),
+      ).rejects.toMatchObject({
+        message: `Database port preflight: ${store.local}; Database port credentials do not match the captured shared database. Restore the archive with openclaw backup restore before retrying.`,
+      });
+      expect(bytes(state, stores)).toEqual(before);
+      expect(fs.existsSync(state.statePath("recovery"))).toBe(false);
+    });
+  });
+
   it("keeps bound companions in backup and out of portable state without changing a dry run", async () => {
     await fixture(async (state, stores) => {
       const before = bytes(state, stores);

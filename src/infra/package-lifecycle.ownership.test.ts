@@ -68,9 +68,9 @@ function onPendingAccess(action: () => Promise<void>, { at = 1, after = true } =
     return result;
   });
 }
-const settle = <T>(work: Promise<T>) =>
+const settle = (work: Promise<void>) =>
   work.then(
-    (completed) => ({ completed }),
+    () => ({ completed: true as const }),
     (error: unknown) => ({ error }),
   );
 function onLockOpen(action: (flags: Parameters<typeof fs.open>[1]) => Promise<void>) {
@@ -213,10 +213,9 @@ it.each(["absent", "replacement-empty", "replacement-pending"])(
       return;
     }
     const replay = vi.fn();
-    const completed = await finish(replay);
-    expect({ markerBeforeReplay, completed, dispatches: replay.mock.calls.length }).toEqual({
+    await finish(replay);
+    expect({ markerBeforeReplay, dispatches: replay.mock.calls.length }).toEqual({
       markerBeforeReplay: null,
-      completed: false,
       dispatches: 0,
     });
   },
@@ -282,11 +281,10 @@ it.each([
   const replay = vi.fn(async () => {
     await rm(legacy, { force: true });
   });
-  const completed = await finish(replay);
+  await finish(replay);
   const shouldRestore = phase === "callback" && shape !== "absent";
-  expect({ markerBeforeReplay, completed, dispatches: replay.mock.calls.length }).toEqual({
+  expect({ markerBeforeReplay, dispatches: replay.mock.calls.length }).toEqual({
     markerBeforeReplay: shape === "pending" || shouldRestore ? "pending\n" : null,
-    completed: shape !== "absent",
     dispatches: shape !== "absent" ? 2 : 0,
   });
 });
@@ -359,7 +357,7 @@ it("retries when the observed owner released before exiting", async () => {
     fsSync.rmSync(lock);
     return false;
   });
-  await expect(finish()).resolves.toBe(true);
+  await finish();
   expect(runScript).toHaveBeenCalledTimes(2);
   await missing(lock);
 });
@@ -437,7 +435,7 @@ it.each(["pending", "completed", "replacement"])("reads %s after release", async
     expect(await read(lock)).toBe("{replacement publishing");
     expect(await read(pending)).toBe("pending\n");
   } else {
-    await expect(completion).resolves.toBe(state === "pending");
+    await completion;
     expect(runScript).toHaveBeenCalledTimes(state === "pending" ? 2 : 0);
     await missing(lock, pending);
   }
@@ -516,7 +514,7 @@ it.each(["ownership", "release"])("keeps work retired after %s failure", async (
 
   vi.restoreAllMocks();
   await rm(lock);
-  await expect(finish()).resolves.toBe(false);
+  await finish();
   expect(runScript).not.toHaveBeenCalled();
 });
 
@@ -576,7 +574,7 @@ it.each(["pending", "legacy"])("retires %s before disposal waiters enter", async
   }
   const contended = observeContention();
   const rm = fs.rm;
-  let contender: Promise<{ completed: boolean } | { error: unknown }> | undefined;
+  let contender: ReturnType<typeof settle> | undefined;
   vi.spyOn(fs, "rm").mockImplementation(async (file, options) => {
     if (file === (shape === "legacy" ? legacy : pending) && !contender) {
       contender = settle(finish());
@@ -599,7 +597,7 @@ it.each(["pending", "legacy"])("retires %s before disposal waiters enter", async
     if (result && "error" in result) {
       expect(result.error).toBeInstanceOf(OwnershipError);
     } else {
-      expect(result).toEqual({ completed: false });
+      expect(result).toEqual({ completed: true });
     }
     expect(runScript).not.toHaveBeenCalled();
     await expect(fs.access(packageRoot)).rejects.toMatchObject({ code: "ENOENT" });
@@ -613,7 +611,7 @@ it.each(["pending", "legacy"])("retires %s before disposal waiters enter", async
 it.each(["removed", "replacement"])("refuses %s roots after disposal", async (state) => {
   const displaced = displacedRoot();
   const contended = observeContention();
-  let completion: ReturnType<typeof settle<boolean>> | undefined;
+  let completion: ReturnType<typeof settle> | undefined;
   vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
   vi.useFakeTimers({ toFake: ["setTimeout"] });
   try {

@@ -3,11 +3,12 @@ import { createMemo, Errored, For, Loading, Show } from "solid-js";
 // DM sender access request queue shared by the Channels hub and detail panels.
 import type { ChannelsPairingAccount, ChannelsPairingRequest } from "../../api/types.ts";
 import { Picker } from "../../components/select-picker.ts";
-import "../../components/modal-dialog.ts";
+import "../../components/modal-dialog.tsx";
 import { ChannelPicker } from "../../components/solid/channel-picker.tsx";
 import {
   SettingsEmpty,
   SettingsLoadingSkeleton,
+  SettingsRow,
   SettingsSection,
   SettingsStatus,
 } from "../../components/solid/settings-ui.tsx";
@@ -307,31 +308,31 @@ export function renderChannelPairingDetail(channelId: string, props: ChannelsPro
                 ).length,
             );
             return (
-              <div class="settings-row">
-                <div class="settings-row__text">
-                  <span class="settings-row__title">{accountName(account())}</span>
-                  <span class="settings-row__desc">{account().accountId}</span>
-                </div>
-                <div class="settings-row__control">
-                  <SettingsStatus
-                    kind={pending() > 0 ? "warn" : "muted"}
-                    label={
-                      pending() > 0
-                        ? t("channels.pairing.pendingCount", { count: String(pending()) })
-                        : t("channels.pairing.noPending")
-                    }
-                  />
-                  <button
-                    type="button"
-                    class="btn btn--sm"
-                    onClick={() =>
-                      props.onPairingReviewAccount(account().channel, account().accountId)
-                    }
-                  >
-                    {t("channels.pairing.review")}
-                  </button>
-                </div>
-              </div>
+              <SettingsRow
+                title={accountName(account())}
+                description={account().accountId}
+                control={
+                  <>
+                    <SettingsStatus
+                      kind={pending() > 0 ? "warn" : "muted"}
+                      label={
+                        pending() > 0
+                          ? t("channels.pairing.pendingCount", { count: String(pending()) })
+                          : t("channels.pairing.noPending")
+                      }
+                    />
+                    <button
+                      type="button"
+                      class="btn btn--sm"
+                      onClick={() =>
+                        props.onPairingReviewAccount(account().channel, account().accountId)
+                      }
+                    >
+                      {t("channels.pairing.review")}
+                    </button>
+                  </>
+                }
+              />
             );
           }}
         </For>
@@ -353,7 +354,9 @@ function PairingPromptContent(params: {
   props: ChannelsProps;
 }) {
   const request = () => params.prompt.request;
-  const busy = () => params.props.channels.pairingBusyRequestId === request().requestId;
+  const busy = () =>
+    params.props.mutationBusy?.pairing ||
+    params.props.channels.pairingBusyRequestId === request().requestId;
   const approving = () => params.prompt.kind === "approve";
   const ownerMissing = () =>
     params.props.channels.pairingSnapshot?.commandOwnerConfigured === false;
@@ -405,19 +408,19 @@ function PairingPromptContent(params: {
         <openclaw-modal-actions class="channels-pairing-dialog__actions">
           <button
             type="button"
-            class={["btn", approving() ? "primary" : "danger"]}
-            disabled={!params.props.channels.connected || busy()}
-            onClick={() => params.props.onPairingPromptConfirm()}
-          >
-            {t(`channels.pairing.${params.prompt.kind}`)}
-          </button>
-          <button
-            type="button"
             class="btn"
             disabled={busy()}
             onClick={() => params.props.onPairingPromptCancel()}
           >
             {t("common.cancel")}
+          </button>
+          <button
+            type="button"
+            class={["btn", approving() ? "primary" : "danger"]}
+            disabled={!params.props.channels.connected || busy()}
+            onClick={() => params.props.onPairingPromptConfirm()}
+          >
+            {t(`channels.pairing.${params.prompt.kind}`)}
           </button>
         </openclaw-modal-actions>
       </div>

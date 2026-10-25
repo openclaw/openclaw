@@ -152,11 +152,17 @@ export async function requestClientCredentialsFromApp(
   }
   const { response } = outcome;
   if (!response.ok) {
-    // This refusal occurs before the app acquires a root or executes an operation.
-    if (response.error.code === "credential_root_unowned") {
+    // Both refusals occur before the app acquires a root or executes an operation.
+    // Released apps that predate the credential route send the frozen unknown-operation
+    // refusal; they cannot own any root, exactly like an app that is not running.
+    const { code, message } = response.error;
+    if (
+      code === "credential_root_unowned" ||
+      (code === "invalid_request" && message === "Unknown control operation.")
+    ) {
       return undefined;
     }
-    throw new Error(`Client credential owner refused the operation: ${response.error.message}`);
+    throw new Error(`Client credential owner refused the operation: ${message}`);
   }
   return response.result;
 }

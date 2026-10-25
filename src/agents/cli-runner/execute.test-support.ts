@@ -1,8 +1,9 @@
 import { beforeEach, vi } from "vitest";
-import type { enqueueSessionEventForHost } from "../../auto-reply/reply/session-event-handoff.js";
+import * as sessionEventHandoff from "../../auto-reply/reply/session-event-handoff.js";
+import * as processSupervisor from "../../process/supervisor/index.js";
 import type { ProcessSupervisor, RunExit } from "../../process/supervisor/types.js";
 import { withTestRunAdmission } from "../admitted-run-context.test-support.js";
-import { executeDeps } from "./execute-deps.js";
+import { createRunExit } from "../bash-tools.exec-runtime.test-support.js";
 import type { PreparedCliRunContext } from "./types.js";
 
 /** Encloses a logical test run, including retries, in the admission preparation normally owns. */
@@ -23,16 +24,18 @@ export function wrapPreparedCliRunWithTestAdmission<Args extends unknown[], T>(
 }
 
 export const supervisorSpawnMock = vi.fn<ProcessSupervisor["spawn"]>();
-export const enqueueSessionEventMock = vi.fn<typeof enqueueSessionEventForHost>(() => ({
-  id: "cli-watchdog-event",
-  accepted: Promise.resolve({ ok: true }),
-  cancel: () => true,
-  settled: Promise.resolve({ status: "completed", executionStarted: true, delivered: false }),
-}));
+export const enqueueSessionEventMock = vi.fn<typeof sessionEventHandoff.enqueueSessionEventForHost>(
+  () => ({
+    id: "cli-watchdog-event",
+    accepted: Promise.resolve({ ok: true }),
+    cancel: () => true,
+    settled: Promise.resolve({ status: "completed", executionStarted: true, delivered: false }),
+  }),
+);
 
 beforeEach(({ onTestFinished }) => {
   const getProcessSupervisorSpy = vi
-    .spyOn(executeDeps, "getProcessSupervisor")
+    .spyOn(processSupervisor, "getProcessSupervisor")
     .mockImplementation(() => {
       const activeRuns = new Map<string, Awaited<ReturnType<ProcessSupervisor["spawn"]>>>();
       return {
@@ -87,7 +90,7 @@ beforeEach(({ onTestFinished }) => {
       };
     });
   const captureSessionEventTargetForHostSpy = vi
-    .spyOn(executeDeps, "captureSessionEventTarget")
+    .spyOn(sessionEventHandoff, "captureSessionEventTargetForHost")
     .mockImplementation(async (agentId, sessionKey) => ({
       agentId,
       sessionKey,
@@ -95,7 +98,7 @@ beforeEach(({ onTestFinished }) => {
       generation: "test",
     }));
   const enqueueSessionEventForHostSpy = vi
-    .spyOn(executeDeps, "enqueueSessionEvent")
+    .spyOn(sessionEventHandoff, "enqueueSessionEventForHost")
     .mockImplementation((text, options) => enqueueSessionEventMock(text, options));
   onTestFinished(() => {
     getProcessSupervisorSpy.mockRestore();
@@ -119,14 +122,5 @@ export function createManagedRun(exit: MockRunExit, pid = 1234) {
 }
 
 export function createSuccessfulProcessExit(): MockRunExit {
-  return {
-    reason: "exit",
-    exitCode: 0,
-    exitSignal: null,
-    durationMs: 50,
-    stdout: "",
-    stderr: "",
-    timedOut: false,
-    noOutputTimedOut: false,
-  };
+  return createRunExit({ durationMs: 50 });
 }

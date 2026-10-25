@@ -63,9 +63,6 @@ async function createClawCronGateway(
     cronEnabled: false,
     log: createNoopLogger(),
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: () => {
-      throw new Error("Claw Add must not invoke heartbeat execution");
-    },
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
   });
   cronServices.push(cron);

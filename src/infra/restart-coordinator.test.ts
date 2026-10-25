@@ -85,6 +85,7 @@ describe("safe gateway restart coordinator", () => {
     vi.mocked(replies.getTotalPendingReplies).mockReturnValue(1);
     vi.mocked(sessionRuns.getActiveSessionRunCount).mockReturnValue(1);
     vi.mocked(cronJobs.getActiveCronJobCount).mockReturnValue(1);
+    vi.mocked(backgroundExec.getActiveBackgroundExecSessionCount).mockReturnValue(2);
     vi.spyOn(gatewayWork, "getActiveGatewayRootWorkCount").mockReturnValue(1);
     vi.mocked(agentRuns.getActiveAgentRunContextCount).mockReturnValue(1);
     vi.mocked(acpTurns.getActiveAcpTurnCount).mockReturnValue(2);
@@ -92,11 +93,12 @@ describe("safe gateway restart coordinator", () => {
     const preflight = createSafeGatewayRestartPreflight();
 
     expect(preflight.safe).toBe(false);
-    expect(preflight.counts.totalActive).toBe(12);
+    expect(preflight.counts).toMatchObject({ totalActive: 14, backgroundExecSessions: 2 });
     expect(preflight.blockers.map((blocker) => blocker.kind)).toEqual([
       "queue",
       "reply",
       "embedded-run",
+      "background-exec",
       "cron-run",
       "agent-run",
       "acp-run",
@@ -105,25 +107,12 @@ describe("safe gateway restart coordinator", () => {
     ]);
     expect(preflight.summary).toContain("restart deferred");
     expect(preflight.summary).toContain("1 admitted agent run(s)");
-  });
-
-  it("defers restart for aggregate background exec sessions", () => {
-    vi.mocked(backgroundExec.getActiveBackgroundExecSessionCount).mockReturnValue(2);
-    const preflight = createSafeGatewayRestartPreflight();
-
-    expect(preflight.safe).toBe(false);
-    expect(preflight.counts).toMatchObject({
-      backgroundExecSessions: 2,
-      totalActive: 2,
+    expect(preflight.blockers).toContainEqual({
+      kind: "background-exec",
+      count: 2,
+      message: "2 active background exec session(s)",
     });
-    expect(preflight.blockers).toEqual([
-      {
-        kind: "background-exec",
-        count: 2,
-        message: "2 active background exec session(s)",
-      },
-    ]);
-    expect(preflight.summary).toBe("restart deferred: 2 active background exec session(s)");
+    expect(preflight.summary).toContain("2 active background exec session(s)");
   });
 
   it("counts an admitted spawn handoff while excluding the preflight request", async () => {

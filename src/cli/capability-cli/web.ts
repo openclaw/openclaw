@@ -1,27 +1,23 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  readStringValue,
+} from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { defaultRuntime } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
+import { parseOptionalPositiveInteger } from "../parse-positive-integer.js";
 import type { CapabilityEnvelope } from "./metadata.js";
 import { emitJsonOrText, formatEnvelopeForText } from "./output.js";
 import { registerLocalProvidersCommand } from "./providers-command.js";
 
 function describeWebResultFailure(result: Record<string, unknown>): string | undefined {
-  const statusCode =
-    typeof result.statusCode === "number" && Number.isFinite(result.statusCode)
-      ? result.statusCode
-      : undefined;
+  const statusCode = asFiniteNumber(result.statusCode);
   const error = result.error;
   const errorMessage =
-    typeof error === "string"
-      ? error
-      : error &&
-          typeof error === "object" &&
-          typeof (error as { message?: unknown }).message === "string"
-        ? (error as { message: string }).message
-        : undefined;
+    readStringValue(error) ?? readStringValue(asOptionalObjectRecord(error)?.message);
   if (result.ok !== false && (statusCode === undefined || statusCode < 400) && !errorMessage) {
     return undefined;
   }
@@ -67,7 +63,6 @@ export function registerWebCapabilityCommands(capability: Command): void {
     .option("--json", "Output JSON", false)
     .action((opts) =>
       runWebCommand("web.search", opts.json, async () => {
-        const { parseOptionalPositiveInteger } = await import("./shared.js");
         const query = String(opts.query);
         const provider = opts.provider as string | undefined;
         const limit = parseOptionalPositiveInteger(opts.limit, "--limit");

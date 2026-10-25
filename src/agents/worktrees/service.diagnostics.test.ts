@@ -18,6 +18,7 @@ import type { SpawnResult } from "../../process/exec.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { isPidAlive } from "../../shared/pid-alive.js";
 import * as stateLease from "../../state/openclaw-state-lease.js";
+import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { killPidIfAlive } from "../../test-utils/process-tree.js";
 import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
 import { WORKTREE_MUTATION_LEASE_SCOPE } from "./capacity-contract.js";
@@ -33,14 +34,7 @@ import type { ManagedWorktreeRecord } from "./types.js";
 const realRunCommand = commandExec.runCommandWithTimeout;
 const realRunGitWorkerOperation = gitWorker.runGitWorkerOperation;
 const realAbortWorktreeRemoval = worktreeRunLease.abortWorktreeRemoval;
-const emptyFailure: SpawnResult = {
-  stdout: "",
-  stderr: "",
-  code: 73,
-  signal: null,
-  killed: false,
-  termination: "exit",
-};
+const emptyFailure: SpawnResult = createCommandResult({ code: 73 });
 
 async function failureMessage(operation: Promise<unknown>): Promise<string> {
   const failure: unknown = await operation.then(

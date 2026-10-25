@@ -12,6 +12,7 @@ import {
   observeCatalogWorkerTasks,
   waitForCatalogPublication,
 } from "./models-auth-catalog.test-support.js";
+import { catalogDiscoverySource } from "./models-catalog-fixture.test-support.js";
 
 it.for([false, true])(
   "models.authLogin publishes delayed account rows to passive models.list (configured: %s)",
@@ -139,15 +140,7 @@ it.for([false, true])(
             refresh: token.refresh_token, expires: Date.now() + 3600000,
             accountId: "fixture-account", email: "fixture@example.invalid",
           } }] };
-        } }], catalog: { order: "profile", async run(ctx) {
-          const auth = ctx.resolveProviderAuth(${JSON.stringify(provider)});
-          if (!auth.discoveryApiKey) return null;
-          const response = await fetch(${JSON.stringify(`${baseUrl}/models`)}, { headers: { Authorization: "Bearer " + auth.discoveryApiKey } });
-          if (!response.ok) throw new Error("Fixture catalog rejected account");
-          return { provider: { baseUrl: ${JSON.stringify(baseUrl)}, api: "openai-completions",
-            models: (await response.json()).map(row => ({ ...row, reasoning: false, input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 32768, maxTokens: 4096 })) } };
-        } },
+        } }], ${catalogDiscoverySource(provider, baseUrl, { error: "Fixture catalog rejected account" })},
       }); }
     };`,
       );

@@ -14,14 +14,18 @@ import {
 type PathOptions = NonNullable<Parameters<typeof getMinimalServicePathPartsFromEnv>[0]>;
 type ServiceOptions = Partial<Omit<Parameters<typeof buildServiceEnvironment>[0], "env">>;
 const home = "/home/u";
-const allExist = () => true;
-const noneExist = () => false;
 const userPath = (suffix: string) => `${home}/${suffix}`;
 const paths = (env: NodeJS.ProcessEnv = {}, options: PathOptions = {}) =>
   getMinimalServicePathPartsFromEnv({ platform: "linux", env: { HOME: home, ...env }, ...options });
 const serviceEnv = (env: NodeJS.ProcessEnv = {}, options: ServiceOptions = {}) =>
   buildServiceEnvironment({ env: { HOME: home, ...env }, port: 18789, ...options });
 afterEach(() => vi.restoreAllMocks());
+function mockPaths(exists: boolean, cwd?: string) {
+  vi.spyOn(fs, "existsSync").mockReturnValue(exists);
+  if (cwd) {
+    vi.spyOn(process, "cwd").mockReturnValue(cwd);
+  }
+}
 
 function expectPathOrder(actual: string[], expected: string[]) {
   const indices = expected.map((entry) => actual.indexOf(entry));
@@ -42,7 +46,7 @@ describe("service PATH", () => {
     );
   });
   it("places package-manager bins after trusted system directories", () => {
-    vi.spyOn(fs, "existsSync").mockImplementation(allExist);
+    mockPaths(true);
     const result = paths({
       PNPM_HOME: userPath(".local/share/pnpm"),
       NPM_CONFIG_PREFIX: userPath(".npm-global"),
@@ -65,8 +69,7 @@ describe("service PATH", () => {
     }
   });
   it("excludes env-configured bins derived from the install workspace", () => {
-    vi.spyOn(process, "cwd").mockReturnValue(userPath("workspace"));
-    vi.spyOn(fs, "existsSync").mockImplementation(noneExist);
+    mockPaths(false, userPath("workspace"));
     const result = paths({
       PNPM_HOME: userPath("workspace/evil-pnpm"),
       NPM_CONFIG_PREFIX: "/proc/thread-self/cwd/evil-npm",
@@ -87,8 +90,7 @@ describe("service PATH", () => {
     expect(result).toEqual(expect.arrayContaining(["/opt/volta/bin", "/nix/default/bin"]));
   });
   it("excludes bins whose existing parent resolves into the workspace", () => {
-    vi.spyOn(process, "cwd").mockReturnValue(userPath("workspace"));
-    vi.spyOn(fs, "existsSync").mockImplementation(noneExist);
+    mockPaths(false, userPath("workspace"));
     vi.spyOn(fs.realpathSync, "native").mockImplementation((candidate) => {
       const value = String(candidate);
       if (value === "/tmp/link") {
@@ -104,25 +106,17 @@ describe("service PATH", () => {
     expect(result).toContain("/opt/volta/bin");
   });
   it("keeps toolchain roots when the install cwd is HOME", () => {
-    vi.spyOn(process, "cwd").mockReturnValue(home);
-    vi.spyOn(fs, "existsSync").mockImplementation(noneExist);
+    mockPaths(false, home);
     const result = paths({
       PNPM_HOME: userPath(".local/share/pnpm"),
       FNM_DIR: userPath(".local/share/fnm"),
     });
-    expect(result).toEqual(
-      expect.arrayContaining(
-        [
-          ".local/share/pnpm",
-          ".local/share/pnpm/bin",
-          ".local/share/fnm/aliases/default/bin",
-          ".local/share/fnm/current/bin",
-        ].map(userPath),
-      ),
-    );
+    for (const suffix of ["pnpm", "pnpm/bin", "fnm/aliases/default/bin", "fnm/current/bin"]) {
+      expect(result).toContain(userPath(`.local/share/${suffix}`));
+    }
   });
   it("preserves Nix precedence across three profiles", () => {
-    vi.spyOn(fs, "existsSync").mockImplementation(allExist);
+    mockPaths(true);
     const profiles = [userPath(".nix-profile"), "/nix/custom", "/nix/default"];
     const result = paths({ NIX_PROFILES: profiles.toReversed().join(" ") });
     expectPathOrder(
@@ -149,34 +143,26 @@ describe("service environment", () => {
         OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.work",
       },
     ],
-    [
-      "bare unit override",
-      { OPENCLAW_PROFILE: "work", OPENCLAW_SYSTEMD_UNIT: "maintenance" },
-      "linux",
-      {
-        OPENCLAW_SYSTEMD_UNIT: "maintenance.service",
-      },
-    ],
-    [
-      "suffixed unit override",
-      { OPENCLAW_SYSTEMD_UNIT: "maintenance.service" },
-      "linux",
-      {
-        OPENCLAW_SYSTEMD_UNIT: "maintenance.service",
-      },
-    ],
-    [
-      "proxy URL fallback",
-      { OPENCLAW_PROXY_URL: " http://127.0.0.1:3128 " },
-      undefined,
-      {
-        OPENCLAW_PROXY_URL: "http://127.0.0.1:3128",
-      },
-    ],
   ] satisfies Array<
     [string, NodeJS.ProcessEnv, NodeJS.Platform | undefined, Record<string, string>]
   >)("preserves %s", (_name, env, platform, expected) => {
     expect(serviceEnv(env, { platform })).toMatchObject(expected);
+  });
+  it.each(["maintenance", "maintenance.service"])("normalizes unit override %s", (unit) => {
+    expect(
+      serviceEnv(
+        {
+          ...(unit === "maintenance" ? { OPENCLAW_PROFILE: "work" } : {}),
+          OPENCLAW_SYSTEMD_UNIT: unit,
+        },
+        { platform: "linux" },
+      ).OPENCLAW_SYSTEMD_UNIT,
+    ).toBe("maintenance.service");
+  });
+  it("trims the proxy URL fallback", () => {
+    expect(serviceEnv({ OPENCLAW_PROXY_URL: " http://127.0.0.1:3128 " }).OPENCLAW_PROXY_URL).toBe(
+      "http://127.0.0.1:3128",
+    );
   });
   it("does not persist ambient proxy variables", () => {
     const proxies = {
@@ -230,6 +216,16 @@ describe("service environment", () => {
   );
   it("does not apply the Gateway heap policy to node services", () => {
     expect(buildNodeServiceEnvironment({ env: { HOME: home } }).NODE_OPTIONS).toBeUndefined();
+  });
+  it("retains the selected profile in the installed node environment", () => {
+    expect(
+      buildNodeServiceEnvironment({ env: { HOME: home, OPENCLAW_PROFILE: "work" } }),
+    ).toMatchObject({
+      OPENCLAW_PROFILE: "work",
+      OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.node.work",
+      OPENCLAW_SYSTEMD_UNIT: "openclaw-node-work",
+      OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Node (work)",
+    });
   });
   it("fences inherited Node compile cache in macOS node LaunchAgents", () => {
     const environment = buildNodeServiceEnvironment({

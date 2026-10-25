@@ -95,18 +95,6 @@ type ComfyMode = "local" | "cloud";
 type ComfyCapability = "image" | "music" | "video";
 type ComfyWorkflow = Record<string, unknown>;
 type ComfyProviderConfig = Record<string, unknown>;
-type ComfyPromptResponse = {
-  prompt_id?: string;
-};
-type ComfyUploadResponse = {
-  name?: string;
-  filename?: string;
-};
-type ComfyStatusResponse = {
-  status?: string;
-  message?: string;
-  error?: string;
-};
 type ComfyApiKeyResolution =
   | {
       status: "available";
@@ -130,12 +118,6 @@ type ComfyGeneratedAsset = {
   mimeType: string;
   fileName: string;
   metadata: { nodeId: string; promptId: string };
-};
-
-type ComfyWorkflowResult = {
-  assets: ComfyGeneratedAsset[];
-  model: string;
-  metadata: { promptId: string; outputNodeIds: string[] };
 };
 
 function readConfigInteger(config: ComfyProviderConfig, key: string): number | undefined {
@@ -437,7 +419,7 @@ export async function runComfyWorkflow(params: {
   timeoutMs?: number;
   capability: ComfyCapability;
   inputImage?: ComfySourceImage;
-}): Promise<ComfyWorkflowResult> {
+}) {
   const { config, path: configPath } = getComfyConfig(params.cfg);
   const capabilityConfig = getComfyCapabilityConfig(config, params.capability);
   const mode = resolveComfyMode(capabilityConfig);
@@ -540,7 +522,7 @@ export async function runComfyWorkflow(params: {
     const uploadHeaders = new Headers(headers);
     uploadHeaders.delete("Content-Type");
 
-    const payload = await readJsonResponse<ComfyUploadResponse>({
+    const payload = await readJsonResponse<{ name?: string; filename?: string }>({
       deadline,
       timeoutMs,
       policy: networkPolicy,
@@ -568,7 +550,7 @@ export async function runComfyWorkflow(params: {
     ...(mode === "cloud" && apiKey ? { extra_data: { api_key_comfy_org: apiKey } } : {}),
   };
 
-  const promptResponse = await readJsonResponse<ComfyPromptResponse>({
+  const promptResponse = await readJsonResponse<{ prompt_id?: string }>({
     url: `${baseUrl}${mode === "cloud" ? "/api/prompt" : "/prompt"}`,
     init: {
       method: "POST",
@@ -606,7 +588,10 @@ export async function runComfyWorkflow(params: {
 
     for (;;) {
       if (mode === "cloud") {
-        const status = await read<ComfyStatusResponse>(`/api/job/${promptId}/status`, "status");
+        const status = await read<{ status?: string; message?: string; error?: string }>(
+          `/api/job/${promptId}/status`,
+          "status",
+        );
         if (status.status === "completed") {
           return await read<unknown>(`/api/history_v2/${promptId}`, "history");
         }

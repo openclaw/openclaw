@@ -151,3 +151,62 @@ it.each([false, true])(
     );
   },
 );
+
+it("refreshes health from the cron partition currently published by the kernel", async () => {
+  const fixture = await createKernelFixture("gateway-health-cron-partition", {
+    layout: "home",
+  });
+  const { state } = fixture;
+  let kernel: Awaited<ReturnType<typeof createGatewayKernel>> | undefined;
+  const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+  try {
+    await fixture.configure({
+      agents: {
+        defaults: { systemAgent: { agentId: "main" } },
+        entries: { main: {} },
+      },
+    });
+    kernel = await fixture.open();
+    const previous = kernel.runtimeState.cronState;
+    const secondPartition = state.statePath("health-second-partition.json");
+    reads.mockClear();
+    const partitions = () =>
+      reads.mock.calls.flatMap(([, command]) =>
+        command.type === "automationProactive.jobs" ? [command.input.storePath] : [],
+      );
+
+    await kernel.gatewayRequestContext.refreshHealthSnapshot({
+      probe: false,
+      includeSensitive: true,
+    });
+    expect(partitions()).toEqual([previous.storePath]);
+
+    await previous.cron.start();
+    reads.mockClear();
+    for (let index = 0; index < 2; index += 1) {
+      await kernel.gatewayRequestContext.refreshHealthSnapshot({
+        probe: false,
+        includeSensitive: true,
+      });
+    }
+    expect(partitions()).toEqual([]);
+
+    // Hot reload uses this same owner publication; retained request contexts must follow it.
+    kernel.kernel.swapCronState({
+      ...previous,
+      storePath: secondPartition,
+      readHeartbeatSummary: undefined,
+    });
+    try {
+      await kernel.gatewayRequestContext.refreshHealthSnapshot({
+        probe: false,
+        includeSensitive: true,
+      });
+      expect(partitions()).toEqual([secondPartition]);
+    } finally {
+      kernel.kernel.swapCronState(previous);
+    }
+  } finally {
+    await closeKernelFixture(kernel, state, () => reads.mockRestore());
+  }
+});

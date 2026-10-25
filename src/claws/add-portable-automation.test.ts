@@ -86,9 +86,6 @@ it.each([
         defaultAgentId: "main",
         log: createNoopLogger(),
         enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: () => {
-          throw new Error("Portable automations must use session execution");
-        },
         runSessionEvent: run,
         runIsolatedAgentJob: run,
       });

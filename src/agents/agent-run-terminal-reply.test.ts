@@ -9,19 +9,16 @@ describe("prepareAgentRunTerminalReply", () => {
     {
       name: "an acknowledgement-only message",
       payload: { text: "HEARTBEAT_OK" },
-      isHeartbeatTrigger: false,
       visible: false,
     },
     {
       name: "visible text beside the acknowledgement",
       payload: { text: "HEARTBEAT_OK Everything is ready." },
-      isHeartbeatTrigger: false,
       visible: true,
     },
     {
       name: "media beside the acknowledgement",
       payload: { text: "HEARTBEAT_OK", mediaUrl: "https://example.invalid/chart.png" },
-      isHeartbeatTrigger: false,
       visible: true,
     },
     {
@@ -31,20 +28,12 @@ describe("prepareAgentRunTerminalReply", () => {
         mediaUrl: "  ",
         mediaUrls: ["  ", "https://example.invalid/chart.png"],
       },
-      isHeartbeatTrigger: false,
       visible: true,
     },
-    {
-      name: "a real heartbeat acknowledgement",
-      payload: { text: "HEARTBEAT_OK" },
-      isHeartbeatTrigger: true,
-      visible: true,
-    },
-  ])("projects $name through message presentation", ({ payload, isHeartbeatTrigger, visible }) => {
+  ])("projects $name through message presentation", ({ payload, visible }) => {
     expect(
       filterAgentRunTerminalPayloadsForPresentation({
         payloads: [payload],
-        isHeartbeatTrigger,
       }),
     ).toEqual(visible ? [payload] : []);
   });

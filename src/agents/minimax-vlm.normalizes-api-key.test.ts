@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isMinimaxVlmModel, minimaxUnderstandImage } from "./minimax-vlm.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
@@ -11,7 +11,6 @@ vi.mock("../infra/net/fetch-guard.js", async () => {
 });
 
 describe("minimaxUnderstandImage apiKey normalization", () => {
-  const priorMinimaxApiHost = process.env.MINIMAX_API_HOST;
   function jsonResponse(payload: unknown) {
     return new Response(JSON.stringify(payload), {
       headers: { "Content-Type": "application/json" },
@@ -32,12 +31,10 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
     fetchWithSsrFGuardMock.mockResolvedValueOnce(guarded(new Response(body, init)));
   }
 
+  beforeEach(() => vi.stubEnv("MINIMAX_API_HOST", ""));
+
   afterEach(() => {
-    if (priorMinimaxApiHost === undefined) {
-      delete process.env.MINIMAX_API_HOST;
-    } else {
-      process.env.MINIMAX_API_HOST = priorMinimaxApiHost;
-    }
+    vi.unstubAllEnvs();
     fetchWithSsrFGuardMock.mockReset();
     vi.restoreAllMocks();
   });
@@ -59,7 +56,7 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
   }
 
   async function requestError(input: Parameters<typeof understandImage>[0] = {}) {
-    const error = await understandImage({ apiHost: "https://api.minimax.io", ...input }).catch(
+    const error = await understandImage({ modelBaseUrl: "https://api.minimax.io", ...input }).catch(
       (caught: unknown) => caught,
     );
     if (!(error instanceof Error)) {
@@ -71,7 +68,7 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
   it("strips embedded CR/LF before sending Authorization header", async () => {
     const opts = await requestOptions({
       apiKey: "minimax-test-\r\nkey",
-      apiHost: "https://api.minimax.io",
+      modelBaseUrl: "https://api.minimax.io",
     });
     expect(new Headers(opts?.init?.headers).get("Authorization")).toBe("Bearer minimax-test-key");
   });
@@ -84,10 +81,10 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
 
   it.each([undefined, "https://["])(
     "keeps minimax-portal-cn on the CN host with configured host %s",
-    async (apiHost) => {
+    async (modelBaseUrl) => {
       const opts = await requestOptions({
         provider: "minimax-portal-cn",
-        ...(apiHost ? { apiHost } : {}),
+        ...(modelBaseUrl ? { modelBaseUrl } : {}),
       });
       expect(opts?.url).toBe("https://api.minimaxi.com/v1/coding_plan/vlm");
     },
@@ -97,12 +94,12 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
     it.each([
       {
         name: "pins a default hostname without broad private-network access",
-        input: { apiHost: "https://api.minimax.io" },
+        input: { modelBaseUrl: "https://api.minimax.io" },
         policy: { hostnameAllowlist: ["api.minimax.io"] },
       },
       {
         name: "preserves an explicitly configured loopback origin",
-        input: { apiHost: "https://localhost:8080" },
+        input: { modelBaseUrl: "https://localhost:8080" },
         policy: {
           hostnameAllowlist: ["localhost"],
           allowedOrigins: ["https://localhost:8080"],
@@ -110,12 +107,12 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
       },
       {
         name: "lets explicit denial override configured origin trust",
-        input: { apiHost: "https://localhost:8080", allowPrivateNetwork: false },
+        input: { modelBaseUrl: "https://localhost:8080", allowPrivateNetwork: false },
         policy: { hostnameAllowlist: ["localhost"] },
       },
       {
         name: "preserves explicit private-network opt-in",
-        input: { apiHost: "https://custom-minimax.example.com", allowPrivateNetwork: true },
+        input: { modelBaseUrl: "https://custom-minimax.example.com", allowPrivateNetwork: true },
         policy: {
           hostnameAllowlist: ["custom-minimax.example.com"],
           allowedOrigins: ["https://custom-minimax.example.com"],
@@ -124,12 +121,12 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
       },
       {
         name: "refuses metadata-like configured origin trust",
-        input: { apiHost: "https://metadata.minimax.local" },
+        input: { modelBaseUrl: "https://metadata.minimax.local" },
         policy: undefined,
       },
       {
         name: "refuses link-local configured origin trust",
-        input: { apiHost: "https://169.254.1.1" },
+        input: { modelBaseUrl: "https://169.254.1.1" },
         policy: undefined,
       },
     ])("$name", async ({ input, policy }) => {
@@ -148,7 +145,7 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
 
     it("carries model request proxy policy into the guarded fetch", async () => {
       const opts = await requestOptions({
-        apiHost: "https://custom-minimax.example.com",
+        modelBaseUrl: "https://custom-minimax.example.com",
         request: { proxy: { mode: "explicit-proxy", url: "https://proxy.example.com" } },
       });
       expect(opts?.dispatcherPolicy).toEqual({

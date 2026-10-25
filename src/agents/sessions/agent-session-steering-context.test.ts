@@ -1,10 +1,6 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import {
-  createAssistantMessageEventStream,
-  type Context,
-  type Model,
-} from "openclaw/plugin-sdk/llm";
+import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -31,6 +27,7 @@ import {
   createAssistant,
   createAssistantResultStream,
   createTestSession,
+  holdAssistantResponse,
   registerAgentSessionLoopTestLifecycle,
   streamMocks,
   testModel,
@@ -75,7 +72,7 @@ function holdInitialRequest(
 ) {
   const requests: Context[] = [];
   const firstRequest = createDeferredCore();
-  let finishInitialResponse = () => {};
+  let held: ReturnType<typeof holdAssistantResponse> | undefined;
   streamMocks.streamSimple.mockImplementation((model: Model, context: Context) => {
     requests.push(context);
     if (requests.length !== 1) {
@@ -83,17 +80,13 @@ function holdInitialRequest(
         createAssistant(model, [...thinking(), textBlock(nextText)]),
       );
     }
-    const stream = createAssistantMessageEventStream();
-    finishInitialResponse = () => {
-      finishInitialResponse = () => {};
-      const message = createAssistant(model, [...thinking(), textBlock("Initial answer")]);
-      stream.push({ type: "done", reason: "stop", message });
-      stream.end();
-    };
+    held = holdAssistantResponse(() =>
+      createAssistant(model, [...thinking(), textBlock("Initial answer")]),
+    );
     firstRequest.resolve();
-    return stream;
+    return held.response;
   });
-  return { requests, firstRequest, finish: () => finishInitialResponse() };
+  return { requests, firstRequest, finish: () => held?.release() };
 }
 
 const quotedContext = (text: string) => ({
@@ -165,10 +158,11 @@ async function withHeldPrompt<T>(
 it("orders operator context and renews runtime facts after a later extension message", async () => {
   const requests = captureResponses();
   const extensionMessage = extension("Hook context");
-  const loader = await createResourceLoader((api) => {
-    api.on("before_agent_start", async () => ({ message: extensionMessage }));
+  const { session, sessionManager } = await createTestSession({
+    extension: (api) => {
+      api.on("before_agent_start", async () => ({ message: extensionMessage }));
+    },
   });
-  const { session, sessionManager } = await createTestSession({ resourceLoader: loader });
   installPermissionPrompt(session);
   let queuedExtension = false;
   session.agent.subscribe(async (event) => {

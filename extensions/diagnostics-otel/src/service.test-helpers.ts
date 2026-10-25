@@ -1,5 +1,4 @@
 import { createServer, type IncomingHttpHeaders } from "node:http";
-import type { AddressInfo } from "node:net";
 import { context, diag, metrics as otelMetrics, propagation, trace } from "@opentelemetry/api";
 import { logs as otelLogs } from "@opentelemetry/api-logs";
 import {
@@ -16,6 +15,7 @@ import {
   registerDiagnosticTracePropagationBridge,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { vi } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import type { ExporterHealthUpdate } from "./service-exporter-health.js";
 import { createDiagnosticsOtelService } from "./service.js";
 
@@ -214,11 +214,7 @@ export async function startOtlpReceiver() {
       response.end();
     });
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const { port } = server.address() as AddressInfo;
+  const port = await listenOnLoopback(server);
   return {
     endpoint: `http://127.0.0.1:${port}`,
     requests,
@@ -280,3 +276,14 @@ export function snapshotOtelEnv(keys: readonly string[]) {
     }
   };
 }
+
+export type MetricArgs = [
+  name: string,
+  value: number,
+  attributes: unknown,
+  position?: "first" | "last",
+  omittedText?: string[],
+];
+export type MetricExpectation = [kind: "counter" | "histogram", ...MetricArgs];
+export const counter = (...args: MetricArgs): MetricExpectation => ["counter", ...args];
+export const histogram = (...args: MetricArgs): MetricExpectation => ["histogram", ...args];

@@ -1,6 +1,7 @@
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { hashCronJobDefinition } from "../definition-hash.js";
+import { PLUGIN_COMMAND_SCHEDULE_MESSAGE } from "../plugin-command-schedule.types.js";
 import { stripCronPinnedExecGrant } from "../scheduled-tool-policy.js";
 import { parseCronStreamSandboxTarget } from "../stream-sandbox-target.js";
 import type { CronStoredJob, CronStoreFile } from "../types.js";
@@ -31,6 +32,14 @@ export function stripJobRuntimeFields(job: CronStoreFile["jobs"][number]): Recor
     toolsAllow,
     requirement: rest.toolsAllowExecTargetRequirement,
   });
+  if (
+    rest.pluginCommand !== undefined &&
+    (payload?.kind !== "agentTurn" || payload.message !== PLUGIN_COMMAND_SCHEDULE_MESSAGE)
+  ) {
+    throw new Error(
+      `Cannot persist plugin command cron job ${job.id} without its reserved payload`,
+    );
+  }
   // Runtime state and authority have separate owners; JSON is canonical for config.
   return {
     ...rest,
@@ -39,6 +48,11 @@ export function stripJobRuntimeFields(job: CronStoreFile["jobs"][number]): Recor
       : {}),
     ...(payload && storedToolsAllow
       ? { payload: { ...payload, toolsAllow: storedToolsAllow } }
+      : {}),
+    // Hosts without command schedules quarantine this unknown kind as invalid-payload. A
+    // persisted agentTurn would instead run there as an unbounded ordinary model prompt.
+    ...(rest.pluginCommand !== undefined
+      ? { payload: { kind: "pluginCommand", toolsAllow: storedToolsAllow ?? toolsAllow } }
       : {}),
     ...(rest.delivery && hasCanonicalCronDeliveryMode(rest.delivery)
       ? { delivery: deliveryToJson(rest.delivery) }
@@ -63,11 +77,22 @@ export function decodeStoredCronJobConfig(
   jobJson: Record<string, unknown>,
 ): Record<string, unknown> {
   const schedule = isRecord(jobJson.schedule) ? jobJson.schedule : undefined;
+  const payload = isRecord(jobJson.payload) ? jobJson.payload : undefined;
   const streamSandbox = parseCronStreamSandboxTarget(jobJson.streamSandbox);
   return {
     ...decodeDeliveryConfig(jobJson),
     ...(schedule?.kind === "sandbox-stream" && streamSandbox
       ? { schedule: { ...schedule, kind: "stream" }, streamSandbox }
+      : {}),
+    // Only the private envelope selects the reserved runner; without it the row stays invalid.
+    ...(payload?.kind === "pluginCommand" && isRecord(jobJson.pluginCommand)
+      ? {
+          payload: {
+            kind: "agentTurn",
+            message: PLUGIN_COMMAND_SCHEDULE_MESSAGE,
+            ...(payload.toolsAllow === undefined ? {} : { toolsAllow: payload.toolsAllow }),
+          },
+        }
       : {}),
   };
 }

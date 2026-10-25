@@ -8,6 +8,7 @@ import { build } from "esbuild";
 import { afterEach, expect, it } from "vitest";
 import { resolveOpenClawCompileCacheDirectory } from "../../node-compile-cache.mjs";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { listDirectoryTreeStrict } from "./directory-walk.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const MiB = 1024 * 1024;
@@ -65,6 +66,7 @@ it("prewarms the release graph, respecting the disabled cache policy", async () 
     "cli-invocation.mjs",
     "cli-parent-lifetime.mjs",
     "gateway-shutdown-budget.mjs",
+    "node-runtime-env.mjs",
   ]) {
     await fs.copyFile(new URL(`../../${name}`, import.meta.url), path.join(root, name));
   }
@@ -195,7 +197,8 @@ it("prunes old bytecode and caps 600 MiB across releases without touching neighb
   await fs.utimes(old, expired, expired);
   await fs.utimes(cache, expired, expired);
   await maintainCompileCache(directory);
-  const files = (await fs.readdir(cache, { recursive: true, withFileTypes: true }))
+  const files = (await listDirectoryTreeStrict(cache))
+    .map((walkEntry) => walkEntry.dirent)
     .filter((entry) => entry.isFile())
     .map((entry) => path.join(entry.parentPath, entry.name));
   const bytes = (await Promise.all(files.map(async (file) => (await fs.stat(file)).size))).reduce(

@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as snapshots from "../infra/fs-observation-snapshot.js";
+import * as configPaths from "./paths.js";
 import { admitConfigObservationRoots, configObservationEntries } from "./source-file-roots.js";
 import { createConfigFileAdapter } from "./source-file.js";
 
@@ -31,6 +32,7 @@ async function fixture({
   realMode?: boolean;
   includeRoots?: readonly string[];
 } = {}) {
+  vi.spyOn(configPaths, "resolveIncludeRoots").mockReturnValue([...includeRoots]);
   const directory = await fs.realpath(dirs.make("config-observation-"));
   const p = (name: string) => path.join(directory, name);
   await fs.writeFile(p("openclaw.json"), "{}");
@@ -65,7 +67,6 @@ async function fixture({
   const adapter = createConfigFileAdapter({
     path: p("openclaw.json"),
     includedPaths: [p("accepted.json")],
-    includeRoots,
     onChange,
     onReady: () => ready.resolve(),
     log,
@@ -253,6 +254,32 @@ describe("config file observation", () => {
     await h.expectChanges(1);
   });
 
+  it.each([false, true])(
+    "notifies once after watcher recovery (edit during downtime: %s)",
+    async (edit) => {
+      const h = await fixture();
+      const previous = h.sources[0]!;
+      const installed = h.nextSource();
+      previous.options.onHealth?.({
+        state: "unavailable",
+        mode: "events",
+        directories: 0,
+        failure: { operation: "scan", error: new Error("watch observation worker stopped") },
+      });
+      await previous.subscription.close();
+      if (edit) {
+        await fs.writeFile(h.p("openclaw.json"), '{"changedWhileUnavailable":true}');
+      }
+      await vi.advanceTimersByTimeAsync(500);
+      const replacement = await installed;
+      await replacement.subscription.ready;
+      await h.settle();
+      expect(h.adapter.status()).toBe("active");
+      expect(h.onChange).toHaveBeenCalledOnce();
+      await h.expectChanges(1);
+    },
+  );
+
   it.each([undefined, "false", "1"])(
     "bounds watch-limit recovery and preserves polling override %s",
     async (setting) => {
@@ -286,10 +313,12 @@ describe("config file observation", () => {
         await vi.advanceTimersByTimeAsync(ms);
         const current = await installed;
         await current.subscription.ready;
+        await h.settle();
         expect(current.options.mode).toBe(initialMode);
       }
       const fallback = setting === undefined ? h.nextSource() : undefined;
       vi.stubEnv("CHOKIDAR_USEPOLLING", setting === undefined ? "false" : undefined);
+      h.onChange.mockClear();
       fail();
       await h.sources.at(-1)!.subscription.close();
       await vi.advanceTimersByTimeAsync(500);
@@ -300,6 +329,7 @@ describe("config file observation", () => {
         expect(h.log.warn).toHaveBeenCalledWith(expect.stringContaining("degrading to polling"));
       } else {
         expect(h.adapter.status()).toBe("disabled");
+        expect(h.onChange).toHaveBeenCalledOnce();
         expect(h.sources).toHaveLength(4);
         expect(h.log.warn).not.toHaveBeenCalledWith(
           expect.stringContaining("degrading to polling"),
@@ -307,6 +337,24 @@ describe("config file observation", () => {
       }
     },
   );
+
+  it("reconciles once when a failed watcher cannot retire", async () => {
+    const h = await fixture();
+    const previous = h.sources[0]!;
+    vi.spyOn(previous.subscription, "close").mockRejectedValue(new Error("retirement failed"));
+    previous.options.onHealth?.({
+      state: "unavailable",
+      mode: "events",
+      directories: 0,
+      failure: { operation: "scan", error: new Error("watch observation worker stopped") },
+    });
+    await vi.advanceTimersByTimeAsync(500);
+    expect(h.adapter.status()).toBe("disabled");
+    expect(h.onChange).toHaveBeenCalledOnce();
+    expect(h.sources).toHaveLength(1);
+    adapters.delete(h.adapter);
+    await expect(h.adapter.stop()).rejects.toThrow("Config watcher shutdown failed");
+  });
 
   it("admits a root-level config directory from its stable volume root", async () => {
     const directory = await fs.realpath(dirs.make("config-volume-root-"));

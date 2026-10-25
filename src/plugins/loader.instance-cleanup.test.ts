@@ -3,6 +3,8 @@ import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
+import { closePreparedModelRuntimeSnapshots } from "../agents/prepared-model-runtime.lifecycle.js";
+import { ownPreparedPluginGeneration } from "../agents/prepared-model-runtime.plugin-lifetime.js";
 import { collectErrorGraphCandidates } from "../infra/errors.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -22,9 +24,9 @@ import {
   withPluginCache,
   type PluginCache,
 } from "./plugin-cache.js";
-import { PluginInstanceDrainTimeoutError } from "./plugin-instance-error.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import { PluginInstance } from "./plugin-instance.js";
+import { createPluginMetadataSnapshotFixture } from "./plugin-metadata.test-support.js";
 import { createInspectionFixture } from "./registry-inspection.test-helpers.js";
 import { hasRetainedPluginRuntimeCloseError } from "./runtime-close-error.js";
 import {
@@ -57,7 +59,7 @@ function pluginConfig(...plugins: ReturnType<typeof writePlugin>[]) {
   };
 }
 
-it.each(["settled", "rejected", "pending"] as const)(
+it.each(["settled", "rejected"] as const)(
   "reports %s inspection disposal without confusing failure with retained custody",
   async (outcome) => {
     const fixture = createInspectionFixture();
@@ -66,11 +68,7 @@ it.each(["settled", "rejected", "pending"] as const)(
     if (!instance) {
       throw new Error("Missing inspection instance");
     }
-    const finished = createDeferredCore();
-    const failure =
-      outcome === "pending"
-        ? new PluginInstanceDrainTimeoutError("fixture drain pending", finished.promise, {})
-        : new Error("fixture instance disposal failed");
+    const failure = new Error("fixture instance disposal failed");
     const dispose = vi.fn(() => {
       if (outcome === "settled") {
         throw failure;
@@ -80,8 +78,6 @@ it.each(["settled", "rejected", "pending"] as const)(
     const observedDispose = outcome === "settled" ? undefined : vi.spyOn(instance, "dispose");
     if (outcome === "rejected") {
       observedDispose?.mockRejectedValue(failure);
-    } else if (outcome === "pending") {
-      observedDispose?.mockResolvedValue({ errors: [failure] });
     }
     try {
       const release = inspection.release();
@@ -103,7 +99,68 @@ it.each(["settled", "rejected", "pending"] as const)(
     } finally {
       observedDispose?.mockRestore();
       await instance.dispose();
-      finished.resolve();
+      await fixture.cleanup(inspection);
+      resetPluginLoaderTestStateForTest();
+    }
+  },
+);
+
+it.each([false, true])(
+  "closes after forced retirement settles (cleanup failure: %s)",
+  async (failCleanup) => {
+    const fixture = createInspectionFixture();
+    const inspection = await acquirePluginRegistryForInspection({ config: fixture.config });
+    const instance = getPluginInstance(inspection.registry.plugins[0]!);
+    if (!instance) {
+      throw new Error("Missing inspection instance");
+    }
+    const entered = createDeferredCore();
+    const finish = createDeferredCore();
+    instance.lifecycle.onDispose(async () => {
+      entered.resolve();
+      await finish.promise;
+      if (failCleanup) {
+        throw new Error("late fixture cleanup failed");
+      }
+    });
+    const generation = ownPreparedPluginGeneration({
+      pluginMetadataSnapshot: createPluginMetadataSnapshotFixture(),
+      pluginRegistry: inspection.registry,
+      remoteCatalog: null,
+      inlineProviderModels: [],
+      configuredCatalogEntries: [],
+    });
+    await inspection.release();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const retirement = generation.close();
+    void retirement.catch(() => {});
+    let closing: Promise<void> | undefined;
+    try {
+      await entered.promise;
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect((await instance.dispose()).errors).toMatchObject([
+        { forcedRetirement: { activeCallCount: 1 } },
+      ]);
+      let completed = false;
+      closing = closePreparedModelRuntimeSnapshots();
+      void closing.then(
+        () => {
+          completed = true;
+        },
+        () => {
+          completed = true;
+        },
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect.soft(completed).toBe(false);
+      finish.resolve();
+      await expect(closing).resolves.toBeUndefined();
+      await expect(closePreparedModelRuntimeSnapshots()).resolves.toBeUndefined();
+      expect(fixture.connection().instanceDisposals).toBe(1);
+    } finally {
+      finish.resolve();
+      await Promise.allSettled([retirement, closing]);
+      vi.useRealTimers();
       await fixture.cleanup(inspection);
       resetPluginLoaderTestStateForTest();
     }
@@ -557,21 +614,26 @@ it("joins failed registration cleanup through cache retirement and preserves bot
   }
 });
 
-it("closes loader admission before a retiring setup owner's abort callback", async () => {
-  const cache = createPluginCache();
-  const instance = new PluginInstance("retiring-setup");
-  cache.setupModules.set(instance.pluginId, instance);
-  let failure: unknown;
-  instance.lifecycle.signal.addEventListener("abort", () => {
-    try {
-      withPluginCache(cache, () => loadOpenClawPlugins({ onlyPluginIds: [], activate: false }));
-    } catch (error) {
-      failure = error;
-    }
-  });
-  await retirePluginCache(cache);
-  expect(failure).toEqual(expect.objectContaining({ message: expect.stringContaining("retired") }));
-});
+it.each([false, true])(
+  "closes loader admission before setup abort (settlement: %s)",
+  async (waitForSettlement) => {
+    const cache = createPluginCache();
+    const instance = new PluginInstance("retiring-setup");
+    cache.setupModules.set(instance.pluginId, instance);
+    let failure: unknown;
+    instance.lifecycle.signal.addEventListener("abort", () => {
+      try {
+        withPluginCache(cache, () => loadOpenClawPlugins({ onlyPluginIds: [], activate: false }));
+      } catch (error) {
+        failure = error;
+      }
+    });
+    await retirePluginCache(cache, undefined, { waitForSettlement });
+    expect(failure).toEqual(
+      expect.objectContaining({ message: expect.stringContaining("retired") }),
+    );
+  },
+);
 
 it("rejects deferred runtime loading after cache retirement completes", async () => {
   useNoBundledPlugins();

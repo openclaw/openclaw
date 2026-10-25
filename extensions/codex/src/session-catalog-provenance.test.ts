@@ -1,18 +1,20 @@
+import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { zstdCompressSync } from "node:zlib";
+import { constants, zstdCompressSync } from "node:zlib";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { isOpenClawManagedCodexThread } from "./session-catalog-provenance.js";
+import {
+  isOpenClawManagedCodexThread,
+  readCodexSessionMeta,
+} from "./session-catalog-provenance.js";
 import {
   config,
   idleThread,
   commandRpcMocks,
   pinnedConnectionMocks,
   createCodexSessionCatalogControlFactory as createCodexSessionCatalogControl,
-  createRuntime,
-  createGatewayApi,
-  registerCodexSessionCatalog,
+  createCatalogTestProvider,
   createCodexTestBindingStore,
   createCodexSessionCatalogNodeHostCommands,
   CODEX_TERMINAL_RESUME_COMMAND,
@@ -20,27 +22,142 @@ import {
   withEnvAsync,
 } from "./session-catalog.test-helpers.js";
 
-const temporaryDirectories: string[] = [];
-
-afterEach(async () => {
-  await Promise.all(
-    temporaryDirectories
-      .splice(0)
-      .map((directory) => fs.rm(directory, { recursive: true, force: true })),
-  );
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const meta = (id = "source", provider = "native-a") => ({
+  type: "session_meta",
+  payload: { id, model_provider: provider, dynamic_tools: [] },
 });
-
-async function writeRollout(payload: Record<string, unknown>): Promise<string> {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-provenance-"));
-  temporaryDirectories.push(directory);
-  const file = path.join(directory, "rollout.jsonl");
-  await fs.writeFile(file, `${JSON.stringify({ type: "session_meta", payload })}\n`);
-  return file;
+const encode = (records: unknown[]) =>
+  Buffer.from(records.map((record) => JSON.stringify(record)).join("\n") + "\n");
+async function rolloutFixture(
+  payload: Record<string, unknown> = meta().payload,
+  compressed = false,
+) {
+  const home = await fs.realpath(tempDirs.make("codex-provenance-"));
+  const root = path.join(home, "sessions");
+  await fs.mkdir(root);
+  const rollout = path.join(root, "source.jsonl");
+  const selectedPath = compressed ? `${rollout}.zst` : rollout;
+  const write = (bytes: Buffer) =>
+    fs.writeFile(selectedPath, compressed ? zstdCompressSync(bytes) : bytes);
+  const writeMetadata = (value: Record<string, unknown>) =>
+    write(encode([{ type: "session_meta", payload: value }]));
+  await writeMetadata(payload);
+  return {
+    home,
+    root,
+    rollout,
+    selectedPath,
+    write,
+    writeMetadata,
+    read: async () => {
+      const result = await readCodexSessionMeta(root, rollout, "source", { canonicalSource: true });
+      if (!result) {
+        throw new Error("Rollout metadata could not be verified");
+      }
+      return result;
+    },
+  };
 }
+
+describe("bounded native rollout metadata", () => {
+  it("keeps canonicalized catalog roots distinct from canonical source admission", async () => {
+    const f = await rolloutFixture();
+    const alias = `${f.root}.link`;
+    await fs.symlink(f.root, alias);
+    const rollout = path.join(alias, path.basename(f.rollout));
+    await expect(readCodexSessionMeta(alias, rollout, "source")).resolves.toEqual(meta().payload);
+    await expect(
+      readCodexSessionMeta(alias, rollout, "source", { canonicalSource: true }),
+    ).resolves.toBeUndefined();
+  });
+
+  it.each(["large history", "large decoder window"])(
+    "keeps ordinary catalog metadata readable with %s",
+    async (size) => {
+      const f = await rolloutFixture(meta().payload, true);
+      const history =
+        size === "large history"
+          ? randomBytes(9 * 1024 * 1024).toString("base64")
+          : "x".repeat(33 * 1024 * 1024);
+      await fs.writeFile(
+        f.selectedPath,
+        zstdCompressSync(encode([meta(), { type: "event_msg", payload: history }]), {
+          params: { [constants.ZSTD_c_windowLog]: 26 },
+        }),
+      );
+      await expect(readCodexSessionMeta(f.root, f.rollout, "source")).resolves.toEqual(
+        meta().payload,
+      );
+      await expect(f.read()).rejects.toThrow();
+    },
+  );
+
+  it("prefers the exact plain file", async () => {
+    const f = await rolloutFixture(meta("source", "plain").payload);
+    await fs.writeFile(
+      `${f.rollout}.zst`,
+      zstdCompressSync(encode([meta("source", "compressed")])),
+    );
+    expect((await f.read()).model_provider).toBe("plain");
+  });
+
+  it.each(["wrong identity", "incomplete header", "hardlink", "symlink", "outside root"])(
+    "fails closed for %s without selecting a fallback",
+    async (fault) => {
+      const f = await rolloutFixture();
+      await fs.writeFile(
+        `${f.rollout}.zst`,
+        zstdCompressSync(encode([meta("source", "fallback")])),
+      );
+      if (fault === "wrong identity") {
+        await f.write(encode([meta("wrong")]));
+      }
+      if (fault === "incomplete header") {
+        await f.write(Buffer.from('{"type":'));
+      }
+      if (fault === "hardlink") {
+        await fs.link(f.rollout, `${f.rollout}.link`);
+      }
+      if (fault === "symlink") {
+        await fs.rename(f.rollout, `${f.rollout}.real`);
+        await fs.symlink(`${f.rollout}.real`, f.rollout);
+      }
+      if (fault === "outside root") {
+        const child = path.join(f.root, "child");
+        await fs.mkdir(child);
+        await expect(readCodexSessionMeta(child, f.rollout, "source")).resolves.toBeUndefined();
+      } else {
+        await expect(f.read()).rejects.toThrow();
+      }
+    },
+  );
+
+  it("rejects invalid compressed header UTF-8 without contaminating the next read", async () => {
+    const invalid = await rolloutFixture(meta().payload, true);
+    await invalid.write(Buffer.from([0xff, 10]));
+    await expect(invalid.read()).rejects.toThrow();
+    const valid = await rolloutFixture(meta().payload, true);
+    await expect(valid.read()).resolves.toEqual(meta().payload);
+  });
+
+  it.each(["input limit", "header limit"])("rejects compressed %s", async (fault) => {
+    const f = await rolloutFixture(meta().payload, true);
+    if (fault === "input limit") {
+      await fs.appendFile(f.selectedPath, Buffer.alloc(8 * 1024 * 1024));
+    } else {
+      await f.write(encode([meta("source", "x".repeat(1024 * 1024))]));
+    }
+    await expect(f.read()).rejects.toThrow();
+  });
+});
 
 describe("Codex catalog provenance", () => {
   it("does not seed rollout provenance cache from an API-only result", async () => {
-    const file = await writeRollout({ id: "uncached-originator", originator: "codex_cli_rs" });
+    const { rollout: file } = await rolloutFixture({
+      id: "uncached-originator",
+      originator: "codex_cli_rs",
+    });
     const thread = idleThread({ id: "uncached-originator", path: file, originator: "openclaw" });
     await expect(isOpenClawManagedCodexThread(thread, path.dirname(file))).resolves.toBe(true);
     await expect(
@@ -57,70 +174,56 @@ describe("Codex catalog provenance", () => {
     ).resolves.toBe(false);
   });
 
-  it.each([false])(
-    "settles compressed read failures and preserves recovery (plain fallback=%s)",
-    async (plainFallback) => {
-      const threadId = `compressed-read-failure-${plainFallback}`;
-      const file = await writeRollout({ id: threadId, originator: "openclaw", source: "vscode" });
-      const compressed = `${file}.zst`;
-      await fs.writeFile(compressed, zstdCompressSync(await fs.readFile(file)));
-      if (!plainFallback) {
-        await fs.rm(file);
+  it("settles compressed read failures and preserves recovery without a plain fallback", async () => {
+    const threadId = "compressed-read-failure-false";
+    const { rollout: file, selectedPath: compressed } = await rolloutFixture(
+      { id: threadId, originator: "openclaw", source: "vscode" },
+      true,
+    );
+    const compressedPaths = new Set([compressed, await fs.realpath(compressed)]);
+    const open = fs.open.bind(fs);
+    let failedHandle: Awaited<ReturnType<typeof fs.open>> | undefined;
+    const openSpy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await open(...args);
+      if (typeof args[0] === "string" && compressedPaths.has(args[0])) {
+        failedHandle = handle;
+        const createReadStream = handle.createReadStream.bind(handle);
+        vi.spyOn(handle, "createReadStream").mockImplementationOnce((options) => {
+          const stream = createReadStream(options);
+          stream.destroy(new Error("rollout source read failed"));
+          return stream;
+        });
       }
-      const compressedPaths = new Set([compressed, await fs.realpath(compressed)]);
-      const open = fs.open.bind(fs);
-      let failedHandle: Awaited<ReturnType<typeof fs.open>> | undefined;
-      const openSpy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-        const handle = await open(...args);
-        if (typeof args[0] === "string" && compressedPaths.has(args[0])) {
-          failedHandle = handle;
-          const createReadStream = handle.createReadStream.bind(handle);
-          vi.spyOn(handle, "createReadStream").mockImplementationOnce((options) => {
-            const stream = createReadStream(options);
-            stream.destroy(new Error("rollout source read failed"));
-            return stream;
-          });
-        }
-        return handle;
-      });
-      const thread = idleThread({ id: threadId, path: compressed });
-      try {
-        await expect(isOpenClawManagedCodexThread(thread, path.dirname(file))).resolves.toBe(
-          plainFallback,
-        );
-      } finally {
-        openSpy.mockRestore();
-      }
-      expect(failedHandle?.fd).toBe(-1);
-      // An unreadable rollout supplies no durable negative provenance.
-      await expect(isOpenClawManagedCodexThread(thread, path.dirname(file))).resolves.toBe(true);
-    },
-  );
+      return handle;
+    });
+    const thread = idleThread({ id: threadId, path: compressed });
+    try {
+      await expect(isOpenClawManagedCodexThread(thread, path.dirname(file))).resolves.toBe(false);
+    } finally {
+      openSpy.mockRestore();
+    }
+    expect(failedHandle?.fd).toBe(-1);
+    // An unreadable rollout supplies no durable negative provenance.
+    await expect(isOpenClawManagedCodexThread(thread, path.dirname(file))).resolves.toBe(true);
+  });
 });
 
 // Filesystem cases use the production budget; clock-driven cases select their own deadline.
 async function localEligibilityFixture(now = () => 0, requestTimeoutMs?: number) {
-  const home = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "codex-eligibility-")));
-  temporaryDirectories.push(home);
-  const root = path.join(home, "sessions");
-  await fs.mkdir(root);
-  const rollout = path.join(root, "source.jsonl");
   const metadata = {
     id: "12345678-1234-1234-1234-123456789abc",
     source: "cli",
     originator: "codex_cli_rs",
   };
-  const writeMetadata = (payload: Record<string, unknown>) =>
-    fs.writeFile(rollout, `${JSON.stringify({ type: "session_meta", payload })}\n`);
-  await writeMetadata(metadata);
-  const thread = idleThread({ id: metadata.id, source: "cli", path: rollout });
+  const rollout = await rolloutFixture(metadata);
+  const thread = idleThread({ id: metadata.id, source: "cli", path: rollout.rollout });
   const managedThreads = {
     has: vi.fn(async (_sourceHomeId: string, _threadId: string) => false),
     mark: vi.fn(async () => true),
     snapshot: vi.fn(async () => new Map()),
   };
   const factory = createCodexSessionCatalogControl({
-    env: { CODEX_HOME: home },
+    env: { CODEX_HOME: rollout.home },
     getPluginConfig: () => ({ appServer: { requestTimeoutMs } }),
     getRuntimeConfig: () => config,
     now,
@@ -128,73 +231,54 @@ async function localEligibilityFixture(now = () => 0, requestTimeoutMs?: number)
   });
   const source = (await factory.homesForAgent("main"))[0]!;
   const control = factory.forRequest("main", source);
+  const reply = ({ method }: { method: string }, includeTurns = false) => {
+    if (method === "thread/read") {
+      return { thread };
+    }
+    if (includeTurns && method === "thread/turns/list") {
+      return { data: [] };
+    }
+    throw new Error("broad listing must not run");
+  };
   pinnedConnectionMocks.request.mockImplementation(async ({ method }) =>
     method === "thread/read" ? { thread } : { data: [thread] },
   );
   return {
-    home,
-    root,
-    rollout,
+    ...rollout,
     metadata,
-    writeMetadata,
     thread,
     managedThreads,
     factory,
     source,
     control,
+    reply,
+    reject: () =>
+      expect(control.requireEligibleThread(metadata.id)).rejects.toThrow(
+        "eligibility could not be verified",
+      ),
   };
 }
 
 describe("Codex exact local eligibility", () => {
-  it.each([{ custom: "atlas" }] as const)(
-    "verifies interactive source %j using one selected rollout",
-    async (source) => {
-      const f = await localEligibilityFixture();
-      f.thread.source = source;
-      await f.writeMetadata({ ...f.metadata, source });
-      await expect(f.control.requireEligibleThread(f.thread.id)).resolves.toBe(f.thread);
-      expect(
-        pinnedConnectionMocks.request.mock.calls.map(([r]) => [r.method, r.requestParams]),
-      ).toEqual([["thread/read", { threadId: f.thread.id, includeTurns: false }]]);
-      expect(commandRpcMocks.codexControlRequest).not.toHaveBeenCalled();
-      expect(f.managedThreads.snapshot).not.toHaveBeenCalled();
-    },
-  );
-
   it.each([
     "noninteractive",
     "stale source",
-    "wrong metadata",
     "wrong read",
     "outside",
-    "symlink",
-    "hardlink",
     "oversized",
     "managed",
     "managed provenance",
   ])("rejects %s evidence without broad listing", async (kind) => {
     const f = await localEligibilityFixture();
-    const listed = { ...f.thread };
     if (kind === "noninteractive") {
       f.thread.source = "exec";
     } else if (kind === "stale source") {
       await f.writeMetadata({ ...f.metadata, source: "exec" });
-    } else if (kind === "wrong metadata") {
-      await f.writeMetadata({ ...f.metadata, id: "other-thread" });
     } else if (kind === "wrong read") {
       f.thread.id = "other-thread";
     } else if (kind === "outside") {
       f.thread.path = path.join(f.home, "source.jsonl");
-      listed.path = f.thread.path;
       await fs.rename(f.rollout, f.thread.path);
-    } else if (kind === "symlink" || kind === "hardlink") {
-      const target = path.join(f.home, "source.jsonl");
-      await fs.rename(f.rollout, target);
-      if (kind === "symlink") {
-        await fs.symlink(target, f.rollout);
-      } else {
-        await fs.link(target, f.rollout);
-      }
     } else if (kind === "oversized") {
       await f.writeMetadata({ ...f.metadata, instructions: "x".repeat(1024 * 1024) });
     } else if (kind === "managed") {
@@ -202,18 +286,8 @@ describe("Codex exact local eligibility", () => {
     } else {
       await f.writeMetadata({ ...f.metadata, originator: "openclaw" });
     }
-    pinnedConnectionMocks.request.mockImplementation(async ({ method, requestParams }) => {
-      if (method === "thread/read") {
-        return { thread: f.thread };
-      }
-      if (method === "thread/list" && requestParams.useStateDbOnly === true) {
-        return { data: [listed] };
-      }
-      throw new Error("broad listing must not run");
-    });
-    await expect(f.control.requireEligibleThread(f.metadata.id)).rejects.toThrow(
-      "eligibility could not be verified",
-    );
+    pinnedConnectionMocks.request.mockImplementation(async (request) => f.reply(request));
+    await f.reject();
     expect(
       pinnedConnectionMocks.request.mock.calls.every(
         ([r]) => r.method !== "thread/list" || r.requestParams.useStateDbOnly === true,
@@ -228,9 +302,7 @@ describe("Codex exact local eligibility", () => {
     commandRpcMocks.codexControlRequest.mockResolvedValue({});
     await f.control.archiveThread(f.thread.id);
     commandRpcMocks.codexControlRequest.mockClear();
-    await expect(f.control.requireEligibleThread(f.thread.id)).rejects.toThrow(
-      "eligibility could not be verified",
-    );
+    await f.reject();
     expect(commandRpcMocks.codexControlRequest).not.toHaveBeenCalled();
     expect(pinnedConnectionMocks.request).not.toHaveBeenCalled();
   });
@@ -242,9 +314,7 @@ describe("Codex exact local eligibility", () => {
       now += 1_001;
       return { thread: f.thread };
     });
-    await expect(f.control.requireEligibleThread(f.thread.id)).rejects.toThrow(
-      "eligibility could not be verified",
-    );
+    await f.reject();
     expect(pinnedConnectionMocks.request.mock.calls.map(([r]) => r.timeoutMs)).toEqual([1_000]);
     expect(commandRpcMocks.codexControlRequest).not.toHaveBeenCalled();
   });
@@ -260,9 +330,7 @@ describe("Codex exact local eligibility", () => {
     );
     vi.useFakeTimers();
     try {
-      const result = expect(f.control.requireEligibleThread(f.thread.id)).rejects.toThrow(
-        "eligibility could not be verified",
-      );
+      const result = f.reject();
       await vi.advanceTimersByTimeAsync(1_000);
       await result;
       release(false);
@@ -274,41 +342,24 @@ describe("Codex exact local eligibility", () => {
   });
 
   it.each(["transcript", "node terminal"])(
-    "uses exact eligibility for %s at the real catalog boundary",
+    "uses exact Atlas eligibility for %s at the real catalog boundary",
     async (action) => {
       const f = await localEligibilityFixture();
-      // Terminal viewing remains available while the source is active.
-      if (action.includes("terminal")) {
+      f.thread.source = { custom: "atlas" };
+      await f.writeMetadata({ ...f.metadata, source: f.thread.source });
+      if (action === "node terminal") {
         f.thread.status = { type: "active" };
       }
-      const reply = ({
-        method,
-        requestParams,
-      }: {
-        method: string;
-        requestParams: Record<string, unknown>;
-      }) => {
-        if (method === "thread/read") {
-          return { thread: f.thread };
-        }
-        if (method === "thread/list" && requestParams.useStateDbOnly === true) {
-          return { data: [f.thread] };
-        }
-        if (method === "thread/turns/list") {
-          return { data: [] };
-        }
-        throw new Error("broad listing must not run");
-      };
-      pinnedConnectionMocks.request.mockImplementation(reply);
-      commandRpcMocks.codexControlRequest.mockImplementation(
-        async (_config, method, requestParams) => reply({ method, requestParams }),
+      pinnedConnectionMocks.request.mockImplementation(async (request) => f.reply(request, true));
+      commandRpcMocks.codexControlRequest.mockImplementation(async (_config, method) =>
+        f.reply({ method }, true),
       );
       const bindingStore = createCodexTestBindingStore();
-      const { runtime } = createRuntime();
-      const { api, getProvider } = createGatewayApi(runtime);
-      const sources = { getPluginConfig: () => ({}), getRuntimeConfig: () => config };
-      registerCodexSessionCatalog({ api, bindingStore, control: f.factory, ...sources });
-      const provider = getProvider()!;
+      const provider = createCatalogTestProvider({
+        bindingStore,
+        control: f.factory,
+        getPluginConfig: () => ({}),
+      });
       const request = {
         hostId: f.source.hostId,
         sourceHomeId: f.source.sourceHomeId,
@@ -353,6 +404,7 @@ describe("Codex exact local eligibility", () => {
       expect(
         pinnedConnectionMocks.request.mock.calls.filter(([r]) => r.method === "thread/read"),
       ).toHaveLength(1);
+      expect(f.managedThreads.snapshot).not.toHaveBeenCalled();
     },
   );
 
@@ -362,9 +414,7 @@ describe("Codex exact local eligibility", () => {
     commandRpcMocks.codexControlRequest.mockResolvedValue({ data: [f.thread] });
     await f.control.initialize();
     await fs.rm(f.rollout);
-    await expect(f.control.requireEligibleThread(f.thread.id)).rejects.toThrow(
-      "eligibility could not be verified",
-    );
+    await f.reject();
     await f.writeMetadata(f.metadata);
     f.managedThreads.has.mockImplementation(
       async (sourceHomeId) => sourceHomeId !== f.source.sourceHomeId,

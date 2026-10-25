@@ -1,7 +1,8 @@
 import { expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../../../src/shared/deferred.ts";
 import { buildCronSchedule, hasUnchangedCronSchedule } from "../../lib/cron/form-schedule.ts";
-import { createInitialCronState, startCronEdit, validateCronForm } from "../../lib/cron/index.ts";
+import { validateCronForm } from "../../lib/cron/form.ts";
+import { createInitialCronState, startCronEdit } from "../../lib/cron/index.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { attribute, fillInput, testId } from "./cron-assertions.test-support.ts";
 import * as events from "./event-source.ts";
