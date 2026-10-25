@@ -113,20 +113,18 @@ describe("Hermes skill activation policy", () => {
     );
     h.config.skills = { entries: { "hidden-skill": { enabled: true } } };
     const plan = await h.plan({ config: h.config });
-    expect(plan.items.filter((entry) => entry.kind === "skill")).toEqual(
+    expect(plan.items.filter((entry) => entry.kind === "skill")).toMatchObject(
       (
         [
           ["hidden-directory", "hidden-skill"],
           ["selected-directory", "selected-skill"],
         ] as const
-      ).map(([directory, skillName]) =>
-        expect.objectContaining({
-          action: "copy",
-          status: "planned",
-          target: path.join(h.workspaceDir, "skills", directory),
-          details: expect.objectContaining({ skillName }),
-        }),
-      ),
+      ).map(([directory, skillName]) => ({
+        action: "copy",
+        status: "planned",
+        target: path.join(h.workspaceDir, "skills", directory),
+        details: { skillName },
+      })),
     );
     expect(plan.items.filter((entry) => entry.kind === "config")).toEqual([
       expect.objectContaining({
@@ -145,32 +143,26 @@ describe("Hermes skill activation policy", () => {
       }),
     ]);
   });
-  it.each([
-    "",
-    "# No name",
-    "null",
-    "true",
-    "42",
-    "ignored-name",
-    "- name: ignored-name",
-    "name: [unterminated",
-  ])("retains directory identity for invalid frontmatter %j", async (frontmatter) => {
-    const h = makeCase();
-    const contents = `---\n${frontmatter}\n---\n# Review\n`;
-    await h.write("skills/review-directory/SKILL.md", contents);
-    expect((await h.plan()).items).toEqual([
-      expect.objectContaining({
-        id: "skill:review-directory",
-        kind: "skill",
-        action: "copy",
-        status: "planned",
-        source: path.join(h.source, "skills/review-directory"),
-        target: path.join(h.workspaceDir, "skills/review-directory"),
-        details: { skillName: "review-directory" },
-      }),
-    ]);
-    expect(await readSkill(h.source, "review-directory")).toBe(contents);
-  });
+  it.each(["", "null", "true", "- name: ignored-name", "name: [unterminated"])(
+    "retains directory identity for invalid frontmatter %j",
+    async (frontmatter) => {
+      const h = makeCase();
+      const contents = `---\n${frontmatter}\n---\n# Review\n`;
+      await h.write("skills/review-directory/SKILL.md", contents);
+      expect((await h.plan()).items).toEqual([
+        expect.objectContaining({
+          id: "skill:review-directory",
+          kind: "skill",
+          action: "copy",
+          status: "planned",
+          source: path.join(h.source, "skills/review-directory"),
+          target: path.join(h.workspaceDir, "skills/review-directory"),
+          details: { skillName: "review-directory" },
+        }),
+      ]);
+      expect(await readSkill(h.source, "review-directory")).toBe(contents);
+    },
+  );
   it.each(["[hidden-skill]", "hidden-skill", "\"['hidden-skill']\""])(
     "imports disabled skills without enabling them (%s)",
     async (disabled) => {

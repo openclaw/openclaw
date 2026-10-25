@@ -44,10 +44,8 @@ describe("Hermes config migration", () => {
     const h = makeCase();
     await h.write(
       "config.yaml",
-      `
-custom_providers: [ { name: local-llm, base_url: http://127.0.0.1:11434/v1, models: [ local-model ] } ]
-memory: { provider: honcho, honcho: { project: hermes } }
-`,
+      `custom_providers: [{name: local-llm, base_url: http://127.0.0.1:11434/v1, models: [local-model]}]
+memory: {provider: honcho, honcho: {project: hermes}}`,
     );
     await h.write("memories/MEMORY.md", "memory line\n");
     const db = path.join(h.agentDir, "openclaw-agent.sqlite");
@@ -73,24 +71,11 @@ memory: { provider: honcho, honcho: { project: hermes } }
     const h = makeCase();
     await h.write(
       "config.yaml",
-      `
-providers:
-  openai:
-    api: https://api.openai.example/v1
-    key_env: OPENAI_API_KEY
-    default_model: gpt-5.4
-    transport: chat_completions
-    models: [ gpt-5.4 ]
+      `providers:
+  openai: {api: https://api.openai.example/v1, key_env: OPENAI_API_KEY, default_model: gpt-5.4, transport: chat_completions, models: [gpt-5.4]}
 mcp_servers:
-  time:
-    enabled: false
-    command: npx
-    args: [ -y, mcp-server-time ]
-    timeout: 45
-    connect_timeout: 10
-    supports_parallel_tool_calls: true
-skills: { config: { ship-it: { mode: fast } } }
-`,
+  time: {enabled: false, command: npx, args: [-y, mcp-server-time], timeout: 45, connect_timeout: 10, supports_parallel_tool_calls: true}
+skills: {config: {ship-it: {mode: fast}}}`,
     );
     await h.write("memories/MEMORY.md", "Imported memory\n");
     const result = await h.import();
@@ -124,11 +109,9 @@ skills: { config: { ship-it: { mode: fast } } }
     const h = makeCase();
     await h.write(
       "config.yaml",
-      `
-providers: { __proto__: { base_url: https://untrusted.example/v1, models: [ untrusted-model ] } }
-mcp_servers: { constructor: { command: untrusted-command }, safe-server: { command: safe-command } }
-skills: { config: { prototype: { mode: untrusted }, safe-skill: { mode: safe } } }
-`,
+      `providers: {__proto__: {base_url: https://untrusted.example/v1, models: [untrusted-model]}}
+mcp_servers: {constructor: {command: untrusted-command}, safe-server: {command: safe-command}}
+skills: {config: {prototype: {mode: untrusted}, safe-skill: {mode: safe}}}`,
     );
     expect((await h.import()).summary.errors).toBe(0);
     const models = h.config.models?.providers as Record<string, unknown>;
@@ -149,9 +132,7 @@ skills: { config: { prototype: { mode: untrusted }, safe-skill: { mode: safe } }
     const h = makeCase();
     await h.write(
       "config.yaml",
-      `
-{ mcp_servers: { time: { command: npx, env: { OPENAI_API_KEY: short-dev-key } } } }
-`,
+      `mcp_servers: {time: {command: npx, env: {OPENAI_API_KEY: short-dev-key}}}`,
     );
     const provider = buildHermesMigrationProvider({ runtime: h.runtime });
     expect((await provider.apply(h.context({ includeSecrets: true }))).summary.errors).toBe(0);
@@ -165,31 +146,29 @@ skills: { config: { prototype: { mode: untrusted }, safe-skill: { mode: safe } }
     const h = makeCase();
     await h.write(
       "config.yaml",
-      `
-model:
+      `model:
   provider: custom
   default: vendor/current-model
   base_url: https://models.example/v1
   api_mode: anthropic_messages
-  api_key: \${SCOPED_MODEL_KEY}
+  api_key: "\${SCOPED_MODEL_KEY}"
   context_length: 65536
   supports_vision: true
 mcp_servers:
   remote:
     url: https://mcp.example/rpc
-    client_cert: [ placeholder, placeholder ]
+    client_cert: [placeholder, placeholder]
     ssl_verify: /tls/ca.pem
     auth: oauth
-    oauth: { scope: read, client_id: placeholder, client_secret: placeholder }
-    tools: { include: [ search ], exclude: [ danger ], resources: off, prompts: true }
+    oauth: {scope: read, client_id: placeholder, client_secret: placeholder}
+    tools: {include: [search], exclude: [danger], resources: off, prompts: true}
     skip_preflight: true
-    sampling: { enabled: true }
-    lifecycle: { idle_timeout_seconds: "60", max_lifetime_seconds: 3600 }
+    sampling: {enabled: true}
+    lifecycle: {idle_timeout_seconds: "60", max_lifetime_seconds: 3600}
     keepalive_interval: 10
-  protected: { url: https://protected.example/rpc, client_cert: [ placeholder, placeholder, placeholder ] }
-  utilities_only: { command: utilities-only, tools: { include: [], resources: false, prompts: true } }
-  no_tools: { command: no-tools, tools: { include: [], resources: false, prompts: false } }
-`,
+  protected: {url: https://protected.example/rpc, client_cert: [placeholder, placeholder, placeholder]}
+  utilities_only: {command: utilities-only, tools: {include: [], resources: false, prompts: true}}
+  no_tools: {command: no-tools, tools: {include: [], resources: false, prompts: false}}`,
     );
     const plan = await h.plan();
     expect(providers(plan).custom).toMatchObject({
@@ -215,10 +194,7 @@ mcp_servers:
       command: "utilities-only",
       toolFilter: { include: ["prompts_list", "prompts_get"] },
     });
-    mcp(plan, "no_tools", {
-      command: "no-tools",
-      toolFilter: { exclude: ["*"] },
-    });
+    mcp(plan, "no_tools", { command: "no-tools", toolFilter: { exclude: ["*"] } });
     manual(
       plan,
       ...[
@@ -238,15 +214,13 @@ mcp_servers:
     const h = makeCase();
     await h.write(
       "config.yaml",
-      `
-providers:
+      `providers:
   acme:
-    api: \${ACME_BASE_URL}
+    api: "\${ACME_BASE_URL}"
     transport: openai_chat
-    models: { acme-one: { max_output_tokens: 12345 } }
-    extra_headers: { X-Environment: "\${ACME_HEADER}", X-Invalid: { nested: true }, X-Literal: literal-value }
-    extra_body: { service_tier: flex }
-`,
+    models: {acme-one: {max_output_tokens: 12345}}
+    extra_headers: {X-Environment: "\${ACME_HEADER}", X-Invalid: {nested: true}, X-Literal: literal-value}
+    extra_body: {service_tier: flex}`,
     );
     await h.write(
       ".env",
@@ -312,15 +286,13 @@ providers:
     const h = makeCase();
     await h.write(
       "config.yaml",
-      `
-model: { provider: gemini, default: gemini-3.1-pro }
+      `model: {provider: gemini, default: gemini-3.1-pro}
 providers:
-  copilot: { base_url: https://copilot.example.test/v1, transport: openai_chat }
-  gemini: { base_url: https://gemini.example.test/v1, transport: openai_chat }
-  kimi-coding: { base_url: https://kimi.example.test/v1, transport: openai_chat }
-  kimi-coding-cn: { base_url: https://moonshot.example.test/v1, transport: openai_chat }
-  opencode-zen: { base_url: https://opencode.example.test/v1, transport: openai_chat }
-`,
+  copilot: {base_url: https://copilot.example.test/v1, transport: openai_chat}
+  gemini: {base_url: https://gemini.example.test/v1, transport: openai_chat}
+  kimi-coding: {base_url: https://kimi.example.test/v1, transport: openai_chat}
+  kimi-coding-cn: {base_url: https://moonshot.example.test/v1, transport: openai_chat}
+  opencode-zen: {base_url: https://opencode.example.test/v1, transport: openai_chat}`,
     );
     const plan = await h.plan();
     expect(item(plan, "config:default-model")?.details?.model).toBe("google/gemini-3.1-pro");
@@ -340,12 +312,10 @@ providers:
     const h = makeCase();
     await h.write(
       "config.yaml",
-      `
-model: { provider: existing, default: imported-model }
+      `model: {provider: existing, default: imported-model}
 providers:
-  existing: { base_url: https://new-existing.example.test/v1, transport: openai_chat }
-  fresh: { base_url: https://fresh.example.test/v1, transport: openai_chat }
-`,
+  existing: {base_url: https://new-existing.example.test/v1, transport: openai_chat}
+  fresh: {base_url: https://fresh.example.test/v1, transport: openai_chat}`,
     );
     h.config.models = {
       providers: {
@@ -404,16 +374,14 @@ providers:
     );
     await h.write(
       "config.yaml",
-      `
-mcp_servers:
+      `mcp_servers:
   resolved:
-    url: \${MCP_URL}
-    args: [ --value, "\${MCP_VALUE}" ]
-    headers: { Authorization: "Bearer \${MCP_VALUE}", X-Dotted: "\${mcp.value}" }
-    env: { DASHED: "\${env:MCP-VALUE}", INHERITED: "\${MCP_INHERITED}" }
-  unresolved: { command: unresolved, env: { VALUE: "\${env:MISSING_VALUE}" } }
-  missing-launch: { command: "\${env:MISSING_COMMAND}", enabled: true, args: [ --serve ] }
-`,
+    url: "\${MCP_URL}"
+    args: [--value, "\${MCP_VALUE}"]
+    headers: {Authorization: "Bearer \${MCP_VALUE}", X-Dotted: "\${mcp.value}"}
+    env: {DASHED: "\${env:MCP-VALUE}", INHERITED: "\${MCP_INHERITED}"}
+  unresolved: {command: unresolved, env: {VALUE: "\${env:MISSING_VALUE}"}}
+  missing-launch: {command: "\${env:MISSING_COMMAND}", enabled: true, args: [--serve]}`,
     );
     const plan = await h.plan({ includeSecrets: true });
     mcp(plan, "resolved", {
@@ -446,14 +414,8 @@ mcp_servers:
     const h = makeCase();
     await h.write(
       "config.yaml",
-      `
-model:
-  provider: kimi-for-coding
-  default: kimi-k2.5
-  base_url: https://proxy.example.test/v1
-  api_mode: chat_completions
-custom_providers: [ { name: My Local LLM, base_url: https://local.example.test/v1, models: [ local-model ] } ]
-`,
+      `model: {provider: kimi-for-coding, default: kimi-k2.5, base_url: https://proxy.example.test/v1, api_mode: chat_completions}
+custom_providers: [{name: My Local LLM, base_url: https://local.example.test/v1, models: [local-model]}]`,
     );
     const plan = await h.plan();
     expect(providers(plan).kimi).toMatchObject({
@@ -468,20 +430,9 @@ custom_providers: [ { name: My Local LLM, base_url: https://local.example.test/v
     const h = makeCase();
     await h.write(
       "config.yaml",
-      `
-model: { provider: acme, default: current-model }
-providers:
-  acme:
-    api: https://current.example.test/v1
-    key_env: CURRENT_ACME_TOKEN
-    transport: codex_responses
-    models: [ current-model ]
-custom_providers:
-  - name: acme
-    key_env: LEGACY_ACME_TOKEN
-    base_url: https://legacy.example.test/v1
-    models: [ legacy-model ]
-`,
+      `model: {provider: acme, default: current-model}
+providers: {acme: {api: https://current.example.test/v1, key_env: CURRENT_ACME_TOKEN, transport: codex_responses, models: [current-model]}}
+custom_providers: [{name: acme, key_env: LEGACY_ACME_TOKEN, base_url: https://legacy.example.test/v1, models: [legacy-model]}]`,
     );
     await h.write(".env", "CURRENT_ACME_TOKEN=placeholder\n");
     const plan = await h.plan({ includeSecrets: true });
