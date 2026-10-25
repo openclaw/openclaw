@@ -111,11 +111,16 @@ describe("loadWebMedia", () => {
   });
 
   it.each([
-    ["FILE://attacker/share/evil.png", "invalid-file-url", true],
+    ["FILE://attacker/share/evil.png", "invalid-file-url", true, false],
     ["\\\\attacker\\share\\evil.png", "network-path-not-allowed", true, true],
-    ["/__openclaw__/canvas/documents/../collection.media/tiny.png", "path-not-allowed"],
-    ["media://outbound/tiny.png", "path-not-allowed"],
-    ["media://inbound/nested%2Ftiny.png", "invalid-path"],
+    [
+      "/__openclaw__/canvas/documents/../collection.media/tiny.png",
+      "path-not-allowed",
+      false,
+      false,
+    ],
+    ["media://outbound/tiny.png", "path-not-allowed", false, false],
+    ["media://inbound/nested%2Ftiny.png", "invalid-path", false, false],
   ] as const)("rejects unsafe path %s (%s)", async (url, code, beforeFs, windows) => {
     const platform = windows
       ? vi.spyOn(process, "platform", "get").mockReturnValue("win32")
