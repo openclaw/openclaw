@@ -46,27 +46,6 @@ import { adoptStartedChatRun, reconcileChatRunLifecycle } from "./run-lifecycle.
 
 beforeEach(installModelPickerLayout);
 
-const accountToggle = "[data-chat-account-group-toggle]";
-const permissionSelect = '[data-chat-permission-select="true"]';
-const modelSelect = "[data-chat-model-select]";
-const modelMenu = ".chat-controls__model-menu";
-
-function account(
-  authProfileId: string,
-  label: string,
-  selected = false,
-  provider = "openai",
-  authType: UsersListModelAccountsResult["accounts"][number]["authType"] = "oauth",
-): UsersListModelAccountsResult["accounts"][number] {
-  return { authProfileId, label, selected, provider, authType };
-}
-const personal = {
-  kind: "personal",
-  label: "Personal workspace",
-  authProfileId: "openai:personal",
-  source: "user",
-} satisfies ChatAccountSelection;
-
 describe("chat account selection", () => {
   function mountAccountControl(
     request: GatewayRequestHandler,
@@ -111,12 +90,13 @@ describe("chat account selection", () => {
       retire: () => {
         current = false;
       },
-      open: () => container.querySelector<HTMLButtonElement>(accountToggle)?.click(),
+      open: () =>
+        container.querySelector<HTMLButtonElement>("[data-chat-account-group-toggle]")?.click(),
       select: (value: string) => {
         container
           .querySelector<HTMLButtonElement>(`[data-chat-account-option="${value}"]`)
           ?.click();
-        return container.querySelector(accountToggle)?.textContent?.trim();
+        return container.querySelector("[data-chat-account-group-toggle]")?.textContent?.trim();
       },
     };
   }
@@ -126,19 +106,44 @@ describe("chat account selection", () => {
       profileId: "owner",
       links: [{ provider: "openai", authProfileId: "openai:work", updatedAt: 1 }],
       accounts: [
-        account("openai:personal", "Personal workspace", false),
-        account("openai:work", "Work workspace", true),
-        account("anthropic:personal", "Claude account", true, "anthropic", "token"),
+        {
+          authProfileId: "openai:personal",
+          provider: "openai",
+          label: "Personal workspace",
+          authType: "oauth",
+          selected: false,
+        },
+        {
+          authProfileId: "openai:work",
+          provider: "openai",
+          label: "Work workspace",
+          authType: "oauth",
+          selected: true,
+        },
+        {
+          authProfileId: "anthropic:personal",
+          provider: "anthropic",
+          label: "Claude account",
+          authType: "token",
+          selected: true,
+        },
       ],
     } satisfies UsersListModelAccountsResult);
-    const view = mountAccountControl(request, personal);
+    const view = mountAccountControl(request, {
+      kind: "personal",
+      label: "Personal workspace",
+      authProfileId: "openai:personal",
+      source: "user",
+    });
     expect(request).not.toHaveBeenCalled();
-    expect(view.container.querySelector(accountToggle)?.getAttribute("aria-expanded")).toBe(
-      "false",
-    );
+    expect(
+      view.container
+        .querySelector("[data-chat-account-group-toggle]")
+        ?.getAttribute("aria-expanded"),
+    ).toBe("false");
     view.open();
     await vi.waitFor(() => expect(view.container.textContent).toContain("Work workspace"));
-    expect(view.container.querySelector(accountToggle)?.textContent).toContain(
+    expect(view.container.querySelector("[data-chat-account-group-toggle]")?.textContent).toContain(
       "Personal workspace",
     );
     expect(view.container.textContent).not.toContain("Claude account");
@@ -146,7 +151,7 @@ describe("chat account selection", () => {
     expect(view.onSelect).toHaveBeenCalledWith(
       expect.objectContaining({ authProfileId: "openai:work", label: "Work workspace" }),
     );
-    expect(view.container.querySelector(accountToggle)?.textContent).toContain(
+    expect(view.container.querySelector("[data-chat-account-group-toggle]")?.textContent).toContain(
       "Personal workspace",
     );
     expect(request.mock.calls.map(([method]) => method)).toEqual(["users.listModelAccounts"]);
@@ -158,7 +163,9 @@ describe("chat account selection", () => {
       source: "user",
     };
     flush();
-    expect(view.container.querySelector(accountToggle)?.textContent).toContain("Work workspace");
+    expect(view.container.querySelector("[data-chat-account-group-toggle]")?.textContent).toContain(
+      "Work workspace",
+    );
     view.select("manage");
     expect(view.onManage).toHaveBeenCalledOnce();
   });
@@ -170,9 +177,22 @@ describe("chat account selection", () => {
       .mockResolvedValueOnce({
         profileId: "owner",
         links: [],
-        accounts: [account("openai:work", "Work workspace", true)],
+        accounts: [
+          {
+            authProfileId: "openai:work",
+            provider: "openai",
+            label: "Work workspace",
+            authType: "oauth",
+            selected: true,
+          },
+        ],
       } satisfies UsersListModelAccountsResult);
-    const view = mountAccountControl(request, personal);
+    const view = mountAccountControl(request, {
+      kind: "personal",
+      label: "Personal workspace",
+      authProfileId: "openai:personal",
+      source: "user",
+    });
     view.open();
     await vi.waitFor(() =>
       expect(view.container.querySelector('[role="alert"]')?.textContent).toContain(
@@ -197,7 +217,15 @@ describe("chat account selection", () => {
     pending.resolve({
       profileId: "owner",
       links: [],
-      accounts: [account("openai:old", "Old connection account", false)],
+      accounts: [
+        {
+          authProfileId: "openai:old",
+          provider: "openai",
+          label: "Old connection account",
+          authType: "oauth",
+          selected: false,
+        },
+      ],
     });
     await pending.promise;
     flush();
@@ -232,13 +260,15 @@ describe("chat pane composer controls", () => {
     );
     flush();
 
-    const trigger = container.querySelector<HTMLElement>(modelSelect);
+    const trigger = container.querySelector<HTMLElement>("[data-chat-model-select]");
     expect(trigger?.textContent).toContain("GPT-5.6 Sol");
     expect(trigger?.getAttribute("aria-label")).toBe("Chat model: GPT-5.6 Sol");
     expect(trigger?.dataset.chatModelLocked).toBe("true");
     expect(state.request).not.toHaveBeenCalled();
     trigger?.click();
-    await waitForSolid(() => expect(container.querySelector(modelMenu)).not.toBeNull());
+    await waitForSolid(() =>
+      expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull(),
+    );
     expect(container.querySelector(".chat-controls__locked-model-value")?.textContent).toBe(
       "GPT-5.6 Sol",
     );
@@ -295,13 +325,15 @@ describe("chat pane composer controls", () => {
       mountSolid(() => createComponent(ChatPaneModelControl, controls.composerControls), {
         container,
       });
-      await waitForSolid(() => expect(container.querySelector(modelMenu)).not.toBeNull());
+      await waitForSolid(() =>
+        expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull(),
+      );
 
       expandModelProviders(container);
 
       expect(container.querySelectorAll(".chat-composer-model-control")).toHaveLength(1);
       expect(container.querySelector('[data-chat-provider-usage="true"]')).toBeNull();
-      expect(container.querySelector(permissionSelect)).toBeNull();
+      expect(container.querySelector('[data-chat-permission-select="true"]')).toBeNull();
       const catalogMessage = container.querySelector(".chat-controls__model-catalog-state");
       expect(catalogMessage?.textContent).toContain(message);
       expect(
@@ -312,9 +344,13 @@ describe("chat pane composer controls", () => {
       mountSolid(() => createComponent(ChatPermissionPicker, controls.permissionPicker), {
         container: permissionContainer,
       });
-      expect(permissionContainer.querySelector(permissionSelect)).not.toBeNull();
       expect(
-        permissionContainer.querySelector(permissionSelect)?.getAttribute("aria-label"),
+        permissionContainer.querySelector('[data-chat-permission-select="true"]'),
+      ).not.toBeNull();
+      expect(
+        permissionContainer
+          .querySelector('[data-chat-permission-select="true"]')
+          ?.getAttribute("aria-label"),
       ).toContain("Default (Guarded)");
       container.querySelector<HTMLButtonElement>('[data-chat-model-setup="true"]')?.click();
       expect(onModelSetup).toHaveBeenCalledTimes(error ? 0 : 1);
@@ -359,20 +395,22 @@ describe("chat pane composer controls", () => {
       container.remove();
     });
     flush();
-    const trigger = container.querySelector<HTMLButtonElement>(permissionSelect)!;
+    const trigger = container.querySelector<HTMLButtonElement>("[data-chat-permission-select]")!;
     trigger.click();
     const menu = container.querySelector<HTMLElement>('[role="menu"]')!;
     await waitForSolid(() => expect(menu.matches(":popover-open")).toBe(true));
 
-    const heading = container.querySelector(".chat-controls__permission-heading");
+    const heading = container.querySelector<HTMLElement>(".chat-controls__permission-heading");
     expect(heading?.textContent?.trim()).toBe("Execution permissions");
     expect(heading?.closest('[role="menuitem"]')).toBeNull();
-    const docsLink = container.querySelector("a.chat-controls__permission-learn-more");
+    const docsLink = container.querySelector<HTMLElement>("a.chat-controls__permission-learn-more");
     expect(docsLink?.textContent?.trim()).toBe("Learn more");
-    expect(docsLink?.getAttribute("rel")?.split(/\s+/).toSorted()).toEqual([
-      "noopener",
-      "noreferrer",
-    ]);
+    expect(docsLink?.getAttribute("href")).toBe(
+      "https://docs.openclaw.ai/gateway/permission-modes",
+    );
+    expect(docsLink?.getAttribute("target")).toBe("_blank");
+    const rel = docsLink?.getAttribute("rel")?.split(/\s+/).toSorted();
+    expect(rel).toEqual(["noopener", "noreferrer"]);
 
     const full = container.querySelector<HTMLElement>('[data-chat-permission-option="full"]');
     const defaultOption = container.querySelector<HTMLElement>(
@@ -382,11 +420,14 @@ describe("chat pane composer controls", () => {
       "Follow the agent's configured execution permissions.",
     );
     expect(defaultOption?.textContent).toContain("Default (Guarded)");
-    expect(container.querySelector(permissionSelect)?.getAttribute("aria-label")).toBe(
-      "Execution permissions: Full Access",
-    );
+    expect(
+      container.querySelector('[data-chat-permission-select="true"]')?.getAttribute("aria-label"),
+    ).toBe("Execution permissions: Full Access");
     expect(full?.hasAttribute("disabled")).toBe(true);
     expect(full?.getAttribute("aria-checked")).toBe("true");
+    expect(full?.querySelector(".chat-controls__permission-shortcut")).toBeNull();
+    expect(full?.querySelector(".chat-controls__permission-lock")).not.toBeNull();
+    expect(full?.querySelector(".chat-controls__inline-select-check")).toBeNull();
     expect(full?.getAttribute("aria-label")).toContain("operator.admin");
 
     menu.dispatchEvent(new KeyboardEvent("keydown", { key: "3", bubbles: true }));
@@ -435,7 +476,7 @@ describe("chat pane composer controls", () => {
     expect(controls.permissionPicker.disabled).toBe(false);
     const selection = controls.permissionPicker.onSelect("workspace");
     flush();
-    const trigger = container.querySelector<HTMLButtonElement>(permissionSelect)!;
+    const trigger = container.querySelector<HTMLButtonElement>("[data-chat-permission-select]")!;
     expect(trigger.disabled).toBe(true);
     expect(trigger.getAttribute("aria-label")).toBe("Execution permissions: Workspace");
     await vi.waitFor(() =>
@@ -458,59 +499,79 @@ describe("chat pane composer controls", () => {
     expect(trigger.getAttribute("aria-label")).toBe("Execution permissions: Workspace");
   });
 
-  it.each(["session", "agent", "connection", "client"] as const)(
-    "suppresses late permission alerts after replacing the %s",
-    async (change) => {
-      const pending = createDeferred<SessionPatchResult>();
-      const sessionKey = change === "agent" ? "global" : "agent:main:remote-worker";
-      const selectedSession: GatewaySessionRow = {
-        key: sessionKey,
-        kind: "direct",
-        hasActiveRun: true,
-        sessionId: "lifecycle-session",
-      };
-      const state = makeChatHost({
-        assistantAgentId: "main",
-        chatRunId: "remote-worker-run",
-        chatError: null,
-        connectionEpoch: 1,
-        requestHandlers: {},
-        chatModelSwitchPromises: {},
-        sessionKey,
-        sessionsResult: { ...createSessionsListResult(), sessions: [selectedSession] },
-      }) as unknown as ChatPageHost;
-      const patch = vi.spyOn(state.sessions, "patch").mockImplementation(() => pending.promise);
-      const controls = renderControls(state);
-
-      const selection = controls.permissionPicker.onSelect("full");
-      expect(patch).toHaveBeenCalledOnce();
-      if (change === "session") {
+  it.each([
+    {
+      label: "failed update after switching sessions",
+      result: "failure",
+      invalidate: (state: ChatPageHost) => {
         state.sessionKey = "agent:main:other-session";
-      }
-      if (change === "agent") {
-        state.assistantAgentId = "research";
-      }
-      if (change === "connection") {
-        state.connectionEpoch += 1;
-      }
-      if (change === "client") {
-        state.client = {} as ChatPageHost["client"];
-      }
-      if (change === "session") {
-        pending.reject(new Error("original remote worker disconnected"));
-      } else {
-        pending.resolve({
-          ok: true,
-          path: "",
-          key: sessionKey,
-          entry: { sessionId: "lifecycle-session" },
-        });
-      }
-      await selection;
-
-      expect(state.chatError).toBeNull();
+      },
     },
-  );
+    {
+      label: "successful global-session update after switching agents",
+      result: "success",
+      initialSessionKey: "global",
+      invalidate: (state: ChatPageHost) => {
+        state.assistantAgentId = "research";
+      },
+    },
+    {
+      label: "successful update after reconnecting",
+      result: "success",
+      invalidate: (state: ChatPageHost) => {
+        state.connectionEpoch += 1;
+      },
+    },
+    {
+      label: "successful update after replacing the Gateway client",
+      result: "success",
+      invalidate: (state: ChatPageHost) => {
+        state.client = {} as ChatPageHost["client"];
+      },
+    },
+  ] as const)("suppresses alerts for a $label", async (lifecycleCase) => {
+    const { invalidate, result } = lifecycleCase;
+    const pending = createDeferred<SessionPatchResult>();
+    const sessionKey =
+      "initialSessionKey" in lifecycleCase
+        ? (lifecycleCase.initialSessionKey ?? "agent:main:remote-worker")
+        : "agent:main:remote-worker";
+    const selectedSession: GatewaySessionRow = {
+      key: sessionKey,
+      kind: "direct",
+      hasActiveRun: true,
+      sessionId: "lifecycle-session",
+    };
+    const state = makeChatHost({
+      assistantAgentId: "main",
+      chatRunId: "remote-worker-run",
+      chatError: null,
+      connectionEpoch: 1,
+      requestHandlers: {},
+      chatModelSwitchPromises: {},
+      sessionKey,
+      sessionsResult: { ...createSessionsListResult(), sessions: [selectedSession] },
+    }) as unknown as ChatPageHost;
+    const patch = vi.spyOn(state.sessions, "patch").mockImplementation(() => pending.promise);
+    const controls = renderControls(state);
+
+    const selection = controls.permissionPicker.onSelect("full");
+    expect(patch).toHaveBeenCalledOnce();
+    invalidate(state);
+    if (result === "failure") {
+      pending.reject(new Error("original remote worker disconnected"));
+    } else {
+      pending.resolve({
+        ok: true,
+        path: "",
+        key: sessionKey,
+        entry: { sessionId: "lifecycle-session" },
+      });
+    }
+    await selection;
+
+    expect(state.chatError).toBeNull();
+  });
 });
 
 describe("chat pane model controls", () => {
@@ -590,7 +651,7 @@ describe("chat pane model controls", () => {
       view = mountSolid(() => createComponent(ChatPaneModelControl, controls.composerControls), {
         container,
       });
-      const trigger = container.querySelector<HTMLElement>(modelSelect);
+      const trigger = container.querySelector<HTMLElement>("[data-chat-model-select]");
       expect(trigger?.dataset.chatSelectValue).toBe("example/primary");
       expect(trigger?.getAttribute("aria-busy")).toBe("false");
       expect(trigger?.querySelector(".btn__spinner")).toBeNull();

@@ -445,22 +445,17 @@ it("keeps a failed older load blocked across a layout-induced scroll", async () 
   expect(request).toHaveBeenCalledOnce();
 });
 
-it("joins a canonical older-page load, prepends once, and exhausts without a viewport jump", async () => {
+it("joins an in-flight canonical load without commanding a viewport jump", async () => {
   const deferred = createDeferred<ReturnType<typeof historyPage>>();
   const request = vi.fn(() => deferred.promise);
-  const { pane, state, scrollToOffset } = createNativeShowEarlierPane(request);
+  const { pane, scrollToOffset } = createNativeShowEarlierPane(request);
 
   const automaticLoad = pane.loadOlderMessages();
   const manualNavigation = pane.loadOlderMessages();
   deferred.resolve(historyPage());
   await Promise.all([automaticLoad, manualNavigation]);
 
-  expect(state.chatMessages.map(nativeHistorySeq)).toEqual([1, 2, 3, 4]);
-  expect(state.chatHistoryPagination).toEqual({ hasMore: false, totalMessages: 4 });
-  expect(state.lastError).toBeNull();
-  expect(pane.hasOlderMessages()).toBe(false);
-  await pane.loadOlderMessages();
-  expect(request).toHaveBeenCalledExactlyOnceWith("chat.history", olderRequest(state.sessionKey));
+  expect(request).toHaveBeenCalledOnce();
   expect(scrollToOffset).not.toHaveBeenCalled();
 });
 
@@ -632,6 +627,19 @@ it("deduplicates projected catalog transcript records by catalog message id", ()
   pane.history.catalogMessages = [current];
 
   expect(pane.prependUniqueCatalogMessages([overlapping])).toEqual([current]);
+});
+
+it("prepends a strictly older page and exhausts", async () => {
+  const { pane, state, request } = historyPane();
+  await pane.loadOlderMessages();
+
+  expect(state.chatMessages.map(nativeHistorySeq)).toEqual([1, 2, 3, 4]);
+  expect(state.chatHistoryPagination).toEqual({ hasMore: false, totalMessages: 4 });
+  expect(state.lastError).toBeNull();
+  expect(pane.hasOlderMessages()).toBe(false);
+
+  await pane.loadOlderMessages();
+  expect(request).toHaveBeenCalledExactlyOnceWith("chat.history", olderRequest(state.sessionKey));
 });
 
 it("replaces cached source groups during a zero-offset refill without losing live rows", async () => {
