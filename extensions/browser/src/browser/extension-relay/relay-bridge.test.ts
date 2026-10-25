@@ -70,13 +70,12 @@ function candidate(bridge: ExtensionRelayBridge) {
 
 function candidateHello(
   receiver: { onMessage(raw: string): void },
-  userAgent: string,
   browserVersion: string,
   tabs?: ReturnType<typeof defaultTabs>,
 ) {
   deliver(receiver, {
     type: "hello",
-    userAgent,
+    userAgent: "candidate",
     browserVersion,
     extensionVersion: "2.0.0",
     ...(tabs === undefined ? {} : { tabs }),
@@ -174,9 +173,7 @@ it.each([
 it.each(["detach", "heartbeat"])("retires awaited Runtime work on %s", async (loss) => {
   const { bridge, client, extension, cdp, sessionId } = await holdCdpCommand(
     "Runtime.callFunctionOn",
-    {
-      awaitPromise: true,
-    },
+    { awaitPromise: true },
   );
   await vi.advanceTimersByTimeAsync(17_000);
   expect(response(client, 2)).toBeUndefined();
@@ -190,11 +187,10 @@ it.each(["detach", "heartbeat"])("retires awaited Runtime work on %s", async (lo
     expect(bridge.extensionConnected).toBe(false);
     expect(vi.getTimerCount()).toBe(0);
   }
-  expect(response(client, 2)).toMatchObject({
-    error: {
-      message: loss === "detach" ? "Physical session detached" : "extension disconnected",
-    },
-  });
+  expect(response(client, 2)).toHaveProperty(
+    "error.message",
+    loss === "detach" ? "Physical session detached" : "extension disconnected",
+  );
 });
 it("notifies connection waiters only after an authenticated valid hello", async () => {
   vi.useFakeTimers();
@@ -303,15 +299,11 @@ it("announces initial targets before acknowledging auto-attach", async () => {
   expect(response(client, 1)).toBeUndefined();
   sendResult(handlers, attach?.seq, { targetId: "target-1" });
   await flush();
-  expect(client.frames()).toEqual([
-    expect.objectContaining({
-      method: "Target.attachedToTarget",
-      params: expect.objectContaining({
-        targetInfo: expect.objectContaining({ targetId: "target-1" }),
-      }),
-    }),
+  expect(client.frames()).toMatchObject([
+    { method: "Target.attachedToTarget", params: { targetInfo: { targetId: "target-1" } } },
     { id: 1, result: {} },
   ]);
+  expect(client.frames()[1]).toEqual({ id: 1, result: {} });
 });
 
 it.each(["active", "replaced extension"])("binds atomic creation to %s", async (lifecycle) => {
@@ -375,7 +367,7 @@ it("keeps the active extension while a candidate is pending, malformed, or close
   expect(bridge.extensionConnected).toBe(true);
   expect(active.closed).toBe(false);
   const { socket: malformedSocket, handlers: malformed } = candidate(bridge);
-  candidateHello(malformed, "candidate", "Chrome/145.0.0.0");
+  candidateHello(malformed, "Chrome/145.0.0.0");
   expect(malformedSocket).toMatchObject(closedSocket(4001, "expected valid hello"));
   expect(bridge.identity?.browserVersion).toBe("Chrome/144.0.0.0");
   expect(active.closed).toBe(false);
@@ -386,12 +378,12 @@ it("rejects an older candidate when a newer candidate promotes first", () => {
   const { socket: firstSocket, handlers: first } = candidate(bridge);
   const { socket: secondSocket, handlers: second } = candidate(bridge);
   expect(activeSocket.closed).toBe(false);
-  candidateHello(second, "second", "Chrome/146.0.0.0", []);
+  candidateHello(second, "Chrome/146.0.0.0", []);
   expect(activeSocket.closed).toBe(true);
   expect(firstSocket.closed).toBe(false);
   expect(secondSocket.closed).toBe(false);
   expect(bridge.identity?.browserVersion).toBe("Chrome/146.0.0.0");
-  candidateHello(first, "first", "Chrome/145.0.0.0", []);
+  candidateHello(first, "Chrome/145.0.0.0", []);
   expect(firstSocket).toMatchObject(closedSocket(4000, "superseded by newer extension connection"));
   expect(bridge.identity?.browserVersion).toBe("Chrome/146.0.0.0");
   first.onClose();
@@ -579,9 +571,10 @@ it("does not project a disconnected zero-tab extension as authoritative empty", 
   handlers.onClose();
   const { client, cdp } = connectClient(bridge);
   await dispatch(cdp, 1, "Target.getTargets");
-  expect(response(client, 1)).toMatchObject({
-    error: { message: expect.stringMatching(/extension.*disconnected/i) },
-  });
+  expect(response(client, 1)).toHaveProperty(
+    "error.message",
+    expect.stringMatching(/extension.*disconnected/i),
+  );
 });
 
 it("rejects discovery when the previous native retirement fails", async () => {
@@ -597,15 +590,9 @@ it("rejects discovery when the previous native retirement fails", async () => {
   sendCommand(cdp, 1, "Target.getTargets");
   const detach = await retirement.promise;
   sendCommand(cdp, 2, "Target.getTargets");
-  deliver(handlers, {
-    type: "error",
-    seq: detach.seq,
-    message: "native detach failed",
-  });
+  deliver(handlers, { type: "error", seq: detach.seq, message: "native detach failed" });
   await flush();
-  expect(response(client, 2)).toMatchObject({
-    error: { message: "Target identities are unavailable" },
-  });
+  expect(response(client, 2)).toHaveProperty("error.message", "Target identities are unavailable");
 });
 
 it("publishes a shared recovered attachment to every waiting auto-attach client", async () => {
