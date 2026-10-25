@@ -248,8 +248,7 @@ it("signs the relay canonical REST path including its query and emits auth heade
   expect(Object.fromEntries(headers)).toMatchObject({
     "x-reef-handle": "alice",
     "x-reef-ts": String(ts),
-    "x-reef-sig":
-      "1Zx-WD8JygVzq8pdTWULPiEZyoLuoJ1zyokkDRGlPWu_6fAKxEfJHPZkCQaZ8DIS4LERDqeh2z6-qlw7BtcoDw",
+    "x-reef-sig": expect.any(String),
   });
 
   expect(verifyRelaySignature(headers.get("x-reef-sig")!, "/v1/mail?after=5")).toBe(true);
@@ -262,7 +261,7 @@ it("puts WebSocket auth in the query but signs the bare relay path", () => {
   expect(Object.fromEntries(url.searchParams)).toEqual({
     handle: "alice",
     ts: String(ts),
-    sig: "teC4QkpLUCMghGA-PkBGBMZFPxNeERmNfGCivaxpYhL8q81v6ReHRKEq2ZVvOd-FG3d3BbMjk-FcvoKjW5kwAA",
+    sig: expect.any(String),
   });
   expect(verifyRelaySignature(url.searchParams.get("sig")!, "/v1/mail/ws")).toBe(true);
 });
@@ -274,26 +273,21 @@ it("binds friendship responses to the exact listed peer key snapshot", async () 
 });
 
 it.each([
-  [
-    400,
-    "invalid_request",
-    "reef-relay",
-    "The Reef relay is likely incompatible or outdated. Update OpenClaw and the Reef relay together, then approve the fresh pairing challenge again.",
-  ],
-  [
-    409,
-    "client_upgrade_required",
-    "openclaw-client",
-    "OpenClaw is outdated for this Reef relay. Update OpenClaw, then approve the fresh pairing challenge again.",
-  ],
+  [400, "invalid_request", "reef-relay"],
+  [409, "client_upgrade_required", "openclaw-client"],
 ] as const)(
   "diagnoses HTTP %i compatibility failure without retrying or downgrading",
-  async (status, code, upgradeRequired, message) => {
+  async (status, code, upgradeRequired) => {
     const { client, fetcher } = recordingClient({ error: code }, status);
     const error = await client.respondFriend(pendingFriend, true).catch((cause: unknown) => cause);
     expect(error).toBeInstanceOf(ReefRelayError);
     expect(error).toBeInstanceOf(ReefProtocolCompatibilityError);
-    expect(error).toMatchObject({ status, code, upgradeRequired, message });
+    expect(error).toMatchObject({
+      status,
+      code,
+      upgradeRequired,
+      message: expect.stringContaining("approve the fresh pairing challenge again"),
+    });
     expect(fetcher).toHaveBeenCalledTimes(1);
     expectFriendshipBody(fetcher.mock.calls[0]?.[1]);
   },

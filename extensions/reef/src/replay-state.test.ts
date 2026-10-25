@@ -87,24 +87,18 @@ describe("Reef replay worker ownership", () => {
     const f = fixture();
     const replay = f.open();
     const observation = observeHostDataSql();
-    const sql = observation.calls;
+    const completed = { receipt: f.receipt, body: { text: "synthetic private body" } };
     await expect(replay.claim("alice", id, hash)).resolves.toBe("new");
     await replay.refresh?.("alice", id);
     await replay.complete("alice", id, f.receipt, { text: "synthetic private body" });
     await expect(replay.claim("alice", id, hash)).resolves.toBe("duplicate");
-    await expect(replay.completed("alice", id)).resolves.toEqual({
-      receipt: f.receipt,
-      body: { text: "synthetic private body" },
-    });
+    await expect(replay.completed("alice", id)).resolves.toEqual(completed);
     await expect(replay.claim("alice", id, "different")).resolves.toBe("mismatch");
-    for (const spy of sql) {
+    for (const spy of observation.calls) {
       expect(spy).not.toHaveBeenCalled();
     }
     vi.restoreAllMocks();
-    await expect(f.open().completed("alice", id)).resolves.toEqual({
-      receipt: f.receipt,
-      body: { text: "synthetic private body" },
-    });
+    await expect(f.open().completed("alice", id)).resolves.toEqual(completed);
     expect(JSON.stringify(f.raw.lookup(key))).not.toContain("synthetic private body");
   });
 
@@ -240,10 +234,8 @@ describe("Reef replay worker ownership", () => {
     const rng = vi.mocked(randomBytes).mockClear();
     const replay = f.open();
     await replay.claim("alice", id, hash);
-    const receipt = structuredClone(f.receipt);
     const body = { text: "original" };
-    const complete = replay.complete("alice", id, receipt, body);
-    await complete;
+    await replay.complete("alice", id, f.receipt, body);
     expect(ciphertexts).toHaveLength(2);
     expect(new Set(ciphertexts).size).toBe(1);
     expect(rng.mock.calls).toEqual([[12]]);
