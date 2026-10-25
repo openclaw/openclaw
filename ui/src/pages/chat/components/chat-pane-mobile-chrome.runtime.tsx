@@ -1,4 +1,4 @@
-import { lazy, Loading, Show, type Element } from "solid-js";
+import { createMemo, lazy, Loading, Show, type Element } from "solid-js";
 import {
   SHELL_NAV_DRAWER_TOGGLE_EVENT,
   type ShellNavDrawerToggleDetail,
@@ -34,6 +34,8 @@ export function ChatPaneMobileChrome(props: {
   onOpenMachine: (source: HTMLElement) => void;
 }) {
   const host = () => props.header.detailsControl?.mobileHost;
+  // A desktop-first pane defers People; an adopted trigger survives desktop parking.
+  const mobileActivated = createMemo<boolean>((previous) => previous === true || props.mobile);
   return (
     <ContentPresentation value={() => props.presented}>
       <div
@@ -87,7 +89,9 @@ export function ChatPaneMobileChrome(props: {
           }
           people={
             <Show
-              when={props.mobile && !props.incognito && props.header.mobilePeople?.header.length}
+              when={
+                mobileActivated() && !props.incognito && props.header.mobilePeople?.header.length
+              }
             >
               <Loading>
                 <ChatMobilePeopleGrid
