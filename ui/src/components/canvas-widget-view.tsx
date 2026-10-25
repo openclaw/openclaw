@@ -6,7 +6,7 @@ import {
 import type { CanvasDocumentViewResult } from "@openclaw/gateway-protocol";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { Show, createEffect, createMemo, onCleanup, onSettled } from "solid-js";
+import { Show, createEffect, createMemo, onCleanup } from "solid-js";
 import type { ApplicationContext } from "../app/context.ts";
 import { hasOperatorReadAccess, hasOperatorSelfReadAccess } from "../app/operator-access.ts";
 import { registerBoardEnglish } from "../i18n/locales/en-board.ts";
@@ -18,6 +18,7 @@ import { projectCallbackOwner } from "../lib/reactive/callback-owner.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
+import { observeWindowMessage } from "../lib/reactive/window-message.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { generateUUID } from "../lib/uuid.ts";
 import { WidgetSandboxHost, WIDGET_LOAD_NOTICE_MS } from "../lib/widget-sandbox-host.ts";
@@ -100,6 +101,8 @@ function createCanvasWidget(
   let sandboxOrigin = "";
   let scrollNonce = "";
   let releaseTheme: (() => void) | undefined;
+  let releaseMessages: (() => void) | undefined;
+  let stopRetryEvents: (() => void) | undefined;
   let validatedBinding: ViewBinding | undefined;
   let ownerBinding: ViewBinding | undefined;
   let retryTimer: number | undefined;
@@ -122,6 +125,28 @@ function createCanvasWidget(
     retryTimer = undefined;
   }
 
+  function releaseRetryEvents(): void {
+    stopRetryEvents?.();
+    stopRetryEvents = undefined;
+  }
+
+  function watchRetryEvents(binding: ViewBinding): void {
+    if (binding.operatorRead || state.view || stopRetryEvents || !isCurrent(binding)) {
+      return;
+    }
+    stopRetryEvents = context.gateway.subscribeEvents((event) => {
+      if (!isCurrent(binding) || state.view || !isCanvasWidgetLoadRetryEvent(event, binding)) {
+        return;
+      }
+      // Retire an in-flight pre-commit lookup too; a remount must not borrow its stale miss.
+      loader.forget(binding);
+      releaseRetryEvents();
+      activeBinding = undefined;
+      reconcile();
+      notify();
+    });
+  }
+
   function scheduleRetry(binding: ViewBinding, retryAfterMs = 0): void {
     if (retryTimer !== undefined) {
       return;
@@ -131,6 +156,7 @@ function createCanvasWidget(
       () => {
         retryTimer = undefined;
         if (isCurrent(binding)) {
+          releaseRetryEvents();
           activeBinding = undefined;
           reconcile();
           notify();
@@ -150,6 +176,7 @@ function createCanvasWidget(
   }
 
   function clearView(): void {
+    releaseRetryEvents();
     loader.forget(activeBinding);
     loader.release();
     clearRetry();
@@ -168,6 +195,8 @@ function createCanvasWidget(
     scrollNonce = "";
     sandboxHost?.dispose();
     sandboxHost = undefined;
+    releaseMessages?.();
+    releaseMessages = undefined;
     releasePromptPort?.();
     releasePromptPort = undefined;
     promptPort?.close();
@@ -227,6 +256,7 @@ function createCanvasWidget(
     // Content can outlive its socket, but prompts require a successful read in
     // the current generation. Keep the private port inert rather than remounting.
     if (!isGatewayAvailable(gateway.snapshot)) {
+      releaseRetryEvents();
       activeBinding = undefined;
       loader.release();
       clearRetry();
@@ -255,6 +285,7 @@ function createCanvasWidget(
       return;
     }
     clearRetry();
+    releaseRetryEvents();
     validatedBinding = undefined;
     state.error = "";
     state.accessDenied = false;
@@ -272,6 +303,7 @@ function createCanvasWidget(
       operatorRead: hasOperatorReadAccess(gateway.snapshot.hello?.auth ?? null),
     };
     activeBinding = binding;
+    watchRetryEvents(binding);
     state.pending = Boolean(state.view) || state.awaitingResult;
     slowTimer = window.setTimeout(() => {
       if (isCurrent(binding)) {
@@ -301,6 +333,7 @@ function createCanvasWidget(
           state.sandboxGeneration += 1;
         }
         state.view = view;
+        releaseRetryEvents();
         ownerBinding = binding;
         validatedBinding = binding;
         state.pending = false;
@@ -336,23 +369,10 @@ function createCanvasWidget(
         state.accessDenied =
           error instanceof GatewayProtocolRequestError && error.gatewayCode === "FORBIDDEN";
         state.error = formatUiError(error);
+        watchRetryEvents(binding);
       })
       .finally(notify);
   }
-
-  onSettled(() =>
-    context.gateway.subscribeEvents((event) => {
-      const binding = activeBinding;
-      if (!isCurrent(binding) || state.view || !isCanvasWidgetLoadRetryEvent(event, binding)) {
-        return;
-      }
-      // Retire an in-flight pre-commit lookup too; a remount must not borrow its stale miss.
-      loader.forget(binding);
-      activeBinding = undefined;
-      reconcile();
-      notify();
-    }),
-  );
 
   function syncSandbox(): void {
     const active = props.presentationActive && isCurrent(validatedBinding);
@@ -366,6 +386,7 @@ function createCanvasWidget(
     sandboxOrigin = new URL(frame.src).origin;
     releaseTheme = registerWidgetThemeFrame(frame, sandboxOrigin);
     scrollNonce = generateUUID();
+    releaseMessages = observeWindowMessage(window, frame.contentWindow!, handleMessage);
     sandboxHost = new WidgetSandboxHost({
       frame,
       sandboxOrigin,
@@ -539,7 +560,6 @@ function createCanvasWidget(
     port.start();
     port.postMessage({ type: "openclaw:widget-prompt-host-ready" });
   };
-  onSettled(() => listen(window, "message", handleMessage));
   onCleanup(clearView);
   return {
     state,
