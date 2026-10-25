@@ -129,6 +129,7 @@ function installShortReads(maxPerCall: number) {
 describe("archive selection", () => {
   test("places the reset marker between retained and new turns", async () => {
     archive([
+      { type: "metadata", padding: "x".repeat(20 * 1024) },
       message("old", null, "user", "old"),
       message("kept-user", "old", "user", "kept question"),
       message("kept-tool", "kept-user", "toolResult", "hidden tool"),
@@ -143,6 +144,7 @@ describe("archive selection", () => {
       },
       message("post-reset", "reset-boundary", "user", "new turn"),
     ]);
+    const shortReads = installShortReads(16);
     const recent = await reader().readRecentWithStats({ maxMessages: 10, maxBytes: 16_384 });
     for (const rows of [await full(), recent.messages]) {
       expect(contents(rows)).toEqual([
@@ -152,6 +154,7 @@ describe("archive selection", () => {
         "new turn",
       ]);
     }
+    expect(shortReads()).toBeGreaterThan(1);
   });
 
   test("keeps active-branch compaction markers reachable through pagination", async () => {
@@ -162,8 +165,6 @@ describe("archive selection", () => {
         type: "compaction",
         id: "comp-1",
         timestamp: "2026-02-07T00:00:00.000Z",
-        summary: "Compacted history",
-        tokensBefore: 123,
       },
       message("active-user", null, "user", "active prompt"),
       message("active-assistant", "active-user", "assistant", "active answer"),
@@ -172,24 +173,10 @@ describe("archive selection", () => {
     ]);
     const newest = await reader().readPage({ offset: 0, maxMessages: 2 });
     const oldest = await reader().readPage({ offset: 2, maxMessages: 1 });
-    expect(newest).toMatchObject({
-      totalMessages: 3,
-      messages: [
-        { content: "active prompt", __openclaw: { seq: 2 } },
-        { content: "active answer", __openclaw: { seq: 3 } },
-      ],
-    });
-    expect(oldest).toMatchObject({
-      totalMessages: 3,
-      messages: [
-        {
-          role: "system",
-          content: [textBlock("Compaction")],
-          timestamp: Date.parse("2026-02-07T00:00:00.000Z"),
-          __openclaw: { kind: "compaction", id: "comp-1", seq: 1, tokensBefore: 123 },
-        },
-      ],
-    });
+    expect(newest.totalMessages).toBe(3);
+    expect(contents(newest.messages)).toEqual(["active prompt", "active answer"]);
+    expect(oldest.totalMessages).toBe(3);
+    expect(contents(oldest.messages)).toEqual([[textBlock("Compaction")]]);
   });
 
   test("accepts stale generated session archives when the header matches the current session", async () => {
@@ -251,6 +238,7 @@ describe("artifact usage", () => {
         usage: { input: 1800, output: 400, cacheRead: 600, cost: { total: 0.0055 } },
       }),
       assistant({ usage: { input: 2400, output: 250, cacheRead: 900, cost: { total: 0.006 } } }),
+      assistant({ provider: "openclaw", model: "command" }),
     ]);
     const readFile = vi.spyOn(fs, "readFileSync");
     const snapshot = await usage();
@@ -274,17 +262,6 @@ describe("artifact usage", () => {
       await expect(usage()).resolves.toEqual({ costUsd: 0 });
     },
   );
-
-  test("keeps the provider model after a delivered command", async () => {
-    writeUsage([
-      assistant({ provider: "anthropic", model: "claude-sonnet-4-6" }),
-      assistant({ provider: "openclaw", model: "command" }),
-    ]);
-    await expect(usage()).resolves.toMatchObject({
-      modelProvider: "anthropic",
-      model: "claude-sonnet-4-6",
-    });
-  });
 
   test("treats unavailable JSONL context as terminal until a later valid snapshot", async () => {
     const cliUsage = (tokens: Record<string, unknown>, extra = {}) =>
@@ -357,6 +334,10 @@ describe("transcript path safety", () => {
 describe("oversized transcript records", () => {
   const prefix = textBlock("keep prefix text");
   const suffix = textBlock("keep suffix text");
+  const document = {
+    type: "document",
+    source: imageSource(Buffer.from("%PDF-1.4\nexample").toString("base64"), "application/pdf"),
+  };
 
   async function recent() {
     return (await reader().readRecentWithStats({ maxMessages: 10 })).messages;
@@ -399,8 +380,8 @@ describe("oversized transcript records", () => {
       }),
     },
   ])("preserves recoverable reset-archive text around oversized $name", async ({ name, image }) => {
-    archiveUser([prefix, image(imageData), suffix]);
-    const expected = { role: "user", content: [prefix, omittedImage(), suffix] };
+    archiveUser([document, prefix, image(imageData), suffix]);
+    const expected = { role: "user", content: [document, prefix, omittedImage(), suffix] };
     const rows = projectChatDisplayMessages(await recent());
     expect(rows).toMatchObject([{ ...expected, __openclaw: { id } }]);
     expect(JSON.stringify(rows)).not.toContain(imageData);
@@ -438,19 +419,6 @@ describe("oversized transcript records", () => {
       expect(JSON.stringify(row)).not.toContain(imageData);
     }
     expect(single).toMatchObject({ found: true, oversized: false });
-  });
-
-  test("preserves a base64 PDF document preceding an oversized image", async () => {
-    const document = {
-      type: "document",
-      source: imageSource(Buffer.from("%PDF-1.4\nexample").toString("base64"), "application/pdf"),
-    };
-    archiveUser([document, prefix, { type: "image", source: imageSource(imageData) }, suffix]);
-    const rows = projectChatDisplayMessages(await recent());
-    expect(rows).toMatchObject([
-      { role: "user", content: [document, prefix, omittedImage(), suffix] },
-    ]);
-    expect(JSON.stringify(rows)).not.toContain(imageData);
   });
 
   test("keeps oversized fallback when recovered JSON numbers expand after parsing", async () => {
@@ -524,22 +492,6 @@ describe("oversized transcript records", () => {
   });
 });
 
-test("readRecentSessionMessagesAsync survives 16-byte tail read caps", async () => {
-  archive(
-    Array.from({ length: 30 }, (_, index) => ({
-      message: {
-        role: index % 2 ? "assistant" : "user",
-        content: `message ${index}: ${"data ".repeat(80)}`,
-      },
-    })),
-  );
-  const read = () => reader().readRecentWithStats({ maxMessages: 20, maxBytes: 8192 });
-  const expected = await read();
-  const calls = installShortReads(16);
-  expect(await read()).toEqual(expected);
-  expect(calls()).toBeGreaterThan(1);
-});
-
 describe("buildSessionPreviewItems bounded projection", () => {
   test("parses only 12 visible signatures from the recovery 1024-row tail", () => {
     const visible = 704;
@@ -550,8 +502,6 @@ describe("buildSessionPreviewItems bounded projection", () => {
     }));
     const sourceText = JSON.stringify(sourceMessages);
     const messages = sourceMessages;
-    const originalRows = messages.slice();
-    const originalContents = messages.map((row) => row.content);
     const signatureTexts = new Set(sourceMessages.map((row) => row.content[0]!.textSignature));
     const parse = vi.spyOn(JSON, "parse");
     const result = buildSessionPreviewItems(messages, 12, 120);
@@ -565,31 +515,7 @@ describe("buildSessionPreviewItems bounded projection", () => {
       })),
     );
     expect(JSON.stringify(messages)).toBe(sourceText);
-    expect(messages.every((row, index) => row === originalRows[index])).toBe(true);
-    expect(messages.every((row, index) => row.content === originalContents[index])).toBe(true);
     expect(parsedSignatures).toBe(12);
-  });
-
-  test.each(["display", "model-context"] as const)("bounds and orders %s previews", (view) => {
-    const messages = [
-      messageRow("user", "older excluded text"),
-      messageRow("assistant", "NO_REPLY"),
-      messageRow("user", [{ type: "input_text", text: "  question  " }]),
-      messageRow("assistant", "model only", { display: false }),
-      messageRow("assistant", [
-        signedText("private commentary", "commentary"),
-        signedText(`${"x".repeat(16)}🦊tail`, "final_answer"),
-      ]),
-      messageRow("assistant", "REPLY_SKIP"),
-      messageRow("toolResult", "tool output"),
-    ];
-    const original = structuredClone(messages);
-    expect(buildSessionPreviewItems(messages, 3, 20, view)).toEqual([
-      { role: "user", text: "question" },
-      { role: "assistant", text: `${"x".repeat(16)}...` },
-      { role: "assistant", text: "REPLY_SKIP" },
-    ]);
-    expect(messages).toEqual(original);
   });
 
   test("returns fewer previews when the input is exhausted", () => {

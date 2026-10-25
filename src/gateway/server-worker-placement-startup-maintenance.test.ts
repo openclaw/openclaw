@@ -176,6 +176,20 @@ function upsertEntry(
   });
 }
 
+async function expectWorkerPreservation(storePath: string, keys: string[]) {
+  const sql = observeHostDataSql();
+  try {
+    const prepared = await prepareSessionMaintenancePreservation(storePath);
+    using _ = { [Symbol.dispose]: prepared.dispose };
+    for (let capture = 0; capture < 4; capture += 1) {
+      expect(prepared.capture().providerKeys).toEqual(keys);
+    }
+    expect(sql.queries).toEqual([]);
+  } finally {
+    sql.restore();
+  }
+}
+
 describe("worker placement session maintenance ownership", () => {
   it.each(["claim", "release", "dispatch"] as const)(
     "preserves worker-owned session data during a concurrent %s",
@@ -212,6 +226,9 @@ describe("worker placement session maintenance ownership", () => {
           preservationStore: store,
         });
         const sidecar = await startMaintenanceRuntime(runtime);
+        await using runtimeCleanup = new AsyncDisposableStack();
+        runtimeCleanup.defer(() => sidecar.stop());
+        await expectWorkerPreservation(storePath, active ? [identity.sessionKey] : []);
         const read = stateReads.executeExistingOpenClawStateRead;
         let preservationReads = 0;
         const interleave = vi
@@ -263,7 +280,6 @@ describe("worker placement session maintenance ownership", () => {
           if (claim) {
             await store.releaseTurnIfOwned(claim);
           }
-          await sidecar.stop();
         }
       });
     },
@@ -333,37 +349,6 @@ describe("worker placement session maintenance ownership", () => {
       });
     },
   );
-
-  it("prepares and recaptures placement preservation without caller-thread SQL", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const store = createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() });
-      const placement = await store.startDispatch({
-        sessionId: "preserved-placement",
-        sessionKey: "agent:main:preserved-placement",
-        agentId: "main",
-      });
-      const { runtime } = createMaintenanceRuntime({
-        placements: [placement],
-        preservationStore: store,
-      });
-      const sidecar = await startMaintenanceRuntime(runtime);
-      const sql = observeHostDataSql();
-      let prepared: Awaited<ReturnType<typeof prepareSessionMaintenancePreservation>> | undefined;
-      try {
-        prepared = await prepareSessionMaintenancePreservation(
-          resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
-        );
-        for (let grant = 0; grant < 4; grant += 1) {
-          expect(prepared.capture().providerKeys).toEqual([placement.sessionKey]);
-        }
-        expect(sql.queries).toEqual([]);
-      } finally {
-        sql.restore();
-        prepared?.dispose();
-        await sidecar.stop();
-      }
-    });
-  });
 
   it("retains a configured-store repository base after its placement manifest advances", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {

@@ -236,11 +236,7 @@ it.each([
                   const wrongOwnerEffect = vi.fn();
                   expect(() =>
                     authorization.withPreparedCurrent!(
-                      {
-                        ...prepared,
-                        sessionKey: `agent:other:${kind}`,
-                        members: [],
-                      },
+                      { ...prepared, sessionKey: `agent:other:${kind}`, members: [] },
                       wrongOwnerEffect,
                       assertSourceCurrent,
                     ),

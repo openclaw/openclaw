@@ -425,7 +425,7 @@ describe("operator role policy", () => {
       }),
   );
 
-  it("intersects current and original model choices without revoking allowed sibling or unrelated work", () =>
+  it("updates bounded and unbounded model choices without revoking allowed sibling or unrelated work", () =>
     inState(async () => {
       const guest = ensureProfileForEmail("model-guest@example.test");
       const staff = ensureProfileForEmail("model-staff@example.test");
@@ -481,6 +481,21 @@ describe("operator role policy", () => {
           modelRef("fallback"),
         ]);
         expectModel(fresh.authority, "restricted-new", false);
+
+        using narrowed = await captureSource({
+          client: narrowClient(identifiedClient(staff.id), unaffected.authority),
+          context,
+        });
+        cfg = structuredClone(cfg);
+        expectDefined(cfg.gateway?.roles?.definitions.maintainer, "maintainer role").modelPolicy = {
+          allow: ["fixture/b", "fixture/c"],
+        };
+        publishOperatorRoleConfigChange(context);
+        expectCurrent(unaffected.authority);
+        expect(narrowed.authority.scopes).toEqual([]);
+        expectModel(narrowed.authority, "primary", false);
+        expectModel(narrowed.authority, "b", true);
+        expectModel(narrowed.authority, "c", true);
       } finally {
         primaryExecution.release();
         fallbackExecution.release();
@@ -488,28 +503,6 @@ describe("operator role policy", () => {
         releaseQueued();
         unaffected.release();
       }
-    }));
-
-  it("applies a new model ceiling to an unbounded source without revoking it", () =>
-    inState(async () => {
-      const profile = ensureProfileForEmail("model-field@example.test");
-      let cfg = roleConfig();
-      cfg.agents = modelDefaults("fixture/a");
-      const context = { getRuntimeConfig: () => cfg };
-      const client = identifiedClient(profile.id);
-      using source = await captureSource({ client, context });
-      using narrowed = await captureSource({
-        client: narrowClient(client, source.authority),
-        context,
-      });
-      cfg = structuredClone(cfg);
-      guestDefinition(cfg).modelPolicy = { allow: ["fixture/b", "fixture/c"] };
-      publishOperatorRoleConfigChange(context);
-      expectCurrent(source.authority);
-      expect(narrowed.authority.scopes).toEqual([]);
-      expectModel(narrowed.authority, "a", false);
-      expectModel(narrowed.authority, "b", true);
-      expectModel(narrowed.authority, "c", true);
     }));
 
   it("reads committed role changes and deletion without a role cache or main-thread SQL", () =>
