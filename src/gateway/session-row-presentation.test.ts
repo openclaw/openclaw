@@ -563,3 +563,52 @@ it("preserves selected account across role changes but rejects a changed merge i
     }
   });
 });
+
+it("reuses follow-up run progress across presentations until the run index changes", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const key = "agent:main:subagent:progress-fact";
+    seedRow(key, {
+      sessionId: "progress-fact",
+      updatedAt: 1,
+      status: "done",
+      spawnedBy: "agent:main:parent",
+    });
+    using projection = await createTestProjection({ cfg: {}, modelCatalog: [] });
+    const list = () => listProjectedSessions({ projection, opts: { limit: 10 } });
+    expect((await list()).sessions.find((row) => row.key === key)?.hasActiveSubagentRun).not.toBe(
+      true,
+    );
+    const index = projection.state.rowContext.projectedAgentRuns!;
+    using keys = vi.spyOn(index.sessionKeys, "get");
+    using ids = vi.spyOn(index.sessionIds, "get");
+    await list();
+    await list();
+    expect(keys).not.toHaveBeenCalled();
+    expect(ids).not.toHaveBeenCalled();
+
+    const claim = claimAgentRunContext(
+      "progress-fact-follow-up",
+      { agentId: "main", sessionId: "progress-fact", projectSessionActive: true },
+      { trackOwner: true, ownsContext: true },
+    );
+    try {
+      expect((await list()).sessions.find((row) => row.key === key)?.hasActiveSubagentRun).toBe(
+        true,
+      );
+      seedRow(key, {
+        sessionId: "replacement-session",
+        updatedAt: 2,
+        status: "done",
+        spawnedBy: "agent:main:parent",
+      });
+      expect((await list()).sessions.find((row) => row.key === key)?.hasActiveSubagentRun).not.toBe(
+        true,
+      );
+    } finally {
+      releaseAgentRunContext("progress-fact-follow-up", claim);
+    }
+    expect((await list()).sessions.find((row) => row.key === key)?.hasActiveSubagentRun).not.toBe(
+      true,
+    );
+  });
+});

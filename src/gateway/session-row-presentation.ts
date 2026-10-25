@@ -24,7 +24,10 @@ import {
   sessionRowsRevision,
   type SessionRowGeneration,
 } from "./session-row-identity.js";
-import type { SessionRowReadView } from "./session-row-prepared-read.js";
+import {
+  projectPreparedSessionRunState,
+  type SessionRowReadView,
+} from "./session-row-prepared-read.js";
 import type * as records from "./session-row-projection-record.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 import {
@@ -49,7 +52,6 @@ import { matchesSessionArchiveFilter, resolveSessionChildOwners } from "./sessio
 import {
   applyGatewaySessionRowMode,
   projectGatewaySessionActiveRun,
-  projectGatewaySessionRunState,
 } from "./session-utils-display.js";
 import type { GatewaySessionRow, SessionsListResult } from "./session-utils.types.js";
 
@@ -298,12 +300,8 @@ export function prepareProjectedSessionPresentation(
   const preparedRowContext = { ...rowContext, subagentRuns };
   const runState = (
     key: string,
-    {
-      entry,
-      parsedKey,
-    }: Pick<records.MaterializedRow["materialized"]["source"], "entry" | "parsedKey">,
-  ) =>
-    projectGatewaySessionRunState({ key, entry, parsedKey, now, rowContext: preparedRowContext });
+    source: Pick<records.MaterializedRow["materialized"]["source"], "entry" | "parsedKey">,
+  ) => projectPreparedSessionRunState(key, source, now, preparedRowContext);
   const active = (
     record: Pick<records.MaterializedRow, "key" | "entry" | "agentId" | "storeTarget">,
   ) =>
