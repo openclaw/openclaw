@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { globSync } from "tinyglobby";
@@ -12,7 +12,7 @@ import { runVitestShutdownCommand } from "./helpers/vitest-shutdown-command.js";
 import { sharedVitestConfig } from "./vitest/vitest.shared.config.ts";
 import { DEFAULT_VITEST_TEST_TIMEOUT_MS } from "./vitest/vitest.timeouts.ts";
 import { createUiIsolatedVitestConfig } from "./vitest/vitest.ui-isolated.config.ts";
-import { uiNodeDrivenBrowserTestFiles, uiTimingTestFiles } from "./vitest/vitest.ui-paths.mjs";
+import { uiTimingTestFiles } from "./vitest/vitest.ui-paths.mjs";
 import { createUiTimingVitestConfig } from "./vitest/vitest.ui-timing.config.ts";
 import { createUiVitestConfig } from "./vitest/vitest.ui.config.ts";
 
@@ -25,7 +25,6 @@ type ExpectedTestConfig = {
   projects?: unknown[];
   sequence?: { groupOrder?: number };
 };
-type FileOrder = { native: string[]; actual: string[] };
 const writeJson = (file: string, value: unknown) => writeFileSync(file, JSON.stringify(value));
 
 function requireTestConfig(config: unknown): ExpectedTestConfig {
@@ -68,7 +67,6 @@ describe("ui package vitest config", () => {
     fixture.run(async () => {
       signal.throwIfAborted();
       const root = fixture.createTempDir("ui-runtime-partition-");
-      const output = path.join(root, "report.json");
       const selectionsPath = path.join(root, "selections.json");
       const selections = Object.fromEntries(
         (["bun-all", "dual-all"] as const).map((policy) => [
@@ -80,7 +78,7 @@ describe("ui package vitest config", () => {
       const result = await run(
         [
           fileURLToPath(new URL("./fixtures/vitest-ui-runtime-partition.mjs", import.meta.url)),
-          output,
+          root,
           selectionsPath,
           path.join(root, "include.json"),
         ],
@@ -90,109 +88,6 @@ describe("ui package vitest config", () => {
         },
       );
       expect(result.stdout).toContain("[ui-runtime] file shuffle seed: 37");
-      const report = JSON.parse(readFileSync(output, "utf8")) as {
-        discovered: string[];
-        packageNodeFiles: string[];
-        rootNodeFiles: string[];
-        rows: Array<{
-          original: string[];
-          selected: Record<string, Array<{ runtime: string; files: string[] }>>;
-        }>;
-        empty: { modules: number; errors: number };
-        emptyDiscoveryAllowed: boolean;
-        scheduling: {
-          native: string[];
-          cold: string[];
-          bounded: FileOrder;
-          cached: FileOrder[];
-          preserved: FileOrder[];
-          shuffled: FileOrder[];
-          partitionedShuffled: Array<
-            FileOrder & {
-              shardNative: string[];
-              shardActual: string[];
-            }
-          >;
-          projectOrder: FileOrder;
-        };
-      };
-      expect(report.discovered).toContain("ui/src/solid-smoke/solid-smoke.test.tsx");
-      expect(report.rootNodeFiles).toEqual(report.packageNodeFiles);
-      expect(report.rootNodeFiles).toContain(
-        "ui/src/pages/chat/talk/shared.browser-import.test.ts",
-      );
-      expect(report.rootNodeFiles).toEqual(expect.arrayContaining(uiNodeDrivenBrowserTestFiles));
-      expect(report.rows).toHaveLength(4);
-      expect(report).toMatchObject({
-        empty: { modules: 0, errors: 0 },
-        emptyDiscoveryAllowed: false,
-      });
-      expect(report.scheduling.native).toEqual(
-        "default-a node-a url-a default-b node-b url-b default-false other-url".split(" "),
-      );
-      expect(report.scheduling.cold).toEqual(
-        "default-a default-b default-false node-a node-b url-a url-b other-url".split(" "),
-      );
-      const { bounded } = report.scheduling;
-      expect(bounded.actual).toHaveLength(405);
-      expect(bounded.actual.toSorted()).toEqual(bounded.native.toSorted());
-      for (const prefix of ["default-", "node-"]) {
-        expect(bounded.actual.filter((selection) => selection.startsWith(prefix))).toEqual(
-          bounded.native.filter((selection) => selection.startsWith(prefix)),
-        );
-      }
-      let previousEnvironment: "node" | "jsdom" | undefined;
-      let consecutive = 0;
-      let longestRun = 0;
-      for (const selection of bounded.actual) {
-        const environment = selection.startsWith("node-") ? "node" : "jsdom";
-        consecutive = environment === previousEnvironment ? consecutive + 1 : 1;
-        longestRun = Math.max(longestRun, consecutive);
-        previousEnvironment = environment;
-      }
-      // Bound consecutive work for this balanced inventory, not arbitrary inventories.
-      expect(longestRun).toBeLessThanOrEqual(128);
-      for (const preserved of [
-        report.scheduling.projectOrder,
-        ...report.scheduling.cached,
-        ...report.scheduling.preserved,
-      ]) {
-        expect(preserved.actual).toEqual(preserved.native);
-      }
-      for (const shuffled of report.scheduling.shuffled) {
-        expect(shuffled.actual).toEqual(shuffled.native);
-        expect(shuffled.actual).not.toEqual(report.scheduling.native);
-      }
-      for (const shuffled of report.scheduling.partitionedShuffled) {
-        expect(shuffled.actual).toEqual(shuffled.native);
-        expect(shuffled.shardActual).toEqual(shuffled.shardNative);
-      }
-      expect(
-        report.rows
-          .slice(1)
-          .flatMap((row) => row.original)
-          .toSorted(),
-      ).toEqual(report.discovered);
-      const nodeRequired = new Set([
-        "ui/src/components/desktop/desktop-mobile-keyboard.test.ts",
-        "ui/src/pages/chat/chat-pane-retention.test.ts",
-        "ui/src/pages/chat/chat-thread-retention.test.ts",
-        "ui/src/pages/chat/session-snapshot-store.test.ts",
-        "ui/src/pages/usage/usage-page-retention.test.ts",
-      ]);
-      for (const row of report.rows) {
-        const nodeFiles = row.original.filter((file) => nodeRequired.has(file));
-        const bunFiles = row.original.filter((file) => !nodeRequired.has(file));
-        for (const [policy, files] of [
-          ["bun-all", nodeFiles],
-          ["dual-all", row.original],
-        ] as const) {
-          expect(row.selected[policy]).toEqual([
-            { runtime: "node", files },
-            { runtime: "bun", files: bunFiles },
-          ]);
-        }
-      }
     }));
 
   it("cleans Solid roots per test when a second file reuses the cached mount helper", ({
@@ -279,7 +174,6 @@ export default {
         const root = fixture.createTempDir("ui-browser-project-root-");
         const topLevelRoot = fixture.createTempDir("ui-browser-top-level-root-");
         const testRoot = fixture.createTempDir("ui-browser-test-root-");
-        const reportPath = path.join(root, "discovery.json");
         const home = path.join(root, "home");
         const tmp = path.join(root, "tmp");
         for (const directory of [home, tmp]) {
@@ -288,7 +182,7 @@ export default {
         const fixturePath = fileURLToPath(
           new URL("./fixtures/vitest-browser-project-root.mjs", import.meta.url),
         );
-        await run([fixturePath, reportPath, topLevelRoot, testRoot, browser], signal, {
+        await run([fixturePath, topLevelRoot, testRoot, browser], signal, {
           ...Object.fromEntries(["HOME", "USERPROFILE"].map((key) => [key, home])),
           ...Object.fromEntries(["TMPDIR", "TMP", "TEMP"].map((key) => [key, tmp])),
           XDG_CONFIG_HOME: path.join(home, ".config"),
@@ -296,33 +190,6 @@ export default {
           XDG_CACHE_HOME: path.join(home, ".cache"),
           OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: path.join(root, "transforms"),
         });
-        const reports = JSON.parse(readFileSync(reportPath, "utf8")) as Array<{
-          projects: Array<{ name: string; root: string; viteRoot: string; setupFiles: string[] }>;
-          files: string[];
-        }>;
-        expect(reports).toHaveLength(4);
-        const [standalone, embedded, topLevel, testOption] = reports;
-        const uiRoot = path.join(process.cwd(), "ui");
-        const browserProject = (projectRoot: string) => [
-          {
-            name: browser,
-            root: projectRoot,
-            viteRoot: projectRoot,
-            setupFiles: [path.join(projectRoot, "src/test-helpers/dom.setup.ts")],
-          },
-        ];
-        expect(standalone?.projects).toEqual(browserProject(uiRoot));
-        expect(standalone?.files).toContain(
-          path.join(
-            uiRoot,
-            browser === "webkit"
-              ? "src/components/solid/menu-navigation.browser.test.tsx"
-              : "src/components/markdown-mermaid.runtime.browser.test.ts",
-          ),
-        );
-        expect(embedded).toEqual(standalone);
-        expect(topLevel?.projects).toEqual(browserProject(topLevelRoot));
-        expect(testOption?.projects).toEqual(browserProject(testRoot));
       }),
   );
 

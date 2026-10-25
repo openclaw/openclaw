@@ -174,28 +174,22 @@ describe("fetchNpmRegistryPackumentWithRetry", () => {
     expect(waits).toEqual(recovers ? [1000] : [1000, 2000]);
   });
 
-  it("rejects completed invalid JSON without retry or recoverable publication deferral", async () => {
-    const fetchImpl = vi.fn(async () => new Response("{"));
-    await expect(
-      fetchPackument({
-        fetchImpl,
-        sleep: noRetry,
-      }),
-    ).rejects.toThrow("returned invalid JSON");
-    expect(fetchImpl).toHaveBeenCalledOnce();
-  });
-
-  it("does not retry permanent certificate errors", async () => {
-    const error = new TypeError("fetch failed", { cause: { code: "CERT_HAS_EXPIRED" } });
+  it.each([
+    ["invalid JSON", "returned invalid JSON"],
+    ["certificate failure", new TypeError("fetch failed", { cause: { code: "CERT_HAS_EXPIRED" } })],
+  ] as const)("does not retry permanent %s", async (_label, error) => {
     const fetchImpl = vi.fn(async () => {
-      throw error;
+      if (error instanceof Error) {
+        throw error;
+      }
+      return new Response("{");
     });
-    await expect(
-      fetchPackument({
-        fetchImpl,
-        sleep: noRetry,
-      }),
-    ).rejects.toBe(error);
+    const result = fetchPackument({ fetchImpl, sleep: noRetry });
+    if (error instanceof Error) {
+      await expect(result).rejects.toBe(error);
+    } else {
+      await expect(result).rejects.toThrow(error);
+    }
     expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
