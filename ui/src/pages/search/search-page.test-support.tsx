@@ -2,6 +2,7 @@ import { createRouter } from "@openclaw/uirouter";
 import { flush } from "solid-js";
 import { expect, onTestFinished, vi } from "vitest";
 import type { WebSearchStatusResult } from "../../../../packages/gateway-protocol/src/schema/web-search.ts";
+import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type {
   ApplicationContext,
   ApplicationGateway,
@@ -21,6 +22,12 @@ import { SearchPage } from "./search-page.tsx";
 
 export const searchPath = ["tools", "web", "search"];
 export const providerPath = (id: string) => ["plugins", "entries", id, "config", "webSearch"];
+export function pendingResult<T>(value: T) {
+  const deferred = createDeferred<T>();
+  const complete = () => deferred.resolve(value);
+  onTestFinished(complete);
+  return { ...deferred, complete };
+}
 export function atPath(path: string[], value: unknown): Record<string, unknown> {
   return path.slice(0, -1).reduceRight((node, key) => ({ [key]: node }), { [path.at(-1)!]: value });
 }
