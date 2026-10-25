@@ -36,6 +36,7 @@ export async function captureCodexSettledTurnFinalizationContext(
     },
 ): Promise<CodexSettledTurnContext | undefined> {
   let reason: CodexHistoryRejectionReason;
+  let stage: "before_read" | "load_worker" | "read" | "after_read" = "before_read";
   try {
     params.signal?.throwIfAborted();
     params.assertActive?.();
@@ -43,9 +44,12 @@ export async function captureCodexSettledTurnFinalizationContext(
     if (!model) {
       throw new CodexHistoryRejection("model_unavailable");
     }
+    stage = "load_worker";
     const { projectCodexSettledHistoryInWorker } =
       await import("../../session-history-worker-runtime.js");
+    stage = "read";
     const result = await projectCodexSettledHistoryInWorker(params, params.signal);
+    stage = "after_read";
     params.signal?.throwIfAborted();
     params.assertActive?.();
     if (result.status === "ok") {
@@ -57,10 +61,14 @@ export async function captureCodexSettledTurnFinalizationContext(
       return params.withCurrent ? await params.withCurrent(consume) : consume();
     }
     reason = result.reason;
+    stage = "read";
   } catch (error) {
     reason = params.signal?.aborted ? "cancelled" : codexHistoryRejectionReason(error);
   }
   // Capture follows settled side effects; a rejected read must preserve the incomplete turn.
-  embeddedAgentLog.warn("codex settled-turn finalization context capture failed", { reason });
+  embeddedAgentLog.warn("codex settled-turn finalization context capture failed", {
+    reason,
+    ...(reason === "history_read_failed" ? { stage } : {}),
+  });
   return undefined;
 }

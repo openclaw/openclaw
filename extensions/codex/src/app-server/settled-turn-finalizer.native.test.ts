@@ -42,7 +42,9 @@ import {
   bindProductionHarnessHostCapabilitiesForTest,
   createCodexRuntimePlanFixture,
   createNativeRunParams,
+  createRuntimeDynamicTool,
   runCodexAppServerAttempt,
+  setCodexTestModelSupportsTools,
   setupRunAttemptTestHooks,
   tempDir,
 } from "./run-attempt-test-harness.js";
@@ -501,6 +503,123 @@ it.skipIf(process.platform === "win32")(
     expect(fixture.requests).toHaveLength(1);
     await expectActionOnce(fixture);
   }),
+);
+
+it.skipIf(process.platform === "win32").each([true, false])(
+  "keeps real native history coverage after message (final=%s)",
+  { timeout: 60_000 },
+  (final) =>
+    withNativeFixture(tempDir, async (fixture, cleanups) => {
+      // Only the provider stream and delivery receipt are synthetic. The pinned
+      // native process, dynamic-tool RPC, host settlement and binding are real.
+      const pluginConfig = await configureAgentHome(fixture);
+      const { params, shared, run } = await createRunFixture(fixture, cleanups, pluginConfig);
+      usePreparedApiKey(params, fixture.baseUrl);
+      params.sourceReplyDeliveryMode = "message_tool_only";
+      setCodexTestModelSupportsTools(params, true);
+      const messageTool = createRuntimeDynamicTool("message");
+      messageTool.parameters = {
+        type: "object",
+        properties: {
+          action: { type: "string" },
+          message: { type: "string" },
+          final: { type: "boolean" },
+        },
+        additionalProperties: false,
+      };
+      messageTool.execute = vi.fn(async () => ({
+        content: [{ type: "text" as const, text: "Sent." }],
+        details: { messageId: "synthetic-local-receipt" },
+      }));
+      setCodexTestToolFactory(params, () => [messageTool]);
+      let closeHost = await bindProductionHarnessHostCapabilitiesForTest(params);
+      cleanups.push(async () => closeHost());
+      const initialized = await run({ ...params, prompt: "Initialize the source." });
+      expect(initialized.terminal).toEqual({ kind: "ok" });
+      const originalBinding = await readCodexAppServerBinding(params.sessionFile);
+      if (!originalBinding) {
+        throw new Error("Native initialization did not persist its binding");
+      }
+      const client = shared.client();
+      expect(client.getRuntimeIdentity()?.serverVersion).toBe(CODEX_APP_SERVER_VERSION);
+      const nativeRequests = vi.spyOn(client, "request");
+      closeHost();
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(Date.now() + 1_000);
+      await expect(
+        appendSessionTranscriptMessageByIdentity({
+          ...transcriptTarget(params),
+          message: {
+            role: "user",
+            content: "The old inventory contains cobalt widgets.",
+            timestamp: Date.now(),
+          },
+        }),
+      ).resolves.toMatchObject({ appended: true });
+      vi.setSystemTime(Date.now() + 1_000);
+      fixture.setMessageDelivery(final);
+      params.runId = "run-native-message";
+      params.prompt = "Send the inventory summary.";
+      // Capture eligibility belongs to core's settled-turn finalization suite;
+      // this case covers native delivery and history continuity only.
+      params.onSettledTurn = undefined;
+      closeHost = await bindProductionHarnessHostCapabilitiesForTest(params);
+      const result = await run();
+      expect(result.terminal).toEqual({ kind: "ok" });
+      expect(result.promptTimeoutOutcome).toBeUndefined();
+      expect(result.codexAppServerFailure).toBeUndefined();
+      expect(messageTool.execute).toHaveBeenCalledOnce();
+      expect(vi.mocked(messageTool.execute).mock.calls[0]?.slice(0, 2)).toEqual([
+        "native-source-reply",
+        expect.objectContaining({ action: "send", message: "Visible inventory reply.", final }),
+      ]);
+      expect(result.didDeliverSourceReplyViaMessageTool).toBe(true);
+      const messageStart = callsFor(nativeRequests, "turn/start")?.at(-1);
+      expect(JSON.stringify(messageStart?.[1])).toContain(
+        "The old inventory contains cobalt widgets.",
+      );
+      expect(result.messagingToolSentTargets).toEqual([
+        expect.objectContaining({ sourceReplyFinal: final }),
+      ]);
+      expect(nativeRequests.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(final);
+      const binding = await readCodexAppServerBinding(params.sessionFile);
+      expect(binding?.threadId).toBe(originalBinding.threadId);
+      expect(Date.parse(binding?.historyCoveredThrough ?? "")).toBeGreaterThan(
+        Date.parse(originalBinding.historyCoveredThrough!),
+      );
+      closeHost();
+      vi.setSystemTime(Date.now() + 1_000);
+      await expect(
+        appendSessionTranscriptMessageByIdentity({
+          ...transcriptTarget(params),
+          message: {
+            role: "user",
+            content: "Correction: the new inventory contains amber widgets.",
+            timestamp: Date.now(),
+          },
+        }),
+      ).resolves.toMatchObject({ appended: true });
+      vi.setSystemTime(Date.now() + 1_000);
+      fixture.setPhase("health");
+      params.runId = "run-native-resume";
+      params.prompt = "Use the corrected inventory.";
+      closeHost = await bindProductionHarnessHostCapabilitiesForTest(params);
+      const resumed = await run();
+      expect(resumed.terminal).toEqual({ kind: "ok" });
+      const resumedStart = callsFor(nativeRequests, "turn/start")?.at(-1);
+      expect(resumedStart?.[1]).toMatchObject({ threadId: originalBinding.threadId });
+      const resumedInput = JSON.stringify(resumedStart?.[1]);
+      expect(resumedInput).toContain("Correction: the new inventory contains amber widgets.");
+      expect(resumedInput).toContain("Use the corrected inventory.");
+      expect(resumedInput).not.toContain("The old inventory contains cobalt widgets.");
+      expect(messageTool.execute).toHaveBeenCalledOnce();
+      expect(callsFor(nativeRequests, "thread/start")).toHaveLength(0);
+      expect(await readCodexAppServerBinding(params.sessionFile)).toMatchObject({
+        threadId: originalBinding.threadId,
+      });
+      expect(client.getCloseError()).toBeUndefined();
+      vi.useRealTimers();
+    }),
 );
 
 it.skipIf(process.platform === "win32")(

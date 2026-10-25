@@ -29,7 +29,7 @@ const liveProvider = LIVE
 
 export type NativeFixture = Awaited<ReturnType<typeof createNativeFixture>>;
 export type Cleanup = () => Promise<void>;
-type NativePhase = "probe" | "action" | "side" | "hold" | "summary" | "health";
+type NativePhase = "probe" | "action" | "side" | "hold" | "summary" | "health" | "message";
 
 const sseHeaders = { "Content-Type": "text/event-stream" };
 function event(type: string, fields: JsonObject) {
@@ -57,6 +57,7 @@ async function createNativeFixture(
   let requestReceived = createDeferred<void>();
   let phase: NativePhase = "probe";
   let actionRequests = 0;
+  let messageFinal = true;
   const livePhases: NativePhase[] = [];
   let emptyTerminalInjections = 0;
   const upstreamAbort = new AbortController();
@@ -95,7 +96,7 @@ async function createNativeFixture(
         );
         return;
       }
-      if (phase === "action" || phase === "side") {
+      if (phase === "action" || phase === "side" || phase === "message") {
         actionRequests += 1;
       }
       if (live && liveProvider) {
@@ -142,7 +143,21 @@ async function createNativeFixture(
       }
       let item: JsonObject | undefined;
       if (!live) {
-        if (actionRequests === 1 && (phase === "action" || phase === "side")) {
+        if (phase === "message") {
+          item =
+            actionRequests === 1
+              ? {
+                  type: "function_call",
+                  call_id: "native-source-reply",
+                  name: "message",
+                  arguments: JSON.stringify({
+                    action: "send",
+                    message: "Visible inventory reply.",
+                    final: messageFinal,
+                  }),
+                }
+              : undefined;
+        } else if (actionRequests === 1 && (phase === "action" || phase === "side")) {
           item = {
             type: "function_call",
             call_id: "completed-action",
@@ -218,6 +233,10 @@ async function createNativeFixture(
     injectedEmptyTerminals: () => emptyTerminalInjections,
     marker,
     waitForRequest: () => requestReceived.promise,
+    setMessageDelivery(final: boolean) {
+      messageFinal = final;
+      this.setPhase("message");
+    },
     setPhase(next: NativePhase) {
       phase = next;
       requests.length = 0;
