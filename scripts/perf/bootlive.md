@@ -5,7 +5,9 @@ Preregistered before the first run on baseline `c2e29980f08775b8f2574820fc414ae0
 Flow: cold isolated Gateway boot, readiness probe, startup cleanup settling, one minute
 warm idle, and clean shutdown. Use the frozen v3.1.4 observer and its causal hooks,
 never live state. Seed 300, 1,000 and 3,000 sessions over three agents through the
-existing session lifecycle fixture, including historical windows. Attribute the
+existing session lifecycle fixture, with 50 registered worktrees. Exercise empty
+transcript windows separately from historical windows with transcript events;
+the empty cohort reproduces projection cleanup's per-session probes. Attribute the
 largest twenty statement shapes to their source owners. Independently exercise the
 existing real loopback Reef workload to separate event-driven boot-slice traffic
 from work proportional to the number of sessions. The complete channel/plugin
