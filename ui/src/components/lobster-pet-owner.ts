@@ -72,7 +72,12 @@ export class LobsterPetOwner {
       this.passerHops =
         this.passerAnchor === "floor" && plan.hops && this.geometry.scene.passage !== null;
     },
-    onPasserFacing: (facing) => this.watchTraffic(facing),
+    // Scuttle owns facing while walking; other acts can watch passing traffic.
+    onPasserFacing: (facing) => {
+      if (this.presence === "in" && this.act !== "scuttle" && !this.vigil) {
+        this.facing = facing;
+      }
+    },
     onPasserMidCross: () => this.reactToPasser(),
     onPasserDone: () => this.scheduleNextAct(),
   });
@@ -307,7 +312,9 @@ export class LobsterPetOwner {
     if (visible && this.presence !== "in") {
       this.timers.clear("leaveTimer");
       if (this.presence === "out") {
-        this.rollPerch();
+        this.anchor = "top";
+        this.spotPct = Math.round(lobsterLook.randomBetween(this.visitRng, 12, 88));
+        this.facing = this.visitRng() < 0.5 ? 1 : -1;
         // Entrance rolls burn once per arrival on their own stream, aligned
         // across scheduled visits and offline summons.
         this.entrance = plans.pickLobsterEntrance(this.entranceRng());
@@ -485,13 +492,6 @@ export class LobsterPetOwner {
     });
   }
 
-  // Scuttle owns facing while walking; other acts can watch passing traffic.
-  private watchTraffic(facing: 1 | -1) {
-    if (this.presence === "in" && this.act !== "scuttle" && !this.vigil) {
-      this.facing = facing;
-    }
-  }
-
   private reactToPasser() {
     const reaction =
       this.familiarity.tier === "friend" ? "wave" : this.familiarity.tier === "shy" ? "peek" : null;
@@ -506,12 +506,6 @@ export class LobsterPetOwner {
       return;
     }
     this.performAct(reaction);
-  }
-
-  private rollPerch() {
-    this.anchor = "top";
-    this.spotPct = Math.round(lobsterLook.randomBetween(this.visitRng, 12, 88));
-    this.facing = this.visitRng() < 0.5 ? 1 : -1;
   }
 
   private scheduleNextAct() {
