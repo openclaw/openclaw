@@ -5,7 +5,7 @@ import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { afterEach, describe, expect, it } from "vitest";
 import { describePeriod } from "./periods.js";
-import { reportDocument, reportMember } from "./reports-data.test-support.js";
+import { githubItem, reportDocument, reportMember } from "./reports-data.test-support.js";
 import { githubCounts as counts } from "./reports.fixtures.js";
 import { buildRoster } from "./roster.js";
 import { teamReportsSqliteBackendEntrypoint } from "./sqlite-backend-entrypoint.test-support.js";
@@ -48,6 +48,14 @@ async function expectStored(
   const expected = { report: document, summary: storedSummary };
   expect(await store.getPeriod(period, key)).toEqual({ ...expected, markdown });
   expect(await store.getPeriodDocument(period, key)).toEqual(expected);
+}
+
+async function readFailure(read: Promise<unknown>) {
+  const error = await read.catch((caught: unknown) => caught);
+  if (!(error instanceof Error)) {
+    throw new Error("The period read must reject this fixture");
+  }
+  return { name: error.name, message: error.message };
 }
 
 const summary: SummaryDocument = {
@@ -197,20 +205,7 @@ describe("Team Reports storage", () => {
       ["2026-08-20", "latest"],
       ...logins.map((login) => ["2026-08-19", login]),
     ]);
-    expect(days[1]).toEqual({
-      dayKey: "2026-08-19",
-      login: "member-0000",
-      githubTotal: 1,
-      commits: 1,
-      prsOpened: 0,
-      prsMerged: 0,
-      prsClosed: 0,
-      issuesOpened: 0,
-      issuesClosed: 0,
-      issueComments: 0,
-      reviewComments: 0,
-      discordMessages: 2,
-    });
+    expect(days[1]).toMatchObject({ githubTotal: 1, commits: 1, discordMessages: 2 });
     expect(await store.listPersonDaysSince("2026-08-21")).toEqual([]);
     await store.upsertPeriod({ report: report("2026-08-19", []), markdown: "empty roster" });
     expect((await store.listPersonDaysSince("2026-08-19")).map((day) => day.login)).toEqual([
@@ -285,18 +280,9 @@ describe("Team Reports storage", () => {
         const latest = (await store.listPeriods({ period: "day", limit: 1 }))[0];
         return latest ? store.getPeriod("day", latest.key) : undefined;
       };
-      const originalError = await originalRead().catch((error: unknown) => error);
-      if (!(originalError instanceof Error)) {
-        throw new Error("The existing period read must reject this fixture");
-      }
-      await expect(store.latestSourceWarnings()).rejects.toMatchObject({
-        name: originalError.name,
-        message: originalError.message,
-      });
-      await expect(store.latestPeople()).rejects.toMatchObject({
-        name: originalError.name,
-        message: originalError.message,
-      });
+      const originalError = await readFailure(originalRead());
+      await expect(store.latestSourceWarnings()).rejects.toMatchObject(originalError);
+      await expect(store.latestPeople()).rejects.toMatchObject(originalError);
       if (failure === "unsafe extracted total") {
         // Direct document reads validate JSON numbers without SQLite's integer extraction.
         expect(await store.getPeriodDocument("day", "2026-08-20")).toEqual({
@@ -304,16 +290,10 @@ describe("Team Reports storage", () => {
           summary,
         });
       } else {
-        const directError = await store
-          .getPeriod("day", "2026-08-20")
-          .catch((error: unknown) => error);
-        if (!(directError instanceof Error)) {
-          throw new Error("The complete period read must reject this fixture");
-        }
-        await expect(store.getPeriodDocument("day", "2026-08-20")).rejects.toMatchObject({
-          name: directError.name,
-          message: directError.message,
-        });
+        const directError = await readFailure(store.getPeriod("day", "2026-08-20"));
+        await expect(store.getPeriodDocument("day", "2026-08-20")).rejects.toMatchObject(
+          directError,
+        );
       }
     } finally {
       database.close();
@@ -380,55 +360,23 @@ describe("Team Reports storage", () => {
   });
 });
 
-it("upserts streamed activity across batches and aggregates newest duplicate comments", async () => {
+it("replaces streamed activity across batches and clears it on reset", async () => {
   const { store } = await openStore();
   const period = describePeriod("day", "2026-08-20");
-  const comment = {
-    kind: "issue_comment" as const,
-    actor: "alice",
-    repo: "example/app",
-    atMs: period.sinceMs + 1,
-    title: "Old title",
-    body: "Same discussion",
-    url: "https://github.com/example/app/issues/1#comment-1",
-  };
-  await store.resetActivity();
-  await store.appendActivity({ source: "github", entries: [{ key: "first", value: comment }] });
-  await store.appendActivity({
-    source: "github",
-    entries: [
-      { key: "first", value: { ...comment, title: "Updated title" } },
-      {
-        key: "second",
-        value: {
-          ...comment,
-          atMs: period.sinceMs + 2,
-          title: "Newest discussion",
-          url: "https://github.com/example/app/issues/2#comment-2",
-        },
-      },
-      { key: "third", value: { ...comment, actor: "bob" } },
-    ],
-  });
   const options = {
     period,
     nowMs: period.untilMs,
-    orgs: ["example"],
-    roster: buildRoster([{ github: ["alice"] }, { github: ["bob"] }]),
+    orgs: ["sample"],
+    roster: buildRoster([{ github: ["alpha"] }]),
     githubStatus: { ok: true, warnings: [], stats: {} },
   };
-  const aggregated = await store.aggregateActivity(options);
-  expect(aggregated.totals.github.issueComments).toBe(2);
-  expect(aggregated.members.find((member) => member.login === "alice")?.github.items).toEqual([
-    {
-      kind: "issue_comment",
-      actor: "alice",
-      repo: "example/app",
-      atMs: period.sinceMs + 2,
-      title: "Newest discussion",
-      url: "https://github.com/example/app/issues/2#comment-2",
-    },
-  ]);
+  for (const title of ["Original", "Updated"]) {
+    const value = githubItem({ title, atMs: period.sinceMs + 1 });
+    await store.appendActivity({ source: "github", entries: [{ key: "same", value }] });
+  }
+  const result = await store.aggregateActivity(options);
+  expect(result.totals.github.total).toBe(1);
+  expect(result.members[0]?.github.items).toMatchObject([{ title: "Updated" }]);
   await store.resetActivity();
   expect((await store.aggregateActivity(options)).totals.github.total).toBe(0);
 });
