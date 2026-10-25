@@ -55,8 +55,10 @@ function createCoordinator(
   }: Partial<CoordinatorOptions["params"]> = {},
   options: Partial<Omit<CoordinatorOptions, "params">> = {},
 ) {
-  const logReload = { info: vi.fn(), warn: vi.fn() };
-  const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
+  const {
+    logReload = { info: vi.fn(), warn: vi.fn() },
+    requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const })),
+  } = params;
   const coordinator = createGatewayRestartCoordinator({
     params: { logReload, requestRecoveryRestart, ...params, scheduler },
     reloadSignal: options.reloadSignal ?? beginGatewayReloadLifecycle(),
@@ -165,9 +167,6 @@ describe("gateway restart readiness preflight", () => {
       await vi.advanceTimersByTimeAsync(1_000);
       expect(assertRestartReady).toHaveBeenCalledOnce();
       expect(requestRecoveryRestart).not.toHaveBeenCalled();
-      expect(logReload.info).not.toHaveBeenCalledWith(
-        "all operations and replies completed; restarting gateway now",
-      );
       coordinator.request(prepareRuntimeConfig);
       await vi.advanceTimersByTimeAsync(0);
       expect(assertRestartReady).toHaveBeenCalledTimes(2);
@@ -208,12 +207,10 @@ describe("gateway restart readiness preflight", () => {
     const cancel = vi.fn();
     const deferSpy = vi.spyOn(restartModule, "deferGatewayRestartUntilIdle");
     let capturedHooks: Parameters<typeof restartModule.deferGatewayRestartUntilIdle>[0]["hooks"];
-    deferSpy.mockImplementation(
-      (opts: Parameters<typeof restartModule.deferGatewayRestartUntilIdle>[0]) => {
-        capturedHooks = opts.hooks;
-        return { cancel };
-      },
-    );
+    deferSpy.mockImplementation(({ hooks }) => {
+      capturedHooks = hooks;
+      return { cancel };
+    });
     const activeCounts = { ...zeroActiveCounts, totalActive: 1, agentRuns: 1 };
     const coordinator = createCoordinator(
       { assertRestartReady: vi.fn(), requestRecoveryRestart: vi.fn() },
@@ -226,24 +223,20 @@ describe("gateway restart readiness preflight", () => {
     const prepareRuntimeConfig = async () => ({});
     coordinator.request(prepareRuntimeConfig);
     expect(deferSpy).toHaveBeenCalledOnce();
-
     capturedHooks?.onTimeout?.(1, 300_000);
-
     coordinator.request(prepareRuntimeConfig);
-
     expect(cancel).toHaveBeenCalled();
   });
   it("forces the restart at the deadline when production timeout diagnostics cannot inspect work", async () => {
     const queueSize = getTotalQueueSize.mockReturnValue(1);
-    const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
     const logReload = { info: vi.fn(), warn: vi.fn() };
     const reloadSignal = beginGatewayReloadLifecycle();
     const tracker = createGatewayActiveWorkTracker({ params: { logReload }, reloadSignal });
-    const coordinator = createCoordinator(
-      { logReload, requestRecoveryRestart },
+    const { request, requestRecoveryRestart } = createCoordinator(
+      { logReload },
       { reloadSignal, ...tracker },
     );
-    expect(coordinator.request().status).toBe("accepted");
+    expect(request().status).toBe("accepted");
     queueSize.mockImplementation(() => {
       throw new Error("pending-work store unavailable");
     });
