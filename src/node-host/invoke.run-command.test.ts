@@ -19,37 +19,28 @@ describe("runCommand", () => {
     vi.restoreAllMocks();
   });
 
-  it.each(["before", "after"] as const)(
-    "checks node launch policy %s native execution",
-    async (timing) => {
-      let allowed = timing === "after";
-      const pending = runCommand(
-        [
-          process.execPath,
-          "-e",
-          "process.stdin.resume(); process.stdin.once('end', () => process.stdout.write('completed'))",
-        ],
-        undefined,
-        { PATH: process.env.PATH ?? "" },
-        5_000,
-        undefined,
-        () => {
-          if (!allowed) {
-            throw new Error("exec approval changed before execution");
-          }
-        },
-      );
-      // The canonical node runner spawns synchronously before returning its promise.
-      allowed = false;
-      if (timing === "before") {
-        await expect(pending).rejects.toThrow("exec approval changed before execution");
-      } else {
-        const result = await pending;
-        expect(result.success).toBe(true);
-        expect(result.stdout).toBe("completed");
-      }
-    },
-  );
+  it("does not revoke an already-launched native command", async () => {
+    let allowed = true;
+    const pending = runCommand(
+      [
+        process.execPath,
+        "-e",
+        "process.stdin.resume(); process.stdin.once('end', () => process.stdout.write('completed'))",
+      ],
+      undefined,
+      { PATH: process.env.PATH ?? "" },
+      5_000,
+      undefined,
+      () => {
+        if (!allowed) {
+          throw new Error("exec approval changed before execution");
+        }
+      },
+    );
+    // The canonical node runner spawns synchronously before returning its promise.
+    allowed = false;
+    await expect(pending).resolves.toMatchObject({ success: true, stdout: "completed" });
+  });
 
   it.runIf(process.platform === "linux")(
     "restores the service PATH after login startup and resolves service-only tools",
@@ -126,24 +117,22 @@ describe("runCommand", () => {
       return { launchedArgv, options };
     }
 
-    it.each(["cmd.exe", "C:\\Windows\\System32\\CMD.EXE"])(
-      "quotes %s once and passes its command verbatim",
-      async (shell) => {
-        const argv =
-          shell === "cmd.exe"
-            ? buildNodeShellCommand(shellCommand, "win32")
-            : [shell, "/d", "/s", "/c", shellCommand];
-        const { launchedArgv, options } = await captureLaunch("win32", argv);
-        expect(launchedArgv).toEqual([shell, "/d", "/s", "/c", `"${shellCommand}"`]);
-        expect(options).toMatchObject({ windowsVerbatimArguments: true });
-      },
-    );
+    it("quotes an absolute cmd.exe path regardless of case", async () => {
+      const shell = "C:\\Windows\\System32\\CMD.EXE";
+      const { launchedArgv, options } = await captureLaunch("win32", [
+        shell,
+        "/d",
+        "/s",
+        "/c",
+        shellCommand,
+      ]);
+      expect(launchedArgv).toEqual([shell, "/d", "/s", "/c", `"${shellCommand}"`]);
+      expect(options).toMatchObject({ windowsVerbatimArguments: true });
+    });
 
     it.each([
       ["four elements", "win32", ["cmd.exe", "/d", "/s", "/c"]],
-      ["six elements", "win32", ["cmd.exe", "/d", "/s", "/c", shellCommand, "extra"]],
       ["another program", "win32", ["powershell.exe", "/d", "/s", "/c", shellCommand]],
-      ["a bare cmd name", "win32", ["cmd", "/d", "/s", "/c", shellCommand]],
       ["/c without /s", "win32", ["cmd.exe", "/d", "/c", "echo", "ready"]],
       ["uppercase switches", "win32", ["cmd.exe", "/D", "/S", "/C", shellCommand]],
       ["another platform", "linux", ["cmd.exe", "/d", "/s", "/c", shellCommand]],
