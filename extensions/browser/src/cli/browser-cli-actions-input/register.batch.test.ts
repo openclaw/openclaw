@@ -12,11 +12,7 @@ import * as batchSharedModule from "./shared.js";
 
 const mocks = vi.hoisted(() => ({
   callBrowserRequest: vi.fn<
-    (
-      opts?: unknown,
-      req?: unknown,
-      extra?: { timeoutMs?: number },
-    ) => Promise<Record<string, unknown>>
+    typeof browserCliSharedModule.callBrowserRequest<Record<string, unknown>>
   >(async () => ({ results: [{ ok: true }] })),
   readActionsPayload: vi.fn(async () => ""),
 }));
