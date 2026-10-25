@@ -27,6 +27,7 @@ import {
 import { useUserStateFixture } from "./user-state.test-support.js";
 
 const stateOptions = useUserStateFixture("openclaw-user-profiles-owner-");
+const identity = { accountId: 10, login: "person" };
 
 function fixture() {
   const options = stateOptions();
@@ -40,7 +41,14 @@ function fixture() {
     expect(operation).toThrow(expect.objectContaining({ name: "UserProfileOwnerError", code }));
     expect(profileState(options)).toEqual(before);
   };
-  return { options, owner, db, reject };
+  const addOwnerEmail = () =>
+    db
+      .prepare("INSERT INTO user_profile_emails (email, profile_id, created_at) VALUES (?, ?, 1)")
+      .run("old-owner@example.test", owner.id);
+  const signIn = (
+    authenticationAlias: Parameters<typeof syncGitHubIdentity>[0]["authenticationAlias"],
+  ) => syncGitHubIdentity({ identity, authenticationAlias }, options);
+  return { options, owner, db, reject, addOwnerEmail, signIn };
 }
 
 function ownerReference(kind: "merged owner" | "tombstone", state: ReturnType<typeof fixture>) {
@@ -100,31 +108,18 @@ describe("gateway owner profiles", () => {
   });
 
   it("rejects moving an owner's email to a person", () => {
-    const { options, owner, db, reject } = fixture();
+    const { options, reject, addOwnerEmail } = fixture();
     const person = ensureProfileForEmail("person@example.test", options);
-    db.prepare(
-      "INSERT INTO user_profile_emails (email, profile_id, created_at) VALUES (?, ?, 1)",
-    ).run("old-owner@example.test", owner.id);
+    addOwnerEmail();
     reject(() => linkEmail("old-owner@example.test", person.id, options));
   });
 
   it("rejects verified GitHub sign-in through an old merged-owner email", () => {
-    const { options, owner, db, reject } = fixture();
-    const identity = { accountId: 10, login: "person" };
-    syncGitHubIdentity(
-      { identity, authenticationAlias: { kind: "github-login", login: "person" } },
-      options,
-    );
-    db.prepare(
-      "INSERT INTO user_profile_emails (email, profile_id, created_at) VALUES (?, ?, 1)",
-    ).run("old-owner@example.test", owner.id);
+    const { options, owner, reject, addOwnerEmail, signIn } = fixture();
+    signIn({ kind: "github-login", login: "person" });
+    addOwnerEmail();
     mergeOwnerIntoPerson(owner.id, options);
-    reject(() =>
-      syncGitHubIdentity(
-        { identity, authenticationAlias: { kind: "email", email: "old-owner@example.test" } },
-        options,
-      ),
-    );
+    reject(() => signIn({ kind: "email", email: "old-owner@example.test" }));
     reject(() =>
       ensureProfileForEmail("old-owner@example.test", {
         ...options,
@@ -134,20 +129,12 @@ describe("gateway owner profiles", () => {
   });
 
   it("rejects personal sign-in through an old merged-owner GitHub identity", () => {
-    const { options, owner, db, reject } = fixture();
+    const { options, owner, db, reject, signIn } = fixture();
     db.prepare(
       "INSERT INTO user_profile_identities (provider, subject, profile_id, canonical_login, created_at) VALUES ('github', '10', ?, 'person', 1)",
     ).run(owner.id);
     mergeOwnerIntoPerson(owner.id, options);
-    reject(() =>
-      syncGitHubIdentity(
-        {
-          identity: { accountId: 10, login: "person" },
-          authenticationAlias: { kind: "email", email: "person@example.test" },
-        },
-        options,
-      ),
-    );
+    reject(() => signIn({ kind: "email", email: "person@example.test" }));
   });
 
   it.each(["owner", "identity", "misdirected"])("requires Doctor for a damaged %s", (kind) => {

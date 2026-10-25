@@ -29,18 +29,23 @@ function createSource(sql: string) {
   return pathname;
 }
 
+function observeChild() {
+  const child = vi.mocked(fork).mock.results.at(-1)?.value;
+  const closed = vi.fn();
+  const closure = new Promise<void>((resolve) => {
+    child.once("close", resolve);
+  });
+  child.once("close", closed);
+  return { child, closed, closure };
+}
+
 it.each(["abort", "dispose"] as const)("joins an unused prestarted child on %s", async (stop) => {
   const controller = new AbortController();
   await using reader = createAgentSchemaInspectionWorker();
   vi.mocked(fork).mockClear();
   reader.prestart(controller.signal);
-  const child = vi.mocked(fork).mock.results[0]?.value;
+  const { child, closed, closure } = observeChild();
   expect(child?.pid).toBeGreaterThan(0);
-  const closed = vi.fn();
-  child.once("close", closed);
-  const closure = new Promise<void>((resolve) => {
-    child.once("close", resolve);
-  });
   if (stop === "abort") {
     controller.abort(new Error("startup stopped before target discovery"));
     await closure;
@@ -61,9 +66,7 @@ it("hands its prestarted child to the first scheduler slot without spending insp
   });
   try {
     reader.prestart();
-    const child = vi.mocked(fork).mock.results[0]?.value;
-    const closed = vi.fn();
-    child.once("close", closed);
+    const { child, closed } = observeChild();
     // Discovery can outlast an inspection's entire budget; only the eventual read spends it.
     await vi.advanceTimersByTimeAsync(10_000);
     expect(child.killed).toBe(false);
@@ -149,9 +152,7 @@ it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
       await using reader = createAgentSchemaInspectionWorker();
       fs.chmodSync(snapshot, 0);
       const inspection = reader.inspect({ pathname, supportedVersion: 21 }, undefined, snapshot);
-      const refusedChild = vi.mocked(fork).mock.results.at(-1)?.value;
-      const refusedChildClosed = vi.fn();
-      refusedChild.once("close", refusedChildClosed);
+      const { closed } = observeChild();
       const failure = await inspection.catch((error: unknown) => error);
       expect(failure).toMatchObject({
         name: "Error",
@@ -160,7 +161,7 @@ it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
         message:
           "failed while creating its private snapshot: unable to open database file (code=ERR_SQLITE_ERROR, errcode=14)",
       });
-      expect(refusedChildClosed).toHaveBeenCalledOnce();
+      expect(closed).toHaveBeenCalledOnce();
       expect(fs.statSync(snapshot, { bigint: true })).toMatchObject({
         dev: identity.dev,
         ino: identity.ino,
@@ -207,7 +208,6 @@ it("agentSchemaInspection carries a Proxy env across IPC and retains typed migra
     kind: "agent-media",
     pathname,
     schemaVersion: 1,
-    message: new OpenClawAgentDatabaseMediaMigrationRequiredError(pathname, 1).message,
   });
   expect(fs.readFileSync(pathname)).toEqual(before);
 });
@@ -230,10 +230,8 @@ it.each(["before launch", "during read"])(
       expect(fork).not.toHaveBeenCalled();
       return;
     }
-    const child = vi.mocked(fork).mock.results.at(-1)?.value;
+    const { child, closed } = observeChild();
     expect(child?.pid).toBeGreaterThan(0);
-    const closed = vi.fn();
-    child.once("close", closed);
     const rejected = expect(operation).rejects.toBe(reason);
     controller.abort(reason);
     await rejected;

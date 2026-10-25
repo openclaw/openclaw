@@ -1,5 +1,5 @@
 import { copyFileSync } from "node:fs";
-import { constants, DatabaseSync } from "node:sqlite";
+import { constants, DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { expect, it } from "vitest";
 import { readExactSessionEntryRow as readEntry } from "../config/sessions/session-accessor.sqlite-entry-read.js";
 import { readSessionEntryCacheValidityToken as readCacheToken } from "../config/sessions/session-accessor.sqlite-entry-revision.js";
@@ -18,6 +18,10 @@ import { OPENCLAW_AGENT_SCHEMA_V24_SQL } from "./openclaw-agent-schema-v24.test-
 import { withoutSessionEntrySnapshotsSchema } from "./openclaw-agent-session-snapshots-schema.js";
 
 const fixtureKey = "agent:main:fixture-0";
+const row = (db: DatabaseSync, sql: string, ...params: SQLInputValue[]) =>
+  db.prepare(sql).get(...params);
+const rows = (db: DatabaseSync, sql: string) => db.prepare(sql).all();
+const nodeRows = (db: DatabaseSync) => rows(db, "SELECT * FROM session_nodes ORDER BY session_key");
 
 function migrate(database: DatabaseSync, options: Parameters<typeof ensureSchema>[1]) {
   return withAgentDatabaseMaintenanceLease({ env: options.env }, async () => {
@@ -82,23 +86,22 @@ function seedV23(database: DatabaseSync, count: number) {
 }
 
 function transcriptRows(database: DatabaseSync) {
-  return database
-    .prepare(
-      "SELECT rowid, session_id, seq, event_json, event_zstd, event_utf8_bytes, navigation_json, created_at FROM transcript_events ORDER BY rowid",
-    )
-    .all();
-}
-
-function nodeRows(database: DatabaseSync) {
-  return database.prepare("SELECT * FROM session_nodes ORDER BY session_key").all();
-}
-function schemaRows(database: DatabaseSync) {
-  return database.prepare("SELECT name, sql FROM sqlite_schema ORDER BY name").all();
+  return rows(
+    database,
+    `SELECT rowid, session_id, seq, event_json, event_zstd,
+    event_utf8_bytes, navigation_json, created_at FROM transcript_events ORDER BY rowid`,
+  );
 }
 function snapshotRows(database: DatabaseSync) {
-  return database
-    .prepare("SELECT * FROM session_entry_snapshots ORDER BY session_key, field")
-    .all();
+  return rows(database, "SELECT * FROM session_entry_snapshots ORDER BY session_key, field");
+}
+function capture(database: DatabaseSync) {
+  return {
+    schema: rows(database, "SELECT name, sql FROM sqlite_schema ORDER BY name"),
+    nodes: nodeRows(database),
+    transcript: transcriptRows(database),
+    metadata: rows(database, "SELECT * FROM schema_meta"),
+  };
 }
 
 it("migrates a copied large v23 store without losing snapshots or rewriting transcript bytes", async () => {
@@ -135,17 +138,17 @@ it("migrates a copied large v23 store without losing snapshots or rewriting tran
       `{"sessionId":"deep","updatedAt":10,"skillsSnapshot":${depthJson}}`,
     );
     expect(
-      source.prepare("SELECT name FROM sqlite_schema WHERE name = 'session_entry_snapshots'").get(),
+      row(source, "SELECT name FROM sqlite_schema WHERE name = 'session_entry_snapshots'"),
     ).toBeUndefined();
     source.close();
     copyFileSync(sourcePath, pathname);
     using database = new DatabaseSync(pathname);
     const beforeTranscript = transcriptRows(database);
     await migrate(database, options);
-    expect(database.prepare("PRAGMA user_version").get()).toEqual({
+    expect(row(database, "PRAGMA user_version")).toEqual({
       user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
     });
-    expect(database.prepare("SELECT schema_version FROM schema_meta").get()).toEqual({
+    expect(row(database, "SELECT schema_version FROM schema_meta")).toEqual({
       schema_version: OPENCLAW_AGENT_SCHEMA_VERSION,
     });
     expect(transcriptRows(database)).toEqual(beforeTranscript);
@@ -157,14 +160,16 @@ it("migrates a copied large v23 store without losing snapshots or rewriting tran
     expect(JSON.stringify(readEntry(reader, "agent:main:deep")?.entry.skillsSnapshot)).toBe(
       depthJson,
     );
-    expect(database.prepare("SELECT count(*) AS count FROM session_entry_snapshots").get()).toEqual(
-      { count: 388 },
-    );
+    expect(row(database, "SELECT count(*) AS count FROM session_entry_snapshots")).toEqual({
+      count: 388,
+    });
     for (const [id, entryJson] of rejected) {
       expect(
-        database
-          .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
-          .get(`agent:main:${id}`),
+        row(
+          database,
+          "SELECT entry_json FROM session_nodes WHERE session_key = ?",
+          `agent:main:${id}`,
+        ),
       ).toEqual({ entry_json: entryJson });
     }
     const migratedNodes = nodeRows(database);
@@ -179,10 +184,8 @@ it("migrates a copied large v23 store without losing snapshots or rewriting tran
     const native = requireNativeSqliteDatabase(opened.db);
     const readRevision = () =>
       opened.db
-        .prepare(
-          "SELECT snapshot_revision FROM session_nodes WHERE session_key = 'agent:main:fixture-0'",
-        )
-        .get();
+        .prepare("SELECT snapshot_revision FROM session_nodes WHERE session_key = ?")
+        .get(fixtureKey);
     const migratedRevision = readRevision();
     writeTransaction((current) => {
       const entry = readEntry(current, fixtureKey)!.entry;
@@ -224,12 +227,7 @@ it("rolls back extracted snapshots and version markers when schema publication i
     const pathname = state.path("refused-v23.sqlite");
     using database = new DatabaseSync(pathname);
     seedV23(database, 2);
-    const before = {
-      schema: schemaRows(database),
-      nodes: nodeRows(database),
-      transcript: transcriptRows(database),
-      metadata: database.prepare("SELECT * FROM schema_meta").all(),
-    };
+    const before = capture(database);
     let reachedPublication = false;
     database.setAuthorizer((action, name, value) => {
       if (
@@ -247,10 +245,7 @@ it("rolls back extracted snapshots and version markers when schema publication i
     ).rejects.toThrow(/authoriz/i);
     database.setAuthorizer(null);
     expect(reachedPublication).toBe(true);
-    expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 23 });
-    expect(schemaRows(database)).toEqual(before.schema);
-    expect(nodeRows(database)).toEqual(before.nodes);
-    expect(database.prepare("SELECT * FROM schema_meta").all()).toEqual(before.metadata);
-    expect(transcriptRows(database)).toEqual(before.transcript);
+    expect(row(database, "PRAGMA user_version")).toEqual({ user_version: 23 });
+    expect(capture(database)).toEqual(before);
   });
 });

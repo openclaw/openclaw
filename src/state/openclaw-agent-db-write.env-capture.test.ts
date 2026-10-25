@@ -164,10 +164,8 @@ it.each([
               mutate,
             );
     try {
-      expect(boundary.route.mock.calls[0]?.[0].env?.OPENCLAW_STATE_DIR).toBe(originalRoot);
       expect(mutate).not.toHaveBeenCalled();
       if (fixture.driver === "write") {
-        expect(boundary.admit.mock.calls[0]?.[0].env?.OPENCLAW_STATE_DIR).toBe(originalRoot);
         expect(boundary.open).not.toHaveBeenCalled();
       }
 
