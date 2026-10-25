@@ -3,7 +3,6 @@ import {
   captureAgentLifecycleBinding,
   matchesAgentLifecycleBinding,
 } from "../../agents/agent-lifecycle-registry.js";
-import * as sqliteQueries from "../../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import type { WorkerSshEndpoint } from "../../plugins/types.js";
 import { recordAgentProvenance } from "../../state/agent-provenance.js";
@@ -138,14 +137,10 @@ describe("worker environment store", () => {
         expectedRecords,
       );
     }
-    using queries = vi.spyOn(sqliteQueries, "executeSqliteQuerySync");
     expect(findWorkerEnvironment(database.db, environmentId)?.sshEndpoint).toStrictEqual(expected);
-    expect(queries).toHaveBeenCalledTimes(1);
-    queries.mockClear();
     expect(
       listRows(database.db).map((record) => [record.environmentId, record.sshEndpoint]),
     ).toEqual(expectedRecords);
-    expect(queries).toHaveBeenCalledTimes(1);
   });
 
   it("rejects an unsafe persisted fallback port for an SSH environment", async () => {

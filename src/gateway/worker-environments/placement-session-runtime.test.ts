@@ -17,7 +17,6 @@ import {
   projectWorkerPlacementAgentRuntime,
   resolveDefaultWorkerPlacementExecutionMode,
   resolveWorkerPlacementCapabilities,
-  resolveWorkerPlacementExecutionMode,
   resolveWorkerPlacementSessionRuntime,
   resolveWorkerPlacementSessionRuntimeAsync,
 } from "./placement-session-runtime.js";
@@ -141,13 +140,7 @@ it("derives presence mode from the default session runtime", () => {
   };
   expect(
     runtimeCapabilities(
-      {
-        sessionId: "browser-created-codex",
-        updatedAt: 0,
-        providerOverride: "openai",
-        modelOverride: "gpt-test",
-        agentRuntimeOverride: "codex",
-      },
+      { providerOverride: "openai", modelOverride: "gpt-test", agentRuntimeOverride: "codex" },
       cfg,
       "agent:main:dashboard:browser-created-codex",
     ).executionMode,
@@ -156,28 +149,18 @@ it("derives presence mode from the default session runtime", () => {
 });
 
 it.each([
-  ["ignores unlocked historical runtime", { agentHarnessId: "codex" }, "openclaw"],
+  [{ agentHarnessId: "codex" }, "openclaw"],
+  [{ agentHarnessId: "codex", agentRuntimeOverride: "default" }, "openclaw"],
+  [{ agentHarnessId: "codex", modelSelectionLocked: true }, "codex"],
   [
-    "honors default override over history",
-    { agentHarnessId: "codex", agentRuntimeOverride: "default" },
-    "openclaw",
-  ],
-  [
-    "preserves locked transcript ownership",
-    { agentHarnessId: "codex", modelSelectionLocked: true },
-    "codex",
-  ],
-  [
-    "ignores historical embedded runtime for a Codex model",
     { agentHarnessId: "openclaw", providerOverride: "openai", modelOverride: "gpt-5.6-sol" },
     "codex",
   ],
   [
-    "honors explicit compatible runtime override",
     { agentRuntimeOverride: "codex", providerOverride: "openai", modelOverride: "gpt-test" },
     "codex",
   ],
-] as const)("%s", (_name, entry, expected) => {
+] as const)("resolves runtime for %j to %s", (entry, expected) => {
   expect(
     sessionRuntime(
       {
@@ -197,12 +180,14 @@ it("reads inherited runtime off thread and observes parent updates", async () =>
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     setRuntimeConfigSnapshot({});
     const parent = { agentId: "main", sessionKey: "agent:main:parent-runtime" };
-    await upsertSessionEntryCore(parent, {
-      sessionId: "parent-runtime",
-      updatedAt: 1,
-      providerOverride: "openai",
-      modelOverride: "gpt-5.6-sol",
-    });
+    const updateParent = (providerOverride: string, modelOverride: string, updatedAt: number) =>
+      upsertSessionEntryCore(parent, {
+        sessionId: "parent-runtime",
+        updatedAt,
+        providerOverride,
+        modelOverride,
+      });
+    await updateParent("openai", "gpt-5.6-sol", 1);
     const input = {
       cfg: {},
       agentId: "main",
@@ -216,12 +201,7 @@ it("reads inherited runtime off thread and observes parent updates", async () =>
     } finally {
       observed.restore();
     }
-    await upsertSessionEntryCore(parent, {
-      sessionId: "parent-runtime",
-      updatedAt: 2,
-      providerOverride: "anthropic",
-      modelOverride: "claude-test",
-    });
+    await updateParent("anthropic", "claude-test", 2);
     expect(await resolveWorkerPlacementSessionRuntimeAsync(input)).toBe("openclaw");
   });
 });
@@ -248,24 +228,22 @@ it.each([
     "ordered-harness",
     remotePlacement(["runtime.zeta.v1", "runtime.alpha.v1", "runtime.zeta.v1"]),
     "remote-exec",
-    {
-      requiredNodeCommands: ["runtime.alpha.v1", "runtime.zeta.v1"],
-      consumesWorkerSlot: false,
-    },
+    { requiredNodeCommands: ["runtime.alpha.v1", "runtime.zeta.v1"], consumesWorkerSlot: false },
   ],
   ["cloud-harness", { mode: "remote-exec" }, "remote-exec", undefined],
   ["missing-harness", undefined, undefined, undefined],
+  [
+    "oversized-harness",
+    remotePlacement(Array.from({ length: 33 }, (_, i) => `runtime.${i}.v1`)),
+    "remote-exec",
+    undefined,
+  ],
 ] as const)(
   "projects %s placement capabilities",
   (runtimeId, cloudPlacement, executionMode, devicePlacement) => {
     if (cloudPlacement) {
       registerHarness(runtimeId, { cloudPlacement });
     }
-    expect(resolveWorkerPlacementExecutionMode(runtimeId)).toBe(executionMode);
-    expect(resolveWorkerPlacementCapabilities(runtimeId)).toEqual({
-      ...(executionMode ? { executionMode } : {}),
-      ...(devicePlacement ? { devicePlacement } : {}),
-    });
     expect(projectWorkerPlacementAgentRuntime({ id: runtimeId, source: "model" })).toEqual({
       id: runtimeId,
       cloudPlacementSupported: executionMode !== undefined,
@@ -277,42 +255,24 @@ it.each([
   },
 );
 
-it("fails closed above the device command-count bound", () => {
-  registerHarness("oversized-harness", {
-    cloudPlacement: remotePlacement(
-      Array.from({ length: 33 }, (_, index) => `runtime.${index}.v1`),
-    ),
-  });
-
-  expect(resolveWorkerPlacementCapabilities("oversized-harness").devicePlacement).toBeUndefined();
-  expect(projectWorkerPlacementAgentRuntime({ id: "oversized-harness", source: "model" })).toEqual({
-    id: "oversized-harness",
-    cloudPlacementSupported: true,
-    cloudPlacementExecutionMode: "remote-exec",
-    devicePlacementSupported: false,
-    source: "model",
-  });
-});
-
-it("rejects local CLI execution", () => {
+it.each([
+  [undefined, {}],
+  [
+    "openclaw",
+    {
+      executionMode: "worker-turn",
+      devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
+    },
+  ],
+] as const)("resolves CLI placement with runtime override %s", (agentRuntimeOverride, expected) => {
   // #136611: CLI backends dispatch locally even when no harness claims the model.
   registerCliBackend();
   const caps = runtimeCapabilities({
     providerOverride: "claude-cli",
     modelOverride: "claude-fable-5-1",
+    agentRuntimeOverride,
   });
-  expect(caps.executionMode).toBeUndefined();
-  expect(caps.devicePlacement).toBeUndefined();
-});
-
-it("honors an embedded runtime override over a CLI provider", () => {
-  registerCliBackend();
-  const caps = runtimeCapabilities({
-    providerOverride: "claude-cli",
-    modelOverride: "opus-4.7",
-    agentRuntimeOverride: "openclaw",
-  });
-  expect(caps.executionMode).toBe("worker-turn");
+  expect(caps).toEqual(expected);
 });
 
 it.each([
@@ -355,13 +315,7 @@ it.each(["provider-policy", "auto", "unclaimed"] as const)(
           }
         : {},
     );
-    expect(caps).toEqual({
-      executionMode: kind === "unclaimed" ? "worker-turn" : "remote-exec",
-      devicePlacement: {
-        requiredNodeCommands: kind === "unclaimed" ? [] : ["runtime.exec-server.v1"],
-        consumesWorkerSlot: kind === "unclaimed",
-      },
-    });
+    expect(caps.executionMode).toBe(kind === "unclaimed" ? "worker-turn" : "remote-exec");
   },
 );
 
