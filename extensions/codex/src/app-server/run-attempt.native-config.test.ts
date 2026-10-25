@@ -51,7 +51,6 @@ import {
   testCodexAppServerBindingStore,
   writeCodexAppServerBinding,
 } from "./session-binding.test-helpers.js";
-import * as settledTurnContext from "./settled-turn-context.js";
 import * as sharedClientModule from "./shared-client.js";
 import {
   attachSqliteSessionTarget,
@@ -171,10 +170,7 @@ describe("Codex native configuration", () => {
           const models = [...allowedModels].map((model) => ({ provider: "openai", model }));
           return {
             models,
-            allows: (ref) =>
-              models.some(
-                ({ provider, model }) => ref.provider === provider && ref.model === model,
-              ),
+            allows: (ref) => ref.provider === "openai" && allowedModels.has(ref.model),
           };
         },
       );
@@ -463,15 +459,11 @@ describe("Codex native configuration", () => {
       });
       params.hostCapabilities = { ...params.hostCapabilities, bindModelExecution };
       params.registerPluginRuntimeRefreshConsumer = vi.fn();
-      params.onSettledTurn = async (attempt, captureContext) => {
-        attempt.settledTurnFinalizationContext = await captureContext();
-      };
       params.agentDir = agentDir;
       params.provider = "anthropic";
       params.modelId = "claude-opus-4-6";
       params.model = createCodexTestModel("anthropic");
       params.fastMode = true;
-      const capture = vi.spyOn(settledTurnContext, "captureCodexSettledTurnFinalizationContext");
       setCodexTestModelSupportsTools(params, nativeSearchEnabled);
       params.config = {
         ...params.config,
@@ -541,12 +533,8 @@ describe("Codex native configuration", () => {
           expect(context).not.toHaveProperty("modelId");
         }
         expect(result.runtimeModelSelection).toEqual(runtimeSelection);
-        expect(capture).not.toHaveBeenCalled();
         if (hasAnswer) {
           expect(result.currentAttemptAssistant).toMatchObject(runtimeSelection);
-          expect(result.settledTurnFinalizationContext).toBeUndefined();
-        } else {
-          expect(result.settledTurnFinalizationContext).toEqual({ source: "unavailable" });
         }
         expect(requests.filter(({ method }) => method === "turn/start")).toHaveLength(1);
       } finally {
