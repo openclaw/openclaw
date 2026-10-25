@@ -2,11 +2,26 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { crc32 } from "node:zlib";
 import { convertToLlm, runAgentLoop } from "openclaw/plugin-sdk/agent-core";
+import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, expect, it, vi } from "vitest";
 import bedrockPlugin from "../../extensions/amazon-bedrock/index.js";
+import { makeCall, makeTool } from "../../packages/agent-core/src/agent-loop.test-support.js";
+import { submitEmbeddedAttemptPrompt } from "../../src/agents/embedded-agent-runner/run/attempt-prompt-submit.js";
+import { createBaseInput } from "../../src/agents/embedded-agent-runner/run/attempt-prompt-submit.test-support.js";
+import { buildRuntimeContextCustomMessage } from "../../src/agents/embedded-agent-runner/run/runtime-context-prompt.js";
 import { createSubscribedSessionHarness } from "../../src/agents/embedded-agent-subscribe.e2e-harness.js";
+import {
+  createAssistant,
+  createAssistantResultStream,
+  createTestSession,
+  registerAgentSessionLoopTestLifecycle,
+  streamMocks,
+  testModel,
+} from "../../src/agents/sessions/agent-session-loop-correctness.test-support.js";
 import { makeProviderModelFixture } from "../../src/agents/test-helpers/provider-model-fixture.js";
 import { onAgentEventForRun } from "../../src/infra/agent-events.js";
+import type { ProviderPlugin } from "../../src/plugins/types.js";
+import { loadBundledPluginFacade } from "../../src/test-utils/bundled-plugin-public-surface.js";
 import { registerSingleProviderPlugin } from "../../src/test-utils/plugin-registration.js";
 import { closeHttpServer, listenLoopback } from "../helpers/gateway-integration-fixtures.js";
 import { createDeferred } from "../helpers/promise.js";
@@ -51,6 +66,7 @@ function bedrockEvent(type: string, payload: unknown): Buffer {
   return frame;
 }
 
+registerAgentSessionLoopTestLifecycle();
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
@@ -143,3 +159,75 @@ it.for(["incremental", "buffered"] as const)(
     }
   },
 );
+it.each([
+  "openai-responses",
+  "openai-chatgpt-responses",
+  "azure-openai-responses",
+  "openai-completions",
+] as const)("retains the previous tool turn's prefix only for Responses (%s)", async (api) => {
+  const { buildOpenAIProvider } = await loadBundledPluginFacade<{
+    buildOpenAIProvider: () => ProviderPlugin;
+  }>({ pluginId: "openai", artifactBasename: "api.js" });
+  const openAiModel = { ...testModel, provider: "openai", api };
+  const policy = buildOpenAIProvider().buildReplayPolicy?.({
+    provider: openAiModel.provider,
+    modelApi: api,
+    modelId: openAiModel.id,
+  });
+  assert(policy, "Expected the OpenAI replay policy");
+  const requests: Context["messages"][] = [];
+  streamMocks.streamSimple.mockImplementation((activeModel: Model, context: Context) => {
+    requests.push(structuredClone(context.messages));
+    return createAssistantResultStream(
+      requests.length === 1
+        ? createAssistant(activeModel, [makeCall("read_fixture", "call_read")], "toolUse")
+        : createAssistant(activeModel, "done"),
+    );
+  });
+  const { session } = await createTestSession({
+    model: openAiModel,
+    customTools: [makeTool("read_fixture")],
+  });
+  const input = createBaseInput();
+  const submit = (text: string) =>
+    submitEmbeddedAttemptPrompt({
+      ...input,
+      activeSession: session,
+      appendOnlyRuntimeContext: policy.appendOnlyRuntimeContext,
+      appendContext: undefined,
+      prependContext: undefined,
+      modelPrompt: text,
+      systemPrompt: session.systemPrompt,
+      transcriptPrompt: text,
+      runtimeContextMessage: buildRuntimeContextCustomMessage(`context for ${text}`),
+      promptActiveSession: (prompt, options) => session.prompt(prompt, options),
+    });
+  await submit("first");
+  await submit("second");
+  expect(requests).toHaveLength(3);
+  const [, firstTurn, nextTurn] = requests;
+  assert(firstTurn && nextTurn, "Expected the tool round and next user request");
+  expect(firstTurn.slice(-2)).toMatchObject([
+    { role: "assistant", content: [{ type: "toolCall", id: "call_read" }] },
+    {
+      role: "toolResult",
+      toolCallId: "call_read",
+      isError: false,
+      content: [{ type: "text", text: "read_fixture result" }],
+    },
+  ]);
+  if (api === "openai-completions") {
+    expect(JSON.stringify(nextTurn)).not.toContain("context for first");
+  } else {
+    expect(nextTurn.slice(0, firstTurn.length)).toEqual(firstTurn);
+    expect(firstTurn.slice(0, 2)).toMatchObject([
+      { role: "user", content: [{ type: "text", text: "first" }] },
+      { role: "user", runtimeContext: {} },
+    ]);
+    expect(nextTurn.slice(firstTurn.length)).toMatchObject([
+      { role: "assistant", content: [{ type: "text", text: "done" }] },
+      { role: "user", content: [{ type: "text", text: "second" }] },
+      { role: "user", runtimeContext: {} },
+    ]);
+  }
+});

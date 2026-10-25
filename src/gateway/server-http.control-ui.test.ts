@@ -42,7 +42,7 @@ function withUiServer(
 }
 
 function withUiRoot(
-  run: (check: Check) => Promise<void>,
+  run: (check: Check, root: string) => Promise<void>,
   configure: (root: string) => ServerOptions["overrides"] | Promise<ServerOptions["overrides"]>,
 ) {
   return withTempDir("openclaw-http-ui-", async (directory) => {
@@ -50,22 +50,26 @@ function withUiRoot(
     await fs.writeFile(nodePath.join(root, "index.html"), "<html>spa fallback</html>\n");
     await fs.mkdir(nodePath.join(root, "assets"));
     await fs.writeFile(nodePath.join(root, "assets", "app.js"), "// synthetic asset\n");
-    await withUiServer(run, {
+    await withUiServer((check) => run(check, root), {
       controlUiRoot: { kind: "resolved", path: root },
       ...(await configure(root)),
     });
   });
 }
 
-it("authenticates media under a base path even with the dashboard disabled", () =>
+it.each([
+  { basePath: "", enabled: true },
+  { basePath: "/console/", enabled: false },
+])("authenticates media at $basePath with UI enabled=$enabled", ({ basePath, enabled }) =>
   withUiServer(
     async (check) => {
+      const base = basePath.replace(/\/$/, "");
       const media = await saveMediaBuffer(
         createSolidPngBuffer(4, 2, { r: 24, g: 64, b: 128 }),
         "image/png",
       );
       const query = new URLSearchParams({ meta: "1", source: `media://inbound/${media.id}` });
-      const mediaPath = `/console/__openclaw__/assistant-media?${query}`;
+      const mediaPath = `${base}/__openclaw__/assistant-media?${query}`;
       for (const [method, path] of [
         ["GET", mediaPath],
         ["POST", `${mediaPath}&allow=1`],
@@ -80,12 +84,15 @@ it("authenticates media under a base path even with the dashboard disabled", () 
         mimeType: "image/png",
         mediaTicket: expect.any(String),
       });
-      await check("/console/avatar/main?meta=1", 404);
-      await check("/console/", 404);
+      await check(`${base}/avatar/main?meta=1`, enabled ? 401 : 404);
+      if (!enabled) {
+        await check(`${base}/`, 404);
+      }
     },
-    { controlUiEnabled: false, controlUiBasePath: "/console/" },
+    { controlUiEnabled: enabled, controlUiBasePath: basePath },
     AUTH_TOKEN,
-  ));
+  ),
+);
 
 it("rejects UI POST before startup fallback", () =>
   withUiServer(
@@ -136,14 +143,20 @@ it("applies dashboard enablement to subsequent requests without replacing the li
 
 it("resolves identity for documents and bootstrap, not assets", () =>
   withUiRoot(
-    async (check) => {
+    async (check, workspace) => {
+      const identityRuntime = await import("../agents/identity-file-runtime.js");
+      const prepareIdentity = vi.spyOn(identityRuntime, "prepareIdentityFile");
       const realpath = vi.spyOn(fsSync, "realpathSync");
-      onTestFinished(() => vi.restoreAllMocks());
+      onTestFinished(() => {
+        prepareIdentity.mockRestore();
+        realpath.mockRestore();
+      });
       const identityReads = () =>
         realpath.mock.calls.filter(([file]) => nodePath.basename(String(file)) === "IDENTITY.md");
       await check("/assets/app.js", 200);
       await check("/assets/app.js", 200, { method: "HEAD", body: "" });
       expect(identityReads()).toHaveLength(0);
+      expect(prepareIdentity).not.toHaveBeenCalled();
 
       for (const path of ["/", "/chat"]) {
         const response = await check(path, 200);
@@ -162,6 +175,7 @@ it("resolves identity for documents and bootstrap, not assets", () =>
         assistantAgentId: "research",
         assistantName: "Synthetic assistant",
       });
+      expect(prepareIdentity).toHaveBeenCalledWith(nodePath.join(workspace, "IDENTITY.md"));
       expect(identityReads()).toHaveLength(0);
     },
     async (workspace) => {
@@ -182,15 +196,29 @@ it("serves marketplace documents without claiming plugin HTTP routes", () =>
     async (check) => {
       const browserRequest: Check = (path, status, options) =>
         check(path, status, { headers: { accept: "text/html" }, ...options });
-      const documentPaths = ["/plugins", "/plugins/ch_bWF0cml4", "/plugins/local_bWVtb3J5"];
+      const documentPaths = ["", "/", "/ch_bWF0cml4", "/local_bWVtb3J5"].map(
+        (path) => `/plugins${path}`,
+      );
       for (const pathname of documentPaths) {
         await browserRequest(pathname, 200, { body: expect.stringContaining("spa fallback") });
+        await browserRequest(pathname, 200, { method: "HEAD", body: "" });
       }
-      await browserRequest("/plugins", 200, { method: "HEAD", body: "" });
-      await browserRequest("/plugins/unclaimed", 404, { body: "Not Found" });
-      await browserRequest("/plugins/ch_a", 404, { body: "Not Found" });
-      await browserRequest("/plugins/ch_bWF0cml4/extra", 404, { body: "Not Found" });
+      for (const [path, method, accept] of [
+        ...documentPaths.flatMap((pathname) => [
+          [pathname, "GET", "application/json"] as const,
+          [pathname, "GET", "text/html;q=0"] as const,
+          [pathname, "POST", "text/html"] as const,
+        ]),
+        ...["/plugins/unclaimed", "/plugins/ch_a", "/plugins/ch_bWF0cml4/extra"].map(
+          (pathname) => [pathname, "GET", "text/html"] as const,
+        ),
+      ]) {
+        await browserRequest(path, 404, { method, headers: { accept }, body: "Not Found" });
+      }
       await browserRequest("/plugins/webhook", 202, { body: "plugin response" });
+      await browserRequest("/settings/plugins", 200, {
+        body: expect.stringContaining("spa fallback"),
+      });
     },
     () => ({
       handlePluginRequest: async (req, res) => {

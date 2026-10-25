@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
+  assertMemoryAudienceSession,
   delegateMemoryAudience,
   resolveMemoryAudienceFromEntry,
 } from "../plugins/memory-audience.js";
@@ -40,6 +41,7 @@ import type { OpenClawCodingToolsOptions } from "./agent-tools.options.js";
 import { runWithAgentRingZeroTools } from "./agent-tools.ring-zero-context.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
+import { resolveOpenClawPluginToolInputs } from "./openclaw-tools.plugin-context.js";
 import { stubTool } from "./test-helpers/fast-tool-stubs.js";
 
 const MEMORY_PATH = "memory/2026-08-22.md";
@@ -127,7 +129,11 @@ describe("memory flush writer availability", () => {
     );
 
     expect(names(assembled)).toEqual(["find_memory", "read", "save_memory"]);
-    expect(warnings).toEqual([expect.stringContaining("get_memory")]);
+    expect(warnings).toEqual([
+      expect.stringContaining(
+        'plugin "memory-provider" flush cannot check for existing memory: get_memory',
+      ),
+    ]);
   });
 
   it.each(["provider", "file"] as const)(
@@ -135,10 +141,12 @@ describe("memory flush writer availability", () => {
     (arm) => {
       const tools = runWithAgentRingZeroTools(
         [persistenceTool("host", "openclaw"), persistenceTool("host", "dispatch_action")],
-        () =>
-          arm === "provider"
-            ? assembleProviderFlush().assembled
-            : assembleFileFlush({ includeToolSearchControls: true }),
+        () => {
+          if (arm === "provider") {
+            return assembleProviderFlush().assembled;
+          }
+          return assembleFileFlush({ includeToolSearchControls: true });
+        },
       );
       expect(names(tools)).toEqual(["read", arm === "provider" ? "save_memory" : "write"]);
     },
@@ -169,9 +177,16 @@ describe("memory flush writer availability", () => {
       memoryAudience: delegatedAudience,
     });
     const options = vi.mocked(createOpenClawTools).mock.lastCall?.[0];
-    expect(options).toMatchObject({ agentSessionKey: flushKey, senderIsOwner: false });
-    expect(options?.memoryAudience).toBe(delegatedAudience);
-    expect(options?.memoryFlush).toStrictEqual({ flushId: "same-compaction-cycle" });
+    const { context } = resolveOpenClawPluginToolInputs({ options });
+
+    expect(context).toMatchObject({ sessionKey: flushKey, senderIsOwner: false });
+    expect(context.memoryAudience).toEqual({ kind: "owner-private", agentId: "main" });
+    expect(() => assertMemoryAudienceSession(context.memoryAudience!, flushKey)).not.toThrow();
+    expect(() => assertMemoryAudienceSession(context.memoryAudience!, sourceKey)).toThrow(
+      "different session",
+    );
+    expect(() => context.assertMemoryAudienceCurrent?.()).not.toThrow();
+    expect(context.memoryFlush).toStrictEqual({ flushId: "same-compaction-cycle" });
   });
 
   it.each(["transport", "empty declaration"])("rejects a missing writer: %s", (reason) => {
@@ -210,15 +225,16 @@ describe("memory flush writer availability", () => {
   );
 
   it.each([
-    ["denied by policy", { config: { tools: { deny: ["write"] } } }, true],
-    ["excluded by transport", { messageProvider: "node" }, false],
-  ] satisfies [string, OpenClawCodingToolsOptions, boolean][])(
-    "reports a writer %s",
-    (_name, options, warning) => {
-      const tools = assembleFileFlush(options);
-      expect(tools.some((tool) => tool.name === "write")).toBe(false);
-      const flushWarnings = warnings.filter((line) => line.includes("memory flush cannot persist"));
-      expect(flushWarnings).toEqual(warning ? [expect.stringContaining(MEMORY_PATH)] : []);
+    {
+      name: "denied by policy",
+      options: { config: { tools: { deny: ["write"] } } },
+      warning: true,
     },
-  );
+    { name: "excluded by transport", options: { messageProvider: "node" }, warning: false },
+  ])("reports a writer $name", ({ options, warning }) => {
+    const tools = assembleFileFlush(options);
+    expect(tools.some((tool) => tool.name === "write")).toBe(false);
+    const flushWarnings = warnings.filter((line) => line.includes("memory flush cannot persist"));
+    expect(flushWarnings).toEqual(warning ? [expect.stringContaining(MEMORY_PATH)] : []);
+  });
 });

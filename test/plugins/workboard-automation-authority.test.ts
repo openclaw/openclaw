@@ -241,6 +241,9 @@ it.each(["agent_end", "subagent_ended"] as const)(
       expect(enqueue).toHaveBeenCalledOnce();
       await settled;
       expect(executeJob).toHaveBeenCalledOnce();
+      // The sibling terminal event for the same card shares the service's debounce owner.
+      await agentEnd!({ messages: [], success: true }, { agentId: "main", sessionKey, runId });
+      expect(enqueue).toHaveBeenCalledOnce();
       expect(warn).not.toHaveBeenCalled();
     } finally {
       admission.close();

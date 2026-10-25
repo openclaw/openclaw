@@ -12,8 +12,7 @@ import {
 import { pluginCommandSchedule } from "./plugin-command-schedule.test-support.js";
 import { PLUGIN_COMMAND_SCHEDULE_MESSAGE } from "./plugin-command-schedule.types.js";
 import type { PluginCommandSchedule } from "./plugin-command-schedule.types.js";
-import { readCronRunHistoryPageForTests } from "./run-history.test-support.js";
-import { cronTestJob } from "./service.fixture-builders.test-support.js";
+import { projectCronRunHistoryPage } from "./run-history.js";
 import {
   createCronServiceWithStateForTest,
   setupCronServiceSuite,
@@ -22,17 +21,20 @@ import {
 import { waitForCronRunQueue } from "./service/run-queue.js";
 import type { CronServiceDeps } from "./service/state.js";
 import { onTimer } from "./service/timer.test-support.js";
-import { cronStoreKey } from "./store/key.js";
+import { readCronRunHistoryCandidates, readCronRunHistoryRecords } from "./store/read-only.js";
 import type { CronStoredJob } from "./types.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "openclaw-command-retire-" });
 const nowMs = Date.parse("2025-12-13T00:00:00.000Z");
 const everyMs = 60_000;
 
-// Real service/queue/timer; only the occurrence runner is stubbed.
+/**
+ * The real service, queue worker and host timer drive a private command schedule. The occurrence
+ * runner is a stub because retirement belongs to the scheduler, not to the command result.
+ */
 async function runSchedule(
-  overrides: Partial<PluginCommandSchedule> = {},
-  ticks = 8,
+  overrides: Partial<PluginCommandSchedule>,
+  ticks: number,
   deps: Pick<CronServiceDeps, "resolveSessionEventTarget"> = {},
   occurrence: Awaited<ReturnType<CronServiceDeps["runIsolatedAgentJob"]>> = {
     status: "ok",
@@ -40,28 +42,25 @@ async function runSchedule(
   },
 ) {
   const store = await makeStorePath();
-  const job: CronStoredJob = {
-    ...cronTestJob({
-      id: "watch",
-      agentId: "main",
-      createdAtMs: nowMs,
-      updatedAtMs: nowMs,
-      schedule: { kind: "every", everyMs, anchorMs: nowMs },
-      sessionTarget: "session:agent:main:parent",
-      payload: {
-        kind: "agentTurn",
-        message: PLUGIN_COMMAND_SCHEDULE_MESSAGE,
-        toolsAllow: ["sessions_spawn", "agents_wait"],
-      },
-      delivery: { mode: "none" },
-      state: { nextRunAtMs: nowMs + everyMs, pluginCommandRuns: 0 },
-    }),
-    pluginCommand: pluginCommandSchedule(nowMs, {
-      maxRuns: 100,
-      deadlineAtMs: nowMs + 60 * everyMs,
-      ...overrides,
-    }),
-  };
+  const job = {
+    id: "watch",
+    name: "watch",
+    agentId: "main",
+    enabled: true,
+    createdAtMs: nowMs,
+    updatedAtMs: nowMs,
+    schedule: { kind: "every", everyMs, anchorMs: nowMs },
+    sessionTarget: "session:agent:main:parent",
+    wakeMode: "next-heartbeat",
+    payload: {
+      kind: "agentTurn",
+      message: PLUGIN_COMMAND_SCHEDULE_MESSAGE,
+      toolsAllow: ["sessions_spawn", "agents_wait"],
+    },
+    delivery: { mode: "none" },
+    pluginCommand: pluginCommandSchedule(nowMs, overrides),
+    state: { nextRunAtMs: nowMs + everyMs, pluginCommandRuns: 0 },
+  } satisfies CronStoredJob;
   await writeCronStoreSnapshot({ storePath: store.storePath, jobs: [job] });
   const clock = createGatewaySchedulerClock(nowMs);
   const runIsolatedAgentJob = vi.fn<CronServiceDeps["runIsolatedAgentJob"]>(async () => ({
@@ -91,12 +90,18 @@ async function runSchedule(
     const stored = (await cron.list({ includeDisabled: true })).find(
       (entry) => entry.id === job.id,
     );
-    const history = readCronRunHistoryPageForTests({
-      storeKey: cronStoreKey(store.storePath),
-    }).entries.map(({ status, error }) => ({ status, error }));
+    const { records } = await readCronRunHistoryCandidates(store.storePath);
+    const history = projectCronRunHistoryPage(
+      await readCronRunHistoryRecords(
+        store.storePath,
+        records.map(({ id }) => id),
+      ),
+      { storeKey: store.storePath },
+    ).entries.map(({ status, error }) => ({ status, error }));
     return { stored, history, runIsolatedAgentJob, runSessionEvent };
   } finally {
     cron.stop();
+    await store.cleanup();
   }
 }
 
@@ -105,29 +110,42 @@ afterEach(() => {
 });
 
 describe("private command schedules under the live scheduler", () => {
-  it.each([
-    ["attempt limit", { maxRuns: 2 }, 2, undefined],
-    [
-      "deadline",
-      { deadlineAtMs: nowMs + everyMs + 30_000 },
-      1,
-      "cron: plugin command schedule deadline expired",
-    ],
-    [
-      "previous Gateway process",
-      { hostProcessId: "1:previous-boot" },
-      0,
-      "cron: plugin command schedule ended with its Gateway process",
-    ],
-  ] as const)("retires at %s without further wake-ups", async (_name, overrides, runs, error) => {
-    const result = await runSchedule(overrides);
-    expect(result.runIsolatedAgentJob).toHaveBeenCalledTimes(runs);
+  it("stops waking once its final allowed attempt launches", async () => {
+    const result = await runSchedule({ maxRuns: 2, deadlineAtMs: nowMs + 60 * everyMs }, 8);
+    expect(result.runIsolatedAgentJob).toHaveBeenCalledTimes(2);
     expect(result.runSessionEvent).not.toHaveBeenCalled();
-    expect(result.stored).toMatchObject({ enabled: false, state: { pluginCommandRuns: runs } });
+    expect(result.stored).toMatchObject({ enabled: false });
     expect(result.stored?.state.nextRunAtMs).toBeUndefined();
+    // Two launches and no skipped wake-ups after retirement.
     expect(result.history).toEqual([
-      ...Array.from({ length: runs }, () => ({ status: "ok", error: undefined })),
-      ...(error ? [{ status: "skipped", error }] : []),
+      { status: "ok", error: undefined },
+      { status: "ok", error: undefined },
+    ]);
+  });
+
+  it("retires at the deadline with one terminal receipt and no further wake-ups", async () => {
+    const result = await runSchedule({ maxRuns: 100, deadlineAtMs: nowMs + everyMs + 30_000 }, 8);
+    expect(result.runIsolatedAgentJob).toHaveBeenCalledTimes(1);
+    expect(result.stored).toMatchObject({ enabled: false, state: { pluginCommandRuns: 1 } });
+    expect(result.stored?.state.nextRunAtMs).toBeUndefined();
+    expect(result.history).toEqual(
+      expect.arrayContaining([
+        { status: "skipped", error: "cron: plugin command schedule deadline expired" },
+      ]),
+    );
+    expect(result.history).toHaveLength(2);
+  });
+
+  it("retires a schedule from a previous Gateway process before spending an attempt", async () => {
+    const result = await runSchedule(
+      { maxRuns: 100, deadlineAtMs: nowMs + 60 * everyMs, hostProcessId: "1:previous-boot" },
+      8,
+    );
+    expect(result.runIsolatedAgentJob).not.toHaveBeenCalled();
+    expect(result.runSessionEvent).not.toHaveBeenCalled();
+    expect(result.stored).toMatchObject({ enabled: false, state: { pluginCommandRuns: 0 } });
+    expect(result.history).toEqual([
+      { status: "skipped", error: "cron: plugin command schedule ended with its Gateway process" },
     ]);
   });
 
@@ -145,7 +163,7 @@ describe("private command schedules under the live scheduler", () => {
         { jobId: "watch", assertCurrent: () => {}, prepare },
       ),
     ).toBe("queued");
-    const result = await runSchedule({ maxRuns: 1 }, 2, {
+    const result = await runSchedule({ maxRuns: 1, deadlineAtMs: nowMs + 60 * everyMs }, 2, {
       resolveSessionEventTarget: () => ({ agentId: "main", sessionKey: "agent:main:parent" }),
     });
     expect(prepare).not.toHaveBeenCalled();
@@ -155,24 +173,36 @@ describe("private command schedules under the live scheduler", () => {
     expect(peekSystemEventEntries(queueKey).map(({ text }) => text)).toEqual(["Parent notice"]);
   });
 
-  it.each([true, false])("retires permanent refusals only (%s)", async (permanent) => {
+  it("retires on the first refusal from a replaced plugin instance, without auto-disable", async () => {
     const refused = {
       status: "error" as const,
-      error: "refused",
-      ...(permanent
-        ? { errorClassification: { kind: "permanent" as const }, executionStarted: false }
-        : {}),
+      error:
+        "Scheduled plugin command's original plugin instance was replaced; the schedule ended.",
+      errorClassification: { kind: "permanent" as const },
+      executionStarted: false,
     };
-    const { stored, history, runIsolatedAgentJob: runJob } = await runSchedule({}, 3, {}, refused);
-    const runs = permanent ? 1 : 3;
-    expect(runJob).toHaveBeenCalledTimes(runs);
-    expect(stored).toMatchObject({ enabled: !permanent, state: { pluginCommandRuns: runs } });
-    if (permanent) {
-      expect(stored?.state.nextRunAtMs).toBeUndefined();
-      expect(stored?.state.autoDisabled).toBeUndefined();
-      expect(history).toEqual([{ status: "error", error: "refused" }]);
-    } else {
-      expect(stored?.state.nextRunAtMs).toBeGreaterThan(nowMs);
-    }
+    const result = await runSchedule(
+      { maxRuns: 100, deadlineAtMs: nowMs + 60 * everyMs },
+      8,
+      {},
+      refused,
+    );
+    expect(result.runIsolatedAgentJob).toHaveBeenCalledTimes(1);
+    expect(result.stored).toMatchObject({ enabled: false, state: { pluginCommandRuns: 1 } });
+    expect(result.stored?.state.nextRunAtMs).toBeUndefined();
+    expect(result.stored?.state.autoDisabled).toBeUndefined();
+    expect(result.history).toEqual([{ status: "error", error: refused.error }]);
+  });
+
+  it("keeps waking after a refusal that is not permanent", async () => {
+    const result = await runSchedule(
+      { maxRuns: 100, deadlineAtMs: nowMs + 60 * everyMs },
+      3,
+      {},
+      { status: "error", error: "Scheduled plugin command source changed or expired." },
+    );
+    expect(result.runIsolatedAgentJob).toHaveBeenCalledTimes(3);
+    expect(result.stored).toMatchObject({ enabled: true, state: { pluginCommandRuns: 3 } });
+    expect(result.stored?.state.nextRunAtMs).toBeGreaterThan(nowMs);
   });
 });

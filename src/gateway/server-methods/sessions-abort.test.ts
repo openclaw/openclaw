@@ -19,6 +19,7 @@ import {
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import * as lifecyclePersistence from "../session-lifecycle-state.js";
 import { testState } from "../test-helpers.js";
 import {
   directSessionReq,
@@ -29,9 +30,9 @@ import { createActiveRun, createChatAbortContext } from "./chat.abort.test-helpe
 
 setupGatewaySessionsHandlerTestHarness();
 
-function statePath(...parts: string[]) {
+function requireStateDir() {
   const value = process.env.OPENCLAW_STATE_DIR;
-  return path.join(expectDefined(value || undefined, "OPENCLAW_STATE_DIR is required"), ...parts);
+  return expectDefined(value || undefined, "OPENCLAW_STATE_DIR is required");
 }
 
 async function configureStore(storePath?: string) {
@@ -56,7 +57,7 @@ afterEach(() => {
 });
 
 async function configureFixedSessionStore(): Promise<string> {
-  const storePath = statePath("shared-abort-sessions-default", "sessions.json");
+  const storePath = path.join(requireStateDir(), "shared-abort-sessions-default", "sessions.json");
   fs.mkdirSync(path.dirname(storePath), { recursive: true });
   fs.writeFileSync(storePath, "{}\n", "utf8");
   testState.agentsConfig = { entries: { main: {} } };
@@ -67,13 +68,13 @@ async function configureFixedSessionStore(): Promise<string> {
 function agentSqlitePath(agentId: string) {
   return resolveOpenClawAgentSqlitePath({
     agentId,
-    env: { OPENCLAW_STATE_DIR: statePath() },
+    env: { OPENCLAW_STATE_DIR: requireStateDir() },
   });
 }
 
 function expectNoAgentStore(agentId: string) {
-  const env = { OPENCLAW_STATE_DIR: statePath() };
-  expect(fs.existsSync(statePath("agents", agentId))).toBe(false);
+  const env = { OPENCLAW_STATE_DIR: requireStateDir() };
+  expect(fs.existsSync(path.join(env.OPENCLAW_STATE_DIR, "agents", agentId))).toBe(false);
   expect(fs.existsSync(agentSqlitePath(agentId))).toBe(false);
   expect(listOpenClawRegisteredAgentDatabases({ env }).map((entry) => entry.agentId)).not.toContain(
     agentId,
@@ -85,13 +86,6 @@ function detachedAbortContext(
 ) {
   const { getRuntimeConfig: _getRuntimeConfig, ...context } = createChatAbortContext({ sources });
   return context;
-}
-
-function expectAborted(result: Awaited<ReturnType<typeof directSessionReq>>, runId: string) {
-  expect(result).toMatchObject({
-    ok: true,
-    payload: { ok: true, abortedRunId: runId, status: "aborted" },
-  });
 }
 
 test.each([false, true])(
@@ -118,15 +112,21 @@ test.each([false, true])(
 test.each(["default", "fixed", "template", "absent"] as const)(
   "aborts a retired agent with a %s store",
   async (layout) => {
-    const agentId = `retired-${layout}`;
+    const agentId =
+      layout === "absent" ? "active-only" : layout === "template" ? "template-retired" : "retired";
+    const fixtureId = layout === "fixed" ? "retired-fixed" : agentId;
     const sessionKey = `agent:${agentId}:${layout === "absent" ? "running" : "existing"}`;
-    const sessionId = layout === "absent" ? undefined : `session-${agentId}`;
-    const runId = `run-${agentId}`;
-    let storePath = statePath("agents", agentId, "sessions", "sessions.json");
+    const sessionId = layout === "absent" ? undefined : `session-${fixtureId}`;
+    const runId = `run-${fixtureId}`;
+    let storePath = path.join(requireStateDir(), "agents", agentId, "sessions", "sessions.json");
     if (layout === "fixed") {
       storePath = await configureFixedSessionStore();
     } else if (layout === "template") {
-      const template = statePath("external-abort-stores", "sessions-{agentId}.json");
+      const template = path.join(
+        requireStateDir(),
+        "external-abort-stores",
+        "sessions-{agentId}.json",
+      );
       testState.agentsConfig = { entries: { main: {} } };
       await configureStore(template);
       storePath = template.replace("{agentId}", agentId);
@@ -141,7 +141,10 @@ test.each(["default", "fixed", "template", "absent"] as const)(
       { context: detachedAbortContext(new Map([[runId, activeRun]])) },
     );
 
-    expectAborted(result, runId);
+    expect(result).toMatchObject({
+      ok: true,
+      payload: { ok: true, abortedRunId: runId, status: "aborted" },
+    });
     expect(activeRun.input.abortSignal.aborted).toBe(true);
     if (layout === "absent") {
       expectNoAgentStore(agentId);
@@ -149,7 +152,7 @@ test.each(["default", "fixed", "template", "absent"] as const)(
   },
 );
 
-test("native Stop ACK precedes cleanup without provisioning or admitting a successor", async ({
+test("native Stop persists before ACK and fences its successor until cleanup", async ({
   signal,
 }) => {
   const agentId = "native-active-only";
@@ -158,8 +161,7 @@ test("native Stop ACK precedes cleanup without provisioning or admitting a succe
   const runId = "native-active-only-run";
   const { getRuntimeConfig } = await getGatewayConfigModule();
   const storePath = resolveSessionStorePathCore(getRuntimeConfig().session?.store, { agentId });
-  const aborted = createDeferred();
-  const abort = vi.fn(() => aborted.resolve());
+  const abort = vi.fn();
   const handle = createEmbeddedRunHandle({ runId, abort });
   registerTestEmbeddedRun(sessionId, handle, sessionKey, undefined, agentId);
   const native = expectDefined(resolveActiveEmbeddedRunOwnerByRunId(runId), "native owner");
@@ -167,33 +169,55 @@ test("native Stop ACK precedes cleanup without provisioning or admitting a succe
   const nativeSettlement = native.waitForSettlement().then(() => {
     nativeSettled = true;
   });
+  const persisted = createDeferred();
+  const publish = createDeferred();
+  const persist = lifecyclePersistence.persistGatewaySessionLifecycleEvent;
+  const persistence = vi
+    .spyOn(lifecyclePersistence, "persistGatewaySessionLifecycleEvent")
+    .mockImplementation(async (params) => {
+      const result = await persist(params);
+      persisted.resolve();
+      await publish.promise;
+      return result;
+    });
   const { getRuntimeConfig: _getRuntimeConfig, ...abortContext } = createChatAbortContext({
     getSessionEventSubscriberConnIds: () => new Set(),
   });
+  let finished = false;
   const request = directSessionReq(
     "sessions.abort",
     { key: sessionKey, runId },
     { context: abortContext },
-  );
+  ).then((result) => {
+    finished = true;
+    return result;
+  });
   let successor: Promise<void> | undefined;
   let successorStarted = false;
   try {
-    await withinTest(aborted.promise, signal);
+    await withinTest(persisted.promise, signal);
     expect(abort).toHaveBeenCalledOnce();
-    expect(nativeSettled).toBe(false);
+    expect({ finished, nativeSettled }).toEqual({ finished: false, nativeSettled: false });
     successor = withSessionTurn({ sessionKey, sessionId, agentId, storePath }, async () => {
       successorStarted = true;
     });
-    expectAborted(await withinTest(request, signal), runId);
+    publish.resolve();
+    await expect(withinTest(request, signal)).resolves.toMatchObject({
+      ok: true,
+      payload: { ok: true, abortedRunId: runId, status: "aborted" },
+    });
     expect([nativeSettled, successorStarted]).toEqual([false, false]);
-    expect(fs.existsSync(statePath("agents", agentId))).toBe(false);
+    const env = { OPENCLAW_STATE_DIR: requireStateDir() };
+    expect(fs.existsSync(path.join(env.OPENCLAW_STATE_DIR, "agents", agentId))).toBe(false);
     expect(fs.existsSync(agentSqlitePath(agentId))).toBe(false);
     clearTestEmbeddedRun(sessionId, handle, sessionKey);
     await withinTest(Promise.all([nativeSettlement, successor]), signal);
     expect([nativeSettled, successorStarted]).toEqual([true, true]);
   } finally {
+    publish.resolve();
     clearTestEmbeddedRun(sessionId, handle, sessionKey);
     await Promise.allSettled([request, nativeSettlement, successor]);
+    persistence.mockRestore();
   }
 });
 

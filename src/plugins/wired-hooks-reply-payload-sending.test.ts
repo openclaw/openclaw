@@ -1,4 +1,6 @@
+/** Tests reply payload sending through wired plugin hook flows. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   getReplyPayloadMetadata,
   setReplyPayloadMetadata,
@@ -20,13 +22,21 @@ const replyPayloadSendingEvent = {
   runId: "run-123",
 };
 
-const replyPayloadSendingCtx = { channelId: "telegram" };
+const replyPayloadSendingCtx = {
+  channelId: "telegram",
+  accountId: "default",
+  conversationId: "conv-1",
+  sessionKey: "agent:test:session",
+  runId: "run-123",
+};
 
 function createRunner(
   handlers: Parameters<typeof createHookRunnerWithRegistry>[0][number]["handler"][],
+  options?: Parameters<typeof createHookRunnerWithRegistry>[1],
 ) {
   return createHookRunnerWithRegistry(
     handlers.map((handler) => ({ hookName: "reply_payload_sending", handler })),
+    options,
   ).runner;
 }
 
@@ -41,38 +51,58 @@ function send(
 }
 
 function editPayload(edit: (payload: PluginHookReplyPayload) => ReplyPayload) {
-  return vi.fn(async (event: { payload: PluginHookReplyPayload }) => {
+  return vi.fn().mockImplementation(async (event: { payload: PluginHookReplyPayload }) => {
     expect("trustedLocalMedia" in event.payload).toBe(false);
     return { payload: edit(event.payload) };
   });
 }
 
 describe("outbound hook runners", () => {
-  it.each(["message_sending", "reply_payload_sending"] as const)(
-    "%s fails open after the default per-handler timeout",
-    async (hookName) => {
-      const next =
-        hookName === "message_sending"
-          ? { content: "after timeout" }
-          : { payload: { text: "after timeout" }, cancel: undefined, reason: undefined };
+  it.each([
+    {
+      hookName: "message_sending",
+      next: { content: "after timeout" },
+      expected: { content: "after timeout" },
+      invoke: (runner: ReturnType<typeof createRunner>) =>
+        runner.runMessageSending(messageEvent, messageCtx),
+    },
+    {
+      hookName: "reply_payload_sending",
+      next: { payload: { text: "after timeout" } },
+      expected: { payload: { text: "after timeout" }, cancel: undefined, reason: undefined },
+      invoke: send,
+    },
+  ])(
+    "$hookName fails open after the default per-handler timeout",
+    async ({ hookName, next, expected, invoke }) => {
+      const logger = { warn: vi.fn(), error: vi.fn() };
+      const firstStarted = createDeferred();
+      const first = vi.fn(() => {
+        firstStarted.resolve();
+        return new Promise<never>(() => {});
+      });
+      const second = vi.fn().mockResolvedValue(next);
       const { runner } = createHookRunnerWithRegistry(
-        [() => new Promise<never>(() => {}), async () => next].map((handler) => ({
-          hookName,
-          handler,
-        })),
+        [first, second].map((handler) => ({ hookName, handler })),
+        { logger },
       );
-      const resultPromise =
-        hookName === "message_sending"
-          ? runner.runMessageSending(messageEvent, messageCtx)
-          : send(runner);
+      const resultPromise = invoke(runner);
+      await firstStarted.promise;
       await vi.advanceTimersByTimeAsync(15_000);
-      await expect(resultPromise).resolves.toEqual(next);
+
+      await expect(resultPromise).resolves.toEqual(expected);
+      expect(second).toHaveBeenCalledTimes(1);
+      expect(logger.error).toHaveBeenCalledWith(
+        `[hooks] ${hookName} handler from test-plugin failed: timed out after 15000ms`,
+      );
       expect(vi.getTimerCount()).toBe(0);
     },
   );
 
-  it("message_sending forwards cancellation metadata", async () => {
-    const hookResult = { cancel: true, cancelReason: "policy", metadata: { owner: "agent-2" } };
+  it.each([
+    { content: "modified content" },
+    { cancel: true, cancelReason: "policy", metadata: { owner: "agent-2" } },
+  ])("message_sending returns %j", async (hookResult) => {
     const handler = vi.fn().mockReturnValue(hookResult);
     const { runner } = createHookRunnerWithRegistry([{ hookName: "message_sending", handler }]);
     await expect(runner.runMessageSending(messageEvent, messageCtx)).resolves.toEqual(hookResult);
@@ -90,24 +120,93 @@ describe("outbound hook runners", () => {
       { hookName: "message_sending", handler, timeoutMs: 20_000 },
     ]);
     const resultPromise = runner.runMessageSending(messageEvent, messageCtx);
-    const settled = vi.fn();
-    void resultPromise.then(settled);
+    let settled = false;
+    void resultPromise.then(() => {
+      settled = true;
+    });
     await vi.advanceTimersByTimeAsync(15_000);
-    expect(settled).not.toHaveBeenCalled();
+    expect(settled).toBe(false);
     await vi.advanceTimersByTimeAsync(1_000);
     await expect(resultPromise).resolves.toEqual({ content: "slow result" });
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("message_sent forwards the delivery outcome", async () => {
-    const event = { to: "user-123", content: "hello", success: false, error: "timeout" };
+  it.each([
+    { to: "user-123", content: "hello", success: true },
+    { to: "user-123", content: "hello", success: false, error: "timeout" },
+  ])("message_sent delivers %j", async (event) => {
     const handler = vi.fn();
     const { runner } = createHookRunnerWithRegistry([{ hookName: "message_sent", handler }]);
     await runner.runMessageSent(event, messageCtx);
     expect(handler).toHaveBeenCalledWith(event, messageCtx);
   });
 
-  it("passes the latest payload between handlers while preserving internal metadata", async () => {
+  it("passes the latest payload between handlers", async () => {
+    const payload = {
+      text: "hello",
+      presentation: {
+        blocks: [{ type: "buttons", buttons: [{ label: "Proceed", value: "action:proceed" }] }],
+      },
+    } satisfies ReplyPayload;
+    const first = vi.fn().mockResolvedValue({ payload });
+    const second = vi.fn().mockImplementation(async (event: { payload: ReplyPayload }) => ({
+      payload: {
+        ...event.payload,
+        text: `${event.payload.text ?? ""}!`,
+      },
+    }));
+    const result = await send(createRunner([first, second]));
+
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(second).toHaveBeenCalledTimes(1);
+    expect(second).toHaveBeenCalledWith(
+      { ...replyPayloadSendingEvent, payload },
+      replyPayloadSendingCtx,
+    );
+    expect(result).toEqual({
+      payload: { ...payload, text: "hello!" },
+      cancel: undefined,
+      reason: undefined,
+    });
+  });
+
+  it("stops at the first handler that cancels delivery", async () => {
+    const first = vi.fn().mockResolvedValue({ cancel: true, reason: "blocked" });
+    const second = vi.fn();
+    const result = await send(createRunner([first, second]));
+
+    expect(result).toEqual({
+      payload: { text: "hello" },
+      cancel: true,
+      reason: "blocked",
+    });
+    expect(second).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])("keeps media trust host-owned (trusted=%s)", async (trusted) => {
+    const handler = editPayload((payload) => ({
+      ...payload,
+      text: "plugin changed",
+      trustedLocalMedia: true,
+    }));
+    const payload = trusted
+      ? ({ text: "hello", trustedLocalMedia: true } as unknown as PluginHookReplyPayload)
+      : replyPayloadSendingEvent.payload;
+    const result = await send(createRunner([handler]), payload);
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect((result?.payload as ReplyPayload | undefined)?.trustedLocalMedia).toBe(
+      trusted ? true : undefined,
+    );
+    expect(result?.payload).toMatchObject({ text: "plugin changed" });
+  });
+
+  it("preserves internal reply metadata across plugin edits", async () => {
+    const handler = vi
+      .fn()
+      .mockImplementation(async (event: { payload: PluginHookReplyPayload }) => ({
+        payload: { ...event.payload, text: "plugin changed" },
+      }));
     const metadata = {
       assistantMessageIndex: 7,
       sourceReplyTranscriptMirror: {
@@ -116,68 +215,28 @@ describe("outbound hook runners", () => {
         idempotencyKey: "mirror-1",
       },
     };
-    const payload = {
-      text: "hello",
-      presentation: {
-        blocks: [{ type: "buttons", buttons: [{ label: "Proceed", value: "action:proceed" }] }],
-      },
-    } satisfies ReplyPayload;
-    const second = vi.fn(
-      async (event: typeof replyPayloadSendingEvent, context: typeof replyPayloadSendingCtx) => {
-        expect(event).toEqual({ ...replyPayloadSendingEvent, payload });
-        expect(context).toEqual(replyPayloadSendingCtx);
-        return { payload: { ...event.payload, text: `${event.payload.text}!` } };
-      },
-    );
-    const result = await send(
-      createRunner([async () => ({ payload }), second]),
-      setReplyPayloadMetadata({ text: "hello" }, metadata),
-    );
-    expect(result).toEqual({
-      payload: { ...payload, text: "hello!" },
-      cancel: undefined,
-      reason: undefined,
-    });
+    const payload = setReplyPayloadMetadata({ text: "hello" } satisfies ReplyPayload, metadata);
+    const result = await send(createRunner([handler]), payload);
+
+    expect(result?.payload).toMatchObject({ text: "plugin changed" });
     expect(getReplyPayloadMetadata(result?.payload as ReplyPayload)).toEqual(metadata);
   });
 
-  it("stops at the first handler that cancels delivery", async () => {
-    const second = vi.fn();
-    expect(
-      await send(createRunner([async () => ({ cancel: true, reason: "blocked" }), second])),
-    ).toEqual({
-      payload: { text: "hello" },
-      cancel: true,
-      reason: "blocked",
-    });
-    expect(second).not.toHaveBeenCalled();
-  });
+  it("drops trusted local media when plugins change media refs", async () => {
+    const handler = editPayload((payload) => ({
+      ...payload,
+      mediaUrl: "file:///tmp/plugin-replaced.wav",
+    }));
+    const result = await send(createRunner([handler]), {
+      text: "hello",
+      mediaUrl: "file:///tmp/runtime-owned.wav",
+      trustedLocalMedia: true,
+    } as unknown as PluginHookReplyPayload);
 
-  it.each([
-    { trusted: false, replaceMedia: false },
-    { trusted: true, replaceMedia: false },
-    { trusted: true, replaceMedia: true },
-  ])(
-    "keeps media trust host-owned ($trusted, replace=$replaceMedia)",
-    async ({ trusted, replaceMedia }) => {
-      const mediaUrl = "file:///tmp/plugin-replaced.wav";
-      const handler = editPayload((payload) => ({
-        ...payload,
-        text: "plugin changed",
-        trustedLocalMedia: true,
-        ...(replaceMedia ? { mediaUrl } : {}),
-      }));
-      const payload: ReplyPayload = {
-        text: "hello",
-        ...(trusted ? { trustedLocalMedia: true } : {}),
-        ...(replaceMedia ? { mediaUrl: "file:///tmp/runtime-owned.wav" } : {}),
-      };
-      const result = await send(createRunner([handler]), payload);
-      expect(result?.payload).toEqual({
-        text: "plugin changed",
-        ...(trusted && !replaceMedia ? { trustedLocalMedia: true } : {}),
-        ...(replaceMedia ? { mediaUrl } : {}),
-      });
-    },
-  );
+    expect((result?.payload as ReplyPayload | undefined)?.trustedLocalMedia).toBeUndefined();
+    expect(result?.payload).toMatchObject({
+      text: "hello",
+      mediaUrl: "file:///tmp/plugin-replaced.wav",
+    });
+  });
 });

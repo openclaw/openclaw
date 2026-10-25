@@ -20,16 +20,6 @@ const makeFile = (overrides: Partial<WorkspaceBootstrapFile>): WorkspaceBootstra
 
 const QUOTED_HEARTBEAT_EXAMPLE =
   "`Check STATUS.md if it exists. Follow it strictly. Do not repeat old tasks from prior chats. If nothing needs attention, reply STATUS_OK.`";
-const policy = "Never commit secrets without validation.";
-const scoped = "Must read scoped AGENTS.md before subtree work.";
-const frame = "Example policy:";
-const fittingFrame = "Example " + "x".repeat(51);
-const oversizedFrame = fittingFrame + "x";
-const early = "- Early normal ".padEnd(20, "a");
-const long = "- Normal payload ".padEnd(70, "b");
-const urgent = "- 嚴禁共用登入帳號 ".padEnd(140, "字");
-const late = "- Late normal ".padEnd(20, "d");
-const omitted = "[...1 more policy lines omitted...]";
 
 function renderFile(
   file: Partial<WorkspaceBootstrapFile>,
@@ -76,6 +66,19 @@ describe("buildBootstrapContextFiles", () => {
   it("skips empty or whitespace-only content", () => {
     expect(buildBootstrapContextFiles([makeFile({ content: "   \n  " })])).toStrictEqual([]);
   });
+  it("truncates large bootstrap content with a warning and bounded head/tail", () => {
+    const content = `HEAD-${"a".repeat(600)}${"b".repeat(300)}-TAIL`;
+    const warn = vi.fn();
+    const result = renderFile({ name: "SOUL.md", content }, { maxChars: 200, warn });
+    expect(result).toHaveLength(199);
+    expect(result).toContain("[...truncated, read SOUL.md for full content...]");
+    expect(result).toContain("kept 75+25 chars");
+    expect(result?.startsWith(content.slice(0, 75))).toBe(true);
+    expect(result?.endsWith(content.slice(-25))).toBe(true);
+    expect(warn.mock.calls.map(([message]) => message)).toEqual([
+      expect.stringMatching(/SOUL\.md.*limit 200/),
+    ]);
+  });
   it("warns once per path, content revision, and effective limit across context builds", () => {
     const file = makeFile({ path: "/warning-revisions/AGENTS.md", content: "a".repeat(1000) });
     const warn = vi.fn();
@@ -84,20 +87,20 @@ describe("buildBootstrapContextFiles", () => {
 
     // A diagnostics build without a logger must not consume the warning.
     buildBootstrapContextFiles([file], { maxChars: 200 });
-    const outputs = [];
-    for (const [overrides, maxChars, expected] of [
-      [{}, 200, 1],
-      [{}, 200, 1],
-      [{ content: "b".repeat(1000) }, 200, 2],
-      [{ content: "b".repeat(1000) }, 200, 2],
-      [{}, 300, 3],
-      [{ path: "/other-workspace/AGENTS.md" }, 200, 4],
-      [{}, 200, 4],
-    ] satisfies [Partial<WorkspaceBootstrapFile>, number, number][]) {
-      outputs.push(build(overrides, maxChars));
-      expect(warn).toHaveBeenCalledTimes(expected);
-    }
-    expect(outputs[2]).not.toEqual(outputs[0]);
+    const first = build();
+    expect(build()).toEqual(first);
+    expect(warn).toHaveBeenCalledTimes(1);
+
+    const edited = build({ content: "b".repeat(1000) });
+    expect(edited).not.toEqual(first);
+    expect(build({ content: "b".repeat(1000) })).toEqual(edited);
+    expect(warn).toHaveBeenCalledTimes(2);
+    build({}, 300);
+    build({ path: "/other-workspace/AGENTS.md" });
+    expect(warn).toHaveBeenCalledTimes(4);
+    expect(build()).toEqual(first);
+    expect(warn).toHaveBeenCalledTimes(4);
+
     buildBootstrapContextFiles([file], { maxChars: 200, totalMaxChars: 150, warn });
     buildBootstrapContextFiles([file], { maxChars: 200, totalMaxChars: 150, warn });
     expect(warn).toHaveBeenCalledTimes(5);
@@ -110,44 +113,64 @@ describe("buildBootstrapContextFiles", () => {
     "keeps $name truncation valid at UTF-16 boundaries",
     ({ name, maxChars, head, middle, tail }) => {
       const content = `${"h".repeat(head)}😀${"m".repeat(middle)}😀${"t".repeat(tail)}`;
-      const warn = vi.fn();
-      const result = renderFile({ name, content }, { maxChars, warn });
+      const result = renderFile({ name, content }, { maxChars });
       expect(result?.startsWith("h".repeat(head))).toBe(true);
       expect(result?.endsWith("t".repeat(tail))).toBe(true);
-      expect(result).toContain(`[...truncated, read ${name} for full content...]`);
-      expect(result?.length).toBeLessThanOrEqual(maxChars);
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining(`limit ${maxChars}`));
       expect(result).not.toMatch(
         /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/,
       );
     },
   );
-  it.each<{
-    name: string;
-    lines: string[];
-    maxChars: number;
-    included: string[];
-    excluded: string[];
-    frames?: number;
-  }>`
-    name                          | lines                                             | maxChars | included                                                 | excluded                                      | frames
-    ${"fitting frame"}            | ${[fittingFrame, QUOTED_HEARTBEAT_EXAMPLE]}       | ${600}   | ${[[fittingFrame, QUOTED_HEARTBEAT_EXAMPLE].join("\n")]} | ${["more policy lines omitted"]}              | ${undefined}
-    ${"oversized frame"}          | ${[oversizedFrame, QUOTED_HEARTBEAT_EXAMPLE]}     | ${600}   | ${[omitted]}                                             | ${[oversizedFrame, QUOTED_HEARTBEAT_EXAMPLE]} | ${undefined}
-    ${"fence boundary"}           | ${["```", frame, "```", policy]}                  | ${2000}  | ${[policy]}                                              | ${[frame, "```", "~~~"]}                      | ${undefined}
-    ${"repeated frames"}          | ${[frame, policy, "", scoped, "", frame, policy]} | ${2000}  | ${[[frame, policy, scoped, frame, policy].join("\n")]}   | ${[]}                                         | ${3}
-    ${"mandatory Chinese bullet"} | ${[early, "", long, "", urgent, "", late]}        | ${600}   | ${[[early, urgent, late].join("\n"), omitted]}           | ${[long]}                                     | ${undefined}
-  `(
-    "keeps policy digest semantics for $name",
-    ({ lines, maxChars, included, excluded, frames }) => {
-      const result = renderMiddle(lines, maxChars);
-      included.forEach((text) => expect(result).toContain(text));
-      excluded.forEach((text) => expect(result).not.toContain(text));
-      if (frames) {
-        expect(result?.split(frame)).toHaveLength(frames);
-      }
-      expect(result?.length).toBeLessThanOrEqual(maxChars);
-    },
-  );
+  it.each([
+    { padding: 51, fits: true },
+    { padding: 52, fits: false },
+  ])("selects the whole framed unit when fits=$fits", ({ padding, fits }) => {
+    const frame = "Example " + "x".repeat(padding);
+    const content = renderMiddle([frame, QUOTED_HEARTBEAT_EXAMPLE], 600);
+
+    if (fits) {
+      expect(content).toContain([frame, QUOTED_HEARTBEAT_EXAMPLE].join("\n"));
+      expect(content).not.toContain("more policy lines omitted");
+    } else {
+      expect(content).not.toContain(frame);
+      expect(content).not.toContain(QUOTED_HEARTBEAT_EXAMPLE);
+      expect(content).toContain("[...1 more policy lines omitted...]");
+    }
+    expect(content?.length).toBeLessThanOrEqual(600);
+  });
+
+  it("clears framing at a backtick closing boundary", () => {
+    const candidate = "Never commit secrets without validation.";
+    const content = renderMiddle(["```", "Example policy:", "```", candidate], 2000);
+    expect(content).toContain(candidate);
+    expect(content).not.toContain("Example policy:");
+    expect(content).not.toContain("```");
+    expect(content).not.toContain("~~~");
+    expect(content?.length).toBeLessThanOrEqual(2000);
+  });
+
+  it("keeps repeated frames local and ordered", () => {
+    const first = "Never commit secrets without validation.";
+    const middle = "Must read scoped AGENTS.md before subtree work.";
+    const frame = "Example policy:";
+    const result = renderMiddle([frame, first, "", middle, "", frame, first], 2000);
+    expect(result).toContain([frame, first, middle, frame, first].join("\n"));
+    expect(result?.split(frame)).toHaveLength(3);
+    expect(result?.length).toBeLessThanOrEqual(2000);
+  });
+
+  it("prioritizes Traditional Chinese mandatory bullets", () => {
+    const earlyShort = "- Early normal ".padEnd(20, "a");
+    const earlyLong = "- Normal payload ".padEnd(70, "b");
+    const urgent = "- 嚴禁共用登入帳號 ".padEnd(140, "字");
+    const lateShort = "- Late normal ".padEnd(20, "d");
+    const content = renderMiddle([earlyShort, "", earlyLong, "", urgent, "", lateShort], 600);
+
+    expect(content).toContain([earlyShort, urgent, lateShort].join("\n"));
+    expect(content).not.toContain(earlyLong);
+    expect(content).toContain("[...1 more policy lines omitted...]");
+    expect(content?.length).toBeLessThanOrEqual(600);
+  });
   it("keeps source bytes with compact markers at budget 22", () => {
     const result = renderFile(
       { name: "USER.md", content: `HEAD-${"a".repeat(1_000)}-TAIL` },

@@ -115,6 +115,8 @@ const waitOneTask = () =>
 beforeEach(() => {
   createdEngines.length = 0;
   inferenceFallbackMocks.verify.mockResolvedValue({ ok: true, binding: {} });
+  transcriptStoreMocks.appendReset.mockReset();
+  transcriptStoreMocks.appendTurn.mockReset();
   transcriptStoreMocks.readTranscriptTailAsync.mockReset().mockResolvedValue([]);
 });
 
@@ -128,11 +130,13 @@ describe("openclaw.chat session lifecycle", () => {
     "rejoins with the current wizard interaction when live=%s",
     async (live) => {
       const engine = makeEngine();
+      const liveQuestion = { id: "wizard-q", header: "Pick", options: [{ label: "A" }] };
+      const liveStep = { id: "step-1", type: "text", message: "Enter a value" };
       const interaction = {
         sensitive: true,
         wizardInputPending: true,
-        question: { id: "wizard-q", header: "Pick", options: [{ label: "A" }] },
-        step: { id: "step-1", type: "text", message: "Enter a value" },
+        question: liveQuestion,
+        step: liveStep,
       };
       if (live) {
         engine.decorateRejoinReply = vi.fn((reply: Record<string, unknown>) => ({
@@ -205,9 +209,20 @@ describe("openclaw.chat session lifecycle", () => {
     expect(respond).not.toHaveBeenCalled();
   });
 
-  it("seeds a fresh session from only post-reset turns", async () => {
-    const context = makeContext(new Map());
-    expect((await callChat(context, { sessionId: "reset", reset: true })).ok).toBe(true);
+  it("resets a session on request", async () => {
+    const engine = makeEngine();
+    const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession({ engine })]]);
+    const context = makeContext(sessions);
+
+    const reset = await callChat(context, { sessionId: "s1", reset: true });
+
+    expect(engine.handle).not.toHaveBeenCalled();
+    expect(engine.dispose).toHaveBeenCalledOnce();
+    expect(sessions.get("s1")?.engine).not.toBe(engine);
+    expect(reset.ok).toBe(true);
+    expect(transcriptStoreMocks.appendReset).toHaveBeenCalledOnce();
+    expect(createdEngines[0]?.seedHistory).not.toHaveBeenCalled();
+
     const turns = [
       { role: "user", text: "After reset" },
       { role: "assistant", text: "Fresh answer" },
@@ -215,7 +230,9 @@ describe("openclaw.chat session lifecycle", () => {
     transcriptStoreMocks.readTranscriptTailAsync.mockResolvedValue(
       turns.map((turn, at) => ({ ...turn, at })),
     );
-    expect((await callChat(context, { sessionId: "fresh-after-reset" })).ok).toBe(true);
+    const fresh = await callChat(context, { sessionId: "fresh-after-reset" });
+
+    expect(fresh.ok).toBe(true);
     expect(createdEngines.at(-1)?.seedHistory).toHaveBeenCalledWith(turns);
     expect(transcriptStoreMocks.readTranscriptTailAsync).toHaveBeenLastCalledWith(30, {
       afterLastReset: true,
