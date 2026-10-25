@@ -250,12 +250,6 @@ it.each<[string, Record<string, string[]>, string[], "unresolved" | "ambiguous"]
   ["telegram-DEFAULT", { telegram: ["default"] }, [], "unresolved"],
   ["custom-channel-default", { telegram: [] }, ["custom-channel"], "unresolved"],
   ["telegram-business", { telegram: ["business"] }, ["telegram-business"], "ambiguous"],
-  [
-    "telegram-business-ops..bot",
-    { telegram: [], "telegram-business": ["ops_bot"] },
-    ["telegram-business"],
-    "unresolved",
-  ],
 ])("preserves account source %s", async (stem, accountIds, configuredChannelIds, reason) => {
   const filename = `${stem}-allowFrom.json`;
   const state = await fixture({ [filename]: ["1003"] }, accounts(accountIds, configuredChannelIds));

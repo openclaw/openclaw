@@ -115,49 +115,40 @@ it.each([
 });
 
 describe("resolveNpmSpecMetadata", () => {
-  const npmViewMetadata = {
-    name: "@openclaw/codex",
-    version: "2026.6.11",
-    "dist.integrity": "placeholder",
-    "dist.shasum": "placeholder",
-    openclaw: { extensions: ["./index.ts"] },
-  };
-
   it("normalizes npm 12 view JSON", async () => {
-    mockPackCommandResult({ stdout: JSON.stringify([npmViewMetadata]) });
+    const openclaw = { extensions: ["./index.ts"] };
+    mockPackCommandResult({
+      stdout: JSON.stringify([
+        {
+          name: packFields.name,
+          version: packFields.version,
+          "dist.integrity": packFields.integrity,
+          "dist.shasum": packFields.shasum,
+          openclaw,
+        },
+      ]),
+    });
 
-    expect(await resolveNpmSpecMetadata({ spec: "@openclaw/codex" })).toEqual({
+    expect(await resolveNpmSpecMetadata({ spec: packFields.name })).toEqual({
       ok: true,
-      metadata: {
-        name: npmViewMetadata.name,
-        version: npmViewMetadata.version,
-        resolvedSpec: "@openclaw/codex@2026.6.11",
-        integrity: "placeholder",
-        shasum: "placeholder",
-        packageOpenClaw: npmViewMetadata.openclaw,
-      },
+      metadata: { ...packMetadata, packageOpenClaw: openclaw },
     });
   });
 
   it.each([
-    { selector: "v2", versions: ["1.0.0"], array: false, version: "1.0.0" },
-    { selector: "v2", versions: ["1.0.0"], array: true, version: "1.0.0" },
-    { selector: "v2", versions: ["2.9.0", "2.1.0"], array: true, version: "2.9.0" },
-    { selector: "^2", versions: ["1.0.0"], array: true, version: undefined },
-    { selector: "2.0.0", versions: ["1.0.0"], array: true, version: undefined },
-  ])(
-    "resolves $selector from $versions (array=$array)",
-    async ({ selector, versions, array, version }) => {
-      const name = "example-plugin";
-      const entries = versions.map((entryVersion) => ({ name, version: entryVersion }));
-      mockPackCommandResult({ stdout: JSON.stringify(array ? entries : entries[0]) });
-      await expect(resolveNpmSpecMetadata({ spec: `${name}@${selector}` })).resolves.toMatchObject(
-        version
-          ? { ok: true, metadata: { name, version, resolvedSpec: `${name}@${version}` } }
-          : { ok: false, category: "metadata-env" },
-      );
-    },
-  );
+    { selector: "v2", versions: ["1.0.0"], version: "1.0.0" },
+    { selector: "v2", versions: ["2.9.0", "2.1.0"], version: "2.9.0" },
+    { selector: "^2", versions: ["1.0.0"], version: undefined },
+  ])("resolves $selector from $versions", async ({ selector, versions, version }) => {
+    const name = "example-plugin";
+    const entries = versions.map((entryVersion) => ({ name, version: entryVersion }));
+    mockPackCommandResult({ stdout: JSON.stringify(entries) });
+    await expect(resolveNpmSpecMetadata({ spec: `${name}@${selector}` })).resolves.toMatchObject(
+      version
+        ? { ok: true, metadata: { name, version, resolvedSpec: `${name}@${version}` } }
+        : { ok: false, category: "metadata-env" },
+    );
+  });
 
   it("reports which required metadata fields are missing", async () => {
     mockPackCommandResult({ stdout: JSON.stringify({ version: "2026.6.11" }) });

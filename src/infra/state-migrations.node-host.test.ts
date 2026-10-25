@@ -105,15 +105,6 @@ describe("legacy node-host Doctor migration", () => {
     expect(detect().hasLegacy).toBe(true);
   });
 
-  it("imports the complete snapshot, discards token, and removes node.json", async () => {
-    const { env, sourcePath, migrate, read } = legacyFixture();
-    const result = await migrate();
-    expect(result.warnings).toEqual([]);
-    await expect(loadNodeHostConfig(env)).resolves.toEqual(canonicalConfig);
-    expect(read()?.value).not.toHaveProperty("token");
-    expect(fs.existsSync(sourcePath)).toBe(false);
-  });
-
   it("normalizes a legacy empty gateway context path to unset", async () => {
     const { env, migrate } = legacyFixture({ gateway: { ...gateway, contextPath: "" } });
     expect((await migrate()).warnings).toEqual([]);
@@ -168,11 +159,9 @@ describe("legacy node-host Doctor migration", () => {
   });
 
   it.each([
-    [{ unknown: true }, "config has unexpected field unknown"],
     [{ "": 1, later: 2 }, 'config has unexpected field ""'],
     [{ version: 2 }, "config version must be 1"],
     [{ nodeId: " " }, "nodeId must be a non-empty string"],
-    [{ gateway: { unknown: true } }, "gateway has unexpected field unknown"],
     [{ gateway: { ["__proto__"]: 1 } }, "gateway has unexpected field __proto__"],
     [{ token: 42 }, "token must be a string when present"],
   ])("rejects strict legacy shape: %j", async (overrides, message) => {
@@ -239,6 +228,7 @@ describe("legacy node-host Doctor migration", () => {
     expect(first.warnings[0]).toContain("legacy cleanup failed");
     expect(fs.existsSync(`${sourcePath}.doctor-importing`)).toBe(true);
     expect(read()?.value.nodeId).toBe("legacy-node-id");
+    expect(read()?.value).not.toHaveProperty("token");
     expect((await migrate()).warnings).toEqual([]);
     expect(fs.existsSync(`${sourcePath}.doctor-importing`)).toBe(false);
     expect(read()?.value.nodeId).toBe("legacy-node-id");

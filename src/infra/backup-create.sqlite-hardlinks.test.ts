@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { expectDefined } from "@openclaw/normalization-core";
 import * as tar from "tar";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildBackupArchivePath } from "../commands/backup-shared.js";
 import { verifyBackupArchive } from "../commands/backup-verify.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -125,14 +125,9 @@ describe.skipIf(process.platform === "win32")("backup SQLite hardlinks", () => {
       );
       expect(archive.warnings?.every((warning) => /opaque/iu.test(warning))).toBe(true);
       const restored = await restoreBackup(state, archive);
-      const asset = expectDefined(
-        archive.assets.find((candidate) => candidate.kind === "state"),
-        "state asset",
-      );
       const restoredDirectory = path.join(
         restored.targetPath,
-        asset.archivePath,
-        "plugins/hardlinks",
+        buildBackupArchivePath(archive.archiveRoot, directory),
       );
       expect((await fs.readdir(restoredDirectory)).toSorted()).toEqual(names.toSorted());
       for (const [name, bytes] of originals) {

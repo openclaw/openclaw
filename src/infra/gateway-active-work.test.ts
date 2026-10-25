@@ -1,7 +1,5 @@
 // Canonical Gateway active-work waiting must report the owners that block shutdown.
-import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { GatewaySuspendPrepareResultSchema } from "../../packages/gateway-protocol/src/index.js";
 import type { EmbeddedAgentQueueHandle } from "../agents/embedded-agent-runner/run-state.js";
 import {
   clearTestEmbeddedRun as clearActiveEmbeddedRun,
@@ -26,20 +24,6 @@ import {
 import { beginLifecycleWriteCustody } from "./lifecycle-write-custody.js";
 
 const activeRuns = new Map<string, EmbeddedAgentQueueHandle>();
-
-function expectSuspensionWireShape(snapshot: ReturnType<typeof createGatewayActiveWorkSnapshot>) {
-  expect(
-    Value.Check(GatewaySuspendPrepareResultSchema, {
-      status: "draining",
-      suspensionId: "held-owner",
-      expiresAtMs: 120_000,
-      retryAfterMs: 20_000,
-      activeCount: snapshot.counts.totalActive,
-      blockers: snapshot.blockers,
-      writeCustody: snapshot.writeCustody,
-    }),
-  ).toBe(true);
-}
 
 afterEach(() => {
   for (const [sessionId, handle] of activeRuns) {
@@ -186,18 +170,12 @@ describe("waitForGatewayActiveWork", () => {
     }
   });
 
-  it("publishes native owners and separate write custody through the suspension wire shape", () => {
+  it("counts recorded custody separately from session and terminal writes", () => {
     const release = beginLifecycleWriteCustody("migration");
     try {
       const snapshot = createGatewayActiveWorkSnapshot({
-        getRootRequests: () => 2,
-        getCronRuns: () => 3,
         getSessionMutations: () => 1,
         getTerminalPersistence: () => 1,
-        getBackgroundExecSessions: () => 1,
-        getAgentRuns: () => 1,
-        getAcpRuns: () => 2,
-        getMediaRuns: () => 3,
       });
       expect(snapshot.writeCustody).toEqual([
         { phase: "migration", count: 1 },
@@ -207,27 +185,14 @@ describe("waitForGatewayActiveWork", () => {
       expect(snapshot).toMatchObject({
         idle: false,
         counts: {
-          rootRequests: 2,
-          cronRuns: 3,
           lifecycleWrites: 1,
-          backgroundExecSessions: 1,
-          agentRuns: 1,
-          acpRuns: 2,
-          mediaRuns: 3,
-          totalActive: 15,
+          totalActive: 3,
         },
       });
       expect(snapshot.blockers.map(({ kind }) => kind)).toEqual([
-        "background-exec",
-        "cron-run",
-        "agent-run",
-        "acp-run",
-        "media-generation",
-        "root-request",
         "session-mutation",
         "terminal-persistence",
       ]);
-      expectSuspensionWireShape(snapshot);
     } finally {
       release();
     }

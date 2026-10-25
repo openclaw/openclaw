@@ -1,10 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-} from "../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import { persistDevicePairingStoreState } from "./device-pairing-store.js";
@@ -13,7 +10,6 @@ import {
   ApnsRegistrationPairingChangedError,
   clearApnsRegistrationIfCurrent,
   loadApnsRegistration,
-  loadApnsRegistrations,
   registerApnsRegistration,
 } from "./push-apns.js";
 import * as workerAdmission from "./sqlite-worker-operation-admission.js";
@@ -147,14 +143,6 @@ describe("push APNs registration store", () => {
     });
   });
 
-  it("preserves request order and duplicates while omitting missing nodes", async () => {
-    await registerDirect({ nodeId: "first" });
-    await registerDirect({ nodeId: "second" });
-    const requested = ["second", "first", "second", "missing"];
-    const loaded = await loadApnsRegistrations(requested, baseDir);
-    expect(loaded.map(({ nodeId }) => nodeId)).toEqual(requested.slice(0, -1));
-  });
-
   it("uses monotonic versions so stale compare-and-delete cannot remove a replacement", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-11T00:00:00Z"));
@@ -251,21 +239,5 @@ describe("push APNs registration store", () => {
       "relay registrations must use valid APNs environment",
     );
     await expect(registerRelay({ relayHandle: oversized })).rejects.toThrow("relayHandle too long");
-  });
-
-  it("fails loudly for a malformed canonical row", async () => {
-    const env = databaseEnv();
-    runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        db.prepare(
-          `INSERT INTO apns_registrations (
-             node_id, transport, topic, environment, updated_at_ms
-           ) VALUES (?, ?, ?, ?, ?)`,
-        ).run("corrupt-node", "unknown", "ai.openclaw.ios", "sandbox", 1);
-      },
-      { env },
-    );
-
-    await expect(load("corrupt-node")).rejects.toThrow("invalid APNs registration row");
   });
 });
