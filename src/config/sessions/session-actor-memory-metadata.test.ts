@@ -1,11 +1,11 @@
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
-import type { SessionActorAuthority, SessionActorStorage } from "./session-actor-contract.js";
+import type { SessionActorStorage } from "./session-actor-contract.js";
+import { authority, memoryOwnerFixture } from "./session-actor-memory-family.test-support.js";
 import {
   readMemory,
   commitMemory,
   mutateMemory,
 } from "./session-actor-memory-publication.test-support.js";
-import { createMemorySessionActorOwner } from "./session-actor-memory.js";
 import { isIndexedSessionEntry } from "./session-entry-codec.js";
 
 vi.mock("node:sqlite", async (importOriginal) => ({
@@ -24,17 +24,11 @@ vi.mock("node:worker_threads", async (importOriginal) => ({
 const sessionKey = "agent:main:dashboard:incognito-metadata";
 const sessionId = "session-1";
 const scope = { agentId: "main", storePath: "/synthetic/metadata", sessionKey, sessionId };
-const authority: SessionActorAuthority = { authorize() {}, assertCurrent() {} };
-const owners: ReturnType<typeof createMemorySessionActorOwner>[] = [];
+const openFixture = memoryOwnerFixture({ agentId: scope.agentId, path: scope.storePath });
 const header =
   '{ "type": "session", "version": 3, "id": "session-1", "timestamp": "1970-01-01T00:00:00.000Z", "cwd": "/synthetic" }';
 
-afterEach(() => {
-  for (const owner of owners.splice(0)) {
-    owner.close();
-  }
-  vi.useRealTimers();
-});
+afterEach(() => vi.useRealTimers());
 
 async function hydrate(storage: SessionActorStorage, selectedId = sessionId) {
   const result = await readMemory(storage, "session.history.hydrate", { sessionId: selectedId });
@@ -45,28 +39,27 @@ async function hydrate(storage: SessionActorStorage, selectedId = sessionId) {
 async function fixture() {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(1000);
-  const owner = createMemorySessionActorOwner({ agentId: scope.agentId, path: scope.storePath });
-  owners.push(owner);
+  const { owner, actor, store: storage } = await openFixture(sessionKey);
   const acquire = async () => {
-    const actor = await owner.acquire(
-      { database: owner.identity, sessionKey },
-      { assertCurrent() {}, assertReadable() {} },
-    );
-    assert(actor.storage, "Missing memory storage");
-    return { actor, storage: actor.storage };
+    const next = await openFixture(sessionKey, owner);
+    return { actor: next.actor, storage: next.store };
   };
-  const { actor, storage } = await acquire();
   await commitMemory(storage, "session.metadata.initialize", {
     scope,
     entry: { sessionId, updatedAt: 1, incognito: true },
   });
   const raw = async (event: string) =>
     await commitMemory(storage, "session.metadata.append", { scope, event, options: {} });
-  const user = async (id: string, text: string) => {
+  const message = async (
+    id: string,
+    text: string,
+    role = "user",
+    parentId: string | null = null,
+  ) => {
     const event = {
       type: "message" as const,
       id,
-      parentId: null,
+      parentId,
       timestamp: "1970-01-01T00:00:00.002Z",
     };
     return await commitMemory(storage, "session.metadata.append", {
@@ -74,13 +67,19 @@ async function fixture() {
       event,
       options: { appendIntent: "active-branch" },
       message: {
-        messageJson: JSON.stringify({ role: "user", content: text, timestamp: 2 }),
+        messageJson: JSON.stringify({ role, content: text, timestamp: 2 }),
         cwd: "/synthetic",
         validateTurn: false,
       },
     });
   };
-  return { owner, actor, storage, raw, user, acquire };
+  const snapshot = () => actor.snapshot(authority)!;
+  const anchors = () =>
+    snapshot().transcript.anchors.map(({ entryId, rawSeq }) => [entryId, rawSeq]);
+  const workspace = (maxSeq: number, generation = snapshot().transcript.watermark.generation) => {
+    expect(snapshot().entry?.priorWorkspace?.through).toEqual({ generation, maxSeq });
+  };
+  return { owner, actor, storage, raw, user: message, acquire, anchors, workspace };
 }
 
 describe("memory actor metadata storage", () => {
@@ -228,7 +227,7 @@ describe("memory actor metadata storage", () => {
   });
 
   it("keeps adopted file provenance through media rewrite, boundary removal and manual trim", async () => {
-    const { actor, storage, raw, user } = await fixture();
+    const { actor, storage, raw, user, anchors, workspace } = await fixture();
     await raw(header);
     await user("old-discarded", "Earlier original source");
     await user("old-kept", "Original notes.md");
@@ -251,25 +250,7 @@ describe("memory actor metadata storage", () => {
       preserveActivity: true,
     });
     await user("current", "Current notes.md");
-    await commitMemory(storage, "session.metadata.append", {
-      scope,
-      event: {
-        type: "message",
-        id: "assistant",
-        parentId: "current",
-        timestamp: "1970-01-01T00:00:00.002Z",
-      },
-      options: { appendIntent: "active-branch" },
-      message: {
-        messageJson: JSON.stringify({
-          role: "assistant",
-          content: "Prepared the PR",
-          timestamp: 2,
-        }),
-        cwd: "/synthetic",
-        validateTurn: false,
-      },
-    });
+    await user("assistant", "Prepared the PR", "assistant", "current");
     const anchor = actor
       .snapshot(authority)!
       .transcript.anchors.find((item) => item.entryId === "assistant")!;
@@ -288,10 +269,7 @@ describe("memory actor metadata storage", () => {
     });
     const rewritten = actor.snapshot(authority)!;
     expect(rewritten.transcript.watermark.generation).not.toBe(prior.generation);
-    expect(rewritten.entry?.priorWorkspace?.through).toEqual({
-      generation: rewritten.transcript.watermark.generation,
-      maxSeq: 3,
-    });
+    workspace(3);
     const before = await hydrate(storage);
     const next = before.events
       .filter((event) => !isIndexedSessionEntry(event) || event.id !== "adoption-boundary")
@@ -304,12 +282,8 @@ describe("memory actor metadata storage", () => {
       scope,
       args: [before.events, next, 0, before.version.updatedAt, false, []],
     });
-    const replaced = actor.snapshot(authority)!;
-    expect(replaced.entry?.priorWorkspace?.through).toEqual({
-      generation: replaced.transcript.watermark.generation,
-      maxSeq: 2,
-    });
-    expect(replaced.transcript.anchors.map(({ entryId, rawSeq }) => [entryId, rawSeq])).toEqual([
+    workspace(2);
+    expect(anchors()).toEqual([
       ["old-discarded", 1],
       ["old-kept", 2],
       ["current", 3],
@@ -317,11 +291,8 @@ describe("memory actor metadata storage", () => {
     ]);
     await commitMemory(storage, "session.transcript.manualCompact", { scope, maxLines: 4 });
     const compacted = actor.snapshot(authority)!;
-    expect(compacted.entry?.priorWorkspace?.through).toEqual({
-      generation: compacted.transcript.watermark.generation,
-      maxSeq: 1,
-    });
-    expect(compacted.transcript.anchors.map(({ entryId, rawSeq }) => [entryId, rawSeq])).toEqual([
+    workspace(1);
+    expect(anchors()).toEqual([
       ["old-kept", 1],
       ["current", 2],
       ["assistant", 3],
@@ -347,15 +318,11 @@ describe("memory actor metadata storage", () => {
         ["copied-current", source("current")],
       ],
     });
-    const branched = actor.snapshot(authority)!;
-    expect(branched.transcript.anchors.map(({ entryId, rawSeq }) => [entryId, rawSeq])).toEqual([
+    expect(anchors()).toEqual([
       ["copied-old", 4],
       ["copied-current", 5],
     ]);
-    expect(branched.entry?.priorWorkspace?.through).toEqual({
-      generation: compacted.transcript.watermark.generation,
-      maxSeq: 4,
-    });
+    workspace(4, compacted.transcript.watermark.generation);
   });
 
   it("retains an old window across branch replacement and commits compaction accounting atomically", async () => {

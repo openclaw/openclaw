@@ -50,6 +50,13 @@ const location = {
 };
 const filter = { engineId: "test" };
 const publishLimits = { maxEvents: 10, maxBytes: 10_000 };
+const outcomeDefaults = {
+  provider: "test",
+  model: "test",
+  outcome: "mute" as const,
+  runStatus: "completed" as const,
+  occurredAt: 1,
+};
 const openFixture = memoryOwnerFixture(location, () => memorySessionActorOwners.reset());
 
 function committed<T>(outcome: SessionActorStorageOutcome<T>): T {
@@ -169,22 +176,13 @@ describe("memory session side-data consumers", () => {
   it("reports a committed message-tool outcome publication failure after one write", async () => {
     const { scope, actor } = await fixture();
     const sequence = actor.snapshot(authority)!.version.sequence;
-    const stop = failSessionActorMemoryPublication(scope.sessionKey);
-    try {
-      await expect(
-        recordMessageToolRunOutcome({
-          ...scope,
-          runId: "run",
-          provider: "test",
-          model: "test",
-          outcome: "mute",
-          runStatus: "completed",
-          occurredAt: 1,
-        }),
-      ).rejects.toMatchObject({ name: "SessionActorStorageCommittedError" });
-    } finally {
-      stop();
-    }
+    await publicationFails(scope, () =>
+      recordMessageToolRunOutcome({
+        ...scope,
+        runId: "run",
+        ...outcomeDefaults,
+      }),
+    );
     expect(actor.snapshot(authority)!.version.sequence).toBe(sequence + 1);
   });
 
@@ -226,11 +224,7 @@ describe("memory session side-data consumers", () => {
     const outcome = {
       ...scope,
       runId: "user",
-      provider: "test",
-      model: "test",
-      outcome: "mute" as const,
-      runStatus: "completed" as const,
-      occurredAt: 1,
+      ...outcomeDefaults,
     };
     await recordMessageToolRunOutcome(outcome);
     const appended = await appendTranscriptMessage(scope, {

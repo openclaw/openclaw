@@ -65,14 +65,19 @@ function listen(sessionKey: string, run: (change: SessionRowChange) => void, fac
   );
 }
 
-function observe(sessionKey: string) {
+function observe(sessionKey: string, projection = false) {
   const values: SessionTranscriptAuthority[] = [];
   listen(
     sessionKey,
     (change) => {
       const fact = readPreparedSessionTranscriptChange(change);
-      if (fact?.kind === "postimage") {
-        values.push(fact.value);
+      const value = projection
+        ? readFinalSessionTranscriptProjection(change)
+        : fact?.kind === "postimage"
+          ? fact.value
+          : undefined;
+      if (value) {
+        values.push(value);
       }
     },
     true,
@@ -141,17 +146,7 @@ it.each(["native", "worker"] as const)(
               persist: manager.persistAsync.bind(manager),
             };
       const values = observe(scope.sessionKey);
-      const ready: SessionTranscriptAuthority[] = [];
-      listen(
-        scope.sessionKey,
-        (change) => {
-          const projection = readFinalSessionTranscriptProjection(change);
-          if (projection) {
-            ready.push(projection);
-          }
-        },
-        true,
-      );
+      const ready = observe(scope.sessionKey, true);
       const invoke = async (write: () => unknown, lastMessagePreview?: string | null) => {
         const count = values.length;
         const result = write();
@@ -469,17 +464,7 @@ it.each(["ready", "dirty", "rollback"] as const)(
   "publishes only final committed projection readiness: %s",
   (outcome) =>
     withNativeSeeded(`projection-${outcome}`, async ({ database, scope, state }) => {
-      const ready: SessionTranscriptAuthority[] = [];
-      listen(
-        scope.sessionKey,
-        (change) => {
-          const projection = readFinalSessionTranscriptProjection(change);
-          if (projection) {
-            ready.push(projection);
-          }
-        },
-        true,
-      );
+      const ready = observe(scope.sessionKey, true);
       const events = loadTranscriptEventsFromDatabase(database, scope.sessionId);
       const write = () =>
         writeTransaction(
