@@ -64,6 +64,7 @@ const runDiscord = (options: CommandOptions) =>
   runStandardLiveTransportQaSuiteCommand({ channelId: "discord", options });
 const parseDiscord = (...args: string[]) => parseQa("discord", ...args);
 const doctorStep = { name: "native readiness", actions: [{ call: "channelE2e.doctor" }] };
+const recipeConfig = { agentE2e: true, marker: "external-recipe" };
 
 async function writeAgentE2eRecipe(
   directory: string,
@@ -85,7 +86,7 @@ async function writeAgentE2eRecipe(
           kind: "flow",
           channel: "discord",
           timeoutMs: 23456,
-          config: { agentE2e: true, marker: "external-recipe" },
+          config: recipeConfig,
           ...execution,
         },
       },
@@ -320,29 +321,24 @@ describe("live transport suite runtime", () => {
   });
 
   it("propagates selection context through the standard suite owner", async () => {
-    const channelId = "discord";
     const scenarioId = "discord-canary";
+    const options = {
+      primaryModel: "openai/custom-selection-model",
+      profile: "all",
+      providerMode: "mock-openai",
+      scenarioIds: [scenarioId, scenarioId],
+    };
     resolveLiveTransportQaScenarioIds.mockReturnValueOnce([scenarioId]);
-
-    await runDiscord({
-      primaryModel: "openai/custom-selection-model",
-      profile: "all",
-      providerMode: "mock-openai",
-      scenarioIds: [scenarioId, scenarioId],
-    });
-
+    await runDiscord(options);
     expect(resolveLiveTransportQaScenarioIds).toHaveBeenLastCalledWith({
-      channelId,
-      primaryModel: "openai/custom-selection-model",
-      profile: "all",
-      providerMode: "mock-openai",
-      scenarioIds: [scenarioId, scenarioId],
+      ...options,
+      channelId: "discord",
       supportsModuleFlows: true,
     });
     expectDispatch({
-      channel: channelId,
-      primaryModel: "openai/custom-selection-model",
-      providerMode: "mock-openai",
+      channel: "discord",
+      primaryModel: options.primaryModel,
+      providerMode: options.providerMode,
       scenarioIds: [scenarioId],
       explicitScenarioSelection: true,
     });
@@ -386,16 +382,8 @@ describe("live transport suite runtime", () => {
   it("normalizes the shared credential source environment override", async () => {
     vi.stubEnv("OPENCLAW_QA_CREDENTIAL_SOURCE", " convex ");
 
-    await runLiveTransportQaSuiteCommand({
-      channelId: "buzz",
-      defaultProviderMode: "mock-openai",
-      options: {},
-      selectScenarioIds: () => ["channel-canary"],
-    });
-
-    expect(runQaSuiteCommand).toHaveBeenCalledWith(
-      expect.objectContaining({ credentialSource: "convex" }),
-    );
+    await runLiveCommand({});
+    expectDispatch({ credentialSource: "convex" });
   });
 
   it("rejects shared credentials for disposable transports", async () => {
@@ -494,8 +482,8 @@ describe("live transport suite runtime", () => {
         execution: {
           timeoutMs: 23456,
           retryCount: 0,
-          config: { agentE2e: true, marker: "external-recipe" },
-          flow: { steps: [{ name: "native readiness", actions: [{ call: "channelE2e.doctor" }] }] },
+          config: recipeConfig,
+          flow: { steps: [doctorStep] },
         },
       },
     ]);

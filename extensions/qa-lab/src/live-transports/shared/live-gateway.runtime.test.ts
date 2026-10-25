@@ -19,25 +19,16 @@ vi.mock("../../providers/server-runtime.js", () => ({
 
 import { createQaLiveLaneGateway } from "./live-gateway.runtime.js";
 
-function createStubTransport(baseUrl = "http://127.0.0.1:43123") {
-  return {
-    requiredPluginIds: ["qa-channel"],
-    createGatewayConfig: () => ({
-      channels: {
-        "qa-channel": {
-          enabled: true,
-          baseUrl,
-        },
-      },
-    }),
-  };
-}
-
 type StartOptions = Parameters<ReturnType<typeof createQaLiveLaneGateway>["start"]>[0];
 function gatewayParams(overrides: Partial<StartOptions> = {}): StartOptions {
   return {
     repoRoot: "/tmp/openclaw-repo",
-    transport: createStubTransport(),
+    transport: {
+      requiredPluginIds: ["qa-channel"],
+      createGatewayConfig: ({ baseUrl }) => ({
+        channels: { "qa-channel": { enabled: true, baseUrl } },
+      }),
+    },
     transportBaseUrl: "http://127.0.0.1:43123",
     providerMode: "mock-openai",
     primaryModel: "mock-openai/gpt-5.6-luna",
@@ -114,40 +105,32 @@ describe("createQaLiveLaneGateway", () => {
     expect(mockStop).toHaveBeenCalledOnce();
   });
 
-  it("threads the mock provider base url into the gateway child", async () => {
-    const harness = await ownGateway().start(
-      gatewayParams({
-        primaryModel: "mock-openai/gpt-5.5",
-        alternateModel: "mock-openai/gpt-5.5-alt",
-        controlUiEnabled: false,
-      }),
-    );
-
-    expect(startQaProviderServer).toHaveBeenCalledWith("mock-openai", {
-      modelRefs: ["mock-openai/gpt-5.5", "mock-openai/gpt-5.5-alt"],
-    });
-    const gatewayOptions = firstGatewayOptions();
-    expect(gatewayOptions?.transportBaseUrl).toBe("http://127.0.0.1:43123");
-    expect(gatewayOptions?.providerBaseUrl).toBe("http://127.0.0.1:44080/v1");
-    expect(gatewayOptions?.providerMode).toBe("mock-openai");
-
-    await harness.stop();
-    expect(gatewayStop).toHaveBeenCalledTimes(1);
-    expect(mockStop).toHaveBeenCalledTimes(1);
-  });
-
-  it("forwards a scenario-selected agent runtime to the gateway child", async () => {
-    await ownGateway().start(
-      gatewayParams({
-        providerMode: "live-frontier",
-        primaryModel: "openai/gpt-5.5",
-        alternateModel: "openai/gpt-5.4",
+  it.each(["mock-openai", "live-frontier"] as const)(
+    "starts and stops the %s lane with the selected runtime",
+    async (providerMode) => {
+      const primaryModel = `${providerMode === "mock-openai" ? "mock-openai" : "openai"}/gpt-5.6-luna`;
+      const alternateModel = providerMode === "mock-openai" ? `${primaryModel}-alt` : primaryModel;
+      const harness = await start({
+        providerMode,
+        primaryModel,
+        alternateModel,
         forcedRuntime: "codex",
-      }),
-    );
-
-    expect(firstGatewayOptions()?.forcedRuntime).toBe("codex");
-  });
+      });
+      expect(startQaProviderServer).toHaveBeenCalledWith(providerMode, {
+        modelRefs: [primaryModel, alternateModel],
+      });
+      expect(firstGatewayOptions()).toMatchObject({
+        transportBaseUrl: "http://127.0.0.1:43123",
+        providerBaseUrl: providerMode === "mock-openai" ? "http://127.0.0.1:44080/v1" : undefined,
+        providerMode,
+        forcedRuntime: "codex",
+      });
+      const options = { preserveToDir: ".artifacts/qa-e2e/debug" };
+      await harness.stop(options);
+      expect(gatewayStop).toHaveBeenCalledExactlyOnceWith(options);
+      expect(mockStop).toHaveBeenCalledTimes(providerMode === "mock-openai" ? 1 : 0);
+    },
+  );
 
   it("disables memory search for transport-only live lanes", async () => {
     await start();
@@ -176,33 +159,6 @@ describe("createQaLiveLaneGateway", () => {
     expect(cfg.plugins?.slots).toEqual({ memory: "none", contextEngine: "custom-context" });
     expect(cfg.memory?.search?.enabled).toBe(false);
     expect(cfg.plugins?.entries).not.toHaveProperty("memory-core");
-  });
-
-  it("forwards gateway stop options to the child harness", async () => {
-    const harness = await start();
-
-    await harness.stop({ preserveToDir: ".artifacts/qa-e2e/debug" });
-    expect(gatewayStop).toHaveBeenCalledWith({ preserveToDir: ".artifacts/qa-e2e/debug" });
-    expect(mockStop).toHaveBeenCalledTimes(1);
-  });
-
-  it("skips mock bootstrap for live frontier runs", async () => {
-    const harness = await start({
-      providerMode: "live-frontier",
-      primaryModel: "openai/gpt-5.6-luna",
-      alternateModel: "openai/gpt-5.6-luna",
-    });
-
-    expect(startQaProviderServer).toHaveBeenCalledWith("live-frontier", {
-      modelRefs: ["openai/gpt-5.6-luna", "openai/gpt-5.6-luna"],
-    });
-    const options = firstGatewayOptions();
-    expect(options?.transportBaseUrl).toBe("http://127.0.0.1:43123");
-    expect(options?.providerBaseUrl).toBeUndefined();
-    expect(options?.providerMode).toBe("live-frontier");
-
-    await harness.stop();
-    expect(gatewayStop).toHaveBeenCalledTimes(1);
   });
 
   it.each([false, true])(
