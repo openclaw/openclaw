@@ -52,7 +52,11 @@ function createPolicyTranscript(paneId: string) {
     canFollowEnd: () => !policy.chatFollowLocked,
     onReaderScroll: (towardEnd) => handleChatScrollTakeover(policy, towardEnd),
   });
-  return { policy, transcript };
+  return {
+    policy,
+    transcript,
+    mount: (rows = numberedContentRows(12)) => mountTestTranscript(paneId, rows, transcript),
+  };
 }
 
 function resize(element: Element, height: number) {
@@ -60,13 +64,18 @@ function resize(element: Element, height: number) {
     observer.emitTarget(element, 800, height);
   }
 }
-function viewport(element: HTMLElement, height: number, scrollHeight: number | (() => number)) {
+function viewport(
+  element: HTMLElement,
+  height: number | (() => number),
+  scrollHeight: number | (() => number),
+) {
+  const dimension = (value: number | (() => number)) => ({
+    configurable: true,
+    ...(typeof value === "number" ? { value } : { get: value }),
+  });
   Object.defineProperties(element, {
-    clientHeight: { configurable: true, value: height },
-    scrollHeight: {
-      configurable: true,
-      ...(typeof scrollHeight === "number" ? { value: scrollHeight } : { get: scrollHeight }),
-    },
+    clientHeight: dimension(height),
+    scrollHeight: dimension(scrollHeight),
   });
 }
 function expectReader(policy: ReturnType<typeof makeChatHost>, locked: boolean) {
@@ -184,10 +193,7 @@ it.each([
 }[])("does not reacquire following after $name", ({ suspended, cancelled, steps }) => {
   const element = document.createElement("div");
   let scrollHeight = 1000;
-  Object.defineProperties(element, {
-    clientHeight: { value: 400 },
-    scrollHeight: { get: () => scrollHeight },
-  });
+  viewport(element, 400, () => scrollHeight);
   element.scrollTop = 600;
   const anchor = new TranscriptEndAnchor(() => {});
   anchor.capture(element);
@@ -216,10 +222,7 @@ it.each(["resize clamp", "native return"] as const)(
     transcriptDomState.measuredRowHeight = 1000;
     const container = document.body.appendChild(document.createElement("div"));
     let viewportHeight = 400;
-    Object.defineProperties(container, {
-      clientHeight: { configurable: true, get: () => viewportHeight },
-      scrollHeight: { configurable: true, value: 1000 },
-    });
+    viewport(container, () => viewportHeight, 1000);
     container.scrollTo = (options?: ScrollToOptions | number, y?: number) => {
       const offset = typeof options === "number" ? (y ?? 0) : (options?.top ?? 0);
       container.scrollTop = Math.min(offset, 1000 - viewportHeight);
@@ -306,9 +309,8 @@ it.each([
   "preserves $intent ownership through composer $nativeResize and row growth",
   async ({ intent, nativeResize }) => {
     const flushFrames = stubAnimationFrames();
-    const { policy, transcript } = createPolicyTranscript(`footer-${intent}`);
-    const rows: TestContentRow[] = numberedContentRows(12);
-    const { container } = await mountTestTranscript(`footer-${intent}`, rows, transcript);
+    const { policy, transcript, mount } = createPolicyTranscript(`footer-${intent}`);
+    const { container } = await mount();
     viewport(container, 400, 2000);
     container.scrollTop = 1600;
     policy.chatLastScrollTop = 1600;
@@ -370,12 +372,8 @@ it.each([
   "preserves following through $movement until reader takeover",
   async ({ smooth, finalOffset }) => {
     const flushFrames = stubAnimationFrames();
-    const { policy, transcript } = createPolicyTranscript("end-retarget");
-    const { container } = await mountTestTranscript(
-      "end-retarget",
-      numberedContentRows(20),
-      transcript,
-    );
+    const { policy, transcript, mount } = createPolicyTranscript("end-retarget");
+    const { container } = await mount(numberedContentRows(20));
     const geometry = { height: 2000 };
     viewport(container, 600, () => geometry.height);
     container.scrollTo = (options?: ScrollToOptions | number) => {
@@ -476,13 +474,9 @@ it("cancels the active native target when the reader locks following", async () 
 
 it("preserves reader policy when row measurement clamps a positive adjustment to the end", async () => {
   transcriptDomState.measuredRowHeight = 120;
-  const { policy, transcript } = createPolicyTranscript("measurement-reader");
+  const { policy, transcript, mount } = createPolicyTranscript("measurement-reader");
   const rows: TestContentRow[] = numberedContentRows(12);
-  const { container, renderRows } = await mountTestTranscript(
-    "measurement-reader",
-    rows,
-    transcript,
-  );
+  const { container, renderRows } = await mount(rows);
   const total = transcriptSize(container);
   let maxScrollTop = total + 84 - 600;
   viewport(container, 600, () => maxScrollTop + 600);

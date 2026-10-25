@@ -38,15 +38,18 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
       containers.splice(0).forEach((container) => container.remove());
     });
 
+    function findElement(root: ParentNode, selector: string) {
+      return root.querySelector<HTMLElement>(selector)!;
+    }
+
+    const click = (target: HTMLElement) => page.elementLocator(target).click();
+
     // Compact and catalog panes intentionally keep the fallback Panels menu.
-    async function openFallbackPanels(scope: {
-      container: ParentNode;
-      click: (element: HTMLElement) => Promise<void>;
-    }) {
-      const menu = scope.container.querySelector<HTMLElement>(".chat-pane__layout-menu")!;
-      const trigger = menu.querySelector<HTMLButtonElement>(".chat-pane__layout-trigger")!;
+    async function openFallbackPanels(container: ParentNode) {
+      const menu = findElement(container, ".chat-pane__layout-menu");
+      const trigger = findElement(menu, ".chat-pane__layout-trigger");
       if (trigger.getAttribute("aria-expanded") !== "true") {
-        await scope.click(trigger);
+        await click(trigger);
       }
       await expect
         .poll(() => menu.querySelector<HTMLElement>(".oc-menu")?.dataset.phase)
@@ -54,16 +57,13 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
       return menu;
     }
 
-    async function selectFallbackPanelAction(
-      scope: { container: ParentNode; click: (element: HTMLElement) => Promise<void> },
-      name: string,
-    ) {
-      const menu = await openFallbackPanels(scope);
+    async function selectFallbackPanelAction(container: ParentNode, name: string) {
+      const menu = await openFallbackPanels(container);
       const action = [...menu.querySelectorAll<HTMLElement>("[role^=menuitem]")].find(
         (item) => (item.getAttribute("aria-label") ?? item.textContent?.trim()) === name,
       );
       expect(action).toBeDefined();
-      await scope.click(action!);
+      await click(action!);
       await expect
         .poll(() => menu.querySelector<HTMLElement>(".oc-menu")?.dataset.phase)
         .toBe("hidden");
@@ -87,15 +87,15 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
         },
         sessionMenuAction: chatPaneHeaderSessionMenu(),
       });
-      const header = container.querySelector<HTMLElement>(".chat-pane__header")!;
-      const trigger = container.querySelector<HTMLButtonElement>(".chat-pane__agent-identity")!;
-      const name = container.querySelector<HTMLElement>(".chat-pane__agent-name")!;
-      const actions = container.querySelector<HTMLElement>(".chat-pane__header-trailing")!;
-      const settings = container.querySelector<HTMLElement>(".chat-pane__agent-settings")!;
+      const header = findElement(container, ".chat-pane__header");
+      const trigger = findElement(container, ".chat-pane__agent-identity");
+      const name = findElement(container, ".chat-pane__agent-name");
+      const actions = findElement(container, ".chat-pane__header-trailing");
+      const settings = findElement(container, ".chat-pane__agent-settings");
       expect(trigger.checkVisibility()).toBe(true);
       expect(name.getBoundingClientRect().width).toBeGreaterThan(40);
       const headerCenter = header.getBoundingClientRect().left + header.clientWidth / 2;
-      const identity = container.querySelector<HTMLElement>(".chat-pane__header-agent")!;
+      const identity = findElement(container, ".chat-pane__header-agent");
       const identityCenter = identity.getBoundingClientRect().left + identity.clientWidth / 2;
       expect(Math.abs(identityCenter - headerCenter)).toBeLessThanOrEqual(2);
       expect(trigger.getBoundingClientRect().right).toBeLessThanOrEqual(
@@ -103,19 +103,18 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
       );
       expect(header.scrollWidth).toBeLessThanOrEqual(header.clientWidth);
       // Idle pill is only avatar and name; the settings glyph is collapsed inside it.
-      const pill = trigger;
       expect(trigger.getAttribute("aria-label")).toBe(
         t("agentChip.namedSettings", { name: props.agent!.name }),
       );
       expect(trigger.hasAttribute("title")).toBe(false);
       expect(getComputedStyle(settings).opacity).toBe("0");
       expect(settings.getBoundingClientRect().width).toBe(0);
-      const idlePill = pill.getBoundingClientRect();
+      const idlePill = trigger.getBoundingClientRect();
       const idleTriggerLeft = trigger.getBoundingClientRect().left;
       const idleBackground = getComputedStyle(settings).backgroundColor;
       await userEvent.hover(trigger);
       // Hover widens the pill rightward to hold settings; the avatar stays put.
-      const hoverPill = pill.getBoundingClientRect();
+      const hoverPill = trigger.getBoundingClientRect();
       const hoverSettings = settings.getBoundingClientRect();
       expect(getComputedStyle(settings).opacity).toBe("1");
       expect(getComputedStyle(settings).backgroundColor).toBe(idleBackground);
@@ -144,17 +143,13 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
       const { container } = mountChatPaneHeader(containers, {
         agent: { id: "research", name: "Research lead", textAvatar: "🔬" },
       });
-      const header = container.querySelector<HTMLElement>(".chat-pane__header")!;
+      const header = findElement(container, ".chat-pane__header");
       // Mirrors the shell's window-chrome inset rules, which set both values.
       header.style.setProperty(inset, value);
       header.style[side] = value;
       const headerRect = header.getBoundingClientRect();
-      const trigger = container
-        .querySelector<HTMLElement>(".chat-pane__agent-identity")!
-        .getBoundingClientRect();
-      const actions = container
-        .querySelector<HTMLElement>(".chat-pane__header-trailing")!
-        .getBoundingClientRect();
+      const trigger = findElement(container, ".chat-pane__agent-identity").getBoundingClientRect();
+      const actions = findElement(container, ".chat-pane__header-trailing").getBoundingClientRect();
       expect(
         Math.abs(trigger.left + trigger.width / 2 - (headerRect.left + headerRect.width / 2)),
       ).toBeLessThanOrEqual(1);
@@ -180,7 +175,7 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
         onToggleSidePanel: vi.fn(),
       });
       container.style.cssText = "position: fixed; top: 80px; left: 310px; width: 312px";
-      const header = container.querySelector<HTMLElement>(".chat-pane__header")!;
+      const header = findElement(container, ".chat-pane__header");
       await expect.element(page.elementLocator(header)).toBeVisible();
       const project = [
         ...container.querySelectorAll<HTMLButtonElement>(".chat-pane__workspace-chip"),
@@ -284,12 +279,8 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
           ],
           onOpenSplitView: vi.fn(),
         });
-        const scope = {
-          container,
-          click: (element: HTMLElement) => page.elementLocator(element).click(),
-        };
-        const menu = await openFallbackPanels(scope);
-        const trigger = menu.querySelector<HTMLButtonElement>(".chat-pane__layout-trigger")!;
+        const menu = await openFallbackPanels(container);
+        const trigger = findElement(menu, ".chat-pane__layout-trigger");
         expect(trigger.getAttribute("aria-label")).toBe(t("chat.sessionHeader.panels"));
         expect(trigger.textContent?.trim()).toBe("");
         expect(
@@ -307,7 +298,7 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
           "discussion",
           "open-split-view",
         ]);
-        const surface = menu.querySelector<HTMLElement>(":scope > .oc-menu")!;
+        const surface = findElement(menu, ":scope > .oc-menu");
         // Measure the settled surface, not its opening scale transition.
         await Promise.all(surface.getAnimations().map((animation) => animation.finished));
         const bounds = surface.getBoundingClientRect();
@@ -327,7 +318,7 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
         )!;
         expect(terminalDetails.querySelector("kbd")).not.toBeNull();
         expect(getComputedStyle(terminalDetails).display).toBe("none");
-        await selectFallbackPanelAction(scope, "Terminal");
+        await selectFallbackPanelAction(container, "Terminal");
         expect(onTerminal).toHaveBeenCalledOnce();
         expect(trigger.getAttribute("aria-expanded")).toBe("false");
       },
@@ -342,8 +333,8 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
         session: undefined,
         onOpenDetails,
       });
-      const trigger = fixture.container.querySelector<HTMLButtonElement>(".chat-details-toggle")!;
-      await page.elementLocator(trigger).click();
+      const trigger = findElement(fixture.container, ".chat-details-toggle");
+      await click(trigger);
       expect(onOpenDetails).toHaveBeenCalledWith(trigger);
       fixture.update({ session: { key: "agent:main:main", kind: "direct", updatedAt: 0 } });
       expect(fixture.container.querySelector(".chat-details-toggle")).toBeNull();
@@ -370,17 +361,12 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
           });
         },
       });
-      const trigger = fixture.container.querySelector<HTMLButtonElement>(
-        ".chat-pane__layout-trigger",
-      )!;
+      const trigger = findElement(fixture.container, ".chat-pane__layout-trigger");
       const menu = fixture.container.querySelector(".chat-pane__layout-menu")!;
       const surface = menu.querySelector<HTMLElement>('[role="menu"]')!;
       const shown = vi.fn();
       surface.addEventListener("overlay-after-show", shown, { once: true });
-      await openFallbackPanels({
-        container: fixture.container,
-        click: (element: HTMLElement) => page.elementLocator(element).click(),
-      });
+      await openFallbackPanels(fixture.container);
       expect(shown).toHaveBeenCalledOnce();
       const closingAnimation = surface.animate({ opacity: [1, 0.9] }, { duration: 1000 });
       closingAnimation.pause();
@@ -392,26 +378,17 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
       expect(surface.matches(":popover-open")).toBe(true);
       expect(document.activeElement).toBe(trigger);
       closingAnimation.cancel();
-      await openFallbackPanels({
-        container: fixture.container,
-        click: (element: HTMLElement) => page.elementLocator(element).click(),
-      });
+      await openFallbackPanels(fixture.container);
       expect(surface.dataset.phase).toBe("open");
       for (const label of ["Minimize side panel", "Side panel"]) {
-        await selectFallbackPanelAction(
-          {
-            container: fixture.container,
-            click: (element: HTMLElement) => page.elementLocator(element).click(),
-          },
-          label,
-        );
+        await selectFallbackPanelAction(fixture.container, label);
         expect(document.activeElement).toBe(trigger);
       }
       for (const expectedCount of [3, 4]) {
         const hidden = new Promise<Event>((resolve) => {
           surface.addEventListener("overlay-after-hide", resolve, { once: true });
         });
-        await page.elementLocator(trigger).click();
+        await click(trigger);
         await page
           .elementLocator(menu.querySelector<HTMLElement>('[data-value="side-panel"]')!)
           .click();
@@ -460,7 +437,7 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
           sessionMenuAction: chatPaneHeaderSessionMenu(),
         });
         container.style.width = `${width}px`;
-        const header = container.querySelector<HTMLElement>(".chat-pane__header")!;
+        const header = findElement(container, ".chat-pane__header");
         flush();
         await expect.element(page.elementLocator(header)).toBeVisible();
         expect(header.scrollWidth).toBeLessThanOrEqual(header.clientWidth);
@@ -479,16 +456,12 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
         expect(container.querySelector(".chat-pane__subagents-running")?.textContent).toContain(
           "Subagents · 12 running",
         );
-        const scope = {
-          container,
-          click: (element: HTMLElement) => page.elementLocator(element).click(),
-        };
-        const menu = await openFallbackPanels(scope);
-        const shortcut = menu.querySelector<HTMLElement>("kbd")!;
+        const menu = await openFallbackPanels(container);
+        const shortcut = findElement(menu, "kbd");
         expect(shortcut.checkVisibility()).toBe(false);
-        const surface = menu.querySelector<HTMLElement>("[role=menu]")!;
+        const surface = findElement(menu, "[role=menu]");
         expect(surface.getBoundingClientRect().width).toBeLessThanOrEqual(264);
-        await selectFallbackPanelAction(scope, "Toggle terminal");
+        await selectFallbackPanelAction(container, "Toggle terminal");
         expect(onTerminal).toHaveBeenCalledOnce();
       },
     );
@@ -562,7 +535,7 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
           .toBe(true);
 
         if (!busy) {
-          await page.elementLocator(trigger).click();
+          await click(trigger);
           await expect.poll(() => tooltip()).toBeUndefined();
           await page.getByRole("menuitem", { name: editor ? "VS Code" : /Earlier idea/ }).click();
           expect(editor ? onOpenEditor : props.onBranchSelect).toHaveBeenCalledWith(
@@ -571,11 +544,9 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
         }
 
         if (state === "idle") {
-          const header = container.querySelector<HTMLElement>(".chat-pane__header")!;
-          const layout = container.querySelector<HTMLButtonElement>(
-            ".chat-header-session-menu__trigger",
-          )!;
-          const closePane = container.querySelector<HTMLButtonElement>(".chat-pane__close")!;
+          const header = findElement(container, ".chat-pane__header");
+          const layout = findElement(container, ".chat-header-session-menu__trigger");
+          const closePane = findElement(container, ".chat-pane__close");
           for (const width of [320, 693]) {
             container.style.width = `${width}px`;
             expect(trigger.checkVisibility()).toBe(true);
@@ -594,11 +565,11 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
             expect(closePaneBounds.left).toBeGreaterThanOrEqual(branchBounds.right);
             expect(closePaneBounds.right).toBeLessThanOrEqual(bounds.right);
             vi.mocked(props.onBranchSelect).mockClear();
-            await page.elementLocator(trigger).click();
+            await click(trigger);
             await page.getByRole("menuitem", { name: /Earlier idea/ }).click();
             expect(props.onBranchSelect).toHaveBeenCalledExactlyOnceWith("other");
           }
-          await page.elementLocator(closePane).click();
+          await click(closePane);
           expect(props.onClosePane).toHaveBeenCalledExactlyOnceWith("pane-1");
         }
       },

@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { projectAgentToolActivity } from "../../../../../src/infra/agent-activity-events.js";
 import { ApplicationProvider } from "../../../lib/reactive/context.ts";
 import { prepareChatHistoryFixture } from "../../../test-helpers/chat-activity-fixtures.ts";
@@ -43,8 +43,21 @@ const {
 } = harness;
 
 describe("grouped chat rendering", () => {
+  beforeEach(() => document.body.append(harness.view));
+  const expandedTools = { isToolExpanded: () => true, isToolMessageExpanded: () => true };
+
+  function callMessage(name: string, args: unknown, output?: string) {
+    const id = `call-${name}`;
+    return createAssistantMessage(
+      [
+        createToolCall(id, name, args),
+        ...(output ? [createToolResultBlock(id, name, output, { type: "toolresult" })] : []),
+      ],
+      { id: "assistant-1", toolCallId: id },
+    );
+  }
+
   function toolFixture(message: unknown, grouped = false) {
-    document.body.append(harness.view);
     const groups = grouped ? [createMessageGroup(message, "tool")] : [];
     return (expanded: boolean, options: Partial<RenderMessageGroupOptions> = {}) =>
       grouped
@@ -72,7 +85,6 @@ describe("grouped chat rendering", () => {
   }
 
   it("counts one exec and one wait across completed history, live snapshots, and separated activity groups", async () => {
-    document.body.append(harness.view);
     const messages: TestMessage[] = [];
     const toolMessages: TestMessage[] = [];
     for (const [index, name] of ["exec", "wait"].entries()) {
@@ -136,7 +148,6 @@ describe("grouped chat rendering", () => {
   });
 
   it("renders a persisted call with an unknown outcome until its matching result arrives", async () => {
-    document.body.append(harness.view);
     const call = createAssistantMessage(
       [createToolCall("orphan", "exec", { command: "check-workspace" })],
       { __openclaw: { id: "orphan-call", runId: "historic-run" } },
@@ -152,8 +163,7 @@ describe("grouped chat rendering", () => {
         {
           showReasoning: false,
           runActive: false,
-          isToolMessageExpanded: () => true,
-          isToolExpanded: () => true,
+          ...expandedTools,
         },
       );
       await settleToolBridges(harness.view);
@@ -185,7 +195,6 @@ describe("grouped chat rendering", () => {
   });
 
   it("keeps a persisted tool review icon-only until its command activity expands", async () => {
-    document.body.append(harness.view);
     const group = createToolGroup("reviewed-tool-group", [
       toolResultEntry("reviewed-tool-message", "call-reviewed", "run_command", "completed", {
         details: {
@@ -211,10 +220,7 @@ describe("grouped chat rendering", () => {
     expect(element('.chat-activity-group__review-status[data-outcome="approved"]')).not.toBeNull();
     expect(harness.view.textContent).not.toContain("Guardian approved");
 
-    await renderToolGroups([group], {
-      isToolMessageExpanded: () => true,
-      isToolExpanded: () => true,
-    });
+    await renderToolGroups([group], expandedTools);
     const review = element('.chat-tool-review[data-review-status="approved"]');
     expect(review?.textContent).toContain("Guardian approved");
     expect(review?.textContent).toContain("Narrowly scoped to the requested file.");
@@ -223,13 +229,11 @@ describe("grouped chat rendering", () => {
   });
 
   it("keeps aggregate expansion and accessibility ids stable when groups append", () => {
-    const groups = [
-      createToolGroup("stable-first", [toolResultEntry("stable-1", "call-1", "read_file", "one")]),
-      createToolGroup("stable-second", [toolResultEntry("stable-2", "call-2", "read_file", "two")]),
-      createToolGroup("stable-third", [
-        toolResultEntry("stable-3", "call-3", "read_file", "three"),
+    const groups = ["first", "second", "third"].map((key, index) =>
+      createToolGroup(`stable-${key}`, [
+        toolResultEntry(`stable-${index}`, `call-${index}`, "read_file", key),
       ]),
-    ];
+    );
     const opts: RenderMessageGroupOptions = {
       showReasoning: true,
       showToolCalls: true,
@@ -251,19 +255,12 @@ describe("grouped chat rendering", () => {
   });
 
   it("keeps failed activity collapsed with neutral chain chrome", async () => {
-    document.body.append(harness.view);
     const onToggleToolMessageExpanded = vi.fn();
     const group = createToolGroup("tool-group", [
-      toolResultEntry(
-        "tool-message-1",
-        "call-1",
-        "read_file",
-        JSON.stringify({ error: "Read failed" }),
-        {
-          isError: true,
-          timestamp: 1000,
-        },
-      ),
+      toolResultEntry("tool-message-1", "call-1", "read_file", '{"error":"Read failed"}', {
+        isError: true,
+        timestamp: 1000,
+      }),
       toolResultEntry("tool-message-2", "call-2", "run_command", "Command output", {
         timestamp: 1001,
         isError: false,
@@ -274,9 +271,7 @@ describe("grouped chat rendering", () => {
     expect(elementText(".chat-activity-group__label")).toBe("Raw details");
     expect(elementText(".chat-activity-group__summary")).not.toContain("1 failed");
 
-    await renderToolGroups(prepareHistoryGroups([group]), {
-      onToggleToolMessageExpanded,
-    });
+    await renderToolGroups(prepareHistoryGroups([group]), { onToggleToolMessageExpanded });
 
     expectAbsent(".chat-activity-group.is-open");
     const activitySummary = requireElement(".chat-activity-group__summary", HTMLButtonElement);
@@ -290,20 +285,11 @@ describe("grouped chat rendering", () => {
     activitySummary.click();
 
     expect(onToggleToolMessageExpanded).toHaveBeenCalledWith("activity:tool-group", false);
-    harness.view.remove();
   });
 
   it("keeps inline tool cards collapsed by default and renders expanded state", async () => {
     const show = toolFixture(
-      createAssistantMessage(
-        [
-          createToolCall("call-1", "browser.open", { url: "https://example.com" }),
-          createToolResultBlock("call-1", "browser.open", "Opened page", {
-            type: "toolresult",
-          }),
-        ],
-        { id: "assistant-1", toolCallId: "call-1" },
-      ),
+      callMessage("browser.open", { url: "https://example.com" }, "Opened page"),
     );
     await show(false);
 
@@ -311,18 +297,15 @@ describe("grouped chat rendering", () => {
 
     await show(true);
 
-    // Simple object args render as key-value rows; only the output keeps a block.
     const kvRow = element(".chat-tool-kv__row");
     expect(kvRow?.querySelector(".chat-tool-kv__key")?.textContent).toBe("url:");
     expect(kvRow?.querySelector(".chat-tool-kv__value")?.textContent).toBe("https://example.com");
     const blocks = elements(".chat-tool-card__block");
-    // Plain output is the block's default content, so it carries no header.
     expect(blocks[0]?.querySelector(".chat-tool-card__block-label")).toBeNull();
     expect(blocks[0]?.querySelector("code")?.textContent).toBe("Opened page");
   });
 
   it("keeps top-level tool-name results collapsed", async () => {
-    document.body.append(harness.view);
     markdownRenderMock.mockClear();
     await renderToolMessage(
       createAssistantMessage("A long tool result that should stay behind the disclosure.", {
@@ -338,18 +321,11 @@ describe("grouped chat rendering", () => {
   });
 
   it("keeps one readable label for standalone tool results with duplicate names", async () => {
-    document.body.append(harness.view);
     const message = createToolResultMessage("call-heartbeat", "heartbeat_respond", [
-      {
-        type: "tool_result",
-        name: "heartbeat_respond",
-        text: "Acknowledged",
-      },
+      { type: "tool_result", name: "heartbeat_respond", text: "Acknowledged" },
     ]);
 
-    await renderToolMessage(message, {
-      isToolMessageExpanded: () => false,
-    });
+    await renderToolMessage(message, { isToolMessageExpanded: () => false });
 
     const summary = requireElement(".chat-tool-msg-summary", HTMLButtonElement);
     expect(summary.textContent?.trim()).toBe("Heartbeat Respond");
@@ -358,15 +334,9 @@ describe("grouped chat rendering", () => {
   });
 
   it("cleans collapsed tool connector copy while preserving expanded raw input", async () => {
-    const show = toolFixture(
-      createAssistantMessage(
-        [createToolCall("call-string-tool", "presentation_create", "with Example Deck")],
-        { id: "assistant-string-tool", toolCallId: "call-string-tool" },
-      ),
-    );
+    const show = toolFixture(callMessage("presentation_create", "with Example Deck"));
     await show(false);
 
-    // The cleaned string-arg preview is now the primary collapsed label.
     expect(elementText(".chat-tool-msg-summary__label")?.trim()).toBe("Example Deck");
     expectAbsent(".chat-tool-msg-summary__names");
     expect(elementText(".chat-tool-msg-summary")).not.toContain("with Example Deck");
@@ -378,36 +348,24 @@ describe("grouped chat rendering", () => {
   });
 
   it("renders expanded tool output rows and their json content", async () => {
-    document.body.append(harness.view);
     const output = {
       status: "error",
       exitCode: 1,
       error: "Session mode is unavailable for this target.",
       childSessionKey: "agent:test:subagent:abc123",
     };
-    const call = createAssistantMessage(
-      [createToolCall("call-5", "sessions_spawn", { mode: "session", thread: true })],
-      { id: "assistant-5", toolCallId: "call-5" },
-    );
+    const call = callMessage("sessions_spawn", { mode: "session", thread: true });
     const result = createToolResultMessage(
-      "call-5",
+      "call-sessions_spawn",
       "sessions_spawn",
       JSON.stringify(output, null, 2),
-      {
-        id: "tool-5",
-        role: "tool",
-        timestamp: Date.now() + 1,
-      },
+      { id: "tool-5", role: "tool", timestamp: Date.now() + 1 },
     );
     await renderToolGroups(
       [createMessageGroup(call, "assistant"), createMessageGroup(result, "tool")],
-      {
-        isToolExpanded: () => true,
-        isToolMessageExpanded: () => true,
-      },
+      expandedTools,
     );
 
-    // The call's simple args render as key-value rows; the error keeps a block.
     const kvRows = elements(".chat-tool-kv__row");
     expect(
       kvRows.map((row) => [
@@ -457,23 +415,16 @@ describe("grouped chat rendering", () => {
     summary = requireElement(".chat-tool-msg-summary", HTMLButtonElement);
     expect(summary.classList.contains("chat-tool-msg-summary--error")).toBe(false);
     expect(summary.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe("Tool output");
-    // The failure stays recorded: the expanded body closes with the outcome.
     expect(elementText(".chat-tool-card__outcome")).toBe("failed");
     expect(elementText(".chat-tool-msg-body .chat-text pre code")).toBe(
       '{\n  "status": "error"\n}',
     );
     expectAbsent(".chat-tool-msg-body details, .code-block-json-mode");
-    harness.view.remove();
   });
 
   it("renders an expanded orphan tool result without a nested disclosure", async () => {
-    document.body.append(harness.view);
     await renderToolGroups(
-      [
-        toolResultGroup("call-orphan", "read", "Orphan tool output", {
-          id: "orphan-tool-result",
-        }),
-      ],
+      [toolResultGroup("call-orphan", "read", "Orphan tool output", { id: "orphan-tool-result" })],
       { isToolMessageExpanded: () => true },
     );
 
@@ -483,7 +434,6 @@ describe("grouped chat rendering", () => {
   });
 
   it("keeps text visible beside an orphan tool-result image", async () => {
-    document.body.append(harness.view);
     await renderToolGroups(
       [
         toolResultGroup("call-image", "image", [
@@ -502,14 +452,9 @@ describe("grouped chat rendering", () => {
   });
 
   it("keeps omitted media visible beside a standalone tool result", async () => {
-    document.body.append(harness.view);
     await renderToolMessage(
       createToolResultMessage("call-history-image", "read_file", [
-        {
-          type: "tool_result",
-          name: "read_file",
-          text: "Read completed",
-        },
+        { type: "tool_result", name: "read_file", text: "Read completed" },
         { type: "image", omitted: true, bytes: 2048 },
       ]),
       { isToolMessageExpanded: () => false },
@@ -531,7 +476,6 @@ describe("grouped chat rendering", () => {
         {},
       );
       onTestFinished(provider.dispose);
-      document.body.append(harness.view);
       const content = toolSummary
         ? [
             {
@@ -563,7 +507,6 @@ describe("grouped chat rendering", () => {
   );
 
   it("opens generic tool details instead of a canvas preview from tool rows", async () => {
-    document.body.append(harness.view);
     const onOpenSidebar = vi.fn();
     const canvas = createAssistantCanvasBlock({
       suffix: "sidebar",
@@ -573,8 +516,7 @@ describe("grouped chat rendering", () => {
       createToolResultMessage("call-artifact-sidebar", "canvas_render", canvas.rawText),
       "tool",
       {
-        isToolExpanded: () => true,
-        isToolMessageExpanded: () => true,
+        ...expandedTools,
         onOpenSidebar,
       },
     );
