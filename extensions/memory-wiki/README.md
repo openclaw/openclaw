@@ -156,6 +156,8 @@ When `render.createBacklinks` is enabled, compile adds repeatable `## Related` b
 Local Markdown link paths are percent-decoded for lint and generated backlinks:
 `[Target](%74arget.md)` resolves to `target.md`. Malformed percent escapes remain
 literal, and Obsidian wikilinks keep their existing syntax.
+In native render mode, generated links to paths with spaces or parentheses use
+angle-bracket destinations, such as `[Meeting notes](<sources/meeting notes.md>)`.
 
 When `render.createDashboards` is enabled, compile also maintains report dashboards under `reports/` for open questions, contradictions, low-confidence pages, and stale pages.
 

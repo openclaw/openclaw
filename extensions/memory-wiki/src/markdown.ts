@@ -452,7 +452,11 @@ export function formatWikiLink(params: {
   const linkTarget = params.sourceRelativeTo
     ? path.posix.relative(path.posix.dirname(params.sourceRelativeTo), params.relativePath)
     : params.relativePath;
-  return `[${params.title}](${linkTarget})`;
+  // CommonMark only takes spaces and unbalanced parentheses in a destination inside angle brackets.
+  const destination = /[\s()<>]/.test(linkTarget)
+    ? `<${linkTarget.replace(/[<>]/g, "\\$&")}>`
+    : linkTarget;
+  return `[${params.title}](${destination})`;
 }
 
 export function renderMarkdownFence(content: string, infoString = "text"): string {

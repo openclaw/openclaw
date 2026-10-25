@@ -77,6 +77,25 @@ describe("compileMemoryWikiVault", () => {
     );
   });
 
+  it("writes native links to pages with spaces in their paths as CommonMark links", async () => {
+    const { config, page, read } = await createVault();
+    await page("entities/plan.md", { pageType: "entity", id: "entity.plan", title: "Plan" });
+    await page(
+      "sources/meeting notes.md",
+      { pageType: "source", id: "source.meeting-notes", title: "Meeting notes" },
+      "# Meeting notes\n\n[Plan](../entities/plan.md)\n",
+    );
+
+    await compileMemoryWikiVault(config);
+
+    await expect(read("index.md")).resolves.toContain(
+      "[Meeting notes](<sources/meeting notes.md>)",
+    );
+    await expect(read("entities/plan.md")).resolves.toContain(
+      "[Meeting notes](<../sources/meeting notes.md>)",
+    );
+  });
+
   it("rejects directory-index syntax-error frontmatter without changing its bytes", async () => {
     const { rootDir, config } = await createVault({ render: { createDashboards: false } });
     const targetPath = path.join(rootDir, "sources/index.md");
