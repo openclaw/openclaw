@@ -188,7 +188,6 @@ async function resetMocks() {
   mocks.initSessionState.mockResolvedValue(
     createGetReplySessionState({
       sessionKey: "agent:main:telegram:-100123",
-      sessionScope: "per-chat",
       isGroup: true,
     }),
   );
@@ -594,9 +593,7 @@ describe("getReplyFromConfig media staging", () => {
   ) {
     Object.values(mocks).forEach((mock) => mock.mockReset());
     vi.mocked(stageMedia).mockReset().mockResolvedValue({ staged: new Map() });
-    vi.mocked(mocks.applyMediaUnderstanding)
-      .mockReset()
-      .mockResolvedValue({ extractedFileImages: [] });
+    mocks.applyMediaUnderstanding.mockResolvedValue({ extractedFileImages: [] });
     vi.mocked(runReply).mockReset().mockResolvedValue({ text: "ready" });
     mocks.initSessionState.mockResolvedValue(
       createGetReplySessionState({
@@ -618,9 +615,6 @@ describe("getReplyFromConfig media staging", () => {
     mocks.resolveReplyDirectives.mockResolvedValue(
       continueReply(ctx, {
         body: "inspect this attachment",
-        abortKey: ctx.SessionKey ?? "agent:main:telegram:-100123",
-        from: ctx.From ?? "telegram:user:42",
-        to: ctx.To ?? "telegram:-100123",
         senderId: sessionEntry ? "owner" : "42",
         senderIsOwner: Boolean(sessionEntry),
       }),

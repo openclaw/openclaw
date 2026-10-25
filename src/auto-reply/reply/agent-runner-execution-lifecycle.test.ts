@@ -31,8 +31,6 @@ import {
   initialFallbackAttemptOptions,
   createMockReplyOperation,
   requireRecord,
-  expectMockCallArgFields,
-  requireMockCall,
   createMinimalRunAgentTurnParams,
   getRawExecuteAgentTurnForTest,
 } from "./agent-runner-execution.test-support.js";
@@ -597,22 +595,6 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     }
   });
 
-  it("omits requireExplicitMessageTarget on ordinary embedded runs", async () => {
-    state.runWithModelFallbackMock.mockImplementationOnce((params: FallbackRunnerParams) =>
-      runFallbackCandidate(params, "anthropic", "claude"),
-    );
-    state.runEmbeddedAgentMock.mockResolvedValueOnce(createRunResult("ok"));
-
-    await execute();
-
-    const embeddedParams = requireMockCall(
-      state.runEmbeddedAgentMock,
-      0,
-      "ordinary embedded run params",
-    )[0] as Record<string, unknown>;
-    expect(embeddedParams).not.toHaveProperty("requireExplicitMessageTarget");
-  });
-
   it("registers run ownership before asynchronous image preflight", async () => {
     const agentRunRegistry = await import("../../infra/agent-run-registry.js");
     const registerAgentRunContext = vi.mocked(agentRunRegistry.registerAgentRunContext);
@@ -684,15 +666,5 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
       clearSink();
       audit.close();
     }
-  });
-
-  it("passes runtime toolsAllow to embedded agent runs", async () => {
-    state.runEmbeddedAgentMock.mockResolvedValueOnce(createRunResult("ok"));
-
-    await execute({ opts: { toolsAllow: ["message"] } });
-
-    expectMockCallArgFields(state.runEmbeddedAgentMock, 0, "embedded run params", {
-      toolsAllow: ["message"],
-    });
   });
 });

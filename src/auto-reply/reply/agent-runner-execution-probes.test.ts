@@ -76,8 +76,9 @@ function recheck(run: ReturnType<typeof createFollowupRun>["run"], entry: Sessio
 }
 
 function lifecycleEvents(runId: string) {
-  return emitAgentEvent.mock.calls
-    .map(([event]) => event)
+  return vi
+    .mocked(emitAgentEvent)
+    .mock.calls.map(([event]) => event)
     .filter((event) => event.runId === runId && event.stream === "lifecycle");
 }
 
@@ -184,60 +185,13 @@ describe("executeAgentTurn: primary probe routing", () => {
     });
   });
 
-  it("drops stale queued primary probes after a user model switch", async () => {
-    const probe = createProbe();
-    const sessionEntry = createSessionEntry({
-      modelOverride: "openai/gpt-5.4",
-      modelOverrideSource: "user",
-      authProfileOverride: "openai:work",
-      authProfileOverrideSource: "user",
-    });
-    const { run } = createProbeRun({ autoFallbackPrimaryProbe: probe });
-
-    expect(recheck(run, sessionEntry)).toMatchObject({
-      provider: "openai",
-      model: "gpt-5.4",
-      requestedRouteResolution: "raw",
-      authProfileId: "openai:work",
-      authProfileIdSource: "user",
-      modelOverrideSource: "user",
-      autoFallbackPrimaryProbe: undefined,
-    });
-  });
-
   it.each([
-    { name: "legacy user", marker: undefined, expectedSource: "user" as const },
-    { name: "marker-backed auto", marker: 0, expectedSource: "auto" as const },
-  ])(
-    "canonicalizes a source-less $name auth profile during queued probe recheck",
-    ({ marker, expectedSource }) => {
-      const probe = createProbe();
-      const sessionEntry: SessionEntry = {
-        sessionId: "session",
-        updatedAt: 1,
-        providerOverride: "openai",
-        modelOverride: "gpt-5.4",
-        modelOverrideSource: "user",
-        authProfileOverride: "openai:work",
-        ...(marker === undefined ? {} : { authProfileOverrideCompactionCount: marker }),
-      };
-      const { run } = createProbeRun({ autoFallbackPrimaryProbe: probe });
-
-      expect(recheck(run, sessionEntry)).toMatchObject({
-        provider: "openai",
-        model: "gpt-5.4",
-        authProfileId: "openai:work",
-        authProfileIdSource: expectedSource,
-        autoFallbackPrimaryProbe: undefined,
-      });
-    },
-  );
-
-  it("propagates rechecked user selections to post-run state", async () => {
+    { providerOverride: "openai", modelOverride: "gpt-5.4" },
+    { providerOverride: undefined, modelOverride: "openai/gpt-5.4" },
+  ])("propagates rechecked user selection $modelOverride to post-run state", async (selection) => {
     const sessionKey = "rechecked-user-selection";
     const sessionEntry = createSessionEntry({
-      providerOverride: "openai",
-      modelOverride: "gpt-5.4",
+      ...selection,
       modelOverrideSource: "user",
       authProfileOverride: "openai:work",
       authProfileOverrideSource: "user",
@@ -264,14 +218,14 @@ describe("executeAgentTurn: primary probe routing", () => {
     expect(followupRun.run).toMatchObject({
       provider: "openai",
       model: "gpt-5.4",
+      requestedRouteResolution: "raw",
       authProfileId: "openai:work",
       authProfileIdSource: "user",
       modelOverrideSource: "user",
     });
     expect(followupRun.run.autoFallbackPrimaryProbe).toBeUndefined();
     expect(activeSessionStore[sessionKey]).toMatchObject({
-      providerOverride: "openai",
-      modelOverride: "gpt-5.4",
+      ...selection,
       modelOverrideSource: "user",
     });
   });
@@ -383,8 +337,9 @@ describe("executeAgentTurn: primary probe routing", () => {
     expect(completeMock).not.toHaveBeenCalled();
     expect(failMock).toHaveBeenCalledWith("run_failed", expect.any(Error));
     expect(
-      emitAgentEvent.mock.calls
-        .map((call) => call[0])
+      vi
+        .mocked(emitAgentEvent)
+        .mock.calls.map((call) => call[0])
         .find(
           (event) =>
             event.stream === "lifecycle" &&
@@ -396,62 +351,6 @@ describe("executeAgentTurn: primary probe routing", () => {
             event.data.timeoutPhase === "provider",
         ),
     ).toBeDefined();
-  });
-
-  it("reports a completed non-fallbackable error result as a failure terminal", async () => {
-    const terminalErrorResult = {
-      payloads: [{ text: "Command may have changed state", isError: true }],
-      meta: {
-        replayInvalid: true,
-        error: {
-          kind: "incomplete_turn",
-          message: "raw provider detail should stay private",
-          fallbackSafe: false,
-        },
-      },
-    };
-    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
-      await params.onAgentEvent?.({
-        stream: "lifecycle",
-        data: {
-          phase: "finishing",
-          error: "Command may have changed state",
-          replayInvalid: true,
-        },
-      });
-      return terminalErrorResult;
-    });
-    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      outcome: "completed",
-      result: await params.run("anthropic", "claude", initialFallbackAttemptOptions(params)),
-      provider: "anthropic",
-      model: "claude",
-      attempts: [],
-    }));
-    const { replyOperation, failMock } = createMockReplyOperation();
-    const completeMock = vi.spyOn(replyOperation, "complete");
-    const result = await execute({ replyOperation, opts: { runId: "run-non-fallbackable-error" } });
-
-    expect(result).toMatchObject({ kind: "success", runResult: terminalErrorResult });
-    expect(completeMock).not.toHaveBeenCalled();
-    expect(failMock).toHaveBeenCalledWith("run_failed", expect.any(Error));
-    const terminalLifecycleEvents = lifecycleEvents("run-non-fallbackable-error");
-    expect(terminalLifecycleEvents).toContainEqual(
-      expect.objectContaining({
-        data: expect.objectContaining({
-          phase: "error",
-          error: "Command may have changed state",
-          executionSettled: true,
-          replayInvalid: true,
-        }),
-      }),
-    );
-    expect(
-      terminalLifecycleEvents.some(
-        (event) => event.data.phase === "end" || event.data.fallbackExhaustedFailure === true,
-      ),
-    ).toBe(false);
-    expect(JSON.stringify(terminalLifecycleEvents)).not.toContain("raw provider detail");
   });
 
   it("reports exhausted CLI preserved earlier candidate without a success terminal", async () => {

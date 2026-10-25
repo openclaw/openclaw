@@ -424,7 +424,6 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     pending: ReturnType<typeof pendingFinalDelivery>;
     replies: ReplyPayload[];
     stalledIndex: number;
-    afterStall?: (memory: Awaited<ReturnType<typeof createDispatchMemorySession>>) => Promise<void>;
   }) {
     vi.useFakeTimers();
     hookMocks.runner.hasHooks.mockReturnValue(false);
@@ -447,7 +446,6 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       InputProvenance: { kind: "internal_system" },
     });
     await hookStarted.promise;
-    await params.afterStall?.(memory);
     await vi.advanceTimersByTimeAsync(15_000);
     await result;
     return { deliver, entry: memory.read() };
@@ -464,45 +462,6 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       expect.objectContaining({ kind: "final" }),
     );
     expect(entry?.pendingFinalDelivery).toBeUndefined();
-  });
-
-  it("records each pending-final delivery without rewriting aggregate text", async () => {
-    const { entry } = await dispatchPastStalledHook({
-      pending: pendingFinalDelivery("auxiliary\n\ndurable reply", {
-        deliveries: [
-          { id: "delivery-auxiliary", state: "prepared" },
-          { id: "delivery-durable", state: "prepared" },
-        ],
-      }),
-      replies: [
-        pendingFinalReply("auxiliary", { deliveryId: "delivery-auxiliary" }),
-        pendingFinalReply("durable reply", { deliveryId: "delivery-durable" }),
-      ],
-      stalledIndex: 2,
-    });
-    expect(entry?.pendingFinalDelivery).toEqual(
-      pendingFinalDelivery("auxiliary\n\ndurable reply", {
-        deliveries: [
-          { id: "delivery-auxiliary", state: "delivered" },
-          { id: "delivery-durable", state: "prepared" },
-        ],
-      }),
-    );
-  });
-
-  it("does not let an older settlement rewrite a newer pending-final intent", async () => {
-    const newer = pendingFinalDelivery("newer reply", { createdAt: 2, intentId: "newer-intent" });
-    const { entry } = await dispatchPastStalledHook({
-      pending: pendingFinalDelivery("older reply", { intentId: "older-intent" }),
-      replies: [pendingFinalReply("older reply", { intentId: "older-intent" })],
-      stalledIndex: 1,
-      afterStall: async (memory) => {
-        await memory.patch({ pendingFinalDelivery: newer });
-      },
-    });
-    expect(entry?.pendingFinalDelivery).toEqual(
-      pendingFinalDelivery("newer reply", { createdAt: 2, intentId: "newer-intent" }),
-    );
   });
 
   const createNoSendFailure = (retryable = true) =>

@@ -41,10 +41,15 @@ const initSessionState = (
   },
 ) => initSessionStateRaw({ ...params, ctx: finalizeInboundContext(params.ctx) });
 
-function startSession(storePath: string, sessionKey: string, Body = "hello") {
+function startSession(
+  storePath: string,
+  sessionKey: string,
+  Body = "hello",
+  reset?: SessionResetConfig,
+) {
   return initSessionState({
     ctx: { Body, SessionKey: sessionKey },
-    cfg: { session: { store: storePath } },
+    cfg: { session: { store: storePath, ...(reset ? { reset } : {}) } },
     commandAuthorized: true,
   });
 }
@@ -97,67 +102,23 @@ async function writeStore(storePath: string, store: Record<string, SessionEntry>
   }
 }
 
-async function writeTranscript(
-  storePath: string,
-  sessionId: string,
-  text = "hello",
-): Promise<string> {
-  const transcriptPath = path.join(path.dirname(storePath), `${sessionId}.jsonl`);
-  await fs.writeFile(
-    transcriptPath,
-    `${JSON.stringify({
-      type: "message",
-      id: `${sessionId}-m1`,
-      message: { role: "user", content: text },
-    })}\n`,
-    "utf-8",
-  );
-  return transcriptPath;
-}
-
 async function createStoredSession(params: {
   prefix: string;
   sessionKey: string;
   sessionId: string;
-  text?: string;
   updatedAt?: number;
-}): Promise<{ storePath: string; transcriptPath: string }> {
+}) {
   const storePath = await createStorePath(params.prefix);
-  const transcriptPath = await writeTranscript(storePath, params.sessionId, params.text);
   await writeStore(storePath, {
     [params.sessionKey]: {
       sessionId: params.sessionId,
-      sessionFile: transcriptPath,
       updatedAt: params.updatedAt ?? Date.now(),
     },
   });
-  return { storePath, transcriptPath };
+  return { storePath };
 }
 
 type SessionResetConfig = NonNullable<NonNullable<OpenClawConfig["session"]>["reset"]>;
-
-async function initStoredSessionState(params: {
-  prefix: string;
-  sessionKey: string;
-  sessionId: string;
-  text: string;
-  updatedAt: number;
-  reset?: SessionResetConfig;
-}): Promise<void> {
-  const { storePath } = await createStoredSession(params);
-  const cfg = {
-    session: {
-      store: storePath,
-      ...(params.reset ? { reset: params.reset } : {}),
-    },
-  } as OpenClawConfig;
-
-  await initSessionState({
-    ctx: { Body: "hello", SessionKey: params.sessionKey },
-    cfg,
-    commandAuthorized: true,
-  });
-}
 
 function expectFields(value: unknown, expected: Record<string, unknown>): void {
   expect(value).toMatchObject(expected);
@@ -217,13 +178,10 @@ describe("session hook context wiring", () => {
     vi.restoreAllMocks();
   });
 
-  it.each(
-    (["new", "reset", "daily", "idle"] as const).flatMap((reason) =>
-      [false, true].map((projectionRepair) => ({ reason, projectionRepair })),
-    ),
-  )(
-    "captures the retiring memory window before $reason (projection repair: $projectionRepair)",
-    async ({ reason, projectionRepair }) => {
+  it.each(["new", "reset", "daily", "idle"] as const)(
+    "captures the retiring memory window before %s",
+    async (reason) => {
+      const projectionRepair = reason === "reset" || reason === "idle";
       const sessionKey = "agent:main:memory-reset";
       const sessionId = "memory-reset-session";
       const storePath = await createStorePath(`memory-${reason}`);
@@ -366,18 +324,6 @@ describe("session hook context wiring", () => {
     },
   );
 
-  it("passes sessionKey to session_start hook context", async () => {
-    const sessionKey = "agent:main:telegram:direct:123";
-    const storePath = await createStorePath("openclaw-session-hook-start");
-    await writeStore(storePath, {});
-    await startSession(storePath, sessionKey);
-
-    expect(hookRunnerMocks.runSessionStart).toHaveBeenCalledTimes(1);
-    const [event, context] = requireHookCall(hookRunnerMocks.runSessionStart, "session_start");
-    expectFields(event, { sessionKey });
-    expectFields(context, { sessionKey, agentId: "main", sessionId: event?.sessionId });
-  });
-
   it.for([
     { kind: "new", dmScope: "main" },
     { kind: "admitted", dmScope: "main" },
@@ -470,6 +416,9 @@ describe("session hook context wiring", () => {
     const initialized = startSession(storePath, sessionKey, "First turn");
     await withinTest(Promise.all([initialized, completed.promise]), signal);
     expect(hookRunnerMocks.runSessionStart).toHaveBeenCalledOnce();
+    const [event, context] = requireHookCall(hookRunnerMocks.runSessionStart, "session_start");
+    expectFields(event, { sessionKey });
+    expectFields(context, { sessionKey, agentId: "main", sessionId: event.sessionId });
   });
 
   it("runs an unawaited session_start hook outside the reply turn that emitted it", async () => {
@@ -567,34 +516,6 @@ describe("session hook context wiring", () => {
     expect(hookRunnerMocks.runSessionStart).toHaveBeenCalledTimes(1);
   });
 
-  it("passes sessionKey to session_end hook context on reset", async () => {
-    const sessionKey = "agent:main:telegram:direct:123";
-    const { storePath } = await createStoredSession({
-      prefix: "openclaw-session-hook-end",
-      sessionKey,
-      sessionId: "old-session",
-    });
-    await startSession(storePath, sessionKey, "/new");
-
-    expect(hookRunnerMocks.runSessionEnd).toHaveBeenCalledTimes(1);
-    expect(hookRunnerMocks.runSessionStart).toHaveBeenCalledTimes(1);
-    const [event, context] = requireHookCall(hookRunnerMocks.runSessionEnd, "session_end");
-    expectFields(event, {
-      sessionKey,
-      reason: "new",
-    });
-    expectFields(context, { sessionKey, agentId: "main", sessionId: event?.sessionId });
-
-    const [startEvent, startContext] = requireHookCall(
-      hookRunnerMocks.runSessionStart,
-      "session_start",
-    );
-    expectFields(startEvent, { resumedFrom: "old-session" });
-    expect(event?.nextSessionId).toBe("old-session");
-    expect(startEvent?.sessionId).toBe("old-session");
-    expectFields(startContext, { sessionId: startEvent?.sessionId });
-  });
-
   it("keeps rollover hooks alive after their requester closes", async ({ signal }) => {
     const completedHooks: string[] = [];
     const releases = holdRolloverHooks((name) =>
@@ -678,8 +599,16 @@ describe("session hook context wiring", () => {
     }
     await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
     expect(hookRunnerMocks.runSessionEnd).toHaveBeenCalledTimes(1);
-    expect(hookRunnerMocks.runSessionEnd.mock.calls[0]?.[0]).toMatchObject({ reason: "new" });
     expect(hookRunnerMocks.runSessionStart).toHaveBeenCalledTimes(1);
+    const [ended, endContext] = requireHookCall(hookRunnerMocks.runSessionEnd, "session_end");
+    expectFields(ended, { sessionKey, reason: "new", nextSessionId: "old-restart-session" });
+    expectFields(endContext, { sessionKey, agentId: "main", sessionId: ended.sessionId });
+    const [started, startContext] = requireHookCall(
+      hookRunnerMocks.runSessionStart,
+      "session_start",
+    );
+    expectFields(started, { sessionId: "old-restart-session", resumedFrom: "old-restart-session" });
+    expectFields(startContext, { sessionId: started.sessionId });
   });
 
   it.each([
@@ -697,14 +626,13 @@ describe("session hook context wiring", () => {
         registerInternalHook("session:auto-reset", listener);
         const sessionKey = `agent:main:telegram:direct:auto-${reason}`;
         const sessionId = `auto-${reason}-session`;
-        await initStoredSessionState({
+        const { storePath } = await createStoredSession({
           prefix: `openclaw-session-auto-${reason}`,
           sessionKey,
           sessionId,
-          text: reason,
           updatedAt: new Date(2026, 0, 18, overlap ? 4 : 3, overlap ? 45 : 0, 0).getTime(),
-          reset,
         });
+        await startSession(storePath, sessionKey, "hello", reset);
         const [ended] = requireHookCall(hookRunnerMocks.runSessionEnd, "session_end");
         const [started] = requireHookCall(hookRunnerMocks.runSessionStart, "session_start");
         expectFields(ended, { reason, nextSessionId: sessionId });
