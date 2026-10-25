@@ -8,6 +8,7 @@ import type { GatewayService } from "../../daemon/service.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
 import * as commandExec from "../../process/exec.js";
+import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import { waitForSignalExitBarriers } from "../signal-exit-barrier.js";
 import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
@@ -72,14 +73,7 @@ it.each([
   ({ hresult, detail, denied }) =>
     withServiceHome(async (home) => {
       mockProcessPlatform("win32");
-      const successfulExit = {
-        code: 0,
-        stdout: "",
-        stderr: "",
-        signal: null,
-        killed: false,
-        termination: "exit" as const,
-      };
+      const successfulExit = createCommandResult();
       const task = vi
         .spyOn(commandExec, "runCommandWithTimeout")
         .mockResolvedValueOnce({
