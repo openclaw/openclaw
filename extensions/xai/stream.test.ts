@@ -1,3 +1,4 @@
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import {
   streamSimple,
   type Model,
@@ -8,7 +9,7 @@ import { describe, expect, it } from "vitest";
 import { XAI_BASE_URL } from "./model-definitions.js";
 import { resolveFastModeSupport } from "./provider-policy-api.js";
 import { applyXaiRuntimeModelCompat } from "./runtime-model-compat.js";
-import { wrapXaiProviderStream } from "./stream.js";
+import { wrapXaiProviderStream, wrapXaiSimpleCompletionStream } from "./stream.js";
 import { captureXaiRequest, xaiModel } from "./test-helpers.js";
 
 function captureRequest(
@@ -131,7 +132,7 @@ describe("xai stream wrappers", () => {
     expect(capturedHeaders).toEqual({
       "X-Existing": "kept",
       "x-delete": null,
-      "x-grok-client-version": "2026.7.2",
+      "x-grok-client-version": "1.0.13",
       "x-grok-model-override": id,
       "X-XAI-Token-Auth": "xai-grok-cli",
     });
@@ -142,6 +143,54 @@ describe("xai stream wrappers", () => {
       xaiModel({ id: "grok-4.5", baseUrl: "https://cli-chat-proxy.grok.com.example/v1" }),
       {},
       { "X-Existing": "kept" },
+    );
+
+    expect(capturedHeaders).toEqual({ "X-Existing": "kept" });
+  });
+
+  it("applies the Grok OAuth proxy contract to simple completions", () => {
+    let capturedHeaders: ModelRequestHeaders | undefined;
+    let capturedPayload: Record<string, unknown> | undefined;
+    const baseStreamFn: StreamFn = (model, _context, options) => {
+      capturedHeaders = options?.headers;
+      const payload: Record<string, unknown> = { reasoning: { effort: "high" }, include: [] };
+      options?.onPayload?.(payload, model);
+      capturedPayload = payload;
+      return {} as ReturnType<StreamFn>;
+    };
+    const wrapped = wrapXaiSimpleCompletionStream({ streamFn: baseStreamFn } as never);
+
+    void wrapped?.(
+      xaiModel({
+        id: "grok-4.7",
+        reasoning: false,
+        baseUrl: "https://cli-chat-proxy.grok.com/v1",
+      }),
+      { messages: [] },
+      { headers: { "X-Existing": "kept" } },
+    );
+
+    expect(capturedHeaders).toEqual({
+      "X-Existing": "kept",
+      "x-grok-client-version": "1.0.13",
+      "x-grok-model-override": "grok-4.7",
+      "X-XAI-Token-Auth": "xai-grok-cli",
+    });
+    expect(capturedPayload).not.toHaveProperty("reasoning");
+  });
+
+  it("leaves simple completions to the public xAI endpoint unchanged", () => {
+    let capturedHeaders: ModelRequestHeaders | undefined;
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      capturedHeaders = options?.headers;
+      return {} as ReturnType<StreamFn>;
+    };
+    const wrapped = wrapXaiSimpleCompletionStream({ streamFn: baseStreamFn } as never);
+
+    void wrapped?.(
+      xaiModel({ id: "grok-4.5", baseUrl: XAI_BASE_URL }),
+      { messages: [] },
+      { headers: { "X-Existing": "kept" } },
     );
 
     expect(capturedHeaders).toEqual({ "X-Existing": "kept" });
