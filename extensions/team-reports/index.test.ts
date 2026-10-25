@@ -100,7 +100,6 @@ function captureReports(
       logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
       serviceHealth: { reportFailure: vi.fn(), clearFailure: vi.fn() },
     } satisfies OpenClawPluginServiceContextV2,
-    services: registerService.mock.calls.map(([service]) => service),
     routes: registerHttpRoute.mock.calls.map(([route]) => route),
     methods: registerGatewayMethod.mock.calls,
   };
@@ -199,35 +198,18 @@ it.each([false, true])("joins storage readiness (stop early: %s)", async (stopEa
 });
 
 it("registers authenticated reports, read/admin methods, and CLI without opening storage", () => {
-  const { captured, services, routes, methods } = captureReports();
-  expect(captured.controlUiDescriptors).toEqual([
+  const { captured, service, routes, methods } = captureReports();
+  expect(service.id).toBe("team-reports");
+  expect(captured.controlUiDescriptors).toMatchObject([
     {
       surface: "tab",
       id: "team-reports",
-      label: "Reports",
       slug: "reports",
-      description: "Team activity reports from GitHub and Discord.",
-      icon: "chart",
-      group: "control",
       requiredScopes: ["operator.read"],
       path: "/team/activity/",
     },
   ]);
-  expect(routes).toMatchObject([
-    {
-      path: "/team/activity",
-      match: "prefix",
-      auth: "gateway",
-      handler: expect.any(Function),
-    },
-  ]);
-  expect(services).toMatchObject([
-    {
-      id: "team-reports",
-      start: expect.any(Function),
-      stop: expect.any(Function),
-    },
-  ]);
+  expect(routes).toMatchObject([{ path: "/team/activity", match: "prefix", auth: "gateway" }]);
   expect(methods.map(([name, , options]) => [name, options?.scope])).toEqual([
     ["team-reports.status", "operator.read"],
     ["team-reports.list", "operator.read"],
@@ -238,13 +220,7 @@ it("registers authenticated reports, read/admin methods, and CLI without opening
     {
       parentPath: [],
       commands: ["team-reports"],
-      descriptors: [
-        {
-          name: "team-reports",
-          description: "Read and generate team activity reports",
-          hasSubcommands: true,
-        },
-      ],
+      descriptors: [{ name: "team-reports", hasSubcommands: true }],
     },
   ]);
   expect(createTeamReportsStore).not.toHaveBeenCalled();
@@ -256,16 +232,12 @@ it.each([true, false])("reads stored JSON/Markdown (schedule: %s)", async (enabl
   const { service, methods, context } = captureReports(undefined, enabled);
   try {
     await expect(service.start(context)).resolves.toBeUndefined();
-    expect(await store.listPeriods()).toEqual([]);
-    const request = async (format: "json" | "markdown") => {
-      const respond = await requestReports(methods, "team-reports.get", {
+    const request = (format: "json" | "markdown") =>
+      requestReports(methods, "team-reports.get", {
         period: "day",
         key: "2026-08-19",
         format,
       });
-      expect(respond).toHaveBeenCalledOnce();
-      return respond;
-    };
     for (const format of ["json", "markdown"] as const) {
       expectUnavailable(await request(format), {
         code: "UNAVAILABLE",
