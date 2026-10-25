@@ -22,7 +22,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("./plugin-metadata-snapshot.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./plugin-metadata-snapshot.js")>()),
-  loadPluginMetadataSnapshot: (...args: unknown[]) => mocks.metadata(...args),
+  loadPluginMetadataSnapshot: mocks.metadata,
   resolvePluginMetadataSnapshot: (...args: unknown[]) => {
     if (mocks.currentMetadata !== undefined) {
       return mocks.currentMetadata;
@@ -37,8 +37,7 @@ vi.mock("./official-external-plugin-catalog.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./official-external-plugin-catalog.js")>();
   return {
     ...actual,
-    loadConfiguredHostedOfficialExternalPluginCatalogEntries: (...args: unknown[]) =>
-      mocks.officialCatalog(...args),
+    loadConfiguredHostedOfficialExternalPluginCatalogEntries: mocks.officialCatalog,
     resolveOfficialExternalPluginInstall: (
       ...args: Parameters<typeof actual.resolveOfficialExternalPluginInstall>
     ) => {
