@@ -16,17 +16,22 @@ const mocks = vi.hoisted(() => ({
 
 // mock-isolation: test real CLI parsing without update, repair, or wizard effects.
 vi.mock("./update-cli/update-command.js", () => ({ updateCommand: mocks.update }));
+// mock-isolation: CLI parsing must not execute finalization effects.
 vi.mock("./update-cli/update-command-finalize.js", () => ({
   updateFinalizeCommand: mocks.finalize,
 }));
+// mock-isolation: CLI parsing must not execute repair effects.
 vi.mock("./update-cli/update-repair-command.js", () => ({ updateRepairCommand: mocks.finalize }));
+// mock-isolation: CLI parsing must not remove installed runtime state.
 vi.mock("./update-cli/cleanup.js", () => ({ updateCleanupCommand: mocks.cleanup }));
+// mock-isolation: CLI parsing must not adopt or recover an installed runtime.
 vi.mock("./update-cli/update-command-immutable.js", () => ({
   updateAdoptImmutableCommand: mocks.adopt,
   updateRecoverImmutableCommand: mocks.recover,
 }));
 // mock-isolation: CLI parsing must not inspect installed runtime state.
 vi.mock("./update-cli/status.js", () => ({ updateStatusCommand: mocks.status }));
+// mock-isolation: CLI parsing must not enter the interactive update wizard.
 vi.mock("./update-cli/wizard.js", () => ({ updateWizardCommand: mocks.wizard }));
 vi.mock("../runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../runtime.js")>()),

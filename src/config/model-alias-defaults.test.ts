@@ -4,6 +4,7 @@ import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.te
 import { applyModelDefaults as applyModelDefaultsWithPolicy } from "./defaults.js";
 import type { ModelDefinitionConfig, ModelProviderConfig, OpenClawConfig } from "./types.js";
 
+// mock-isolation: model default tests must not load provider plugins or apply provider-owned policy.
 vi.mock("./provider-policy.js", () => ({
   applyProviderConfigDefaultsForConfig: (params: { config: OpenClawConfig }) => params.config,
   normalizeProviderConfigForConfigDefaults: (params: { providerConfig: ModelProviderConfig }) =>
