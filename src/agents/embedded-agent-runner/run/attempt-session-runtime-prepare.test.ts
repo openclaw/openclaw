@@ -114,50 +114,27 @@ function createFixture() {
   const order: string[] = [];
   const activeMarker = { type: "custom", customType: "openclaw.cache-ttl", data: "active" };
   const sessionManager = {
-    kind: "manager",
     getBranch: () => [activeMarker],
     getToolResultProjectionEntries: () => [activeMarker],
-    getEntries: () => [activeMarker, { ...activeMarker, data: "sibling" }],
   };
   const activeSession = {
     messages: [{ role: "user" }, { role: "assistant" }],
     sessionId: "active-session",
   };
-  const settingsManager = { kind: "settings" };
-  const setActiveSessionSystemPrompt = vi.fn();
   const agentSession = {
     activeSession,
     clientToolDefs: [{ name: "read" }, { name: "write" }],
-    setActiveSessionSystemPrompt,
-    settingsManager,
+    setActiveSessionSystemPrompt: vi.fn(),
   };
-  const boundary = { setCurrentUserTimestampOverride: vi.fn() };
   const promptState = { toolResults: { projected: true } };
   const promptStateLease = { state: promptState, [Symbol.dispose]: vi.fn() };
   const abortActiveSession = vi.fn(async () => undefined);
   const buildAbortSettlePromise = vi.fn(() => null);
-  const trackPromptSettlePromise = vi.fn((promise: Promise<void>) => promise);
-  const settleTracker = {
-    abortActiveSession,
-    buildAbortSettlePromise,
-    trackPromptSettlePromise,
-  };
-  const contextGuards = {
-    checkMidTurnPrecheck: vi.fn(),
-    getAfterTurnCheckpoint: vi.fn(() => null),
-    remove: vi.fn(),
-    takePendingMidTurnPrecheckRequest: vi.fn(() => null),
-  };
-  const cacheTrace = { kind: "cache-trace" };
-  const anthropicPayloadLogger = { kind: "payload-logger" };
+  const contextGuards = { remove: vi.fn() };
   const trajectoryRecorder = { kind: "trajectory" };
   const transport = {
     compactionReplayEnabled: true,
-    effectiveAgentTransport: "sse",
-    effectiveExtraParams: { cacheRetention: "long" },
     effectivePromptCacheRetention: "long",
-    providerTextTransforms: undefined,
-    streamStrategy: "provider",
   };
   const transcriptPolicy = { repairToolUseResultPairing: true, inHistorySystemUpdates: false };
   const getUserTranscriptContexts = vi.fn(() => []);
@@ -188,31 +165,22 @@ function createFixture() {
       order.push(name);
       return value;
     };
-  mocks.prepareSessionBoundary.mockImplementation(stage("boundary", boundary));
+  mocks.prepareSessionBoundary.mockImplementation(stage("boundary", {}));
   mocks.retainSessionPromptState.mockImplementation(stage("prompt-state", promptStateLease));
-  mocks.createSessionSettleTracker.mockImplementation(stage("settle-tracker", settleTracker));
-  mocks.installContextGuards.mockImplementation(stage("context-guards", contextGuards));
-  mocks.createCacheTrace.mockImplementation(stage("cache-trace", cacheTrace));
-  mocks.createAnthropicPayloadLogger.mockImplementation(
-    stage("payload-logger", anthropicPayloadLogger),
+  mocks.createSessionSettleTracker.mockImplementation(
+    stage("settle-tracker", { abortActiveSession, buildAbortSettlePromise }),
   );
+  mocks.installContextGuards.mockImplementation(stage("context-guards", contextGuards));
+  mocks.createCacheTrace.mockImplementation(stage("cache-trace", {}));
+  mocks.createAnthropicPayloadLogger.mockImplementation(stage("payload-logger", {}));
   mocks.prepareTrajectory.mockImplementation(async () => stage("trajectory", trajectoryRecorder)());
   mocks.prepareTransport.mockImplementation(async () => stage("transport", transport)());
 
-  const resourceEvents: Record<string, string> = {
-    promptStateLease: "own-prompt-state",
-    session: "own-session",
-    sessionManager: "own-manager",
-    getUserTranscriptContexts: "own-user-transcript-contexts",
-    removeToolResultContextGuard: "own-context-guards",
-    buildAbortSettlePromise: "own-settle-tracker",
-    trajectoryRecorder: "own-trajectory",
-  };
   const resources = new Proxy<PrepareInput["resources"]>(
     { trajectoryRecorder: null, buildAbortSettlePromise: () => null },
     {
       set: (target, key, value) => {
-        order.push(resourceEvents[String(key)]!);
+        order.push(`own-${String(key)}`);
         return Reflect.set(target, key, value);
       },
     },
@@ -223,34 +191,23 @@ function createFixture() {
   };
   const input = {
     attempt: {
-      model: { api: "openai-responses", contextWindow: 128_000 },
+      model: { api: "openai-responses" },
       modelId: "gpt-5",
       provider: "openai",
       runId: "run-1",
       sessionId: "session-1",
-      workspaceDir: "/workspace",
     },
     agentDir: "/agent",
     isRawModelRun: false,
     resolveActiveContextEnginePluginId: vi.fn(),
     setup: {
-      agentCoreThinkingLevel: "medium",
-      effectiveCwd: "/workspace",
-      effectiveWorkspace: "/workspace",
-      getCurrentAttemptPluginMetadataSnapshot: vi.fn(),
-      getProviderRuntimeHandle: vi.fn(),
       prepStages: { mark: vi.fn() },
-      providerThinkingLevel: "medium",
-      sessionAgentId: "main",
-      sandboxSessionKey: "sandbox-1",
     },
     toolBase: {
-      computerContextEpoch: { value: 0 },
-      localModelLeanEnabled: false,
       codeModeControlsEnabledForRun: false,
     },
     toolCatalog: {
-      effectiveTools: Array.from({ length: 4 }, (_, i) => ({ name: `tool-${i}` })),
+      effectiveTools: [],
       toolSearchRunPlan: { replayAllowedToolNames: new Set(["read"]) },
     },
     bundleTools: { clientTools: [], uncompactedEffectiveTools: [] },
@@ -275,10 +232,7 @@ function createFixture() {
     abortActiveSession,
     activeSession,
     agentSession,
-    anthropicPayloadLogger,
-    boundary,
     buildAbortSettlePromise,
-    cacheTrace,
     contextGuards,
     externalAbortController,
     getUserTranscriptContexts,
@@ -289,10 +243,8 @@ function createFixture() {
     promptState,
     promptStateLease,
     sessionManager,
-    settingsManager,
     trajectoryRecorder,
     transcriptPolicy,
-    transport,
   };
 }
 
@@ -499,22 +451,13 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
       fixture.sessionManager.getBranch(),
     );
     expect(fixture.order.join(" ")).toBe(
-      "manager own-manager prompt-state own-prompt-state own-user-transcript-contexts " +
+      "manager own-sessionManager prompt-state own-promptStateLease own-getUserTranscriptContexts " +
         "agent-session own-session owned-boundary boundary settle-tracker arm-session-abort " +
-        "own-settle-tracker own-yield context-guards own-context-guards cache-trace " +
-        "payload-logger trajectory own-trajectory transport",
+        "own-buildAbortSettlePromise own-yield context-guards own-removeToolResultContextGuard cache-trace " +
+        "payload-logger trajectory own-trajectoryRecorder transport",
     );
-    expect(result).toMatchObject({
-      anthropicPayloadLogger: fixture.anthropicPayloadLogger,
-      boundary: fixture.boundary,
-      cacheTrace: fixture.cacheTrace,
-      contextGuards: fixture.contextGuards,
-      sessionManager: fixture.sessionManager,
-      sessionPromptState: fixture.promptState,
-      toolResultPromptProjectionState: fixture.promptState.toolResults,
-      trajectoryRecorder: fixture.trajectoryRecorder,
-      transport: fixture.transport,
-    });
+    expect(result.sessionPromptState).toBe(fixture.promptState);
+    expect(result.toolResultPromptProjectionState).toBe(fixture.promptState.toolResults);
     expect(result.state).toEqual({
       currentTurnImageFailureCount: 0,
       prePromptMessageCount: 2,

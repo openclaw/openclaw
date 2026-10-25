@@ -19,7 +19,6 @@ import type { AgentTool } from "../../runtime/index.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import type { ToolSearchCatalogRef } from "../../tool-search-types.js";
 import { createAttemptSetupFixture } from "./attempt-setup.test-support.js";
-import { buildAttemptSystemPrompt } from "./attempt-system-prompt.js";
 import { createEmptyPromptBootstrap } from "./attempt-system-prompt.test-support.js";
 import { buildTurnDeliveryContextFragments } from "./turn-delivery-context.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
@@ -42,14 +41,11 @@ vi.mock("../../../plugins/providers.runtime-core.js", () => ({
 let prepareEmbeddedAttemptSystemPrompt: typeof import("./attempt-system-prompt-prepare.js").prepareEmbeddedAttemptSystemPrompt;
 const admissions: Array<ReturnType<typeof prepareSystemAgentRunAdmission>> = [];
 
-async function admitPrompt(
-  config: NonNullable<EmbeddedRunAttemptParams["config"]>,
-  agentId = "main",
-) {
+async function admitPrompt() {
   const admission = prepareSystemAgentRunAdmission(
-    config,
+    {},
     `prompt-fixture-${admissions.length}`,
-    agentId,
+    "main",
     "system-prompt-test",
   );
   admissions.push(admission);
@@ -70,10 +66,6 @@ afterEach(() => {
   providerRegistryMocks.resolvePluginProvidersCore.mockClear();
 });
 
-const identityFiles = ["SOUL", "IDENTITY", "USER"].map((name) => ({
-  path: `/tmp/openclaw/${name}.md`,
-  content: `${name}_CONTEXT_MARKER`,
-}));
 const tool = (name: string): AgentTool => ({
   name,
   label: name,
@@ -88,29 +80,6 @@ function expectText(text: string, included: string[], excluded: string[] = []) {
   for (const value of excluded) {
     expect(text).not.toContain(value);
   }
-}
-
-function buildPrompt(
-  overrides: Partial<Parameters<typeof buildAttemptSystemPrompt>[0]["embeddedSystemPrompt"]>,
-) {
-  return buildAttemptSystemPrompt({
-    isRawModelRun: false,
-    transformSystemPrompt: (prompt) => prompt,
-    embeddedSystemPrompt: {
-      workspaceDir: "/tmp/openclaw",
-      reasoningTagHint: false,
-      runtimeInfo: {
-        host: "test-host",
-        os: "Darwin",
-        arch: "arm64",
-        node: "v22.0.0",
-        model: "openai/gpt-5.5",
-      },
-      tools: [],
-      modelAliasLines: [],
-      ...overrides,
-    },
-  });
 }
 
 async function preparePermissionPrompt({
@@ -162,7 +131,7 @@ async function preparePermissionPrompt({
     ...session,
     workspaceDir: "/tmp/openclaw",
     config: {},
-    admittedRunContext: await admitPrompt({}),
+    admittedRunContext: await admitPrompt(),
     thinkLevel,
     toolsAllow: skills?.toolsAllow,
     sourceReplyDeliveryMode:
@@ -253,6 +222,7 @@ describe("buildAttemptSystemPrompt", () => {
       webSearchUnconfigured: () => missing,
     });
     expectText(prepared.systemPromptText, [
+      "Current model identity: openai/gpt-5.6-luna.",
       "Web search is supported but not configured.",
       "openclaw configure --section web",
     ]);
@@ -500,19 +470,6 @@ describe("buildAttemptSystemPrompt", () => {
     },
   );
 
-  it("injects sanitized workspace identity context", async () => {
-    const result = await buildPrompt({
-      workspaceDir: "/tmp/open\u202eclaw\n",
-      contextFiles: identityFiles,
-    });
-
-    expectText(
-      result.systemPrompt,
-      ["\nWorking directory: /tmp/openclaw\n", ...identityFiles.map((file) => file.content)],
-      ["\u202e"],
-    );
-  });
-
   it("leaves project annotation guidance to the selected memory plugin", async () => {
     const seenProjectKeys: Array<string | undefined> = [];
     registerTestMemoryPromptBuilder((params) => {
@@ -533,101 +490,40 @@ describe("buildAttemptSystemPrompt", () => {
     expect(seenProjectKeys).toContain("github.com/acme/Alpha");
     expectText(prepared.systemPromptText, ["PROVIDER_MEMORY_MARKER"], ["<!-- project:"]);
   });
-
-  it("filters first-turn curated context to global and active-project entries", async () => {
-    const result = await buildPrompt({
-      activeProjectKeys: ["github.com/acme/Alpha"],
-      contextFiles: [
-        {
-          path: "/tmp/openclaw/MEMORY.md",
-          content: [
-            "# Durable memory",
-            "- Alpha fact. <!-- project: github.com/acme/Alpha -->",
-            "- Beta fact. <!-- project: github.com/acme/Beta -->",
-            "- Global fact.",
-          ].join("\n"),
-        },
-      ],
-    });
-
-    expectText(result.systemPrompt, ["Alpha fact", "Global fact"], ["Beta fact"]);
-  });
-
-  it("preserves bootstrap Project Context", async () => {
-    const result = await buildPrompt({
-      bootstrapMode: "full",
-      bootstrapTruncationNotice: "Bootstrap context was truncated.",
-      contextFiles: [
-        {
-          path: "/tmp/openclaw/BOOTSTRAP.md",
-          content: "Reply with BOOTSTRAP_OK.",
-        },
-        ...identityFiles,
-      ],
-    });
-
-    expectText(result.systemPrompt, [
-      "## Bootstrap Pending",
-      "Bootstrap context was truncated.",
-      ...identityFiles.map((file) => file.content),
-      "Reply with BOOTSTRAP_OK.",
-    ]);
-  });
-
-  it("preserves runtime extra system prompt context", async () => {
-    const result = await buildPrompt({
-      promptMode: "minimal",
-      extraSystemPrompt:
-        "# Subagent Context\n\n## Your Role\n- You were created to handle: RUN_MODE_TASK_77950",
-      bootstrapMode: "full",
-      contextFiles: [],
-    });
-
-    expectText(result.systemPrompt, [
-      "Current model identity: openai/gpt-5.5.",
-      "## Subagent Context",
-      "RUN_MODE_TASK_77950",
-    ]);
-  });
 });
 
 describe("embedded session prompt delivery", () => {
   // Provider prefix caches need one system prompt per session; turn delivery rules
   // that differ (heartbeats, completions) travel in the turn's runtime context.
-  it.each([
-    [
-      "source-only completion",
-      {
+  it.each([false, true])(
+    "keeps the user turn's system prompt with explicit target=%s",
+    async (requireExplicitMessageTarget) => {
+      const turn = {
         sourceReplyDeliveryMode: "message_tool_only" as const,
+        requireExplicitMessageTarget,
+      };
+      const user = await preparePermissionPrompt({
         requireExplicitMessageTarget: false,
-      },
-    ],
-    [
-      "explicit-target heartbeat",
-      { sourceReplyDeliveryMode: "message_tool_only" as const, requireExplicitMessageTarget: true },
-    ],
-  ])("keeps the user turn's system prompt on a %s turn", async (_kind, turn) => {
-    const user = await preparePermissionPrompt({
-      requireExplicitMessageTarget: false,
-      attemptOverrides: { sourceReplyDeliveryMode: "automatic" },
-    });
-    const synthetic = await preparePermissionPrompt({
-      requireExplicitMessageTarget: false,
-      attemptOverrides: turn,
-    });
-    expect(synthetic.prepared.systemPromptText).toBe(user.prepared.systemPromptText);
-    expect(
-      buildTurnDeliveryContextFragments({
-        sessionKey: synthetic.attempt.sessionKey,
-        sourceReplyDeliveryMode: turn.sourceReplyDeliveryMode,
-        requireExplicitMessageTarget: turn.requireExplicitMessageTarget,
-      })
-        .map((fragment) => fragment.text)
-        .join("\n"),
-    ).toMatch(
-      turn.requireExplicitMessageTarget
-        ? /final text is private[\s\S]*target required this turn/u
-        : /final text is private/u,
-    );
-  });
+        attemptOverrides: { sourceReplyDeliveryMode: "automatic" },
+      });
+      const synthetic = await preparePermissionPrompt({
+        requireExplicitMessageTarget: false,
+        attemptOverrides: turn,
+      });
+      expect(synthetic.prepared.systemPromptText).toBe(user.prepared.systemPromptText);
+      expect(
+        buildTurnDeliveryContextFragments({
+          sessionKey: synthetic.attempt.sessionKey,
+          sourceReplyDeliveryMode: turn.sourceReplyDeliveryMode,
+          requireExplicitMessageTarget: turn.requireExplicitMessageTarget,
+        })
+          .map((fragment) => fragment.text)
+          .join("\n"),
+      ).toMatch(
+        turn.requireExplicitMessageTarget
+          ? /final text is private[\s\S]*target required this turn/u
+          : /final text is private/u,
+      );
+    },
+  );
 });

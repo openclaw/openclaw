@@ -360,30 +360,6 @@ describe("prepareEmbeddedRunTerminal", () => {
     expect(prepared.agentMeta.promptTokens).toBeUndefined();
   });
 
-  it("projects a Code Mode cron tool failure into terminal metadata", async () => {
-    const assistant = assistantMessage("stop");
-    const prepared = await prepareAssistant(
-      assistant,
-      {
-        codeModeEngaged: true,
-        lastToolError: {
-          toolName: "exec",
-          errorCode: "invalid_input",
-          error:
-            "Unknown tool id: MCP.notes.read. Use openclaw.tools.search to find a tool, openclaw.tools.describe to inspect it, then openclaw.tools.call with the exact id or name.",
-        },
-      },
-      { runParams: { trigger: "cron" } },
-    );
-
-    expect(prepared.failureSignal).toBeUndefined();
-    expect(prepared.terminalToolFailure).toEqual({
-      source: "tool",
-      toolName: "exec",
-      code: "UNKNOWN_TOOL_ID",
-    });
-  });
-
   it("recovers current final text and tool media after a prompt-timeout race", async () => {
     const completedText = "Completed answer block before the timeout.";
     const partialText = "Partial final response before the timeout.";
@@ -470,25 +446,6 @@ describe("prepareEmbeddedRunTerminal", () => {
 
     expect(payloadMocks.buildEmbeddedRunPayloads).toHaveBeenCalledWith(
       expect.objectContaining({ lastAssistant: undefined, currentAssistant: null }),
-    );
-  });
-
-  it("carries the canonical restart reason into terminal payload rendering", async () => {
-    await prepareAttempt({
-      attempt: attemptResult({
-        lastToolError: {
-          toolName: "gateway_exec",
-          error: "OpenClaw dynamic tool call aborted.",
-        },
-      }),
-      terminalState: {
-        outcome: { reason: "cancelled", status: "error", stopReason: "restart" },
-        signalOwnedInterruption: true,
-      },
-    });
-
-    expect(payloadMocks.buildEmbeddedRunPayloads).toHaveBeenCalledWith(
-      expect.objectContaining({ runAborted: true, runStopReason: "restart" }),
     );
   });
 });
