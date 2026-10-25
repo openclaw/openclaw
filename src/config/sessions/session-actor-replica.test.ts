@@ -315,8 +315,18 @@ it("retains the first creation after restart before any replica reader and appli
     expect(created.ok).toBe(true);
     const durableTarget = sessionActorFileTarget(database, sessionKey);
     expect(readSessionActorEntryFacts(durableTarget)?.entry).toMatchObject({ label: "created" });
-    await patchSessionEntryCore(createdScope, () => ({ updatedAt: 2, label: "updated" }));
-    expect(readSessionActorEntryFacts(durableTarget)?.entry).toMatchObject({ label: "updated" });
+    const patched = await patchSessionEntryCore(createdScope, () => ({
+      updatedAt: 2,
+      label: "updated",
+      skillsSnapshot: { prompt: "Committed instructions", skills: [] },
+    }));
+    assert(patched?.skillsSnapshot);
+    patched.label = "Caller edit";
+    patched.skillsSnapshot.prompt = "Caller instructions";
+    expect(readSessionActorEntryFacts(durableTarget)?.entry).toMatchObject({
+      label: "updated",
+      skillsSnapshot: { prompt: "Committed instructions" },
+    });
     runOpenClawAgentWriteTransaction((current) => deleteSessionEntryRows(current, sessionKey), {
       agentId: createdScope.agentId,
       path: database.path,

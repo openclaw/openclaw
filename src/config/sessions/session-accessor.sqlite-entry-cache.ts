@@ -6,7 +6,7 @@ import {
   runSqliteReadOperationSync,
 } from "../../infra/sqlite-schema-facts.js";
 import type { SessionRowFacts } from "../../sessions/session-row-changes.js";
-import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
+import { freezeTrustedJsonSnapshot } from "../../shared/immutable-data.js";
 import { findOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { readOpenClawAgentDatabase } from "../../state/openclaw-agent-db-readonly-open.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -256,7 +256,7 @@ export function readSessionEntryCache(
     // same-timestamp or owner-only edits; updated_at cannot validate a partial reload.
     const loaded = loadSessionEntrySnapshot(database, options.projection, prepared);
     for (const entry of loaded.entries.values()) {
-      freezeJsonSnapshot(entry);
+      freezeTrustedJsonSnapshot(entry);
     }
     const next = { ...loaded, validityToken };
     sessionEntryCaches.set(database.db, next);

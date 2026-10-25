@@ -4,7 +4,7 @@ import {
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
 import { readSqliteDatabaseWriteRevision } from "../../infra/sqlite-database-admission.js";
-import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
+import { freezeTrustedJsonSnapshot } from "../../shared/immutable-data.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type {
   SessionEntryCacheDatabase,
@@ -106,7 +106,7 @@ export function projectSessionEntryCacheMetadata(
       delete projected[field];
     }
   }
-  return freezeJsonSnapshot(projected);
+  return freezeTrustedJsonSnapshot(projected);
 }
 
 export function projectSessionEntryCacheUpdate(

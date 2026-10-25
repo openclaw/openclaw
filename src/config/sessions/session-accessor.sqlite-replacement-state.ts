@@ -1,6 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getAdmittedSqlSchemaFacts } from "../../infra/sqlite-schema-facts.js";
-import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
+import { freezeTrustedJsonSnapshot } from "../../shared/immutable-data.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { readSessionActivitySummary } from "./activity-summary.js";
@@ -99,18 +99,18 @@ export function prepareSessionEntryReplacementPublication(
     if (!committedEntry) {
       throw new Error(`Session publication lost its committed metadata: ${key}`);
     }
-    const entry = freezeJsonSnapshot(
+    const entry = freezeTrustedJsonSnapshot(
       attachSessionEntrySnapshots({ ...committedEntry }, {}, "list"),
     );
     current.set(key, entry);
     if (unavailableParticipantKeys.has(key)) {
       continue;
     }
-    fullEntries?.set(key, freezeJsonSnapshot(committedEntry));
+    fullEntries?.set(key, freezeTrustedJsonSnapshot(committedEntry));
     const projectedEntry = committedEntry;
     projection.set(
       key,
-      freezeJsonSnapshot({
+      freezeTrustedJsonSnapshot({
         membership: [
           key,
           isInternalSessionEffectsKey(key)

@@ -621,9 +621,7 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
       subagentRunInputs: input.subagentRunInputs,
       lastMessagePreview: input.lastMessagePreview,
       lastAssistantMessage: input.lastAssistantMessage,
-      childLinks: freezeTrustedJsonSnapshot<
-        Readonly<ReturnType<typeof projectSessionRowChildLinks>>
-      >(projectSessionRowChildLinks(input.childLinks)),
+      childLinks: projectSessionRowChildLinks(input.childLinks),
     }),
   });
 }
@@ -634,13 +632,13 @@ export function replaceSessionRowFacts(
   row?: Partial<GatewaySessionRow>,
   source?: Partial<ReturnType<typeof materializeSessionRow>["source"]>,
 ): ReturnType<typeof materializeSessionRow> {
-  const nextSource = source ? { ...materialized.source, ...source } : materialized.source;
-  freezeTrustedJsonSnapshot(nextSource.childLinks);
   return Object.freeze({
     row: row
-      ? freezeTrustedJsonSnapshot(omitUndefinedFields({ ...materialized.row, ...row }))
+      ? Object.freeze(
+          omitUndefinedFields({ ...materialized.row, ...freezeTrustedJsonSnapshot(row) }),
+        )
       : materialized.row,
-    source: Object.freeze(nextSource),
+    source: source ? Object.freeze({ ...materialized.source, ...source }) : materialized.source,
   });
 }
 
