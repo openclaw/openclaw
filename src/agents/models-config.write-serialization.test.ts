@@ -9,7 +9,6 @@ import {
   resolveModelCostConfig,
   resolveModelCostConfigFingerprint,
 } from "../utils/usage-format.js";
-import { resolveDefaultAgentDir } from "./agent-scope.js";
 import { configFor as modelConfig, modelDefinition } from "./model-auth.fixtures.test-support.js";
 import {
   CUSTOM_PROXY_MODELS_CONFIG,
@@ -242,9 +241,7 @@ it("refreshes prices only for the published agent", async ({ home }) => {
   expect(resolveModelCostConfigFingerprint(config, secondDir)).toBe(secondFingerprint);
 });
 
-it("writes privately into the configured default agent dir and repairs a cached file's mode", async ({
-  home,
-}) => {
+it("maintains private cached models in the configured default agent dir", async ({ home }) => {
   const contents = catalog({});
   planCatalog("fixture", contents);
   let modeAfterWrite: number | undefined;
@@ -286,6 +283,11 @@ it("writes privately into the configured default agent dir and repairs a cached 
   expect(writePrivateStoreTextWriteMock).toHaveBeenCalledOnce();
   expect(await fs.readFile(modelsPath, "utf8")).toBe(emptyModelsJson);
   await expectPrivate(modelsPath);
+  await fs.writeFile(modelsPath, '{"external":true}\n', "utf8");
+  const externalMtime = new Date(Date.now() + 2000);
+  await fs.utimes(modelsPath, externalMtime, externalMtime);
+  await ensureOpenClawModelsJson(cfg);
+  expect(await fs.readFile(modelsPath, "utf8")).toBe(emptyModelsJson);
 });
 
 it("writes plugin catalogs into SQLite, not files", async ({ agentDir }) => {
@@ -378,41 +380,24 @@ it.for(["noop", "write"] as const)(
   },
 );
 
-it("invalidates the ready cache after external writes", async ({ home: _home }) => {
-  await ensureOpenClawModelsJson(CUSTOM_PROXY_MODELS_CONFIG);
-  await ensureOpenClawModelsJson(CUSTOM_PROXY_MODELS_CONFIG);
-
-  const modelPath = path.join(resolveDefaultAgentDir({}), "models.json");
-  await fs.writeFile(modelPath, `${JSON.stringify({ external: true })}\n`, "utf8");
-  const externalMtime = new Date(Date.now() + 2000);
-  await fs.utimes(modelPath, externalMtime, externalMtime);
-  await ensureOpenClawModelsJson(CUSTOM_PROXY_MODELS_CONFIG);
-
-  expect(planOpenClawModelsJsonMock).toHaveBeenCalledTimes(2);
-});
-
 it("serializes concurrent models.json writes", async ({ home: _home }) => {
-  const configs = ["Proxy A", "Proxy B with longer name"].map((name) => {
-    const cfg = structuredClone(CUSTOM_PROXY_MODELS_CONFIG);
-    expectDefined(cfg.models?.providers?.["custom-proxy"]?.models[0], "custom-proxy model").name =
-      name;
-    return cfg;
-  });
+  const names = ["Proxy A", "Proxy B with longer name"];
+  const configs = names.map((name) =>
+    modelConfig("custom-proxy", "https://proxy.test/v1", {
+      models: [modelDefinition("model", { name })],
+    }),
+  );
 
   let inFlightWrites = 0;
   let maxInFlightWrites = 0;
   const entered = createDeferredCore();
   const release = createDeferredCore();
-  let modelsWriteCount = 0;
   writePrivateStoreTextWriteMock.mockImplementation(async (params: StoreWrite) => {
     const isModelsWrite = path.basename(params.filePath) === "models.json";
     if (isModelsWrite) {
-      modelsWriteCount += 1;
       inFlightWrites += 1;
       maxInFlightWrites = Math.max(inFlightWrites, maxInFlightWrites);
-      if (modelsWriteCount === 1) {
-        entered.resolve();
-      }
+      entered.resolve();
       await release.promise;
     }
     try {
@@ -431,10 +416,6 @@ it("serializes concurrent models.json writes", async ({ home: _home }) => {
   await writes;
 
   expect(maxInFlightWrites).toBe(1);
-  const parsed = await readGeneratedModelsJson<{
-    providers: { "custom-proxy"?: { models?: Array<{ name?: string }> } };
-  }>();
-  expect(["Proxy A", "Proxy B with longer name"]).toContain(
-    parsed.providers["custom-proxy"]?.models?.[0]?.name,
-  );
+  const parsed = await readGeneratedModelsJson<(typeof configs)[number]["models"]>();
+  expect(names).toContain(parsed.providers["custom-proxy"]?.models[0]?.name);
 }, 60_000);
