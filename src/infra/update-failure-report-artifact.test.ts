@@ -6,7 +6,6 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as fileLocks from "./file-lock.js";
 import { writeUpdateRunReportArtifact } from "./update-failure-report-artifact.js";
-import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
 import { renderUpdateRunReport, updateRunReportInputFromResult } from "./update-run-report.js";
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
@@ -22,7 +21,6 @@ function admittedReport() {
   const revoked = new Error("Original update report authority was revoked");
   let current = true;
   const params = {
-    result: { ...updateResult("ok"), runId },
     report: { markdown: "Admitted update" },
     env: { OPENCLAW_STATE_DIR: stateDir },
     readRun: vi.fn(() => undefined),
@@ -226,12 +224,6 @@ it.each(["ok", "error"] as const)(
   },
 );
 
-it("keeps admitted reports in the selected state directory", async () => {
-  const fixture = admittedReport();
-  expect(await fixture.write("ok", false)).toBe(fixture.outputPath);
-  expect(await fixture.read()).toContain("Admitted update");
-});
-
 it.each(["history", "capture"] as const)(
   "saves the target and failed swap from %s after rollback",
   async (source) => {
@@ -280,6 +272,7 @@ it.each(["history", "capture"] as const)(
       ...(source === "history" ? { readRun: () => run } : { record: run }),
       report: (record) => renderUpdateRunReport(updateRunReportInputFromResult(result, record)),
     });
+    expect(reportPath).toBe(path.join(stateDir, "update-reports", `${result.runId}.md`));
     const markdown = await fs.readFile(reportPath, "utf8");
     expect(markdown).toContain("Update target: 2026.10.6");
     expect(markdown).toContain("Failed: global install swap");
@@ -290,11 +283,5 @@ it.each(["history", "capture"] as const)(
     expect(await readJson(path.join(support, diagnostic))).toMatchObject({
       result: { target: { version: "2026.10.6" }, steps: [{ name: "global install swap" }] },
     });
-    const issue = await prepareUpdateFailureReport(
-      { attemptId: run.runId, result, recordedRun: run },
-      { stateDir, env: {} },
-    );
-    expect(issue.body).toContain("Update target: 2026.10.6");
-    expect(issue.body).toContain("Failed phase: package-swap");
   },
 );

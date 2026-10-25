@@ -124,6 +124,7 @@ export function spawnServiceChildRelay(params: {
   stdio: SpawnOptions["stdio"];
   env: NodeJS.ProcessEnv;
   detached: boolean;
+  nativeProcessOwner?: string;
   onSpawnCleanup?: (completion: Promise<void>) => void;
 }): {
   child: ChildProcess;
@@ -133,13 +134,19 @@ export function spawnServiceChildRelay(params: {
   const executable = resolveLaunchableNodePath();
   const child = withChildProcessOperation(
     "service.relay",
-    () =>
-      spawnProcess(executable, resolveRuntimeWorkerArgv(params.workerUrl, executable), {
+    () => {
+      const env = resolveRuntimeWorkerEnv(params.workerUrl, params.env);
+      // The admitted owner can select a native entry without the caller's image inventory.
+      if (params.nativeProcessOwner === params.workerUrl.href) {
+        delete env.BUN_BE_BUN;
+      }
+      return spawnProcess(executable, resolveRuntimeWorkerArgv(params.workerUrl, executable), {
         stdio: params.stdio,
         detached: params.detached,
         windowsHide: true,
-        env: resolveRuntimeWorkerEnv(params.workerUrl, params.env),
-      }),
+        env,
+      });
+    },
     "default",
   );
   const cleanup = createServiceChildCleanup();

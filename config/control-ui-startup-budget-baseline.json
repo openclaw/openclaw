@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 274132,
-  "reason": "Appearance Settings readiness improves 21.06% and script CPU falls 51.31% over 20 remote base/base/head triplets. Integrated builds measure 273922 B base and 274132 B head; accept the 210 B startup gzip increase for owner-backed deferred reads and parallel sidebar loading.",
+  "startupJsGzipBytes": 274148,
+  "reason": "Appearance Settings readiness improves 21.06% and script CPU falls 51.31% over 20 remote base/base/head triplets. After merging main 097f6a10a254, same-host builds measure 273752 B base and 274148 B head; accept the measured 396 B startup gzip increase for owner-backed deferred reads and parallel sidebar loading.",
   "updatedAt": "2026-10-25"
 }

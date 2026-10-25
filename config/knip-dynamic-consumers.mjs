@@ -371,5 +371,27 @@ export function compileDynamicConsumerEdges(source, filePath, scriptEntrypoints 
     );
   }
 
+  const poolLifecyclePath = "scripts/perf/pg-pool-lifecycle.mts";
+  const poolFixtureSpecifier = fs
+    .readFileSync(poolLifecyclePath, "utf8")
+    .match(
+      /\bbroker\.open(?:<[^>]+>)?\(\s*\{\s*moduleUrl:\s*new URL\(\s*["']([^"'\r\n]+)["']\s*,\s*self\s*\)/u,
+    )?.[1];
+  const creationFactory = fs
+    .readFileSync("src/infra/sqlite-store.worker.ts", "utf8")
+    .match(
+      /\bconst factoryName\s*=\s*request\.existingIdentity\s*\?\s*["'][^"'\r\n]+["']\s*:\s*["']([^"'\r\n]+)["']/u,
+    )?.[1];
+  if (poolFixtureSpecifier && creationFactory) {
+    imports.push(
+      namedImport(
+        [creationFactory],
+        path.resolve(path.dirname(poolLifecyclePath), poolFixtureSpecifier),
+        filePath,
+        "PgPool",
+      ),
+    );
+  }
+
   return `${source}\n${imports.join("\n")}`;
 }

@@ -114,6 +114,13 @@ Git commands are generated from configuration data without requiring retained
 function bodies. Qualify this child path on the exact signed artifact without
 adding JIT entitlements or substituting a host runtime.
 
+Portable workers delegate exec process ownership to their admitted host's native
+anchor. The same executable runs that declared entry outside generic Bun mode;
+macOS keeps process-group cleanup and Linux keeps native subreaper cleanup.
+macOS delegates only to bundles advertising the platform-aware native-owner
+capability; older bundles retain their existing startup envelope. Linux also
+accepts the earlier Linux-native-owner capability.
+
 ### Original TypeScript and compiler options
 
 `--compile-aot` compiles the completed JavaScript runtime build. `--aot-source` resolves
