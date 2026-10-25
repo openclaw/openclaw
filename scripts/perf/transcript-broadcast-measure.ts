@@ -1,3 +1,13 @@
+// Team-shaped stress: prepare team-shape-fixture.ts --sessions 10000 --runs 8000
+// --settled-runs, then run this script against the built Gateway with:
+// --state-dir <fixture> --scenario memory-soak --clients 65 --runs 4 --plugins 40
+// --stress-tools --row-mode sidebar --limit 200 --list-filter-churn
+// --list-interval-ms 10000 --poll-seed team-stress --duration-ms 600000
+// --soak-rounds 40 --warmup-ms 60000 --round-interval-ms 15000 --chunks 200
+// --chunk-interval-ms 50 --retained-profile-ms 0 --diagnostics.
+// Trace allocations in a separate pass with matching fixture treatment on both sides:
+// either fresh fixtures or consistently warmed post-timing state.
+// wholeSoakCpu includes idle gaps; listFilterCounts proves measured search coverage.
 // --stress-worktree-fanout instead uses prepared fixture worktrees and retains reconnect/filter churn.
 // Worker-churn load (isolated built Gateway; run baseline/candidate on fresh identical fixtures):
 // node --import ./scripts/tsx.mjs scripts/perf/team-shape-fixture.ts --state-dir .local/worker-base \
@@ -329,14 +339,8 @@ const gatewayPreload = values["gateway-preload"]
     }
   : undefined;
 const retentionScenario = scenario === "attempt-retention";
-if (
-  values["list-filter-churn"] &&
-  scenario !== "sessions.list" &&
-  !(scenario === "memory-soak" && values["mixed-rpc"])
-) {
-  throw new Error(
-    "--list-filter-churn requires --scenario sessions.list or memory-soak --mixed-rpc",
-  );
+if (values["list-filter-churn"] && scenario !== "sessions.list" && scenario !== "memory-soak") {
+  throw new Error("--list-filter-churn requires --scenario sessions.list or memory-soak");
 }
 const idleScenario = scenario === "session-idle-retention";
 const soakScenario = scenario === "memory-soak";
@@ -4976,6 +4980,7 @@ try {
     { excludeSystem: true, excludeCron: true },
   ];
   let listChurnSequence = 0;
+  const listFilterCounts = listFilterShapes.map(() => 0);
   const readStartup = async (
     client: ReturnType<typeof createGatewayWsClient>,
     target: StartupTarget,
@@ -5876,6 +5881,10 @@ try {
                           Object.keys(listFilter).length === 0))
                     ) {
                       throw new Error("concurrent sessions.list did not return the requested page");
+                    }
+                    if (values["list-filter-churn"] && search === undefined) {
+                      const filterIndex = listSequence % listFilterShapes.length;
+                      listFilterCounts[filterIndex] = listFilterCounts[filterIndex]! + 1;
                     }
                     if (search) {
                       worktreeToolSearches.set(search, (worktreeToolSearches.get(search) ?? 0) + 1);
@@ -6988,6 +6997,9 @@ try {
           wholeSoakAllocation,
           wholeSoakDiagnostics: wholeWorkloadDiagnostics,
           wholeSoakCpu,
+          ...(values["list-filter-churn"]
+            ? { listFilterCounts, listFilterShapes, listChurnPatches: listChurnSequence }
+            : {}),
           wholeSoakGc,
         }
       : {}),
