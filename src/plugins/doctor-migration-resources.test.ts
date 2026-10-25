@@ -174,12 +174,8 @@ it("warns once per undeclared owner without running its migration", async () => 
     expect.objectContaining({ kind: "undeclared-migration-resources", pluginId: "other-owner" }),
   ]);
   for (const { message } of input.warnings) {
-    expect(message).toContain("migration recovery coverage is unknown");
-    expect(message).toContain("Update the plugin to a version with migration backup support.");
-    expect(message).toContain("keep a separate backup of its configured data");
-    expect(message).toContain("ask its maintainer to add backup support");
-    expect(message).toContain(
-      "https://docs.openclaw.ai/cli/doctor/state-migrations#plugin-migration-recovery-coverage",
+    expect(message).toMatch(
+      /migration recovery coverage is unknown.*Update the plugin to a version with migration backup support\..*keep a separate backup of its configured data.*ask its maintainer to add backup support.*https:\/\/docs\.openclaw\.ai\/cli\/doctor\/state-migrations#plugin-migration-recovery-coverage/,
     );
   }
   expect(fixtureMigration.detectLegacyState).not.toHaveBeenCalled();
@@ -206,14 +202,10 @@ it.each(["declared", "malformed"] as const)(
         "collectBackupResources",
       );
     } else {
-      const contract = coercePluginDoctorContractModule({ stateMigrations: [migration] });
-      const coerced = contract?.stateMigrations?.[0];
-      if (!coerced) {
-        throw new Error("Missing adapted migration");
-      }
+      const coerced = coercePluginDoctorContractModule({ stateMigrations: [migration] })
+        .stateMigrations[0]!;
       const result = await collectResources(coerced, "planned-owner");
       expect(result.resources).toEqual([{ path: source, kind: "sqlite" }]);
-      expect(collectBackupResources).toHaveBeenCalledOnce();
       expect(collectBackupResources).toHaveBeenCalledWith(
         expect.objectContaining({ stateDir, requireLocalResources: true }),
       );

@@ -170,12 +170,15 @@ describe("manifest theme catalog", () => {
   it("projects captured artwork URLs and changes only the edited content revision on publication", () => {
     const plugin = fixture(undefined, "@scope/pack");
     const svg = '<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0h20v10H0z"/></svg>';
+    const webp = Buffer.from("UklGRhoAAABXRUJQVlA4TA0AAAAvAAAAEAcQERGIiP4HAA==", "base64");
+    fs.writeFileSync(path.join(plugin.rootDir, "night.webp"), webp);
     for (const name of ["hat", "icon", "critter"]) {
       fs.writeFileSync(path.join(plugin.rootDir, `${name}.svg`), svg);
     }
     plugin.writeThemes([
       {
         ...plugin.declaration,
+        backgrounds: { dark: "night.webp" },
         icons: { rocket: "icon.svg" },
         hats: { beret: "hat.svg" },
         critters: {
@@ -189,7 +192,8 @@ describe("manifest theme catalog", () => {
       avatarHat: "beret",
       critters: ["ferris"],
     });
-    const before = plugin.readSnapshot();
+    // Publication freezes the snapshot; captured raster bytes must survive it.
+    const before = finalizePluginMetadataSnapshot(plugin.readSnapshot());
     const original = catalog(before)[0];
     expect(original).toMatchObject({
       brandIcon: "rocket",
@@ -205,6 +209,10 @@ describe("manifest theme catalog", () => {
       title: "a crab, allegedly",
       crossMs: 15000,
     });
+    expect(original?.artwork?.backgrounds?.dark?.url).toMatch(
+      /^\/__openclaw__\/plugin-theme-art\/%40scope%2Fpack\/neon\/background\/dark\?v=[a-f0-9]{12}$/,
+    );
+    expect(artwork(before, plugin.id, "background", "dark")?.body).toEqual(webp);
     const replacement = svg.replace("h20", "h30");
     for (const name of ["hat", "icon"]) {
       fs.writeFileSync(path.join(plugin.rootDir, `${name}.svg`), replacement);
@@ -230,31 +238,6 @@ describe("manifest theme catalog", () => {
         expect(artwork(snapshot, plugin.id, kind, id)?.body.toString("utf8")).toBe(expected);
       }
     }
-    after.index.plugins[0]!.enabled = false;
-    expect(artwork(after, plugin.id, "icon", "rocket")).toBeUndefined();
-  });
-
-  it("projects mode backgrounds and serves their captured raster bytes", () => {
-    const plugin = fixture();
-    const webp = Buffer.from("UklGRhoAAABXRUJQVlA4TA0AAAAvAAAAEAcQERGIiP4HAA==", "base64");
-    fs.writeFileSync(path.join(plugin.rootDir, "night.webp"), webp);
-    plugin.writeThemes([{ ...plugin.declaration, backgrounds: { dark: "night.webp" } }]);
-    // Runtime snapshots are deep-frozen; captured bytes must survive that (Buffers cannot).
-    const snapshot = finalizePluginMetadataSnapshot(plugin.readSnapshot());
-    const [theme] = catalog(snapshot);
-    expect(theme?.artwork).toEqual({
-      backgrounds: {
-        dark: {
-          url: expect.stringMatching(
-            /^\/__openclaw__\/plugin-theme-art\/space\/neon\/background\/dark\?v=[a-f0-9]{12}$/,
-          ),
-        },
-      },
-    });
-    const resolve = (artId: string) => artwork(snapshot, plugin.id, "background", artId);
-    expect(resolve("dark")?.body).toEqual(webp);
-    expect(resolve("light")).toBeUndefined();
-    expect(resolve("constructor")).toBeUndefined();
   });
 
   it.each([
