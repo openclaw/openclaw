@@ -21,11 +21,11 @@ const writeText = vi.fn(async (_text: string) => undefined);
 
 let originalMutationObserver: typeof MutationObserver;
 let restoreDialogPolyfill: () => void;
-const restoreProperties: Array<() => void> = [];
+const cleanups: Array<() => void> = [];
 
 function stubProperty(target: object, key: PropertyKey, value: unknown) {
   const descriptor = Object.getOwnPropertyDescriptor(target, key);
-  restoreProperties.push(() =>
+  cleanups.push(() =>
     descriptor
       ? Object.defineProperty(target, key, descriptor)
       : Reflect.deleteProperty(target, key),
@@ -69,6 +69,7 @@ function interactiveOwner(content = table) {
   });
   owner.addEventListener("click", handleMarkdownTableInteraction);
   enhanceMarkdownTables(owner);
+  cleanups.push(() => releaseMarkdownTables(owner));
   deliverTableResize(viewport);
   return {
     owner,
@@ -112,12 +113,12 @@ describe("Markdown table interactions", () => {
 
   afterEach(() => {
     vi.useRealTimers();
-    resetThreadPresentation();
-    document.body.replaceChildren();
-    restoreProperties
+    cleanups
       .splice(0)
       .toReversed()
-      .forEach((restore) => restore());
+      .forEach((cleanup) => cleanup());
+    resetThreadPresentation();
+    document.body.replaceChildren();
     vi.unstubAllGlobals();
     restoreDialogPolyfill();
   });
@@ -157,37 +158,36 @@ describe("Markdown table interactions", () => {
     Object.defineProperty(otherViewport, "scrollWidth", { configurable: true, get: otherWidth });
     Object.defineProperty(viewport, "scrollWidth", { configurable: true, get: changedWidth });
 
-    try {
-      shell.querySelector("td")!.firstChild!.textContent = "Shorter";
-      await Promise.resolve();
-      await Promise.resolve();
-      expect(changedWidth).not.toHaveBeenCalled();
-      expect(otherWidth).not.toHaveBeenCalled();
-      deliverTableResize(viewport);
-      expect(shell.classList.contains("markdown-table--can-scroll-right")).toBe(false);
-      expect(changedWidth).toHaveBeenCalled();
-      expect(otherWidth).not.toHaveBeenCalled();
+    shell.querySelector("td")!.firstChild!.textContent = "Shorter";
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(changedWidth).not.toHaveBeenCalled();
+    expect(otherWidth).not.toHaveBeenCalled();
+    deliverTableResize(viewport);
+    expect(shell.classList.contains("markdown-table--can-scroll-right")).toBe(false);
+    expect(changedWidth).toHaveBeenCalled();
+    expect(otherWidth).not.toHaveBeenCalled();
 
-      changedWidth.mockClear();
-      query(shell, ".markdown-table__copy").replaceChildren(document.createElement("span"));
-      await Promise.resolve();
-      await Promise.resolve();
-      expect(changedWidth).not.toHaveBeenCalled();
-      expect(otherWidth).not.toHaveBeenCalled();
-    } finally {
-      releaseMarkdownTables(owner);
-    }
+    changedWidth.mockClear();
+    query(shell, ".markdown-table__copy").replaceChildren(document.createElement("span"));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(changedWidth).not.toHaveBeenCalled();
+    expect(otherWidth).not.toHaveBeenCalled();
   });
 
-  it("shows a failed current table copy without stale success", async () => {
+  it("announces copy outcomes without stale success and resets their feedback", async () => {
     vi.useFakeTimers();
     const legacyCopy = vi.fn(() => false);
     stubProperty(document, "execCommand", legacyCopy);
-    const { copy } = interactiveOwner();
+    const { shell, copy } = interactiveOwner();
+    const statusText = () => shell.querySelector('[role="status"]')?.textContent;
     await copyTable(copy, "Copied!");
+    expect(statusText()).toBe("Copied!");
 
     writeText.mockRejectedValueOnce(new DOMException("Clipboard access denied", "NotAllowedError"));
     await copyTable(copy, "Copy failed");
+    expect(statusText()).toBe("Copy failed");
 
     expect(writeText).toHaveBeenLastCalledWith("Name\tValue\nAlpha\tOne");
     expect(legacyCopy).toHaveBeenCalledExactlyOnceWith("copy");
@@ -199,50 +199,31 @@ describe("Markdown table interactions", () => {
     expect(copy.getAttribute("aria-label")).toBe("Copied!");
     await vi.advanceTimersByTimeAsync(1000);
     expectCopy(copy, "Copy table");
-  });
-
-  it("announces table copy outcomes in a status region", async () => {
-    vi.useFakeTimers();
-    stubProperty(
-      document,
-      "execCommand",
-      vi.fn(() => false),
-    );
-    const { shell, copy } = interactiveOwner();
-    const statusText = () => shell.querySelector('[role="status"]')?.textContent;
-    await copyTable(copy, "Copied!");
-    expect(statusText()).toBe("Copied!");
-
     writeText.mockRejectedValueOnce(new DOMException("Clipboard access denied", "NotAllowedError"));
     await copyTable(copy, "Copy failed");
-    expect(statusText()).toBe("Copy failed");
     await vi.advanceTimersByTimeAsync(2000);
     expect(statusText()).toBe("");
   });
 
   it("decorates cloned session links and retires their registrations on close", async () => {
     const titler = new SessionLinkTitler();
+    cleanups.push(() => titler.disconnect());
     installSessionTitleRegistrar((target, label) => titler.register(target, label));
     const { owner } = interactiveOwner("| Task |\n| --- |\n| agent:main:research |");
     const source = owner.querySelector<HTMLAnchorElement>("a.markdown-session-link")!;
     expect(source.hasAttribute("href")).toBe(false);
 
-    try {
-      const { modal } = await openTable(owner);
-      const clone = modal.querySelector<HTMLAnchorElement>("a.markdown-session-link")!;
-      expect(clone).not.toBe(source);
-      await expect.poll(() => clone.getAttribute("href")).toBe("/chat/main/research");
+    const { modal } = await openTable(owner);
+    const clone = modal.querySelector<HTMLAnchorElement>("a.markdown-session-link")!;
+    expect(clone).not.toBe(source);
+    await expect.poll(() => clone.getAttribute("href")).toBe("/chat/main/research");
 
-      modal.querySelector<HTMLButtonElement>(".markdown-table-dialog__close")!.click();
-      expect(modal.isConnected).toBe(false);
-      clone.removeAttribute("href");
-      titler.refresh();
-      await Promise.resolve();
-      expect(clone.hasAttribute("href")).toBe(false);
-    } finally {
-      titler.disconnect();
-      releaseMarkdownTables(owner);
-    }
+    modal.querySelector<HTMLButtonElement>(".markdown-table-dialog__close")!.click();
+    expect(modal.isConnected).toBe(false);
+    clone.removeAttribute("href");
+    titler.refresh();
+    await Promise.resolve();
+    expect(clone.hasAttribute("href")).toBe(false);
   });
 
   it("cancels a pending expansion when its owner disconnects and reconnects", async () => {
@@ -273,29 +254,25 @@ describe("Markdown table interactions", () => {
       const routing = startNativeLinkRouting({
         shouldOpenInControlUiBrowser: () => openInBrowserPanel,
       });
+      cleanups.push(() => routing.dispose());
       const { owner } = interactiveOwner(
         "| Reference |\n| --- |\n| [Open reference](https://example.com/table) |",
       );
-      try {
-        const { modal } = await openTable(owner);
-        const link = modal.querySelector("a")!;
-        vi.useFakeTimers();
-        for (const type of ["contextmenu", "auxclick"]) {
-          const event = new MouseEvent(type, { bubbles: true, cancelable: true, button: 2 });
-          link.dispatchEvent(event);
-          await vi.advanceTimersByTimeAsync(0);
-          expect(event.defaultPrevented).toBe(false);
-          expect(modal.isConnected).toBe(true);
-        }
-        const middle = new MouseEvent("auxclick", { bubbles: true, cancelable: true, button: 1 });
-        link.dispatchEvent(middle);
-        expect(middle.defaultPrevented).toBe(openInBrowserPanel);
+      const { modal } = await openTable(owner);
+      const link = modal.querySelector("a")!;
+      vi.useFakeTimers();
+      for (const type of ["contextmenu", "auxclick"]) {
+        const event = new MouseEvent(type, { bubbles: true, cancelable: true, button: 2 });
+        link.dispatchEvent(event);
         await vi.advanceTimersByTimeAsync(0);
-        expect(modal.isConnected).toBe(false);
-      } finally {
-        routing.dispose();
-        releaseMarkdownTables(owner);
+        expect(event.defaultPrevented).toBe(false);
+        expect(modal.isConnected).toBe(true);
       }
+      const middle = new MouseEvent("auxclick", { bubbles: true, cancelable: true, button: 1 });
+      link.dispatchEvent(middle);
+      expect(middle.defaultPrevented).toBe(openInBrowserPanel);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(modal.isConnected).toBe(false);
     },
   );
 

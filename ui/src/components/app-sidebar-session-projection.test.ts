@@ -16,6 +16,8 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 const project = (rows: SidebarRecentSession[], overrides: Partial<ProjectionInput> = {}) =>
   projection.project(projectionInput(rows, overrides));
+const sectionIds = (rows: SidebarRecentSession[], overrides: Partial<ProjectionInput>) =>
+  project(rows, overrides).sections.map(({ id }) => id);
 const runningRow = (overrides: Partial<SidebarRecentSession> = {}) =>
   sessionRow("running", { hasActiveRun: true, activeRunIds: ["run-one"], ...overrides });
 const parentRow = (...childSessionKeys: string[]) => sessionRow("parent", { childSessionKeys });
@@ -150,20 +152,14 @@ it.each(["active", "archived", "snoozed"] as const)(
     const unfiltered = project(rows, { ...input, statusFilter: "all" });
     expect(unfiltered.sections.map(({ id }) => id)).toContain("category:Empty");
     expect(unfiltered.sections[0]).toMatchObject({ totalRowCount: 1, visibleRowCount: 0 });
-    expect(
-      project(rows, { ...input, emptyGroupsMode: "never" }).sections.map(({ id }) => id),
-    ).toContain("category:Empty");
+    expect(sectionIds(rows, { ...input, emptyGroupsMode: "never" })).toContain("category:Empty");
   },
 );
 
 it("retains unloaded group destinations until the session list establishes their contents", () => {
   const input = { knownGroups: ["Awaiting sessions"], statusFilter: "active" as const };
-  expect(project([], { ...input, listLoaded: false }).sections.map(({ id }) => id)).toContain(
-    "category:Awaiting sessions",
-  );
-  expect(project([], input).sections.map(({ id }) => id)).not.toContain(
-    "category:Awaiting sessions",
-  );
+  expect(sectionIds([], { ...input, listLoaded: false })).toContain("category:Awaiting sessions");
+  expect(sectionIds([], input)).not.toContain("category:Awaiting sessions");
 });
 
 it("renders a single selected owner's sessions inline instead of under a person header", () => {
