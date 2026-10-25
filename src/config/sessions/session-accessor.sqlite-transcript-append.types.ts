@@ -1,16 +1,14 @@
 import type { SessionRowTranscriptProjection } from "../../gateway/session-row-transcript-preview.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import type { createTranscriptIdentityReader } from "./session-accessor.sqlite-read.js";
-import type {
-  createTranscriptIdentityInserter,
-  TranscriptIdentityInsertRow,
-} from "./session-accessor.sqlite-transcript-identity.js";
+import type { createTranscriptIdentityInserter } from "./session-accessor.sqlite-transcript-identity.js";
 import type { readTranscriptAppendStateInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import type { createTranscriptIndexAppenderInTransaction } from "./session-transcript-index.js";
 import type {
   createTranscriptEventInserter,
   PreparedTranscriptPayload,
   TranscriptEventInsertRow,
+  TranscriptIdentityInsertRow,
 } from "./transcript-payload.js";
 
 export type TranscriptInsertRow = {

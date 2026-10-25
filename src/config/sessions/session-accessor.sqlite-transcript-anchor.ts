@@ -190,10 +190,7 @@ function readActiveTranscriptEntryFacts(
       return undefined;
     }
   }
-  const row = executeSqliteQueryTakeFirstSync(
-    params.database.db,
-    selectActiveTranscriptEntryAnchor(params, projection, includeVersion),
-  );
+  const row = readActiveTranscriptEntryRows(params, projection, includeVersion)[0];
   return row
     ? {
         ...row,
@@ -201,6 +198,18 @@ function readActiveTranscriptEntryFacts(
         latestSeq: projection ? projection.state.indexedSeq : row.latestSeq,
       }
     : undefined;
+}
+
+function readActiveTranscriptEntryRows(
+  params: TranscriptEntryRead,
+  projection?: CurrentTranscriptProjection,
+  includeVersion = false,
+  entryIds?: readonly string[],
+) {
+  return executeSqliteQuerySync(
+    params.database.db,
+    selectActiveTranscriptEntryAnchor(params, projection, includeVersion, entryIds),
+  ).rows;
 }
 
 /** Compose final authority predicates into the anchor's single-statement snapshot. */
@@ -313,15 +322,12 @@ export function readTranscriptMessageAppendMetadataBatchInTransaction(
       continue;
     }
     const byId = new Map(chunk.map((message) => [message.messageId, message]));
-    const rows = executeSqliteQuerySync(
-      database.db,
-      selectActiveTranscriptEntryAnchor(
-        { database, resolved, entryId: first.messageId },
-        undefined,
-        true,
-        chunk.map((message) => message.messageId),
-      ),
-    ).rows;
+    const rows = readActiveTranscriptEntryRows(
+      { database, resolved, entryId: first.messageId },
+      undefined,
+      true,
+      chunk.map((message) => message.messageId),
+    );
     for (const row of rows) {
       const message = byId.get(row.event_id);
       if (!message) {

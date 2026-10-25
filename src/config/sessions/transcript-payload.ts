@@ -15,7 +15,6 @@ import { isPostgresSqlConnection, type EngineConnection } from "../../infra/sql-
 import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
 import { resolveZstdCodec } from "../../infra/zstd-codec.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
-import type { TranscriptIdentityInsertRow } from "./session-accessor.sqlite-transcript-identity.js";
 import { findSessionTranscriptHeader } from "./session-entry-codec.js";
 import {
   projectModelContextEventSql,
@@ -64,6 +63,16 @@ export type TranscriptEventInsertRow = {
   eventId?: string;
   parsedEvent?: unknown;
   preparedPayload?: PreparedTranscriptPayload;
+};
+
+type StoredTranscriptIdentity = DB["transcript_event_identities"];
+export type TranscriptIdentityInsertRow = {
+  seq: number;
+  createdAt: number;
+  eventId: StoredTranscriptIdentity["event_id"];
+  eventType: StoredTranscriptIdentity["event_type"];
+  parentId: StoredTranscriptIdentity["parent_id"];
+  messageIdempotencyKey: StoredTranscriptIdentity["message_idempotency_key"];
 };
 
 // Fourteen bound columns per row use at most 7,168 parameters on either engine.
@@ -218,13 +227,7 @@ export function createTranscriptEventInserter(database: EngineConnection, sessio
         }
       }
     : undefined;
-  type StoredIdentity = DB["transcript_event_identities"];
-  type Identity = {
-    eventId: StoredIdentity["event_id"];
-    eventType: StoredIdentity["event_type"];
-    parentId: StoredIdentity["parent_id"];
-    messageIdempotencyKey: StoredIdentity["message_idempotency_key"];
-  };
+  type Identity = Omit<TranscriptIdentityInsertRow, "seq" | "createdAt">;
   type SingleRow = StoredRow & { eventId?: string; identity?: Identity };
   const createSingleInsert = (checkEventId: boolean, includeIdentity: boolean) =>
     prepareSqliteQueryTakeFirstSync<SingleRow, { seq: number }>(database, (parameter) => {
