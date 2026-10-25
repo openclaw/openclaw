@@ -607,6 +607,7 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
     [31, false],
     [32, false],
     [33, false],
+    [34, false],
   ] as const)(
     "keeps the real agent v%s→current rollback exact (foreign write: %s)",
     async (sourceVersion, foreignWrite) => {
@@ -900,7 +901,7 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
             {
               indexname: "idx_agent_session_windows_conversation",
               indexdef:
-                "CREATE INDEX idx_agent_session_windows_conversation ON fixture_namespace.session_windows USING btree (primary_conversation_id NULLS FIRST) WHERE (primary_conversation_id IS NOT NULL)",
+                "CREATE INDEX idx_agent_session_windows_conversation ON fixture_namespace.session_windows USING btree (primary_conversation_id) WHERE (primary_conversation_id IS NOT NULL)",
             },
           ]);
           if (foreignWrite) {

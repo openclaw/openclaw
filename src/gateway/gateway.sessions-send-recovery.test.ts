@@ -48,6 +48,7 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
       const waitFor = (assertion: () => void, timeout = 30_000) =>
         vi.waitFor(assertion, { timeout });
       const parallelHeld = new Set<number>();
+      const parallelLabels = new Set<string>();
       const parallelResponses = new Map<number, ServerResponse>();
       const parallelObserved: string[][] = parallelTargets.map(() => []);
       let hold = true;
@@ -77,6 +78,17 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
         expect(++steerContinuations).toBeLessThanOrEqual(8);
         writeToolCall(response, "session_status", {});
       };
+      const inputText = (content: unknown) =>
+        typeof content === "string"
+          ? content
+          : (Array.isArray(content) ? content : [])
+              .flatMap((block) => {
+                const record = asOptionalRecord(block);
+                return record?.type === "input_text" && typeof record.text === "string"
+                  ? [record.text]
+                  : [];
+              })
+              .join("\n");
       const providerServer = createServer((request, response) => {
         void (async () => {
           const raw = await readRequestText(request);
@@ -95,7 +107,24 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
               item.role === "user" &&
               !JSON.stringify(item.content).includes("OpenClaw runtime context:"),
           );
-          const text = JSON.stringify(input[userIndex]?.content ?? "");
+          const userContent = input[userIndex]?.content;
+          const userText = inputText(userContent);
+          const isConversationLabelRequest =
+            userText.includes("conversationLabelSource") &&
+            input.some((item) =>
+              inputText(item.content).includes(
+                'Label only the text in the "conversationLabelSource" field',
+              ),
+            );
+          if (isConversationLabelRequest) {
+            const labelMarker = userText.match(/HOLD_PARALLEL_[0-9]+/u)?.[0];
+            if (labelMarker) {
+              parallelLabels.add(labelMarker);
+            }
+            reply(response, "Recovery test");
+            return;
+          }
+          const text = JSON.stringify(userContent ?? "");
           const outputIndex = input.findLastIndex((item) => item.type === "function_call_output");
           const parallelHold = text.match(/HOLD_PARALLEL_([0-9]+)/u);
           if (hold && parallelHold) {
@@ -476,6 +505,9 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
         // Require successful startup after releasing the provider responses below.
         // A held turn in one session must not keep other sessions from replaying.
         await awaitRecovery(parallelResponsesReady.promise);
+        expect(parallelLabels).toEqual(
+          new Set(parallelTargets.map((_, index) => `HOLD_PARALLEL_${index}`)),
+        );
         expect(parallelObserved).toEqual(
           parallelTargets.map((_, index) => [`PARALLEL_INPUT_${index}_1`]),
         );

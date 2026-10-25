@@ -89,9 +89,13 @@ function mountMenu(props: MenuProps, container?: HTMLElement) {
 
 async function openMenu(host: HTMLElement, selector = ".oc-menu-trigger") {
   const { page } = await import("vitest/browser");
-  await page.elementLocator(query(host, selector)).click();
   const menu = query(host, ".oc-menu");
-  await expect.poll(() => menu.dataset.phase).toBe("open");
+  const shown = new Promise<void>((resolve) => {
+    menu.addEventListener("overlay-after-show", () => resolve(), { once: true });
+  });
+  await page.elementLocator(query(host, selector)).click();
+  await shown;
+  expect(menu.dataset.phase).toBe("open");
   return menu;
 }
 

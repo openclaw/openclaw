@@ -90,6 +90,8 @@ const repositoryScriptEntries = [
   "apps/android/scripts/build-release-artifacts.ts!",
   // scripts/README.md invokes this warm-interaction benchmark CLI by path.
   "scripts/bench-control-ui-interactions.ts!",
+  // The opt-in projection benchmark builds its browser fixture through this CLI.
+  "scripts/build-control-ui-projection-fixture.mts!",
   // scripts/README.md invokes these exact memory-search benchmarks by path.
   "scripts/bench-memory-search.mjs!",
   "scripts/bench-memory-search-sqlite.mjs!",
@@ -149,6 +151,15 @@ const repositoryScriptEntries = [
   "scripts/perf/diagnostic-profile-measure.ts!",
   "scripts/perf/owned-directory-events-measure.ts!",
   "scripts/perf/plugin-gateway-scope-measure.ts!",
+  // pg-footprint.md and the pool proof commands execute these entries by path.
+  "scripts/perf/pg-footprint.ts!",
+  "scripts/perf/pg-footprint-preload.mjs!",
+  "scripts/perf/pg-footprint-topology.mjs!",
+  "scripts/perf/pg-pool-lifecycle.mts!",
+  "scripts/perf/pg-pool-topology.mts!",
+  // The lifecycle proof passes these fixture entries through computed worker URLs.
+  "scripts/perf/pg-pool-broker.fixture.mts!",
+  "scripts/perf/pg-pool-hang.worker.mjs!",
   // #181150 invokes this reproducible session-row owner probe by path.
   "scripts/perf/session-actor-row-facts-measure.ts!",
   "scripts/perf/session-catalog-selection-measure.ts!",

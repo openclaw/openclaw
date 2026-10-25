@@ -198,8 +198,6 @@ export function isInsideCode(index: number, spans: Array<[number, number]>): boo
   return false;
 }
 
-type RecoveryMode = "hide" | "visible" | "static-strict" | "static-preserve";
-
 export type ReductionState = {
   depth: number;
   visibleEver: boolean;
@@ -221,20 +219,18 @@ export type ReductionCheckpoint = {
   holdStart: number;
 };
 
-type ReductionOptions = {
-  final: boolean;
-  recoverUnclosed?: boolean;
-  mode: RecoveryMode;
-  scope: "all" | "leading";
-  start?: number;
-  checkpoint?: ReductionCheckpoint;
-};
-
 export function reduceReasoningText(
   text: string,
   codeSpans: Array<[number, number]>,
   state: ReductionState,
-  options: ReductionOptions,
+  options: {
+    final: boolean;
+    recoverUnclosed?: boolean;
+    mode: "hide" | "visible" | "static-strict" | "static-preserve";
+    scope: "all" | "leading";
+    start?: number;
+    checkpoint?: ReductionCheckpoint;
+  },
 ): ReasoningTagTextDelta[] {
   const output: ReasoningTagTextDelta[] = [];
   const checkpoint = options.checkpoint;

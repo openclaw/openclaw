@@ -11,6 +11,7 @@ import {
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { agentRoster } from "./agent-roster.test-support.ts";
 import { useCanvasSandboxFixture } from "./canvas-sandbox.test-support.ts";
 import { board as createBoardSnapshot } from "./chat-layout-fixtures.test-support.ts";
 import {
@@ -93,15 +94,7 @@ suite.define(() => {
                     },
                   }
                 : {}),
-              "agents.list": {
-                defaultId: "main",
-                mainKey: "main",
-                scope: "per-sender",
-                agents: [
-                  { id: "main", name: "Main" },
-                  { id: "other", name: "Other" },
-                ],
-              },
+              "agents.list": agentRoster({ main: "Main", other: "Other" }, "main", "per-sender"),
               "board.get": board,
             },
           });

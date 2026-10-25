@@ -114,6 +114,13 @@ Git commands are generated from configuration data without requiring retained
 function bodies. Qualify this child path on the exact signed artifact without
 adding JIT entitlements or substituting a host runtime.
 
+Portable workers delegate exec process ownership to their admitted host's native
+anchor. The same executable runs that declared entry outside generic Bun mode;
+macOS keeps process-group cleanup and Linux keeps native subreaper cleanup.
+macOS delegates only to bundles advertising the platform-aware native-owner
+capability; older bundles retain their existing startup envelope. Linux also
+accepts the earlier Linux-native-owner capability.
+
 ### Original TypeScript and compiler options
 
 `--compile-aot` compiles the completed JavaScript runtime build. `--aot-source` resolves
@@ -122,6 +129,9 @@ and compiles their original TypeScript. Both modes preserve named entry contract
 shared chunks remain reachable imports. The completed `pnpm build` is required
 for generated files, runtime resources, and source-to-emitted module URL metadata.
 Rerun it when the builder reports missing or stale metadata.
+After source discovery, the builder relinks the emitted graph from its declared
+entries so exports used only by removed imports do not fail module URL validation.
+This packaging pass preserves the original TypeScript inputs for native compilation.
 Source AOT also requires the repository-supported Node executable on `PATH` for
 syntax analysis of TypeScript forms that the packaging parser cannot read.
 This analysis preserves source offsets; native compilation receives the original

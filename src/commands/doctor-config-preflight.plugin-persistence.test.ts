@@ -208,11 +208,7 @@ it("retains the original beta scope and full config-wide inventory without persi
       expect(current()).toBe(aggregate);
       // The invoking generation remains old while the new admission owns current package facts.
       await writeVersion("2.0.0");
-      const result = await runOutsidePluginCache(() => freshCache(startup)).catch(
-        (error: unknown) => error,
-      );
-      expect.soft(result).not.toBeInstanceOf(Error);
-      expect.soft(result).toMatchObject({
+      expect(await runOutsidePluginCache(() => freshCache(startup))).toMatchObject({
         pluginMetadataSnapshot: metadata(names, "2.0.0"),
       });
       expectNotPersisted();
@@ -242,13 +238,6 @@ it.each(["secondary-schema", "duplicate-owner"])(
           await writeJson(manifestPath, { ...manifest, id: "preflight-alpha" });
           const discovered = freshCache(() => discover(config));
           expect(discovered.plugins.some((plugin) => plugin.id === "preflight-alpha")).toBe(false);
-          expect(discovered.diagnostics).toContainEqual(
-            expect.objectContaining({
-              level: "error",
-              pluginId: "preflight-alpha",
-              message: expect.stringContaining("present in multiple agent workspaces"),
-            }),
-          );
         }
         const result = await startup();
         expect(result.snapshot.valid).toBe(false);

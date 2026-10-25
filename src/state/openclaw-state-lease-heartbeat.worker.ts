@@ -2,6 +2,7 @@ import { parentPort, workerData, type MessagePort } from "node:worker_threads";
 import { coerceErrorMessage, toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { installDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import { assertStateDatabaseAccessAllowed } from "../infra/gateway-state-owner.js";
+import { bindPostgresPool } from "../infra/postgres-sync/pool.js";
 import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import { runWithSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { withSqliteDatabaseAdmissionExchange } from "../infra/sqlite-database-admission.js";
@@ -444,6 +445,9 @@ function startHeartbeat(
     runAutomatic(() => receive(request), "automatic-renewal");
   }
   try {
+    if (params.postgresPool) {
+      bindPostgresPool(params.postgresPool);
+    }
     if (params.databaseEngineSelection) {
       installDatabaseEngineSelection(params.databaseEngineSelection);
     }

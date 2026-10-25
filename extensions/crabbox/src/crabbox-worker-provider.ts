@@ -145,6 +145,7 @@ export function createCrabboxWorkerProvider(
   const stopLease = async (
     context: LeaseCommandContext,
     onCleanupAccepted?: () => void,
+    signal?: AbortSignal,
   ): Promise<void> => {
     await heartbeats.stop(context.id);
     // Cleanup has its own deadline. Confirmed stop or absence releases allocation/image ownership.
@@ -152,8 +153,9 @@ export function createCrabboxWorkerProvider(
       ...context,
       warn,
       onCleanupAccepted,
+      signal,
     });
-    await warmImages.release(context);
+    await warmImages.release({ ...context, signal });
   };
   const resolveLeaseContext = async (
     lease: Parameters<WorkerProvider["inspect"]>[0],
@@ -642,6 +644,7 @@ export function createCrabboxWorkerProvider(
       return { status: "active", sharedHost: false };
     },
     async destroy(lease): Promise<void> {
+      lease.signal?.throwIfAborted();
       assertCrabboxLeaseId(lease.leaseId);
       // An admitted image capture still owns the source. Plain teardown fences
       // renewal immediately; capture transfers it until the waiting stop below.
@@ -665,7 +668,9 @@ export function createCrabboxWorkerProvider(
         if (captureProfile.warmImage) {
           await warmImages.capture({
             ...context,
-            signal: providerAbort.signal,
+            signal: lease.signal
+              ? AbortSignal.any([providerAbort.signal, lease.signal])
+              : providerAbort.signal,
             profile: captureProfile,
             teardown: true,
             onCaptureStart: () => {
@@ -675,13 +680,17 @@ export function createCrabboxWorkerProvider(
           });
         }
       } catch (error) {
+        if (lease.signal?.aborted) {
+          await heartbeats.stop(context.id);
+          lease.signal.throwIfAborted();
+        }
         warn(
           `Crabbox warm image capture failed for lease ${context.id}: ${coerceErrorMessage(error)}; next step: crabbox stop --provider ${context.provider} ${context.id}`,
         );
       }
       // A claimed capture releases the reclaim caller through the notification,
       // while the lifecycle owner keeps this promise until stop is confirmed.
-      await stopLease(context, onCleanupAccepted);
+      await stopLease(context, onCleanupAccepted, lease.signal);
     },
   };
 }

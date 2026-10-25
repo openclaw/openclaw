@@ -297,15 +297,8 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
         test: () => true,
         tags: ["$initial"] as ["$initial"],
         priority: 10,
-        maxSize: 1024 * 1024,
-      },
-      {
-        name: "control-ui-lib",
-        test: (id: string) => normalizeModuleId(id).includes("/ui/src/lib/"),
-        tags: ["$initial"] as ["$initial"],
-        priority: 11,
-        // Keep initial state owners and utilities together across core entry points.
-        maxSize: 1024 * 1024,
+        // The initial graph is already eager; one dictionary avoids serial h1 requests.
+        maxSize: 4096 * 1024,
       },
       ...(options.includeBootGroups === false
         ? []
@@ -313,6 +306,9 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
             ...(["shared", "new", "chat"] as const).map((route, index) => {
               const modules = new Set(controlUiBootModules[route]);
               if (route === "shared") {
+                // Plugin activation validates versions on every route without
+                // evaluating Chat or adding a separate contract request.
+                modules.add("src/shared/plugin-inline-view.ts");
                 // Plugin contributions can initialize after the New Session boot capture.
                 modules.add("ui/src/plugins/control-ui-actions.ts");
                 // Both routes read deferred resources; share their existing boot partition.
@@ -329,12 +325,11 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
                 // them (and therefore other routes) into its eagerly imported chunk.
                 priority: 8 - index,
                 includeDependenciesRecursively: true,
-                // Shared boot needs a smaller partition cap because its dense chat
-                // modules can exceed the compressed-size budget after regrouping.
-                // Chat-only code can share a larger compression dictionary;
-                // shipped byte/request budgets still bound the output.
+                // Keep each measured boot partition together instead of queueing
+                // several fragments over HTTP/1.1. Shared and route-only code
+                // retain separate groups and their existing lazy boundaries.
                 minSize: (route === "chat" ? 384 : 128) * 1024,
-                maxSize: (route === "shared" ? 1280 : route === "chat" ? 1664 : 1408) * 1024,
+                maxSize: (route === "shared" || route === "chat" ? 5120 : 1408) * 1024,
               };
             }),
             ...(["shared", "new", "chat"] as const).map((route) => {

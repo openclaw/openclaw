@@ -104,6 +104,7 @@ describe("Control UI build chunking", () => {
     const sharedUi = modulePath("../components/select-picker-view.tsx");
     const pluginActions = modulePath("../plugins/control-ui-actions.ts");
     const pluginLoader = modulePath("../plugins/control-ui-loader.ts");
+    const inlineView = modulePath("../../../src/shared/plugin-inline-view.ts");
     const mutations = modulePath("../lib/sessions/session-mutation-operations.runtime.ts");
     const receipts = modulePath("../lib/sessions/session-patch-row-facts.ts");
     const creation = modulePath("../lib/sessions/create.ts");
@@ -121,7 +122,7 @@ describe("Control UI build chunking", () => {
       ],
       [
         chat,
-        `import ${JSON.stringify(sharedStyle)}; import ${JSON.stringify(transcriptStyle)}; import { label } from ${JSON.stringify(sharedUi)}; import { action } from ${JSON.stringify(pluginActions)}; import { patch } from ${JSON.stringify(mutations)}; export class Chat { label = patch(action(label)); } export const openPanel = () => import(${JSON.stringify(optional)});`,
+        `import ${JSON.stringify(sharedStyle)}; import ${JSON.stringify(transcriptStyle)}; import { label } from ${JSON.stringify(sharedUi)}; import { action } from ${JSON.stringify(pluginActions)}; import { patch } from ${JSON.stringify(mutations)}; export { version } from ${JSON.stringify(inlineView)}; export class Chat { label = patch(action(label)); } export const openPanel = () => import(${JSON.stringify(optional)});`,
       ],
       [
         newSession,
@@ -131,7 +132,11 @@ describe("Control UI build chunking", () => {
       [devices, 'export const page = "devices-page";'],
       [sharedUi, `import inline from ${JSON.stringify(inlineStyle)}; export const label = inline;`],
       [pluginActions, "export const action = (label) => label;"],
-      [pluginLoader, `export { action } from ${JSON.stringify(pluginActions)};`],
+      [
+        pluginLoader,
+        `export { action } from ${JSON.stringify(pluginActions)}; export { version } from ${JSON.stringify(inlineView)};`,
+      ],
+      [inlineView, "export const version = (value) => Number.isInteger(value);"],
       [
         mutations,
         `export { patch } from ${JSON.stringify(receipts)}; export { create } from ${JSON.stringify(creation)};`,
@@ -245,11 +250,12 @@ describe("Control UI build chunking", () => {
     expect(chunks.filter((chunk) => chunk.imports.includes(deferred.fileName))).toHaveLength(0);
   });
 
-  it("groups stable runtime dependencies into bounded chunks", () => {
+  it("keeps optional runtime dependencies separate from initial modules", () => {
     expect(controlUiCodeSplitting.includeDependenciesRecursively).toBe(false);
-    expect(controlUiCodeSplitting.groups[1]).toMatchObject({
+    expect(
+      controlUiCodeSplitting.groups.find((group) => group.name === "control-ui-core"),
+    ).toMatchObject({
       tags: ["$initial"],
-      maxSize: 1024 * 1024,
     });
     for (const [id, expected] of [
       ["/repo/ui/node_modules/highlight.js/lib/core.js", "markdown-highlight-runtime"],

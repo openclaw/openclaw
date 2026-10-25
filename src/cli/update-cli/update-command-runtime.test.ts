@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as nodeSqlite from "../../../node-sqlite.mjs";
+import * as retainedRuntime from "../../infra/update-retained-runtime.js";
 import { ExitError } from "../../runtime.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import * as immutableUpdate from "./update-command-immutable.js";
 import { updateCommand } from "./update-command.js";
 
 const mocks = vi.hoisted(() => ({
@@ -8,6 +11,11 @@ const mocks = vi.hoisted(() => ({
     throw new Error("state admission reached on unsupported Node");
   }),
   runtime: { error: vi.fn(), writeJson: vi.fn(), exit: vi.fn() },
+  preparePostgres: vi.fn<() => Promise<void>>(async () => {}),
+}));
+// mock-isolation: Admission tests must not create process-wide PostgreSQL services.
+vi.mock("../../infra/postgres-sync/pool.js", () => ({
+  preparePostgresPoolForUpdate: mocks.preparePostgres,
 }));
 vi.mock("../../state/openclaw-state-ownership-preflight.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../state/openclaw-state-ownership-preflight.js")>()),
@@ -22,6 +30,30 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   vi.clearAllMocks();
+});
+
+it("waits for PostgreSQL services before entering runtime retention", async () => {
+  const preparing = createDeferredCore();
+  const ready = createDeferredCore();
+  mocks.preparePostgres.mockImplementationOnce(() => {
+    preparing.resolve();
+    return ready.promise;
+  });
+  vi.spyOn(immutableUpdate, "tryRunImmutableUpdateCommand").mockResolvedValue(false);
+  const retain = vi
+    .spyOn(retainedRuntime, "withRetainedUpdateRuntime")
+    .mockResolvedValue(undefined);
+  const update = updateCommand({ json: true });
+  try {
+    await preparing.promise;
+    expect(retain).not.toHaveBeenCalled();
+    ready.resolve();
+    await update;
+    expect(retain).toHaveBeenCalledOnce();
+  } finally {
+    ready.resolve();
+    await update;
+  }
 });
 
 describe("unsupported CLI Node update admission", () => {

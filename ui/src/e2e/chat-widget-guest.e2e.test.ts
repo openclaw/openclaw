@@ -6,6 +6,7 @@ import {
   controlUiSessionUrl,
   createChatFlowE2eSuite,
   installMockGateway,
+  chatMessage,
 } from "./chat-flow.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -52,12 +53,10 @@ suite.define(() => {
               ],
               timestamp: 1_700_000_000_000,
             },
-            {
-              role: "assistant",
-              content: [{ type: "text", text: "Here is the saved conversation preview." }],
+            chatMessage("assistant", "Here is the saved conversation preview.", {
               timestamp: 1_700_000_000_001,
               __openclaw: { id: "saved-reply", seq: 2 },
-            },
+            }),
           ]).slice(-1),
           methodResponses: { "canvas.document.view": canvasView(html) },
         });

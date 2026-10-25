@@ -689,6 +689,23 @@ describe("Control UI offline app shell", () => {
     expect(worker.priorCache.has(worker.scope + "__offline_shell__")).toBe(true);
   });
 
+  it("preserves an installing replacement cache when the active worker is probed", async () => {
+    const worker = createFetchServiceWorker();
+    worker.fetch.mockResolvedValue(new Response("build asset"));
+    await worker.install();
+    await worker.activate();
+    const replacementName = "openclaw-control-next-fixture";
+    const replacementCache = new Map([
+      [worker.scope + "assets/next.js", new Response("installing replacement")],
+    ]);
+    worker.generations.set(replacementName, replacementCache);
+
+    await worker.probe();
+
+    expect(worker.generations.get(replacementName)).toBe(replacementCache);
+    expect(worker.cache.has(worker.scope + "__offline_shell__")).toBe(true);
+  });
+
   it("uses the cached shell when an online navigation stalls until the deadline", async () => {
     vi.useFakeTimers();
     try {
@@ -902,6 +919,7 @@ function createFetchServiceWorker(
     cache,
     priorCache,
     olderCache,
+    generations,
     info,
     cacheDelete,
     cacheMatch,
