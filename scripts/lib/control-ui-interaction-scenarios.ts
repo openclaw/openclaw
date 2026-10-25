@@ -15,9 +15,11 @@ import {
   waitForControlUiRoute,
 } from "../../ui/src/test-helpers/control-ui-e2e.ts";
 import { navigationDrawerToggle } from "../../ui/src/test-helpers/control-ui-navigation.ts";
+import type { ProjectionFamily } from "../../ui/src/test-helpers/control-ui-projection-fixture-contract.ts";
 import { mcpResourceHtml } from "../../ui/src/test-helpers/control-ui-team-scale-widget-html.ts";
 import { cronListResponseFixture } from "../../ui/src/test-helpers/cron.ts";
 import { meetingStatus } from "../../ui/src/test-helpers/transcripts.test-support.ts";
+import { runProjectionFixture } from "./control-ui-projection-fixtures.ts";
 import type { ControlUiResourceCounts } from "./control-ui-resource-counts.ts";
 
 const sessionKeys = ["agent:main:interaction-a", "agent:main:interaction-b"] as const;
@@ -82,6 +84,8 @@ export type InteractionScenario = {
   /** Resource campaigns opt into the longer inventory and idle scenarios. */
   resourceOnly?: boolean;
   visibility?: "hidden";
+  projectionFamily?: ProjectionFamily;
+  projectionIdle?: boolean;
   /** Count newly inserted rows across the action, including transient replacements. */
   rowSelector?: string;
   setup?: (page: Page) => Promise<void>;
@@ -1317,7 +1321,7 @@ async function settleSidebarCapture(page: Page) {
   );
 }
 
-async function settleSidebarBackgroundWork(page: Page) {
+export async function settleSidebarBackgroundWork(page: Page) {
   // The prefetch owner automatically warms New Session; other groups require navigation intent.
   const prefetchAssets = await page.evaluate(async () => {
     const descriptor = document
@@ -1519,6 +1523,54 @@ async function searchModels(page: Page) {
 }
 
 export const interactionScenarios: readonly InteractionScenario[] = [
+  ...(["sdk-avatars", "sdk-avatar-identities"] as const).map((family): InteractionScenario => ({
+    id: `projection-${family}`,
+    route: controlUiSessionPath(sessionKeys[0]),
+    expected:
+      "120 SDK avatars in A and 40 in B, two real factories per application; twenty native publications update A only, then independent factory/application retirement.",
+    projectionFamily: family,
+    prepare: prepareChat,
+    run: async (page) => {
+      await runProjectionFixture(page);
+    },
+  })),
+  ...(["visible", "hidden"] as const).map((visibility): InteractionScenario => ({
+    id: `projection-outbox-idle-${visibility}`,
+    route: controlUiSessionPath(sessionKeys[0]),
+    expected: `480 actual outbox rows remain mounted for three ${visibility} native-clock idle seconds, then retire independently.`,
+    projectionFamily: "outbox",
+    projectionIdle: true,
+    visibility: visibility === "hidden" ? visibility : undefined,
+    prepare: prepareChat,
+    run: async (page) => {
+      const state = () => page.evaluate(() => document.visibilityState);
+      if ((await state()) !== visibility) {
+        throw new Error(`Expected ${visibility} projection page`);
+      }
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 3_000);
+      });
+      if (
+        (await state()) !== visibility ||
+        (await page
+          .locator('[data-projection-application="A"] [data-attention-kind="outbox"]')
+          .count()) !== 400
+      ) {
+        throw new Error("Projection idle visibility or mounted family changed");
+      }
+    },
+  })),
+  ...(["agent-rows", "outbox", "board-pins"] as const).map((family): InteractionScenario => ({
+    id: `projection-${family}`,
+    route: controlUiSessionPath(sessionKeys[0]),
+    expected:
+      "400 rows in application A and 80 in B; twenty actual native-owner publications update A alone, then both groups retire independently.",
+    projectionFamily: family,
+    prepare: prepareChat,
+    run: async (page) => {
+      await runProjectionFixture(page);
+    },
+  })),
   {
     id: "mcp-app-resize-resources",
     route: controlUiSessionPath(sessionKeys[0]),

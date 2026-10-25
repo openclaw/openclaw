@@ -15,6 +15,7 @@ import {
 } from "../../agents/auth-profiles/store-runtime.js";
 import * as catalogCredentials from "../../agents/plugin-model-catalog-credentials.js";
 import * as catalogs from "../../agents/plugin-model-catalog.js";
+import { createCliTtyMock } from "../../cli/test-runtime-capture.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createDirectChatContext } from "../../gateway/server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../../gateway/server-methods.js";
@@ -168,16 +169,12 @@ function catalogDatabase(agentDir: string, main: string) {
 }
 
 async function withStdinIsTty<T>(isTTY: boolean, run: () => Promise<T>): Promise<T> {
-  const previous = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
-  Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: isTTY });
+  const ttyMock = createCliTtyMock([process.stdin]);
+  ttyMock.set(isTTY);
   try {
     return await run();
   } finally {
-    if (previous) {
-      Object.defineProperty(process.stdin, "isTTY", previous);
-    } else {
-      Reflect.deleteProperty(process.stdin, "isTTY");
-    }
+    ttyMock.restore();
   }
 }
 

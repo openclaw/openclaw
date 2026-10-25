@@ -3,6 +3,7 @@ import path from "node:path";
 import type { BrowserContextOptions, Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
+import { mediaTicketPayload } from "../test-helpers/control-ui-attachment-fixtures.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { exactButton, newChatPage } from "./chat-flow.test-support.ts";
 import { polledAttribute, polledText } from "./chat-presentation.test-support.ts";
@@ -343,11 +344,7 @@ suite.define(() => {
       if (url.searchParams.get("meta") === "1") {
         metadataSources.push(sources[index]!);
         await route.fulfill({
-          json: {
-            available: true,
-            mediaTicket: "gallery-proof",
-            mediaTicketExpiresAt: new Date(Date.now() + 300_000).toISOString(),
-          },
+          json: mediaTicketPayload("gallery-proof", 300_000),
         });
       } else {
         expect(url.searchParams.get("mediaTicket")).toBe("gallery-proof");

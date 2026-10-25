@@ -38,6 +38,12 @@ decoded rows even when a caller retains the inactive handle. Predicate compariso
 baselines last only until release; a late acknowledgement cannot restore them.
 Active authorities retain their existing publication and final-effect checks.
 
+Idle session reclamation workers retain their admitted connection, not completed
+deletion plans or the caller's async context. Retirement callbacks capture only
+the worker's registry key. Transport startup and idle timers run outside request
+context while preserving the selected database engine. Each reclamation request
+keeps its own current-source and commit-authority checks.
+
 ## Choose the execution owner
 
 Actor-backed session managers serialize append preparation and committed view

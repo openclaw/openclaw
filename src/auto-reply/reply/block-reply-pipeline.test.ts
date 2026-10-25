@@ -1,5 +1,6 @@
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { waitForAbortSignal as waitForAbort } from "../../infra/abort-signal.js";
 import {
   getReplyPayloadMetadata,
   setReplyPayloadMetadata,
@@ -7,15 +8,6 @@ import {
 } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import { createBlockReplyPipeline } from "./block-reply-pipeline.js";
-
-const waitForAbort = (signal: AbortSignal | undefined): Promise<void> =>
-  new Promise((resolve) => {
-    if (!signal || signal.aborted) {
-      resolve();
-      return;
-    }
-    signal.addEventListener("abort", () => resolve(), { once: true });
-  });
 
 afterEach(() => {
   vi.useRealTimers();

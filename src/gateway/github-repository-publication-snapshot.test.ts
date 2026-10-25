@@ -30,6 +30,7 @@ const baseEnv = {
 };
 const runGit = (cwd: string, env: NodeJS.ProcessEnv, args: string[], input?: Buffer) =>
   execFileSync("git", args, { cwd, env, input, encoding: "utf8" }).trim();
+const digestOf = (raw: string) => "sha256:" + createHash("sha256").update(raw).digest("hex");
 
 async function fixture(linked: false | "linked" | "linked-config" = false) {
   const root = temporary.make("github-repository-snapshot-");
@@ -115,8 +116,7 @@ it("preserves committed CRLF bytes when capturing clean and edited workspaces", 
       },
       async (root) => {
         const raw = await fs.readFile(path.join(root, "snapshot.json"), "utf8");
-        const digest = "sha256:" + createHash("sha256").update(raw).digest("hex");
-        return (await readGitHubRepositoryPublicationMetadata(root, digest)).snapshot;
+        return (await readGitHubRepositoryPublicationMetadata(root, digestOf(raw))).snapshot;
       },
     );
     expect(nodeSnapshot).toEqual(remote);
@@ -218,6 +218,8 @@ it("restores accepted publication paths as unstaged without running hooks or fil
   const current = await captureWorkspaceManifest({ root: f.cwd, baseCommit: f.base });
   const digest = f.capture();
   const restored = path.join(f.root, "restored");
+  const restoredFile = (name: string) => path.join(restored, name);
+  const readRestored = (name: string) => fs.readFile(restoredFile(name), "utf8");
   f.git("clone", "--quiet", "--no-local", "--", f.cwd, restored);
   await applyNodeRepositoryCheckpoint({
     workspaceDir: restored,
@@ -237,64 +239,54 @@ it("restores accepted publication paths as unstaged without running hooks or fil
       "core.fsmonitor=false",
       ...args,
     ]);
-  await fs.writeFile(path.join(restored, "ignored-removed.txt"), "recovery-only bytes\n");
-  const hooks = path.join(restored, ".git", "test-hooks");
+  await fs.writeFile(restoredFile("ignored-removed.txt"), "recovery-only bytes\n");
+  const hooks = restoredFile(".git/test-hooks");
   const sentinel = path.join(f.root, "unexpected-hook-or-filter");
+  const expectNoExecution = async () =>
+    expect(await fs.readFile(sentinel, "utf8").catch(() => undefined)).toBeUndefined();
   await fs.mkdir(hooks);
   await fs.writeFile(
     path.join(hooks, "post-index-change"),
     `#!/bin/sh\nprintf hook > '${sentinel}'\n`,
     { mode: 0o755 },
   );
-  await fs.writeFile(
-    path.join(restored, ".git", "info", "attributes"),
-    "ignored*.txt filter=synthetic\n",
-  );
+  await fs.writeFile(restoredFile(".git/info/attributes"), "ignored*.txt filter=synthetic\n");
   git("config", "core.hooksPath", hooks);
   git("config", "core.fsmonitor", `printf fsmonitor > '${sentinel}'`);
   git("config", "filter.synthetic.clean", `printf filter > '${sentinel}'`);
-  expect(await fs.readFile(sentinel, "utf8").catch(() => undefined)).toBeUndefined();
+  await expectNoExecution();
   const batches = await prepareRepositoryPublicationRestore({
     current: current.manifest,
     publicationStagingRoot: f.output,
     publicationDigest: digest,
   });
+  const restoreArgv = resolveRuntimeWorkerArgv(
+    resolveRuntimeProcessEntrypointUrl("repositoryPublicationRestore"),
+  );
   const restore = () => {
     for (const batch of batches) {
-      execFileSync(
-        process.execPath,
-        [
-          ...resolveRuntimeWorkerArgv(
-            resolveRuntimeProcessEntrypointUrl("repositoryPublicationRestore"),
-          ),
-          batch.action,
-        ],
-        {
-          cwd: restored,
-          env: f.env,
-          input: batch.input,
-          stdio: "pipe",
-        },
-      );
+      execFileSync(process.execPath, [...restoreArgv, batch.action], {
+        cwd: restored,
+        env: f.env,
+        input: batch.input,
+        stdio: "pipe",
+      });
     }
   };
-  expect(restore).toThrow();
-  expect(await fs.readFile(sentinel, "utf8").catch(() => undefined)).toBeUndefined();
-  git("config", "--unset", "core.fsmonitor");
-  expect(restore).toThrow();
-  expect(await fs.readFile(sentinel, "utf8").catch(() => undefined)).toBeUndefined();
-  git("config", "--unset", "filter.synthetic.clean");
+  for (const setting of ["core.fsmonitor", "filter.synthetic.clean"]) {
+    expect(restore).toThrow();
+    await expectNoExecution();
+    git("config", "--unset", setting);
+  }
   restore();
-  expect(await fs.readFile(sentinel, "utf8").catch(() => undefined)).toBeUndefined();
+  await expectNoExecution();
   expect(git("--literal-pathspecs", "ls-files", "--", "ignored-[1].txt")).toBe("ignored-[1].txt");
   expect(git("diff", "--cached", "--name-only")).toBe("ignored-removed.txt");
   expect(git("ls-files", "--", "ignored-removed.txt")).toBe("");
-  expect(await fs.readFile(path.join(restored, "ignored-removed.txt"), "utf8")).toBe(
-    "recovery-only bytes\n",
-  );
-  expect(await fs.readFile(path.join(restored, "ignored-[1].txt"), "utf8")).toBe("publishable\n");
+  expect(await readRestored("ignored-removed.txt")).toBe("recovery-only bytes\n");
+  expect(await readRestored("ignored-[1].txt")).toBe("publishable\n");
   if (process.platform !== "win32") {
-    expect(await fs.readlink(path.join(restored, "ignored-link.txt"))).toBe("counter.txt");
+    expect(await fs.readlink(restoredFile("ignored-link.txt"))).toBe("counter.txt");
     expect(git("ls-files", "--", "ignored-link.txt")).toBe("ignored-link.txt");
   }
 });
@@ -341,12 +333,7 @@ it("rejects substituted checkpoint bytes and paths outside the normalized payloa
   const unsafe = JSON.stringify({ ...snapshot, entries: [{ ...entry, path: "../escape" }] });
   await fs.writeFile(path.join(f.output, "snapshot.json"), unsafe);
   await expect(f.metadata(digest)).rejects.toThrow("digest");
-  await expect(
-    readGitHubRepositoryPublicationMetadata(
-      f.output,
-      "sha256:" + createHash("sha256").update(unsafe).digest("hex"),
-    ),
-  ).rejects.toThrow("entry");
+  await expect(f.metadata(digestOf(unsafe))).rejects.toThrow("entry");
   if (process.platform !== "win32") {
     await fs.rm(path.join(f.output, "blobs", entry.sha!));
     await fs.symlink(f.file("counter.txt"), path.join(f.output, "blobs", entry.sha!));
