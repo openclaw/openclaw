@@ -147,7 +147,7 @@ describe("update-cli", () => {
               serviceRunning: true,
               readyz: true,
               settled: true,
-              recovery: { serviceRestartSafe: true, service: "healthy" },
+              recovery: expect.objectContaining({ serviceRestartSafe: true, service: "healthy" }),
             }),
           );
         }

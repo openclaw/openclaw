@@ -104,7 +104,7 @@ function finalizeParentTools(bound: BoundParent, tools: AnyAgentTool[]) {
 
 function spawnDispatch(
   gateway: ReturnType<typeof createPreparationGateway>,
-  dispatch: (params: Record<string, unknown>) => unknown | Promise<unknown>,
+  dispatch: (params: Record<string, unknown>) => unknown,
   allowAbort = false,
 ) {
   return async <T>(

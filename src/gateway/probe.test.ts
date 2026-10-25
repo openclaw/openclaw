@@ -67,6 +67,7 @@ class MockGatewayClient {
     if (typeof callback === "function") {
       return callback(...args);
     }
+    return undefined;
   }
 
   start(): void {

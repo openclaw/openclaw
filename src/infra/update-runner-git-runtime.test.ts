@@ -467,17 +467,24 @@ describe("Git runtime promotion", () => {
   });
 });
 
-runtimeIt(
-  "preserves runtime freshness and launches without postbuild after Git promotion",
-  async ({ tmp }) => {
+runtimeIt.for([false, true])(
+  "preserves runtime freshness across Git promotion (newer build: %s)",
+  async (newerBuild, { tmp }) => {
     const candidate = path.join(tmp, "candidate");
     const installed = path.join(tmp, "installed");
     await setupStampedProject(candidate, {
       files: { ".gitignore": "dist/\ndist-runtime/\n.artifacts/\n" },
     });
-    const { git } = await trackProjectWithGit(candidate);
+    const { git, deps } = await trackProjectWithGit(candidate);
     git("clone", "--quiet", candidate, installed);
-    await touchProjectFiles(candidate, [RUNTIME_POSTBUILD_STAMP], NEW_TIME);
+    await touchProjectFiles(
+      candidate,
+      [newerBuild ? BUILD_STAMP : RUNTIME_POSTBUILD_STAMP],
+      NEW_TIME,
+    );
+    const expected = { shouldSync: newerBuild, reason: newerBuild ? "build_stamp_newer" : "clean" };
+    expect(resolveRuntimePostBuildRequirement(deps)).toEqual(expected);
+
     const promotion = await prepareGitRuntimePromotion(
       installed,
       candidate,
@@ -487,29 +494,32 @@ runtimeIt(
     );
     await promotion.activate();
     await promotion.cleanup();
+
     expect(
       resolveRuntimePostBuildRequirement({
         ...createBuildRequirementDeps(installed),
         env: {},
         spawnSync: realSpawnSync,
       }),
-    ).toEqual({ shouldSync: false, reason: "clean" });
+    ).toEqual(expected);
     for (const stamp of [BUILD_STAMP, RUNTIME_POSTBUILD_STAMP]) {
       expect((await fs.stat(path.join(installed, stamp))).mtimeMs).toBe(
         (await fs.stat(path.join(candidate, stamp))).mtimeMs,
       );
     }
-    const runRuntimePostBuild = vi.fn();
-    const { spawn, spawnCalls } = createSpawnRecorder();
-    expect(
-      await runNodeCommand(installed, {
-        args: ["--version"],
-        spawn,
-        spawnSync: realSpawnSync,
-        runRuntimePostBuild,
-      }),
-    ).toBe(0);
-    expect(spawnCalls).toEqual([[process.execPath, "openclaw.mjs", "--version"]]);
-    expect(runRuntimePostBuild).not.toHaveBeenCalled();
+    if (!newerBuild) {
+      const runRuntimePostBuild = vi.fn();
+      const { spawn, spawnCalls } = createSpawnRecorder();
+      expect(
+        await runNodeCommand(installed, {
+          args: ["--version"],
+          spawn,
+          spawnSync: realSpawnSync,
+          runRuntimePostBuild,
+        }),
+      ).toBe(0);
+      expect(spawnCalls).toEqual([[process.execPath, "openclaw.mjs", "--version"]]);
+      expect(runRuntimePostBuild).not.toHaveBeenCalled();
+    }
   },
 );

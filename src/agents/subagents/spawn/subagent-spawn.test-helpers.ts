@@ -226,7 +226,7 @@ export function throwBoundFailures(failures: unknown[]): void {
 export function createSubagentSpawnTestConfig(
   workspaceDir = os.tmpdir(),
   overrides?: Record<string, unknown>,
-) {
+): OpenClawConfig {
   return {
     session: { mainKey: "main", scope: "per-sender" },
     tools: {

@@ -105,7 +105,7 @@ function fixture() {
       entrypoint: { type: "thread" },
     },
   };
-  const dispatch = <T>(name: string, detail: T, target = element) => {
+  const dispatch = <T>(name: string, detail: T, target: HTMLElement = element) => {
     const event = new CustomEvent(name, {
       detail,
       bubbles: true,
@@ -127,7 +127,7 @@ function fixture() {
     cleanup,
     launch,
     dispatch,
-    claim: <T>(name: string, detail: T) => dispatch(name, detail).defaultPrevented,
+    claim: (name: string, detail: unknown) => dispatch(name, detail).defaultPrevented,
     abortHost: (sessionKey = state.sessionKey, assistantAgentId?: string) => {
       const host = Object.assign(makeChatHost({ client, sessionKey, assistantAgentId }), {
         handleSendChat: state.handleSendChat,

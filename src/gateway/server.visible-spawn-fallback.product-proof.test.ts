@@ -41,7 +41,6 @@ import {
   resolveMcpLoopbackClientGrant,
   revokeMcpLoopbackClientGrant,
 } from "./mcp-grant-store.js";
-import { toolCall } from "./mcp-http-request.test-support.js";
 import { handleMcpJsonRpc } from "./mcp-http.handlers.js";
 import { resolveMcpRequestContext } from "./mcp-http.request.js";
 import { resolveMcpLoopbackScopedTools } from "./mcp-http.runtime.js";
@@ -668,16 +667,20 @@ describe("CLI model inheritance through MCP", () => {
             });
             const response = await withGatewayToolCallerIdentity(caller, () =>
               handleMcpJsonRpc({
-                message: toolCall(
-                  "sessions_spawn",
-                  {
-                    task: `Return exactly ${INITIAL_SUCCESS}. ${WORKER}`,
-                    label: "CLI child",
-                    visible,
-                    expectsCompletionMessage: false,
+                message: {
+                  jsonrpc: "2.0",
+                  id: "cli-model-inheritance",
+                  method: "tools/call",
+                  params: {
+                    name: "sessions_spawn",
+                    arguments: {
+                      task: `Return exactly ${INITIAL_SUCCESS}. ${WORKER}`,
+                      label: "CLI child",
+                      visible,
+                      expectsCompletionMessage: false,
+                    },
                   },
-                  "cli-model-inheritance",
-                ),
+                },
                 tools: scoped.tools,
                 toolSchema: buildMcpToolSchema(scoped.tools),
                 hookContext: { config: cfg, agentId: "main", sessionKey: parentKey },

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
-import { createDeferred, withTestTimeout } from "../../../../test/helpers/promise.js";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import type { BaseOpenAIStreamOptions } from "../provider-options.js";
 import { streamAzureOpenAIResponses } from "../providers/azure-openai-responses.js";
@@ -8,25 +8,14 @@ import {
   resetOpenAICodexWebSocketStateForTest,
   streamOpenAICodexResponses,
 } from "../providers/openai-chatgpt-responses.js";
-import { createJwt } from "../providers/openai-chatgpt-responses.test-helpers.js";
 import { streamOpenAIResponses } from "../providers/openai-responses.js";
 import { makeProviderModel } from "../providers/provider-model.test-support.js";
-import type { Api, AssistantMessageEventStreamLike, Context, Model } from "../types.js";
+import type { AssistantMessageEventStreamLike, Context, Model, StreamFn } from "../types.js";
 import {
   createAzureOpenAIResponsesTransportStreamFn,
   createOpenAIResponsesTransportStreamFn,
 } from "./openai-responses-client.js";
-import { outputMessage, responseUsage } from "./openai-responses-prompt-observer.test-support.js";
 import { collectEventTypes } from "./openai-stream-cases.test-support.js";
-
-const responseMetadata = {
-  status: 202,
-  headers: {
-    "content-type": "text/event-stream",
-    "x-ratelimit-remaining-requests": "42",
-    "x-request-id": "req_observable",
-  },
-};
 
 const openAIModel = makeProviderModel("openai-responses", "openai", "gpt-5.6-luna", {
   name: "Responses hook lifecycle",
@@ -42,6 +31,11 @@ const azureModel = {
   baseUrl: "https://project.services.ai.azure.com/openai/v1",
 } satisfies Model<"azure-openai-responses">;
 
+const traditionalAzureModel = {
+  ...azureModel,
+  baseUrl: "https://resource.openai.azure.com/openai/v1",
+} satisfies Model<"azure-openai-responses">;
+
 const chatGptModel = {
   ...openAIModel,
   api: "openai-chatgpt-responses",
@@ -53,9 +47,15 @@ const context = {
   messages: [{ role: "user", content: "hello", timestamp: 1 }],
 } satisfies Context;
 
-const chatGptToken = createJwt({
-  "https://api.openai.com/auth": { chatgpt_account_id: "acct-response-hook" },
-});
+const chatGptToken = (() => {
+  const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url");
+  const body = Buffer.from(
+    JSON.stringify({
+      "https://api.openai.com/auth": { chatgpt_account_id: "acct-response-hook" },
+    }),
+  ).toString("base64url");
+  return `${header}.${body}.signature`;
+})();
 
 type RequestLifecycle = {
   requestAborted: ReturnType<typeof vi.fn>;
@@ -69,15 +69,31 @@ function completedResponse(init?: ResponseInit, eventHeaders?: Record<string, st
     status: "completed",
     model: openAIModel.id,
     ...(eventHeaders ? { headers: eventHeaders } : {}),
-    output: [outputMessage("hello", "msg_response_hook")],
-    usage: responseUsage,
+    output: [
+      {
+        id: "msg_response_hook",
+        type: "message",
+        role: "assistant",
+        status: "completed",
+        content: [{ type: "output_text", text: "hello", annotations: [] }],
+      },
+    ],
+    usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 },
   };
   const events = [
     { type: "response.created", response: { ...response, output: [], status: "in_progress" } },
     { type: "response.completed", response },
   ];
   const body = `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")}data: [DONE]\n\n`;
-  return new Response(body, { ...responseMetadata, ...init });
+  return new Response(body, {
+    status: 202,
+    headers: {
+      "content-type": "text/event-stream",
+      "x-ratelimit-remaining-requests": "42",
+      "x-request-id": "req_observable",
+    },
+    ...init,
+  });
 }
 
 function trackedFetch(responseFactory: () => Response): {
@@ -111,23 +127,21 @@ function trackedFetch(responseFactory: () => Response): {
   };
 }
 
-function installTrackedResponse(native = false): RequestLifecycle {
+function installSdkResponse(): RequestLifecycle {
   const tracked = trackedFetch(completedResponse);
-  if (native) {
-    vi.stubGlobal("fetch", tracked.fetch);
-  } else {
-    configureAiTransportHost({ buildModelFetch: () => tracked.fetch });
-  }
+  configureAiTransportHost({ buildModelFetch: () => tracked.fetch });
   return tracked.lifecycle;
 }
 
-function createManagedFixtureStream<TApi extends Api>(
-  createStream: (
-    model: Model<TApi>,
-    context: Context,
-    options: BaseOpenAIStreamOptions,
-  ) => AssistantMessageEventStreamLike | Promise<AssistantMessageEventStreamLike>,
-  model: Model<TApi>,
+function installChatGptResponse(): RequestLifecycle {
+  const tracked = trackedFetch(completedResponse);
+  vi.stubGlobal("fetch", tracked.fetch);
+  return tracked.lifecycle;
+}
+
+function createManagedFixtureStream(
+  createStream: StreamFn,
+  model: Model,
   options?: BaseOpenAIStreamOptions,
 ): AssistantMessageEventStreamLike {
   const result = createStream(model, context, { apiKey: "fixture-token", ...options });
@@ -140,38 +154,78 @@ function createManagedFixtureStream<TApi extends Api>(
 const managedOpenAIStream = createOpenAIResponsesTransportStreamFn();
 const managedAzureStream = createAzureOpenAIResponsesTransportStreamFn();
 
-function fixture<TApi extends Api>(
-  name: string,
-  model: Model<TApi>,
-  stream: (
-    model: Model<TApi>,
-    context: Context,
-    options: BaseOpenAIStreamOptions,
-  ) => AssistantMessageEventStreamLike | Promise<AssistantMessageEventStreamLike>,
-  native = false,
-) {
-  return {
-    name,
-    model,
-    installResponse: () => installTrackedResponse(native),
+const fixtures = {
+  openai: {
+    name: "SDK OpenAI",
+    model: openAIModel,
+    installResponse: installSdkResponse,
     createStream: (options?: BaseOpenAIStreamOptions) =>
-      createManagedFixtureStream(stream, model, {
-        apiKey: native ? chatGptToken : "fixture-token",
-        ...(native ? { transport: "sse" as const } : {}),
+      createManagedFixtureStream(managedOpenAIStream, openAIModel, options),
+  },
+  azure: {
+    name: "SDK Azure",
+    model: azureModel,
+    installResponse: installSdkResponse,
+    createStream: (options?: BaseOpenAIStreamOptions) =>
+      createManagedFixtureStream(managedAzureStream, azureModel, options),
+  },
+  traditionalAzure: {
+    name: "traditional SDK Azure",
+    model: traditionalAzureModel,
+    installResponse: installSdkResponse,
+    createStream: (options?: BaseOpenAIStreamOptions) =>
+      createManagedFixtureStream(managedAzureStream, traditionalAzureModel, options),
+  },
+  sharedAzure: {
+    name: "package Azure Responses",
+    model: azureModel,
+    installResponse: installSdkResponse,
+    createStream: (options?: BaseOpenAIStreamOptions) =>
+      streamAzureOpenAIResponses(azureModel, context, { apiKey: "fixture-token", ...options }),
+  },
+  sharedTraditionalAzure: {
+    name: "package traditional Azure Responses",
+    model: traditionalAzureModel,
+    installResponse: installSdkResponse,
+    createStream: (options?: BaseOpenAIStreamOptions) =>
+      streamAzureOpenAIResponses(traditionalAzureModel, context, {
+        apiKey: "fixture-token",
         ...options,
       }),
-  };
-}
-const fixtures = {
-  openai: fixture("SDK OpenAI", openAIModel, managedOpenAIStream),
-  azure: fixture("SDK Azure", azureModel, managedAzureStream),
-  sharedAzure: fixture("package Azure Responses", azureModel, streamAzureOpenAIResponses),
-  shared: fixture("shared Responses provider", openAIModel, streamOpenAIResponses),
-  chatgpt: fixture("native ChatGPT SSE", chatGptModel, streamOpenAICodexResponses, true),
+  },
+  shared: {
+    name: "shared Responses provider",
+    model: openAIModel,
+    installResponse: installSdkResponse,
+    createStream: (options?: BaseOpenAIStreamOptions) =>
+      streamOpenAIResponses(openAIModel, context, { apiKey: "fixture-token", ...options }),
+  },
+  chatgpt: {
+    name: "native ChatGPT SSE",
+    model: chatGptModel,
+    installResponse: installChatGptResponse,
+    createStream: (options?: BaseOpenAIStreamOptions) =>
+      streamOpenAICodexResponses(chatGptModel, context, {
+        apiKey: chatGptToken,
+        transport: "sse",
+        ...options,
+      }),
+  },
 };
 
-const settleWithin = <T>(promise: Promise<T>) =>
-  withTestTimeout(promise, 500, "response hook lifecycle timed out");
+async function settleWithin<T>(promise: Promise<T>, timeoutMs = 500): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error("response hook lifecycle timed out")), timeoutMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 let previousHost: ReturnType<typeof getAiTransportHost>;
 
@@ -188,41 +242,67 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-it("preserves sampling on the managed Azure route", async () => {
-  const id = "gpt-6-sol";
-  let requestBody: unknown;
-  const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
-    requestBody = await new Request(input, init).json();
-    return Response.json({ error: { message: "captured" } }, { status: 400 });
-  });
-  configureAiTransportHost({ buildModelFetch: () => fetchMock });
+it.each([{ id: "gpt-6-sol", api: "azure-openai-responses" }] as const)(
+  "preserves $id sampling on the managed $api route",
+  async ({ id, api }) => {
+    let requestBody: unknown;
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      requestBody = await new Request(input, init).json();
+      return Response.json({ error: { message: "captured" } }, { status: 400 });
+    });
+    configureAiTransportHost({ buildModelFetch: () => fetchMock });
 
-  const stream = createManagedFixtureStream(
-    managedAzureStream,
-    { ...azureModel, id },
-    { temperature: 0.5, topP: 0.8 },
-  );
+    const stream = createManagedFixtureStream(
+      managedAzureStream,
+      { ...azureModel, id, api },
+      { temperature: 0.5, topP: 0.8 },
+    );
 
-  expect((await stream.result()).stopReason).toBe("error");
-  expect(fetchMock).toHaveBeenCalledOnce();
-  expect(requestBody).toMatchObject({ model: id, temperature: 0.5, top_p: 0.8 });
-});
+    expect((await stream.result()).stopReason).toBe("error");
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(requestBody).toMatchObject({ model: id, temperature: 0.5, top_p: 0.8 });
+  },
+);
 
-it("preserves turn encoding over environment headers on the final SDK request", async () => {
-  vi.stubEnv("OPENAI_CUSTOM_HEADERS", "Accept-Encoding: deflate");
-  const fetchMock = vi.fn<typeof fetch>(async () => completedResponse());
-  configureAiTransportHost({
-    buildModelFetch: () => fetchMock,
-    plugin: {
-      ...previousHost.plugin,
-      resolveTransportTurnState: () => ({ headers: { "Accept-Encoding": "gzip, br" } }),
+describe.each([
+  {
+    name: "OpenAI",
+    model: openAIModel,
+    createStream: managedOpenAIStream,
+    defaultEncoding: "identity",
+  },
+])("$name Responses encoding", ({ model, createStream, defaultEncoding }) => {
+  it.each([{ source: "turn", key: "Accept-Encoding", expected: "gzip, br" }])(
+    "preserves the $source encoding on the final SDK request",
+    async ({ source, key, expected }) => {
+      vi.stubEnv(
+        "OPENAI_CUSTOM_HEADERS",
+        source === "default"
+          ? undefined
+          : `${key}: ${source === "environment" ? expected : "deflate"}`,
+      );
+      const fetchMock = vi.fn<typeof fetch>(async () => completedResponse());
+      configureAiTransportHost({
+        buildModelFetch: () => fetchMock,
+        plugin: {
+          ...previousHost.plugin,
+          resolveTransportTurnState: () =>
+            source === "turn" ? { headers: { [key]: expected } } : undefined,
+        },
+      });
+      const stream = createManagedFixtureStream(
+        createStream,
+        { ...model, ...(source === "model" ? { headers: { [key]: expected } } : {}) },
+        source === "caller" ? { headers: { [key]: expected } } : undefined,
+      );
+      expect((await stream.result()).stopReason).toBe("stop");
+      expect(fetchMock).toHaveBeenCalledOnce();
+      const headers = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
+      expect(headers.get("accept-encoding")).toBe(
+        source === "default" ? defaultEncoding : expected,
+      );
     },
-  });
-  const stream = createManagedFixtureStream(managedOpenAIStream, openAIModel);
-  expect((await stream.result()).stopReason).toBe("stop");
-  expect(fetchMock).toHaveBeenCalledOnce();
-  const headers = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
-  expect(headers.get("accept-encoding")).toBe("gzip, br");
+  );
 });
 
 describe.each([fixtures.azure, fixtures.chatgpt])(
@@ -242,7 +322,17 @@ describe.each([fixtures.azure, fixtures.chatgpt])(
 
       await vi.waitFor(() => expect(onResponse).toHaveBeenCalledOnce());
       expect(order).toEqual(["hook:start"]);
-      expect(onResponse).toHaveBeenCalledWith(responseMetadata, model);
+      expect(onResponse).toHaveBeenCalledWith(
+        {
+          status: 202,
+          headers: {
+            "content-type": "text/event-stream",
+            "x-ratelimit-remaining-requests": "42",
+            "x-request-id": "req_observable",
+          },
+        },
+        model,
+      );
 
       hookCompleted.resolve();
       await consume;
@@ -287,8 +377,17 @@ describe.each([fixtures.openai, fixtures.chatgpt])(
       async (settlement) => {
         const lifecycle = installResponse();
         const controller = new AbortController();
-        const pendingHook = createDeferred();
-        const onResponse = vi.fn(() => pendingHook.promise);
+        let settleHook!: () => void;
+        const pendingHook = new Promise<void>((resolve, reject) => {
+          settleHook = () => {
+            if (settlement === "resolve") {
+              resolve();
+            } else {
+              reject(new Error("late response hook rejection"));
+            }
+          };
+        });
+        const onResponse = vi.fn(() => pendingHook);
         const stream = createStream({ signal: controller.signal, onResponse });
         const eventTypes: string[] = [];
         const consume = collectEventTypes(stream, eventTypes);
@@ -308,11 +407,7 @@ describe.each([fixtures.openai, fixtures.chatgpt])(
         expect(eventTypes).toEqual(["error"]);
         expect(lifecycle.requestAborted).toHaveBeenCalledOnce();
 
-        if (settlement === "resolve") {
-          pendingHook.resolve();
-        } else {
-          pendingHook.reject(new Error("late response hook rejection"));
-        }
+        settleHook();
         await new Promise<void>((resolve) => {
           setImmediate(resolve);
         });
@@ -323,35 +418,52 @@ describe.each([fixtures.openai, fixtures.chatgpt])(
   },
 );
 
-it.each(["concrete SSE model", "conflicting SSE models", "conflicting HTTP models"])(
-  "validates managed ChatGPT OAuth model: %s",
-  async (scenario) => {
+describe("managed ChatGPT OAuth response model", () => {
+  it("preserves the concrete model reported by managed SSE event headers", async () => {
     const responseModel = "gpt-5.6-luna-2026-08-02";
-    const headers = new Headers({ "openai-model": "gpt-5.6-sol" });
-    headers.append("openai-model", "gpt-5.6-terra-2026-08-01");
     const tracked = trackedFetch(() =>
-      scenario === "conflicting HTTP models"
-        ? completedResponse({ headers })
-        : completedResponse(
-            undefined,
-            scenario === "concrete SSE model"
-              ? { "x-openai-model": responseModel }
-              : { "openai-model": "gpt-5.6-sol", "x-openai-model": "gpt-5.6-terra-2026-08-01" },
-          ),
+      completedResponse(undefined, { "x-openai-model": responseModel }),
     );
     configureAiTransportHost({ buildModelFetch: () => tracked.fetch });
+
     const result = await createManagedFixtureStream(managedOpenAIStream, chatGptModel).result();
-    if (scenario === "concrete SSE model") {
-      expect(result.responseModel).toBe(responseModel);
-      return;
-    }
+
+    expect(result.responseModel).toBe(responseModel);
+  });
+
+  it("fails closed when one managed SSE event has conflicting model attestations", async () => {
+    const tracked = trackedFetch(() =>
+      completedResponse(undefined, {
+        "openai-model": "gpt-5.6-sol",
+        "x-openai-model": "gpt-5.6-terra-2026-08-01",
+      }),
+    );
+    configureAiTransportHost({ buildModelFetch: () => tracked.fetch });
+
+    const result = await createManagedFixtureStream(managedOpenAIStream, chatGptModel).result();
+
     expect(result).toMatchObject({
       stopReason: "error",
       errorMessage: "Conflicting OpenAI response model attestations",
     });
     expect(result.responseModel).toBeUndefined();
-  },
-);
+  });
+
+  it("fails closed when repeated managed HTTP model headers conflict", async () => {
+    const headers = new Headers({ "openai-model": "gpt-5.6-sol" });
+    headers.append("openai-model", "gpt-5.6-terra-2026-08-01");
+    const tracked = trackedFetch(() => completedResponse({ headers }));
+    configureAiTransportHost({ buildModelFetch: () => tracked.fetch });
+
+    const result = await createManagedFixtureStream(managedOpenAIStream, chatGptModel).result();
+
+    expect(result).toMatchObject({
+      stopReason: "error",
+      errorMessage: "Conflicting OpenAI response model attestations",
+    });
+    expect(result.responseModel).toBeUndefined();
+  });
+});
 
 describe.each(Object.values(fixtures))("$name non-success response hooks", ({ createStream }) => {
   it("reports the rejection before body consumption while another request completes", async () => {

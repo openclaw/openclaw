@@ -217,7 +217,7 @@ describe("session link-reader intent delivery", () => {
     async (boundary, outcome) => {
       vi.useFakeTimers();
       const f = fixture();
-      const heldCommit = createDeferred<void>();
+      const heldCommit = createDeferred();
       f.owner.awaitDomCommit = () => (boundary === "pane" ? heldCommit.promise : Promise.resolve());
       const recipient = document.createElement("openclaw-link-reader-panel");
       Object.defineProperty(recipient, "updateComplete", {

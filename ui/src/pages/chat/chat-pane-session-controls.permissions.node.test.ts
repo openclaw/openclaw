@@ -38,7 +38,7 @@ async function createControlsFixture(
   sharingRole: GatewaySessionRow["sharingRole"] = "owner",
   globalTarget?: { sessionKey: string; rowAgentId: string },
 ) {
-  const selectedSession: GatewaySessionRow = {
+  const selectedSession: GatewaySessionRow & { sessionId: string } = {
     key: globalTarget ? "global" : "agent:main:existing",
     ...(globalTarget ? { agentId: globalTarget.rowAgentId } : {}),
     kind: globalTarget ? "global" : "direct",

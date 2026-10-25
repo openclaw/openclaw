@@ -89,6 +89,12 @@ async function writeDiskPlugin(workspace: string) {
         requireAuth: true, runtimeCapabilities: ["subagents"],
         async handler(ctx) {
           const native = ctx.runtimeContext.subagents;
+          let conflict;
+          try {
+            await native.spawn({ requestId: "conflict", task: "Must not launch",
+              profile: "reviewer", outputSchema: { type: "string" } });
+          } catch (error) { conflict = String(error); }
+          if (!conflict) throw new Error("Caller replaced the profile output schema");
           const accepted = [];
           for (const requestId of ["valid", "invalid"]) {
             accepted.push(await native.spawn({ requestId, task: requestId + " profile result",
@@ -96,7 +102,7 @@ async function writeDiskPlugin(workspace: string) {
           }
           const collection = await native.collect({ ids: accepted.map(child => child.runId),
             awaitResults: true });
-          return { text: JSON.stringify({ accepted, collection }) };
+          return { text: JSON.stringify({ conflict, accepted, collection }) };
         }
       });
     } };`,
@@ -325,6 +331,7 @@ export function registerDiskProfileCase(options: NativePluginSpawnTestOptions) {
         );
         expect(result?.shouldContinue).toBe(false);
         const receipt = JSON.parse(expectDefined(result?.reply?.text, "plugin command response"));
+        expect(receipt.conflict).toMatch(/outputSchema|schema/i);
         expect(receipt.accepted).toHaveLength(2);
         expect(receipt.collection).toMatchObject({
           pending: [],

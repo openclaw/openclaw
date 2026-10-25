@@ -271,8 +271,10 @@ describe("Gateway timed work", () => {
 
   it("coalesces sleep and forward jumps into one pass while retaining absolute deadlines", async () => {
     const { scheduler, job, at } = fixture();
-    const deadline = job("approval", { atMs: 5_000 });
-    const periodic = job("health", { atMs: 2_000, everyMs: 1_000 });
+    const deadline = vi.fn();
+    const periodic = vi.fn();
+    job("approval", { atMs: 5_000 }, deadline);
+    job("health", { atMs: 2_000, everyMs: 1_000 }, periodic);
     await at(301_000, [periodic, 1], [deadline, 1]);
     expect(periodic).toHaveBeenCalledBefore(deadline);
     expect(scheduler.nextWakeAtMs).toBe(302_000);
