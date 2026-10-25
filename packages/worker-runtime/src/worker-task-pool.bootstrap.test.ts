@@ -164,11 +164,11 @@ it("services the diagnostic flush before native stop without Promise reactions",
   expect(stop).toHaveBeenCalledOnce();
 });
 
-async function overloadCapacity(result: Promise<string>) {
+async function overloadError(result: Promise<string>) {
   const error = await result.catch((reason: unknown) => reason);
   assert(error instanceof WorkerTaskError, "Expected a worker overload");
   expect(error.code).toBe("overloaded");
-  return error.capacityAvailable;
+  return error;
 }
 
 it("retries failed publication before successor dispatch", async () => {
@@ -339,7 +339,7 @@ it.each([true, false])("waits for both capacities (local first=%s)", async (loca
   const other = createPool({ requiresReady: false, sharedCompute: true, computeCapacity });
   const localWork = local.pool.run("local", { inputBytes: 8 });
   const sharedWork = other.pool.run("shared", { inputBytes: DEFAULT_WORKER_PENDING_BYTES - 8 });
-  const capacityAvailable = await overloadCapacity(local.pool.run("retry", { inputBytes: 16 }));
+  const { capacityAvailable } = await overloadError(local.pool.run("retry", { inputBytes: 16 }));
   assert(capacityAvailable, "Expected an overload readiness signal");
   const ready = vi.fn();
   void capacityAvailable.then(ready);
@@ -363,7 +363,7 @@ it("wakes an overloaded caller on close and rejects its retry as unavailable", a
   const { pool } = createPool({ requiresReady: false, maxPendingTasks: 1 });
   const held = pool.run("held", {});
   const heldOutcome = Promise.allSettled([held]);
-  const capacityAvailable = await overloadCapacity(pool.run("retry", {}));
+  const { capacityAvailable } = await overloadError(pool.run("retry", {}));
   assert(capacityAvailable, "Expected an overload readiness signal");
   await pool.close();
   await capacityAvailable;
@@ -373,6 +373,8 @@ it("wakes an overloaded caller on close and rejects its retry as unavailable", a
 
 it("does not promise readiness for input that exceeds the pool byte limit", async () => {
   const { pool } = createPool({ requiresReady: false, maxPendingBytes: 8 });
-  expect(await overloadCapacity(pool.run("oversized", { inputBytes: 16 }))).toBeUndefined();
+  expect(
+    (await overloadError(pool.run("oversized", { inputBytes: 16 }))).capacityAvailable,
+  ).toBeUndefined();
   expect(pool.getSnapshot().pendingTasks).toBe(0);
 });

@@ -47,7 +47,8 @@ const apiMocks = vi.hoisted(() => ({
   sendPhoto: vi.fn<AsyncUnknownCall>(async () => ({ ok: true })),
 }));
 
-export const getZaloRuntimeMock = vi.hoisted(() => vi.fn<UnknownCall>());
+const getZaloRuntimeMock = vi.hoisted(() => vi.fn<UnknownCall>());
+export { getZaloRuntimeMock };
 export const {
   getUpdates: getUpdatesMock,
   sendMessage: sendMessageMock,
