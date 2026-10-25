@@ -263,7 +263,6 @@ function fixture({
     openRootFileSync: rootOpen,
     bundledRootFileOpen: rootOpen,
     readFileDescriptorBoundedSync,
-    resolveRuntimeWorkerArgv,
     parseFrontmatterBlockResult,
     resolveHookManifestMetadata,
     HOOK_METADATA_MAX_BYTES: 1024 * 1024,
