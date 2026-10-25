@@ -63,7 +63,6 @@ function makeRefusalResult(provider: string, model: string): EmbeddedAgentRunRes
 type EntryParams = Parameters<typeof runEmbeddedAgentEntry<EmbeddedAgentRunResult>>[0];
 
 function runEntry(
-  runId: string,
   runCandidate: EntryParams["runCandidate"] = async (provider, model) =>
     makeRefusalResult(provider, model),
   overrides: Partial<Omit<EntryParams, "runCandidate" | "identity">> = {},
@@ -78,7 +77,7 @@ function runEntry(
       provider: "openai",
       model: "gpt-5.6",
     },
-    identity: { runId, agentId: "main", sessionId: "session-1" },
+    identity: { runId: "cyber-test", agentId: "main", sessionId: "session-1" },
     harness: createDirectHarness(),
     behavior: { kind: "command-rpc", hasCommittedSideEffect: () => false },
     sessionOverride: { kind: "preserve" },
@@ -104,24 +103,20 @@ describe("runEmbeddedAgentEntry cyber failover", () => {
 
   it("retries a replay-safe OpenAI cyber refusal once on the configured target without changing selection", async () => {
     const reconcile = vi.fn(async () => {});
-    const runCandidate = vi.fn<EntryParams["runCandidate"]>(async (provider, model) =>
-      model === retryModel ? makeResult({ provider, model }) : makeRefusalResult(provider, model),
+    const result = await runEntry(
+      async (provider, model, options) => {
+        expect(provider).toBe("openai");
+        expect(options).toMatchObject({
+          isFallbackRetry: model === retryModel,
+          modelRoutingProvenance: { stage: model === retryModel ? "fallback" : "initial" },
+        });
+        return model === retryModel
+          ? makeResult({ provider, model })
+          : makeRefusalResult(provider, model);
+      },
+      { sessionOverride: { kind: "reconcile-completed", reconcile } },
     );
-    const result = await runEntry("run-cyber-escalation", runCandidate, {
-      sessionOverride: { kind: "reconcile-completed", reconcile },
-    });
-
-    expect(
-      runCandidate.mock.calls.map(([provider, model, options]) => [
-        provider,
-        model,
-        options.isFallbackRetry,
-        options.modelRoutingProvenance.stage,
-      ]),
-    ).toEqual([
-      ["openai", "gpt-5.6", false, "initial"],
-      ["openai", retryModel, true, "fallback"],
-    ]);
+    expect(searchedModels()).toEqual(["gpt-5.6", retryModel]);
     expect(result).toMatchObject({ provider: "openai", model: retryModel });
     expect(result.result.payloads).toEqual([{ text: "recovered" }]);
     expect(result.attempts).toContainEqual(expect.objectContaining({ code: cyberCode }));
@@ -136,8 +131,8 @@ describe("runEmbeddedAgentEntry cyber failover", () => {
 
   it("preserves the original refusal and cools off an unauthorized retry target", async () => {
     failRetry(Object.assign(new Error("401 unauthorized"), { status: 401 }));
-    const first = await runEntry("run-cyber-cooloff");
-    const second = await runEntry("run-cyber-cooloff");
+    const first = await runEntry();
+    const second = await runEntry();
     expect([first.model, second.model]).toEqual(["gpt-5.6", "gpt-5.6"]);
     expect(first.result.payloads).toEqual([{ text: "policy refusal", isError: true }]);
     expect(searchedModels()).toEqual(["gpt-5.6", retryModel, "gpt-5.6"]);
@@ -151,7 +146,7 @@ describe("runEmbeddedAgentEntry cyber failover", () => {
       recordModelFallbackStop(thrown);
     }
     failRetry(thrown);
-    await expect(runEntry("run-cyber-throw")).rejects.toBe(thrown);
+    await expect(runEntry()).rejects.toBe(thrown);
   });
 
   const incomplete = { kind: "incomplete_turn", message: "retry failed mid-turn" } as const;
@@ -169,7 +164,6 @@ describe("runEmbeddedAgentEntry cyber failover", () => {
           ? [{ text: "Tool warning", isError: true }, { text: "Recovered answer" }]
           : [{ text: "retry did not complete", isError: true }];
       const result = await runEntry(
-        "run-cyber-preserve-returned",
         async (provider, model) => {
           if (model === retryModel) {
             committed = commit;
@@ -196,7 +190,7 @@ describe("runEmbeddedAgentEntry cyber failover", () => {
   );
 
   it("keeps a cyber refusal terminal for a strict model selection", async () => {
-    const result = await runEntry("run-cyber-strict", undefined, {
+    const result = await runEntry(undefined, {
       selection: { cfg: {}, provider: "openai", model: "gpt-5.6", fallbacksOverride: [] },
     });
     expect(searchedModels()).toEqual(["gpt-5.6"]);
@@ -206,7 +200,7 @@ describe("runEmbeddedAgentEntry cyber failover", () => {
 
   it("restores the original refusal display when the configured retry fails", async () => {
     const displayChanges: Array<{ text: string; visible: boolean }> = [];
-    await runEntry("run-cyber-transcript", async (provider, model, options) => {
+    await runEntry(async (provider, model, options) => {
       const retry = model === retryModel;
       const message = makeAssistantMessageFixture({
         provider,

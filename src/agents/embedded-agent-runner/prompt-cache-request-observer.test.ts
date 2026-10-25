@@ -1,6 +1,5 @@
 import { hash } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runNodeScript } from "../../../test/helpers/run-node-script.js";
 import { createPromptCacheRequestObserver } from "./prompt-cache-request-observer.js";
@@ -21,12 +20,9 @@ function createObserver(
   );
 }
 
-function requestContext(
-  observer: ReturnType<typeof createObserver>,
-  systemPrompt = "original system",
-) {
-  return observer.onModelRequest(model, { systemPrompt, messages: [] });
-}
+type Observer = ReturnType<typeof createObserver>;
+const requestContext = (observer: Observer, systemPrompt = "original system") =>
+  observer.onModelRequest(model, { systemPrompt, messages: [] });
 
 const inputChange = (fields: Record<string, unknown>) => ({
   input: [{ role: "user", content: "first", ...fields }],
@@ -42,6 +38,21 @@ function fingerprint(payload: unknown) {
   return { scopeDigest: "same-scope", ...result };
 }
 
+async function measure(observer: Observer, body: unknown, cacheRead?: number) {
+  await requestContext(observer);
+  observer.onModelUsage(
+    cacheRead === undefined
+      ? undefined
+      : {
+          cacheRead,
+          contextUsage: { state: "available", promptTokens: 10_000, totalTokens: 10_100 },
+        },
+    fingerprint(body),
+    { responseId: "resp-cache-fixture" },
+  );
+  return observer.getObservation();
+}
+
 describe("prompt cache request observer", () => {
   beforeEach(() => {
     currentTestScope = String(++testScope);
@@ -50,19 +61,16 @@ describe("prompt cache request observer", () => {
 
   it("pairs a drop with the last measured wire request across missing usage and run boundaries", async () => {
     const sessionId = scopedKey("wire-pair");
-    const request = async (key: string, cacheRead?: number) => {
-      const observer = createObserver(sessionId);
-      await requestContext(observer, "stable");
-      observer.onModelUsage(
-        cacheRead === undefined ? undefined : { cacheRead },
-        fingerprint({
+    const request = (key: string, cacheRead?: number) =>
+      measure(
+        createObserver(sessionId),
+        {
           prompt_cache_key: key,
           previous_response_id: "private-response",
           input: [],
-        }),
+        },
+        cacheRead,
       );
-      return observer.getObservation();
-    };
     expect((await request("private-first", 9_000))?.broke).toBe(false);
     await request("private-unmeasured");
     const dropped = await request("private-final", 2_000);
@@ -80,7 +88,6 @@ describe("prompt cache request observer", () => {
       },
     });
     expect(JSON.stringify(dropped)).not.toContain("private-");
-    // A fresh request with the original key must compare against the measured drop.
     expect((await request("private-first", 0))?.requests?.previous?.cacheKeyHash).toBe(
       dropped?.requests?.current?.cacheKeyHash,
     );
@@ -164,21 +171,9 @@ describe("prompt cache request observer", () => {
         input: [{ role: "user", content: "first" }],
         reasoning: { effort: "low" },
       };
-      const measure = async (body: unknown, cacheRead: number) => {
-        await requestContext(observer);
-        observer.onModelUsage(
-          {
-            cacheRead,
-            contextUsage: { state: "available", promptTokens: 10_000, totalTokens: 10_100 },
-          },
-          fingerprint(body),
-          { responseId: "resp-cache-fixture" },
-        );
-      };
-      await measure(payload, 9_000);
+      await measure(observer, payload, 9_000);
       clock.mockReturnValue(3_000);
-      await measure({ ...payload, ...replacement }, 2_000);
-      const observation = observer.getObservation();
+      const observation = await measure(observer, { ...payload, ...replacement }, 2_000);
       expect(observation).toMatchObject({
         broke: true,
         changes: null,
@@ -212,14 +207,7 @@ describe("prompt cache request observer", () => {
           }),
       );
       for (const cacheRead of reads) {
-        await observer.onModelRequest(
-          { provider: "anthropic", id: "claude-sonnet-4-6", api: "anthropic-messages" },
-          {
-            messages: [],
-            systemPrompt: "stable prefix",
-            tools: [{ name: "read", description: "Read text", parameters: Type.Object({}) }],
-          },
-        );
+        await requestContext(observer, "stable prefix");
         observer.onModelUsage({ input: 10_000 - cacheRead, cacheRead, cacheWrite: 0 });
       }
     }

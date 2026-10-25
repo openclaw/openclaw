@@ -19,6 +19,7 @@ import type { EmbeddedRunAttemptResult } from "./run/types.js";
 const EMPTY_RETRY =
   "Your turn ended without a final reply. If the user still needs a reply, write it now. If your completed actions already answered the request, answer exactly NO_REPLY. Continue from the current state; do not restart from scratch.";
 const REJECTION = "Provider completed tool call with malformed JSON arguments";
+const spawn = { runId: "child", childSessionKey: "agent:test:subagent:child" };
 type Assistant = NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
 type Attempt = Partial<EmbeddedRunAttemptResult>;
 
@@ -56,14 +57,13 @@ describe("incomplete-turn retry classification", () => {
     ["ollama", "glm-5.1:cloud", 0, null, undefined],
     ["openai", "gpt-5.5", 111, EMPTY_RETRY, "openai-chatgpt-responses"],
   ] as const)("handles empty %s/%s output", (provider, modelId, output, expected, modelApi) => {
-    expect(
-      resolveNonVisibleTurnRetryInstructions({
-        ...retryState({ lastAssistant: assistant({ usage: createMockUsage(100, output) }) }),
-        provider,
-        modelId,
-        modelApi,
-      })[1],
-    ).toBe(expected);
+    const instructions = resolveNonVisibleTurnRetryInstructions({
+      ...retryState({ lastAssistant: assistant({ usage: createMockUsage(100, output) }) }),
+      provider,
+      modelId,
+      modelApi,
+    });
+    expect(instructions[1]).toBe(expected);
   });
 
   const errorCases: Array<[string, Partial<Assistant>, Attempt?]> = [
@@ -90,12 +90,11 @@ describe("incomplete-turn retry classification", () => {
       usage: createMockUsage(640, 1329),
       ...overrides,
     });
-    expect(
-      shouldRetrySilentErrorAssistantTurn({
-        assistant: message,
-        attempt: makeEmbeddedRunnerAttempt({ lastAssistant: message, ...attempt }),
-      }),
-    ).toBe(false);
+    const retry = shouldRetrySilentErrorAssistantTurn({
+      assistant: message,
+      attempt: makeEmbeddedRunnerAttempt({ lastAssistant: message, ...attempt }),
+    });
+    expect(retry).toBe(false);
   });
 });
 
@@ -106,32 +105,25 @@ describe("incomplete-turn delivery ownership", () => {
   ] as const)(
     "honors current-source $state over aggregate sends",
     ({ state, sourceDelivered, expected }) => {
-      expect(
-        warning({
-          sourceReplyDeliveryState: state,
-          sourceReplyDelivered: sourceDelivered ? true : undefined,
-          didSendViaMessagingTool: true,
-          messagingToolSentTexts: ["A message was sent."],
-          messagingToolSentMediaUrls: ["file:///tmp/render.png"],
-          lastAssistant: assistant({
-            stopReason: "error",
-            errorMessage: "provider failed after delivery",
-          }),
+      const result = warning({
+        sourceReplyDeliveryState: state,
+        sourceReplyDelivered: sourceDelivered ? true : undefined,
+        didSendViaMessagingTool: true,
+        messagingToolSentTexts: ["A message was sent."],
+        messagingToolSentMediaUrls: ["file:///tmp/render.png"],
+        lastAssistant: assistant({
+          stopReason: "error",
+          errorMessage: "provider failed after delivery",
         }),
-      ).toEqual(expected);
+      });
+      expect(result).toEqual(expected);
     },
   );
 
   it("suppresses warnings for a spawn owning completion", () => {
     const result = warning(
       {
-        acceptedSessionSpawns: [
-          {
-            runId: "child",
-            childSessionKey: "agent:test:subagent:child",
-            expectsCompletionMessage: true,
-          },
-        ],
+        acceptedSessionSpawns: [{ ...spawn, expectsCompletionMessage: true }],
       },
       { hadPotentialSideEffects: true },
     );
@@ -139,18 +131,15 @@ describe("incomplete-turn delivery ownership", () => {
   });
 
   it("marks an accepted spawn as replay-invalid", () => {
-    const evidence = {
-      acceptedSessionSpawns: [{ runId: "child", childSessionKey: "agent:test:subagent:child" }],
-    };
-    expect(
-      buildAttemptReplayMetadata({
-        toolMetas: [],
-        didSendViaMessagingTool: false,
-        messagingToolSentTexts: [],
-        messagingToolSentMediaUrls: [],
-        ...evidence,
-      }),
-    ).toEqual({ hadPotentialSideEffects: true, replaySafe: false });
+    const evidence = { acceptedSessionSpawns: [spawn] };
+    const replay = buildAttemptReplayMetadata({
+      toolMetas: [],
+      didSendViaMessagingTool: false,
+      messagingToolSentTexts: [],
+      messagingToolSentMediaUrls: [],
+      ...evidence,
+    });
+    expect(replay).toEqual({ hadPotentialSideEffects: true, replaySafe: false });
     expect(hasOutboundDeliveryEvidence(evidence)).toBe(true);
   });
 });
@@ -174,11 +163,10 @@ describe("incomplete-turn payload resolution", () => {
       { toolMetas: [{ toolName: "image_generate", asyncStarted: true }] },
       { itemLifecycle: { startedCount: 1, completedCount: 0, activeCount: 1 } },
     ];
-    expect(
-      attempts.map((attempt) =>
-        shouldRetryMissingAssistantTurn(retryState({ lastAssistant: undefined, ...attempt })),
-      ),
-    ).toEqual([true, false, false]);
+    const retries = attempts.map((attempt) =>
+      shouldRetryMissingAssistantTurn(retryState({ lastAssistant: undefined, ...attempt })),
+    );
+    expect(retries).toEqual([true, false, false]);
   });
 
   it.each([
@@ -197,9 +185,11 @@ describe("incomplete-turn payload resolution", () => {
   ] satisfies Array<[string, Partial<Assistant>, number, string]>)(
     "resolves warning for %s",
     (_name, message, payloadCount, expected) => {
-      expect(
-        warning({ assistantTexts: [], lastAssistant: assistant(message) }, { payloadCount }),
-      ).toContain(expected);
+      const result = warning(
+        { assistantTexts: [], lastAssistant: assistant(message) },
+        { payloadCount },
+      );
+      expect(result).toContain(expected);
     },
   );
 });

@@ -67,7 +67,17 @@ async function writeSkill(root: string, name: string, metadata: string) {
   return dir;
 }
 
-async function promptFor(params: Parameters<typeof prepareRuntimeSkillEntries>[0]) {
+type Sandbox = Parameters<typeof resolveSandboxSkillRuntimeInputs>[0]["sandbox"];
+const runtimeParams = (sandbox: Sandbox, skillsSnapshot?: SkillSnapshot) => ({
+  sandbox,
+  skillsSnapshot,
+  skillsAnchorWorkspace: "/workspace",
+});
+const resolveRuntime = (sandbox: Sandbox, skillsSnapshot?: SkillSnapshot) =>
+  resolveSandboxSkillRuntimeInputs(runtimeParams(sandbox, skillsSnapshot));
+
+async function promptFor(sandbox: Sandbox, skillsSnapshot?: SkillSnapshot) {
+  const params = runtimeParams(sandbox, skillsSnapshot);
   const { skillEntries } = await prepareRuntimeSkillEntries(params);
   const { prompt } = await resolveRuntimeSkillsPrompt(params);
   return { prompt, skillEntries };
@@ -81,13 +91,8 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
   it.each([false, true])(
     "uses the anchor without materialized skills (sandbox: %s)",
     (sandboxed) => {
-      expect(
-        resolveSandboxSkillRuntimeInputs({
-          sandbox: sandboxed ? { enabled: true } : undefined,
-          skillsAnchorWorkspace: "/workspace",
-          skillsSnapshot: snapshot,
-        }),
-      ).toEqual({
+      const runtime = resolveRuntime(sandboxed ? { enabled: true } : undefined, snapshot);
+      expect(runtime).toEqual({
         skillsSnapshot: sandboxed ? undefined : snapshot,
         skillsPromptWorkspaceDir: "/workspace",
         skillsWorkspaceDir: "/workspace",
@@ -98,12 +103,8 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
 
   it("maps materialized read paths while preserving original file identities", () => {
     const original = usagePath("demo", "/agent-workspace/skills/demo/SKILL.md");
-    expect(
-      resolveSandboxSkillRuntimeInputs({
-        sandbox: { ...materializedSandbox, skillUsagePaths: [original] },
-        skillsAnchorWorkspace: "/workspace",
-      }).skillUsagePaths,
-    ).toEqual([{ ...original, readPath: deliveredPath("demo") }]);
+    const runtime = resolveRuntime({ ...materializedSandbox, skillUsagePaths: [original] });
+    expect(runtime.skillUsagePaths).toEqual([{ ...original, readPath: deliveredPath("demo") }]);
   });
 
   it("remaps workspace-hosted explicit references to the delivered sandbox copy", () => {
@@ -112,8 +113,8 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
       { ...workspaceSkill, name: "gateway-demo" },
       "gateway",
     );
-    const runtime = resolveSandboxSkillRuntimeInputs({
-      sandbox: {
+    const runtime = resolveRuntime(
+      {
         ...materializedSandbox,
         skillUsagePaths: [
           usagePath("demo"),
@@ -121,14 +122,12 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
           usagePath("hidden", hiddenSkillPath),
         ],
       },
-      skillsAnchorWorkspace: "/workspace",
-      skillsSnapshot: {
+      {
         ...snapshot,
         skills: [...snapshot.skills, { name: "hidden" }],
         resolvedSkills: [workspaceSkill, gatewaySkill],
       },
-    });
-
+    );
     expect(
       remapSkillReferencePaths(
         `Read workspace-skill://workspace/demo/SKILL.md, ${hostSkillPath}, workspace-skill://workspace/hidden/SKILL.md, workspace-skill://workspace/hidden/references/setup.md, ${hiddenSkillPath}, and /host/skills/hidden/references/setup.md before acting.`,
@@ -142,14 +141,13 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
       ["gateway-demo", hostSkillPath, "gateway"],
       ["hidden-2", hiddenSkillPath, "workspace"],
     ] as const;
-    expect(
-      selections.map(([name, filePath, host]) =>
-        remapExplicitSkillSelectionPath(
-          recordExplicitSkillSelectionFileHost({ name, path: filePath }, host),
-          runtime.skillUsagePaths,
-        ),
+    const remapped = selections.map(([name, filePath, host]) =>
+      remapExplicitSkillSelectionPath(
+        recordExplicitSkillSelectionFileHost({ name, path: filePath }, host),
+        runtime.skillUsagePaths,
       ),
-    ).toEqual(["demo", "gateway-demo", "hidden"].map((name) => deliveredPath(name)));
+    );
+    expect(remapped).toEqual(["demo", "gateway-demo", "hidden"].map((name) => deliveredPath(name)));
   });
 
   it.each([
@@ -160,7 +158,6 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
     },
   ])("$label", async ({ skillsSnapshot }) => {
     const root = temps.make("openclaw-sandbox-skills-");
-    const effectiveWorkspace = path.join(root, "workspace");
     const materializedWorkspace = path.join(root, "state", "sandbox-skills");
     const skillDir = await writeSkill(
       materializedWorkspace,
@@ -171,23 +168,18 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
       bins.includes("sandboxbin"),
     );
 
-    const params = {
-      sandbox: {
-        ...materializedSandbox,
-        skillsEligibility,
-        skillsWorkspaceDir: materializedWorkspace,
-        skillUsagePaths: [{ ...usagePath("demo"), readPath: path.join(skillDir, "SKILL.md") }],
-      },
-      skillsAnchorWorkspace: effectiveWorkspace,
-      skillsSnapshot,
+    const sandbox = {
+      ...materializedSandbox,
+      skillsEligibility,
+      skillsWorkspaceDir: materializedWorkspace,
+      skillUsagePaths: [{ ...usagePath("demo"), readPath: path.join(skillDir, "SKILL.md") }],
     };
-    const runtime = resolveSandboxSkillRuntimeInputs(params);
-    const { prompt, skillEntries } = await promptFor(params);
+    const runtime = resolveRuntime(sandbox, skillsSnapshot);
+    const { prompt, skillEntries } = await promptFor(sandbox, skillsSnapshot);
 
     if (skillsSnapshot === snapshot) {
       expect(prompt).toContain(deliveredPath("demo"));
       const deliveredSkill = runtime.skillsSnapshot?.resolvedSkills?.[0];
-      expect(deliveredSkill).toBeDefined();
       if (!deliveredSkill) {
         throw new Error("missing delivered sandbox skill");
       }
@@ -208,8 +200,9 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
     const skillsEligibility = remoteEligibility("darwin", "remote mac available");
 
     const { prompt } = await promptFor({
-      skillsAnchorWorkspace: root,
-      sandbox: { enabled: true, skillsWorkspaceDir: root, skillsEligibility },
+      enabled: true,
+      skillsWorkspaceDir: root,
+      skillsEligibility,
     });
 
     expect(prompt).toContain("remote mac available");
