@@ -12,7 +12,7 @@ import {
 } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import type { BoardDocumentProps } from "./board-document.tsx";
+import { resolvePassiveWebsiteIdentity, type BoardDocumentProps } from "./board-document.tsx";
 import {
   widgetSnapshot,
   testId,
@@ -380,4 +380,358 @@ it("keeps passive documents live with saved HTML and pure core reports only", as
   expect(view.canGrant).toBe(false);
   expect(view.snapshot?.widgets.map((widget) => widget.name)).toEqual(["status", "session:report"]);
   expect(request).toHaveBeenCalledOnce();
+});
+
+it("renders a recognizable website identity card in passive mode for website-only boards", async () => {
+  const request = vi.fn(async () =>
+    snapshot({
+      sessionKey: "dashboard-website",
+      tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" }],
+      widgets: [
+        boardWidget({
+          name: "inventory-app",
+          title: "Demo Inventory App",
+          contentKind: "plugin",
+          pluginKind: "session:website",
+          props: { url: "https://inventory.example/app" },
+        }),
+      ],
+    }),
+  );
+  const client = {
+    request,
+    addEventListener: vi.fn(() => vi.fn()),
+  } as unknown as GatewayBrowserClient;
+  const element = mountDocument({
+    passive: true,
+    preparedSession: { sessionKey: "dashboard-website", agentId: "main" },
+    gatewaySnapshot: connected(client, {
+      ...gatewayHelloForMethods(["board.get"]),
+      controlUiWidgetKinds: [
+        { pluginId: "session", kind: "session:website", label: "Website" },
+      ],
+    }),
+  });
+
+  const view = await vi.waitFor(() => {
+    const current = element.querySelector("openclaw-board-view");
+    expect(current).not.toBeNull();
+    return current!;
+  });
+
+  // Website widgets remain safely excluded from renderSnapshot
+  expect(view.snapshot?.widgets).toEqual([]);
+
+  // Shows the recognizable website card instead of empty board
+  await waitForSolid(() => {
+    const card = view.querySelector<HTMLElement>('[data-test-id="board-website-preview"]');
+    expect(card).not.toBeNull();
+    expect(card?.querySelector("strong")?.textContent).toBe("Demo Inventory App");
+    expect(card?.querySelector("span:last-child")?.textContent).toBe("Website");
+    expect(card?.querySelector(".board-empty__mark")?.getAttribute("aria-hidden")).toBe("true");
+    expect(card?.querySelector("svg")).not.toBeNull();
+  });
+
+  // Empty board prompt is not shown
+  expect(view.querySelector('[data-test-id="board-empty"]')).toBeNull();
+
+  // Executable renderer is not mounted
+  expect(view.querySelector("openclaw-website-widget")).toBeNull();
+  expect(view.querySelector("iframe")).toBeNull();
+});
+
+it("falls back to generic localized website label when widget title is missing or blank", async () => {
+  const request = vi.fn(async () =>
+    snapshot({
+      sessionKey: "dashboard-website-blank",
+      tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" }],
+      widgets: [
+        boardWidget({
+          name: "unnamed-website",
+          title: "   ",
+          contentKind: "plugin",
+          pluginKind: "session:website",
+          props: { url: "https://example.com" },
+        }),
+      ],
+    }),
+  );
+  const client = {
+    request,
+    addEventListener: vi.fn(() => vi.fn()),
+  } as unknown as GatewayBrowserClient;
+  const element = mountDocument({
+    passive: true,
+    preparedSession: { sessionKey: "dashboard-website-blank", agentId: "main" },
+    gatewaySnapshot: connected(client, {
+      ...gatewayHelloForMethods(["board.get"]),
+      controlUiWidgetKinds: [
+        { pluginId: "session", kind: "session:website", label: "Website" },
+      ],
+    }),
+  });
+
+  const view = await vi.waitFor(() => {
+    const current = element.querySelector("openclaw-board-view");
+    expect(current).not.toBeNull();
+    return current!;
+  });
+
+  await waitForSolid(() => {
+    const card = view.querySelector<HTMLElement>('[data-test-id="board-website-preview"]');
+    expect(card).not.toBeNull();
+    expect(card?.querySelector("strong")?.textContent).toBe("Website");
+  });
+});
+
+it("renders the empty board prompt for genuinely empty boards in passive mode", async () => {
+  const request = vi.fn(async () =>
+    snapshot({
+      sessionKey: "dashboard-empty",
+      tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" }],
+      widgets: [],
+    }),
+  );
+  const client = {
+    request,
+    addEventListener: vi.fn(() => vi.fn()),
+  } as unknown as GatewayBrowserClient;
+  const element = mountDocument({
+    passive: true,
+    preparedSession: { sessionKey: "dashboard-empty", agentId: "main" },
+    gatewaySnapshot: connected(client, gatewayHelloForMethods(["board.get"])),
+  });
+
+  const view = await vi.waitFor(() => {
+    const current = element.querySelector("openclaw-board-view");
+    expect(current).not.toBeNull();
+    return current!;
+  });
+
+  await waitForSolid(() => {
+    const emptyPrompt = view.querySelector('[data-test-id="board-empty"]');
+    expect(emptyPrompt).not.toBeNull();
+    expect(emptyPrompt?.textContent).toContain("A clear board, ready for work");
+  });
+  expect(view.querySelector('[data-test-id="board-website-preview"]')).toBeNull();
+});
+
+it("keeps other unsafe widgets isolated without displaying a website identity card", async () => {
+  const request = vi.fn(async () =>
+    snapshot({
+      sessionKey: "dashboard-mcp-only",
+      tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" }],
+      widgets: [
+        boardWidget({
+          name: "mcp-tools",
+          title: "Custom MCP Tools",
+          contentKind: "mcp-app",
+        }),
+        boardWidget({
+          name: "browser-dash",
+          title: "Browser Dashboard",
+          contentKind: "plugin",
+          pluginKind: "browser:dashboard",
+        }),
+      ],
+    }),
+  );
+  const client = {
+    request,
+    addEventListener: vi.fn(() => vi.fn()),
+  } as unknown as GatewayBrowserClient;
+  const element = mountDocument({
+    passive: true,
+    preparedSession: { sessionKey: "dashboard-mcp-only", agentId: "main" },
+    gatewaySnapshot: connected(client, {
+      ...gatewayHelloForMethods(["board.get"]),
+      controlUiWidgetKinds: [
+        { pluginId: "browser", kind: "browser:dashboard", label: "Browser" },
+      ],
+    }),
+  });
+
+  const view = await vi.waitFor(() => {
+    const current = element.querySelector("openclaw-board-view");
+    expect(current).not.toBeNull();
+    return current!;
+  });
+
+  expect(view.snapshot?.widgets).toEqual([]);
+  await waitForSolid(() => {
+    expect(view.querySelector('[data-test-id="board-empty"]')).not.toBeNull();
+  });
+  expect(view.querySelector('[data-test-id="board-website-preview"]')).toBeNull();
+  expect(view.querySelector("openclaw-browser-dashboard-widget")).toBeNull();
+});
+
+it("renders normal previews for mixed boards without duplicating or executing website widgets", async () => {
+  const request = vi.fn(async () =>
+    snapshot({
+      sessionKey: "dashboard-mixed",
+      tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" }],
+      widgets: [
+        boardWidget({
+          name: "safe-report",
+          title: "Production Summary",
+          contentKind: "plugin",
+          pluginKind: "session:report",
+          props: { blocks: [{ type: "text", text: "Summary text" }] },
+        }),
+        boardWidget({
+          name: "service-website",
+          title: "Service Dashboard",
+          contentKind: "plugin",
+          pluginKind: "session:website",
+          props: { url: "https://status.example" },
+        }),
+      ],
+    }),
+  );
+  const client = {
+    request,
+    addEventListener: vi.fn(() => vi.fn()),
+  } as unknown as GatewayBrowserClient;
+  const element = mountDocument({
+    passive: true,
+    preparedSession: { sessionKey: "dashboard-mixed", agentId: "main" },
+    gatewaySnapshot: connected(client, {
+      ...gatewayHelloForMethods(["board.get"]),
+      controlUiWidgetKinds: [
+        { pluginId: "session", kind: "session:report", label: "Report" },
+        { pluginId: "session", kind: "session:website", label: "Website" },
+      ],
+    }),
+  });
+
+  const view = await vi.waitFor(() => {
+    const current = element.querySelector("openclaw-board-view");
+    expect(current).not.toBeNull();
+    return current!;
+  });
+
+  // Only the safe report widget is admitted for rendering
+  expect(view.snapshot?.widgets.map((w) => w.name)).toEqual(["safe-report"]);
+  await waitForSolid(() => {
+    expect(view.querySelectorAll("openclaw-board-widget-cell")).toHaveLength(1);
+  });
+  expect(view.querySelector('[data-test-id="board-empty"]')).toBeNull();
+  expect(view.querySelector('[data-test-id="board-website-preview"]')).toBeNull();
+  expect(view.querySelector("openclaw-website-widget")).toBeNull();
+});
+
+it("deterministically resolves website identity across multiple widgets and tabs", () => {
+  // Case 1: Active tab website vs second tab website -> active tab wins
+  const multiTab = snapshot({
+    tabs: [
+      { tabId: "main", title: "Main", position: 0, chatDock: "right" },
+      { tabId: "ops", title: "Operations", position: 1, chatDock: "right" },
+    ],
+    widgets: [
+      boardWidget({
+        name: "ops-site",
+        tabId: "ops",
+        title: "Ops Site",
+        pluginKind: "session:website",
+        position: 0,
+      }),
+      boardWidget({
+        name: "main-site",
+        tabId: "main",
+        title: "Main Site",
+        pluginKind: "session:website",
+        position: 0,
+      }),
+    ],
+  });
+  expect(resolvePassiveWebsiteIdentity(multiTab, "main")).toEqual({ title: "Main Site" });
+  expect(resolvePassiveWebsiteIdentity(multiTab, "ops")).toEqual({ title: "Ops Site" });
+
+  // Case 2: Active tab has non-website widget -> returns null (does not falsely claim website)
+  const mcpTab = snapshot({
+    tabs: [
+      { tabId: "main", title: "Main", position: 0, chatDock: "right" },
+      { tabId: "secondary", title: "Secondary", position: 1, chatDock: "right" },
+    ],
+    widgets: [
+      boardWidget({
+        name: "mcp-card",
+        tabId: "main",
+        contentKind: "mcp-app",
+        position: 0,
+      }),
+      boardWidget({
+        name: "sec-site",
+        tabId: "secondary",
+        pluginKind: "session:website",
+        title: "Secondary Site",
+        position: 0,
+      }),
+    ],
+  });
+  expect(resolvePassiveWebsiteIdentity(mcpTab, "main")).toBeNull();
+
+  // Case 3: Active tab is empty, fallback to ordered tabs
+  const emptyActiveTab = snapshot({
+    tabs: [
+      { tabId: "main", title: "Main", position: 0, chatDock: "right" },
+      { tabId: "secondary", title: "Secondary", position: 1, chatDock: "right" },
+    ],
+    widgets: [
+      boardWidget({
+        name: "sec-site",
+        tabId: "secondary",
+        pluginKind: "session:website",
+        title: "Secondary Site",
+        position: 0,
+      }),
+    ],
+  });
+  expect(resolvePassiveWebsiteIdentity(emptyActiveTab, "main")).toEqual({ title: "Secondary Site" });
+
+  // Case 4: Multiple website widgets on same tab -> position 0 wins
+  const multiWidget = snapshot({
+    tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" }],
+    widgets: [
+      boardWidget({
+        name: "second",
+        tabId: "main",
+        pluginKind: "session:website",
+        title: "Second Site",
+        position: 2,
+      }),
+      boardWidget({
+        name: "first",
+        tabId: "main",
+        pluginKind: "session:website",
+        title: "First Site",
+        position: 0,
+      }),
+    ],
+  });
+  expect(resolvePassiveWebsiteIdentity(multiWidget, "main")).toEqual({ title: "First Site" });
+});
+
+it("does not expose website metadata for unauthorized boards", async () => {
+  const request = vi.fn(async () => {
+    throw new Error("Permission denied: operator cannot read session");
+  });
+  const client = {
+    request,
+    addEventListener: vi.fn(() => vi.fn()),
+  } as unknown as GatewayBrowserClient;
+  const element = mountDocument({
+    passive: true,
+    preparedSession: { sessionKey: "unauthorized-dashboard", agentId: "main" },
+    gatewaySnapshot: connected(client, gatewayHelloForMethods(["board.get"])),
+  });
+
+  await waitForSolid(() => {
+    const errorAlert = element.querySelector('[role="alert"]');
+    expect(errorAlert).not.toBeNull();
+    expect(errorAlert?.textContent).toContain("Permission denied");
+  });
+
+  expect(element.querySelector("openclaw-board-view")).toBeNull();
+  expect(element.querySelector('[data-test-id="board-website-preview"]')).toBeNull();
 });

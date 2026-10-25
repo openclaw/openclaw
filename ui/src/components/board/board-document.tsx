@@ -1,4 +1,4 @@
-import type { BoardGetParams, BoardSnapshot } from "@openclaw/gateway-protocol";
+import type { BoardGetParams, BoardSnapshot, BoardWidget } from "@openclaw/gateway-protocol";
 import { createMemo, onSettled, Show } from "solid-js";
 import { GATEWAY_SERVER_CAPS } from "../../../../packages/gateway-protocol/src/server-capabilities.js";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
@@ -28,7 +28,57 @@ import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-brid
 import { Icon } from "../solid/icon.tsx";
 import { PanelLoadingSkeleton } from "../solid/panel-loading-skeleton.tsx";
 import "../../styles/board-document.css";
+import type { PassiveWebsiteIdentity } from "./board-view-state.ts";
 import { BoardView } from "./board-view.tsx";
+
+export type { PassiveWebsiteIdentity } from "./board-view-state.ts";
+
+export function resolvePassiveWebsiteIdentity(
+  snapshot: BoardSnapshot,
+  activeTabId?: string,
+): PassiveWebsiteIdentity | null {
+  const isWebsite = (widget: BoardWidget) => widget.pluginKind === "session:website";
+  if (activeTabId) {
+    const activeWidgets = snapshot.widgets
+      .filter((widget) => widget.tabId === activeTabId)
+      .toSorted(
+        (left, right) => left.position - right.position || left.name.localeCompare(right.name),
+      );
+    if (activeWidgets.length > 0) {
+      const activeWebsite = activeWidgets.find(isWebsite);
+      return activeWebsite
+        ? { title: activeWebsite.title?.trim() || t("board.widget.kindWebsite") }
+        : null;
+    }
+  }
+  const orderedTabs = snapshot.tabs.toSorted(
+    (left, right) => left.position - right.position || left.tabId.localeCompare(right.tabId),
+  );
+  for (const tab of orderedTabs) {
+    const tabWidgets = snapshot.widgets
+      .filter((widget) => widget.tabId === tab.tabId)
+      .toSorted(
+        (left, right) => left.position - right.position || left.name.localeCompare(right.name),
+      );
+    const tabWebsite = tabWidgets.find(isWebsite);
+    if (tabWebsite) {
+      return {
+        title: tabWebsite.title?.trim() || t("board.widget.kindWebsite"),
+      };
+    }
+  }
+  const anyWebsite = snapshot.widgets
+    .filter(isWebsite)
+    .toSorted(
+      (left, right) => left.position - right.position || left.name.localeCompare(right.name),
+    )[0];
+  if (anyWebsite) {
+    return {
+      title: anyWebsite.title?.trim() || t("board.widget.kindWebsite"),
+    };
+  }
+  return null;
+}
 
 type DashboardDocumentState =
   | "loading"
@@ -288,10 +338,14 @@ function createBoardDocument(
           ),
         }
       : snapshot;
+    const websiteIdentity = passive
+      ? resolvePassiveWebsiteIdentity(snapshot, activeTabId)
+      : null;
     return {
       provider,
       widgetFrameUrl: (name: string, revision: number) => provider.widgetFrameUrl(name, revision),
       snapshot: renderSnapshot,
+      websiteIdentity,
       session,
       callbacks,
       activeTabId,
@@ -389,6 +443,7 @@ function BoardDocumentContent(
               fitAutoContent={true}
               session={board().session}
               snapshot={board().snapshot}
+              websiteIdentity={board().websiteIdentity}
               activeTabId={board().activeTabId}
               widgetFrameUrl={board().widgetFrameUrl}
               callbacks={board().callbacks}

@@ -47,6 +47,10 @@ export function orderedWidgets(snapshot: BoardSnapshot, tabId: string): BoardWid
     );
 }
 
+export type PassiveWebsiteIdentity = {
+  title: string;
+};
+
 export type BoardViewProps = {
   session: BoardGetParams;
   snapshot?: BoardSnapshot;
@@ -59,6 +63,7 @@ export type BoardViewProps = {
   canGrant: boolean;
   fitAutoContent: boolean;
   pageWidgetName: string;
+  websiteIdentity?: PassiveWebsiteIdentity | null;
 };
 
 export type BoardViewMethods = {

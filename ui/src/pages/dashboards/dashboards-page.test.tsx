@@ -427,4 +427,72 @@ describe("DashboardsPage", () => {
     changeValue(sortSelect, "title");
     expect(cardTitles(element)).toEqual(["Alpha signals", "Bravo health", "Zulu monitor"]);
   });
+
+  it("renders a recognizable website identity preview in gallery for a website dashboard", async () => {
+    const runFrame = controlPreviewFrames();
+    const source = createApplicationGateway();
+    const client = createTestGatewayClient(async (method, _params) => {
+      if (method !== "board.get") {
+        throw new Error(`Unexpected Gateway method: ${method}`);
+      }
+      return {
+        sessionKey: "agent:main:dashboard:site",
+        revision: 1,
+        tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" }],
+        widgets: [
+          {
+            name: "site-widget",
+            tabId: "main",
+            title: "Demo Inventory App",
+            contentKind: "plugin",
+            pluginKind: "session:website",
+            props: { url: "https://inventory.example/app" },
+            sizeW: 12,
+            sizeH: 8,
+            position: 0,
+            grantState: "none",
+            revision: 1,
+          },
+        ],
+      } satisfies BoardSnapshot;
+    });
+    source.publish({
+      ...source.gateway.snapshot,
+      client,
+      phase: "connected",
+      hello: {
+        ...source.gateway.snapshot.hello,
+        controlUiWidgetKinds: [
+          { pluginId: "session", kind: "session:website", label: "Website" },
+        ],
+      },
+    });
+    const data = routeData(row("agent:main:dashboard:site", "Inventory Dashboard"));
+    const context = pageContext({
+      gateway: source.gateway,
+      sessions: {
+        listSnapshot: () => snapshot(null),
+        subscribeList: () => () => {},
+        refreshList: vi.fn(async () => undefined),
+      },
+    });
+    const { container } = await mountDashboard(context, data);
+    flush();
+    runFrame();
+    flush();
+
+    const preview = container.querySelector<HTMLElement>("openclaw-dashboard-preview");
+    expect(preview).not.toBeNull();
+
+    await waitForSolid(() => {
+      const card = preview?.querySelector('[data-test-id="board-website-preview"]');
+      expect(card).not.toBeNull();
+      expect(card?.querySelector("strong")?.textContent).toBe("Demo Inventory App");
+      expect(card?.querySelector("span:last-child")?.textContent).toBe("Website");
+    });
+
+    expect(preview?.querySelector('[data-test-id="board-empty"]')).toBeNull();
+    expect(preview?.querySelector("openclaw-website-widget")).toBeNull();
+    expect(preview?.querySelector("iframe")).toBeNull();
+  });
 });
