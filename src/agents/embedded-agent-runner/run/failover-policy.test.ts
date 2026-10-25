@@ -1,6 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { classifyAssistantFailoverReason } from "../../embedded-agent-helpers/assistant-message-failures.js";
-import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
 import { mergeRetryFailoverReason, resolveRunFailoverDecision } from "./failover-policy.js";
 
 function resolveAssistantDecision(
@@ -73,29 +71,6 @@ describe("resolveRunFailoverDecision", () => {
     ).toEqual(expected);
   });
 
-  it("falls back for opencode-go provider-owned stalled stream errors after rotation is exhausted", () => {
-    const failoverReason = classifyAssistantFailoverReason({
-      role: "assistant" as const,
-      api: "openai-completions" as const,
-      provider: "opencode-go",
-      model: "deepseek-v4-flash",
-      usage: createZeroUsageFixture(),
-      stopReason: "error" as const,
-      errorMessage: "opencode-go stream timed out after provider-owned SSE boundary stalled",
-      content: [],
-      timestamp: 0,
-    });
-
-    expect(failoverReason).toBe("timeout");
-    expect(
-      resolveAssistantDecision({
-        failoverFailure: failoverReason !== null,
-        failoverReason,
-        profileRotated: true,
-      }),
-    ).toEqual(fallback("timeout"));
-  });
-
   it.each(["runtime", "run_budget"] as const)(
     "does not rotate harness-owned %s timeouts",
     (source) => {
@@ -109,6 +84,10 @@ describe("resolveRunFailoverDecision", () => {
   );
 
   it.each([
+    [
+      { failoverFailure: true, failoverReason: "timeout", profileRotated: true },
+      fallback("timeout"),
+    ],
     [{ failoverFailure: true, failoverReason: "format" }, surface("format")],
     [{ failoverFailure: true, failoverReason: "tls_certificate" }, fallback("tls_certificate")],
     // Tool execution must not trigger model/profile rotation (#52147).

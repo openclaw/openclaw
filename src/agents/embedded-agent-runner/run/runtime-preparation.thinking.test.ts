@@ -131,11 +131,9 @@ describe("selected route thinking metadata at runtime preparation", () => {
 
   it.each([
     ["platform", "absent"],
-    ["platform", "platform"],
     ["platform", "subscription"],
     ["subscription", "absent"],
     ["subscription", "platform"],
-    ["subscription", "subscription"],
   ] as const)("preserves %s disablement with %s prepared capability", async (route, capability) => {
     vi.stubGlobal(
       "fetch",

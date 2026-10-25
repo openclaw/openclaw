@@ -117,19 +117,9 @@ beforeEach(() => {
   vi.resetAllMocks();
 });
 
-it.each([false, true])("publishes recovery context with team=%s", async (team) => {
+it("publishes recovery context without a team", async () => {
   const fixture = createFixture();
-  mocks.readSummaries.mockResolvedValue(
-    team
-      ? [
-          ...fixture.summaries,
-          {
-            sessionKey: "agent:main:subagent:worker-2",
-            entry: { sessionId: "worker-2", updatedAt: 1, spawnedBy: fixture.entry.sessionId },
-          },
-        ]
-      : [],
-  );
+  mocks.readSummaries.mockResolvedValue([]);
   await prepareEmbeddedAttemptHistory(fixture.input, fixture.assertActive);
   expect(fixture.agent.state.messages.at(-1)).toMatchObject({
     role: "user",
@@ -137,14 +127,8 @@ it.each([false, true])("publishes recovery context with team=%s", async (team) =
   });
   const content = fixture.agent.state.messages.at(-1)?.content;
   expect(content).toContain("[SYSTEM HANDOFF]");
-  if (team) {
-    expect(content).toContain("You are the new LEADER");
-    expect(content).toContain("Subagent worker-2 (leaf): running");
-    expect(content).toContain("Do not repeat work already performed by subordinates.");
-  } else {
-    expect(content).toContain("continue the conversation from where the previous model left off");
-    expect(content).not.toContain("ACTIVE SUBORDINATE UNITS");
-  }
+  expect(content).toContain("continue the conversation from where the previous model left off");
+  expect(content).not.toContain("ACTIVE SUBORDINATE UNITS");
 });
 
 it("awaits descriptive worker rows before publishing the recovery briefing", async () => {
@@ -159,10 +143,22 @@ it("awaits descriptive worker rows before publishing the recovery briefing", asy
   await awaitGateBeforeSettlement(entered.promise, preparation, "hierarchy reader was not reached");
   expect(fixture.agent.state.messages).toBe(fixture.messages);
   expect(mocks.updateEntry).not.toHaveBeenCalled();
-  rows.resolve(fixture.summaries);
+  rows.resolve([
+    ...fixture.summaries,
+    {
+      sessionKey: "agent:main:subagent:worker-2",
+      entry: { sessionId: "worker-2", updatedAt: 1, spawnedBy: fixture.entry.sessionId },
+    },
+  ]);
   await preparation;
   const content = fixture.agent.state.messages.at(-1)?.content;
   expect(content).toContain("Subagent child-session (orchestrator): done");
+  expect(content).toContain("Subagent worker-2 (leaf): running");
+  expect(content).toContain("You are the new LEADER (Orchestrator)");
+  expect(content).toContain("Do not perform tasks already delegated to subordinates.");
+  expect(content).toContain("CURRENT STATE SUMMARY:\nDelegate the remaining work");
+  expect(content).toContain("Do not repeat work already performed by subordinates.");
+  expect(fixture.agent.state.messages.at(-1)?.role).toBe("user");
   expect(content).not.toContain("unrelated");
   const [, update] = mocks.updateEntry.mock.calls[0]!;
   expect(await update(fixture.entry, {})).toMatchObject({ quotaSuspension: { state: "active" } });

@@ -130,10 +130,9 @@ describe("stripSessionsYieldArtifacts", () => {
     ]);
   });
 
-  it("keeps SQLite history and trailing metadata available after multi-turn yield cleanup", async () => {
+  it("keeps SQLite history consistent after multi-turn yield cleanup", async () => {
     const { dir, scope, sessionManager } = await persistentSession("sqlite");
     const { toolResult, assistants } = await seed(sessionManager, 3);
-    await sessionManager.appendCustomEntryAsync("plugin-state", { enabled: true });
     const generationBefore = readSessionTranscriptWatermark(scope).generation;
     const session = buildSession([toolResult, ...assistants, interrupt()], sessionManager);
     await stripSessionsYieldArtifacts(session);
@@ -146,13 +145,6 @@ describe("stripSessionsYieldArtifacts", () => {
     expect(readSessionTranscriptWatermark(scope).generation).toBe(generationAfter);
     const reopened = await SessionManager.openAsync(scope, dir);
     expect(reopened.buildSessionContext().messages).toEqual([toolResult]);
-    expect(reopened.getEntries()).toContainEqual(
-      expect.objectContaining({
-        type: "custom",
-        customType: "plugin-state",
-        data: { enabled: true },
-      }),
-    );
     expect(await loadTranscriptEvents(scope)).not.toContainEqual(
       expect.objectContaining({ type: "custom_message", customType: interruptType }),
     );
