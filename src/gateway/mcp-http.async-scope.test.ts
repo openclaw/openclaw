@@ -1,6 +1,7 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { PreparedAgentRunAdmission } from "../agents/admitted-run-context.js";
 import {
   getGatewayToolCallerIdentity as getToolCaller,
@@ -154,7 +155,7 @@ it("serves fresh request scopes after its replacement creator closes", async () 
   expect(constructionScopes[0]?.aborted).toBe(true);
 });
 
-it("retains Gateway readers but sheds the starting turn's transcript fence", async () => {
+it("keeps Gateway readers while shedding the starting turn's async stores", async () => {
   const session = { agentId: "main", sessionId: "first-turn-session" };
   const receipt: UserTurnTranscriptAdmissionReceipt = {
     ...session,
@@ -168,22 +169,30 @@ it("retains Gateway readers but sheds the starting turn's transcript fence", asy
     logicalTurnId: "first-turn",
     role: "user",
   };
+  // Stands in for turn-local stores this listener does not name explicitly.
+  const turnLocal = new AsyncLocalStorage<string>();
   const readers = createSqliteReadOnlyWorkerScope();
   const readerContext = readers.run(() => readOnlyWorkerScope.getStore());
   const observed: unknown[] = [];
   execute.mockImplementation(() => {
-    observed.push([readTranscriptFence(session), readOnlyWorkerScope.getStore()]);
+    observed.push([
+      readTranscriptFence(session),
+      turnLocal.getStore(),
+      readOnlyWorkerScope.getStore(),
+    ]);
     return completed;
   });
   try {
     await readers.run(() =>
-      withTranscriptFence(receipt, () => {
-        expect(readTranscriptFence(session)).toBe(receipt);
-        return ensureMcpLoopbackServer();
-      }),
+      turnLocal.run("first-turn", () =>
+        withTranscriptFence(receipt, () => {
+          expect(readTranscriptFence(session)).toBe(receipt);
+          return ensureMcpLoopbackServer();
+        }),
+      ),
     );
     expect(await callTool()).toMatchObject({ result: { ...completed, isError: false } });
-    expect(observed).toEqual([[undefined, readerContext]]);
+    expect(observed).toEqual([[undefined, undefined, readerContext]]);
   } finally {
     await closeMcpLoopbackServer();
     await readers.close();
@@ -324,7 +333,17 @@ describe("MCP HTTP keepalive", () => {
     }
   });
 
-  const within = <T>(promise: Promise<T>) => withTestTimeout(promise, 500, "HTTP idle timeout");
+  async function within<T>(promise: Promise<T>): Promise<T> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("HTTP idle timeout")), 500);
+    });
+    try {
+      return await Promise.race([promise, timeout]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
 
   const toolCall = mcp.toolCall("wait_probe");
   const heartbeatResult = { content: [{ type: "text", text: "completed once" }] };

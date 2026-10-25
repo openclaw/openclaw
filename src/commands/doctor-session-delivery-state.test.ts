@@ -6,16 +6,17 @@ import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { listSessionEntriesCore } from "../config/sessions/session-accessor.js";
 import { loadExactSessionEntryReadOnly } from "../config/sessions/session-accessor.sqlite-exact-read.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
+import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import {
   repairCanonicalSessionDeliveryStates,
   repairCanonicalSessionResolvedSkills,
@@ -33,32 +34,45 @@ afterEach(() => {
 function insertSessionRow(
   env: NodeJS.ProcessEnv,
   sessionKey: string,
-  entry: {
-    sessionId: string;
-    updatedAt: number;
-    channel?: string;
-    lastAccountId?: string;
-    deliveryContext?: DeliveryContext;
-  } & Record<string, unknown>,
+  entry: Record<string, unknown>,
   agentId = "main",
 ): void {
   const database = openOpenClawAgentDatabase({ agentId, env });
   database.db
     .prepare(
-      "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at, entry_valid) VALUES (?, ?, ?, ?, 1)",
+      "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at, parent_session_key, spawned_by) VALUES (?, ?, ?, ?, ?, ?)",
     )
-    .run(sessionKey, entry.sessionId, JSON.stringify(entry), entry.updatedAt);
+    .run(
+      sessionKey,
+      String(entry.sessionId),
+      JSON.stringify(entry),
+      Number(entry.updatedAt),
+      typeof entry.parentSessionKey === "string" ? entry.parentSessionKey : null,
+      typeof entry.spawnedBy === "string" ? entry.spawnedBy : null,
+    );
+  database.db
+    .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
+    .run(sessionKey);
+  const legacyContext = entry.deliveryContext as Record<string, unknown> | undefined;
   database.db
     .prepare(
       "INSERT INTO session_windows (session_id, session_key, session_scope, created_at, updated_at, channel, account_id) VALUES (?, ?, 'conversation', ?, ?, ?, ?)",
     )
     .run(
-      entry.sessionId,
+      String(entry.sessionId),
       sessionKey,
-      entry.updatedAt,
-      entry.updatedAt,
-      entry.channel ?? entry.deliveryContext?.channel ?? null,
-      entry.lastAccountId ?? entry.deliveryContext?.accountId ?? null,
+      Number(entry.updatedAt),
+      Number(entry.updatedAt),
+      typeof entry.channel === "string"
+        ? entry.channel
+        : typeof legacyContext?.channel === "string"
+          ? legacyContext.channel
+          : null,
+      typeof entry.lastAccountId === "string"
+        ? entry.lastAccountId
+        : typeof legacyContext?.accountId === "string"
+          ? legacyContext.accountId
+          : null,
     );
 }
 
@@ -106,10 +120,27 @@ describe("doctor canonical session delivery state", () => {
         deliveryContext: { channel: "telegram", to: "recipient", accountId: "current-bot" },
         lastAccountId: "stale-slack-bot",
       };
-      insertSessionRow(env, sessionKey, entry);
-      closeOpenClawAgentDatabasesForTest();
+      fs.mkdirSync(path.dirname(databasePath), { recursive: true });
       {
         using database = new DatabaseSync(databasePath);
+        database.exec(OPENCLAW_AGENT_SCHEMA_SQL);
+        database.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION}`);
+        database
+          .prepare(
+            `INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, created_at, updated_at)
+             VALUES ('primary', 'agent', ?, 'main', 1, 1)`,
+          )
+          .run(OPENCLAW_AGENT_SCHEMA_VERSION);
+        database
+          .prepare(
+            "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at, entry_valid) VALUES (?, ?, ?, ?, 1)",
+          )
+          .run(sessionKey, entry.sessionId, JSON.stringify(entry), entry.updatedAt);
+        database
+          .prepare(
+            "INSERT INTO session_windows (session_id, session_key, session_scope, created_at, updated_at, channel, account_id) VALUES (?, ?, 'conversation', 10, 10, 'slack', 'stale-slack-bot')",
+          )
+          .run(entry.sessionId, sessionKey);
         database.exec(`
           DROP INDEX idx_agent_cache_updated;
           CREATE INDEX idx_agent_cache_updated ON cache_entries(scope, key, updated_at);
@@ -218,7 +249,12 @@ describe("doctor canonical session delivery state", () => {
     const canonicalEntry = {
       sessionId: "canonical-session",
       updatedAt: 30,
-      delivery: { kind: "internal" },
+      delivery: {
+        kind: "external",
+        route: { channel: "telegram", target: { to: "-1002" } },
+        context: { channel: "telegram", to: "-1002" },
+        origin: { provider: "telegram", to: "-1002" },
+      },
     };
     insertSessionRow(sourceEnv, "agent:main:legacy", {
       sessionId: "legacy-session",
@@ -282,11 +318,35 @@ describe("doctor canonical session delivery state", () => {
     expectReport(repairCanonicalSessionDeliveryStates({ apply: true, cfg: {}, env: copiedEnv }), 0);
 
     const migrated: Record<string, unknown> = readEntry(copiedEnv, "agent:main:legacy");
-    expect(migrated.delivery).toMatchObject({
+    expect(migrated.delivery).toEqual({
       kind: "external",
+      route: {
+        channel: "telegram",
+        accountId: "work",
+        target: { to: "-1001" },
+        thread: { id: "thread-1" },
+      },
       context: { channel: "telegram", to: "-1001", accountId: "work", threadId: "thread-1" },
+      origin: {
+        provider: "telegram",
+        to: "-1001",
+        chatType: "group",
+        accountId: "work",
+        threadId: "thread-1",
+      },
     });
-    expect(migrated).not.toHaveProperty("deliveryContext");
+    for (const key of [
+      "route",
+      "deliveryContext",
+      "origin",
+      "channel",
+      "lastChannel",
+      "lastTo",
+      "lastAccountId",
+      "lastThreadId",
+    ]) {
+      expect(migrated).not.toHaveProperty(key);
+    }
     expect(readEntry(copiedEnv, "agent:main:internal").delivery).toEqual({ kind: "internal" });
     expect(readEntry(copiedEnv, "agent:main:origin-stale").delivery.context).toMatchObject({
       channel: "telegram",

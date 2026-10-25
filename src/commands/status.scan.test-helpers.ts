@@ -6,48 +6,175 @@ import type { OpenClawConfig } from "../config/types.js";
 import { withEnvAsync } from "../test-utils/env.js";
 
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
-const unknownMock = () => vi.fn<(...args: unknown[]) => unknown>();
-type StatusScanSharedMocks = ReturnType<typeof createStatusScanSharedMocks>;
-type ChannelScope = {
-  config: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  includePersistedAuthState?: boolean;
+type ResolveConfigPathMock = Mock<() => string>;
+
+type StatusScanSharedMocks = {
+  resolveConfigPath: ResolveConfigPathMock;
+  resolveGatewayPort: Mock<(cfg?: OpenClawConfig) => number>;
+  hasConfiguredChannels: UnknownMock;
+  hasConfiguredChannelsForReadOnlyScope: UnknownMock;
+  readBestEffortConfig: UnknownMock;
+  readBestEffortConfigSnapshot: UnknownMock;
+  resolveCommandSecretRefsViaGateway: UnknownMock;
+  getUpdateCheckResult: UnknownMock;
+  getAgentLocalStatuses: Mock<
+    (cfg: OpenClawConfig) => Promise<{ defaultId: string | null; agents: unknown[] }>
+  >;
+  getStatusSummary: UnknownMock;
+  getMemorySearchManager: UnknownMock;
+  buildGatewayConnectionDetails: UnknownMock;
+  resolveGatewayProbeTarget: UnknownMock;
+  probeGateway: UnknownMock;
+  resolveGatewayProbeAuthResolution: UnknownMock;
+  ensurePluginRegistryLoaded: UnknownMock;
+  buildPluginCompatibilityNotices: Mock<() => unknown[]>;
 };
 
-function hasConfiguredChannels(mocks: StatusScanSharedMocks, params: ChannelScope) {
-  return mocks.hasConfiguredChannels(
-    params.config,
-    params.env,
-    params.includePersistedAuthState === undefined
-      ? undefined
-      : { includePersistedAuthState: params.includePersistedAuthState },
-  );
-}
-
-export function createStatusScanSharedMocks(configPathLabel: string) {
+export function createStatusScanSharedMocks(configPathLabel: string): StatusScanSharedMocks {
   return {
     resolveConfigPath: vi.fn(() => `/tmp/openclaw-${configPathLabel}-missing-${process.pid}.json`),
     resolveGatewayPort: vi.fn((cfg?: OpenClawConfig) => cfg?.gateway?.port ?? 18789),
-    hasConfiguredChannels: unknownMock(),
-    hasConfiguredChannelsForReadOnlyScope: unknownMock(),
-    readBestEffortConfig: unknownMock(),
-    readBestEffortConfigSnapshot: unknownMock(),
-    resolveCommandSecretRefsViaGateway: unknownMock(),
-    getUpdateCheckResult: unknownMock(),
-    getAgentLocalStatuses:
-      vi.fn<(cfg: OpenClawConfig) => Promise<{ defaultId: string | null; agents: unknown[] }>>(),
-    getStatusSummary: unknownMock(),
-    getMemorySearchManager: unknownMock(),
-    buildGatewayConnectionDetails: unknownMock(),
-    resolveGatewayProbeTarget: vi.fn<(...args: unknown[]) => unknown>(() => ({
+    hasConfiguredChannels: vi.fn(),
+    hasConfiguredChannelsForReadOnlyScope: vi.fn(),
+    readBestEffortConfig: vi.fn(),
+    readBestEffortConfigSnapshot: vi.fn(),
+    resolveCommandSecretRefsViaGateway: vi.fn(),
+    getUpdateCheckResult: vi.fn(),
+    getAgentLocalStatuses: vi.fn(),
+    getStatusSummary: vi.fn(),
+    getMemorySearchManager: vi.fn(),
+    buildGatewayConnectionDetails: vi.fn(),
+    resolveGatewayProbeTarget: vi.fn(() => ({
       mode: "local",
       gatewayMode: "local",
       remoteUrlMissing: false,
     })),
-    probeGateway: unknownMock(),
-    resolveGatewayProbeAuthResolution: unknownMock(),
-    ensurePluginRegistryLoaded: unknownMock(),
-    buildPluginCompatibilityNotices: vi.fn<() => unknown[]>(() => []),
+    probeGateway: vi.fn(),
+    resolveGatewayProbeAuthResolution: vi.fn(),
+    ensurePluginRegistryLoaded: vi.fn(),
+    buildPluginCompatibilityNotices: vi.fn(() => []),
+  };
+}
+
+type StatusOsSummaryModuleMock = {
+  resolveOsSummary: Mock<() => { label: string }>;
+};
+
+function createStatusOsSummaryModuleMock(): StatusOsSummaryModuleMock {
+  return {
+    resolveOsSummary: vi.fn(() => ({ label: "test-os" })),
+  };
+}
+
+type StatusScanDepsRuntimeModuleMock = Pick<
+  typeof import("./status.scan.deps.runtime.js"),
+  "getMemoryProvider" | "isMemoryProviderNative"
+> & {
+  getMemorySearchManager: StatusScanSharedMocks["getMemorySearchManager"];
+};
+
+function createStatusScanDepsRuntimeModuleMock(
+  mocks: Pick<StatusScanSharedMocks, "getMemorySearchManager">,
+): StatusScanDepsRuntimeModuleMock {
+  return {
+    getMemoryProvider: vi.fn<StatusScanDepsRuntimeModuleMock["getMemoryProvider"]>(async () => ({
+      provider: null,
+    })),
+    getMemorySearchManager: mocks.getMemorySearchManager,
+    isMemoryProviderNative: vi.fn<StatusScanDepsRuntimeModuleMock["isMemoryProviderNative"]>(
+      () => false,
+    ),
+  };
+}
+
+type StatusGatewayProbeModuleMock = {
+  resolveGatewayProbeAuthResolution: StatusScanSharedMocks["resolveGatewayProbeAuthResolution"];
+};
+
+function createStatusGatewayProbeModuleMock(
+  mocks: Pick<StatusScanSharedMocks, "resolveGatewayProbeAuthResolution">,
+): StatusGatewayProbeModuleMock {
+  return {
+    resolveGatewayProbeAuthResolution: mocks.resolveGatewayProbeAuthResolution,
+  };
+}
+
+type StatusGatewayCallModuleMock = {
+  buildGatewayConnectionDetails: StatusScanSharedMocks["buildGatewayConnectionDetails"];
+  callGateway?: unknown;
+};
+
+function createStatusGatewayCallModuleMock(
+  mocks: Pick<StatusScanSharedMocks, "buildGatewayConnectionDetails"> & {
+    callGateway?: unknown;
+  },
+): StatusGatewayCallModuleMock {
+  return {
+    buildGatewayConnectionDetails: mocks.buildGatewayConnectionDetails,
+    ...(mocks.callGateway ? { callGateway: mocks.callGateway } : {}),
+  };
+}
+
+function createStatusPluginRegistryModuleMock(
+  mocks: Pick<StatusScanSharedMocks, "ensurePluginRegistryLoaded">,
+): { ensurePluginRegistryLoaded: StatusScanSharedMocks["ensurePluginRegistryLoaded"] } {
+  return {
+    ensurePluginRegistryLoaded: mocks.ensurePluginRegistryLoaded,
+  };
+}
+
+function createStatusPluginStatusModuleMock(
+  mocks: Pick<StatusScanSharedMocks, "buildPluginCompatibilityNotices">,
+): {
+  buildPluginCompatibilityNotices: StatusScanSharedMocks["buildPluginCompatibilityNotices"];
+  buildPluginCompatibilitySnapshotNotices: StatusScanSharedMocks["buildPluginCompatibilityNotices"];
+} {
+  return {
+    buildPluginCompatibilityNotices: mocks.buildPluginCompatibilityNotices,
+    buildPluginCompatibilitySnapshotNotices: mocks.buildPluginCompatibilityNotices,
+  };
+}
+
+function createStatusUpdateModuleMock(mocks: Pick<StatusScanSharedMocks, "getUpdateCheckResult">): {
+  getUpdateCheckResult: StatusScanSharedMocks["getUpdateCheckResult"];
+} {
+  return {
+    getUpdateCheckResult: mocks.getUpdateCheckResult,
+  };
+}
+
+function createStatusAgentLocalModuleMock(
+  mocks: Pick<StatusScanSharedMocks, "getAgentLocalStatuses">,
+): {
+  collectStatusLocalSnapshot: (
+    cfg: OpenClawConfig,
+  ) => Promise<{ defaultId: string | null; publish: () => unknown; sessionStores: undefined }>;
+} {
+  return {
+    collectStatusLocalSnapshot: async (cfg) => {
+      const agentStatus = await mocks.getAgentLocalStatuses(cfg);
+      return {
+        defaultId: agentStatus.defaultId,
+        publish: () => agentStatus,
+        sessionStores: undefined,
+      };
+    },
+  };
+}
+
+function createStatusSummaryModuleMock(mocks: Pick<StatusScanSharedMocks, "getStatusSummary">) {
+  return {
+    getStatusSummary: mocks.getStatusSummary,
+    prepareStatusSummary: async (...args: unknown[]) => {
+      const summary = await mocks.getStatusSummary(...args);
+      return { publish: () => ({ summary, sessionStores: undefined }) };
+    },
+  };
+}
+
+function createStatusExecModuleMock(): { runExec: UnknownMock } {
+  return {
+    runExec: vi.fn(),
   };
 }
 
@@ -83,9 +210,25 @@ export async function loadStatusScanModuleForTest(
     vi.fn(() => ({ store: { databasePath: "/tmp/main.sqlite" } }));
 
   vi.doMock("../plugins/channel-plugin-ids.js", () => ({
-    hasConfiguredChannelsForReadOnlyScope: mocks.hasConfiguredChannelsForReadOnlyScope,
-    listConfiguredChannelIdsForReadOnlyScope: (params: ChannelScope) =>
-      hasConfiguredChannels(mocks, params) ? ["mock-channel"] : [],
+    hasConfiguredChannelsForReadOnlyScope: (params: {
+      config: OpenClawConfig;
+      env?: NodeJS.ProcessEnv;
+      includePersistedAuthState?: boolean;
+    }) => mocks.hasConfiguredChannelsForReadOnlyScope(params),
+    listConfiguredChannelIdsForReadOnlyScope: (params: {
+      config: OpenClawConfig;
+      env?: NodeJS.ProcessEnv;
+      includePersistedAuthState?: boolean;
+    }) =>
+      mocks.hasConfiguredChannels(
+        params.config,
+        params.env,
+        params.includePersistedAuthState === undefined
+          ? undefined
+          : { includePersistedAuthState: params.includePersistedAuthState },
+      )
+        ? ["mock-channel"]
+        : [],
   }));
 
   vi.doMock("../config/io.js", () => ({
@@ -155,40 +298,12 @@ export async function loadStatusScanModuleForTest(
   vi.doMock("../cli/command-secret-gateway.js", () => ({
     resolveCommandSecretRefsViaGateway: mocks.resolveCommandSecretRefsViaGateway,
   }));
-  vi.doMock("./status.update.js", () => ({ getUpdateCheckResult: mocks.getUpdateCheckResult }));
-  vi.doMock("./status.agent-local.js", () => ({
-    collectStatusLocalSnapshot: async (cfg: OpenClawConfig) => {
-      const agentStatus = await mocks.getAgentLocalStatuses(cfg);
-      return {
-        defaultId: agentStatus.defaultId,
-        publish: () => agentStatus,
-        sessionStores: undefined,
-      };
-    },
-  }));
-  vi.doMock("../status/summary.js", () => ({
-    getStatusSummary: mocks.getStatusSummary,
-    prepareStatusSummary: async (...args: unknown[]) => {
-      const summary = await mocks.getStatusSummary(...args);
-      return { publish: () => ({ summary, sessionStores: undefined }) };
-    },
-  }));
-  vi.doMock("../infra/os-summary.js", () => ({
-    resolveOsSummary: vi.fn(() => ({ label: "test-os" })),
-  }));
-  vi.doMock("./status.scan.deps.runtime.js", () => ({
-    getMemoryProvider: vi.fn<typeof import("./status.scan.deps.runtime.js").getMemoryProvider>(
-      async () => ({ provider: null }),
-    ),
-    getMemorySearchManager: mocks.getMemorySearchManager,
-    isMemoryProviderNative: vi.fn<
-      typeof import("./status.scan.deps.runtime.js").isMemoryProviderNative
-    >(() => false),
-  }));
-  vi.doMock("../gateway/call.js", () => ({
-    buildGatewayConnectionDetails: mocks.buildGatewayConnectionDetails,
-    ...(mocks.callGateway ? { callGateway: mocks.callGateway } : {}),
-  }));
+  vi.doMock("./status.update.js", () => createStatusUpdateModuleMock(mocks));
+  vi.doMock("./status.agent-local.js", () => createStatusAgentLocalModuleMock(mocks));
+  vi.doMock("../status/summary.js", () => createStatusSummaryModuleMock(mocks));
+  vi.doMock("../infra/os-summary.js", () => createStatusOsSummaryModuleMock());
+  vi.doMock("./status.scan.deps.runtime.js", () => createStatusScanDepsRuntimeModuleMock(mocks));
+  vi.doMock("../gateway/call.js", () => createStatusGatewayCallModuleMock(mocks));
   vi.doMock("../gateway/probe.js", () => ({
     probeGateway: mocks.probeGateway,
   }));
@@ -198,22 +313,17 @@ export async function loadStatusScanModuleForTest(
   vi.doMock("../gateway/probe-target.js", () => ({
     resolveGatewayProbeTarget: mocks.resolveGatewayProbeTarget,
   }));
-  vi.doMock("./status.gateway-probe.js", () => ({
-    resolveGatewayProbeAuthResolution: mocks.resolveGatewayProbeAuthResolution,
-  }));
+  vi.doMock("./status.gateway-probe.js", () => createStatusGatewayProbeModuleMock(mocks));
   vi.doMock("../gateway/connection-details.js", () => ({
     buildGatewayConnectionDetails: mocks.buildGatewayConnectionDetails,
     buildGatewayConnectionDetailsWithResolvers: mocks.buildGatewayConnectionDetails,
   }));
-  vi.doMock("../process/exec.js", () => ({ runExec: vi.fn() }));
+  vi.doMock("../process/exec.js", () => createStatusExecModuleMock());
   vi.doMock("../plugins/runtime/runtime-registry-loader.js", async (importOriginal) => ({
     ...(await importOriginal<typeof import("../plugins/runtime/runtime-registry-loader.js")>()),
-    ensurePluginRegistryLoaded: mocks.ensurePluginRegistryLoaded,
+    ...createStatusPluginRegistryModuleMock(mocks),
   }));
-  vi.doMock("../plugins/status.js", () => ({
-    buildPluginCompatibilityNotices: mocks.buildPluginCompatibilityNotices,
-    buildPluginCompatibilitySnapshotNotices: mocks.buildPluginCompatibilityNotices,
-  }));
+  vi.doMock("../plugins/status.js", () => createStatusPluginStatusModuleMock(mocks));
 
   if (options.fastJson) {
     return await import("./status.scan.fast-json.js");
@@ -249,7 +359,27 @@ export function createStatusSummary(
   };
 }
 
-const createStatusUpdateResult = () => ({ installKind: "git", git: null, registry: null });
+function createStatusUpdateResult() {
+  return {
+    installKind: "git",
+    git: null,
+    registry: null,
+  };
+}
+
+function createStatusAgentLocalStatuses() {
+  return {
+    defaultId: "main",
+    agents: [],
+  };
+}
+
+function createStatusGatewayConnection() {
+  return {
+    url: "ws://127.0.0.1:18789",
+    urlSource: "default",
+  };
+}
 
 function createStatusGatewayProbeFailure() {
   return {
@@ -303,9 +433,22 @@ export function applyStatusScanDefaults(
   const resolvedConfig = options.resolvedConfig ?? sourceConfig;
 
   mocks.hasConfiguredChannels.mockReturnValue(options.hasConfiguredChannels ?? false);
-  mocks.hasConfiguredChannelsForReadOnlyScope.mockImplementation((params: unknown) =>
-    Boolean(hasConfiguredChannels(mocks, params as ChannelScope)),
-  );
+  mocks.hasConfiguredChannelsForReadOnlyScope.mockImplementation((rawParams: unknown) => {
+    const params = rawParams as {
+      config: OpenClawConfig;
+      env?: NodeJS.ProcessEnv;
+      includePersistedAuthState?: boolean;
+    };
+    return Boolean(
+      mocks.hasConfiguredChannels(
+        params.config,
+        params.env,
+        params.includePersistedAuthState === undefined
+          ? undefined
+          : { includePersistedAuthState: params.includePersistedAuthState },
+      ),
+    );
+  });
   mocks.readBestEffortConfig.mockResolvedValue(sourceConfig);
   mocks.readBestEffortConfigSnapshot.mockResolvedValue({
     config: sourceConfig,
@@ -316,12 +459,9 @@ export function applyStatusScanDefaults(
     resolvedConfig,
     diagnostics: [],
   });
-  mocks.getAgentLocalStatuses.mockResolvedValue({ defaultId: "main", agents: [] });
+  mocks.getAgentLocalStatuses.mockResolvedValue(createStatusAgentLocalStatuses());
   mocks.getStatusSummary.mockResolvedValue(options.summary ?? createStatusSummary());
-  mocks.buildGatewayConnectionDetails.mockReturnValue({
-    url: "ws://127.0.0.1:18789",
-    urlSource: "default",
-  });
+  mocks.buildGatewayConnectionDetails.mockReturnValue(createStatusGatewayConnection());
   mocks.resolveGatewayProbeAuthResolution.mockResolvedValue({
     auth: {},
     warning: undefined,
