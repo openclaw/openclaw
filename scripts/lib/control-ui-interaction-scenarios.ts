@@ -424,6 +424,9 @@ async function prepareProgressClocks(page: Page, gateway: MockGatewayControls) {
     },
     { selector: progressClocks, expected: progressClockSessions.length },
   );
+  const viewport = page.viewportSize()!;
+  await page.mouse.move(viewport.width - 4, viewport.height - 4);
+  await settleSidebarBackgroundWork(page);
   // Start each sample near a minute boundary without replacing the native clock.
   const updatedAt = Date.now() - 45_000;
   await gateway.setMethodResponse("progressCard.get", progressClockResponses(updatedAt, 2));
@@ -444,14 +447,13 @@ async function prepareProgressClocks(page: Page, gateway: MockGatewayControls) {
     },
     { selector: progressClocks, datetime: new Date(updatedAt).toISOString() },
   );
-  await frames(page);
+  // The accepted progress refresh also updates the active chat's persisted snapshot.
+  await settleSidebarBackgroundWork(page);
   const clocks = page.locator(progressClocks);
   initialProgressClocks.set(page, {
     count: await clocks.count(),
     labels: await clocks.allTextContents(),
   });
-  const viewport = page.viewportSize()!;
-  await page.mouse.move(viewport.width - 4, viewport.height - 4);
 }
 
 async function prepareSessionSwitch(page: Page) {
