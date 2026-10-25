@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as sourceProjection from "../config/runtime-source-projection.js";
 import type { ModelApi } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderResolveModelRoutesContext } from "../plugin-sdk/provider-model-types.js";
@@ -8,6 +9,8 @@ import {
   resolveProviderModelRoutes,
 } from "./provider-model-routes.js";
 
+afterEach(() => vi.restoreAllMocks());
+
 function createIndeterminateRouteMock() {
   return vi.fn((_context: ProviderResolveModelRoutesContext) => ({
     kind: "indeterminate" as const,
@@ -15,6 +18,37 @@ function createIndeterminateRouteMock() {
 }
 
 describe("provider model route adapter", () => {
+  it.each(["present", "none", undefined] as const)(
+    "projects authored overrides only when the request has not already established them (%s)",
+    (requestTransportOverrides) => {
+      const project = vi.spyOn(sourceProjection, "projectConfigOntoRuntimeSourceSnapshot");
+      const resolveModelRoutes = createIndeterminateRouteMock();
+      const resolveRoutes = createProviderModelRoutesResolver({
+        provider: "fixture",
+        requestTransportOverrides,
+        config: {
+          models: {
+            providers: {
+              fixture: {
+                baseUrl: "https://provider.example.test/v1",
+                headers: { "x-route": "custom" },
+                models: [],
+              },
+            },
+          },
+        },
+        env: {},
+        surface: { resolveModelRoutes },
+      });
+      resolveRoutes({ modelId: "first" });
+      resolveRoutes({ modelId: "second" });
+      expect(project).toHaveBeenCalledTimes(requestTransportOverrides === "present" ? 0 : 1);
+      expect(
+        resolveModelRoutes.mock.calls.map(([context]) => context.requestTransportOverrides),
+      ).toEqual(["present", "present"]);
+    },
+  );
+
   it("forwards a non-chat capability without inventing route intent", () => {
     const resolveModelRoutes = createIndeterminateRouteMock();
     resolveProviderModelRoutes({

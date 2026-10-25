@@ -27,6 +27,7 @@ const entries = {
     "components/settings-sidebar-shell.tsx",
     "app/theme-catalog.ts",
   ],
+  "advanced-next": ["pages/config/security.tsx"],
   shortcuts: ["components/keyboard-shortcuts-dialog.tsx"],
   debug: [
     "pages/debug/debug-overlay.ts",

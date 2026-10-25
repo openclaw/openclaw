@@ -1194,33 +1194,31 @@
   flex-direction: column;
   min-height: 0;
   overflow: hidden;
-}
 
-.chat-pane__sharing-menu--desktop .chat-pane__sharing-roster-frame::before,
-.chat-pane__sharing-menu--desktop .chat-pane__sharing-roster-frame::after {
-  position: absolute;
-  z-index: 1;
-  right: var(--scrollbar-size, 8px);
-  left: 0;
-  height: 16px;
-  pointer-events: none;
-  content: "";
-  opacity: 0;
-}
+  &::before,
+  &::after {
+    position: absolute;
+    z-index: 1;
+    right: var(--scrollbar-size, 8px);
+    left: 0;
+    height: 16px;
+    pointer-events: none;
+    content: "";
+    opacity: 0;
+  }
 
-.chat-pane__sharing-menu--desktop .chat-pane__sharing-roster-frame::before {
-  top: 0;
-  background: linear-gradient(to bottom, var(--bg-elevated), transparent);
-}
+  &::before {
+    top: 0;
+    background: linear-gradient(to bottom, var(--bg-elevated), transparent);
+  }
 
-.chat-pane__sharing-menu--desktop .chat-pane__sharing-roster-frame::after {
-  bottom: 0;
-  background: linear-gradient(to top, var(--bg-elevated), transparent);
-}
+  &::after {
+    bottom: 0;
+    background: linear-gradient(to top, var(--bg-elevated), transparent);
+  }
 
-.chat-pane__sharing-menu--desktop
-  .chat-pane__sharing-roster-frame:has([data-at-start="false"])::before,
-.chat-pane__sharing-menu--desktop
-  .chat-pane__sharing-roster-frame:has([data-at-end="false"])::after {
-  opacity: 1;
+  &:has([data-at-start="false"])::before,
+  &:has([data-at-end="false"])::after {
+    opacity: 1;
+  }
 }

@@ -296,6 +296,7 @@ src/agents/github-host.ts
 src/agents/internal-runtime-context.ts
 src/agents/mcp-oauth-store-error.ts
 src/agents/model-auth-policy.ts
+src/agents/model-catalog-entry.ts
 src/agents/model-catalog-lookup.ts
 src/agents/model-catalog-metadata.ts
 src/agents/model-compat-catalog.ts
@@ -309,6 +310,7 @@ src/agents/model-selection-config.ts
 src/agents/model-selection-normalize.ts
 src/agents/model-selection-shared.ts
 src/agents/model-selection-warnings.ts
+src/agents/model-serving-context.ts
 src/agents/openai-model-routes.ts
 src/agents/openai-routing.ts
 src/agents/owner-display.ts
@@ -525,6 +527,7 @@ src/commands/doctor/shared/legacy-config-migrations.runtime.cli-backends.ts
 src/commands/doctor/shared/legacy-config-migrations.runtime.code-mode.ts
 src/commands/doctor/shared/legacy-config-migrations.runtime.config-tranche.ts
 src/commands/doctor/shared/legacy-config-migrations.runtime.cron.ts
+src/commands/doctor/shared/legacy-config-migrations.runtime.cyber-failover.ts
 src/commands/doctor/shared/legacy-config-migrations.runtime.diagnostics.ts
 src/commands/doctor/shared/legacy-config-migrations.runtime.entries.ts
 src/commands/doctor/shared/legacy-config-migrations.runtime.gateway.ts
@@ -613,7 +616,6 @@ src/config/io.invalid-config.ts
 src/config/io.legacy-issues.runtime.ts
 src/config/io.load.ts
 src/config/io.meta.ts
-src/config/io.observe-promotion.ts
 src/config/io.observe-recovery-effects.ts
 src/config/io.observe-recovery.ts
 src/config/io.observe-state.ts
@@ -1538,7 +1540,6 @@ src/plugins/manifest-config-groups.ts
 src/plugins/manifest-contract-eligibility.ts
 src/plugins/manifest-contract-keys.ts
 src/plugins/manifest-control-ui.ts
-src/plugins/manifest-decision-catalog.ts
 src/plugins/manifest-install-owner.ts
 src/plugins/manifest-metadata-scan.ts
 src/plugins/manifest-model-id-normalization.ts
@@ -2406,15 +2407,11 @@ packages/gateway-protocol/src/schema/users-background.ts
 packages/gateway-protocol/src/schema/users.ts
 packages/gateway-protocol/src/schema/wizard.ts
 packages/markdown-core/src/fences.ts
-packages/markdown-core/src/image-code-retention.ts
-packages/markdown-core/src/list-code-retention.ts
 packages/markdown-core/src/markdown-code-regions.ts
-packages/markdown-core/src/reference-definition-retention.ts
 packages/markdown-core/src/reasoning-tag-parser.ts
 packages/markdown-core/src/reasoning-tag-syntax.ts
 packages/markdown-core/src/reasoning-tags-batch.ts
 packages/markdown-core/src/reasoning-tags.ts
-packages/markdown-core/src/table-code-retention.ts
 packages/media-core/src/base64.ts
 packages/media-core/src/inline-image-data-url.ts
 packages/memory-host-sdk/src/host/session-entry-projection.ts
@@ -2746,3 +2743,4 @@ src/process/spawn-broker/worker-sender.ts
 src/process/spawn-broker/worker.ts
 src/state/openclaw-agent-schema-inspection.worker.ts
 src/state/openclaw-state-ownership.worker.ts
+src/infra/schema-migration-diagnostics.ts

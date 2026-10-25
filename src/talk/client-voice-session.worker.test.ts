@@ -11,6 +11,7 @@ import {
   observeHostDataSql,
   observeSqliteReadSql,
 } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { createEnteredGate } from "../agents/entered-gate.test-support.js";
 import { readSessionTranscriptMessageEvents } from "../config/sessions/session-accessor.sqlite-active-events.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
 import {
@@ -96,15 +97,11 @@ describe("client voice session worker contract", () => {
     };
   }
   async function holdWorker(scope: Parameters<typeof runOpenClawAgentWorkerWrite>[0]) {
-    const entered = createDeferred();
-    const resume = createDeferred();
-    releaseHeldWrites.push(() => resume.resolve());
-    const blocked = runOpenClawAgentWorkerWrite(scope, async () => {
-      entered.resolve();
-      await resume.promise;
-    });
-    await entered.promise;
-    return { blocked, resume };
+    const { entered, release, wait } = createEnteredGate();
+    releaseHeldWrites.push(release);
+    const blocked = runOpenClawAgentWorkerWrite(scope, wait);
+    await entered;
+    return { blocked, release };
   }
   function mutateForeignVoice(voiceSessionId: string, change: string, ...values: string[]) {
     const database = new DatabaseSync(resolveOpenClawAgentSqlitePath(target));
@@ -365,7 +362,7 @@ describe("client voice session worker contract", () => {
 
   it("refuses revoked admission after the FIFO wait", async () => {
     await seedSession(target.sessionKey);
-    const { blocked, resume } = await holdWorker({ agentId: target.agentId });
+    const { blocked, release } = await holdWorker({ agentId: target.agentId });
     const controller = new AbortController();
     const voiceSessionId = "voice-revoked-admission";
     const prepare = vi.fn(async () => ({ assertCurrent() {}, checks: [] }));
@@ -376,7 +373,7 @@ describe("client voice session worker contract", () => {
     });
     controller.abort(new Error("voice access revoked"));
     const rejected = expect(creating).rejects.toThrow("voice access revoked");
-    resume.resolve();
+    release();
     await blocked;
     await rejected;
     expect(prepare).not.toHaveBeenCalled();
@@ -456,7 +453,7 @@ describe("client voice session worker contract", () => {
       await seedSession("agent:main:main");
       const sdkTarget = { agentId: "cold-sdk", sessionKey: "agent:cold-sdk:main" };
       const checked = createDeferred();
-      const { blocked, resume } = await holdWorker(sdkTarget);
+      const { blocked, release } = await holdWorker(sdkTarget);
       let allowed = true;
       const writer = retained ? captureClientVoiceSessionWriter(sdkTarget) : undefined;
       const creating = createVoice(
@@ -477,7 +474,7 @@ describe("client voice session worker contract", () => {
         : expect(creating).resolves.toBe("cold-sdk-voice");
       try {
         allowed = !revoked;
-        resume.resolve();
+        release();
         await awaitGateBeforeSettlement(
           checked.promise,
           creating,
@@ -510,7 +507,7 @@ describe("client voice session worker contract", () => {
           database.close();
         }
       } finally {
-        resume.resolve();
+        release();
         await Promise.allSettled([blocked, creating, completed]);
         await writer?.release();
       }
@@ -645,7 +642,7 @@ describe("client voice session worker contract", () => {
       });
       // The successor worker roundtrip lets an incorrectly idle original owner settle.
       await createVoice({ voiceSessionId });
-      gate.resume.resolve();
+      gate.release();
       await gate.blocked;
       await drained;
       expect(atDrain?.effects).toEqual(expectedEffects);
@@ -656,7 +653,7 @@ describe("client voice session worker contract", () => {
       setTestEnvValue("OPENCLAW_STATE_DIR", originalStateDir);
       expect(readRecord(voiceSessionId)?.effects).toEqual(expectedEffects);
     } finally {
-      gate?.resume.resolve();
+      gate?.release();
       await gate?.blocked;
       await flushOriginalWorker();
       setTestEnvValue("OPENCLAW_STATE_DIR", originalStateDir);

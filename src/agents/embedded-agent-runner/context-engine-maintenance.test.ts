@@ -18,6 +18,7 @@ import {
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
+import { expectCallCount as expectCalls } from "../../test-utils/mock-call-assertions.js";
 import { waitForSessionMaintenance } from "../session-maintenance/coordinator.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
 import {
@@ -73,12 +74,6 @@ const rewritten = { changed: true, bytesFreed: 77, rewrittenEntries: 1 };
 const keepProcessAlive = () => {};
 type Maintain = NonNullable<ContextEngine["maintain"]>;
 type MaintenanceParams = Parameters<typeof runContextEngineMaintenance>[0];
-
-function expectCalls(count: number, ...mocks: { mock: { calls: unknown[][] } }[]) {
-  for (const mock of mocks) {
-    expect(mock).toHaveBeenCalledTimes(count);
-  }
-}
 
 function backgroundSession(sessionId: string) {
   const params = sessionParams(sessionId);

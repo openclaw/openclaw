@@ -144,7 +144,6 @@
 .agent-chat__composer-shell,
 .agent-chat__input {
   --chat-composer-radius: calc(20px * var(--openclaw-corner-radius-scale));
-  --chat-composer-surface: var(--popover);
   --chat-composer-light-outline: rgb(0 0 0 / 6%);
   --composer-attached-surface: color-mix(
     in srgb,
@@ -168,7 +167,6 @@
 
 .agent-chat__input {
   --chat-box-inset: 8px;
-  --chat-composer-surface: var(--popover);
   --chat-composer-secondary: var(
     --control-secondary-text,
     color-mix(in srgb, var(--text-strong) 65%, var(--chat-composer-surface))
@@ -744,7 +742,7 @@
   width: 36px;
   border-radius: var(--radius-full);
   background: var(--primary);
-  color: var(--primary-foreground);
+  color: var(--chat-send-foreground);
   box-shadow: 0 1px 3px var(--accent-subtle);
   transition:
     background var(--duration-fast) ease,
@@ -801,7 +799,7 @@
   height: var(--chat-composer-send-size);
   padding: 5px;
   background: var(--primary);
-  color: var(--primary-foreground);
+  color: var(--chat-send-foreground);
   box-shadow: none;
 }
 
@@ -809,7 +807,7 @@
    --primary-hover, which several themes leave at the base value and would render
    as no feedback at all. */
 .agent-chat__input .chat-send-btn:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--primary) 86%, var(--text-strong));
+  background: var(--chat-send-hover-bg, color-mix(in srgb, var(--primary) 86%, var(--text-strong)));
   box-shadow: none;
 }
 
@@ -1290,12 +1288,6 @@
   .agent-chat__input--mobile-toolbar .agent-chat__composer-footer svg {
     width: var(--chat-mobile-row-icon-size);
     height: var(--chat-mobile-row-icon-size);
-  }
-
-  /* Keep the muted default below action-specific foregrounds regardless of
-     lazy stylesheet order. */
-  .agent-chat__input--mobile-toolbar :where(.agent-chat__composer-footer) svg {
-    color: var(--muted);
   }
 
   .agent-chat__input--mobile-toolbar

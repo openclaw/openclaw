@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 270488,
-  "reason": "Heavy tool details avoid rendering hidden diff/raw views: rejected-patch script CPU -39.07% and main-thread task CPU -47.04% over 20 counterbalanced pairs. Integrated same-toolchain build on f8a97fe: startup 270323 to 270488 B gzip (+165 B), five JS and one CSS request unchanged; Chat -132 B, New +114 B. Accept the small startup tradeoff and ratchet to the measured head.",
+  "startupJsGzipBytes": 271935,
+  "reason": "Same-host uncached 8937cb4 to 92174fc builds measure startup 271947 to 271935 B gzip (-12 B), Chat +1451 B and New Session +29 B (within build variance), with unchanged CSS bytes and JS/CSS request counts. The lazy highlighting worker cuts 5000-line code/diff CPU by 18-70%; avoiding leaf-subtree table scans cuts dense-code CPU median/p95 by 65.9%/64.3%. Record the measured integrated startup head.",
   "updatedAt": "2026-10-25"
 }

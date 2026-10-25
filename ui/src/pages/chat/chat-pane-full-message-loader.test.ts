@@ -1,7 +1,7 @@
-/* @vitest-environment jsdom */
-
 import { describe, expect, it, vi } from "vitest";
+/* @vitest-environment jsdom */
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { sessionListResult } from "../../test-helpers/chat-model.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
 import { createSidebarFullMessageLoader } from "./chat-pane-sidebar-layout.ts";
@@ -24,13 +24,7 @@ function fixture(request = vi.fn().mockResolvedValue(result)) {
     sessionId: state.currentSessionId,
     lifecycleRevision: "revision-1",
   };
-  state.sessionsResult = {
-    ts: 1,
-    path: "",
-    count: 1,
-    defaults: { modelProvider: null, model: null, contextTokens: null },
-    sessions: [session],
-  };
+  state.sessionsResult = sessionListResult(1, [session]);
   context.gateway.snapshot.selfUser = { id: "alice", name: "Alice" };
   const load = () => createSidebarFullMessageLoader(state, context.gateway)!;
   const expectRead = (input: typeof messageRequest & { sessionId?: string }) =>
