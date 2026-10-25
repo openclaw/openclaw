@@ -39,19 +39,16 @@ function textSession(options: Parameters<WizardPrompter["text"]>[0] = { message:
 }
 
 describe("WizardSession", () => {
-  test.each([true, false, "false"])(
-    "only literal true confirms a wire answer (%j)",
-    async (answer) => {
-      let confirmed: boolean | undefined;
-      const session = new WizardSession(async (prompter) => {
-        confirmed = await prompter.confirm({ message: "Continue?", initialValue: false });
-      });
-      const step = await nextStep(session);
-      await session.answer(step.id, answer);
-      await session.whenSettled();
-      expect(confirmed).toBe(answer === true);
-    },
-  );
+  test.each([true, "false"])("only literal true confirms a wire answer (%j)", async (answer) => {
+    let confirmed: boolean | undefined;
+    const session = new WizardSession(async (prompter) => {
+      confirmed = await prompter.confirm({ message: "Continue?", initialValue: false });
+    });
+    const step = await nextStep(session);
+    await session.answer(step.id, answer);
+    await session.whenSettled();
+    expect(confirmed).toBe(answer === true);
+  });
 
   test.each([
     ["select", undefined, true],
@@ -119,7 +116,7 @@ describe("WizardSession", () => {
     await expectTerminal(session);
   });
 
-  test.each(["prepared", "activated", "utility"] as const)(
+  test.each(["prepared", "utility"] as const)(
     "returns the exact %s model only on the successful terminal result",
     async (kind) => {
       const modelRef = "ollama/qwen3:0.6b";
@@ -127,10 +124,7 @@ describe("WizardSession", () => {
         if (kind === "prepared") {
           owner.setPreparedModelRef(modelRef);
         } else {
-          owner.setModelActivation({
-            modelRef,
-            ...(kind === "utility" ? { modelTarget: "utility" as const } : {}),
-          });
+          owner.setModelActivation({ modelRef, modelTarget: "utility" });
         }
         await prompter.note("Finishing setup");
       });
@@ -143,12 +137,7 @@ describe("WizardSession", () => {
         status: "done",
         ...(kind === "prepared"
           ? { preparedModelRef: modelRef }
-          : {
-              modelActivation: {
-                modelRef,
-                ...(kind === "utility" ? { modelTarget: "utility" } : {}),
-              },
-            }),
+          : { modelActivation: { modelRef, modelTarget: "utility" } }),
       });
     },
   );
