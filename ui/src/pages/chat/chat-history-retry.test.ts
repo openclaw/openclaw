@@ -218,4 +218,24 @@ describe("shared chat history transient recovery", () => {
     expect(await outcome).toBeInstanceOf(GatewayProtocolRequestTimeoutError);
     expect(request).toHaveBeenCalledTimes(1);
   });
+
+  it("retries one timed-out read for current panes and preserves the shared request", async () => {
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(timeout())
+      .mockResolvedValueOnce({ messages: [{ role: "assistant", content: "Recovered" }] });
+    const client = createTestGatewayClient(request);
+    const first = readHistory(client, "shared");
+    const second = readHistory(client, "shared");
+    const outcomes = Promise.allSettled([first, second]);
+    await vi.advanceTimersByTimeAsync(499);
+    expect(request).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(request).toHaveBeenCalledTimes(2);
+    const fulfilled = {
+      status: "fulfilled",
+      value: { messages: [{ role: "assistant", content: "Recovered" }] },
+    };
+    expect(await outcomes).toEqual([fulfilled, fulfilled]);
+  });
 });
