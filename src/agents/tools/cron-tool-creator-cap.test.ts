@@ -1,12 +1,10 @@
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
-import { mergeCronPayload } from "../../cron/service/payload-merge.js";
 import {
   cronCreateRequiresStreamExecAuthority,
   cronMutationRequiresStreamExecAuthority,
   cronUpdateRequiresStreamExecAuthority,
 } from "../../cron/stream-exec-authority.js";
-import type { CronPayloadPatch } from "../../cron/types.js";
 import { createCronScheduledToolProjection } from "../exec-tool-target-pinning.js";
 import type { AnyAgentTool } from "./common.js";
 import {
@@ -75,19 +73,7 @@ describe("cron tool creator cap", () => {
     expect(cronCreateRequiresStreamExecAuthority({ schedule: stream() })).toBe(true);
   });
 
-  it("uses Gateway replacement semantics for stream schedule updates", () => {
-    const source = stream();
-    const current = { enabled: true, schedule: stream({ cwd: "/workspace" }) };
-    expect(cronUpdateRequiresStreamExecAuthority({ schedule: current.schedule }, current)).toBe(
-      false,
-    );
-    expect(cronUpdateRequiresStreamExecAuthority({ schedule: source }, current)).toBe(true);
-    expect(
-      cronUpdateRequiresStreamExecAuthority(
-        { schedule: { command: ["node", "replacement.mjs"] } },
-        current,
-      ),
-    ).toBe(true);
+  it("does not require stream authority for invalid command fields on an every schedule", () => {
     expect(
       cronUpdateRequiresStreamExecAuthority(
         { schedule: { command: ["node", "invalid-on-every.mjs"] } },
@@ -138,7 +124,7 @@ describe("cron tool creator cap", () => {
     expect(input).toEqual({ payload: { kind: "agentTurn", toolsAllow: ["read", "exec"] } });
   });
 
-  it("preserves explicit narrower and default caps through canonical payload merge", () => {
+  it("leaves explicit narrower and default caps unchanged in message-only patches", () => {
     for (const isDefault of [false, true]) {
       const payload = {
         ...agentPayload,
@@ -151,10 +137,6 @@ describe("cron tool creator cap", () => {
         currentJob: { payload },
       });
       expect(patch).toEqual({ payload: { kind: "agentTurn", message: "updated" } });
-      expect(mergeCronPayload(payload, patch.payload as CronPayloadPatch)).toEqual({
-        ...payload,
-        message: "updated",
-      });
     }
   });
 

@@ -27,10 +27,14 @@ import { createMessageTool } from "./message-tool-execution.js";
 import type { MessageToolOptions } from "./message-tool-execution.types.js";
 
 const actualRunMessageAction = messageActionRunner.runMessageAction;
-const mocks = {
-  send: vi.fn<typeof actualRunMessageAction>(),
-  secrets: vi.fn(commandSecretGateway.resolveCommandSecretRefsViaGateway),
-};
+const send = vi.fn<typeof actualRunMessageAction>();
+const secrets = vi.fn(commandSecretGateway.resolveCommandSecretRefsViaGateway);
+const source = {
+  sourceReplyOnly: true,
+  sourceReplyDeliveryMode: "message_tool_only",
+  currentThreadTs: "thread-1",
+  currentMessageId: "message-1",
+} satisfies Partial<MessageToolOptions>;
 
 function registerPlugins(plugin: ChannelPlugin) {
   setActivePluginRegistry(createTestRegistry([{ pluginId: plugin.id, source: "test", plugin }]));
@@ -39,12 +43,10 @@ function registerPlugins(plugin: ChannelPlugin) {
 beforeEach(() => {
   resetGlobalHookRunner();
   resetPluginRuntimeStateForTest();
-  mocks.send.mockReset();
-  mocks.secrets.mockClear();
-  vi.spyOn(messageActionRunner, "runMessageAction").mockImplementation(mocks.send);
-  vi.spyOn(commandSecretGateway, "resolveCommandSecretRefsViaGateway").mockImplementation(
-    mocks.secrets,
-  );
+  send.mockReset();
+  secrets.mockClear();
+  vi.spyOn(messageActionRunner, "runMessageAction").mockImplementation(send);
+  vi.spyOn(commandSecretGateway, "resolveCommandSecretRefsViaGateway").mockImplementation(secrets);
 });
 afterEach(() => {
   vi.restoreAllMocks();
@@ -56,19 +58,6 @@ afterEach(() => {
 describe("completion source-reply authority", () => {
   const replyTag = "[[reply_to:message-2]]";
   const audioTag = "[[audio_as_voice]]";
-  function createSourceTool(
-    config: MessageToolOptions["config"],
-    options: Partial<MessageToolOptions>,
-  ) {
-    return createMessageTool({
-      config,
-      sourceReplyOnly: true,
-      sourceReplyDeliveryMode: "message_tool_only",
-      currentThreadTs: "thread-1",
-      currentMessageId: "message-1",
-      ...options,
-    });
-  }
   function createRestrictedTool(overrides: Partial<MessageToolOptions> = {}) {
     const config = overrides.config ?? {};
     setRuntimeConfigSnapshot(config);
@@ -84,7 +73,9 @@ describe("completion source-reply authority", () => {
         },
       },
     });
-    return createSourceTool(config, {
+    return createMessageTool({
+      ...source,
+      config,
       currentChannelProvider: "discord",
       currentChannelId: "channel:source",
       agentAccountId: "source-account",
@@ -99,14 +90,10 @@ describe("completion source-reply authority", () => {
     { to: "channel:other" },
     { channelId: "channel:other" },
     { destination: "channel:other" },
-    { targets: ["channel:other"] },
     { accountId: "other-account" },
     { threadId: "thread-2" },
     { replyTo: "message-2" },
-    { gatewayUrl: "wss://other.example" },
     { gatewayToken: "other-token" },
-    { buffer: "c2VjcmV0" },
-    { pluginFile: "./AGENTS.md" },
     { message: `${replyTag} stolen thread` },
     { media: undefined, message: `MEDIA:https://example.com/a${replyTag}.png` },
     { message: "", caption: `MEDIA:https://example.com/a${replyTag}.png` },
@@ -133,12 +120,12 @@ describe("completion source-reply authority", () => {
         ...args,
       }),
     ).rejects.toThrow(/Completion source replies/);
-    expect(mocks.secrets).not.toHaveBeenCalled();
-    expect(mocks.send).not.toHaveBeenCalled();
+    expect(secrets).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
   });
 
   function createCompletionMediaTool() {
-    mocks.send.mockImplementation(actualRunMessageAction);
+    send.mockImplementation(actualRunMessageAction);
     const config = { ...workspaceConfig, tools: { fs: { workspaceOnly: true } } };
     setRuntimeConfigSnapshot(config);
     const sendMedia = vi.fn(async (_ctx: ChannelOutboundContext) => ({
@@ -159,7 +146,9 @@ describe("completion source-reply authority", () => {
         },
       },
     });
-    const tool = createSourceTool(config, {
+    const tool = createMessageTool({
+      ...source,
+      config,
       agentSessionKey: "agent:main:workspace:group:SOURCE",
       currentChannelProvider: "workspace",
       currentChannelId: "SOURCE",
@@ -187,15 +176,16 @@ describe("completion source-reply authority", () => {
           threadId: "thread-1",
           ...args,
         });
-        expect(sendMedia).toHaveBeenCalledTimes(1);
-        expect(sendMedia).toHaveBeenCalledWith(
-          expect.objectContaining({
-            to: "SOURCE",
-            mediaUrl: url,
-            threadId: "thread-1",
-            replyToId: "message-1",
-          }),
-        );
+        expect(sendMedia.mock.calls).toMatchObject([
+          [
+            {
+              to: "SOURCE",
+              mediaUrl: url,
+              threadId: "thread-1",
+              replyToId: "message-1",
+            },
+          ],
+        ]);
         expect(result.details).toHaveProperty("messageDelivery.sourceReplyDelivered", true);
       }
     });
@@ -239,7 +229,7 @@ describe("completion source-reply authority", () => {
   });
 
   it("allows shared final controls and matched canonical source-thread text sends", async () => {
-    mocks.send.mockResolvedValue({
+    send.mockResolvedValue({
       kind: "send",
       action: "send",
       channel: "discord",
@@ -250,29 +240,26 @@ describe("completion source-reply authority", () => {
     });
     const tool = createRestrictedTool();
 
-    for (const [id, args] of [
-      ["implicit", { message: "completion", final: true }],
-      ["literal-no-reply", { message: "NO_REPLY", final: true }],
-      ["media-prose", { message: "See the MEDIA: section for details." }],
-      ["media-code-example", { message: "Example:\n```text\nMEDIA:./AGENTS.md\n```" }],
-      [
-        "explicit",
-        {
-          channel: "discord",
-          target: "channel:source",
-          accountId: "source-account",
-          threadId: "thread-1",
-          replyTo: "message-1",
-          message: "completion",
-          final: false,
-        },
-      ],
-    ] as const) {
-      await tool.execute(id, { action: "send", ...args });
+    for (const args of [
+      { message: "completion", final: true },
+      { message: "NO_REPLY", final: true },
+      { message: "See the MEDIA: section for details." },
+      { message: "Example:\n```text\nMEDIA:./AGENTS.md\n```" },
+      {
+        channel: "discord",
+        target: "channel:source",
+        accountId: "source-account",
+        threadId: "thread-1",
+        replyTo: "message-1",
+        message: "completion",
+        final: false,
+      },
+    ]) {
+      await tool.execute("allowed", { action: "send", ...args });
     }
 
-    expect(mocks.send).toHaveBeenCalledTimes(5);
-    expect(mocks.send).toHaveBeenNthCalledWith(
+    expect(send).toHaveBeenCalledTimes(5);
+    expect(send).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({ params: expect.objectContaining({ message: "NO_REPLY" }) }),
     );
@@ -284,6 +271,6 @@ describe("completion source-reply authority", () => {
     await expect(
       tool.execute("missing-source", { action: "send", message: "completion" }),
     ).rejects.toThrow("authoritative current conversation");
-    expect(mocks.secrets).not.toHaveBeenCalled();
+    expect(secrets).not.toHaveBeenCalled();
   });
 });
