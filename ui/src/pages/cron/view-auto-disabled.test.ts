@@ -6,7 +6,7 @@ import {
   renderCronView as renderView,
 } from "./view.test-support.ts";
 
-it("labels an auto-disabled job distinctly from an operator pause", () => {
+it("labels an auto-disabled job distinctly from an operator pause", async () => {
   const paused = createJob("job-paused", { enabled: false });
   const autoDisabled = createJob("job-auto", {
     enabled: false,
@@ -16,7 +16,7 @@ it("labels an auto-disabled job distinctly from an operator pause", () => {
       autoDisabled: { reason: "consecutive-failures", atMs: 1, consecutiveErrors: 10 },
     },
   });
-  const container = renderView({ jobs: [paused, autoDisabled] });
+  const container = await renderView({ jobs: [paused, autoDisabled] });
   const pausedRow = container.querySelector("[data-test-id='cron-row-job-paused']");
   expect(pausedRow?.textContent).toContain("Paused");
   expect(pausedRow?.querySelector(".cron-table__state--paused")?.getAttribute("aria-label")).toBe(

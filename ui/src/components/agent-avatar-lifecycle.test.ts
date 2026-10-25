@@ -175,10 +175,10 @@ it("shares one reset observer while preserving synchronous credential retirement
     });
     expect(fetchAvatar).toHaveBeenCalledTimes(2);
     expect(activeResetObservers).toBe(1);
-    expect(new Headers(fetchAvatar.mock.calls[0][1]?.headers).get("Authorization")).toBe(
+    expect(new Headers(fetchAvatar.mock.calls[0]?.[1]?.headers).get("Authorization")).toBe(
       "Bearer old-test-token",
     );
-    expect(new Headers(fetchAvatar.mock.calls[1][1]?.headers).get("Authorization")).toBe(
+    expect(new Headers(fetchAvatar.mock.calls[1]?.[1]?.headers).get("Authorization")).toBe(
       "Bearer new-test-token",
     );
 

@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { expect, it, onTestFinished, vi } from "vitest";
+import { assert, expect, it, onTestFinished, vi } from "vitest";
 import type { AgentIdentityResult, AgentsListResult } from "../api/types.ts";
 import { createAgentIdentityCapability } from "../lib/agents/identity.ts";
 import { createAgentCapability } from "../lib/agents/index.ts";
@@ -153,11 +153,15 @@ it("shares SDK avatar source observation across factories without crossing appli
   const first = await application("first");
   const second = await application("second");
   const onError = vi.fn();
-  const lifetimes = [new AbortController(), new AbortController(), new AbortController()];
-  const factories = [first, first, second].map((app, index) =>
+  const lifetimes = [new AbortController(), new AbortController(), new AbortController()] as const;
+  const factories = [
+    { app: first, lifetime: lifetimes[0] },
+    { app: first, lifetime: lifetimes[1] },
+    { app: second, lifetime: lifetimes[2] },
+  ].map(({ app, lifetime }) =>
     createControlUiComponents({
       current: () => app.context,
-      signal: lifetimes[index].signal,
+      signal: lifetime.signal,
       onError,
     }),
   );
@@ -172,8 +176,13 @@ it("shares SDK avatar source observation across factories without crossing appli
       return { container, handle, factoryIndex };
     }),
   );
+  const mountedAvatar = (index: number) => {
+    const avatar = mounted[index];
+    assert(avatar, `Expected mounted avatar at index ${index}`);
+    return avatar;
+  };
   const image = (index: number) =>
-    mounted[index].container.querySelector("img")?.getAttribute("src");
+    mountedAvatar(index).container.querySelector("img")?.getAttribute("src");
   onTestFinished(() => {
     lifetimes.forEach((lifetime) => lifetime.abort());
     mounted.forEach(({ container }) => container.remove());
@@ -204,11 +213,12 @@ it("shares SDK avatar source observation across factories without crossing appli
   });
 
   first.ensureIdentity.mockClear();
-  mounted[1].handle.update({ agentId: "reader", label: "Reader updated" });
+  const updatedAvatar = mountedAvatar(1);
+  updatedAvatar.handle.update({ agentId: "reader", label: "Reader updated" });
   expect(first.ensureIdentity).toHaveBeenCalledWith(["reader"]);
   await waitForSolid(() => {
     expect(image(1)).toBe(first.avatar("reader"));
-    expect(mounted[1].container.querySelector("openclaw-agent-avatar")?.option.label).toBe(
+    expect(updatedAvatar.container.querySelector("openclaw-agent-avatar")?.option.label).toBe(
       "Reader updated",
     );
     expect(image(2)).toBe(first.avatar("writer"));

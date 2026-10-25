@@ -5,6 +5,7 @@ import { projectGateway } from "../../reactive/application.ts";
 import { useOptionalApplication } from "../../reactive/context.ts";
 import { projectProgressCard } from "../../reactive/domain-keyed.ts";
 import { t } from "../../reactive/i18n.ts";
+import { projectSource } from "../../reactive/projection.ts";
 import { projectSessionProgressRoster } from "../../reactive/session-progress-roster.ts";
 import {
   resolveSessionProgressCardTarget,
@@ -98,22 +99,28 @@ function SessionProgressWidgetContent(
         previous[0] === next[0] && previous[1] === next[1] && previous[2] === next[2],
     },
   );
-  const roster = createMemo(() => {
-    const [agentId, active, connected] = rosterScope();
-    if (!context) {
-      return undefined;
-    }
-    return active && connected
-      ? projectSessionProgressRoster(context.sessions, agentId).read()
-      : context.sessions.listSnapshot(sessionProgressTargetQuery(agentId));
-  });
+  const roster = createMemo(() =>
+    projectSource(rosterScope(), {
+      read: ([agentId]) => context?.sessions.listSnapshot(sessionProgressTargetQuery(agentId)),
+      subscribe: ([agentId, active, connected], notify) => {
+        if (!context || !active || !connected) {
+          return () => {};
+        }
+        // A scoped child releases on invalidation even when an empty card never rereads it.
+        return projectSessionProgressRoster(context.sessions, agentId).subscribe(notify);
+      },
+      equality: "revision",
+    }),
+  );
   const row = createMemo(() => {
     const current = identity();
-    return roster()?.result?.sessions.find(
-      (entry) =>
-        entry.key === current.sessionKey &&
-        (entry.agentId ?? parseAgentSessionKey(entry.key)?.agentId) === current.agentId,
-    );
+    return roster()
+      .read()
+      ?.result?.sessions.find(
+        (entry) =>
+          entry.key === current.sessionKey &&
+          (entry.agentId ?? parseAgentSessionKey(entry.key)?.agentId) === current.agentId,
+      );
   });
   const card = createMemo(() => progress.read().card);
   const error = createMemo(() => progress.read().error);

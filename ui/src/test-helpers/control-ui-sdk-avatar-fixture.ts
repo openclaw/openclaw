@@ -7,10 +7,12 @@ import { bootstrapApplication, type ApplicationRuntime } from "../app/bootstrap.
 import type { AgentAvatarElement } from "../components/solid/agent-avatar.tsx";
 import { createControlUiComponents } from "../plugins/control-ui-components.ts";
 import type { ControlUiMockGateway } from "./control-ui-e2e-contract.ts";
-import type { ProjectionFixtureFacts } from "./control-ui-projection-fixture.tsx";
+import type {
+  ProjectionFixtureFacts,
+  SdkAvatarFamily,
+} from "./control-ui-projection-fixture-contract.ts";
 import { createProjectionResourceProbe } from "./control-ui-projection-resource-probe.ts";
 
-export type SdkAvatarFamily = "sdk-avatars" | "sdk-avatar-identities";
 type Mounted = {
   factory: number;
   host: HTMLElement;

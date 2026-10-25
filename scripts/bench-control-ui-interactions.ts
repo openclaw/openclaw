@@ -19,7 +19,7 @@ import {
   resolvePlaywrightChromiumExecutablePath,
   startBuiltControlUiE2eServer,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
-import type { ProjectionFixtureFacts } from "../ui/src/test-helpers/control-ui-projection-fixture.tsx";
+import type { ProjectionFixtureFacts } from "../ui/src/test-helpers/control-ui-projection-fixture-contract.ts";
 import { createControlUiSandboxFixtureServer } from "../ui/src/test-helpers/control-ui-sandbox-fixture-server.ts";
 import { createTeamScaleSidebarListOwner } from "../ui/src/test-helpers/control-ui-sidebar-list-fixture.ts";
 import { mapColdLoadCpuProfile, summarizeCpuProfile } from "./lib/control-ui-cold-load-trace.ts";

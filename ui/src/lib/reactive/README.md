@@ -29,11 +29,13 @@ explicit application, pane, or test lifetimes. Disposal releases observation and
 retains the last read/published reference; it does not deep-freeze owner objects
 or dispose the authoritative owner.
 
-Fixed shared adapters expose only `read()` and `revision()`. Each contract shares
-one projection per owner and scope across independently mounted consumers. They
-connect lazily on the first tracked read, release the native subscription when
-the last reader leaves, and read the current owner when observation resumes.
-Consumers cannot replace or dispose a projection shared with other views.
+Fixed shared adapters expose `read()`, `revision()`, and `subscribe()`. Each
+contract shares one projection per owner and scope across independently mounted
+consumers. They connect lazily on the first tracked read or subscription, release
+the native subscription when the last observer leaves, and read the current owner
+when observation resumes. Consumers cannot replace or dispose a projection shared
+with other views. A scoped child projection can subscribe to the shared adapter
+so invalidating its scope releases observation even if its read is no longer used.
 
 Event consumers subscribe directly to their owners, preserving each channel's
 delivery order, replay behavior, and completion contract.

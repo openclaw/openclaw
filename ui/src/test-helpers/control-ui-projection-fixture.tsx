@@ -8,20 +8,12 @@ import { GatewayBoardProvider } from "../lib/board/gateway-provider.ts";
 import { ApplicationProvider } from "../lib/reactive/context.ts";
 import { WidgetPinButton } from "../pages/chat/components/widget-pin-button.tsx";
 import type { ControlUiMockGateway } from "./control-ui-e2e-contract.ts";
-import {
-  createProjectionResourceProbe,
-  type ProjectionResourceSnapshot,
-} from "./control-ui-projection-resource-probe.ts";
-import { createSdkAvatarFixture, type SdkAvatarFamily } from "./control-ui-sdk-avatar-fixture.ts";
-
-type CoreProjectionFamily = "agent-rows" | "outbox" | "board-pins";
-export type ProjectionFamily = CoreProjectionFamily | SdkAvatarFamily;
-export type ProjectionFixtureFacts = {
-  family: ProjectionFamily;
-  instrumented: boolean;
-  mounted: { application: string; expected: number; actual: number }[];
-  checkpoints: { phase: string; counts: ProjectionResourceSnapshot }[];
-};
+import type {
+  CoreProjectionFamily,
+  ProjectionFixtureFacts,
+} from "./control-ui-projection-fixture-contract.ts";
+import { createProjectionResourceProbe } from "./control-ui-projection-resource-probe.ts";
+import { createSdkAvatarFixture } from "./control-ui-sdk-avatar-fixture.ts";
 
 type Group = {
   label: string;
@@ -298,13 +290,3 @@ window.openclawProjectionFixture = {
     active = undefined;
   },
 };
-declare global {
-  interface Window {
-    openclawProjectionFixture?: {
-      setup(family: ProjectionFamily, instrumented: boolean): Promise<ProjectionFixtureFacts>;
-      run(): Promise<ProjectionFixtureFacts>;
-      finish(): Promise<ProjectionFixtureFacts>;
-      dispose(): void;
-    };
-  }
-}

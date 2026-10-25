@@ -15,7 +15,7 @@ import {
   waitForControlUiRoute,
 } from "../../ui/src/test-helpers/control-ui-e2e.ts";
 import { navigationDrawerToggle } from "../../ui/src/test-helpers/control-ui-navigation.ts";
-import type { ProjectionFamily } from "../../ui/src/test-helpers/control-ui-projection-fixture.tsx";
+import type { ProjectionFamily } from "../../ui/src/test-helpers/control-ui-projection-fixture-contract.ts";
 import { mcpResourceHtml } from "../../ui/src/test-helpers/control-ui-team-scale-widget-html.ts";
 import { cronListResponseFixture } from "../../ui/src/test-helpers/cron.ts";
 import { meetingStatus } from "../../ui/src/test-helpers/transcripts.test-support.ts";

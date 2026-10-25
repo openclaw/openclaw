@@ -5,7 +5,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { withTimeout } from "@openclaw/fs-safe/advanced";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { createServer, type ViteDevServer } from "vite";
+import type { ViteDevServer } from "vite";
 import { expect, it, vi } from "vitest";
 import { replaceSessionEntrySync } from "../../../src/config/sessions/session-accessor.ts";
 import { GatewayClient } from "../../../src/gateway/client.ts";
@@ -33,6 +33,7 @@ import { recordControlUiE2eFailureFacts } from "../test-helpers/control-ui-e2e-d
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { createGatewayProxy, gatewayProxyRoute } from "./gateway-proxy.test-support.ts";
 import { recordTaskPrDiagnostics } from "./task-pull-requests.diagnostics.test-support.ts";
 
 const parentKey = "agent:main:task-pr-parent";
@@ -302,27 +303,8 @@ suite.define(() => {
             sidecarStartup: "defer",
           });
         gateway = await start();
-        proxy = await createServer({
-          configFile: false,
-          envFile: false,
-          root: state.workspaceDir,
-          appType: "custom",
-          logLevel: "error",
-          server: {
-            host: "127.0.0.1",
-            port: 0,
-            proxy: {
-              "/": {
-                target: "http://127.0.0.1:" + port,
-                ws: true,
-                headers: {
-                  "x-forwarded-for": "192.0.2.10",
-                  "x-forwarded-proto": "http",
-                  "x-forwarded-user": viewerEmail,
-                },
-              },
-            },
-          },
+        proxy = await createGatewayProxy(state.workspaceDir, {
+          "/": gatewayProxyRoute(port, viewerEmail),
         });
         await proxy.listen();
         const proxyUrl = proxy.resolvedUrls?.local[0];
@@ -810,26 +792,13 @@ suite.define(() => {
           sidecarStartup: "defer",
         });
         const route = (email: string) => ({
-          target: origin,
-          ws: true,
+          ...gatewayProxyRoute(port, email),
           rewrite: () => "/",
-          headers: {
-            "x-forwarded-for": "192.0.2.10",
-            "x-forwarded-proto": "http",
-            "x-forwarded-user": email,
-          },
         });
-        proxy = await createServer({
-          configFile: false,
-          envFile: false,
-          root: state.workspaceDir,
-          appType: "custom",
-          logLevel: "error",
-          server: {
-            host: "127.0.0.1",
-            port: 0,
-            proxy: { "/owner": route(ownerEmail), "/a": route(aEmail), "/b": route(bEmail) },
-          },
+        proxy = await createGatewayProxy(state.workspaceDir, {
+          "/owner": route(ownerEmail),
+          "/a": route(aEmail),
+          "/b": route(bEmail),
         });
         await proxy.listen();
         const address = proxy.resolvedUrls?.local[0];

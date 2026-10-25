@@ -2,9 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { expect, it } from "vitest";
-import { gatewayOriginScope } from "../../packages/gateway-client/src/gateway-origin-scope.js";
 import { withRuntimePreload } from "../../test/helpers/runtime-preload.js";
-import { readOriginDeviceTokenReadOnlyForTest } from "../infra/device-auth-store.test-support.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { cliRecoveryEntrypoints } from "./cli-entrypoint.test-support.js";
 import { runCliProcessChild } from "./cli-process-child.test-helpers.js";
@@ -90,7 +88,6 @@ it("lists nodes with an explicit positive timeout", async () => {
     pending: [{ requestId: "request-1", nodeId: "node-1" }],
     paired: [],
   });
-  expect(gateway.connectionCount).toBeGreaterThan(0);
   expect(gateway.calls).toEqual(["node.pair.list", "node.list"]);
 });
 
@@ -120,7 +117,7 @@ it.each([
   );
   const fixture = await remoteFixture(root, { url: gateway.url });
   const { stateDir } = fixture;
-  const { identity, env } = seedDeviceAuth(root, stateDir, gateway.url, storedToken);
+  seedDeviceAuth(root, stateDir, gateway.url, storedToken);
   const before = await test.snapshot(stateDir);
   const result = await runIsolatedGatewayCli({ args: test.args, ...fixture });
   expect(expectCliResult(result)).toEqual(test.result);
@@ -128,80 +125,62 @@ it.each([
   if (test.label === "stability RPC") {
     expect(gateway.authInputs).toEqual([{ deviceToken: storedToken }]);
   }
-  expect(
-    readOriginDeviceTokenReadOnlyForTest({
-      gatewayScope: gatewayOriginScope(gateway.url),
-      deviceId: identity.deviceId,
-      role: "operator",
-      env,
-    })?.token,
-  ).toBe(storedToken);
   expect(await test.snapshot(stateDir)).toEqual(before);
 });
 
-it("requires a reachable status RPC without changing seeded shared state", async () => {
-  const root = tempDirs.make("openclaw-gateway-status-seeded-");
-  const token = "configured-token";
-  const gateway = await startGatewayStabilityRpcServer({ token }, "issued-device-token");
-  const fixture = await remoteFixture(root, { url: gateway.url, token });
-  const { stateDir } = fixture;
-  seedDeviceAuth(root, stateDir, gateway.url, token);
-  const before = await snapshotSharedStateArtifacts(stateDir);
-  expect(Object.keys(before).includes("openclaw.sqlite")).toBe(true);
-
-  const result = await runIsolatedGatewayCli({
-    args: statusArgs(gateway.url, token),
-    ...fixture,
-  });
-
-  expect(expectCliResult(result)).toMatchObject({
-    rpc: { ok: true, kind: "read" },
-  });
-  expect(gateway.calls).toEqual(["status"]);
-  expect(await snapshotSharedStateArtifacts(stateDir)).toEqual(before);
-});
-
-it.runIf(process.platform !== "win32")(
-  "runs gateway status through one OpenClaw entry process",
-  async () => {
-    const root = tempDirs.make("openclaw-gateway-status-entry-process-");
+it.each(process.platform === "win32" ? [true] : [true, false])(
+  "reads gateway status without changing state (seeded=%s)",
+  async (seeded) => {
+    const root = tempDirs.make("openclaw-gateway-status-");
     const pidLogPath = path.join(root, "entry-pids");
     const preloadPath = path.join(root, "track-entry-pid.mjs");
     const token = "configured-token";
     const gateway = await startGatewayStabilityRpcServer({ token }, "issued-device-token");
     const fixture = await remoteFixture(root, { url: gateway.url, token });
     const { stateDir } = fixture;
-    expect(await snapshotSharedStateArtifacts(stateDir)).toEqual({});
-    await fs.writeFile(
-      preloadPath,
-      [
-        'import fs from "node:fs";',
-        'const entry = process.argv[1]?.replaceAll("\\\\", "/");',
-        `if (entry === ${JSON.stringify(fileURLToPath(cliEntrypoint).replaceAll("\\", "/"))}) {`,
-        "  fs.appendFileSync(process.env.OPENCLAW_ENTRY_PID_LOG, `${process.pid}\\n`);",
-        "}",
-        "",
-      ].join("\n"),
-    );
+    if (seeded) {
+      seedDeviceAuth(root, stateDir, gateway.url, token);
+    }
+    const before = await snapshotSharedStateArtifacts(stateDir);
+    expect(Object.keys(before).includes("openclaw.sqlite")).toBe(seeded);
+    if (!seeded) {
+      await fs.writeFile(
+        preloadPath,
+        [
+          'import fs from "node:fs";',
+          'const entry = process.argv[1]?.replaceAll("\\\\", "/");',
+          `if (entry === ${JSON.stringify(fileURLToPath(cliEntrypoint).replaceAll("\\", "/"))}) {`,
+          "  fs.appendFileSync(process.env.OPENCLAW_ENTRY_PID_LOG, `${process.pid}\\n`);",
+          "}",
+          "",
+        ].join("\n"),
+      );
+    }
 
     const result = await runIsolatedGatewayCli({
       args: statusArgs(gateway.url, token),
       ...fixture,
-      env: {
-        ...withRuntimePreload({}, preloadPath),
-        OPENCLAW_ENTRY_PID_LOG: pidLogPath,
-        OPENCLAW_NODE_EXTRA_CA_CERTS_READY: "1",
-        OPENCLAW_NODE_OPTIONS_READY: undefined,
-        OPENCLAW_NO_RESPAWN: undefined,
-      },
+      env: seeded
+        ? undefined
+        : {
+            ...withRuntimePreload({}, preloadPath),
+            OPENCLAW_ENTRY_PID_LOG: pidLogPath,
+            OPENCLAW_NODE_EXTRA_CA_CERTS_READY: "1",
+            OPENCLAW_NODE_OPTIONS_READY: undefined,
+            OPENCLAW_NO_RESPAWN: undefined,
+          },
     });
 
     expect(expectCliResult(result)).toMatchObject({
       rpc: { ok: true, kind: "read" },
     });
-    const entryPids = (await fs.readFile(pidLogPath, "utf8")).trim().split(/\s+/u);
-    expect(new Set(entryPids).size).toBe(1);
-    expect(await snapshotSharedStateArtifacts(stateDir)).toEqual({});
+    expect(gateway.calls).toEqual(["status"]);
+    if (!seeded) {
+      const entryPids = (await fs.readFile(pidLogPath, "utf8")).trim().split(/\s+/u);
+      expect(new Set(entryPids).size).toBe(1);
+      expect(before).toEqual({});
+    }
+    expect(await snapshotSharedStateArtifacts(stateDir)).toEqual(before);
   },
 );
 

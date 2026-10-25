@@ -1,6 +1,6 @@
 import type { Page } from "playwright";
 import type { BoardSnapshot } from "../../ui/src/lib/board/types.ts";
-import type { ProjectionFamily } from "../../ui/src/test-helpers/control-ui-projection-fixture.tsx";
+import type { ProjectionFamily } from "../../ui/src/test-helpers/control-ui-projection-fixture-contract.ts";
 
 /** Each actual board.get request publishes a fresh valid snapshot for its exact session. */
 export function createProjectionBoardResponses() {

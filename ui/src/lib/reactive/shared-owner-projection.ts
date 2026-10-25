@@ -4,6 +4,7 @@ import { projectSource } from "./projection.ts";
 type SharedOwnerProjection<T> = {
   readonly read: () => T;
   readonly revision: () => number;
+  subscribe(this: void, listener: () => void): () => void;
 };
 
 /** Each fixed contract shares one lazy projection per source, independently of its consumers. */
@@ -18,7 +19,7 @@ export function createSharedSourceProjection<S extends object, T>(contract: {
       projection = createDetachedRoot(() => {
         const shared = projectSource(source, { ...contract, equality: "revision" });
         // Consumers may observe this projection, but cannot replace or dispose its shared owner.
-        return { read: shared.read, revision: shared.revision };
+        return { read: shared.read, revision: shared.revision, subscribe: shared.subscribe };
       });
       projections.set(source, projection);
     }

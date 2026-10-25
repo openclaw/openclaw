@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 import { getQueriesForElement } from "@solidjs/testing-library";
 import { flush } from "solid-js";
-import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, assert, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { captureI18nStateForTesting } from "../../i18n/lib/translate.test-support.ts";
 import { i18n } from "../../i18n/lib/translate.ts";
 import * as idleImport from "../../lib/idle-import.ts";
@@ -87,6 +87,7 @@ it("shares the admitted directory read and only resolves the currently open card
       expect(request.mock.calls.filter(([method]) => method === "users.list")).toHaveLength(1),
     );
 
+    await vi.dynamicImportSettled();
     pending.resolve(sessionOwnerProfiles("Alice", "Bob"));
     await waitForSolid(() =>
       expect(queries(second.card).getByRole("heading", { name: "Bob" })).toBeTruthy(),
@@ -156,7 +157,9 @@ it.each(["immediate", "deferred", "reconnected"] as const)(
   "keeps session navigation independent of card retirement: %s",
   async (mode) => {
     const { context: ownerContext, publish } = createSessionOwnerMenuHarness();
-    vi.mocked(ownerContext.sessions.list).mockResolvedValue({
+    const sessionResult = ownerContext.sessions.state.result;
+    assert(sessionResult, "The session owner harness provides a canonical roster");
+    Object.assign(sessionResult, {
       ts: 1,
       path: "",
       count: 1,

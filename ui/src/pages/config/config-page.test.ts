@@ -2,7 +2,7 @@
 
 import { createRouter, definePage } from "@openclaw/uirouter";
 import { createComponent } from "solid-js";
-import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SolidRouteProps } from "../../app-route-types.tsx";
@@ -34,9 +34,17 @@ import {
   mountConfigPageState,
   publishConfigSource,
 } from "./config-page.test-support.ts";
-import type { ConfigPageId, ConfigPageRouteData } from "./config-page.tsx";
+import { preloadConfigPage, type ConfigPageId, type ConfigPageRouteData } from "./config-page.tsx";
 import { pages } from "./route.ts";
 import { extractQuickSettingsSecurity } from "./security.tsx";
+
+beforeAll(() =>
+  Promise.all([
+    preloadConfigPage("updates"),
+    preloadConfigPage("notifications"),
+    preloadConfigPage("advanced"),
+  ]),
+);
 
 const switchActiveRealtimeTalkCameras =
   vi.fn<typeof realtimeTalk.switchActiveRealtimeTalkCameras>();

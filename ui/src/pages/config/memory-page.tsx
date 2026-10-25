@@ -576,14 +576,18 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
     return next !== undefined ? { kind: "pinned", pluginId: next } : engineSelection();
   };
   const agentId = () => agentSelection.read().state.selectedId;
-  function readSettingsSnapshot(): ControlUiSettingsSnapshot {
+  function readSettingsSnapshot(panel: "overview" | "memories"): ControlUiSettingsSnapshot | null {
+    const routeData = props.admittedRoute.read();
+    // Retained rendering must not reactivate a plugin after its tab's owner has moved on.
+    if (!routeData || memoryTabForRoute(routeData, application.basePath) !== panel) {
+      return null;
+    }
     // Read authority directly from each live owner.
     const selection = resolveMemoryEngineSelection(
       currentConfigObject(application.runtimeConfig.state) ?? {},
     );
     const id = selectedEngineId(selection);
     const entry = findMemoryPlugin(catalogState.value, id);
-    const routeData = props.admittedRoute.read();
     return {
       agentId: application.settingsAgentSelection.state.selectedId,
       agentsLoading: application.agents.state.agentsLoading,
@@ -644,7 +648,7 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
             <ControlUiSettingsPresentation
               application={application}
               placement={{ section: "memory", panel: "overview" }}
-              readSnapshot={readSettingsSnapshot}
+              readSnapshot={() => readSettingsSnapshot("overview")}
               subscribe={subscribeSettings}
               navigate={navigateTab}
               refreshAgents={() => {
@@ -658,7 +662,7 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
             <ControlUiSettingsPresentation
               application={application}
               placement={{ section: "memory", panel: "memories" }}
-              readSnapshot={readSettingsSnapshot}
+              readSnapshot={() => readSettingsSnapshot("memories")}
               subscribe={subscribeSettings}
               navigate={navigateTab}
               refreshAgents={() => {

@@ -229,6 +229,11 @@ export function connectNavigationPrefetch(options: {
             : undefined;
     if (key) {
       prioritize(key);
+      if (key === "appearance" && ready()) {
+        // The Settings command has no route href; warm its owner's config/schema
+        // through the same loader used by ordinary navigation links.
+        void options.preloadRoute("appearance").catch(() => undefined);
+      }
     }
   };
   const stops = [

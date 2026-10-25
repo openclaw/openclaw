@@ -85,6 +85,32 @@ it("accepts nested work without re-entering its current context", async () => {
 });
 
 it.each([false, true])(
+  "restores caller context after synchronous scope entry (throws=%s)",
+  (throws) => {
+    const scope = makeScope();
+    const caller = new AsyncLocalStorage<string>();
+    cleanups.push(() => caller.disable());
+    caller.run("caller", () => {
+      const invoke = () =>
+        scope.run(() => {
+          expectContext(scope.signal, [scope, true]);
+          caller.enterWith("scope continuation");
+          if (throws) {
+            throw new Error("scope callback failed");
+          }
+        });
+      if (throws) {
+        expect(invoke).toThrow("scope callback failed");
+      } else {
+        invoke();
+      }
+      expect(caller.getStore()).toBe("caller");
+      expectContext(undefined, [scope, false]);
+    });
+  },
+);
+
+it.each([false, true])(
   "keeps cancellation and accepted work after foreground settlement (fails=%s)",
   async (fails) => {
     const { scope: owner, gate: finishWork } = makeHeldScope();
