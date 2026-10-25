@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { buildSubagentTaskMessage } from "../agents/subagents/spawn/subagent-system-prompt.js";
 import { INTERNAL_WAKE_TRANSCRIPT_PROMPTS } from "../auto-reply/heartbeat.js";
@@ -14,14 +15,6 @@ const cfg = { agents: { entries: { main: {} } } };
 const title = "Investigate why the gateway times out";
 const user = (content: string) => ({ role: "user", content });
 const messages = [user(title), { role: "assistant", content: "reply" }];
-const makeEntry = (sessionId: string, lifecycleRevision: string): SessionEntry => ({
-  sessionId,
-  lifecycleRevision,
-  status: "done",
-  updatedAt: 12,
-  lastActivityAt: 11,
-  lastInteractionAt: 10,
-});
 vi.mock("../auto-reply/reply/conversation-label-generator.js", () => ({
   generateConversationLabelWithFallback,
 }));
@@ -47,10 +40,14 @@ async function withSession(
       messages: transcript.map((message) => ({ message })),
       touchSessionEntry: false,
     });
-    await sessionAccessor.replaceSessionEntry(
-      params,
-      makeEntry(params.sessionId, params.lifecycleRevision),
-    );
+    await sessionAccessor.replaceSessionEntry(params, {
+      sessionId: params.sessionId,
+      lifecycleRevision: params.lifecycleRevision,
+      status: "done",
+      updatedAt: 12,
+      lastActivityAt: 11,
+      lastInteractionAt: 10,
+    });
     await run(params);
   });
 }
@@ -64,38 +61,75 @@ function repair() {
 }
 
 it("preserves native child names while repairing ordinary sessions in the same scan", async () => {
-  await withSession(async (params) => {
-    const child = {
-      ...params,
-      sessionKey: "agent:main:subagent:session:thread:child",
-      sessionId: "child",
-    };
-    await sessionAccessor.persistSessionTranscriptTurn(child, {
-      messages: [
+  await withSession(
+    async (params) => {
+      const task = "Investigate the gateway timeout";
+      const fixtures: Array<{
+        sessionKey: string;
+        message: string;
+        entry?: Partial<SessionEntry>;
+        displayName?: string;
+      }> = [
+        ...(["run", "session"] as const).flatMap((spawnMode) => {
+          const historical = `[Subagent Context] You are running as a subagent.\n\n[Subagent Task]\n\n${task}`;
+          const current = buildSubagentTaskMessage({
+            task,
+            spawnMode,
+            childDepth: 1,
+            maxSpawnDepth: 5,
+          });
+          return [historical, current].map((message, index) => ({
+            sessionKey: `agent:main:subagent:${spawnMode}-${index}:thread:child`,
+            message,
+          }));
+        }),
         {
-          message: user(
-            buildSubagentTaskMessage({
-              task: "Investigate the gateway timeout",
-              spawnMode: "session",
-              childDepth: 1,
-              maxSpawnDepth: 5,
-            }),
-          ),
+          sessionKey: "agent:main:subagent:named",
+          message: task,
+          entry: { label: "Explicit child label" },
+          displayName: undefined,
         },
-      ],
-      touchSessionEntry: false,
-    });
-    await sessionAccessor.replaceSessionEntry(child, makeEntry(child.sessionId, "child-lifecycle"));
-    const before = sessionAccessor.loadSessionEntry(child);
-    const parentBefore = sessionAccessor.loadSessionEntry(params);
-    expect(before).toBeDefined();
-    await repair();
-    expect(sessionAccessor.loadSessionEntry(child)).toEqual(before);
-    expect(sessionAccessor.loadSessionEntry(params)).toEqual({
-      ...parentBefore,
-      displayName: title,
-    });
-  });
+        {
+          sessionKey: "agent:main:dashboard:child",
+          message: task,
+          entry: {},
+          displayName: task,
+        },
+      ];
+      const expected = new Map<string, SessionEntry>();
+      for (const [index, fixture] of fixtures.entries()) {
+        const scope = { ...params, sessionKey: fixture.sessionKey, sessionId: `child-${index}` };
+        await sessionAccessor.persistSessionTranscriptTurn(scope, {
+          messages: [{ message: user(fixture.message) }],
+          touchSessionEntry: false,
+        });
+        await sessionAccessor.replaceSessionEntry(scope, {
+          sessionId: scope.sessionId,
+          lifecycleRevision: `child-lifecycle-${index}`,
+          status: "done",
+          updatedAt: Date.now(),
+          lastActivityAt: 11,
+          lastInteractionAt: 10,
+          ...fixture.entry,
+        });
+        const before = expectDefined(sessionAccessor.loadSessionEntry(scope), fixture.sessionKey);
+        expected.set(fixture.sessionKey, {
+          ...before,
+          ...(fixture.displayName ? { displayName: fixture.displayName } : {}),
+        });
+      }
+      await repair();
+      for (const [sessionKey, entry] of expected) {
+        expect
+          .soft(sessionAccessor.loadSessionEntry({ ...params, sessionKey }), sessionKey)
+          .toEqual(entry);
+      }
+      expect(sessionAccessor.loadSessionEntry(params)?.displayName).toBe(
+        "[Subagent Context] Explain this phrase",
+      );
+    },
+    [user("[Subagent Context] Explain this phrase")],
+  );
 });
 
 it.each(Object.entries(INTERNAL_WAKE_TRANSCRIPT_PROMPTS))(
