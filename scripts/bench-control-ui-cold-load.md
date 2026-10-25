@@ -331,6 +331,20 @@ metrics on a loaded host. Selector instrumentation adds substantial overhead;
 use separate untraced interleaved runs for timing comparisons. Empty Chromium
 selector snapshots represent no matching work and are omitted from the ranking.
 
+For per-row resource counts, the warm runner accepts `--resource-counts` and
+`--steps sidebar-resources-scroll-resize,sidebar-resources-idle-visible,sidebar-resources-idle-hidden`.
+These scenarios use 1,000 long session labels, 400-message transcripts, and native
+clocks. The result records created/active observers, observed targets, callbacks,
+intervals, media queries, and global listeners before and after each action.
+Run timing comparisons separately without instrumentation, with
+`--thread-cpu-time --pairs 20 --compare-bundle-dir <other-build>` and an A/A
+control on a loaded host. Hidden idle requires `--headed`: the runner minimizes
+its own Chromium window and verifies native document visibility. Hidden samples
+use a fresh runner-owned profile and Playwright's `noDefaults` connection so its
+normal focus emulation cannot override native visibility. The profile and process
+are removed after each sample. A browser that
+remains visible produces an explicit skip, never a simulated hidden result.
+
 Each invocation keeps its exact Git head and dirty-tree inventory, raw Chrome trace,
 CPU profile, settled screenshot, and JSON summary in a fresh timestamped directory.
 It measures renderer-main-thread task interval union, long tasks, layouts with

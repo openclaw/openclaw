@@ -124,7 +124,8 @@ function tabMeasurementClock() {
     resize(target: Element) {
       for (const observer of observers) {
         if (observer.targets.has(target)) {
-          observer.callback([], observer);
+          // SAFETY: The pooled delivery router reads only target.
+          observer.callback([{ target } as ResizeObserverEntry], observer);
         }
       }
     },
