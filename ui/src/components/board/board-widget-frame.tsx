@@ -1,4 +1,4 @@
-import { createMemo, Match, Show, Switch } from "solid-js";
+import { createMemo, Match, onSettled, Show, Switch } from "solid-js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { registerBoardEnglish } from "../../i18n/locales/en-board.ts";
 import { EventStream } from "../../lib/board/provider-signals.ts";
@@ -10,7 +10,8 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
 import { isLoopbackHostname } from "../../lib/gateway-locality.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import { listen } from "../../lib/reactive/listener.ts";
+import { subscribeDocumentVisibility } from "../../lib/reactive/platform.ts";
+import { observeWindowMessage } from "../../lib/reactive/window-message.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { WidgetRenderTimeoutError } from "../../lib/widget-sandbox-host.ts";
 import { postWidgetTheme, registerWidgetThemeFrame } from "../../lib/widget-theme.ts";
@@ -236,7 +237,29 @@ export function createBoardWidgetFrame(host: BoardWidgetFrameOwnerHost) {
     syncSandboxHost(frame, widget)?.handleMessage(event);
   };
   let stopMessages: (() => void) | undefined;
+  let messageFrame: HTMLIFrameElement | undefined;
+  let messagesConnected = false;
   let stopVisibility: (() => void) | undefined;
+  function releaseMessages(): void {
+    stopMessages?.();
+    stopMessages = undefined;
+    messageFrame = undefined;
+  }
+
+  function syncMessages(): void {
+    const frame = frameElement;
+    if (!messagesConnected || !frame?.isConnected) {
+      releaseMessages();
+      return;
+    }
+    if (messageFrame === frame) {
+      return;
+    }
+    releaseMessages();
+    messageFrame = frame;
+    stopMessages = observeWindowMessage(window, frame.contentWindow!, handleWindowMessage);
+  }
+
   function gatewayAvailable(): boolean {
     const snapshot = host.context()?.gateway.snapshot;
     return !snapshot || isGatewayAvailable(snapshot);
@@ -471,9 +494,10 @@ export function createBoardWidgetFrame(host: BoardWidgetFrameOwnerHost) {
       return contentVisible || waiting || renderStalled || Boolean(frameError);
     },
     connect(): void {
-      stopMessages ??= listen(window, "message", handleWindowMessage);
+      messagesConnected = true;
+      syncMessages();
       if (host.active()) {
-        stopVisibility ??= listen(document, "visibilitychange", handleVisibilityChange);
+        stopVisibility ??= subscribeDocumentVisibility(document, handleVisibilityChange);
       }
     },
     disconnect(): void {
@@ -482,8 +506,8 @@ export function createBoardWidgetFrame(host: BoardWidgetFrameOwnerHost) {
       frameProbeGeneration += 1;
       contentVisible = false;
       stopWork();
-      stopMessages?.();
-      stopMessages = undefined;
+      messagesConnected = false;
+      releaseMessages();
       sandboxHost?.dispose();
       sandboxHost = null;
     },
@@ -624,6 +648,14 @@ export function createBoardWidgetFrame(host: BoardWidgetFrameOwnerHost) {
       frame.style.colorScheme = initialTheme;
       frameElement = frame;
     },
+    frameConnected(frame: HTMLIFrameElement): () => void {
+      syncMessages();
+      return () => {
+        if (messageFrame === frame) {
+          releaseMessages();
+        }
+      };
+    },
     prepareView(value: BoardWidget) {
       const resolveFrameUrl = host.resolveFrameUrl();
       if (!resolveFrameUrl) {
@@ -675,12 +707,22 @@ export function BoardWidgetFrame(props: {
   current: () => BoardWidget;
 }) {
   const view = createMemo(() => props.state().prepareView(props.current()));
+  function frameRef() {
+    let frame!: HTMLIFrameElement;
+    // An iframe has its source window only after insertion. Keep the binding
+    // through suspension; unmount or the owner disconnect retires it.
+    onSettled(() => props.state().frameConnected(frame));
+    return (element: HTMLIFrameElement) => {
+      frame = element;
+      props.state().bindFrame(element);
+    };
+  }
   return (
     <Show
       when={Boolean(view().sandboxSrc)}
       fallback={
         <iframe
-          ref={(frame) => props.state().bindFrame(frame)}
+          ref={[frameRef()]}
           class="board-widget__frame"
           allow="fullscreen"
           sandbox="allow-scripts"
@@ -725,7 +767,7 @@ export function BoardWidgetFrame(props: {
           </Switch>
         </Show>
         <iframe
-          ref={(frame) => props.state().bindFrame(frame)}
+          ref={[frameRef()]}
           class="board-widget__frame"
           allow="fullscreen"
           style={{ opacity: view().visible || view().painting ? undefined : 0 }}
