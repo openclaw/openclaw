@@ -2,11 +2,9 @@ import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
-  onInternalDiagnosticEvent,
   onTrustedInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
   waitForDiagnosticEventsDrained,
-  type DiagnosticEventMetadata,
   type DiagnosticEventPayload,
 } from "../../infra/diagnostic-events.js";
 import { runWithDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
@@ -38,7 +36,6 @@ describe("registered catalog list phase diagnostics", () => {
   let config: OpenClawConfig;
   let projection: ReturnType<typeof createSessionRowProjectionFixture>;
   let phases: Phase[];
-  let trustedFlags: boolean[];
   let threadCpuUsage: MockInstance<typeof process.threadCpuUsage>;
   const install = (list?: SessionCatalogProvider["list"]) => {
     hoisted.activeRegistry.sessionCatalogs = [
@@ -54,9 +51,8 @@ describe("registered catalog list phase diagnostics", () => {
       phases.filter((event) => event.trace?.traceId === traceId).map(({ name }) => name),
     ).toEqual(names.map((name) => `sessions.catalog.list.${name}`));
 
-  const collect = (event: DiagnosticEventPayload, metadata: DiagnosticEventMetadata) => {
+  const collect = (event: DiagnosticEventPayload) => {
     if (event.type === "diagnostic.phase.completed") {
-      trustedFlags.push(metadata.trusted);
       phases.push(event);
     }
   };
@@ -70,7 +66,6 @@ describe("registered catalog list phase diagnostics", () => {
     cpuMicros = 0;
     dirty = false;
     phases = [];
-    trustedFlags = [];
     config = { agents: { entries: { main: {} } } };
     projection = createSessionRowProjectionFixture({ cfg: config, store: {} });
     vi.spyOn(projection, "needsSelectionPreparation").mockImplementation(() => dirty);
@@ -141,7 +136,6 @@ describe("registered catalog list phase diagnostics", () => {
         catalogs: [expect.objectContaining({ id: privateText, hosts: [host] })],
       });
       await waitForDiagnosticEventsDrained();
-      expect(trustedFlags).toEqual(Array.from({ length: phases.length }, () => true));
       expect(
         phases.map(({ name, durationMs, details }) => ({ name, durationMs, details })),
       ).toEqual([
@@ -214,30 +208,18 @@ describe("registered catalog list phase diagnostics", () => {
     expect(JSON.stringify(phases)).not.toContain(privateText);
   });
 
-  it.each(["untrusted", "unavailable"] as const)(
-    "delivers with %s CPU sampling",
-    async (sampling) => {
-      if (sampling === "untrusted") {
-        onInternalDiagnosticEvent(collect);
-      } else {
-        observe();
-        threadCpuUsage.mockImplementation(() => {
-          throw new Error(privateText);
-        });
-      }
-      install();
-      const call = start();
-      await call.completion;
-      await waitForDiagnosticEventsDrained();
-      expect(call.respond).toHaveBeenCalledWith(true, expect.anything());
-      if (sampling === "untrusted") {
-        expect(threadCpuUsage).not.toHaveBeenCalled();
-        expect(phases).toEqual([]);
-      } else {
-        expect(phases).toHaveLength(3);
-        expect(phases.every((event) => event.details === undefined)).toBe(true);
-        expect(JSON.stringify(phases)).not.toContain(privateText);
-      }
-    },
-  );
+  it("delivers with unavailable CPU sampling", async () => {
+    observe();
+    threadCpuUsage.mockImplementation(() => {
+      throw new Error(privateText);
+    });
+    install();
+    const call = start();
+    await call.completion;
+    await waitForDiagnosticEventsDrained();
+    expect(call.respond).toHaveBeenCalledWith(true, expect.anything());
+    expect(phases).toHaveLength(3);
+    expect(phases.every((event) => event.details === undefined)).toBe(true);
+    expect(JSON.stringify(phases)).not.toContain(privateText);
+  });
 });

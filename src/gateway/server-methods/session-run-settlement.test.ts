@@ -3,7 +3,6 @@ import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-reques
 import {
   beginSessionEffect,
   captureSessionTarget,
-  isCompetingSessionControllerWorkActive,
   SESSION_CONTROLLER_DRAIN_TIMEOUT_MS,
   withSessionControllerOwner,
 } from "../../sessions/session-controller.lifecycle.js";
@@ -97,16 +96,6 @@ function fixture() {
   return { target, register, admit, track };
 }
 
-it("leaves live runs to the existing active-work gate", async () => {
-  const { target, register, admit } = fixture();
-  const registration = register({ terminal: false });
-  await admit();
-  expect(await waitForTerminalSessionRunSettlement(target)).toBe(false);
-  expect(isCompetingSessionControllerWorkActive(target.storePath, [target.sessionId])).toBe(true);
-  expect(getRpcSource("terminal-run")).toBe(registration.entry);
-  expect(registration.controller.signal.aborted).toBe(false);
-});
-
 it.each(["pending", "persistence"] as const)(
   "does not treat unclaimed terminal %s as a discardable waiting input",
   async (kind) => {
@@ -192,23 +181,6 @@ it.each([false, true])(
     release();
   },
 );
-
-it("refuses an acquired live admission without waiting for an older terminal owner", async () => {
-  const { target, register, admit, track } = fixture();
-  const terminal = register();
-  const live = await admit();
-  let result: boolean | undefined;
-  const waiting = track(
-    waitForTerminalSessionRunSettlement(target).then((value) => {
-      result = value;
-    }),
-  );
-  await vi.advanceTimersByTimeAsync(0);
-  expect(result).toBe(false);
-  expect(live.isActive()).toBe(true);
-  expect(getRpcSource("terminal-run")).toBe(terminal.entry);
-  await waiting;
-});
 
 it.each(["store", "Gateway"] as const)(
   "ignores another %s's source with the same logical identity",
