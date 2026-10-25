@@ -41,17 +41,17 @@ function user(text: string): AgentMessage {
   return { role: "user", content: text, timestamp: 1 };
 }
 
-function tool(params: { id: string; text?: unknown; image?: boolean }): AgentMessage {
+function tool(id: string, text: unknown = "result", image = false): AgentMessage {
   return {
     role: "toolResult",
-    toolCallId: params.id,
+    toolCallId: id,
     toolName: "read",
     content: [
-      ...(params.image ? [{ type: "image", data: "AA==", mimeType: "image/png" }] : []),
-      { type: "text", text: params.text ?? "result" },
+      ...(image ? [{ type: "image", data: "AA==", mimeType: "image/png" }] : []),
+      { type: "text", text },
     ],
-    details: { source: params.id },
-    isError: params.id === "error",
+    details: { source: id },
+    isError: id === "error",
     timestamp: 42,
   } as AgentMessage;
 }
@@ -69,7 +69,7 @@ function addNewRound(history: AgentMessage[]): AgentMessage[] {
   return [
     ...history,
     assistant(),
-    tool({ id: "new", text: "b".repeat(5_000) }),
+    tool("new", "b".repeat(5_000)),
     ...Array.from({ length: 3 }, () => assistant()),
   ];
 }
@@ -177,15 +177,15 @@ describe("cache-TTL tool-result projection", () => {
     (kind) => {
       const state = newState();
       const history = prunableHistory([
-        tool({ id: "old", text: "a".repeat(100_000) }),
-        tool({ id: "older", text: "c".repeat(100_000) }),
+        tool("old", "a".repeat(100_000)),
+        tool("older", "c".repeat(100_000)),
       ]);
       const sent =
         kind === "cache-TTL"
           ? project(history, { projectionState: state })
           : truncate(history, 128_000, 100_000, 1_000, state).messages;
       expect(toolText(sent, "old").length).toBeLessThan(100_000);
-      const freshResult = tool({ id: "fresh", text: "b".repeat(100_000) });
+      const freshResult = tool("fresh", "b".repeat(100_000));
       const before = structuredClone(state);
 
       expect(replayToolResultPromptProjections([...history, freshResult], state)).toEqual([
@@ -206,10 +206,7 @@ describe("cache-TTL tool-result projection", () => {
     const history: AgentMessage[] = [user("start")];
     let sent: AgentMessage[] = [];
     for (let batch = 0; batch < 3; batch++) {
-      history.push(
-        assistant(),
-        tool({ id: `batch-${batch}`, text: `${batch}`.repeat(6_000), image: true }),
-      );
+      history.push(assistant(), tool(`batch-${batch}`, `${batch}`.repeat(6_000), true));
       sent = truncate(history, 128_000, maxChars, 8_000, state).messages;
     }
     expect(sent.filter((message) => message.role === "toolResult")).toHaveLength(3);
@@ -248,7 +245,7 @@ describe("cache-TTL tool-result projection", () => {
 
       const messages = prunableHistory(
         Array.from({ length: mode === "hard" ? 18 : 1 }, (_, index) =>
-          tool({ id: `tool-${index}`, text: `${index}:` + "x".repeat(6_000), image: true }),
+          tool(`tool-${index}`, `${index}:` + "x".repeat(6_000), true),
         ),
       );
       using initialLease = retainState(sessionId);
@@ -320,11 +317,11 @@ describe("cache-TTL tool-result projection", () => {
   );
 
   it("keeps pruned bytes when a later result makes a tool identity ambiguous", () => {
-    const messages = prunableHistory([tool({ id: "reused", text: "a".repeat(5_000) })]);
+    const messages = prunableHistory([tool("reused", "a".repeat(5_000))]);
     const state = newState();
     const sent = project(messages, { projectionState: state });
     const entries = checkpoint(snapshot(state));
-    const expanded = [...messages, tool({ id: "reused", text: "b".repeat(5_000) })];
+    const expanded = [...messages, tool("reused", "b".repeat(5_000))];
     const continued = project(expanded, { projectionState: state, lastCacheTouchAt: NOW });
     expect(JSON.stringify(continued.slice(0, messages.length))).toBe(JSON.stringify(sent));
     const restarted = newState();
@@ -338,7 +335,7 @@ describe("cache-TTL tool-result projection", () => {
     restore(state, checkpoint({ prunedToolResults: [{ key: "tool:old:42", mode: "soft" }] }));
     // SAFETY: older malformed plugin content is handled by the existing replay guard.
     const original = freezeJsonSnapshot({
-      ...tool({ id: "old" }),
+      ...tool("old"),
       content: null,
     }) as unknown as AgentMessage;
     truncate([original], 128_000, 5_000, 20_000, state);
@@ -356,7 +353,7 @@ describe("cache-TTL tool-result projection", () => {
     "gates new %s pruning rounds without undoing live or restored projections",
     (owner) => {
       const state = newState();
-      const history = prunableHistory([tool({ id: "old", text: "a".repeat(5_000) })]);
+      const history = prunableHistory([tool("old", "a".repeat(5_000))]);
       const first = project(history, { projectionState: state });
       const entries = checkpoint(snapshot(state));
       const expanded = addNewRound(history);
@@ -402,7 +399,7 @@ describe("cache-TTL tool-result projection", () => {
 
   it("replaces images and serializes malformed text before hard eligibility", () => {
     const malformed = { payload: "m".repeat(5_000) };
-    const result = project(prunableHistory([tool({ id: "image", text: malformed, image: true })]), {
+    const result = project(prunableHistory([tool("image", malformed, true)]), {
       contextWindowTokens: 4_000,
     });
     const text = toolText(result, "image");
@@ -411,7 +408,7 @@ describe("cache-TTL tool-result projection", () => {
   });
 
   it("drops old thinking only for pressure estimation", () => {
-    const messages = prunableHistory([tool({ id: "thinking", text: "x".repeat(4_001) })]);
+    const messages = prunableHistory([tool("thinking", "x".repeat(4_001))]);
     messages[1] = assistant([
       { type: "thinking", thinking: "hidden", thinkingSignature: "s".repeat(40_000) },
       { type: "text", text: { malformed: "m".repeat(40_000) } },
