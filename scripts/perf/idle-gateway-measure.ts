@@ -41,6 +41,7 @@ const { values } = parseArgs({
     minutes: { type: "string", default: "10" },
     "settle-seconds": { type: "string", default: "60" },
     "config-reloads": { type: "string", default: "0" },
+    "watcher-failure": { type: "boolean", default: false },
     "start-at": { type: "string" },
     port: { type: "string", default: "41563" },
     timers: { type: "boolean", default: false },
@@ -62,6 +63,9 @@ if (values.profile && values.allocations) {
 if (Boolean(values["sql-observer"]) !== Boolean(values["sql-output"])) {
   throw new Error("--sql-observer and --sql-output must be supplied together");
 }
+if (values["watcher-failure"] && values.entry !== "src/entry.ts") {
+  throw new Error("--watcher-failure requires --entry src/entry.ts");
+}
 const sqlOutput = values["sql-output"] ? path.resolve(values["sql-output"]) : undefined;
 const sqlPhase = (phase: string) => {
   if (sqlOutput) {
@@ -78,7 +82,7 @@ const integer = (raw: string, label: string, min: number) =>
 const minutes = integer(values.minutes, "--minutes", 1);
 const settleSeconds = integer(values["settle-seconds"], "--settle-seconds", 0);
 const configReloads = integer(values["config-reloads"], "--config-reloads", 0);
-const needsDevice = values.subscribe || configReloads > 0;
+const needsDevice = values.subscribe || configReloads > 0 || values["watcher-failure"];
 const traceGc = configReloads === 0;
 const port = integer(values.port, "--port", 40000);
 const startAt = values["start-at"] ? integer(values["start-at"], "--start-at", 1) : undefined;
@@ -144,6 +148,7 @@ const env = createGatewayBenchEnv(path.join(state ?? output, "home"), configPath
     OPENCLAW_SYSTEMD_UNIT: `openclaw-idle-measure-${port}`,
     OPENCLAW_IDLE_MEASURE_CHANNEL: channel,
     OPENCLAW_IDLE_MEASURE_TIMERS: values.timers ? "1" : "0",
+    OPENCLAW_IDLE_MEASURE_WATCHER_FAILURE: values["watcher-failure"] ? "1" : "0",
     OPENCLAW_BENCH_TRACE_GC: traceGc ? "1" : "0",
     NODE_DISABLE_COMPILE_CACHE: "1",
   },
@@ -154,7 +159,7 @@ const args = [
   path.resolve("scripts/tsx.mjs"),
   "--import",
   path.resolve("scripts/lib/gateway-bench-profile-preload.ts"),
-  ...(values.timers
+  ...(values.timers || values["watcher-failure"]
     ? ["--import", path.resolve("scripts/perf/idle-gateway-measure-preload.mjs")]
     : []),
   path.resolve(values.entry),
@@ -176,6 +181,36 @@ process.once("SIGINT", interrupt);
 process.once("SIGTERM", interrupt);
 const wait = (ms: number) => delay(ms, undefined, { signal: abort.signal });
 const samples: unknown[] = [];
+async function watcherCommand(action: "watcher-fail" | "watcher-count") {
+  const id = randomUUID();
+  const reply = Promise.withResolvers<{ watchNotifications?: number; error?: string }>();
+  const onMessage = (message: {
+    channel?: string;
+    id?: string;
+    watchNotifications?: number;
+    error?: string;
+  }) => {
+    if (message.channel === channel && message.id === id) {
+      reply.resolve(message);
+    }
+  };
+  child!.on("message", onMessage);
+  child!.send({ channel, action, id });
+  try {
+    const result = await Promise.race([
+      reply.promise,
+      wait(15_000).then(() => {
+        throw new Error(`Watcher command timed out: ${action}`);
+      }),
+    ]);
+    if (result.error) {
+      throw new Error(result.error);
+    }
+    return result;
+  } finally {
+    child!.off("message", onMessage);
+  }
+}
 async function sample() {
   const id = randomUUID();
   const rows: unknown[] = [];
@@ -319,8 +354,13 @@ try {
   sqlPhase("settle");
   await wait(settleSeconds * 1000);
   const reloads: Array<{ requests: number; elapsedMs: number }> = [];
-  for (let index = 0; index < configReloads; index++) {
-    sqlPhase(`reload-${index + 1}`);
+  let watcherRecovery: Awaited<ReturnType<typeof watcherCommand>> | undefined;
+  for (let index = 0; index < configReloads + (values["watcher-failure"] ? 1 : 0); index++) {
+    const forceFailure = values["watcher-failure"] && index === 0;
+    sqlPhase(forceFailure ? "watcher-failure" : `reload-${index + 1}`);
+    if (forceFailure) {
+      await watcherCommand("watcher-fail");
+    }
     const nextConfig: OpenClawConfig = JSON.parse(readFileSync(configPath, "utf8"));
     const level = nextConfig.logging?.level === "debug" ? "info" : "debug";
     nextConfig.logging = { ...nextConfig.logging, level };
@@ -328,6 +368,10 @@ try {
     const pendingPath = `${configPath}.pending`;
     writeFileSync(pendingPath, JSON.stringify(nextConfig));
     renameSync(pendingPath, configPath);
+    if (forceFailure) {
+      // Observe after the bounded first recovery, without adding latency-dependent RPC polling.
+      await wait(2000);
+    }
     let requests = 0;
     for (;;) {
       const response = await client.request("config.get", {});
@@ -351,6 +395,10 @@ try {
       await wait(100);
     }
     reloads.push({ requests, elapsedMs: performance.now() - started });
+    if (forceFailure) {
+      await wait(2000);
+      watcherRecovery = await watcherCommand("watcher-count");
+    }
     sqlPhase(`reload-settle-${index + 1}`);
     await wait(1000);
   }
@@ -431,6 +479,7 @@ try {
         minutes,
         settleSeconds,
         reloads,
+        watcherRecovery,
         subscribe: values.subscribe,
         channels: values.channels,
         sqlOutput,

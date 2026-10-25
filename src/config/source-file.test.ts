@@ -254,6 +254,32 @@ describe("config file observation", () => {
     await h.expectChanges(1);
   });
 
+  it.each([false, true])(
+    "notifies once after watcher recovery (edit during downtime: %s)",
+    async (edit) => {
+      const h = await fixture();
+      const previous = h.sources[0]!;
+      const installed = h.nextSource();
+      previous.options.onHealth?.({
+        state: "unavailable",
+        mode: "events",
+        directories: 0,
+        failure: { operation: "scan", error: new Error("watch observation worker stopped") },
+      });
+      await previous.subscription.close();
+      if (edit) {
+        await fs.writeFile(h.p("openclaw.json"), '{"changedWhileUnavailable":true}');
+      }
+      await vi.advanceTimersByTimeAsync(500);
+      const replacement = await installed;
+      await replacement.subscription.ready;
+      await h.settle();
+      expect(h.adapter.status()).toBe("active");
+      expect(h.onChange).toHaveBeenCalledOnce();
+      await h.expectChanges(1);
+    },
+  );
+
   it.each([undefined, "false", "1"])(
     "bounds watch-limit recovery and preserves polling override %s",
     async (setting) => {
