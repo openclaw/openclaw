@@ -1,3 +1,6 @@
+// Sandbox workspace tests cover bootstrap file seeding into isolated workspaces
+// without following unsafe host links.
+import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -203,25 +206,33 @@ describe("ensureSandboxWorkspace", () => {
     }
   });
 
-  it.runIf(process.platform !== "win32").each(["symlink", "link"] as const)(
-    "skips bootstrap seed files created with %s",
-    async (link) => {
-      const { root, seed, prepare, expectMissing } = await workspaceFixture();
-      const outside = path.join(root, "outside-agents.txt");
-      await fs.writeFile(outside, "outside", "utf-8");
-      try {
-        await fs[link](outside, path.join(seed, DEFAULT_AGENTS_FILENAME));
-      } catch (error) {
-        if (link === "link" && (error as NodeJS.ErrnoException).code === "EXDEV") {
-          return;
-        }
-        throw error;
-      }
+  it.runIf(process.platform !== "win32")("skips symlinked bootstrap seed files", async () => {
+    const { root, seed, prepare, expectMissing } = await workspaceFixture();
+    const outside = path.join(root, "outside-secret.txt");
+    await fs.writeFile(outside, "secret", "utf-8");
+    await fs.symlink(outside, path.join(seed, DEFAULT_AGENTS_FILENAME));
 
-      await prepare();
-      await expectMissing();
-    },
-  );
+    await prepare();
+    await expectMissing();
+  });
+
+  it.runIf(process.platform !== "win32")("skips hardlinked bootstrap seed files", async () => {
+    const { root, seed, prepare, expectMissing } = await workspaceFixture();
+    const outside = path.join(root, "outside-agents.txt");
+    const linkedSeed = path.join(seed, DEFAULT_AGENTS_FILENAME);
+    await fs.writeFile(outside, "outside", "utf-8");
+    try {
+      await fs.link(outside, linkedSeed);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EXDEV") {
+        return;
+      }
+      throw error;
+    }
+
+    await prepare();
+    await expectMissing();
+  });
 
   it("skips an oversized seed file but still seeds the others", async () => {
     const { prepare, read, expectMissing } = await workspaceFixture({
@@ -241,5 +252,50 @@ describe("ensureSandboxWorkspace", () => {
     });
     await prepare();
     expect(await read()).toContain("Do startup things");
+  });
+
+  it("does not publish a partial sandbox seed when the first write fails", async () => {
+    const { sandbox, prepare, read, expectMissing } = await workspaceFixture({
+      [DEFAULT_AGENTS_FILENAME]: "seeded-agents",
+    });
+    await fs.mkdir(sandbox, { recursive: true });
+    const resolvedSandbox = await fs.realpath(sandbox);
+    const realOpen = fs.open.bind(fs);
+    let injected = false;
+    const spy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await realOpen(...args);
+      const rawPath = nodeFilePath(args[0]);
+      const exclusiveCreate =
+        typeof args[1] === "number" &&
+        (args[1] & syncFs.constants.O_CREAT) !== 0 &&
+        (args[1] & syncFs.constants.O_EXCL) !== 0;
+      if (
+        !injected &&
+        rawPath &&
+        path.dirname(path.resolve(rawPath)) === resolvedSandbox &&
+        exclusiveCreate
+      ) {
+        vi.spyOn(handle, "write").mockImplementationOnce(async () => {
+          injected = true;
+          await handle.writeFile("# PARTIAL\n");
+          throw Object.assign(new Error("ENOSPC"), { code: "ENOSPC" });
+        });
+      }
+      return handle;
+    });
+
+    try {
+      await expect(withEnvAsync({ FS_SAFE_NATIVE_MODE: "off" }, prepare)).rejects.toMatchObject({
+        cause: { code: "ENOSPC" },
+      });
+      expect(injected).toBe(true);
+      await expectMissing();
+      expect(await fs.readdir(sandbox)).toEqual([]);
+    } finally {
+      spy.mockRestore();
+    }
+
+    await prepare();
+    await expect(read()).resolves.toBe("seeded-agents");
   });
 });

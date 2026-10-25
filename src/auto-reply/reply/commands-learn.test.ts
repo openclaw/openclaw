@@ -1,6 +1,6 @@
+// Tests /learn prompt rewriting, defaults, standards, and availability gating.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
-import { model } from "../../agents/model-catalog-fixtures.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { WorkshopReviewNotFoundError } from "../../skills/workshop/review-undo.js";
 import { createCanonicalAgentConfigFixture } from "../../test-utils/config-roster.js";
@@ -26,7 +26,18 @@ function createLearnModels(supportsTools: boolean): NonNullable<OpenClawConfig["
     providers: {
       openai: {
         baseUrl: "https://api.openai.com/v1",
-        models: [model("gpt-5.5", "GPT-5.5", { compat: { supportsTools } })],
+        models: [
+          {
+            id: "gpt-5.5",
+            name: "GPT-5.5",
+            reasoning: true,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 128_000,
+            maxTokens: 16_384,
+            compat: { supportsTools },
+          },
+        ],
       },
     },
   };
@@ -39,8 +50,8 @@ function buildLearnParams(
   cfg: OpenClawConfig = {},
 ): HandleCommandsParams {
   const loadedConfig = createCanonicalAgentConfigFixture(cfg).config;
-  return buildSessionCommandTestParams(
-    {
+  return {
+    ...buildSessionCommandTestParams({
       commandBodyNormalized,
       isAuthorizedSender: true,
       senderIsOwner: true,
@@ -50,33 +61,29 @@ function buildLearnParams(
       surface: INTERNAL_MESSAGE_CHANNEL,
       ownerList: [],
       rawBodyNormalized: commandBodyNormalized,
+    }),
+    cfg: { ...loadedConfig, models: loadedConfig.models ?? DEFAULT_TEST_MODELS },
+    ctx: {
+      Provider: INTERNAL_MESSAGE_CHANNEL,
+      Surface: INTERNAL_MESSAGE_CHANNEL,
+      CommandSource: "text",
+      Body: commandBodyNormalized,
+      RawBody: commandBodyNormalized,
+      CommandBody: commandBodyNormalized,
+      BodyForCommands: commandBodyNormalized,
+      BodyForAgent: commandBodyNormalized,
+      BodyStripped: commandBodyNormalized,
     },
-    {
-      cfg: { ...loadedConfig, models: loadedConfig.models ?? DEFAULT_TEST_MODELS },
-      ctx: {
-        Provider: INTERNAL_MESSAGE_CHANNEL,
-        Surface: INTERNAL_MESSAGE_CHANNEL,
-        CommandSource: "text",
-        BodyForAgent: commandBodyNormalized,
-      },
-      directives: {},
-      sessionKey: "agent:main:webchat:test",
-      model: "gpt-5.5",
-    },
-  );
+    directives: {},
+    sessionKey: "agent:main:webchat:test",
+    model: "gpt-5.5",
+  } as unknown as HandleCommandsParams;
 }
 
 afterEach(() => {
   cliBackendsTesting.resetDepsForTest();
   getMemoryLearnContribution.mockReset();
 });
-
-async function expectUnavailable(params: HandleCommandsParams) {
-  expect(await handleLearnCommand(params, true)).toMatchObject({
-    shouldContinue: false,
-    reply: { text: expect.stringContaining("Skill workshop is not available on this agent") },
-  });
-}
 
 describe("learn command", () => {
   it("uses isolated workshop availability in a global session", async () => {
@@ -92,7 +99,10 @@ describe("learn command", () => {
     params.agentId = "isolated";
     params.sessionKey = "global";
 
-    await expectUnavailable(params);
+    const result = await handleLearnCommand(params, true);
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toContain("Skill workshop is not available on this agent");
     expect(params.ctx.BodyForAgent).toBe("/learn");
   });
 
@@ -115,31 +125,54 @@ describe("learn command", () => {
       });
       params.ctx.RuntimePolicySessionKey = "agent:isolated:webchat:test";
 
-      await expectUnavailable(params);
+      const result = await handleLearnCommand(params, true);
+
+      expect(result?.shouldContinue).toBe(false);
+      expect(result?.reply?.text).toContain("Skill workshop is not available on this agent");
     },
   );
 
-  it.each([true, false])("applies wildcard sender policy for WebChat owner=%s", async (owner) => {
+  it("keeps the workshop available for owner WebChat under a wildcard sender policy", async () => {
     const params = buildLearnParams("/learn", {
       tools: { toolsBySender: { "*": { deny: ["skill_workshop"] } } },
     });
-    params.command.senderIsOwner = owner;
-    if (owner) {
-      expect((await handleLearnCommand(params, true))?.shouldContinue).toBe(true);
-    } else {
-      await expectUnavailable(params);
-    }
+
+    const result = await handleLearnCommand(params, true);
+
+    expect(result?.shouldContinue).toBe(true);
+  });
+
+  it("keeps the wildcard sender policy for non-owner WebChat", async () => {
+    const params = buildLearnParams("/learn", {
+      tools: { toolsBySender: { "*": { deny: ["skill_workshop"] } } },
+    });
+    params.command.senderIsOwner = false;
+
+    const result = await handleLearnCommand(params, true);
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toContain("Skill workshop is not available on this agent");
   });
 
   it("replies without continuing when the runtime tool allowlist is empty", async () => {
     const params = buildLearnParams("/learn");
     params.opts = { toolsAllow: [] };
 
-    await expectUnavailable(params);
+    const result = await handleLearnCommand(params, true);
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toContain("Skill workshop is not available on this agent");
   });
 
   it("replies without continuing when the selected model disables tools", async () => {
-    await expectUnavailable(buildLearnParams("/learn", { models: createLearnModels(false) }));
+    const params = buildLearnParams("/learn", {
+      models: createLearnModels(false),
+    });
+
+    const result = await handleLearnCommand(params, true);
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toContain("Skill workshop is not available on this agent");
   });
 
   describe("memory provider learning", () => {

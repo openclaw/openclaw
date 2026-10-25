@@ -79,15 +79,6 @@ function registerNode(pairedNode: PairedDevice, connId = `connection-${pairedNod
   return client;
 }
 
-function connectNode(nodeId: string) {
-  const paired = createPairedNode(nodeId);
-  registry = new NodeRegistry({
-    resolveCurrentPairingState: async () =>
-      prepareDevicePairingBinding(paired.deviceId, paired).binding ?? undefined,
-  });
-  return { paired, client: registerNode(paired) };
-}
-
 function invoke(
   method: string,
   params: Record<string, unknown>,
@@ -145,7 +136,12 @@ it("uses current node bindings when pairing publications replace historical role
 });
 
 it("shares immutable catalog rows until pairing or live node facts change", async () => {
-  const { paired, client } = connectNode("cached-node");
+  const paired = createPairedNode("cached-node");
+  registry = new NodeRegistry({
+    resolveCurrentPairingState: async () =>
+      prepareDevicePairingBinding(paired.deviceId, paired).binding ?? undefined,
+  });
+  const client = registerNode(paired);
   publishPairing([paired]);
   const admin = {
     connect: { scopes: ["operator.admin"] },
@@ -154,6 +150,8 @@ it("shares immutable catalog rows until pairing or live node facts change", asyn
   const initial = await read();
   expect(initial).toMatchObject({ nodeId: "cached-node", connected: true, commands: [] });
   expect(await read()).toBe(initial);
+  expect(Object.isFrozen(initial)).toBe(true);
+  expect(Object.isFrozen(initial.commands)).toBe(true);
 
   registry.updateHostStats({
     nodeId: paired.deviceId,
@@ -168,31 +166,38 @@ it("shares immutable catalog rows until pairing or live node facts change", asyn
   expect(await read()).toBe(stats);
 
   const transport = getNodeWorkerSupervisorTransport(registry);
-  const publishCapacity = (available: number) =>
-    updateNodeRunnerInventory({
-      registry,
-      nodeId: paired.deviceId,
-      connId: client.connId,
-      declaration: {
-        protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-        workerHost: {
-          enabled: true,
-          capacity: { total: 2, available },
-          bundleRetention: 1,
-          bundleStatus: 1,
+  const publishCapacity = (available: number) => {
+    expect(
+      updateNodeRunnerInventory({
+        registry,
+        nodeId: paired.deviceId,
+        connId: client.connId,
+        declaration: {
+          protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+          workerHost: {
+            enabled: true,
+            capacity: { total: 2, available },
+            bundleRetention: 1,
+            bundleStatus: 1,
+          },
         },
-      },
-    });
+      }),
+    ).toEqual({ changed: true });
+  };
   publishCapacity(1);
   const proof = expectDefined(
     await transport.getCurrentNode(paired.deviceId),
     "current node proof",
   );
-  transport.acceptBundleStatus?.(proof, {
-    bundleHash: "a".repeat(64),
-    status: { status: "installed", version: "1" },
-  });
+  expect(
+    transport.acceptBundleStatus?.(proof, {
+      bundleHash: "a".repeat(64),
+      status: { status: "installed", version: "1" },
+    }),
+  ).toBe(true);
   const inventory = await read();
+  expect(inventory.workerSlots).toEqual({ total: 2, available: 1 });
+  expect(inventory.workerBundle).toEqual({ status: "installed", version: "1" });
   const described = await request("node.describe", { nodeId: paired.deviceId }, admin);
   expect(described).toMatchObject({
     nodeId: paired.deviceId,
@@ -203,8 +208,12 @@ it("shares immutable catalog rows until pairing or live node facts change", asyn
   for (const projection of [inventory, described]) {
     expect(JSON.stringify(projection)).not.toContain("bundleHash");
   }
-  expect(inventory.workerSlots).toEqual({ total: 2, available: 1 });
-  expect(inventory.workerBundle).toEqual({ status: "installed", version: "1" });
+  expect(Object.isFrozen(inventory.workerSlots)).toBe(true);
+  expect(Object.isFrozen(inventory.workerBundle)).toBe(true);
+  expect(() => Object.assign(inventory.workerSlots!, { available: 0 })).toThrow();
+  expect(() => Object.assign(inventory.workerBundle!, { status: "missing" })).toThrow();
+  expect((await transport.getCurrentNode(paired.deviceId))?.workerHost.capacity.available).toBe(1);
+  expect(transport.getBundleStatus?.(paired.deviceId)?.status.status).toBe("installed");
   publishCapacity(0);
   const full = await read();
   expect(full.workerSlots?.available).toBe(0);
@@ -228,7 +237,12 @@ it("shares immutable catalog rows until pairing or live node facts change", asyn
 });
 
 it("retains received stats after replacement and rejects the retired connection", async () => {
-  const { paired: pairedNode, client: registered } = connectNode("stats-node");
+  const pairedNode = createPairedNode("stats-node");
+  registry = new NodeRegistry({
+    resolveCurrentPairingState: async () =>
+      prepareDevicePairingBinding(pairedNode.deviceId, pairedNode).binding ?? undefined,
+  });
+  const registered = registerNode(pairedNode);
   pairedNode.nodeSurface!.lastHostStats = {
     ...sampleStats,
     memoryFreeBytes: 1024,
@@ -255,6 +269,7 @@ it("retains received stats after replacement and rejects the retired connection"
   expect(connected).toMatchObject({ connected: true, hostStats });
   expect(connected.hostStats).not.toBe(registry.get(pairedNode.deviceId)?.hostStats);
   const replacement = registerNode(pairedNode, "replacement");
+  const pairingState = resolveNodePairingState(pairedNode)!;
   expect(registry.unregister(registered.connId)).toBeNull();
   expect(await readNode()).toMatchObject({ connected: true });
   expect(await readNode()).not.toHaveProperty("hostStats");
@@ -263,6 +278,14 @@ it("retains received stats after replacement and rejects the retired connection"
   const offline = await readNode();
   expect(offline).toMatchObject({ connected: false, hostStats });
   expect(offline.hostStats).not.toBe(pairedNode.nodeSurface!.lastHostStats);
+  expect(mocks.stats).toHaveBeenCalledExactlyOnceWith({
+    nodeId: pairedNode.deviceId,
+    hostStats,
+    expectedPairingGeneration: {
+      nodeId: pairedNode.deviceId,
+      key: pairingState.generation!.key,
+    },
+  });
 });
 
 it("preserves Gateway-local ownership across list and describe", async () => {

@@ -30,20 +30,18 @@ const cfg = {
   },
 } as OpenClawConfig;
 
-const openaiRow = (id: string, fields: Partial<ModelCatalogEntry> = {}) =>
-  row(id, { provider: "openai", ...fields });
-const apiModel = openaiRow("gpt-5.6-sol", {
+const apiModel: ModelCatalogEntry = {
+  provider: "openai",
+  id: "gpt-5.6-sol",
   name: "GPT-5.6 Sol (API)",
   api: "openai-responses",
   baseUrl: "https://api.openai.com/v1",
-});
+};
 const nativeRoute = {
   provider: "openai",
   api: "openai-chatgpt-responses" as const,
   baseUrl: "https://chatgpt.com/backend-api/codex",
 };
-const nativeRow = (id: string, fields: Partial<ModelCatalogEntry> = {}) =>
-  openaiRow(id, { ...nativeRoute, reasoning: true, ...fields });
 const standardEfforts = ["low", "medium", "high", "xhigh", "max"];
 const reasoningCompat = (efforts = standardEfforts) => ({
   supportsReasoningEffort: true,
@@ -53,20 +51,29 @@ const snapshot: ModelCatalogSnapshot = {
   entries: [{ ...apiModel, compat: reasoningCompat() }],
   routeVariants: [apiModel],
   staticEntries: [
-    nativeRow("gpt-5.6-sol", {
+    {
+      ...nativeRoute,
+      id: "gpt-5.6-sol",
       name: "GPT-5.6 Sol",
       contextWindow: 1_050_000,
+      reasoning: true,
       params: { providerFact: "kept", codexAppServerRuntimeModel: "stale-runtime" },
       compat: {
         ...reasoningCompat(),
         supportsTools: false,
       },
-    }),
-    nativeRow("gpt-5.6-terra", {
+    },
+    {
+      ...nativeRoute,
+      id: "gpt-5.6-terra",
       name: "GPT-5.6 Terra",
+      reasoning: true,
       compat: reasoningCompat([...standardEfforts, "ultra"]),
+    },
+    row("provider-empty-reasoner", {
+      provider: "openai",
+      compat: { supportedReasoningEfforts: [] },
     }),
-    openaiRow("provider-empty-reasoner", { compat: { supportedReasoningEfforts: [] } }),
   ],
 };
 
@@ -149,6 +156,32 @@ describe("agent harness model catalog", () => {
     },
   );
 
+  it("retains successful default acquisition when an alternative fails", async () => {
+    const config = pickerConfig("native-one");
+    const initial = catalog([]);
+    const observed = row("model", { name: "Observed model", nativeRuntime: "native-one" });
+    const failure = new Error("Alternative catalog is unavailable");
+    const successfulLoad = vi.fn(async () => [observed]);
+    const failedLoad = vi.fn(async () => {
+      throw failure;
+    });
+    const registry = catalogRegistry({ "native-one": successfulLoad, "native-two": failedLoad });
+    const onError = vi.fn();
+    const onDiscoveryCompleted = vi.fn();
+    const result = await augmentPreparedModelCatalogWithAgentHarness({
+      input: pickerInput(config),
+      snapshot: initial,
+      pluginRegistry: registry,
+      onError,
+      onDiscoveryCompleted,
+    });
+    expect(successfulLoad).toHaveBeenCalledOnce();
+    expect(failedLoad).toHaveBeenCalledOnce();
+    expect([result.entries, result.routeVariants]).toEqual([[observed], [observed]]);
+    expect(onError).toHaveBeenCalledExactlyOnceWith(failure, ["fixture"]);
+    expect(onDiscoveryCompleted).toHaveBeenCalledExactlyOnceWith([observed]);
+  });
+
   it.each([false, true])(
     "acquires picker runtimes once and preserves their refresh ownership (provider scoped: %s)",
     async (providerScoped) => {
@@ -169,15 +202,23 @@ describe("agent harness model catalog", () => {
       });
       const initial = catalog([host, foreign]);
       const first = row("shared", { name: "Native one", nativeRuntime: "native-one" });
-      const second = { ...first, name: "Native two", nativeRuntime: "native-two" };
+      const second: ModelCatalogEntry = {
+        ...first,
+        name: "Native two",
+        nativeRuntime: "native-two",
+      };
       const stale: ModelCatalogEntry = { ...first, id: "retired" };
       const other: ModelCatalogEntry = { ...first, provider: "other", id: "third" };
       const loadOne = vi.fn(async () => [first, stale, other]);
       const loadTwo = vi.fn(async () => [second]);
       const registry = catalogRegistry({ "native-one": loadOne, "native-two": loadTwo });
+      const onDiscoveryStarted = vi.fn();
+      const onDiscoveryCompleted = vi.fn();
       const params = {
         input: pickerInput(config),
         pluginRegistry: registry,
+        onDiscoveryStarted,
+        onDiscoveryCompleted,
         ...(providerScoped
           ? { includesProvider: (provider: string) => provider === "fixture" }
           : {}),
@@ -191,8 +232,17 @@ describe("agent harness model catalog", () => {
       expect(
         discovered.entries.find((entry) => entry.provider === "fixture" && entry.id === "shared"),
       ).toEqual(host);
+      expect(sharedRuntimes(discovered)).toEqual(["native-one", "native-two", undefined]);
       const published = mergePreparedNativeCatalog(discovered, initial);
       expect(sharedRuntimes(published)).toEqual(["native-one", "native-two", undefined]);
+      expect(onDiscoveryCompleted).toHaveBeenCalledExactlyOnceWith(
+        providerScoped ? [first, stale, second] : [first, stale, other, second],
+      );
+      expect(
+        onDiscoveryStarted.mock.calls
+          .map(([provider]) => provider)
+          .toSorted((left, right) => left.localeCompare(right)),
+      ).toEqual(providerScoped ? ["fixture", "fixture"] : ["fixture", "fixture", "other"]);
       loadOne.mockResolvedValue([]);
       loadTwo.mockResolvedValue([]);
       const refreshed = await augmentPreparedModelCatalogWithAgentHarness({
@@ -206,53 +256,77 @@ describe("agent harness model catalog", () => {
     },
   );
 
-  it("enriches host rows while preserving native-owned capabilities", async () => {
-    const native = openaiRow("native-owned", {
+  it("does not donate host transport or capabilities to native-owned rows beside host rows", async () => {
+    const native = {
+      provider: "openai",
+      id: "gpt-5.6-sol",
       name: "Native model",
       nativeRuntime: "codex",
       reasoning: true,
+    };
+    const host = { provider: "openai", id: "gpt-5.6-terra", name: "Host model" };
+    const result = await augmentModelCatalogWithAgentHarness({
+      ...modelInput,
+      defaultProvider: "openai",
+      snapshot: catalog([]),
+      preparedSnapshot: snapshot,
+      pluginRegistry: registryWithCatalog(async () => [native, host]),
     });
+    expect(result.entries[0]).toEqual(native);
+    expect(result.routeVariants[0]).toEqual(native);
+    expect(result.entries[1]).toMatchObject({
+      id: "gpt-5.6-terra",
+      name: "Host model",
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      reasoning: true,
+    });
+  });
+  it("merges account-scoped harness models into the prepared generation", async () => {
     const loadModelCatalog = vi.fn(async () => [
-      native,
-      openaiRow("gpt-5.6-terra", {
+      {
+        ...nativeRoute,
+        id: "gpt-5.6-terra",
         name: "GPT-5.6 Terra",
         reasoning: false,
         compat: { supportedReasoningEfforts: [] },
-      }),
-      nativeRow("gpt-5.6-sol", {
+      },
+      {
+        ...nativeRoute,
+        id: "gpt-5.6-sol",
         name: "GPT-5.6 Sol (account)",
+        reasoning: true,
         params: { codexAppServerRuntimeModel: "gpt-5.6-sol-runtime" },
         compat: {
           ...reasoningCompat(["high", "ultra"]),
           supportsTools: true,
         },
+      },
+      row("custom-reasoner", {
+        provider: "openai",
+        compat: { supportedReasoningEfforts: ["high"] },
       }),
-      ...["custom-reasoner", "provider-empty-reasoner"].map((id) =>
-        openaiRow(id, { compat: { supportedReasoningEfforts: ["high"] } }),
-      ),
+      row("provider-empty-reasoner", {
+        provider: "openai",
+        compat: { supportedReasoningEfforts: ["high"] },
+      }),
     ]);
 
     const result = await augmentModelCatalogWithAgentHarness({
       ...modelInput,
       defaultProvider: "anthropic",
-      snapshot: {
-        ...snapshot,
-        staticEntries: [...snapshot.staticEntries!, { ...apiModel, id: native.id }],
-      },
+      snapshot,
       pluginRegistry: registryWithCatalog(loadModelCatalog),
     });
 
-    const [owned, disabled, enriched, custom, empty] = result.entries;
-    expect(owned).toEqual(native);
-    expect(result.routeVariants).toContainEqual(native);
-    expect(disabled).toMatchObject({
-      id: "gpt-5.6-terra",
-      ...nativeRoute,
-      reasoning: false,
-      compat: { supportedReasoningEfforts: [] },
-    });
-    expect(enriched).toMatchObject({
-      id: "gpt-5.6-sol",
+    expect(result.entries.map((entry) => entry.id)).toEqual([
+      "gpt-5.6-terra",
+      "gpt-5.6-sol",
+      "custom-reasoner",
+      "provider-empty-reasoner",
+    ]);
+    expect(result.entries[0]?.compat?.supportedReasoningEfforts).toEqual([]);
+    expect(result.entries[1]).toMatchObject({
       name: "GPT-5.6 Sol (account)",
       contextWindow: 1_050_000,
       params: {
@@ -264,13 +338,23 @@ describe("agent harness model catalog", () => {
         supportsTools: true,
       },
     });
-    expect(custom).toMatchObject({
-      id: "custom-reasoner",
-      compat: { supportedReasoningEfforts: ["high"] },
-    });
-    expect(empty).toMatchObject({
-      id: "provider-empty-reasoner",
-      compat: { supportedReasoningEfforts: ["high"] },
+    expect(result.entries[2]?.compat?.supportedReasoningEfforts).toEqual(["high"]);
+    expect(result.entries[3]?.compat?.supportedReasoningEfforts).toEqual(["high"]);
+    expect(result.routeVariants).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "gpt-5.6-sol", api: "openai-chatgpt-responses" }),
+        expect.objectContaining({ id: "gpt-5.6-sol", api: "openai-responses" }),
+      ]),
+    );
+    expect(loadModelCatalog).toHaveBeenCalledWith({
+      config: cfg,
+      agentId: modelInput.agentId,
+      agentDir: modelInput.agentDir,
+      workspaceDir: modelInput.workspaceDir,
+      configuredModelRefs: [
+        { provider: "openai", model: "gpt-5.6-sol" },
+        { provider: "openai", model: "gpt-5.6-sol" },
+      ],
     });
   });
 });

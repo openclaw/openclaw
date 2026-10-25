@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createRequireRecord } from "../../../../test/helpers/record.js";
@@ -246,6 +247,11 @@ describe("session selection hydration", () => {
       expect(selection.state.selectedId).toBe(agentId);
       expect(sessions.state.result).toBe(heldMain);
       expect(sessions.state).toMatchObject({ loading: true, agentId: "main" });
+      expect(request).toHaveBeenLastCalledWith(
+        "sessions.list",
+        expect.objectContaining({ agentId, includeGlobal: true, includeDerivedTitles: true }),
+      );
+
       replacement.resolve(sessionsResult([incoming], 30));
       await vi.advanceTimersByTimeAsync(0);
       await sameOwnerRefresh;
@@ -282,12 +288,26 @@ describe("session selection hydration", () => {
     try {
       connect();
       await vi.advanceTimersByTimeAsync(0);
+      expect(request).toHaveBeenCalledWith(
+        "sessions.subscribe",
+        {},
+        { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS },
+      );
+      expect(request).toHaveBeenCalledWith(
+        "sessions.list",
+        expect.objectContaining({ agentId: "main" }),
+      );
+
       selectApplicationSession({ selection, gateway, sessionKey: "agent:writer:dashboard:one" });
       bootstrap.resolve(runningSessionsResult());
       await vi.advanceTimersByTimeAsync(0);
 
       expect(publishedAgents).toEqual([]);
       expect(sessions.state.result).toBeNull();
+      expect(request).toHaveBeenCalledWith(
+        "sessions.list",
+        expect.objectContaining({ agentId: "writer" }),
+      );
       writerList.resolve(writerResult);
       await vi.advanceTimersByTimeAsync(0);
 
@@ -328,6 +348,11 @@ describe("session selection hydration", () => {
       expect(request).toHaveBeenLastCalledWith(
         "sessions.list",
         expect.objectContaining(writerQuery),
+      );
+    } else {
+      expect(request).toHaveBeenCalledWith(
+        "sessions.list",
+        expect.objectContaining({ agentId: "writer" }),
       );
     }
     expectRoster(sessions, "writer", result);

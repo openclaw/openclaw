@@ -11,32 +11,14 @@ import "./chat-header-session-menu.ts";
 
 afterEach(() => document.body.replaceChildren());
 
-const button = (root: ParentNode, selector: string) =>
-  root.querySelector<HTMLButtonElement>(selector)!;
-const buttons = (root: ParentNode, selector = "button") => [
-  ...root.querySelectorAll<HTMLButtonElement>(selector),
-];
-const labeledButton = (root: ParentNode, label: string) =>
-  buttons(root).find((entry) => entry.textContent?.trim() === label)!;
-
-function openPage(fixture: Awaited<ReturnType<typeof menuFixture>>, value = "mobile-advanced") {
-  button(fixture.menu, `[value="${value}"]`).click();
-  flush();
-  const page = fixture.open.mock.calls.at(-1)![0];
-  fixture.menu.mobilePageOpen = true;
-  const mounted = mountSolid(() => [page.headerActions, page.content]);
-  flush();
-  return { page, mounted };
-}
-
-async function menuFixture() {
+async function menuFixture(mobile: boolean | undefined) {
   const menu = document.createElement("openclaw-chat-header-session-menu");
   const onAction = vi.fn();
   const [currentPage, setCurrentPage] = createSignal<HeaderSessionMenuPage>();
   const [presented, setPresented] = createSignal(true);
   const open = vi.fn<(page: HeaderSessionMenuPage, source: HTMLElement) => void>(setCurrentPage);
   const close = vi.fn<() => void>(() => setCurrentPage(undefined));
-  menu.mobile = true;
+  menu.mobile = mobile;
   menu.compact = true;
   menu.mobileHost = { open, close, isCurrent: (page) => presented() && currentPage() === page };
   menu.onAction = onAction;
@@ -49,16 +31,20 @@ async function menuFixture() {
   expect(menu.openMenu()).toBe(true);
   flush();
   await menu.updateComplete;
-  await waitForSolid(() => expect(menu.querySelector('[value="mobile-copy"]')).not.toBeNull());
+  await waitForSolid(() =>
+    expect(
+      menu.querySelector(mobile ? '[value="mobile-copy"]' : '[value="rename"]'),
+    ).not.toBeNull(),
+  );
   return { menu, onAction, open, close, currentPage, setCurrentPage, setPresented };
 }
 
 it("copies through the native action and closes the whole mobile menu", async () => {
-  const { menu, onAction, open } = await menuFixture();
+  const { menu, onAction, open } = await menuFixture(true);
   const panel = menu.querySelector<HTMLElement>(".chat-header-session-menu__panel")!;
   expect(menu.querySelector('[value="copy-session-link"]')).toBeNull();
   await openSubmenu(panel, "Copy");
-  const copy = button(menu, '[value="copy-session-id"]');
+  const copy = menu.querySelector<HTMLButtonElement>('[value="copy-session-id"]')!;
   expect(copy.textContent).toContain("Copy session ID");
   copy.click();
   flush();
@@ -69,28 +55,36 @@ it("copies through the native action and closes the whole mobile menu", async ()
 });
 
 it("opens a controlled group picker without autofocus and dispatches the selected group", async () => {
-  const fixture = await menuFixture();
-  const { menu, open, close, onAction } = fixture;
-  const { page, mounted } = openPage(fixture, "compact:open-group");
+  const { menu, open, close, onAction } = await menuFixture(true);
+  menu.querySelector<HTMLButtonElement>('[value="compact:open-group"]')!.click();
+  flush();
   expect(open).toHaveBeenCalledOnce();
+  const [page, source] = open.mock.calls[0]!;
   expect(page.key).toBe("session-group");
-  expect(open.mock.calls[0]![1]).toBe(menu.querySelector(".chat-header-session-menu__trigger"));
+  expect(source).toBe(menu.querySelector(".chat-header-session-menu__trigger"));
+  menu.mobilePageOpen = true;
+  const mounted = mountSolid(() => [page.headerActions, page.content]);
+  flush();
   expect(mounted.container.querySelector('input[type="search"]')).toBeNull();
-  const groups = () => buttons(mounted.container, ".session-actions-page__group button");
+  const buttons = () => [
+    ...mounted.container.querySelectorAll<HTMLButtonElement>(".session-actions-page__group button"),
+  ];
   expect(
-    groups()
+    buttons()
       .slice(0, 2)
-      .map((entry) => entry.textContent),
+      .map((button) => button.textContent),
   ).toEqual(["Alpha", "Zebra"]);
-  button(mounted.container, ".chat-mobile-host__circle").click();
+  mounted.container.querySelector<HTMLButtonElement>(".chat-mobile-host__circle")!.click();
   flush();
   const search = mounted.container.querySelector<HTMLInputElement>('input[type="search"]')!;
   expect(document.activeElement).not.toBe(search);
   search.value = "alp";
   search.dispatchEvent(new Event("input", { bubbles: true }));
   flush();
-  expect(groups().some((entry) => entry.textContent === "Zebra")).toBe(false);
-  labeledButton(mounted.container, "Alpha").click();
+  expect(buttons().some((button) => button.textContent === "Zebra")).toBe(false);
+  buttons()
+    .find((button) => button.textContent === "Alpha")!
+    .click();
   expect(onAction).toHaveBeenCalledExactlyOnceWith({ kind: "move-to-group", category: "Alpha" });
   expect(close).toHaveBeenCalledOnce();
 
@@ -98,7 +92,7 @@ it("opens a controlled group picker without autofocus and dispatches the selecte
   mounted.unmount();
   expect(menu.openMenu()).toBe(true);
   flush();
-  button(menu, '[value="compact:open-group"]').click();
+  menu.querySelector<HTMLButtonElement>('[value="compact:open-group"]')!.click();
   close();
   flush();
   menu.groups = ["Alpine"];
@@ -107,19 +101,37 @@ it("opens a controlled group picker without autofocus and dispatches the selecte
   expect(retiredPage.textContent).not.toContain("Alpine");
 });
 
+it.each([false, undefined])(
+  "uses explicit desktop presentation for the palette delta: %s",
+  async (mobile) => {
+    const { menu } = await menuFixture(mobile);
+    expect(Boolean(menu.querySelector('[value="open-command-palette"]'))).toBe(
+      mobile === undefined,
+    );
+    expect(menu.querySelector('[value="rename"]')?.textContent).toContain("Rename…");
+    expect(menu.querySelector('[value="mobile-copy"]')).toBeNull();
+  },
+);
+
 it.each([false, true])(
   "keeps the gated Speech bubbles preference reachable in mobile Advanced: %s",
   async (enabled) => {
-    const fixture = await menuFixture();
-    const { menu, close } = fixture;
+    const { menu, open, close } = await menuFixture(true);
     const onSettingsChange = vi.fn();
     menu.bubbleModeEnabled = enabled;
     menu.session = { ...menu.session, target: { key: "agent:main:testing" } };
     menu.onSettingsChange = onSettingsChange;
     await menu.updateComplete;
-    const { mounted } = openPage(fixture);
+    menu.querySelector<HTMLButtonElement>('[value="mobile-advanced"]')!.click();
+    flush();
+    const page = open.mock.calls[0]![0];
+    menu.mobilePageOpen = true;
+    const mounted = mountSolid(() => page.content);
+    flush();
     const conversation = mounted.container.querySelector("section")!;
-    const bubbles = labeledButton(conversation, "Speech bubbles");
+    const bubbles = [...conversation.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent?.trim() === "Speech bubbles",
+    );
     expect(Boolean(bubbles)).toBe(enabled);
     if (bubbles) {
       bubbles.click();
@@ -134,14 +146,35 @@ it.each([false, true])(
   },
 );
 
+it("dismisses the controlled Advanced page after a fork action", async () => {
+  const { menu, open, close, onAction } = await menuFixture(true);
+  menu.forkDisabled = false;
+  await menu.updateComplete;
+  menu.querySelector<HTMLButtonElement>('[value="mobile-advanced"]')!.click();
+  flush();
+  const page = open.mock.calls[0]![0];
+  menu.mobilePageOpen = true;
+  const mounted = mountSolid(() => page.content);
+  flush();
+  const fork = [...mounted.container.querySelectorAll<HTMLButtonElement>("button")].find(
+    (button) => button.textContent?.trim() === "Fork conversation",
+  );
+  expect(fork?.disabled).toBe(false);
+  fork!.click();
+  expect(onAction).toHaveBeenCalledExactlyOnceWith({ kind: "fork" });
+  expect(close).toHaveBeenCalledOnce();
+});
+
 it("closes the originating split pane from mobile Advanced without exposing legacy View", async () => {
-  const first = await menuFixture();
-  const second = await menuFixture();
+  const first = await menuFixture(true);
+  const second = await menuFixture(true);
   const focusedAtClose: (Element | null)[] = [];
   const onClosePane = vi.fn(() => {
     focusedAtClose.push(document.activeElement);
   });
-  const trigger = button(second.menu, ".chat-header-session-menu__trigger");
+  const trigger = second.menu.querySelector<HTMLButtonElement>(
+    ".chat-header-session-menu__trigger",
+  )!;
   second.close.mockImplementation(() => trigger.focus());
   const secondLayout = {
     paneId: "pane-second",
@@ -159,12 +192,20 @@ it("closes the originating split pane from mobile Advanced without exposing lega
   second.menu.deleteAllowed = true;
   await second.menu.updateComplete;
   expect(second.menu.querySelector('[value="compact:open-view"]')).toBeNull();
-  const { mounted } = openPage(second);
+  second.menu.querySelector<HTMLButtonElement>('[value="mobile-advanced"]')!.click();
+  flush();
+  const page = second.open.mock.calls[0]![0];
+  second.menu.mobilePageOpen = true;
+  const mounted = mountSolid(() => page.content);
+  flush();
   const session = () =>
     [...mounted.container.querySelectorAll("section")].find(
       (section) => section.querySelector("h3")?.textContent === "Session",
     )!;
-  const closePaneButton = () => labeledButton(session(), "Close pane");
+  const closePaneButton = () =>
+    [...session().querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent?.trim() === "Close pane",
+    )!;
   expect(closePaneButton()).toBeDefined();
   expect(closePaneButton().disabled).toBe(true);
   closePaneButton().click();
@@ -175,7 +216,9 @@ it("closes the originating split pane from mobile Advanced without exposing lega
   second.menu.viewActions = chatPaneLayoutModel(secondLayout).allActions;
   await second.menu.updateComplete;
   flush();
-  const labels = buttons(session()).map((entry) => entry.textContent?.trim());
+  const labels = [...session().querySelectorAll("button")].map((button) =>
+    button.textContent?.trim(),
+  );
   expect(labels).toContain("Delete");
   expect(labels.indexOf("Close pane")).toBeLessThan(labels.indexOf("Delete"));
   expect(closePaneButton().disabled).toBe(false);
@@ -189,18 +232,37 @@ it("closes the originating split pane from mobile Advanced without exposing lega
   expect(second.onAction).not.toHaveBeenCalled();
 });
 
+it("omits pane closure from mobile Advanced for a single pane", async () => {
+  const { menu, open } = await menuFixture(true);
+  menu.viewActions = chatPaneLayoutModel({
+    paneId: "only-pane",
+    narrow: true,
+    mobile: true,
+  }).allActions;
+  await menu.updateComplete;
+  menu.querySelector<HTMLButtonElement>('[value="mobile-advanced"]')!.click();
+  flush();
+  menu.mobilePageOpen = true;
+  const mounted = mountSolid(() => open.mock.calls[0]![0].content);
+  flush();
+  expect(mounted.container.textContent).not.toContain("Close pane");
+  expect(menu.querySelector('[value="compact:open-view"]')).toBeNull();
+});
+
 it.each(["keyboard", "pointer", "close", "suspend", "newer focus", "dispose"] as const)(
   "only consumes the current native appearance keyboard request: %s",
   async (entry) => {
-    const { menu, currentPage, close, setCurrentPage, setPresented } = await menuFixture();
+    const { menu, currentPage, close, setCurrentPage, setPresented } = await menuFixture(true);
     const mounted = mountSolid(() => (
       <Show when={currentPage()} keyed>
         {(page) => page.content}
       </Show>
     ));
-    button(menu, '[value="mobile-advanced"]').click();
+    menu.querySelector<HTMLButtonElement>('[value="mobile-advanced"]')!.click();
     flush();
-    const appearance = labeledButton(mounted.container, "Icon & color");
+    const appearance = [...mounted.container.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent?.trim() === "Icon & color",
+    )!;
     const advancedPage = currentPage()!;
     appearance.focus();
     appearance.dispatchEvent(
@@ -218,7 +280,8 @@ it.each(["keyboard", "pointer", "close", "suspend", "newer focus", "dispose"] as
       menu.remove();
     }
     flush();
-    const firstColor = button(mounted.container, '[aria-label="No color"]');
+    const firstColor =
+      mounted.container.querySelector<HTMLButtonElement>('[aria-label="No color"]');
     if (entry === "keyboard") {
       expect(firstColor).not.toBeNull();
       expect(document.activeElement).toBe(firstColor);

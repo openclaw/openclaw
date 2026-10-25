@@ -21,7 +21,10 @@ import {
   resolveIncognitoOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { withCodexSessionTranscriptMirrorWriteLock } from "./codex-session-transcript-runtime.js";
+import {
+  withCodexSessionTranscriptMirrorWrite,
+  withCodexSessionTranscriptMirrorWriteLock,
+} from "./codex-session-transcript-runtime.js";
 import {
   appendSessionTranscriptMessageByIdentity as appendMessage,
   appendSessionTranscriptMessageByIdentityStrict as appendStrict,
@@ -64,34 +67,62 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it("keeps legacy fresh-commit callbacks transactional and reports their migration", async () => {
+it("retains callback ordering and names each migration once per plugin across reloads", async () => {
   await withSeed(async (f) => {
     const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
-    const instance = new PluginInstance("transcript-compat");
+    const instances = ["first", "second", "first"].map(
+      (id) => new PluginInstance(`transcript-compat-${id}`),
+    );
     const guard = vi.fn(() => {
       expect(f.database.db.isTransaction).toBe(true);
-      expect(readExactSessionEntryRow(f.database, f.scope.sessionKey)?.entry.sessionId).toBe(
-        f.scope.sessionId,
-      );
+      const row = readExactSessionEntryRow(f.database, f.scope.sessionKey);
+      expect(row?.entry.sessionId).toBe(f.scope.sessionId);
     });
     try {
-      await expect(
-        instance.run(() =>
-          appendStrict({
-            ...f.scope,
-            message: { role: "assistant", content: "guarded" },
-            prepareMessageAfterIdempotencyCheck: (message) => message,
-            beforeFreshMessageCommit: guard,
-          }),
-        ),
-      ).resolves.toMatchObject({ kind: "result", result: { appended: true } });
-      expect(guard).toHaveBeenCalledOnce();
-      expect(warning).toHaveBeenCalledWith(
-        expect.stringContaining("beforeFreshMessageCommit is deprecated; use preparation.source"),
-        { code: "DEP_SESSION_PERSISTENCE", type: "DeprecationWarning" },
-      );
+      for (const instance of instances) {
+        await instance.run(async () => {
+          const warningCount = warning.mock.calls.length;
+          await withSessionTranscriptWrite(f.scope, () => undefined);
+          await withCodexSessionTranscriptMirrorWrite(f.scope, () => undefined);
+          expect(warning).toHaveBeenCalledTimes(warningCount);
+          await expect(
+            appendStrict({
+              ...f.scope,
+              message: { role: "assistant", content: "guarded" },
+              prepareMessageAfterIdempotencyCheck: (message) => message,
+              beforeFreshMessageCommit: guard,
+            }),
+          ).resolves.toMatchObject({ kind: "result", result: { appended: true } });
+          await withSessionTranscriptWriteLock(f.scope, () => undefined);
+          await withCodexSessionTranscriptMirrorWriteLock(f.scope, () => undefined);
+        });
+      }
+      expect([guard.mock.calls.length, warning.mock.calls.length]).toEqual([3, 8]);
+      for (const plugin of ["transcript-compat-first", "transcript-compat-second"]) {
+        for (const [method, replacement] of [
+          [
+            "prepareMessageAfterIdempotencyCheck",
+            "preparation.prepareMessage outside the transaction",
+          ],
+          ["beforeFreshMessageCommit", "preparation.source"],
+          ["withSessionTranscriptWriteLock", "withSessionTranscriptWrite"],
+          ["withCodexSessionTranscriptMirrorWriteLock", "withCodexSessionTranscriptMirrorWrite"],
+        ]) {
+          expect(warning).toHaveBeenCalledWith(
+            expect.stringContaining(
+              `Plugin ${plugin}: ${method} is deprecated; use ${replacement}`,
+            ),
+            { code: "DEP_SESSION_PERSISTENCE", type: "DeprecationWarning" },
+          );
+        }
+      }
+      for (const [message] of warning.mock.calls) {
+        expect(message).toContain("Final compatibility day: 2026-12-31");
+        expect(message).toContain("first January 2027 stable release");
+      }
     } finally {
-      await instance.dispose();
+      warning.mockRestore();
+      await Promise.all(instances.map((instance) => instance.dispose()));
     }
   });
 });

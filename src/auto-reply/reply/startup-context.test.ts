@@ -41,7 +41,7 @@ describe("buildSessionStartupContextPrelude", () => {
     await fs.rm(workspaceDir, { recursive: true, force: true });
   });
 
-  it.each<WindowCase>`
+  it.each`
     scenario            | timezone              | nowMs                            | days | budget  | today           | yesterday       | both     | excluded
     ${"default window"} | ${"America/Chicago"}  | ${Date.UTC(2026, 3, 11, 18)}     | ${2} | ${2800} | ${"2026-04-11"} | ${"2026-04-10"} | ${true}  | ${""}
     ${"UTC extra day"}  | ${"Asia/Tokyo"}       | ${Date.UTC(2026, 3, 10, 15, 30)} | ${1} | ${2800} | ${"2026-04-11"} | ${"2026-04-10"} | ${true}  | ${""}
@@ -50,7 +50,17 @@ describe("buildSessionStartupContextPrelude", () => {
     ${"DST calendar"}   | ${"America/New_York"} | ${Date.UTC(2026, 2, 9, 4, 30)}   | ${2} | ${2800} | ${"2026-03-09"} | ${"2026-03-08"} | ${true}  | ${"2026-03-07"}
   `(
     "loads $scenario",
-    async ({ scenario, timezone, nowMs, days, budget, today, yesterday, both, excluded }) => {
+    async ({
+      scenario,
+      timezone,
+      nowMs,
+      days,
+      budget,
+      today,
+      yesterday,
+      both,
+      excluded,
+    }: WindowCase) => {
       await writeMemoryFile(`${today}.md`, "today notes");
       await writeMemoryFile(`${yesterday}.md`, "yesterday notes");
       const prelude = await buildPrelude({

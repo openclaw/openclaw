@@ -18,15 +18,15 @@ import type { TtsProviderAttempt, TtsResult, TtsStatusEntry } from "../../tts/tt
 
 const ttsMocks = vi.hoisted(() => ({
   getLastTtsAttempt: vi.fn(),
-  getTtsMaxLength: vi.fn(() => 1500),
+  getTtsMaxLength: vi.fn(),
   getTtsPersona: vi.fn(),
-  getTtsProviderAsync: vi.fn(() => PRIMARY_TTS_PROVIDER),
-  isSummarizationEnabled: vi.fn(() => true),
-  isTtsEnabled: vi.fn(() => true),
-  isTtsProviderConfiguredAsync: vi.fn(() => true),
+  getTtsProviderAsync: vi.fn(),
+  isSummarizationEnabled: vi.fn(),
+  isTtsEnabled: vi.fn(),
+  isTtsProviderConfiguredAsync: vi.fn(),
   listTtsPersonas: vi.fn(),
-  resolveTtsConfig: vi.fn(() => ({})),
-  resolveTtsPrefsPathAsync: vi.fn(async () => "/tmp/tts-prefs.json"),
+  resolveTtsConfig: vi.fn(),
+  resolveTtsPrefsPathAsync: vi.fn(),
   setLastTtsAttempt: vi.fn(),
   updateTtsPrefsAsync: vi.fn(),
   textToSpeech: vi.fn(),
@@ -136,7 +136,16 @@ function transcriptText(text: string, phase: "commentary" | "final_answer") {
 
 describe("handleTtsCommands status fallback reporting", () => {
   beforeEach(() => {
-    vi.resetAllMocks();
+    vi.clearAllMocks();
+    ttsMocks.resolveTtsConfig.mockReturnValue({});
+    ttsMocks.resolveTtsPrefsPathAsync.mockResolvedValue("/tmp/tts-prefs.json");
+    ttsMocks.isTtsEnabled.mockReturnValue(true);
+    ttsMocks.getTtsProviderAsync.mockReturnValue(PRIMARY_TTS_PROVIDER);
+    ttsMocks.getTtsPersona.mockReturnValue(undefined);
+    ttsMocks.isTtsProviderConfiguredAsync.mockReturnValue(true);
+    ttsMocks.getTtsMaxLength.mockReturnValue(1500);
+    ttsMocks.isSummarizationEnabled.mockReturnValue(true);
+    ttsMocks.getLastTtsAttempt.mockReturnValue(undefined);
     ttsMocks.listTtsPersonas.mockReturnValue([]);
   });
 
@@ -147,9 +156,10 @@ describe("handleTtsCommands status fallback reporting", () => {
     expect(ttsMocks.updateTtsPrefsAsync).not.toHaveBeenCalled();
   });
 
-  it("reports worker preference failures with repair guidance", async () => {
+  it("replies with repair guidance without overwriting malformed preferences", async () => {
     const prefsPath = path.join(tempDirs.make("openclaw-tts-command-prefs-"), "tts.json");
-    fs.writeFileSync(prefsPath, '{"tts":{"provider":"custom",');
+    const malformed = '{"tts":{"provider":"custom",';
+    fs.writeFileSync(prefsPath, malformed);
     ttsMocks.resolveTtsPrefsPathAsync.mockResolvedValue(prefsPath);
     const { updateTtsPrefsAsync } = await vi.importActual<
       typeof import("../../tts/tts-settings-write-worker.js")
@@ -158,7 +168,12 @@ describe("handleTtsCommands status fallback reporting", () => {
 
     const result = await handleTtsCommands(buildTtsParams("/tts limit 2000"), true);
 
+    await expect(ttsMocks.updateTtsPrefsAsync.mock.results[0]?.value).rejects.toThrow(
+      "Repair the file or its permissions",
+    );
+
     expect(expectReply(result).text).toContain("Repair the preference file or its permissions");
+    expect(fs.readFileSync(prefsPath, "utf8")).toBe(malformed);
   });
 
   it("shows attempted provider chain for failed attempts", async () => {
@@ -180,8 +195,10 @@ describe("handleTtsCommands status fallback reporting", () => {
   });
 
   it("persists fallback metadata from /tts audio and renders it in /tts status", async () => {
+    let lastAttempt: TtsStatusEntry | undefined;
+    ttsMocks.getLastTtsAttempt.mockImplementation(() => lastAttempt);
     ttsMocks.setLastTtsAttempt.mockImplementation((next: TtsStatusEntry) => {
-      ttsMocks.getLastTtsAttempt.mockReturnValue(next);
+      lastAttempt = next;
     });
     mockAudio("/tmp/fallback.ogg", {
       provider: FALLBACK_TTS_PROVIDER,
@@ -198,14 +215,16 @@ describe("handleTtsCommands status fallback reporting", () => {
     expect(audioReply.mediaUrl).toBe("/tmp/fallback.ogg");
 
     const statusReply = await reply("/tts status");
-    for (const fragment of [
-      `Provider: ${FALLBACK_TTS_PROVIDER}`,
+    expect(statusReply.text).toContain(`Provider: ${FALLBACK_TTS_PROVIDER}`);
+    expect(statusReply.text).toContain(
       `Fallback: ${PRIMARY_TTS_PROVIDER} -> ${FALLBACK_TTS_PROVIDER}`,
+    );
+    expect(statusReply.text).toContain(
       `Attempts: ${PRIMARY_TTS_PROVIDER} -> ${FALLBACK_TTS_PROVIDER}`,
+    );
+    expect(statusReply.text).toContain(
       `Attempt details: ${PRIMARY_TTS_PROVIDER}:failed(provider_error) 65ms, ${FALLBACK_TTS_PROVIDER}:success(ok) 175ms`,
-    ]) {
-      expect(statusReply.text).toContain(fragment);
-    }
+    );
   });
 
   it("keeps base status fields in display order", async () => {

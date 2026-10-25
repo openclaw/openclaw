@@ -266,6 +266,20 @@ describe("createPersistentDedupe", () => {
 });
 
 describe("createClaimableDedupe", () => {
+  it("serializes concurrent claims and records on commit", async () => {
+    const dedupe = createClaimableDedupe({ ttlMs: 10_000, memoryMaxSize: 100 });
+
+    const claims = await Promise.all([dedupe.claim("line:race-1"), dedupe.claim("line:race-1")]);
+    expect(claims.map((claim) => claim.kind).toSorted()).toEqual(["claimed", "inflight"]);
+
+    const waitingClaim = claims.find((claim) => claim.kind === "inflight");
+    await expect(dedupe.commit("line:race-1")).resolves.toBe(true);
+    if (waitingClaim?.kind === "inflight") {
+      await expect(waitingClaim.pending).resolves.toBe(true);
+    }
+    await expect(dedupe.claim("line:race-1")).resolves.toEqual({ kind: "duplicate" });
+  });
+
   it("bounds non-finite claimable dedupe options", async () => {
     const dedupe = createClaimableDedupe({ ttlMs: Number.NaN, memoryMaxSize: Number.NaN });
 
