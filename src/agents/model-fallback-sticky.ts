@@ -1,5 +1,6 @@
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolveGlobalMap } from "../shared/global-singleton.js";
 import {
   MODEL_FALLBACK_SKIPPED_CODE,
   type FallbackAttempt,
@@ -27,15 +28,13 @@ type StickyRateLimitFallback = {
   record: (winner: ModelCandidate, attempts: readonly FallbackAttempt[]) => void;
 };
 
-// Process-global like fallback-skip-cache: duplicated module instances (bundle chunks,
-// per-file test registries) share one store. Restart costs at most one cold cache;
-// idle expiry and the cap bound primary deferral.
-function getStickyFallbacks(): Map<string, StickyEntry> {
-  const globalStore = globalThis as typeof globalThis & {
-    openclawStickyRateLimitFallbacks?: Map<string, StickyEntry>;
-  };
-  return (globalStore.openclawStickyRateLimitFallbacks ??= new Map());
-}
+// Process-global so duplicated module instances (bundle chunks, per-file test registries)
+// share one store. Restart costs at most one cold cache; idle expiry and the cap bound
+// primary deferral.
+const stickyFallbacks = resolveGlobalMap<string, StickyEntry>(
+  Symbol.for("openclaw.stickyRateLimitFallbacks"),
+  "close-and-restart",
+);
 
 export function takeStickyRateLimitFallback(
   params: { sessionId?: string; stickyRateLimitFallback?: boolean },
@@ -45,7 +44,6 @@ export function takeStickyRateLimitFallback(
   if (params.stickyRateLimitFallback !== true || !sessionId) {
     return undefined;
   }
-  const stickyFallbacks = getStickyFallbacks();
   const entry = stickyFallbacks.get(sessionId);
   // Taking clears the preference unless a qualifying winner re-records it.
   // An aborted sticky run drops stickiness; its next turn tries the primary.
@@ -119,5 +117,5 @@ export function takeStickyRateLimitFallback(
 }
 
 export function resetStickyRateLimitFallbacksForTest(): void {
-  getStickyFallbacks().clear();
+  stickyFallbacks.clear();
 }
