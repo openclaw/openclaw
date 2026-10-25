@@ -2,7 +2,8 @@
 // A rewind or branch switch rotates the active leaf but leaves the channel cache
 // keyed by chat. These probes let the inbound merge drop cached window entries
 // whose turn is no longer on the active path, without touching the cache or
-// matching rendered text.
+// matching rendered text. The store path comes from owner.source.path,
+// then owner.scope.storePath.
 //
 // Each check is one indexed point read on the existing session history worker.
 // A healthy projection with zero active events is a valid empty branch. An
