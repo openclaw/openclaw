@@ -169,6 +169,20 @@ it("passes abort signal to tailscale status and serve commands", async () => {
   ]);
 });
 
+it("percent-encodes the push token in the public endpoint", async () => {
+  const { ensureTailscaleEndpoint } = await loadGmailSetupUtils();
+  runCommand.mockResolvedValueOnce(tailscaleStatus).mockResolvedValueOnce(success);
+
+  const endpoint = await ensureTailscaleEndpoint({
+    mode: "funnel",
+    path: "/gmail-pubsub",
+    port: 8788,
+    token: "part+two/&=",
+  });
+
+  expect(endpoint).toBe("https://fixture.example/gmail-pubsub?token=part%2Btwo%2F%26%3D");
+});
+
 describe("Gmail setup diagnostics and decisions", () => {
   const hasBinaryMock = vi.fn<(bin: string) => boolean>();
   beforeEach(() => {
