@@ -37,11 +37,6 @@ export function bindingEntriesGate(runtime: PluginRuntime) {
     },
   };
 }
-export async function opened(sessionKey: string, entry: Parameters<typeof createHarness>[0]) {
-  const h = createHarness(entry);
-  await h.service.open(sessionKey);
-  return h;
-}
 export function expectCreated(h: Harness, fields: Record<string, unknown>) {
   expect(h.createChannel).toHaveBeenCalledWith("wsp_team", expect.objectContaining(fields));
 }
