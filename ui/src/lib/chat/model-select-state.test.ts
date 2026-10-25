@@ -249,6 +249,39 @@ describe("chat-model-select-state", () => {
     expect(resolveChatModelUnavailableReason("gpt-5.6-luna", "openai", catalog)).toBe("cooldown");
   });
 
+  it.each([false, true])(
+    "accepts a ready alias with unavailable routes (ready first: %s)",
+    (readyFirst) => {
+      const unavailable = (["missing-auth", "auth-failed", "cooldown"] as const).map((reason) =>
+        model("example-model", "Example model", "codex", {
+          available: false,
+          unavailableReason: reason,
+        }),
+      );
+      const ready = model("example-model", "Example model", "openai", { available: true });
+      const catalog = readyFirst ? [ready, ...unavailable] : [...unavailable, ready];
+      expect(resolveChatModelUnavailableReason("example-model", "openai", catalog)).toBeUndefined();
+    },
+  );
+
+  it.each([false, true])(
+    "prefers auth failure over missing auth (auth failure first: %s)",
+    (authFirst) => {
+      const missing = model("example-model", "Example model", "openai", {
+        available: false,
+        unavailableReason: "missing-auth",
+      });
+      const failed = { ...missing, provider: "codex", unavailableReason: "auth-failed" as const };
+      expect(
+        resolveChatModelUnavailableReason(
+          "example-model",
+          "openai",
+          authFirst ? [failed, missing] : [missing, failed],
+        ),
+      ).toBe("auth-failed");
+    },
+  );
+
   it("keeps an all-cold default identity visible as a disabled option", () => {
     const identities = [
       ["gpt-5.6-sol", "GPT-5.6 Sol"],

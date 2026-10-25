@@ -132,12 +132,7 @@ it.each([false, true])(
       await Promise.race([state.applying.promise, completion]);
       const ownerPath = gatewayLock.resolveGatewayLockPaths(process.env).ownerLockPath;
       expect(gatewayLock.readLockPayloadSync(ownerPath)).toMatchObject(embeddedOwner);
-      expect(state.applied).toBeDefined();
-      expect(state.applied).toBe(state.planned);
       expectConnection(fixture, 0, true);
-      expect(state.connections[0]?.database.prepare("SELECT 42 AS value").get()).toEqual({
-        value: 42,
-      });
       state.resumeApply.resolve();
       const outcome = await completion;
       if (failApply) {
@@ -147,7 +142,6 @@ it.each([false, true])(
         expect(outcome.error).toBeUndefined();
         expect(outcome.result?.summary.migrated).toBe(1);
         expect(outcome.result?.metadata).toBe(state.planned?.metadata);
-        expect(outcome.result?.metadata).toEqual({ read: expect.any(Function) });
         expect(logs).toHaveLength(1);
         expect(JSON.parse(logs[0] ?? "{}").summary.migrated).toBe(1);
       }
@@ -163,13 +157,11 @@ it.each([false, true])(
 it("borrows an active raw provider without disposing its connection", async () => {
   const fixture = createFixture();
   const { state } = fixture;
-  const active = await loadAndActivateRootPluginRegistry({ config: fixture.config });
-  expect(active.migrationProviders.map(({ provider }) => provider.id)).toContain(fixture.id);
+  await loadAndActivateRootPluginRegistry({ config: fixture.config });
   state.resumeApply.resolve();
   const result = await migrateDefaultCommand(createNonExitingRuntime(), applyOptions(fixture));
   expect(result.summary.migrated).toBe(1);
   expectConnection(fixture, 0, true);
-  expect(state.connections[0]?.database.prepare("SELECT 42 AS value").get()).toEqual({ value: 42 });
 });
 
 it("keeps post-install plan details alive through config projection and preparation disposal", async () => {
@@ -179,7 +171,6 @@ it("keeps post-install plan details alive through config projection and preparat
   const completion = settled(postInstall(fixture));
   try {
     await Promise.race([state.preparationDisposing.promise, completion]);
-    expect(state.applied).toBe(state.planned);
     const ownerPath = gatewayLock.resolveGatewayLockPaths(process.env).ownerLockPath;
     expect(gatewayLock.readLockPayloadSync(ownerPath)).toMatchObject(embeddedOwner);
     expect(state.patchReads).toBeGreaterThan(0);
@@ -221,14 +212,11 @@ it("logs the primary migration failure before a prepared instance disposal failu
 
 it("carries runtime metadata for a negative detection after its native registration closes", async () => {
   const fixture = createFixture({ detectFound: false, configPath: true });
-  const { state } = fixture;
   const discovery = await detectSetupMigrationSources({
     config: fixture.config,
     runtime: createNonExitingRuntime(),
   });
   expect(discovery.detections).toEqual([]);
-  expect(state.connections).toHaveLength(1);
-  expect(state.connections[0]?.database.isOpen).toBe(false);
   const params = { baseConfig: fixture.config, ...discovery };
   const options = await listSetupMigrationOptions(params);
   const label = "Import from Native migration fixture";

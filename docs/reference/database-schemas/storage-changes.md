@@ -146,12 +146,16 @@ it does not maintain a separate schema definition. They omit transaction wrapper
 the owning connection supplies the namespace and transaction. The `agent.postgres.sql` artifact follows the same runtime-only convention.
 
 Explicit PostgreSQL index keys use native ordering for canonical NOT NULL and
-primary-key columns. Nullable columns and expression keys retain SQLite's
+primary-key columns, and for direct keys proven non-null by the index's own
+`IS NOT NULL` predicate. Other nullable columns and expression keys retain SQLite's
 `ASC NULLS FIRST` / `DESC NULLS LAST` placement. This lets default PostgreSQL
 `ORDER BY` use non-null indexes without changing observable nullable ordering.
 State schema 32, agent schema 34, Workboard schema 4, Logbook schema 2, and
-Team Reports schema 2 rebuild only changed explicit indexes through versioned
-schema admission under its existing advisory lock. Absent first-use fragments
+Team Reports schema 2 introduced schema-nullability ordering. State schema 33,
+agent schema 35, and Logbook schema 3 extend it to predicate-proven keys,
+including equality-only indexes. Each migration rebuilds only changed indexes
+through versioned schema admission under its existing advisory lock. Queries
+that exclude null keys retain PostgreSQL's default ordering. Absent first-use fragments
 stay absent. SQLite advances version metadata without changing canonical DDL.
 Historical admission and backup descriptors retain the preceding index definitions;
 rollback restores the verified pre-upgrade backup. Update and Doctor retain their

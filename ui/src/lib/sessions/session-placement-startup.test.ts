@@ -6,7 +6,7 @@ import type { GatewayProtocolRequestOptions } from "../../../../packages/gateway
 import type { RequestFrame } from "../../../../packages/gateway-protocol/src/schema/frames.js";
 import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
-import { gatewayRequest } from "./session-fixtures.test-support.ts";
+import { sessionRequest as gatewayRequest } from "./hydration-family.test-support.ts";
 import {
   deleteSessionPlacementDraft,
   startSessionPlacementInitialTurn,

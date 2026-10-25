@@ -313,46 +313,32 @@ export function handlePageGatewayEvent(
     dispatchChatLiveEvent(state, event, isPresented);
     return;
   }
-  handlePageStateEvent(state, event, isPresented, sessionResult);
-}
-
-function handlePageStateEvent(
-  state: ChatPageHost,
-  event: GatewayEventFrame,
-  isPresented: ChatPanePresentation = () => true,
-  sessionResult: SessionChangedRowResult = { applied: false },
-): void {
   chatRunPresentation(state).batch(
-    () => applyPageStateEvent(state, event, isPresented, sessionResult),
+    () => {
+      if (event.event === "models.snapshot") {
+        applyChatModelCatalogSnapshot(state);
+        return;
+      }
+      if (event.event === "session.approval") {
+        if (applySessionApprovalEvent(state, event.payload, resolveChatAgentId(state))) {
+          chatRunPresentation(state).publish();
+        }
+        return;
+      }
+      if (event.event === "session.message" || event.event === "sessions.changed") {
+        const handle =
+          event.event === "session.message"
+            ? handleSessionMessageEvent
+            : handleSessionsChangedEvent;
+        const scopedChange = handle(state, event.payload, isPresented, sessionResult);
+        void resumeStoredChatOutboxes(state, event);
+        if (scopedChange) {
+          chatRunPresentation(state).publish("animation-frame");
+        }
+      }
+    },
     event.event === "session.message" || event.event === "sessions.changed"
       ? "animation-frame"
       : "immediate",
   );
-}
-
-function applyPageStateEvent(
-  state: ChatPageHost,
-  event: GatewayEventFrame,
-  isPresented: ChatPanePresentation,
-  sessionResult: SessionChangedRowResult,
-): void {
-  if (event.event === "models.snapshot") {
-    applyChatModelCatalogSnapshot(state);
-    return;
-  }
-  if (event.event === "session.approval") {
-    if (applySessionApprovalEvent(state, event.payload, resolveChatAgentId(state))) {
-      chatRunPresentation(state).publish();
-    }
-    return;
-  }
-  if (event.event === "session.message" || event.event === "sessions.changed") {
-    const handle =
-      event.event === "session.message" ? handleSessionMessageEvent : handleSessionsChangedEvent;
-    const scopedChange = handle(state, event.payload, isPresented, sessionResult);
-    void resumeStoredChatOutboxes(state, event);
-    if (scopedChange) {
-      chatRunPresentation(state).publish("animation-frame");
-    }
-  }
 }

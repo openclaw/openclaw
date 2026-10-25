@@ -1598,6 +1598,7 @@ src/plugins/plugin-instance-module-loader.ts
 src/plugins/plugin-state-operation-module-loader.ts
 src/plugins/plugin-state-operation-source.ts
 src/plugins/plugin-instance-owned-values.ts
+src/plugins/plugin-instance-replacement.ts
 src/plugins/plugin-instance-scope.ts
 src/plugins/plugin-instance-settlement.ts
 src/plugins/plugin-instance-bindings.ts
@@ -2001,6 +2002,7 @@ src/state/openclaw-state-db-existing-write.ts
 src/state/openclaw-state-db-failure.ts
 src/state/openclaw-state-db-fast-path.ts
 src/state/openclaw-state-db-handle.ts
+src/state/openclaw-state-db-index-ordering-migrations.ts
 src/state/openclaw-state-db-initialization.ts
 src/state/openclaw-state-db-integrity-admission.ts
 src/state/openclaw-state-db-legacy-backfills.ts

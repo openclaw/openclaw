@@ -187,14 +187,14 @@ it("creates long-lived observations outside importer and caller authority", () =
   expect(scopes).toEqual([undefined]);
 });
 
-it("shares one watcher and reconciles a separate process's atomic replacement", async () => {
+it("shares one watcher, forwards invalidation and reconciles an atomic replacement", async () => {
   vi.useFakeTimers({
     toFake: ["Date", "performance", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
   });
   const directory = tempDirs.make("owned-directory-external-");
   const filename = path.join(directory, "profiles");
   fs.writeFileSync(filename, "before");
-  const watch = vi.spyOn(fs, "watch");
+  const watch = vi.spyOn(nativeWatchFs, "watch");
   const listener = vi.fn(() => fs.readFileSync(filename, "utf8"));
   const otherListener = vi.fn();
   observe(directory, listener);
@@ -209,12 +209,7 @@ it("shares one watcher and reconciles a separate process's atomic replacement", 
   expect(listener).toHaveLastReturnedWith("after");
   expect(otherListener).toHaveBeenCalledWith(undefined, undefined);
   expect(watch).toHaveBeenCalledTimes(1);
-});
-
-it("forwards native file invalidation without replacing the shared directory watch", () => {
-  const directory = tempDirs.make("owned-directory-events-");
-  const watch = vi.spyOn(nativeWatchFs, "watch");
-  const listener = observe(directory);
+  listener.mockClear();
   const resolve = vi.spyOn(path, "resolve");
   watch.mock.calls[0]![2]("rename", "profiles");
   expect(listener).toHaveBeenCalledWith("profiles", "rename");
