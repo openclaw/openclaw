@@ -494,17 +494,13 @@ export async function prepareIsolatedChildAdmissionProof(bound: BoundParent) {
   };
 }
 
-export type RequestCustodySpawnCaseOptions = {
+export type RequestCustodySpawnCaseOptions = Pick<
+  NativePluginSpawnTestOptions,
+  "closeBoundGateway" | "throwBoundFailures" | "runEmbeddedAgent"
+> & {
   createBoundParent: () => Promise<BoundParent>;
   createBoundGateway: (bound: BoundParent) => Promise<{ runtime: GatewayRuntime }>;
-  closeBoundGateway: (
-    bound: BoundParent,
-    runtime: GatewayRuntime,
-    childRunId?: string,
-  ) => Promise<unknown[]>;
-  throwBoundFailures: (failures: unknown[]) => void;
   parentSessionKey: string;
   parentRunId: string;
   assertNoModelExecution: () => void;
-  runEmbeddedAgent: Mock<typeof import("../../embedded-agent.js").runEmbeddedAgent>;
 };

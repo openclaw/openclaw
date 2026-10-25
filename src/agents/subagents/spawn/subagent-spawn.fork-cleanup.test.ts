@@ -50,6 +50,22 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
   const spawn = (params: Parameters<SpawnSubagent>[0]) =>
     spawnSubagentDirect(params, { agentSessionKey: parentKey });
   const parentScope = () => ({ ...scope(), sessionId: parentId });
+  const setParentTokens = (totalTokens: number) =>
+    sessions.upsertSessionEntryCore(parentScope(), {
+      totalTokens,
+      totalTokensFresh: true,
+      totalTokensVersion: 1,
+    });
+  const expectDeletedIncarnation = (key: string, entry: SessionEntry) =>
+    expect(dispatch).toHaveBeenCalledWith(
+      "sessions.delete",
+      expect.objectContaining({
+        key,
+        expectedSessionId: entry.sessionId,
+        expectedLifecycleRevision: entry.lifecycleRevision,
+      }),
+      expect.anything(),
+    );
   const expectNotLaunched = () => {
     expect(registerSubagentRun).not.toHaveBeenCalled();
     expect(dispatch.mock.calls.some(([method]) => method === "agent")).toBe(false);
@@ -63,12 +79,10 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
     };
   }
   function expectCopiedHistory(events: Awaited<ReturnType<typeof history>>) {
-    expect(events).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          message: expect.objectContaining({ content: "parent history" }),
-        }),
-      ]),
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        message: expect.objectContaining({ content: "parent history" }),
+      }),
     );
   }
   const fork = vi.fn(async (input: unknown) => {
@@ -237,15 +251,7 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
 
       const created = expectDefined(provisional, "committed provisional child");
       expect(read(created.sessionKey)).toBeUndefined();
-      expect(dispatch).toHaveBeenCalledWith(
-        "sessions.delete",
-        expect.objectContaining({
-          key: created.sessionKey,
-          expectedSessionId: created.entry.sessionId,
-          expectedLifecycleRevision: created.entry.lifecycleRevision,
-        }),
-        expect.anything(),
-      );
+      expectDeletedIncarnation(created.sessionKey, created.entry);
       expect(fork).not.toHaveBeenCalled();
       expectNotLaunched();
       expect(read()).toMatchObject({ sessionId: parentId, lifecycleRevision: "parent-revision" });
@@ -255,11 +261,7 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
   });
 
   it("refuses an oversized fork when its created child disappears before preparation", async () => {
-    await sessions.upsertSessionEntryCore(scope(), {
-      totalTokens: 150_000,
-      totalTokensFresh: true,
-      totalTokensVersion: 1,
-    });
+    await setParentTokens(150_000);
     let childSessionKey: string | undefined;
     fork.mockImplementationOnce(async (input: unknown) => {
       const params = input as Parameters<ForkSession>[0];
@@ -343,11 +345,7 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
       threadBindingAvailable = true;
       config.logging = { audit: { enabled: true, executionIdentity: true } };
       if (parentTokens !== undefined) {
-        await sessions.upsertSessionEntryCore(parentScope(), {
-          totalTokens: parentTokens,
-          totalTokensFresh: true,
-          totalTokensVersion: 1,
-        });
+        await setParentTokens(parentTokens);
       }
       const expectParentUnchanged = await snapshotParent();
       const work: ExecutionDecisionWork[] = [];
@@ -474,15 +472,7 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
       expect(rollback).toHaveBeenCalledOnce();
       const childSessionKey = expectDefined(childKey, "prepared child key");
       const entry = expectDefined(forkedEntry, "committed fork entry");
-      expect(dispatch).toHaveBeenCalledWith(
-        "sessions.delete",
-        expect.objectContaining({
-          key: childSessionKey,
-          expectedSessionId: entry.sessionId,
-          expectedLifecycleRevision: entry.lifecycleRevision,
-        }),
-        expect.anything(),
-      );
+      expectDeletedIncarnation(childSessionKey, entry);
       expect(read(childSessionKey)).toEqual(successor);
       expect(await history(childSessionKey, successor?.sessionId ?? entry.sessionId)).toEqual(
         successorHistory,
