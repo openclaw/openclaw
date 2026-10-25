@@ -11,13 +11,13 @@ import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { resolveStateDir } from "../config/paths.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
+import type { DB } from "../state/openclaw-state-db.generated.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   createImageProcessor,
   readImageMetadataFromHeader,
   resizeToJpeg,
 } from "./media-services.js";
-import { encodePngRgba, fillPixel } from "./png-encode.js";
 
 let media: typeof import("./web-media.js");
 type MediaOptions = Exclude<Parameters<typeof media.loadWebMedia>[1], number | undefined>;
@@ -45,6 +45,14 @@ async function writeFile(name: string, body: Buffer | string, root = fixtureRoot
 function localOptions(overrides: MediaOptions = {}): MediaOptions {
   return { maxBytes: 1024 * 1024, localRoots: [fixtureRoot], ...overrides };
 }
+const loadLocal = (file: string, options: MediaOptions = {}) =>
+  media.loadWebMedia(file, localOptions(options));
+const hostOptions = (overrides: MediaOptions = {}): MediaOptions => ({
+  localRoots: "any",
+  readFile: (source) => fs.readFile(source),
+  hostReadCapability: true,
+  ...overrides,
+});
 
 function remoteOptions(
   body: BodyInit,
@@ -59,12 +67,7 @@ function remoteOptions(
 }
 
 function loadWithHostRead(file: string) {
-  return media.loadWebMedia(file, {
-    maxBytes: 1024 * 1024,
-    localRoots: "any",
-    readFile: (source) => fs.readFile(source),
-    hostReadCapability: true,
-  });
+  return media.loadWebMedia(file, hostOptions({ maxBytes: 1024 * 1024 }));
 }
 
 async function expectAccessError(promise: Promise<unknown>, code = "path-not-allowed") {
@@ -81,26 +84,6 @@ async function stageHtml(body = Buffer.from("<!doctype html><h1>report</h1>")) {
   const { saveMediaBuffer } = await import("./store.js");
   const saved = await saveMediaBuffer(body, "text/html", "outbound", 1024 * 1024, "report.html");
   return { path: saved.path, body };
-}
-
-function colorBlockPng(size: number, transparent = false) {
-  const pixels = Buffer.alloc(size * size * 4);
-  for (let y = 0; y < size; y += 1) {
-    for (let x = 0; x < size; x += 1) {
-      const center = x >= size / 4 && x < (size * 3) / 4 && y >= size / 4 && y < (size * 3) / 4;
-      fillPixel(
-        pixels,
-        x,
-        y,
-        size,
-        center ? 230 : 30,
-        center ? 40 : 110,
-        center ? 35 : 220,
-        transparent && !center ? 96 : undefined,
-      );
-    }
-  }
-  return encodePngRgba(pixels, size, size);
 }
 
 function jpegDimensions(buffer: Buffer) {
@@ -169,10 +152,7 @@ describe("loadWebMedia", () => {
     const reply = parseReplyDirectives(`Here is your image.\nMEDIA:${url}`);
     expect(reply.text).toBe("Here is your image.");
     expect(reply.mediaUrls).toHaveLength(1);
-    const result = await media.loadWebMedia(
-      expectDefined(reply.mediaUrls?.[0], "file URL"),
-      localOptions(),
-    );
+    const result = await loadLocal(expectDefined(reply.mediaUrls?.[0], "file URL"));
     expect(result.buffer).toEqual(TINY_PNG);
     expect([result.fileName, result.contentType]).toEqual([fileName, "image/png"]);
   });
@@ -198,11 +178,10 @@ describe("loadWebMedia", () => {
     const realpath = vi.spyOn(fs, "realpath");
     try {
       await expectAccessError(
-        media.loadWebMedia(
+        loadLocal(
           url.startsWith("FILE:")
             ? expectDefined(parseReplyDirectives(`MEDIA:${url}`).mediaUrls?.[0], "file URL")
             : url,
-          localOptions(),
         ),
         code,
       );
@@ -268,7 +247,7 @@ describe("loadWebMedia", () => {
 
   it("resolves relative PNGs and enforces the strictest model dimensions", async () => {
     const file = "portrait.png";
-    await writeFile(file, colorBlockPng(64));
+    await writeFile(file, createSolidPngBuffer(64, 64, { r: 230, g: 40, b: 35 }));
     const options = localOptions({
       workspaceDir: fixtureRoot,
       imageCompression: { ...IMAGE_LIMITS, quality: "high" },
@@ -285,11 +264,10 @@ describe("loadWebMedia", () => {
   });
 
   it("resizes transparent WebP to PNG for a many-image turn", async () => {
-    const webp = (await createImageProcessor().encode(colorBlockPng(64, true), { format: "webp" }))
-      .data;
+    const source = createSolidPngBuffer(64, 64, { r: 30, g: 110, b: 220, a: 96 });
+    const webp = (await createImageProcessor().encode(source, { format: "webp" })).data;
     const file = await writeFile("portrait.WebP", webp);
-    const options = localOptions({ imageCompression: { ...IMAGE_LIMITS, imageCount: 8 } });
-    const result = await media.loadWebMedia(file, options);
+    const result = await loadLocal(file, { imageCompression: { ...IMAGE_LIMITS, imageCount: 8 } });
     expect(result.kind).toBe("image");
     expect(result.contentType).toBe("image/png");
     expect(result.fileName).toBe("portrait.png");
@@ -438,10 +416,7 @@ describe("loadWebMedia", () => {
 
   it("resolves home-relative paths through allowed local roots", async () => {
     await withEnvAsync({ OPENCLAW_HOME: fixtureRoot }, async () => {
-      const result = await media.loadWebMedia(
-        "~/workspace/chart.png",
-        localOptions({ localRoots: [workspaceDir] }),
-      );
+      const result = await loadLocal("~/workspace/chart.png", { localRoots: [workspaceDir] });
       expect([result.kind, result.buffer]).toEqual(["image", TINY_PNG]);
     });
   });
@@ -487,12 +462,7 @@ describe("loadWebMedia", () => {
     const root = tempDirs.make("html-publication-");
     const body = Buffer.from("<!doctype html><h1>Final report</h1>");
     const file = await writeFile("report.html", body, root);
-    const options = {
-      localRoots: [root],
-      readFile: (source: string) => fs.readFile(source),
-      hostReadCapability: true,
-      htmlPublication: "explicit" as const,
-    };
+    const options = hostOptions({ localRoots: [root], htmlPublication: "explicit" });
     const result = await media.loadWebMedia(file, options);
     expect(result.buffer).toEqual(body);
     expect(result.contentType).toBe("text/html");
@@ -515,12 +485,7 @@ describe("loadWebMedia", () => {
     const root = tempDirs.make("html-publication-invalid-");
     const file = await writeFile("report.html", body, root);
     await expectAccessError(
-      media.loadWebMedia(file, {
-        localRoots: [root],
-        readFile: (source) => fs.readFile(source),
-        hostReadCapability: true,
-        htmlPublication: "explicit",
-      }),
+      media.loadWebMedia(file, hostOptions({ localRoots: [root], htmlPublication: "explicit" })),
     );
   });
 
@@ -529,16 +494,18 @@ describe("loadWebMedia", () => {
     const file = await writeFile("bounded.xlsm", body);
     const readFile = vi.fn((source: string) => fs.readFile(source));
     await expectAccessError(
-      media.loadWebMedia(file, { localRoots: [workspaceDir], readFile, hostReadCapability: true }),
+      media.loadWebMedia(file, hostOptions({ localRoots: [workspaceDir], readFile })),
     );
     expect(readFile).not.toHaveBeenCalled();
     await expect(
-      media.loadWebMedia(file, {
-        maxBytes: body.length - 1,
-        localRoots: [fixtureRoot],
-        readFile,
-        hostReadCapability: true,
-      }),
+      media.loadWebMedia(
+        file,
+        hostOptions({
+          maxBytes: body.length - 1,
+          localRoots: [fixtureRoot],
+          readFile,
+        }),
+      ),
     ).rejects.toThrow(/exceeds.*limit/i);
   });
 
@@ -588,16 +555,7 @@ describe("loadWebMedia", () => {
         await import("../infra/kysely-sync.js");
       const { openOpenClawStateDatabase, runOpenClawStateWriteTransaction } =
         await import("../state/openclaw-state-db.js");
-      type ProvenanceDb = {
-        outbound_media_provenance: {
-          realpath: string;
-          kind: string;
-          version: number;
-          sha256: string;
-          size_bytes: number;
-          created_at_ms: number;
-        };
-      };
+      type ProvenanceDb = Pick<DB, "outbound_media_provenance">;
       runOpenClawStateWriteTransaction(({ db }) => {
         executeSqliteQuerySync(
           db,
