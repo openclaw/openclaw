@@ -548,16 +548,15 @@ describe("session resource admission", () => {
         await dispatchSession(test, handler, {
           respond: response,
           sessionMutationCommitGuard: kind === "receipt" ? assertActive : undefined,
-          ...(kind === "profile selection"
-            ? {
-                expectedProfileBinding: {
+          expectedProfileBinding:
+            kind === "profile selection"
+              ? {
                   assertCurrent: assertActive,
                   assertMatchesResolvedProfile: () => {},
                   markInvoked: () => {},
                   guardResponse: (respond) => respond,
-                },
-              }
-            : {}),
+                }
+              : undefined,
         });
         expect(response).toHaveBeenCalledExactlyOnceWith(true, {});
         expect(committed).toMatchObject({ label: "allowed invocation write" });
@@ -579,10 +578,7 @@ describe("session resource admission", () => {
       authority.release();
       expect(() => authority.retainSession()).toThrow();
       expect(() => authority.assertCurrent()).toThrow();
-      replaceSessionEntrySync(
-        { agentId: "main", storePath, sessionKey: key },
-        { ...entry, updatedAt: 2, label: "Progress" },
-      );
+      replaceSessionEntrySync(scope, { ...entry, updatedAt: 2, label: "Progress" });
       await projection.ensureMaterialized();
       await projection.prepareMembership();
       expectCurrent(resource, viewer);

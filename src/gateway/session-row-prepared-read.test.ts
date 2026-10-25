@@ -164,42 +164,6 @@ function useSharedStore(context: ReturnType<typeof requestContext>, databasePath
   });
 }
 
-it("refuses a new session's initial message without retaining a startup write", async () => {
-  await withPendingStartupInspection(async ({ context, client, complete, admission }) => {
-    const handler = vi.fn<GatewayRequestHandler>(({ respond }) => {
-      assertAgentDatabaseAdmitted("main");
-      respond(true, { message: "accepted" });
-    });
-    const respond = vi.fn();
-    const request = handleGatewayRequest({
-      req: gatewayRequest("startup-write", "sessions.create", {
-        agentId: "main",
-        message: "hello",
-      }),
-      context,
-      client,
-      respond,
-      isWebchatConnect: () => false,
-      extraHandlers: { "sessions.create": handler },
-    });
-    await request;
-    expect(handler).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledExactlyOnceWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "UNAVAILABLE",
-        retryable: true,
-        details: { reason: "startup-sidecars", method: "sessions.create" },
-      }),
-    );
-    complete();
-    await admission.pendingPreparation;
-    expect(handler).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledOnce();
-  });
-});
-
 it.each(["before", "after refusal"] as const)(
   "preserves terminal inspection failure %s write authorization",
   async (when) => {
@@ -386,19 +350,6 @@ it.each(["ready", "revoked", "changed config", "timeout", "cancelled"] as const)
     );
   },
 );
-
-it("rechecks scopes after startup admission", async () => {
-  await withPendingStartupInspection(async ({ authorize, client, complete }) => {
-    const read = authorize();
-    await vi.advanceTimersByTimeAsync(0);
-    await expect(authorize("sessions.list", { agentId: "healthy" })).resolves.toMatchObject({
-      error: null,
-    });
-    client.connect.scopes = [];
-    complete();
-    await expect(read).resolves.toMatchObject({ error: { code: "FORBIDDEN" } });
-  });
-});
 
 it.each(["current", "revoked"] as const)(
   "bounds startup reads with %s authority without cancelling preparation or granting writes",

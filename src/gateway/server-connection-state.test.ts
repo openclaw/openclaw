@@ -26,6 +26,7 @@ import { createGatewayConnectionState } from "./server-connection-state.js";
 import { systemHandlers } from "./server-methods/system.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
 import { makeContextParams } from "./server-request-context.test-support.js";
+import { gatewayProfile } from "./server/client-fixtures.test-support.js";
 import { buildGatewaySnapshot } from "./server/health-state.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { prepareSessionEventProjection } from "./session-event-projection.js";
@@ -111,11 +112,8 @@ function identify(
   updatedAt = 1,
 ) {
   client.authenticatedUserProfile = {
-    profileId,
-    displayName,
+    ...gatewayProfile(profileId, displayName, updatedAt),
     avatarRevision: "test",
-    hasAvatar: false,
-    updatedAt,
   };
 }
 
@@ -559,12 +557,7 @@ describe("gateway connection state", () => {
         state.clients.add(peer.client);
         return peer;
       });
-      const context = createGatewayRequestContext(
-        makeContextParams({
-          clients: state.clients,
-          getSessionRowProjection: state.getSessionRowProjection,
-        }),
-      );
+      const context = createGatewayRequestContext(makeContextParams(state));
       const presenceKey = "presence-boundary-watcher";
       upsertPresence(presenceKey, {
         text: presenceKey,
