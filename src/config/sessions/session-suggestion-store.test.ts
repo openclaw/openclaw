@@ -44,7 +44,7 @@ async function createSession() {
       }),
     list: (params?: Parameters<typeof listSessionSuggestions>[1]) =>
       listSessionSuggestions(scope, params),
-    async resolve(id: string, state: "accepted" | "dismissed") {
+    resolve: async (id: string, state: "accepted" | "dismissed") => {
       const expected = { ...identity(id), expectedEntry: loadSessionEntry(scope)! };
       const claimed = await claimSessionSuggestionDispatch(scope, {
         ...expected,

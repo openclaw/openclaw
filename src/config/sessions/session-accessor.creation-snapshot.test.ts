@@ -39,7 +39,7 @@ function fixture(sessionKey = "agent:main:target") {
     put: (entry: SessionEntry, key = sessionKey) =>
       writeEntry({ ...scope, sessionKey: key }, entry),
     snapshot: (label?: string, key = sessionKey) => readSnapshot(database(), key, label),
-    addMembers() {
+    addMembers: () => {
       assignSessionOwner(scope, {
         owner: { type: "human", id: "owner" },
         assignedBy: { type: "system", id: "fixture" },

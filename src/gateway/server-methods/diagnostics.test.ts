@@ -225,7 +225,7 @@ describe("diagnostics gateway methods", () => {
     const lane = `test:diagnostics-${Date.now()}`;
     const before = await requestLaneDiagnostics();
     await using blocked = await blockLane(lane);
-    blocked.queue();
+    void blocked.queue();
     const payload = await requestLaneDiagnostics();
     const baseline = before.dynamic;
     expect(payload.lanes.map((snapshot) => snapshot.lane)).not.toContain(lane);
