@@ -6,7 +6,6 @@ import ai.openclaw.app.chat.ChatController
 import ai.openclaw.app.chat.ChatSessionDeletion
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatSessionPatch
-import ai.openclaw.app.chat.SESSION_LIST_FETCH_LIMIT
 import ai.openclaw.app.chat.selectChatAgentSessionKey
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayHelloSummary
@@ -633,7 +632,9 @@ class NodeRuntimeAgentSelectionTest {
         assertTrue(withTimeout(2_000) { history.await() }.orEmpty().contains("agent:agent-b:"))
         assertEquals("agent-b", resolveAgentIdFromMainSessionKey(runtime.mainSessionKey.value))
         assertEquals(runtime.mainSessionKey.value, runtime.chat.sessionKey.value)
-        assertFalse(requests.any { (_, params) -> params.orEmpty().contains("agent:agent-a:") })
+        synchronized(requests) {
+          assertFalse(requests.any { (_, params) -> params.orEmpty().contains("agent:agent-a:") })
+        }
       } finally {
         releaseRoster.complete(Unit)
         closeNodeRuntimeTestFixture(runtime)
@@ -1158,8 +1159,6 @@ class NodeRuntimeAgentSelectionTest {
                 emptyList()
               }
             val page = rows.take(limit)
-            // Bootstrap also lists sessions; only the 200-row selection lookup owns this rendezvous.
-            if (limit == SESSION_LIST_FETCH_LIMIT) lookupStarted.get()?.complete(currentCoroutineContext().job)
             page.joinToString(
               prefix = """{"sessions":[""",
               postfix = """],"totalCount":${rows.size},"hasMore":${page.size < rows.size}}""",
@@ -1243,7 +1242,12 @@ class NodeRuntimeAgentSelectionTest {
           }
         }
       }
-      installChatGateway(runtime, requestGateway, requestLeaseGeneration = leaseGeneration::get)
+      installChatGateway(
+        runtime,
+        requestGateway,
+        requestLeaseGeneration = leaseGeneration::get,
+        onBoundSessionList = { lookupStarted.get()?.complete(currentCoroutineContext().job) },
+      )
 
       suspend fun selectAgentAndWait(
         agentId: String,
@@ -1625,7 +1629,6 @@ class NodeRuntimeAgentSelectionTest {
           }
 
           "sessions.list" -> {
-            if (request["limit"] == JsonPrimitive(SESSION_LIST_FETCH_LIMIT)) lookupJobs.send(currentCoroutineContext().job)
             val rows = if (request["agentId"]?.jsonPrimitive?.content == "scout") sessions.get() else emptyList()
             rows.joinToString(prefix = """{"sessions":[""", postfix = "]}") { row ->
               """{"key":"${row.key}","sessionId":"session-${row.key}","agentId":"scout","updatedAt":${row.updatedAtMs},"archived":false}"""
@@ -1649,7 +1652,7 @@ class NodeRuntimeAgentSelectionTest {
           }
         }
       }
-      installChatGateway(runtime, requestGateway)
+      installChatGateway(runtime, requestGateway, onBoundSessionList = { lookupJobs.send(currentCoroutineContext().job) })
 
       runtime.selectChatAgent("scout")
       withTimeout(5_000) { lookupJobs.receive().join() }
@@ -1697,8 +1700,10 @@ class NodeRuntimeAgentSelectionTest {
     runtime: NodeRuntime,
     requestGateway: suspend (String, String?) -> String,
     requestLeaseGeneration: () -> Int = { 0 },
+    onBoundSessionList: suspend () -> Unit = {},
   ) {
     val requestGatewayForGateway: suspend (String, String, String?) -> String = { _, method, params ->
+      if (method == "sessions.list") onBoundSessionList()
       requestGateway(method, params)
     }
     val chat = ReflectionHelpers.getField<ChatController>(runtime, "chat")
@@ -1730,8 +1735,8 @@ class NodeRuntimeAgentSelectionTest {
       ReflectionHelpers.getField<suspend (String, String, String?) -> String>(chat, "requestGatewayForGateway")
     val request: suspend (String, String, String?) -> String = { gatewayId, method, paramsJson ->
       val params = if (method == "sessions.list") Json.parseToJsonElement(paramsJson.orEmpty()) as JsonObject else null
-      // Hold the candidate lookup, not the smaller bootstrap list needed by session creation.
-      if (params != null && params["limit"] == JsonPrimitive(SESSION_LIST_FETCH_LIMIT)) {
+      // Candidate lookups use this bound request path; drawer bootstrap uses requestGateway.
+      if (params != null) {
         onLookup((params["agentId"] as JsonPrimitive).content)
       } else {
         requestGatewayForGateway(gatewayId, method, paramsJson)

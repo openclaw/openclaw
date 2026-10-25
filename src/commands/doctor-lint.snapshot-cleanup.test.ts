@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createCliTtyMock } from "../cli/test-runtime-capture.js";
 import { clearHealthChecksForTest } from "../flows/health-check-registry.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -54,8 +55,8 @@ async function runCleanupLint(json: boolean, invalid: boolean) {
     await closeOpenClawStateDatabaseAsync();
     const runtime = createTestRuntime();
     const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-    const tty = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
-    Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: !json });
+    const tty = createCliTtyMock([process.stdout]);
+    tty.set(!json);
     try {
       const exitCode = await runDoctorLintCli(runtime, {
         json,
@@ -70,11 +71,7 @@ async function runCleanupLint(json: boolean, invalid: boolean) {
         output: stdout.mock.calls.map(([chunk]) => String(chunk)).join(""),
       };
     } finally {
-      if (tty) {
-        Object.defineProperty(process.stdout, "isTTY", tty);
-      } else {
-        Reflect.deleteProperty(process.stdout, "isTTY");
-      }
+      tty.restore();
     }
   });
 }

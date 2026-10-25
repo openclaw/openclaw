@@ -184,7 +184,6 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/server-methods/exec-approvals.test.ts",
   "src/gateway/server-methods/models-auth-api-key.integration.test.ts",
   "src/gateway/server-methods/models-auth-login.catalog.integration.test.ts",
-  "src/gateway/server-methods/models-auth-refresh.catalog.integration.test.ts",
   "src/gateway/server-methods/models-auth-refresh.integration.test.ts",
   "src/gateway/server-methods/models-auth-removal.integration.test.ts",
   "src/gateway/server-methods/models-connect-publication.integration.test.ts",

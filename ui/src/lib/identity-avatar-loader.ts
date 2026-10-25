@@ -156,7 +156,6 @@ export function createIdentityAvatars() {
   const listeners = new Set<() => void>();
   const notify = () => listeners.forEach((listener) => listener());
   let connected = false;
-  let unsubscribeGatewayReset: (() => void) | undefined;
   const routes = new Map<
     string,
     { url: string | null; result: string | Promise<string | null> | null; release?: () => void }
@@ -171,14 +170,11 @@ export function createIdentityAvatars() {
   }
   function disconnect() {
     connected = false;
-    unsubscribeGatewayReset?.();
-    unsubscribeGatewayReset = undefined;
     clearRoutes();
   }
   return {
     connect() {
       connected = true;
-      unsubscribeGatewayReset = registerAvatarGatewayReset(notify);
       notify();
       return disconnect;
     },

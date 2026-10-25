@@ -43,12 +43,28 @@ function record(id: string, patch: Partial<SubagentRunRecord> = {}): SubagentRun
     delivery: { status: "not_required" },
     collect: true,
     collectorCompletion: { status: "done" },
-    nativePluginOwner: {
-      version: 1,
-      pluginId: "test-plugin",
-      requesterProfileId: "spawn-operator",
-      requestId: "request-" + id,
-    },
+    nativePluginOwner: owner({ requestId: "request-" + id }),
+    ...patch,
+  };
+}
+
+function listed(runId: string, status = "done") {
+  return {
+    runId,
+    childSessionKey: "agent:main:subagent:" + runId,
+    requestId: "request-" + runId,
+    status,
+  };
+}
+
+function owner(
+  patch: Partial<NonNullable<SubagentRunRecord["nativePluginOwner"]>>,
+): NonNullable<SubagentRunRecord["nativePluginOwner"]> {
+  return {
+    version: 1,
+    pluginId: "test-plugin",
+    requesterProfileId: "spawn-operator",
+    requestId: "same",
     ...patch,
   };
 }
@@ -151,21 +167,9 @@ export function registerNativePluginListCases() {
           record("missing-parent", { completionRequesterSessionId: undefined }),
           record("other-parent", { requesterSessionKey: "agent:main:other" }),
           record("other-agent", { requesterAgentId: "other" }),
-          record("other-plugin", {
-            nativePluginOwner: {
-              version: 1,
-              pluginId: "other",
-              requesterProfileId: "spawn-operator",
-              requestId: "same",
-            },
-          }),
+          record("other-plugin", { nativePluginOwner: owner({ pluginId: "other" }) }),
           record("other-requester", {
-            nativePluginOwner: {
-              version: 1,
-              pluginId: "test-plugin",
-              requesterProfileId: "other",
-              requestId: "same",
-            },
+            nativePluginOwner: owner({ requesterProfileId: "other" }),
           }),
           record("ordinary", { collect: false }),
           record("stale", { childSessionKey: "agent:main:subagent:reused" }),
@@ -177,15 +181,7 @@ export function registerNativePluginListCases() {
         ];
         saveSubagentRegistryToSqlite(new Map(rows.map((row) => [row.runId, row])));
         expect(subagentRuns.size).toBe(0);
-        expect(await list()).toEqual([
-          {
-            runId: "accepted",
-            childSessionKey: "agent:main:subagent:accepted",
-            requestId: "request-accepted",
-            label: "review",
-            status: "done",
-          },
-        ]);
+        expect(await list()).toEqual([{ ...listed("accepted"), label: "review" }]);
       });
     });
 
@@ -201,14 +197,7 @@ export function registerNativePluginListCases() {
           ]),
         );
         const databasePath = openOpenClawStateDatabase().path;
-        const recovered = [
-          {
-            runId: "owned",
-            childSessionKey: "agent:main:subagent:owned",
-            requestId: "request-owned",
-            status: "done",
-          },
-        ];
+        const recovered = [listed("owned")];
         restartRegistryProcess();
         const stored = loadSubagentRegistryFromSqlite();
         expect(stored.get("pre-feature")).toEqual(preFeature);
@@ -255,22 +244,8 @@ export function registerNativePluginListCases() {
         expect(window.slice(0, 2).map((row) => row.runId)).toEqual(["B", "a"]);
         expect(window[2]?.runId).toBe("done-204");
         expect(window.at(-1)?.runId).toBe("done-7");
-        expect(await list({ status: "queued" })).toEqual([
-          {
-            runId: "pending",
-            childSessionKey: "agent:main:subagent:pending",
-            requestId: "request-pending",
-            status: "queued",
-          },
-        ]);
-        expect(await list({ status: "terminal" })).toEqual([
-          {
-            runId: "terminal-only",
-            childSessionKey: "agent:main:subagent:terminal-only",
-            requestId: "request-terminal-only",
-            status: "terminal",
-          },
-        ]);
+        expect(await list({ status: "queued" })).toEqual([listed("pending", "queued")]);
+        expect(await list({ status: "terminal" })).toEqual([listed("terminal-only", "terminal")]);
       });
     });
   });

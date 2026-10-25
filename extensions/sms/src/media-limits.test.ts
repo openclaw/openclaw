@@ -1,13 +1,12 @@
 import fs from "node:fs/promises";
-import { createServer, type Server } from "node:http";
 import path from "node:path";
-import { promisify } from "node:util";
 import { saveResponseMedia } from "openclaw/plugin-sdk/media-runtime";
 import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
   createPluginRuntimeMediaMock,
   createPluginRuntimeMock,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { withServer } from "openclaw/plugin-sdk/test-env";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { resolveSmsAccount } from "./accounts.js";
@@ -37,7 +36,6 @@ function accountFor(sms: SmsChannelConfig, agentLimit?: number, accountId?: stri
 
 describe("SMS configured media limits", () => {
   let state: OpenClawTestState;
-  let server: Server | undefined;
   async function prepare(account: ResolvedSmsAccount, bytes = PDF, file = "attachment.pdf") {
     const mediaUrl = path.join(state.stateDir, file);
     await fs.writeFile(mediaUrl, bytes);
@@ -58,10 +56,6 @@ describe("SMS configured media limits", () => {
   });
 
   afterEach(async () => {
-    if (server) {
-      await promisify(server.close.bind(server))();
-      server = undefined;
-    }
     await state.cleanup();
   });
 
@@ -83,28 +77,22 @@ describe("SMS configured media limits", () => {
   it("serves exact below-cap bytes through the hosted HTTP route", async () => {
     const account = accountFor({ mediaMaxMb: PDF.length / MB }, 1 / MB);
     const attempt = await prepare(account);
-    const hostedServer = createServer((req, res) => {
-      void tryHandleHostedSmsMediaRequest(req, res, account.accountId).catch(() => {
-        res.statusCode = 500;
-        res.end();
-      });
-    });
-    server = hostedServer;
-    await new Promise<void>((resolve) => {
-      hostedServer.listen(0, "127.0.0.1", resolve);
-    });
-    const address = hostedServer.address();
-    if (!address || typeof address === "string") {
-      throw new Error("expected local HTTP listener");
-    }
-    const hosted = new URL(attempt.hostedMediaUrl);
-    const response = await fetch(
-      `http://127.0.0.1:${address.port}${hosted.pathname}${hosted.search}`,
+    await withServer(
+      (req, res) => {
+        void tryHandleHostedSmsMediaRequest(req, res, account.accountId).catch(() => {
+          res.statusCode = 500;
+          res.end();
+        });
+      },
+      async (baseUrl) => {
+        const hosted = new URL(attempt.hostedMediaUrl);
+        const response = await fetch(`${baseUrl}${hosted.pathname}${hosted.search}`);
+        expect(response.status).toBe(200);
+        expect(response.headers.get("content-type")).toBe("application/pdf");
+        expect(Buffer.from(await response.arrayBuffer())).toEqual(PDF);
+        await attempt.cleanupHostedMedia();
+      },
     );
-    expect(response.status).toBe(200);
-    expect(response.headers.get("content-type")).toBe("application/pdf");
-    expect(Buffer.from(await response.arrayBuffer())).toEqual(PDF);
-    await attempt.cleanupHostedMedia();
   });
 
   it.each([

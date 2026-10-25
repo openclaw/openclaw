@@ -142,28 +142,21 @@ it.each<[string, NativeStatusSelectionCase]>([
       contextTokens: 1_000_000,
       delivery: normalizeSessionDeliveryState({
         context: { channel: deliveryChannel },
-        ...(directUserId
-          ? { origin: { provider: deliveryChannel, nativeDirectUserId: directUserId } }
-          : {}),
+        origin: directUserId
+          ? { provider: deliveryChannel, nativeDirectUserId: directUserId }
+          : undefined,
       }),
-      ...(isDirect ? {} : { groupId }),
-      ...(topicName ? { subject: "Project Team", topicName: "Previous" } : {}),
-      ...(locked ? { modelSelectionLocked: true } : {}),
-      ...(source
-        ? {
-            providerOverride: "anthropic",
-            modelOverride: "claude-fable-5",
-            modelOverrideSource: source,
-          }
-        : {}),
-      ...(source === "auto"
-        ? {
-            modelOverrideFallbackOriginProvider: "openai",
-            modelOverrideFallbackOriginModel: "gpt-5.5",
-            modelProvider: "openai",
-            model: "gpt-5.5",
-          }
-        : {}),
+      groupId: isDirect ? undefined : groupId,
+      subject: topicName ? "Project Team" : undefined,
+      topicName: topicName ? "Previous" : undefined,
+      modelSelectionLocked: locked || undefined,
+      providerOverride: source ? "anthropic" : undefined,
+      modelOverride: source ? "claude-fable-5" : undefined,
+      modelOverrideSource: source,
+      modelOverrideFallbackOriginProvider: source === "auto" ? "openai" : undefined,
+      modelOverrideFallbackOriginModel: source === "auto" ? "gpt-5.5" : undefined,
+      modelProvider: source === "auto" ? "openai" : undefined,
+      model: source === "auto" ? "gpt-5.5" : undefined,
     },
     targetSessionKey,
   );
@@ -171,19 +164,15 @@ it.each<[string, NativeStatusSelectionCase]>([
   const result = await runStatus(
     {
       ChatType: isDirect ? "direct" : "group",
-      ...(topicName
-        ? {
-            GroupSubject: "Project Team",
-            TopicName: topicName,
-            MessageThreadId: 77,
-            IsForum: true,
-          }
-        : {}),
-      ...(!isDirect
-        ? { From: `telegram:group:${groupId}`, OriginatingTo: `telegram:${groupId}` }
-        : {}),
-      ...(directSenderId ? { From: `telegram:${directSenderId}`, SenderId: directSenderId } : {}),
-      ...(modelParentSessionKey ? { ModelParentSessionKey: modelParentSessionKey } : {}),
+      GroupSubject: topicName ? "Project Team" : undefined,
+      TopicName: topicName,
+      MessageThreadId: topicName ? 77 : undefined,
+      IsForum: topicName ? true : undefined,
+      ...(!isDirect ? { From: `telegram:group:${groupId}` } : {}),
+      ...(directSenderId ? { From: `telegram:${directSenderId}` } : {}),
+      OriginatingTo: !isDirect ? `telegram:${groupId}` : undefined,
+      SenderId: directSenderId,
+      ModelParentSessionKey: modelParentSessionKey,
       SessionKey: "telegram:slash:123",
       CommandTargetSessionKey: targetSessionKey,
     },
@@ -228,25 +217,19 @@ it.each<[string, NativeStatusSelectionCase]>([
   const [expectedProvider, expectedModel] = expected.split("/");
   const statusCall = buildStatusReplyMock.mock.calls[0]?.[0];
   expect(statusCall).toMatchObject({ provider: expectedProvider, model: expectedModel });
-  expect(statusCall.thinkingCatalog).toContainEqual(
-    expect.objectContaining({
-      provider: "anthropic",
-      id: "claude-fable-5",
-      contextWindow: 1_000_000,
-    }),
-  );
+  // The real-render sibling covers catalog plumbing; this matrix owns route selection.
   if (expectedProvider === "anthropic") {
     await expect(statusCall.resolveDefaultThinkingLevel()).resolves.toBe("high");
   }
   if (source) {
-    expect(statusCall.sessionEntry).toMatchObject({
+    expect(fixture.read(targetSessionKey)).toMatchObject({
       providerOverride: "anthropic",
       modelOverride: "claude-fable-5",
       modelOverrideSource: source,
     });
   } else {
-    expect(statusCall.sessionEntry).not.toHaveProperty("providerOverride");
-    expect(statusCall.sessionEntry).not.toHaveProperty("modelOverride");
+    expect(fixture.read(targetSessionKey)?.providerOverride).toBeUndefined();
+    expect(fixture.read(targetSessionKey)?.modelOverride).toBeUndefined();
   }
   expect(result).toMatchObject({ reply: { text: "selected model status" } });
   if (topicName) {

@@ -1,4 +1,5 @@
 import { For, createMemo, createUniqueId, onSettled } from "solid-js";
+import "../../../styles/chat/composer-queue-content.css";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Menu, type MenuHandle } from "../../../components/solid/menu.tsx";
 import { StrokeIcon } from "../../../components/solid/stroke-icon.tsx";

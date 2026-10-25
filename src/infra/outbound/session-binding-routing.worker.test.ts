@@ -6,7 +6,7 @@ import {
 } from "../../../test/helpers/sqlite-parent-observer.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveBoundAcpDispatchSessionKey } from "../../auto-reply/reply/dispatch-from-config.context.js";
-import { resolveIngressFailureDisposition } from "../../channels/message/ingress-retry-policy.js";
+import { createIngressRetryPolicy } from "../../channels/message/ingress-retry-policy.js";
 import { buildChannelInboundEventContext } from "../../plugin-sdk/channel-inbound.js";
 import {
   getSessionBindingService,
@@ -186,9 +186,9 @@ it.each(
     expect(failure).toBeInstanceOf(Error);
     const now = Date.now();
     const disposition = (attempts: number) =>
-      resolveIngressFailureDisposition({
+      createIngressRetryPolicy({}).failure({
         err: failure,
-        event: { receivedAt: now - 1_000, attempts },
+        event: { id: "binding-route", receivedAt: now - 1_000, attempts },
         formatError: String,
         now,
       });

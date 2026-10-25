@@ -10,9 +10,7 @@ export function useSignalHttpServer() {
     await Promise.all(
       servers.splice(0).map(async (server) => {
         server.closeAllConnections();
-        await new Promise<void>((resolve, reject) => {
-          server.close((error) => (error ? reject(error) : resolve()));
-        });
+        await server[Symbol.asyncDispose]();
       }),
     );
   });
@@ -90,6 +88,8 @@ export async function expectPreparedHandoff(
     if (!revoked) {
       await arrived.promise;
       expect(settled).toBe(false);
+      // Transmission owns settlement even if its caller closes before the reply.
+      caller.abort(failure);
       response.resolve();
     }
     expect(await sending).toEqual(revoked ? { error: failure } : { value: fixture.result });

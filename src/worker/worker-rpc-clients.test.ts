@@ -12,7 +12,8 @@ import type {
   WorkerInferenceTerminalOutcome,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { createZeroUsageFixture } from "../agents/test-helpers/usage-fixtures.js";
+import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
+import { createUsageFixture } from "../agents/test-helpers/usage-fixtures.js";
 import { WorkerConnectionStoppedError, WorkerFencedError } from "./worker-connection-contract.js";
 import type { WorkerConnectionFrameDispatcher } from "./worker-connection-frames.js";
 import { WorkerConnection, type WorkerConnectionState } from "./worker-connection.js";
@@ -186,14 +187,14 @@ const INFERENCE_REQUEST: WorkerInferenceStartParams = {
 const TERMINAL_OUTCOME: WorkerInferenceTerminalOutcome = {
   type: "done",
   message: {
-    role: "assistant",
-    content: [{ type: "text", text: "done" }],
-    api: "openai-responses",
-    provider: "provider-1",
-    model: "model-1",
+    ...makeAgentAssistantMessage({
+      content: [{ type: "text", text: "done" }],
+      provider: "provider-1",
+      model: "model-1",
+      usage: createUsageFixture(1, 1, 2),
+      timestamp: 2,
+    }),
     stopReason: "stop",
-    usage: { ...createZeroUsageFixture(), input: 1, output: 1, totalTokens: 2 },
-    timestamp: 2,
   },
 };
 
@@ -375,33 +376,30 @@ it("reports stream gaps but accepts later events and the terminal outcome", asyn
   harness.start.mockResolvedValueOnce(successResponse({ status: "accepted" as const }));
   const client = new WorkerInferenceProxyClient(harness.connection);
   const deliveries: string[] = [];
-  const onEvent = () => deliveries.push("event");
-  const onStreamGap = () => deliveries.push("gap");
-  const terminal = TERMINAL_OUTCOME;
-
-  const outcome = client.start(INFERENCE_REQUEST, { onEvent, onStreamGap });
+  const outcome = client.start(INFERENCE_REQUEST, {
+    onEvent: () => deliveries.push("event"),
+    onStreamGap: () => deliveries.push("gap"),
+  });
   await vi.waitFor(() => expect(harness.start).toHaveBeenCalledOnce());
   expect(harness.start.mock.calls[0]?.[1]).toEqual(INFERENCE_REQUEST);
   harness.emitInferenceEvent(1, { type: "text_start", contentIndex: 0 });
   harness.emitInferenceEvent(3, { type: "text_delta", contentIndex: 0, delta: "continued" });
-  harness.emitInferenceTerminal(4, terminal);
+  harness.emitInferenceTerminal(4, TERMINAL_OUTCOME);
 
-  await expect(outcome).resolves.toEqual(terminal);
+  await expect(outcome).resolves.toEqual(TERMINAL_OUTCOME);
   expect(deliveries).toEqual(["event", "gap", "event"]);
   client.dispose();
 });
 
 it("reattaches an active turn and consumes its replayed terminal", async () => {
   const harness = connectionHarness();
-  const terminal = TERMINAL_OUTCOME;
-  harness.start
-    .mockResolvedValueOnce(successResponse({ status: "accepted" as const }))
-    .mockImplementationOnce(async (_kind, _params, beforeResolve) => {
-      const response = successResponse({ status: "replayed" as const });
-      beforeResolve?.(response);
-      harness.emitInferenceTerminal(1, terminal);
-      return response;
-    });
+  harness.start.mockResolvedValueOnce(successResponse({ status: "accepted" as const }));
+  harness.start.mockImplementationOnce(async (_kind, _params, beforeResolve) => {
+    const response = successResponse({ status: "replayed" as const });
+    beforeResolve?.(response);
+    harness.emitInferenceTerminal(1, TERMINAL_OUTCOME);
+    return response;
+  });
   const client = new WorkerInferenceProxyClient(harness.connection);
   const onStreamGap = vi.fn();
 
@@ -411,7 +409,7 @@ it("reattaches an active turn and consumes its replayed terminal", async () => {
   harness.emitReady();
   await vi.waitFor(() => expect(harness.start).toHaveBeenCalledTimes(2));
 
-  await expect(outcome).resolves.toEqual(terminal);
+  await expect(outcome).resolves.toEqual(TERMINAL_OUTCOME);
   expect(harness.start.mock.calls[1]?.[1]).toEqual(harness.start.mock.calls[0]?.[1]);
   expect(onStreamGap).not.toHaveBeenCalled();
   client.dispose();

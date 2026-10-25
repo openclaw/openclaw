@@ -62,6 +62,10 @@ function commandAction(label: string, command: string) {
   return { kind: "command" as const, label, command };
 }
 
+function settingsAction(label: string, settingsPath: string) {
+  return { kind: "system-settings" as const, label, settingsPath };
+}
+
 const SETUP_ACTIONS = {
   "install-native-package": commandAction(
     "Install or reinstall the FaceTime native package with Homebrew",
@@ -103,30 +107,26 @@ const SETUP_ACTIONS = {
     label: "Install or update the paired FaceTime audio driver",
     gatewayMethod: "facetime.installDriver",
   },
-  "select-physical-output": {
-    kind: "system-settings",
-    label: "Select MacBook Speakers or another physical output",
-    settingsPath: "System Settings > Sound > Output",
-  },
-  "grant-system-audio": {
-    kind: "system-settings",
-    label: "Allow OpenClaw to capture FaceTime app audio",
-    settingsPath: "System Settings > Privacy & Security > Screen & System Audio Recording",
-  },
+  "select-physical-output": settingsAction(
+    "Select MacBook Speakers or another physical output",
+    "System Settings > Sound > Output",
+  ),
+  "grant-system-audio": settingsAction(
+    "Allow OpenClaw to capture FaceTime app audio",
+    "System Settings > Privacy & Security > Screen & System Audio Recording",
+  ),
   "configure-realtime-provider": commandAction(
     "Configure authentication for a registered realtime voice provider",
     "openclaw configure",
   ),
-  "verify-focus": {
-    kind: "system-settings",
-    label: "Verify Focus is off or allows the expected caller",
-    settingsPath: "Control Center > Focus",
-  },
-  "allow-sharing-notifications": {
-    kind: "system-settings",
-    label: "Allow notifications while mirroring or sharing the display",
-    settingsPath: "System Settings > Notifications",
-  },
+  "verify-focus": settingsAction(
+    "Verify Focus is off or allows the expected caller",
+    "Control Center > Focus",
+  ),
+  "allow-sharing-notifications": settingsAction(
+    "Allow notifications while mirroring or sharing the display",
+    "System Settings > Notifications",
+  ),
   "live-outbound-test": {
     kind: "manual-test",
     label: "Place one outbound FaceTime audio call with facetime.dial",
@@ -136,11 +136,10 @@ const SETUP_ACTIONS = {
     kind: "manual-test",
     label: "Run one inbound and one outbound FaceTime audio call",
   },
-  "review-live-voicemail": {
-    kind: "system-settings",
-    label: "Review Live Voicemail if inbound audio calls are screened",
-    settingsPath: "Phone > Settings > Live Voicemail",
-  },
+  "review-live-voicemail": settingsAction(
+    "Review Live Voicemail if inbound audio calls are screened",
+    "Phone > Settings > Live Voicemail",
+  ),
 } satisfies Record<string, Omit<FaceTimeSetupAction, "id">>;
 
 const PRECHECK_ACTIONS: Record<string, keyof typeof SETUP_ACTIONS> = {

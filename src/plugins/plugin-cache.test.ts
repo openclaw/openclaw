@@ -36,6 +36,7 @@ import {
 import { PluginInstance } from "./plugin-instance.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { preparePluginModule } from "./plugin-module-loader-cache.js";
+import { writeArtifacts } from "./public-surface.test-support.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import {
   getPluginLoaderCacheState,
@@ -66,10 +67,7 @@ function symlinkDir(target: string, alias: string) {
 function fixture(files: Record<string, string> = {}, aliases: Record<string, string> = {}) {
   const root = fs.realpathSync(tempDirs.make("plugin-cache-"));
   const file = (name: string) => path.join(root, name);
-  for (const [name, contents] of Object.entries(files)) {
-    fs.mkdirSync(path.dirname(file(name)), { recursive: true });
-    fs.writeFileSync(file(name), contents);
-  }
+  writeArtifacts(root, files);
   for (const [name, target] of Object.entries(aliases)) {
     if (fs.statSync(file(target)).isDirectory()) {
       symlinkDir(file(target), file(name));

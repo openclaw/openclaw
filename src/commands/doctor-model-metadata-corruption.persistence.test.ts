@@ -13,6 +13,7 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { withEnvAsync } from "../test-utils/env.js";
 import { prepareDoctorContext } from "./doctor-config-flow.test-support.js";
 import { withDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
+import { createTestModelDefinition } from "./test-runtime-config-helpers.js";
 
 describe("Doctor model metadata corruption persistence", () => {
   afterEach(() => {
@@ -35,17 +36,12 @@ describe("Doctor model metadata corruption persistence", () => {
                   api: "openai-chatgpt-responses",
                   baseUrl: "https://chatgpt.com/backend-api/codex",
                   models: [
-                    {
-                      id: "gpt-5.6-sol",
-                      name: "gpt-5.6-sol",
+                    createTestModelDefinition("gpt-5.6-sol", {
                       contextWindow: 272_000,
                       contextTokens: 272_000,
-                      reasoning: false,
-                      input: ["text"],
-                      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                       maxTokens: 8192,
                       api: "openai-chatgpt-responses",
-                    },
+                    }),
                   ],
                 },
               },

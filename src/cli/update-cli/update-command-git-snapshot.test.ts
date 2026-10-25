@@ -177,7 +177,7 @@ it.each([
           [candidateCommand, beforeGitMutation, validateCandidate].map((fn) => fn.mock.calls),
         ).toEqual([[], [], []]);
         expect(await git(root, "rev-parse", "HEAD")).toBe(before);
-        expect(await fs.readdir(stateDir)).toEqual(
+        expect((await fs.readdir(stateDir)).toSorted()).toEqual(
           backupShortfall ? ["agents", "openclaw.json"] : ["openclaw.json"],
         );
       } finally {

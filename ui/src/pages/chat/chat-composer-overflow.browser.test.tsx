@@ -1,6 +1,7 @@
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { page, server, userEvent } from "vitest/browser";
+import { createSessionGoalFixture } from "../../../../src/gateway/session-goal.test-support.js";
 import type { SessionGoal } from "../../api/types.ts";
 import { ContentPresentation } from "../../lib/solid/presentation.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
@@ -16,7 +17,6 @@ import { AttachmentPreview } from "./components/chat-attachments.tsx";
 import { ChatGoal } from "./components/chat-composer-goal.tsx";
 import { makeCapabilities } from "./components/chat-composer-menu.test-support.ts";
 import { ComposerMenu } from "./components/chat-composer-menu.tsx";
-import { resetChatComposerState } from "./components/chat-composer-state.ts";
 import "../../styles/base.css";
 import "../../styles/components.css";
 import "../../styles/chat/composer.css";
@@ -24,6 +24,7 @@ import "../../styles/chat/composer-surface.css";
 import "../../styles/chat/composer-context-strip.css";
 import "../../styles/chat/composer-progress.css";
 import "../../styles/chat/composer-queue.css";
+import { resetChatComposerState } from "./components/chat-composer-state.ts";
 
 const attachments = Array.from({ length: 7 }, (_, index) => ({
   id: `overflow-${index}`,
@@ -361,18 +362,12 @@ it.each([
 ] as const)("lays out expanded goal controls at %ipx (%s)", async (width, status) => {
   await resize(width, "agent-chat__composer-shell", 800);
   const [expanded, setExpanded] = createSignal(false);
-  const goal: SessionGoal = {
-    schemaVersion: 1,
-    id: "overflow-goal",
-    objective: "Short objective",
+  const goal: SessionGoal = createSessionGoalFixture("overflow-goal", "Short objective", {
     status,
     lastStatusNote: "Review the deployment results before continuing.",
     createdAt: 1000,
     updatedAt: 2000,
-    tokenStart: 0,
-    tokensUsed: 0,
-    continuationTurns: 0,
-  };
+  });
   const [currentGoal, setGoal] = createSignal(goal, { equals: false });
   const drawObjective = (objective: string) => {
     goal.objective = objective;

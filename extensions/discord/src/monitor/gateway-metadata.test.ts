@@ -1,5 +1,5 @@
 // Discord tests cover gateway metadata plugin behavior.
-import { createServer, type Server } from "node:http";
+import { createServer } from "node:http";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { listenOnLoopback as listenLoopbackServer } from "../../../test-support/hanging-loopback-server.js";
 import { createRuntimeSpies } from "../../../test-support/runtime-spies.js";
@@ -28,12 +28,6 @@ vi.mock("openclaw/plugin-sdk/proxy-capture", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/proxy-capture")>()),
   captureHttpExchangeAsync: captureHost.capture,
 }));
-
-async function closeServer(server: Server): Promise<void> {
-  await new Promise<void>((resolve) => {
-    server.close(() => resolve());
-  });
-}
 
 function stubGuardedFetch(response: Response) {
   const release = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
@@ -240,7 +234,7 @@ describe("fetchDiscordGatewayMetadataGuarded bounded reads", () => {
       );
       expect(release).toHaveBeenCalledOnce();
     } finally {
-      await closeServer(server);
+      await server[Symbol.asyncDispose]();
     }
   });
 });

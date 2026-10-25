@@ -9,14 +9,6 @@ type MatrixCliVerificationBootstrap = Awaited<
   ReturnType<typeof verificationActions.bootstrapMatrixVerification>
 >;
 
-type MatrixCliEncryptionSetupResult = {
-  accountId: string;
-  configPath: string;
-  encryptionChanged: boolean;
-  bootstrap: MatrixCliVerificationBootstrap;
-  status: cli.MatrixCliVerificationStatus;
-};
-
 function isMatrixVerificationSetupComplete(status: cli.MatrixCliVerificationStatus): boolean {
   return (
     status.encryptionEnabled &&
@@ -50,7 +42,7 @@ async function setupMatrixEncryption(params: {
   account?: string;
   recoveryKey?: string;
   forceResetCrossSigning?: boolean;
-}): Promise<MatrixCliEncryptionSetupResult> {
+}) {
   const { accountId, cfg } = cli.resolveMatrixCliAccountContext(params.account);
   const publishConfig = cli.createMatrixCliAccountConfigPublisher({ accountId, previousCfg: cfg });
   const account = await resolveMatrixAccountAsync({ cfg, accountId });
@@ -118,7 +110,7 @@ async function setupMatrixEncryption(params: {
 }
 
 function printMatrixEncryptionSetupResult(
-  result: MatrixCliEncryptionSetupResult,
+  result: Awaited<ReturnType<typeof setupMatrixEncryption>>,
   verbose = false,
 ): void {
   cli.printAccountLabel(result.accountId);

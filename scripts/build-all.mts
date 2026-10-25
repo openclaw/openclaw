@@ -102,7 +102,12 @@ const pluginAssetStep = (phase: "build" | "copy") =>
     phase,
   ]);
 export const BUILD_ALL_STEPS: BuildAllStep[] = [
-  nodeStep("runtime:scripts:check", ["scripts/generate-runtime-script-assets.mjs", "--check"]),
+  nodeStep("runtime:scripts:check", [
+    "--import",
+    "./scripts/tsx.mjs",
+    "scripts/generate-runtime-script-assets.mjs",
+    "--check",
+  ]),
   nodeStep("native-protocol", ["scripts/prepare-native-protocol.mjs"]),
   nodeStep("clean:dist", [
     "-e",

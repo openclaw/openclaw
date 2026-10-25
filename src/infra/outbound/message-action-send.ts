@@ -418,15 +418,15 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
   const initialReply = resolveAndApplyOutboundReplyToId(params, {
     channel,
     toolContext: input.toolContext,
-    matchesToolContextTarget: channelPlugin?.threading?.matchesToolContextTarget,
+    matchesToolContextTarget: channelPlugin.threading?.matchesToolContextTarget,
   });
   const resolvedThreadId = resolveAndApplyOutboundThreadId(params, {
     cfg,
     to,
     accountId,
     toolContext: input.toolContext,
-    resolveAutoThreadId: channelPlugin?.threading?.resolveAutoThreadId,
-    resolveReplyTransport: channelPlugin?.threading?.resolveReplyTransport,
+    resolveAutoThreadId: channelPlugin.threading?.resolveAutoThreadId,
+    resolveReplyTransport: channelPlugin.threading?.resolveReplyTransport,
     replyToIsExplicit: initialReply?.source === "explicit",
   });
   // Route resolution is read-only; persist only after the send succeeds so a
@@ -544,8 +544,8 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
   const usesGatewayAction =
     !requiresCoreDelivery &&
     Boolean(gateway) &&
-    (channelPlugin?.actions?.resolveExecutionMode?.({ action }) === "gateway" ||
-      channelPlugin?.outbound?.deliveryMode === "gateway");
+    (channelPlugin.actions?.resolveExecutionMode?.({ action }) === "gateway" ||
+      channelPlugin.outbound?.deliveryMode === "gateway");
   if (usesGatewayAction && !dryRun) {
     let stagedPayload = sendPayload.payload;
     const mediaUrls = sendPayload.mediaUrls;
@@ -639,7 +639,7 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
   }
 
   const useCorePresentationDelivery = Boolean(
-    sendPayload.payload.presentation && hasCorePresentationDelivery(channelPlugin?.outbound),
+    sendPayload.payload.presentation && hasCorePresentationDelivery(channelPlugin.outbound),
   );
   if (sendPayload.payload.presentation && !useCorePresentationDelivery) {
     const fallbackMessage = materializeMessagePresentationFallback({

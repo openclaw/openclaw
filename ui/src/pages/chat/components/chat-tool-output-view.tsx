@@ -113,6 +113,9 @@ export function ChatToolOutput(props: Props) {
           <pre class="chat-tool-output__text">
             <code>{displayText()}</code>
           </pre>
+          <Show when={card()!.catalogTruncated}>
+            <p role="status">{t("chat.catalogOutputTruncated")}</p>
+          </Show>
           <Show when={displayText() !== text()}>
             <RawOutputToggle text={text()} />
           </Show>

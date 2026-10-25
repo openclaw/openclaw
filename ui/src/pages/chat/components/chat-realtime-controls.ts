@@ -1,5 +1,5 @@
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
-import type { RealtimeTalkConversationEntry } from "../talk/conversation.ts";
+import type { RealtimeTalkConversationEntry } from "../talk/conversation-state.ts";
 import { createTranscriptMemo } from "./chat-transcript-memo.ts";
 
 const persistedMessageIds = createTranscriptMemo<Set<string | null>>();
