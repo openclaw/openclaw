@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { Server, WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/server";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -11,7 +10,7 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
+import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import { disposeAllSessionMcpRuntimes } from "../agent-bundle-mcp-manager-api.js";
 import { bindSessionMcpRuntimeTestScheduler } from "../agent-bundle-mcp-manager.test-support.js";
@@ -42,25 +41,15 @@ vi.mock("../cli-runner/execute.runtime.js", () => ({ executePreparedCliRun }));
 
 describe("CLI attempt session MCP overrides", () => {
   let root: string;
+  let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
   const servers: Server[] = [];
   let overlays: Array<Record<string, unknown>>;
 
-  const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
-    afterAll(async () => {
-      try {
-        await cleanupSessionStateForTest({ stateDir: root });
-        cleanup();
-      } finally {
-        vi.unstubAllEnvs();
-      }
-    });
+  beforeAll(async () => {
+    state = await createOpenClawTestState({ label: "cli-session-mcp" });
+    root = state.stateDir;
   });
-
-  beforeAll(() => {
-    root = tempDirs.make("openclaw-cli-session-mcp-");
-    vi.stubEnv("OPENCLAW_STATE_DIR", root);
-    vi.stubEnv("HOME", root);
-  });
+  afterAll(() => state.cleanup());
 
   afterEach(async () => {
     await disposeAllSessionMcpRuntimes();
