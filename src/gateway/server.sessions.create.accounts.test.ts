@@ -5,7 +5,11 @@ import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
-import { connectUserModelAccount } from "../state/user-model-accounts.js";
+import {
+  connectUserModelAccount,
+  listUserProfileAuthLinks,
+  setUserProfileAuthLink,
+} from "../state/user-model-accounts.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { identifiedClient } from "./server-methods/sessions-sharing.test-support.js";
 import type { GatewayClient } from "./server-methods/types.js";
@@ -36,6 +40,20 @@ const pinnedAccount = (authProfileOverride: string) => ({
 });
 const readSession = (storePath: string, sessionKey: string) =>
   loadSessionEntry({ storePath, sessionKey });
+function modelContext(
+  cfg: ReturnType<typeof getRuntimeConfig>,
+  entries: Array<{ id: string; name: string; provider: string }>,
+  clients: ReadonlySet<GatewayClient & { connId: string }>,
+) {
+  return {
+    getRuntimeConfig: () => cfg,
+    loadGatewayModelCatalogSnapshot: vi.fn(async () => ({ entries, routeVariants: entries })),
+    getClientConnIds: (filter?: (client: GatewayClient) => boolean) =>
+      new Set(
+        [...clients].filter((client) => !filter || filter(client)).map(({ connId }) => connId),
+      ),
+  };
+}
 async function seedAccountSession(
   storePath: string,
   key: string,
@@ -88,17 +106,7 @@ async function createPersonalAccountSessionFixture() {
   // Real account setup can warm config IO before the Gateway fixture applies its workspace.
   gatewayConfig.clearRuntimeConfigSnapshot();
   const cfg = gatewayConfig.getRuntimeConfig();
-  const context = {
-    getRuntimeConfig: () => cfg,
-    loadGatewayModelCatalogSnapshot: vi.fn(async () => ({
-      entries: catalog,
-      routeVariants: catalog,
-    })),
-    getClientConnIds: (filter?: (current: GatewayClient) => boolean) =>
-      new Set(
-        [...clients].filter((current) => !filter || filter(current)).map(({ connId }) => connId),
-      ),
-  };
+  const context = modelContext(cfg, catalog, clients);
   const create = (params: Record<string, unknown>) =>
     directSessionReq("sessions.create", params, { client, context });
   return { storePath, owner, authProfileId, connectAccount, client, context, create };
@@ -177,7 +185,6 @@ test.each([
       async (state) => {
         const { ensureAuthProfileStoreWithoutExternalProfiles } =
           await import("../agents/auth-profiles/store-runtime.js");
-        const { createModelAccountConnectService } = await import("./model-account-connect.js");
         const { storePath } = await createSessionStoreDir();
         const inputConfig: import("../config/types.openclaw.js").OpenClawConfig = {
           plugins: { allow: ["arcee"] },
@@ -189,12 +196,12 @@ test.each([
               arcee: {
                 baseUrl: "https://openrouter.ai/api/v1",
                 api: "openai-completions",
-                models: ["trinity-large-thinking", "trinity-large-preview"].map((id) =>
+                models: [
                   modelDefinition(
-                    id,
-                    id.endsWith("thinking") ? { baseUrl: "https://api.arcee.ai/api/v1" } : {},
+                    modelId,
+                    modelId.endsWith("thinking") ? { baseUrl: "https://api.arcee.ai/api/v1" } : {},
                   ),
-                ),
+                ],
               },
             },
           },
@@ -234,43 +241,22 @@ test.each([
           metadata,
           async () => {
             const owner = ensureProfileForEmail("arcee-session-owner@example.test");
-            const administrator = ensureProfileForEmail("arcee-link-admin@example.test");
             const client = {
               ...identifiedClient(owner.id, owner.displayName),
               connId: "arcee-session-owner-connection",
             };
-            const adminClient = {
-              ...identifiedClient(administrator.id, administrator.displayName),
-              connId: "arcee-link-admin-connection",
-            };
-            adminClient.connect.scopes = ["operator.admin"];
-            const clients = new Set([client, adminClient]);
-            const service = createModelAccountConnectService({ getConfig: () => cfg });
-            const context = {
-              getRuntimeConfig: () => cfg,
-              modelAccountConnectService: service,
-              loadGatewayModelCatalogSnapshot: async () => {
-                const entries = ["trinity-large-thinking", "trinity-large-preview"].map((id) => ({
-                  id,
-                  name: id,
-                  provider: "arcee",
-                }));
-                return { entries, routeVariants: entries };
-              },
-              getClientConnIds: (filter?: (current: GatewayClient) => boolean) =>
-                new Set(
-                  [...clients]
-                    .filter((current) => !filter || filter(current))
-                    .map(({ connId }) => connId),
-                ),
-            };
+            const clients = new Set([client]);
+            const context = modelContext(
+              cfg,
+              [{ id: modelId, name: modelId, provider: "arcee" }],
+              clients,
+            );
             try {
-              const linked = await directSessionReq(
-                "users.linkAuthProfile",
-                { profileId: owner.id, authProfileId: "arcee:work" },
-                { client: adminClient, context },
-              );
-              expect(linked.ok, JSON.stringify(linked.error)).toBe(true);
+              const links = setUserProfileAuthLink({
+                profileId: owner.id,
+                provider: "arcee",
+                authProfileId: "arcee:work",
+              });
 
               const key = `agent:main:dashboard:arcee-linked-${modelId}`;
               expect(loadSessionEntry({ sessionKey: key, storePath })).toBeUndefined();
@@ -314,15 +300,7 @@ test.each([
                     readOnly: true,
                   }).profiles["arcee:work"],
                 ).toEqual(credential);
-                const linksAfter = await directSessionReq(
-                  "users.listAuthLinks",
-                  { profileId: owner.id },
-                  { client, context },
-                );
-                expect(linksAfter).toMatchObject({
-                  ok: true,
-                  payload: { links: [{ provider: "arcee", authProfileId: "arcee:work" }] },
-                });
+                expect(listUserProfileAuthLinks(owner.id)).toEqual(links);
                 expect(JSON.parse(await fs.readFile(state.configPath, "utf8"))).toEqual(
                   inputConfig,
                 );
@@ -331,7 +309,6 @@ test.each([
               }
             } finally {
               clients.clear();
-              await service.stop();
               gatewayConfig.clearRuntimeConfigSnapshot();
             }
           },

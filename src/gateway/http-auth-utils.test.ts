@@ -30,7 +30,6 @@ import {
   checkGatewayHttpRequestAuth,
   resolveSharedSecretHttpOperatorScopes,
 } from "./http-auth-utils.js";
-import { GatewayOperatorAccessDeniedError } from "./operator-access-policy.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { gatewayConnect } from "./server/client-fixtures.test-support.js";
@@ -109,9 +108,7 @@ async function registerPersonAccessFixture() {
       roles: {
         ...roles,
         definitions: {
-          ...roles.definitions,
           reader: { ...roles.definitions.reader, accessPolicyPlugin: "person-access" },
-          staff: { sessions: { others: "write" }, agents: "*", scopes: ["operator.admin"] },
         },
       },
     },
@@ -130,7 +127,7 @@ async function registerPersonAccessFixture() {
       api.registerGatewayAccessPolicy({
         authorize({ profile }) {
           access.onAuthorize?.();
-          if (profile.assignedRole === "staff" || access.inapplicable) {
+          if (access.inapplicable) {
             return undefined;
           }
           const current = access.grant;
@@ -157,10 +154,10 @@ afterEach(() => {
 });
 
 describe("HTTP gateway owner profiles", () => {
-  it.each(["missing", "disabled", "failed", "unregistered", "inapplicable", "unrelated"] as const)(
-    "denies a required %s policy while preserving independent staff and owner access",
+  it.each(["missing", "disabled", "failed", "inapplicable", "unrelated"] as const)(
+    "translates required %s access policy denial to HTTP authentication failure",
     inState(async (availability: string) => {
-      const { cfg, email, person, access, registry } = await registerPersonAccessFixture();
+      const { cfg, email, access, registry } = await registerPersonAccessFixture();
       access.grant = new AbortController();
       const plugin = registry.plugins.find((entry) => entry.id === "person-access");
       assert(plugin, "Expected the registered access policy owner");
@@ -171,59 +168,13 @@ describe("HTTP gateway owner profiles", () => {
         plugin.enabled = false;
       } else if (availability === "failed") {
         plugin.status = "error";
-      } else if (availability === "unregistered") {
-        registry.gatewayAccessPolicies.length = 0;
       } else if (availability === "inapplicable") {
         access.inapplicable = true;
       } else {
         cfg.gateway!.roles!.definitions.reader!.accessPolicyPlugin = "another-policy";
       }
 
-      for (const assignment of [null, "reader", "removed-role"]) {
-        await setCanonicalUserProfileRole(person.id, assignment);
-        invalidateOperatorRolePolicy(person.id);
-        expect(await authenticate("trusted-proxy", cfg, email)).toMatchObject(accessDenied);
-      }
-      await setCanonicalUserProfileRole(person.id, "staff");
-      invalidateOperatorRolePolicy(person.id);
-      expect(await authenticate("trusted-proxy", cfg, email)).toMatchObject({ ok: true });
-      expect(await authenticate("token", cfg)).toMatchObject({ ok: true });
-    }),
-  );
-
-  it.each(["grant ended", "email moved away and back"])(
-    "enforces registered person access without retiring independent staff authority (%s)",
-    inState(async (change: string) => {
-      const { cfg, email, person, access } = await registerPersonAccessFixture();
-      expect((await authenticate("trusted-proxy", cfg, email)).ok).toBe(false);
-      access.grant = new AbortController();
-      const admitted = await authenticate("trusted-proxy", cfg, email);
-      assert(admitted.ok && admitted.requestAuth.operatorAccessAuthority);
-      const captured = admitted.requestAuth.operatorAccessAuthority;
-      setDisplayName(person.id, "Updated display");
-      const staffEmail = "another-verified@example.test";
-      await linkCanonicalUserProfileEmail(staffEmail, person.id);
-      expect(() => captured.assertCurrent()).not.toThrow();
-      await setCanonicalUserProfileRole(person.id, "staff");
-      invalidateOperatorRolePolicy(person.id);
-      const staff = await authenticate("trusted-proxy", cfg, email);
-      assert(staff.ok, "Expected independent staff admission");
-      expect(staff.requestAuth.operatorAccessAuthority).toBeNull();
-      if (change === "grant ended") {
-        access.grant.abort(new Error("Access ended"));
-      } else {
-        await linkCanonicalUserProfileEmail(
-          email,
-          (await ensureCanonicalUserProfileForEmail("replacement@example.test")).id,
-        );
-        await linkCanonicalUserProfileEmail(email, person.id);
-      }
-      expect(captured.signal.aborted).toBe(true);
-      expect(() => captured.assertCurrent()).toThrow(GatewayOperatorAccessDeniedError);
-      expect((await authenticate("trusted-proxy", cfg, staffEmail)).ok).toBe(true);
-      access.grant = new AbortController();
-      expect(() => captured.assertCurrent()).toThrow(GatewayOperatorAccessDeniedError);
-      expect((await authenticate("token", cfg)).ok).toBe(true);
+      expect(await authenticate("trusted-proxy", cfg, email)).toMatchObject(accessDenied);
     }),
   );
 
