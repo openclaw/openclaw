@@ -22,7 +22,9 @@ it("waits for a current pane but lets an intentionally hidden conversation stay 
   onTestFinished(() => runtime.stop());
   const shell = createShellOwner();
   const panes: HTMLElementTagNameMap["openclaw-chat-pane"][] = [];
-  vi.spyOn(shell, "queryRenderedElements").mockImplementation(() => panes);
+  vi.spyOn(shell, "queryRenderedElements").mockImplementation((tag) =>
+    tag === "openclaw-chat-pane" ? panes : [],
+  );
   vi.spyOn(runtime.context.router, "getState").mockReturnValue(
     committedRouterState("dashboard", "/dashboard"),
   );
@@ -62,4 +64,35 @@ it("waits for a current pane but lets an intentionally hidden conversation stay 
   facts.presented = true;
   facts.visuallyPresented = false;
   expect(ready()).toBe(false);
+});
+
+it("waits for mounted plugin activation without waiting for unrelated plugins", () => {
+  const runtime = bootstrapApplication();
+  onTestFinished(() => runtime.stop());
+  const shell = createShellOwner();
+  const page = document.createElement("openclaw-plugin-page");
+  page.pluginId = "workboard";
+  const pages = [page];
+  vi.spyOn(shell, "queryRenderedElements").mockImplementation((tag) =>
+    tag === "openclaw-plugin-page" ? pages : [],
+  );
+  vi.spyOn(runtime.context.router, "getState").mockReturnValue(
+    committedRouterState("workboard", "/workboard"),
+  );
+  const loading = new Set(["workboard", "unrelated"]);
+  vi.spyOn(runtime.context.plugins, "isLoading").mockImplementation((id) => loading.has(id));
+  onTestFinished(connectShellIdle(shell, runtime.context, 0));
+  const ready = vi.mocked(connectNavigationPrefetch).mock.lastCall?.[0].transcriptsReady;
+  if (!ready) {
+    throw new Error("Navigation preparation was not connected");
+  }
+
+  expect(ready()).toBe(false);
+  loading.delete("workboard");
+  expect(ready()).toBe(true);
+
+  page.pluginId = "unrelated";
+  expect(ready()).toBe(false);
+  pages.length = 0;
+  expect(ready()).toBe(true);
 });

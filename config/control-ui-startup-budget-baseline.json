@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 270085,
-  "reason": "Consolidated asset delivery on main 39ceca404cec preserves the shared plugin-inline-view contract. Same-host production builds reduce startup from 273896 to 270085 B gzip and from seven to five JS requests, retaining one startup CSS request. Ratchet to the measured integrated head.",
+  "startupJsGzipBytes": 270103,
+  "reason": "Cross-route dependency isolation on d5503615074 removes unrelated route code while leaving Cron source unchanged; same-host final startup is 270103 B gzip, 122 B over base.",
   "updatedAt": "2026-10-25"
 }
