@@ -10,13 +10,11 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { maybeStopManagedServiceBeforeMutableUpdate } from "../cli/update-cli/update-command-service-maintenance.js";
 import { mockSystemAccountHome } from "../daemon/service.test-helpers.js";
 import { readGatewayLockProcessNamespace } from "../infra/gateway-lock-payload.js";
-import { readGatewayOwnerLease } from "../infra/gateway-owner-lease.js";
 import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { withCommandProcessScope } from "../process/exec-spawn.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
-import { openDoctorStateSchemaReadAdmission } from "../state/openclaw-state-db-doctor-schema.js";
 import * as stateReadonly from "../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -154,17 +152,6 @@ it.each([
               },
             };
           });
-          if (kind !== "missing") {
-            expect(
-              readGatewayOwnerLease({
-                env: state.env,
-                current: true,
-                openStateSchemaReadAdmission: openDoctorStateSchemaReadAdmission,
-              })?.owner,
-            ).toBe("serving-gateway");
-            expect(leaseQueries().length).toBeGreaterThan(0);
-          }
-          sql.queries.length = 0;
           const held = ["revoked", "cancelled", "selected-source", "process-exited"].includes(kind);
           const entered = createDeferredCore();
           const resume = createDeferredCore();

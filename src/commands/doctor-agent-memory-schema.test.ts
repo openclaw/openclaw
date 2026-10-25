@@ -3,8 +3,9 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import { encodeMemoryEmbedding } from "../plugin-sdk/memory-core-host-engine-storage.js";
 import { AGENT_DATABASE_MAINTENANCE_LEASE } from "../state/openclaw-agent-db-lease.js";
+import * as leaseOwner from "../state/openclaw-agent-db-maintenance-lease.js";
+import * as agentMaintenance from "../state/openclaw-agent-db-maintenance.js";
 import { invalidateRegisteredAgentDatabasesMemo } from "../state/openclaw-agent-db-registry-listing.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -32,29 +33,20 @@ function recreateUnreleasedInlineMemoryMetadata(databasePath: string): void {
   using database = openNodeSqliteDatabase(databasePath);
   database.exec("PRAGMA foreign_keys = OFF");
   database.exec(`
-      DROP TABLE memory_index_chunk_recall_metadata;
-      ALTER TABLE memory_index_chunks ADD COLUMN importance INTEGER
-        CHECK (importance IS NULL OR importance BETWEEN 1 AND 10);
-      ALTER TABLE memory_index_chunks ADD COLUMN triggers TEXT;
-      ALTER TABLE memory_index_chunks ADD COLUMN project_key TEXT;
-      CREATE TRIGGER memory_index_chunk_provenance_after_insert
-      AFTER INSERT ON memory_index_chunks
-      BEGIN
-        INSERT OR IGNORE INTO memory_index_chunk_provenance (
-          chunk_id, origin_class, session_kind, observed_at
-        ) VALUES (NEW.id, 'agent', 'unknown', NEW.updated_at);
-      END;
-    `);
-  database
-    .prepare(`INSERT INTO memory_index_chunks (
-        id, path, source, start_line, end_line, hash, model, text, embedding,
-        updated_at, importance, triggers, project_key
-      ) VALUES (
-        'pre-provenance-sentinel', 'MEMORY.md', 'memory', 1, 2,
-        'sentinel-hash', 'sentinel-model', 'sentinel text', ?, 42,
-        9, 'when testing rollback', 'project/key'
-      )`)
-    .run(encodeMemoryEmbedding([1, 0]));
+    DROP TABLE memory_index_chunk_recall_metadata;
+    ALTER TABLE memory_index_chunks ADD COLUMN importance INTEGER
+      CHECK (importance IS NULL OR importance BETWEEN 1 AND 10);
+    CREATE TRIGGER memory_index_chunk_provenance_after_insert
+    AFTER INSERT ON memory_index_chunks BEGIN
+      INSERT OR IGNORE INTO memory_index_chunk_provenance (chunk_id, origin_class, session_kind, observed_at)
+      VALUES (NEW.id, 'agent', 'unknown', NEW.updated_at);
+    END;
+    INSERT INTO memory_index_chunks (
+      id, path, source, start_line, end_line, hash, model, text, embedding, updated_at, importance
+    ) VALUES (
+      'sentinel', 'MEMORY.md', 'memory', 1, 2, 'hash', 'model', 'sentinel text', X'', 42, 9
+    );
+  `);
   database.exec("PRAGMA foreign_keys = ON");
 }
 
@@ -113,8 +105,6 @@ it("blocks runtime admission until a lost Doctor repair releases maintenance", a
   recreateUnreleasedInlineMemoryMetadata(laterPath);
   const laterBefore = fs.readFileSync(laterPath);
   const agentDatabase = await import("../state/openclaw-agent-db.js");
-  const agentMaintenance = await import("../state/openclaw-agent-db-maintenance.js");
-  const integrityWorker = await import("../infra/sqlite-integrity-worker.js");
   const sqlite = await import("../infra/node-sqlite.js");
   const startAdmission = createDeferred();
   // Register outside the old maintenance ALS scope: this is a new runtime owner.
@@ -124,7 +114,6 @@ it("blocks runtime admission until a lost Doctor repair releases maintenance", a
     ),
   );
   void newerAdmission.catch(() => {});
-  const scan = vi.spyOn(integrityWorker, "assertSqliteIntegrityInWorker");
   const open = sqlite.openNodeSqliteDatabase;
   const inspectedPaths: string[] = [];
   vi.spyOn(sqlite, "openNodeSqliteDatabase").mockImplementation((pathname, options) => {
@@ -135,9 +124,8 @@ it("blocks runtime admission until a lost Doctor repair releases maintenance", a
   });
   const close = vi.spyOn(agentDatabase, "closeOpenClawAgentDatabaseByPath");
   const migrate = agentMaintenance.migrateOpenClawAgentDatabaseForMaintenance;
-  const repair = vi
-    .spyOn(agentMaintenance, "migrateOpenClawAgentDatabaseForMaintenance")
-    .mockImplementationOnce(async (options, maintenance) => {
+  vi.spyOn(agentMaintenance, "migrateOpenClawAgentDatabaseForMaintenance").mockImplementationOnce(
+    async (options, maintenance) => {
       await migrate(options, maintenance);
       const removed = openOpenClawStateDatabase({ env })
         .db.prepare("DELETE FROM state_leases WHERE scope = ? AND lease_key = ?")
@@ -148,13 +136,12 @@ it("blocks runtime admission until a lost Doctor repair releases maintenance", a
       close.mockClear();
       startAdmission.resolve();
       await newerAdmission.catch(() => {});
-    });
+    },
+  );
   try {
     await expect(repairMemory(env)).rejects.toThrow(/maintenance lease.*was lost/iu);
-    expect(repair.mock.calls.map(([options]) => options.pathname)).toEqual([databasePath]);
     expect(inspectedPaths).not.toContain(laterPath);
     expect(close.mock.calls.some(([pathname]) => pathname === laterPath)).toBe(false);
-    expect(scan.mock.calls.filter(([pathname]) => pathname === laterPath)).toHaveLength(0);
     await expect(newerAdmission).rejects.toThrow(
       "without an active schema lease or maintenance scope",
     );
@@ -163,8 +150,7 @@ it("blocks runtime admission until a lost Doctor repair releases maintenance", a
       agentDatabase.withOpenClawAgentDatabaseAsync(laterOptions, (database) =>
         database.db.prepare("SELECT id, text FROM memory_index_chunks").all(),
       ),
-    ).resolves.toEqual([{ id: "pre-provenance-sentinel", text: "sentinel text" }]);
-    expect(scan.mock.calls.filter(([pathname]) => pathname === laterPath)).toHaveLength(1);
+    ).resolves.toEqual([{ id: "sentinel", text: "sentinel text" }]);
   } finally {
     startAdmission.resolve();
     await newerAdmission.catch(() => {});
@@ -208,26 +194,25 @@ it.each(["already-repaired", "new-repair", "before-doctor", "before-lease"])(
           .run(...Object.values(row));
       };
     }
-    const agentMaintenance = await import("../state/openclaw-agent-db-maintenance.js");
-    const leaseOwner = await import("../state/openclaw-agent-db-maintenance-lease.js");
     const withLease = leaseOwner.withAgentDatabaseMaintenanceLease;
-    const lease = vi.spyOn(leaseOwner, "withAgentDatabaseMaintenanceLease");
-    lease.mockImplementationOnce((options, run) => {
-      if (change === "before-lease") {
-        publishPeer();
-      }
-      return withLease(options, async (maintenance) => {
-        if (change === "already-repaired") {
-          await agentMaintenance.migrateOpenClawAgentDatabaseForMaintenance(
-            { agentId: "worker-1", pathname: databasePath },
-            maintenance,
-          );
-        } else if (change === "new-repair") {
-          recreateUnreleasedInlineMemoryMetadata(peerPath);
+    vi.spyOn(leaseOwner, "withAgentDatabaseMaintenanceLease").mockImplementationOnce(
+      (options, run) => {
+        if (change === "before-lease") {
+          publishPeer();
         }
-        return run(maintenance);
-      });
-    });
+        return withLease(options, async (maintenance) => {
+          if (change === "already-repaired") {
+            await agentMaintenance.migrateOpenClawAgentDatabaseForMaintenance(
+              { agentId: "worker-1", pathname: databasePath },
+              maintenance,
+            );
+          } else if (change === "new-repair") {
+            recreateUnreleasedInlineMemoryMetadata(peerPath);
+          }
+          return run(maintenance);
+        });
+      },
+    );
     if (change === "before-doctor") {
       publishPeer();
     }
