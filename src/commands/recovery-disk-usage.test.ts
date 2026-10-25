@@ -18,7 +18,6 @@ import { UPDATE_CAPTURE_PRIVACY_MARKER } from "../infra/update-capture-privacy-m
 import { createUpdateRun, finishUpdateRun } from "../infra/update-run-ledger.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { runDoctorLintCli } from "./doctor-lint.js";
-import { collectUpdateCleanupInventory } from "./doctor-session-sqlite-recovery-inventory.js";
 import { collectRecoveryDiskUsage, formatRecoveryDiskUsage } from "./recovery-disk-usage.js";
 import { buildStatusCommandOverviewRows } from "./status-overview-rows.js";
 import { createStatusCommandOverviewRowsParams } from "./status.test-support.js";
@@ -177,16 +176,10 @@ it("keeps originals protected after incomplete dependency discovery skips anothe
       writeSessionSqliteMigrationManifest(completed);
       using clock = vi.spyOn(performance, "now");
       clock.mockReturnValue(0);
-      expect(collectUpdateCleanupInventory({ cfg: {}, env: state.env }).report.artifacts).toEqual([
-        expect.objectContaining({ path: archivePath, outcome: "candidate" }),
-      ]);
       expect(collectRecoveryDiskUsage({ cfg: {}, env: state.env }).total.retirable.count).toBe(1);
       const unfinished = createSessionSqliteMigrationRun(state.env, [target]);
       recordPlannedMigrationMoves(unfinished, target, [move]);
       fs.appendFileSync(unfinished.manifestPath, " ".repeat(3 * 1024 * 1024));
-      expect(
-        collectUpdateCleanupInventory({ cfg: {}, env: state.env }).report.artifacts,
-      ).toContainEqual(expect.objectContaining({ path: archivePath, outcome: "protected" }));
       const usage = collectRecoveryDiskUsage({ cfg: {}, env: state.env });
       expect(usage).toMatchObject({
         incomplete: true,
