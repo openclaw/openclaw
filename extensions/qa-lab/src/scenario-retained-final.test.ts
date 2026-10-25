@@ -188,12 +188,13 @@ async function startRetainedFinalScenario(fault: FinalFault = {}) {
     releaseDelete: () => releaseDelete.resolve(),
     finalStarted: finalStarted.promise,
     releaseFinal: () => releaseFinal.resolve(),
+    async expectPending() {
+      expect(state.getAcknowledgedPollCursor("default")).toBe(0);
+      nextCheck = createDeferred<void>();
+      expect(await Promise.race([nextCheck.promise, result])).toBeUndefined();
+    },
     expireDeadline: () => {
       deadlineExpired = true;
-    },
-    async probePending() {
-      nextCheck = createDeferred<void>();
-      return await Promise.race([nextCheck.promise.then(() => undefined), result]);
     },
     async sendControl() {
       await injectQaBusInboundMessage({
@@ -234,12 +235,10 @@ describe("failed-tool scenario retained final", () => {
     expect(
       harness.state.getSnapshot().messages.filter((m) => m.direction === "outbound" && !m.deleted),
     ).toEqual([]);
-    expect(harness.acknowledgedCursor()).toBe(0);
-    expect(await harness.probePending()).toBeUndefined();
+    await harness.expectPending();
     harness.releaseDelete();
     await harness.finalStarted;
-    expect(harness.acknowledgedCursor()).toBe(0);
-    expect(await harness.probePending()).toBeUndefined();
+    await harness.expectPending();
     harness.releaseFinal();
     expect(await harness.result).toMatchObject({ status: "pass" });
     expect(harness.acknowledgedCursor()).toBeGreaterThanOrEqual(Number(harness.vars.inboundCursor));
@@ -293,8 +292,7 @@ describe("failed-tool scenario retained final", () => {
     harness.startFinal();
     await harness.deleteStarted;
     await harness.sendControl();
-    expect(harness.acknowledgedCursor()).toBe(0);
-    expect(await harness.probePending()).toBeUndefined();
+    await harness.expectPending();
     harness.expireDeadline();
     expect(await harness.result).toMatchObject({
       status: "fail",

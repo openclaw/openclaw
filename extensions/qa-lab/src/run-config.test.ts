@@ -60,8 +60,16 @@ describe("qa run config", () => {
       scorecardReport,
       ...options,
     });
-  const contains = (value: Record<string, unknown>) =>
-    expect.arrayContaining([expect.objectContaining(value)]);
+  const expectExcluded = (
+    plan: ReturnType<typeof planFor>,
+    scenarioId: string,
+    reasons?: string[],
+  ) =>
+    expect(plan.exclusions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ scenarioId, ...(reasons ? { reasons } : {}) }),
+      ]),
+    );
 
   it("normalizes live selections and deduplicates scenario ids", () => {
     expect(
@@ -168,12 +176,9 @@ describe("qa run config", () => {
     expect(pairPlan.selectedScenarios.map((scenario) => scenario.id)).toContain(
       "runtime-first-hour-20-turn",
     );
-    expect(pairPlan.exclusions).toEqual(
-      contains({
-        scenarioId: "codex-plugin-cold-install",
-        reasons: ["runtimePair requires execution.kind=flow"],
-      }),
-    );
+    expectExcluded(pairPlan, "codex-plugin-cold-install", [
+      "runtimePair requires execution.kind=flow",
+    ]);
   });
 
   it("validates explicit runtime-pair-lane selections without expanding them", () => {
@@ -192,12 +197,7 @@ describe("qa run config", () => {
       scenarioIds: ["dm-chat-baseline"],
     });
     expect(outsideLanePlan).toMatchObject({ status: "invalid", selectedScenarios: [] });
-    expect(outsideLanePlan.exclusions).toEqual(
-      contains({
-        scenarioId: "dm-chat-baseline",
-        reasons: ["runtimePairLane=core"],
-      }),
-    );
+    expectExcluded(outsideLanePlan, "dm-chat-baseline", ["runtimePairLane=core"]);
   });
 
   it("preserves canonical unresolved live dispatch and rejects unsupported driver channels", () => {
@@ -207,9 +207,7 @@ describe("qa run config", () => {
         providerMode: "live-frontier",
         scenarioIds: ["dm-chat-baseline"],
       },
-      {
-        supportsChannel: () => true,
-      },
+      { supportsChannel: () => true },
     );
     expect(unresolvedLivePlan).toMatchObject({
       status: "ready",
@@ -229,12 +227,9 @@ describe("qa run config", () => {
       },
     );
     expect(unsupportedCrablinePlan.status).toBe("invalid");
-    expect(unsupportedCrablinePlan.exclusions).toEqual(
-      contains({
-        scenarioId: "dm-chat-baseline",
-        reasons: ["unsupported crabline channel=qa-channel"],
-      }),
-    );
+    expectExcluded(unsupportedCrablinePlan, "dm-chat-baseline", [
+      "unsupported crabline channel=qa-channel",
+    ]);
   });
 
   it("fails closed when an explicit scenario conflicts with execution.channel", () => {
@@ -245,7 +240,7 @@ describe("qa run config", () => {
     const plan = planFor({ providerMode: "live-frontier", scenarioIds: [scenario!.id] });
 
     expect(plan.status).toBe("invalid");
-    expect(plan.exclusions).toEqual(contains({ scenarioId: scenario!.id }));
+    expectExcluded(plan, scenario!.id);
     expect(plan.errors.join(" ")).toContain("Explicit QA scenario selection is not runnable");
   });
 
@@ -255,13 +250,13 @@ describe("qa run config", () => {
       { defaultChannel: "qa-channel" },
     );
 
-    expect(plan.status).toBe("invalid");
+    expect(plan).toMatchObject({
+      status: "invalid",
+      selectedScenarios: [{ id: "dm-chat-baseline", effectiveChannel: "qa-channel" }],
+    });
     expect(plan.errors).toContain(
       "An execution channel requires channelDriver=crabline or channelDriver=live.",
     );
-    expect(plan.selectedScenarios).toEqual([
-      expect.objectContaining({ id: "dm-chat-baseline", effectiveChannel: "qa-channel" }),
-    ]);
   });
 
   it("distinguishes declared constraints from the suite-resolved effective channel", () => {
@@ -274,20 +269,14 @@ describe("qa run config", () => {
       { defaultChannel: "telegram" },
     );
 
-    expect(plan.selectedScenarios).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "dm-chat-baseline",
-          declaredChannel: null,
-          effectiveChannel: "telegram",
-        }),
-        expect.objectContaining({
-          id: "browser-talk-start-stop",
-          declaredChannel: null,
-          effectiveChannel: null,
-        }),
-      ]),
-    );
+    for (const [id, effectiveChannel] of [
+      ["dm-chat-baseline", "telegram"],
+      ["browser-talk-start-stop", null],
+    ]) {
+      expect(plan.selectedScenarios).toContainEqual(
+        expect.objectContaining({ id, declaredChannel: null, effectiveChannel }),
+      );
+    }
   });
 
   it("fails closed when required canonical profiles are missing", () => {

@@ -45,6 +45,8 @@ afterEach(() => {
   fetchWithSsrFGuardMock.mockReset();
   writeGatewayRestartIntentSyncMock.mockReset();
   vi.useRealTimers();
+  vi.restoreAllMocks();
+  syncBuiltinESMExports();
 });
 
 function mockGateway(config: Record<string, unknown> = {}) {
@@ -62,14 +64,18 @@ function mockHealthyResponse() {
   return release;
 }
 
-function guardedStream(events: string[], name: string, release: () => Promise<void>) {
+function guardedStream(events: string[], name: string, release: () => Promise<void>, status = 200) {
   return {
     response: new Response(
       new ReadableStream<Uint8Array>({
         cancel() {
           events.push(`${name}:cancel`);
+          if (status !== 200) {
+            throw new Error("cancel failed");
+          }
         },
       }),
+      { status },
     ),
     release: async () => {
       events.push(`${name}:release`);
@@ -137,12 +143,9 @@ describe("qa suite gateway helpers", () => {
       intent: { force: true, waitMs: 0 },
     });
     expect(writeGatewayRestartIntentSyncMock).toHaveBeenCalledOnce();
-    expect(writeGatewayRestartIntentSyncMock.mock.invocationCallOrder[0]).toBeGreaterThan(
-      gatewayCall.mock.invocationCallOrder[2] ?? Number.POSITIVE_INFINITY,
-    );
-    expect(writeGatewayRestartIntentSyncMock.mock.invocationCallOrder[0]).toBeLessThan(
-      gatewayCall.mock.invocationCallOrder[3] ?? Number.NEGATIVE_INFINITY,
-    );
+    const intentOrder = writeGatewayRestartIntentSyncMock.mock.invocationCallOrder[0]!;
+    expect(intentOrder).toBeGreaterThan(gatewayCall.mock.invocationCallOrder[2]!);
+    expect(intentOrder).toBeLessThan(gatewayCall.mock.invocationCallOrder[3]!);
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
       expect.objectContaining({
         url: "http://127.0.0.1:43123/readyz",
@@ -211,25 +214,12 @@ describe("qa suite gateway helpers", () => {
 
   it("cancels failed suite gateway JSON response bodies before releasing their guard", async () => {
     const events: string[] = [];
-    fetchWithSsrFGuardMock.mockResolvedValue({
-      response: new Response(
-        new ReadableStream<Uint8Array>({
-          cancel() {
-            events.push("cancel");
-            throw new Error("cancel failed");
-          },
-        }),
-        { status: 503 },
-      ),
-      release: async () => {
-        events.push("release");
-      },
-    });
+    fetchWithSsrFGuardMock.mockResolvedValue(guardedStream(events, "failed", async () => {}, 503));
 
     await expect(fetchJson("http://127.0.0.1:43123/config")).rejects.toThrow(
       "request failed 503: http://127.0.0.1:43123/config",
     );
-    expect(events).toEqual(["cancel", "release"]);
+    expect(events).toEqual(["failed:cancel", "failed:release"]);
   });
 
   it("retries healthy gateway responses until their guard releases successfully", async () => {
@@ -266,15 +256,9 @@ describe("qa suite gateway helpers", () => {
       await expect(readiness).resolves.toBeUndefined();
       expect(onReady).toHaveBeenCalledOnce();
     } finally {
-      try {
-        released.resolve();
-        await vi.advanceTimersByTimeAsync(1_000);
-        await settled;
-      } finally {
-        sleep.mockRestore();
-        vi.useRealTimers();
-        syncBuiltinESMExports();
-      }
+      released.resolve();
+      await vi.advanceTimersByTimeAsync(1_000);
+      await settled;
     }
   });
 
