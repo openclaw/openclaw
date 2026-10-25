@@ -1,7 +1,6 @@
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import { ModelInferenceCapabilitiesSchema } from "openclaw/plugin-sdk/decisions";
 import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
 import type { ModelRequestHeaders } from "openclaw/plugin-sdk/llm";
 import type {
@@ -47,6 +46,7 @@ import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { parseClawRouterPool, type ClawRouterPoolResult } from "./pool.js";
 import {
   buildClawRouterProviderConfig,
+  decisionCapabilities,
   CLAWROUTER_REASONING_EFFORT_LEVELS,
   normalizeClawRouterReasoningEfforts,
   normalizeClawRouterResolvedModel,
@@ -65,12 +65,6 @@ const PERPLEXITY_UNSUPPORTED_SCHEMA_KEYWORDS = new Set([
   "patternProperties",
   "additionalProperties",
 ]);
-
-const decisionCapabilities = ModelInferenceCapabilitiesSchema.parse(
-  manifest.modelCatalog.providers.clawrouter.models.find(
-    (model) => model.id === "openai/gpt-6-luna",
-  )?.inference,
-);
 
 const ENV_API_KEY_MARKER = "CLAWROUTER_API_KEY";
 const ATTRIBUTION_VALUE_MAX_LENGTH = 256;

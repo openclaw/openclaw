@@ -461,6 +461,7 @@ data class ChatSessionEntry(
   val autoLabel: String? = null,
   /** In-memory presentation fallback; never server metadata or cached session state. */
   val localFallbackTitle: String? = null,
+  val kind: String? = null,
   val category: String? = null,
   val color: String? = null,
   val hasColorMetadata: Boolean = color != null,

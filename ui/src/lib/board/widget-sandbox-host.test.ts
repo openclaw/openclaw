@@ -4,22 +4,19 @@ import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { WIDGET_HTML_MAX_UTF8_BYTES } from "../../../../packages/gateway-protocol/src/schema/canvas.ts";
 import type { BoardWidget } from "./types.ts";
 import { BoardWidgetSandboxHost } from "./widget-sandbox-host.ts";
+import { createBoardWidget } from "./widget.test-support.ts";
 const SANDBOX_ORIGIN = "https://sandbox.example";
 const SANDBOX_URL = SANDBOX_ORIGIN + "/mcp-app-sandbox";
 type HostOptions = ConstructorParameters<typeof BoardWidgetSandboxHost>[0];
-const widget = (overrides: Partial<BoardWidget> = {}): BoardWidget => ({
-  name: "weather",
-  tabId: "main",
-  contentKind: "html",
-  sizeW: 6,
-  sizeH: 4,
-  position: 0,
-  grantState: "granted",
-  revision: 2,
-  viewTicket: "ticket",
-  viewGeneration: "a".repeat(32),
-  ...overrides,
-});
+const widget = (overrides: Partial<BoardWidget> = {}): BoardWidget =>
+  createBoardWidget({
+    name: "weather",
+    grantState: "granted",
+    revision: 2,
+    viewTicket: "ticket",
+    viewGeneration: "a".repeat(32),
+    ...overrides,
+  });
 const htmlFetch = (html = "<!doctype html><p>weather</p>", init?: ResponseInit) =>
   vi.fn<typeof fetch>(async () => new Response(html, init));
 const client = () => ({ request: vi.fn(async () => ({ ok: true })) });

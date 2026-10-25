@@ -124,8 +124,12 @@ export function getWorkboardDependencyState(
   cards: readonly WorkboardCard[],
   complete = true,
 ): WorkboardDependencyState {
+  const parentIds = parentDependencyIds(card);
+  if (!parentIds.length) {
+    return { parents: [], blockedParents: [] };
+  }
   const cardsById = new Map(cards.map((entry) => [entry.id, entry]));
-  const parents = parentDependencyIds(card).map((id) => {
+  const parents = parentIds.map((id) => {
     const parent = cardsById.get(id);
     return {
       id,

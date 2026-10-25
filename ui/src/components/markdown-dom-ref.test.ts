@@ -3,7 +3,8 @@ import { expect, it, onTestFinished, vi } from "vitest";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { renderSolidRef } from "../test-helpers/render-solid-ref.ts";
 import { createMarkdownRef } from "./markdown-dom-ref.ts";
-import { toStreamingMarkdownDomParts } from "./markdown.ts";
+import { toStreamingMarkdownDomParts } from "./markdown-live.ts";
+import { partitionMarkdownHtml, toSanitizedMarkdownHtml } from "./markdown.ts";
 
 it("commits Markdown before onUpdate and retires a replaced island", () => {
   const container = document.body.appendChild(document.createElement("div"));
@@ -82,4 +83,69 @@ it("retires retained media when the Solid owner unmounts", () => {
   view.unmount();
   expect(dispose).toHaveBeenCalledOnce();
   expect(target.childNodes).toHaveLength(0);
+});
+
+it("retains external long-code decoration until the exact source changes", () => {
+  const markup = (code: string, prose: string) =>
+    `<div class="code-block-wrapper"><div class="code-block-viewport"><pre><code data-code-highlight="ts">${code}</code></pre></div></div><p>${prose}</p>`;
+  const [html, setHtml] = createSignal(markup("before", "First"));
+  const view = renderSolidRef(
+    () => createMarkdownRef(() => ({ content: html(), incremental: true })),
+    { targetElement: document.createElement("div") },
+  );
+  const code = view.container.querySelector("code")!;
+  const wrapper = view.container.querySelector(".code-block-wrapper");
+  expect([...code.childNodes].map((node) => node.nodeType)).toEqual([Node.TEXT_NODE]);
+  const highlighted = document.createElement("span");
+  highlighted.className = "hljs-keyword";
+  highlighted.textContent = "before";
+  code.replaceChildren(highlighted);
+  setHtml(markup("before", "Unrelated prose"));
+  flush();
+  expect(view.container.querySelector("code")).toBe(code);
+  expect(code.firstChild).toBe(highlighted);
+  setHtml(markup("after", "Unrelated prose"));
+  flush();
+  expect(view.container.querySelector(".code-block-wrapper")).toBe(wrapper);
+  expect(view.container.querySelector("code")).not.toBe(code);
+  expect(code.isConnected).toBe(false);
+  expect(view.container.querySelector("code")?.textContent).toBe("after");
+});
+
+it("hands a closed stream fence to the code owner and retains its decoration at completion", () => {
+  const codeSource = "const value = 1;\n".repeat(400);
+  const [source, setSource] = createSignal("```ts\n" + codeSource);
+  const [streaming, setStreaming] = createSignal(true);
+  const options = { codeBlockInteraction: "interactive" } as const;
+  const view = renderSolidRef(
+    () =>
+      createMarkdownRef(() => ({
+        content: {
+          messageKey: "large-fence-stream",
+          source: source(),
+          parts: streaming()
+            ? toStreamingMarkdownDomParts(source(), options, "large-fence-stream")
+            : partitionMarkdownHtml(
+                toSanitizedMarkdownHtml(source(), options),
+                "large-fence-stream",
+              ),
+        },
+      })),
+    { targetElement: document.createElement("div") },
+  );
+  expect(view.container.querySelector("code[data-code-highlight]")).toBeNull();
+  expect(view.container.querySelector("code")?.textContent).toBe(codeSource);
+  setSource(source() + "```\n\nDone.");
+  flush();
+  const code = view.container.querySelector("code[data-code-highlight]")!;
+  expect(code).not.toBeNull();
+  const highlighted = document.createElement("span");
+  highlighted.className = "hljs-keyword";
+  highlighted.textContent = codeSource;
+  code.replaceChildren(highlighted);
+  setStreaming(false);
+  flush();
+  expect(view.container.querySelector("code[data-code-highlight]")).toBe(code);
+  expect(code.firstChild).toBe(highlighted);
+  expect(code.textContent).toBe(codeSource);
 });

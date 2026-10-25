@@ -5,6 +5,7 @@ import { createSignal, flush } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
+import { makeBootRoster } from "../app/bootstrap.test-support.ts";
 import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
 import { createTestSessionCapability } from "../lib/sessions/session-capability.test-support.ts";
 import {
@@ -201,12 +202,13 @@ it("keeps cached agent rows while the live roster settles", async () => {
   );
   const sessions = createTestSessionCapability(gateway.gateway);
   await sessions.refresh({ agentId: "main" });
-  const context = createContext(gateway.gateway, sessions, {
-    defaultId: "main",
-    mainKey: "main",
-    scope: "per-sender",
-    agents: [{ id: "main", name: "Harbor", identity: { emoji: "⚓" } }],
-  });
+  const context = createContext(
+    gateway.gateway,
+    sessions,
+    makeBootRoster({
+      agents: [{ id: "main", name: "Harbor", identity: { emoji: "⚓" } }],
+    }),
+  );
   const store = rosterActivityStore(context);
   const { sidebar: host } = await mountSidebarContext(context);
   host.sidebarAgentsMode = "roster";

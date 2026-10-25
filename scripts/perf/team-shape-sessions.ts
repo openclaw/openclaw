@@ -30,6 +30,8 @@ export type TeamShapeSessionsOptions = {
   longTranscriptEntries?: number;
   longTranscriptSessions?: number;
   chatStartupSessions?: number;
+  /** Stable category mix for the reusable dev-Gateway load harness. */
+  teamStress?: boolean;
 };
 
 const MESSAGE_BYTES = 64 * 1024;
@@ -129,6 +131,18 @@ export async function seedTeamShapeSessions(options: TeamShapeSessionsOptions) {
   let archivedCount = 0;
   let totalWeight = 0;
   const rootCount = teamShapeRootSessionCount(options.sessions);
+  const stressCounts = options.teamStress
+    ? {
+        subagent: options.retainedRuns,
+        archivedDashboard: Math.floor((options.sessions * 4_400) / 10_800),
+        dashboard: Math.floor((options.sessions * 400) / 10_800),
+        explicit: Math.floor((options.sessions * 200) / 10_800),
+        channel: 0,
+        cron: 0,
+        other: 0,
+      }
+    : undefined;
+  const stressTargets: Array<{ sessionKey: string; agentId: string }> = [];
   const latestCreation =
     options.retainedRuns > 0
       ? options.now - 60_000 - options.retainedRuns * TEAM_SHAPE_RUN_SLOT_MS
@@ -139,17 +153,57 @@ export async function seedTeamShapeSessions(options: TeamShapeSessionsOptions) {
         const sessionId = `team-shape-session-${index}`;
         const startupUuid = `${(index + 1).toString(16).padStart(8, "0")}-1659-4000-8000-000000000001`;
         const startupTarget = index < chatStartupSessions;
-        const sessionKey = startupTarget
-          ? `agent:main:dashboard:${startupUuid}`
-          : `agent:main:${sessionId}`;
-        const updatedAt = options.now - Math.floor(random() ** 2 * 30 * DAY_MS);
+        const isChild = index >= rootCount && index < rootCount + options.retainedRuns;
+        // Keep child ordering aligned with seedTeamShapeExtras' retained-run owner.
+        const rootIndex = index < rootCount ? index : index - options.retainedRuns;
+        const stressCategory = !stressCounts
+          ? undefined
+          : isChild
+            ? "subagent"
+            : rootIndex < stressCounts.dashboard
+              ? "dashboard"
+              : rootIndex < stressCounts.dashboard + stressCounts.explicit
+                ? "explicit"
+                : rootIndex <
+                    stressCounts.dashboard + stressCounts.explicit + stressCounts.archivedDashboard
+                  ? "archivedDashboard"
+                  : index % 25 === 0
+                    ? "channel"
+                    : index % 25 === 1
+                      ? "cron"
+                      : "other";
+        const sessionKey =
+          stressCategory === "dashboard" || stressCategory === "archivedDashboard"
+            ? `agent:main:dashboard:${startupUuid}`
+            : stressCategory === "subagent"
+              ? `agent:main:subagent:${startupUuid}`
+              : stressCategory === "channel"
+                ? `agent:main:discord:channel:synthetic-${index}`
+                : stressCategory === "cron"
+                  ? `agent:main:cron:synthetic-${index}`
+                  : startupTarget
+                    ? `agent:main:dashboard:${startupUuid}`
+                    : `agent:main:${sessionId}`;
+        // Keep the live stress cohort inside normal maintenance age limits for the campaign.
+        const ageDays = stressCategory === "dashboard" ? 6 : stressCategory ? 29 : 30;
+        const updatedAt = options.now - Math.floor(random() ** 2 * ageDays * DAY_MS);
         const createdAt = Math.min(updatedAt - Math.floor(random() * 7 * DAY_MS), latestCreation);
         const profileId = `team-shape-profile-${index % 24}`;
         const visibility = startupTarget
           ? "shared"
           : VISIBILITIES[index % 10 < 7 ? 0 : (index % 10) - 6]!;
-        const archived = !startupTarget && index % 5 === 0;
-        const isChild = index >= rootCount && index < rootCount + options.retainedRuns;
+        const archived = stressCategory
+          ? stressCategory === "archivedDashboard"
+          : !startupTarget && index % 5 === 0;
+        if (
+          stressCounts &&
+          (stressCategory === "channel" || stressCategory === "cron" || stressCategory === "other")
+        ) {
+          stressCounts[stressCategory]++;
+        }
+        if (stressCategory && !archived && !isChild && stressTargets.length < 64) {
+          stressTargets.push({ sessionKey, agentId: "main" });
+        }
         const entry: InternalSessionEntry = {
           sessionId,
           updatedAt,
@@ -367,6 +421,7 @@ export async function seedTeamShapeSessions(options: TeamShapeSessionsOptions) {
     ownerCount,
     participantCount,
     archivedCount,
+    ...(stressCounts ? { stressCounts, stressTargets } : {}),
     generationMs: performance.now() - started,
   };
 }

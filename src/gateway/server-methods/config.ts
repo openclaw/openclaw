@@ -62,6 +62,7 @@ import {
   resolveControlPlaneActor,
   summarizeChangedPaths,
 } from "../control-plane-audit.js";
+import { SerializedJsonPayload } from "../serialized-json.js";
 import { resolveBaseHashParam } from "./base-hash.js";
 import {
   diffConfigLeafPaths,
@@ -97,6 +98,22 @@ const configWriteRecovery = new WeakMap<
   GatewayConfigRevisionProjector,
   { configPath: string; error: ReturnType<typeof errorShape> }
 >();
+
+const serializedConfigReads = new WeakMap<object, SerializedJsonPayload>();
+
+function configReadPayload(snapshot: object, acceptsSerializedJson: boolean | undefined) {
+  if (!acceptsSerializedJson) {
+    return snapshot;
+  }
+  // Config/schema owners replace their snapshots on invalidation. Keep encoded
+  // bytes with that exact snapshot, independently of each request's envelope.
+  let payload = serializedConfigReads.get(snapshot);
+  if (!payload) {
+    payload = new SerializedJsonPayload(snapshot);
+    serializedConfigReads.set(snapshot, payload);
+  }
+  return payload;
+}
 
 type ConfigRedactionHints = Parameters<typeof redactConfigObject>[1];
 type ConfigRestartWriteMode = Parameters<typeof resolveGatewayConfigRestartWriteResult>[0]["mode"];
@@ -681,7 +698,7 @@ async function commitGatewayConfigWriteOrRespond(
 }
 
 export const configHandlers: GatewayRequestHandlers = {
-  "config.get": async ({ params, respond, context }) => {
+  "config.get": async ({ params, respond, context, acceptsSerializedJson }) => {
     if (!assertValidParams(params, validateConfigGetParams, "config.get", respond)) {
       return;
     }
@@ -701,13 +718,17 @@ export const configHandlers: GatewayRequestHandlers = {
         return;
       }
     }
-    respond(true, snapshot, undefined);
+    respond(true, configReadPayload(snapshot, acceptsSerializedJson), undefined);
   },
-  "config.schema": ({ params, respond }) => {
+  "config.schema": ({ params, respond, acceptsSerializedJson }) => {
     if (!assertValidParams(params, validateConfigSchemaParams, "config.schema", respond)) {
       return;
     }
-    respond(true, loadGatewayRuntimeConfigSchema(), undefined);
+    respond(
+      true,
+      configReadPayload(loadGatewayRuntimeConfigSchema(), acceptsSerializedJson),
+      undefined,
+    );
   },
   "config.schema.lookup": defineValidatedGatewayHandler(
     "config.schema.lookup",

@@ -22,8 +22,10 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { buildSessionCreationStamp } from "../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
 import type { GitHubPublicationRequesterSnapshot } from "../state/github-publication-requester.js";
 import { insertGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.worker.js";
+import { closeOpenClawAgentDatabases } from "../state/openclaw-agent-db-lifecycle.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -494,13 +496,18 @@ export async function persistClaimPublicationWorkspace() {
   await persistPublicationTestSession(REQUEST.sessionKey);
 }
 
+async function closePublicationTestAgentDatabases() {
+  withEngineStoreAdmission(() => closeOpenClawAgentDatabases());
+  await closeOpenClawAgentDatabasesAsync();
+}
+
 export function installGitHubPublicationTestHarness(
   harnessOptions: { creatorEmail?: string; sandbox?: "required"; realWorktree?: boolean } = {},
 ): void {
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     afterAll(async () => {
       // Agent close releases leases through shared state; drain it before shared state.
-      await closeOpenClawAgentDatabasesAsync();
+      await closePublicationTestAgentDatabases();
       closeOpenClawAgentDatabasesForTest();
       await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
@@ -693,20 +700,22 @@ export function installGitHubPublicationTestHarness(
     setRuntimeConfigSnapshot({
       agents: { entries: { main: { workspace: "/repo/worktree" } } },
     });
-    for (const sessionKey of [SESSION_KEY, REQUEST.sessionKey]) {
-      replaceSessionEntrySync(
-        { agentId: "main", sessionKey },
-        { ...mocks.loadSession(sessionKey).entry, updatedAt: Date.now() },
-      );
-    }
+    withEngineStoreAdmission(() => {
+      for (const sessionKey of [SESSION_KEY, REQUEST.sessionKey]) {
+        replaceSessionEntrySync(
+          { agentId: "main", sessionKey },
+          { ...mocks.loadSession(sessionKey).entry, updatedAt: Date.now() },
+        );
+      }
+    });
     // Custody remains persisted for policy reads; release its writer lease so
     // receipt-only tests can observe a genuinely cold shared database.
-    await closeOpenClawAgentDatabasesAsync();
+    await closePublicationTestAgentDatabases();
     systemPublicationRequester = (await createSystemGitHubPublicationRequesterFixture()).requester;
   });
 
   afterEach(async () => {
-    await closeOpenClawAgentDatabasesAsync();
+    await closePublicationTestAgentDatabases();
     clearRuntimeConfigSnapshot();
     closeOpenClawAgentDatabasesForTest();
     vi.unstubAllEnvs();

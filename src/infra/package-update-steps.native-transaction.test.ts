@@ -6,6 +6,7 @@ import { root as fsSafeRoot, type Root } from "@openclaw/fs-safe/root";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
+import { listDirectoryTreeStrict } from "./directory-walk.js";
 import { PACKAGE_DIST_INVENTORY_RELATIVE_PATH } from "./package-dist-inventory.js";
 import { runGlobalPackageUpdateSteps } from "./package-update-steps.js";
 import { packageUpdateStepResult, writePackageRoot } from "./package-update-steps.test-support.js";
@@ -406,7 +407,9 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
         );
         if (rollbackFailure.startsWith("copy-")) {
           const backupRoot = retained.backupRoot;
-          const backupEntries = (await fs.readdir(backupRoot, { recursive: true })).toSorted();
+          const backupEntries = (await listDirectoryTreeStrict(backupRoot))
+            .map((walkEntry) => walkEntry.relativePath)
+            .toSorted();
           const { revoke, assertCurrent } = executorAuthority();
           let published = false;
           const rename = fs.rename.bind(fs);
@@ -468,9 +471,11 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
               expect.stringContaining(path.join(binDir, ".openclaw-shim-stage-")),
               project,
             ]);
-            expect((await fs.readdir(backupRoot, { recursive: true })).toSorted()).toEqual(
-              backupEntries,
-            );
+            expect(
+              (await listDirectoryTreeStrict(backupRoot))
+                .map((walkEntry) => walkEntry.relativePath)
+                .toSorted(),
+            ).toEqual(backupEntries);
             await expectText(path.join(backupRoot, "manager-metadata"), "original metadata\n");
             expect(published).toBe(true);
             await expectVersion(packageRoot, "1.0.0");

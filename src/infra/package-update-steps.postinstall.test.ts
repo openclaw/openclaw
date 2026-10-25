@@ -37,9 +37,12 @@ it.each([
           installs.push(argv);
           const stagedRoot = path.join(stagedNpmPrefix(argv), "lib/node_modules/openclaw");
           for (const relativePath of [
+            "runtime-process-bootstrap.generated.mjs",
             "scripts/postinstall-bundled-plugins.mjs",
             "scripts/lib/package-lifecycle-marker.mjs",
             "scripts/lib/fs-safe-prebuild.mjs",
+            "scripts/lib/fs-safe-npm-cli-preload.generated.mjs",
+            "scripts/lib/fs-safe-npm-cli-protocol.mjs",
             "scripts/windows-cmd-helpers.mjs",
           ]) {
             const destination = path.join(stagedRoot, relativePath);

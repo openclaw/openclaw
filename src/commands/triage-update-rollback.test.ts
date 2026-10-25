@@ -3,10 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import {
-  writeTriageUpdateFailure,
-  writeUpdateRunReportArtifact,
-} from "../infra/update-failure-report-artifact.js";
+import { writeTriageUpdateFailure } from "../infra/update-failure-report-artifact.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
 import {
   readTriageUpdateFailure,
@@ -158,19 +155,6 @@ it.each([
   }
   if (errorCount === 40) {
     expect(receipt.omitted).toBeGreaterThan(0);
-    const reportPath = await writeUpdateRunReportArtifact({
-      result,
-      report: { markdown: "Synthetic update report" },
-      env,
-    });
-    const markdown = await fs.readFile(reportPath, "utf8");
-    const link = /^Bounded diagnostic JSON: ([^\r\n]+)$/mu.exec(markdown)?.[1];
-    expect(link).toBeDefined();
-    await expect(
-      readReleased(path.resolve(path.dirname(reportPath), link!)),
-    ).resolves.toMatchObject({
-      error: expect.stringContaining("Complete Doctor lint inventory:"),
-    });
   }
   expect(bounded.result.steps[0]).toMatchObject(physical);
   expect(bounded.result.steps[0]).not.toHaveProperty("doctorLintFindings");

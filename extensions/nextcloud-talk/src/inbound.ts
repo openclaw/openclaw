@@ -1,6 +1,8 @@
 import {
   createChannelInboundEnvelopeBuilderAsync,
+  filterChannelInboundQuoteContext,
   formatInboundMediaUnavailableText,
+  resolveInboundSupplementalSenderAllowed,
   type ChannelInboundTurnPlan,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
@@ -11,7 +13,9 @@ import {
   bindIngressLifecycleToReplyOptions,
   resolveChannelStreamingBlockEnabled,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
+import { expandAllowFromWithAccessGroups } from "openclaw/plugin-sdk/security-runtime";
 import {
   isRecord,
   normalizeOptionalString,
@@ -94,10 +98,7 @@ export async function handleNextcloudTalkInbound(params: {
     runtime,
   });
   const isGroup = roomKind === "direct" ? false : roomKind === "group" ? true : message.isGroupChat;
-  const senderId = message.senderId;
-  const senderName = message.senderName;
-  const roomToken = message.roomToken;
-  const roomName = message.roomName;
+  const { senderId, senderName, roomToken, roomName } = message;
 
   statusSink?.({ lastInboundAt: message.timestamp });
 
@@ -466,9 +467,7 @@ export async function handleNextcloudTalkInbound(params: {
               accountId: account.accountId,
               messageId: message.messageId,
               senderId,
-              ...(authenticatedSource.status === undefined
-                ? {}
-                : { status: authenticatedSource.status }),
+              status: authenticatedSource.status,
             });
           } else {
             sourceModality = authenticatedSource.sourceModality;
@@ -511,9 +510,7 @@ export async function handleNextcloudTalkInbound(params: {
                 stagedMediaId = canonicalized.media.id;
                 stagedMedia = {
                   path: canonicalized.media.path,
-                  ...(canonicalized.media.contentType
-                    ? { contentType: canonicalized.media.contentType }
-                    : {}),
+                  contentType: canonicalized.media.contentType,
                 };
                 if (!sourceModality && stagedMedia.contentType?.startsWith("audio/")) {
                   sourceModality = "audio";
@@ -542,7 +539,26 @@ export async function handleNextcloudTalkInbound(params: {
       }
     }
 
-    if (performedAsyncMediaWork) {
+    const quote = message.quote;
+    let quoteAllowFrom = hasAllowEntries(outerGroupAllowFrom) ? outerGroupAllowFrom : roomAllowFrom;
+    let quoteRoomAllowFrom = roomAllowFrom;
+    const hasQuotePolicyWork = quote !== undefined && isGroup && groupPolicy === "allowlist";
+    if (hasQuotePolicyWork) {
+      const expandQuoteAllowFrom = (entries: string[]) =>
+        expandAllowFromWithAccessGroups({
+          cfg: config,
+          allowFrom: entries,
+          channel: CHANNEL_ID,
+          accountId: account.accountId,
+          senderId: quote.senderId,
+          isSenderAllowed: (id, allow) =>
+            resolveNextcloudTalkAllowlistMatch({ senderId: id, allowFrom: allow }).allowed,
+        });
+      quoteAllowFrom = await expandQuoteAllowFrom(quoteAllowFrom);
+      quoteRoomAllowFrom = await expandQuoteAllowFrom(roomAllowFrom);
+    }
+
+    if (performedAsyncMediaWork || hasQuotePolicyWork) {
       throwIfIngressAborted();
       access = await resolveAccess(isGroup ? wasMentioned : undefined, contextBinding);
       throwIfIngressAborted();
@@ -568,8 +584,36 @@ export async function handleNextcloudTalkInbound(params: {
       body: agentBody,
     });
 
-    const groupSystemPrompt = normalizeOptionalString(roomConfig?.systemPrompt);
     const blockStreamingEnabled = resolveChannelStreamingBlockEnabled(account.config);
+    const visibleQuote = quote
+      ? filterChannelInboundQuoteContext(
+          resolveChannelContextVisibilityMode({
+            cfg: config,
+            channel: CHANNEL_ID,
+            accountId: account.accountId,
+          }),
+          {
+            id: quote.id,
+            body: quote.body,
+            sender: quote.senderName || quote.senderId,
+            senderAllowed: resolveInboundSupplementalSenderAllowed({
+              isGroup,
+              groupPolicy,
+              allowFrom: quoteAllowFrom,
+              isSenderAllowed: (candidateAllowFrom) =>
+                resolveNextcloudTalkAllowlistMatch({
+                  allowFrom: [...candidateAllowFrom],
+                  senderId: quote.senderId,
+                }).allowed &&
+                (!hasAllowEntries(quoteRoomAllowFrom) ||
+                  resolveNextcloudTalkAllowlistMatch({
+                    allowFrom: quoteRoomAllowFrom,
+                    senderId: quote.senderId,
+                  }).allowed),
+            }),
+          },
+        )
+      : undefined;
 
     const ctxPayload = core.channel.inbound.buildContext({
       channelIngress: access,
@@ -605,7 +649,20 @@ export async function handleNextcloudTalkInbound(params: {
       ...(stagedMedia ? { media: [stagedMedia] } : {}),
       extra: {
         GroupSubject: isGroup ? roomName || roomToken : undefined,
-        GroupSystemPrompt: isGroup ? groupSystemPrompt : undefined,
+        GroupSystemPrompt: isGroup ? normalizeOptionalString(roomConfig?.systemPrompt) : undefined,
+        // ReplyChain carries quoted identity without changing the outgoing ReplyToId fallback.
+        ReplyChain:
+          quote && visibleQuote
+            ? [
+                {
+                  messageId: visibleQuote.id,
+                  senderId: quote.senderId,
+                  sender: visibleQuote.sender,
+                  body: visibleQuote.body,
+                  isQuote: true,
+                },
+              ]
+            : undefined,
       },
     });
 

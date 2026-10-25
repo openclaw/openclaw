@@ -34,6 +34,7 @@ import {
   readSessionPendingInput,
   readSessionPendingInputRequesterOrigin,
   stageSessionPendingInput,
+  prepareForeignLiveSessionPendingInputEntries,
   withSessionPendingInputPersistence as withPersistence,
   type SessionPendingInputReceipt,
 } from "./session-accessor.pending-inputs.js";
@@ -233,9 +234,15 @@ it("keeps accepted input outside the active transcript and applies its hook once
   expect(await submitted("queued:user")).toEqual(receipt.message);
   const committedReplay = await stage("queued", { prepareMessageAfterIdempotencyCheck: prepare });
   expect(committedReplay.message).toEqual(receipt.message);
+  expect(bindSessionPendingInputSources([committedReplay], message("recollected"))).toBeUndefined();
   expect(prepare).toHaveBeenCalledOnce();
   receipt.finish("interrupted");
   expect(() => receipt.run(() => {})).toThrow("ownership ended");
+  const readForeign = await prepareForeignLiveSessionPendingInputEntries(scope());
+  expect(readForeign()).toEqual(new Map([[receipt.inputId, receipt.message.idempotencyKey]]));
+  committedReplay.finish("interrupted");
+  await committedReplay.settled?.();
+  expect(readForeign()).toEqual(new Map());
 });
 
 it("keeps requester facts with exact accepted custody through projection edits and restart replay", async () => {

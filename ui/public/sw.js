@@ -81,11 +81,12 @@ function prepareOfflineShell() {
   }
   // Registration/resume probes share the install work; a failed attempt remains
   // retryable without a retry timer or delaying the build-identity reply.
+  // Only activation retires caches: an older worker can still answer probes
+  // while its replacement is installing.
   if (!offlinePreparation) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 60_000);
     offlinePreparation = precacheOfflineShell(controller.signal)
-      .then(retireOldCaches)
       .catch(() => {
         // Cache storage is optional; updates and notifications must still work.
       })

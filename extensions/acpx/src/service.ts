@@ -303,6 +303,8 @@ export function createAcpxRuntimeService(
         return new AcpxRuntime({
           cwd: pluginConfig.cwd,
           agentProcessEnv: resolveAgentProcessEnv(),
+          agentProcessEnvAllow: pluginConfig.agentProcessEnvAllow,
+          agentProcessEnvBlock: pluginConfig.agentProcessEnvBlock,
           openclawLegacyBareSessionKeys: legacyBareSessionKeys,
           openclawGatewayInstanceId: gatewayInstanceId,
           openclawProcessLeaseStore: processLeaseStore,

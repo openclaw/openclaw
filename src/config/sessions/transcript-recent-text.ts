@@ -1,4 +1,8 @@
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import {
+  asOptionalRecord,
+  asOptionalObjectRecord,
+} from "@openclaw/normalization-core/record-coerce";
 import {
   extractAssistantPhaseText,
   extractFirstTextBlock,
@@ -13,12 +17,16 @@ import type {
   SessionTranscriptBoundedMessageTailOptions,
   SessionTranscriptBoundedMessageTailPage,
 } from "./session-accessor.sqlite-projection-read.js";
-import {
-  isWithinTranscriptWindow,
-  normalizeRecentTranscriptLimit,
-  normalizeTranscriptTimestamp,
-  readPreferredUpstreamUserText,
-} from "./transcript-recent-window.js";
+
+function readPreferredUpstreamUserText(message: {
+  __openclaw?: unknown;
+}): string | null | undefined {
+  const meta = asOptionalObjectRecord(message["__openclaw"]);
+  if (typeof meta?.upstreamUserText === "string") {
+    return meta.upstreamUserText.trim();
+  }
+  return meta?.mirrorOrigin ? null : undefined;
+}
 
 export type SessionRecentConversationText = {
   id?: string;
@@ -82,7 +90,7 @@ function extractRecentConversationText(
     return undefined;
   }
   const provenance = asOptionalRecord(message.provenance);
-  const timestamp = normalizeTranscriptTimestamp(message.timestamp);
+  const timestamp = asFiniteNumber(message.timestamp);
   return {
     ...(typeof parsed?.id === "string" && parsed.id ? { id: parsed.id } : {}),
     role: message.role,
@@ -101,14 +109,22 @@ export function readRecentTranscriptConversationText(
   ) => SessionTranscriptBoundedMessageTailPage,
   options: ReadRecentSessionConversationTextOptions = {},
 ): SessionRecentConversationText[] {
-  const limit = normalizeRecentTranscriptLimit(options.limit);
+  const limit = Math.max(1, Math.floor(options.limit ?? 10));
   const pageSize = 250;
   const recent: SessionRecentConversationText[] = [];
   for (let offset = 0; recent.length < limit; offset += pageSize) {
     const page = readPage({ maxMessages: pageSize, maxBytes: Number.MAX_SAFE_INTEGER, offset });
     for (const event of page.events.toReversed()) {
       const entry = extractRecentConversationText(event.event, options);
-      if (entry && isWithinTranscriptWindow(entry.timestamp, options)) {
+      if (
+        entry &&
+        (options.beforeTimestampMs === undefined ||
+          entry.timestamp === undefined ||
+          entry.timestamp < options.beforeTimestampMs) &&
+        (options.minTimestampMs === undefined ||
+          entry.timestamp === undefined ||
+          entry.timestamp >= options.minTimestampMs)
+      ) {
         recent.push(entry);
         if (recent.length >= limit) {
           break;

@@ -141,41 +141,19 @@ describe("private profile backgrounds", () => {
     expect((await image(replacement.asset!.assetId)).image).toBeUndefined();
   });
 
-  it.each(["theme", "none"] as const)(
-    "first upload opts into New Session only after an existing %s selection",
-    async (kind) => {
-      const { first, setBackground, upload } = setup();
-      const previous = {
+  it.each([
+    ["theme", undefined],
+    ["none", "faded"],
+    ["theme", "full-bleed"],
+  ] as const)(
+    "preserves %s/%s preferences through upload, replacement and removal",
+    async (kind, presentation) => {
+      const { options, first, setBackground, upload, read, remove } = setup();
+      const previous: BackgroundPreference = {
         ...DEFAULT_BACKGROUND_PREFERENCE,
         source: { kind },
         showOnNewSession: false,
         showInSessions: true,
-      };
-      expect(setBackground(first, previous, null).ok).toBe(true);
-      const initial = snapshot(await upload({ ...empty, expectedPreference: previous }));
-      expect(initial.preference).toMatchObject({
-        source: { kind: "custom" },
-        showOnNewSession: true,
-        showInSessions: false,
-      });
-      const explicit = { ...initial.preference!, showOnNewSession: false, showInSessions: true };
-      expect(setBackground(first, explicit, initial.preference).ok).toBe(true);
-      const replacement = snapshot(
-        await upload({ ...expected(initial), expectedPreference: explicit }, "replacement"),
-      );
-      expect(replacement.preference).toMatchObject({
-        showOnNewSession: false,
-        showInSessions: true,
-      });
-    },
-  );
-
-  it.each([undefined, "faded", "full-bleed"] as const)(
-    "retains presentation %s through preference writes, upload, replacement, and removal",
-    async (presentation) => {
-      const { options, first, setBackground, upload, read, remove } = setup();
-      const previous: BackgroundPreference = {
-        ...DEFAULT_BACKGROUND_PREFERENCE,
         ...(presentation ? { presentation } : {}),
       };
       expect(setBackground(first, previous, null).ok).toBe(true);
@@ -190,16 +168,18 @@ describe("private profile backgrounds", () => {
         showInSessions: false,
         source: { kind: "custom", assetId: uploaded.asset!.assetId },
       });
-      const replacement = snapshot(await upload(expected(uploaded), "replacement"));
+      const explicit = { ...uploaded.preference!, showOnNewSession: false, showInSessions: true };
+      expect(setBackground(first, explicit, uploaded.preference).ok).toBe(true);
+      const replacement = snapshot(
+        await upload({ ...expected(uploaded), expectedPreference: explicit }, "replacement"),
+      );
       expect(replacement.preference).toStrictEqual({
-        ...uploaded.preference,
+        ...explicit,
         source: { kind: "custom", assetId: replacement.asset!.assetId },
       });
       const theme = { ...replacement.preference!, source: { kind: "theme" } };
       expect(setBackground(first, theme, replacement.preference).ok).toBe(true);
-      const unselected = snapshot(await read());
-      expect(unselected.preference).toStrictEqual(theme);
-      expect(unselected.asset).toStrictEqual(replacement.asset);
+      expect(snapshot(await read())).toStrictEqual({ ...replacement, preference: theme });
       expect(setBackground(first, replacement.preference, theme).ok).toBe(true);
       const removed = snapshot(await remove(expected(replacement)));
       expect(removed.preference).toStrictEqual({

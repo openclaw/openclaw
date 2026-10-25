@@ -8,6 +8,8 @@ const mocks = vi.hoisted(() => ({
   generate: vi.fn(),
   utility: vi.fn(),
   readTranscript: vi.fn(),
+  readTail: vi.fn(),
+  prepareSkills: vi.fn(),
   patch: vi.fn(),
   load: vi.fn(),
 }));
@@ -28,15 +30,19 @@ vi.mock("../config/sessions/session-entry-read-runtime.js", () => ({
 }));
 // mock-isolation: Registry and transport behavior are covered by the real-provider title suites.
 vi.mock("../skills/discovery/chat-commands.js", () => ({
-  prepareSkillCommandsForWorkspace: async () => [],
+  prepareSkillCommandsForWorkspace: mocks.prepareSkills,
 }));
 // mock-isolation: Title orchestration tests supply transcript reads without starting workers.
 vi.mock("./session-transcript-title-reader.js", () => ({
   readSessionTitleFieldsFromTranscriptAsync: mocks.readTranscript,
 }));
+// mock-isolation: Supply the recent conversation without starting history workers.
+vi.mock("./session-transcript-readers.js", () => ({
+  readSessionTranscriptBoundedMessageTailPageAsync: mocks.readTail,
+}));
 
 import type { WorktreeSourceStage } from "../agents/worktrees/types.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import type { InternalSessionEntry, SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
@@ -122,6 +128,8 @@ describe("maybeGenerateDashboardSessionTitle", () => {
       firstUserMessage: null,
       lastMessagePreview: null,
     });
+    mocks.readTail.mockReset().mockResolvedValue({ events: [] });
+    mocks.prepareSkills.mockReset().mockResolvedValue([]);
     mockSessionUpdate(baseEntry);
   });
 
@@ -201,6 +209,100 @@ describe("maybeGenerateDashboardSessionTitle", () => {
       false,
     );
     expectCalls(0, mocks.generate, mocks.patch);
+  });
+
+  it.each(["ordinary", "registered skill", "prepared skill"] as const)(
+    "refines a generated Dashboard title once after six follow-up messages (%s)",
+    async (mode) => {
+      const prepared = mode === "prepared skill";
+      const taskMessage = (text: string) => (mode === "ordinary" ? text : `/review ${text}`);
+      if (mode !== "ordinary") {
+        mocks.prepareSkills.mockResolvedValue([
+          { name: "review", skillName: "review", description: "Review a task" },
+        ]);
+      }
+      let current: InternalSessionEntry = {
+        ...baseEntry,
+        ...(prepared
+          ? {
+              displayName: "Release Planning",
+              titleRefinement: {
+                sessionId: baseEntry.sessionId,
+                generatedName: "Release Planning",
+                remainingMessages: 7,
+              },
+            }
+          : {}),
+      };
+      mocks.load.mockImplementation(() => current);
+      mocks.patch.mockImplementation(async (_scope, update) => {
+        const patch = await update(current);
+        if (patch) {
+          current = { ...current, ...patch };
+        }
+        return current;
+      });
+      const params = { ...titleDefaults };
+      await maybeGenerateDashboardSessionTitle({
+        ...params,
+        userMessage: taskMessage(params.userMessage),
+      });
+      mocks.generate.mockResolvedValue("Fix release signing");
+      mocks.readTail.mockResolvedValue({
+        events: [
+          {
+            event: {
+              type: "message",
+              message: { role: "user", content: "The release fails during signing" },
+            },
+          },
+        ],
+      });
+      for (const userMessage of ["/status", "/unknown task"]) {
+        await maybeGenerateDashboardSessionTitle({ ...params, userMessage });
+      }
+      for (let index = 0; index < 5; index++) {
+        await maybeGenerateDashboardSessionTitle({
+          ...params,
+          userMessage: taskMessage("Investigate signing"),
+        });
+      }
+      expect(current.displayName).toBe("Release Planning");
+      await maybeGenerateDashboardSessionTitle({
+        ...params,
+        userMessage: taskMessage("Fix the certificate"),
+      });
+      expect(current.displayName).toBe("Fix release signing");
+      expect(mocks.generate.mock.calls.at(-1)?.[0].userMessage).toContain("Fix the certificate");
+      expect(mocks.generate.mock.calls.at(-1)?.[0].userMessage).toContain("fails during signing");
+      for (let index = 0; index < 8; index++) {
+        await maybeGenerateDashboardSessionTitle(params);
+      }
+      expect(mocks.generate).toHaveBeenCalledTimes(prepared ? 1 : 2);
+    },
+  );
+
+  it("does not overwrite a manual rename while the one-time refinement is in flight", async () => {
+    let current: SessionEntry = { ...baseEntry };
+    mocks.load.mockImplementation(() => current);
+    mocks.patch.mockImplementation(async (_scope, update) => {
+      const patch = await update(current);
+      if (patch) {
+        current = { ...current, ...patch };
+      }
+      return current;
+    });
+    await maybeGenerateDashboardSessionTitle(titleDefaults);
+    for (let index = 0; index < 5; index++) {
+      await maybeGenerateDashboardSessionTitle(titleDefaults);
+    }
+    const pending = pendingLabel();
+    const refinement = maybeGenerateDashboardSessionTitle(titleDefaults);
+    await pending.started;
+    current = { ...current, displayName: "My release" };
+    pending.resolve("Fix release signing");
+    await expect(refinement).resolves.toBe(false);
+    expect(current.displayName).toBe("My release");
   });
 
   it("titles over an Android platform auto-label without treating it as a rename", async () => {
@@ -403,7 +505,9 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     await expect(first).resolves.toBe(true);
     await expect(duplicate).resolves.toBe(false);
 
-    expectCalls(1, mocks.generate, mocks.patch, mocks.load, mocks.readTranscript);
+    expectCalls(1, mocks.generate, mocks.patch, mocks.readTranscript);
+    // Each admitted turn reads current title state before counting toward refinement.
+    expect(mocks.load).toHaveBeenCalledTimes(2);
   });
 });
 

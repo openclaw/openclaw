@@ -387,6 +387,11 @@ suite.define(() => {
         await waitForTalkReady(page);
 
         const microphone = button(page, "Dictation");
+        const microphoneColors = await microphone.evaluate((element) => ({
+          button: getComputedStyle(element).color,
+          icon: getComputedStyle(element.querySelector("svg")!).color,
+        }));
+        expect(microphoneColors.icon).toBe(microphoneColors.button);
         await microphone.click();
         await gateway.waitForRequest("talk.session.create");
 

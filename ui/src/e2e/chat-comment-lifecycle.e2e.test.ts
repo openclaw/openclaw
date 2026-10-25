@@ -1,6 +1,7 @@
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { mediaTicketPayload } from "../test-helpers/control-ui-attachment-fixtures.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { waitForChatScrollIdle } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -134,11 +135,7 @@ suite.define(() => {
       await page.route("**/__openclaw__/assistant-media?**", async (route) => {
         if (new URL(route.request().url()).searchParams.has("meta")) {
           await route.fulfill({
-            json: {
-              available: true,
-              mediaTicket: "annotation-fixture",
-              mediaTicketExpiresAt: new Date(Date.now() + 60_000).toISOString(),
-            },
+            json: mediaTicketPayload("annotation-fixture", 60_000),
           });
           return;
         }

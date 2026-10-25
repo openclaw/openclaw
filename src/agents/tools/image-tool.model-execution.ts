@@ -134,12 +134,7 @@ export async function runImagePrompt(params: {
   signal?: AbortSignal;
   operatorAuthority?: AdmittedRunOperatorAuthority;
   assertCurrent?: () => void;
-}): Promise<{
-  text: string;
-  provider: string;
-  model: string;
-  attempts: Array<{ provider: string; model: string; error: string }>;
-}> {
+}) {
   const effectiveCfg = applyAgentDefaultModelConfig(
     params.cfg,
     "imageModel",

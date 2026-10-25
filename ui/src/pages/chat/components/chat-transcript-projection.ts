@@ -20,7 +20,7 @@ import {
   setExpansionState,
   syncToolCardExpansionState,
 } from "../chat-thread.ts";
-import { readAsyncQuestions } from "./chat-async-question.ts";
+import { readAsyncQuestions } from "./chat-async-question-content.ts";
 import { buildChatArchiveNotice } from "./chat-divider.ts";
 import type { NativeMessageGroupOptions } from "./chat-message-group-frame.ts";
 import { assistantMediaPolicyKey } from "./chat-message-media.ts";

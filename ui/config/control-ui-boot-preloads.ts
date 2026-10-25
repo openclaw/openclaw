@@ -16,8 +16,18 @@ const sharedInteractionEntries = new Set([
   "ui/src/components/app-sidebar-online.tsx",
 ]);
 const chatInteractionEntries = new Set([
+  "ui/src/pages/chat/components/chat-context-breakdown.tsx",
+  "ui/src/components/markdown-live.ts",
+  // Cached environment facts reveal without another network round trip.
+  "ui/src/pages/chat/components/chat-details-environment-body.tsx",
   "ui/src/pages/chat/chat-pane-session-operations.ts",
   "ui/src/pages/chat/chat-send-delivery.runtime.ts",
+  // Keep the first live reply and common actions to one network round trip.
+  "ui/src/pages/chat/chat-live-events.runtime.ts",
+  "ui/src/pages/chat/tool-stream.ts",
+  "ui/src/pages/chat/chat-command-dispatch.runtime.ts",
+  "ui/src/pages/chat/chat-pane-session-operations.runtime.ts",
+  // Image viewers and provider-review dialogs load only when their own UI is needed.
 ]);
 
 export function collectControlUiStaticAssets(

@@ -3,10 +3,10 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createJiti } from "./jiti-factory.js";
-import { writeTree } from "./plugin-generation-capture.test-support.js";
 import { inspectPluginSourceDependencies } from "./plugin-generation-source-inspection.js";
 import { withPluginSourceCaptureDirectory } from "./plugin-package-metadata-capture.js";
 import { visitPluginSourceReferences } from "./plugin-source-references.js";
+import { writeArtifacts as writeTree } from "./public-surface.test-support.js";
 
 const temp = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());

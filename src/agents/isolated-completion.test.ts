@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentRunDelegatedAuthority } from "../infra/agent-run-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { expectNoCalls } from "../test-utils/mock-call-assertions.js";
 import type { AdmittedRunContext } from "./admitted-run-context.js";
 import {
   isolatedAssistant,
@@ -41,12 +42,6 @@ beforeEach(resetIsolatedCompletionTestState);
 
 function expectCall(mock: unknown, shape: object) {
   expect(mock).toHaveBeenCalledWith(expect.objectContaining(shape));
-}
-
-function expectNoCalls(...functions: unknown[]) {
-  for (const mock of functions) {
-    expect(mock).not.toHaveBeenCalled();
-  }
 }
 
 function complete(overrides: Partial<Parameters<typeof runIsolatedCompletion>[0]> = {}) {
@@ -427,6 +422,17 @@ describe("runIsolatedCompletion", () => {
       });
     },
   );
+
+  it("forwards the native output schema to a V2 harness", async () => {
+    const assistant = isolatedAssistant([{ type: "text", text: '{"ok":true}' }]);
+    const dispatch = vi.fn(async (_params: unknown) => ({ assistant }));
+    registerIsolatedHarness({ runIsolatedCompletionV2: dispatch });
+    const outputSchema = { type: "object" };
+
+    await runIsolatedCompletion({ ...isolatedRequest(), outputSchema });
+
+    expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({ outputSchema }));
+  });
 
   it.each([false, true])(
     "captures call-owned choices and authority before admission (retired: %s)",

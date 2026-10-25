@@ -2,6 +2,7 @@
 import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withinTest } from "../../../test/helpers/promise.js";
+import { createEnteredGate } from "../../agents/entered-gate.test-support.js";
 import { jsonResult } from "../../agents/tools/common.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -18,7 +19,6 @@ import {
   runWithGatewayIndependentRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
-import { createDeferredCore } from "../../shared/deferred.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
@@ -217,15 +217,11 @@ describe("outbound mirror route ordering", () => {
         sessionId: "destination",
       };
       await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 100 });
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
-      const turn = withSessionTurn(target, async () => {
-        entered.resolve();
-        await release.promise;
-      });
+      const turnGate = createEnteredGate();
+      const turn = withSessionTurn(target, turnGate.wait);
       let drained = Promise.resolve();
       try {
-        await withinTest(entered.promise, signal);
+        await withinTest(turnGate.entered, signal);
         const sent = await withinTest(
           withSessionTranscriptWriteAssertion(
             transcriptScope(),
@@ -239,7 +235,7 @@ describe("outbound mirror route ordering", () => {
         expect(gatewayRequest).toHaveBeenCalledOnce();
         expect(handleAction).not.toHaveBeenCalled();
         expect(transcriptMessages(OTHER_SESSION_KEY)).toEqual([]);
-        release.resolve();
+        turnGate.release();
         await withinTest(turn, signal);
         await withinTest(drained, signal);
         expect(transcriptMessages(OTHER_SESSION_KEY)).toEqual([
@@ -249,7 +245,7 @@ describe("outbound mirror route ordering", () => {
         ]);
         expect(transcriptMessages(MAIN_SESSION_KEY)).toEqual([]);
       } finally {
-        release.resolve();
+        turnGate.release();
         await Promise.allSettled([turn, drained]);
       }
     });

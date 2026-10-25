@@ -8,11 +8,11 @@ import { createGatewayConnectionLifecycle } from "../../../lib/gateway-connectio
 import { loadPluginDiscoveryDetail } from "../../../lib/plugins/index.ts";
 import { useApplication } from "../../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import { listen } from "../../../lib/reactive/listener.ts";
 import type { ClawHubSkillDetail } from "../../../lib/skills/index.ts";
 import { loadSkillStatusReport } from "../../../lib/skills/status-report.ts";
 import { PluginIconOwner, pluginIconFetchContext } from "../../plugins/plugin-icon-owner.ts";
 import { resolvePluginCatalogIconUrl } from "../../plugins/presentation.ts";
+import { subscribeClawHubCardUpdates } from "./chat-clawhub-card-updates.ts";
 import type { ChatClawHubCardProps } from "./chat-clawhub-card.tsx";
 
 registerEnglishCatalog(registerPluginManagementEnglish);
@@ -220,17 +220,7 @@ export function ChatClawHubCardBody(
   }
   onSettled(() => {
     // Connection edges retire request generations and icon URLs before later replies arrive.
-    const stop = context.gateway.subscribe(() => load());
-    const activate = () => {
-      if (
-        context.gateway.snapshot.phase === "connected" &&
-        document.visibilityState === "visible"
-      ) {
-        load(true);
-      }
-    };
-    const stopVisibility = listen(document, "visibilitychange", activate);
-    const stopFocus = listen(globalThis, "focus", activate);
+    const stop = subscribeClawHubCardUpdates(context.gateway, document, load);
     return () => {
       active = false;
       ++generation;
@@ -238,8 +228,6 @@ export function ChatClawHubCardBody(
       stop();
       connection.dispose();
       resetIcons();
-      stopVisibility();
-      stopFocus();
     };
   });
   const card = (): CardPresentation | undefined => read().presentation ?? props.recommendation;

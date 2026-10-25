@@ -4,14 +4,15 @@ import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { watchDirectory, type DirectoryWatch } from "./directory-watch-host.js";
 import { isPathInside } from "./path-guards.js";
 
-type Listener = (filename?: string) => void;
+// Missing event/filename means recovery or an unclassified notification, not a content write.
+type Listener = (filename?: string, event?: string) => void;
 type Directory = {
   key: string;
   path: string;
   watchRoot: string;
   recursive: boolean;
   reconcileIntervalMs: number;
-  listeners: Set<Listener>;
+  listeners: readonly Listener[];
   nextFallback: { atMs: number; elapsedAtMs: number };
   source?: Source;
 };
@@ -106,10 +107,9 @@ function detach(directory: Directory) {
   }
 }
 
-function notify(directory: Directory, filename?: string) {
-  const listeners = Array.from(directory.listeners);
-  for (const listener of listeners) {
-    listener(filename);
+function notify(directory: Directory, filename?: string, event?: string) {
+  for (const listener of directory.listeners) {
+    listener(filename, event);
   }
 }
 
@@ -156,7 +156,7 @@ function attach(directory: Directory) {
                 isPathInside(entry.path, (changedPath ??= path.resolve(candidate, filename))) ||
                 isPathInside(changedPath, entry.path)
               ) {
-                notify(entry, entry.path === candidate ? filename : undefined);
+                notify(entry, entry.path === candidate ? filename : undefined, event);
               }
             }
             // A renamed directory's watcher can remain bound to its retired inode.
@@ -239,19 +239,20 @@ export function observeOwnedDirectory(
       watchRoot,
       recursive,
       reconcileIntervalMs,
-      listeners: new Set(),
+      listeners: [],
       nextFallback: { atMs: Infinity, elapsedAtMs: Infinity },
     };
     directories.set(key, selected);
     attach(selected);
   }
-  const listener: Listener = (filename) => onChange(filename);
-  selected.listeners.add(listener);
+  const listener: Listener = (filename, event) => onChange(filename, event);
+  selected.listeners = [...selected.listeners, listener];
   retainEarlierFallback(selected, nextFallback(reconcileIntervalMs));
   scheduleFallback(selected);
   return {
     close() {
-      if (!selected.listeners.delete(listener) || selected.listeners.size) {
+      selected.listeners = selected.listeners.filter((entry) => entry !== listener);
+      if (selected.listeners.length || directories.get(key) !== selected) {
         return;
       }
       directories.delete(key);

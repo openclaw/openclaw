@@ -138,7 +138,12 @@ import { resolveCliCatalogCapabilities } from "./model-capabilities.js";
 import { detectNodeClaudePlacement, resolveClaudeCliContextModelId } from "./prepare-claude.js";
 import * as mcp from "./prepare-mcp.js";
 import { runWithCliPreparationSource } from "./prepare-source.js";
-import { resolveCliRuntimeToolPolicy } from "./prepare-tool-policy.js";
+import {
+  capCliToolAvailability,
+  keptManagedNativeTools,
+  resolveCliBootstrapFileAccess,
+  resolveCliRuntimeToolPolicy,
+} from "./prepare-tool-policy.js";
 import {
   buildCliVisibleReplyGuidance,
   finalizeCliSystemPrompt,
@@ -316,12 +321,13 @@ async function prepareCliRunContextWithinReadFence(
     bundleMcp: backendResolved.bundleMcp,
     canEnforceExactToolAvailability,
     projectNativeToolAuthority: backendResolved.projectNativeToolAuthority,
+    resolveManagedNativeTools: backendResolved.resolveManagedNativeTools,
     sideQuestionToolMode: backendResolved.sideQuestionToolMode,
     isSideQuestion,
     skipsTurnPreparation,
   });
   params = toolPolicy.params;
-  const { runtimeToolsAllowPolicy } = toolPolicy;
+  const { runtimeToolsAllowPolicy, managedNativeTools } = toolPolicy;
   const internalParams = params as RunCliAgentPrepareParams;
   const nodeClaudePlacement = detectNodeClaudePlacement({
     backendId: backendResolved.id,
@@ -825,23 +831,16 @@ async function prepareCliRunContextWithinReadFence(
     params = {
       ...params,
       cliToolAvailability: {
-        native: [],
+        native: params.cliToolAvailability?.native ?? [], // empty or operator-managed
         openClaw: hookFilteredProjectedTools.map((tool) => tool.name),
       },
     };
   }
   if (params.cliToolAvailability && promptBuildToolsAllow !== undefined) {
-    const filterToolNames = (names: string[]) =>
-      applyEmbeddedAttemptToolsAllow(
-        names.map((name) => ({ name })),
-        promptBuildToolsAllow,
-      ).map((tool) => tool.name);
+    const { cliToolAvailability } = params;
     params = {
       ...params,
-      cliToolAvailability: {
-        native: filterToolNames(params.cliToolAvailability.native),
-        openClaw: filterToolNames(params.cliToolAvailability.openClaw),
-      },
+      cliToolAvailability: capCliToolAvailability(cliToolAvailability, promptBuildToolsAllow),
     };
   }
   const projectedTools = applyEmbeddedAttemptToolsAllow(
@@ -850,18 +849,12 @@ async function prepareCliRunContextWithinReadFence(
   );
   // Mirror the embedded runner's bootstrap routing for backends that transport
   // OpenClaw's system prompt, using the final native or mediated file access.
-  const selectedNativeToolsProvideFileAccess =
-    params.cliToolAvailability === undefined || params.cliToolAvailability.native.length > 0;
-  const mediatedBootstrapFileAccess =
-    backendResolved.id === "claude-cli" &&
-    projectedTools.some((tool) => tool.name === "read") &&
-    projectedTools.some((tool) => ["write", "apply_patch"].includes(tool.name));
-  const hasBootstrapFileAccess =
-    (((backendResolved.nativeToolMode === "always-on" ||
-      backendResolved.nativeToolMode === "selectable") &&
-      selectedNativeToolsProvideFileAccess) ||
-      mediatedBootstrapFileAccess) &&
-    params.disableTools !== true;
+  const hasBootstrapFileAccess = resolveCliBootstrapFileAccess({
+    backend: backendResolved,
+    params,
+    managedNativeTools,
+    projectedToolNames: projectedTools.map((tool) => tool.name),
+  });
   const bootstrapRouting =
     skipsTurnPreparation || !canTransportSystemPrompt(backendResolved.config)
       ? undefined
@@ -1575,6 +1568,8 @@ async function prepareCliRunContextWithinReadFence(
         isNewSession:
           !reusableCliSessionId?.trim() || reusableCliSession.mode === "reuse-with-drift",
         thinkLevel: params.thinkLevel,
+        // Operator-kept orchestration tools that survived every later native-tool cap.
+        nativeDelegationTools: keptManagedNativeTools(managedNativeTools, params),
         runtimeContextFragments: params.runtimeContextFragments,
         // Caller-owned memory cannot grant access to persisted interrupted inputs.
         sessionTarget: params.isolatedCompletion ? undefined : replayableTarget(cliHistoryWriter),

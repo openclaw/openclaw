@@ -30,8 +30,8 @@ import {
 import { createDeferred } from "../../test/helpers/promise.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.entry.js";
+import { persistSessionTranscriptTurn } from "../config/sessions/session-accessor.js";
 import { isSessionHistoryWorkerCold } from "../config/sessions/session-transcript-worker-runtime.js";
-import { CURRENT_SESSION_VERSION } from "../config/sessions/version.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { withTimeout } from "../infra/fs-safe.js";
@@ -434,7 +434,6 @@ async function proveRealGatewayContracts(): Promise<void> {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sdk-a2-gateway-"));
   const sessionKey = "agent:main:sdk-real-gateway";
   const sessionId = "sdk-real-gateway-session";
-  const transcriptPath = path.join(tempDir, `${sessionId}.jsonl`);
   const previousSessionStorePath = testState.sessionStorePath;
   const runId = "sdk-real-gateway-run";
   const timeoutRunId = "sdk-real-gateway-timeout";
@@ -470,38 +469,25 @@ async function proveRealGatewayContracts(): Promise<void> {
   testState.sessionStorePath = path.join(tempDir, "sessions.json");
 
   try {
-    await fs.writeFile(
-      transcriptPath,
-      `${JSON.stringify({ type: "session", version: CURRENT_SESSION_VERSION, id: sessionId })}\n${JSON.stringify(
-        {
-          type: "message",
-          id: "sdk-artifact-message",
-          parentId: null,
-          timestamp: "2026-08-03T00:00:00.000Z",
-          message: {
-            role: "assistant",
-            content: [
-              {
-                type: "file",
-                data: "aGVsbG8=",
-                mimeType: "text/plain",
-                title: "sdk-result.txt",
-              },
-            ],
-            __openclaw: { seq: 2, runId: "sdk-artifact-run" },
-          },
-        },
-      )}\n`,
-    );
     await writeSessionStore({
-      entries: {
-        [sessionKey]: {
-          sessionId,
-          sessionFile: transcriptPath,
-          updatedAt: Date.now(),
-        },
-      },
+      entries: { [sessionKey]: { sessionId, updatedAt: Date.now() } },
     });
+    await persistSessionTranscriptTurn(
+      { agentId: "main", sessionKey, sessionId, storePath: testState.sessionStorePath },
+      {
+        messages: [
+          {
+            message: {
+              role: "assistant",
+              content: [
+                { type: "file", data: "aGVsbG8=", mimeType: "text/plain", title: "sdk-result.txt" },
+              ],
+            },
+          },
+        ],
+        updateMode: "none",
+      },
+    );
 
     const token = "sdk-real-gateway-token";
     started = await startServer(token, { controlUiEnabled: false });

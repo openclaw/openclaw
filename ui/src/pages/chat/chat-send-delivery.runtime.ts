@@ -15,6 +15,7 @@ import { readChatResetTargetAccess } from "./chat-commands.ts";
 import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
 import { setChatError } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
+import { captureChatNativeRuntimeRecovery } from "./chat-model-recovery.runtime.ts";
 import {
   flushStoredChatOutbox,
   scheduleStoredChatOutboxRetry,
@@ -44,10 +45,7 @@ import {
   retireDeliveredQueuedUserTurn,
   surfaceChatDeliveryFailure,
 } from "./chat-send-support.ts";
-import {
-  captureChatNativeRuntimeRecovery,
-  refreshChatSessionListForTarget,
-} from "./chat-session.ts";
+import { refreshChatSessionListForTarget } from "./chat-session.ts";
 import { attachmentBatchRejection } from "./components/chat-attachment-admission.ts";
 import { formatConnectError } from "./connect-error.ts";
 import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";

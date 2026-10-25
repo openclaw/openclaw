@@ -38,6 +38,12 @@ decoded rows even when a caller retains the inactive handle. Predicate compariso
 baselines last only until release; a late acknowledgement cannot restore them.
 Active authorities retain their existing publication and final-effect checks.
 
+Idle session reclamation workers retain their admitted connection, not completed
+deletion plans or the caller's async context. Retirement callbacks capture only
+the worker's registry key. Transport startup and idle timers run outside request
+context while preserving the selected database engine. Each reclamation request
+keeps its own current-source and commit-authority checks.
+
 ## Choose the execution owner
 
 Actor-backed session managers serialize append preparation and committed view
@@ -101,6 +107,14 @@ and the agent's
 [`openclaw-agent-execution.worker.ts`](https://github.com/openclaw/openclaw/blob/main/src/state/openclaw-agent-execution.worker.ts).
 The lifecycle owner closes its read scope and drains accepted writes before
 retiring the store.
+
+Session-entry and transcript readers resolve read scopes without loading synchronous
+writer admission. A passive process-local borrower owner shares already admitted
+handles, failure visibility, pins, and idle activity with the writable lifecycle.
+The writable lifecycle alone opens and publishes those handles and owns leases,
+migrations, timers, and closure. Borrowers prevent idle eviction; explicit disposal
+can still close the connection and invalidate its claims immediately. Maintenance
+closes cached handles before migrating or replacing their storage.
 
 If PostgreSQL schema publication invalidates admission, connection opening,
 shared-state reads before their callback, and standalone feature-schema ensures
