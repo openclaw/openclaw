@@ -4,6 +4,7 @@ import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { mediaTicketPayload } from "../test-helpers/control-ui-attachment-fixtures.ts";
 import {
   createControlUiE2eContextOptions,
   tooltipTitleText,
@@ -370,11 +371,7 @@ suite.define(() => {
         await route.fulfill(
           metadata
             ? {
-                json: {
-                  available: true,
-                  mediaTicket: "initial-prompt-ticket",
-                  mediaTicketExpiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
-                },
+                json: mediaTicketPayload("initial-prompt-ticket", 5 * 60_000),
               }
             : { contentType: "image/png", body: imageBytes },
         );
