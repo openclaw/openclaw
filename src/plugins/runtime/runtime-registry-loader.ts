@@ -13,7 +13,6 @@ import { resolveEffectivePluginIdsAsync } from "../effective-plugin-ids.js";
 import { collectConfiguredMemoryEmbeddingProviderIds } from "../gateway-startup-plugin-ids.js";
 import { createInstalledPluginIndexScopeLookup } from "../installed-plugin-index-scope-lookup.js";
 import { loadAndActivateRootPluginRegistry } from "../loader.js";
-import { hasNonEmptyPluginIdScope } from "../plugin-scope.js";
 import { buildPluginRuntimeLoadOptions } from "./load-context.js";
 import { resolvePluginRuntimeLoadContext } from "./load-context.resolve.js";
 
@@ -144,7 +143,7 @@ export async function ensurePluginRegistryLoaded(options?: {
         scope === "memory" ||
         scope === "sandbox-backends" ||
         scope === "all" ||
-        hasNonEmptyPluginIdScope(pluginIds)
+        (pluginIds !== undefined && pluginIds.length > 0)
           ? { onlyPluginIds: pluginIds }
           : {}),
       },
