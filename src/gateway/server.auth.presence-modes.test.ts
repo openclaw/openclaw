@@ -55,6 +55,10 @@ type Observation = {
   rows: PresenceEntry[];
 };
 
+async function request(ws: WebSocket, method: string, params: Record<string, unknown>) {
+  expect((await rpcReq(ws, method, params)).ok).toBe(true);
+}
+
 function observePresence(ws: WebSocket) {
   const observations: Observation[] = [];
   let entries = new Map<string, PresenceEntry>();
@@ -162,12 +166,7 @@ test("keeps multi-client presence compact through heartbeat, activity, and watch
       };
       // Establish a delivered baseline before touching every live browser row.
       await publication(
-        async () => {
-          expect(
-            (await rpcReq(clients[0]!.ws, "sessions.viewers.set", { sessionKeys: [sessionKey] }))
-              .ok,
-          ).toBe(true);
-        },
+        () => request(clients[0]!.ws, "sessions.viewers.set", { sessionKeys: [sessionKey] }),
         ({ rows }) =>
           rows.some(
             (row) =>
@@ -186,14 +185,8 @@ test("keeps multi-client presence compact through heartbeat, activity, and watch
                 clients.map(async ({ ws }) => {
                   // A pong is the real socket liveness boundary that renews stored presence.ts.
                   ws.pong();
-                  expect((await rpcReq(ws, "presence.activity", {})).ok).toBe(true);
-                  expect(
-                    (
-                      await rpcReq(ws, "sessions.viewers.set", {
-                        sessionKeys: watched,
-                      })
-                    ).ok,
-                  ).toBe(true);
+                  await request(ws, "presence.activity", {});
+                  await request(ws, "sessions.viewers.set", { sessionKeys: watched });
                 }),
               );
             },

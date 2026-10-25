@@ -114,23 +114,20 @@ test("sessions.list retains stored titles and transcript previews beyond the dat
     getRuntimeConfig: () => cfg,
     ...bindSessionRowProjection({}, () => projection),
   };
-  try {
-    const initial = await directSessionReq<SessionsListResult>(
+  const list = (limit?: number) =>
+    directSessionReq<SessionsListResult>(
       "sessions.list",
-      { includeDerivedTitles: true, includeLastMessage: true, limit: agentIds.length },
+      { includeDerivedTitles: true, includeLastMessage: true, limit },
       { context },
     );
+  try {
+    const initial = await list(agentIds.length);
     expect(initial.ok).toBe(true);
     expect(initial.payload?.sessions).toHaveLength(agentIds.length);
     await backfilled;
     await projection.ensureMaterialized();
     for (const limit of [undefined, 100]) {
-      const result = await directSessionReq<SessionsListResult>(
-        "sessions.list",
-        { includeDerivedTitles: true, includeLastMessage: true, limit },
-        { context },
-      );
-
+      const result = await list(limit);
       expect(result.ok).toBe(true);
       expect(result.payload?.sessions).toMatchObject(
         agentIds.map((agentId) => ({
@@ -168,19 +165,17 @@ test("sessions.list projects out prompt snapshots without changing full entry re
     agentId: target.agentId ?? "main",
     path: target.path,
   });
-  const fullEntries = sessionAccessor.listSessionEntriesReadOnly({ agentId: "main", storePath });
+  const readEntries = (projection?: "list") =>
+    sessionAccessor.listSessionEntriesReadOnly({ agentId: "main", storePath, projection });
+  const fullEntries = readEntries();
   expect(fullEntries).toHaveLength(1);
   expect(fullEntries[0]?.entry.skillsSnapshot).toBeDefined();
   expect(fullEntries[0]?.entry.systemPromptReport?.source).toBe("run");
 
-  const cfg = {
-    agents: { entries: { main: {} } },
-    session: { store: storePath },
-  };
-  let projection: Awaited<ReturnType<typeof createSessionRowProjection>> | undefined;
+  const cfg = { agents: { entries: { main: {} } }, session: { store: storePath } };
+  const projection = await createSessionRowProjection({ cfg });
   let reads: ReturnType<typeof trackSqliteStatementExecutions<"sessionStore">> | undefined;
   try {
-    projection = await createSessionRowProjection({ cfg });
     const resident = projection.describe({ agentId: "main", key: fullEntries[0]!.sessionKey });
     expect(resident?.storedEntry?.sessionId).toBe("sess-main");
     expect(resident?.storedEntry?.skillsSnapshot).toBeUndefined();
@@ -212,18 +207,11 @@ test("sessions.list projects out prompt snapshots without changing full entry re
     expect(reads.counts.sessionStore).toBe(0);
   } finally {
     reads?.restore();
-    projection?.dispose();
+    projection.dispose();
   }
 
-  expect(sessionAccessor.listSessionEntriesReadOnly({ agentId: "main", storePath })).toEqual(
-    fullEntries,
-  );
-
-  const listEntries = sessionAccessor.listSessionEntriesReadOnly({
-    agentId: "main",
-    projection: "list",
-    storePath,
-  });
+  expect(readEntries()).toEqual(fullEntries);
+  const listEntries = readEntries("list");
   expect(listEntries.map(({ entry }) => [entry.skillsSnapshot, entry.systemPromptReport])).toEqual([
     [undefined, undefined],
   ]);
