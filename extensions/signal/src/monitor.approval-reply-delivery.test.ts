@@ -76,6 +76,17 @@ describe("Signal monitor reply delivery", () => {
     });
   });
 
+  it("forwards voice delivery for reply media and not for reply text", async () => {
+    await deliverReplyPayload({ mediaUrl: "/tmp/voice.mp3", audioAsVoice: true });
+    await deliverReplyPayload({ text: "plain", audioAsVoice: true });
+
+    expect(sendMocks.sendMessageSignal.mock.calls[0]?.[2]).toMatchObject({
+      mediaUrl: "/tmp/voice.mp3",
+      audioAsVoice: true,
+    });
+    expect(sendMocks.sendMessageSignal.mock.calls[1]?.[2]).not.toHaveProperty("audioAsVoice");
+  });
+
   it("preserves ordinary control-only presentation fallback text", async () => {
     await deliverReplyPayload({
       presentation: {

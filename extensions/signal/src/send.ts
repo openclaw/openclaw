@@ -41,6 +41,8 @@ export type SignalSendOpts = {
   replyToId?: string | null;
   replyToAuthor?: string | null;
   replyToBody?: string | null;
+  /** Send audio media as a native voice note (signal-cli `--voice-note`). */
+  audioAsVoice?: boolean;
   /** Revalidate the originating request before every daemon mutation. */
   assertDirectAdapterHandoff?: () => void;
 };
@@ -213,6 +215,9 @@ export async function sendMessageSignal(
   }
   if (attachments && attachments.length > 0) {
     params.attachments = attachments;
+  }
+  if (opts.audioAsVoice === true && outboundMedia?.kind === "audio") {
+    params.voiceNote = true;
   }
 
   Object.assign(params, buildTargetParams(target));

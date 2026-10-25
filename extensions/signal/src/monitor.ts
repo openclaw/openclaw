@@ -238,6 +238,7 @@ export async function deliverReplies(
         maxBytes,
         accountId,
         ...(mediaUrl ? { mediaUrl } : {}),
+        ...(mediaUrl && deliveredPayload.audioAsVoice === true ? { audioAsVoice: true } : {}),
         ...(replyToId
           ? {
               replyToId,

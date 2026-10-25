@@ -120,6 +120,36 @@ describe("sendMessageSignal receipts", () => {
     expect(result.receipt.sentAt).toBeGreaterThan(0);
   });
 
+  it("sends audio as a native voice note only when voice delivery is requested", async () => {
+    signalRpcRequestMock.mockResolvedValue({ timestamp: 1234567892 });
+    const voice = { path: "/tmp/voice.mp3", contentType: "audio/mpeg" };
+    resolveOutboundAttachmentFromUrlMock.mockResolvedValueOnce(voice).mockResolvedValueOnce(voice);
+    await sendMessageSignal("+15551234567", "", {
+      cfg: SIGNAL_TEST_CFG,
+      mediaUrl: "/tmp/voice.mp3",
+      audioAsVoice: true,
+    });
+    await sendMessageSignal("+15551234567", "", {
+      cfg: SIGNAL_TEST_CFG,
+      mediaUrl: "/tmp/voice.mp3",
+    });
+    expect(signalRpcRequestMock.mock.calls[0]?.[1]).toMatchObject({
+      attachments: ["/tmp/voice.mp3"],
+      voiceNote: true,
+    });
+    expect(signalRpcRequestMock.mock.calls[1]?.[1]).not.toHaveProperty("voiceNote");
+  });
+
+  it("keeps non-audio media as a normal attachment when voice delivery is requested", async () => {
+    signalRpcRequestMock.mockResolvedValueOnce({ timestamp: 1234567893 });
+    await sendMessageSignal("+15551234567", "", {
+      cfg: SIGNAL_TEST_CFG,
+      mediaUrl: "/tmp/image.png",
+      audioAsVoice: true,
+    });
+    expect(signalRpcRequestMock.mock.calls[0]?.[1]).not.toHaveProperty("voiceNote");
+  });
+
   it("does not invent platform ids when signal-cli omits a timestamp", async () => {
     signalRpcRequestMock.mockResolvedValueOnce({});
     const result = await sendMessageSignal("+15551234567", "hello", { cfg: SIGNAL_TEST_CFG });
