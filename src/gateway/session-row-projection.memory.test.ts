@@ -68,7 +68,7 @@ afterEach(async () => {
 async function fixture(
   sessionKey = key,
   entry: Partial<InternalSessionEntry> = {},
-  messages: [string, unknown][] = [],
+  messages: unknown[] = [],
 ) {
   const agentId = sessionKey.split(":")[1]!;
   const owner = memorySessionActorOwners.get({
@@ -85,10 +85,10 @@ async function fixture(
     cwd: "/synthetic/workspace",
     transcriptEvents: [
       createSessionTranscriptHeader({ sessionId: sessionKey, cwd: "/synthetic/workspace" }),
-      ...messages.map(([id, message], index) => ({
+      ...messages.map((message, index) => ({
         type: "message",
-        id,
-        parentId: messages[index - 1]?.[0] ?? null,
+        id: String(index),
+        parentId: index ? String(index - 1) : null,
         timestamp: new Date(1).toISOString(),
         message,
       })),
@@ -98,37 +98,35 @@ async function fixture(
   return { owner, actor, binding };
 }
 
+type Rows = ReadonlyMap<string, Row | undefined>;
 function readRows<T>(
-  binding: SessionActorStorageBinding,
+  binding: SessionActorStorageBinding | undefined,
   keys: string[],
-  consume: (rows: ReadonlyMap<string, Row | undefined>) => T,
+  consume: (rows: Rows) => T,
 ) {
-  return runWithSessionActorStorage(binding, () =>
+  const read = () =>
     withBoundIncognitoSessionRows(
       cfg,
       keys.map((sessionKey) => ({ key: sessionKey, agentId: sessionKey.split(":")[1]! })),
       consume,
       env,
-    ),
-  );
+    );
+  return binding ? runWithSessionActorStorage(binding, read) : read();
 }
-const rowAt = (rows: ReadonlyMap<string, Row | undefined>, sessionKey: string) =>
+const rowAt = (rows: Rows, sessionKey: string) =>
   rows.get(JSON.stringify([sessionKey.split(":")[1], sessionKey]));
 
 it("prepares memory title, bounded fallback, board presence and cross-agent lineage", async () => {
   const root = await fixture(key, { parentSessionKey: parentKey }, [
-    ["user", { role: "user", content: "A private question" }],
-    [
-      "answer",
-      {
-        role: "assistant",
-        content: "A private answer",
-        stopReason: "stop",
-        provider: "ollama",
-        model: "example",
-        __openclaw: { runId: "run" },
-      },
-    ],
+    { role: "user", content: "A private question" },
+    {
+      role: "assistant",
+      content: "A private answer",
+      stopReason: "stop",
+      provider: "ollama",
+      model: "example",
+      __openclaw: { runId: "run" },
+    },
   ]);
   await fixture(parentKey, { displayName: "Parent" });
   await fixture(childKey, { parentSessionKey: key });
@@ -223,12 +221,10 @@ it("prepares queued rows after the turn releases its actor without extending ses
 
 it("reads memory reactions after writes through the Gateway reader", async () => {
   const root = await fixture();
-  const sibling = await fixture(childKey, {}, [
-    ["message", { role: "user", content: "React to this" }],
-  ]);
+  const sibling = await fixture(childKey, {}, [{ role: "user", content: "React to this" }]);
   const params = {
     expectedSessionId: childKey,
-    messageId: "message",
+    messageId: "0",
     emoji: "👍",
     identityId: "viewer",
   };
@@ -243,7 +239,7 @@ it("reads memory reactions after writes through the Gateway reader", async () =>
     );
   await commitMemory(sibling.actor.storage!, "session.reaction.set", { params });
   expect(await read()).toEqual({
-    message: [{ emoji: "👍", count: 1, identities: [{ id: "viewer" }] }],
+    0: [{ emoji: "👍", count: 1, identities: [{ id: "viewer" }] }],
   });
   await commitMemory(sibling.actor.storage!, "session.reaction.set", {
     params: { ...params, remove: true },
@@ -253,20 +249,11 @@ it("reads memory reactions after writes through the Gateway reader", async () =>
 
 it("selects unbound row owners and keeps absent reads from recreating a closed session", async () => {
   const root = await fixture();
-  const queries = [
-    { key, agentId: "main" },
-    { key: parentKey, agentId: "work" },
-  ];
   const read = () =>
-    withBoundIncognitoSessionRows(
-      cfg,
-      queries,
-      (rows) => ({
-        entry: rowAt(rows, key)?.entry,
-        absent: rowAt(rows, parentKey),
-      }),
-      env,
-    );
+    readRows(undefined, [key, parentKey], (rows) => ({
+      entry: rowAt(rows, key)?.entry,
+      absent: rowAt(rows, parentKey),
+    }));
   expect(await read()).toMatchObject({ entry: { sessionId: key }, absent: undefined });
   await patch(root.actor, { displayName: "Updated in memory" });
   expect((await read()).entry?.displayName).toBe("Updated in memory");
