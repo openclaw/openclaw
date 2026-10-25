@@ -1,13 +1,10 @@
 import { Command } from "commander";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { isRich } from "../../packages/terminal-core/src/theme.js";
+import { withTestTimeout } from "../../test/helpers/promise.js";
 import { registerDocsCli } from "./docs-cli.js";
 
-const runtime = vi.hoisted(() => ({
-  log: vi.fn(),
-  error: vi.fn(),
-  exit: vi.fn(),
-}));
+const runtime = vi.hoisted(() => ({ log: vi.fn(), error: vi.fn(), exit: vi.fn() }));
 const fetchMock = vi.fn<typeof fetch>();
 
 vi.mock("../runtime.js", async (importOriginal) => ({
@@ -62,9 +59,7 @@ beforeEach(() => {
   fetchMock.mockReset();
   vi.mocked(isRich).mockReturnValue(false);
   vi.stubGlobal("fetch", fetchMock);
-  runtime.log.mockClear();
-  runtime.error.mockClear();
-  runtime.exit.mockClear();
+  vi.clearAllMocks();
 });
 
 afterEach(() => vi.unstubAllGlobals());
@@ -107,11 +102,7 @@ it("emits one JSON object for the docs homepage", async () => {
 
 it.each([
   ["null root", "null", "malformed: expected results array"],
-  [
-    "non-array results",
-    JSON.stringify({ results: "unavailable" }),
-    "malformed: expected results array",
-  ],
+  ["non-array results", '{"results":"unavailable"}', "malformed: expected results array"],
   [
     "invalid UTF-8",
     Buffer.from('{"results":[{"title":"\xff","link":"/"}]}', "latin1"),
@@ -203,23 +194,13 @@ it("settles a known HTTP error before a retained clone reaches EOF", async () =>
     () => ({ ok: true as const }),
     (error: unknown) => ({ ok: false as const, error }),
   );
-  let deadline: ReturnType<typeof setTimeout> | undefined;
   try {
-    const result = await Promise.race([
-      pending,
-      new Promise<null>((resolve) => {
-        deadline = setTimeout(() => resolve(null), 500);
-      }),
-    ]);
+    const result = await withTestTimeout(pending, 500, "HTTP error blocked on response EOF");
     expect(result).toMatchObject({ ok: false, error: { message: "Docs search failed: HTTP 503" } });
     expect(requestSignal?.aborted).toBe(true);
   } finally {
-    if (deadline) {
-      clearTimeout(deadline);
-    }
     streamController?.error(new DOMException("fixture cleanup", "AbortError"));
     await capture.body?.cancel().catch(() => undefined);
     await pending;
-    vi.unstubAllGlobals();
   }
 });

@@ -1,4 +1,3 @@
-// Banner tests cover CLI banner rendering and suppression behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { formatCliBannerLine } from "./banner.js";
 import { createCliTtyMock } from "./test-runtime-capture.js";
@@ -12,6 +11,10 @@ const bannerOptions = {
   richTty: false,
   mode: "off" as const,
 };
+const formatBanner = (options: Parameters<typeof formatCliBannerLine>[1] = {}) =>
+  formatCliBannerLine("2026.3.7", { ...bannerOptions, ...options });
+const firstTagline =
+  "Your terminal just grew claws—type something and let the bot pinch the busywork.";
 
 beforeEach(() => {
   setStdoutIsTty(true);
@@ -31,35 +34,37 @@ afterEach(() => {
   restoreStdoutIsTty();
 });
 
-async function importFreshBannerModule() {
+async function captureBanner() {
   vi.resetModules();
-  return await import("./banner.js");
+  const { emitCliBanner, hasEmittedCliBanner } = await import("./banner.js");
+  const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+  return {
+    emit: (options: Parameters<typeof emitCliBanner>[1] = {}) =>
+      emitCliBanner("2026.3.7", { ...bannerOptions, ...options }),
+    hasEmittedCliBanner,
+    write,
+    output: () => write.mock.calls.map(([chunk]) => String(chunk)).join(""),
+  };
 }
 
 describe("formatCliBannerLine", () => {
   it("omits the tagline when mode is off", () => {
-    expect(formatCliBannerLine("2026.3.7", bannerOptions)).toBe("🦞 OpenClaw 2026.3.7 (abc1234)");
+    expect(formatBanner()).toBe("🦞 OpenClaw 2026.3.7 (abc1234)");
   });
 
   it("uses the default tagline when explicitly requested", () => {
-    const line = formatCliBannerLine("2026.3.7", {
-      ...bannerOptions,
-      mode: "default",
-    });
-
-    expect(line).toBe("🦞 OpenClaw 2026.3.7 (abc1234) — All your chats, one OpenClaw.");
+    expect(formatBanner({ mode: "default" })).toBe(
+      "🦞 OpenClaw 2026.3.7 (abc1234) — All your chats, one OpenClaw.",
+    );
   });
 
   it("keeps OPENCLAW_TAGLINE_INDEX behavior in random mode", () => {
-    const line = formatCliBannerLine("2026.3.7", {
-      ...bannerOptions,
+    const line = formatBanner({
       mode: "random",
       env: { ...bannerOptions.env, OPENCLAW_TAGLINE_INDEX: "0" },
     });
 
-    expect(line).toContain(
-      "Your terminal just grew claws\u2014type something and let the bot pinch the busywork.",
-    );
+    expect(line).toContain(firstTagline);
     expect(line).not.toContain("All your chats, one OpenClaw.");
   });
 
@@ -67,23 +72,16 @@ describe("formatCliBannerLine", () => {
     vi.spyOn(Math, "random").mockReturnValue(0);
 
     expect(
-      formatCliBannerLine("2026.3.7", {
-        ...bannerOptions,
+      formatBanner({
         mode: "random",
         env: { ...bannerOptions.env, OPENCLAW_TAGLINE_INDEX: "1abc" },
       }),
-    ).toContain(
-      "Your terminal just grew claws\u2014type something and let the bot pinch the busywork.",
-    );
+    ).toContain(firstTagline);
   });
 
   it("drops decorative emoji for generic Linux terminals", () => {
     Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
-    const line = formatCliBannerLine("2026.3.7", {
-      ...bannerOptions,
-    });
-
-    expect(line).toBe("OpenClaw 2026.3.7 (abc1234)");
+    expect(formatBanner()).toBe("OpenClaw 2026.3.7 (abc1234)");
   });
 });
 
@@ -98,7 +96,7 @@ describe("future holiday tagline windows (2028-2030)", () => {
     const seen = new Set<string>();
     for (let i = 0; i < 200; i++) {
       random.mockReturnValue(i / 200);
-      seen.add(formatCliBannerLine("2026.3.7", { ...bannerOptions, mode: "random" }));
+      seen.add(formatBanner({ mode: "random" }));
     }
     return [...seen];
   };
@@ -123,44 +121,27 @@ describe("emitCliBanner", () => {
     { args: ["-v"], suppressed: true },
     { args: ["acp", "-v"], suppressed: false },
   ])("respects banner suppression for $args", async ({ args, suppressed }) => {
-    const { emitCliBanner, hasEmittedCliBanner } = await importFreshBannerModule();
-    const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-
-    emitCliBanner("2026.3.7", { ...bannerOptions, argv: ["node", "openclaw", ...args] });
-
-    expect(writeSpy).toHaveBeenCalledTimes(suppressed ? 0 : 1);
+    const { emit, hasEmittedCliBanner, write } = await captureBanner();
+    emit({ argv: ["node", "openclaw", ...args] });
+    expect(write).toHaveBeenCalledTimes(suppressed ? 0 : 1);
     expect(hasEmittedCliBanner()).toBe(!suppressed);
   });
 
   it("does not write a banner without a TTY", async () => {
-    const { emitCliBanner, hasEmittedCliBanner } = await importFreshBannerModule();
+    const { emit, hasEmittedCliBanner, write } = await captureBanner();
     setStdoutIsTty(false);
-    const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-
-    emitCliBanner("2026.3.7", {
-      ...bannerOptions,
-    });
-
-    expect(writeSpy).not.toHaveBeenCalled();
+    emit();
+    expect(write).not.toHaveBeenCalled();
     expect(hasEmittedCliBanner()).toBe(false);
   });
 
   it.each([new Date(2026, 1, 26), new Date(2026, 1, 26, 23, 59)])(
     "selects the same ASCII lobster throughout %s",
     async (now) => {
-      const { emitCliBanner } = await importFreshBannerModule();
-      setStdoutIsTty(true);
-      const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-
+      const { emit, output } = await captureBanner();
       vi.useFakeTimers({ now });
-      emitCliBanner("2026.3.7", {
-        ...bannerOptions,
-        mode: "random",
-        richTty: true,
-      });
-
-      const written = writeSpy.mock.calls.map(([chunk]) => String(chunk)).join("");
-      expect(written).toContain(
+      emit({ mode: "random", richTty: true });
+      expect(output()).toContain(
         ["  (\\/)  (\\/)", "   \\_\\  /_/", "    ( o.o )", "    /|__|\\"].join("\n"),
       );
     },
@@ -174,31 +155,18 @@ describe("emitCliBanner", () => {
     { label: "CI", options: { env: { CI: "1" } } },
     { label: "tests", options: { env: { VITEST: "true" } } },
   ])("keeps lobster day out of $label", async ({ options, now }) => {
-    const { emitCliBanner } = await importFreshBannerModule();
-    setStdoutIsTty(true);
-    const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-
+    const { emit, output } = await captureBanner();
     vi.useFakeTimers({ now: now ?? new Date(2026, 1, 26) });
-    emitCliBanner("2026.3.7", {
-      ...bannerOptions,
-      mode: "random",
-      richTty: true,
-      ...options,
-    });
-
-    const written = writeSpy.mock.calls.map(([chunk]) => String(chunk)).join("");
-    expect(written).not.toContain("( o.o )");
-    expect(written).not.toContain("~~~~~~~~~~~");
+    emit({ mode: "random", richTty: true, ...options });
+    expect(output()).not.toContain("( o.o )");
+    expect(output()).not.toContain("~~~~~~~~~~~");
   });
 
   it("emits only once per module instance", async () => {
-    const { emitCliBanner, hasEmittedCliBanner } = await importFreshBannerModule();
-    setStdoutIsTty(true);
-    const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-    emitCliBanner("2026.3.7", bannerOptions);
-    emitCliBanner("2026.3.7", bannerOptions);
-
+    const { emit, hasEmittedCliBanner, write } = await captureBanner();
+    emit();
+    emit();
     expect(hasEmittedCliBanner()).toBe(true);
-    expect(writeSpy).toHaveBeenCalledTimes(1);
+    expect(write).toHaveBeenCalledTimes(1);
   });
 });
