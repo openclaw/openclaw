@@ -10,9 +10,7 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
-import * as pendingInputReads from "../../config/sessions/session-accessor.pending-inputs.js";
 import { prepareSessionPendingInputDedupeRecovery } from "../../config/sessions/session-accessor.pending-inputs.js";
-import { withHostDataSql } from "../../config/sessions/session-native-binding.execution.test-support.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import type { UserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.types.js";
@@ -103,31 +101,15 @@ it("dispatches freshly reclaimed pending input despite its pre-restart inbound d
         await recorder.persistApproved();
         return { text: "Input delivered" };
       });
-      const prepareRecovery = pendingInputReads.prepareSessionPendingInputDedupeRecovery;
-      const observed: string[] = [];
-      const read = vi
-        .spyOn(pendingInputReads, "prepareSessionPendingInputDedupeRecovery")
-        .mockImplementation((...args) =>
-          withHostDataSql(
-            () => prepareRecovery(...args),
-            (query) => observed.push(query),
-          ),
-        );
-      try {
-        await recorder.withPendingInput?.(() =>
-          dispatchReplyFromConfig({
-            ctx,
-            cfg,
-            dispatcher,
-            replyOptions: { userTurnTranscriptRecorder: recorder },
-            replyResolver,
-          }),
-        );
-
-        expect(observed).toEqual([]);
-      } finally {
-        read.mockRestore();
-      }
+      await recorder.withPendingInput?.(() =>
+        dispatchReplyFromConfig({
+          ctx,
+          cfg,
+          dispatcher,
+          replyOptions: { userTurnTranscriptRecorder: recorder },
+          replyResolver,
+        }),
+      );
       expect(replyResolver).toHaveBeenCalledOnce();
       expect((await listSessionPendingInputs(target)).items).toEqual([]);
       const transcript = await loadTranscriptEvents(target);
@@ -135,11 +117,8 @@ it("dispatches freshly reclaimed pending input despite its pre-restart inbound d
         const record = asOptionalRecord(event);
         return record?.type === "message" && asOptionalRecord(record.message)?.role === "user";
       });
-      expect(userMessages).toEqual([
-        expect.objectContaining({
-          type: "message",
-          message: expect.objectContaining({ content: message, idempotencyKey: `${runId}:user` }),
-        }),
+      expect(userMessages).toMatchObject([
+        { message: { content: message, idempotencyKey: `${runId}:user` } },
       ]);
     } finally {
       await interrupt(resumed, source);

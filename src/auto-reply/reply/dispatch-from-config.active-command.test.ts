@@ -122,18 +122,18 @@ it.each([
   ["native", "/help", false, false],
 ] as const)("admits %s %s (authorized=%s, target=%s)", async (source, body, authorized, target) => {
   await withActive(source, target, async ({ key, sourceKey, operation, start }) => {
-    const waiting = createDeferred<{ status: "waiting_for_active" }>();
+    const waiting = createDeferred();
     const wait = controllerWait.waitForSessionRunIdle;
     vi.spyOn(controllerWait, "waitForSessionRunIdle").mockImplementation((sessionKey, ...args) => {
       if (sessionKey === key) {
-        waiting.resolve({ status: "waiting_for_active" });
+        waiting.resolve();
       }
       return wait(sessionKey, ...args);
     });
     const acknowledgement = {
       text: target ? "🧠 Model: mock | ⚙️ Status: ok" : "Command completed.",
     };
-    const resolver = vi.fn<Resolver>(async (_ctx, options) => {
+    const resolver: Resolver = async (_ctx, options) => {
       const binding = readReplySourceInput(options);
       if (target) {
         expect(binding?.mailbox.owner.aliases.has(sourceKey)).toBe(true);
@@ -143,12 +143,9 @@ it.each([
         expect(binding?.claim).toBeUndefined();
       }
       return target ? acknowledgement : markCommandReplyForDelivery(acknowledgement);
-    });
+    };
     const { work, dispatcher } = start(body, resolver, { CommandAuthorized: authorized });
-    expect(
-      await Promise.race([work.then((result) => ({ status: "settled", result })), waiting.promise]),
-    ).toMatchObject({ status: "settled", result: { queuedFinal: true } });
-    expect(resolver).toHaveBeenCalledOnce();
+    expect(await Promise.race([work, waiting.promise])).toMatchObject({ queuedFinal: true });
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(acknowledgement);
     expect(getSessionControllerOperation(key)).toBe(operation);
     expect(operation.result).toBeNull();

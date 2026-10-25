@@ -47,19 +47,6 @@ const routeReply = (params: Partial<RouteReplyParams> = {}) =>
     ...params,
   });
 
-function suppressDelivery(reason: string) {
-  mocks.deliverOutboundPayloads.mockImplementationOnce(
-    async ({
-      onPayloadDeliveryOutcome,
-    }: {
-      onPayloadDeliveryOutcome?: (outcome: unknown) => void;
-    }) => {
-      onPayloadDeliveryOutcome?.({ index: 0, status: "suppressed", reason });
-      return [];
-    },
-  );
-}
-
 describe("routeReply delivery result", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   beforeEach(() => {
@@ -103,9 +90,6 @@ describe("routeReply delivery result", () => {
         deliveries: [{ id: custody.deliveryId, state: "prepared" }],
       },
     });
-    mocks.deliverOutboundPayloads.mockResolvedValue([
-      { channel: "telegram", messageId: "caption-sent" },
-    ]);
     mocks.deliverOutboundPayloads.mockRejectedValueOnce(
       new OutboundDeliveryError("later payload failed", {
         cause: new PlatformMessageNotDispatchedError("before platform dispatch", {
@@ -148,8 +132,6 @@ describe("routeReply delivery result", () => {
             }
             return {
               visibleReplySent: sent.delivered,
-              ...(sent.ambiguous ? { ambiguous: true } : {}),
-              ...(sent.suppressed ? { suppression: { reason: sent.reason } } : {}),
             };
           },
         },
@@ -190,7 +172,16 @@ describe("routeReply delivery result", () => {
   ] as const)(
     "projects suppression or ambiguity for %s without claiming delivery",
     async (reason, outcome) => {
-      suppressDelivery(reason);
+      mocks.deliverOutboundPayloads.mockImplementationOnce(
+        async ({
+          onPayloadDeliveryOutcome,
+        }: {
+          onPayloadDeliveryOutcome?: (outcome: unknown) => void;
+        }) => {
+          onPayloadDeliveryOutcome?.({ index: 0, status: "suppressed", reason });
+          return [];
+        },
+      );
       expect(await routeReply()).toEqual({ ok: true, delivered: false, ...outcome });
     },
   );

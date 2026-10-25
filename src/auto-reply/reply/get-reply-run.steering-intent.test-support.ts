@@ -57,8 +57,7 @@ async function prepareIngress(body: string, authorized = true): Promise<Prepared
     sessionId: sessionEntry.sessionId,
     isNewSession: false,
   });
-  // This suite owns ingress/run construction, not model catalog I/O. The parser,
-  // authorization owner, directive application, and final run producer stay real.
+  // Only catalog I/O is mocked; ingress, authorization, and the run producer stay real.
   const selected = createModelSelectionStateFixture({
     agentCfg: params.agentCfg,
     provider: params.provider,
@@ -84,7 +83,6 @@ async function prepareIngress(body: string, authorized = true): Promise<Prepared
       defaultModel: params.model,
       aliasIndex: { byAlias: new Map(), byKey: new Map() },
     });
-    expect(routed.kind).toBe("continue");
     if (routed.kind !== "continue") {
       throw new Error("Expected directive/prose input to continue to the run producer");
     }
@@ -94,12 +92,19 @@ async function prepareIngress(body: string, authorized = true): Promise<Prepared
       ...routed.result,
       ...levels,
       defaultActivation: routed.result.defaultActivation,
-      // Directives can rewrite agent text. Capture conversation after that owner.
       conversation: prepareReplyConversation({ ctx: sessionCtx, sessionEntry }),
     };
   } finally {
     selection.mockRestore();
   }
+}
+
+function attachBackend(active: ReplyOperation, queueMessage = async () => {}) {
+  active.attachBackend({
+    kind: "embedded",
+    cancel() {},
+    messageInjectionV2: { version: 2, isAvailable: () => true, queueMessage },
+  });
 }
 
 export function registerSteeringIntentProducerCases(params: {
@@ -117,10 +122,7 @@ export function registerSteeringIntentProducerCases(params: {
         ctx: createInboundTurn(body, "slack", "direct"),
         sessionCtx: createSessionTurn(body, "slack", "direct"),
         isNewSession: false,
-        commandAuthorized: true,
-        allowTextCommands: true,
       });
-      prepared.command = { ...prepared.command, isAuthorizedSender: true };
       const inbound = finalizeInboundContext({ ...prepared.ctx, CommandAuthorized: true });
       const routed = await routeReplyDirectivesForTest(inbound, {
         cfg: prepared.cfg,
@@ -164,11 +166,7 @@ export function registerSteeringIntentProducerCases(params: {
         const queueMessage = vi.fn(async () => {});
         const followup = vi.fn(async () => {});
         const active = params.activatePreparedRun(input.sessionKey);
-        active.attachBackend({
-          kind: "embedded",
-          cancel() {},
-          messageInjectionV2: { version: 2, isAvailable: () => true, queueMessage },
-        });
+        attachBackend(active, queueMessage);
         vi.mocked(runReplyAgent).mockImplementationOnce(async (produced) => {
           expect(produced.steeringIntent).toEqual({ kind: "new-execution" });
           expect(produced.followupRun.run.elevatedLevel).toBe("off");
@@ -176,8 +174,6 @@ export function registerSteeringIntentProducerCases(params: {
             expect(produced.followupRun.run.execOverrides?.security).toBe("deny");
             expect(produced.followupRun.prompt).not.toContain("/exec");
           }
-          // Use the exact object emitted by executePreparedReplyRun. Never set
-          // steeringIntent in a test or call the intent helper directly.
           await expect(runReplyQuestionInput(produced)).resolves.toEqual({ handled: false });
           try {
             await expect(
@@ -199,7 +195,6 @@ export function registerSteeringIntentProducerCases(params: {
             expect(queueMessage).not.toHaveBeenCalled();
             expect(followup).not.toHaveBeenCalled();
           } finally {
-            // The queue owns the input now; do not run a queued model turn here.
             clearFollowupQueue(produced.queueKey);
           }
           return undefined;
@@ -218,11 +213,7 @@ export function registerSteeringIntentProducerCases(params: {
       const body = "/steer continue the task";
       const input = await prepareIngress(body);
       const active = params.activatePreparedRun(input.sessionKey);
-      active.attachBackend({
-        kind: "embedded",
-        cancel() {},
-        messageInjectionV2: { version: 2, isAvailable: () => true, async queueMessage() {} },
-      });
+      attachBackend(active);
       const command = buildCommandTestParams(body, input.cfg);
       Object.assign(command, {
         agentId: input.agentId,
