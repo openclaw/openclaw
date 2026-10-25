@@ -243,6 +243,35 @@ it.each(["/login cancel", "/reset", "/new continue"])(
   },
 );
 
+// Channels such as IRC authorize a typed command without marking its source.
+it("answers an unmarked /login cancel beside the active turn", async ({ signal }) => {
+  await withActive("text", false, async ({ key, operation, start }) => {
+    const acknowledgement = { text: "Provider login cancelled." };
+    const reached = createDeferred<boolean>();
+    const abort = new AbortController();
+    const { work, dispatcher } = start(
+      "/login cancel",
+      async () => {
+        reached.resolve(operation.result === null);
+        return markCommandReplyForDelivery(acknowledgement);
+      },
+      { Provider: "irc", Surface: "irc", CommandSource: undefined, CommandTurn: undefined },
+      { abortSignal: abort.signal },
+    );
+    try {
+      expect(await withinTest(reached.promise, signal)).toBe(true);
+    } catch (error) {
+      // A turn queued behind the active one would otherwise outlive the test.
+      abort.abort();
+      throw error;
+    }
+    await expect(work).resolves.toMatchObject({ queuedFinal: true });
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(acknowledgement);
+    expect(getSessionControllerOperation(key)).toBe(operation);
+    expect(operation.result).toBeNull();
+  });
+});
+
 it("lets text /steer reach queue policy beside its active turn", async ({ signal }) => {
   await withActive("text", false, async ({ key, operation, start }) => {
     const reached = createDeferred<boolean>();

@@ -232,6 +232,10 @@ async function runChannelProviderLogin(
     };
   }
 
+  // Adopt before the provider wait: it can outlive the ingress stall watchdog, and
+  // an adopted claim frees the lane for `/login cancel` and cannot be replayed.
+  commandParams.opts?.turnAdoptionLifecycle?.abortSignal?.throwIfAborted();
+  await commandParams.opts?.turnAdoptionLifecycle?.onAdopted();
   const reservation = reserveProviderLoginFlow({
     flows: activeProviderLoginFlows,
     flowKey,

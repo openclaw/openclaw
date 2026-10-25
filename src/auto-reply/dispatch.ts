@@ -17,6 +17,7 @@ import { logMessageReceived } from "../logging/diagnostic.js";
 import { createKeyedFifoLeaseRegistry, type KeyedFifoLease } from "../shared/keyed-fifo-lease.js";
 import { observeAgentRunStart } from "./agent-run-start.js";
 import { resolveCommandTurnContext } from "./command-turn-context.js";
+import { resolveExplicitCommandTurnContext } from "./command-turn-detection.js";
 import { isActiveRunSafeCommandTurn } from "./commands-registry.js";
 import { withReplyDispatcher } from "./dispatch-dispatcher.js";
 import { dispatchGroupThread } from "./group-thread-dispatch.js";
@@ -137,7 +138,7 @@ function reserveForegroundReplyLease(
   // not take a FIFO slot behind that run or /status stays silent until it ends.
   if (
     isActiveRunSafeCommandTurn({
-      commandTurn: resolveCommandTurnContext(finalized),
+      commandTurn: resolveExplicitCommandTurnContext(finalized, cfg),
       cfg,
       provider: finalized.Provider ?? finalized.Surface,
     })
