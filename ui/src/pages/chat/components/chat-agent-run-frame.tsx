@@ -24,6 +24,7 @@ import {
 } from "../chat-agent-run-grouping.ts";
 import type { TurnRecap } from "../chat-progress.ts";
 import { rawMessageTimestamp } from "../chat-thread-items.ts";
+import { BrowserTabPreviews } from "./chat-browser-tab-previews.tsx";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import {
   ActivityGroup,
@@ -38,7 +39,6 @@ import {
   type StreamGroupPart,
 } from "./chat-message-stream-view.tsx";
 import { resolveGroupReplyLine } from "./chat-reply-attribution.ts";
-import { BrowserTabPreviews } from "./chat-tool-cards.solid.tsx";
 import { selectWorkGroupBrowserTabPreviews } from "./chat-tool-cards.ts";
 import { WorkGroupSummary } from "./chat-work-group-summary.tsx";
 import "../../../styles/chat/source-previews.css";

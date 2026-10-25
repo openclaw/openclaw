@@ -51,7 +51,10 @@ continues to run PostgreSQL 17. See the [qualification evidence](#server-major-q
 | `unaccent`, `pg_trgm`, `vector`                   | Supported requirements                  | Positive and missing-extension cases tested; administrators install extensions.                                                                                                                                                |
 | Headless Linux, including Linux under WSL2        | Supported                               | Linux PostgreSQL conformance and CLI/Gateway paths.                                                                                                                                                                            |
 | Headless macOS CLI                                | Supported                               | Real PostgreSQL CLI, interactive setup and Gateway runs.                                                                                                                                                                       |
-| Headless native Windows                           | Experimental                            | No native Windows PostgreSQL acceptance run recorded. Test setup, turns, port, backup and update on Windows.                                                                                                                   |
+| Native Windows + PostgreSQL                       | Supported                               | Native Windows client and PG17 server, including fresh backup restore; [qualification and limits](#native-windows-qualification).                                                                                              |
+| Native Windows managed service                    | Supported                               | Install, readiness, turns, graceful stop, restart continuity and data-preserving uninstall; [qualification](#native-windows-qualification).                                                                                    |
+| Native Windows package update with PG state       | Not yet applicable                      | No published release selects PostgreSQL for state and agent stores; requalify when one ships. [Evidence](#native-windows-qualification).                                                                                       |
+| Native Windows database port                      | Not supported yet                       | Use fresh PostgreSQL state on Windows, or run the port on Linux/macOS; [details](#native-windows-qualification).                                                                                                               |
 | macOS app                                         | Experimental: pending signed-app proof  | Credentials stay local, runtime pins stay local, and exec approvals use the shared owner. Combined signed-app acceptance is pending.                                                                                           |
 | iOS/iPad app                                      | Not supported without real-device proof | Simulator evidence is insufficient; real-device authentication and approval flows remain unqualified.                                                                                                                          |
 
@@ -101,6 +104,65 @@ rejecting the row. Its first full attempt also exhausted the default lock table.
 The recorded full PG18 run used `max_locks_per_transaction=512` with 100
 connections; production sizing depends on actual concurrent store use.
 
+## Native Windows qualification
+
+The `PGQUALWIN` qualification on 2026-10-25 used Windows Server 2022 Datacenter
+build **20348.5761**, Node **24.22.1**, PostgreSQL **17.11** from the official EDB
+Windows installer, and pgvector **0.8.7** built from its official release tag with
+MSVC. Extensions were `pg_trgm` **1.6** and `unaccent` **1.1**. Both OpenClaw and
+PostgreSQL ran natively on Windows, connected over loopback TLS `verify-full`.
+Source pins, commands, timings, and redacted evidence are recorded in
+[PR #183512](https://github.com/openclaw/openclaw/pull/183512).
+
+Covered flows include non-interactive onboarding through a file DSN SecretRef,
+Doctor/status/models, foreground Gateway readiness and health, scripted turns,
+memory indexing/search, and forced Gateway restart continuity. A populated PG
+backup was created, verified, and restored into fresh staging with exact canonical
+digests and no embedding calls during backup/restore and index rebuild. Path checks
+covered spaces/non-ASCII names, drive-letter/backslash SecretRef and `sslrootcert`
+paths, and a **324-character state directory**. An unreachable DSN failed without
+credential leaks, and Gateway startup rejected invalid config with exit **78**.
+
+The `PGQUALWIN2` follow-up on the same Windows/Node/PostgreSQL versions qualified
+native Scheduled Task service lifecycle with a file DSN SecretRef. Patched build
+`8f8721740bdb`, whose service fix landed in
+[PR #183632](https://github.com/openclaw/openclaw/pull/183632), passed installation,
+readiness/health, a scripted turn, and completed graceful shutdown. No Gateway
+worker/bridge processes or OpenClaw role backends remained in `pg_stat_activity`.
+Start and restart preserved exact six-table, session/history and memory digests.
+Uninstall removed the service registration and retained PostgreSQL data, local
+anchors and the file SecretRef. Lifecycle checks emitted no embedding calls
+before deliberate memory-search probes, which separately embedded their queries.
+
+Host reboot recovery passed on the earlier build `5abc0c66e293`: the Scheduled
+Task ran automatically, a subsequent `gateway start` returned `already-running`,
+and readiness and continuity checks passed. Reboot was not repeated on the
+patched build. The baseline `2f95e977c77d`, target `5abc0c66e293` and patched service
+build used state **32** / agent **34**; this run does not qualify the later state
+33 / agent 35 migrations.
+
+**Package update with PostgreSQL state is not yet applicable.** No published
+release selected PostgreSQL for state and agent stores in the 2026-10-25 registry
+inspection. Stable **2026.10.7** lacks that support; **2026.10.10-beta.3** accepts
+the configuration but its bundled runtime selects SQLite for state and agent
+stores, with PostgreSQL enabled only for Workboard. Requalify published-release
+updates when a version selecting PostgreSQL state and agent stores ships.
+
+The previous-main update and managed rollback attempts did not complete.
+Separate handoff-path and candidate-admission fixes landed in
+[PR #183622](https://github.com/openclaw/openclaw/pull/183622) and
+[PR #183645](https://github.com/openclaw/openclaw/pull/183645). Manual package
+replacement followed the documented
+[recovery procedure](/install/updating/rollback-and-recovery), but does not qualify
+managed activation or rollback. Commands, source pins, continuity digests and
+timings are recorded in
+[PR #183634](https://github.com/openclaw/openclaw/pull/183634).
+
+Native Windows does not yet support SQLite ↔ PostgreSQL database port, including
+dry-run, resume, and rollback. The command refuses before creating recovery
+artifacts and leaves existing data and engine selection unchanged. Start with
+fresh PostgreSQL state on Windows, or run the port on Linux/macOS.
+
 ## When to use PostgreSQL
 
 Choose PostgreSQL when you want supported Gateway stores on an independently
@@ -142,6 +204,17 @@ and an idle connection lost by the server is replaced at the next open. Workers
 close their cached connections after three minutes idle or on shutdown. Taking a
 connection from the cache cancels its idle timeout; checked-out connections are
 not expired by this cache.
+
+Gateway workers share four PostgreSQL I/O services per process. The Gateway
+starts them when it selects PostgreSQL, overlapping their initialization with
+config and plugin preparation. Replies wake only their own connection; blocked
+callers check for service failure at intervals of at most 50 milliseconds.
+This changes where connections run, not their exclusive ownership or idle retention. An
+externally constructed SDK or plugin worker without inherited pool endpoints
+starts its own four services on first PostgreSQL use. It emits a once-per-thread
+warning and `openclaw.postgres.pool.self-root` diagnostic with the worker label
+and thread ID. Worker diagnostics count these roots separately from physical
+I/O services, so unexpected worker creation remains visible.
 
 Usage reports retain their reader in the existing history worker between requests.
 Each report still uses a fresh read snapshot; database maintenance and worker
@@ -727,12 +800,23 @@ the upgrade. [Doctor's migration owner](https://github.com/openclaw/openclaw/blo
 and the [agent maintenance gate](https://github.com/openclaw/openclaw/blob/main/src/state/openclaw-agent-db-maintenance-authority.ts)
 enforce stopped-writer maintenance.
 
+After a PostgreSQL major-version upgrade, `REINDEX` the
+`idx_memory_index_sources_exact_path`, `idx_memory_index_sources_basename`, and
+`idx_memory_index_sources_stem` indexes because `normalize()` follows PostgreSQL's
+Unicode tables.
+
 First boot, ports, rebuilds, and migrations can take longer on slow disks or a
 remote server. Connection waits allow 60 seconds. On runtime store connections,
 OpenClaw sets session-level `lock_timeout` to 60 seconds and `statement_timeout`
 to 90 seconds. These liveness bounds override role, database, and DSN startup
-settings; the synchronous bridge also has a 120-second deadline. These are not per-operation
-config options. Port and restore materialization allow a one-hour statement timeout.
+settings. The synchronous bridge has a 120-second deadline. If it expires, the
+process root terminates the whole I/O service, resetting every connection assigned
+to that service (roughly a quarter of the process's PostgreSQL connections) with
+an unknown outcome. Runtime statements time out after 90 seconds, so the bridge
+deadline covers a wedged service or a black-holed network. Port and restore
+materialization allow a one-hour statement timeout, but a statement running longer
+than 120 seconds still trips the bridge deadline and resets its I/O service.
+These are not per-operation config options.
 A timeout is a failure to investigate, not permission to delete recovery state.
 Inspect server load, locks, network, and storage, and retry only
 after resolving the reported cause.

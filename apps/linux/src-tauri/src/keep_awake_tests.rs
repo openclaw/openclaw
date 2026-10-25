@@ -84,11 +84,15 @@ fn start(f: &Arc<Mutex<Fixture>>) -> (KeepAwake, mpsc::Receiver<Status>) {
     .unwrap();
     (owner, receiver)
 }
-fn status(receiver: &mpsc::Receiver<Status>, active: bool, error: Option<&str>) {
+fn status(receiver: &mpsc::Receiver<Status>, active: bool, error: Option<(&str, &str)>) {
     let status = receiver.recv_timeout(Duration::from_secs(5)).unwrap();
     assert_eq!(status.active, active);
     match error {
-        Some(error) => assert!(status.error.unwrap().contains(error)),
+        Some((title, message)) => {
+            let error = status.error.unwrap();
+            assert_eq!(error.title(), title);
+            assert!(error.message().contains(message));
+        }
         None => assert!(status.error.is_none()),
     }
 }
@@ -135,9 +139,9 @@ fn enable_failure_never_saves_or_leaks_a_native_request() {
             &reports,
             false,
             Some(if fail_acquire {
-                "acquire failed"
+                ("Keep computer awake", "acquire failed")
             } else {
-                "write failed"
+                ("Saved Gateways", "write failed")
             }),
         );
         owner.wait_stopped();
@@ -156,7 +160,11 @@ fn failed_release_stays_active_but_failed_save_reports_restart_risk() {
     let (owner, reports) = start(&f);
     status(&reports, true, None);
     owner.toggle().unwrap();
-    status(&reports, true, Some("release failed"));
+    status(
+        &reports,
+        true,
+        Some(("Keep computer awake", "release failed")),
+    );
     {
         let mut f = f.lock().unwrap();
         assert!(f.saved);
@@ -165,7 +173,11 @@ fn failed_release_stays_active_but_failed_save_reports_restart_risk() {
         f.write_error = true;
     }
     owner.toggle().unwrap();
-    status(&reports, false, Some("may turn on again after restarting"));
+    status(
+        &reports,
+        false,
+        Some(("Saved Gateways", "may turn on again after restarting")),
+    );
     assert!(f.lock().unwrap().saved);
     f.lock().unwrap().write_error = false;
     owner.toggle().unwrap();
@@ -183,7 +195,11 @@ fn failed_restoration_can_be_disabled_without_retrying_the_unavailable_platform(
         ..Fixture::default()
     }));
     let (owner, reports) = start(&f);
-    status(&reports, false, Some("acquire failed"));
+    status(
+        &reports,
+        false,
+        Some(("Keep computer awake", "acquire failed")),
+    );
     owner.toggle().unwrap();
     status(&reports, false, None);
     assert!(!f.lock().unwrap().saved);
@@ -191,28 +207,40 @@ fn failed_restoration_can_be_disabled_without_retrying_the_unavailable_platform(
     owner.wait_stopped();
 }
 #[test]
-fn startup_error_is_visible_without_changing_the_saved_preference() {
-    for fail_read in [true, false] {
-        let f = Arc::new(Mutex::new(Fixture {
-            saved: true,
-            read_error: fail_read,
-            acquire_error: !fail_read,
-            ..Fixture::default()
-        }));
-        let (owner, reports) = start(&f);
-        status(
-            &reports,
-            false,
-            Some(if fail_read {
-                "read failed"
-            } else {
-                "acquire failed"
-            }),
-        );
-        owner.wait_stopped();
-        assert!(f.lock().unwrap().saved);
-        assert_eq!(f.lock().unwrap().acquired, 0);
+fn unavailable_shared_preferences_leave_power_off_without_a_duplicate_startup_alert() {
+    let f = Arc::new(Mutex::new(Fixture {
+        saved: true,
+        read_error: true,
+        ..Fixture::default()
+    }));
+    let (owner, reports) = start(&f);
+    let initial = reports.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert!(!initial.enabled);
+    assert!(!initial.active);
+    assert!(initial.error.is_none(), "{initial:?}");
+    {
+        let mut f = f.lock().unwrap();
+        assert!(f.saved);
+        assert_eq!((f.acquired, f.released), (0, 0));
+        f.write_error = true;
     }
+    // A user-initiated retry names the shared store and releases the new
+    // request if persistence is still unavailable.
+    owner.toggle().unwrap();
+    status(&reports, false, Some(("Saved Gateways", "write failed")));
+    {
+        let mut f = f.lock().unwrap();
+        assert!(f.saved);
+        assert_eq!((f.acquired, f.released), (1, 1));
+        f.read_error = false;
+        f.write_error = false;
+    }
+    owner.toggle().unwrap();
+    status(&reports, true, None);
+    owner.wait_stopped();
+    let f = f.lock().unwrap();
+    assert!(f.saved);
+    assert_eq!((f.acquired, f.released), (2, 2));
 }
 #[test]
 fn shutdown_during_acquisition_releases_without_persisting_or_publishing() {

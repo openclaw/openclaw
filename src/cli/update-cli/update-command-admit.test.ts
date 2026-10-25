@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { readConfigFileSnapshot } from "../../config/io.runtime.js";
 import * as deferredPluginMigrations from "../../infra/deferred-plugin-migrations.js";
+import { listDirectoryTreeStrictSync } from "../../infra/directory-walk.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 import * as runtimeGuard from "../../infra/runtime-guard.js";
 import {
@@ -65,8 +66,8 @@ function readVerdict(): UpdateAdmissionVerdict {
 }
 
 function snapshotFiles() {
-  return fs
-    .readdirSync(home, { recursive: true, withFileTypes: true })
+  return listDirectoryTreeStrictSync(home)
+    .map((walkEntry) => walkEntry.dirent)
     .filter((entry) => entry.isFile())
     .map((entry) => {
       const filename = path.join(entry.parentPath, entry.name);

@@ -12,6 +12,7 @@ import {
 } from "../components/chat-thread-interactions.ts";
 import { ChatThread } from "../components/chat-thread-view.tsx";
 import type { ChatTranscript } from "../components/chat-transcript-controller.ts";
+import type { TranscriptRow } from "../components/chat-transcript-layout.ts";
 import { TranscriptSearch } from "../components/chat-transcript-search.tsx";
 import type { ChatTranscriptSession } from "../components/chat-transcript-session.ts";
 import {
@@ -256,3 +257,8 @@ export const contact = (identifier: number, target: EventTarget): Touch => ({
   rotationAngle: 0,
   force: 1,
 });
+
+export function renderReadyRows(session: ChatTranscriptSession, rows: readonly TranscriptRow[]) {
+  session.setContentReady(true);
+  return session.render(rows, (row) => (row.kind === "content" ? row.content : null), null, false);
+}

@@ -12,6 +12,7 @@ import {
   isCanvasBoardWidgetName,
 } from "../../../../src/chat/canvas-render.js";
 import { readMessageClientSources } from "../../../../src/chat/message-client-source.js";
+import { projectImportedMessageForDisplay } from "../../../../src/chat/session-catalog-display.js";
 import {
   isToolCallContentType,
   isToolResultContentType,
@@ -23,7 +24,6 @@ import { readClawHubRecommendation } from "../../../../src/shared/clawhub-recomm
 import { readPluginInlineViewBlock } from "../../../../src/shared/plugin-inline-view.js";
 import { getMediaFileExtension } from "../media-file-extension.ts";
 import type { NormalizedMessage, MessageContentItem, MessageImageSource } from "./chat-types.ts";
-import { projectImportedMessageForDisplay } from "./imported-message-display.ts";
 import { normalizeAttachmentContentBlock } from "./message-normalizer-attachments.ts";
 import { resolveMessageSender, resolveMessageSenderLabel } from "./sender-label.ts";
 
@@ -479,7 +479,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
   let audioAsVoice = false;
   let replyTarget = resolveDeliveryReplyTarget(delivery);
   const normalizeText = (text: string, block = false): MessageContentItem[] => {
-    if (!isAssistantMessage) {
+    if (!isAssistantMessage || asOptionalRecord(m["__openclaw"])?.catalogSource === true) {
       return [{ type: "text", text, ...(block ? { name: undefined, args: undefined } : {}) }];
     }
     audioAsVoice = delivery?.audioAsVoice === true;

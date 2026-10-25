@@ -72,10 +72,10 @@ export function resolveAcpSpawnBootstrapDeliveryPlan(params: {
   const bindingMatchesRequesterConversation = Boolean(
     params.requester.origin?.channel &&
     params.binding?.conversation.channel === params.requester.origin.channel &&
-    params.binding?.conversation.accountId === requesterAccountId &&
+    params.binding.conversation.accountId === requesterAccountId &&
     requesterConversationRef?.conversationId &&
-    params.binding?.conversation.conversationId === requesterConversationRef.conversationId &&
-    params.binding?.conversation.parentConversationId ===
+    params.binding.conversation.conversationId === requesterConversationRef.conversationId &&
+    params.binding.conversation.parentConversationId ===
       requesterConversationRef.parentConversationId,
   );
   const boundDeliveryTarget = deliveryContextFromConversation(params.binding?.conversation);

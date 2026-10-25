@@ -151,8 +151,8 @@ export function ChatThread(input: {
   const contents = createMemo(() => {
     // Native range changes redraw this island without preparing the whole pane.
     geometry().read();
-    if (routeLoading()) {
-      return mobile() ? <ChatConversationLoading route /> : <LoadingState />;
+    if (routeLoading() && mobile()) {
+      return <ChatConversationLoading route />;
     }
     if (showLoadingSkeleton() || isEmpty()) {
       return (
@@ -164,6 +164,8 @@ export function ChatThread(input: {
           {showLoadingSkeleton() ? (
             mobile() ? (
               <ChatConversationLoading route={false} />
+            ) : routeLoading() ? (
+              <LoadingState messagesOnly />
             ) : (
               <PanelLoadingSkeleton variant="chat" label={t("chat.thread.loading")} />
             )
@@ -214,11 +216,12 @@ export function ChatThread(input: {
           "chat-thread",
           {
             "chat-thread--direct": current().projection.isDirectThread,
-            "chat-thread--route-loading": routeLoading(),
+            "chat-thread--route-loading": mobile() && routeLoading(),
             "chat-thread--comment-pins": commentPins(),
           },
         ]}
         role="log"
+        aria-label={t("chat.sidePanel.conversation")}
         aria-live="off"
         aria-relevant="additions"
         tabindex={0}

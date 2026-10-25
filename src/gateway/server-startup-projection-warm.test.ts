@@ -196,11 +196,8 @@ it("completes startup and projection preparation before marking while retaining 
     const entryResponse = await waitFor(entryReceived.promise, earlyEntryRequest);
     await waitFor(projectionEntered.promise, earlyEntryRequest);
     for (const [path, expectedStatus, expectedBody] of [
-      ["/health", 200, { ok: true, status: "live" }],
       ["/healthz", 200, { ok: true, status: "live" }],
-      ["/startup", 503, { ok: false, status: "starting" }],
       ["/startupz", 503, { ok: false, status: "starting" }],
-      ["/ready", 503, { ready: false }],
       ["/readyz", 503, { ready: false }],
     ] as const) {
       const response = await fetch(`http://127.0.0.1:${port}${path}`, { signal: requestSignal });

@@ -35,6 +35,7 @@ import {
   writeArchive,
   type FixtureEvent,
 } from "./state-migrations.media-persistence.test-support.js";
+import { createUpdateFailureFact } from "./update-failure-facts.js";
 
 const tempDirs: string[] = [];
 
@@ -232,7 +233,8 @@ it("repairs the next agent after another agent loses maintenance ownership", asy
   const { result, preparedPaths } = await migratePrepared(env);
   expect(revoked).toBe(true);
   expect(result.warnings).toHaveLength(1);
-  expect(result.warnings[0]).toContain(`Skipped agent database migration for ${first}:`);
+  expect(result.warnings[0]).toContain("Skipped agent database migration");
+  expect(result.warnings[0]).toContain(`Database: ${first}`);
   expect(result.warnings[0]).toContain("lease");
   expect(preparedPaths).toEqual([second]);
   expect(readDatabaseSnapshot(first)).toEqual(before);
@@ -665,8 +667,17 @@ it.each([
         `Saved pre-repair SQLite backup: ${path.join(path.dirname(databasePath), "openclaw-media-persistence-recovery-")}`,
       ),
     ]);
-    expect(result.warnings[0]).toContain(`Skipped agent database migration for ${databasePath}:`);
+    expect(result.warnings[0]).toContain("Skipped agent database migration:");
+    expect(result.warnings[0]).toContain(`Database: ${databasePath}`);
     expect(result.warnings[0]).toContain(`invalid ${kind} JSON`);
+    expect(
+      createUpdateFailureFact({
+        check: "media-persistence",
+        code: "step-refused",
+        message: result.warnings[0],
+      }).message,
+    ).toContain(`invalid ${kind} JSON`);
+    expect(result.notices).toContainEqual(expect.stringContaining('rerun "openclaw doctor --fix"'));
     expect(readDatabaseSnapshot(databasePath)).toEqual(before);
     expect(
       readRows(

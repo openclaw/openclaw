@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it } from "vitest";
 import { getPluginToolMeta, setPluginToolMeta } from "../plugins/tool-metadata.js";
+import { expectText as expectGuidance } from "../test-utils/text-assertions.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { applyToolAvailabilityDescriptions } from "./agent-tools.deferred-followup.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
@@ -25,14 +26,6 @@ function describeFirst(source: AnyAgentTool, siblings: string[] = []) {
     applyToolAvailabilityDescriptions([source, ...siblings.map((name) => tool(name))])[0],
     "described tool",
   );
-}
-function expectGuidance(text: string, included: string[], excluded: string[] = []) {
-  for (const fragment of included) {
-    expect(text).toContain(fragment);
-  }
-  for (const fragment of excluded) {
-    expect(text).not.toContain(fragment);
-  }
 }
 
 it.each([

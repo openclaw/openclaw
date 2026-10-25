@@ -121,6 +121,11 @@ export function createPersonReferenceCard(options: {
                     globalScope: isUiGlobalScopeConfigured(defaults),
                     routing: personActivityRouting(context, close),
                     openSession: (row, agentId, navigation) => {
+                      if (!scope || !connection.isCurrent(scope)) {
+                        return;
+                      }
+                      // Closing retires card reads; a deferred navigation keeps Gateway-owned authority.
+                      const { client, hello } = context.gateway.snapshot;
                       const face = resolveSessionPreferredFace(row);
                       close();
                       runSessionNavigationIntent(host, {
@@ -128,10 +133,13 @@ export function createPersonReferenceCard(options: {
                         face,
                         sessionKey: row.key,
                         commit: () => {
+                          const snapshot = context.gateway.snapshot;
                           if (
-                            !scope ||
+                            !connection.capture() ||
                             context.router.getState().location !== route ||
-                            !connection.isCurrent(scope)
+                            snapshot.phase !== "connected" ||
+                            snapshot.client !== client ||
+                            snapshot.hello !== hello
                           ) {
                             return false;
                           }

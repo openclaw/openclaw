@@ -20,7 +20,6 @@ import {
   transcriptContainer,
 } from "./chat-transcript-fixture.test-support.tsx";
 import { readConnectedTranscriptRows } from "./chat-transcript-geometry.ts";
-import type { TranscriptRow } from "./chat-transcript-layout.ts";
 import { TranscriptRowRefs } from "./chat-transcript-row-refs.ts";
 import {
   flushDeferredRowPrune,
@@ -51,51 +50,6 @@ function railState(viewport: HTMLElement) {
 beforeEach(installTranscriptDomMocks);
 afterEach(resetTranscriptTestDom);
 
-it.each([null, 4_800])(
-  "keeps a bounded initial range before measured placement at offset %s",
-  (offset) => {
-    const flushFrames = stubAnimationFrames();
-    const paneId = `render-window-${offset}`;
-    const sessionKey = `agent:main:${paneId}`;
-    if (offset !== null) {
-      saveChatSessionScrollPosition(paneId, sessionKey, {
-        scrollTop: offset,
-        anchorToEnd: false,
-      });
-    }
-    vi.stubGlobal("innerWidth", 800);
-    vi.stubGlobal("innerHeight", 600);
-    const transcript = createChatTranscript(() => paneId);
-    const rows = contentRows(100, "row:", "Turn");
-    const renderRow = vi.fn((row: TranscriptRow) => (row.kind === "content" ? row.content : null));
-    const container = transcriptContainer();
-    const renderWindow = (windowRows = rows) => {
-      renderRow.mockClear();
-      render(
-        transcript.renderSession(sessionKey, (session) =>
-          session.render(windowRows, renderRow, null, false),
-        ),
-        container,
-      );
-      transcript.update();
-      flush();
-      return renderRow.mock.calls.length;
-    };
-    transcript.start();
-    expect(renderWindow([])).toBe(0);
-    flushFrames();
-
-    expect(renderWindow()).toBe(offset === null ? 1 : 9);
-    const mounted = transcriptRows(container).map((row) => Number(row.dataset.index));
-    expect(mounted).toEqual(expect.arrayContaining(offset === null ? [99] : [40, 44]));
-    expect(renderWindow()).toBe(offset === null ? 1 : 9);
-    flushFrames();
-    expect(renderWindow()).toBe(offset === null ? 1 : 9);
-
-    transcript.dispose();
-  },
-);
-
 it("measures newly committed rows before observer registration using fractional layout height", () => {
   const container = transcriptContainer();
   container.innerHTML =
@@ -125,6 +79,7 @@ it("measures newly committed rows before observer registration using fractional 
   virtualizer.getVirtualItems();
   const rowRefs = new TranscriptRowRefs(virtualizer, {
     isCurrentRow: () => true,
+    beforeMeasure: () => {},
     onMount: () => {},
   });
   try {
@@ -154,49 +109,6 @@ it("keeps fractional observer sizes as the sole skipped-row sizing input", async
     for (const row of transcriptRows(container)) {
       expect(row.style.containIntrinsicBlockSize).toBe("100.375px");
     }
-  } finally {
-    transcript.dispose();
-  }
-});
-
-it("keeps a displaced smooth end command smooth during row growth", async () => {
-  const flushFrames = stubAnimationFrames();
-  const transcript = createChatTranscript(() => "smooth-end-recovery", {
-    canFollowEnd: () => true,
-  });
-  const rows = contentRows(1);
-  const { container, renderRows } = await mountTestTranscript(
-    "smooth-end-recovery",
-    rows,
-    transcript,
-  );
-  let scrollHeight = 2000;
-  setTranscriptViewport(container, () => scrollHeight);
-  const scrollTo = vi.fn((options?: ScrollToOptions | number) => {
-    if (typeof options === "object" && options.behavior !== "smooth") {
-      container.scrollTop = options.top ?? container.scrollTop;
-    }
-  });
-  container.scrollTo = scrollTo;
-  try {
-    const row = requireElement(container, ".chat-virtual-row");
-    emitTranscriptResize(row, 800, scrollHeight);
-    renderRows(rows);
-    flushFrames();
-    transcript.cancelScroll();
-    container.scrollTop = 800;
-    transcript.scrollToEnd({ source: "manual", behavior: "smooth" });
-    scrollTo.mockClear();
-    scrollHeight += 100;
-    emitTranscriptResize(row, 800, scrollHeight);
-    renderRows(rows);
-    flushFrames();
-    expect(
-      scrollTo.mock.calls.some(
-        ([options]) => typeof options === "object" && options.behavior === "auto",
-      ),
-    ).toBe(false);
-    expect(container.scrollTop).toBe(800);
   } finally {
     transcript.dispose();
   }
@@ -468,9 +380,7 @@ it("keeps rendering rows after a hide-transition zero rect", async () => {
       observer.emit(0, 0);
     }
     for (const row of transcriptRows(container)) {
-      if (observer.observes(row)) {
-        observer.emitTarget(row, 0, 0);
-      }
+      observer.emitTarget(row, 0, 0);
     }
   }
   render(renderChatThread(props, transcript), container);

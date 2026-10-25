@@ -10,11 +10,11 @@ import {
 } from "../../sessions/agent-harness-session-key.js";
 import { collectSessionControllerTargets } from "../../sessions/session-controller.lifecycle.js";
 import { emitSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
+import { retainAgentDatabase } from "../../state/openclaw-agent-db-borrower.js";
 import {
   createOpenClawAgentDatabaseClaim,
   readOpenClawAgentDatabaseIdentity,
 } from "../../state/openclaw-agent-db-identity.js";
-import { retainAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
   deferOpenClawAgentPostCommitPublication,

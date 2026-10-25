@@ -15,6 +15,7 @@ import { createContext, createGateway, createSessions } from "../test-helpers/ap
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
+import { makeBootRoster } from "./bootstrap.test-support.ts";
 import { createApplicationConfigCapability } from "./config.ts";
 import { bindControlUiDocumentHead, controlUiDocumentHead } from "./control-ui-document-head.ts";
 
@@ -71,12 +72,9 @@ it("renders a matching stripe, favicon, avatar ring, and sidebar/topbar pills on
     ...createContext(
       createGateway(createTestGatewayClient(async () => ({}))),
       createSessions("main", []),
-      {
-        defaultId: "main",
-        mainKey: "main",
-        scope: "per-sender",
+      makeBootRoster({
         agents: [{ id: "main", name: "OpenClaw" }],
-      },
+      }),
     ),
     get config() {
       cardEnvironment();

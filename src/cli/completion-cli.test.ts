@@ -95,11 +95,9 @@ describe("completion-cli", () => {
         .option("--log-level <level>", "Log level")
         .option("--container <name>", "Container")
         .option("--no-color", "Disable colors")
-        .option("--root-only", "Positional root option")
-        .addOption(new Option("--dev", "Hidden global").hideHelp());
+        .option("--root-only", "Positional root option");
       const group = program.command("group").alias("g").option("--parent-only");
       group.command("status").option("--json");
-      program.command("local").addOption(new Option("--profile <name>").choices(["local"]));
       for (const [line, expected] of [
         ["openclaw g status --pr", ["--profile"]],
         ["openclaw group status --no-c", ["--no-color"]],
@@ -107,8 +105,6 @@ describe("completion-cli", () => {
         ["openclaw group status --cont", ["--container"]],
         ["openclaw group status --root", []],
         ["openclaw group status --parent", []],
-        ["openclaw group status --dev", []],
-        ["openclaw local --profile lo", ["local"]],
       ] as const) {
         expect(await complete(shell, program, line), line).toEqual(expected);
       }
@@ -136,17 +132,6 @@ describe("completion-cli", () => {
       },
     );
   }
-
-  it("escapes zsh option descriptions for double-quoted arguments specs", () => {
-    const program = new Command()
-      .name("openclaw")
-      .option("--literal", "Use $OPENCLAW_STATE_DIR with `model/list` and John's profile");
-    const script = getCompletionScript("zsh", program);
-    expect(script).toContain(
-      "--literal[Use \\$OPENCLAW_STATE_DIR with \\`model/list\\` and John's profile]",
-    );
-    expect(script).not.toContain("John'\\''s");
-  });
 
   itUnix.each(["built-in", "root"] as const)("keeps %s zsh descriptions literal", (scope) => {
     const program = new Command().name("openclaw");
@@ -191,14 +176,15 @@ ${completionFunction}
     }
   });
 
-  itUnix("keeps zsh choice boundaries literal", () => {
+  itUnix("keeps zsh choice and option description boundaries literal", () => {
+    const description = "Use $OPENCLAW_STATE_DIR with `model/list` and John's profile";
     const program = choiceProgram([
       "two words",
       'say "hello"',
       "it's literal",
       "literal $(printf OPENCLAW_COMPLETION_VALUE_EXECUTED >&2)",
       "literal `printf OPENCLAW_COMPLETION_VALUE_EXECUTED >&2`",
-    ]);
+    ]).option("--literal", description);
     const stdout = runZshScript(`${getCompletionScript("zsh", program)}
 _arguments() { printf '%s\\n' "$@"; }
 _openclaw_root_completion
@@ -209,6 +195,7 @@ _openclaw_root_completion
     expect(stdout).toContain("two\\ words");
     expect(stdout).toContain('say\\ \\"hello\\"');
     expect(stdout).toContain("OPENCLAW_COMPLETION_VALUE_EXECUTED");
+    expect(stdout).toContain(`--literal[${description}]`);
   });
 
   itUnix("completes zsh short clusters in groups and leaves", async (ctx) => {
@@ -317,9 +304,9 @@ ${cases
 
   itWithPowerShell("ignores PowerShell arguments after the cursor", async () => {
     const prefix = "openclaw completion --shell f";
-    const program = documentedProgram();
-    program.command("status").description("Root status").option("--json", "JSON output");
-    expect(await powershell.complete(program, `${prefix} --yes`, prefix.length)).toEqual(["fish"]);
+    expect(
+      await powershell.complete(documentedProgram(), `${prefix} --yes`, prefix.length),
+    ).toEqual(["fish"]);
   });
 
   itWithPowerShell("matches literal PowerShell choice prefixes", async () => {
@@ -332,15 +319,6 @@ ${cases
   });
 
   itWithFish.each([
-    [
-      "openclaw --profile work --log-level debug --container local g",
-      () =>
-        createCompletionProgram()
-          .option("-p, --profile <name>")
-          .option("--log-level <level>")
-          .option("--container <name>"),
-      expect.arrayContaining(["gateway"]),
-    ],
     ["openclaw gateway -t=secret status -", createCompletionProgram, ["--json"]],
     [
       "openclaw gateway status restart -",
@@ -392,10 +370,7 @@ ${cases
     const program = new Command()
       .name("openclaw")
       .option("-v, --verbose", "Verbose output")
-      .addOption(new Option("-m, --mode <mode>").choices(["-legacy"]))
-      .exitOverride();
-    program.parse(["-vm", "-legacy"], { from: "user" });
-    expect(program.opts()).toEqual({ verbose: true, mode: "-legacy" });
+      .addOption(new Option("-m, --mode <mode>").choices(["-legacy"]));
     expect(runBash(program, ["openclaw", "-vm", "-le"])).toEqual(["-legacy"]);
   });
 

@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
+import * as protocol from "../../../packages/gateway-protocol/src/index.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -76,6 +77,7 @@ it.each(["ready", "busy", "failed"] as const)(
         return readHistory(...args);
       });
       const respond = vi.fn<RespondFn>();
+      const historyValidation = vi.spyOn(protocol, "validateChatHistoryParams");
       try {
         await handleGatewayRequest({
           req: {
@@ -95,6 +97,7 @@ it.each(["ready", "busy", "failed"] as const)(
           extraHandlers: sessionSubscriptionHandlers,
         });
         expect(read, JSON.stringify(respond.mock.calls)).toHaveBeenCalledOnce();
+        expect(historyValidation).not.toHaveBeenCalled();
         expect(observedDuringRead).toBe(true);
         expect(respond).toHaveBeenCalledExactlyOnceWith(
           true,

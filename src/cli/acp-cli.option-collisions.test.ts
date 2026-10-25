@@ -7,16 +7,12 @@ import { registerAcpCli } from "./acp-cli.js";
 type AcpClientOptions = { verbose?: boolean };
 type AcpGatewayOptions = { gatewayPassword?: string; gatewayToken?: string; prefixCwd?: boolean };
 
-const mocks = vi.hoisted(() => ({
+const mocks = await vi.hoisted(async () => ({
   runAcpClientInteractive: vi.fn(async (_opts: AcpClientOptions) => 0),
   serveAcpGateway: vi.fn(async (_opts: AcpGatewayOptions) => {}),
-  defaultRuntime: {
-    log: vi.fn(),
-    error: vi.fn(),
-    writeStdout: vi.fn(),
-    writeJson: vi.fn(),
-    exit: vi.fn(),
-  },
+  defaultRuntime: vi.mocked(
+    (await import("../test-utils/plugin-runtime-env.js")).createNonExitingRuntimeEnv(),
+  ),
 }));
 
 const { runAcpClientInteractive, serveAcpGateway, defaultRuntime } = mocks;

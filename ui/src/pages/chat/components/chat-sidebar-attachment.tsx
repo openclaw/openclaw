@@ -18,7 +18,7 @@ import {
 } from "./chat-attachment-href.ts";
 import type { FileSessionAttachment } from "./chat-file-session-attachment.ts";
 import { FileSessionMenu } from "./chat-file-session-menu.tsx";
-import { openResolvedImage } from "./chat-message-image-open.ts";
+import { openResolvedImage } from "./chat-image-presentation.ts";
 import { releaseChatMediaResourceOwner } from "./chat-message-media.ts";
 import { ChatPdfPreview, isPdfAttachment } from "./chat-pdf-preview.tsx";
 import type {

@@ -8,11 +8,11 @@ import { createZeroUsage } from "../../../../ai/src/usage.test-support.js";
 import type { AgentMessage } from "../../types.js";
 import { convertToLlm } from "../messages.js";
 import { SummaryOutputBudgetError } from "../types.js";
-import { generateSummary } from "./compaction.js";
 import { createCompactionModel } from "./compaction.test-support.js";
 import {
   assistant,
   responseStream,
+  summarize as requestSummary,
   toolCall,
   toolResult,
   user,
@@ -103,20 +103,19 @@ function conversationOf(prompt: string): string {
   return match[1];
 }
 
+function bounded(messages: AgentMessage[], budget = MAX_SUMMARY_INPUT_CHARS) {
+  const result = serializeConversationWithinBudget(convertToLlm(messages), budget);
+  expect(estimateStringChars(result.text)).toBeLessThanOrEqual(budget);
+  return result;
+}
+
 async function summarize(messages: AgentMessage[], model: Model, previousSummary?: string) {
   const { streamFn, prompts } = createCapturingStream();
-  const result = await generateSummary(
-    messages,
-    model,
-    16_384,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
+  const result = await requestSummary(messages, model, {
+    reserveTokens: 16_384,
     previousSummary,
-    undefined,
     streamFn,
-  );
+  });
   expect(result).toEqual({ ok: true, value: "summary" });
   expect(prompts).toHaveLength(1);
   return prompts[0] ?? "";
@@ -139,7 +138,6 @@ describe("summary request input budget", () => {
     const conversation = conversationOf(prompt);
 
     expect(estimateStringChars(conversation)).toBeLessThanOrEqual(MAX_SUMMARY_INPUT_CHARS);
-    // The newest turn carries the live task and arrives verbatim.
     expect(conversation).toContain(`[User]: ask-1249 ${"context ".repeat(100)}`);
     const newestResult = serializeConversation(convertToLlm(messages.slice(-1)));
     expect(
@@ -147,9 +145,7 @@ describe("summary request input budget", () => {
         `[Tool result of exec(cmd="run 1249")]${newestResult.slice("[Tool result]".length)}`,
       ),
     ).toBe(true);
-    // The oldest turn usually states the goal of the session.
     expect(conversation).toContain("[User]: ask-0 ");
-    // Every gap names its size, and the sizes add up to what was left out.
     const gaps = [...conversation.matchAll(/\[\.\.\. (\d+) entr(?:y|ies) omitted \.\.\.\]/gu)];
     expect(gaps.length).toBeGreaterThan(1);
     const kept = conversation
@@ -157,8 +153,6 @@ describe("summary request input budget", () => {
       .filter((part) => /^\[(User|Assistant|Assistant tool calls|Tool result)/u.test(part));
     const omitted = gaps.reduce((sum, gap) => sum + Number(gap[1]), 0);
     expect(kept.length + omitted).toBe(1_250 * 4);
-    // Sampling can separate a result from its call, so each kept result names
-    // the call that produced it.
     expect(conversation).not.toContain("[Tool result]:");
     const results = [
       ...conversation.matchAll(/\[Tool result of exec\(cmd="run (\d+)"\)\]: result-(\d+) /gu),
@@ -166,7 +160,6 @@ describe("summary request input budget", () => {
     expect(results.length).toBeGreaterThan(3);
     expect(results.filter((result) => result[1] !== result[2])).toEqual([]);
     expect(results).toHaveLength([...conversation.matchAll(/ result-\d+ /gu)].length);
-    // The summarizer is told about the gaps, and the previous summary stays outside the budget.
     expect(prompt).toContain("Do not guess what they said.");
     expect(prompt).toContain("<previous-summary>\nPREVIOUS-SUMMARY-FACT\n</previous-summary>");
   });
@@ -185,22 +178,15 @@ describe("summary request input budget", () => {
     { name: "a long history", messages: createLongSession(5) },
     {
       name: "a short history",
-      messages: [{ role: "user", content: "hello", timestamp: 1 }] satisfies AgentMessage[],
+      messages: [user("hello")],
     },
   ])("fails without a model call when the window cannot hold $name", async ({ messages }) => {
     const { streamFn, prompts } = createCapturingStream();
-    const result = await generateSummary(
-      messages,
-      createModel(4_096, 4_096),
-      3_000,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      "漢".repeat(4_000),
-      undefined,
+    const result = await requestSummary(messages, createModel(4_096, 4_096), {
+      reserveTokens: 3_000,
+      previousSummary: "漢".repeat(4_000),
       streamFn,
-    );
+    });
 
     expect(prompts).toHaveLength(0);
     expect(result.ok).toBe(false);
@@ -211,65 +197,37 @@ describe("summary request input budget", () => {
   });
 
   it("never exceeds a budget too small for one gap marker", () => {
-    const messages: AgentMessage[] = [{ role: "user", content: "hello world", timestamp: 1 }];
-
     for (const budget of [0, 10, 18]) {
-      const bounded = serializeConversationWithinBudget(convertToLlm(messages), budget);
-      expect(bounded.text).not.toContain("hello");
-      expect(bounded.omittedEntries).toBe(1);
+      const result = serializeConversationWithinBudget(convertToLlm([user("hello world")]), budget);
+      expect(result.text).not.toContain("hello");
+      expect(result.omittedEntries).toBe(1);
     }
   });
 
   it("keeps both ends of a newest entry that alone exceeds the newest-entries share", () => {
-    const messages: AgentMessage[] = [
-      { role: "user", content: `older ${"a".repeat(300_000)}`, timestamp: 1 },
-      { role: "user", content: `NEWEST-HEAD ${"b".repeat(300_000)} NEWEST-TAIL`, timestamp: 2 },
-    ];
-
-    const bounded = serializeConversationWithinBudget(
-      convertToLlm(messages),
-      MAX_SUMMARY_INPUT_CHARS,
-    );
-
-    expect(estimateStringChars(bounded.text)).toBeLessThanOrEqual(MAX_SUMMARY_INPUT_CHARS);
-    expect(bounded.text).toContain("[User]: NEWEST-HEAD b");
-    expect(bounded.text.endsWith("b NEWEST-TAIL")).toBe(true);
-    expect(bounded.text).toMatch(/\[\.\.\. \d+ characters omitted \.\.\.\]/u);
-    expect(bounded.trimmedEntries).toBe(2);
-    expect(bounded.omittedEntries).toBe(0);
+    const result = bounded([
+      user(`older ${"a".repeat(300_000)}`),
+      user(`NEWEST-HEAD ${"b".repeat(300_000)} NEWEST-TAIL`, 2),
+    ]);
+    expect(result.text).toContain("[User]: NEWEST-HEAD b");
+    expect(result.text.endsWith("b NEWEST-TAIL")).toBe(true);
+    expect(result.text).toMatch(/\[\.\.\. \d+ characters omitted \.\.\.\]/u);
+    expect(result).toMatchObject({ trimmedEntries: 2, omittedEntries: 0 });
   });
 
   it("keeps an excerpt of a huge newest entry that mixes CJK and ASCII text", () => {
-    const messages: AgentMessage[] = [
-      { role: "user", content: `${"𠀀".repeat(500)}${"a".repeat(1_000_000)} END`, timestamp: 1 },
-    ];
-
-    const bounded = serializeConversationWithinBudget(
-      convertToLlm(messages),
-      MAX_SUMMARY_INPUT_CHARS,
-    );
-
-    expect(estimateStringChars(bounded.text)).toBeLessThanOrEqual(MAX_SUMMARY_INPUT_CHARS);
-    expect(bounded.text.startsWith("[User]: 𠀀")).toBe(true);
-    expect(bounded.text.endsWith("a END")).toBe(true);
-    expect(bounded.omittedEntries).toBe(0);
+    const result = bounded([user(`${"𠀀".repeat(500)}${"a".repeat(1_000_000)} END`)]);
+    expect(result.text.startsWith("[User]: 𠀀")).toBe(true);
+    expect(result.text.endsWith("a END")).toBe(true);
+    expect(result.omittedEntries).toBe(0);
   });
 
   it("counts CJK text by its token weight, not its length", () => {
-    const messages: AgentMessage[] = Array.from({ length: 400 }, (_, index) => ({
-      role: "user" as const,
-      content: `${index} ${"漢字".repeat(1_000)}`,
-      timestamp: index,
-    }));
-
-    const bounded = serializeConversationWithinBudget(
-      convertToLlm(messages),
-      MAX_SUMMARY_INPUT_CHARS,
+    const result = bounded(
+      Array.from({ length: 400 }, (_, i) => user(`${i} ${"漢字".repeat(1_000)}`, i)),
     );
-
-    expect(bounded.omittedEntries).toBeGreaterThan(0);
-    expect(estimateStringChars(bounded.text)).toBeLessThanOrEqual(MAX_SUMMARY_INPUT_CHARS);
-    expect(bounded.text.length).toBeLessThan(MAX_SUMMARY_INPUT_CHARS / 2);
+    expect(result.omittedEntries).toBeGreaterThan(0);
+    expect(result.text.length).toBeLessThan(MAX_SUMMARY_INPUT_CHARS / 2);
   });
 
   it("names the call of every sampled tool result, even after the image-omission note", () => {
@@ -292,7 +250,7 @@ describe("summary request input budget", () => {
     }
 
     for (let budget = 4_000; budget <= 60_000; budget += 1_000) {
-      const { text } = serializeConversationWithinBudget(convertToLlm(messages), budget);
+      const { text } = bounded(messages, budget);
       const named = [
         ...text.matchAll(/exec\(cmd="command-(\d+)"\)\]: (?:\[.*\]\n)?RESULT-(\d+) /gu),
       ];
@@ -308,15 +266,14 @@ describe("summary request input budget", () => {
     "keeps the newest result and names its call when one argument fills a %i-character budget",
     (budget) => {
       const messages: AgentMessage[] = [
-        { role: "user", content: "Write the report.", timestamp: 1 },
+        user("Write the report."),
         toolCallMessage([{ id: "w-1", name: "write", cmd: "x".repeat(30_000) }]),
         toolResultMessage("w-1", "write", "WRITE-FAILED: disk full"),
       ];
 
-      const { text } = serializeConversationWithinBudget(convertToLlm(messages), budget);
+      const { text } = bounded(messages, budget);
 
       expect(text).toMatch(/\[Tool result of write\(cmd="x+\.\.\.\)\]: WRITE-FAILED: disk full$/u);
-      expect(estimateStringChars(text)).toBeLessThanOrEqual(budget);
     },
   );
 
@@ -325,34 +282,27 @@ describe("summary request input budget", () => {
     const messages: AgentMessage[] = [
       toolCallMessage(names.map((name) => ({ id: name, name, cmd: "y".repeat(10_000) }))),
       ...names.map((name) => toolResultMessage(name, name, `R-${name}`)),
-      { role: "user", content: `NEWEST ${"z".repeat(200_000)}`, timestamp: 9 },
+      user(`NEWEST ${"z".repeat(200_000)}`, 9),
     ];
 
-    const { text } = serializeConversationWithinBudget(
-      convertToLlm(messages),
-      MAX_SUMMARY_INPUT_CHARS,
-    );
+    const { text } = bounded(messages);
 
     for (const name of names) {
       expect(text).toMatch(
         new RegExp(`\\[Tool result of ${name}\\(cmd="y+\\.\\.\\.\\)\\]: R-${name}\\b`, "u"),
       );
     }
-    expect(estimateStringChars(text)).toBeLessThanOrEqual(MAX_SUMMARY_INPUT_CHARS);
   });
 
   it("names the call of a result that follows an intervening user message", () => {
     const messages: AgentMessage[] = [
       ...createLongSession(60),
       toolCallMessage([{ id: "report", name: "write_report", cmd: "r".repeat(40_000) }]),
-      { role: "user", content: "Any update?", timestamp: 2 },
+      user("Any update?", 2),
       toolResultMessage("report", "write_report", "WRITE_FAILED: quota"),
     ];
 
-    const { text } = serializeConversationWithinBudget(
-      convertToLlm(messages),
-      MAX_SUMMARY_INPUT_CHARS,
-    );
+    const { text } = bounded(messages);
 
     expect(text).toContain("entries omitted ...]");
     expect(text).toMatch(/\[Tool result of write_report\(cmd="r+\.\.\.\)\]: WRITE_FAILED: quota$/u);
@@ -360,20 +310,10 @@ describe("summary request input budget", () => {
 
   it("sends a short history unchanged when the window is too small to sample", async () => {
     const { streamFn, prompts } = createCapturingStream();
-    const messages: AgentMessage[] = [{ role: "user", content: "Rename the queue.", timestamp: 1 }];
-
-    const result = await generateSummary(
-      messages,
-      createModel(4_096, 4_096),
-      2_500,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
+    const result = await requestSummary([user("Rename the queue.")], createModel(4_096, 4_096), {
+      reserveTokens: 2_500,
       streamFn,
-    );
+    });
 
     expect(result).toEqual({ ok: true, value: "summary" });
     expect(conversationOf(prompts[0] ?? "")).toBe("[User]: Rename the queue.");
@@ -399,18 +339,11 @@ describe("summary request input budget", () => {
         provider: "anthropic",
         reasoning: true,
       };
-      const result = await generateSummary(
-        createLongSession(80),
-        model,
-        8_192,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        level,
+      const result = await requestSummary(createLongSession(80), model, {
+        reserveTokens: 8_192,
+        thinkingLevel: level,
         streamFn,
-      );
+      });
 
       expect(result).toEqual({ ok: true, value: "summary" });
       const completionTokens = Math.floor(0.8 * 8_192) + thinking;
@@ -427,18 +360,11 @@ describe("summary request input budget", () => {
       provider: "openai",
       reasoning: true,
     };
-    const result = await generateSummary(
-      [{ role: "user", content: "Rename the queue.", timestamp: 1 }],
-      model,
-      4_096,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      "high",
+    const result = await requestSummary([user("Rename the queue.")], model, {
+      reserveTokens: 4_096,
+      thinkingLevel: "high",
       streamFn,
-    );
+    });
 
     expect(result).toEqual({ ok: true, value: "summary" });
     expect(conversationOf(prompts[0] ?? "")).toBe("[User]: Rename the queue.");
@@ -449,13 +375,10 @@ describe("summary request input budget", () => {
       toolCallMessage([{ id: "0", name: "exec", cmd: "delete A" }], "aborted"),
       toolCallMessage([{ id: "0", name: "exec", cmd: "write B" }]),
       toolResultMessage("0", "exec", "done"),
-      { role: "user", content: `NEWEST ${"z".repeat(200_000)}`, timestamp: 9 },
+      user(`NEWEST ${"z".repeat(200_000)}`, 9),
     ];
 
-    const { text } = serializeConversationWithinBudget(
-      convertToLlm(messages),
-      MAX_SUMMARY_INPUT_CHARS,
-    );
+    const { text } = bounded(messages);
 
     expect(text).toContain('[Tool result of exec(cmd="write B")]: done');
   });
@@ -468,13 +391,10 @@ describe("summary request input budget", () => {
       ]),
       toolResultMessage("exec_0", "exec", "OUT-FIRST"),
       toolResultMessage("exec_0", "exec", "OUT-SECOND"),
-      { role: "user", content: `NEWEST ${"z".repeat(200_000)}`, timestamp: 9 },
+      user(`NEWEST ${"z".repeat(200_000)}`, 9),
     ];
 
-    const { text } = serializeConversationWithinBudget(
-      convertToLlm(messages),
-      MAX_SUMMARY_INPUT_CHARS,
-    );
+    const { text } = bounded(messages);
 
     expect(text).toContain('[Tool result of exec(cmd="first")]: OUT-FIRST');
     expect(text).toContain('[Tool result of exec(cmd="second")]: OUT-SECOND');
@@ -487,20 +407,15 @@ describe("summary request input budget", () => {
       text: `DECISION-${turn}: use advisory locks, not Redis`,
     }));
     for (const { turn, text } of decisions) {
-      messages[turn * 3] = { role: "user", content: text, timestamp: turn };
+      messages[turn * 3] = user(text, turn);
     }
     for (let turn = 0; turn < 400; turn += 1) {
       if (!decisions.some((decision) => decision.turn === turn)) {
-        messages[turn * 3] = { role: "user", content: `ask-${turn}`, timestamp: turn };
+        messages[turn * 3] = user(`ask-${turn}`, turn);
       }
     }
 
-    const { text } = serializeConversationWithinBudget(
-      convertToLlm(messages),
-      MAX_SUMMARY_INPUT_CHARS,
-    );
-
-    expect(estimateStringChars(text)).toBeLessThanOrEqual(MAX_SUMMARY_INPUT_CHARS);
+    const { text } = bounded(messages);
     for (const { text: decision } of decisions) {
       expect(text).toContain(`[User]: ${decision}`);
     }
@@ -510,19 +425,11 @@ describe("summary request input budget", () => {
   });
 
   it("spreads user messages across the history when they do not all fit", () => {
-    const messages: AgentMessage[] = Array.from({ length: 2_000 }, (_, index) => ({
-      role: "user" as const,
-      content: `USER-${index} ${"note ".repeat(80)}`,
-      timestamp: index,
-    }));
-
-    const { text } = serializeConversationWithinBudget(
-      convertToLlm(messages),
-      MAX_SUMMARY_INPUT_CHARS,
+    const { text } = bounded(
+      Array.from({ length: 2_000 }, (_, i) => user(`USER-${i} ${"note ".repeat(80)}`, i)),
     );
     const kept = [...text.matchAll(/\[User\]: USER-(\d+) /gu)].map((match) => Number(match[1]));
 
-    expect(estimateStringChars(text)).toBeLessThanOrEqual(MAX_SUMMARY_INPUT_CHARS);
     // Each tenth of the history keeps some of its user messages.
     for (let tenth = 0; tenth < 10; tenth += 1) {
       expect(
@@ -535,18 +442,10 @@ describe("summary request input budget", () => {
   it("shrinks the sample when a provider plugin raised the output limit past the window", async () => {
     // A plugin output floor makes the first, correctly sized request overflow.
     const { streamFn, prompts } = createCapturingStream((prompt) => prompt.length > 60_000);
-    const result = await generateSummary(
-      createLongSession(200),
-      createModel(200_000, 64_000),
-      16_384,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
+    const result = await requestSummary(createLongSession(200), createModel(200_000, 64_000), {
+      reserveTokens: 16_384,
       streamFn,
-    );
+    });
 
     expect(result).toEqual({ ok: true, value: "summary" });
     expect(prompts.length).toBeGreaterThan(1);
@@ -556,18 +455,10 @@ describe("summary request input budget", () => {
 
   it("stops with a budget error when the provider keeps rejecting the request as too long", async () => {
     const { streamFn, prompts } = createCapturingStream(() => true);
-    const result = await generateSummary(
-      createLongSession(200),
-      createModel(200_000, 64_000),
-      16_384,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
+    const result = await requestSummary(createLongSession(200), createModel(200_000, 64_000), {
+      reserveTokens: 16_384,
       streamFn,
-    );
+    });
 
     expect(prompts).toHaveLength(3);
     expect(result.ok).toBe(false);
@@ -584,24 +475,17 @@ describe("summary request input budget", () => {
       return overflowing(model, context, options);
     };
     const usage: unknown[] = [];
-    const result = await generateSummary(
-      createLongSession(200),
-      createModel(200_000, 64_000),
-      16_384,
-      undefined,
-      undefined,
-      controller.signal,
-      undefined,
-      undefined,
-      undefined,
+    const result = await requestSummary(createLongSession(200), createModel(200_000, 64_000), {
+      reserveTokens: 16_384,
+      signal: controller.signal,
       streamFn,
-      {
+      runtime: {
         completeSimple: vi.fn(),
         internalUsageSink: (entry) => {
           usage.push(entry);
         },
       },
-    );
+    });
 
     expect(prompts).toHaveLength(1);
     expect(usage).toHaveLength(1);

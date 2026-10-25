@@ -6,6 +6,8 @@ import {
   observeHostDataSql,
   observeSqliteReadSql,
 } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { resolveDatabaseEngineSelection } from "../infra/database-engine/config.js";
+import { withDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import * as admission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe } from "../infra/sqlite-worker-owner-probe.test-support.js";
@@ -181,7 +183,10 @@ it("uses one autocommit read when empty and rereads populated inputs in a snapsh
   });
   try {
     for (let attempt = 0; attempt < 2; attempt++) {
-      expect(run()).toEqual({ ok: true, value: { value: [], validUntil: undefined } });
+      expect(run()).toEqual({
+        ok: true,
+        value: { value: [], validUntil: undefined, emptyShortcut: true },
+      });
       expect(statements.splice(0)).toEqual([expect.stringContaining("plugin_state_entries")]);
     }
     await second.register("key", "delivery");
@@ -200,37 +205,98 @@ it("uses one autocommit read when empty and rereads populated inputs in a snapsh
   }
 });
 
-it("invalidates empty receipts after either watched namespace changes", async () => {
-  const { first, second, operation } = await pair("empty-watch");
-  const scan = () =>
-    operation.execute(
-      { type: "entries", input: undefined },
-      { writeStores: [], watchStores: [0, 1], ifEmpty: { store: 1, value: [] } },
+it("invalidates empty receipts after either watched namespace changes", async () =>
+  withDatabaseEngineSelection(await resolveDatabaseEngineSelection({}), async () => {
+    const { first, second, operation } = await pair("empty-watch");
+    let requests = 0;
+    sqliteWorkerOwnerProbe.command(
+      await import("../state/openclaw-state-worker-store.js"),
+      async (command, commandOptions, scope) => {
+        if (command.type === "pluginState.executeOperation") {
+          requests++;
+        }
+        return scope.execute(command, commandOptions);
+      },
     );
-  let receipt = await scan();
-  expect(receipt.value).toEqual([]);
-  await first.register("key", "changed peer");
-  expect(receipt.assertCurrent).toThrow(PluginStateOperationInvalidatedError);
-  receipt = await scan();
-  await second.register("key", "delivery");
-  expect(receipt.assertCurrent).toThrow(PluginStateOperationInvalidatedError);
-  expect((await scan()).value).toMatchObject([
-    [{ value: "delivery" }],
-    [{ value: "changed peer" }],
-  ]);
-  await invalid(
-    operation.execute(
-      { type: "entries", input: undefined },
-      { writeStores: [], ifEmpty: { store: 2, value: [] } },
-    ),
-  );
-  await invalid(
-    operation.execute(
-      { type: "entries", input: undefined },
-      { writeStores: [0], ifEmpty: { store: 1, value: [] } },
-    ),
-  );
-});
+    const scan = () =>
+      operation.execute(
+        { type: "entries", input: undefined },
+        { writeStores: [], watchStores: [0, 1], ifEmpty: { store: 1, value: [] } },
+      );
+    let receipt = await scan();
+    expect(receipt.value).toEqual([]);
+    receipt.value.push([]);
+    expect((await scan()).value).toEqual([]);
+    expect(requests).toBe(1);
+    await first.register("key", "changed peer");
+    expect(receipt.assertCurrent).toThrow(PluginStateOperationInvalidatedError);
+    receipt = await scan();
+    expect(requests).toBe(1);
+    await second.register("key", "delivery");
+    expect(receipt.assertCurrent).toThrow(PluginStateOperationInvalidatedError);
+    expect((await scan()).value).toMatchObject([
+      [{ value: "delivery" }],
+      [{ value: "changed peer" }],
+    ]);
+    expect(requests).toBe(2);
+    await invalid(
+      operation.execute(
+        { type: "entries", input: undefined },
+        { writeStores: [], ifEmpty: { store: 2, value: [] } },
+      ),
+    );
+    await invalid(
+      operation.execute(
+        { type: "entries", input: undefined },
+        { writeStores: [0], ifEmpty: { store: 1, value: [] } },
+      ),
+    );
+  }));
+
+it("waits for an earlier write to the empty target even when it is not watched", async () =>
+  withDatabaseEngineSelection(await resolveDatabaseEngineSelection({}), async () => {
+    const { first, second, operation } = await pair("empty-target-order");
+    const scan = () =>
+      operation.execute(
+        { type: "entries", input: undefined },
+        { writeStores: [], watchStores: [0], ifEmpty: { store: 1, value: [] } },
+      );
+    expect((await scan()).value).toEqual([]);
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    sqliteWorkerOwnerProbe.command(
+      await import("../state/openclaw-state-worker-store.js"),
+      async (command, commandOptions, scope) => {
+        if (command.type === "pluginState.register") {
+          entered.resolve();
+          await release.promise;
+        }
+        return scope.execute(command, commandOptions);
+      },
+    );
+    const writing = second.register("key", "delivery");
+    await entered.promise;
+    const reading = scan();
+    release.resolve();
+    await writing;
+    expect((await reading).value).toMatchObject([[{ value: "delivery" }], [{ value: "original" }]]);
+    expect(await first.lookup("key")).toBe("original");
+  }));
+
+it("validates a new handler even when another operation confirmed an empty namespace", async () =>
+  withDatabaseEngineSelection(await resolveDatabaseEngineSelection({}), async () => {
+    const { first, second, operation } = await pair("empty-preparation");
+    const command = { type: "entries", input: undefined } as const;
+    const readOptions = { writeStores: [], ifEmpty: { store: 1, value: [] } };
+    expect((await operation.execute(command, readOptions)).value).toEqual([]);
+    const invalidOperation = first.createOperation<FixtureOperations>([first, second], {
+      ...handler,
+      exportName: "missingHandler",
+    });
+    await expect(invalidOperation.execute(command, readOptions)).rejects.toMatchObject({
+      code: "PLUGIN_STATE_WRITE_FAILED",
+    });
+  }));
 
 it("leaves the writer free during initial grants and preserves replacement revocation", async () => {
   const { first, second, operation } = await pair("admission");

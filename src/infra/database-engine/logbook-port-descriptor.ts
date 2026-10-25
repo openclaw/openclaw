@@ -10,7 +10,7 @@ import { expectedPostgresCatalog } from "./postgres-catalog.js";
 export async function loadLogbookPortDescriptor(
   sourceVersion = metadata.version,
 ): Promise<PortDescriptor> {
-  if (sourceVersion !== metadata.version && sourceVersion !== 1) {
+  if (sourceVersion !== metadata.version && sourceVersion !== 1 && sourceVersion !== 2) {
     throw new DatabasePortDataError(
       `Missing logbook PostgreSQL backup descriptor for version ${sourceVersion}`,
     );
@@ -44,7 +44,12 @@ export async function loadLogbookPortDescriptor(
   if (sourceVersion === metadata.version) {
     return descriptor;
   }
-  return historicalIndexOrderingPort(descriptor, sourceVersion, postgres);
+  return historicalIndexOrderingPort(
+    descriptor,
+    sourceVersion,
+    postgres,
+    sourceVersion === 2 ? "schema-nullability" : "sqlite",
+  );
 }
 
 function api() {

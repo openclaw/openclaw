@@ -6,7 +6,7 @@ import { toPublicCronJob } from "../../cron/public-job.js";
 import type { CronServiceContract } from "../../cron/service-contract.js";
 import type { CronListPageResult } from "../../cron/service/list-page-types.js";
 import type { CronJob } from "../../cron/types.js";
-import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
+import { freezeTrustedJsonSnapshot } from "../../shared/immutable-data.js";
 import { registerSerializedJsonArray } from "../serialized-json.js";
 
 type Page = { key: string; jobs: ReturnType<typeof prepareJobs> };
@@ -34,7 +34,7 @@ export function projectCronListJobs(
 
 function prepareJobs(jobs: CronJob[], defaultAgentId: string | undefined, compact: boolean) {
   const rows = jobs.map((job) =>
-    freezeJsonSnapshot({
+    freezeTrustedJsonSnapshot({
       ...(compact ? compactCronListJob(toPublicCronJob(job)) : cronJobReadView(job)),
       effectiveAgentId: tryResolveCronJobEffectiveAgentId(job, defaultAgentId) ?? null,
     }),
