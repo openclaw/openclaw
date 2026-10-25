@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { realpath } from "node:fs/promises";
 import type { ApprovalHandler, Session, Turn } from "@muse-code/sdk";
 import {
@@ -61,7 +62,8 @@ function createMuseApprovalHandler(
   recordFailure: (error: Error) => void,
   assertCurrent: () => void,
 ): ApprovalHandler {
-  return async (request) => {
+  // Capture this prepared owner before replay; pooled pipe callbacks retain their first caller's context.
+  return AsyncLocalStorage.bind(async (request) => {
     assertCurrent();
     const timeoutMs = Math.min(120_000, params.timeoutMs);
     const { subject, toolName } = request;
@@ -100,7 +102,7 @@ function createMuseApprovalHandler(
     }
     assertCurrent();
     return selectApprovalChoice(request, decision);
-  };
+  });
 }
 
 function selectApprovalChoice(

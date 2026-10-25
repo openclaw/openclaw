@@ -365,6 +365,9 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     if (params.choiceId !== "server-allow-id") {
       fail("approvalDenied", "denied");
     } else {
+      if (process.env.MUSE_FIXTURE_EFFECT_PATH) {
+        writeFileSync(process.env.MUSE_FIXTURE_EFFECT_PATH, "approved native effect");
+      }
       setImmediate(answer);
     }
   } else if (method === "turn/interrupt") {
