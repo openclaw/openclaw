@@ -42,8 +42,7 @@ afterEach(() => {
   setActivePluginRegistry(createEmptyPluginRegistry());
 });
 
-// Model execution is fixed external input; real followup accounting, durable queue,
-// session reset, and recovery own the delivery lifecycle exercised here.
+// Fixed model output; real followup accounting, reset, and durable recovery own delivery.
 it.each([false, true])(
   "recovers an unsent ordinary followup only without reset (reset=%s)",
   async (resetSession) => {
@@ -51,9 +50,10 @@ it.each([false, true])(
     const sessionKey = "agent:main:reset-followup-durable";
     const sessionId = "before-reset-session";
     const lifecycleRevision = "before-reset-revision";
-    const scope = { agentId: "main", storePath, sessionKey };
+    const identity = { agentId: "main", sessionKey };
+    const scope = { ...identity, storePath };
     await writeSessionStore({
-      agentId: "main",
+      agentId: identity.agentId,
       storePath,
       entries: { [sessionKey]: sessionStoreEntry(sessionId, { lifecycleRevision }) },
     });
@@ -63,8 +63,7 @@ it.each([false, true])(
       throw new Error("Gateway test state directory is required");
     }
     let offline = true;
-    let resetCommitted = false;
-    const visible: Array<{ text: string; afterReset: boolean }> = [];
+    const visible: string[] = [];
     const outbound: ChannelOutboundAdapter = {
       deliveryMode: "direct",
       sendText: async ({ text, onPlatformSendDispatch }) => {
@@ -74,7 +73,7 @@ it.each([false, true])(
             cause: new Error("connection unavailable"),
           });
         }
-        visible.push({ text, afterReset: resetCommitted });
+        visible.push(text);
         return { channel: "matrix", messageId: `sent-${visible.length}` };
       },
     };
@@ -88,8 +87,7 @@ it.each([false, true])(
       ]),
     );
     const operation = createReplyOperation({
-      agentId: "main",
-      sessionKey,
+      ...identity,
       sessionId,
       resetTriggered: false,
       target: captureSessionTarget({
@@ -116,9 +114,8 @@ it.each([false, true])(
       turn.queued.originatingChannel = "matrix";
       turn.queued.originatingTo = "!room:example";
       Object.assign(turn.queued.run, {
-        agentId: "main",
+        ...identity,
         sessionId,
-        sessionKey,
         config: cfg,
         messageProvider: "matrix",
         agentDir: path.join(dir, "agent"),
@@ -140,8 +137,7 @@ it.each([false, true])(
         currentAssistant: null,
         assistantMessageIndex: 1,
         assistantTranscriptOwned: true,
-        sessionKey,
-        agentId: "main",
+        ...identity,
         runId: settled.runId,
         config: cfg,
         sourceReplyDeliveryState: "missing",
@@ -196,7 +192,7 @@ it.each([false, true])(
       assert(retained, "Expected the unsent followup's durable owner");
       expect(retained.deliveryCompletion).toBeUndefined();
 
-      // Mirrors followup-runner's finally after delivery transferred to the queue.
+      // Mirrors followup-runner's finally after delivery transfers to the queue.
       operation.complete();
 
       if (resetSession) {
@@ -205,7 +201,6 @@ it.each([false, true])(
         const afterReset = loadSessionEntry(scope);
         expect(afterReset).toBeDefined();
         expect(afterReset?.lifecycleRevision).not.toBe(lifecycleRevision);
-        resetCommitted = true;
       }
       offline = false;
       const log = createRecoveryLog();
@@ -221,17 +216,14 @@ it.each([false, true])(
         });
       await recover();
 
-      expect(visible).toEqual(
-        resetSession ? [] : [{ text: "pre-reset answer", afterReset: false }],
-      );
+      expect(visible).toEqual(resetSession ? [] : ["pre-reset answer"]);
       expect(retained.sessionGeneration).toEqual({ ...scope, sessionId, lifecycleRevision });
       if (resetSession) {
         expect(log.warn).toHaveBeenCalledWith(
           expect.stringContaining("original session generation no longer accepts"),
         );
       }
-      // Ordinary followups retain no terminal receipt; both a successful send
-      // and a permanent generation rejection retire their original queue row.
+      // Ordinary followups have no terminal receipt; send or permanent rejection retires the row.
       expect(
         getDeliveryQueueEntryStatus(outboundDeliveryQueueName(retained), retained.id, stateDir),
       ).toBeUndefined();

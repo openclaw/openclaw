@@ -109,15 +109,12 @@ describe("node host version mismatch guard", () => {
     "Gateway %s accepts same-install node version %s",
     async (serverVersion, clientVersion) =>
       await withEnvAsync({ OPENCLAW_VERSION: serverVersion }, async () => {
-        let helloProtocol: number | undefined;
-        const client = await connectNode({
-          clientVersion,
-          onHelloOk: (hello) => {
-            helloProtocol = hello.protocol;
-          },
-        });
+        const onHelloOk = vi.fn();
+        const client = await connectNode({ clientVersion, onHelloOk });
         try {
-          expect(helloProtocol).toBe(PROTOCOL_VERSION);
+          expect(onHelloOk).toHaveBeenCalledWith(
+            expect.objectContaining({ protocol: PROTOCOL_VERSION }),
+          );
         } finally {
           await stopClient(client);
         }
@@ -142,24 +139,20 @@ describe("node host version mismatch guard", () => {
         scopes: ["operator.read"],
       });
       clients.push(operator);
-      const localNode = {
-        nodeId: localIdentity.deviceId,
-        gatewayLocal: true,
-        paired: true,
-        connected: true,
-      };
+      const connected = { paired: true, connected: true };
+      const localNode = { ...connected, nodeId: localIdentity.deviceId, gatewayLocal: true };
       const list = await operator.request<{ nodes: NodeListNode[] }>("node.list", {});
       expect(list.nodes.filter((node) => node.gatewayLocal)).toEqual([
         expect.objectContaining(localNode),
       ]);
       const remote = list.nodes.find((node) => node.nodeId === identity.deviceId);
-      expect(remote).toMatchObject({ paired: true, connected: true, displayName: "test-node" });
+      expect(remote).toMatchObject({ ...connected, displayName: "test-node" });
       expect(remote).not.toHaveProperty("gatewayLocal");
       await expect(
         operator.request("node.describe", { nodeId: localIdentity.deviceId }),
       ).resolves.toMatchObject(localNode);
       const described = await operator.request("node.describe", { nodeId: identity.deviceId });
-      expect(described).toMatchObject({ nodeId: identity.deviceId, paired: true, connected: true });
+      expect(described).toMatchObject({ ...connected, nodeId: identity.deviceId });
       expect(described).not.toHaveProperty("gatewayLocal");
     } finally {
       try {
