@@ -237,6 +237,17 @@ it(
             expect(requests.slice(beforeAllowed)).toEqual([
               { method: "POST", url: "/v1/responses" },
             ]);
+            const history = await client.request<{
+              messages?: Array<{ role?: string; content?: unknown }>;
+            }>("chat.history", { sessionKey: allowed.onboarding!.sessionKey });
+            expect(history.messages).toEqual(
+              expect.arrayContaining([
+                expect.objectContaining({
+                  role: "assistant",
+                  content: [{ type: "text", text: "Hi, I’m New agent. Happy to help." }],
+                }),
+              ]),
+            );
             await withinTest(allowedIntroFinished.promise, signal);
             await vi.waitFor(() => expect(requests.length).toBeGreaterThan(beforeAllowed + 1), {
               timeout: 10_000,

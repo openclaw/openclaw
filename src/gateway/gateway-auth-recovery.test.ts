@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { expect, it, onTestFailed, type TestContext } from "vitest";
 import type { ModelChoice } from "../../packages/gateway-protocol/src/schema/agents-models-skills.js";
+import { readProcessRssMb } from "../../scripts/lib/gateway-bench-probes.ts";
 import {
   createFixtureRequest,
   verifyBuiltGatewayHead,
@@ -54,6 +55,7 @@ async function withBuiltGateway(
     context,
     async ({ signal, verifyCleanup }) => {
       await verifyBuiltGatewayHead(process.cwd(), signal);
+      signal.throwIfAborted();
       gateway = await createOpenClawTestInstance({
         name,
         cwd: process.cwd(),
@@ -67,6 +69,7 @@ async function withBuiltGateway(
           OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
           OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
           OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+          ...(name === "configured-catalog-auth" ? { OPENCLAW_GATEWAY_STARTUP_TRACE: "1" } : {}),
         },
       });
       signal.throwIfAborted();
@@ -109,7 +112,9 @@ async function withBuiltGateway(
 
 it(
   "records rate limits and retains authentication recovery through the built Gateway",
-  { timeout: 180_000 },
+  {
+    timeout: 180_000,
+  },
   async (context) => {
     const credentials = {
       rate: "qa-rate-profile-key",
@@ -180,7 +185,9 @@ it(
               models: { [rateModelRef]: configuredModel, [provider.modelRef]: configuredModel },
             },
             entries: {
-              rate: { model: { primary: `${rateModelRef}@${profileIds.rate}`, fallbacks: [] } },
+              rate: {
+                model: { primary: `${rateModelRef}@${profileIds.rate}`, fallbacks: [] },
+              },
               auth: {
                 model: { primary: `${provider.modelRef}@${profileIds.auth}`, fallbacks: [] },
               },
@@ -229,6 +236,7 @@ it(
         const gatewayPid = gateway.child?.pid;
         expect(gatewayPid).toBeTypeOf("number");
         const runTurn = async (agentId: keyof typeof profileIds, message: string) => {
+          signal.throwIfAborted();
           const sessionKey = `agent:${agentId}:auth-recovery-${randomUUID()}`;
           const accepted = await request<{ runId: string; status: string }>("agent", {
             agentId,
@@ -240,13 +248,17 @@ it(
           expect(accepted.status).toBe("accepted");
           const terminal = await request<{ status: string }>(
             "agent.wait",
-            { runId: accepted.runId, timeoutMs: 60_000 },
+            {
+              runId: accepted.runId,
+              timeoutMs: 60_000,
+            },
             { timeoutMs: 65_000 },
           );
           return { sessionKey, terminal };
         };
         const failTurn = async (agentId: keyof typeof profileIds) => {
           const { terminal } = await runTurn(agentId, `AUTH_FAILURE_${agentId.toUpperCase()}`);
+          signal.throwIfAborted();
           expect(terminal.status).toBe("error");
           expect(requests[agentId]).toBeGreaterThan(0);
           expect(unexpectedCredential).toBe(false);
@@ -255,6 +267,7 @@ it(
           )?.usageStats?.[profileIds[agentId]];
         };
         const rateStats = await failTurn("rate");
+        signal.throwIfAborted();
         // The synthetic 429 carries no provider timing: record it without a local cooldown.
         expect(rateStats?.lastRateLimitAt).toEqual(expect.any(Number));
         expect(rateStats?.cooldownUntil).toBeUndefined();
@@ -262,10 +275,15 @@ it(
 
         phase = "auth";
         const authStats = await failTurn("auth");
+        signal.throwIfAborted();
         expect(["auth", "auth_permanent"]).toContain(
           authStats?.cooldownReason ?? authStats?.disabledReason,
         );
-        const saved = await request<{ provider: string; profileId: string; warning?: string }>(
+        const saved = await request<{
+          provider: string;
+          profileId: string;
+          warning?: string;
+        }>(
           "models.authSetApiKey",
           { agentId: "auth", provider: provider.providerId, apiKey: credentials.recovered },
           { timeoutMs: 30_000 },
@@ -289,6 +307,7 @@ it(
 
         phase = "recovered";
         const { sessionKey, terminal } = await runTurn("auth", "Reply AUTH_RECOVERY_OK.");
+        signal.throwIfAborted();
         expect(terminal.status, gateway.logs()).toBe("ok");
         expect(requests.recovered).toBe(1);
         expect(unexpectedCredential).toBe(false);
@@ -307,6 +326,93 @@ it(
             profileIds.rate
           ],
         ).toEqual(rateStats);
+      },
+    );
+  },
+);
+
+it(
+  "serves a large authenticated catalog for each agent through the built Gateway",
+  { timeout: 180_000 },
+  async (context) => {
+    const agentIds = Array.from({ length: 11 }, (_, index) =>
+      index === 0 ? "main" : `catalog-${index}`,
+    );
+    const credential = "qa-configured-catalog-key";
+    const providerServer = createTrackedProvider((_raw, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ data: [] }));
+    });
+    await withBuiltGateway(
+      context,
+      "configured-catalog-auth",
+      providerServer,
+      async (gateway, signal, connect) => {
+        const provider = buildMockOpenAiResponsesProvider(
+          await providerServer.listen(),
+          "synthetic-0",
+        );
+        signal.throwIfAborted();
+        const models = Array.from({ length: 400 }, (_, index) => ({
+          ...provider.config.models[0],
+          id: `synthetic-${index}`,
+          name: `Synthetic ${index}`,
+        }));
+        const base = gatewayConfig(gateway, provider.modelRef);
+        const cfg = {
+          ...base,
+          agents: {
+            ...base.agents,
+            defaults: {
+              ...base.agents.defaults,
+              models: Object.fromEntries(
+                models.map((model) => [
+                  `${provider.providerId}/${model.id}`,
+                  { agentRuntime: { id: "openclaw" } },
+                ]),
+              ),
+            },
+            entries: Object.fromEntries(agentIds.map((agentId) => [agentId, {}])),
+          },
+          models: {
+            mode: "replace",
+            providers: {
+              [provider.providerId]: {
+                ...provider.config,
+                apiKey: credential,
+                models,
+                request: { allowPrivateNetwork: true },
+              },
+            },
+          },
+        } satisfies OpenClawConfig;
+        await gateway.state.writeConfig(cfg);
+        signal.throwIfAborted();
+        const client = await connect();
+        const request = createFixtureRequest(client, signal);
+        const expectedIds = new Set(models.map((model) => model.id));
+        let returnedRows = 0;
+        for (const agentId of agentIds) {
+          signal.throwIfAborted();
+          const result = await request<{ models: ModelChoice[] }>(
+            "models.list",
+            { agentId, view: "configured" },
+            { timeoutMs: 30_000 },
+          );
+          const configured = result.models.filter(
+            (model) => model.provider === provider.providerId,
+          );
+          expect(configured, agentId).toHaveLength(models.length);
+          expect(new Set(configured.map((model) => model.id)), agentId).toEqual(expectedIds);
+          expect(
+            configured.every((model) => model.available === true),
+            agentId,
+          ).toBe(true);
+          returnedRows += configured.length;
+        }
+        const gatewayRssMb = readProcessRssMb(gateway.child?.pid);
+        expect(gatewayRssMb).toBeGreaterThan(0);
+        expect(returnedRows).toBe(4_400);
       },
     );
   },
