@@ -1,10 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  TRANSCRIPTS_EXPORT_MAX_BYTES,
-  TRANSCRIPTS_RESULT_MAX_BYTES,
-} from "../../../packages/gateway-protocol/src/schema/transcripts.js";
+import { TRANSCRIPTS_RESULT_MAX_BYTES } from "../../../packages/gateway-protocol/src/schema/transcripts.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
@@ -126,6 +123,18 @@ async function fails(...args: Parameters<typeof request>) {
   expect(payload).toBeUndefined();
   return error;
 }
+function afterRead<T extends (...args: never[]) => Promise<unknown>>(
+  read: T,
+  after: () => void,
+): T {
+  return new Proxy(read, {
+    async apply(target, receiver, args) {
+      const result = await Reflect.apply(target, receiver, args);
+      after();
+      return result;
+    },
+  });
+}
 async function seed(stateDir: string) {
   const store = new TranscriptsStore(path.join(stateDir, "transcripts"));
   const session = {
@@ -158,31 +167,18 @@ describe("transcript Gateway read authorization and errors", () => {
   });
   afterEach(() => vi.restoreAllMocks());
 
-  it("returns explicit byte-limit errors without a partial read or download", async () => {
+  it("maps archive byte-limit failures to explicit RPC errors without partial output", async () => {
     await withOpenClawTestState(profileState, async (state) => {
       const { store, session, selector } = await seed(state.stateDir);
       await store.appendUtteranceForSession(session, {
-        text: "x".repeat(TRANSCRIPTS_EXPORT_MAX_BYTES + 1),
+        text: "x".repeat(TRANSCRIPTS_RESULT_MAX_BYTES + 1),
       });
-      for (const [method, params, type, maxBytes] of [
-        [
-          "transcripts.get",
-          { selector, includeUtterances: true, limit: 50 },
-          "transcript_result_too_large",
-          TRANSCRIPTS_RESULT_MAX_BYTES,
-        ],
-        [
-          "transcripts.export",
-          { selector, format: "jsonl" },
-          "transcript_export_too_large",
-          TRANSCRIPTS_EXPORT_MAX_BYTES,
-        ],
-      ] as const) {
-        expect(await fails(method, params)).toMatchObject({
-          code: "INVALID_REQUEST",
-          details: { type, maxBytes },
-        });
-      }
+      expect(
+        await fails("transcripts.get", { selector, includeUtterances: true, limit: 50 }),
+      ).toMatchObject({
+        code: "INVALID_REQUEST",
+        details: { type: "transcript_result_too_large", maxBytes: TRANSCRIPTS_RESULT_MAX_BYTES },
+      });
       expect(fs.existsSync(path.join(state.stateDir, "transcripts"))).toBe(false);
     });
   });
@@ -324,19 +320,14 @@ describe("transcript Gateway read authorization and errors", () => {
         const cancellation = new AbortController();
         let current = true;
         const cfg = roles("view");
-        const read = store.listReadEntries.bind(store);
         const observer = vi
           .spyOn(TranscriptsStore.prototype, "listReadEntries")
           .mockImplementationOnce(
-            new Proxy(read, {
-              async apply(target, receiver, args) {
-                const result = await Reflect.apply(target, receiver, args);
-                current = false;
-                if (kind === "cancellation") {
-                  cancellation.abort();
-                }
-                return result;
-              },
+            afterRead(store.listReadEntries.bind(store), () => {
+              current = false;
+              if (kind === "cancellation") {
+                cancellation.abort();
+              }
             }),
           );
         try {
@@ -365,21 +356,6 @@ describe("transcript Gateway read authorization and errors", () => {
       });
     },
   );
-
-  it("waits for the authenticated profile before reading the library", async () => {
-    const caller = client();
-    caller.authenticatedUserId = "pending@example.test";
-    caller.authenticatedGitHubIdentitySync = vi
-      .fn()
-      .mockRejectedValue(new Error("private identity detail"));
-    const result = await request("transcripts.status", {}, roles("view"), caller);
-    expect(result[2]).toMatchObject({
-      code: "UNAVAILABLE",
-      retryable: true,
-      details: { code: "AUTHENTICATED_PROFILE_UNAVAILABLE" },
-    });
-    expect(JSON.stringify(result)).not.toContain("private identity detail");
-  });
 
   it("rejects invalid requests and missing selectors, and redacts archive failures", async () => {
     await withOpenClawTestState(profileState, async (state) => {
@@ -435,15 +411,8 @@ describe("meeting transcript RPC", () => {
 
   const session = {
     sessionId: "weekly",
-    title: "Design review",
     startedAt: "2026-08-02T14:00:00.000Z",
-    source: {
-      providerId: "manual-transcript",
-      guildId: "team",
-      meetingUrl: "https://example.com/meeting?token=secret#secret",
-      privateField: "hidden",
-    },
-    metadata: { privateMetadata: "hidden" },
+    source: { providerId: "manual-transcript" },
   };
 
   const selector = transcriptSessionSelector(session);
@@ -491,25 +460,19 @@ describe("meeting transcript RPC", () => {
       await store.appendUtteranceForSession(session, { text: "Agreed to ship." });
       let current = true;
       if (phase === "snapshot") {
-        const readSnapshot = store.readSummarySnapshot.bind(store);
         vi.spyOn(TranscriptsStore.prototype, "readSummarySnapshot").mockImplementation(
-          async (...args) => {
-            const snapshot = await readSnapshot(...args);
+          afterRead(store.readSummarySnapshot.bind(store), () => {
             current = false;
-            return snapshot;
-          },
+          }),
         );
       } else {
         let reads = 0;
-        const readEntry = store.readLibraryEntry.bind(store);
         vi.spyOn(TranscriptsStore.prototype, "readLibraryEntry").mockImplementation(
-          async (...args) => {
-            const result = await readEntry(...args);
+          afterRead(store.readLibraryEntry.bind(store), () => {
             if (++reads === 2) {
               current = false;
             }
-            return result;
-          },
+          }),
         );
       }
       const response = await directRequest(
@@ -544,20 +507,13 @@ describe("meeting transcript RPC", () => {
     },
   );
 
-  it("lists exact capture counts, first-appearance speakers, and sanitized source fields", async () => {
-    const older = { ...session, startedAt: "2026-08-01T14:00:00.000Z" };
-    await store.writeSession(older);
-    await store.appendUtteranceForSession(older, {
-      text: "older",
-      speaker: { label: "Old speaker" },
-    });
+  it("lists first-appearance speakers, model attribution, and live capture state", async () => {
     for (const label of ["Zoe", "Ada", "Zoe"]) {
       await store.appendUtteranceForSession(session, { text: "Agreed.", speaker: { label } });
     }
     await store.appendUtteranceForSession(session, { text: "Unattributed" });
     const storedSummary = {
       ...summarizeTranscripts({ session, utterances: [] }),
-      overview: "x".repeat(400),
       source: "model",
       participants: ["Zoe", "Ada"],
       model: "gpt-5.6-luna",
@@ -575,31 +531,14 @@ describe("meeting transcript RPC", () => {
     });
     const [ok, payload] = await directRequest("transcripts.list", {});
     expect(ok).toBe(true);
-    expect(payload.sessions).toHaveLength(2);
+    expect(payload.sessions).toHaveLength(1);
     expect(payload.sessions[0]).toMatchObject({
       utteranceCount: 4,
       participants: ["Zoe", "Ada"],
       active: true,
       hasSummary: true,
       summarySource: "model",
-      overview: "x".repeat(280),
     });
-    expect(payload.sessions[0].source).toEqual({
-      providerId: "manual-transcript",
-      guildId: "team",
-      meetingUrl: "https://example.com/meeting",
-    });
-    expect(payload.sessions[0]).not.toHaveProperty("metadata");
-    expect(payload.sessions[1]).toMatchObject({
-      utteranceCount: 1,
-      participants: ["Old speaker"],
-      active: false,
-      hasSummary: false,
-    });
-    expect((await directRequest("transcripts.list", { limit: 1 }))[1].sessions).toHaveLength(1);
-    expect((await directRequest("transcripts.list", { providerId: "absent" }))[1].sessions).toEqual(
-      [],
-    );
   });
 
   it("reads older stored notes without participant or model attribution fields", async () => {

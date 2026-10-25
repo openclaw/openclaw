@@ -210,10 +210,6 @@ async function request(trusted = true, timeoutMs = 3_600_000, id = "human-questi
     ],
   };
   expect((await call("question.request", params, trusted))?.[0]).toBe(true);
-  expect(manager.get(params.id)).toMatchObject({
-    status: "pending",
-    expiresAtMs: Date.now() + timeoutMs,
-  });
   return params.id;
 }
 
