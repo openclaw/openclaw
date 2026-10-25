@@ -81,7 +81,7 @@ describe("applyNonInteractiveGatewayConfig auth resolution", () => {
 
   it("selects token auth when --gateway-token overrides a no-auth config", async () => {
     const result = await applyGatewayConfig({
-      nextConfig: { gateway: { auth: { mode: "none" } } },
+      auth: { mode: "none" },
       opts: { gatewayToken: "flag-token" } as OnboardOptions,
     });
 
@@ -114,26 +114,16 @@ describe("applyNonInteractiveGatewayConfig auth resolution", () => {
     });
   });
 
-  it.each([
-    {
-      name: "an existing plaintext password",
-      password: "existing-password",
+  it.each(["existing-password", { ...SAMPLE_SECRET_REF, id: "EXISTING_GATEWAY_PASSWORD" }])(
+    "preserves existing password %j in reference mode without an explicit replacement",
+    async (password) => {
+      const result = await applyGatewayConfig({
+        auth: { mode: "password", password },
+        opts: { secretInputMode: "ref" },
+      });
+      expect(result?.nextConfig.gateway?.auth?.password).toEqual(password);
     },
-    {
-      name: "an existing password SecretRef",
-      password: {
-        source: "env" as const,
-        provider: "default",
-        id: "EXISTING_GATEWAY_PASSWORD",
-      },
-    },
-  ])("preserves $name in reference mode without an explicit replacement", async ({ password }) => {
-    const result = await applyGatewayConfig({
-      auth: { mode: "password", password },
-      opts: { secretInputMode: "ref" },
-    });
-    expect(result?.nextConfig.gateway?.auth?.password).toEqual(password);
-  });
+  );
 
   it.each([
     { name: "an explicit auth mode", opts: { gatewayAuth: "token" as const } },

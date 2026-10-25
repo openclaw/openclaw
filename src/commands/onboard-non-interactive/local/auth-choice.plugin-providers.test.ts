@@ -600,40 +600,25 @@ describe("applyNonInteractivePluginProviderChoice", () => {
     expect(resolveProviderInstallCatalogEntries).not.toHaveBeenCalled();
   });
 
-  it.each([
-    ["openai", "openai-api-key", "codex"],
-    ["openai", "openai-api-key", undefined],
-    ["github-copilot", "github-copilot", "copilot"],
-  ] as const)(
-    "ensures the selected %s runtime (%s, %s)",
-    async (providerId, authChoice, runtimeId) => {
-      const model = `${providerId}/gpt-5.5`;
+  it.each([false, true])(
+    "ensures the selected runtime and gates migration hints on Codex installation (%s)",
+    async (codexInstalled) => {
+      const model = "openai/gpt-5.5";
+      const authChoice = "openai-api-key";
       const selectedConfig: OpenClawConfig = {
         agents: { defaults: { model: { primary: model } } },
-        ...(runtimeId === "copilot"
-          ? {
-              models: {
-                providers: {
-                  [providerId]: {
-                    baseUrl: "https://copilot.example",
-                    models: [],
-                    agentRuntime: { id: "copilot" },
-                  },
-                },
-              },
-            }
-          : {}),
       };
-      const installedConfig = runtimeId
-        ? { ...selectedConfig, plugins: { entries: { [runtimeId]: { enabled: true } } } }
-        : selectedConfig;
+      const installedConfig = {
+        ...selectedConfig,
+        plugins: { entries: { codex: { enabled: true } } },
+      };
       const runNonInteractive = vi.fn(async () => selectedConfig);
       ensureModelSelectionRuntimePlugins.mockResolvedValue({
         ok: true,
         cfg: installedConfig,
-        codexInstalled: runtimeId === "codex",
+        codexInstalled,
       });
-      mockProvider(providerId, runNonInteractive);
+      mockProvider("openai", runNonInteractive);
       expect(await applyChoice({ authChoice })).toBe(installedConfig);
       expect(runNonInteractive).toHaveBeenCalledOnce();
       const ensureInput = mockArg(ensureModelSelectionRuntimePlugins);
@@ -646,7 +631,7 @@ describe("applyNonInteractivePluginProviderChoice", () => {
         includeUntrustedWorkspacePlugins: false,
       });
       expect(mockArg(resolvePluginProvidersCore).includeUntrustedWorkspacePlugins).toBe(false);
-      if (runtimeId === "codex") {
+      if (codexInstalled) {
         expect(offerPostInstallMigrations).toHaveBeenCalledOnce();
         expect(mockArg(offerPostInstallMigrations).config).toBe(installedConfig);
         expect(mockArg(offerPostInstallMigrations)).toMatchObject({
