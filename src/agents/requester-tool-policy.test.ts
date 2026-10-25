@@ -181,6 +181,46 @@ describe("resolveRequesterToolPolicies", () => {
     };
   }
 
+  it.each([true, false])(
+    "scopes inherited completion policy without changing the child (restricted: %s)",
+    async (restricted) => {
+      const parent = "agent:main:main";
+      const child = "agent:main:subagent:completion";
+      const cfg = config({ tools: { toolsBySender: { "*": {} } } });
+      await writeChild(child, { spawnedBy: parent, inheritedToolDeny: restricted ? ["exec"] : [] });
+      const handoff = completionHandoffFacts(child, parent);
+      const resolve = (sessionKey: string, completion = false) =>
+        withPreparedSessionCapabilityRead(() =>
+          resolvePluginHarnessToolPolicies({
+            config: cfg,
+            agentId: "main",
+            sessionKey,
+            preparedSessionEntry: null,
+            provider: "openai",
+            modelId: "gpt-test",
+            ...(completion ? handoff : {}),
+          }),
+        );
+
+      const owner = await resolve(parent);
+      const completion = await resolve(parent, true);
+      const resumedOwner = await resolve(parent);
+      expect(owner).toMatchObject({ toolPolicyRestricted: false, toolPolicyScope: "conversation" });
+      if (restricted) {
+        expect(completion.runtimePolicies).toContainEqual({ deny: ["exec"] });
+      }
+      expect(completion).toMatchObject({
+        toolPolicyRestricted: restricted,
+        toolPolicyScope: restricted ? "turn" : "conversation",
+      });
+      expect(resumedOwner).toEqual(owner);
+      expect(await resolve(child)).toMatchObject({
+        toolPolicyRestricted: true,
+        toolPolicyScope: "conversation",
+      });
+    },
+  );
+
   it("classifies sender/channel restriction provenance", () => {
     const policy = { allow: ["read", "sessions_spawn"] };
     for (const source of ["sender", "conversation"] as const) {

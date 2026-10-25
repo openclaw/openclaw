@@ -12,7 +12,7 @@ import {
 } from "./chat-history-branches.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
-import { handlePageGatewayEvent } from "./chat-state-events.ts";
+import { handlePageGatewayEvent } from "./chat-state-events.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 
 function branch(leafEntryId = "original-reply", active = false): SessionBranch {

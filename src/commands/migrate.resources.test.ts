@@ -1,6 +1,7 @@
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
+import { createCliTtyMock } from "../cli/test-runtime-capture.js";
 import * as config from "../config/config.js";
 import { clearRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import * as gatewayLock from "../infra/gateway-lock.js";
@@ -26,12 +27,12 @@ type FixtureOptions = NonNullable<Parameters<typeof createMigrationResourceFixtu
 };
 
 const fixtures: Fixture[] = [];
-const stdin = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+const tty = createCliTtyMock([process.stdin]);
 function createFixture(options: FixtureOptions = {}) {
   const fixture = createMigrationResourceFixture(options);
   fixtures.push(fixture);
   if (options.interactive) {
-    Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: true });
+    tty.set(true);
   }
   const state = path.join(fixture.root, "state");
   vi.stubEnv("OPENCLAW_STATE_DIR", state);
@@ -43,11 +44,7 @@ function createFixture(options: FixtureOptions = {}) {
 
 afterEach(() => {
   vi.unstubAllEnvs();
-  if (stdin) {
-    Object.defineProperty(process.stdin, "isTTY", stdin);
-  } else {
-    Reflect.deleteProperty(process.stdin, "isTTY");
-  }
+  tty.restore();
   fixtures.splice(0).forEach((fixture) => fixture.cleanup());
   vi.restoreAllMocks();
   clearRuntimeConfigSnapshot();

@@ -173,6 +173,42 @@ it("borrows canonical writer proof without a native reader and still fences fore
   });
 });
 
+it("reads the latest projection status with one SELECT and no transaction envelope", async () => {
+  await withWorker("projection-status", async ({ state, database, scope }) => {
+    appendTranscriptMessageSync(scope, {
+      eventId: "projection-message",
+      message: { role: "assistant", content: [{ type: "text", text: "Synthetic projection" }] },
+    });
+    const request = {
+      kind: "projection-status" as const,
+      database: { agentId: database.agentId, path: database.path },
+      env: state.env,
+      sessionId: scope.sessionId,
+    };
+    await expect(worker.read(request)).resolves.toMatchObject({ ok: true, value: false });
+    const update = database.db.prepare(
+      "UPDATE session_transcript_index_state SET needs_rebuild = ? WHERE session_id = ?",
+    );
+    const native = nodeSqlite.requireNodeSqlite();
+    const observation = observeSqliteReadSql(native.StatementSync.prototype);
+    using reads = { ...observation, [Symbol.dispose]: observation.restore };
+    using exec = vi.spyOn(native.DatabaseSync.prototype, "exec");
+    for (const needsReconcile of [false, true, false]) {
+      update.run(Number(needsReconcile), scope.sessionId);
+      reads.queries.length = 0;
+      exec.mockClear();
+      await expect(worker.read(request)).resolves.toMatchObject({
+        ok: true,
+        value: needsReconcile,
+      });
+      expect(reads.queries).toEqual([expect.stringMatching(/^\s*select\b/i)]);
+      expect(
+        exec.mock.calls.filter(([sql]) => /^\s*(?:BEGIN|COMMIT|ROLLBACK)\b/i.test(sql)),
+      ).toEqual([]);
+    }
+  });
+});
+
 it.for([
   { offset: 0, maxHistoryBytes: 1024, messageBytes: 200_000 },
   { offset: 1, maxHistoryBytes: 1024, messageBytes: 200_000 },

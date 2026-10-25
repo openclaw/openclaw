@@ -19,6 +19,7 @@ type DashboardSessionTitleRequest = {
   request: Pick<NormalizedChatSendRequest, "normalizedAttachments" | "rawMessage">;
   sessionKey: string;
   storePath: string;
+  initialMessagePending?: boolean;
 };
 
 export function scheduleCreatedDashboardSessionTitle(
@@ -44,6 +45,7 @@ export function scheduleCreatedDashboardSessionTitle(
     request: { rawMessage: titleSource, normalizedAttachments: [] },
     sessionKey: created.key,
     storePath: created.storePath,
+    initialMessagePending: true,
   });
 }
 
@@ -69,6 +71,7 @@ export function scheduleChatDashboardSessionTitle(
       sessionId: params.admittedSessionId,
       sessionKey: params.sessionKey,
       storePath: params.storePath,
+      initialMessagePending: params.initialMessagePending,
       currentUserMessage: params.request.rawMessage,
       userMessage: titleSource,
       ...(retryAfter ? { retryAfter } : {}),

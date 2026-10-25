@@ -4,6 +4,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { mockCall } from "../test-utils/mock-call-assertions.js";
 
 const runFfmpegMock = vi.hoisted(() => vi.fn());
 const runCommandWithTimeoutMock = vi.hoisted(() => vi.fn());
@@ -28,16 +29,6 @@ afterAll(() => {
   vi.doUnmock("./ffmpeg-exec.js");
   vi.resetModules();
 });
-
-type MockWithCalls = { mock: { calls: unknown[][] } };
-
-function firstMockCall(mock: MockWithCalls, label: string): unknown[] {
-  const call = mock.mock.calls[0];
-  if (!call) {
-    throw new Error(`expected ${label} call`);
-  }
-  return call;
-}
 
 describe("transcodeAudioBufferToOpus", () => {
   afterEach(() => {
@@ -72,7 +63,7 @@ describe("transcodeAudioBufferToOpus", () => {
     ).resolves.toEqual(Buffer.from("opus-output"));
 
     expect(runFfmpegMock).toHaveBeenCalledTimes(1);
-    expect(firstMockCall(runFfmpegMock, "runFfmpeg")).toStrictEqual([
+    expect(mockCall(runFfmpegMock)).toStrictEqual([
       [
         "-hide_banner",
         "-loglevel",
@@ -137,7 +128,7 @@ describe("transcodeAudioBufferToOpus", () => {
       maxDurationSeconds: 300,
     });
 
-    const ffmpegArgs = firstMockCall(runFfmpegMock, "runFfmpeg")[0] as string[];
+    const ffmpegArgs = mockCall(runFfmpegMock)[0] as string[];
     expect(ffmpegArgs).toEqual(expect.arrayContaining(["-t", "300", "-c:a", "libopus"]));
   });
 

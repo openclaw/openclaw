@@ -31,6 +31,7 @@ import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import {
   observeAcknowledgedUpdate,
   proveIncrementalWorkspaceEdits,
+  proveSandboxMutationCheckpoints,
   proveStagedInputCheckpointOwnership,
   proveWorkerOwnedIncrementalWorkspace,
 } from "./local-workspace-incremental.test-support.js";
@@ -159,6 +160,8 @@ afterEach(async () => {
   vi.unstubAllEnvs();
   await fs.rm(root, { recursive: true, force: true });
 });
+
+it("checkpoints sandbox file writes once", () => proveSandboxMutationCheckpoints(owner));
 
 it("recovers an explicitly selected oversized artifact before the next sandbox preparation", async () => {
   await archiveFixture();

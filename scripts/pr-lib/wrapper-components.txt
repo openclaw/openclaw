@@ -8,8 +8,11 @@ gateway-prewarm.mjs
 gateway-shutdown-budget.mjs
 worker-heap-flag.mjs
 node-runtime-env.mjs
+node-sqlite-capabilities.mjs
 node-sqlite.mjs
 node-version.mjs
+runtime-process-bootstrap.generated.mjs
+runtime-process-scripts.generated.mjs
 standalone-runtime-profile.mjs
 package.json
 packages/acp-core/package.json
@@ -226,6 +229,7 @@ scripts/lib/release-changelog.mjs
 scripts/lib/repo-root.mjs
 scripts/lib/test-runtime.mts
 scripts/lib/test-selector-source-facts.mts
+scripts/lib/test-selector-source-facts.worker.mts
 scripts/lib/test-source-term-matcher.mts
 scripts/lib/tsdown-declaration-boundary.mts
 scripts/lib/tsgo-core-test-shards.mts
@@ -382,6 +386,7 @@ src/agents/worktrees/run-end-lifecycle.ts
 src/agents/sandbox/registry-lifecycle.ts
 src/agents/sandbox/registry-publication.ts
 src/config/zod-schema.database.ts
+src/infra/directory-walk.ts
 src/infra/database-engine/adapters.ts
 src/infra/database-engine/admission-scope.ts
 src/infra/database-engine/capability-unavailable.ts
@@ -402,6 +407,7 @@ src/infra/database-engine/postgres-search.ts
 src/infra/database-engine/postgres-store-metadata.ts
 src/infra/database-engine/postgres-vector.ts
 src/infra/database-engine/registry.ts
+src/infra/database-engine/scalar.ts
 src/infra/database-engine/search-admission.ts
 src/infra/database-engine/search-extension.ts
 src/infra/database-engine/search.ts
@@ -417,6 +423,7 @@ src/infra/database-engine/vector-contract.ts
 src/infra/postgres-sync/bridge-prestart.ts
 src/infra/postgres-sync/connection.ts
 src/infra/postgres-sync/idle-bridges.ts
+src/infra/postgres-sync/pool.ts
 src/infra/postgres-sync/protocol.ts
 src/infra/postgres-sync/transaction.ts
 src/infra/sql-connection.ts
@@ -926,6 +933,8 @@ src/infra/boundary-file-read.ts
 src/infra/boundary-path.ts
 src/infra/bun-sqlite-close-probe.ts
 src/infra/bun-sqlite-close-probe.worker.ts
+src/infra/bun-sqlite-library-probe.generated.ts
+src/infra/bun-sqlite-library-probe.ts
 src/infra/bun-sqlite-library.ts
 src/infra/clawhub-integrity.ts
 src/infra/clawhub-spec.ts
@@ -1053,6 +1062,7 @@ src/infra/map-size.ts
 src/infra/mutation-authority.ts
 src/infra/native-error-response-schema.ts
 src/infra/native-error-response.ts
+src/infra/native-module-format.ts
 src/infra/net/configured-local-origin-bypass.ts
 src/infra/net/fetch-guard.ts
 src/infra/net/fetch-request-authority.ts
@@ -1120,8 +1130,10 @@ src/infra/retry.ts
 src/infra/root-walk.ts
 src/infra/runtime-capabilities.ts
 src/infra/runtime-dependency-ownership.ts
+src/infra/runtime-process-dependency-url.ts
 src/infra/runtime-process-entrypoints.ts
 src/infra/runtime-process-manifest.ts
+src/infra/runtime-process-script-file.ts
 src/infra/runtime-process-url.ts
 src/infra/runtime-profile.ts
 src/infra/runtime-worker-generation.ts
@@ -2113,6 +2125,8 @@ src/utils/absolute-deadline.ts
 src/utils/boolean.ts
 src/utils/delivery-context.read.ts
 src/utils/delivery-context.shared.ts
+src/utils/directive-tags-batch.ts
+src/utils/directive-tags-stream.ts
 src/utils/directive-tags.ts
 src/utils/fetch-timeout.ts
 src/utils/github-login.ts
@@ -2273,6 +2287,7 @@ src/infra/session-cost-usage-worker.types.ts
 src/sessions/session-agent-work-admission.ts
 src/sessions/session-lifecycle-identity.ts
 src/config/sessions/cli-history-boundary.ts
+src/config/sessions/session-accessor.sqlite-archive-worker-lifetime.ts
 src/config/sessions/session-accessor.sqlite-identity.ts
 src/config/sessions/session-accessor.sqlite-worker-coordination.ts
 src/config/sessions/session-accessor.sqlite-worker-transport.ts
@@ -2295,6 +2310,7 @@ src/config/sessions/session-transcript-worker-read-admission.ts
 src/config/sessions/session-transcript-worker-readers.ts
 src/config/sessions/session-transcript-worker-resources.ts
 src/config/sessions/session-transcript-worker-runtime.ts
+src/config/sessions/transcript-write-context-store.ts
 src/config/sessions/transcript-write-context.ts
 src/sessions/session-lifecycle-events.ts
 src/sessions/session-row-facts.ts
@@ -2391,8 +2407,11 @@ packages/gateway-protocol/src/schema/wizard.ts
 packages/markdown-core/src/fences.ts
 packages/markdown-core/src/image-code-retention.ts
 packages/markdown-core/src/list-code-retention.ts
+packages/markdown-core/src/markdown-code-regions.ts
 packages/markdown-core/src/reference-definition-retention.ts
 packages/markdown-core/src/reasoning-tag-parser.ts
+packages/markdown-core/src/reasoning-tag-syntax.ts
+packages/markdown-core/src/reasoning-tags-batch.ts
 packages/markdown-core/src/reasoning-tags.ts
 packages/markdown-core/src/table-code-retention.ts
 packages/media-core/src/base64.ts
@@ -2580,18 +2599,26 @@ src/shared/keyboard-shortcuts.ts
 src/shared/markdown-code.ts
 src/shared/provider-login-command.ts
 src/shared/session-list-visibility.ts
+src/shared/text/assistant-internal-scaffolding.ts
+src/shared/text/assistant-text-transforms.ts
 src/shared/text/assistant-visible-text.ts
+src/shared/text/code-ranges.ts
 src/shared/text/code-regions.ts
 src/shared/text/downgraded-tool-call-text.ts
 src/shared/text/escape-markdown.ts
 src/shared/text/final-tags.ts
 src/shared/text/glm-arg-key-payload.ts
+src/shared/text/internal-scaffolding-stages.ts
+src/shared/text/model-special-token-transform.ts
 src/shared/text/model-special-tokens.ts
 src/shared/text/native-tool-marker.ts
 src/shared/text/reasoning-tags.ts
+src/shared/text/strip-leading-empty-lines.ts
 src/shared/text/tag-name-probe.ts
 src/shared/text/text-projection.ts
+src/shared/text/trim-code-text.ts
 src/shared/text/tool-call-xml.ts
+src/shared/text/tool-call-xml-transform.ts
 src/shared/text/xml-tag-at.ts
 src/shared/widget-theme.ts
 packages/markdown-core/package.json
@@ -2706,6 +2733,7 @@ src/plugins/service-scheduler-binding.ts
 src/plugins/setup-registry.ts
 src/shared/map-nested-strings.ts
 src/shared/owned-buffer.ts
+src/shared/state-lease-loss.ts
 src/status/utility-model-warnings.ts
 src/infra/sqlite-integrity.worker.ts
 src/infra/sqlite-readonly-inspection.ts

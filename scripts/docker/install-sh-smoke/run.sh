@@ -298,7 +298,21 @@ for (const pid of fs.readdirSync("/proc").filter((entry) => /^\d+$/.test(entry))
 for (const root of [path.join(os.homedir(), ".config/systemd"), path.join(os.homedir(), ".local/share/systemd"), "/etc/systemd", "/run/systemd", "/usr/local/lib/systemd", "/usr/lib/systemd", "/lib/systemd"]) {
   let entries;
   try {
-    entries = fs.readdirSync(root, { recursive: true, withFileTypes: true });
+    // Runs against historical installed releases, before current SDK helpers exist.
+    // Explicit systemd roots may be aliases; never descend through discovered links.
+    entries = [];
+    const pending = [{ directory: root, depth: 0 }];
+    while (pending.length) {
+      const { directory, depth } = pending.pop();
+      const handle = fs.opendirSync(directory);
+      try {
+        for (let entry = handle.readSync(); entry; entry = handle.readSync()) {
+          if (entries.length >= 100000 || depth >= 64) fail("systemd directory scan limit exceeded");
+          entries.push(entry);
+          if (entry.isDirectory()) pending.push({ directory: path.join(directory, entry.name), depth: depth + 1 });
+        }
+      } finally { handle.closeSync(); }
+    }
   } catch (error) {
     if (error.code === "ENOENT") continue;
     throw error;

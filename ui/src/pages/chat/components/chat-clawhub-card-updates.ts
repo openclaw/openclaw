@@ -27,7 +27,7 @@ export function subscribeClawHubCardUpdates(
     let pluginGeneration = gateway.snapshot.pluginCapabilities?.generation;
     let pendingGatewayUpdate = false;
     const notify = (force: boolean, current: () => boolean) => {
-      for (const callback of [...listeners]) {
+      for (const callback of Array.from(listeners)) {
         if (!current()) {
           return false;
         }

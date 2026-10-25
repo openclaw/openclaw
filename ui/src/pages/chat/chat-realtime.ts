@@ -10,7 +10,7 @@ import {
   createRealtimeTalkConversationState,
   continueRealtimeTalkConversation,
   type RealtimeTalkConversationState,
-} from "./talk/conversation.ts";
+} from "./talk/conversation-state.ts";
 import type { RealtimeTalkCameraDevice } from "./talk/input.ts";
 import { RealtimeTalkLevelSignal } from "./talk/level.ts";
 import type { RealtimeTalkSession, RealtimeTalkStatus } from "./talk/session.ts";

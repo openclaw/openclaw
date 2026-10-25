@@ -5,7 +5,7 @@ import { formatCompactTokenCount } from "../../../lib/format.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { createTimeout } from "../../../lib/reactive/timers.ts";
-import { getContextNoticeViewModel } from "./chat-composer-context.tsx";
+import { getContextNoticeViewModel } from "./chat-composer-context-model.ts";
 import {
   buildChatContextCategories,
   buildDeferredContextGroups,

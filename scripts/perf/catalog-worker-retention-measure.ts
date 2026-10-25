@@ -1,5 +1,12 @@
-/** Synthetic catalog-worker retention, with forced GC outside any timing window. */
+/**
+ * Synthetic catalog-worker retention, with forced GC outside request timing windows.
+ * Run: node --import ./scripts/tsx.mjs scripts/perf/catalog-worker-retention-measure.ts
+ *   --output /absolute/new-fixture --workspaces 5 --models 5000 --runtime-plugin [--snapshot]
+ * Alternate independent baseline/candidate launches; --owner-dir substitutes pinned source files.
+ * Source-mode heap includes the TypeScript loader; do not equate it with packaged Gateway RSS.
+ */
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -16,6 +23,7 @@ const { values } = parseArgs({
     models: { type: "string", default: "5000" },
     "owner-dir": { type: "string" },
     snapshot: { type: "boolean", default: false },
+    "runtime-plugin": { type: "boolean", default: false },
   },
 });
 assert(values.output, "--output must name a new synthetic fixture directory");
@@ -47,7 +55,8 @@ if (values["owner-dir"]) {
 }
 // Install the same observer and optional source substitution before either owner imports.
 await import("./worker-retained-heap-preload.js");
-const { WorkerTaskPool } = await import("../../src/infra/worker-task-pool.js");
+const { CatalogWorkerTaskPool } =
+  await import("../../src/agents/prepared-model-catalog-worker.pool.js");
 const { loadPluginMetadataSnapshot } =
   await import("../../src/plugins/plugin-metadata-snapshot.js");
 const { createPreparedModelCatalogWorkerInput } =
@@ -58,10 +67,42 @@ const { captureClawInstallSchemaVersionFacts } =
 const { prepareSharedAuthStoreOwnership } =
   await import("../../src/agents/auth-profiles/path-resolve.js");
 await prepareSharedAuthStoreOwnership(env);
+const pluginDir = path.join(root, "plugin");
+if (values["runtime-plugin"]) {
+  fs.mkdirSync(pluginDir);
+  fs.writeFileSync(
+    path.join(pluginDir, "openclaw.plugin.json"),
+    JSON.stringify({
+      id: "catalog-retention-fixture",
+      providers: ["fixture-provider"],
+      modelCatalog: { discovery: { "fixture-provider": "runtime" }, runtimeAugment: true },
+      configSchema: { type: "object", additionalProperties: false },
+    }),
+  );
+  fs.writeFileSync(
+    path.join(pluginDir, "index.cjs"),
+    `module.exports = { id: "catalog-retention-fixture", register(api) {
+      api.registerProvider({ id: "fixture-provider", label: "Synthetic catalog", auth: [],
+        catalog: { run() { return { provider: {
+          api: "openai-completions", baseUrl: "https://fixture.invalid/v1",
+          models: Array.from({ length: 500 }, (_, index) => ({
+            id: "generated-" + index, name: "Generated " + index,
+            contextWindow: 128000, maxTokens: 8192,
+          })),
+        } }; } },
+      });
+    } };`,
+  );
+}
 const config = {
-  plugins: { enabled: false },
+  plugins: values["runtime-plugin"]
+    ? {
+        load: { paths: [path.join(pluginDir, "index.cjs")] },
+        allow: ["catalog-retention-fixture"],
+      }
+    : { enabled: false },
   models: {
-    mode: "replace" as const,
+    mode: values["runtime-plugin"] ? ("merge" as const) : ("replace" as const),
     providers: {
       "fixture-provider": {
         baseUrl: "https://fixture.invalid/v1",
@@ -93,8 +134,13 @@ const inputs = Array.from({ length: workspaces }, (_, index) => {
     agentFacts: {
       input,
       env,
-      authStore: { version: 1, profiles: {} },
-      credentials: {},
+      authStore: {
+        version: 1,
+        profiles: {
+          fixture: { type: "api_key", provider: "fixture-provider", key: "synthetic-not-real" },
+        },
+      },
+      credentials: { "fixture-provider": { type: "api_key", key: "synthetic-not-real" } },
       providerIds: ["fixture-provider"],
       configuredModelRefs: [],
       configuredRuntimeModels: [],
@@ -105,14 +151,12 @@ const inputs = Array.from({ length: workspaces }, (_, index) => {
     pluginMetadataSnapshot: loadPluginMetadataSnapshot({ config, env, workspaceDir }),
   });
 });
-const pool = new WorkerTaskPool<PreparedModelCatalogWorkerTask, PreparedModelWorkerResult>({
-  workerUrl: new URL("../../src/agents/prepared-model-catalog.worker.ts", import.meta.url),
-  maxWorkers: 1,
-  idleTimeoutMs: 0,
-  restartOnError: false,
-  workerOptions: { workerData: { sourceCaptureDirectory: path.join(root, "capture") }, env },
-});
+const pool = new CatalogWorkerTaskPool<PreparedModelCatalogWorkerTask, PreparedModelWorkerResult>(
+  env,
+  () => {},
+);
 let commands = 0;
+const requests: Array<{ elapsedMs: number; entries: number; hash: string }> = [];
 async function sample(name: string, snapshot = false) {
   const ready = fs
     .readdirSync(output)
@@ -164,6 +208,7 @@ try {
       upstreamPricing: {},
     };
     for (const [index, input] of inputs.entries()) {
+      const started = performance.now();
       const result = await pool.run(
         {
           value: { ...input, remoteCatalog },
@@ -175,8 +220,17 @@ try {
         },
         { timeoutMs: 120_000 },
       );
+      const elapsedMs = performance.now() - started;
       assert(result.status === "ok" && result.kind === "catalog", JSON.stringify(result));
       assert(result.snapshot.entries.some((entry) => entry.id === "fixture-model"));
+      if (values["runtime-plugin"]) {
+        assert(result.snapshot.entries.some((entry) => entry.id === "generated-499"));
+      }
+      requests.push({
+        elapsedMs,
+        entries: result.snapshot.entries.length,
+        hash: createHash("sha256").update(JSON.stringify(result.snapshot)).digest("hex"),
+      });
       commands++;
       if (index === 0 && revision === 0) {
         await sample("one");
@@ -184,6 +238,7 @@ try {
     }
     await sample(`revision-${revision}`, values.snapshot && revision === 1);
   }
+  console.log(JSON.stringify({ phase: "requests", requests }));
 } finally {
   await pool.close();
 }

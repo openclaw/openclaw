@@ -52,7 +52,25 @@ vi.mock("../infra/worker-cpu.js", async (importOriginal) => {
     import { DatabaseSync } from "node:sqlite";
     import { MessagePort, workerData } from "node:worker_threads";
     // Fault 2: transient lease insertion/cleanup failures.
-    const prepare = DatabaseSync.prototype.prepare;
+    const originalPrepare = DatabaseSync.prototype.prepare;
+    function prepare(sql) {
+      const statement = originalPrepare.call(this, sql);
+      if (/delete from "?agent_database_leases"?/i.test(sql)) {
+        // DELETE RETURNING uses iterate() on Bun and all() on current Node.
+        for (const method of ["all", "iterate"]) {
+          const execute = statement[method].bind(statement);
+          statement[method] = (...args) => {
+            const fault = new Int32Array(workerData.closeWedgeEnabled);
+            Atomics.add(fault, 1, 1);
+            if (Atomics.load(fault, 0) === 1) {
+              throw Object.assign(new Error("disk I/O error"), { code: "ERR_SQLITE_ERROR", errcode: 10, errstr: "disk I/O error" });
+            }
+            return execute(...args);
+          };
+        }
+      }
+      return statement;
+    }
     DatabaseSync.prototype.prepare = function (sql) {
       if ([5, 6].includes(Atomics.load(new Int32Array(workerData.closeWedgeEnabled), 0)) &&
           (Atomics.load(new Int32Array(workerData.closeWedgeEnabled), 0) === 6 ||

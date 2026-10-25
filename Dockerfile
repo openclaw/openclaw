@@ -68,6 +68,9 @@ WORKDIR /app
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 COPY node-version.mjs ./
 COPY node-sqlite.mjs ./
+COPY node-sqlite-capabilities.mjs ./
+COPY runtime-process-bootstrap.generated.mjs ./
+COPY runtime-process-scripts.generated.mjs ./
 COPY node-runtime-update.mjs ./
 COPY node-runtime-recovery.mjs ./
 COPY cli-parent-lifetime.mjs ./
@@ -86,6 +89,8 @@ COPY scripts/lib/package-dist-imports.mjs ./scripts/lib/package-dist-imports.mjs
 COPY scripts/lib/javascript-statements.mjs ./scripts/lib/javascript-statements.mjs
 COPY scripts/lib/package-lifecycle-marker.mjs ./scripts/lib/package-lifecycle-marker.mjs
 COPY scripts/lib/fs-safe-prebuild.mjs ./scripts/lib/fs-safe-prebuild.mjs
+COPY scripts/lib/fs-safe-npm-cli-preload.generated.mjs ./scripts/lib/fs-safe-npm-cli-preload.generated.mjs
+COPY scripts/lib/fs-safe-npm-cli-protocol.mjs ./scripts/lib/fs-safe-npm-cli-protocol.mjs
 COPY scripts/docker/verify-fs-safe-native.mjs ./scripts/docker/verify-fs-safe-native.mjs
 COPY scripts/docker/verify-native-addons.sh ./scripts/docker/verify-native-addons.sh
 
@@ -282,6 +287,9 @@ COPY --from=runtime-assets --chown=node:node /app/pnpm-workspace.yaml .
 COPY --from=runtime-assets --chown=node:node /app/patches ./patches
 COPY --from=runtime-assets --chown=node:node /app/node-version.mjs .
 COPY --from=runtime-assets --chown=node:node /app/node-sqlite.mjs .
+COPY --from=runtime-assets --chown=node:node /app/node-sqlite-capabilities.mjs .
+COPY --from=runtime-assets --chown=node:node /app/runtime-process-bootstrap.generated.mjs .
+COPY --from=runtime-assets --chown=node:node /app/runtime-process-scripts.generated.mjs .
 COPY --from=runtime-assets --chown=node:node /app/node-runtime-update.mjs .
 COPY --from=runtime-assets --chown=node:node /app/node-runtime-recovery.mjs .
 COPY --from=runtime-assets --chown=node:node /app/cli-parent-lifetime.mjs .

@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { sessionActivityTimestamp } from "../../../../src/shared/session-activity-timestamp.js";
 import type { AgentsListResult, GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { activityPersonFromPath } from "../../app-route-paths.ts";
+import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import { createSessionRowProvenance } from "../../lib/sessions/session-row-provenance.ts";
 import { useSessionActivityControllerFixture } from "./session-activity-controller.test-support.ts";
 import {
@@ -91,12 +92,9 @@ describe("session activity projection", () => {
   });
 
   it("uses the advertised owner's avatar instead of the creator's avatar", () => {
-    const agents: AgentsListResult = {
-      defaultId: "main",
-      mainKey: "main",
-      scope: "per-sender",
+    const agents: AgentsListResult = makeBootRoster({
       agents: [{ id: "main", identity: { avatarUrl: "/avatar/main?roster=1" } }],
-    };
+    });
     const row: GatewaySessionRow = {
       key: "agent:main:work",
       kind: "direct",

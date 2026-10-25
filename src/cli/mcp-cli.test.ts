@@ -135,6 +135,36 @@ afterEach(async () => {
   }
 });
 
+it("escapes MCP report fields without altering JSON or the saved server", async () => {
+  const name = "café\x1b[31m\nforged\tserver\r\x00\x85end";
+  const servers = {
+    [name]: { command: "node", args: ["café\x1b[31m\nforged-arg"], enabled: false },
+    normal: { command: "node", enabled: false },
+  };
+  await writeMcpServers(servers);
+  const before = await fs.readFile(configPath, "utf8");
+  for (const args of [["list"], ["show", name], ["status", "--verbose"], ["doctor"]]) {
+    mockLog.mockClear();
+    await mcp(...args);
+    const report = args[0] === "show" ? String(mockLog.mock.calls[0]?.[0]) : logOutput();
+    expect(report).toContain("café\\nforged\\tserver\\rend");
+    expect(report.replaceAll("\n", "")).not.toMatch(/\p{Cc}/u);
+  }
+  expect(await readJson("list")).toEqual(servers);
+  expect(await fs.readFile(configPath, "utf8")).toBe(before);
+});
+
+it("escapes mutation acknowledgements and unknown-server errors without rewriting names", async () => {
+  const name = "café\x1b[31m\nforged";
+  await setServer({ command: "node", enabled: false }, name);
+  expect(lastLogLine()).toContain('Saved MCP server "café\\nforged"');
+  expect(await readJson("list")).toHaveProperty(name);
+  mockError.mockClear();
+  await expect(mcp("show", `${name}-missing`)).rejects.toMatchObject({ code: 1 });
+  expect(lastErrorLine()).toContain('No MCP server named "café\\nforged-missing"');
+  expect(lastErrorLine()).not.toMatch(/\p{Cc}/u);
+});
+
 it("adds a configured MCP server from flags without replacing operator knobs", async () => {
   await mcp(
     "add",

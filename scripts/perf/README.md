@@ -4803,6 +4803,33 @@ Preserve the exact instrumentation patch and compiled build identity. Validate
 all source anchors again when rebasing. Never apply this instrumenter to an
 operator checkout or ship the instrumented build.
 
+Each measured wave also reports `materializationWork` from the production
+session-row work counters: `created` is first construction, `reused` constructs
+and then retains the old graph, `rebuilt` replaces an existing graph, and `skipped`
+retains the old graph without constructing a replacement. Reuse among repeated
+attempts is `(reused + skipped) / (reused + skipped + rebuilt)`; exclude first
+constructions and report an empty denominator as no attempts. `deepComparisons`
+counts whole-materialization comparisons, not individual input-field checks or
+diagnostic sampling. Existing diagnostic memory snapshots include these counters
+and first differing source-field counts sampled on one in 64 rebuilds. The
+`row-or-membership` bucket means source fields were equal; it does not imply the
+materialized row was equal. No values or session identities are sampled.
+
+For a separate development Gateway diagnostic through ordinary WebSocket RPCs:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/session-row-materialization-measure.ts \
+  --root /path/to/new-synthetic-state --port 62689 --sessions 32 --lists 100
+```
+
+This launches an isolated source Gateway, waits for admission readiness, and
+reports ordinary reads, cron rename/enable/disable, a changed label, and a repeated
+save of that label. The repeat save may still change persisted metadata. Asserted
+automation and label changes guard against stale reuse. Main CPU per list includes
+the phase's mutation and background work, but excludes the controller process;
+it is not exclusive RPC CPU. Apply the same host isolation, quiet slot and guard
+rules as the compiled diagnostic. Preserve failed setup separately from samples.
+
 ```sh
 node --enable-source-maps --import ./scripts/tsx.mjs \
   scripts/perf/reconnect-read-wave-measure.ts \
@@ -5827,3 +5854,30 @@ Run counts separately from timing and allocation. Use fresh state directories,
 fixed operation counts, a shared `--start-at`, and swapped interleaved CPU placement
 under the quiet-slot lock and production guard for paired comparisons. Report GC
 counts and absolute total/max deltas alongside CPU and allocation per operation.
+
+## Memory search status counts
+
+Build `qaRuntime`, then measure ten keyword searches through a real isolated
+Gateway. The workload uses four synthetic memory files, a real indexed agent,
+and no provider calls. Corpus timestamps are fixed so returned provenance is
+comparable too. Use a fresh output directory for each engine and revision:
+
+```sh
+PGCENSUS_ENGINE=sqlite PGCENSUS_OUT=/path/to/new-sqlite-output \
+  node --import ./scripts/tsx.mjs scripts/perf/memory-search-status-measure.ts
+PGCENSUS_ENGINE=postgres PGCENSUS_CONNECTION=postgresql://localhost/throwaway \
+  PGCENSUS_OUT=/path/to/new-postgres-output \
+  node --import ./scripts/tsx.mjs scripts/perf/memory-search-status-measure.ts
+```
+
+The PostgreSQL database must be disposable and provide the qualified extensions.
+The workload validates its fresh config, indexes the corpus, checks every top
+result, and stops its Gateway. `result.json` retains response objects and
+per-search statement-call, diagnostic-count-query, and worker-request counts.
+The preload captures the database statement channel in each worker, plus native
+SQLite calls that bypass that channel. Those are separate ledgers, never added.
+Compare response objects within each engine and require diagnostic count queries
+to disappear (`PGCENSUS_EXPECT_COUNT_STATEMENTS=0` enforces this). Request windows
+and worker events use the same monotonic nanosecond clock, including submillisecond
+searches. Wall samples include instrumentation and incidental background work;
+this small workload does not establish latency or relevance at scale.

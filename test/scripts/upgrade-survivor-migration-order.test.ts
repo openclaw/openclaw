@@ -1,13 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import {
-  cpSync,
-  existsSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
@@ -24,6 +16,7 @@ import {
   captureWorkshopLegacyState,
   seedWorkshopLegacyProposals,
 } from "../../scripts/e2e/lib/upgrade-survivor/workshop-legacy-proposals.mjs";
+import { listDirectoryTreeStrictSync } from "../../src/infra/directory-walk.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -357,9 +350,9 @@ function simulateWorkshopRetirement(
     "agents/main/agent/workshop-skills/.archive/.retired-proposals",
   );
   for (const id of exportedIds) {
-    const draft = readdirSync(join(proposals, id), { recursive: true, encoding: "utf8" }).find(
-      (entry) => entry.endsWith("PROPOSAL.md"),
-    )!;
+    const draft = listDirectoryTreeStrictSync(join(proposals, id))
+      .map((walkEntry) => walkEntry.relativePath)
+      .find((entry) => entry.endsWith("PROPOSAL.md"))!;
     const bundle = dirname(join(proposals, id, draft));
     mkdirSync(join(exportRoot, id), { recursive: true });
     cpSync(join(bundle, "PROPOSAL.md"), join(exportRoot, id, "SKILL.md"));

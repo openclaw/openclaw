@@ -50,7 +50,9 @@ it("shares closed tooltip observation across light and shadow DOM and releases r
   shadow.append(...fixtures.slice(50).map(({ tooltip }) => tooltip));
   await Promise.all(fixtures.map(({ tooltip }) => settleTooltip(tooltip)));
   expect(observers.size).toBe(1);
-  expect([...observers].filter((observer) => observer.targets.size > 0)).toHaveLength(1);
+  expect([...observers].filter((activeObserver) => activeObserver.targets.size > 0)).toHaveLength(
+    1,
+  );
   const observer = [...observers][0]!;
   for (const [index, { tooltip, trigger }] of fixtures.entries()) {
     expect(observer.targets.get(tooltip)).toEqual({
@@ -80,12 +82,14 @@ it("shares closed tooltip observation across light and shadow DOM and releases r
   first.tooltip.remove();
   await Promise.resolve();
   expect(replacement.hasAttribute("aria-describedby")).toBe(false);
-  expect([...observers].filter((observer) => observer.targets.size > 0)).toHaveLength(1);
+  expect([...observers].filter((activeObserver) => activeObserver.targets.size > 0)).toHaveLength(
+    1,
+  );
   expect(observers.size).toBe(1);
 
   document.body.replaceChildren();
   await Promise.resolve();
-  expect([...observers].every((observer) => observer.targets.size === 0)).toBe(true);
+  expect([...observers].every((activeObserver) => activeObserver.targets.size === 0)).toBe(true);
 });
 
 it("materializes content on first hover intent and reuses the native surface", async () => {

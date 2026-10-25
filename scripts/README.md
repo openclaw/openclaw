@@ -43,6 +43,20 @@ new directory taxonomy.
 | Commits         | `git add <files...>` then `git commit -m "<message>"`                          | Stage only the intended files for each commit.                                                                      |
 | Remote proof    | `node scripts/crabbox-wrapper.mjs ...`                                         | Use when the current host lacks the required isolation, OS, device, or capacity; sync each run and reuse the lease. |
 
+## Runtime script generation and proof builds
+
+`pnpm runtime:scripts:gen` bundles embedded programs and their materializer.
+Whitespace minification removes esbuild's source-path comments, so generated
+bytes stay identical when dependencies move between pnpm virtual stores.
+`pnpm runtime:scripts:check` still requires an exact byte match; source-run build
+stamps still hash the complete generated files.
+
+Use `pnpm build qaRuntime` for reusable runtime test artifacts. Controllers that
+also verify `dist/build-info.json` against a source commit should use
+`pnpm build sourcePerformance`, which adds that identity metadata without a UI
+or declaration build. Keep generated files unchanged after either build so
+equivalent-input admission can certify the same source bytes.
+
 ## Exact memory search benchmark
 
 Use `scripts/bench-memory-search.mjs` against a disposable PostgreSQL database

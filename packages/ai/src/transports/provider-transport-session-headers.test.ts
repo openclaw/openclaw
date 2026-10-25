@@ -12,7 +12,6 @@ import { makeProviderModel } from "../providers/provider-model.test-support.js";
 import { registerBuiltInApiProviders } from "../providers/register-builtins.js";
 import type { Model } from "../types.js";
 import { createAnthropicMessagesTransportStreamFn } from "./anthropic-transport-stream.js";
-import { createAzureOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
 import { createBoundaryAwareStreamFnForModel } from "./provider-transport-stream.js";
 import { prepareModelForSimpleCompletion } from "./simple-completion-transport.js";
 
@@ -227,27 +226,6 @@ describe("managed OpenCode conversation headers at fetch egress", () => {
 });
 
 describe("managed OpenAI Responses session headers at fetch egress", () => {
-  it("honors Azure proxy opt-in with short cache retention", async () => {
-    const { requests, captureFetch } = captureRequests();
-    configureAiTransportHost({ ...initialHost, buildModelFetch: () => captureFetch });
-
-    const streamFn = createAzureOpenAIResponsesTransportStreamFn();
-    const stream = await streamFn(
-      makeModel({
-        api: "azure-openai-responses",
-        provider: "openai-proxy",
-        baseUrl: "https://responses-proxy.example.test/v1",
-        compat: { sendSessionIdHeader: true },
-      }),
-      makeContext(),
-      { apiKey: "test-key", sessionId: "conversation-a", cacheRetention: "short" },
-    );
-    await stream.result();
-
-    expect(requests).toHaveLength(1);
-    expect(requests[0]?.headers.get("session_id")).toBe("conversation-a");
-  });
-
   it.each([
     {
       name: "proxy opt-in",

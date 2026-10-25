@@ -175,6 +175,59 @@ describe("model diagnostic lifecycle", () => {
   });
 
   it.each([
+    { terminal: "done", responseModel: " routed/model ", expected: "routed/model" },
+    { terminal: "error", responseModel: "routed/model", expected: "routed/model" },
+    { terminal: "result", responseModel: "routed/model", expected: "routed/model" },
+    { terminal: "done", responseModel: undefined, expected: undefined },
+    { terminal: "done", responseModel: "  ", expected: undefined },
+  ] as const)(
+    "observes $terminal response model $responseModel without changing requested identity",
+    async ({ terminal, responseModel, expected }) => {
+      const stopReason = terminal === "error" ? "error" : "stop";
+      const message = makeAssistantMessageFixture({ stopReason, responseModel });
+      const source: StreamFn = () => ({
+        async *[Symbol.asyncIterator]() {
+          if (terminal === "done") {
+            yield { type: "done", reason: "stop", message } as const;
+          } else if (terminal === "error") {
+            yield { type: "error", reason: "error", error: message } as const;
+          }
+        },
+        // Iterator cases cannot obtain the response model from result().
+        result: async () =>
+          terminal === "result" ? message : makeAssistantMessageFixture({ stopReason }),
+      });
+      const events = await collect(async () => {
+        const result = await wrap(source)(
+          makeProviderModelFixture({
+            id: "gpt-5.4",
+            provider: "openai",
+            api: "openai-responses",
+            baseUrl: "https://example.invalid",
+          }),
+          { messages: [] },
+          {},
+        );
+        if (terminal === "result") {
+          await result.result();
+        } else {
+          await drain(result);
+        }
+      });
+      expect(events).toHaveLength(2);
+      expect(events[0]).not.toHaveProperty("responseModel");
+      expect(events[1]).toMatchObject({
+        type: terminal === "error" ? "model.call.error" : "model.call.completed",
+        model: "gpt-5.4",
+        ...(expected ? { responseModel: expected } : {}),
+      });
+      if (!expected) {
+        expect(events[1]).not.toHaveProperty("responseModel");
+      }
+    },
+  );
+
+  it.each([
     "throw",
     "promise rejection",
     "iterator failure",

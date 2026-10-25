@@ -29,7 +29,7 @@ import {
 const { observedDirectories, releasedDirectories } = vi.hoisted(() => ({
   observedDirectories: [] as Array<{
     directory: string;
-    notify: (filename?: string) => void;
+    notify: (filename?: string, event?: string) => void;
     active: boolean;
   }>,
   // The shared owner closes a native watch when a directory's last observation leaves.
@@ -37,7 +37,7 @@ const { observedDirectories, releasedDirectories } = vi.hoisted(() => ({
 }));
 // mock-isolation: Deliver directory changes deterministically without native watcher timing.
 vi.mock("../infra/owned-directory-observation.js", () => ({
-  observeOwnedDirectory(directory: string, notify: (filename?: string) => void) {
+  observeOwnedDirectory(directory: string, notify: (filename?: string, event?: string) => void) {
     const observation = { directory, notify, active: true };
     observedDirectories.push(observation);
     return {
@@ -343,11 +343,25 @@ it("retains source preparation until directory or registry ownership changes", a
     expect(warm.request).toEqual(first.request);
     expect([realpath, stat, readdir].map((spy) => spy.mock.calls)).toEqual([[], [], []]);
 
+    // Registry commits publish their own revision; file activity must not rescan agent paths.
+    for (const entry of observedDirectories) {
+      if (entry.active && entry.directory === path.dirname(params.registryPath)) {
+        entry.notify(path.basename(params.registryPath));
+      }
+    }
+    expect([realpath, stat, readdir].map((spy) => spy.mock.calls.length)).toEqual([0, 0, 0]);
+    await Promise.resolve();
+
     const directory = observedDirectories.find(
       (entry) => entry.active && entry.directory === path.dirname(main.path),
     );
     expect(directory).toBeDefined();
     directory!.notify("unrelated.txt");
+    for (let index = 0; index < 100; index++) {
+      directory!.notify(path.basename(main.path), "change");
+      directory!.notify(`${path.basename(main.path)}-wal`, "change");
+    }
+    expect([realpath, stat, readdir].map((spy) => spy.mock.calls)).toEqual([[], [], []]);
     directory!.notify(path.basename(main.path));
     const revalidationReads = realpath.mock.calls.length;
     for (const entry of observedDirectories) {

@@ -48,7 +48,7 @@ export function subscribeCiGatewayUpdates(
         if (!pending[target]) {
           continue;
         }
-        for (const callback of [...listeners[target]]) {
+        for (const callback of Array.from(listeners[target])) {
           // Match Gateway publication ordering, including a nested replacement.
           if (gateway.snapshot !== snapshot) {
             return;

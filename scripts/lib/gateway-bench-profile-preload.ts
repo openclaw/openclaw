@@ -338,7 +338,12 @@ ${source}`;
     );
   });
   let inspectorConnected = false;
-  const traceGc = process.execArgv.includes("--trace-gc-nvp");
+  const traceGc =
+    process.env.OPENCLAW_BENCH_TRACE_GC === "1" || process.execArgv.includes("--trace-gc-nvp");
+  if (traceGc) {
+    // Enable tracing here: Worker rejects this flag when inherited through execArgv.
+    v8.setFlagsFromString("--trace-gc-nvp");
+  }
   const markGc = (phase: string, profilePath?: string) => {
     if (traceGc) {
       // Share V8's stdout descriptor without asynchronous stream buffering.

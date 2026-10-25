@@ -108,6 +108,13 @@ type ChatCiDetailsProps = ChatCiDisclosureProps & {
 };
 
 export type ChatCiDetailsElement = SolidBridgeElement<ChatCiDetailsProps>;
+
+declare global {
+  interface HTMLElementTagNameMap {
+    "openclaw-chat-ci-details": ChatCiDetailsElement;
+  }
+}
+
 function ChatCiDetailsContent(props: ChatCiDetailsProps, host: ChatCiDetailsElement) {
   const retryRef = props.controls?.ref();
   const skippedRef = props.controls?.ref();

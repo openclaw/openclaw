@@ -79,10 +79,14 @@ it("makes the new subscription ready before the old unsubscribe settles", async 
   const sync = syncSelectedSessionMessageSubscription(state);
   await Promise.resolve();
   expect(unsubscribeMessages).toHaveBeenCalledOnce();
-  expect(subscribeMessages).toHaveBeenCalledWith(selected.key, {
-    agentId: undefined,
-    includeApprovals: true,
-  });
+  expect(subscribeMessages).toHaveBeenCalledWith(
+    selected.key,
+    {
+      agentId: undefined,
+      includeApprovals: true,
+    },
+    undefined,
+  );
   try {
     await vi.waitFor(() => expect(state.chatSessionMessageSubscription).toEqual(selected));
     await expect(sync).resolves.toBe(true);
@@ -348,8 +352,12 @@ it("clears stale approvals while switching the selected global agent", async () 
   await sync;
 
   expect(queueWhileReplacementIsPending).toEqual([]);
-  expect(subscribeMessages).toHaveBeenCalledWith("global", {
-    agentId: "research",
-    includeApprovals: true,
-  });
+  expect(subscribeMessages).toHaveBeenCalledWith(
+    "global",
+    {
+      agentId: "research",
+      includeApprovals: true,
+    },
+    undefined,
+  );
 });

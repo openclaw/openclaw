@@ -2,8 +2,8 @@ import { createMemo, Show, useContext } from "solid-js";
 import { providerDisplayLabel } from "../../../components/provider-icon-data.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { ProviderBrandIcon } from "../../../components/solid/provider-icon.tsx";
-import "../../../components/tooltip.ts";
 import { formatModelRuntimeLabel } from "../../../lib/model-runtime-label.ts";
+import "../../../components/tooltip.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import {
   formatModelContextMeta,
@@ -13,11 +13,8 @@ import {
   type ChatModelPickerOptionProps,
   type ChatModelPickerTargetOptionProps,
 } from "./chat-model-picker-options.ts";
-import {
-  ChatModelSearchContext,
-  handleModelOptionMouseEnter,
-  type ChatModelSearchRow,
-} from "./chat-model-picker-search.ts";
+import { handleModelOptionMouseEnter } from "./chat-model-picker-search-view.ts";
+import { ChatModelSearchContext, type ChatModelSearchRow } from "./chat-model-picker-search.ts";
 
 function ModelShortcut(props: { rowKey: string }) {
   const search = useContext(ChatModelSearchContext);

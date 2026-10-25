@@ -34,20 +34,10 @@ type EvaluatedBindingsCache = {
 
 const evaluatedBindingsCacheByCfg = new WeakMap<OpenClawConfig, EvaluatedBindingsCache>();
 const MAX_EVALUATED_BINDINGS_CACHE_KEYS = 2000;
-type EvaluatedBindingsIndex = {
-  byPeer: Map<string, EvaluatedBinding[]>;
-  byPeerWildcard: EvaluatedBinding[];
-  byGuildWithRoles: Map<string, EvaluatedBinding[]>;
-  byGuild: Map<string, EvaluatedBinding[]>;
-  byTeam: Map<string, EvaluatedBinding[]>;
-  byAccount: EvaluatedBinding[];
-  byChannel: EvaluatedBinding[];
-};
-
 // Source-order candidates and their lookup index share one cache generation.
 type EvaluatedBindingsEntry = {
   bindings: EvaluatedBinding[];
-  index: EvaluatedBindingsIndex;
+  index: ReturnType<typeof buildEvaluatedBindingsIndex>;
 };
 
 type EvaluatedBindingsByChannel = {
@@ -142,7 +132,7 @@ export function peerLookupKey(kind: ChatType, id: string): string {
   return `${kind === "channel" ? "group" : kind}:${id}`;
 }
 
-function buildEvaluatedBindingsIndex(bindings: EvaluatedBinding[]): EvaluatedBindingsIndex {
+function buildEvaluatedBindingsIndex(bindings: EvaluatedBinding[]) {
   const byPeer = new Map<string, EvaluatedBinding[]>();
   const byPeerWildcard: EvaluatedBinding[] = [];
   const byGuildWithRoles = new Map<string, EvaluatedBinding[]>();

@@ -3,7 +3,10 @@ import { withPreparedToolConstruction } from "../../agents/tool-construction-pre
 import * as facts from "../../config/resolution-facts.js";
 import * as snapshots from "../../config/runtime-snapshot.js";
 import { captureRuntimeConfig } from "../../config/runtime-source-projection.js";
+import { publishRetainedSessionEntryChange } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { retainReplyToolAuthorityClassification } from "./reply-tool-authority-cohort.js";
 import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
 
 const route = { provider: "openai", model: "test-model" };
@@ -93,4 +96,144 @@ it("isolates unpublished configs from later edits", async () => {
   expect(next.config.tools?.deny).toEqual(["read"]);
   expect(next.fingerprint).not.toBe(first.fingerprint);
   expect(first.authority.project(overlay, route)).toBe(first.fingerprint);
+});
+
+const classificationEntry: SessionEntry = {
+  sessionId: "classification",
+  updatedAt: 1,
+  lifecycleRevision: "generation",
+  sandbox: "required",
+  sandboxMode: "off",
+  createdActor: {
+    type: "human",
+    source: "profile",
+    id: "creator",
+    delegatedBy: { type: "agent", id: "parent" },
+  },
+};
+it.each([
+  { name: "unrelated metadata", patch: { updatedAt: 2, label: "Renamed" }, current: true },
+  {
+    name: "reordered actor keys",
+    patch: {
+      createdActor: {
+        delegatedBy: { id: "parent", type: "agent" },
+        id: "creator",
+        source: "profile",
+        type: "human",
+      },
+    },
+    current: true,
+  },
+  { name: "session identity", patch: { sessionId: "replacement" }, current: false },
+  { name: "lifecycle", patch: { lifecycleRevision: "replacement" }, current: false },
+  { name: "sandbox requirement", patch: { sandbox: undefined }, current: false },
+  { name: "sandbox mode", patch: { sandboxMode: undefined }, current: false },
+  {
+    name: "creator identity",
+    patch: { createdActor: { ...classificationEntry.createdActor!, id: "replacement" } },
+    current: false,
+  },
+  {
+    name: "nested creator identity",
+    patch: {
+      createdActor: {
+        ...classificationEntry.createdActor!,
+        delegatedBy: { type: "human", source: "profile", id: "creator" },
+      },
+    },
+    current: false,
+  },
+  {
+    name: "explicit undefined actor property",
+    patch: { createdActor: { ...classificationEntry.createdActor!, label: undefined } },
+    current: false,
+  },
+  { name: "removed creator", patch: { createdActor: undefined }, current: false },
+] satisfies { name: string; patch: Partial<SessionEntry>; current: boolean }[])(
+  "retained classification observes $name on publication",
+  ({ patch, current }) => {
+    const original = {
+      storePath: "/synthetic/classification",
+      canonicalKey: "agent:main:classification",
+      storeKeys: ["agent:main:classification"],
+      agentId: "main",
+      source: {
+        agentId: "main",
+        path: "/synthetic/classification.db",
+        databaseIdentity: "classification-test",
+      },
+      sources: undefined,
+      sessionId: classificationEntry.sessionId,
+      lifecycleRevision: classificationEntry.lifecycleRevision,
+    };
+    const retained = retainReplyToolAuthorityClassification(
+      original,
+      classificationEntry,
+      () => {},
+    );
+    expect(retained).toBeDefined();
+    try {
+      const entry = { ...classificationEntry, ...patch };
+      publishRetainedSessionEntryChange(
+        "classification-test",
+        original.canonicalKey,
+        entry,
+        classificationEntry,
+        true,
+        entry,
+      );
+      if (current) {
+        expect(() => retained!.assertCurrent()).not.toThrow();
+      } else {
+        expect(() => retained!.assertCurrent()).toThrow("classification session changed");
+      }
+    } finally {
+      retained?.release();
+    }
+  },
+);
+it("treats absent and undefined classification fields equally but still checks live authority", () => {
+  const entry: SessionEntry = { sessionId: "optional", updatedAt: 1 };
+  let active = true;
+  const original = {
+    storePath: "/synthetic/optional",
+    canonicalKey: "agent:main:optional",
+    storeKeys: ["agent:main:optional"],
+    agentId: "main",
+    source: { agentId: "main", path: "/synthetic/optional.db", databaseIdentity: "optional-test" },
+    sources: undefined,
+    sessionId: entry.sessionId,
+    lifecycleRevision: undefined,
+  };
+  const retained = retainReplyToolAuthorityClassification(original, entry, () => {
+    if (!active) {
+      throw new Error("Caller revoked");
+    }
+  });
+  try {
+    const next = {
+      ...entry,
+      sandbox: undefined,
+      sandboxMode: undefined,
+      lifecycleRevision: undefined,
+      createdActor: undefined,
+    };
+    publishRetainedSessionEntryChange(
+      "optional-test",
+      original.canonicalKey,
+      next,
+      entry,
+      true,
+      next,
+    );
+    expect(() => retained!.assertCurrent()).not.toThrow();
+    active = false;
+    expect(() => retained!.assertCurrent()).toThrow("Caller revoked");
+    active = true;
+    retained!.release();
+    expect(() => retained!.assertCurrent()).toThrow("classification session changed");
+  } finally {
+    retained?.release();
+  }
 });

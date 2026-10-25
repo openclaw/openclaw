@@ -13,6 +13,12 @@ const mocks = vi.hoisted(() => ({
   profiles: new Set<string>(),
   roles: new Map<string, string>(),
   readSession: vi.fn(),
+  note: vi.fn<(message: string, title?: string) => void>(),
+}));
+
+vi.mock("../../../../packages/terminal-core/src/note.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../../packages/terminal-core/src/note.js")>()),
+  note: mocks.note,
 }));
 
 vi.mock("./store-repair.js", async (importOriginal) => ({
@@ -44,7 +50,7 @@ vi.mock("../../../state/openclaw-state-db-readonly.js", async (importOriginal) =
   }),
 }));
 
-const { collectScheduledContextReport } = await import("./execution-context-check.js");
+const { noteScheduledContextReport } = await import("./execution-context-check.js");
 
 const PARENT = "agent:main:dashboard:parent";
 const GONE = { sessionKey: "agent:main:dashboard:gone", sessionId: "gone-session" };
@@ -78,6 +84,7 @@ beforeEach(() => {
   mocks.profiles = new Set(["profile-1"]);
   mocks.roles = new Map();
   mocks.readSession.mockReset();
+  mocks.note.mockReset();
   mocks.readSession.mockImplementation(async ({ sessionKey }: { sessionKey: string }) =>
     mocks.sessions.get(sessionKey),
   );
@@ -104,28 +111,48 @@ function roleConfig(): OpenClawConfig {
 
 const profileActor = { type: "human", source: "profile", id: "profile-1" } as const;
 
-describe("collectScheduledContextReport", () => {
+async function noteText(cfg: OpenClawConfig): Promise<string | null> {
+  await noteScheduledContextReport({ cfg });
+  expect(mocks.note.mock.calls.length).toBeLessThanOrEqual(1);
+  const call = mocks.note.mock.calls[0];
+  if (!call) {
+    return null;
+  }
+  expect(call[1]).toBe("Cron");
+  expect(call[0]).toEqual(expect.any(String));
+  return call[0];
+}
+
+describe("noteScheduledContextReport", () => {
   it("checks a profile requester against the stored profile and the role rule", async () => {
     mocks.jobs = [jobRow("current", { createdActor: profileActor })];
-    expect((await collectScheduledContextReport({ cfg: {} })).losses).toEqual([]);
+    expect(await noteText({})).toBeNull();
 
-    const tiered = await collectScheduledContextReport({ cfg: roleConfig() });
-    expect(tiered.losses).toEqual([expect.objectContaining({ ownerCheck: "checked" })]);
+    const tiered = await noteText(roleConfig());
+    expect(tiered).toContain(
+      "- current (current): owner-only tools such as sessions, portal, nodes, gateway and plugins",
+    );
+    expect(tiered).not.toContain("Doctor could not verify it");
 
+    mocks.note.mockClear();
     mocks.profiles.clear();
-    const removed = await collectScheduledContextReport({ cfg: {} });
-    expect(removed.losses).toEqual([expect.objectContaining({ ownerCheck: "checked" })]);
+    const removed = await noteText({});
+    expect(removed).toContain(
+      "- current (current): owner-only tools such as sessions, portal, nodes, gateway and plugins",
+    );
+    expect(removed).not.toContain("Doctor could not verify it");
   });
 
   it("applies the creator role's sandbox from the stored profile role", async () => {
     mocks.jobs = [jobRow("sandboxed", { createdActor: profileActor })];
     mocks.roles.set("profile-1", "contractor");
-    const report = await collectScheduledContextReport({ cfg: roleConfig() });
+    const text = await noteText(roleConfig());
     // Today's runs already sandbox this creator, so the sandbox is not a loss.
-    expect(report.losses).toEqual([
-      expect.objectContaining({ fields: [expect.objectContaining({ field: "ownerEmbedded" })] }),
-    ]);
-    expect(report.failed).toEqual([]);
+    expect(text?.split("\n")).toContain(
+      "- sandboxed (sandboxed): owner-only tools such as sessions, portal, nodes, gateway and plugins (the creator is not currently an owner)",
+    );
+    expect(text).not.toContain("unsandboxed execution");
+    expect(text).not.toContain("could not be evaluated");
   });
 
   it("accepts a configured channel owner", async () => {
@@ -144,16 +171,13 @@ describe("collectScheduledContextReport", () => {
       }),
     ];
     const cfg = { commands: { ownerAllowFrom: ["telegram:42"] } } as OpenClawConfig;
-    expect((await collectScheduledContextReport({ cfg })).losses).toEqual([]);
+    expect(await noteText(cfg)).toBeNull();
   });
 
   it("reads the parent row read-only and reports an archived parent as a pause", async () => {
     mocks.jobs = [jobRow("archived", { createdActor: profileActor })];
     mocks.sessions.set(PARENT, { ...parent, archivedAt: 1 });
-    const report = await collectScheduledContextReport({ cfg: {} });
-    expect(report.pauses).toEqual([
-      expect.objectContaining({ parentSessionKey: PARENT, cause: "archived" }),
-    ]);
+    expect(await noteText({})).toContain(`- archived (archived): \`${PARENT}\` is archived`);
     expect(mocks.readSession).toHaveBeenCalledWith(
       expect.objectContaining({ agentId: "main", sessionKey: PARENT, readConsistency: "latest" }),
     );
@@ -165,21 +189,22 @@ describe("collectScheduledContextReport", () => {
       { id: "broken", definition: null, invalidReason: "invalid-definition-json" },
     ];
     mocks.sessions.set(PARENT, { sessionId: "parent-session" });
-    const report = await collectScheduledContextReport({ cfg: {} });
-    expect(report.missingChatType).toEqual([
-      expect.objectContaining({ job: expect.objectContaining({ id: "no-chat-type" }) }),
-    ]);
-    expect(report.failed).toEqual([]);
+    const text = await noteText({});
+    expect(text).toContain("a creating conversation with no stored chat type");
+    expect(text).toContain(`- no-chat-type (no-chat-type): \`${PARENT}\``);
+    expect(text).not.toContain("broken");
+    expect(text).not.toContain("could not be evaluated");
     expect(mocks.readSession).toHaveBeenCalledTimes(1);
   });
 
   it("lists a job whose parent read fails instead of aborting the review", async () => {
     mocks.jobs = [jobRow("unreadable", { createdActor: profileActor }), jobRow("other")];
     mocks.readSession.mockRejectedValueOnce(new Error("store locked"));
-    const report = await collectScheduledContextReport({ cfg: {} });
-    expect(report.failed).toEqual([
-      expect.objectContaining({ job: expect.objectContaining({ id: "unreadable" }) }),
-    ]);
+    const text = await noteText({});
+    expect(text).toContain("- unreadable (unreadable): store locked");
+    expect(text).toContain(
+      "- other (other): owner-only tools such as sessions, portal, nodes, gateway and plugins",
+    );
     expect(mocks.readSession).toHaveBeenCalledTimes(2);
   });
 
@@ -193,15 +218,14 @@ describe("collectScheduledContextReport", () => {
       jobRow("main-live", { sessionTarget: "main", payload: { kind: "systemEvent", text: "x" } }),
     ];
     mocks.sessions.set(PARENT, { sessionId: "parent-session" });
-    const report = await collectScheduledContextReport({ cfg: {} });
-    expect(report.pauses).toEqual([
-      expect.objectContaining({
-        job: expect.objectContaining({ id: "main-removed" }),
-        cause: "removed",
-      }),
-    ]);
-    expect(report.losses).toEqual([]);
-    expect(report.missingChatType).toEqual([]);
+    const text = await noteText({});
+    expect(text).toContain(
+      "- main-removed (main-removed): `agent:main:dashboard:gone` was removed",
+    );
+    expect(text).not.toContain("main-live");
+    expect(text).not.toContain("will lose access");
+    expect(text).not.toContain("no stored chat type");
+    expect(text).not.toContain("could not be evaluated");
   });
 
   it("never pauses or predicts access changes for a command job", async () => {
@@ -213,8 +237,7 @@ describe("collectScheduledContextReport", () => {
       jobRow("command-live", { payload: { kind: "command", argv: ["true"] } }),
     ];
     mocks.sessions.set(PARENT, { sessionId: "parent-session" });
-    const report = await collectScheduledContextReport({ cfg: {} });
-    expect(report).toMatchObject({ pauses: [], losses: [], missingChatType: [], failed: [] });
+    expect(await noteText({})).toBeNull();
     expect(mocks.readSession).toHaveBeenCalledTimes(2);
   });
 });

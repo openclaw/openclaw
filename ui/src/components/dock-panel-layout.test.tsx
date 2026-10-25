@@ -231,6 +231,9 @@ describe("DockLayout inline columns", () => {
     const controller = createDock("test-keyboard", host);
     controller.connect();
     const { container, unmount } = mountResizer(host, controller);
+    flush();
+    expect(container.querySelector("resizable-divider")).toBeNull();
+    controller.setOpen(true);
     let separator = await separatorIn(container);
     expect(separator.getAttribute("role")).toBe("separator");
     expect(separator.getAttribute("tabindex")).toBe("0");
@@ -242,6 +245,9 @@ describe("DockLayout inline columns", () => {
     expect(separator.getAttribute("aria-orientation")).toBe("horizontal");
     keydown(separator, "ArrowUp");
     expect(controller.height).toBeGreaterThan(320);
+    controller.setOpen(false);
+    flush();
+    expect(container.querySelector("resizable-divider")).toBeNull();
     controller.dispose();
     unmount();
   });

@@ -45,7 +45,7 @@ export function subscribeLinkReaderMetadata(
         if (!listeners) {
           return;
         }
-        for (const callback of [...listeners]) {
+        for (const callback of Array.from(listeners)) {
           if (listeners.has(callback)) {
             try {
               callback(update);
