@@ -3,23 +3,16 @@ import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vite
 import { probeTelegram } from "./probe.js";
 
 const resolveTelegramTransport = vi.hoisted(() => vi.fn());
-const makeProxyFetch = vi.hoisted(() => vi.fn());
 
 vi.mock("./fetch.js", async () => ({
   resolveTelegramTransport,
   resolveTelegramApiBase: (await import("./api-root.js")).normalizeTelegramApiRoot,
 }));
 
-vi.mock("openclaw/plugin-sdk/fetch-runtime", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/fetch-runtime")>()),
-  makeProxyFetch,
-}));
-
 describe("probeTelegram retry logic", () => {
   const timeoutMs = 5000;
   let tokenIndex = 0;
   let token = "";
-  const originalFetch = global.fetch;
   let forceFallbackMock: Mock;
   const transport = (proxyFetch?: typeof fetch, close = async () => {}) => ({
     fetch: proxyFetch ?? fetch,
@@ -29,12 +22,11 @@ describe("probeTelegram retry logic", () => {
   });
 
   const installFetchMock = (fetchMock: Mock = vi.fn()): Mock => {
-    global.fetch = withFetchPreconnect(fetchMock);
+    vi.stubGlobal("fetch", withFetchPreconnect(fetchMock));
     forceFallbackMock = vi.fn().mockReturnValue(true);
     resolveTelegramTransport.mockImplementation((proxyFetch?: typeof fetch) =>
       transport(proxyFetch),
     );
-    makeProxyFetch.mockImplementation(() => fetchMock as unknown as typeof fetch);
     return fetchMock;
   };
 
@@ -65,13 +57,8 @@ describe("probeTelegram retry logic", () => {
 
   afterEach(() => {
     resolveTelegramTransport.mockReset();
-    makeProxyFetch.mockReset();
     vi.clearAllMocks();
-    if (originalFetch) {
-      global.fetch = originalFetch;
-    } else {
-      delete (globalThis as { fetch?: typeof fetch }).fetch;
-    }
+    vi.unstubAllGlobals();
   });
 
   it("refuses an unrepaired bot endpoint before fetching", async () => {
@@ -88,18 +75,17 @@ describe("probeTelegram retry logic", () => {
 
   it("respects timeout budget across retries", async () => {
     const fetchMock = installFetchMock(
-      vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
-        return new Promise<Response>((_resolve, reject) => {
-          const signal = init?.signal;
-          if (signal?.aborted) {
-            reject(new Error("Request aborted"));
-            return;
-          }
-          signal?.addEventListener("abort", () => reject(new Error("Request aborted")), {
-            once: true,
-          });
-        });
-      }),
+      vi.fn(
+        (_input: RequestInfo | URL, init?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            const abort = () => reject(new Error("Request aborted"));
+            if (init?.signal?.aborted) {
+              abort();
+            } else {
+              init?.signal?.addEventListener("abort", abort, { once: true });
+            }
+          }),
+      ),
     );
     vi.useFakeTimers();
     try {

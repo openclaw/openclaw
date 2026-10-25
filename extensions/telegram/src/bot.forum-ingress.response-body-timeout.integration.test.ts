@@ -3,6 +3,7 @@ import { createServer, type Server } from "node:http";
 import type { Socket } from "node:net";
 import { Bot } from "grammy";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
@@ -27,9 +28,8 @@ describe("Telegram supergroup ingress with a stalled Bot API response body", () 
   let server: Server;
   let apiRoot: string;
   let getChatRequests = 0;
-  let closedSocketCount = 0;
-  let resolveResponseHeaders: (() => void) | undefined;
-  let resolveSocketClosed: (() => void) | undefined;
+  const headersReceived = createDeferred<void>();
+  const socketClosed = createDeferred<void>();
 
   beforeAll(async () => {
     setTelegramRuntime(createPluginRuntimeMock());
@@ -47,8 +47,7 @@ describe("Telegram supergroup ingress with a stalled Bot API response body", () 
       liveSockets.add(socket);
       socket.once("close", () => {
         liveSockets.delete(socket);
-        closedSocketCount += 1;
-        resolveSocketClosed?.();
+        socketClosed.resolve();
       });
     });
     apiRoot = `http://127.0.0.1:${await listenOnLoopback(server)}`;
@@ -79,7 +78,7 @@ describe("Telegram supergroup ingress with a stalled Bot API response body", () 
     }
     const observeClientFetch: typeof clientFetch = async (input, init) => {
       const response = await clientFetch(input, init);
-      resolveResponseHeaders?.();
+      headersReceived.resolve();
       return response;
     };
     const botInfo = telegramBotInfoForTest;
@@ -171,12 +170,6 @@ describe("Telegram supergroup ingress with a stalled Bot API response body", () 
     const pipeline = createTelegramInboundPipeline({ params, message, authorization });
     registerTelegramInboundHandlers({ bot, pipeline });
 
-    const headersReceived = new Promise<void>((resolve) => {
-      resolveResponseHeaders = resolve;
-    });
-    const socketClosed = new Promise<void>((resolve) => {
-      resolveSocketClosed = resolve;
-    });
     const groupDelivery = bot.handleUpdate({
       update_id: 1,
       message: {
@@ -191,7 +184,7 @@ describe("Telegram supergroup ingress with a stalled Bot API response body", () 
     // The client must receive headers before the deadline advances: the regression
     // cleared the deadline after fetch resolved, leaving body consumption unbounded.
     await Promise.race([
-      headersReceived,
+      headersReceived.promise,
       groupDelivery.then(() => {
         throw new Error("group delivery settled before the metadata response headers");
       }),
@@ -232,7 +225,6 @@ describe("Telegram supergroup ingress with a stalled Bot API response body", () 
       isForum: false,
     });
     expect(getChatRequests).toBe(1);
-    await socketClosed;
-    expect(closedSocketCount).toBeGreaterThan(0);
+    await socketClosed.promise;
   });
 });

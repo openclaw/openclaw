@@ -2,23 +2,15 @@ import { resolveChannelGroupPolicy } from "openclaw/plugin-sdk/channel-policy";
 import { validateTestChannelConfig } from "openclaw/plugin-sdk/channel-test-helpers";
 import { describe, expect, it } from "vitest";
 import { mergeTelegramAccountConfig } from "./account-config.js";
-import { normalizeAllowFrom, type NormalizedAllowFrom } from "./bot-access.js";
+import { normalizeAllowFrom as allow } from "./bot-access.js";
 import { TelegramConfigSchema } from "./config-schema.js";
 import {
   evaluateTelegramGroupBaseAccess,
   evaluateTelegramGroupPolicyAccess,
 } from "./group-access.js";
 
-function allow(entries: string[], hasWildcard = false): NormalizedAllowFrom {
-  return {
-    entries,
-    hasWildcard,
-    hasEntries: entries.length > 0 || hasWildcard,
-    invalidEntries: [],
-  };
-}
-
-function runBaseAccess(overrides: Partial<Parameters<typeof evaluateTelegramGroupBaseAccess>[0]>) {
+type BaseAccessParams = Parameters<typeof evaluateTelegramGroupBaseAccess>[0];
+function runBaseAccess(overrides: Partial<BaseAccessParams>) {
   return evaluateTelegramGroupBaseAccess({
     hasGroupAllowOverride: true,
     effectiveGroupAllow: allow([]),
@@ -31,7 +23,7 @@ function runBaseAccess(overrides: Partial<Parameters<typeof evaluateTelegramGrou
 
 describe("evaluateTelegramGroupBaseAccess", () => {
   it("normalizes sender-only allowlist entries and rejects group ids", () => {
-    const result = normalizeAllowFrom(["-1001234567890", " tg:-100999 ", "745123456", "@someone"]);
+    const result = allow(["-1001234567890", " tg:-100999 ", "745123456", "@someone"]);
 
     expect(result).toEqual({
       entries: ["745123456"],
@@ -41,12 +33,7 @@ describe("evaluateTelegramGroupBaseAccess", () => {
     });
   });
 
-  it.each<
-    [
-      Partial<Parameters<typeof evaluateTelegramGroupBaseAccess>[0]>,
-      ReturnType<typeof evaluateTelegramGroupBaseAccess>,
-    ]
-  >([
+  it.each<[Partial<BaseAccessParams>, ReturnType<typeof evaluateTelegramGroupBaseAccess>]>([
     [{}, { allowed: false, reason: "group-override-unauthorized" }],
     [{ hasGroupAllowOverride: false }, { allowed: true }],
     [{ effectiveGroupAllow: allow(["12345"]) }, { allowed: true }],
@@ -87,6 +74,10 @@ const groupPolicy =
     allowed,
     groupConfig: explicit ? { requireMention: false } : undefined,
   });
+const unrestrictedGroup = (mode: "open" | "disabled"): Partial<GroupAccessParams> => ({
+  telegramCfg: { groupPolicy: mode },
+  resolveGroupPolicy: () => ({ allowlistEnabled: false, allowed: false }),
+});
 
 describe("evaluateTelegramGroupPolicyAccess", () => {
   it.each([
@@ -110,7 +101,7 @@ describe("evaluateTelegramGroupPolicyAccess", () => {
           cfg,
           telegramCfg,
           senderId,
-          effectiveGroupAllow: normalizeAllowFrom(telegramCfg.groupAllowFrom),
+          effectiveGroupAllow: allow(telegramCfg.groupAllowFrom),
           resolveGroupPolicy: (chatId, turnCfg) =>
             resolveChannelGroupPolicy({
               cfg: turnCfg,
@@ -143,22 +134,8 @@ describe("evaluateTelegramGroupPolicyAccess", () => {
       },
       "group-policy-allowlist-unauthorized",
     ],
-    [
-      "open policy",
-      {
-        telegramCfg: { groupPolicy: "open" },
-        resolveGroupPolicy: () => ({ allowlistEnabled: false, allowed: false }),
-      },
-      undefined,
-    ],
-    [
-      "disabled policy",
-      {
-        telegramCfg: { groupPolicy: "disabled" },
-        resolveGroupPolicy: () => ({ allowlistEnabled: false, allowed: false }),
-      },
-      "group-policy-disabled",
-    ],
+    ["open policy", unrestrictedGroup("open")],
+    ["disabled policy", unrestrictedGroup("disabled"), "group-policy-disabled"],
     [
       "non-group bypass",
       { isGroup: false, chatId: "12345", resolveGroupPolicy: groupPolicy(false) },
@@ -183,23 +160,20 @@ describe("evaluateTelegramGroupPolicyAccess", () => {
     });
   });
 
-  it("uses topic policy before group and account policy", () => {
-    expect(
-      runAccess({
-        telegramCfg: { groupPolicy: "open" },
-        groupConfig: { groupPolicy: "open" },
-        topicConfig: { groupPolicy: "disabled" },
-      }),
-    ).toEqual({
-      allowed: false,
-      reason: "group-policy-disabled",
-    });
-    expect(
-      runAccess({
-        telegramCfg: { groupPolicy: "open" },
-        groupConfig: { groupPolicy: "disabled" },
-        topicConfig: { groupPolicy: "open" },
-      }),
-    ).toEqual({ allowed: true });
-  });
+  it.each(["open", "disabled"] as const)(
+    "uses %s topic policy before group and account policy",
+    (topicPolicy) => {
+      expect(
+        runAccess({
+          telegramCfg: { groupPolicy: "open" },
+          groupConfig: { groupPolicy: topicPolicy === "open" ? "disabled" : "open" },
+          topicConfig: { groupPolicy: topicPolicy },
+        }),
+      ).toEqual(
+        topicPolicy === "open"
+          ? { allowed: true }
+          : { allowed: false, reason: "group-policy-disabled" },
+      );
+    },
+  );
 });
