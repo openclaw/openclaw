@@ -131,38 +131,32 @@ describe("service environment", () => {
     const env = serviceEnv({ OPENCLAW_CONFIG_READONLY: "1" }, { platform: "linux" });
     expect([resolveIsConfigReadOnly(env), resolveIsNixMode(env)]).toEqual([true, false]);
   });
-  it.each([
-    ["Linux TMPDIR", { TMPDIR: "/tmp/service/" }, "linux", { TMPDIR: "/tmp/service/" }],
+  it.each<[string, NodeJS.ProcessEnv, string]>([
+    ["TMPDIR", { TMPDIR: "/tmp/service/" }, "/tmp/service/"],
     [
-      "profile identity",
-      { OPENCLAW_PROFILE: "work" },
-      "darwin",
-      {
-        OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-work.service",
-        OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Gateway (work)",
-        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.work",
-      },
-    ],
-  ] satisfies Array<
-    [string, NodeJS.ProcessEnv, NodeJS.Platform | undefined, Record<string, string>]
-  >)("preserves %s", (_name, env, platform, expected) => {
-    expect(serviceEnv(env, { platform })).toMatchObject(expected);
-  });
-  it.each(["maintenance", "maintenance.service"])("normalizes unit override %s", (unit) => {
-    expect(
-      serviceEnv(
-        {
-          ...(unit === "maintenance" ? { OPENCLAW_PROFILE: "work" } : {}),
-          OPENCLAW_SYSTEMD_UNIT: unit,
-        },
-        { platform: "linux" },
-      ).OPENCLAW_SYSTEMD_UNIT,
-    ).toBe("maintenance.service");
-  });
-  it("trims the proxy URL fallback", () => {
-    expect(serviceEnv({ OPENCLAW_PROXY_URL: " http://127.0.0.1:3128 " }).OPENCLAW_PROXY_URL).toBe(
+      "OPENCLAW_PROXY_URL",
+      { OPENCLAW_PROXY_URL: " http://127.0.0.1:3128 " },
       "http://127.0.0.1:3128",
-    );
+    ],
+    [
+      "OPENCLAW_SYSTEMD_UNIT",
+      { OPENCLAW_PROFILE: "work", OPENCLAW_SYSTEMD_UNIT: "maintenance" },
+      "maintenance.service",
+    ],
+    [
+      "OPENCLAW_SYSTEMD_UNIT",
+      { OPENCLAW_SYSTEMD_UNIT: "maintenance.service" },
+      "maintenance.service",
+    ],
+  ])("normalizes %s from %j", (key, env, value) => {
+    expect(serviceEnv(env, { platform: "linux" })[key]).toBe(value);
+  });
+  it("preserves profile identity", () => {
+    expect(serviceEnv({ OPENCLAW_PROFILE: "work" }, { platform: "darwin" })).toMatchObject({
+      OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-work.service",
+      OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Gateway (work)",
+      OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.work",
+    });
   });
   it("does not persist ambient proxy variables", () => {
     const proxies = {
@@ -214,32 +208,26 @@ describe("service environment", () => {
       expect(serviceEnv(env, options).NODE_OPTIONS).toBe(expected);
     },
   );
-  it("does not apply the Gateway heap policy to node services", () => {
-    expect(buildNodeServiceEnvironment({ env: { HOME: home } }).NODE_OPTIONS).toBeUndefined();
-  });
-  it("retains the selected profile in the installed node environment", () => {
-    expect(
-      buildNodeServiceEnvironment({ env: { HOME: home, OPENCLAW_PROFILE: "work" } }),
-    ).toMatchObject({
-      OPENCLAW_PROFILE: "work",
-      OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.node.work",
-      OPENCLAW_SYSTEMD_UNIT: "openclaw-node-work",
-      OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Node (work)",
-    });
-  });
-  it("fences inherited Node compile cache in macOS node LaunchAgents", () => {
+  it("builds a profile node LaunchAgent without Gateway heap or inherited compile cache", () => {
     const environment = buildNodeServiceEnvironment({
-      env: { HOME: "/Users/u", NODE_COMPILE_CACHE: "/tmp/ambient-cache" },
+      env: { HOME: "/Users/u", OPENCLAW_PROFILE: "work", NODE_COMPILE_CACHE: "/tmp/ambient-cache" },
       platform: "darwin",
     });
     const plist = buildLaunchAgentPlist({
-      label: "ai.openclaw.node",
+      label: "ai.openclaw.node.work",
       programArguments: ["/usr/local/bin/node", "dist/index.js", "node", "run"],
       stdoutPath: "/tmp/node.log",
       stderrPath: "/tmp/node.err.log",
       environment,
     });
-    expect(environment.NODE_DISABLE_COMPILE_CACHE).toBe("1");
+    expect(environment).toMatchObject({
+      OPENCLAW_PROFILE: "work",
+      OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.node.work",
+      OPENCLAW_SYSTEMD_UNIT: "openclaw-node-work",
+      OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Node (work)",
+      NODE_DISABLE_COMPILE_CACHE: "1",
+    });
+    expect(environment.NODE_OPTIONS).toBeUndefined();
     expect(environment.NODE_COMPILE_CACHE).toBeUndefined();
     expect(plist).toContain("<key>NODE_DISABLE_COMPILE_CACHE</key>");
     expect(plist).not.toContain("<key>NODE_COMPILE_CACHE</key>");
