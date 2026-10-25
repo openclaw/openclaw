@@ -38,12 +38,13 @@ async function prepareScripts() {
   for (const file of collectRuntimeImportClosure(process.cwd(), sourceEntries)) {
     writeAt(root, file, fs.readFileSync(path.resolve(file)));
   }
-  for (const name of ["p-map", "@openclaw/fs-safe", "json5"]) {
+  const dependencies = { "p-map": "*", "@openclaw/fs-safe": "*", json5: "*" };
+  for (const name of Object.keys(dependencies)) {
     const target = path.join(root, "node_modules", name);
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.symlinkSync(path.resolve("node_modules", name), target, "junction");
   }
-  writeAt(root, "package.json", '{"type":"module"}');
+  writeAt(root, "package.json", JSON.stringify({ type: "module", dependencies }));
   writeAt(root, "pnpm-workspace.yaml", "packages: []\n");
   writeAt(
     root,
@@ -164,6 +165,8 @@ process.stderr.write = (chunk, ...args) => {
   );
   const env: NodeJS.ProcessEnv = {
     ...process.env,
+    CI: "false",
+    OPENCLAW_LINT_TOOL: "oxlint",
     FIXTURE_CONTROLLER_GUARD_EXIT: phase === "controllers" && mode === "nonzero" ? "7" : "0",
     OPENCLAW_OXLINT_SHARDS_SERIAL: "1",
   };
@@ -355,7 +358,7 @@ describe.skipIf(process.platform === "win32")("lint failure reporting boundary",
         const result = await fixture.track(
           runNodeScript(
             [path.join(root, "scripts/run-oxlint.mjs"), ...args, "--threads=1"],
-            { ...env, CI: "true", GITHUB_ACTIONS: "true" },
+            { ...env, GITHUB_ACTIONS: "true" },
             10_000,
             { cwd: root, signal, requireProcessTreeExit: true },
           ),

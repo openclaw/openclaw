@@ -40,6 +40,8 @@ type RpcMetric = {
   offset?: number;
   messages?: number;
   historyBytes?: number;
+  initialHistory?: boolean;
+  historyOk?: boolean;
   resolvedKey?: string;
   resolvedAgentId?: string;
   resolutionOk?: boolean;
@@ -58,6 +60,12 @@ const selectRpc = (metrics: readonly RpcMetric[], method: string, sessionKey?: s
   metrics.filter(
     (metric) =>
       metric.method === method && (sessionKey === undefined || metric.sessionKey === sessionKey),
+  );
+const selectStartupHistory = (metrics: readonly RpcMetric[], sessionKey: string) =>
+  metrics.filter(
+    (metric) =>
+      (metric.method === "chat.startup" || metric.initialHistory) &&
+      metric.sessionKey === sessionKey,
   );
 const redactFixtureTokens = (text: string, owner: OpenClawTestInstance) =>
   [owner.gatewayToken, owner.hookToken].reduce(
@@ -282,8 +290,8 @@ suite.define(() => {
         const waitForStartupCommit = async (sessionKey: string, pane: Locator) => {
           await expect
             .poll(() =>
-              selectRpc(rpc, "chat.startup", sessionKey).some(
-                (metric) => metric.receivedMs !== undefined,
+              selectStartupHistory(rpc, sessionKey).some(
+                (metric) => metric.receivedMs !== undefined && metric.historyOk === true,
               ),
             )
             .toBe(true);
@@ -308,16 +316,28 @@ suite.define(() => {
               return;
             }
             const params = isRecord(frame.params) ? frame.params : {};
+            const initialHistory =
+              frame.method === "sessions.messages.subscribe" && isRecord(params.initialHistory)
+                ? params.initialHistory
+                : undefined;
+            const historyParams = initialHistory ?? params;
             const metric: RpcMetric = {
               requestId: frame.id,
               method: frame.method,
               sentMs: Date.now() - startedAt,
-              ...(typeof params.sessionKey === "string" ? { sessionKey: params.sessionKey } : {}),
+              ...(typeof params.sessionKey === "string"
+                ? { sessionKey: params.sessionKey }
+                : initialHistory && typeof params.key === "string"
+                  ? { sessionKey: params.key }
+                  : {}),
+              ...(initialHistory ? { initialHistory: true } : {}),
               ...(typeof params.agentId === "string" ? { agentId: params.agentId } : {}),
               ...(typeof params.shortId === "string" ? { shortId: params.shortId } : {}),
-              ...(typeof params.limit === "number" ? { limit: params.limit } : {}),
-              ...(typeof params.maxBytes === "number" ? { maxBytes: params.maxBytes } : {}),
-              ...(typeof params.offset === "number" ? { offset: params.offset } : {}),
+              ...(typeof historyParams.limit === "number" ? { limit: historyParams.limit } : {}),
+              ...(typeof historyParams.maxBytes === "number"
+                ? { maxBytes: historyParams.maxBytes }
+                : {}),
+              ...(typeof historyParams.offset === "number" ? { offset: historyParams.offset } : {}),
             };
             rpc.push(metric);
             pending.set(frame.id, metric);
@@ -338,9 +358,16 @@ suite.define(() => {
             metric.receivedMs = Date.now() - startedAt;
             metric.responseBytes = Buffer.byteLength(payload);
             const body = isRecord(frame.payload) ? frame.payload : {};
-            if (Array.isArray(body.messages)) {
-              metric.messages = body.messages.length;
-              metric.historyBytes = Buffer.byteLength(JSON.stringify(body.messages));
+            const initialHistory = isRecord(body.initialHistory) ? body.initialHistory : undefined;
+            const history = metric.initialHistory
+              ? initialHistory?.ok === true && isRecord(initialHistory.payload)
+                ? initialHistory.payload
+                : undefined
+              : body;
+            metric.historyOk = frame.ok === true && history !== undefined;
+            if (Array.isArray(history?.messages)) {
+              metric.messages = history.messages.length;
+              metric.historyBytes = Buffer.byteLength(JSON.stringify(history.messages));
             }
             if (metric.method === "sessions.resolve" && typeof body.key === "string") {
               metric.resolvedKey = body.key;
@@ -501,7 +528,7 @@ suite.define(() => {
           nextOffset += messages;
         }
         expect(nextOffset).toBe(transcriptLength);
-        const selectedStartup = selectRpc(startupMetrics, "chat.startup", selectedKey)[0];
+        const selectedStartup = selectStartupHistory(startupMetrics, selectedKey)[0];
         expect(selectedStartup).toBeDefined();
         expect(olderHistoryRequests(startupMetrics)).toHaveLength(0);
         const resolutions = selectRpc(startupMetrics, "sessions.resolve");
@@ -513,10 +540,10 @@ suite.define(() => {
           resolvedKey: selectedKey,
           resolvedAgentId: "main",
         });
-        expect(selectRpc(startupMetrics, "chat.startup", selectedKey)).toHaveLength(1);
+        expect(selectStartupHistory(startupMetrics, selectedKey)).toHaveLength(1);
         expect(selectedStartup?.messages).toBeLessThanOrEqual(80);
         expect(selectedStartup?.historyBytes).toBeLessThanOrEqual(256 * 1024);
-        const homeStartup = selectRpc(startupMetrics, "chat.startup", homeKey)[0];
+        const homeStartup = selectStartupHistory(startupMetrics, homeKey)[0];
         expect(homeStartup?.sentMs).toBeGreaterThanOrEqual(selectedStartup?.receivedMs ?? Infinity);
         expect(selectRpc(startupMetrics, "chat.history", homeKey)).toHaveLength(0);
         expect(selectRpc(startupMetrics, "agent.identity.get")).toHaveLength(1);

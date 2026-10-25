@@ -87,6 +87,21 @@ not Gateway RPC or provider latency. The default Vite preview server does not
 activate Gateway route preload hints or serve the shipped compression sidecars;
 retain that mode for renderer diagnostics rather than network-readiness claims.
 
+For code-splitting evidence, add `--coverage` to capture executed and unused raw
+source bytes. `javaScriptResources` separately counts completed JavaScript
+fetches from Resource Timing: decoded body bytes, encoded body bytes, and transfer
+bytes including headers. Its `outsideCoverage` subset includes fetch-only
+preloads, so V8 coverage alone must not be reported as all downloaded code.
+Module preloads can parse/compile without evaluation, and dormant function bodies
+can be compiled lazily; unused source bytes are not a CPU estimate.
+
+Use a separate traced run (omit `--untraced`) for `trace.compilation`: coarse V8
+module parse/compile spans are unioned per renderer thread; this is not an
+exhaustive compiler profile. Main-thread and all-renderer
+thread CPU are reported separately from wall duration. CPU is unavailable when
+the trace lacks complete thread-clock intervals. Never mix traced readiness
+timings into the untraced comparison.
+
 This opt-in benchmark builds the production Control UI into a fresh artifact directory,
 warms a signed-in synthetic dashboard visit, and measures three reloads. It never
 connects to a real Gateway or account. The reusable inventory is

@@ -67,6 +67,9 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/lib/device-pair-setup.ts":
       // Pairing loads on interaction; the earlier boot capture must not pull it into either route.
       return "device-pair-setup-runtime";
+    case "ui/src/pages/chat/chat-send-delivery.runtime.ts":
+    case "ui/src/pages/chat/chat-send-queue-runtime.ts":
+      return "chat-delivery-runtime";
     case "ui/src/lib/sessions/session-mutation-operations.runtime.ts":
     case "ui/src/lib/sessions/session-mutation-refresh.ts":
     case "ui/src/lib/sessions/create.ts":
@@ -86,9 +89,15 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/styles/emoji-search-panel.css":
       return "emoji-search-panel";
     case "ui/src/pages/chat/components/chat-composer-emoji-options.tsx":
+    case "ui/src/pages/chat/components/chat-composer-emoji.tsx":
     case "ui/src/pages/chat/components/chat-composer-mention-menu-options.tsx":
+    case "ui/src/pages/chat/components/chat-composer-mention-menu.tsx":
+    case "ui/src/pages/chat/components/chat-composer-menu.tsx":
     case "ui/src/pages/chat/components/chat-composer-skill-menu-options.tsx":
+    case "ui/src/pages/chat/components/chat-composer-skill-menu.tsx":
     case "ui/src/pages/chat/components/chat-composer-slash-menu-options.tsx":
+    case "ui/src/pages/chat/components/chat-composer-slash-menu-dom.tsx":
+    case "ui/src/pages/chat/components/chat-composer-slash-menu.tsx":
       // Share interaction-only rows without four separate preload-map entries.
       return "composer-invocation-menus";
     case "ui/src/app/app-root-focus.ts":
@@ -223,6 +232,8 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
                 modules.add("node_modules/@solidjs/signals/dist/prod/deferred.js");
                 // Opened person cards share labels with New Session, not its composer chunk.
                 modules.add("ui/src/lib/platform-label.ts");
+                // Placement and delivery share retries without importing either route's bundle.
+                modules.add("ui/src/pages/chat/chat-outbox-retry.ts");
               }
               return {
                 name: `control-ui-boot-${route}`,

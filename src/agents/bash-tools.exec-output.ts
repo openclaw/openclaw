@@ -15,7 +15,7 @@ export type ExecProcessFailureKind =
   | "aborted"
   | "runtime-error";
 
-export type ExecExitFailureKind = Exclude<ExecProcessFailureKind, "runtime-error">;
+type ExecExitFailureKind = Exclude<ExecProcessFailureKind, "runtime-error">;
 
 /** Normalized result of a spawned exec process. */
 export type ExecProcessOutcome =

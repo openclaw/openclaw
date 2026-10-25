@@ -32,8 +32,6 @@ export function writeFiles(cwd: string, files: Record<string, string> | readonly
   }
 }
 
-export const testConfig = (name: string) => `test/vitest/vitest.${name}.config.ts`;
-
 export function fullOwnerPlan(runnerBackend?: string, changedPaths?: string[]) {
   return createNodeTestShardBundles({
     compactMode: "pull-request",

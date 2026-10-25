@@ -9,7 +9,10 @@ class NativeCloneRequired extends Error {
 }
 
 /** Detach mutable containers while sharing sealed transcript payloads. */
-export function cloneTranscriptView<T>(snapshot: T): T {
+export function cloneTranscriptView<T>(
+  snapshot: T,
+  { shareImmutablePayloads = true }: { shareImmutablePayloads?: boolean } = {},
+): T {
   const copies = new Map<object, object>();
   const copy = (value: unknown): unknown => {
     if (typeof value === "function" || typeof value === "symbol") {
@@ -22,7 +25,10 @@ export function cloneTranscriptView<T>(snapshot: T): T {
       throw new NativeCloneRequired();
     }
     // Public mutable SDK views can also alias frozen descendants outside admitted roots.
-    if (isOwnedTranscriptPayload(value) || isDeeplyFrozenPlainData(value)) {
+    if (
+      shareImmutablePayloads &&
+      (isOwnedTranscriptPayload(value) || isDeeplyFrozenPlainData(value))
+    ) {
       return value;
     }
     if (copies.has(value)) {

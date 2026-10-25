@@ -12,6 +12,7 @@ import { ModuleGraph } from "../scripts/lib/update-compat-module-graph.mts";
 import { buildPackageDistEntriesFromExports } from "../scripts/lib/workspace-package-entries.mts";
 import { controlUiSource } from "../src/plugins/package-manifest.js";
 import aiBuildConfig from "../tsdown.ai.config.ts";
+import { compileDynamicConsumerEdges } from "./knip-dynamic-consumers.mjs";
 import { compileViteConfigConsumers } from "./knip-vite-consumers.mjs";
 
 const BUNDLED_PLUGIN_ROOT_DIR = "extensions";
@@ -27,6 +28,9 @@ const repositoryScriptEntries = [
   "scripts/lib/plugin-npm-build-and-pack.mts!",
   // Package scripts execute the PostgreSQL schema generator, which consumes state declarations.
   "scripts/generate-postgres-schema.mts!",
+  // Package scripts execute these maintained generators, whose inputs are production contracts.
+  "scripts/generate-runtime-script-assets.mjs!",
+  "scripts/generate-static-validators.mts!",
   // src/daemon/systemd-directives.ts documents this node regeneration command.
   "scripts/generate-systemd-directives.mjs!",
   // ui:validators:gen/check compile canonical payload schemas into browser runtime guards.
@@ -86,7 +90,6 @@ const repositoryScriptEntries = [
   "scripts/bench-control-ui-cold-load.ts!",
   // scripts/control-ui-retention/README.md invokes this opt-in production census.
   "scripts/control-ui-retention/retention-suite.ts!",
-  "scripts/control-ui-retention/vitest.config.ts!",
   // #179175 invokes this development-loop benchmark CLI by path.
   "scripts/bench-control-ui-dev-loop.mts!",
   // #179449 documents this document-handler benchmark CLI by path.
@@ -662,6 +665,9 @@ const rootEntries = [
   "config/knip.config.ts!",
   "config/knip.all-exports.config.ts!",
   "config/knip.scripts-exports.config.ts!",
+  "config/knip-dynamic-consumers.mjs!",
+  // tsdown consumes the runtime-process manifests while constructing portable worker builds.
+  "tsdown.config.ts!",
   // OpenGrep rule tests read these as static source inputs; they are never executed.
   "security/opengrep/rules/*/*.{js,ts}!",
   "{openclaw,docker-entrypoint}.mjs!",
@@ -901,6 +907,9 @@ function workspacePackage(packageDir: string, extraEntries: readonly string[] = 
 }
 
 function compileDynamicMjsConsumers(source: string, filePath: string): string {
+  if (path.resolve(filePath) === path.resolve("config/knip-dynamic-consumers.mjs")) {
+    return compileDynamicConsumerEdges(source, filePath);
+  }
   // A custom TS compiler disables Knip's declaration-to-source mapping.
   if (path.resolve(filePath) === path.resolve("config/knip-vite-consumers.mjs")) {
     return compileViteConfigConsumers(source, filePath);
@@ -1233,10 +1242,21 @@ const config = {
       ],
       // The stylelint config lives under config/, not a root default path.
       stylelint: { config: ["config/stylelint.config.mjs"] },
+      // Maintained package commands select these opt-in Vitest configs outside
+      // the default root patterns. Config ownership keeps their defaults live.
+      vitest: {
+        config: [
+          "vitest.config.{js,mjs,ts,cjs,mts,cts}",
+          "vitest.{workspace,projects}.{js,mjs,ts,cjs,mts,cts,json}",
+          "scripts/control-ui-parity/vitest.config.ts",
+          "scripts/control-ui-retention/vitest.config.ts",
+        ],
+      },
       project: [
         ".github/actions/**/*.{js,mjs,cjs,ts,mts,cts}!",
         "apps/**/*.{js,mjs,cjs,ts,mts,cts}!",
         "config/**/*.{ts,mts,cts}!",
+        "config/knip-dynamic-consumers.mjs!",
         "config/knip-vite-consumers.mjs!",
         "docs/**/*.js!",
         "security/**/*.{js,mjs,cjs,ts,mts,cts}!",

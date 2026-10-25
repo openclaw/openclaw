@@ -373,6 +373,7 @@ export function createInitializationContext(client?: GatewayBrowserClient): Appl
     runtimeConfig: {
       state: { configNeedsApply: false, configSnapshot: null },
       ensureLoaded: async () => undefined,
+      ensureDisplayLoaded: async () => undefined,
       subscribe: () => () => {},
     },
     placementStartup: {
@@ -465,6 +466,7 @@ export function createSessionContext(
     runtimeConfig: {
       state: { configNeedsApply: false, configSnapshot: null },
       ensureLoaded: async () => undefined,
+      ensureDisplayLoaded: async () => undefined,
       subscribe: () => () => {},
     },
     chatSubmissions: createChatSubmissions(),

@@ -19,6 +19,7 @@ import {
 } from "openclaw/plugin-sdk/webhook-ingress";
 import { sendHttpRequestRejection } from "openclaw/plugin-sdk/webhook-request-guards";
 import * as synologyClient from "./client.js";
+import type { SynologyInboundMessage } from "./inbound-context.js";
 import { validateToken, authorizeUserForDmWithIngress, sanitizeInput } from "./security.js";
 import type { SynologyWebhookPayload, ResolvedSynologyChatAccount } from "./types.js";
 import {
@@ -175,10 +176,7 @@ export interface WebhookHandlerDeps {
 
 export async function processSynologyWebhookIngressEvent(params: {
   account: ResolvedSynologyChatAccount;
-  deliver: (
-    msg: import("./inbound-context.js").SynologyInboundMessage,
-    lifecycle: SynologyIngressLifecycle,
-  ) => Promise<unknown>;
+  deliver: (msg: SynologyInboundMessage, lifecycle: SynologyIngressLifecycle) => Promise<unknown>;
   log?: WebhookHandlerDeps["log"];
   rawEvent: SynologyWebhookRawEvent;
   lifecycle: SynologyIngressLifecycle;

@@ -25,12 +25,12 @@ import "../../../components/tooltip.ts";
 import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
 import { registerChatMediaEnglish } from "../../../i18n/locales/en-chat-media.ts";
 import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
-import { createCanvasFramePresentation } from "../../../lib/chat/canvas-frame-presentation.ts";
 import {
   resolveCanvasIframeUrl,
   resolveEmbedSandbox,
   type EmbedSandboxMode,
-} from "../../../lib/chat/tool-display.ts";
+} from "../../../lib/chat/canvas-embed-policy.ts";
+import { createCanvasFramePresentation } from "../../../lib/chat/canvas-frame-presentation.ts";
 import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";

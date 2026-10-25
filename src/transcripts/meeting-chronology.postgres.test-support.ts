@@ -21,7 +21,11 @@ import {
 } from "../state/openclaw-state-db.js";
 import { ensureMeetingTranscriptsSchema } from "./sqlite-schema.js";
 import { queryTranscriptReadEntries, type TranscriptReadOptions } from "./store-read.js";
-import { writeMeetingTranscriptSessionInDatabase } from "./store-sqlite-write.js";
+import { readTranscriptSessionEntries } from "./store-sqlite-read.js";
+import {
+  writeMeetingTranscriptSessionInDatabase,
+  writeMeetingTranscriptSummaryInDatabase,
+} from "./store-sqlite-write.js";
 
 export type ChronologyProof = {
   threadId: number;
@@ -122,6 +126,26 @@ if (parentPort) {
     }
     // Metadata updates must retain the instant fixed by the original admission.
     assert.equal(write(fixtures[2], 0).inserted, false);
+    runOpenClawStateWriteTransaction(
+      ({ db }) =>
+        writeMeetingTranscriptSummaryInDatabase(
+          db,
+          { sessionId: fixtures[2][1], startedAt: fixtures[2][2] },
+          {
+            generated_at: null,
+            summary_json: null,
+            markdown: "Synthetic notes",
+            utterance_count: 0,
+          },
+        ),
+      options,
+    );
+    assert.deepEqual(
+      readTranscriptSessionEntries(postgresDb)
+        .filter((entry) => entry.hasSummary)
+        .map((entry) => entry.selector),
+      ["tie-a-iso"],
+    );
     const page = (params: TranscriptReadOptions) => {
       const result = queryTranscriptReadEntries(postgresDb, params);
       return { selectors: result.entries.map((entry) => entry.selector), hasMore: result.hasMore };
