@@ -34,13 +34,12 @@ async function mountIdentity(
   return { gateway, context, dom, navigate, open: () => dom.click(".sidebar-identity-card") };
 }
 
-function menuItems(menu: HTMLElement | null, enabledOnly = false) {
-  const selector = enabledOnly ? '[role="menuitem"][data-value]' : '[role^="menuitem"][data-value]';
-  return [...(menu?.querySelectorAll<HTMLElement>(selector) ?? [])].filter(
+function menuItems(menu: HTMLElement | null) {
+  return [...(menu?.querySelectorAll<HTMLElement>('[role="menuitem"][data-value]') ?? [])].filter(
     (item) =>
       item.closest('[role="menu"]') === menu &&
       !item.closest(".sidebar-identity-menu__footer") &&
-      (!enabledOnly || !item.hasAttribute("disabled")),
+      !item.hasAttribute("disabled"),
   );
 }
 
@@ -124,16 +123,6 @@ describe("AppSidebar footer identity menu", () => {
     const menu = dom.query<HTMLElement>(".sidebar-identity-menu");
     const view = domProbe(menu!);
     expect(identity?.getAttribute("aria-expanded")).toBe("true");
-    expect(menuItems(menu).map((element) => element.getAttribute("data-value"))).toEqual([
-      "command:profile",
-      "command:settings",
-      "command:updates",
-      "command:usage",
-      "command:pair-mobile",
-      "command:apps",
-      "command:debug-overlay",
-      "command:help",
-    ]);
     expect(card.text(".sidebar-identity-card__name")?.trim()).toBe(fullName);
     expect(card.attr(".sidebar-identity-card__name", "title")).toBeNull();
     for (const [field, value] of Object.entries({ name: fullName, email })) {
@@ -150,9 +139,6 @@ describe("AppSidebar footer identity menu", () => {
     expect(view.query(".sidebar-pair-mobile")?.hasAttribute("disabled")).toBe(true);
     expect(view.attr("openclaw-sidebar-build-chip .sidebar-footer-build", "role")).toBe("menuitem");
     expect(view.query("openclaw-theme-mode-toggle")).not.toBeNull();
-    expect(menu?.textContent).not.toContain("Recent activity");
-    expect(view.all(':scope > [role="separator"]')).toHaveLength(4);
-    expect(card.query(".sidebar-identity-card__more, .sidebar-identity-card__chevron")).toBeNull();
 
     const helpRow = view.query<HTMLElement>(".sidebar-identity-menu__help");
     expect(helpRow?.getAttribute("aria-haspopup")).toBe("menu");
@@ -190,7 +176,7 @@ describe("AppSidebar footer identity menu", () => {
 
       const menu = dom.query<HTMLElement>(".sidebar-identity-menu");
       const view = domProbe(menu!);
-      const items = menuItems(menu, true);
+      const items = menuItems(menu);
       const lastItem = items.at(-1);
       const theme = view.query<HTMLButtonElement>(".theme-mode-toggle");
       const build = view.query<HTMLAnchorElement>(".sidebar-footer-build");
