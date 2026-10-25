@@ -24,12 +24,9 @@ function searchFor(search: HTMLInputElement, value: string) {
   flush();
 }
 function pickerElements(container: HTMLElement) {
-  const query = <T extends HTMLElement = HTMLElement>(selector: string) =>
-    container.querySelector<T>(selector)!;
   return {
-    query,
-    details: query<HTMLDetailsElement>(".chat-controls__model-picker"),
-    search: query<HTMLInputElement>("[data-chat-model-search]"),
+    details: container.querySelector<HTMLDetailsElement>(".chat-controls__model-picker")!,
+    search: container.querySelector<HTMLInputElement>("[data-chat-model-search]")!,
   };
 }
 
@@ -52,9 +49,11 @@ describe("chat model controls", () => {
     const callbacks = { onModelSelect, onProviderSettings };
     const container = await renderModelControls(state, callbacks);
     document.body.append(container);
-    const { query, details, search } = pickerElements(container);
+    const { details, search } = pickerElements(container);
 
-    const providerSettings = query<HTMLButtonElement>("[data-chat-model-provider-settings]");
+    const providerSettings = container.querySelector<HTMLButtonElement>(
+      "[data-chat-model-provider-settings]",
+    )!;
     expect(providerSettings.closest('[role="listbox"]')).toBeNull();
     expect(
       Array.from(container.querySelectorAll<HTMLElement>('[role="option"]')).every(
@@ -64,7 +63,7 @@ describe("chat model controls", () => {
     providerSettings.click();
     expect(onProviderSettings).toHaveBeenCalledExactlyOnceWith("openai");
     details.open = true;
-    expect(query("[data-chat-model-selection-target]")).toBeNull();
+    expect(container.querySelector("[data-chat-model-selection-target]")).toBeNull();
     searchFor(search, "anth");
 
     const visibleOptions = Array.from(
