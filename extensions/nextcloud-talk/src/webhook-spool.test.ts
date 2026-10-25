@@ -48,16 +48,24 @@ function activityBody(object: { id: string; name?: string; content: string }) {
   return JSON.stringify({ ...payload, object: { ...payload.object, ...object } });
 }
 
-function createRawEvent(params?: { messageId?: string; roomToken?: string; text?: string }) {
+function createRawEvent(params?: {
+  messageId?: string;
+  roomToken?: string;
+  text?: string;
+  quote?: unknown;
+}) {
   const { body } = createSignedCreateMessageRequest();
   const payload = JSON.parse(body) as {
-    object: { id: string; content: string; name: string };
+    object: { id: string; content: string; name: string; inReplyTo?: unknown };
     target: { id: string };
   };
   payload.object.id = params?.messageId ?? "msg-1";
   payload.target.id = params?.roomToken ?? "test-room-token";
   payload.object.content = params?.text ?? "hello";
   payload.object.name = params?.text ?? "hello";
+  if (params && Object.hasOwn(params, "quote")) {
+    payload.object.inReplyTo = params.quote;
+  }
   return JSON.stringify(payload);
 }
 
@@ -126,6 +134,107 @@ afterEach(async () => {
 });
 
 describe("Nextcloud Talk durable ingress", () => {
+  it("retains one quoted parent through durable admission and delivery", async () => {
+    const deliver = deferredDelivery();
+    const rawEvent = createRawEvent({
+      text: "What about this?",
+      quote: {
+        type: "Note",
+        actor: { type: "Person", id: "bots/quoted-bot", name: "Quoted bot" },
+        object: {
+          type: "Note",
+          id: "parent-1",
+          name: "message",
+          content: JSON.stringify({ message: "Look north.", parameters: [] }),
+          mediaType: "text/markdown",
+          inReplyTo: { object: { id: "ancestor", content: "Do not include this ancestor" } },
+        },
+      },
+    });
+    const spool = startSpool(queue, deliver);
+    await receive(spool, rawEvent);
+    await expectClaim("msg-1", "room:test-room-token", rawEvent);
+    expectDelivered(deliver, {
+      messageId: "msg-1",
+      text: "What about this?",
+      senderId: "alice",
+      quote: {
+        id: "parent-1",
+        senderId: "bots/quoted-bot",
+        senderName: "Quoted bot",
+        body: "Look north.",
+      },
+    });
+  });
+
+  it.each([
+    {
+      kind: "plain text",
+      content: "Plain quoted text",
+      body: "Plain quoted text",
+    },
+    {
+      kind: "referenced rich labels without unreferenced metadata",
+      content: JSON.stringify({
+        message: "Ask {mention-user1} about {file}",
+        parameters: {
+          "mention-user1": { type: "user", name: "Ada", id: "ada" },
+          file: { type: "file", name: "plan.pdf", link: "https://unused.invalid/secret" },
+          unused: { name: "Do not include me", link: "https://unused.invalid/other" },
+        },
+      }),
+      body: "Ask Ada about plan.pdf",
+    },
+  ])("delivers $kind as quoted context", async ({ content, body }) => {
+    const deliver = adoptedDelivery();
+    const spool = startSpool(queue, deliver);
+    await receive(
+      spool,
+      createRawEvent({
+        quote: {
+          type: "Note",
+          actor: { type: "Person", id: "users/ada", name: "Ada" },
+          object: { type: "Note", id: "parent-rich", name: "message", content },
+        },
+      }),
+    );
+    expectDelivered(deliver, {
+      quote: { id: "parent-rich", senderId: "users/ada", senderName: "Ada", body },
+    });
+  });
+
+  it.each([
+    { kind: "non-object", quote: "parent-1" },
+    { kind: "missing parent", quote: { type: "Note", actor: { id: "users/ada" } } },
+    {
+      kind: "malformed structured body",
+      quote: {
+        type: "Note",
+        actor: { type: "Person", id: "users/ada", name: "Ada" },
+        object: {
+          type: "Note",
+          id: "parent-1",
+          content: JSON.stringify({ message: 7, parameters: [] }),
+        },
+      },
+    },
+    {
+      kind: "invalid parent body",
+      quote: {
+        type: "Note",
+        actor: { type: "Person", id: "users/ada", name: "Ada" },
+        object: { type: "Note", id: "parent-1", content: { message: "Wrong shape" } },
+      },
+    },
+  ])("keeps the current message when optional quote is $kind", async ({ quote }) => {
+    const deliver = adoptedDelivery();
+    const spool = startSpool(queue, deliver);
+    await receive(spool, createRawEvent({ text: "Current text", quote }));
+    expect(deliver).toHaveBeenCalledTimes(1);
+    expectDelivered(deliver, { messageId: "msg-1", text: "Current text" });
+    expect(deliver.mock.calls[0]?.[0]).not.toHaveProperty("quote");
+  });
+
   it("accepts file metadata without the optional hide-download flag", () => {
     const envelope = JSON.parse(createFileSharedActivityBody()) as { object: { content: string } };
     const content = JSON.parse(envelope.object.content) as {

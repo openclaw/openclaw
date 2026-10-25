@@ -297,11 +297,13 @@ describe("exec approval card", () => {
     expect(actions).toHaveLength(3);
     expect(timer.getAttribute("aria-label")).toBe("expires in 00:02");
     expect(actions.every((button) => !button.disabled)).toBe(true);
+    expect(vi.getTimerCount()).toBe(1);
     await vi.advanceTimersByTimeAsync(2_000);
     flush();
     expect(timer).toMatchObject({ textContent: "00:00", title: "expired" });
     expect(timer.getAttribute("aria-label")).toBe("expired");
     expect(actions.every((button) => button.disabled)).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
     for (const button of actions) {
       button.click();
     }

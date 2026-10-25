@@ -61,11 +61,7 @@ function findTextCheckpoint(
   text: string,
   referenceLength: number,
   resolveOwnership: (text: string) => ReturnType<typeof findCodeOwnership>,
-): {
-  offset: number;
-  context: string;
-  definitions?: ReturnType<typeof findCodeOwnership>["definitions"];
-} {
+) {
   const state = createProtectionScanState();
   let cursor = referenceLength;
   let lastLineStart = cursor;
@@ -116,6 +112,7 @@ function createCheckpointTransform(
   let sourceLength = 0;
   let pending = "";
   let settled = "";
+  let settledMatchesSource = true;
   let previousTail = "";
   let context = "";
   let references = "";
@@ -150,7 +147,9 @@ function createCheckpointTransform(
     const boundary = findTextCheckpoint(text, references.length, resolveOwnership);
     const result = project(text, boundary.offset);
     const window = result.text.slice(contextLength);
-    const visible = settled + window;
+    // Reuse unchanged source bytes: comparing separately built cumulative ropes
+    // for identity would flatten the whole reply on every append.
+    const visible = settledMatchesSource && result.text === text ? source : settled + window;
     // `settled` only grows, so while the stage kept emitting this transform's output the
     // delta extends the previous visible text exactly when it extends the previous tail.
     // A stream that skipped this transform (activation just flipped, or an upstream
@@ -171,7 +170,9 @@ function createCheckpointTransform(
     // A provisional tool call can retain text before the Markdown checkpoint.
     let retain = 0;
     if (boundary.offset > contextLength && result.retainStart === boundary.offset) {
-      settled += result.text.slice(contextLength, result.retainedOutputStart);
+      const added = result.text.slice(contextLength, result.retainedOutputStart);
+      settledMatchesSource &&= added === pending.slice(0, boundary.offset - contextLength);
+      settled += added;
       retain = Math.max(0, result.retainedOutputStart - contextLength);
       for (const definition of boundary.definitions ?? []) {
         if (definition.end <= boundary.offset && !definitions.has(definition.identifier)) {

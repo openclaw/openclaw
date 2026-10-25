@@ -1,4 +1,4 @@
-import "./port-command-worker.test-support.js";
+import "./database-suite-workers.test-support.js";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs";

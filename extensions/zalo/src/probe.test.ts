@@ -69,9 +69,7 @@ describe("probeZalo", () => {
         process.env.ZALO_API_URL = originalApiUrl;
       }
       server.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
+      await server[Symbol.asyncDispose]();
     }
   });
 

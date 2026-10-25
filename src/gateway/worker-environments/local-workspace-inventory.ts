@@ -73,11 +73,12 @@ export async function selectLocalWorkspaceCanonicalPaths(params: {
       paths.add(entryPath);
     }
   }
-  // The inventory contract requires explicit ancestors, including directories
-  // omitted by Git and empty directories already accepted from the guest.
+  // Set iteration visits added parents too, so each path needs only its immediate
+  // parent to include every ancestor omitted by Git or accepted from the guest.
   for (const entryPath of paths) {
-    for (const parent of workspacePathAncestors(entryPath)) {
-      paths.add(parent);
+    const separator = entryPath.lastIndexOf("/");
+    if (separator !== -1) {
+      paths.add(entryPath.slice(0, separator));
     }
   }
   return paths;

@@ -341,11 +341,11 @@ describe("codex plugin", () => {
     expect(registerSessionCatalog).not.toHaveBeenCalled();
   });
 
-  it("registers the five shipped supervision tools only when supervision is enabled", () => {
+  it("keeps native declarations across owner, completion, and owner turns", async () => {
     const registerTool = vi.fn<OpenClawPluginApi["registerTool"]>();
     plugin.register(
       createCodexTestApi({
-        pluginConfig: { supervision: { enabled: true } },
+        pluginConfig: { appServer: { homeScope: "user" }, supervision: { enabled: true } },
         registerTool,
       }),
     );
@@ -355,8 +355,26 @@ describe("codex plugin", () => {
     expect(registration.create({ senderIsOwner: true }).map((tool) => tool.name)).toEqual([
       ...CODEX_SUPERVISION_COMPAT_TOOL_NAMES,
     ]);
-    expect(registration.create({ senderIsOwner: false })).toEqual([]);
-    expect(registration.create()).toEqual([]);
+    for (const registered of [
+      registration,
+      registeredCodexTools(registerTool, "codex_plugins"),
+      registeredCodexTools(registerTool, "codex_threads"),
+    ]) {
+      const declaration = (owner?: boolean) =>
+        registered.create({ senderIsOwner: owner }).map(({ name, description, parameters }) => ({
+          name,
+          description,
+          parameters,
+        }));
+      const ownerDeclaration = declaration(true);
+      expect(ownerDeclaration).not.toEqual([]);
+      expect(declaration(false)).toEqual(ownerDeclaration);
+      expect(declaration()).toEqual(ownerDeclaration);
+      expect(declaration(true)).toEqual(ownerDeclaration);
+      for (const tool of registered.create({ senderIsOwner: false })) {
+        await expect(tool.execute("denied", {})).rejects.toThrow("owner-authorized sender");
+      }
+    }
   });
 
   it.each([

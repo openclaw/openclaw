@@ -553,6 +553,105 @@ it.each(["inspected", "legacy-unavailable", "windows-suspended"] as const)(
   },
 );
 
+it("does not stop a supervised predecessor when the delegated Doctor deadline expires during startup", async () => {
+  const doctor = vi.fn();
+  let wallNow = 1_000;
+  let elapsedMs = 0;
+  vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
+  const deadlineAtMs = wallNow + 500;
+  const errorReported = createDeferredCore();
+  vi.spyOn(process.stderr, "write").mockImplementation((value) => {
+    stderr.push(String(value));
+    errorReported.resolve();
+    return true;
+  });
+  vi.spyOn(Date, "now").mockImplementation(() => wallNow);
+  // mock-isolation: Keep real Doctor repair, service and database effects outside this worker fixture.
+  vi.doMock("../flows/doctor-health.js", () => {
+    wallNow -= 90_000;
+    elapsedMs = 501;
+    return { runDoctorHealthFlow: doctor };
+  });
+  fixture.ownerLease.mockReturnValue({ state: "live", mode: "supervised" });
+  process.env.OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH = "/synthetic/doctor.json";
+  try {
+    await runWorker(
+      {
+        executor: {},
+        runId: "synthetic-run",
+        root: "/synthetic",
+        configInputHash: "hash",
+        repair: true,
+        serviceInspectionDeadlineAtMs: deadlineAtMs,
+      },
+      "--doctor",
+    );
+    // Database cleanup settles before the executable reports its terminal error.
+    await errorReported.promise;
+  } finally {
+    delete process.env.OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH;
+    vi.doUnmock("../flows/doctor-health.js");
+  }
+
+  expect(fixture.stopService).not.toHaveBeenCalled();
+  expect(doctor).not.toHaveBeenCalled();
+  expect(stderr.join("")).toContain("Doctor service-inspection deadline has expired.");
+  expect(process.exitCode).toBe(1);
+});
+
+it("bounds a supervised predecessor stop by the remaining Doctor deadline", async () => {
+  const doctor = vi.fn();
+  const deadlineAtMs = 1_500;
+  vi.spyOn(Date, "now").mockReturnValue(1_000);
+  vi.spyOn(performance, "now").mockReturnValue(0);
+  // mock-isolation: Keep real Doctor repair, service and database effects outside this worker fixture.
+  vi.doMock("../flows/doctor-health.js", () => ({ runDoctorHealthFlow: doctor }));
+  fixture.ownerLease.mockReturnValue({ state: "live", mode: "supervised" });
+  fixture.recordStep.mockImplementation(async (runId: string, step: unknown) => ({
+    runId,
+    status: "running",
+    steps: [step],
+  }));
+  const stoppedState = {
+    stopped: true,
+    stoppedAtMs: 7,
+    inspected: true,
+    runtimeInspected: true,
+    running: true,
+    servicePid: 631,
+    serviceManagerUid: 1000,
+    serviceUpdateVerdict: { kind: "owned", root: "/synthetic", fingerprint: "f" },
+  };
+  fixture.stopService.mockImplementation(
+    async (params: { timeoutMs?: number; onStopped?: (s: unknown) => void }) => {
+      params.onStopped?.(stoppedState);
+      return stoppedState;
+    },
+  );
+  process.env.OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH = "/synthetic/doctor.json";
+  try {
+    await runWorker(
+      {
+        executor: {},
+        runId: "synthetic-run",
+        root: "/synthetic",
+        configInputHash: "hash",
+        repair: true,
+        serviceInspectionDeadlineAtMs: deadlineAtMs,
+      },
+      "--doctor",
+    );
+  } finally {
+    delete process.env.OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH;
+    vi.doUnmock("../flows/doctor-health.js");
+  }
+
+  expect(fixture.stopService).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ phase: "prepare", timeoutMs: deadlineAtMs - 1_000 }),
+  );
+  expect(doctor).toHaveBeenCalledOnce();
+});
+
 it.each([
   ["supervised", false],
   ["supervised", true],

@@ -65,6 +65,15 @@ function axisVector(length: number, index = 0, value = 1): number[] {
   return Array.from({ length }, (_, offset) => (offset === index ? value : 0));
 }
 
+function installAxisVectorFetchMock(dimensions: number) {
+  return installFetchMock((input) => {
+    const url = input instanceof URL ? input.href : typeof input === "string" ? input : input.url;
+    return url.endsWith(":batchEmbedContents")
+      ? { embeddings: [{ values: axisVector(dimensions) }] }
+      : { embedding: { values: axisVector(dimensions) } };
+  });
+}
+
 describe("Gemini embedding provider", () => {
   const providerBaseUrl = "https://provider.example.test/v1beta";
   const config = {
@@ -179,12 +188,7 @@ describe("Gemini embedding provider", () => {
     ["gemini-embedding-2", 3072],
     ["gemini-embedding-2-preview", 512],
   ] as const)("supports %s with %i output dimensions", async (model, dimensions) => {
-    const fetchMock = installFetchMock((input) => {
-      const url = input instanceof URL ? input.href : typeof input === "string" ? input : input.url;
-      return url.endsWith(":batchEmbedContents")
-        ? { embeddings: [{ values: axisVector(dimensions) }] }
-        : { embedding: { values: axisVector(dimensions) } };
-    });
+    const fetchMock = installAxisVectorFetchMock(dimensions);
     const { provider, client } = await createGeminiEmbeddingProvider({
       config: {} as never,
       provider: "gemini",
@@ -602,12 +606,7 @@ describe("Gemini embedding provider", () => {
   });
 
   it("formats stable Gemini retrieval requests and honors explicit query instructions", async () => {
-    const fetchMock = installFetchMock((input) => {
-      const url = input instanceof URL ? input.href : typeof input === "string" ? input : input.url;
-      return url.endsWith(":batchEmbedContents")
-        ? { embeddings: [{ values: axisVector(768) }] }
-        : { embedding: { values: axisVector(768) } };
-    });
+    const fetchMock = installAxisVectorFetchMock(768);
     const { provider } = await createGeminiEmbeddingProvider({
       config: {} as never,
       provider: "gemini",
@@ -656,12 +655,7 @@ describe("Gemini embedding provider", () => {
     ["QUESTION_ANSWERING", "question answering"],
     ["FACT_VERIFICATION", "fact checking"],
   ] as const)("keeps %s query and document instructions asymmetric", async (taskType, task) => {
-    const fetchMock = installFetchMock((input) => {
-      const url = input instanceof URL ? input.href : typeof input === "string" ? input : input.url;
-      return url.endsWith(":batchEmbedContents")
-        ? { embeddings: [{ values: axisVector(768) }] }
-        : { embedding: { values: axisVector(768) } };
-    });
+    const fetchMock = installAxisVectorFetchMock(768);
     const { provider } = await createGeminiEmbeddingProvider({
       config: {} as never,
       provider: "gemini",
@@ -684,12 +678,7 @@ describe("Gemini embedding provider", () => {
   });
 
   it("rejects Gemini 2 responses that drift from the requested dimensions", async () => {
-    installFetchMock((input) => {
-      const url = input instanceof URL ? input.href : typeof input === "string" ? input : input.url;
-      return url.endsWith(":batchEmbedContents")
-        ? { embeddings: [{ values: axisVector(3072) }] }
-        : { embedding: { values: axisVector(3072) } };
-    });
+    installAxisVectorFetchMock(3072);
     const { provider } = await createGeminiEmbeddingProvider({
       config: {} as never,
       provider: "gemini",

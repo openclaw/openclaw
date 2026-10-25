@@ -134,8 +134,8 @@ export function startGatewayConfigReloader(
         // Restart preparation outlives its requesting mutation but still owns a process lease.
         const current = {
           ...ownership,
-          assertInvokerOwned: () => lease.assertOwned(),
-          checkpoint: () => checkpointOwned(() => lease.assertOwned()),
+          assertInvokerOwned: () => lease.assertCurrent(),
+          checkpoint: () => checkpointOwned(() => lease.assertCurrent()),
         };
         await current.checkpoint();
         return run(current);
@@ -377,7 +377,6 @@ export function startGatewayConfigReloader(
           return;
         }
         publishedRuntimeEnv ??= preparedCandidate?.runtimeEnv?.publish();
-        assertCurrent();
       },
       rollbackRuntimeEnv: () => {
         if (runtimeEnvCommitted) {
@@ -788,7 +787,6 @@ export function startGatewayConfigReloader(
         try {
           await runAcceptedTransaction(async () => {
             const snapshot = pendingWrite.snapshot;
-            assertLeaseOwned();
             assertConfigReloadWriteSnapshot(snapshot);
             if (
               source.observation.writerRevision > pendingWrite.epoch ||
@@ -1019,7 +1017,7 @@ export function startGatewayConfigReloader(
       withPluginLifecycleLease({ signal: lifecycle.signal, processBound: true }, async (lease) => {
         enteredReload = true;
         leaseRetryDelayMs = 0;
-        await runReload(() => lease.assertOwned());
+        await runReload(() => lease.assertCurrent());
       }),
     ).catch((error: unknown) => {
       if (stopped) {

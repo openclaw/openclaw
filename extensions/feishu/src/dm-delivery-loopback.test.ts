@@ -1,5 +1,6 @@
 // Prove Feishu DM routing against the real SDK, token exchange, and HTTP transport.
 import { createServer } from "node:http";
+import { buffer as consumeBuffer } from "node:stream/consumers";
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { expect, it } from "vitest";
 import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
@@ -26,14 +27,11 @@ it("Feishu DM delivery preserves routing, card byte envelopes and physical-send 
   const requests: RecordedFeishuRequest[] = [];
   const server = createServer((request, response) => {
     void (async () => {
-      const chunks: Buffer[] = [];
-      for await (const chunk of request) {
-        chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
-      }
+      const bodyBuffer = await consumeBuffer(request);
 
       const url = new URL(request.url ?? "/", "http://127.0.0.1");
       const path = url.pathname;
-      const rawBody = Buffer.concat(chunks).toString("utf8");
+      const rawBody = bodyBuffer.toString("utf8");
       const isJson = (request.headers["content-type"] ?? "").includes("application/json");
       const body = isJson && rawBody ? (JSON.parse(rawBody) as Record<string, unknown>) : {};
       const string = (value: unknown) => (typeof value === "string" ? value : undefined);

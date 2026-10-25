@@ -4,12 +4,12 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isMainThread, workerData } from "node:worker_threads";
 import type { JitiOptions, JitiResolveOptions } from "jiti";
+import { isNativeEsmPackage } from "../infra/native-module-format.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { resolveGlobalMap, resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { createJiti } from "./jiti-factory.js";
 import {
   resolvePluginLoaderTryNative,
-  isNativeEsmPackage,
   isPluginSourceModulePath,
   supportsBunRuntimeOnResolveTargets,
   useNodeModuleHooks,

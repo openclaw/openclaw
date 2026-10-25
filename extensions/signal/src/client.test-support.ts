@@ -10,9 +10,7 @@ export function useSignalHttpServer() {
     await Promise.all(
       servers.splice(0).map(async (server) => {
         server.closeAllConnections();
-        await new Promise<void>((resolve, reject) => {
-          server.close((error) => (error ? reject(error) : resolve()));
-        });
+        await server[Symbol.asyncDispose]();
       }),
     );
   });

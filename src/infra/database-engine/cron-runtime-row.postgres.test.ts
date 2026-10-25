@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { getEnvironmentData } from "node:worker_threads";
 import { expect, it } from "vitest";
-import { loadCronRows, replaceCronRows } from "../../cron/store/row-codec.js";
+import type { CronScratchReadCommand } from "../../cron/scratch-contract.js";
+import { readCronScratchSnapshotInDatabase } from "../../cron/scratch-read.kernel.js";
+import { writeCronJobScratchInDatabase } from "../../cron/scratch-write.kernel.js";
+import { loadCronRows, replaceCronRows, upsertCronJobRow } from "../../cron/store/row-codec.js";
 import { finalizeCronRunsInWorker } from "../../cron/store/run-finalization.worker.js";
 import { mutateCronRuntimeRowsInDatabase } from "../../cron/store/runtime-rows.kernel.js";
 import type { CronStoredJob } from "../../cron/types.js";
@@ -23,7 +26,7 @@ const connection = typeof configured === "string" ? configured : undefined;
 
 for (const engine of ["sqlite", "postgres"] as const) {
   it.skipIf(engine === "postgres" && !connection)(
-    `commits one-shot completion and boolean enablement without losing config on ${engine}`,
+    `preserves one-shot config and current scratch snapshots on ${engine}`,
     async () => {
       const prefix = `cron_runtime_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
       try {
@@ -122,6 +125,88 @@ for (const engine of ["sqlite", "postgres"] as const) {
               enabled: true,
               authoredNote: { keep: true, nested: [1, "two"] },
             });
+            const readScratch = (selector: CronScratchReadCommand["selector"]) =>
+              readCronScratchSnapshotInDatabase(database.db, {
+                type: "cron.scratch",
+                storeKey,
+                selector,
+              });
+            expect(
+              readScratch({ kind: "job", jobId: "missing-job", createdAtMsFallback: 1 }),
+            ).toBeUndefined();
+            expect(readScratch({ kind: "heartbeat", agentId: "missing-monitor" })).toBeUndefined();
+
+            runOpenClawStateWriteTransaction(
+              ({ db }) => {
+                upsertCronJobRow(db, storeKey, { ...job, id: "heartbeat-monitor" }, 1);
+                // Current writers no longer create legacy heartbeat definitions.
+                db.prepare(
+                  "UPDATE cron_jobs SET declaration_key = ?, payload_kind = ?, job_json = ? WHERE store_key = ? AND job_id = ?",
+                ).run(
+                  "heartbeat:main",
+                  "heartbeat",
+                  JSON.stringify({
+                    ...job,
+                    id: "heartbeat-monitor",
+                    payload: { kind: "heartbeat" },
+                  }),
+                  storeKey,
+                  "heartbeat-monitor",
+                );
+              },
+              { database, env: state.env },
+            );
+            const selectors = [
+              { kind: "job", jobId: job.id, createdAtMsFallback: 1 },
+              { kind: "heartbeat", agentId: "main" },
+            ] satisfies CronScratchReadCommand["selector"][];
+            for (const selector of selectors) {
+              const jobId = selector.kind === "job" ? selector.jobId : "heartbeat-monitor";
+              const identity = {
+                jobId,
+                ...(selector.kind === "job" ? { configRevision: expect.any(String) } : {}),
+              };
+              expect(readScratch(selector)).toEqual({
+                ...identity,
+                state: { currentRevision: 0 },
+              });
+              for (const [content, expectedRevision] of [
+                ["synthetic scratch", 0],
+                [null, 1],
+              ] as const) {
+                runOpenClawStateWriteTransaction(
+                  ({ db }) =>
+                    writeCronJobScratchInDatabase(db, {
+                      storeKey,
+                      jobId,
+                      content,
+                      expectedRevision,
+                      nowMs: 10,
+                    }),
+                  { database, env: state.env },
+                );
+                const revision = expectedRevision + 1;
+                expect(readScratch(selector)).toEqual({
+                  ...identity,
+                  state: {
+                    currentRevision: revision,
+                    ...(content === null
+                      ? {}
+                      : { scratch: { content, revision, updatedAtMs: 10 } }),
+                  },
+                });
+              }
+            }
+            runOpenClawStateWriteTransaction(
+              ({ db }) =>
+                db
+                  .prepare("UPDATE cron_jobs SET job_json = ? WHERE store_key = ? AND job_id = ?")
+                  .run("{malformed", storeKey, job.id),
+              { database, env: state.env },
+            );
+            expect(
+              readScratch({ kind: "job", jobId: job.id, createdAtMsFallback: 1 }),
+            ).toBeUndefined();
           });
           await closeStateDatabaseForTest();
         });

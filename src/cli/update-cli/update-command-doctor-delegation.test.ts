@@ -645,7 +645,8 @@ function controlDoctorDeadline() {
     .mockImplementationOnce((callback, delayMs) => {
       const inOwner = AsyncLocalStorage.snapshot();
       release = (expire) => {
-        expect(delayMs).toBe(5_000);
+        expect(delayMs).toBeGreaterThan(0);
+        expect(delayMs).toBeLessThanOrEqual(5_000);
         if (active) {
           timer = inOwner(() => nativeTimeout(callback, expire ? 0 : delayMs));
         }

@@ -32,10 +32,15 @@ import {
   type PortDescriptor,
   type PortVerification,
 } from "./port.worker.js";
+import {
+  refreshPostgresPlannerStatistics,
+  type PostgresPlannerStatistics,
+} from "./postgres-planner-statistics.js";
 
 type Common = { sourcePath: string; config: OpenClawConfig };
 type Identity = { storeId: string; namespace: string };
 export type DatabasePortTask =
+  | ({ operation: "analyze" } & Common)
   | ({ operation: "inspect"; to: "sqlite" | "postgres" } & Common)
   | { operation: "preflight"; config: OpenClawConfig; probe: boolean; namespace?: string }
   // Migration and staging consume an exclusively owned private SQLite image.
@@ -69,7 +74,8 @@ type ReplyMap = {
   inspect: DatabasePortInspection;
   preflight: Awaited<ReturnType<typeof preflight>>;
   migrate: { descriptorHash: string; verification: PortVerification };
-  stage: ReplyMap["migrate"];
+  stage: ReplyMap["migrate"] & { plannerStatistics?: PostgresPlannerStatistics };
+  analyze: PostgresPlannerStatistics | undefined;
   verify: void;
   checkpoint: void;
 };
@@ -177,8 +183,9 @@ async function stage(
   descriptor: PortDescriptor,
   assertCurrent: () => void,
   source: Awaited<ReturnType<typeof inspectSqliteImage>>,
-): Promise<PortVerification> {
+): Promise<{ verification: PortVerification; plannerStatistics?: PostgresPlannerStatistics }> {
   const { migrationRequired, verification } = source;
+  let plannerStatistics: PostgresPlannerStatistics | undefined;
   if (migrationRequired || !verification) {
     refuse("observed unmigrated private source; required migrate phase before staging");
   }
@@ -211,7 +218,7 @@ async function stage(
     const { targetPath: sourcePath, to: engine } = task;
     try {
       await verify({ ...task, operation: "verify", sourcePath, engine, verification }, descriptor);
-      return verification;
+      return { verification };
     } catch {
       // Only unverified private staging is rebuilt; occupied namespaces are checked below.
       for (const suffix of ["", "-wal", "-shm", "-journal"]) {
@@ -231,6 +238,7 @@ async function stage(
             refuse("observed occupied target namespace; required fresh namespace");
           }
           compare(await inspectPostgres(db, descriptor, task), verification);
+          plannerStatistics = await refreshPostgresPlannerStatistics(db, task.namespace);
           return;
         }
         using image = openNodeSqliteDatabase(task.sourcePath, {
@@ -244,6 +252,9 @@ async function stage(
             descriptor,
             storeId: task.storeId,
             assertCurrent,
+            onPlannerStatistics: (result) => {
+              plannerStatistics = result;
+            },
           }),
           verification,
         );
@@ -291,7 +302,7 @@ async function stage(
     using image = openNodeSqliteDatabase(task.targetPath, { readOnly: true });
     compare((await inspectSqliteImage(image, descriptor)).verification!, verification);
   }
-  return verification;
+  return { verification, plannerStatistics };
 }
 async function verify(
   task: Extract<DatabasePortTask, { operation: "verify" }>,
@@ -318,6 +329,22 @@ export async function executeDatabasePortTask(
   task: DatabasePortTask,
   assertCurrent: () => void,
 ): Promise<DatabasePortReply> {
+  if (task.operation === "analyze") {
+    const anchor = readBackupEngine(task.sourcePath);
+    if (anchor.engine === "postgres") {
+      return withDatabasePortConnection(
+        task.config,
+        async (db) => {
+          await assertDatabasePortNamespaceOwner(db, anchor.namespace);
+          assertCurrent();
+          return refreshPostgresPlannerStatistics(db, anchor.namespace);
+        },
+        process.env,
+        { connectionTimeoutMillis: 5_000, query_timeout: 15_000 },
+      );
+    }
+    return;
+  }
   if (task.operation === "preflight") {
     return preflight(task, assertCurrent);
   }
@@ -387,16 +414,18 @@ export async function executeDatabasePortTask(
     };
   }
   if (task.operation === "migrate" || task.operation === "stage") {
-    const verification =
+    const result =
       task.operation === "stage"
         ? await stage(task, descriptor, assertCurrent, source.facts!)
-        : await migrateDatabasePortSource(
-            task.sourcePath,
-            descriptor,
-            source.facts!.version,
-            assertCurrent,
-          );
-    return { descriptorHash, verification };
+        : {
+            verification: await migrateDatabasePortSource(
+              task.sourcePath,
+              descriptor,
+              source.facts!.version,
+              assertCurrent,
+            ),
+          };
+    return { descriptorHash, ...result };
   }
   return verify(task, descriptor, source);
 }

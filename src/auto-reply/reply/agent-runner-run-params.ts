@@ -182,6 +182,7 @@ export function buildFallbackCandidateTurnParams(params: AgentFallbackCandidateC
     currentInboundEventKind: turn.followupRun.currentInboundEventKind,
     currentInboundContext: turn.followupRun.currentInboundContext,
     extraSystemPrompt: turn.followupRun.run.extraSystemPrompt,
+    extraSystemPromptTurnContext: turn.followupRun.run.extraSystemPromptTurnContext,
     sourceReplyDeliveryMode: turn.followupRun.run.sourceReplyDeliveryMode,
     ...(turn.followupRun.run.scheduledAutomation ? { requireExplicitMessageTarget: true } : {}),
     cleanupBundleMcpOnRunEnd: turn.opts?.cleanupBundleMcpOnRunEnd,

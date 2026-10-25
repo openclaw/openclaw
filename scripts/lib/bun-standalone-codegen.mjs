@@ -6,7 +6,6 @@ const programOwners = [
   "src/media/staged-inputs.ts",
   "src/gateway/worker-environments/workspace-path-exclusions.ts",
   "src/gateway/worker-environments/workspace-hash-memo.ts",
-  "src/gateway/worker-environments/workspace-manifest-script.runtime.ts",
   "src/worker/workspace-seed-retention.ts",
 ];
 const receiverOwner = "src/worker/workspace-rsync-receiver.ts";

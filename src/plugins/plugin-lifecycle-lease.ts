@@ -32,13 +32,10 @@ export type PluginMetadataLeaseContext = {
   assertOwned(): void | Promise<void>;
 };
 
-export type PluginLifecycleLeaseContext = Omit<OpenClawStateLeaseContext, "assertOwned"> & {
-  assertOwned: () => void;
+export type PluginLifecycleLeaseContext = OpenClawStateLeaseContext & {
   databasePath: string;
   /** Original state owner; wrapper identity cannot authorize worker writes. */
   stateLease: OpenClawStateLeaseContext;
-  /** Live requester checks without synchronous lease SQL inside worker admission. */
-  assertCurrent(): void;
 };
 
 type PluginLifecycleRefusal = { current?: { error: unknown } };
@@ -52,7 +49,7 @@ function createPluginLifecycleLeaseContext(
   return {
     databasePath,
     stateLease: lease,
-    assertCurrent: () => assertAuthority(() => lease.signal.throwIfAborted()),
+    assertCurrent: () => assertAuthority(() => lease.assertCurrent()),
     signal: lease.signal,
     ...(lease.renew ? { renew: () => lease.renew?.() } : {}),
     assertOwned: () => lease.assertOwned(),

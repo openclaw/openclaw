@@ -2,6 +2,7 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { noteCommittedSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
+import { createEmptyPreparedModelRuntimeFixture } from "./embedded-agent-runner/model.fixture.test-support.js";
 import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { setPreparedModelFullCatalogAuth } from "./prepared-model-runtime-auth.js";
@@ -58,26 +59,19 @@ function catalog(entries: ModelCatalogEntry[]): ModelCatalogSnapshot {
 
 function owner(config: OpenClawConfig, entries: ModelCatalogEntry[]): PreparedModelRuntimeSnapshot {
   return {
-    agentDir: "/tmp/model-catalog-passive-test",
     inheritedAuthDir: resolveLegacyInheritedAuthDir(config),
-    activeProjectKeys: [],
-    catalogOwner: undefined,
-    config,
-    observationConfig: config,
-    isCurrent: () => true,
-    authModes: {},
-    metadataSnapshot: createPluginMetadataSnapshot({
+    ...createEmptyPreparedModelRuntimeFixture({
+      agentDir: "/tmp/model-catalog-passive-test",
       config,
-      manifestRegistry: { plugins: [], diagnostics: [] },
+      metadataSnapshot: createPluginMetadataSnapshot({
+        config,
+        manifestRegistry: { plugins: [], diagnostics: [] },
+      }),
+      createStores: () => {
+        throw new Error("Passive capability reads must not create stores");
+      },
     }),
-    allowGatewaySubagentBinding: false,
     modelCatalog: catalog(entries),
-    configuredRuntimeModels: [],
-    findConfiguredRuntimeModel: () => undefined,
-    inlineProviderModels: [],
-    createStores: () => {
-      throw new Error("Passive capability reads must not create stores");
-    },
   };
 }
 

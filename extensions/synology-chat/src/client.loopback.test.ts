@@ -3,6 +3,7 @@ import { once } from "node:events";
 import * as http from "node:http";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import { synologyChatPlugin } from "./channel.js";
 import { resolveLegacyWebhookNameToChatUserId, sendMessage } from "./client.js";
 
@@ -94,25 +95,17 @@ describe("Synology Chat client loopback", () => {
 
   async function reserveLoopbackPort(): Promise<number> {
     const reservation = http.createServer();
-    reservation.listen(0, "127.0.0.1");
-    await once(reservation, "listening");
-    const address = reservation.address();
-    if (!address || typeof address === "string") {
-      throw new Error("expected reserved loopback address");
-    }
-    await new Promise<void>((resolve, reject) => {
-      reservation.close((err) => (err ? reject(err) : resolve()));
-    });
-    return address.port;
+    const port = await listenOnLoopback(reservation);
+    await reservation[Symbol.asyncDispose]();
+    return port;
   }
 
   afterEach(async () => {
     vi.restoreAllMocks();
     if (server) {
-      await new Promise<void>((resolve, reject) => {
-        server?.close((err) => (err ? reject(err) : resolve()));
-        server?.closeAllConnections?.();
-      });
+      const closed = server[Symbol.asyncDispose]();
+      server?.closeAllConnections?.();
+      await closed;
       server = undefined;
     }
   });

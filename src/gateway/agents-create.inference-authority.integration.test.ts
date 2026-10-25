@@ -21,6 +21,7 @@ import {
   disconnectGatewayClient,
   startGatewayWithClient,
 } from "./test-helpers.e2e.js";
+import { createAuthorityGatewayTestEnv } from "./test-helpers.env.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
 const observation = vi.hoisted(() => ({
@@ -136,16 +137,7 @@ it(
       await withOpenClawTestState(
         {
           label: "agent-create-inference-authority",
-          env: {
-            OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-            OPENCLAW_SKIP_CHANNELS: "1",
-            OPENCLAW_SKIP_CRON: "1",
-            OPENCLAW_DISABLE_BONJOUR: "1",
-            OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-            OPENCLAW_SKIP_CANVAS_HOST: "1",
-            OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-            OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-          },
+          env: createAuthorityGatewayTestEnv(),
         },
         async (state) => {
           const recoveryRestart = vi.fn(() => {

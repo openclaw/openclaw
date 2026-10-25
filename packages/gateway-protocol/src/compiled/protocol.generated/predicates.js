@@ -1375,7 +1375,7 @@ var External = [
     /(^type$|^actorType$|^source$|^id$)/u,
     /(^emoji$|^count$|^identities$)/u,
     /(^id$|^label$)/u,
-    /(^key$|^idempotencyKey$|^agentId$|^surface$|^label$|^displayName$|^titleSource$|^category$|^model$|^agentRuntime$|^contextWindow$|^thinkingLevel$|^fastMode$|^permissionMode$|^communication$|^toolOverrides$|^incognito$|^visibility$|^catalogId$|^parentSessionKey$|^spawnDepth$|^fork$|^forkFrom$|^emitCommandHooks$|^succeedsParent$|^timeoutMs$|^task$|^message$|^mentions$|^attachments$|^projectId$|^projectGitUrl$|^repository$|^deviceFolder$|^worktree$|^worktreeSource$|^worktreeBaseRef$|^worktreeName$|^execNode$|^cwd$)/u,
+    /(^key$|^idempotencyKey$|^agentId$|^surface$|^label$|^displayName$|^displayNameGenerated$|^titleSource$|^category$|^model$|^agentRuntime$|^contextWindow$|^thinkingLevel$|^fastMode$|^permissionMode$|^communication$|^toolOverrides$|^incognito$|^visibility$|^catalogId$|^parentSessionKey$|^spawnDepth$|^fork$|^forkFrom$|^emitCommandHooks$|^succeedsParent$|^timeoutMs$|^task$|^message$|^mentions$|^attachments$|^projectId$|^projectGitUrl$|^repository$|^deviceFolder$|^worktree$|^worktreeSource$|^worktreeBaseRef$|^worktreeName$|^execNode$|^cwd$)/u,
     /(^send$|^receive$)/u,
     /(^mcpServers$|^mcpToolsDeny$|^skills$|^webSearch$)/u,
     /(^url$|^ref$)/u,
@@ -15170,6 +15170,9 @@ var External = [
     (value.surface === void 0 || !("surface" in value) || check_2280(value.surface)) &&
     (value.label === void 0 || !("label" in value) || check_94(value.label)) &&
     (value.displayName === void 0 || !("displayName" in value) || check_2281(value.displayName)) &&
+    (value.displayNameGenerated === void 0 ||
+      !("displayNameGenerated" in value) ||
+      check_181(value.displayNameGenerated)) &&
     (value.titleSource === void 0 || !("titleSource" in value) || check_2282(value.titleSource)) &&
     (value.category === void 0 || !("category" in value) || check_94(value.category)) &&
     (value.model === void 0 || !("model" in value) || check_63(value.model)) &&

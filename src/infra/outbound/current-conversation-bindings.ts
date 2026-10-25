@@ -134,7 +134,7 @@ function bindingWriteOptions(
 /** Updates one binding from its currently committed row in one synchronous transaction. */
 export function updateCurrentConversationBindingRecord(
   ref: ConversationRef,
-  update: (current: SessionBindingRecord | null) => SessionBindingRecord | null,
+  update: (current: SessionBindingRecord | null) => SessionBindingRecord | null | undefined,
 ): { previous: SessionBindingRecord | null; current: SessionBindingRecord | null } {
   const conversation = normalizeConversationRef(ref);
   return runOpenClawStateWriteTransaction(({ db }) =>
@@ -400,7 +400,9 @@ export function touchGenericCurrentConversationBinding(
             lastActivityAt: at,
           },
         }
-      : current,
+      : current
+        ? undefined
+        : null,
   );
 }
 

@@ -3,6 +3,7 @@ import { resolveGatewayRestartProbeContext } from "../cli/daemon-cli/restart-hea
 import { verifyPreviousGatewayForUpdate } from "../cli/update-cli/update-command-verification.js";
 import type { TriageUpdateFailure } from "../commands/triage-update.js";
 import { runUtf8CommandWithTimeout } from "../process/exec.js";
+import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { readDeferredPluginMigrationsAsync } from "./deferred-plugin-migrations.js";
 import { collectPackageDistContentInventoryErrors } from "./package-dist-inventory.js";
 import { readPackageVersion } from "./package-json.js";
@@ -118,14 +119,7 @@ let failedRun: UpdateRunRecord;
 let latestRun: UpdateRunRecord;
 const validateDoctor = vi.fn<() => Promise<UpdateRepairValidation>>();
 const healthy = { ok: true, score: 0, summary: "Doctor passed." };
-const gitHead = (sha: string) => ({
-  code: 0,
-  stdout: `${sha}\n`,
-  stderr: "",
-  signal: null,
-  killed: false,
-  termination: "exit" as const,
-});
+const gitHead = (sha: string) => createCommandResult({ stdout: `${sha}\n` });
 
 function validate(
   savedFailure = failure(),

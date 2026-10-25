@@ -70,6 +70,7 @@ function fixture(emptySessionIds = false) {
   const controller = new AbortController();
   const authority = {
     signal: controller.signal,
+    assertCurrent() {},
     assertOwned() {},
     assertOwnedInTransaction() {},
     renew() {},
