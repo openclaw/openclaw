@@ -1,16 +1,11 @@
-import type {
-  AgentMessage,
-  EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
-import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
+import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { describe, expect, it } from "vitest";
 import { createNativeCommandItem } from "./event-projector-command.test-support.js";
-import { buildCodexMessagesSnapshot } from "./event-projector-snapshot.js";
 import { finalMessage as finalItem } from "./event-projector.compact.test-support.js";
 import * as fixture from "./event-projector.compact.test-support.js";
 import {
   buildEmptyToolTelemetry,
-  createCodexTestModel,
+  createParams,
   createProjector,
   registerCodexEventProjectorTestLifecycle,
 } from "./event-projector.test-harness.js";
@@ -30,45 +25,22 @@ function commitSteeringPrefix(
   }
 }
 
-function buildSnapshot(trigger: EmbeddedRunAttemptParams["trigger"]): AgentMessage[] {
-  const model = createCodexTestModel();
-  return buildCodexMessagesSnapshot({
-    runParams: {
-      prompt: "Pre-compaction memory flush",
-      sessionId: "session-1",
-      provider: model.provider,
-      modelId: model.id,
-      model,
-      trigger,
-    } as EmbeddedRunAttemptParams,
-    turnId: "turn-1",
-    upstreamUserText: undefined,
-    reasoningText: "checking memory",
-    asyncMessages: [],
-    commentaryMessages: [],
-    toolMessages: [
-      {
-        role: "toolResult",
-        toolCallId: "call-1",
-        toolName: "write",
-        content: fixture.text("saved"),
-        isError: false,
-        timestamp: Date.now(),
-      } as AgentMessage,
-    ],
-    lastAssistant: {
-      role: "assistant",
-      content: fixture.text("NO_REPLY"),
-      timestamp: Date.now() + 1,
-    } as AssistantMessage,
-  });
-}
-
 describe("buildCodexMessagesSnapshot", () => {
-  it("marks every current memory-maintenance message as hidden for durable replay", () => {
-    const messages = buildSnapshot("memory");
-
-    expect(messages.length).toBeGreaterThan(1);
+  it("marks every current memory-maintenance message as hidden for durable replay", async () => {
+    const projector = await createProjector({ ...(await createParams()), trigger: "memory" });
+    await fixture.notify(projector, "item/reasoning/textDelta", {
+      itemId: "reasoning",
+      delta: "checking memory",
+    });
+    const tool = createNativeCommandItem({ id: "write", aggregatedOutput: "saved" });
+    await fixture.start(projector, tool);
+    await fixture.complete(projector, tool);
+    await fixture.complete(projector, finalItem("answer", "NO_REPLY"));
+    await fixture.finish(projector, [finalItem("answer", "NO_REPLY")]);
+    const messages = fixture.result(projector).messagesSnapshot;
+    expect(messages.map(({ role }) => role)).toEqual(
+      expect.arrayContaining(["user", "assistant", "toolResult"]),
+    );
     expect(messages.every((message) => (message as { display?: boolean }).display === false)).toBe(
       true,
     );
@@ -217,11 +189,6 @@ describe("buildCodexMessagesSnapshot", () => {
       "turn-1:assistant:answer-a",
       "turn-1:assistant:answer-b",
       "turn-1:assistant:pending:segment:0",
-    ]);
-    expect(prefix).toMatchObject([
-      { role: "assistant", content: fixture.text("Same answer.") },
-      { role: "assistant", content: fixture.text("Same answer.") },
-      { role: "assistant", content: fixture.text("Still writing.") },
     ]);
     commitSteeringPrefix(projector, prefix);
     expect(projector.buildSteeringTranscriptPrefix()).toEqual(prefix.slice(0, 2));

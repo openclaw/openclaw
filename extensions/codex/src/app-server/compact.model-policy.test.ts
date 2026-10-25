@@ -73,11 +73,7 @@ it.each([
       });
       const itemEvent = (method: string) => ({
         method,
-        params: {
-          threadId,
-          turnId,
-          item: { id: "policy-compaction-item", type: "contextCompaction" },
-        },
+        params: { threadId, turnId, item: { id: "item", type: "contextCompaction" } },
       });
       const runId = randomUUID();
       const identity = {
@@ -87,18 +83,21 @@ it.each([
         sessionKey: "agent:main:compaction-policy",
       };
       const controller = new AbortController();
+      const attempt = {
+        ...identity,
+        runId,
+        workspaceDir: tempRoot,
+        provider,
+        abortSignal: controller.signal,
+      };
       let sourceActive = true;
       const host = await createAgentHarnessHostCapabilitiesForTest({
         pluginId: "codex",
         nativeModelPolicySupport: "exact",
         attempt: {
-          runId,
-          ...identity,
-          workspaceDir: tempRoot,
+          ...attempt,
           agentDir: path.join(tempRoot, "agent"),
-          provider,
           modelId: selectedModel,
-          abortSignal: controller.signal,
         },
         operatorSource: {
           profileId: "compaction-policy-operator",
@@ -117,28 +116,24 @@ it.each([
       const started = createDeferred<void>();
       const harness = createClientHarness({
         onWrite(line, send) {
-          const request = JSON.parse(line) as { id: number; method: string };
-          if (request.method === "thread/compact/start") {
+          const { id, method } = JSON.parse(line) as { id: number; method: string };
+          if (method === "thread/compact/start") {
             send(turnEvent("turn/started", "inProgress"));
             send(itemEvent("item/started"));
-            send({ id: request.id, result: {} });
+            send({ id, result: {} });
             started.resolve();
-          } else if (request.method === "account/read") {
-            send({ id: request.id, result: { account: { type: "apiKey" } } });
-          } else if (
-            request.method === "turn/interrupt" ||
-            request.method === "thread/unsubscribe"
-          ) {
-            send({ id: request.id, result: {} });
-          } else {
+            return;
+          } else if (method === "account/read") {
+            send({ id, result: { account: { type: "apiKey" } } });
+            return;
+          } else if (method !== "turn/interrupt" && method !== "thread/unsubscribe") {
             send({
-              id: request.id,
-              error: {
-                code: -32_601,
-                message: `Unexpected policy fixture RPC: ${request.method}`,
-              },
+              id,
+              error: { code: -32_601, message: `Unexpected policy fixture RPC: ${method}` },
             });
+            return;
           }
+          send({ id, result: {} });
         },
       });
       let pending: ReturnType<typeof maybeCompactCodexAppServerSession> | undefined;
@@ -211,24 +206,19 @@ it.each([
           kind: "set",
           binding: { threadId, cwd: tempRoot, model: nativeModel, modelProvider: nativeProvider },
         });
-        const runtimeModel = {
-          ...createCodexTestModel(provider),
-          id: selectedModel,
-          params: buildCodexRuntimeModelParams(selectedModel, nativeModel),
-        };
         const retainSourceAuthority = host.capabilities.retainSourceAuthority;
         assert(retainSourceAuthority, "Expected the production operator source capability");
         pending = maybeCompactCodexAppServerSession(
           {
-            ...identity,
-            runId,
+            ...attempt,
             sessionFile: path.join(tempRoot, "session.jsonl"),
-            workspaceDir: tempRoot,
-            provider,
             model: selectedModel,
-            runtimeModel,
+            runtimeModel: {
+              ...createCodexTestModel(provider),
+              id: selectedModel,
+              params: buildCodexRuntimeModelParams(selectedModel, nativeModel),
+            },
             trigger: "manual",
-            abortSignal: controller.signal,
             hostCapabilities: {
               kind: host.capabilities.kind,
               version: host.capabilities.version,

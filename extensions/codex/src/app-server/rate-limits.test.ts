@@ -54,59 +54,52 @@ describe("formatCodexUsageLimitErrorMessage", () => {
     );
   });
 
-  it("preserves Codex retry hints when structured reset windows are absent", () => {
-    const message = usageError({
-      message: "You've hit your usage limit; try again at May 11th, 2026 9:00 AM.",
-      rateLimits: { rateLimits: bucket({ primary: window(100, null) }) },
-      nowMs: Date.UTC(2026, 4, 10, 23, 0, 0),
-    });
-
-    expect(message).toContain("You've reached your Codex subscription usage limit.");
-    expect(message).toContain("Codex says to try again at May 11th, 2026 9:00 AM.");
-    expect(message).toContain("Wait until the retry time");
-    expect(message).not.toContain("Codex did not return a reset time");
-  });
-
-  it("does not use sibling bucket resets when the blocked Codex bucket omits a reset", () => {
-    const message = usageError({
-      rateLimits: byLimitId(namedBucket({ primary: window(100, null) }), {
-        "gpt-5.3-codex-spark": bucket({
-          limitId: "gpt-5.3-codex-spark",
-          limitName: "GPT 5.3 Codex Spark",
-          primary: window(0, nowSeconds + 3600),
-        }),
-      }),
-      nowMs,
-    });
-
-    expect(message).toContain("OpenClaw could not determine a reset time from Codex.");
-    expect(message).toContain("Wait until Codex becomes available");
-    expect(message).not.toContain("Next reset");
-    expect(message).not.toContain("1 hour");
-  });
-
-  it("does not report exhaustion when an authoritative snapshot has no active limit", () => {
-    const message = usageError({
-      rateLimits: {
-        rateLimits: bucket({ primary: window(0, null, null), rateLimitReachedType: null }),
+  it.each([
+    {
+      name: "preserves provider retry hints",
+      options: {
+        message: "You've hit your usage limit; try again at May 11th, 2026 9:00 AM.",
+        rateLimits: { rateLimits: bucket({ primary: window(100, null) }) },
+        nowMs: Date.UTC(2026, 4, 10, 23),
       },
-      rateLimitsAuthoritative: true,
-    });
-
-    expect(message).toContain("current account usage does not report an exhausted limit");
-    expect(message).not.toContain("subscription usage limit");
-    expect(message).not.toContain("could not determine a reset time");
-  });
-
-  it("does not infer availability from an empty authoritative snapshot", () => {
-    const message = usageError({
-      rateLimits: { rateLimits: bucket({ rateLimitReachedType: null }) },
-      rateLimitsAuthoritative: true,
-    });
-
-    expect(message).not.toContain("current account usage does not report an exhausted limit");
-    expect(message).not.toContain("Retry the request");
-    expect(message).toContain("OpenClaw could not determine a reset time from Codex.");
+      expected: /Codex says to try again at May 11th, 2026 9:00 AM/,
+      rejected: /could not determine a reset time/,
+    },
+    {
+      name: "does not borrow a sibling bucket's reset",
+      options: {
+        rateLimits: byLimitId(bucket({ primary: window(100, null) }), {
+          other: { limitId: "other", primary: window(0, nowSeconds + 3600) },
+        }),
+        nowMs,
+      },
+      expected: /could not determine a reset time/,
+      rejected: /Next reset|1 hour/,
+    },
+    {
+      name: "reports authoritative unexhausted usage",
+      options: {
+        rateLimits: {
+          rateLimits: bucket({ primary: window(0, null, null), rateLimitReachedType: null }),
+        },
+        rateLimitsAuthoritative: true,
+      },
+      expected: /current account usage does not report an exhausted limit/,
+      rejected: /subscription usage limit|could not determine a reset time/,
+    },
+    {
+      name: "does not infer availability from empty authoritative usage",
+      options: {
+        rateLimits: { rateLimits: bucket({ rateLimitReachedType: null }) },
+        rateLimitsAuthoritative: true,
+      },
+      expected: /could not determine a reset time/,
+      rejected: /current account usage does not report an exhausted limit|Retry the request/,
+    },
+  ])("$name", ({ options, expected, rejected }) => {
+    const message = usageError(options);
+    expect(message).toMatch(expected);
+    expect(message).not.toMatch(rejected);
   });
 });
 

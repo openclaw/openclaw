@@ -19,8 +19,15 @@ describe("Codex app-server websocket transport", () => {
   const httpServers: http.Server[] = [];
   const tempDirs: string[] = [];
 
-  async function startClient(options: Parameters<typeof CodexAppServerClient.start>[0]) {
-    const client = await CodexAppServerClient.start(options);
+  async function startClient(
+    server: WebSocketServer,
+    options: Parameters<typeof CodexAppServerClient.start>[0] = {},
+  ) {
+    const client = await CodexAppServerClient.start({
+      transport: "websocket",
+      url: options.url ?? (await websocketUrl(server)),
+      ...options,
+    });
     clients.push(client);
     return client;
   }
@@ -136,11 +143,7 @@ describe("Codex app-server websocket transport", () => {
     const localRegistration = rejectLocalInspection();
     const server = tcpServer();
     const authHeaders = serveRpc(server, "model/list", "authorization");
-    const client = await startClient({
-      transport: "websocket",
-      url: await websocketUrl(server),
-      authToken: "secret",
-    });
+    const client = await startClient(server, { authToken: "secret" });
     await expect(client.initialize()).resolves.toBeUndefined();
     await expect(client.request("model/list", {})).resolves.toEqual({ data: [] });
     expect(authHeaders).toEqual(["Bearer secret"]);
@@ -148,13 +151,12 @@ describe("Codex app-server websocket transport", () => {
 
     const disposedExitHandler = vi.fn();
     client.addTransportExitHandler(disposedExitHandler)();
-    const exited = new Promise<void>((resolve) => {
-      client.addTransportExitHandler(() => resolve());
-    });
+    const exited = createDeferred<void>();
+    client.addTransportExitHandler(() => exited.resolve());
     for (const socket of server.clients) {
       socket.close(1001, "server restarting");
     }
-    await exited;
+    await exited.promise;
     expect.soft(disposedExitHandler).not.toHaveBeenCalled();
     for (let attempt = 0; attempt < 2; attempt += 1) {
       await expect(client.closeAndWait({ exitTimeoutMs: 50 })).resolves.toEqual({
@@ -172,15 +174,11 @@ describe("Codex app-server websocket transport", () => {
         socket.send(JSON.stringify({ method: "probe/ready" }));
       });
     });
-    const client = await startClient({
-      transport: "websocket",
-      url: await websocketUrl(server),
-    });
-    const received = new Promise<void>((resolve) => {
-      client.addNotificationHandler(() => resolve());
-    });
+    const client = await startClient(server);
+    const received = createDeferred<void>();
+    client.addNotificationHandler(() => received.resolve());
     client.notify("probe");
-    await received;
+    await received.promise;
     await expect(
       client.closeAndWait({ forceKillDelayMs: 10, exitTimeoutMs: 1_000 }),
     ).resolves.toEqual({ exited: true, cleanup: "uncertain" });
@@ -261,7 +259,7 @@ describe("Codex app-server websocket transport", () => {
     const server = new WebSocketServer({ server: httpServer });
     servers.push(server);
     const upgradeExtensions = serveRpc(server, "thread/list", "sec-websocket-extensions");
-    const client = await startClient({
+    const client = await startClient(server, {
       transport: "unix",
       homeScope: "user",
       url: `unix://${socketPath}`,

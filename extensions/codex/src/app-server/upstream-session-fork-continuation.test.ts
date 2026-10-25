@@ -4,9 +4,8 @@ import path from "node:path";
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { readVisibleSessionTranscriptMessageEntries } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { afterAll, expect, it, vi } from "vitest";
+import { afterAll, expect, it } from "vitest";
 import { createCodexCatalogHomeResolver } from "../session-catalog-homes.js";
 import { resolveCodexAppServerHomeDir } from "./auth-start-options.js";
 import { resolveCodexBindingAppServerConnection } from "./binding-connection.js";
@@ -20,25 +19,10 @@ import { createCodexAppServerBindingStore, sessionBindingIdentity } from "./sess
 import { createCodexTestBindingStateStore } from "./session-binding.test-helpers.js";
 import { createCodexTestModel } from "./test-support.js";
 import { startOrResumeThread } from "./thread-lifecycle-run.js";
-import { importCodexThreadHistoryToTranscript } from "./transcript-mirror.js";
-import {
-  createForkTestRuntime,
-  forkControl,
-  forkParams,
-  forkResponse,
-  codexForkTurn,
-} from "./upstream-session-fork.test-support.js";
-
-vi.mock("openclaw/plugin-sdk/session-catalog", async (importOriginal) => ({
-  ...(await importOriginal()),
-  deleteSessionUpstreamLinkAsync: vi.fn(),
-  upsertSessionUpstreamLinkAsync: vi.fn(() => true),
-}));
-
-import { forkCodexUpstreamSession } from "./upstream-session-fork.js";
+import { forkResponse, codexForkTurn } from "./upstream-session-fork.test-support.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "codex-fork-home-");
-it("continues a persistent upstream fork on its secondary home and native model with applied harness configuration", async () => {
+it("materializes a persisted upstream fork on its secondary home and native model with applied harness configuration", async () => {
   const root = sessionDirs.make();
   const agentDir = path.join(root, "agents", "main", "agent");
   const sourceAgentDir = path.join(root, "agents", "source", "agent");
@@ -55,7 +39,6 @@ it("continues a persistent upstream fork on its secondary home and native model 
     },
     session: { store: path.join(root, "openclaw-agent.sqlite") },
   };
-  const params = forkParams();
   const retained = codexForkTurn("turn-1", "one");
   const nativeModel = "gpt-5.6-luna";
   const responseFor = (threadId: string, turns = [retained], model = nativeModel) => {
@@ -72,11 +55,8 @@ it("continues a persistent upstream fork on its secondary home and native model 
       },
     };
   };
-  const nativeThreads = new Map([
-    ["thread-source", responseFor("thread-source", [retained, codexForkTurn("turn-2", "edit me")])],
-    ["thread-forked", responseFor("thread-forked")],
-  ]);
-  const sourceBefore = structuredClone(nativeThreads.get("thread-source"));
+  const nativeThreads = new Map([["thread-forked", responseFor("thread-forked")]]);
+  const sourceBefore = structuredClone(nativeThreads.get("thread-forked"));
   let nextThreadId = 0;
   const createThread = (model: unknown, turns: (typeof retained)[]) => {
     const response = responseFor(
@@ -138,58 +118,38 @@ it("continues a persistent upstream fork on its secondary home and native model 
     ).find((home) => home.appServer.start.env?.CODEX_HOME === secondaryHome);
     expect(sourceHome).toBeDefined();
     const fingerprint = buildCodexAppServerConnectionFingerprint(sourceHome!.appServer, agentDir);
-    params.upstream.ref = { connectionFingerprint: fingerprint, threadId: "thread-source" };
-    params.source.storePath = config.session!.store!;
-    await upsertSessionEntry({
-      ...params.source,
-      entry: { sessionId: params.source.sessionId, updatedAt: Date.now() },
-    });
-    await importCodexThreadHistoryToTranscript({
-      ...params.source,
-      thread: nativeThreads.get("thread-source")!.thread,
-      throughTurnId: "turn-2",
-    });
-    const sourceEntries = await readVisibleSessionTranscriptMessageEntries(params.source);
-    params.source.entryId = sourceEntries.findLast((entry) => entry.role === "user")!.entryId;
-    const secondary = forkControl(
-      vi.fn(async () => responseFor("thread-forked")),
-      fingerprint,
-    );
-    secondary.control.readThread = async (threadId) => nativeThreads.get(threadId)!.thread;
-    secondary.control.listTurnPage = async ({ threadId }) => ({
-      data: nativeThreads.get(threadId)!.thread.turns,
-    });
-    const primary = forkControl(undefined, "primary-fingerprint");
-    const controlFactory = {
-      ...primary.controlFactory,
-      forUpstream: secondary.controlFactory.forUpstream.bind(secondary.controlFactory),
-    };
-    secondary.control.clientId = native.client.getInstanceId();
-    const bindingStore = createCodexAppServerBindingStore(createCodexTestBindingStateStore());
-    const runtime = createForkTestRuntime(params.source.storePath, bindingStore);
-
-    const forkResult = await forkCodexUpstreamSession(params, {
-      bindingStore,
-      controlFactory,
-      harnessRuntimeId: "codex",
-      resolveConfig: () => config,
-      runtime,
-    });
-    expect(forkResult).toEqual({
-      status: "created",
-      key: params.targetKey,
-      editorText: "edit me",
-    });
-    expect(primary.forkThread).not.toHaveBeenCalled();
-    expect(secondary.forkThread).toHaveBeenCalledOnce();
-    const created = await vi.mocked(runtime.agent.session.createSessionEntry).mock.results[0]!
-      .value;
-    const attempt = {
+    // Fork creation and its persisted binding are covered by upstream-fork-import.test.ts.
+    const session = {
       agentId: "main",
+      sessionId: "forked-session",
+      sessionKey: "agent:main:dashboard:forked",
+    };
+    await upsertSessionEntry({
+      ...session,
+      storePath: config.session!.store!,
+      entry: { sessionId: session.sessionId, updatedAt: Date.now() },
+    });
+    const bindingStore = createCodexAppServerBindingStore(createCodexTestBindingStateStore());
+    await bindingStore.mutate(sessionBindingIdentity(session), {
+      kind: "set",
+      binding: {
+        threadId: "thread-forked",
+        cwd: root,
+        connectionScope: "supervision",
+        supervisionSourceThreadId: "thread-forked",
+        preserveNativeModel: true,
+        conversationSourceTransferComplete: true,
+        pendingSupervisionBranch: {
+          sourceThreadId: "thread-forked",
+          connectionFingerprint: fingerprint,
+          lastTurnId: "turn-1",
+        },
+      },
+    });
+    const attempt = {
+      ...session,
       agentDir,
       config,
-      sessionId: created.sessionId,
-      sessionKey: created.key,
       workspaceDir: root,
       runId: "fork-continuation",
       prompt: "edited request",
@@ -269,8 +229,7 @@ it("continues a persistent upstream fork on its secondary home and native model 
       items: [{ type: "message", role: "user", content: [{ type: "input_text", text: "one" }] }],
     });
 
-    expect(nativeThreads.get("thread-source")).toEqual(sourceBefore);
-    expect(secondary.archiveThread).not.toHaveBeenCalledWith("thread-source");
+    expect(nativeThreads.get("thread-forked")).toEqual(sourceBefore);
   } finally {
     native.close();
     ordinary.close();

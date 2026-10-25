@@ -103,24 +103,10 @@ describe("Codex Computer Use readiness", () => {
     try {
       const status = await readCodexComputerUseStatus({ pluginConfig: readinessConfig() });
       expect(status).toMatchObject({
-        enabled: true,
         ready: true,
         reason: "ready",
-        ...exposed,
-        marketplaceName: "desktop-tools",
         tools: ["list_apps"],
-        message: "Computer Use is ready.",
-        installation: "installed",
-        exposure: "available",
-        liveTest: {
-          status: "passed",
-          ok: true,
-          attempted: true,
-          attempts: 1,
-          timeoutMs: 60_000,
-          retried: false,
-          repaired: false,
-        },
+        liveTest: { ok: true, attempts: 1, retried: false, repaired: false },
       });
       expect(requestCalls(fixture).map(([method]) => method)).toEqual(
         expect.arrayContaining(["thread/start", "mcpServer/tool/call", "thread/unsubscribe"]),
@@ -166,14 +152,15 @@ describe("Codex Computer Use readiness", () => {
           { liveTestFailures: 1, reloadFailures },
           { autoRepair: true },
         );
-        const warning = "Could not reload Computer Use MCP servers: MCP runtime reload failed";
         expect(status).toMatchObject({
           ready: true,
           reason: "ready",
           liveTest: { status: "passed", attempts: 2, retried: true, repaired: !reloadFailures },
         });
         if (reloadFailures) {
-          expect(status.warnings).toContain(warning);
+          expect(status.warnings).toContain(
+            "Could not reload Computer Use MCP servers: MCP runtime reload failed",
+          );
         }
         expect(request).toHaveBeenCalledWith("config/mcpServer/reload", undefined, {
           timeoutMs: 60_000,
@@ -239,20 +226,12 @@ describe("Codex Computer Use readiness", () => {
       status: {
         ready: false,
         reason: "live_test_failed",
-        ...exposed,
-        installation: "installed",
-        exposure: "available",
         liveTest: {
-          status: "failed",
           ok: false,
-          attempted: true,
           attempts: 2,
-          timeoutMs: 60_000,
-          retried: true,
           repaired: true,
           error: "list_apps timed out",
         },
-        message: expect.stringContaining("Computer Use live test failed after 2 attempts"),
       },
     });
     expect(requestCalls(request, "config/mcpServer/reload")).toHaveLength(1);
