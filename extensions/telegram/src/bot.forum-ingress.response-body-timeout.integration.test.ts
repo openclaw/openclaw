@@ -6,6 +6,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, expect, it, vi } from "vitest";
+import { normalizeAllowFrom } from "./bot-access.js";
 import { createTelegramHandlerAuthorization } from "./bot-handlers.inbound-authorization.js";
 import {
   createTelegramInboundPipeline,
@@ -86,12 +87,7 @@ it("dispatches DMs immediately and the supergroup after cancelling its stalled s
           kind: "completed",
         }),
       );
-      const emptyAllow = {
-        entries: [],
-        hasWildcard: false,
-        hasEntries: false,
-        invalidEntries: [],
-      };
+      const emptyAllow = normalizeAllowFrom([]);
       const params: RegisterTelegramHandlerParams = {
         accountId: "default",
         ownerAgentId: "main",
@@ -181,13 +177,7 @@ it("dispatches DMs immediately and the supergroup after cancelling its stalled s
       ]);
 
       await bot.handleUpdate(update(2, { id: 222, type: "private", first_name: "DM sender" }, 222));
-      expect(dispatched).toHaveBeenCalledTimes(1);
-      expect(dispatched.mock.calls[0]?.[0].msg.chat.id).toBe(222);
-      expect(authorizeInboundMessage.mock.calls[0]?.[0]).toMatchObject({
-        chatId: 222,
-        isGroup: false,
-        isForum: false,
-      });
+      expect(dispatched.mock.calls.map(([{ msg }]) => msg.chat.id)).toEqual([222]);
 
       const groupResult = Promise.race([
         groupDelivery.then(() => "dispatched" as const),
@@ -198,13 +188,20 @@ it("dispatches DMs immediately and the supergroup after cancelling its stalled s
 
       await vi.advanceTimersByTimeAsync(1_000);
       expect(await groupResult).toBe("dispatched");
-      expect(dispatched).toHaveBeenCalledTimes(2);
-      expect(dispatched.mock.calls[1]?.[0].msg.chat.id).toBe(-100364);
-      expect(authorizeInboundMessage.mock.calls[1]?.[0]).toMatchObject({
-        chatId: -100364,
-        isGroup: true,
-        isForum: false,
-      });
+      expect(dispatched.mock.calls.map(([{ msg }]) => msg.chat)).toMatchObject([
+        { id: 222, type: "private" },
+        { id: -100364, type: "supergroup", is_forum: false },
+      ]);
+      expect(
+        authorizeInboundMessage.mock.calls.map(([{ chatId, isGroup, isForum }]) => [
+          chatId,
+          isGroup,
+          isForum,
+        ]),
+      ).toEqual([
+        [222, false, false],
+        [-100364, true, false],
+      ]);
       expect(getChatRequests).toBe(1);
       await socketClosed.promise;
     },
