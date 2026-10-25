@@ -24,7 +24,11 @@ import {
 } from "./inference-routing.js";
 import { buildCodexRuntimeModelParams } from "./model-runtime.js";
 import { createCodexTestBindingStore } from "./session-binding.test-helpers.js";
-import { createClientHarness, createCodexTestModel } from "./test-support.js";
+import {
+  createClientHarness,
+  createCodexTestModel,
+  stubCodexInferenceTransportEnv,
+} from "./test-support.js";
 
 const transport = vi.hoisted(() => ({ fetch: vi.fn<typeof fetchWithSsrFGuard>() }));
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
@@ -35,13 +39,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
 beforeEach(() => {
   transport.fetch.mockReset();
   setRuntimeConfigSnapshot({});
-  for (const key of ["CODEX_CA_CERTIFICATE", "SSL_CERT_FILE", "REQUEST_METHOD"]) {
-    vi.stubEnv(key, undefined);
-  }
-  for (const key of ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"]) {
-    vi.stubEnv(key, undefined);
-    vi.stubEnv(key.toLowerCase(), undefined);
-  }
+  stubCodexInferenceTransportEnv();
   // The global fetch dispatcher may already own the host proxy. Keep only this
   // fixture's loopback transport direct while its upstream remains guarded.
   vi.stubEnv("NO_PROXY", "127.0.0.1,localhost,::1");

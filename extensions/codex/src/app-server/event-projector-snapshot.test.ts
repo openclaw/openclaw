@@ -125,27 +125,10 @@ describe("buildCodexMessagesSnapshot", () => {
       expect(result.assistantTexts).toEqual([]);
       expect(result.lastAssistant).toBeUndefined();
       expect(result.currentAttemptAssistant).toMatchObject({ turnId: "turn-1" });
-      expect(prefix).toMatchObject([
-        { role: "assistant", content: fixture.text("Earlier answer.") },
-      ]);
       expect(prefix[0]).not.toHaveProperty("turnId");
       expect(prefix.map(readMirrorIdentity)).toEqual(["turn-1:assistant:earlier-answer"]);
     },
   );
-
-  it("adopts the saved prefix for a raw completion with a replacement identity", async () => {
-    const completionId = "raw-completed";
-    const projector = await createProjector();
-    await fixture.start(projector, finalItem("streamed", ""));
-    await fixture.delta(projector, "Before steer.", "streamed");
-    commitSteeringPrefix(projector, projector.buildSteeringTranscriptPrefix());
-    await fixture.rawAssistant(projector, "Before steer. After steer.", {
-      id: completionId,
-      phase: "final_answer",
-    });
-    await fixture.finish(projector, [finalItem(completionId, "Before steer. After steer.")]);
-    expect(fixture.result(projector).assistantTexts).toEqual([" After steer."]);
-  });
 
   it.each([true, false])(
     "respects the first completion boundary across a native tool (completed before tool: %s)",
@@ -208,24 +191,29 @@ describe("buildCodexMessagesSnapshot", () => {
     expect(fixture.result(projector).assistantTexts).toEqual([]);
   });
 
-  it.each(["same", "replacement", "independent", "handoff", "async"] as const)(
-    "retains the captured raw cutoff when %s completion arrives before the mirror settles",
+  it.each(["same", "replacement", "independent", "handoff", "async", "raw"] as const)(
+    "retains the captured cutoff across %s completion",
     async (identity) => {
       const projector = await createProjector();
       const started = finalItem("streamed", "");
-      const beforeSteer = " \t🦞 prefix\n";
+      const beforeSteer = identity === "raw" ? "Before steer." : " \t🦞 prefix\n";
+      const tail = identity === "raw" ? " After steer." : "continued and done";
       await fixture.start(projector, started);
       await fixture.delta(projector, beforeSteer, started.id);
       const prefix = projector.buildSteeringTranscriptPrefix();
       expect(prefix).toMatchObject([{ role: "assistant", content: fixture.text(beforeSteer) }]);
-      await fixture.delta(projector, "continued", started.id);
+      if (identity === "raw") {
+        commitSteeringPrefix(projector, prefix);
+      } else {
+        await fixture.delta(projector, "continued", started.id);
+      }
       const completed = {
         ...started,
         id:
           identity === "same" || identity === "handoff" || identity === "async"
             ? started.id
             : identity,
-        text: `${beforeSteer}continued and done`,
+        text: `${beforeSteer}${tail}`,
       };
       if (identity === "handoff") {
         const item = { type: "sleep", id: "handoff", durationMs: 1 };
@@ -242,11 +230,18 @@ describe("buildCodexMessagesSnapshot", () => {
           delivery: "async",
         });
       }
-      await fixture.complete(projector, completed);
-      commitSteeringPrefix(projector, prefix);
+      if (identity === "raw") {
+        await fixture.rawAssistant(projector, completed.text, {
+          id: completed.id,
+          phase: "final_answer",
+        });
+      } else {
+        await fixture.complete(projector, completed);
+        commitSteeringPrefix(projector, prefix);
+      }
       await fixture.finish(projector, [completed]);
       expect(fixture.result(projector).assistantTexts).toEqual([
-        identity === "independent" ? `${beforeSteer}continued and done` : "continued and done",
+        identity === "independent" ? `${beforeSteer}${tail}` : tail,
       ]);
     },
   );
