@@ -36,33 +36,36 @@ import {
 } from "./tool-result-context-guard.test-support.js";
 
 async function project(messages: AgentMessage[], contextWindowTokens = 1_000) {
-  const agent = makeGuardableAgent();
-  const dispose = installToolResultContextGuard({ agent, contextWindowTokens });
-  try {
-    return await expectDefined(agent.transformContext, "installed guard")(
-      messages,
-      new AbortController().signal,
-    );
-  } finally {
-    dispose();
-  }
+  return expectDefined(
+    await applyGuardToContext(makeGuardableAgent(), messages, contextWindowTokens),
+    "guarded messages",
+  );
 }
 
-function makeEngine() {
+function makeEngine(cancelAt?: string, cancel?: () => void) {
+  const checkpoint = (stage: string) => {
+    if (stage === cancelAt) {
+      cancel?.();
+    }
+  };
   return {
     info: { id: "test-engine", name: "Test Engine", version: "0.0.1", ownsCompaction: true },
     afterTurn: vi.fn<NonNullable<ContextEngine["afterTurn"]>>(async () => {}),
-    assemble: vi.fn<ContextEngine["assemble"]>(async ({ messages }) => ({
-      messages,
-      estimatedTokens: 0,
-    })),
+    assemble: vi.fn<ContextEngine["assemble"]>(async ({ messages }) => {
+      checkpoint("assemble");
+      return { messages, estimatedTokens: 0 };
+    }),
     compact: vi.fn<ContextEngine["compact"]>(async () => {
       throw new Error("unexpected direct compaction");
     }),
-    ingest: vi.fn<ContextEngine["ingest"]>(async () => ({ ingested: true })),
-    ingestBatch: vi.fn<NonNullable<ContextEngine["ingestBatch"]>>(async ({ messages }) => ({
-      ingestedCount: messages.length,
-    })),
+    ingest: vi.fn<ContextEngine["ingest"]>(async () => {
+      checkpoint("ingest");
+      return { ingested: true };
+    }),
+    ingestBatch: vi.fn<NonNullable<ContextEngine["ingestBatch"]>>(async ({ messages }) => {
+      checkpoint("ingestBatch");
+      return { ingestedCount: cancelAt === "ingestBatch" ? 1 : messages.length };
+    }),
   } satisfies ContextEngine;
 }
 
@@ -275,7 +278,7 @@ describe("installContextEngineLoopHook", () => {
       const controller = new AbortController();
       const cancellation = new Error("operator cancelled");
       const cancel = () => controller.abort(cancellation);
-      const engine = makeEngine();
+      const engine = makeEngine(stage, cancel);
       const agent = makeGuardableAgent(
         stage === "upstream"
           ? async (messages) => {
@@ -288,24 +291,6 @@ describe("installContextEngineLoopHook", () => {
         engine.afterTurn.mockImplementation(async ({ messages }) => {
           messages.length = 0;
           cancel();
-        });
-      }
-      if (stage === "ingestBatch") {
-        engine.ingestBatch.mockImplementation(async () => {
-          cancel();
-          return { ingestedCount: 1 };
-        });
-      }
-      if (stage === "ingest") {
-        engine.ingest.mockImplementation(async () => {
-          cancel();
-          return { ingested: true };
-        });
-      }
-      if (stage === "assemble") {
-        engine.assemble.mockImplementation(async ({ messages }) => {
-          cancel();
-          return { messages, estimatedTokens: 0 };
         });
       }
       const individual = stage === "ingest";

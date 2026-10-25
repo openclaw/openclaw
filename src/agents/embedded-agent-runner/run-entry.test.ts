@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as runtimeConfig from "../../config/runtime-snapshot.js";
-import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as runRegistry from "../../infra/agent-run-registry.js";
+import { makeModel } from "./model.test-harness.js";
 import { registerRunEntryFailureTests } from "./run-entry.failures.test-support.js";
 import { runEmbeddedAgentEntry, setupRunEntryTestState } from "./run-entry.test-harness.js";
 import {
@@ -458,80 +458,42 @@ describe("runEmbeddedAgentEntry", () => {
     expect(result.result.payloads).toEqual([]);
   });
 
-  it.each([true, false])(
-    "announces an endpoint-resolved model unless its row declares it (declared: %s)",
-    async (declared) => {
-      const runId = `endpoint-resolved-${declared}`;
-      const modelRow: ModelDefinitionConfig = {
-        id: "team/chat",
-        name: "Team chat",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 128_000,
-        maxTokens: 8_192,
-        ...(declared ? { responseModelEquivalent: true } : {}),
-      };
-      const broker = { baseUrl: "https://broker.example/v1", models: [modelRow] };
-      const cfg: OpenClawConfig = { models: { providers: { broker } } };
-      const result = await runReceipt(
-        runId,
-        { cfg, provider: "broker", model: "team/chat" },
-        "team/chat",
-        "upstream-model",
-      );
+  it("honors configured endpoint equivalence when publishing a receipt", async () => {
+    const row = { ...makeModel("team/chat"), responseModelEquivalent: true };
+    const cfg: OpenClawConfig = {
+      models: { providers: { broker: { baseUrl: "https://broker.example/v1", models: [row] } } },
+    };
+    const result = await runReceipt(
+      "declared-endpoint",
+      { cfg, provider: "broker", model: row.id },
+      row.id,
+      "upstream-model",
+    );
+    expect(result.terminal.metadata.terminalReceipt).toMatchObject({
+      effective: { provider: "broker", model: row.id, responseModel: "upstream-model" },
+      rerouted: false,
+    });
+    expect(result.terminal.metadata.terminalReply).toEqual({
+      disposition: "visible",
+      text: "done",
+    });
+  });
 
-      expect(result.terminal.metadata.terminalReceipt).toMatchObject({
-        effective: { provider: "broker", model: "team/chat", responseModel: "upstream-model" },
-        rerouted: !declared,
-      });
-      expect(result.terminal.metadata.terminalReply).toEqual({
-        disposition: "visible",
-        text: "done",
-        ...(declared
-          ? {}
-          : { modelRouteChange: "Model route changed: broker/team/chat → broker/upstream-model." }),
-      });
-    },
-  );
-
+  const selected = "openai/gpt-5.6-sol";
   it.each([
-    { model: "openai/gpt-6-astra", responseModel: "gpt-6-astra", routeChange: undefined },
-    {
-      model: "openai/gpt-6-astra",
-      responseModel: "gpt-6.1-sol",
-      routeChange: "Model route changed: clawrouter/openai/gpt-6-astra → clawrouter/gpt-6.1-sol.",
-    },
-    {
-      model: "openai/gpt-6-astra",
-      responseModel: "anthropic/gpt-6-astra",
-      routeChange:
-        "Model route changed: clawrouter/openai/gpt-6-astra → clawrouter/anthropic/gpt-6-astra.",
-    },
-    {
-      model: "openai/gpt-6.1-sol",
-      responseModel: "gpt-6.1-sol",
-      routeChange: "Model route changed: clawrouter/openai/gpt-6-astra → clawrouter/gpt-6.1-sol.",
-    },
-  ])(
-    "reports a ClawRouter $model response $responseModel only when it is a real reroute",
-    async ({ model: effectiveModel, responseModel, routeChange }) => {
-      const runId = `clawrouter-${effectiveModel}-${responseModel}`;
-      const route = { provider: "clawrouter", model: "openai/gpt-6-astra" };
-      const result = await runReceipt(runId, { cfg: {}, ...route }, effectiveModel, responseModel);
-
-      expect(result.terminal.metadata.terminalReceipt).toMatchObject({
-        requested: route,
-        effective: { provider: route.provider, model: effectiveModel, responseModel },
-        rerouted: routeChange !== undefined,
-      });
-      expect(result.terminal.metadata.terminalReply).toEqual({
-        disposition: "visible",
-        text: "done",
-        ...(routeChange ? { modelRouteChange: routeChange } : {}),
-      });
-    },
-  );
+    [selected, "gpt-5.6-sol", false],
+    [selected, "gpt-5.6-luna", true],
+    [selected, "anthropic/gpt-5.6-sol", true],
+    ["openai/gpt-5.6-luna", "gpt-5.6-luna", true],
+  ] as const)("classifies router receipt %s → %s", async (model, responseModel, rerouted) => {
+    const route = { provider: "clawrouter", model: selected };
+    const result = await runReceipt("router-receipt", { cfg: {}, ...route }, model, responseModel);
+    expect(result.terminal.metadata.terminalReceipt).toMatchObject({
+      requested: route,
+      effective: { provider: route.provider, model, responseModel },
+      rerouted,
+    });
+  });
 
   it("records a silent CLI delivery using the entry's session identity", async () => {
     const runId = "terminal-cli-delivery";

@@ -1,18 +1,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import type {
-  diagnosticSessionStates as DiagnosticSessionStatesType,
-  getDiagnosticSessionState as GetDiagnosticSessionStateType,
-  SessionState,
-} from "../../logging/diagnostic-session-state.js";
-import type {
-  ToolOutcomeObserver,
-  wrapToolWithBeforeToolCallHook as WrapToolWithBeforeToolCallHookType,
-} from "../agent-tools.before-tool-call.js";
-import type {
-  recordToolCallOutcome as RecordToolCallOutcomeType,
-  recordToolCall as RecordToolCallType,
-} from "../tool-loop-detection.js";
+import type { SessionState } from "../../logging/diagnostic-session-state.js";
+import type { ToolOutcomeObserver } from "../agent-tools.before-tool-call.js";
 import {
   type makeAttemptResult,
   makeCompactionSuccess,
@@ -35,11 +24,8 @@ let baseParams: Awaited<ReturnType<typeof createSharedRunIntegrationSession>>["r
 let runEmbeddedAgent: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
 // Import after the shared harness loads so these references point at the
 // same module instances as the re-imported runner graph.
-let diagnosticSessionStates: typeof DiagnosticSessionStatesType;
-let getDiagnosticSessionState: typeof GetDiagnosticSessionStateType;
-let recordToolCall: typeof RecordToolCallType;
-let recordToolCallOutcome: typeof RecordToolCallOutcomeType;
-let wrapToolWithBeforeToolCallHook: typeof WrapToolWithBeforeToolCallHookType;
+let diagnostics: typeof import("../../logging/diagnostic-session-state.js");
+let toolHistory: typeof import("../tool-loop-detection.js");
 
 // The default history cap distinguishes sequence-based observation from an index cursor.
 const HISTORY_TRIM_CAP = 30;
@@ -55,8 +41,7 @@ function seedToolHistory(state: SessionState) {
   for (let i = 0; i < HISTORY_TRIM_CAP; i += 1) {
     const toolParams = { iter: i };
     const toolCallId = `seed-${state.toolCallHistory?.length ?? 0}`;
-    recordToolCall(state, "seed", toolParams, toolCallId, { runId });
-    recordToolCallOutcome(state, {
+    toolHistory.recordToolCallOutcome(state, {
       toolName: "seed",
       toolParams,
       toolCallId,
@@ -65,8 +50,6 @@ function seedToolHistory(state: SessionState) {
     });
   }
 }
-
-let liveToolCallSeq = 0;
 
 function prepareCompactedAttempt() {
   mockedRunEmbeddedAttempt.mockResolvedValueOnce(
@@ -82,25 +65,11 @@ function prepareCompactedAttempt() {
 }
 
 let sessionResult: typeof makeAttemptResult;
-async function repeatToolOutcome(onToolOutcome?: ToolOutcomeObserver) {
+function repeatToolOutcome(onToolOutcome?: ToolOutcomeObserver) {
   for (let i = 0; i < 3; i += 1) {
-    // Use the real wrapper so the guard sees live tool outcomes, not seeded history.
-    const tool = wrapToolWithBeforeToolCallHook(
-      { name: "gateway", execute: vi.fn(async () => "identical-result") } as never,
-      {
-        agentId: "main",
-        sessionKey: baseParams.sessionKey,
-        sessionId: baseParams.sessionId,
-        runId: baseParams.runId,
-        onToolOutcome,
-      },
-    );
-    await tool.execute(
-      `gateway-${++liveToolCallSeq}`,
-      { action: "lookup", path: "x" },
-      undefined,
-      undefined,
-    );
+    // The mocked attempt reports outcomes; wrapper/guard integration lives in
+    // agent-tools.before-tool-call.network-error.test.ts.
+    onToolOutcome?.({ toolName: "gateway", argsHash: "lookup-x", resultHash: "identical-result" });
   }
 }
 
@@ -174,15 +143,12 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
   let session: Awaited<ReturnType<typeof createSharedRunIntegrationSession>>;
   beforeAll(async () => {
     runEmbeddedAgent = await loadSharedRunIntegrationHarness();
-    ({ diagnosticSessionStates, getDiagnosticSessionState } =
-      await import("../../logging/diagnostic-session-state.js"));
-    ({ recordToolCall, recordToolCallOutcome } = await import("../tool-loop-detection.js"));
-    ({ wrapToolWithBeforeToolCallHook } = await import("../agent-tools.before-tool-call.js"));
+    diagnostics = await import("../../logging/diagnostic-session-state.js");
+    toolHistory = await import("../tool-loop-detection.js");
   });
 
   beforeEach(async () => {
-    liveToolCallSeq = 0;
-    diagnosticSessionStates.clear();
+    diagnostics.diagnosticSessionStates.clear();
     resetSharedRunIntegrationHarnessMocks();
     session = await createSharedRunIntegrationSession();
     sessionResult = session.makeAttemptResult;
@@ -200,11 +166,7 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
           const work = task();
           queuedTasks.push(work);
           pendingTasks.add(work);
-          void work.then(
-            () => pendingTasks.delete(work),
-            () => pendingTasks.delete(work),
-          );
-          return work;
+          return work.finally(() => pendingTasks.delete(work));
         },
         options,
       );
@@ -256,7 +218,7 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
       let attemptReturned = false;
       let attemptSignalAborted = false;
       let attemptSignalReason: unknown;
-      const history = getDiagnosticSessionState({
+      const history = diagnostics.getDiagnosticSessionState({
         sessionKey: baseParams.sessionKey,
         sessionId: baseParams.sessionId,
       });
