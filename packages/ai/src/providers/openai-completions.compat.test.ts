@@ -10,8 +10,6 @@ import type { Context, Model } from "../types.js";
 const mockOpenAI = vi.hoisted(() => ({
   chunks: [] as unknown[],
   clientOptions: [] as unknown[],
-  payloads: [] as unknown[],
-  requestOptions: [] as unknown[],
   nextError: undefined as Error | undefined,
 }));
 
@@ -23,9 +21,7 @@ vi.mock("openai", () => {
 
     chat = {
       completions: {
-        create: (payload: unknown, requestOptions: unknown) => {
-          mockOpenAI.payloads.push(payload);
-          mockOpenAI.requestOptions.push(requestOptions);
+        create: () => {
           async function* stream() {
             yield* mockOpenAI.chunks;
           }
@@ -45,10 +41,7 @@ vi.mock("openai", () => {
   return { default: MockOpenAI };
 });
 
-import {
-  resolveOpenAICompletionsCompat,
-  type ResolvedOpenAICompletionsCompat,
-} from "../transports/openai-completions-compat.js";
+import { resolveOpenAICompletionsCompat } from "../transports/openai-completions-compat.js";
 import { streamOpenAICompletions } from "./openai-completions.js";
 import { makeProviderModel } from "./provider-model.test-support.js";
 
@@ -72,142 +65,53 @@ function createModel(overrides: Partial<Model<"openai-completions">> = {}) {
   return { ...baseModel, ...overrides };
 }
 
-function resolveTestEndpointClass(baseUrl: string | undefined): string {
-  if (!baseUrl) {
-    return "default";
-  }
-  const host = new URL(baseUrl).hostname;
-  const exactClasses: Record<string, string> = {
-    "api.openai.com": "openai-public",
-    "api.cerebras.ai": "cerebras-native",
-    "api.x.ai": "xai-native",
-    "api.moonshot.ai": "moonshot-native",
-    "api.moonshot.cn": "moonshot-native",
-    "llm.chutes.ai": "chutes-native",
-    "api.z.ai": "zai-native",
-    "api.deepseek.com": "deepseek-native",
-    "dashscope.aliyuncs.com": "modelstudio-native",
-    "127.0.0.1": "local",
-    localhost: "local",
-  };
-  const exactClass = exactClasses[host];
-  if (exactClass) {
-    return exactClass;
-  }
-  if (host.endsWith(".openai.azure.com")) {
-    return "azure-openai";
-  }
-  if (host.endsWith("openrouter.ai")) {
-    return "openrouter";
-  }
-  if (host.endsWith("opencode.ai")) {
-    return "opencode-native";
-  }
-  if (host.endsWith("xiaomimimo.com")) {
-    return "xiaomi-native";
-  }
-  return "custom";
-}
-
 function resolveTestCapabilities(
   input: AiProviderRequestPolicyInput,
 ): AiProviderRequestCapabilities {
-  const endpointClass = resolveTestEndpointClass(input.baseUrl);
-  const provider = input.provider;
-  const knownProviderFamily =
-    provider === "moonshotai" || provider === "moonshotai-cn"
-      ? "moonshot"
-      : provider === "openai" || provider === "azure-openai"
-        ? "openai-family"
-        : provider === "qwen" || provider === "dashscope"
-          ? "modelstudio"
-          : (provider ?? "unknown");
-  const usesConfiguredBaseUrl = endpointClass !== "default";
-  const usesKnownNativeOpenAIEndpoint =
-    endpointClass === "openai-public" ||
-    endpointClass === "openai" ||
-    endpointClass === "azure-openai";
+  const endpoints: Record<string, string> = {
+    "proxy.example": "custom",
+    "api.together.xyz": "custom",
+    "openrouter.ai": "openrouter",
+    "opencode.ai": "opencode-native",
+  };
+  const endpointClass = endpoints[new URL(input.baseUrl ?? "").hostname];
+  if (!endpointClass) {
+    throw new Error(`Missing fixture endpoint: ${input.baseUrl}`);
+  }
   return {
     endpointClass,
-    knownProviderFamily,
-    supportsNativeStreamingUsageCompat: endpointClass === "moonshot-native",
+    knownProviderFamily: input.provider ?? "unknown",
+    supportsNativeStreamingUsageCompat: false,
     supportsOpenAICompletionsStreamingUsageCompat: false,
-    usesExplicitProxyLikeEndpoint: usesConfiguredBaseUrl && !usesKnownNativeOpenAIEndpoint,
+    usesExplicitProxyLikeEndpoint: true,
     allowsAnthropicServiceTier: false,
   };
 }
 
-type DuplicatedCompatFields = Pick<
-  ResolvedOpenAICompletionsCompat,
-  | "supportsStore"
-  | "supportsDeveloperRole"
-  | "supportsReasoningEffort"
-  | "maxTokensField"
-  | "thinkingFormat"
-  | "supportsStrictMode"
-  | "supportsJsonSchemaResponseFormat"
->;
-
-const defaultDuplicatedCompat = {
-  supportsStore: true,
-  supportsDeveloperRole: true,
-  supportsReasoningEffort: true,
-  maxTokensField: "max_completion_tokens",
-  thinkingFormat: "openai",
-  supportsStrictMode: true,
-  supportsJsonSchemaResponseFormat: false,
-} satisfies DuplicatedCompatFields;
-
-function duplicatedCompatFields(compat: ResolvedOpenAICompletionsCompat): DuplicatedCompatFields {
-  return {
-    supportsStore: compat.supportsStore,
-    supportsDeveloperRole: compat.supportsDeveloperRole,
-    supportsReasoningEffort: compat.supportsReasoningEffort,
-    maxTokensField: compat.maxTokensField,
-    thinkingFormat: compat.thinkingFormat,
-    supportsStrictMode: compat.supportsStrictMode,
-    supportsJsonSchemaResponseFormat: compat.supportsJsonSchemaResponseFormat,
-  };
-}
-
 const canonicalProxyCompat = {
-  ...defaultDuplicatedCompat,
   supportsStore: false,
   supportsDeveloperRole: false,
   supportsReasoningEffort: false,
   supportsStrictMode: false,
-} satisfies DuplicatedCompatFields;
-const canonicalOpenRouterCompat = {
-  ...canonicalProxyCompat,
-  thinkingFormat: "openrouter",
-} satisfies DuplicatedCompatFields;
-const canonicalChutesCompat = {
-  ...canonicalProxyCompat,
-  maxTokensField: "max_tokens",
-} satisfies DuplicatedCompatFields;
-const canonicalTogetherCompat = {
-  ...canonicalChutesCompat,
-  thinkingFormat: "together",
-} satisfies DuplicatedCompatFields;
-
-type MatrixParityCase = readonly [
-  name: string,
-  overrides: Partial<Model<"openai-completions">>,
-  expected: DuplicatedCompatFields,
-];
+  supportsJsonSchemaResponseFormat: false,
+};
 
 const legacyMatrixParityCases = [
   [
     "OpenRouter Anthropic model",
     { provider: "openrouter", id: "anthropic/claude-sonnet-4.6" },
-    canonicalOpenRouterCompat,
+    {
+      ...canonicalProxyCompat,
+      maxTokensField: "max_completion_tokens",
+      thinkingFormat: "openrouter",
+    },
   ],
   [
     "endpoint together.xyz",
     { provider: "custom", baseUrl: "https://api.together.xyz/v1" },
-    canonicalTogetherCompat,
+    { ...canonicalProxyCompat, maxTokensField: "max_tokens", thinkingFormat: "together" },
   ],
-] satisfies MatrixParityCase[];
+] as const;
 
 function chunk(delta: Record<string, unknown>, finishReason?: string): unknown {
   return {
@@ -221,8 +125,6 @@ beforeEach(() => {
   configureAiTransportHost({ resolveProviderRequestCapabilities: resolveTestCapabilities });
   mockOpenAI.chunks = [chunk({ content: "ok" }), chunk({}, "stop")];
   mockOpenAI.clientOptions = [];
-  mockOpenAI.payloads = [];
-  mockOpenAI.requestOptions = [];
   mockOpenAI.nextError = undefined;
 });
 
@@ -234,9 +136,7 @@ describe("OpenAI-compatible completions compatibility", () => {
   it.each(legacyMatrixParityCases)(
     "maps former provider matrix case %s to canonical endpoint policy",
     (_name, overrides, expected) => {
-      expect(
-        duplicatedCompatFields(resolveOpenAICompletionsCompat(createModel(overrides))),
-      ).toEqual(expected);
+      expect(resolveOpenAICompletionsCompat(createModel(overrides))).toMatchObject(expected);
     },
   );
 
