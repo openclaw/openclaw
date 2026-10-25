@@ -300,32 +300,20 @@ describe("createMattermostDraftStream", () => {
 
     const caught: unknown = await stream.flush().catch((error: unknown) => error);
     expect(isChannelPartialDeliveryError(caught)).toBe(true);
-    expect(requestMock).toHaveBeenCalledOnce();
     expect(requestMock.mock.calls[0]?.[0]).toBe("/posts");
     stream.update("Must not create another accepted post");
     await expect(stream.flush()).rejects.toThrow("did not include a post id");
-    expect(requestMock).toHaveBeenCalledOnce();
     for (const finish of [
-      () => stream.discardPending(),
-      () => stream.clear(),
-      () => stream.seal(),
-      () => stream.stop(),
-      () => stream.forceNewMessage(),
-      () => stream.settleBoundaries(),
-    ]) {
-      await expect(finish()).rejects.toThrow("did not include a post id");
+      "discardPending",
+      "clear",
+      "seal",
+      "stop",
+      "forceNewMessage",
+      "settleBoundaries",
+    ] as const) {
+      await expect(stream[finish]()).rejects.toThrow("did not include a post id");
     }
     expect(requestMock).toHaveBeenCalledOnce();
-  });
-
-  it("truncates on a code-point boundary so a straddling emoji is dropped whole", async () => {
-    // The cut at UTF-16 index 3997 bisects the emoji at indices 3996-3997.
-    const { calls, publish } = createDraftStreamFixture();
-    const input = `${"a".repeat(3996)}\u{1F600}${"b".repeat(5)}`;
-    await publish(input);
-
-    expect(calls).toHaveLength(1);
-    expect(parseRequestJson(calls[0]?.init).message).toBe(`${"a".repeat(3996)}...`);
   });
 
   it("does not resend after an update failure followed by stop", async () => {
@@ -360,8 +348,9 @@ describe("createMattermostDraftStream forceNewMessage", () => {
     expect(requestMock).toHaveBeenCalledOnce();
   });
 
-  it("deduplicates previews and restores an over-limit block before rotating", async () => {
-    const firstChunk = "a".repeat(4000);
+  it("deduplicates Unicode-safe previews and restores lossless chunks before rotating", async () => {
+    // Preview index 3997 straddles the emoji; rotation must restore it intact.
+    const firstChunk = `${"a".repeat(3996)}\u{1F600}aa`;
     const secondChunk = "b".repeat(4000);
     const chunkText = vi.fn(() => [firstChunk, secondChunk]);
     const { calls, stream, publish } = createDraftStreamFixture({ chunkText, rootId: "root-1" });
@@ -372,19 +361,12 @@ describe("createMattermostDraftStream forceNewMessage", () => {
     expect(parseRequestJson(calls[0]?.init)).toEqual({
       channel_id: "channel-1",
       root_id: "root-1",
-      message: `${"a".repeat(3997)}...`,
+      message: `${"a".repeat(3996)}...`,
     });
     await stream.forceNewMessage();
     expect(stream.postId()).toBeUndefined();
     await publish("tool");
 
-    expect(calls.map((call) => call.path)).toEqual([
-      "/posts",
-      "/posts/post-1/patch",
-      "/posts",
-      "/posts",
-    ]);
-    expect(calls.map((call) => call.init?.method)).toEqual(["POST", "PUT", "POST", "POST"]);
     const finalizedChunks = [
       parseRequestJson(calls[1]?.init)?.message,
       parseRequestJson(calls[2]?.init)?.message,

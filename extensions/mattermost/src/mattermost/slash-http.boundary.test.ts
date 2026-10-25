@@ -116,6 +116,10 @@ function json(res: ServerResponse, status: number, body: unknown) {
   res.end(JSON.stringify(body));
 }
 
+function until<T>(actual: () => T, expected: T, timeout = 1_000) {
+  return vi.waitFor(() => expect(actual()).toEqual(expected), { timeout });
+}
+
 class Boundary {
   readonly dispatch = vi.fn(async (_params: unknown) => undefined);
   readonly runtime = createRuntime(this.dispatch);
@@ -253,15 +257,16 @@ class Boundary {
     }).toString();
   }
 
-  get validBody() {
-    return this.bodyFor();
-  }
-  post(selected = this.command) {
+  post(
+    selected = this.command,
+    options: Partial<Omit<RequestTarget, "port">> & { body?: string } = {},
+  ) {
     return postForm({
       port: this.address.port,
       localAddress: "127.0.0.1",
       authorization: `Token ${selected.token}`,
       body: this.bodyFor(selected),
+      ...options,
     });
   }
   holdChannel(gate: Promise<void>) {
@@ -283,12 +288,8 @@ async function withBoundary(runBoundary: (boundary: Boundary) => Promise<void>) 
 
 async function fillCredentialPool(boundary: Boundary): Promise<HeldRequest[]> {
   const seen = boundary.callbackSourceAddresses.length;
-  const held = holdPool(
-    boundary.address.port,
-    () => "127.0.0.1",
-    () => `Token ${TOKEN}`,
-  );
-  await vi.waitFor(() => expect(boundary.callbackSourceAddresses).toHaveLength(seen + 8));
+  const held = holdPool(boundary.address.port);
+  await until(() => boundary.callbackSourceAddresses.length, seen + 8);
   expect(held.every((entry) => entry.statusCode === undefined)).toBe(true);
   expect((await boundary.post()).statusCode).toBe(429);
   return held;
@@ -296,11 +297,15 @@ async function fillCredentialPool(boundary: Boundary): Promise<HeldRequest[]> {
 
 function holdPool(
   port: number,
-  address: (index: number) => string,
-  authorization: (index: number) => string | undefined = () => undefined,
+  firstAddress?: number,
+  authorization: string | ((index: number) => string | undefined) = `Token ${TOKEN}`,
 ) {
   return Array.from({ length: 8 }, (_, index) =>
-    openHeldRequest({ port, localAddress: address(index), authorization: authorization(index) }),
+    openHeldRequest({
+      port,
+      localAddress: `127.0.0.${firstAddress === undefined ? 1 : firstAddress + index}`,
+      authorization: typeof authorization === "string" ? authorization : authorization(index),
+    }),
   );
 }
 
@@ -315,65 +320,44 @@ async function drainCredentialPool(held: HeldRequest[], timeout = 1_000) {
   for (const entry of held) {
     entry.socket.write("x");
   }
-  await vi.waitFor(
-    () => expect(held.map((entry) => entry.statusCode)).toEqual(Array(8).fill(400)),
-    { timeout },
-  );
+  await until(() => held.map((entry) => entry.statusCode), Array(8).fill(400), timeout);
 }
 
 describe("Mattermost slash HTTP boundary", () => {
   afterEach(() => deactivateSlashCommands());
 
   it("reserves authenticated capacity and bounds each pre-authentication pool at eight", async () => {
-    await withBoundary(async ({ address, callbackSourceAddresses, validBody, dispatch }) => {
-      const sharedHeld = holdPool(
-        address.port,
-        (index) => `127.0.0.${index + 2}`,
-        (index) =>
-          index === 6 ? "Token wrong-token" : index === 7 ? `Bearer ${TOKEN}` : undefined,
+    await withBoundary(async (boundary) => {
+      const { address, callbackSourceAddresses, dispatch } = boundary;
+      const sharedHeld = holdPool(address.port, 2, (index) =>
+        index === 6 ? "Token wrong-token" : index === 7 ? `Bearer ${TOKEN}` : undefined,
       );
-      await vi.waitFor(() => expect(callbackSourceAddresses).toHaveLength(8), { timeout: 3_000 });
+      await until(() => callbackSourceAddresses.length, 8, 3_000);
       expect(sharedHeld.every((entry) => entry.statusCode === undefined)).toBe(true);
 
       const sharedOverflow = openHeldRequest({ port: address.port, localAddress: "127.0.0.10" });
-      await vi.waitFor(() => expect(sharedOverflow.statusCode).toBe(429), { timeout: 3_000 });
-      await vi.waitFor(
-        () => expect(sharedOverflow.endedByServer && sharedOverflow.closedByServer).toBe(true),
-        { timeout: 3_000 },
-      );
+      await until(() => sharedOverflow.statusCode, 429, 3_000);
+      await until(() => sharedOverflow.endedByServer && sharedOverflow.closedByServer, true, 3_000);
 
-      expectProcessing(
-        await postForm({
-          port: address.port,
-          body: validBody,
-          localAddress: "127.0.0.11",
-          authorization: `Token ${TOKEN}`,
-        }),
-      );
-      await vi.waitFor(() => expect(dispatch).toHaveBeenCalledOnce());
+      expectProcessing(await boundary.post(undefined, { localAddress: "127.0.0.11" }));
+      await until(() => dispatch.mock.calls.length, 1);
 
       await drainCredentialPool(sharedHeld, 3_000);
 
-      const authenticatedHeld = holdPool(
-        address.port,
-        (index) => `127.0.0.${index + 21}`,
-        () => `Token ${TOKEN}`,
-      );
-      await vi.waitFor(() => expect(callbackSourceAddresses).toHaveLength(18), { timeout: 3_000 });
+      const authenticatedHeld = holdPool(address.port, 21);
+      await until(() => callbackSourceAddresses.length, 18, 3_000);
       expect(authenticatedHeld.every((entry) => entry.statusCode === undefined)).toBe(true);
       const authenticatedOverflow = openHeldRequest({
         port: address.port,
         localAddress: "127.0.0.29",
         authorization: `Token ${TOKEN}`,
       });
-      await vi.waitFor(() => expect(authenticatedOverflow.statusCode).toBe(429), {
-        timeout: 3_000,
-      });
+      await until(() => authenticatedOverflow.statusCode, 429, 3_000);
 
-      const recovered = await postForm({
-        port: address.port,
+      const recovered = await boundary.post(undefined, {
         body: "x",
         localAddress: "127.0.0.30",
+        authorization: "",
       });
       expect(recovered.statusCode).toBe(400);
       await drainCredentialPool(authenticatedHeld, 3_000);
@@ -398,7 +382,7 @@ describe("Mattermost slash HTTP boundary", () => {
       expect((await boundary.post()).statusCode).toBe(401);
       const held = await fillCredentialPool(boundary);
       expectProcessing(await boundary.post(commandB));
-      await vi.waitFor(() => expect(dispatch).toHaveBeenCalledOnce());
+      await until(() => dispatch.mock.calls.length, 1);
       await drainCredentialPool(held);
     });
   });
@@ -412,7 +396,7 @@ describe("Mattermost slash HTTP boundary", () => {
       };
       const pending = Array.from({ length: 2 }, () => boundary.post());
       try {
-        await vi.waitFor(() => expect(boundary.channelRequests).toHaveBeenCalledTimes(2));
+        await until(() => boundary.channelRequests.mock.calls.length, 2);
         const oldRuns = [...boundary.routeRuns];
         expect(oldRuns).toHaveLength(2);
         // Both old handlers have authenticated but are still awaiting channel work.
@@ -451,18 +435,15 @@ describe("Mattermost slash HTTP boundary", () => {
             authorization: `Token ${TOKEN}`,
             contentLength: fault === "oversize" ? 65_537 : 1,
           });
-          await vi.waitFor(() => expect(boundary.callbackSourceAddresses).toHaveLength(1));
+          await until(() => boundary.callbackSourceAddresses.length, 1);
           if (fault === "disconnect") {
             failed.socket.destroy();
           } else {
-            await vi.waitFor(
-              () => expect(failed.statusCode).toBe(fault === "timeout" ? 408 : 413),
-              { timeout: 7_000 },
-            );
-            await vi.waitFor(() => expect(failed.closedByServer).toBe(true));
+            await until(() => failed.statusCode, fault === "timeout" ? 408 : 413, 7_000);
+            await until(() => failed.closedByServer, true);
           }
         }
-        await vi.waitFor(() => expect(boundary.routeRuns.size).toBe(0));
+        await until(() => boundary.routeRuns.size, 0);
         expect(boundary.channelRequests).not.toHaveBeenCalled();
         await drainCredentialPool(await fillCredentialPool(boundary));
       });

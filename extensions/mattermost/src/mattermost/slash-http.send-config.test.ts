@@ -265,106 +265,88 @@ describe("slash-http cfg threading", () => {
     });
   });
 
-  it.each(
-    [
-      {
-        commandText: "/model",
-        entry: { kind: "summary" },
-        action: "providers",
-        text: "/oc_model <provider/model> to switch",
-      },
-      {
-        commandText: "/models",
-        entry: { kind: "providers" },
-        action: "list",
-        text: "Select a provider:",
-      },
-      {
-        commandText: "/models openai",
-        entry: { kind: "models", provider: "openai" },
-        action: "select",
-        text: "Select a model to switch immediately.",
-      },
-    ].map((entry) => ({ entry, failed: entry.commandText !== "/model" })),
-  )(
-    "sends real $entry.commandText menu with current catalog status (failed: $failed)",
-    async ({ entry: testCase, failed }) => {
-      const state = await createOpenClawTestState({
-        label: "mattermost-menu-pin",
-        applyEnv: false,
-      });
-      onTestFinished(() => state.cleanup());
-      const storePath = state.path("sessions.json");
-      const cfg: OpenClawConfig = { session: { store: storePath } };
-      const sessionEntry: SessionEntry = {
-        sessionId: "session-1",
-        updatedAt: 1,
-        providerOverride: "openai",
-        authProfileOverride: "openai:previous",
-        authProfileOverrideSource: "user",
-        agentRuntimeOverride: "openclaw",
-      };
-      const saveSession = (entry: SessionEntry) =>
-        upsertSessionEntry({
-          agentId: "agent-1",
-          storePath,
-          sessionKey: "agent:agent-1:mattermost:session:1",
-          entry,
-        });
-      await saveSession(sessionEntry);
-      mockState.resolveCommandText.mockReturnValueOnce(testCase.commandText);
-      mockState.resolveMattermostModelPickerEntry.mockReturnValueOnce(testCase.entry);
-      mockState.buildPreparedModelsProviderData.mockResolvedValueOnce({
-        ...fixtures.catalog(),
-        byProvider: new Map([["openai", new Set(["fixture-model"])]]),
-        providers: ["openai"],
-        resolvedDefault: { provider: "openai", model: "fixture-model" },
-        modelNames: new Map([["openai/fixture-model", "Fixture model"]]),
-        refreshWarning: failed ? "Some models could not be refreshed." : undefined,
-      });
-      const handler = createHandler(cfg);
-
-      await saveSession({ ...sessionEntry, authProfileOverride: "openai:current", updatedAt: 2 });
-
-      await expectProcessing(handler);
-      expect(mockState.buildPreparedModelsProviderData).toHaveBeenCalledExactlyOnceWith(
-        cfg,
-        "agent-1",
-        {
-          sessionEntry: expect.objectContaining({
-            providerOverride: "openai",
-            authProfileOverride: "openai:current",
-            authProfileOverrideSource: "user",
-            agentRuntimeOverride: "openclaw",
-          }),
-        },
-      );
-      expect(mockState.sendMessageMattermost).toHaveBeenCalledExactlyOnceWith(
-        "channel:chan-1",
-        expect.stringContaining(testCase.text),
-        expect.objectContaining({
-          accountId: "default",
-          buttons: expect.arrayContaining([
-            expect.arrayContaining([
-              expect.objectContaining({
-                context: expect.objectContaining({ action: testCase.action }),
-              }),
-            ]),
-          ]),
-          cfg,
-        }),
-      );
-      const sentText = mockState.sendMessageMattermost.mock.calls[0]?.[1];
-      expect(sentText?.includes("Some models could not be refreshed.")).toBe(failed);
-      expectRecorded({
+  it.each([
+    ["/model", "summary", "providers", "/oc_model <provider/model> to switch"],
+    ["/models", "providers", "list", "Select a provider:"],
+    ["/models openai", "models", "select", "Select a model to switch immediately."],
+  ])("sends real %s menu with current catalog status", async (commandText, kind, action, text) => {
+    const failed = commandText !== "/model";
+    const state = await createOpenClawTestState({
+      label: "mattermost-menu-pin",
+      applyEnv: false,
+    });
+    onTestFinished(() => state.cleanup());
+    const storePath = state.path("sessions.json");
+    const cfg: OpenClawConfig = { session: { store: storePath } };
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-1",
+      updatedAt: 1,
+      providerOverride: "openai",
+      authProfileOverride: "openai:previous",
+      authProfileOverrideSource: "user",
+      agentRuntimeOverride: "openclaw",
+    };
+    const saveSession = (entry: SessionEntry) =>
+      upsertSessionEntry({
         agentId: "agent-1",
+        storePath,
         sessionKey: "agent:agent-1:mattermost:session:1",
-        expectedSessionId: sessionEntry.sessionId,
-        commandText: testCase.commandText,
-        replyText: expect.stringContaining(testCase.text),
+        entry,
       });
-    },
-  );
+    await saveSession(sessionEntry);
+    mockState.resolveCommandText.mockReturnValueOnce(commandText);
+    const entry = kind === "models" ? { kind, provider: "openai" } : { kind };
+    mockState.resolveMattermostModelPickerEntry.mockReturnValueOnce(entry);
+    mockState.buildPreparedModelsProviderData.mockResolvedValueOnce({
+      ...fixtures.catalog(),
+      byProvider: new Map([["openai", new Set(["fixture-model"])]]),
+      providers: ["openai"],
+      resolvedDefault: { provider: "openai", model: "fixture-model" },
+      modelNames: new Map([["openai/fixture-model", "Fixture model"]]),
+      refreshWarning: failed ? "Some models could not be refreshed." : undefined,
+    });
+    const handler = createHandler(cfg);
+
+    await saveSession({ ...sessionEntry, authProfileOverride: "openai:current", updatedAt: 2 });
+
+    await expectProcessing(handler);
+    expect(mockState.buildPreparedModelsProviderData).toHaveBeenCalledExactlyOnceWith(
+      cfg,
+      "agent-1",
+      {
+        sessionEntry: expect.objectContaining({
+          providerOverride: "openai",
+          authProfileOverride: "openai:current",
+          authProfileOverrideSource: "user",
+          agentRuntimeOverride: "openclaw",
+        }),
+      },
+    );
+    expect(mockState.sendMessageMattermost).toHaveBeenCalledExactlyOnceWith(
+      "channel:chan-1",
+      expect.stringContaining(text),
+      expect.objectContaining({
+        accountId: "default",
+        buttons: expect.arrayContaining([
+          expect.arrayContaining([
+            expect.objectContaining({
+              context: expect.objectContaining({ action }),
+            }),
+          ]),
+        ]),
+        cfg,
+      }),
+    );
+    const sentText = mockState.sendMessageMattermost.mock.calls[0]?.[1];
+    expect(sentText?.includes("Some models could not be refreshed.")).toBe(failed);
+    expectRecorded({
+      agentId: "agent-1",
+      sessionKey: "agent:agent-1:mattermost:session:1",
+      expectedSessionId: sessionEntry.sessionId,
+      commandText,
+      replyText: expect.stringContaining(text),
+    });
+  });
 
   it("keeps the slash team scope on direct conversations", async () => {
     mockState.resolveMattermostModelPickerEntry.mockReturnValueOnce(null);
