@@ -7,23 +7,15 @@ import { registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { installDialogPolyfill } from "../../test-helpers/modal-dialog.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import type { ModelSetupWizardState } from "./state.ts";
-import { ModelSetupWizard } from "./wizard-view-solid.tsx";
+import { ModelSetupWizard, type WizardViewProps } from "./wizard-view-solid.tsx";
 
 registerEnglishCatalog(registerModelSetupEnglish);
 
 beforeEach(() => onTestFinished(installDialogPolyfill()));
 
-const find = <E extends Element = HTMLElement>(root: ParentNode, selector: string) =>
-  root.querySelector<E>(selector)!;
-
 function fakeTime() {
   vi.useFakeTimers();
   onTestFinished(() => vi.useRealTimers());
-}
-
-async function settle(container: HTMLElement) {
-  flush();
-  await container.querySelector("openclaw-modal-dialog")!.updateComplete;
 }
 
 const wizardDefaults = {
@@ -35,6 +27,27 @@ const wizardDefaults = {
   onClose: () => undefined,
 };
 
+async function createWizardHarness(
+  read: () => Pick<WizardViewProps, "state"> & Partial<WizardViewProps>,
+) {
+  const { container } = mountSolid(() => (
+    <ModelSetupWizard {...wizardDefaults} value={undefined} {...read()} />
+  ));
+  flush();
+  await container.querySelector("openclaw-modal-dialog")!.updateComplete;
+  return {
+    container,
+    get: <E extends Element = HTMLElement>(selector: string) =>
+      container.querySelector<E>(selector)!,
+    expectText: (selector: string, content: string) =>
+      expect(container.querySelector(selector)?.textContent).toContain(content),
+    namedButton: (label: string) =>
+      [...container.querySelectorAll("button")].find(
+        (button) => button.textContent?.trim() === label,
+      ),
+  };
+}
+
 type StepState = Extract<ModelSetupWizardState, { phase: "step" }>;
 function stepState(step: StepState["step"], busy = false): StepState {
   return { phase: "step", authChoice: "synthetic-provider", step, busy, validationError: null };
@@ -43,48 +56,57 @@ function stepState(step: StepState["step"], busy = false): StepState {
 it("keeps the wizard draft mounted while typing and presenting a pending save", async () => {
   const [draft, setDraft] = createSignal("initial");
   const [saving, setSaving] = createSignal(false);
+  const [validationError, setValidationError] = createSignal<string | null>(null);
   const answer = vi.fn();
-  const { container } = mountSolid(() => (
-    <ModelSetupWizard
-      {...wizardDefaults}
-      state={stepState({ id: "access-code", type: "text", message: "Access code" })}
-      busy={saving()}
-      value={draft()}
-      onValueChange={(value) => setDraft(String(value))}
-      onAnswer={answer}
-    />
-  ));
-  await settle(container);
-  const modal = find(container, "openclaw-modal-dialog");
-  const input = find<HTMLInputElement>(container, "input");
+  const { container, get, expectText, namedButton } = await createWizardHarness(() => ({
+    state: {
+      ...stepState({ id: "access-code", type: "text", message: "Access code", sensitive: true }),
+      validationError: validationError(),
+    },
+    busy: saving(),
+    value: draft(),
+    onValueChange: (value) => setDraft(String(value)),
+    onAnswer: answer,
+  }));
+  const modal = get("openclaw-modal-dialog");
+  const input = get<HTMLInputElement>("input");
+  const label = get<HTMLLabelElement>(`label[for="${input.id}"]`);
+  expect([input.type, label.textContent]).toEqual(["password", "Access code"]);
+  expect(input.labels).toContain(label);
   input.focus();
   input.value = "initial typed";
   input.dispatchEvent(new Event("input", { bubbles: true }));
   flush();
 
   expect(container.querySelector("openclaw-modal-dialog")).toBe(modal);
-  expect(find(container, "input")).toBe(input);
+  expect(get("input")).toBe(input);
   expect(document.activeElement).toBe(input);
   expect([input.value, untrack(draft)]).toEqual(["initial typed", "initial typed"]);
 
   setSaving(true);
   flush();
-  expect(find(container, "input")).toBe(input);
+  expect(get("input")).toBe(input);
   expect(input).toMatchObject({ value: "initial typed", disabled: true });
-  expect(container.querySelector('[role="status"][aria-busy="true"]')?.textContent).toContain(
-    "Working",
-  );
-  expect(
-    [...container.querySelectorAll("button")].find(
-      (button) => button.textContent?.trim() === "Cancel",
-    )?.disabled,
-  ).toBe(false);
+  expectText('[role="status"][aria-busy="true"]', "Working");
+  expect(namedButton("Cancel")?.disabled).toBe(false);
   setSaving(false);
   flush();
   expect(input.disabled).toBe(false);
 
   input.form!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
   expect(answer).toHaveBeenCalledExactlyOnceWith("initial typed");
+  setValidationError("That access value is not valid.");
+  flush();
+  expect(input.getAttribute("aria-invalid")).toBe("true");
+  expect(document.getElementById(input.getAttribute("aria-describedby")!)?.textContent).toContain(
+    "That access value is not valid.",
+  );
+  setValidationError(null);
+  flush();
+  expect([input.hasAttribute("aria-invalid"), input.hasAttribute("aria-describedby")]).toEqual([
+    false,
+    false,
+  ]);
 });
 
 it("shows live sign-in activity and focuses the primary action as each step changes", async () => {
@@ -98,16 +120,12 @@ it("shows live sign-in activity and focuses the primary action as each step chan
   );
   const [startingChat, setStartingChat] = createSignal(false);
   const startChat = vi.fn();
-  const { container } = mountSolid(() => (
-    <ModelSetupWizard
-      {...wizardDefaults}
-      state={state()}
-      doneMessage="Provider is connected"
-      doneAction={{ label: "Start a new chat", disabled: startingChat(), onClick: startChat }}
-      value="continue"
-    />
-  ));
-  await settle(container);
+  const { container, get } = await createWizardHarness(() => ({
+    state: state(),
+    doneMessage: "Provider is connected",
+    doneAction: { label: "Start a new chat", disabled: startingChat(), onClick: startChat },
+    value: "continue",
+  }));
   expect(document.activeElement?.textContent).toContain("Continue");
   const deviceStep = {
     id: "device-code",
@@ -122,7 +140,7 @@ it("shows live sign-in activity and focuses the primary action as each step chan
   const status = container.querySelector('.wizard-sign-in [role="status"]');
   expect(status?.textContent).toContain("Waiting for sign-in");
   expect(container.querySelector(".wizard-sign-in__ring")).not.toBeNull();
-  const code = find(container, "code");
+  const code = get("code");
   expect(code.textContent).toBe("ABCD-1234");
   const verifyStep = {
     ...deviceStep,
@@ -138,7 +156,7 @@ it("shows live sign-in activity and focuses the primary action as each step chan
   expect(container.querySelector("code")).toBe(code);
   setState({ phase: "done" });
   flush();
-  const primary = find<HTMLButtonElement>(container, "[data-login-start-chat]");
+  const primary = get<HTMLButtonElement>("[data-login-start-chat]");
   expect(document.activeElement).toBe(primary);
   expect(container.querySelector(".wizard-step__spinner")).toBeNull();
   primary.click();
@@ -159,63 +177,44 @@ const redirectStep = {
 it("presents browser sign-in as a provider badge with quiet recovery and corner cancel", async () => {
   fakeTime();
   const cancel = vi.fn();
-  const { container } = mountSolid(() => (
-    <ModelSetupWizard
-      {...wizardDefaults}
-      state={{ ...stepState(redirectStep, true), authLabel: "Linear" }}
-      value={undefined}
-      onCancel={cancel}
-    />
-  ));
-  await settle(container);
+  const { container, get, expectText, namedButton } = await createWizardHarness(() => ({
+    state: { ...stepState(redirectStep, true), authLabel: "Linear" },
+    onCancel: cancel,
+  }));
 
   expect(container.querySelector(".model-setup-wizard__header")).toBeNull();
-  expect(container.querySelector('.wizard-sign-in [role="status"]')?.textContent).toBe(
-    "Waiting for Linear…",
-  );
-  const link = find<HTMLAnchorElement>(container, ".wizard-step__external-link");
+  expect(get('.wizard-sign-in [role="status"]').textContent).toBe("Waiting for Linear…");
+  const link = get<HTMLAnchorElement>(".wizard-step__external-link");
+  expect(link).toMatchObject({ target: "_blank", rel: "noreferrer" });
   expect([link.textContent, link.classList.contains("primary")]).toEqual([
     "Reopen browser tab",
     false,
   ]);
   expect(container.querySelector(".btn.primary")).toBeNull();
-  expect(
-    [...container.querySelectorAll("button")].some(
-      (button) => button.textContent?.trim() === "Cancel",
-    ),
-  ).toBe(false);
+  expect(namedButton("Cancel")).toBeUndefined();
 
-  find<HTMLButtonElement>(container, '[aria-label="Cancel sign-in"]').click();
+  get<HTMLButtonElement>('[aria-label="Cancel sign-in"]').click();
   expect(cancel).toHaveBeenCalledOnce();
 
   vi.advanceTimersByTime(45_000);
   flush();
-  expect(container.querySelector(".wizard-sign-in__callout")?.textContent).toContain(
-    "another browser or profile",
-  );
+  expectText(".wizard-sign-in__callout", "another browser or profile");
   expect([link.textContent, link.classList.contains("primary")]).toEqual(["Try again", true]);
 });
 
 it("shows device-code expiry only near the end and retires an expired code", async () => {
   fakeTime();
-  const { container } = mountSolid(() => (
-    <ModelSetupWizard
-      {...wizardDefaults}
-      state={{
-        ...stepState(
-          { ...redirectStep, id: "device", deviceCode: { code: "WDJB-MJHT", expiresInMinutes: 7 } },
-          true,
-        ),
-        authLabel: "GitHub",
-      }}
-      value={undefined}
-    />
-  ));
-  await settle(container);
+  const { container, expectText } = await createWizardHarness(() => ({
+    state: {
+      ...stepState(
+        { ...redirectStep, id: "device", deviceCode: { code: "WDJB-MJHT", expiresInMinutes: 7 } },
+        true,
+      ),
+      authLabel: "GitHub",
+    },
+  }));
 
-  expect(container.querySelector(".wizard-sign-in__lead")?.textContent).toContain(
-    "Make sure it shows the same code before you approve.",
-  );
+  expectText(".wizard-sign-in__lead", "Make sure it shows the same code before you approve.");
   expect(container.querySelector("code")?.textContent).toBe("WDJB-MJHT");
   expect(container.textContent).not.toContain("Expires in");
 
@@ -226,8 +225,6 @@ it("shows device-code expiry only near the end and retires an expired code", asy
   vi.advanceTimersByTime(4 * 60_000);
   flush();
   expect(container.querySelector("code")).toBeNull();
-  expect(container.querySelector('[role="alert"]')?.textContent).toContain(
-    "This code expired. Nothing was connected.",
-  );
+  expectText('[role="alert"]', "This code expired. Nothing was connected.");
   expect(container.querySelector(".wizard-sign-in__ring")).toBeNull();
 });

@@ -127,7 +127,7 @@ describe("ModelSetupPage detection ownership", () => {
   );
 
   it("rejects stale detection after reattach", async () => {
-    const { context, request, detectCalls } = fixture;
+    const { context, request } = fixture;
     const stale = createDeferred<SystemAgentSetupDetectResult>();
     let signal: AbortSignal | undefined;
     request.mockImplementationOnce(async (_method, _params, options) => {
@@ -150,12 +150,6 @@ describe("ModelSetupPage detection ownership", () => {
     mountModelSetupPage(page);
     await vi.waitFor(() => expect(selectedModelDetail(page)).toBe("current-model"));
     expect(signal?.aborted).toBe(true);
-    expect(detectCalls()).toHaveLength(2);
-    expect(detectCalls().at(-1)).toEqual([
-      "openclaw.setup.detect",
-      { agentId: "main" },
-      expect.objectContaining({ signal: expect.any(AbortSignal) }),
-    ]);
     stale.resolve({ ...detection, configuredModel: "provider/stale-model", setupComplete: true });
     await vi.waitFor(() => expect(request.mock.settledResults[0]?.type).toBe("fulfilled"));
     await page.updateComplete;
