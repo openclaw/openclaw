@@ -4,6 +4,7 @@ export function warmReloadProbe() {
   const mutations: Array<{ at: number; count: number; region: string }> = [];
   const shifts: Array<{ at: number; value: number }> = [];
   const states: Array<{ at: number; state: string }> = [];
+  const longTasks: Array<{ at: number; duration: number }> = [];
   const reads: Array<{ at: number; store: string; hit: boolean }> = [];
   const transactions: Array<{
     at: number;
@@ -63,6 +64,11 @@ export function warmReloadProbe() {
   observe("paint", (entries) => {
     for (const entry of entries) {
       milestones[entry.name] = entry.startTime;
+    }
+  });
+  observe("longtask", (entries) => {
+    for (const entry of entries) {
+      longTasks.push({ at: entry.startTime, duration: entry.duration });
     }
   });
   const elementLabel = (element: Element) =>
@@ -357,6 +363,9 @@ export function warmReloadProbe() {
     }
     const state = JSON.stringify({
       shell: Boolean(document.querySelector(".shell")),
+      bootSkeleton: Boolean(document.querySelector("#openclaw-boot-shell")),
+      viewSkeleton: Boolean(document.querySelector(".lazy-view-state--loading")),
+      pane: Boolean(pane),
       sidebar: Boolean(document.querySelector("aside.sidebar")),
       header: pane?.querySelector(".chat-pane__session-title-text")?.textContent ?? null,
       rows: visible,
@@ -387,6 +396,7 @@ export function warmReloadProbe() {
         lastMutationBurst: mutations.findLast((batch) => batch.count >= 10)?.at ?? null,
         mutations,
         states,
+        longTasks,
         sidebarFrames,
         rows: {
           mounted: rows.size,
