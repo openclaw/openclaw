@@ -30,18 +30,20 @@ const cfg = {
   },
 } as OpenClawConfig;
 
-const apiModel: ModelCatalogEntry = {
-  provider: "openai",
-  id: "gpt-5.6-sol",
+const openaiRow = (id: string, fields: Partial<ModelCatalogEntry> = {}) =>
+  row(id, { provider: "openai", ...fields });
+const apiModel = openaiRow("gpt-5.6-sol", {
   name: "GPT-5.6 Sol (API)",
   api: "openai-responses",
   baseUrl: "https://api.openai.com/v1",
-};
+});
 const nativeRoute = {
   provider: "openai",
   api: "openai-chatgpt-responses" as const,
   baseUrl: "https://chatgpt.com/backend-api/codex",
 };
+const nativeRow = (id: string, fields: Partial<ModelCatalogEntry> = {}) =>
+  openaiRow(id, { ...nativeRoute, reasoning: true, ...fields });
 const standardEfforts = ["low", "medium", "high", "xhigh", "max"];
 const reasoningCompat = (efforts = standardEfforts) => ({
   supportsReasoningEffort: true,
@@ -51,29 +53,20 @@ const snapshot: ModelCatalogSnapshot = {
   entries: [{ ...apiModel, compat: reasoningCompat() }],
   routeVariants: [apiModel],
   staticEntries: [
-    {
-      ...nativeRoute,
-      id: "gpt-5.6-sol",
+    nativeRow("gpt-5.6-sol", {
       name: "GPT-5.6 Sol",
       contextWindow: 1_050_000,
-      reasoning: true,
       params: { providerFact: "kept", codexAppServerRuntimeModel: "stale-runtime" },
       compat: {
         ...reasoningCompat(),
         supportsTools: false,
       },
-    },
-    {
-      ...nativeRoute,
-      id: "gpt-5.6-terra",
-      name: "GPT-5.6 Terra",
-      reasoning: true,
-      compat: reasoningCompat([...standardEfforts, "ultra"]),
-    },
-    row("provider-empty-reasoner", {
-      provider: "openai",
-      compat: { supportedReasoningEfforts: [] },
     }),
+    nativeRow("gpt-5.6-terra", {
+      name: "GPT-5.6 Terra",
+      compat: reasoningCompat([...standardEfforts, "ultra"]),
+    }),
+    openaiRow("provider-empty-reasoner", { compat: { supportedReasoningEfforts: [] } }),
   ],
 };
 
@@ -202,11 +195,7 @@ describe("agent harness model catalog", () => {
       });
       const initial = catalog([host, foreign]);
       const first = row("shared", { name: "Native one", nativeRuntime: "native-one" });
-      const second: ModelCatalogEntry = {
-        ...first,
-        name: "Native two",
-        nativeRuntime: "native-two",
-      };
+      const second = { ...first, name: "Native two", nativeRuntime: "native-two" };
       const stale: ModelCatalogEntry = { ...first, id: "retired" };
       const other: ModelCatalogEntry = { ...first, provider: "other", id: "third" };
       const loadOne = vi.fn(async () => [first, stale, other]);
@@ -257,14 +246,12 @@ describe("agent harness model catalog", () => {
   );
 
   it("does not donate host transport or capabilities to native-owned rows beside host rows", async () => {
-    const native = {
-      provider: "openai",
-      id: "gpt-5.6-sol",
+    const native = openaiRow("gpt-5.6-sol", {
       name: "Native model",
       nativeRuntime: "codex",
       reasoning: true,
-    };
-    const host = { provider: "openai", id: "gpt-5.6-terra", name: "Host model" };
+    });
+    const host = openaiRow("gpt-5.6-terra", { name: "Host model" });
     const result = await augmentModelCatalogWithAgentHarness({
       ...modelInput,
       defaultProvider: "openai",
@@ -284,32 +271,22 @@ describe("agent harness model catalog", () => {
   });
   it("merges account-scoped harness models into the prepared generation", async () => {
     const loadModelCatalog = vi.fn(async () => [
-      {
-        ...nativeRoute,
-        id: "gpt-5.6-terra",
+      nativeRow("gpt-5.6-terra", {
         name: "GPT-5.6 Terra",
         reasoning: false,
         compat: { supportedReasoningEfforts: [] },
-      },
-      {
-        ...nativeRoute,
-        id: "gpt-5.6-sol",
+      }),
+      nativeRow("gpt-5.6-sol", {
         name: "GPT-5.6 Sol (account)",
-        reasoning: true,
         params: { codexAppServerRuntimeModel: "gpt-5.6-sol-runtime" },
         compat: {
           ...reasoningCompat(["high", "ultra"]),
           supportsTools: true,
         },
-      },
-      row("custom-reasoner", {
-        provider: "openai",
-        compat: { supportedReasoningEfforts: ["high"] },
       }),
-      row("provider-empty-reasoner", {
-        provider: "openai",
-        compat: { supportedReasoningEfforts: ["high"] },
-      }),
+      ...["custom-reasoner", "provider-empty-reasoner"].map((id) =>
+        openaiRow(id, { compat: { supportedReasoningEfforts: ["high"] } }),
+      ),
     ]);
 
     const result = await augmentModelCatalogWithAgentHarness({

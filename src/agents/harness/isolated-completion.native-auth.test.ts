@@ -1,8 +1,8 @@
 import { performance } from "node:perf_hooks";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  isolatedAssistant,
+  isolatedReply as reply,
   isolatedCompletionMocks as mocks,
   runIsolatedCompletion,
   preparedModelRuntime,
@@ -28,7 +28,6 @@ beforeEach(() => {
 
 afterEach(() => vi.restoreAllMocks());
 
-const reply = (text: string) => ({ assistant: isolatedAssistant([{ type: "text", text }]) });
 function registerReply(text: string) {
   const run = vi.fn(async () => reply(text));
   registerIsolatedHarness({ authBootstrap: "harness", runIsolatedCompletionV2: run });
@@ -45,6 +44,12 @@ function tokenProfiles(...names: string[]) {
     ]),
   );
 }
+const apiRoute = {
+  ...nativeAuthPlan.modelRoute,
+  api: "openai-responses" as const,
+  baseUrl: "https://api.openai.com/v1",
+  authRequirement: "api-key" as const,
+};
 
 describe("runIsolatedCompletion native authorization", () => {
   it.each(["profile", "dependent-direct"] as const)(
@@ -76,12 +81,7 @@ describe("runIsolatedCompletion native authorization", () => {
       const apiPlan = {
         ...subscriptionPlan,
         forwardedAuthProfileId: "openai:key",
-        modelRoute: {
-          ...subscriptionPlan.modelRoute,
-          api: "openai-responses" as const,
-          baseUrl: "https://api.openai.com/v1",
-          authRequirement: "api-key" as const,
-        },
+        modelRoute: apiRoute,
       };
       mocks.ensureAuthProfileStore.mockReturnValueOnce({
         version: 1,
@@ -164,30 +164,26 @@ describe("runIsolatedCompletion native authorization", () => {
       .mockResolvedValueOnce(reply("backup result"));
     registerIsolatedHarness({ authBootstrap: "harness", runIsolatedCompletionV2 });
 
-    const completion = runIsolatedCompletion({
-      ...isolatedRequest(),
-      assertCurrent() {
-        if (!current) {
-          throw expired;
-        }
-      },
-    });
+    const completion = runIsolatedCompletion(
+      isolatedRequest({
+        assertCurrent() {
+          if (!current) {
+            throw expired;
+          }
+        },
+      }),
+    );
     if (retired) {
       await expect(completion).rejects.toBe(expired);
       expect(runIsolatedCompletionV2).toHaveBeenCalledOnce();
       expect(releaseRuntimeLease).toHaveBeenCalledOnce();
       return;
     }
-    await expect(completion).resolves.toMatchObject({
-      text: "backup result",
-    });
+    await expect(completion).resolves.toMatchObject({ text: "backup result" });
     expect(runIsolatedCompletionV2).toHaveBeenCalledTimes(2);
     for (const [index, id] of ["openai:first", "openai:backup"].entries()) {
       const authorization = runIsolatedCompletionV2.mock.calls[index]![0].authorization;
-      expect(authorization.owner).toBe("harness");
-      if (authorization.owner !== "harness") {
-        throw new Error("expected harness authorization");
-      }
+      assert(authorization.owner === "harness", "expected harness authorization");
       expect(authorization.plan.forwardedAuthProfileId).toBe(id);
       expect(authorization.plan.forwardedAuthProfileCandidateIds).toEqual([id]);
       expect(Object.keys(authorization.authProfileStore.profiles)).toEqual([id]);
@@ -212,12 +208,7 @@ describe("runIsolatedCompletion native authorization", () => {
         authProfileProviderForAuth: "openai",
         modelId: "gpt-test",
         harnessAuthProvider: "openai",
-        modelRoute: {
-          ...nativeAuthPlan.modelRoute,
-          api: "openai-responses" as const,
-          baseUrl: "https://api.openai.com/v1",
-          authRequirement: "api-key" as const,
-        },
+        modelRoute: apiRoute,
       };
       mocks.ensureAuthProfileStore.mockReturnValueOnce({
         version: 1,
@@ -256,18 +247,8 @@ describe("runIsolatedCompletion native authorization", () => {
   );
 
   it.each([
-    {
-      mode: "api-key",
-      owner: "host",
-      api: "openai-responses",
-      baseUrl: "https://api.openai.com/v1",
-    },
-    {
-      mode: "subscription",
-      owner: "harness",
-      api: "openai-chatgpt-responses",
-      baseUrl: "https://chatgpt.com/backend-api/codex",
-    },
+    { mode: "api-key", owner: "host", ...apiRoute },
+    { mode: "subscription", owner: "harness", ...nativeAuthPlan.modelRoute },
   ] as const)("dispatches the real prepared $mode route to $owner authorization", async (route) => {
     const { prepareAgentRuntimeAuth } = await vi.importActual<
       typeof import("../runtime-plan/prepare-auth.js")
@@ -305,13 +286,14 @@ describe("runIsolatedCompletion native authorization", () => {
     const parent = new AsyncWorkScope();
     try {
       await parent.run(() =>
-        runIsolatedCompletion({
-          ...isolatedRequest(),
-          model: "gpt-5.5",
-          authProfileId: profileId,
-          outputTextPolicy: "strict-visible",
-          streamParams: { maxTokens: 4_096, temperature: 0.2 },
-        }),
+        runIsolatedCompletion(
+          isolatedRequest({
+            model: "gpt-5.5",
+            authProfileId: profileId,
+            outputTextPolicy: "strict-visible",
+            streamParams: { maxTokens: 4_096, temperature: 0.2 },
+          }),
+        ),
       );
     } finally {
       await AsyncWorkScope.runWhenAllIdle(
