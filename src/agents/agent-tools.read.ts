@@ -1152,14 +1152,12 @@ function createSandboxMutationOperations(params: SandboxToolParams) {
     {
       resolveQueueKey: (absolutePath: string, signal?: AbortSignal) =>
         resolveSandboxFileQueueKey(params, absolutePath, signal),
-      mkdir: async (dir: string) => {
-        await params.bridge.mkdirp({ filePath: dir, cwd: params.root, signal: params.abortSignal });
-      },
       writeFile: async (absolutePath: string, content: string) => {
         await params.bridge.writeFile({
           filePath: absolutePath,
           cwd: params.root,
           data: content,
+          mkdir: true,
           signal: params.abortSignal,
         });
       },

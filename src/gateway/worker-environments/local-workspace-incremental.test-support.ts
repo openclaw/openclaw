@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, vi } from "vitest";
+import type { SandboxBackendHandle } from "../../agents/sandbox/backend-handle.types.js";
 import { stagedInputDirectory, STAGED_INPUT_GITIGNORE } from "../../media/staged-inputs.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { withLocalWorkspaceProjection } from "./local-workspace-projection.js";
@@ -114,4 +115,98 @@ export async function proveStagedInputCheckpointOwnership(owner: LocalWorkspaceO
   await expectText(owner.worktree.path, input, "edited input\n");
   await prepare(owner);
   await expectText(projection, input, "edited input\n");
+}
+
+export async function proveSandboxMutationCheckpoints(owner: LocalWorkspaceOwner) {
+  const [
+    projectionOwner,
+    { prepareLocalSandboxWorkspace, bindLocalSandboxWorkspace },
+    { resolveSandboxConfigForAgent },
+    { createSandboxTestContext },
+    { createHostSandboxFsBridge },
+    { createSandboxedWriteTool },
+    { createApplyPatchTool },
+  ] = await Promise.all([
+    import("./local-workspace-projection.js"),
+    import("../../agents/sandbox/local-workspace.js"),
+    import("../../agents/sandbox/config.js"),
+    import("../../agents/sandbox/test-fixtures.js"),
+    import("../../agents/test-helpers/host-sandbox-fs-bridge.js"),
+    import("../../agents/agent-tools.read.js"),
+    import("../../agents/apply-patch.js"),
+  ]);
+  vi.spyOn(projectionOwner, "resolveLocalWorkspaceOwner").mockResolvedValue({
+    ...owner,
+    [Symbol.dispose]() {},
+  });
+  using projection = await prepareLocalSandboxWorkspace({
+    cfg: { worktreeAcceleration: false },
+    agentId: owner.agentId,
+    sessionKey: owner.sessionKey,
+    workspaceDir: owner.worktree.path,
+    sandbox: resolveSandboxConfigForAgent({}, owner.agentId),
+  });
+  if (!projection) {
+    throw new Error("Expected managed projection");
+  }
+  const backend: SandboxBackendHandle = {
+    id: "docker",
+    runtimeId: "file-checkpoint-fixture",
+    runtimeLabel: "file-checkpoint-fixture",
+    workdir: "/workspace",
+    buildExecSpec: async () => {
+      throw new Error("Unexpected command execution");
+    },
+    runShellCommand: async () => {
+      throw new Error("Unexpected shell execution");
+    },
+  };
+  const bridge = createHostSandboxFsBridge(projection.workspaceDir);
+  const sandbox = createSandboxTestContext({
+    overrides: { workspaceDir: projection.workspaceDir, backend, fsBridge: bridge },
+  });
+  bindLocalSandboxWorkspace(sandbox, projection);
+  const write = createSandboxedWriteTool({ root: projection.workspaceDir, bridge });
+  const patch = createApplyPatchTool({
+    cwd: projection.workspaceDir,
+    sandbox: {
+      root: projection.workspaceDir,
+      bridge,
+      workspaceMounts: bridge.pathMappings,
+    },
+  });
+  const withStore = workspaceStore.withLocalWorkspaceStore;
+  const scans: string[] = [];
+  vi.spyOn(workspaceStore, "withLocalWorkspaceStore").mockImplementation((params, run) =>
+    withStore(params, (store) =>
+      run({
+        ...store,
+        manifest: async (row, action) => {
+          if (action.kind === "scan") {
+            scans.push(action.target);
+          }
+          return await store.manifest(row, action);
+        },
+      }),
+    ),
+  );
+  await write.execute("nested-write", { path: "written/nested/file.txt", content: "written\n" });
+  await expectText(owner.worktree.path, "written/nested/file.txt", "written\n");
+  expect.soft(scans).toEqual(["canonical"]);
+  scans.length = 0;
+
+  // Guest writes do not advance the database revision: the next caller must capture them.
+  await writeText(projection.workspaceDir, "source.txt", "fresh guest edit\n");
+  await patch.execute("nested-patch", {
+    input: "*** Begin Patch\n*** Add File: patched/nested/file.txt\n+patched\n*** End Patch",
+  });
+  await expectText(owner.worktree.path, "source.txt", "fresh guest edit\n");
+  await expectText(owner.worktree.path, "patched/nested/file.txt", "patched\n");
+  await expectText(owner.worktree.path, "written/nested/file.txt", "written\n");
+  expect.soft(scans).toEqual(["canonical"]);
+  expect(await readLocalWorkspaceProjection(owner.worktree.id)).toMatchObject({
+    pending_ref: null,
+    pending_target: null,
+    journal_json: null,
+  });
 }
