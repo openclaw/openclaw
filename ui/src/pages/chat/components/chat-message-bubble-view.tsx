@@ -25,20 +25,27 @@ import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { assistantMessageIsInterrupted } from "../chat-assistant-reply.ts";
 import "../../../components/solid/person-reference.tsx";
 import { usePanePresentation } from "../chat-pane-presentation.ts";
+import { AsyncQuestionSummary } from "./chat-async-question-summary.tsx";
 import { ChatBubbleActivity } from "./chat-bubble-activity-view.tsx";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
+import { OmittedMedia, PairingQrNotices } from "./chat-message-attachment-status-solid.tsx";
 import type { GroupedMessageOptions } from "./chat-message-bubble-options.ts";
 import {
   prepareGroupedMessage,
-  type GroupedMessagePresentation,
+  type MessageContentProps as ContentProps,
 } from "./chat-message-bubble-presentation.ts";
+import {
+  AssistantViews,
+  BubbleToolCards,
+  InlineToolCards,
+  ToolMessage,
+} from "./chat-message-bubble-tools.tsx";
+import { MessageWorkContext } from "./chat-message-context-view.tsx";
 import {
   AssistantAttachments,
   ChatClawHubCard,
   MessageAttachment,
   MessageImages,
-  OmittedMedia,
-  PairingQrNotices,
 } from "./chat-message-deferred.tsx";
 import type { ChatMessageRenderPreparation } from "./chat-message-markdown-view.tsx";
 import type { MarkdownMedia, PositionedMedia } from "./chat-message-media-markdown.ts";
@@ -53,6 +60,7 @@ import { MarkdownText, MessageJson, MessageMarkdown } from "./chat-message-text-
 import { ReplyLineView } from "./chat-reply-attribution.tsx";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import { TranscriptMessageElementsContext } from "./chat-transcript-message-elements.ts";
+import { WorkspaceConflictTranscriptMessage } from "./chat-workspace-conflict.tsx";
 
 registerEnglishCatalog(registerChatToolLabelsEnglish);
 
@@ -61,41 +69,12 @@ registerEnglishCatalog(registerChatSessionEnglish);
 
 registerEnglishCatalog(registerChatMessageMetadataEnglish);
 
-// These parts share full synchronous preparation; only their presentation is deferred.
-const InlineToolCards = lazy(() => import("./chat-message-bubble-tools.tsx"), {
-  export: "InlineToolCards",
-});
-const ToolMessage = lazy(() => import("./chat-message-bubble-tools.tsx"), {
-  export: "ToolMessage",
-});
-const BubbleToolCards = lazy(() => import("./chat-message-bubble-tools.tsx"), {
-  export: "BubbleToolCards",
-});
-const AssistantViews = lazy(() => import("./chat-message-bubble-tools.tsx"), {
-  export: "AssistantViews",
-});
-const AsyncQuestionSummary = lazy(() => import("./chat-async-question-summary.tsx"), {
-  export: "AsyncQuestionSummary",
-});
 const PluginInlineView = lazy(() => import("../../../plugins/control-ui-inline-view.tsx"), {
   export: "PluginInlineView",
-});
-const MessageWorkContext = lazy(() => import("./chat-message-context-view.tsx"), {
-  export: "MessageWorkContext",
-});
-const WorkspaceConflictTranscriptMessage = lazy(() => import("./chat-workspace-conflict.tsx"), {
-  export: "WorkspaceConflictTranscriptMessage",
 });
 
 export type GroupedMessageProps = {
   preparation: ChatMessageRenderPreparation;
-  messageKey: string;
-  options: GroupedMessageOptions;
-  onOpenSidebar?: (content: SidebarContent) => void;
-};
-
-export type ContentProps = {
-  state: Accessor<GroupedMessagePresentation>;
   messageKey: string;
   options: GroupedMessageOptions;
   onOpenSidebar?: (content: SidebarContent) => void;
@@ -162,21 +141,17 @@ export function GroupedMessage(props: GroupedMessageProps) {
                       </ChatBubbleActivity>
                     </Match>
                     <Match when={state().onlyToolCards}>
-                      <ChatLazyBoundary>
-                        <InlineToolCards
-                          cards={state().toolCards}
-                          options={state().toolRenderOptions}
-                        />
-                      </ChatLazyBoundary>
+                      <InlineToolCards
+                        cards={state().toolCards}
+                        options={state().toolRenderOptions}
+                      />
                     </Match>
                     <Match when={state().isStandaloneToolMessage}>
-                      <ChatLazyBoundary>
-                        <ToolMessage
-                          {...props}
-                          state={state}
-                          renderContents={() => <BubbleContents {...props} state={state} />}
-                        />
-                      </ChatLazyBoundary>
+                      <ToolMessage
+                        {...props}
+                        state={state}
+                        renderContents={() => <BubbleContents {...props} state={state} />}
+                      />
                     </Match>
                     <Match when={true}>
                       {/* Keep preparation out of this boundary so refreshes retain embedded media. */}
@@ -215,9 +190,7 @@ export function GroupedMessage(props: GroupedMessageProps) {
                   </Show>
                 </div>
                 <Show when={readMessageWorkContext(state().message)}>
-                  <ChatLazyBoundary>
-                    <MessageWorkContext message={state().message} />
-                  </ChatLazyBoundary>
+                  <MessageWorkContext message={state().message} />
                 </Show>
               </>
             );
@@ -232,14 +205,12 @@ export function GroupedMessage(props: GroupedMessageProps) {
           return () => entryRef?.(undefined);
         });
         return (
-          <ChatLazyBoundary>
-            <WorkspaceConflictTranscriptMessage
-              conflict={conflict()}
-              messageKey={props.messageKey}
-              entryId={props.options.entryId}
-              ref={bindEntry}
-            />
-          </ChatLazyBoundary>
+          <WorkspaceConflictTranscriptMessage
+            conflict={conflict()}
+            messageKey={props.messageKey}
+            entryId={props.options.entryId}
+            ref={bindEntry}
+          />
         );
       }}
     </Show>
@@ -286,12 +257,10 @@ function MessageText(props: ContentProps) {
   return (
     <Switch>
       <Match when={props.state().asyncQuestions}>
-        <ChatLazyBoundary>
-          <AsyncQuestionSummary
-            questions={props.state().asyncQuestions!}
-            presentation={props.options.asyncQuestions!}
-          />
-        </ChatLazyBoundary>
+        <AsyncQuestionSummary
+          questions={props.state().asyncQuestions!}
+          presentation={props.options.asyncQuestions!}
+        />
       </Match>
       <Match when={prepared().json}>
         <MessageJson
@@ -405,9 +374,7 @@ function BubbleContents(props: ContentProps) {
       <Show
         when={props.state().isStandaloneToolMessage && props.state().assistantViewBlocks.length > 0}
       >
-        <ChatLazyBoundary>
-          <AssistantViews {...props} />
-        </ChatLazyBoundary>
+        <AssistantViews {...props} />
       </Show>
       <Show when={props.state().reasoningMarkdown}>
         <MessageReasoning state={props.state} options={props.options} />
@@ -417,9 +384,7 @@ function BubbleContents(props: ContentProps) {
           !props.state().isStandaloneToolMessage && props.state().assistantViewBlocks.length > 0
         }
       >
-        <ChatLazyBoundary>
-          <AssistantViews {...props} />
-        </ChatLazyBoundary>
+        <AssistantViews {...props} />
       </Show>
       <Show when={props.state().normalizedRole === "user"} fallback={<MessageText {...props} />}>
         <Show when={hasText() || props.options.avatar}>
@@ -442,9 +407,7 @@ function BubbleContents(props: ContentProps) {
         )}
       </For>
       <Show when={props.state().hasToolCards || props.state().failedToolCard}>
-        <ChatLazyBoundary>
-          <BubbleToolCards {...props} />
-        </ChatLazyBoundary>
+        <BubbleToolCards {...props} />
       </Show>
     </>
   );

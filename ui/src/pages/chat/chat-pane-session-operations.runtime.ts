@@ -79,7 +79,7 @@ export async function recoverCapturedChatSession({
         key: sourceSessionKey,
         sessionId: params.sessionId,
         recoveryCycleId: params.recoveryCycleId,
-        generation: generation,
+        generation,
       };
     }
     setChatError(state, formatUiError(recovery.continuation.error.message));

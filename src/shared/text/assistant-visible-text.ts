@@ -1,3 +1,7 @@
+import { scanFenceSpans } from "../../../packages/markdown-core/src/fences.js";
+// Assistant visible text helpers strip hidden reasoning and control marker text.
+import { projectPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
+import { escapeRegExp } from "../regexp.js";
 import {
   stripMinimaxToolCallXml,
   stripRelevantMemoriesTags,
@@ -8,12 +12,6 @@ import {
   traceLineHeads,
   INTERNAL_TRACE_LINE_RE,
 } from "./assistant-text-transforms.js";
-import { orderInternalScaffoldingStages } from "./internal-scaffolding-stages.js";
-export { stripAssistantInternalScaffolding } from "./assistant-internal-scaffolding.js";
-import { scanFenceSpans } from "../../../packages/markdown-core/src/fences.js";
-// Assistant visible text helpers strip hidden reasoning and control marker text.
-import { projectPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
-import { escapeRegExp } from "../regexp.js";
 import {
   canReuseMarkdownOwnership,
   findCodeOwnership,
@@ -21,6 +19,7 @@ import {
   projectLinesOutsideCode,
 } from "./code-regions.js";
 import { downgradedToolCallTextFilter } from "./downgraded-tool-call-text.js";
+import { orderInternalScaffoldingStages } from "./internal-scaffolding-stages.js";
 import { modelSpecialTokensTextFilter } from "./model-special-tokens.js";
 import { createReasoningTagProbe, stripReasoningTagsFromText } from "./reasoning-tags.js";
 import {
@@ -32,6 +31,7 @@ import {
 } from "./text-projection.js";
 import { toolCallXmlTextFilter } from "./tool-call-xml.js";
 
+export { stripAssistantInternalScaffolding } from "./assistant-internal-scaffolding.js";
 export { stripToolCallXmlTags, toolCallXmlTextFilter } from "./tool-call-xml.js";
 
 export type AssistantVisibleTextSanitizerProfile =

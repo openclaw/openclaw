@@ -86,7 +86,9 @@ export function ChatPaneMobileChrome(props: {
                 : undefined
           }
           people={
-            <Show when={!props.incognito && props.header.mobilePeople?.header.length}>
+            <Show
+              when={props.mobile && !props.incognito && props.header.mobilePeople?.header.length}
+            >
               <Loading>
                 <ChatMobilePeopleGrid
                   people={props.header.mobilePeople!}

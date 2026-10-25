@@ -11,7 +11,7 @@ import { hasUserFileAttachments } from "../chat/components/chat-message-attachme
 import { AssistantAttachments, MessageImages } from "../chat/components/chat-message-deferred.tsx";
 import { projectMessageMedia } from "../chat/components/chat-message-media.ts";
 import { MessageJson, MessageMarkdown } from "../chat/components/chat-message-text-view.tsx";
-import { ChatWorkingIndicator } from "../chat/components/chat-working-indicator-lazy.tsx";
+import { ChatWorkingIndicator } from "../chat/components/chat-working-indicator.tsx";
 import type { NewSessionBodyProps } from "./draft-body.solid.tsx";
 
 export function NewSessionSubmission(props: {

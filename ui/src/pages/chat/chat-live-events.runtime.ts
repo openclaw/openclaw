@@ -42,6 +42,7 @@ import {
 import { getChatSessionProjection, readChatSessionProjectionScope } from "./history-merge.ts";
 import { captureOutboxPayloadOwner } from "./outbox-payloads.ts";
 import { isSidebarSlotVisible } from "./sidebar-layout.ts";
+import type { AgentEventPayload } from "./tool-stream-contract.ts";
 import { handleSessionOperationEvent } from "./tool-stream-status.ts";
 import { handleAgentEvent } from "./tool-stream.ts";
 
@@ -150,6 +151,7 @@ function applyPageGatewayEvent(
   isPresented: ChatPanePresentation,
 ): void {
   if (event.event === "chat") {
+    // SAFETY: Gateway chat payload; its reducer checks run/session identity and normalizes content.
     const payload = event.payload as ChatEventPayload | undefined;
     const terminalPayload =
       payload &&
@@ -286,6 +288,7 @@ function applyPageGatewayEvent(
     return;
   }
   if (event.event === "session.observer") {
+    // SAFETY: Protocol observer digest; the checks below admit only this session and its active run.
     const payload = event.payload as SessionObserverDigest | undefined;
     if (
       !payload ||
@@ -306,14 +309,18 @@ function applyPageGatewayEvent(
     return;
   }
   if (event.event === "agent" || event.event === "session.tool") {
-    if (handleAgentEvent(state as never, event.payload as never)) {
+    // SAFETY: AgentEvent streams; the reducer checks session, sequence, and stream-specific data.
+    if (handleAgentEvent(state, event.payload as AgentEventPayload | undefined)) {
       chatRunPresentation(state).publish("animation-frame");
     }
     return;
   }
   if (event.event === "session.operation") {
-    handleSessionOperationEvent(state as never, event.payload as never);
+    handleSessionOperationEvent(
+      state,
+      // SAFETY: Protocol operation event; its reducer checks the operation, session, and phase.
+      event.payload as Parameters<typeof handleSessionOperationEvent>[1],
+    );
     chatRunPresentation(state).publish("animation-frame");
-    return;
   }
 }

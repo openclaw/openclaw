@@ -246,31 +246,6 @@ export function MobileHostChrome(
     );
     return undefined;
   };
-  onSettled(() => {
-    const stopKeydown = listen(props.readShell(), "keydown", (event) => {
-      if (event.key === "Escape" && !event.defaultPrevented && props.view.mobileHost) {
-        event.preventDefault();
-        props.view.mobileHost.close();
-      }
-    });
-    const stopFocus = listen(props.readShell(), "focusin", (event) => {
-      const target = event.target;
-      if (
-        props.view.mobileHost?.mode === "dock" &&
-        target instanceof HTMLElement &&
-        (target.matches(
-          "textarea:not([readonly]):not([disabled]), input:not([readonly]):not([disabled]):not([type=button]):not([type=submit]):not([type=reset]):not([type=color]):not([type=checkbox]):not([type=radio]):not([type=range]):not([type=file])",
-        ) ||
-          target.isContentEditable)
-      ) {
-        toggleExpanded();
-      }
-    });
-    return () => {
-      stopKeydown();
-      stopFocus();
-    };
-  });
   return (
     <Show when={props.view.mobileHost}>
       <ScrollFades />

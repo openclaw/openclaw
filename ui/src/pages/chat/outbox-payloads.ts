@@ -1,20 +1,25 @@
 import { readOfflineStorageScope } from "../../app/boot-record.ts";
 import { t } from "../../i18n/index.ts";
+import { readBlobAsDataUrl } from "../../lib/blob-data-url.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import {
+  outboxPayloadTab,
+  readOutboxPayload,
   removeOutboxPayloads,
+  writeOutboxPayload,
   type OutboxPayloadFailure,
 } from "../../lib/chat/outbox-payload-store.runtime.ts";
 import type { StoredChatOutboxScope } from "../../lib/chat/outbox-store-scope.ts";
 import { storageTargetForGateway, type ChatComposerScope } from "../../lib/chat/outbox-store.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { isIncognitoComposerScope } from "./composer-persistence-state.ts";
+import { captureDurableChatAttachments } from "./durable-composer-persistence.ts";
 
 type Host = ChatComposerScope & { sessionKey?: string };
 type PayloadUpdate = Pick<ChatQueueItem, "attachments" | "attachmentPayload"> & {
   attachmentStorageError?: undefined;
 };
-export type PayloadResult =
+type PayloadResult =
   | { status: "ready"; update: PayloadUpdate }
   | { status: "failed"; reason: OutboxPayloadFailure };
 
@@ -82,24 +87,107 @@ async function preparePayload(
     return { status: "failed", reason: "unavailable" };
   }
   const isCurrent = captureOutboxPayloadOwner(host, scope);
-  const gatewayOwner = storageTargetForGateway(host.settings?.gatewayUrl).gatewayOwner;
-  const capturedItem = {
-    ...item,
-    attachments: item.attachments?.map((attachment) => ({ ...attachment })),
-    attachmentPayload: item.attachmentPayload ? { ...item.attachmentPayload } : undefined,
-  };
+  let tabId: string;
   try {
-    const { prepareCapturedOutboxPayload } = await import("./outbox-payloads.runtime.ts");
-    return await prepareCapturedOutboxPayload(
-      capturedItem,
-      purpose,
-      gatewayOwner,
-      recoveryScope,
-      isCurrent,
-    );
+    tabId = await outboxPayloadTab();
   } catch {
     return { status: "failed", reason: "unavailable" };
   }
+  if (!isCurrent()) {
+    return { status: "failed", reason: "unavailable" };
+  }
+  const owner = {
+    tabId,
+    gatewayOwner: storageTargetForGateway(host.settings?.gatewayUrl).gatewayOwner,
+    recoveryScope,
+    queueId: item.id,
+  };
+  if (item.attachmentPayload) {
+    const result = await readOutboxPayload(owner, item.attachmentPayload);
+    if (result.status === "failed") {
+      return result;
+    }
+    const metadata = item.attachments ?? [];
+    if (
+      result.value.length !== metadata.length ||
+      result.value.some((attachment, index) => {
+        const expected = metadata[index]!;
+        return (
+          attachment.mimeType !== expected.mimeType ||
+          attachment.fileName !== expected.fileName ||
+          attachment.origin !== expected.origin ||
+          attachment.sizeBytes !== expected.sizeBytes
+        );
+      })
+    ) {
+      return { status: "failed", reason: "missing" };
+    }
+    if (!isCurrent()) {
+      return { status: "failed", reason: "unavailable" };
+    }
+    try {
+      // Restore into isolated objects; no consumer sees a partially hydrated batch.
+      const attachments = await Promise.all(
+        result.value.map(async (attachment, index) => ({
+          ...metadata[index]!,
+          ...(attachment.selectionAnnotation
+            ? { selectionAnnotation: attachment.selectionAnnotation }
+            : {}),
+          dataUrl: await readBlobAsDataUrl(attachment.blob),
+        })),
+      );
+      if (!isCurrent()) {
+        return { status: "failed", reason: "unavailable" };
+      }
+      const update = {
+        attachments,
+        attachmentPayload: item.attachmentPayload,
+        attachmentStorageError: undefined,
+      };
+      if (purpose === "send" && item.attachmentPayload.tabId !== tabId) {
+        const copy = await writeOutboxPayload(owner, result.value);
+        if (copy.status === "failed") {
+          return copy;
+        }
+        if (!isCurrent()) {
+          await removeOutboxPayloads([copy.value]);
+          return { status: "failed", reason: "unavailable" };
+        }
+        // A duplicate tab keeps the original submission ID; server admission
+        // deduplicates its retry while each tab owns its attachment bytes.
+        return {
+          status: "ready",
+          update: {
+            ...update,
+            attachmentPayload: copy.value,
+          },
+        };
+      }
+      return { status: "ready", update };
+    } catch {
+      return { status: "failed", reason: "missing" };
+    }
+  }
+  // Delivery already happened: read existing bytes, never allocate a new bundle.
+  if (purpose === "handoff" || item.attachmentStorageError === "missing") {
+    return { status: "failed", reason: "missing" };
+  }
+  const attachments = captureDurableChatAttachments(item.attachments ?? []);
+  if (!attachments) {
+    return { status: "failed", reason: "missing" };
+  }
+  const result = await writeOutboxPayload(owner, attachments);
+  if (result.status === "failed") {
+    return result;
+  }
+  if (!isCurrent()) {
+    await removeOutboxPayloads([result.value]);
+    return { status: "failed", reason: "unavailable" };
+  }
+  return {
+    status: "ready",
+    update: { attachmentPayload: result.value, attachmentStorageError: undefined },
+  };
 }
 
 // Preview and drain share reads/copies so a cloned tab cannot create competing refs.

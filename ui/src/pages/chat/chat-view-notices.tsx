@@ -23,8 +23,8 @@ import { ChatGPTUsageLimit } from "./chatgpt-usage-limit.tsx";
 import { ChatChildAttention } from "./components/chat-child-attention.tsx";
 import { ChatConversationMobile } from "./components/chat-conversation-presentation.ts";
 import { renderGuestWelcomeStatus } from "./components/chat-guest-welcome-status.tsx";
-import { ChatLazyBoundary } from "./components/chat-lazy-boundary.tsx";
 import { ChatSendStatus } from "./components/chat-message-send-status-view.tsx";
+import { WorkspaceConflictNotice } from "./components/chat-workspace-conflict.tsx";
 import type { ChatRunError } from "./run-lifecycle.ts";
 import type { ProviderPolicyNotice } from "./tool-stream-contract.ts";
 import "../../styles/chat/conversation-notices.css";
@@ -38,10 +38,6 @@ registerEnglishCatalog(registerChatSessionEnglish);
 registerEnglishCatalog(registerChatComposerEnglish);
 
 registerNewSessionRuntimeEnglish();
-
-const WorkspaceConflictNotice = lazy(() => import("./components/chat-workspace-conflict.tsx"), {
-  export: "WorkspaceConflictNotice",
-});
 
 export type ChatPlacementStartupNoticeProps = {
   placementStartup?: ApplicationPlacementStartupStatus | null;
@@ -367,12 +363,10 @@ export function renderChatComposerNotices(props: ChatComposerNoticesProps) {
         )}
       </Show>
       <Show when={props.workspaceConflict}>
-        <ChatLazyBoundary>
-          <WorkspaceConflictNotice
-            conflict={props.workspaceConflict ?? undefined}
-            onDismiss={props.onDismissWorkspaceConflict}
-          />
-        </ChatLazyBoundary>
+        <WorkspaceConflictNotice
+          conflict={props.workspaceConflict ?? undefined}
+          onDismiss={props.onDismissWorkspaceConflict}
+        />
       </Show>
       <ChatPlacementStartupNotice
         status={props.placementStartup}

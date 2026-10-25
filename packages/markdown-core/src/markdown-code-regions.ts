@@ -5,7 +5,9 @@ type MarkdownCodeRegion = { start: number; end: number; block: boolean };
 
 /** Read exact original UTF-16 code ranges without building a Markdown tree. */
 export function findMarkdownCodeRegions(text: string): MarkdownCodeRegion[] {
-  if (!/[`~\t]| {4}/u.test(text)) return [];
+  if (!/[`~\t]| {4}/u.test(text)) {
+    return [];
+  }
   const events = postprocess(
     parse({ extensions: [{ disable: { null: ["htmlFlow", "htmlText"] } }, gfmTable()] })
       .document()
@@ -14,7 +16,9 @@ export function findMarkdownCodeRegions(text: string): MarkdownCodeRegion[] {
   const regions: MarkdownCodeRegion[] = [];
   let imageDepth = 0;
   for (const [phase, token] of events) {
-    if (token.type === "image") imageDepth += phase === "enter" ? 1 : -1;
+    if (token.type === "image") {
+      imageDepth += phase === "enter" ? 1 : -1;
+    }
     // Resolved image labels become alt text, so their inline code is not protected.
     if (
       phase === "enter" &&

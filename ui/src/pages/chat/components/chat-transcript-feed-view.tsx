@@ -1,7 +1,7 @@
 import { flattenMarkdownToPlainText } from "@openclaw/normalization-core/markdown-plain-text";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { createMemo, For, lazy } from "solid-js";
+import { createMemo, For } from "solid-js";
 import "../../../styles/chat/transcript-feed.css";
 import { stripShellPreamble } from "../../../../../src/agents/tool-display-exec-shell.js";
 import {
@@ -31,14 +31,10 @@ import { resolveCappedMessageId } from "../chat-message-recovery.ts";
 import { ownSessionLaunchCalls } from "../chat-spawned-subagent.ts";
 import { buildMessageItems, rawMessageTimestamp } from "../chat-thread-items.ts";
 import { coalesceToolActivityMessages } from "../chat-tool-activity-coalesce.ts";
-import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
+import { ForwardedAttribution } from "./chat-forwarded-attribution.tsx";
 import { MessageMarkdown } from "./chat-message-text-view.tsx";
 
 registerEnglishCatalog(registerChatToolLabelsEnglish);
-
-const ForwardedAttribution = lazy(() => import("./chat-forwarded-attribution.tsx"), {
-  export: "ForwardedAttribution",
-});
 
 type Entry = { key: string; timestamp: number | null } & (
   | {
@@ -288,9 +284,7 @@ function FeedEntry(props: { entry: Entry }) {
       </span>
       <div class="chat-task-feed__body">
         {props.entry.kind === "assistant" && props.entry.senderSession ? (
-          <ChatLazyBoundary>
-            <ForwardedAttribution group={props.entry} options={{ linkSource: false }} />
-          </ChatLazyBoundary>
+          <ForwardedAttribution group={props.entry} options={{ linkSource: false }} />
         ) : (
           (props.entry.kind === "user" || props.entry.kind === "assistant") && (
             <span class="sr-only">{t(`sessionsView.${props.entry.kind}`)}: </span>

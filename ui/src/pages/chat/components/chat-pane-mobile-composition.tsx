@@ -31,6 +31,7 @@ import { chatPaneLayoutModel, ChatPaneLayoutHeaderActions } from "./chat-header-
 import type { HeaderSessionMenuPage } from "./chat-header-session-menu-mobile.tsx";
 import { ChatHeaderSessionMenu } from "./chat-header-session-menu.tsx";
 import type { ChatPaneHeaderProps } from "./chat-pane-header.types.ts";
+import { ChatPaneMobileChrome } from "./chat-pane-mobile-chrome.runtime.tsx";
 import {
   createChatMachinePresentation,
   type ChatPanePlacementProps,
@@ -40,10 +41,6 @@ import { createChatSessionSharingMobileAdapter } from "./chat-session-sharing-mo
 import { ChatSessionSharingOptions } from "./chat-session-sharing-options.tsx";
 
 registerEnglishCatalog(registerChatSessionEnglish);
-
-const ChatPaneMobileChrome = lazy(() => import("./chat-pane-mobile-chrome.runtime.tsx"), {
-  export: "ChatPaneMobileChrome",
-});
 
 /** Composition only: destinations and resources remain owned by the pane's native host. */
 export function ChatPaneMobileComposition(props: {
@@ -566,72 +563,46 @@ export function ChatPaneMobileComposition(props: {
       </span>
     </Show>
   );
+  // The first mobile frame needs this header’s height and focus targets.
   // The host retains page JSX across viewport changes. Keep its owner (including
   // the native session menu's page roots) mounted while its chrome is parked.
-  // The mobile subtree is adopted once, then parked across viewport changes.
-  const mobileActivated = createMemo<boolean>((previous) => previous === true || mobile());
   const chrome = (
-    <Show when={mobileActivated()}>
-      <Errored
-        fallback={(error, reset) => (
-          <LazyViewError
-            error={error()}
-            stale={isStaleChunkImportError(error())}
-            onRetry={() => {
-              if (isStaleChunkImportError(error())) {
-                void retryStaleChunkReloadWhenReachable();
-              } else {
-                reset();
-              }
-            }}
-            inline
-          />
-        )}
-      >
-        <Loading>
-          <ChatPaneMobileChrome
-            header={props.header}
-            project={props.project}
-            details={details}
-            notice={props.notice}
-            sessionMenu={sessionMenu}
-            mobile={mobile()}
-            presented={presented()}
-            incognito={incognito()}
-            compactActions={compactActions()}
-            deviceOffline={machine()?.deviceOffline}
-            machineName={machineName()}
-            peopleControls={peopleId()}
-            peopleLabel={labels.people}
-            morePeople={labels.morePeople}
-            peopleExpanded={Boolean(
-              host()?.open && !host()?.suspended && host()?.destination === people,
-            )}
-            onChromeRef={(element) => {
-              chromeRoot = element;
-            }}
-            onOpenMachine={(source) => host()?.navigate(machinePage, source)}
-            onOpenPeople={(source) => {
-              const current = host();
-              if (!current) {
-                return;
-              }
-              // Set native expansion before revealing the destination, in the same synchronous intent.
-              // A closed host has no visible dock to reserve behind the expanded page.
-              if (current.mode !== "expanded") {
-                const shell = current.detailsMount?.closest<HTMLElement>(".chat-mobile-host");
-                current.toggleExpanded(
-                  current.open && !current.suspended
-                    ? (shell?.getBoundingClientRect().height ?? 0)
-                    : 0,
-                );
-              }
-              current.navigate(people, source);
-            }}
-          />
-        </Loading>
-      </Errored>
-    </Show>
+    <ChatPaneMobileChrome
+      header={props.header}
+      project={props.project}
+      details={details}
+      notice={props.notice}
+      sessionMenu={sessionMenu}
+      mobile={mobile()}
+      presented={presented()}
+      incognito={incognito()}
+      compactActions={compactActions()}
+      deviceOffline={machine()?.deviceOffline}
+      machineName={machineName()}
+      peopleControls={peopleId()}
+      peopleLabel={labels.people}
+      morePeople={labels.morePeople}
+      peopleExpanded={Boolean(host()?.open && !host()?.suspended && host()?.destination === people)}
+      onChromeRef={(element) => {
+        chromeRoot = element;
+      }}
+      onOpenMachine={(source) => host()?.navigate(machinePage, source)}
+      onOpenPeople={(source) => {
+        const current = host();
+        if (!current) {
+          return;
+        }
+        // Set native expansion before revealing the destination, in the same synchronous intent.
+        // A closed host has no visible dock to reserve behind the expanded page.
+        if (current.mode !== "expanded") {
+          const shell = current.detailsMount?.closest<HTMLElement>(".chat-mobile-host");
+          current.toggleExpanded(
+            current.open && !current.suspended ? (shell?.getBoundingClientRect().height ?? 0) : 0,
+          );
+        }
+        current.navigate(people, source);
+      }}
+    />
   );
   return (
     <>

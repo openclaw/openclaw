@@ -7,8 +7,12 @@ const pendingImport = vi.hoisted(() => {
   let release!: () => void;
   let started!: () => void;
   return {
-    held: new Promise<void>((resolve) => (release = resolve)),
-    started: new Promise<void>((resolve) => (started = resolve)),
+    held: new Promise<void>((resolve) => {
+      release = resolve;
+    }),
+    started: new Promise<void>((resolve) => {
+      started = resolve;
+    }),
     release: () => release(),
     start: () => started(),
     dispatchImports: 0,
@@ -99,7 +103,9 @@ it("preserves live ordering across one shared import and retires superseded pane
   for (const includeFinal of [false, true]) {
     const pane = await harness();
     pane.chat("settled-run", "delta", "Already settled");
-    if (includeFinal) pane.chat("settled-run", "final", "Durable final");
+    if (includeFinal) {
+      pane.chat("settled-run", "final", "Durable final");
+    }
     const row: GatewaySessionRow = {
       key: pane.state.sessionKey,
       sessionId: pane.state.currentSessionId!,
@@ -121,16 +127,27 @@ it("preserves live ordering across one shared import and retires superseded pane
       pane.state.assistantAgentId = "main";
     }
     pane.chat("stale-run", "delta", "Wrong owner");
-    if (change === "connection") pane.state.connectionEpoch += 1;
-    if (change === "session") pane.state.sessionKey = "agent:main:other";
-    if (change === "physical-session") pane.state.currentSessionId = "successor-session";
-    if (change === "agent") pane.state.assistantAgentId = "other";
-    if (change === "dispose") boundary.disposeChatLiveEvents(pane.state);
+    if (change === "connection") {
+      pane.state.connectionEpoch += 1;
+    }
+    if (change === "session") {
+      pane.state.sessionKey = "agent:main:other";
+    }
+    if (change === "physical-session") {
+      pane.state.currentSessionId = "successor-session";
+    }
+    if (change === "agent") {
+      pane.state.assistantAgentId = "other";
+    }
+    if (change === "dispose") {
+      boundary.disposeChatLiveEvents(pane.state);
+    }
     retiredPanes.push(pane);
   }
 
-  const loadToolsNow = boundary.loadChatLiveTools;
-  const loadTools = vi.spyOn(boundary, "loadChatLiveTools").mockImplementation(async () => {
+  const tools = await import("./chat-live-tools.ts");
+  const loadToolsNow = tools.loadChatLiveTools;
+  const loadTools = vi.spyOn(tools, "loadChatLiveTools").mockImplementation(async () => {
     await pendingImport.held;
     return loadToolsNow();
   });

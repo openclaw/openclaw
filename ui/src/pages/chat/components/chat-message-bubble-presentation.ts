@@ -1,4 +1,5 @@
 import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
+import type { Accessor } from "solid-js";
 import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { parseMarkdownJson } from "../../../components/markdown-json.ts";
 import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
@@ -351,3 +352,10 @@ export function prepareGroupedMessage(
 }
 
 export type GroupedMessagePresentation = ReturnType<typeof prepareGroupedMessage>;
+
+export type MessageContentProps = {
+  state: Accessor<GroupedMessagePresentation>;
+  messageKey: string;
+  options: GroupedMessageOptions;
+  onOpenSidebar?: (content: SidebarContent) => void;
+};

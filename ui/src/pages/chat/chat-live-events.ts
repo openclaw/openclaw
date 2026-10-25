@@ -21,12 +21,6 @@ async function importChatLiveEvents(): Promise<LiveEvents> {
   return { handleChatLiveEvent };
 }
 
-export function loadChatLiveTools() {
-  // History needs the tool reducer, not the dispatcher's browser presentation imports.
-  // Both entries share the preloaded live-events chunk in production.
-  return import("./tool-stream.ts");
-}
-
 export function loadChatLiveEvents(): Promise<LiveEvents> {
   return (loading ??= importChatLiveEvents().then(
     (loaded) => (runtime = loaded),

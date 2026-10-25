@@ -10,7 +10,7 @@ import { openCatalogSessionInTerminal } from "../lib/sessions/catalog-terminal.t
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { showToast } from "../lib/toast.ts";
 import type {
-  SidebarCatalogMenuHost,
+  SidebarCatalogMenuProps,
   SidebarCatalogSessionMenuState,
 } from "./app-sidebar-catalog-menu.tsx";
 import type { SidebarCatalogSessionMutationScope } from "./app-sidebar-session-types.ts";
@@ -19,14 +19,6 @@ import { showConfirmDialog } from "./confirm-dialog.ts";
 
 registerEnglishCatalog(registerSessionNavigationEnglish);
 registerEnglishCatalog(registerSessionOrganizationSharedEnglish);
-
-export type SidebarCatalogMenuProps = {
-  host: SidebarCatalogMenuHost;
-  viewHost: SidebarCatalogMenuHost;
-  menu: SidebarCatalogSessionMenuState;
-  trigger: HTMLElement | null;
-  onClose: () => void;
-};
 
 export function SidebarCatalogMenu(props: SidebarCatalogMenuProps) {
   function isMutationCurrent(scope: SidebarCatalogSessionMutationScope): boolean {

@@ -30,6 +30,9 @@ const transforms = orderInternalScaffoldingStages<(text: string) => string>({
 });
 
 export function stripAssistantInternalScaffolding(text: string): string {
-  for (const transform of transforms) text = transform(text);
-  return text;
+  let transformed = text;
+  for (const transform of transforms) {
+    transformed = transform(transformed);
+  }
+  return transformed;
 }

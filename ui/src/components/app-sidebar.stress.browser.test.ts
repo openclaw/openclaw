@@ -144,7 +144,9 @@ describe.runIf("__vitest_browser__" in globalThis)("full sidebar state stress", 
           previous &&
           row.title &&
           previous.title &&
-          Math.abs(row.title.x - previous.title.x) > 0.1
+          Math.abs(
+            rtl ? row.title.right - previous.title.right : row.title.left - previous.title.left,
+          ) > 0.1
         ) {
           issues.push(row.key + " title shifted with presence");
         }

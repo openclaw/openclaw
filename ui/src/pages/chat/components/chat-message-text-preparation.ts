@@ -34,6 +34,7 @@ export function prepareMessageMarkdown(
   markdownRenderOptions: MarkdownRenderOptions,
   duplicateSuffix?: DuplicateSuffix,
   renderStreaming?: typeof toStreamingMarkdownDomParts,
+  mutableStreaming = false,
 ) {
   const disclosure = opts.assistantMessageDisclosure;
   const isAssistant = opts.role === "assistant";
@@ -44,9 +45,12 @@ export function prepareMessageMarkdown(
   const options: MarkdownRenderOptions = recovered
     ? { ...markdownRenderOptions, mode: "document" }
     : markdownRenderOptions;
-  const parts: [MarkdownContent, MarkdownContent] = renderStreaming
+  let parts: [MarkdownContent, MarkdownContent] = renderStreaming
     ? renderStreaming(source, options, isAssistant ? messageKey : undefined)
     : partitionMarkdownHtml(toSanitizedMarkdownHtml(source, options), messageKey);
+  if (mutableStreaming) {
+    parts = ["", markdownContentHtml(parts[0]) + markdownContentHtml(parts[1])];
+  }
   if (duplicateSuffix) {
     const terminalPart = markdownContentHtml(parts[1]).trim() ? 1 : 0;
     const template = document.createElement("template");

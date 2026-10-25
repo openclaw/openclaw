@@ -1,5 +1,9 @@
 // Model special token helpers strip model control tokens outside code regions.
 import { findCodeOwnership } from "./code-regions.js";
+import {
+  projectModelSpecialTokens as projectTokens,
+  stripModelSpecialTokens,
+} from "./model-special-token-transform.js";
 import type { TextFilter, TextProjection } from "./text-projection.js";
 
 // Match both ASCII pipe <|...|> and full-width pipe <｜...｜> (U+FF5C) variants.
@@ -54,11 +58,6 @@ function endsWithCompleteToken(text: string): boolean {
 function endsWithTokenBeforeIncompleteSurrogate(text: string): boolean {
   return /[\uD800-\uDBFF]$/u.test(text) && endsWithCompleteToken(text.slice(0, -1));
 }
-
-import {
-  projectModelSpecialTokens as projectTokens,
-  stripModelSpecialTokens,
-} from "./model-special-token-transform.js";
 
 function projectModelSpecialTokens(text: string) {
   return projectTokens(text, (source) => findCodeOwnership(source, { includeText: true }));

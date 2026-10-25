@@ -78,7 +78,7 @@ export async function sendQueuedChatMessage(
     ({ item: queued, expectedLeafEntryId } = ready);
   }
   // FIFO and visible history are admitted before preparing transport and the first reply.
-  const { sendPreparedChatQueueItem, error: preparationError } = await Promise.all([
+  const { sendPreparedChatQueueItem: sendPrepared, error: preparationError } = await Promise.all([
     import("./chat-send-delivery.runtime.ts").then(
       ({ sendPreparedChatQueueItem }) => sendPreparedChatQueueItem,
     ),
@@ -97,13 +97,13 @@ export async function sendQueuedChatMessage(
   if (!retryOwnerIsCurrent()) {
     return "failed";
   }
-  if (!sendPreparedChatQueueItem) {
+  if (!sendPrepared) {
     const error = formatUiError(preparationError);
     deliveryStateWriter(host, storageMode, id)("failed", error);
     surfaceChatDeliveryFailure(host, retrySessionKey, retryAgentId, error);
     return "failed";
   }
-  return sendPreparedChatQueueItem(
+  return sendPrepared(
     host,
     current,
     expectedLeafEntryId,

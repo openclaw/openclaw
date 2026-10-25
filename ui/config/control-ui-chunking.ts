@@ -82,9 +82,6 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/pages/chat/components/chat-details-environment-desktop.css":
       // Share styles without making Outputs import the Details renderer.
       return "chat-details-styles";
-    case "ui/src/lib/reactive/application-native.ts":
-    case "ui/src/pages/chat/components/chat-working-indicator-lazy.tsx":
-      return "deferred-ui-support";
     case "ui/src/components/session-git-diff.tsx":
     case "ui/src/lib/sessions/usage.ts":
     case "src/shared/weak-owner-map.ts":
@@ -96,7 +93,6 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/lib/download.ts":
     case "src/shared/markdown-code.ts":
       return "deferred-ui-support";
-    case "ui/src/pages/chat/components/chat-message-attachment-status-solid.tsx":
     case "ui/src/pages/chat/components/chat-image-preview-size.ts":
     case "ui/src/pages/chat/components/chat-image-rendition.ts":
     case "ui/src/pages/chat/components/chat-message-image-open.ts":
@@ -117,31 +113,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/pages/chat/chat-pane-session-metadata-patch.ts":
     case "ui/src/pages/chat/chat-pane-session-operations.ts":
     case "ui/src/pages/chat/chat-pane-session-operations.runtime.ts":
-    case "ui/src/pages/chat/outbox-payloads.runtime.ts":
-    case "ui/src/lib/chat/outbox-payload-store.io.ts":
       return "chat-interaction-runtime";
-    case "ui/src/pages/chat/components/chat-agent-run-frame.tsx":
-    case "ui/src/pages/chat/components/chat-message-stream-view.tsx":
-    case "ui/src/pages/chat/components/chat-work-group-summary.tsx":
-    case "ui/src/pages/chat/components/chat-async-question-summary.tsx":
-    case "ui/src/pages/chat/components/chat-forwarded-attribution.tsx":
-    case "ui/src/pages/chat/components/chat-session-activity.solid.tsx":
-    case "ui/src/pages/chat/components/chat-tool-card-row.solid.tsx":
-    case "ui/src/pages/chat/components/chat-command-highlight.solid.tsx":
-    case "ui/src/pages/chat/components/chat-turn-recap-view.tsx":
-    case "ui/src/pages/chat/components/chat-working-indicator-branding.tsx":
-    case "ui/src/pages/chat/components/chat-retry-status.tsx":
-    case "ui/src/pages/chat/components/chat-working-indicator-surprise.ts":
-    case "ui/src/pages/chat/components/chat-working-indicator.tsx":
-    case "ui/src/components/working-phrase-solid.tsx":
-    case "ui/src/lib/chat/source-previews.ts":
-    case "ui/src/lib/chat/tool-call-view.ts":
-    case "ui/src/lib/chat/tool-display.ts":
-    case "src/agents/tool-display-exec-shell.ts":
-    case "src/agents/tool-display-exec.ts":
-    case "src/agents/tool-display-common.ts":
-      return "chat-interaction-runtime";
-    case "ui/src/pages/chat/components/chat-composer-context-panel.tsx":
     case "ui/src/pages/chat/components/chat-context-breakdown.tsx":
     case "ui/src/pages/chat/components/chat-context-breakdown-model.ts":
     case "ui/src/pages/chat/components/chat-context-report.tsx":
@@ -165,11 +137,9 @@ export function controlUiStableChunkName(id: string): string | undefined {
       return "chat-live-events-runtime";
     case "ui/src/pages/chat/chat-mobile-host.runtime.tsx":
     case "ui/src/pages/chat/chat-mobile-scroll-fades.runtime.ts":
-    case "ui/src/pages/chat/components/chat-pane-mobile-chrome.runtime.tsx":
-    case "ui/src/pages/chat/components/chat-pane-mobile-header.tsx":
     case "ui/src/pages/chat/components/chat-mobile-people-grid.tsx":
     case "ui/src/pages/chat/components/chat-mobile-people-grid.css":
-      // Earlier captures include the hidden mobile header; desktop must not evaluate it.
+      // Keep gesture and People implementations separate from retained header chrome.
       return "chat-mobile-runtime";
     case "ui/src/lib/device-pair-setup.ts":
       // Pairing loads on interaction; the earlier boot capture must not pull it into either route.

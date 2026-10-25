@@ -3,7 +3,7 @@ import type {
   SessionParticipant,
   SessionParticipantIdentity,
 } from "../../../../../packages/gateway-protocol/src/schema/session-participant.js";
-import { type PersonActivityRouting } from "../../../components/person-activity-link.ts";
+import type { PersonActivityRouting } from "../../../components/person-activity-link.ts";
 import { ParticipantAvatar } from "../../../components/solid/viewer-facepile.tsx";
 import { registerChatDetailsEnglish } from "../../../i18n/locales/en-chat-details.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";

@@ -11,8 +11,10 @@ vi.mock("./markdown-live.ts", async (importOriginal) => {
   return importOriginal();
 });
 
-it("keeps final history synchronous and renders only the latest safe delta after loading", async () => {
-  const [source, setSource] = createSignal("**First delta");
+it("renders current safe Markdown and retains its DOM while the live runtime loads", async () => {
+  const initial = "First paragraph\n\n**Growing";
+  const [source, setSource] = createSignal(initial);
+  const [streaming, setStreaming] = createSignal(true);
   const [finished, setFinished] = createSignal(false);
   const view = mountSolid(() => (
     <>
@@ -29,7 +31,7 @@ it("keeps final history synchronous and renders only the latest safe delta after
           <MessageMarkdown
             markdown={source()}
             messageKey="live"
-            options={{ role: "assistant", isStreaming: true }}
+            options={{ role: "assistant", isStreaming: streaming() }}
             markdownOptions={{}}
           />
         </ChatLazyBoundary>
@@ -44,25 +46,58 @@ it("keeps final history synchronous and renders only the latest safe delta after
           />
         </ChatLazyBoundary>
       </section>
+      <section class="live-code">
+        <ChatLazyBoundary fallback={<span>Loading reply</span>}>
+          <MessageMarkdown
+            markdown="```text\nCopyable while loading"
+            messageKey="code"
+            options={{ role: "assistant", isStreaming: streaming() }}
+            markdownOptions={{}}
+          />
+        </ChatLazyBoundary>
+      </section>
     </>
   ));
   expect(view.container.querySelector(".final-history strong")?.textContent).toBe("history");
   await waitForSolid(() => {
-    expect(view.container.querySelector(".live-message")?.textContent).toBe("Loading reply");
+    expect(view.container.querySelector(".live-message")?.textContent).toContain("Growing");
   });
+  const paragraphs = [...view.container.querySelectorAll(".live-message p")];
+  expect(paragraphs).toHaveLength(2);
+  const expectRetainedParagraphs = () => {
+    const current = view.container.querySelectorAll(".live-message p");
+    expect(current).toHaveLength(paragraphs.length);
+    current.forEach((paragraph, index) => expect(paragraph).toBe(paragraphs[index]));
+  };
+  const copy = view.container.querySelector(".live-code .code-block-copy");
+  expect(copy).not.toBeNull();
 
-  setSource('**Latest delta**<img src="x" onerror="alert(1)">');
+  const latest = `${initial} delta**<img src="x" onerror="alert(1)">`;
+  setSource(latest);
   setFinished(true);
   await waitForSolid(() => {
     expect(view.container.querySelector(".completed-message strong")?.textContent).toBe("reply");
+    expect(view.container.querySelector(".live-message strong")?.textContent).toBe("Growing delta");
   });
-  expect(view.container.querySelector(".live-message")?.textContent).not.toContain("Latest");
+  expectRetainedParagraphs();
+  expect(view.container.querySelector("[onerror], script")).toBeNull();
 
   runtime.resolve();
+  await vi.dynamicImportSettled();
   await waitForSolid(() => {
-    expect(view.container.querySelector(".live-message strong")?.textContent).toBe("Latest delta");
+    expect(view.container.querySelector(".live-message strong")?.textContent).toBe("Growing delta");
   });
-  expect(view.container.querySelector(".live-message")?.textContent).not.toContain("First");
+  expectRetainedParagraphs();
+  expect(view.container.querySelector(".live-code .code-block-copy")).toBe(copy);
+  setSource(`${latest} More`);
+  await waitForSolid(() => {
+    expect(view.container.querySelector(".live-message")?.textContent).toContain("More");
+  });
+  setStreaming(false);
+  await waitForSolid(() => {
+    expectRetainedParagraphs();
+    expect(view.container.querySelector(".live-code .code-block-copy")).toBe(copy);
+  });
   expect(view.container.querySelector(".completed-message")?.textContent).toBe("Completed reply\n");
   expect(view.container.querySelector("[onerror], script")).toBeNull();
 });

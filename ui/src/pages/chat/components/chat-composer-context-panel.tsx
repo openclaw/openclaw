@@ -1,6 +1,6 @@
 import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asNullableObjectRecord as readCostRecord } from "@openclaw/normalization-core/record-coerce";
-import { For, Loading, Show, createMemo, lazy } from "solid-js";
+import { For, Loading, Repeat, Show, createMemo, lazy } from "solid-js";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../../../../../src/shared/transcript-only-openclaw-assistant.js";
 import { normalizeBasePath } from "../../../app-route-paths.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
@@ -8,15 +8,35 @@ import { ProviderBrandIcon } from "../../../components/solid/provider-icon.tsx";
 import { formatCompactTokenCount, formatCost } from "../../../lib/format.ts";
 import type { ProviderQuotaGroup } from "../../../lib/provider-quota-summary.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import {
-  ContextPopoverSkeleton,
-  type ContextNoticeProps,
-  type getContextNoticeViewModel,
-} from "./chat-composer-context.tsx";
+import type {
+  ContextNoticeProps,
+  getContextNoticeViewModel,
+} from "./chat-composer-context-model.ts";
 
 const ChatContextBreakdown = lazy(() => import("./chat-context-breakdown.tsx"), {
   export: "ChatContextBreakdown",
 });
+
+function ContextPopoverSkeleton() {
+  return (
+    <div
+      class="context-usage__report-skeleton"
+      role="status"
+      aria-label={t("chat.sessionDetails.contextLoading")}
+    >
+      <div class="context-usage__skeleton-bar" />
+      <Repeat count={5}>
+        {() => (
+          <div class="context-usage__skeleton-row">
+            <i />
+            <span />
+            <b />
+          </div>
+        )}
+      </Repeat>
+    </div>
+  );
+}
 
 type ProviderCostStats = {
   input?: number;

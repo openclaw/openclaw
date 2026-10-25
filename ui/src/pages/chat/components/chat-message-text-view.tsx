@@ -5,6 +5,7 @@ import {
   createSignal,
   createRoot,
   getOwner,
+  latest,
   runWithOwner,
   Show,
   useContext,
@@ -78,12 +79,15 @@ export type MessageMarkdownProps = {
 };
 
 export function MessageMarkdown(props: MessageMarkdownProps) {
-  // Live rows have a ChatLazyBoundary. Resolve code there before reading a delta,
-  // then render in the ordinary tracked memo so late highlighting stays reactive.
-  const streaming = createMemo(() =>
-    props.options.isStreaming
-      ? (loadStreamingMarkdown.peek() ?? loadStreamingMarkdown())
-      : undefined,
+  // A cold tab can join a remote reply before the live runtime is ready. Keep
+  // that reply in one mutable island so loading cannot repartition its DOM.
+  const initialStreamingRuntime = loadStreamingMarkdown.peek();
+  const streaming = createMemo(
+    () =>
+      props.options.isStreaming
+        ? (loadStreamingMarkdown.peek() ?? loadStreamingMarkdown())
+        : undefined,
+    { loadingValue: undefined },
   );
   const presentation = createMemo(() =>
     prepareMessageMarkdown(
@@ -92,7 +96,8 @@ export function MessageMarkdown(props: MessageMarkdownProps) {
       props.options,
       props.markdownOptions,
       props.duplicateSuffix,
-      streaming()?.toStreamingMarkdownDomParts,
+      latest(streaming)?.toStreamingMarkdownDomParts,
+      !initialStreamingRuntime && props.options.isStreaming,
     ),
   );
   return (

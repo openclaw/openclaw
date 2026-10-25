@@ -16,7 +16,8 @@ import { useChatSendBrowserFixture } from "./outbox-browser.test-support.ts";
 const { prepareStreaming } = vi.hoisted(() => ({
   prepareStreaming: vi.fn<() => Promise<unknown>>(),
 }));
-vi.mock("../../components/markdown-live-loader.ts", () => ({
+vi.mock("../../components/markdown-live-loader.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../components/markdown-live-loader.ts")>()),
   loadStreamingMarkdown: prepareStreaming,
 }));
 
