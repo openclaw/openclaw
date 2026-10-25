@@ -17,7 +17,7 @@ type TitleRequest = {
 };
 
 export async function withTitleProvider(
-  raw: string,
+  raw: string | (() => string),
   run: (fixture: {
     cfg: OpenClawConfig;
     agentDir: string;
@@ -41,12 +41,13 @@ export async function withTitleProvider(
             url: request.url,
             body: JSON.parse(body),
           });
+          const content = typeof raw === "function" ? raw() : raw;
           if (api === "ollama") {
             response.writeHead(200, { "content-type": "application/x-ndjson" });
             response.end(
               JSON.stringify({
                 model: "qwen3.6:35b",
-                message: { role: "assistant", content: raw },
+                message: { role: "assistant", content },
                 done: true,
                 done_reason: "stop",
               }) + "\n",
@@ -60,9 +61,7 @@ export async function withTitleProvider(
               object: "chat.completion.chunk",
               created: 0,
               model,
-              choices: [
-                { index: 0, delta: { role: "assistant", content: raw }, finish_reason: "stop" },
-              ],
+              choices: [{ index: 0, delta: { role: "assistant", content }, finish_reason: "stop" }],
               usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
             })}\n\ndata: [DONE]\n\n`,
           );
