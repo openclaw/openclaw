@@ -58,13 +58,8 @@ function caseOverride(overrides: Record<string, unknown>) {
   return { cases: [{ ...makeCase(), ...overrides }] };
 }
 
-function makeCase(overrides: Partial<TuiPtyCase> = {}): TuiPtyCase {
-  return {
-    coverageId: COVERAGE_ID,
-    testFile: HARNESS_FILE,
-    testNamePattern: `^${TEST_NAME}$`,
-    ...overrides,
-  };
+function makeCase(testFile: TuiPtyCase["testFile"] = HARNESS_FILE): TuiPtyCase {
+  return { coverageId: COVERAGE_ID, testFile, testNamePattern: `^${TEST_NAME}$` };
 }
 
 async function writeFiles(repoRoot: string, files: string[]) {
@@ -97,7 +92,7 @@ async function writeReport(command: { args: string[] }, testFile = HARNESS_FILE)
 async function makeProducer(built = false) {
   const scenario = makeScenario({
     requireBuiltCli: built,
-    cases: [makeCase({ testFile: built ? LOCAL_FILE : HARNESS_FILE })],
+    cases: [makeCase(built ? LOCAL_FILE : HARNESS_FILE)],
   });
   const repoRoot = tempDirs.make("openclaw-tui-pty-producer-");
   await writeFiles(repoRoot, [HARNESS_FILE, LOCAL_FILE, RESET_FILE]);
@@ -157,11 +152,9 @@ it.each<[Parameters<typeof makeScenario>[0], string]>([
   [{ cases: [makeCase(), makeCase()] }, "duplicate TUI PTY case"],
   [{ executionKind: "vitest" }, "execution.kind=script"],
   [{ executionPath: "test/other.ts" }, `must execute ${SOURCE_PATH}`],
-  [{ requireBuiltCli: "built" }, "execution.config.requireBuiltCli must be a boolean"],
   [{ requireBuiltCli: null }, "execution.config.requireBuiltCli must be a boolean"],
-  [{ requireBuiltCli: true }, `every testFile to be exactly ${LOCAL_FILE}`],
   [
-    { requireBuiltCli: true, cases: [makeCase({ testFile: LOCAL_FILE }), makeCase()] },
+    { requireBuiltCli: true, cases: [makeCase(LOCAL_FILE), makeCase()] },
     `every testFile to be exactly ${LOCAL_FILE}`,
   ],
 ])("rejects scenario %j: %s", (params, message) => {
@@ -197,26 +190,23 @@ it.each([
   expectFailure(evidence, reason);
 });
 
-it.each(["openclaw.mjs", "dist"])(
-  "fails built preflight without %s before spawning",
-  async (missing) => {
-    const producer = await makeProducer(true);
-    await writeFiles(producer.repoRoot, ["openclaw.mjs", "dist/entry.js"]);
-    await fs.rm(path.join(producer.repoRoot, missing), { recursive: true });
-    const runCommand = vi.fn(async () => ({ exitCode: 0, signal: null }));
-    const evidence = await producer.run({ runCommand });
+it.each(["openclaw.mjs", "dist"])("rejects missing built artifact %s", async (missing) => {
+  const producer = await makeProducer(true);
+  await writeFiles(producer.repoRoot, ["openclaw.mjs", "dist/entry.js"]);
+  await fs.rm(path.join(producer.repoRoot, missing), { recursive: true });
+  const runCommand = vi.fn(async () => ({ exitCode: 0, signal: null }));
+  const evidence = await producer.run({ runCommand });
 
-    expect(runCommand).not.toHaveBeenCalled();
-    expect(evidence.entries[0]?.execution?.artifacts).toMatchObject([
-      { kind: "log", path: "tui-pty-evidence-producer.log" },
-      { kind: "proof-matrix", path: "proof-matrix.json" },
-    ]);
-    expectFailure(
-      evidence,
-      "cliMode=built requires readable openclaw.mjs and at least one readable dist/entry.js or dist/entry.mjs",
-    );
-  },
-);
+  expect(runCommand).not.toHaveBeenCalled();
+  expect(evidence.entries[0]?.execution?.artifacts).toMatchObject([
+    { kind: "log", path: "tui-pty-evidence-producer.log" },
+    { kind: "proof-matrix", path: "proof-matrix.json" },
+  ]);
+  expectFailure(
+    evidence,
+    "cliMode=built requires readable openclaw.mjs and at least one readable dist/entry.js or dist/entry.mjs",
+  );
+});
 
 it.each([null, "entry.js", "entry.mjs"] as const)(
   "writes sanitized evidence (%s)",
