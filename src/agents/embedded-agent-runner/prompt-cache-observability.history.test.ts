@@ -53,6 +53,22 @@ function contentHashes(text: string) {
     .mocked(crypto.hash)
     .mock.calls.filter(([, value]) => typeof value === "string" && value.includes(text));
 }
+function history(key: string, messages: Message[]) {
+  const sessionId = scopedKey(key);
+  const read = (next = messages) => observe(sessionId, next);
+  read();
+  return {
+    read,
+    complete(usage?: Parameters<typeof completePromptCacheObservation>[0]["usage"]) {
+      return completePromptCacheObservation({ sessionId, usage });
+    },
+    assertRewrite(detail: string, next = messages) {
+      withEnv({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, () => {
+        expect(() => read(next)).toThrow(detail);
+      });
+    },
+  };
+}
 function historyChange(detail: string) {
   return [{ code: "historyRewrite", detail }];
 }
@@ -443,47 +459,36 @@ describe("prompt cache history fingerprints", () => {
   ] as const)(
     "detects mutated %s text (rebuilt wrapper=%s)",
     (kind, rebuildWrapper, original, rewritten) => {
-      const sessionId = scopedKey(`mutated-${kind}`);
       const block: TextContent = { type: "text", text: original };
       const first: Message = { role: "user", content: "question", timestamp: 1 };
       const message: Message =
         kind === "string"
           ? { role: "user", content: original, timestamp: 2 }
           : makeAgentAssistantMessage({ content: [block], timestamp: 2 });
-      beginOpenAIObservation({ sessionId, messages: [first, message] });
-      completePromptCacheObservation({ sessionId, usage: { cacheRead: 8_000 } });
+      const tracker = history(`mutated-${kind}`, [first, message]);
+      tracker.complete({ cacheRead: 8_000 });
       if (message.role === "user") {
         message.content = rewritten;
       } else {
         block.text = rewritten;
       }
       const detail = `message 1 (${message.role}) differs from the previous request; history must be append-only; changed fields: ${kind === "string" ? "content" : "content[0].text"}`;
-      withEnv({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, () => {
-        expect(() =>
-          beginOpenAIObservation({
-            sessionId,
-            messages: [first, rebuildWrapper ? { ...message } : message],
-          }),
-        ).toThrow(detail);
-      });
-      expect(
-        completePromptCacheObservation({ sessionId, usage: { input: 8_000, cacheRead: 0 } })
-          ?.changes,
-      ).toEqual(historyChange(detail));
+      tracker.assertRewrite(detail, [first, rebuildWrapper ? { ...message } : message]);
+      expect(tracker.complete({ input: 8_000, cacheRead: 0 })?.changes).toEqual(
+        historyChange(detail),
+      );
     },
   );
 
   it("detects nested tool arguments mutated in place", () => {
-    withEnv({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, () => {
-      const sessionId = scopedKey("mutated-arguments");
-      const args = { options: { path: "before" } };
-      const message = makeAgentAssistantMessage({
+    const args = { options: { path: "before" } };
+    const tracker = history("mutated-arguments", [
+      makeAgentAssistantMessage({
         content: [{ type: "toolCall", id: "call-1", name: "read", arguments: args }],
-      });
-      observe(sessionId, [message]);
-      args.options.path = "after";
-      expect(() => observe(sessionId, [message])).toThrow("changed fields: content[0].arguments");
-    });
+      }),
+    ]);
+    args.options.path = "after";
+    tracker.assertRewrite("changed fields: content[0].arguments");
   });
 
   it("names changed reasoning signatures without exposing values or extension keys", () => {
@@ -510,26 +515,16 @@ describe("prompt cache history fingerprints", () => {
   });
 
   it("detects primitive property additions, changes, and removals", () => {
-    withEnv({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, () => {
-      const sessionId = scopedKey("mutated-properties");
-      const block: TextContent = { type: "text", text: "stable" };
-      const message = makeAgentAssistantMessage({ content: [block] });
-      observe(sessionId, [message]);
-      for (const mutate of [
-        () => {
-          block.textSignature = undefined;
-        },
-        () => {
-          block.textSignature = "signature";
-        },
-        () => {
-          delete block.textSignature;
-        },
-      ]) {
-        mutate();
-        expect(() => observe(sessionId, [message])).toThrow("message 0 (assistant)");
-      }
-    });
+    const block: TextContent = { type: "text", text: "stable" };
+    const tracker = history("mutated-properties", [
+      makeAgentAssistantMessage({ content: [block] }),
+    ]);
+    for (const value of [undefined, "signature"]) {
+      block.textSignature = value;
+      tracker.assertRewrite("message 0 (assistant)");
+    }
+    delete block.textSignature;
+    tracker.assertRewrite("message 0 (assistant)");
   });
 
   it.each(["block", "string"] as const)(
@@ -636,24 +631,22 @@ describe("prompt cache history fingerprints", () => {
     },
   );
 
-  it("bounds content diagnostics while detecting changes beyond the retained block prefix", () => {
-    const sessionId = scopedKey("bounded-content-diff");
+  it("bounds diagnostics while detecting changes beyond the retained block prefix", () => {
     const blocks: TextContent[] = Array.from({ length: 20 }, () => ({
       type: "text",
       text: "before",
     }));
-    const message = makeAgentAssistantMessage({ content: blocks });
-    observe(sessionId, [message]);
+    const tracker = history("bounded-content-diff", [
+      makeAgentAssistantMessage({ content: blocks }),
+    ]);
     blocks[19]!.text = "private-rewritten-content";
-    withEnv({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, () => {
-      expect(() => observe(sessionId, [message])).toThrow("changed fields: content[remaining]");
-      for (const block of blocks) {
-        block.text = "private-second-rewrite";
-      }
-      expect(() => observe(sessionId, [message])).toThrow(
-        "changed fields: content[0].text, content[1].text, content[2].text, content[3].text, content[4].text, content[5].text, content[6].text, content[7].text, …",
-      );
-    });
+    tracker.assertRewrite("changed fields: content[remaining]");
+    for (const block of blocks) {
+      block.text = "private-second-rewrite";
+    }
+    tracker.assertRewrite(
+      "changed fields: content[0].text, content[1].text, content[2].text, content[3].text, content[4].text, content[5].text, content[6].text, content[7].text, …",
+    );
   });
 
   it("asserts an undeclared tool block change and admits one declared pin change", () => {
@@ -748,21 +741,17 @@ describe("prompt cache history fingerprints", () => {
     });
   });
 
-  it("does not reuse a content digest for a different tool-call identity", () => {
-    withEnv({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, () => {
-      const sessionId = scopedKey("shared-content");
-      const result: Message = {
-        role: "toolResult",
-        toolName: "read",
-        toolCallId: "first",
-        content: [],
-        isError: false,
-        timestamp: 1,
-      };
-      beginOpenAIObservation({ sessionId, messages: [result] });
-      expect(() =>
-        beginOpenAIObservation({ sessionId, messages: [{ ...result, toolCallId: "second" }] }),
-      ).toThrow("message 0 (toolResult)");
-    });
+  it("does not reuse a digest for a different tool-call identity", () => {
+    const result: Message = {
+      role: "toolResult",
+      toolName: "read",
+      toolCallId: "first",
+      content: [],
+      isError: false,
+      timestamp: 1,
+    };
+    history("shared-content", [result]).assertRewrite("message 0 (toolResult)", [
+      { ...result, toolCallId: "second" },
+    ]);
   });
 });
