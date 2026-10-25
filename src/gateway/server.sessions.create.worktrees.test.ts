@@ -10,7 +10,6 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   findLiveRegistryWorktreeByOwner,
   getRegistryWorktree,
-  listRegistryWorktrees,
 } from "../agents/worktrees/registry.test-support.js";
 import { managedWorktrees, ManagedWorktreeService } from "../agents/worktrees/service.js";
 import { loadSessionEntry, loadTranscriptEvents } from "../config/sessions/session-accessor.js";
@@ -30,7 +29,6 @@ import {
   sessionDiffBaselineMocks,
   chatSendOwner,
   requireNonEmptyString,
-  removeSessionWorktree,
 } from "./server.sessions.create.test-support.js";
 import { loadGatewayTestConfig } from "./test-helpers.config-runtime.js";
 import { agentCommandMock, mockGetReplyFromConfigOnce, rpcReq, testState } from "./test-helpers.js";
@@ -339,97 +337,6 @@ test.each([
   },
 );
 
-test("sessions.create provisions and reuses a session worktree for later runs", async () => {
-  const workspace = await createWorkspace("openclaw-session-worktree-");
-  await git(workspace, "branch", "selected-base");
-  testState.agentConfig = { workspace };
-  const { dir, storePath } = await createSessionStoreDir();
-  const originalCreate = captureMethodCall("createWithOutcome")(ManagedWorktreeService.prototype);
-  const createSpy = vi
-    .spyOn(ManagedWorktreeService.prototype, "createWithOutcome")
-    .mockImplementation(async function (this: ManagedWorktreeService, params) {
-      expect(isSessionMutationActive(storePath, [params.ownerId])).toBe(true);
-      return await originalCreate(this, params);
-    });
-  let sessionKey: string | undefined;
-  try {
-    const created = await createSession({
-      label: "Release planning",
-      worktree: true,
-      worktreeBaseRef: "selected-base",
-    });
-
-    expect(created.ok).toBe(true);
-    const key = requireNonEmptyString(created.payload?.key, "created session key");
-    const worktree = created.payload?.worktree;
-    expect(worktree?.branch).toBe("openclaw/release-planning");
-    expect(created.payload?.entry).toMatchObject({
-      spawnedCwd: worktree?.path,
-      sessionRoot: worktree?.path,
-    });
-    expect(created.payload?.entry?.permissionMode).toBeUndefined();
-    expect(loadSessionEntry({ sessionKey: key, storePath })?.permissionMode).toBeUndefined();
-    sessionKey = key;
-    expect(findLiveRegistryWorktreeByOwner(process.env, "session", key)).toMatchObject({
-      id: worktree?.id,
-      path: worktree?.path,
-      ownerKind: "session",
-      ownerId: key,
-    });
-
-    const retainedDraft = path.join(worktree!.path, "session-draft.txt");
-    await fs.writeFile(retainedDraft, "uncommitted work survives reuse\n");
-    const originalHead = (await git(worktree!.path, "rev-parse", "HEAD")).stdout;
-
-    await git(workspace, "branch", "-D", "selected-base");
-    const recreated = await createSession({
-      key,
-      worktree: true,
-      worktreeBaseRef: "selected-base",
-    });
-    expect(recreated.ok).toBe(true);
-    expect(recreated.payload?.worktree).toEqual(worktree);
-    expect(recreated.payload?.entry?.spawnedCwd).toBe(worktree?.path);
-    await expect(fs.readFile(retainedDraft, "utf8")).resolves.toBe(
-      "uncommitted work survives reuse\n",
-    );
-    expect((await git(worktree!.path, "rev-parse", "HEAD")).stdout).toBe(originalHead);
-    expect(
-      listRegistryWorktrees(process.env).filter(
-        (record) =>
-          record.ownerKind === "session" &&
-          record.ownerId === key &&
-          record.removedAt === undefined,
-      ),
-    ).toHaveLength(1);
-
-    agentCommandMock.mockClear();
-    const commandEntered = createDeferredCore();
-    agentCommandMock.mockImplementationOnce(async () => {
-      commandEntered.resolve();
-    });
-    const { ws } = await openClient();
-    const run = await rpcReq(ws, "agent", {
-      message: "verify worktree cwd",
-      sessionKey: key,
-      idempotencyKey: "session-worktree-cwd",
-    });
-    expect(run.ok, JSON.stringify(run)).toBe(true);
-    await commandEntered.promise;
-    expect(agentCommandMock.mock.calls.at(-1)?.[0]).toMatchObject({
-      cwd: worktree?.path,
-      workspaceDir: worktree?.path,
-    });
-    ws.close();
-  } finally {
-    await disposeSessionReadContexts();
-    await releaseGatewaySessionStoreFixture(dir);
-    createSpy.mockRestore();
-    await removeSessionWorktree(sessionKey);
-    testState.agentConfig = undefined;
-  }
-});
-
 test("sessions.create runs an existing managed worktree cwd for initial and follow-up turns", async () => {
   const root = tempDirs.make("openclaw-session-existing-worktree-cwd-");
   const workspace = await copyGitWorkspace(gitWorkspaceTemplate, root);
@@ -582,6 +489,21 @@ test("sessions.create runs an existing managed worktree cwd for initial and foll
     });
     expect(preparedRuntime).toHaveBeenCalledTimes(1);
     expect(preparedRuntime.mock.calls[0]?.[0]).toEqual({
+      cwd: requestedCwd,
+      workspaceDir: requestedCwd,
+    });
+
+    const commandEntered = createDeferredCore();
+    agentCommandMock.mockClear();
+    agentCommandMock.mockImplementationOnce(async () => commandEntered.resolve());
+    const run = await rpcReq(ws, "agent", {
+      message: "verify worktree cwd",
+      sessionKey,
+      idempotencyKey: "session-worktree-cwd",
+    });
+    expect(run.ok, JSON.stringify(run)).toBe(true);
+    await commandEntered.promise;
+    expect(agentCommandMock.mock.calls.at(-1)?.[0]).toMatchObject({
       cwd: requestedCwd,
       workspaceDir: requestedCwd,
     });

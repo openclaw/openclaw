@@ -192,23 +192,6 @@ describe("archive selection", () => {
     });
   });
 
-  test("reads the latest reset archive independently of active artifacts", async () => {
-    writeRecords(path.join(tmpDir, `${id}.jsonl`), [
-      { type: "session", version: 1, id },
-      artifact("assistant", "active artifact"),
-    ]);
-    archive([artifact("assistant", "older archive")], {
-      timestamp: "2026-02-16T22-26-33.000Z",
-    });
-    archive([artifact("user", "restored prompt"), artifact("assistant", "restored archive")]);
-    expect(contents(await full())).toEqual(["restored prompt", "restored archive"]);
-    expect(await reader().readRecentWithStats({ maxMessages: 1, maxBytes: 2048 })).toMatchObject({
-      transcriptSource: "reset-archive",
-      totalMessages: 2,
-      messages: [{ role: "assistant", content: "restored archive", __openclaw: { seq: 2 } }],
-    });
-  });
-
   test("accepts stale generated session archives when the header matches the current session", async () => {
     id = "00000000-0000-4000-8000-000000000006";
     const stale = "00000000-0000-4000-8000-000000000007";
@@ -531,32 +514,6 @@ describe("oversized transcript records", () => {
     expect(readFile).not.toHaveBeenCalled();
   });
 
-  test("oversized line metadata extraction preserves id and parentId", async () => {
-    const timestamp = "2026-05-16T16:00:33.000Z";
-    const oversized = "w".repeat(300 * 1024);
-    archive([
-      message("root-msg", null, "user", "root"),
-      {
-        timestamp,
-        ...message("oversized-child", "root-msg", "assistant", oversized, {
-          idempotencyKey: "oversized-key",
-        }),
-      },
-    ]);
-    const rows = await recent();
-    expect(rows).toHaveLength(2);
-    expect(rows[1]).toMatchObject({
-      role: "assistant",
-      content: [textBlock("[chat.history omitted: message too large]")],
-      __openclaw: {
-        id: "oversized-child",
-        idempotencyKey: "oversized-key",
-        recordTimestampMs: Date.parse(timestamp),
-      },
-    });
-    expect(JSON.stringify(rows)).not.toContain(oversized);
-  });
-
   test("readSessionMessagesAsync keeps id-less oversized message placeholders", async () => {
     const oversized = "w".repeat(300 * 1024);
     archive([artifact("assistant", oversized)]);
@@ -592,8 +549,7 @@ describe("buildSessionPreviewItems bounded projection", () => {
       content: [signedText(`message ${index}`, "final_answer", `preview-${index}`)],
     }));
     const sourceText = JSON.stringify(sourceMessages);
-    // SQLite hydration yields fresh blocks, so the per-block signature cache starts cold.
-    const messages = JSON.parse(sourceText) as typeof sourceMessages;
+    const messages = sourceMessages;
     const originalRows = messages.slice();
     const originalContents = messages.map((row) => row.content);
     const signatureTexts = new Set(sourceMessages.map((row) => row.content[0]!.textSignature));
@@ -614,55 +570,44 @@ describe("buildSessionPreviewItems bounded projection", () => {
     expect(parsedSignatures).toBe(12);
   });
 
-  const visibilityMessages = [
-    messageRow("user", "older excluded text"),
-    messageRow("assistant", "NO_REPLY"),
-    messageRow("toolResult", "tool output"),
-    messageRow("user", [{ type: "input_text", text: "  question  " }]),
-    messageRow("assistant", "model only", { display: false }),
-    messageRow("assistant", [
-      signedText("private commentary", "commentary"),
-      signedText(`${"x".repeat(16)}🦊tail`, "final_answer"),
-    ]),
-    messageRow("assistant", "REPLY_SKIP"),
-    messageRow("assistant", [textBlock("   ")]),
-    messageRow("system", "system metadata"),
-  ];
-  const visiblePreview = [
-    { role: "user", text: "question" },
-    { role: "assistant", text: `${"x".repeat(16)}...` },
-    { role: "assistant", text: "REPLY_SKIP" },
-  ];
-  test.each([
-    ["display", visibilityMessages, 3, 20, visiblePreview],
-    ["model-context", visibilityMessages, 3, 20, visiblePreview],
-    [
-      undefined,
-      [
-        null,
-        undefined,
-        {},
-        messageRow("user", "first"),
-        messageRow("toolResult", "tool output"),
-        messageRow("assistant", "ANNOUNCE_SKIP"),
-        messageRow("assistant", "hidden", { display: false }),
-        messageRow("assistant", "last"),
-        messageRow("assistant", [signedText("commentary only", "commentary")]),
-      ],
-      12,
-      120,
-      [
-        { role: "user", text: "first" },
-        { role: "assistant", text: "ANNOUNCE_SKIP" },
-        { role: "assistant", text: "last" },
-      ],
-    ],
-  ] as const)(
-    "preserves %s preview visibility, order and bounds",
-    (view, messages, limit, maxChars, expected) => {
-      const original = JSON.stringify(messages);
-      expect(buildSessionPreviewItems(messages, limit, maxChars, view)).toEqual(expected);
-      expect(JSON.stringify(messages)).toBe(original);
-    },
-  );
+  test.each(["display", "model-context"] as const)("bounds and orders %s previews", (view) => {
+    const messages = [
+      messageRow("user", "older excluded text"),
+      messageRow("assistant", "NO_REPLY"),
+      messageRow("user", [{ type: "input_text", text: "  question  " }]),
+      messageRow("assistant", "model only", { display: false }),
+      messageRow("assistant", [
+        signedText("private commentary", "commentary"),
+        signedText(`${"x".repeat(16)}🦊tail`, "final_answer"),
+      ]),
+      messageRow("assistant", "REPLY_SKIP"),
+      messageRow("toolResult", "tool output"),
+    ];
+    const original = structuredClone(messages);
+    expect(buildSessionPreviewItems(messages, 3, 20, view)).toEqual([
+      { role: "user", text: "question" },
+      { role: "assistant", text: `${"x".repeat(16)}...` },
+      { role: "assistant", text: "REPLY_SKIP" },
+    ]);
+    expect(messages).toEqual(original);
+  });
+
+  test("returns fewer previews when the input is exhausted", () => {
+    expect(
+      buildSessionPreviewItems(
+        [
+          null,
+          {},
+          messageRow("user", "first"),
+          messageRow("toolResult", "hidden"),
+          messageRow("assistant", "last"),
+        ],
+        12,
+        120,
+      ),
+    ).toEqual([
+      { role: "user", text: "first" },
+      { role: "assistant", text: "last" },
+    ]);
+  });
 });

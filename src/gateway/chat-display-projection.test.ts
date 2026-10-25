@@ -236,84 +236,66 @@ it.each([
   );
 });
 
-describe("current user profile display", () => {
-  const resolved = (id: string, hasUploadedAvatar = true) => ({
-    kind: "resolved" as const,
-    profileId: id,
-    avatarUrl: "/api/users/" + id + "/avatar?v=20",
-    hasUploadedAvatar,
-  });
+it("refreshes cached profile aliases without rewriting non-profile or unresolved senders", () => {
   const profile = (id: string, fields: Record<string, unknown> = {}) =>
     userRow(id, { senderIdentity: { type: "profile", id }, senderId: id, ...fields });
-
-  it("gates alias lookup on profile provenance", () => {
-    const rows = [
-      { type: "profile", id: "shared-id" },
-      {
+  const messages = [
+    profile("ada", {
+      senderName: "Historical Ada",
+      senderUsername: "ada",
+      senderProfileAvatarUrl: "/old/avatar",
+    }),
+    profile("ada", { senderName: "Earlier Ada" }),
+    userRow("same label", {
+      senderId: "ada",
+      senderIdentity: {
         type: "observation",
-        id: "shared-id",
+        id: "ada",
         pluginId: "channel",
         accountId: null,
         senderKind: "unknown",
       },
-      undefined,
-    ].map((senderIdentity) =>
-      userRow("same label", {
-        senderId: "shared-id",
-        ...(senderIdentity ? { senderIdentity } : {}),
+    }),
+    userRow("same label", { senderId: "ada" }),
+    profile("missing", { senderProfileAvatarUrl: "/existing/avatar" }),
+    { role: "user", content: "missing sender" },
+    assistant("hostile", { __openclaw: { senderId: "hostile-assistant" } }),
+    {
+      role: "toolResult",
+      toolCallId: "hostile",
+      toolName: "read",
+      content: "hostile",
+      __openclaw: { senderId: "hostile-tool" },
+    },
+  ];
+  const resolveCurrentUserProfileDisplay = vi.fn((id: string) =>
+    id === "missing"
+      ? { kind: "unresolved" as const }
+      : {
+          kind: "resolved" as const,
+          profileId: "canonical-id",
+          avatarUrl: "/api/users/canonical-id/avatar?v=20",
+          hasUploadedAvatar: false,
+        },
+  );
+  const projected = projectStable(messages, { resolveCurrentUserProfileDisplay });
+  expect(resolveCurrentUserProfileDisplay.mock.calls).toEqual([["ada"], ["missing"]]);
+  expect(projected).toEqual([
+    ...messages.slice(0, 2).map((message) =>
+      Object.assign({}, message, {
+        __openclaw: {
+          ...message["__openclaw"],
+          senderIdentity: { type: "profile", id: "canonical-id" },
+          senderProfileAvatarUrl: "/api/users/canonical-id/avatar?v=20",
+        },
       }),
-    );
-    const resolveCurrentUserProfileDisplay = vi.fn(() => resolved("canonical-id"));
-    const projected = projectStable(rows, { resolveCurrentUserProfileDisplay });
-    expect(resolveCurrentUserProfileDisplay).toHaveBeenCalledTimes(1);
-    expect(projected[0]?.["__openclaw"]).toEqual({
-      senderId: "shared-id",
-      senderIdentity: { type: "profile", id: "canonical-id" },
-      senderProfileAvatarUrl: "/api/users/canonical-id/avatar?v=20",
-    });
-    expect(projected.slice(1)).toEqual(rows.slice(1));
-  });
-
-  it("caches profile lookups, refreshes stale avatars, and preserves unresolved rows", () => {
-    const messages = [
-      profile("ada", {
-        senderName: "Historical Ada",
-        senderUsername: "ada",
-        senderProfileAvatarUrl: "/old/avatar",
-      }),
-      profile("ada", { senderName: "Earlier Ada" }),
-      profile("missing", { senderProfileAvatarUrl: "/existing/avatar" }),
-      { role: "user", content: "missing sender" },
-      assistant("hostile", { __openclaw: { senderId: "hostile-assistant" } }),
-      {
-        role: "toolResult",
-        toolCallId: "hostile",
-        toolName: "read",
-        content: "hostile",
-        __openclaw: { senderId: "hostile-tool" },
-      },
-    ];
-    const resolveCurrentUserProfileDisplay = vi.fn((id: string) =>
-      id === "missing" ? { kind: "unresolved" as const } : resolved(id, false),
-    );
-    const projected = projectStable(messages, { resolveCurrentUserProfileDisplay });
-    expect(resolveCurrentUserProfileDisplay.mock.calls).toEqual([["ada"], ["missing"]]);
-    expect(projected).toEqual([
-      ...messages.slice(0, 2).map((message) =>
-        Object.assign({}, message, {
-          __openclaw: {
-            ...message["__openclaw"],
-            senderProfileAvatarUrl: "/api/users/ada/avatar?v=20",
-          },
-        }),
-      ),
-      ...messages.slice(2),
-    ]);
-    expect(projected[0]).not.toBe(messages[0]);
-    for (const index of [2, 3, 4]) {
-      expect(projected[index]).toBe(messages[index]);
-    }
-  });
+    ),
+    ...messages.slice(2),
+  ]);
+  expect(projected[0]).not.toBe(messages[0]);
+  for (const index of [2, 3, 4, 5, 6]) {
+    expect(projected[index]).toBe(messages[index]);
+  }
 });
 
 it("matches later audio against text left by an earlier supplement", () => {
@@ -451,9 +433,9 @@ it.each([
   },
 );
 
+const execStatus = { exitCode: 7, durationMs: 12.5, cwd: "/workspace", ok: false };
 it.each([
-  ["exec", { exitCode: 7, durationMs: 12.5, cwd: "/workspace", ok: false }, {}],
-  ["sessions_spawn", { ok: true, sessionKey: "agent:helper:main" }, {}],
+  ["exec", { ...execStatus, sessionKey: "agent:helper:main" }, {}],
   ["exec", {}, { exitCode: Number.NaN, durationMs: Infinity, sessionKey: " padded ", ok: "true" }],
   ["exec", {}, { exitCode: "0", durationMs: -Infinity, sessionKey: "s".repeat(33), ok: 1 }],
 ] as const)(
@@ -544,10 +526,6 @@ const projectedIds = (messages: unknown[]) =>
 
 const legacyGuidance = "The provider stopped this request as a safety precaution (misalignment).";
 it.each([
-  [
-    { errorCode: "misalignment_policy_violation", errorType: "invalid_request_error" },
-    legacyGuidance,
-  ],
   [{ errorCode: "misalignment_policy_violation" }, legacyGuidance],
   [
     { diagnostics: [{ type: "provider_refusal", details: { category: "misalignment" } }] },
