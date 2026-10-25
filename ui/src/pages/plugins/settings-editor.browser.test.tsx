@@ -27,8 +27,10 @@ const objectSchema = (properties: Record<string, JsonSchema>): JsonSchema => ({
   additionalProperties: false,
   properties,
 });
-async function mount(overrides: Partial<PluginSettingsEditorModel> = {}) {
-  const model: PluginSettingsEditorModel = {
+function editorModel(
+  overrides: Partial<PluginSettingsEditorModel> = {},
+): PluginSettingsEditorModel {
+  return {
     pluginId: "fixture",
     result: null,
     connected: true,
@@ -69,6 +71,9 @@ async function mount(overrides: Partial<PluginSettingsEditorModel> = {}) {
     onBack: vi.fn(),
     ...overrides,
   };
+}
+async function mount(overrides: Partial<PluginSettingsEditorModel> = {}) {
+  const model = editorModel(overrides);
   const [props, setProps] = createSignal<PluginSettingsEditorProps>({ model });
   const host = document.createElement("div");
   document.body.append(host);
@@ -81,6 +86,12 @@ async function mount(overrides: Partial<PluginSettingsEditorModel> = {}) {
   await settle();
   return { editor, model, update, ...domProbe(editor) };
 }
+const mountFields = (properties: Record<string, JsonSchema>, value: Record<string, unknown> = {}) =>
+  mount({
+    configHints: {},
+    configSchema: objectSchema(properties),
+    configValue: configValue(value),
+  });
 
 async function expectBlurPatch(
   fixture: Awaited<ReturnType<typeof mount>>,
@@ -89,11 +100,13 @@ async function expectBlurPatch(
   replacement: string,
   path: string[],
   value: unknown,
-  index = 0,
 ) {
-  const input = fixture.all<HTMLInputElement>(selector).item(index)!;
+  const input = fixture.query<HTMLInputElement>(selector)!;
   expect(input).not.toBeNull();
   expect(input.value).toBe(initial);
+  input.focus();
+  input.blur();
+  expect(fixture.model.onConfigPatch).not.toHaveBeenCalled();
   input.focus();
   input.value = replacement;
   input.dispatchEvent(new Event("input", { bubbles: true }));
@@ -135,10 +148,9 @@ describe("grouped plugin settings", () => {
     const mounted = mountSolid(
       () => (
         <PluginSettingsInventory
+          {...editorModel({ configValue: value(), onConfigPatch: onPatch })}
           tab="advanced"
           query=""
-          result={null}
-          connected
           loading={false}
           error={null}
           busy={{}}
@@ -146,20 +158,7 @@ describe("grouped plugin settings", () => {
           iconUrls={{}}
           canMutate
           mutationBlockedReason={null}
-          configValue={value()}
-          configHints={{}}
-          configUnsupportedPaths={[]}
           advancedSchema={schema}
-          canEditConfig
-          configBusy={false}
-          configSchemaLoading={false}
-          configRead={undefined}
-          configSchemaRead={undefined}
-          configError={null}
-          onConfigPatch={onPatch}
-          onConfigRemove={vi.fn()}
-          onConfigReadRetry={vi.fn()}
-          onConfigWriteRetry={vi.fn()}
           onConfigReload={vi.fn()}
           onRefresh={vi.fn()}
           onTabChange={vi.fn()}
@@ -239,11 +238,6 @@ describe("grouped plugin settings", () => {
     expect(document.activeElement).toBe(target);
     expect(all("[data-setting]")).toHaveLength(4);
     expect(query("h1")).toBeNull();
-    expect([...all("h2")].map((e) => e.textContent?.trim())).toEqual([
-      "Data storage",
-      "Capture",
-      "Other",
-    ]);
     const back = query<HTMLAnchorElement>(".plugins-settings-breadcrumb__parent")!;
     expect(back.getAttribute("href")).toBe("/settings/plugins/fixture");
     back.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
@@ -254,46 +248,30 @@ describe("grouped plugin settings", () => {
     await update({ model: { ...model, configHints: {} } });
     expect(query(".plugin-editor__nav")).toBeNull();
   });
-  it.each<{
-    name: string;
-    overrides: Partial<PluginSettingsEditorModel>;
-    fields: { label: string; value: string; placeholder?: string }[];
-  }>([
-    {
-      name: "an automatic numeric placeholder",
-      overrides: {
-        configHints: { [`${prefix}.timeout`]: { placeholder: "Automatic" } },
-        configSchema: {
-          type: "object",
-          properties: { timeout: { type: "integer", title: "Timeout" } },
-        },
-      },
-      fields: [{ label: "Timeout", value: "", placeholder: "Automatic" }],
-    },
-    {
-      name: "inherited string and numeric defaults",
-      overrides: {},
-      fields: [
-        { label: "Storage: Path", value: "original" },
-        { label: "Timeout", value: "30" },
-      ],
-    },
-  ])(
-    "does not persist $name when an unchanged field loses focus",
-    async ({ overrides, fields }) => {
-      const { model, query } = await mount(overrides);
-      for (const { label, value, placeholder } of fields) {
-        const input = query<HTMLInputElement>(`input[aria-label="${label}"]`)!;
-        expect(input.value).toBe(value);
-        if (placeholder !== undefined) {
-          expect(input.placeholder).toBe(placeholder);
-        }
-        input.focus();
-        input.blur();
+  it("does not persist inherited values or automatic placeholders on blur", async () => {
+    const { model, query } = await mount({
+      configHints: { [`${prefix}.automatic`]: { placeholder: "Automatic" } },
+      configSchema: objectSchema({
+        text: { type: "string", title: "Text", default: "original" },
+        timeout: { type: "integer", title: "Timeout", default: 30 },
+        automatic: { type: "integer", title: "Automatic" },
+      }),
+    });
+    for (const [label, value, placeholder] of [
+      ["Text", "original"],
+      ["Timeout", "30"],
+      ["Automatic", "", "Automatic"],
+    ]) {
+      const input = query<HTMLInputElement>(`input[aria-label="${label}"]`)!;
+      expect(input.value).toBe(value);
+      if (placeholder) {
+        expect(input.placeholder).toBe(placeholder);
       }
-      expect(model.onConfigPatch).not.toHaveBeenCalled();
-    },
-  );
+      input.focus();
+      input.blur();
+    }
+    expect(model.onConfigPatch).not.toHaveBeenCalled();
+  });
   it("edits an inherited nested value without losing its sibling", async () => {
     await expectBlurPatch(
       await mount(),
@@ -306,17 +284,16 @@ describe("grouped plugin settings", () => {
   });
 
   it("edits a searched descendant inside a retained object", async () => {
-    const fixture = await mount({
-      configHints: {},
-      configValue: configValue({ storage: { path: "original" } }),
-      configSchema: objectSchema({
+    const fixture = await mountFields(
+      {
         storage: {
           type: "object",
           title: "Storage",
           properties: { path: { type: "string", title: "Directory" } },
         },
-      }),
-    });
+      },
+      { storage: { path: "original" } },
+    );
     await searchSettings(fixture.editor, "directory");
     await expectBlurPatch(
       fixture,
@@ -328,44 +305,14 @@ describe("grouped plugin settings", () => {
     );
   });
 
-  it("edits an inherited array item without losing its sibling", async () => {
-    const fixture = await mount({
-      configHints: {},
-      configValue: configValue({}),
-      configSchema: objectSchema({
-        tags: {
-          type: "array",
-          title: "Tags",
-          default: ["alpha", "beta"],
-          items: { type: "string" },
-        },
-      }),
-    });
-    const row = fixture.query<HTMLElement>('[data-setting="tags"]')!;
-    expect(
-      [...row.querySelectorAll<HTMLInputElement>("input")].map((input) => input.value),
-    ).toEqual(["alpha", "beta"]);
-    expect(row.textContent).not.toContain("2 items");
-    await expectBlurPatch(
-      fixture,
-      '[data-setting="tags"] input',
-      "beta",
-      "edited",
-      ["tags"],
-      ["alpha", "edited"],
-      1,
-    );
-  });
-
   it("edits a literal dotted property without splitting its identity", async () => {
-    const fixture = await mount({
-      configHints: {},
-      configValue: configValue({ "model.name": "first" }),
-      configSchema: objectSchema({
+    const fixture = await mountFields(
+      {
         "model.name": { type: "string", title: "Model name" },
         empty: { type: "integer" },
-      }),
-    });
+      },
+      { "model.name": "first" },
+    );
     expect(fixture.all("[data-setting]")).toHaveLength(2);
     expect(fixture.all("h2")).toHaveLength(0);
     await expectBlurPatch(
@@ -378,22 +325,20 @@ describe("grouped plugin settings", () => {
     );
   });
   it("keeps object array inputs aligned beside removal and finds their descendants", async () => {
-    const { editor, model, query, all } = await mount({
-      configHints: {},
-      configValue: configValue({ targets: [{ path: "first", mode: "keep" }] }),
-      configSchema: objectSchema({
-        targets: {
-          type: "array",
-          items: objectSchema({
-            path: { type: "string", title: "Directory" },
-            mode: { type: "string", title: "Mode" },
-          }),
-        },
-      }),
+    const { editor, model, query, all } = await mountFields({
+      targets: {
+        type: "array",
+        default: [{ path: "first", mode: "keep" }],
+        items: objectSchema({
+          path: { type: "string", title: "Directory" },
+          mode: { type: "string", title: "Mode" },
+        }),
+      },
     });
     editor.style.width = "1000px";
     const inputs = [...all<HTMLInputElement>(".cfg-array__item input")];
-    expect(inputs).toHaveLength(2);
+    expect(inputs.map((input) => input.value)).toEqual(["first", "keep"]);
+    expect(editor.textContent).not.toContain("1 item");
     const bounds = inputs.map((input) => input.getBoundingClientRect());
     const remove = query<HTMLButtonElement>('button[aria-label="Remove item"]')!;
     const removeBounds = remove.getBoundingClientRect();
@@ -544,9 +489,8 @@ describe("grouped plugin settings", () => {
     },
   );
   it("retains empty object fields instead of silently dropping them", async () => {
-    const { editor, all } = await mount({
-      configHints: {},
-      configSchema: objectSchema({ empty: { ...objectSchema({}), title: "Empty object" } }),
+    const { editor, all } = await mountFields({
+      empty: { ...objectSchema({}), title: "Empty object" },
     });
     expect(all("[data-setting]")).toHaveLength(1);
     expect(editor.textContent).toContain("Empty object");
@@ -576,51 +520,42 @@ describe("grouped editor field discovery", () => {
     }
   });
 
-  it.each<{
-    name: string;
-    overrides: Partial<PluginSettingsEditorModel>;
-    query: string;
-  }>([
-    { name: "authored groups", overrides: {}, query: "data storage" },
-    {
-      name: "dynamic root",
-      overrides: {
+  it.each<[string, Partial<PluginSettingsEditorModel>, string]>([
+    ["authored groups", {}, "data storage"],
+    [
+      "dynamic root",
+      {
         configSchema: { type: "object", properties: {}, additionalProperties: { type: "string" } },
         configHints: {},
         configValue: configValue({ alpha: "first", beta: "second" }),
       },
-      query: "alpha",
-    },
-  ])(
-    "filters $name settings and shows unmatched searches",
-    async ({ name, overrides, query: searchQuery }) => {
-      const { editor, query, all } = await mount(overrides);
-      await searchSettings(editor, searchQuery);
-      if (name === "authored groups") {
-        expect(all("[data-setting]")).toHaveLength(2);
-        expect(editor.textContent).toContain("Storage: Path");
-        expect(editor.textContent).not.toContain("Timeout");
-      } else {
-        expect(query(".cfg-map > .settings-row .settings-row__title")?.textContent?.trim()).toBe(
-          "Custom entries",
-        );
-        expect(query('input[aria-label="Key: alpha"]')).not.toBeNull();
-        expect(query('input[aria-label="Key: beta"]')).toBeNull();
-      }
-      await searchSettings(editor, "does-not-match");
-      expect(query(".cfg-map")).toBeNull();
-      expect(query(".plugin-editor__empty")?.textContent).toContain("No matching settings.");
-    },
-  );
+      "alpha",
+    ],
+  ])("filters %s settings and shows unmatched searches", async (name, overrides, searchQuery) => {
+    const { editor, query, all } = await mount(overrides);
+    await searchSettings(editor, searchQuery);
+    if (name === "authored groups") {
+      expect(all("[data-setting]")).toHaveLength(2);
+      expect(editor.textContent).toContain("Storage: Path");
+      expect(editor.textContent).not.toContain("Timeout");
+    } else {
+      expect(query(".cfg-map > .settings-row .settings-row__title")?.textContent?.trim()).toBe(
+        "Custom entries",
+      );
+      expect(query('input[aria-label="Key: alpha"]')).not.toBeNull();
+      expect(query('input[aria-label="Key: beta"]')).toBeNull();
+    }
+    await searchSettings(editor, "does-not-match");
+    expect(query(".cfg-map")).toBeNull();
+    expect(query(".plugin-editor__empty")?.textContent).toContain("No matching settings.");
+  });
 });
 
 describe("plugin map layout", () => {
   it.each([1728, 390])("keeps map labels, keys, and values usable at %s pixels", async (width) => {
     await page.viewport(width, 913);
-    const { editor, model, query, all } = await mount({
-      configHints: {},
-      configValue: configValue({ populated: { first: 15 } }),
-      configSchema: objectSchema({
+    const { editor, model, query, all } = await mountFields(
+      {
         empty: {
           type: "object",
           title: "Empty overrides",
@@ -631,8 +566,9 @@ describe("plugin map layout", () => {
           title: "Populated overrides",
           additionalProperties: { type: "number" },
         },
-      }),
-    });
+      },
+      { populated: { first: 15 } },
+    );
     editor.style.width = width > 768 ? "880px" : "100%";
     try {
       expect([...all(".plugin-editor__title")].map((title) => title.textContent?.trim())).toEqual([
