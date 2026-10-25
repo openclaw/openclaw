@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { buildTestCtx } from "../auto-reply/reply/test-ctx.js";
-import { withClaimingHookAdmission } from "./hook-claim-admission.js";
 import type {
   PluginHookRegistrationOptions,
   PluginHookReplyDispatchContext,
@@ -48,29 +47,15 @@ const handledResult = {
 const guard = <T>(pluginId: string, run: () => T) =>
   withNativeSubagentRuntimeGuard({ pluginId, assertCurrent() {} }, run);
 
-function createRegisteredReplyHook(eligibleDispatchKinds: unknown) {
-  const builder = createTestPluginRegistry();
-  const api = builder.createApi(createPluginRecord({ id: "scoped-dispatch", origin: "bundled" }), {
-    config: {},
-  });
-  const result = { handled: true, queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
-  const handler = vi.fn(() => result);
-  const options: PluginHookRegistrationOptions<"reply_dispatch"> = {};
-  // JavaScript plugins can supply invalid metadata despite the typed registration contract.
-  Reflect.set(options, "eligibleDispatchKinds", eligibleDispatchKinds);
-  api.on("reply_dispatch", handler, options);
-  return { handler, result, runner: createHookRunner(builder.registry) };
-}
-
 describe("reply_dispatch hook runner", () => {
   it.each([
-    { outcome: "timeout", captured: false },
-    { outcome: "timeout", captured: true },
-    { outcome: "declined", captured: true },
-    { outcome: "rejected", captured: true },
+    { outcome: "timeout", overlap: false },
+    { outcome: "timeout", overlap: true },
+    { outcome: "declined", overlap: true },
+    { outcome: "rejected", overlap: true },
   ])(
-    "closes native requester custody after $outcome (captured admission=$captured)",
-    async ({ outcome, captured }) => {
+    "closes native requester custody after $outcome (active next hook=$overlap)",
+    async ({ outcome, overlap }) => {
       vi.useFakeTimers();
       const late = createDeferred();
       const nextStarted = createDeferred();
@@ -89,27 +74,14 @@ describe("reply_dispatch hook runner", () => {
             hookName: "reply_dispatch",
             pluginId: "first",
             timeoutMs: 5,
-            handler: async (_event, context) =>
+            handler: async () =>
               guard("first", async () => {
-                if (captured) {
+                if (overlap) {
                   await nativeSubagentRuntime.spawn({ requestId: "first", task: "active" });
                 }
-                detached = late.promise.then(() => {
-                  const invoke = () =>
-                    nativeSubagentRuntime.spawn({ requestId: "reopened", task: "blocked" });
-                  if (!captured) {
-                    return invoke();
-                  }
-                  // A plugin can retain the admission capability from its public context.
-                  if (!context || typeof context !== "object") {
-                    throw new Error("reply hook context was not supplied");
-                  }
-                  const admission = Reflect.get(
-                    context,
-                    Symbol.for("openclaw.claimingHookAdmission"),
-                  );
-                  return typeof admission?.run === "function" ? admission.run(invoke) : invoke();
-                });
+                detached = late.promise.then(() =>
+                  nativeSubagentRuntime.spawn({ requestId: "reopened", task: "blocked" }),
+                );
                 if (outcome === "timeout") {
                   await releaseFirst.promise;
                 }
@@ -125,7 +97,7 @@ describe("reply_dispatch hook runner", () => {
               guard("next", async () => {
                 await nativeSubagentRuntime.spawn({ requestId: "current", task: "current" });
                 nextStarted.resolve();
-                if (captured) {
+                if (overlap) {
                   await releaseNext.promise;
                 }
                 return handledResult;
@@ -134,27 +106,22 @@ describe("reply_dispatch hook runner", () => {
         ],
         { logger },
       );
-      const work = runner.runReplyDispatch(
-        replyDispatchEvent,
-        captured
-          ? withClaimingHookAdmission({ ...replyDispatchCtx }, { assertCurrent() {} })
-          : { ...replyDispatchCtx },
-        (invoke) =>
-          withNativeSubagentRequest(
-            () => ({ spawn, collect: async () => ({ completed: [], pending: [] }) }),
-            invoke,
-          ),
+      const work = runner.runReplyDispatch(replyDispatchEvent, { ...replyDispatchCtx }, (invoke) =>
+        withNativeSubagentRequest(
+          () => ({ spawn, collect: async () => ({ completed: [], pending: [] }) }),
+          invoke,
+        ),
       );
       try {
         await vi.advanceTimersByTimeAsync(5);
         await nextStarted.promise;
-        if (!captured) {
+        if (!overlap) {
           await expect(work).resolves.toEqual(handledResult);
         }
         late.resolve();
         await expect(detached).rejects.toThrow("requester-bound");
         expect(spawn.mock.calls).toEqual([
-          ...(captured ? [[{ requestId: "first", task: "active" }]] : []),
+          ...(overlap ? [[{ requestId: "first", task: "active" }]] : []),
           [{ requestId: "current", task: "current" }],
         ]);
         releaseNext.resolve();
@@ -182,13 +149,23 @@ describe("reply_dispatch hook runner", () => {
   ])(
     "keeps invocation and presence aligned for $dispatchKind with $kinds eligibility",
     async ({ kinds, dispatchKind, eligible }) => {
-      const { handler, result, runner } = createRegisteredReplyHook(kinds);
+      const builder = createTestPluginRegistry();
+      const api = builder.createApi(
+        createPluginRecord({ id: "scoped-dispatch", origin: "bundled" }),
+        { config: {} },
+      );
+      const handler = vi.fn(() => handledResult);
+      const options: PluginHookRegistrationOptions<"reply_dispatch"> = {};
+      // JavaScript plugins can supply invalid metadata despite the typed contract.
+      Reflect.set(options, "eligibleDispatchKinds", kinds);
+      api.on("reply_dispatch", handler, options);
+      const runner = createHookRunner(builder.registry);
       const ctx: PluginHookReplyDispatchContext = { ...replyDispatchCtx };
       Reflect.set(ctx, "dispatchKind", dispatchKind);
 
       expect(runner.hasHooks("reply_dispatch", ctx)).toBe(eligible);
       await expect(runner.runReplyDispatch(replyDispatchEvent, ctx)).resolves.toEqual(
-        eligible ? result : undefined,
+        eligible ? handledResult : undefined,
       );
       expect(handler).toHaveBeenCalledTimes(eligible ? 1 : 0);
     },

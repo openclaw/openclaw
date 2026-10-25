@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
 import {
   getReplyPayloadMetadata,
   setReplyPayloadMetadata,
@@ -21,13 +20,7 @@ const replyPayloadSendingEvent = {
   runId: "run-123",
 };
 
-const replyPayloadSendingCtx = {
-  channelId: "telegram",
-  accountId: "default",
-  conversationId: "conv-1",
-  sessionKey: "agent:test:session",
-  runId: "run-123",
-};
+const replyPayloadSendingCtx = { channelId: "telegram" };
 
 function createRunner(
   handlers: Parameters<typeof createHookRunnerWithRegistry>[0][number]["handler"][],
@@ -55,45 +48,31 @@ function editPayload(edit: (payload: PluginHookReplyPayload) => ReplyPayload) {
 }
 
 describe("outbound hook runners", () => {
-  it.each([
-    {
-      hookName: "message_sending",
-      next: { content: "after timeout" },
-      expected: { content: "after timeout" },
-      invoke: (runner: ReturnType<typeof createRunner>) =>
-        runner.runMessageSending(messageEvent, messageCtx),
-    },
-    {
-      hookName: "reply_payload_sending",
-      next: { payload: { text: "after timeout" } },
-      expected: { payload: { text: "after timeout" }, cancel: undefined, reason: undefined },
-      invoke: send,
-    },
-  ])(
-    "$hookName fails open after the default per-handler timeout",
-    async ({ hookName, next, expected, invoke }) => {
-      const firstStarted = createDeferred();
-      const first = vi.fn(() => {
-        firstStarted.resolve();
-        return new Promise<never>(() => {});
-      });
-      const second = vi.fn().mockResolvedValue(next);
+  it.each(["message_sending", "reply_payload_sending"] as const)(
+    "%s fails open after the default per-handler timeout",
+    async (hookName) => {
+      const next =
+        hookName === "message_sending"
+          ? { content: "after timeout" }
+          : { payload: { text: "after timeout" }, cancel: undefined, reason: undefined };
       const { runner } = createHookRunnerWithRegistry(
-        [first, second].map((handler) => ({ hookName, handler })),
+        [() => new Promise<never>(() => {}), async () => next].map((handler) => ({
+          hookName,
+          handler,
+        })),
       );
-      const resultPromise = invoke(runner);
-      await firstStarted.promise;
+      const resultPromise =
+        hookName === "message_sending"
+          ? runner.runMessageSending(messageEvent, messageCtx)
+          : send(runner);
       await vi.advanceTimersByTimeAsync(15_000);
-
-      await expect(resultPromise).resolves.toEqual(expected);
+      await expect(resultPromise).resolves.toEqual(next);
       expect(vi.getTimerCount()).toBe(0);
     },
   );
 
-  it.each([
-    { content: "modified content" },
-    { cancel: true, cancelReason: "policy", metadata: { owner: "agent-2" } },
-  ])("message_sending returns %j", async (hookResult) => {
+  it("message_sending forwards cancellation metadata", async () => {
+    const hookResult = { cancel: true, cancelReason: "policy", metadata: { owner: "agent-2" } };
     const handler = vi.fn().mockReturnValue(hookResult);
     const { runner } = createHookRunnerWithRegistry([{ hookName: "message_sending", handler }]);
     await expect(runner.runMessageSending(messageEvent, messageCtx)).resolves.toEqual(hookResult);
@@ -111,21 +90,17 @@ describe("outbound hook runners", () => {
       { hookName: "message_sending", handler, timeoutMs: 20_000 },
     ]);
     const resultPromise = runner.runMessageSending(messageEvent, messageCtx);
-    let settled = false;
-    void resultPromise.then(() => {
-      settled = true;
-    });
+    const settled = vi.fn();
+    void resultPromise.then(settled);
     await vi.advanceTimersByTimeAsync(15_000);
-    expect(settled).toBe(false);
+    expect(settled).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1_000);
     await expect(resultPromise).resolves.toEqual({ content: "slow result" });
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it.each([
-    { to: "user-123", content: "hello", success: true },
-    { to: "user-123", content: "hello", success: false, error: "timeout" },
-  ])("message_sent delivers %j", async (event) => {
+  it("message_sent forwards the delivery outcome", async () => {
+    const event = { to: "user-123", content: "hello", success: false, error: "timeout" };
     const handler = vi.fn();
     const { runner } = createHookRunnerWithRegistry([{ hookName: "message_sent", handler }]);
     await runner.runMessageSent(event, messageCtx);

@@ -15,6 +15,7 @@ import {
   requestDeferredPluginInstall,
   resolvePluginInstallTransaction,
 } from "./install-transaction.js";
+import { writeArtifacts } from "./public-surface.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 
@@ -32,15 +33,11 @@ describe("git install target ownership", () => {
   }
   const head = (dir = sourceDir) => git(dir, "rev-parse", "HEAD");
   async function commitPlugin(pluginId: string, version: string, root = sourceDir) {
-    await fs.writeFile(
-      path.join(root, "package.json"),
-      JSON.stringify({ name: "git-fixture", version, openclaw: { extensions: ["index.js"] } }),
-    );
-    await fs.writeFile(
-      path.join(root, "openclaw.plugin.json"),
-      JSON.stringify({ id: pluginId, configSchema: { type: "object", properties: {} } }),
-    );
-    await fs.writeFile(path.join(root, "index.js"), `export default ${JSON.stringify(version)};\n`);
+    writeArtifacts(root, {
+      "package.json": { name: "git-fixture", version, openclaw: { extensions: ["index.js"] } },
+      "openclaw.plugin.json": { id: pluginId, configSchema: { type: "object", properties: {} } },
+      "index.js": `export default ${JSON.stringify(version)};\n`,
+    });
     await git(root, "add", ".");
     await git(root, "-c", "commit.gpgsign=false", "commit", "-m", version);
     return await head(root);
