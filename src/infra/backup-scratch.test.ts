@@ -54,14 +54,15 @@ it("inspects a scratch creator awaiting lifetime admission without reclaiming it
   const creating = createScratch(root);
   try {
     const originalDirectory = await entered.promise;
-    expect(await inspect(root, false)).toMatchObject({
-      warnings: [],
-      unchecked: [originalDirectory],
-    });
+    const report = await maintainBackupScratch({ roots: [root], repair: false, log: () => {} });
+    expect(report.warnings).toEqual([]);
+    expect(report.unchecked).toEqual([originalDirectory]);
     resume.resolve();
     const scratch = await creating;
     expect(scratch.directory).toBe(originalDirectory);
-    expect(await inspect(root)).toMatchObject({ warnings: [], active: [scratch.directory] });
+    const active = await maintainBackupScratch({ roots: [root], repair: true, log: () => {} });
+    expect(active.warnings).toEqual([]);
+    expect(active.active).toEqual([scratch.directory]);
   } finally {
     resume.resolve();
     await expect(finishScratch(await creating, () => {})).resolves.toBeUndefined();
@@ -167,15 +168,22 @@ it("rejects replaced scratch after boundary observation without removing either 
 it("cleans up scratch and preserves its original native token-open failure", async () => {
   const root = dirs.make("backup-scratch-create-open-");
   const open = sqlite.openNodeSqliteDatabase;
+  const createDirectory = privateDirs.createPrivateSqliteTempDirectory;
   let nativeFailure: unknown;
-  vi.spyOn(sqlite, "openNodeSqliteDatabase").mockImplementationOnce((location, options) => {
-    try {
-      return open(path.join(path.dirname(String(location)), "missing", "owner.sqlite"), options);
-    } catch (error) {
-      nativeFailure = error;
-      throw error;
-    }
-  });
+  vi.spyOn(privateDirs, "createPrivateSqliteTempDirectory").mockImplementationOnce(
+    async (...args) => {
+      const directory = await createDirectory(...args);
+      vi.spyOn(sqlite, "openNodeSqliteDatabase").mockImplementationOnce((_location, options) => {
+        try {
+          return open(path.join(directory, "missing", "owner.sqlite"), options);
+        } catch (error) {
+          nativeFailure = error;
+          throw error;
+        }
+      });
+      return directory;
+    },
+  );
   const outcome = await createScratch(root).then(
     async (scratch) => {
       await finishScratch(scratch, () => {});
@@ -199,7 +207,7 @@ it.each([
     const root = dirs.make("backup-scratch-vanished-");
     const scratch = boundary === "token" ? await createScratch(root) : undefined;
     const directory = scratch?.directory ?? path.join(root, "openclaw-backup-retired-Gone01");
-    const open = sqlite.openNodeSqliteDatabase;
+    const open = vi.fn(sqlite.openNodeSqliteDatabase);
     let observedRemoval = false;
     if (scratch) {
       scratch.release(true);
@@ -239,6 +247,9 @@ it.each([
     const report = await inspect(root, true, log);
     expect(observedRemoval).toBe(true);
     if (boundary === "token") {
+      expect(open.mock.results.find((result) => result.type === "throw")?.value).toBeInstanceOf(
+        Error,
+      );
       expect(report.active).toEqual([]);
     }
     expect(report).toMatchObject({
@@ -300,7 +311,8 @@ it("preserves retired scratch for maintenance instead of admitting it", async ()
     return acquire(directory, mode, options);
   });
   await expect(createScratch(root)).rejects.toBeInstanceOf(tokens.SqliteStagingRetiredError);
-  expect(await inspect(root)).toMatchObject({ reclaimed: [retired], active: [] });
+  const report = await inspect(root);
+  expect(report).toMatchObject({ reclaimed: [retired], active: [] });
 });
 
 it("preserves unknown contents, legacy scratch, rollback directories and symbolic links", async () => {

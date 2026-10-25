@@ -68,34 +68,6 @@ const preToolUse = {
 type RelayHarness = ReturnType<typeof createStartedThreadHarness>;
 const threadRequest = (harness: RelayHarness, method = "thread/start") =>
   harness.requests.find((request) => request.method === method)?.params;
-const registration = nativeHookRelayTesting.getNativeHookRelayRegistrationForTests;
-const paths = (name = "session") =>
-  [path.join(tempDir, `${name}.jsonl`), path.join(tempDir, "workspace")] as const;
-async function startRelay(
-  harness: RelayHarness,
-  params: Parameters<typeof runCodexAppServerAttempt>[0],
-  options: Parameters<typeof runCodexAppServerAttempt>[1] = preToolUse,
-) {
-  const run = runCodexAppServerAttempt(params, options);
-  await harness.waitForMethod("turn/start");
-  return { run };
-}
-async function finishRelay(harness: RelayHarness, run: Promise<unknown>, threadId = "thread-1") {
-  await harness.completeTurn({ threadId, turnId: "turn-1" });
-  await run;
-}
-function requestApproval(
-  harness: RelayHarness,
-  kind: "commandExecution" | "fileChange",
-  itemId: string,
-  details: Record<string, string>,
-) {
-  return harness.handleServerRequest({
-    id: `request-${itemId}`,
-    method: `item/${kind}/requestApproval`,
-    params: { threadId: "thread-1", turnId: "turn-1", itemId, ...details },
-  });
-}
 
 function invokeCommand(relayId: string, toolUseId: string, generation?: string, command = "pwd") {
   return invokeNativeHookRelay({
@@ -149,17 +121,19 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     });
     setActivePluginRegistry(registry);
     initializeGlobalHookRunner(registry);
-    const [sessionFile, workspaceDir] = paths();
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir);
     params.sandboxSessionKey = "agent:main:policy";
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-    const { run } = await startRelay(harness, params, {
+    const run = runCodexAppServerAttempt(params, {
       nativeHookRelay: {
         enabled: true,
         events: ["post_tool_use", "before_agent_finalize"],
       },
     });
+    await harness.waitForMethod("turn/start");
     const startRequest = threadRequest(harness);
     const startConfig = (startRequest as { config?: Record<string, unknown> } | undefined)?.config;
     expect(startConfig?.["hooks.PostToolUse"]).not.toEqual([]);
@@ -207,7 +181,8 @@ describe("runCodexAppServerAttempt native hook relay", () => {
       );
     }
 
-    await finishRelay(harness, run);
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
   });
 
   it("auto-answers defensive yolo command and workspace file approvals once", async () => {
@@ -227,28 +202,43 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     params.approvalReviewerDeviceId = "device-tui-reviewer";
     const closeHostCapabilities = await bindProductionHarnessHostCapabilitiesForTest(params);
 
-    const { run } = await startRelay(harness, params);
+    const run = runCodexAppServerAttempt(params, preToolUse);
+    await harness.waitForMethod("turn/start");
     const startRequest = threadRequest(harness);
     expect(startRequest).toMatchObject({ approvalPolicy: "never" });
     const relayId = extractRelayIdFromThreadRequest(startRequest);
-    expect(registration(relayId)).toMatchObject({
+    expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toMatchObject({
       approvalContext: {
         trigger: "user",
         approvalReviewerDeviceId: "device-tui-reviewer",
       },
     });
 
-    const commandResponse = await requestApproval(harness, "commandExecution", "cmd-policy-allow", {
-      command: `node ${commandFile}`,
-      cwd: workspaceDir,
+    const commandResponse = await harness.handleServerRequest({
+      id: "request-command-policy-allow",
+      method: "item/commandExecution/requestApproval",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-policy-allow",
+        command: `node ${commandFile}`,
+        cwd: workspaceDir,
+      },
     });
     expect(approvalSpy).toHaveBeenCalledWith(expect.objectContaining({ autoApprove: true }));
     // Commands backed by mutable file bytes cannot receive reusable approval.
     expect(commandResponse).toEqual({ decision: "accept" });
     await expect(
-      requestApproval(harness, "fileChange", "patch-policy-allow", {
-        reason: "write memory/2026-07-29.md",
-        grantRoot: workspaceDir,
+      harness.handleServerRequest({
+        id: "request-file-policy-allow",
+        method: "item/fileChange/requestApproval",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "patch-policy-allow",
+          reason: "write memory/2026-07-29.md",
+          grantRoot: workspaceDir,
+        },
       }),
     ).resolves.toEqual({ decision: "accept" });
 
@@ -256,7 +246,8 @@ describe("runCodexAppServerAttempt native hook relay", () => {
       expect.objectContaining({ toolName: "apply_patch" }),
       expect.any(Object),
     );
-    await finishRelay(harness, run);
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
     closeHostCapabilities();
     await nativeHookRelayUnregisterQueue.flush();
   });
@@ -290,11 +281,19 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     const closeHostCapabilities = await bindProductionHarnessHostCapabilitiesForTest(params);
 
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-    const { run } = await startRelay(harness, params);
-    const response = await requestApproval(harness, "commandExecution", "cmd-policy-unattended", {
-      // Reach the hook without requiring an unrelated CLI installation.
-      command: "node --version",
-      cwd: workspaceDir,
+    const run = runCodexAppServerAttempt(params, preToolUse);
+    await harness.waitForMethod("turn/start");
+    const response = await harness.handleServerRequest({
+      id: "request-command-policy-unattended",
+      method: "item/commandExecution/requestApproval",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-policy-unattended",
+        // Executable binding must reach the hook without requiring an unrelated CLI installation.
+        command: "node --version",
+        cwd: workspaceDir,
+      },
     });
 
     expect(response).toEqual({ decision: "decline" });
@@ -313,27 +312,29 @@ describe("runCodexAppServerAttempt native hook relay", () => {
       }),
     );
 
-    await finishRelay(harness, run);
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
     closeHostCapabilities();
     await nativeHookRelayUnregisterQueue.flush();
   });
 
   it("throttles default native hook relay renewal on current-turn progress", async () => {
-    const [sessionFile, workspaceDir] = paths();
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
     const harness = createStartedThreadHarness();
 
-    const { run } = await startRelay(
-      harness,
+    const run = runCodexAppServerAttempt(
       createLoopRelayParams(sessionFile, workspaceDir),
       preToolUse,
     );
+    await harness.waitForMethod("turn/start");
 
     const relayId = extractRelayIdFromThreadRequest(threadRequest(harness));
-    const registered = registration(relayId);
-    if (!registered) {
+    const registration = nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId);
+    if (!registration) {
       throw new Error("Expected native hook relay registration");
     }
-    const firstExpiresAtMs = registered.expiresAtMs;
+    const firstExpiresAtMs = registration.expiresAtMs;
 
     for (const id of ["raw-progress-1", "raw-progress-2"]) {
       await harness.notify(
@@ -344,7 +345,9 @@ describe("runCodexAppServerAttempt native hook relay", () => {
           content: [{ type: "output_text", text: "Still working." }],
         }),
       );
-      expect(registration(relayId)?.expiresAtMs).toBe(firstExpiresAtMs);
+      expect(
+        nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)?.expiresAtMs,
+      ).toBe(firstExpiresAtMs);
     }
 
     await harness.notify({
@@ -360,23 +363,29 @@ describe("runCodexAppServerAttempt native hook relay", () => {
         },
       },
     });
-    expect(registration(relayId)?.expiresAtMs).toBe(firstExpiresAtMs);
+    expect(
+      nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)?.expiresAtMs,
+    ).toBe(firstExpiresAtMs);
 
-    await finishRelay(harness, run);
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
     await nativeHookRelayUnregisterQueue.flush();
-    expect(registration(relayId)).toBeUndefined();
+    expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
   });
 
   it.each(["replacement", "independent"])(
     "keeps the %s execution relay registered when prior cleanup is pending",
     async (kind) => {
       const sameExecutionSession = kind === "replacement";
-      const [sessionFile, workspaceDir] = paths();
+      const sessionFile = path.join(tempDir, "session.jsonl");
+      const workspaceDir = path.join(tempDir, "workspace");
       const firstHarness = createStartedThreadHarness(undefined, { persistedThreads: [] });
       const firstParams = createLoopRelayParams(sessionFile, workspaceDir);
       firstParams.sandboxSessionKey = "agent:main:policy";
-      const { run: firstRun } = await startRelay(firstHarness, firstParams);
-      await finishRelay(firstHarness, firstRun);
+      const firstRun = runCodexAppServerAttempt(firstParams, preToolUse);
+      await firstHarness.waitForMethod("turn/start");
+      await firstHarness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      await firstRun;
 
       const firstStartRequest = threadRequest(firstHarness);
       const firstRelayId = extractRelayIdFromThreadRequest(firstStartRequest);
@@ -384,7 +393,9 @@ describe("runCodexAppServerAttempt native hook relay", () => {
       expect((await readCodexAppServerBinding(sessionFile))?.nativeHookRelayGeneration).toBe(
         firstGeneration,
       );
-      expect(registration(firstRelayId)?.runId).toBe("run-1");
+      expect(
+        nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(firstRelayId)?.runId,
+      ).toBe("run-1");
       await expect(
         invokeCommand(firstRelayId, "late-call-1", undefined, "python3 -c 'print(\"x\")'"),
       ).rejects.toThrow("Codex session generation is no longer current");
@@ -403,7 +414,8 @@ describe("runCodexAppServerAttempt native hook relay", () => {
         secondParams.sessionId = "session-2";
         secondParams.sessionKey = "agent:main:session-2";
       }
-      const { run: secondRun } = await startRelay(secondHarness, secondParams);
+      const secondRun = runCodexAppServerAttempt(secondParams, preToolUse);
+      await secondHarness.waitForMethod("turn/start");
 
       const secondThreadRequest = threadRequest(
         secondHarness,
@@ -413,25 +425,35 @@ describe("runCodexAppServerAttempt native hook relay", () => {
       expect(secondRelayId === firstRelayId).toBe(sameExecutionSession);
       const secondGeneration = extractGenerationFromThreadRequest(secondThreadRequest);
       expect(secondGeneration === firstGeneration).toBe(sameExecutionSession);
-      expect(registration(secondRelayId)).toMatchObject({
-        runId: "run-2",
-        sessionKey: secondParams.sessionKey,
-      });
-      expect(registration(secondRelayId)?.allowedEvents).toEqual(["pre_tool_use"]);
-      expect(registration(firstRelayId)?.runId).toBe(sameExecutionSession ? "run-2" : "run-1");
+      const resumedRegistration =
+        nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(secondRelayId);
+      expect(resumedRegistration?.runId).toBe("run-2");
+      expect(resumedRegistration?.sessionKey).toBe(secondParams.sessionKey);
+      expect(resumedRegistration?.allowedEvents).toEqual(["pre_tool_use"]);
+      expect(
+        nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(firstRelayId)?.runId,
+      ).toBe(sameExecutionSession ? "run-2" : "run-1");
 
       await nativeHookRelayUnregisterQueue.flush();
-      expect(registration(secondRelayId)?.runId).toBe("run-2");
+      expect(
+        nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(secondRelayId)?.runId,
+      ).toBe("run-2");
 
-      await finishRelay(secondHarness, secondRun);
-      expect(registration(secondRelayId)?.runId).toBe("run-2");
+      await secondHarness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      await secondRun;
+      expect(
+        nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(secondRelayId)?.runId,
+      ).toBe("run-2");
       await nativeHookRelayUnregisterQueue.flush();
-      expect(registration(secondRelayId)).toBeUndefined();
+      expect(
+        nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(secondRelayId),
+      ).toBeUndefined();
     },
   );
 
   it("accepts a stale first hook generation when resuming a pre-generation binding", async () => {
-    const [sessionFile, workspaceDir] = paths();
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
     await writeCodexAppServerBinding(sessionFile, {
       threadId: "thread-existing",
       cwd: workspaceDir,
@@ -441,11 +463,11 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     });
     const harness = createResumeHarness();
 
-    const { run } = await startRelay(
-      harness,
+    const run = runCodexAppServerAttempt(
       createLoopRelayParams(sessionFile, workspaceDir),
       preToolUse,
     );
+    await harness.waitForMethod("turn/start");
 
     const resumeRequest = threadRequest(harness, "thread/resume");
     const relayId = extractRelayIdFromThreadRequest(resumeRequest);
@@ -458,7 +480,8 @@ describe("runCodexAppServerAttempt native hook relay", () => {
       invokeCommand(relayId, "unexpected-stale-generation", "different-legacy-generation"),
     ).rejects.toThrow("native hook relay bridge stale registration");
 
-    await finishRelay(harness, run, "thread-existing");
+    await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
+    await run;
     expect((await readCodexAppServerBinding(sessionFile))?.nativeHookRelayGeneration).toBe(
       currentGeneration,
     );
@@ -468,7 +491,8 @@ describe("runCodexAppServerAttempt native hook relay", () => {
   it.each(["configuration changed", "resume failed"] as const)(
     "rejects the old hook generation when %s starts a fresh thread",
     async (reason) => {
-      const [sessionFile, workspaceDir] = paths();
+      const sessionFile = path.join(tempDir, "session.jsonl");
+      const workspaceDir = path.join(tempDir, "workspace");
       const generation = "generation-from-old-thread";
       await writeCodexAppServerBinding(sessionFile, {
         threadId: "thread-existing",
@@ -489,11 +513,11 @@ describe("runCodexAppServerAttempt native hook relay", () => {
         },
         { persistedThreads: reason === "resume failed" ? ["thread-existing"] : [] },
       );
-      const { run } = await startRelay(
-        harness,
+      const run = runCodexAppServerAttempt(
         createLoopRelayParams(sessionFile, workspaceDir),
         preToolUse,
       );
+      await harness.waitForMethod("turn/start");
       const start = threadRequest(harness);
       const relayId = extractRelayIdFromThreadRequest(start);
       const currentGeneration = extractGenerationFromThreadRequest(start);
@@ -501,7 +525,8 @@ describe("runCodexAppServerAttempt native hook relay", () => {
       await expect(invokeCommand(relayId, "old-thread-tool", generation)).rejects.toThrow(
         "native hook relay bridge stale registration",
       );
-      await finishRelay(harness, run);
+      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      await run;
       expect((await readCodexAppServerBinding(sessionFile))?.nativeHookRelayGeneration).toBe(
         currentGeneration,
       );
@@ -510,7 +535,8 @@ describe("runCodexAppServerAttempt native hook relay", () => {
   );
 
   it("cleans up native hook relay state when turn/start fails", async () => {
-    const [sessionFile, workspaceDir] = paths();
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
     const diagnosticEvents: DiagnosticEventPayload[] = [];
     const unsubscribeDiagnostics = onInternalDiagnosticEvent((event) =>
       diagnosticEvents.push(event),
@@ -521,7 +547,8 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     const harness = createStartedThreadHarness(async (method) => {
       if (method === "turn/start") {
         const relayId = extractRelayIdFromThreadRequest(threadRequest(harness));
-        reportPreToolUseFailure = registration(relayId)?.onPreToolUseFailure;
+        const registration = nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId);
+        reportPreToolUseFailure = registration?.onPreToolUseFailure;
         throw new Error("turn start exploded");
       }
       return undefined;
@@ -549,7 +576,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     }
 
     const relayId = extractRelayIdFromThreadRequest(threadRequest(harness));
-    expect(registration(relayId)).toBeUndefined();
+    expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
     expect(diagnosticEvents).toContainEqual(
       expect.objectContaining({
         type: "tool.execution.error",
