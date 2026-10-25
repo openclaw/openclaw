@@ -129,7 +129,7 @@ describe("canonical anonymous HTTP entry", () => {
   });
 
   it("reloads the exact Incognito address produced by in-app navigation", async () => {
-    const sessionKey = "agent:main:dashboard:incognito-12345678-aaaa-4000-8000-000000000001";
+    const sessionKey = "agent:main:dashboard:12345678-aaaa-4000-8000-000000000001";
     const target = sessionNavigationTarget({
       face: "chat",
       sessionKey,
@@ -137,6 +137,7 @@ describe("canonical anonymous HTTP entry", () => {
       fallbackAgentId: "main",
       basePath: "/control",
     });
+    expect(target.options.search).toContain("__openclawSessionKey=");
     const response = await sendRequest(server(), {
       path: target.options.pathname + (target.options.search ?? ""),
       host: "gateway.lan:18789",

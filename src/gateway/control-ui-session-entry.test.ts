@@ -71,6 +71,13 @@ describe("protected canonical session handoff", () => {
     expect(parseReturn(path, "/control")).toEqual(parseReturn(canonical, "/control"));
   });
 
+  it("preserves an in-flight short-session key without changing the authenticated target", async () => {
+    const path = `${canonical}?__openclawSessionKey=agent%3Amain%3Adashboard%3A11111111-2222-3333-4444-555555555555`;
+    const opened = await request(entryUrl(path, "/control"));
+    expect(opened.serveApp).toHaveBeenCalledWith(path, expect.any(Function));
+    expect(parseReturn(path, "/control")).toEqual(parseReturn(canonical, "/control"));
+  });
+
   it("uses the authenticated profile and grants only exact accessible sessions", async () => {
     const probe = await request(`${entry}&probe=1`);
     expect(probe.res.statusCode).toBe(204);
@@ -119,6 +126,8 @@ describe("protected canonical session handoff", () => {
     "/control/chat/main/topic?openclaw_mount_recovery=1&openclaw_mount_recovery=2",
     "/control/chat/main/topic?openclaw_mount_recovery=invalid",
     "/control/chat/main?__openclawSessionFacePreference=1&__openclawSessionFacePreference=1",
+    "/control/chat/main?__openclawSessionKey=agent%3Amain%3Adashboard%3Afirst&__openclawSessionKey=agent%3Amain%3Adashboard%3Asecond",
+    "/control/chat/main?__openclawSessionKey=",
     "/control/chat/main?__openclawSessionFacePreference=0",
     "/control/chat/main?__openclawSessionFacePreference=",
     "/control/chat/main?__openclawSessionFacePreference=1&token=secret",

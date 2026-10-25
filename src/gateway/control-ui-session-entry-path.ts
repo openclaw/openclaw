@@ -24,13 +24,19 @@ export function parseControlUiSessionReturnPath(value: string, basePath: string)
         key !== "dashboard" &&
         key !== "draft" &&
         key !== "openclaw_mount_recovery" &&
-        key !== "__openclawSessionFacePreference",
+        key !== "__openclawSessionFacePreference" &&
+        key !== "__openclawSessionKey",
     ) ||
     // The UI emits this hint until the session loader resolves its preferred face.
     // Reloading that address must keep the same pathname-based auth and target.
     url.searchParams.getAll("__openclawSessionFacePreference").length > 1 ||
     (url.searchParams.has("__openclawSessionFacePreference") &&
       url.searchParams.get("__openclawSessionFacePreference") !== "1") ||
+    // The UI carries this hint only while a short route resolves. It must not alter
+    // the pathname-based auth and target, but rejecting it strands generated URLs.
+    url.searchParams.getAll("__openclawSessionKey").length > 1 ||
+    (url.searchParams.has("__openclawSessionKey") &&
+      !url.searchParams.get("__openclawSessionKey")?.trim()) ||
     url.searchParams.getAll("openclaw_mount_recovery").length > 1 ||
     (url.searchParams.has("openclaw_mount_recovery") &&
       !/^[0-9]+$/u.test(url.searchParams.get("openclaw_mount_recovery") ?? "")) ||
