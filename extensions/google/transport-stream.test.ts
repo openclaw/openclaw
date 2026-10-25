@@ -1277,13 +1277,8 @@ describe("google transport stream", () => {
   it("rotates Gemini LLM API keys when a pre-stream request is rate limited", async () => {
     vi.stubEnv("OPENCLAW_LIVE_GEMINI_KEY", "");
     vi.stubEnv("GEMINI_API_KEYS", "gemini-key-2");
-    guardedFetchMock.mockResolvedValueOnce(buildRateLimitResponse()).mockResolvedValueOnce(
-      buildSseResponse([
-        {
-          candidates: [{ content: { parts: [{ text: "recovered" }] }, finishReason: "STOP" }],
-        },
-      ]),
-    );
+    guardedFetchMock.mockResolvedValueOnce(buildRateLimitResponse());
+    mockGoogleTextResponse("recovered");
 
     const result = await runGeminiStreamResult({ options: { apiKey: "gemini-key-1" } });
 
