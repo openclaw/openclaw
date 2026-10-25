@@ -1,5 +1,6 @@
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { buildReplyPayloads } from "../../auto-reply/reply/agent-runner-payloads.js";
+import { expectCallCount as expectCalls } from "../../test-utils/mock-call-assertions.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { estimateAggregateUsageCost } from "../../utils/usage-format.js";
 import type { BlockReplyPayload } from "../embedded-agent-payloads.js";
@@ -55,11 +56,6 @@ const userMessage = (content: string, timestamp = 1) => ({
 const completedItem = { startedCount: 1, completedCount: 1, activeCount: 0 };
 const textPayloads = ({ assistantTexts }: { assistantTexts: string[] }) =>
   assistantTexts.map((text) => ({ text }));
-function expectCalls(count: number, ...mocks: ReturnType<typeof vi.fn>[]) {
-  for (const mock of mocks) {
-    expect(mock).toHaveBeenCalledTimes(count);
-  }
-}
 function delivered(payload: { text: string; mediaUrls?: string[] }, to = "telegram:123") {
   return {
     toolMetas: succeeded("message", "plugins"),

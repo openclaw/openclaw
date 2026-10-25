@@ -27,7 +27,7 @@ import {
   sessionsResult as sessionListFixture,
 } from "../../lib/sessions/session-capability.test-support.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
-import { createResolvedModelPatch } from "../../test-helpers/chat-model.ts";
+import { createResolvedModelPatch, sessionListResult } from "../../test-helpers/chat-model.ts";
 import { createTestGatewayClient as clientWithRequest } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { createActiveSessionPlacement } from "../../test-helpers/session-placement.ts";
@@ -1563,19 +1563,17 @@ describe("handleSendChat", () => {
           },
         },
         "chat.history": { messages: [], thinkingLevel: null },
-        "sessions.list": {
-          ts: 0,
-          path: "",
-          count: 1,
-          defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
-          sessions: [
+        "sessions.list": sessionListResult(
+          0,
+          [
             row("main", {
               model: "gpt-5-mini",
               modelProvider: "openai",
               modelOverrideSource: "user",
             }),
           ],
-        },
+          { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+        ),
         "models.list": {
           models: [{ id: "gpt-5-mini", name: "GPT-5 Mini", provider: "openai" }],
         },

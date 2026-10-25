@@ -144,7 +144,6 @@
 .agent-chat__composer-shell,
 .agent-chat__input {
   --chat-composer-radius: calc(20px * var(--openclaw-corner-radius-scale));
-  --chat-composer-surface: var(--popover);
   --chat-composer-light-outline: rgb(0 0 0 / 6%);
   --composer-attached-surface: color-mix(
     in srgb,
@@ -168,7 +167,6 @@
 
 .agent-chat__input {
   --chat-box-inset: 8px;
-  --chat-composer-surface: var(--popover);
   --chat-composer-secondary: color-mix(
     in srgb,
     var(--text-strong) 65%,

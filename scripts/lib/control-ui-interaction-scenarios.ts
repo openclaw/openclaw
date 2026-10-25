@@ -26,6 +26,14 @@ import {
 import { heavyContentScenarios } from "./control-ui-heavy-content-scenarios.ts";
 import { runProjectionFixture } from "./control-ui-projection-fixtures.ts";
 import type { ControlUiResourceCounts } from "./control-ui-resource-counts.ts";
+import {
+  exerciseWorkboardResourceFixture,
+  idleWorkboardResourceFixture,
+  prepareWorkboardResourceFixture,
+  runWorkboardEventsCpu,
+  runWorkboardRemountCpu,
+  workboardResourceRoute,
+} from "./control-ui-workboard-resource-fixture.ts";
 
 const sessionKeys = ["agent:main:interaction-a", "agent:main:interaction-b"] as const;
 const sessionQuery = "Interaction 0999";
@@ -59,6 +67,7 @@ export type InteractionSandbox = { sandboxUrl: string; sandboxPort: number };
 export type InteractionEvidence = Record<string, number | boolean>;
 
 type InteractionFixtureOptions = {
+  workboardResources?: boolean;
   heavyContent?: boolean;
   runningSessions?: boolean;
   longSessionLabels?: boolean;
@@ -90,6 +99,7 @@ export type InteractionScenario = {
   fixture?: InteractionFixtureOptions;
   /** Resource campaigns opt into the longer inventory and idle scenarios. */
   resourceOnly?: boolean;
+  /** Own one browser per observation; launch and retirement stay outside measurement. */
   observationBrowser?: boolean;
   visibility?: "hidden";
   projectionFamily?: ProjectionFamily;
@@ -1560,6 +1570,47 @@ async function prepareProviderUsage(page: Page) {
 }
 
 export const interactionScenarios: readonly InteractionScenario[] = [
+  ...(
+    ["tooltips", "link-providers", "link-metadata", "ci-pairs", "clawhub-cards"] as const
+  ).flatMap((family): InteractionScenario[] => {
+    const active: InteractionScenario = {
+      id: `projection-${family}`,
+      route: "/instance-resource-fixture.html",
+      expected:
+        "Real production consumers on an isolated benchmark document; native observer/listener/subscription counts and retained scope/cleanup contracts, with twenty bounded native publication batches.",
+      projectionFamily: family,
+      prepare: async (page) => {
+        if (await page.locator("openclaw-app").count()) {
+          throw new Error("Instance resources require the benchmark-only blank document");
+        }
+      },
+      run: async (page): Promise<void> => {
+        await runProjectionFixture(page);
+      },
+    };
+    const idle = (["visible", "hidden"] as const).map((visibility): InteractionScenario => ({
+      id: `projection-${family}-idle-${visibility}`,
+      route: "/instance-resource-fixture.html",
+      expected: `Actual ${family} consumers stay mounted for three ${visibility} native-clock seconds; no global count instrumentation exists in CPU mode.`,
+      projectionFamily: family,
+      projectionIdle: true,
+      visibility: visibility === "hidden" ? visibility : undefined,
+      prepare: async () => {},
+      run: async (page): Promise<void> => {
+        const state = () => page.evaluate(() => document.visibilityState);
+        if ((await state()) !== visibility) {
+          throw new Error(`Expected ${visibility} instance document`);
+        }
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 3_000);
+        });
+        if ((await state()) !== visibility) {
+          throw new Error("Instance idle visibility changed");
+        }
+      },
+    }));
+    return [active].concat(idle);
+  }),
   ...heavyContentScenarios,
   ...createBrowserResourceScenarios({
     route: controlUiSessionPath(sessionKeys[0]),
@@ -1618,6 +1669,59 @@ export const interactionScenarios: readonly InteractionScenario[] = [
     run: async (page) => {
       await runProjectionFixture(page);
     },
+  })),
+  {
+    id: "workboard-native-resources",
+    route: workboardResourceRoute,
+    fixture: { workboardResources: true },
+    resourceOnly: true,
+    observationBrowser: true,
+    expected:
+      "1,000 actual native Workboard cards preserve cancelled/coalesced popover transitions, pending hover cancellation, placement and independent resource retirement. Requires --resource-counts; diagnostic waits are not CPU timing.",
+    rowSelector: ".workboard-card",
+    prepare: (page) => prepareWorkboardResourceFixture(page, settleSidebarBackgroundWork),
+    run: (page, gateway) => exerciseWorkboardResourceFixture(page, gateway, frames),
+  },
+  {
+    id: "workboard-events-cpu",
+    route: workboardResourceRoute,
+    fixture: { workboardResources: true },
+    resourceOnly: true,
+    observationBrowser: true,
+    expected:
+      "1,000 closed cards receive eight actual viewport changes and eight native column scrolls with no diagnostic listeners; measure CPU without --resource-counts.",
+    prepare: (page) => prepareWorkboardResourceFixture(page, settleSidebarBackgroundWork),
+    run: async (page) => {
+      const evidence = await runWorkboardEventsCpu(page, frames);
+      await settleSidebarCapture(page);
+      return evidence;
+    },
+  },
+  {
+    id: "workboard-remount-cpu",
+    route: workboardResourceRoute,
+    fixture: { workboardResources: true },
+    resourceOnly: true,
+    observationBrowser: true,
+    expected:
+      "Retire 1,000 actual cards, then mount 1,000 through real paginated responses inside the warm CPU interval; measure without --resource-counts.",
+    prepare: (page) => prepareWorkboardResourceFixture(page, settleSidebarBackgroundWork),
+    run: async (page, gateway) => {
+      const evidence = await runWorkboardRemountCpu(page, gateway, frames);
+      await settleSidebarCapture(page);
+      return evidence;
+    },
+  },
+  ...(["visible", "hidden"] as const).map((visibility): InteractionScenario => ({
+    id: `workboard-idle-${visibility}`,
+    route: workboardResourceRoute,
+    fixture: { workboardResources: true },
+    resourceOnly: true,
+    observationBrowser: true,
+    visibility: visibility === "hidden" ? visibility : undefined,
+    expected: `1,000 actual Workboard cards stay mounted and genuinely ${visibility} during three native-clock idle seconds.`,
+    prepare: (page) => prepareWorkboardResourceFixture(page, settleSidebarBackgroundWork),
+    run: (page) => idleWorkboardResourceFixture(page, visibility),
   })),
   {
     id: "mcp-app-resize-resources",

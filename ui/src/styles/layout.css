@@ -872,6 +872,35 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
      both values share --sidebar-pad-x so they cannot drift. */
   margin-right: calc(-1 * var(--sidebar-pad-x));
   padding-right: var(--sidebar-pad-x);
+  scrollbar-color: color-mix(in srgb, var(--muted) 10%, transparent) transparent;
+}
+
+.sidebar-shell:hover .sidebar-shell__body {
+  scrollbar-color: color-mix(in srgb, var(--muted) 16%, transparent) transparent;
+}
+
+@supports selector(::-webkit-scrollbar) {
+  .sidebar-shell__body {
+    /* Native scrollbar colors override the separate thumb-hover treatment. */
+    scrollbar-width: auto;
+    scrollbar-color: auto;
+  }
+
+  .sidebar-shell:hover .sidebar-shell__body {
+    scrollbar-color: auto;
+  }
+
+  .sidebar-shell__body::-webkit-scrollbar-thumb {
+    background-color: color-mix(in srgb, var(--muted) 10%, transparent);
+  }
+
+  .sidebar-shell:hover .sidebar-shell__body::-webkit-scrollbar-thumb {
+    background-color: color-mix(in srgb, var(--muted) 16%, transparent);
+  }
+
+  .sidebar-shell .sidebar-shell__body::-webkit-scrollbar-thumb:hover {
+    background-color: var(--scrollbar-thumb-hover);
+  }
 }
 
 /* The footer bleeds past the sidebar gutters without moving the content frame. */

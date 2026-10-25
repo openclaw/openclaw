@@ -50,7 +50,7 @@ const { values } = parseArgs({
 });
 if (values.help) {
   console.log(
-    "--bundle-dir BASE [--compare-bundle-dir HEAD] --routes sessions,cron,usage --mode coverage|timing|all --pairs 10 --profiles local,remote [--screenshots] [--output DIR]. Default routes include every Settings section, Sessions, Cron, Agents, Usage, Plugins, Workboard and sharing. Optional --interactions agents-files,cron-history,cron-transcript probes follow cold readiness. Coverage and timing run in separate fresh contexts; comparison timings include a base/base control.",
+    "--bundle-dir BASE [--compare-bundle-dir HEAD] --routes sessions,cron,usage --mode coverage|timing|all --pairs 10 --profiles local,remote [--screenshots] [--output DIR]. Default routes include every Settings section, Sessions, Cron, Agents, Usage, Plugins, Workboard and sharing. Optional --interactions agents-files,cron-history,cron-transcript probes follow cold readiness. Security uses --routes advanced with one settings-security-immediate or settings-security-idle interaction. Coverage and timing run in separate fresh contexts; comparison timings include a base/base control.",
   );
   process.exit(0);
 }
@@ -95,11 +95,26 @@ const routes = (values.routes?.split(",") ?? defaults).map((id) => {
   return id as RouteId | "sharing";
 });
 const interactionIds = values.interactions?.split(",") ?? [];
-const knownInteractions = ["agents-files", "cron-history", "cron-transcript"];
+const securityInteractions = ["settings-security-immediate", "settings-security-idle"];
+const knownInteractions = [
+  "agents-files",
+  "cron-history",
+  "cron-transcript",
+  ...securityInteractions,
+];
 for (const id of interactionIds) {
   if (!knownInteractions.includes(id)) {
     throw new Error(`Unknown interaction: ${id}; choose ${knownInteractions.join(",")}`);
   }
+}
+const securityInteraction = interactionIds.find((id) => securityInteractions.includes(id));
+if (
+  securityInteraction &&
+  (interactionIds.length !== 1 || routes.length !== 1 || routes[0] !== "advanced")
+) {
+  throw new Error(
+    "Security navigation requires only --routes advanced and one Security interaction",
+  );
 }
 const output = createControlUiE2eArtifactDir("route-leaks", values.output);
 const configPages = new Set<string>(CONFIG_PAGE_IDS);
@@ -450,7 +465,7 @@ async function save() {
         workload:
           "cold direct navigation; real production HTTP assets, synthetic in-document WebSocket Gateway; interaction routes receive a fixed minimum 2,000 ms post-ready think time on every variant",
         instrumentation:
-          "Timing uses renderer-main-frame threadTicks without coverage. Optional interaction wallMs/CPU are automation-to-ready intervals after cold capture, not INP; evaluatedScriptUrls uses positive top-level V8 ranges. Parsed scripts without execution are reported separately. Import references are regex-extracted chunk references, not a complete source import graph. V8 coverage also belongs to the page target; workerUrls records any dedicated-worker coverage/network-emulation gap. Coverage is a separate pass bounded by usable route readiness and includes requested preloads absent from V8 as unexecuted. requestedRawBytes counts the full source of requested files; loadedBytes includes only completed/evaluated files. pendingJsRequests identifies incomplete transfer accounting, and jsResources contains completed Resource Timing entries. Remote emulates 100ms HTTP latency and 10Mbps; synthetic WS has no simulated RTT. Workboard plugin fixture is built from the current checkout and held identical across bundle variants; its bytes are reported separately from UI-bundle code. Ready requires route success and a visible enabled page control, then one animation frame. Sharing includes opening the menu after the chat becomes usable. Matching Agents/Cron interactions give every variant the same minimum 2,000 ms post-ready think time, recording warmup CPU/wall time even when no passive preload files exist. Passive preload completion may extend that window. Cold-only and sharing runs have no think-time delay.",
+          "Timing uses renderer-main-frame threadTicks without coverage. Optional interaction wallMs/CPU are automation-to-ready intervals after cold capture, not INP; evaluatedScriptUrls uses positive top-level V8 ranges. Parsed scripts without execution are reported separately. Import references are regex-extracted chunk references, not a complete source import graph. V8 coverage also belongs to the page target; workerUrls records any dedicated-worker coverage/network-emulation gap. Coverage is a separate pass bounded by usable route readiness and includes requested preloads absent from V8 as unexecuted. requestedRawBytes counts the full source of requested files; loadedBytes includes only completed/evaluated files. pendingJsRequests identifies incomplete transfer accounting, and jsResources contains completed Resource Timing entries. Remote emulates 100ms HTTP latency and 10Mbps; synthetic WS has no simulated RTT. Workboard plugin fixture is built from the current checkout and held identical across bundle variants; its bytes are reported separately from UI-bundle code. Ready requires route success and a visible enabled page control, then one animation frame. Security navigation additionally requires the checked/enabled Browser control and all four enabled tool profiles, with no fixture override selected; config/schema receipt counts must stay unchanged. Security before/after observations have their own timestamps, and no hover/focus/import or artificial preload precedes its native click. Its readinessToActionMs records observation overhead; coverage and screenshots are written after its action. Sharing includes opening the menu after the chat becomes usable. Matching Agents/Cron interactions give every variant the same minimum 2,000 ms post-ready think time, recording warmup CPU/wall time even when no passive preload files exist. Passive preload completion may extend that window. Cold-only and sharing runs have no think-time delay.",
         acceptance:
           "A measured real-scenario win of at least 5%; no median readiness regression over 5% or worse p95 unless an A/A control attributes the movement to host noise. On a noisy host, run 20 interleaved pairs and judge affected threadTicks CPU plus structural byte/request counts. Coverage-instrumented timings are diagnostic only.",
         buildVariants: variants,
@@ -544,6 +559,167 @@ async function summarizeCoverage(
     loadedBytes: loaded.reduce((sum, item) => sum + item.loadedBytes, 0),
     executedBytes: scripts.reduce((sum, item) => sum + item.executedBytes, 0),
     unusedBytes: loaded.reduce((sum, item) => sum + item.unusedBytes, 0),
+  };
+}
+
+async function runSecurityNavigation(
+  page: Page,
+  cdp: CDPSession,
+  id: string,
+  mode: string,
+  readyMs: number,
+  requests: Map<string, AssetRequest>,
+  prefix: string,
+  coldCoverage: CoverageEntry[] = [],
+): Promise<InteractionResult> {
+  const observe = () =>
+    page.evaluate(() => ({
+      observedAtMs: performance.now(),
+      modulePreloads: [
+        ...document.querySelectorAll<HTMLLinkElement>('link[rel="modulepreload"]'),
+      ].map((link) => link.href),
+      resources: performance.getEntriesByType("resource").map((entry) => {
+        const resource = entry as PerformanceResourceTiming;
+        return {
+          url: resource.name,
+          initiatorType: resource.initiatorType,
+          responseEnd: resource.responseEnd,
+          encodedBytes: resource.encodedBodySize,
+          rawBytes: resource.decodedBodySize,
+        };
+      }),
+      rpc: (window as MockGatewayWindow).openclawControlUiE2eGateway
+        ?.findRequests()
+        .reduce<Record<string, number>>((counts, request) => {
+          counts[request.method] = (counts[request.method] ?? 0) + 1;
+          return counts;
+        }, {}),
+    }));
+  const minimumThinkTimeMs = id.endsWith("-idle") ? 2_000 : 0;
+  let idleCoverage: CoverageEntry[] | undefined;
+  let idleCpu: Record<string, number> | undefined;
+  if (minimumThinkTimeMs) {
+    const beforeIdle = await metrics(cdp);
+    if (mode === "coverage") {
+      await page.coverage.startJSCoverage({
+        resetOnNavigation: false,
+        reportAnonymousScripts: false,
+      });
+    }
+    await page.evaluate(async (until) => {
+      const remaining = until - performance.now();
+      if (remaining > 0) {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, remaining);
+        });
+      }
+    }, readyMs + minimumThinkTimeMs);
+    idleCoverage = mode === "coverage" ? await page.coverage.stopJSCoverage() : undefined;
+    idleCpu = cpuDelta(beforeIdle, await metrics(cdp));
+  }
+  // Observe without focusing, hovering, importing, or warming the destination.
+  const beforeAction = await observe();
+  const prior = new Map(Array.from(requests, ([key, request]) => [key, { ...request }]));
+  if (mode === "coverage") {
+    await page.coverage.startJSCoverage({
+      resetOnNavigation: false,
+      reportAnonymousScripts: false,
+    });
+  }
+  const before = await metrics(cdp);
+  const started = await page.evaluate(() => performance.now());
+  await page.locator(`a.settings-sidebar__item[href="${pathForRoute("security")}"]`).click();
+  await page.waitForFunction(() => {
+    const snapshot = window.openclawControlUi?.snapshot();
+    const root = document.querySelector(".security-page");
+    const rows = [...(root?.querySelectorAll(".settings-row") ?? [])];
+    const browser = rows.find(
+      (row) => row.querySelector(".settings-row__title")?.textContent?.trim() === "Browser enabled",
+    );
+    const tools = rows.find(
+      (row) => row.querySelector(".settings-row__title")?.textContent?.trim() === "Available tools",
+    );
+    const toolProfiles = [
+      ...(tools?.querySelectorAll<HTMLInputElement>('input[type="radio"]') ?? []),
+    ];
+    const visible = (node: Element | undefined) =>
+      Boolean(node?.getClientRects().length && getComputedStyle(node).visibility !== "hidden");
+    return (
+      snapshot?.routeReady &&
+      snapshot.route?.status === "success" &&
+      snapshot.route.matches[0]?.routeId === "security" &&
+      snapshot.route.pendingMatches.length === 0 &&
+      visible(browser) &&
+      visible(tools) &&
+      browser?.querySelector(
+        'input[type="checkbox"]:checked:not(:disabled):not([aria-disabled="true"])',
+      ) &&
+      toolProfiles.map((input) => input.value).join(",") === "minimal,coding,messaging,full" &&
+      toolProfiles.every(
+        (input) =>
+          !input.checked && !input.disabled && input.getAttribute("aria-disabled") !== "true",
+      )
+    );
+  });
+  const ended = await page.evaluate(
+    () =>
+      new Promise<number>((resolve) => {
+        requestAnimationFrame(() => resolve(performance.now()));
+      }),
+  );
+  const atEnd = Array.from(requests.values(), (request) => ({ ...request }));
+  const coverage = mode === "coverage" ? await page.coverage.stopJSCoverage() : undefined;
+  const cpu = cpuDelta(before, await metrics(cdp));
+  const afterAction = await observe();
+  for (const method of ["config.get", "config.schema"]) {
+    const beforeReads = beforeAction.rpc?.[method] ?? 0;
+    const afterReads = afterAction.rpc?.[method] ?? 0;
+    if (beforeReads !== 1 || afterReads !== beforeReads) {
+      throw new Error(
+        `Security navigation changed ${method} receipts: ${beforeReads} -> ${afterReads}`,
+      );
+    }
+  }
+  const alerts = await page.locator('[role="alert"]:visible').allTextContents();
+  if (alerts.length) {
+    throw new Error(`Security navigation visible alerts: ${alerts.join("; ")}`);
+  }
+  if (idleCoverage) {
+    await writeFile(
+      path.join(output, `${prefix}-${id}-idle-v8.json`),
+      JSON.stringify(idleCoverage),
+    );
+  }
+  if (coverage) {
+    await writeFile(path.join(output, `${prefix}-${id}-v8.json`), JSON.stringify(coverage));
+  }
+  return {
+    id,
+    targetRoute: "security",
+    minimumThinkTimeMs,
+    coldReadyMs: readyMs,
+    coldEvaluatedScriptUrls: evaluatedUrls(coldCoverage),
+    idleCpu,
+    idleEvaluatedScriptUrls: idleCoverage ? evaluatedUrls(idleCoverage) : undefined,
+    beforeAction,
+    afterAction,
+    actionStartedMs: started,
+    readinessToActionMs: started - readyMs,
+    wallMs: ended - started,
+    cpu,
+    jsRequestsBeforeAction: [...prior.values()].filter((request) =>
+      /\.m?js$/u.test(new URL(request.url).pathname),
+    ),
+    newJsRequests: atEnd.filter(
+      (request) => !prior.has(request.requestId) && /\.m?js$/u.test(new URL(request.url).pathname),
+    ),
+    previousPendingCompleted: atEnd.filter(
+      (request) =>
+        prior.has(request.requestId) &&
+        prior.get(request.requestId)!.wireBytes === undefined &&
+        request.wireBytes !== undefined,
+    ),
+    evaluatedScriptUrls: coverage ? evaluatedUrls(coverage) : undefined,
   };
 }
 
@@ -790,6 +966,19 @@ try {
                 }),
                 readyMs,
               );
+              // Keep immediate navigation ahead of artifact analysis and screenshots.
+              const securityCell = securityInteraction
+                ? await runSecurityNavigation(
+                    page,
+                    cdp,
+                    securityInteraction,
+                    mode,
+                    readyMs,
+                    requests,
+                    prefix,
+                    coverageAtReady,
+                  )
+                : undefined;
               result.rpc = data.rpc;
               result.alerts = data.alerts;
               const unexpectedAlerts = data.alerts.filter(
@@ -826,7 +1015,12 @@ try {
                 );
               }
               if (values.screenshots && pair === 0) {
-                await page.screenshot({ path: path.join(output, `${prefix}.png`) });
+                await page.screenshot({
+                  path: path.join(
+                    output,
+                    securityCell ? `${prefix}-${securityInteraction}.png` : `${prefix}.png`,
+                  ),
+                });
               }
               // Keep coverage and screenshots even when the visible page is not usable.
               if (unexpectedAlerts.length) {
@@ -882,7 +1076,7 @@ try {
                   throw new Error(`Next panel evaluated before interaction: ${warmFiles[0]}`);
                 }
               }
-              result.interactions = [];
+              result.interactions = securityCell ? [securityCell] : [];
               for (const id of routeInteractions) {
                 const cell: InteractionResult = { id };
                 try {
