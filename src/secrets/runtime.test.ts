@@ -9,10 +9,7 @@ import { redactSensitiveText } from "../logging/redact.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { assertSecretOwnerAvailable } from "./runtime-degraded-state.js";
-import {
-  activateSecretsRuntimeSnapshotState,
-  clearSecretsRuntimeSnapshotState,
-} from "./runtime-state.js";
+import { activateSecretsRuntimeSnapshotState } from "./runtime-state.js";
 import { activateSecretsRuntimeSnapshot } from "./runtime.js";
 import { asConfig, setupSecretsRuntimeSnapshotTestHooks } from "./runtime.test-support.ts";
 
@@ -38,11 +35,7 @@ function prepare(
 }
 
 function ttsConfig(apiKey: unknown, config: Record<string, unknown> = {}) {
-  return asConfig({
-    ...explicitMainRoster(),
-    ...config,
-    tts: { providers: { elevenlabs: { apiKey } } },
-  });
+  return coreConfig({ ...config, tts: { providers: { elevenlabs: { apiKey } } } });
 }
 
 const envRef = (id: string) => ({ source: "env" as const, provider: "default", id });
@@ -52,8 +45,7 @@ const provider = (apiKey: unknown, baseUrl = "https://first.example.invalid/v1")
   models: [],
 });
 function siblingConfig(firstId: string) {
-  return asConfig({
-    ...explicitMainRoster(),
+  return coreConfig({
     models: {
       providers: {
         first: provider(envRef(firstId)),
@@ -66,17 +58,14 @@ function activate(snapshot: Snapshot) {
   activateSecretsRuntimeSnapshotState({ snapshot, refreshContext: null, refreshHandler: null });
 }
 function pluginConfig(id: string, config: Record<string, unknown>) {
-  return asConfig({
-    ...explicitMainRoster(),
-    plugins: { entries: { [id]: { enabled: true, config } } },
-  });
+  return coreConfig({ plugins: { entries: { [id]: { enabled: true, config } } } });
 }
 function codexConfig(literalAuthorization = false) {
   return pluginConfig("codex", {
     appServer: {
       transport: "websocket",
       url: "wss://codex-app-server.example.internal/ws",
-      authToken: CODEX_APP_SERVER_TOKEN_REF,
+      authToken: envRef("CODEX_APP_SERVER_TOKEN"),
       headers: {
         ...(literalAuthorization ? { Authorization: "Bearer literal-token" } : {}),
         "x-codex-client-session-token": "${CODEX_CLIENT_SESSION_TOKEN}",
@@ -85,8 +74,8 @@ function codexConfig(literalAuthorization = false) {
   });
 }
 
-function explicitMainRoster() {
-  return { agents: { entries: { main: {} } } };
+function coreConfig(config: Record<string, unknown>) {
+  return asConfig({ agents: { entries: { main: {} } }, ...config });
 }
 
 function sandboxConfig(
@@ -106,12 +95,7 @@ function sandboxConfig(
   });
 }
 
-const CODEX_APP_SERVER_TOKEN_REF = envRef("CODEX_APP_SERVER_TOKEN");
-
-afterEach(() => {
-  resetSecretRedactionRegistryForTest();
-  clearSecretsRuntimeSnapshotState();
-});
+afterEach(resetSecretRedactionRegistryForTest);
 
 const TTS_REF = envRef("ELEVENLABS_API_KEY");
 
@@ -127,17 +111,15 @@ describe("secrets runtime snapshot", () => {
   it("retains resolved credentials for UI edits but re-resolves explicit and changed-input refreshes", async () => {
     const secretFile = path.join(tempDirs.make("openclaw-ui-secret-"), "secrets.json");
     await fs.writeFile(secretFile, JSON.stringify({ apiKey: "prepared-value" }), { mode: 0o600 });
-    const config = asConfig({
-      ...explicitMainRoster(),
+    const config = coreConfig({
       ui: { prefs: { chatShowToolCalls: false } },
       secrets: { providers: { fixture: { source: "file", path: secretFile, mode: "json" } } },
       models: {
         providers: {
-          example: {
-            baseUrl: "https://example.invalid/v1",
-            apiKey: { source: "file", provider: "fixture", id: "/apiKey" },
-            models: [],
-          },
+          example: provider(
+            { source: "file", provider: "fixture", id: "/apiKey" },
+            "https://example.invalid/v1",
+          ),
         },
       },
     });
@@ -212,10 +194,7 @@ describe("secrets runtime snapshot", () => {
   it("does not send a stale provider credential to a changed endpoint", async () => {
     const apiKeyRef = envRef("PROVIDER_KEY");
     const config = (baseUrl: string) =>
-      asConfig({
-        ...explicitMainRoster(),
-        models: { providers: { first: provider(apiKeyRef, baseUrl) } },
-      });
+      coreConfig({ models: { providers: { first: provider(apiKeyRef, baseUrl) } } });
     const active = await prepare(config("https://old.example.invalid/v1"), {
       PROVIDER_KEY: "last-known-good",
     });
@@ -417,8 +396,7 @@ describe("secrets runtime snapshot", () => {
   it("fails when an active exec ref id contains traversal segments", async () => {
     await expect(
       prepare(
-        asConfig({
-          ...explicitMainRoster(),
+        coreConfig({
           talk: {
             provider: "example",
             providers: {

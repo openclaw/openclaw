@@ -544,34 +544,27 @@ describe("secrets apply", () => {
   );
 
   it("preserves unrelated oauth profiles while applying auth-profile key ref targets", async () => {
-    await writeStore({
-      version: 1,
-      profiles: {
-        "openai:static": apiKey("sk-openai-static"), // pragma: allowlist secret
-        "openai:sidecar": {
-          type: "oauth",
-          provider: "openai",
-          oauthRef: { id: "codex-sidecar-ref", provider: "openai" },
-          email: "codex@example.invalid",
-        },
-        "anthropic:claude-cli": { provider: "claude-cli", type: "oauth" },
+    const profiles = {
+      "openai:static": apiKey("sk-openai-static"), // pragma: allowlist secret
+      "openai:sidecar": {
+        type: "oauth",
+        provider: "openai",
+        oauthRef: { id: "codex-sidecar-ref", provider: "openai" },
+        email: "codex@example.invalid",
       },
-      order: {
-        openai: ["openai:sidecar", "openai:static"],
-        "claude-cli": ["anthropic:claude-cli"],
-      },
-      lastGood: {
-        openai: "openai:sidecar",
-        "claude-cli": "anthropic:claude-cli",
-      },
-    });
-    const plan = targetPlan(createAuthTarget("main", "openai:static"));
-
-    expect((await apply(plan)).changed).toBe(true);
+      "anthropic:claude-cli": { provider: "claude-cli", type: "oauth" },
+    };
+    const order = {
+      openai: ["openai:sidecar", "openai:static"],
+      "claude-cli": ["anthropic:claude-cli"],
+    };
+    const lastGood = { openai: "openai:sidecar", "claude-cli": "anthropic:claude-cli" };
+    await writeStore({ version: 1, profiles, order, lastGood });
+    expect((await apply(targetPlan(createAuthTarget("main", "openai:static")))).changed).toBe(true);
     const store = await readAuthStore(fixture);
     expect(store).toMatchObject({
-      order: { openai: ["openai:sidecar", "openai:static"] },
-      lastGood: { "claude-cli": "anthropic:claude-cli" },
+      order: { openai: order.openai },
+      lastGood: { "claude-cli": lastGood["claude-cli"] },
     });
     expect(store.profiles).toEqual({
       "openai:static": { type: "api_key", provider: "openai", keyRef: OPENAI_API_KEY_ENV_REF },
