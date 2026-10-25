@@ -5,7 +5,7 @@
  *
  * Run five alternating baseline/candidate pairs and four identical-source A/A
  * pairs. Use --mode allocation separately; use --trace-gc-nvp with --mode promotion
- * and sum promoted= bytes only between ROSTER_BEGIN and ROSTER_END. Never use
+ * and sum GC records' promoted fields only between ROSTER_BEGIN and ROSTER_END. Never use
  * traced timing for gates. A frozen baseline module may be passed with --subject;
  * retain its relative imports against the same source tree. No Gateway or live state.
  *
