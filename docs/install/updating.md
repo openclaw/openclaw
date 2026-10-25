@@ -113,6 +113,9 @@ to delegate service refresh to that candidate. Custom CA bundles at other paths
 remain preserved, and unknown operator edits still require manual repair.
 An intentionally configured `/etc/ssl/cert.pem` is indistinguishable from the old
 default; move a maintained custom bundle to a different path before updating.
+When reconciliation replaces the service's Node executable, its leading runtime
+directory in `PATH` can move to the selected Node directory. Every other existing
+`PATH` entry must remain in order; this does not discard custom directories.
 
 When an updater stops a macOS LaunchAgent, it waits for both launchd's process
 and the verified serving Gateway child to exit before continuing. An unloaded

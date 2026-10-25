@@ -489,11 +489,15 @@ it("accepts retained heap aliases, custom environment and owned environment rege
   expect(result.definitionDrift).toBeUndefined();
 });
 
-it("allows the installer to retire the legacy macOS CA bundle without discarding operator settings", async () => {
+it("allows the installer to replace a macOS Node runtime and retire the legacy CA bundle", async () => {
   const { env, sourcePath, plist } = launchdFixture();
-  const environment = { PATH: "/usr/bin:/bin", OPERATOR_SETTING: "operator-secret" };
+  const environment = {
+    PATH: "/old/node/bin:/usr/bin:/bin",
+    OPERATOR_SETTING: "operator-secret",
+  };
+  const replacementEnvironment = { ...environment, PATH: "/new/node/bin:/usr/bin:/bin" };
   const command = {
-    programArguments,
+    programArguments: ["/old/node/bin/node", "/opt/openclaw/index.js", "gateway"],
     environment: { ...environment, NODE_EXTRA_CA_CERTS: "/etc/ssl/cert.pem" },
     sourcePath,
   };
@@ -504,15 +508,59 @@ it("allows the installer to retire the legacy macOS CA bundle without discarding
     env,
     command,
     platform: "darwin",
-    expectedServicePath: environment.PATH,
+    expectedServicePath: replacementEnvironment.PATH,
     expectedCommand: {
-      programArguments,
-      environment: { ...environment, NODE_USE_SYSTEM_CA: "1" },
+      programArguments: ["/new/node/bin/node", "/opt/openclaw/index.js", "gateway"],
+      environment: { ...replacementEnvironment, NODE_USE_SYSTEM_CA: "1" },
     },
   });
   expect(result.definitionDrift).toEqual([drift("outdated", "Environment.NODE_EXTRA_CA_CERTS")]);
   expect(result.definitionDriftError).toBeUndefined();
   expect(await fs.readFile(sourcePath, "utf8")).toBe(content);
+});
+
+it.each([
+  {
+    name: "discarded operator directory",
+    currentPath: "/old/bin:/operator/bin:/usr/bin:/bin",
+    nextPath: "/new/bin:/usr/bin:/bin",
+  },
+  {
+    name: "reordered operator directories",
+    currentPath: "/old/bin:/operator/bin:/usr/bin:/bin",
+    nextPath: "/new/bin:/usr/bin:/operator/bin:/bin",
+  },
+  {
+    name: "unrelated leading directory",
+    currentPath: "/operator/bin:/old/bin:/usr/bin:/bin",
+    nextPath: "/new/bin:/usr/bin:/bin",
+  },
+  {
+    name: "replacement missing the selected runtime directory",
+    currentPath: "/old/bin:/usr/bin:/bin",
+    nextPath: "/other/bin:/usr/bin:/bin",
+  },
+  {
+    name: "opaque launcher",
+    currentPath: "/old/bin:/usr/bin:/bin",
+    nextPath: "/new/bin:/usr/bin:/bin",
+    executable: "/old/bin/launcher",
+  },
+])("refuses a macOS runtime refresh with $name", ({ currentPath, nextPath, executable }) => {
+  const findings: ServiceDefinitionDrift[] = [];
+  auditGatewayInstallPreservation(
+    {
+      programArguments: [executable ?? "/old/bin/node", "/opt/openclaw/index.js", "gateway"],
+      environment: { PATH: currentPath },
+    },
+    {
+      programArguments: ["/new/bin/node", "/opt/openclaw/index.js", "gateway"],
+      environment: { PATH: nextPath },
+    },
+    "darwin",
+    findings,
+  );
+  expect(findings).toContainEqual(drift("unknown-edit", "Environment.PATH"));
 });
 
 it.each([
