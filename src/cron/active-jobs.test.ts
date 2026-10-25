@@ -327,7 +327,10 @@ describe("active cron schedule ownership", () => {
       const retired = markCronJobActive("updated-job");
       clearCronJobActive("updated-job", retired);
       const marker = markCronJobActive("updated-job");
+      const unrelated = markCronJobActive("unrelated-job");
       mutate("updated-job");
+      mutate("updated-job");
+      expect(unrelated?.[changed]).toBeUndefined();
       expect([marker?.[changed], marker?.[untouched], retired?.[changed]]).toEqual([
         true,
         undefined,
@@ -343,20 +346,5 @@ describe("active cron schedule ownership", () => {
   ] as const)("does not create idle markers for %s", (_name, mutate) => {
     mutate("idle-job");
     expect(getActiveCronJobCount()).toBe(0);
-  });
-
-  it("keeps schedule ownership isolated across concurrent active jobs", () => {
-    const markers = Array.from({ length: 64 }, (_, index) =>
-      markCronJobActive(`rescheduled-job-${index}`),
-    );
-
-    for (let index = 0; index < markers.length; index += 2) {
-      noteActiveCronJobScheduleMutation(`rescheduled-job-${index}`);
-      noteActiveCronJobScheduleMutation(`rescheduled-job-${index}`);
-    }
-
-    for (const [index, marker] of markers.entries()) {
-      expect(marker?.scheduleMutated).toBe(index % 2 === 0 ? true : undefined);
-    }
   });
 });

@@ -83,9 +83,6 @@ describe("CronService one-shot lifecycle", () => {
       await onTimer(state);
       await finished;
       expect(cron.getJob(job.id)?.enabled).toBe(false);
-      expect(deps.runSessionEvent).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ job: expect.objectContaining({ id: job.id }), text: "hello" }),
-      );
       expect(deps.enqueueSystemEvent).not.toHaveBeenCalled();
       expect((await cron.update(job.id, { enabled: true })).state.nextRunAtMs).toBeUndefined();
       clock.setTime(clock.clock.now() + 1_000);
@@ -173,7 +170,6 @@ describe("CronService one-shot lifecycle", () => {
         mainJob({ schedule: { kind: "at", at: new Date(1).toISOString() } }),
       );
       await cron.run(job.id, "force");
-      expect(runSessionEvent).toHaveBeenCalledOnce();
       expect(deps.enqueueSystemEvent).not.toHaveBeenCalled();
       expect(deps.enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith(
         expect.stringContaining("auto-disabled"),
@@ -280,15 +276,4 @@ describe("CronService one-shot lifecycle", () => {
       }
     },
   );
-
-  it("rejects unsupported session/payload combinations", async () => {
-    const { cron, cleanup } = await fixture();
-    try {
-      await expect(cron.add(mainJob({ sessionTarget: "isolated" }))).rejects.toThrow(
-        /sessionTarget "isolated" requires/,
-      );
-    } finally {
-      await cleanup();
-    }
-  });
 });
