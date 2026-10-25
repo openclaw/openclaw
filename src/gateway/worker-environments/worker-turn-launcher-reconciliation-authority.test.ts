@@ -1,35 +1,32 @@
 import { mkdir, readdir, readFile } from "node:fs/promises";
 import path from "node:path";
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   installSessionPlacementAdmissionProvider,
   withSessionPlacementTurnAdmission,
 } from "../../agents/session-placement-admission.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
-import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { placementTurnOwner } from "./placement-record.js";
 import type { WorkerTunnelHandle } from "./tunnel-contract.js";
-import { remoteExecEnvironment, revocableTurn } from "./worker-turn-launcher-flow.test-support.js";
+import {
+  installLauncherTest,
+  remoteExecEnvironment,
+  revocableTurn,
+} from "./worker-turn-launcher-flow.test-support.js";
 import {
   MANIFEST_REF,
   SESSION_ID,
-  cleanupWorkerTurnLauncherTest,
   createWorkerSessionTurnPlacementProvider,
   placements,
   root,
   seedActivePlacement,
   sessionTarget,
-  setupWorkerTurnLauncherTest,
 } from "./worker-turn-launcher.test-support.js";
 import { WORKER_ATTACHMENT_DIRECTORY_PREFIX } from "./workspace-path-exclusions.js";
 
-afterAll(closeStateDatabaseForTest);
-
 describe("reconciliation continuation authority", () => {
-  beforeEach(setupWorkerTurnLauncherTest);
-  afterEach(() => cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true }));
-
+  installLauncherTest();
   it.each([
     { mode: "remote-exec", authority: "source", revokeAt: "wait" },
     { mode: "remote-exec", authority: "admitted", revokeAt: "wait" },

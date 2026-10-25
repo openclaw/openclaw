@@ -17,6 +17,7 @@ const enCommandPalette = {
     startSessionBackground: "Start new session in background",
     startingSession: "Starting…",
     promptRequired: "Write a prompt to start a session.",
+    attachmentPrompt: en.palette.attachmentPrompt,
     searchingSessions: "Searching sessions…",
     searchingCommands: "Searching commands…",
     clearSearch: "Clear search",
@@ -136,6 +137,9 @@ const enCommandPalette = {
         summarizeRecentSessions: "Summarize my recent sessions",
         configureChannel: "Help me configure a channel",
         checkSystemHealth: "Check system health",
+        exploreOpenClaw: "Tour OpenClaw's code and docs",
+        investigateInSandbox: "Investigate an issue in a sandbox",
+        openDraftPullRequest: "Fix a bug and open a draft PR",
       },
     },
     commands: {

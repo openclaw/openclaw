@@ -10,10 +10,12 @@ import {
 import {
   emptyClientCredentialReceipt,
   readClientCredentialFileIdentity,
+  type ClientCredentialReceipt,
 } from "./client-credential-receipt.js";
 import type { ClientCredentialDatabase } from "./client-credential-schema.js";
 import { openClientCredentialCustody } from "./client-credential-store.js";
 import { normalizeLegacyDeviceIdentity } from "./device-identity-legacy.js";
+import { storedDeviceIdentityFromRow } from "./device-identity-material.js";
 import { validateStoredDeviceIdentity, type DeviceIdentity } from "./device-identity-store.js";
 import { deriveEd25519PrivateKeyRaw, deriveEd25519PublicKeyRaw } from "./ed25519-signature.js";
 import {
@@ -23,6 +25,7 @@ import {
 } from "./kysely-sync.js";
 import {
   hasLegacyDeviceIdentityPath,
+  detectLegacyDeviceIdentity,
   repairInvalidCanonicalIdentity,
 } from "./state-migrations.device-identity-repair.js";
 import type {
@@ -33,7 +36,7 @@ import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
 import { readLegacyMigrationSourceSnapshot } from "./state-migrations.source-snapshot.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
 
-export { detectLegacyDeviceIdentity } from "./state-migrations.device-identity-repair.js";
+export { detectLegacyDeviceIdentity };
 const MAX_BYTES = 128 * 1024;
 const decoder = new TextDecoder("utf-8", { fatal: true });
 
@@ -78,6 +81,52 @@ async function readSource(stateRoot: Root, stateDir: string, sourcePath: string)
     throw new Error("Legacy device identity is invalid or unsupported.");
   }
   return { ...snapshot, identity };
+}
+
+async function readLegacyIdentitySource(stateDir: string, detected: LegacyDeviceIdentitySource) {
+  const stateRoot = await root(stateDir, {
+    hardlinks: "reject",
+    maxBytes: MAX_BYTES,
+    symlinks: "reject",
+  });
+  const snapshots = [];
+  for (const sourcePath of [detected.sourcePath, detected.claimPath, detected.nativeClaimPath]) {
+    if (await stateRoot.exists(sourcePath.slice(stateDir.length + 1))) {
+      snapshots.push(await readSource(stateRoot, stateDir, sourcePath));
+    }
+  }
+  const snapshot = snapshots[0];
+  if (snapshot && snapshots.some((other) => other.sha256 !== snapshot.sha256)) {
+    throw new Error(
+      "Legacy identity files disagree; preserve them and resolve the conflict before importing.",
+    );
+  }
+  return snapshot;
+}
+
+/** Validate only inputs that automatic startup would import, without acquiring write custody. */
+export async function prepareLegacyDeviceIdentity(params: {
+  stateDir: string;
+  identities: readonly ClientCredentialDatabase["device_identities"][];
+  legacyImports: ClientCredentialReceipt["legacyImports"];
+}): Promise<LegacyDeviceIdentityDetection> {
+  const detected = detectLegacyDeviceIdentity({ stateDir: params.stateDir });
+  for (const source of detected.sources) {
+    const canonical = params.identities.find((row) => row.identity_key === source.identityKey);
+    if (canonical) {
+      // Automatic migration cannot rotate or repair a corrupt canonical identity.
+      storedDeviceIdentityFromRow(canonical, source.identityKey);
+    }
+    source.hasLegacy =
+      !canonical &&
+      !params.legacyImports[`identity:${source.identityKey}`] &&
+      hasLegacyDeviceIdentityPath(source);
+    if (source.hasLegacy) {
+      await readLegacyIdentitySource(params.stateDir, source);
+    }
+  }
+  detected.hasLegacy = detected.sources.some((source) => source.hasLegacy);
+  return detected;
 }
 
 /** Copy-only import: retained JSON never becomes authoritative after its durable claim. */
@@ -152,30 +201,9 @@ async function migrateLegacyDeviceIdentitySource(params: {
             "Prepare the shared credential migration before importing legacy identities.",
           );
         }
-        const stateRoot = await root(params.stateDir, {
-          hardlinks: "reject",
-          maxBytes: MAX_BYTES,
-          symlinks: "reject",
-        });
-        const candidates = [
-          params.detected.sourcePath,
-          params.detected.claimPath,
-          params.detected.nativeClaimPath,
-        ];
-        const snapshots = [];
-        for (const sourcePath of candidates) {
-          if (await stateRoot.exists(sourcePath.slice(params.stateDir.length + 1))) {
-            snapshots.push(await readSource(stateRoot, params.stateDir, sourcePath));
-          }
-        }
-        const snapshot = snapshots[0];
+        const snapshot = await readLegacyIdentitySource(params.stateDir, params.detected);
         if (!snapshot) {
           return { changes: [], warnings: [] };
-        }
-        if (snapshots.some((other) => other.sha256 !== snapshot.sha256)) {
-          throw new Error(
-            "Legacy identity files disagree; preserve them and resolve the conflict before importing.",
-          );
         }
         let imported = false;
         owner.transaction(() => {

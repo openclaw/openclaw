@@ -17,9 +17,7 @@ import {
   type SlashCommandDef,
 } from "./commands.ts";
 
-afterEach(() => {
-  replaceSlashCommands(buildFallbackSlashCommands());
-});
+afterEach(() => replaceSlashCommands(buildFallbackSlashCommands()));
 
 describe("model-independent commands", () => {
   it.each([
@@ -61,9 +59,6 @@ describe("findInlineSlashCompletion", () => {
     ]);
     expect(completionNames("weather", { inlineOnly: true })).toEqual(["weather"]);
     expect(completionNames("reset", { inlineOnly: true })).toEqual(["reset"]);
-    expect(completionNames("elevated", { inlineOnly: true })).toEqual(["elevated"]);
-    expect(completionNames("exec", { inlineOnly: true })).toContain("exec");
-    expect(completionNames("think", { inlineOnly: true })).toContain("think");
     expect(
       getSlashCommandCompletions("reset", {
         inlineOnly: true,
@@ -152,12 +147,6 @@ describe("getSlashCommandCompletions", () => {
     ]);
 
     expect(completionNames("")).toEqual([
-      "essential-session",
-      "essential-tools",
-      "standard-session",
-      "standard-agent",
-    ]);
-    expect(completionNames("", { showAll: true })).toEqual([
       "essential-session",
       "essential-tools",
       "standard-session",

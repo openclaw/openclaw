@@ -25,7 +25,6 @@ describe("security-path canonicalization", () => {
       canonicalPath: "/api/channels/nostr/default/profile",
       candidates: ["/api/channels/nostr/default/profile"],
       malformedEncoding: false,
-      decodePasses: 0,
       decodePassLimitReached: false,
       rawNormalizedPath: "/api/channels/nostr/default/profile",
     });
@@ -33,7 +32,6 @@ describe("security-path canonicalization", () => {
     expect(encoded.canonicalPath).toBe("/api/channels/nostr/default/profile");
     expect(encoded.candidates).toContain("/api/%63hannels%2fnostr%2fdefault%2fprofile");
     expect(encoded.candidates).toContain("/api/channels/nostr/default/profile");
-    expect(encoded.decodePasses).toBeGreaterThan(0);
     expect(encoded.decodePassLimitReached).toBe(false);
   });
 
@@ -56,7 +54,6 @@ describe("security-path canonicalization", () => {
     const deeplyEncoded = "/api%2525252fchannels%2525252fnostr%2525252fdefault%2525252fprofile";
     const result = canonicalizePathForSecurity(deeplyEncoded);
     expect(result.canonicalPath).toBe("/api/channels/nostr/default/profile");
-    expect(result.decodePasses).toBeGreaterThanOrEqual(4);
     expect(isProtectedPluginRoutePath(deeplyEncoded)).toBe(true);
   });
 

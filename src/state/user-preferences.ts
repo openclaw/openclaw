@@ -132,8 +132,9 @@ export async function setCanonicalUserPreferences(
             let receiptValid = false;
             try {
               const receipt = admission.committed;
-              if (receipt) {
-                if (!pending || !isDeepStrictEqual(receipt.facts, pending.facts)) {
+              // Ordinary writes may publish an engine receipt without coauthor authority facts.
+              if (receipt && pending) {
+                if (!isDeepStrictEqual(receipt.facts, pending.facts)) {
                   throw new Error("Profile preference receipt changed its prepared mutation");
                 }
                 committed = true;

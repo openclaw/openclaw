@@ -1,9 +1,0 @@
-export { resetWebInboundDedupe } from "./inbound/dedupe.js";
-export { extractContactContext, extractLocationData, extractText } from "./inbound/extract.js";
-export { monitorWebInbox } from "./inbound/monitor.js";
-export type { WhatsAppInboundAdmission } from "./inbound/admission.js";
-export type {
-  WebInboundCallbackMessage,
-  WebInboundMessage,
-  WebListenerCloseReason,
-} from "./inbound/types.js";

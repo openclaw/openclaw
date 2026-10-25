@@ -1,9 +1,7 @@
-// @vitest-environment node
 import { beforeEach, describe, expect, it } from "vitest";
-import {
-  createRealtimeTalkConversationState,
-  updateRealtimeTalkConversation,
-} from "./conversation.ts";
+// @vitest-environment node
+import { createRealtimeTalkConversationState } from "./conversation-state.ts";
+import { updateRealtimeTalkConversation } from "./conversation.ts";
 
 describe("realtime Talk conversation", () => {
   let state = createRealtimeTalkConversationState();

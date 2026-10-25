@@ -11,6 +11,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { FastMode } from "../../api/types.ts";
 import type { ApplicationConfigCapability } from "../../app/config.ts";
 import { t } from "../../i18n/index.ts";
+import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { showToast } from "../../lib/toast.ts";
 import { assertUploadsEnabled } from "../../lib/uploads.ts";
@@ -21,6 +22,8 @@ import {
 } from "./attachment-payload-store.ts";
 import { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.ts";
 import { formatChatSelectionAnnotation } from "./components/chat-selection-attachment.ts";
+
+registerChatSessionEnglish();
 
 const COMPANION_BUSY_DETAIL_CODE = "SESSION_COMPANION_BUSY";
 const MAX_COMPANION_EXCHANGES = 24;
@@ -41,6 +44,8 @@ export type ChatSessionCompanionTurn = {
   | ({ status: "answered" } & SessionCompanionExchange)
   | {
       status: "failed";
+      /** Carried over from the pending turn; Object.assign keeps it on failure. */
+      startedAt: number;
       hint:
         | "busy"
         | "history-unavailable"

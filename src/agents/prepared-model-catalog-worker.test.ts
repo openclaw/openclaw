@@ -4,8 +4,7 @@ import * as cryptoDigest from "../infra/crypto-digest.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { fingerprintPreparedModelCatalogPluginContext } from "./prepared-model-catalog-fingerprints.js";
 import { createPreparedModelCatalogWorkerInput } from "./prepared-model-catalog-worker.js";
-import type { PreparedModelRuntimeAgentFacts } from "./prepared-model-runtime.catalog-contract.js";
-import { AuthStorage } from "./sessions/auth-storage.js";
+import { catalogAgentFacts } from "./prepared-model-catalog-worker.shared.test-support.js";
 
 describe("prepared model catalog worker input", () => {
   it("reuses captured config digests for plugin context identities", () => {
@@ -20,18 +19,7 @@ describe("prepared model catalog worker input", () => {
       plugins: { entries: { fixture: { config: { sentinel: undefined } } } },
     });
     const pluginMetadataSnapshot = createPluginMetadataSnapshotFixture();
-    const agentFacts: PreparedModelRuntimeAgentFacts = {
-      input: { config, agentDir: "/tmp/catalog-agent" },
-      env: {},
-      authStore: { version: 1, profiles: {} },
-      credentials: {},
-      providerIds: [],
-      configuredModelRefs: [],
-      configuredRuntimeModels: [],
-      runtimeCapabilityModels: [],
-      configuredGeneratedCatalogPluginIds: [],
-      templateAuthStorage: AuthStorage.inMemory({}),
-    };
+    const agentFacts = catalogAgentFacts({ config, agentDir: "/tmp/catalog-agent" }, {});
     try {
       let captured: ReturnType<typeof createPreparedModelCatalogWorkerInput> | undefined;
       for (let index = 0; index < 32; index++) {

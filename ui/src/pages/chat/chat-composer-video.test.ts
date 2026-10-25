@@ -61,6 +61,14 @@ it("switches multiple cameras and mirrors a user-facing preview", () => {
   });
   button(container, t("chat.composer.switchCamera")).click();
   expect(onSwitchRealtimeCamera).toHaveBeenCalledOnce();
+  const switchButton = button(container, t("chat.composer.switchCamera"));
+  const replacementSwitch = vi.fn();
+  props.onSwitchRealtimeCamera = replacementSwitch;
+  renderComposerInto(container, props);
+  expect(button(container, t("chat.composer.switchCamera"))).toBe(switchButton);
+  switchButton.click();
+  expect(replacementSwitch).toHaveBeenCalledOnce();
+  expect(onSwitchRealtimeCamera).toHaveBeenCalledOnce();
   expect(container.querySelector("video")?.classList).toContain(
     "agent-chat__video-preview-mirrored",
   );

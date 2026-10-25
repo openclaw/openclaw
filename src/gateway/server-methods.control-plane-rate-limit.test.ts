@@ -9,8 +9,11 @@ import {
   CONTROL_PLANE_RATE_LIMIT_WINDOW_MS,
 } from "./control-plane-rate-limit.js";
 import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./methods/core-method-policy.js";
-import { handleGatewayRequest } from "./server-methods.js";
-import type { GatewayRequestHandler } from "./server-methods/types.js";
+import {
+  authorizationClient,
+  dispatchAuthorizationRequest,
+} from "./server-methods.authorization.test-support.js";
+import type { GatewayRequestContext, GatewayRequestHandler } from "./server-methods/types.js";
 
 let clientSequence = 0;
 
@@ -33,33 +36,25 @@ describe("gateway control-plane write rate limit", () => {
       getRuntimeConfig: () => ({}),
       logGateway: { warn: logWarn },
       unavailableGatewayMethods: new Set<string>(),
-    } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"];
-    const client = {
-      connect: {
-        role: "operator",
-        scopes: ["operator.admin"],
+    } as unknown as GatewayRequestContext;
+    const client = authorizationClient(
+      `conn-${clientSequence}`,
+      ["operator.admin"],
+      { clientIp: `10.0.0.${clientSequence}` },
+      {
         client: { id: "openclaw-control-ui", version: "1.0.0", platform: "macos", mode: "ui" },
-        minProtocol: 1,
-        maxProtocol: 1,
       },
-      connId: `conn-${clientSequence}`,
-      clientIp: `10.0.0.${clientSequence}`,
-    } as Parameters<typeof handleGatewayRequest>[0]["client"];
+    );
     const handler = vi.fn<GatewayRequestHandler>(({ respond }) => {
       respond(true, undefined, undefined);
     });
-    async function request(method: string) {
-      const respond = vi.fn();
-      await handleGatewayRequest({
-        req: { type: "req", id: crypto.randomUUID(), method },
-        respond,
-        client,
-        isWebchatConnect: () => false,
-        context,
-        extraHandlers: { [method]: handler },
-      });
-      return respond;
-    }
+    const request = (method: string) =>
+      dispatchAuthorizationRequest(
+        method,
+        undefined,
+        { client, context, extraHandlers: { [method]: handler } },
+        crypto.randomUUID(),
+      );
     async function exhaust(method: string) {
       for (let attempt = 0; attempt < CONTROL_PLANE_RATE_LIMIT_MAX_REQUESTS; attempt += 1) {
         await request(method);

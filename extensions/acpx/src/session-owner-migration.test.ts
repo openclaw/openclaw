@@ -24,6 +24,11 @@ const directories = useAutoCleanupTempDirTracker(afterEach);
 const target = { ...fixtureSession("global"), agentId: "work" };
 const ownerResource = resolveAcpxSessionResource(target);
 afterEach(() => resetPluginStateStoreForTests());
+const ownedRecord = (raw: Record<string, unknown>, resource: string) => ({
+  ...raw,
+  name: resource,
+  acpx_record_id: resource,
+});
 
 async function expectNoMigrationStaging(sourcePath: string) {
   const files = await fs.readdir(path.dirname(sourcePath));
@@ -153,11 +158,7 @@ async function fixture(mode: "persistent" | "oneshot" = "persistent", sessionKey
     async expectPublished() {
       const resource = resolveAcpxSessionResource(claim);
       await expectNoMigrationStaging(sourcePath);
-      expect(JSON.parse(await read(file(resource)))).toEqual({
-        ...raw,
-        name: resource,
-        acpx_record_id: resource,
-      });
+      expect(JSON.parse(await read(file(resource)))).toEqual(ownedRecord(raw, resource));
       return resource;
     },
     async expectRetained(before?: string) {
@@ -215,6 +216,45 @@ it.each([
 });
 
 type Fixture = Awaited<ReturnType<typeof fixture>>;
+it.each(["source", "destination"] as const)(
+  "retains malformed UTF-8 %s records without changing ownership",
+  async (location) => {
+    const f = await fixture();
+    const resource = resolveAcpxSessionResource(f.claim);
+    const claim = structuredClone(f.claim);
+    f.raw.future_field = { opaque: ["\ufffd", 42] };
+    await fs.writeFile(f.sourcePath, JSON.stringify(f.raw));
+    const source = await fs.readFile(f.sourcePath);
+    const targetPath = location === "source" ? f.sourcePath : f.file(resource);
+    const targetBytes = Buffer.from(
+      JSON.stringify(location === "source" ? f.raw : ownedRecord(f.raw, resource)),
+    );
+    const replacement = targetBytes.indexOf(Buffer.from("\ufffd"));
+    const malformed = Buffer.concat([
+      targetBytes.subarray(0, replacement),
+      Buffer.from([0xff]),
+      targetBytes.subarray(replacement + 3),
+    ]);
+    await fs.writeFile(targetPath, malformed);
+
+    const result = await acpxSessionOwnerMigration.migrateLegacyState(f.input);
+
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toHaveLength(location === "source" ? 1 : 2);
+    for (const warning of result.warnings) {
+      expect(warning).toContain("UTF-8");
+    }
+    expect(result.warningDisposition).toBe("recoverable");
+    expect(await fs.readFile(targetPath)).toEqual(malformed);
+    if (location === "destination") {
+      expect(await fs.readFile(f.sourcePath)).toEqual(source);
+    }
+    expect(f.claim).toEqual(claim);
+    await expect(fs.access(`${f.sourcePath}.migrated`)).rejects.toThrow();
+    await expectNoMigrationStaging(f.sourcePath);
+  },
+);
+
 it.each<[string, (f: Fixture, resource: string) => unknown]>([
   ["ambiguous", (f) => f.claims.push({ ...structuredClone(f.claim), agentId: "main" })],
   ["missing", (f) => f.claims.splice(0)],

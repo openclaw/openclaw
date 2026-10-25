@@ -27,6 +27,12 @@ export const DEFAULT_QUEUE_DEBOUNCE_MS = 500;
 export const DEFAULT_QUEUE_CAP = 20;
 export const DEFAULT_QUEUE_DROP: QueueDropPolicy = "summarize";
 
+// Retries and compacted sources retain their input and its original dispatch scope.
+export const followupSourceRunners = new WeakMap<
+  NonNullable<FollowupRun["controllerInput"]>,
+  (run: FollowupRun) => Promise<void>
+>();
+
 export function* followupQueueSources(
   queue: Pick<SessionControllerMailbox, "items" | "summarySources" | "summaryElisions">,
 ): Generator<FollowupRun> {
@@ -247,6 +253,19 @@ export function refreshQueuedFollowupSession(params: {
         run.hasSessionModelOverride =
           params.nextModelOverrideSource !== undefined && Boolean(run.provider || run.model);
         run.modelOverrideSource = params.nextModelOverrideSource;
+        const scheduledAutomation = run.scheduledAutomation;
+        if (scheduledAutomation?.modelFallbackPolicy) {
+          // Queued scheduled work now runs the retargeted session selection, not the admitted one.
+          run.scheduledAutomation = {
+            ...scheduledAutomation,
+            modelFallbackPolicy: {
+              ...scheduledAutomation.modelFallbackPolicy,
+              sessionModelOverrideSource: run.hasSessionModelOverride
+                ? params.nextModelOverrideSource
+                : undefined,
+            },
+          };
+        }
       }
       if (Object.hasOwn(params, "nextAuthProfileId")) {
         run.authProfileId = normalizeOptionalString(params.nextAuthProfileId);

@@ -61,9 +61,10 @@ import type {
 } from "./chat-typing-presence.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
 import type { ChatPaneHeaderAction } from "./components/chat-pane-header.types.ts";
-import type { ChatSessionSharingState } from "./components/chat-session-sharing.solid.tsx";
+import type { ChatSessionSharingState } from "./components/chat-session-sharing-shared.tsx";
 import { getTranscriptState } from "./components/chat-thread-interactions.ts";
 import { createChatTranscript } from "./components/chat-transcript-controller.ts";
+import type { ComposerActivityLayout } from "./components/chat-transcript-layout-owner.ts";
 import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.tsx";
 import { canAutoFollowChat, handleChatScrollTakeover } from "./scroll.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
@@ -76,6 +77,7 @@ export type ChatPaneInputChanges = {
   inputRegion?: boolean;
   draft?: boolean;
   focusComposer?: boolean;
+  routeResolutionPending?: boolean;
 };
 
 /** Synchronous pane facts and domain resources; Solid owns publication and commits. */
@@ -95,6 +97,14 @@ export abstract class ChatPaneStateOwner {
   transcriptAnnouncement: HTMLElement | null = null;
   composerShell: HTMLElement | null = null;
   composerFloat: HTMLElement | null = null;
+  private composerActivityLayout: ComposerActivityLayout | null = null;
+  protected readonly onActivityPillsLayout = (layout: ComposerActivityLayout, detached = false) => {
+    if (detached && this.composerActivityLayout?.strip !== layout.strip) {
+      return;
+    }
+    this.composerActivityLayout = detached ? null : layout;
+    this.transcript.syncViewportGeometry();
+  };
   private registerPaneElement(
     key:
       | "headerElement"
@@ -185,6 +195,7 @@ export abstract class ChatPaneStateOwner {
   }
 
   dispose() {
+    this.context?.connectionBootstrap.cancelQueued(this);
     this.context?.connectionBootstrap.setForegroundPane(this, null);
     this.chatState.dispose();
     this.isConnected = false;
@@ -212,6 +223,7 @@ export abstract class ChatPaneStateOwner {
   sessionKey = "";
   // This session-keyed pane retains its initial skeleton through URL canonicalization.
   routeLoadingSkeleton = false;
+  routeResolutionPending = false;
   agentId?: string = undefined;
   inputRegion: ChatInputRegion = "page";
   compact = false;
@@ -404,6 +416,7 @@ export abstract class ChatPaneStateOwner {
   readonly transcript = createChatTranscript(() => this.paneId, {
     geometryEventTarget: this.element,
     getComposerFloat: () => (this.usesMobileHost ? this.composerFloat : null),
+    getComposerActivityLayout: () => (this.usesMobileHost ? this.composerActivityLayout : null),
     onViewportResize: () => this.chatState.handleTranscriptResize(),
     canFollowEnd: () => this.state !== undefined && canAutoFollowChat(this.state),
     onReaderScroll: (towardEnd) => this.state && handleChatScrollTakeover(this.state, towardEnd),
@@ -462,7 +475,6 @@ export abstract class ChatPaneStateOwner {
   ) {
     const sessions = target ? this.swarm.hydrator?.rows : undefined;
     return {
-      swarm: target && this.swarm.enabled ? { ...target, sessions: sessions ?? [] } : undefined,
       subagentSessions: sessions,
       subagentSessionsHydrated: Boolean(target && this.swarm.hydrator?.hydrated),
       subagentSessionsPending: Boolean(target && this.swarm.hydrator?.pendingChildRead),
@@ -598,6 +610,12 @@ export abstract class ChatPaneStateOwner {
       this.context.placementStartup.retry(sessionKey);
     }
   };
+  protected readonly discardSessionPlacementStartup = () => {
+    const sessionKey = this.state?.sessionKey;
+    if (sessionKey) {
+      this.context.placementStartup.discard(sessionKey);
+    }
+  };
   protected headerRenameInitialValue = "";
   protected headerCopiedTimer: number | null = null;
   protected composerPrefillAttentionTimer: number | null = null;
@@ -697,7 +715,6 @@ export abstract class ChatPaneStateOwner {
     snapshot: ApplicationContext["gateway"]["snapshot"],
   ): void;
   protected abstract applyApplicationConfig(config: ApplicationContext["config"]["current"]): void;
-  protected abstract applySessionsState(state: ApplicationContext["sessions"]["state"]): void;
   protected abstract cancelHeaderRename(): void;
   protected abstract handleArchiveSessionShortcut(event: KeyboardEvent): boolean;
   protected abstract resetOlderMessagesViewport(): void;

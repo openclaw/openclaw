@@ -11,48 +11,32 @@ function createProjectionContext(params?: {
   configuredModelApi?: ModelApi;
 }): ProviderNormalizeResolvedModelContext {
   const modelId = params?.modelId ?? "gpt-5.5";
-  return {
+  const model = {
+    provider: "openai",
+    id: modelId,
+    api: params?.rowApi ?? ("openai-responses" as const),
+    baseUrl: params?.rowBaseUrl ?? "https://api.openai.com/v1",
+    input: ["text" as const],
+    name: "OpenAI model",
+    reasoning: true,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 96_000,
+    maxTokens: 128_000,
+  };
+  const context: ProviderNormalizeResolvedModelContext = {
     provider: "openai",
     modelId,
-    ...(params?.providerApi
-      ? {
-          config: {
-            models: {
-              providers: {
-                openai: {
-                  api: params.providerApi,
-                  baseUrl: "https://api.openai.com/v1",
-                  models: [
-                    {
-                      id: modelId,
-                      name: "Configured OpenAI model",
-                      reasoning: true,
-                      input: ["text" as const],
-                      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                      contextWindow: 96_000,
-                      maxTokens: 128_000,
-                      ...(params.configuredModelApi ? { api: params.configuredModelApi } : {}),
-                    },
-                  ],
-                },
-              },
-            },
-          },
-        }
-      : {}),
-    model: {
-      provider: "openai",
-      id: modelId,
-      api: params?.rowApi ?? ("openai-responses" as const),
-      baseUrl: params?.rowBaseUrl ?? "https://api.openai.com/v1",
-      input: ["text" as const],
-      name: "OpenAI model",
-      reasoning: true,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 96_000,
-      maxTokens: 128_000,
-    },
+    model,
   };
+  if (params?.providerApi) {
+    const openai = {
+      api: params.providerApi,
+      baseUrl: "https://api.openai.com/v1",
+      models: [{ ...model, api: params.configuredModelApi }],
+    };
+    context.config = { models: { providers: { openai } } };
+  }
+  return context;
 }
 
 describe("OpenAI configured-row projection", () => {
@@ -61,27 +45,12 @@ describe("OpenAI configured-row projection", () => {
   });
 
   it.each([
-    {
-      source: "provider",
-      providerApi: "openai-completions" as const,
-      configuredModelApi: undefined,
-      rowApi: undefined,
-    },
-    {
-      source: "model",
-      providerApi: "openai-responses" as const,
-      configuredModelApi: "openai-completions" as const,
-      rowApi: "openai-completions" as const,
-    },
-    {
-      source: "provider ChatGPT",
-      providerApi: "openai-chatgpt-responses" as const,
-      configuredModelApi: undefined,
-      rowApi: undefined,
-    },
-  ])(
-    "keeps runtime normalization for a $source configured route",
-    ({ providerApi, configuredModelApi, rowApi }) => {
+    ["provider", "openai-completions", undefined, undefined],
+    ["model", "openai-responses", "openai-completions", "openai-completions"],
+    ["provider ChatGPT", "openai-chatgpt-responses", undefined, undefined],
+  ] as const)(
+    "keeps runtime normalization for a %s configured route",
+    (_source, providerApi, configuredModelApi, rowApi) => {
       expect(
         projectConfiguredModelRow(
           createProjectionContext({ providerApi, configuredModelApi, rowApi }),

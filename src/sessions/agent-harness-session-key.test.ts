@@ -117,6 +117,12 @@ it("allows plugin-owned observations to change without releasing the lock or ide
     expect(transition(patch)).toBe(MODEL_SELECTION_LOCK_REMOVAL_MESSAGE);
   }
   expect(transition({ sessionId: "replacement" })).toBe(AGENT_HARNESS_SESSION_ID_LOCKED_MESSAGE);
+  expect(
+    resolveAgentHarnessSessionStoreTransitionError({
+      before: new Map([[ordinaryKey, entry]]),
+      store: {},
+    }),
+  ).toBe(MODEL_SELECTION_LOCK_REMOVAL_MESSAGE);
 });
 
 it("rejects mixed plugin ownership in the reserved native namespace", () => {

@@ -55,6 +55,8 @@ it("routes MCP App previews through the dedicated double-iframe host", async () 
   const options = { sessionKey: "agent:main:main" };
   mountPreview(preview, "chat_message", options, container);
 
+  await vi.dynamicImportSettled();
+  await waitForSolid(() => expect(query(container, "mcp-app-view")).not.toBeNull());
   const view = query(container, "mcp-app-view");
   expect(view?.getAttribute("src")).toBeNull();
   expect(view).toMatchObject({ sessionKey: "agent:main:main", viewId: "cv_app", height: 600 });

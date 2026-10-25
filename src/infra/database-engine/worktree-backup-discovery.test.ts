@@ -1,7 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { getEnvironmentData } from "node:worker_threads";
-import { Client } from "pg";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { withWorktreeAllocationLease } from "../../agents/worktrees/allocation.js";
@@ -10,27 +8,13 @@ import { readExistingWorktreePaths } from "../../agents/worktrees/registry-read.
 import { insertRegistryWorktree } from "../../agents/worktrees/registry.js";
 import type { ManagedWorktreeRecord } from "../../agents/worktrees/types.js";
 import { resolveBackupPlanFromDisk } from "../../commands/backup-shared.js";
-import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db-contract.js";
 import * as stateReads from "../../state/openclaw-state-db-readonly.js";
-import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-} from "../../state/openclaw-state-db.js";
+import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
-import type {
-  OpenClawStateReadCommand,
-  OpenClawStateReadOptions,
-} from "../../state/openclaw-state-read.types.js";
-import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import type { OpenClawStateReadCommand } from "../../state/openclaw-state-read.types.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { withEngineStoreAdmission } from "./admission-scope.js";
-import { installDatabaseEngineSelection } from "./context.js";
-import { resetDatabaseEngineSelectionForTest } from "./context.test-support.js";
-import { getPostgresPhysicalFacts } from "./physical-facts.js";
-import { resolveDatabaseFamilyEngines } from "./registry.js";
-
-const configured: unknown = getEnvironmentData("openclaw.test.state.conformance.connection");
-const connection = typeof configured === "string" ? configured : undefined;
+import { mixedAgentConnection, useMixedAgentPair } from "./mixed-agent.conformance.test-support.js";
 
 function record(root: string, id: string): ManagedWorktreeRecord {
   return {
@@ -48,113 +32,85 @@ function record(root: string, id: string): ManagedWorktreeRecord {
   };
 }
 
+function writePendingPayload(env: NodeJS.ProcessEnv, id: string, payload: string) {
+  runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      db.prepare("UPDATE state_leases SET payload_json = ? WHERE scope = ? AND lease_key = ?").run(
+        payload,
+        "core:managed-worktrees:pending-slots",
+        id,
+      );
+    },
+    { env },
+  );
+}
+
 describe.each(["sqlite", "postgres"] as const)("%s worktree backup discovery", (engine) => {
-  it.skipIf(engine === "postgres" && !connection)(
+  const fixture = useMixedAgentPair(engine, engine);
+  it.skipIf(engine === "postgres" && !mixedAgentConnection)(
     "retains pending publication in one read generation and includes recovering custody",
     async () => {
-      await withOpenClawTestState(
-        { prefix: "worktree-backup-discovery-", scenario: "minimal" },
-        async (state) => {
-          installDatabaseEngineSelection({
-            effectiveEngines: resolveDatabaseFamilyEngines({ database: { engine } }),
-            ...(engine === "postgres"
-              ? { postgres: { connection: connection!, schemaPrefix: "worktree_backup" } }
-              : {}),
-          });
-          const client =
-            engine === "postgres" ? new Client({ connectionString: connection }) : undefined;
-          await client?.connect();
-          let namespace: string | undefined;
-          try {
-            namespace = withEngineStoreAdmission(
-              () =>
-                getPostgresPhysicalFacts(openOpenClawStateDatabase({ env: state.env }).db)
-                  ?.namespace,
-            );
-            const live = record(state.root, "live");
-            const removed = { ...record(state.root, "removed"), removedAt: 2 };
-            const recovering = record(state.root, "recovering");
-            const pending = record(state.root, "pending");
-            await insertRegistryWorktree(state.env, live);
-            await insertRegistryWorktree(state.env, removed);
-            await withWorktreeAllocationLease(
-              { env: state.env, id: recovering.id },
-              async (guard) => {
-                await reservePendingWorktree(state.env, recovering, guard.workerAuthority);
-              },
-            );
-            // Persist the existing interrupted-allocation state; discovery must not recover it.
-            withEngineStoreAdmission(() =>
-              runOpenClawStateWriteTransaction(
-                ({ db }) => {
-                  db.prepare(
-                    "UPDATE state_leases SET payload_json = ? WHERE scope = ? AND lease_key = ?",
-                  ).run(
-                    JSON.stringify({ record: recovering, state: "recovering" }),
-                    "core:managed-worktrees:pending-slots",
-                    recovering.id,
-                  );
-                },
-                { env: state.env },
-              ),
-            );
-            await withWorktreeAllocationLease({ env: state.env, id: pending.id }, async (guard) => {
-              await reservePendingWorktree(state.env, pending, guard.workerAuthority);
-              const published = createDeferred();
-              const execute = stateReads.executeExistingOpenClawStateRead;
-              // Gate transport only: both reads and the atomic pending→live publication stay real.
-              const intercept = vi
-                .spyOn(stateReads, "executeExistingOpenClawStateRead")
-                .mockImplementation(
-                  async <Command extends OpenClawStateReadCommand>(
-                    options: OpenClawStateDatabaseOptions,
-                    command: Command,
-                    readOptions?: OpenClawStateReadOptions,
-                  ) => {
-                    if (command.type === "worktrees.pendingSlots") {
-                      await published.promise;
-                    }
-                    try {
-                      const reply = await execute(options, command, readOptions);
-                      if (command.type === "worktrees.livePaths") {
-                        await insertRegistryWorktree(state.env, pending, {
-                          pendingId: pending.id,
-                          workerAuthority: guard.workerAuthority,
-                        });
-                        published.resolve();
-                      }
-                      return reply;
-                    } catch (error) {
-                      if (command.type === "worktrees.livePaths") {
-                        published.reject(error);
-                      }
-                      throw error;
-                    }
-                  },
-                );
+      const state = { root: fixture.root, env: process.env };
+      const live = record(state.root, "live");
+      const removed = { ...record(state.root, "removed"), removedAt: 2 };
+      const recovering = record(state.root, "recovering");
+      const pending = record(state.root, "pending");
+      await insertRegistryWorktree(state.env, live);
+      await insertRegistryWorktree(state.env, removed);
+      await withWorktreeAllocationLease({ env: state.env, id: recovering.id }, async (guard) => {
+        await reservePendingWorktree(state.env, recovering, guard.workerAuthority);
+      });
+      // Persist the existing interrupted-allocation state; discovery must not recover it.
+      withEngineStoreAdmission(() =>
+        writePendingPayload(
+          state.env,
+          recovering.id,
+          JSON.stringify({ record: recovering, state: "recovering" }),
+        ),
+      );
+      await withWorktreeAllocationLease({ env: state.env, id: pending.id }, async (guard) => {
+        await reservePendingWorktree(state.env, pending, guard.workerAuthority);
+        const published = createDeferred();
+        const execute = stateReads.executeExistingOpenClawStateRead;
+        // Gate transport only: both reads and the atomic pending→live publication stay real.
+        const intercept = vi
+          .spyOn(stateReads, "executeExistingOpenClawStateRead")
+          .mockImplementation(
+            async <Command extends OpenClawStateReadCommand>(
+              ...args: Parameters<typeof execute<Command>>
+            ) => {
+              const command = args[1];
+              if (command.type === "worktrees.pendingSlots") {
+                await published.promise;
+              }
               try {
-                expect((await readExistingWorktreePaths(state.env)).toSorted()).toEqual(
-                  [live.path, pending.path, recovering.path].toSorted(),
-                );
-              } finally {
-                intercept.mockRestore();
+                const reply = await execute(...args);
+                if (command.type === "worktrees.livePaths") {
+                  await insertRegistryWorktree(state.env, pending, {
+                    pendingId: pending.id,
+                    workerAuthority: guard.workerAuthority,
+                  });
+                  published.resolve();
+                }
+                return reply;
+              } catch (error) {
+                if (command.type === "worktrees.livePaths") {
+                  published.reject(error);
+                }
+                throw error;
               }
-            });
-            expect((await readExistingWorktreePaths(state.env)).toSorted()).toEqual(
-              [live.path, pending.path, recovering.path].toSorted(),
-            );
-          } finally {
-            await closeStateDatabaseForTest();
-            resetDatabaseEngineSelectionForTest();
-            try {
-              if (namespace) {
-                await client?.query(`DROP SCHEMA "${namespace}" CASCADE`);
-              }
-            } finally {
-              await client?.end();
-            }
-          }
-        },
+            },
+          );
+        try {
+          expect((await readExistingWorktreePaths(state.env)).toSorted()).toEqual(
+            [live.path, pending.path, recovering.path].toSorted(),
+          );
+        } finally {
+          intercept.mockRestore();
+        }
+      });
+      expect((await readExistingWorktreePaths(state.env)).toSorted()).toEqual(
+        [live.path, pending.path, recovering.path].toSorted(),
       );
     },
   );
@@ -171,14 +127,7 @@ it("leaves absent state absent and reports registry corruption except for config
       await withWorktreeAllocationLease({ env: state.env, id: pending.id }, async (guard) => {
         await reservePendingWorktree(state.env, pending, guard.workerAuthority);
       });
-      runOpenClawStateWriteTransaction(
-        ({ db }) => {
-          db.prepare(
-            "UPDATE state_leases SET payload_json = ? WHERE scope = ? AND lease_key = ?",
-          ).run("{invalid", "core:managed-worktrees:pending-slots", pending.id);
-        },
-        { env: state.env },
-      );
+      writePendingPayload(state.env, pending.id, "{invalid");
       await expect(readExistingWorktreePaths(state.env)).rejects.toThrow(
         "Invalid pending worktree slot",
       );

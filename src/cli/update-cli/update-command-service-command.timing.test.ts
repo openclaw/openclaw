@@ -149,7 +149,8 @@ it.each([false, true])("retains a timed step when history write fails=%s", (fail
   }
   const result: UpdateRunResult = { status: "ok", mode: "git", steps: [], durationMs: 0 };
   const step = timedStep("install", "install --force --json", 24_000);
-  expect(() => recordServiceTimedStep(result, step, { runId: "run-1", env: {} })).not.toThrow();
+  const run = { runId: "run-1", env: {}, busyTimeoutMs: 71_000 };
+  expect(() => recordServiceTimedStep(result, step, run)).not.toThrow();
   expect(result.steps).toEqual([step]);
   if (!failed) {
     expect(mocks.recordStep).toHaveBeenCalledExactlyOnceWith(
@@ -160,7 +161,7 @@ it.each([false, true])("retains a timed step when history write fails=%s", (fail
         startedAtMs: Date.now() - 24_000,
         endedAtMs: Date.now(),
       }),
-      { env: {} },
+      run,
     );
   }
 });

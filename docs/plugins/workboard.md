@@ -342,10 +342,12 @@ The session-header chip reads only cards linked to its session through the
 These narrower reads preserve the existing rendering.
 
 The Gateway shares the first `workboard.cards.list` page per board filter at each
-store revision, including concurrent reads. Session-filtered and continuation
-reads do not retain a payload cache. Card and board writes invalidate cached
-pages before the next read. Each response includes all board summaries, so a
-change to another board invalidates the page too.
+store revision, including concurrent reads. Board summaries are shared across
+`workboard.boards.list` and all card-list queries at that same revision.
+Session-filtered and continuation reads do not retain a card payload cache.
+Card and board writes invalidate cached pages and summaries before the next
+read. Each response includes all board summaries, so a change to another board
+invalidates the page too.
 
 The Control UI and dashboard widgets show when more cards are available and
 offer **Load more cards**. Card search, filters, and widget counts apply to loaded

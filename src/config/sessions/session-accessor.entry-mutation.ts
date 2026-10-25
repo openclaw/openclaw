@@ -383,14 +383,6 @@ export async function createSessionEntryWithTranscript<TError = string>(
   );
 }
 
-export function cloneSessionEntries(
-  store: Record<string, SessionEntry>,
-): Record<string, SessionEntry> {
-  return Object.fromEntries(
-    Object.entries(store).map(([sessionKey, entry]) => [sessionKey, { ...entry }]),
-  );
-}
-
 function collectSessionEntryKeys(...entries: SessionEntry[]): Array<keyof SessionEntry> {
   return [...new Set(entries.flatMap((entry) => Object.keys(entry) as Array<keyof SessionEntry>))];
 }

@@ -106,9 +106,21 @@ export function startChatSendDiagnostics(log: { info(message: string): void }) {
   const scope = (phase: ChatSendPhase) => (finished ? undefined : timing.scope(phase));
   return {
     scope,
-    observeSpan: (name: string, attributes: Record<string, unknown> | undefined) => {
+    observeSpan: (
+      name: string,
+      attributes: Record<string, unknown> | undefined,
+      durationMs?: number,
+    ) => {
       const spanName = name === "agent.prepare" ? attributes?.stage : name;
-      return typeof spanName === "string" ? scope(`detail.${spanName}`)?.finish : undefined;
+      if (typeof spanName !== "string" || finished) {
+        return undefined;
+      }
+      const phase = `detail.${spanName}` as const;
+      if (durationMs !== undefined) {
+        totals.set(phase, (totals.get(phase) ?? 0) + durationMs);
+        return undefined;
+      }
+      return scope(phase)?.finish;
     },
     acknowledge(disposition: PostAckStage = "startup") {
       if (!finished && stage === "request") {

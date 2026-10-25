@@ -15,6 +15,7 @@ import {
   withNativeBindingFixture,
   type NativeBindingClientTestApi,
 } from "./session-native-binding.test-support.js";
+import { messageEvent } from "./transcript-message.test-support.js";
 
 // Load the plugin graph during collection; each fixture still owns its storage and runtime.
 const { attachNativeBindingDeletionClient: attachClient } =
@@ -55,12 +56,8 @@ function createCutFixture(fixture: Fixture) {
       }
     },
   }));
-  const answer = (id: string, content: string, timestamp: number) => ({
-    type: "message",
-    id,
-    parentId: userId,
-    message: { role: "assistant", content, timestamp },
-  });
+  const answer = (id: string, content: string, timestamp: number) =>
+    messageEvent(id, userId, { role: "assistant", content, timestamp });
   replaceTranscriptEventsSync(fixture.scope, [
     ...fixture.events,
     answer(activeId, "Active answer", 2),

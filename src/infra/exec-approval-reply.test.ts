@@ -59,21 +59,6 @@ function approvalButtons(approvalId: string, always = true) {
 }
 
 describe("exec approval reply helpers", () => {
-  const unavailableReasonCases = [
-    {
-      reason: "initiating-platform-disabled" as const,
-      channelLabel: "Slack",
-      expected:
-        "Exec approval is required, but native chat exec approvals are not configured on Slack.",
-    },
-    {
-      reason: "initiating-platform-unsupported" as const,
-      channelLabel: undefined,
-      expected:
-        "Exec approval is required, but this platform does not support chat exec approvals.",
-    },
-  ] as const;
-
   it("only suggests exec-capable recovery surfaces without native clients", () => {
     vi.mocked(listNativeExecApprovalClientLabels).mockReturnValueOnce([]);
     const text = buildExecApprovalUnavailableReplyPayload({ reason: "no-approval-route" }).text;
@@ -172,38 +157,36 @@ describe("exec approval reply helpers", () => {
   });
 
   it.each([
-    {
-      name: "compact cwd",
-      options: { command: "pwd", cwd: "C:\\Users\\alice\\project" },
-      contains: ["CWD: ~/project"],
-      excludes: ["C:\\Users\\alice"],
+    [
+      "compact cwd",
+      { command: "pwd", cwd: "C:\\Users\\alice\\project" },
+      ["CWD: ~/project"],
+      ["C:\\Users\\alice"],
+    ],
+    [
+      "backtick fences",
+      { approvalCommandId: " req-cmd-2 ", command: "echo ```danger```", host: "sandbox" },
+      ["```txt\n/approve req-cmd-2 allow-once\n```", "````sh\necho ```danger```\n````"],
+      ["Expires in:"],
+    ],
+    [
+      "minute expiry",
+      { command: "echo later", expiresAtMs: 1_801_000, nowMs: 1_000 },
+      ["Expires in: 30m"],
+      [],
+    ],
+  ] satisfies Array<[string, PendingOptions, string[], string[]]>)(
+    "formats pending replies: %s",
+    (_, options, contains, excludes) => {
+      const { text } = buildExecApprovalPendingReplyPayload(pendingOptions(options));
+      for (const expected of contains) {
+        expect(text).toContain(expected);
+      }
+      for (const forbidden of excludes) {
+        expect(text).not.toContain(forbidden);
+      }
     },
-    {
-      name: "backtick fences",
-      options: { approvalCommandId: " req-cmd-2 ", command: "echo ```danger```", host: "sandbox" },
-      contains: ["```txt\n/approve req-cmd-2 allow-once\n```", "````sh\necho ```danger```\n````"],
-      excludes: ["Expires in:"],
-    },
-    {
-      name: "minute expiry",
-      options: { command: "echo later", expiresAtMs: 1_801_000, nowMs: 1_000 },
-      contains: ["Expires in: 30m"],
-      excludes: [],
-    },
-  ] satisfies Array<{
-    name: string;
-    options: PendingOptions;
-    contains: string[];
-    excludes: string[];
-  }>)("formats pending replies: $name", ({ options, contains, excludes }) => {
-    const { text } = buildExecApprovalPendingReplyPayload(pendingOptions(options));
-    for (const expected of contains) {
-      expect(text).toContain(expected);
-    }
-    for (const forbidden of excludes) {
-      expect(text).not.toContain(forbidden);
-    }
-  });
+  );
 
   it("omits allow-always actions when the effective policy requires approval every time", () => {
     const payload = typedPending({
@@ -280,15 +263,20 @@ describe("exec approval reply helpers", () => {
     });
   });
 
-  it.each(unavailableReasonCases)(
-    "builds unavailable payload for reason $reason",
-    ({ reason, channelLabel, expected }) => {
-      const payload = buildExecApprovalUnavailableReplyPayload({
-        reason,
-        channelLabel,
-      });
-      expect(payload.text).toContain(expected);
-      expect(payload.channelData).toEqual({ execApprovalUnavailable: { reason } });
-    },
-  );
+  it.each([
+    [
+      "initiating-platform-disabled",
+      "Slack",
+      "Exec approval is required, but native chat exec approvals are not configured on Slack.",
+    ],
+    [
+      "initiating-platform-unsupported",
+      undefined,
+      "Exec approval is required, but this platform does not support chat exec approvals.",
+    ],
+  ] as const)("builds unavailable payload for reason %s", (reason, channelLabel, expected) => {
+    const payload = buildExecApprovalUnavailableReplyPayload({ reason, channelLabel });
+    expect(payload.text).toContain(expected);
+    expect(payload.channelData).toEqual({ execApprovalUnavailable: { reason } });
+  });
 });

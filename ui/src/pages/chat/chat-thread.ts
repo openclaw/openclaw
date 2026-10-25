@@ -6,6 +6,7 @@ import {
   type MessageGroup,
 } from "../../lib/chat/chat-types.ts";
 import { stripHeartbeatTokenForDisplay } from "../../lib/chat/heartbeat-display.ts";
+import { readChatThreadMessageIdentity } from "../../lib/chat/history-message-identity.ts";
 import { isStandaloneToolMessageForDisplay } from "../../lib/chat/message-normalizer.ts";
 import { senderIdentityKey } from "../../lib/chat/sender-label.ts";
 import { extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
@@ -18,17 +19,8 @@ import { resetWorkingProgress } from "./chat-progress.ts";
 import { activeChatReasoning } from "./chat-reasoning.ts";
 import { buildChatItems, type BuildChatItemsProps } from "./chat-thread-build.ts";
 import type { ChatInputOrderState } from "./chat-thread-inputs.ts";
-import { readChatThreadMessageIdentity, sanitizeStreamText } from "./chat-thread-items.ts";
+import { sanitizeStreamText } from "./chat-thread-items.ts";
 import { getOrCreateSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
-
-export { persistedMessageEntryId, readPendingSendStatus } from "./chat-thread-items.ts";
-export {
-  assistantGroupCanOwnActiveRunStatus,
-  coalesceActivityRuns,
-  coalesceStreamRuns,
-  collapseCompletedTurnWork,
-} from "./chat-thread-grouping.ts";
-export { coalesceAgentRunFrames } from "./chat-agent-run-grouping.ts";
 
 type CachedChatItems = {
   generation: number;
@@ -133,6 +125,7 @@ const CHAT_ITEM_FIELDS = {
     "boundaryId",
     "timestamp",
     "systemEvent",
+    "repeatCount",
   ],
   divider: [
     "compaction",

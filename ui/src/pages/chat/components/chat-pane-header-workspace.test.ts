@@ -1,12 +1,15 @@
 /* @vitest-environment jsdom */
-import { expect, it } from "vitest";
+import { expect, it, onTestFinished } from "vitest";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import { resolveSessionWorkspace } from "../../../lib/sessions/workspace.ts";
 import {
-  canRevealSessionWorkspace,
+  resolveChatPaneWorkspace,
   resolveChatPaneParentSession,
-} from "./chat-pane-header-identity.tsx";
-import { chatPaneHeaderSessionRow as row } from "./chat-pane-header.test-support.ts";
+} from "../chat-pane-header-identity.ts";
+import {
+  chatPaneHeaderSessionRow as row,
+  mountChatPaneHeader,
+} from "./chat-pane-header.test-support.ts";
 
 it("omits unresolved and self-referential parents", () => {
   const child = row({ key: "agent:main:child", parentSessionKey: "agent:main:missing" });
@@ -50,29 +53,83 @@ it.each<WorkspaceCase>([
     { agentWorkspace, worktreePath: "/local/worktree" },
   ],
   [{}, { root: repo, label: "openclaw" }, { agentWorkspace: repo }],
+  [
+    { key: "agent:bot-stable-id:main" },
+    { root: "/local/workspace/bot-stable-id", label: "Workspace" },
+    { agentWorkspace: "/local/workspace/bot-stable-id" },
+  ],
 ])("resolves workspace from %j", (session, expected, options) => {
   expect(resolveSessionWorkspace({ session: row(session), ...options })).toEqual(expected);
 });
 
-it.each<Partial<Parameters<typeof canRevealSessionWorkspace>[0]>>([
+it.each(["Workspace", "openclaw"])(
+  "keeps the %s workspace breadcrumb free of a tooltip",
+  (workspaceLabel) => {
+    const containers: HTMLElement[] = [];
+    const { container } = mountChatPaneHeader(containers, {
+      session: row({ key: "agent:bot-stable-id:main" }),
+      workspaceRoot: "/local/workspace/bot-stable-id",
+      workspaceLabel,
+    });
+    onTestFinished(() => containers.forEach((mounted) => mounted.remove()));
+    const crumb = container.querySelector<HTMLElement>(".chat-pane__workspace-chip");
+    expect(crumb?.textContent).toContain(workspaceLabel);
+    expect(crumb?.getAttribute("aria-label")).toContain(workspaceLabel);
+    expect(crumb?.hasAttribute("title")).toBe(false);
+  },
+);
+
+it.each<Partial<Parameters<typeof resolveChatPaneWorkspace>[0]>>([
   {
     session: row({ execNode: "build-mac", execCwd: "/remote/build" }),
-    workspaceRoot: "/remote/build",
   },
   {
     session: row({ placement: { state: "requested" } as GatewaySessionRow["placement"] }),
-    workspaceRoot: "/cloud/work",
   },
   { methodAdvertised: false },
   { hasAdminAccess: false },
 ])("disables reveal for unavailable or unauthorized workspaces: %j", (overrides) => {
   expect(
-    canRevealSessionWorkspace({
+    resolveChatPaneWorkspace({
       session: row(),
-      workspaceRoot: repo,
+      agentWorkspace: repo,
+      worktreePaths: new Map(),
+      branches: new Map(),
       methodAdvertised: true,
       hasAdminAccess: true,
       ...overrides,
-    }),
+    }).canReveal,
   ).toBe(false);
+});
+
+it.each([{}, { spawnedCwd: agentWorkspace }, { spawnedWorkspaceDir: agentWorkspace }])(
+  "omits the default agent workspace from header identity: %j",
+  (placement) => {
+    const workspace = resolveChatPaneWorkspace({
+      session: { key: "agent:main:default-workspace", kind: "direct", ...placement },
+      agentWorkspace,
+      worktreePaths: new Map(),
+      branches: new Map(),
+      methodAdvertised: true,
+      hasAdminAccess: true,
+    });
+    expect(workspace).toEqual({ root: agentWorkspace, label: null, branch: null, canReveal: true });
+  },
+);
+
+it("preserves a real project even when it uses the agent workspace directory", () => {
+  const workspace = resolveChatPaneWorkspace({
+    session: {
+      key: "agent:main:project",
+      kind: "direct",
+      spawnedCwd: agentWorkspace,
+      worktree: { id: "project", repoRoot: agentWorkspace, branch: "feature" },
+    },
+    agentWorkspace,
+    worktreePaths: new Map(),
+    branches: new Map(),
+    methodAdvertised: true,
+    hasAdminAccess: true,
+  });
+  expect(workspace.label).toBe("default");
 });

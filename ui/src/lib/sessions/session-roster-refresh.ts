@@ -50,7 +50,7 @@ import type {
 } from "./session-types.ts";
 
 type SessionRosterRefreshHost = SessionListRefreshHost & {
-  publish: (state: SessionState, errorSource?: "session-observer" | "operation") => void;
+  publish: (state: SessionState, errorSource?: "session-observer" | "operation" | "list") => void;
   onWarmListsRetired: (agentIds: ReadonlySet<string>) => void;
   observerError: () => string | null;
   onCanonicalList: (
@@ -314,7 +314,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
             startupPending,
             deletedSessions: [],
           },
-          ownsError ? "operation" : undefined,
+          ownsError ? (isPrimarySessionListQuery(options) ? "list" : "operation") : undefined,
         );
       }
       return isCurrent() && ownsError

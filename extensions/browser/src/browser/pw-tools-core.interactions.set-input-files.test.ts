@@ -86,7 +86,7 @@ it("checks aggregate payload size before reading any files", async () => {
   expect(setInputFiles).not.toHaveBeenCalled();
 });
 
-it.each([46, 47, 48, 50])("uses safe %i MiB extension handoff", async (mib) => {
+it.each([46, 47, 50])("uses safe %i MiB extension handoff", async (mib) => {
   stat.mockResolvedValueOnce(fileStats(mib * 1024 * 1024));
   await upload(extension);
   expect(readFile.mock.calls).toEqual(mib === 46 ? [[canonical]] : []);

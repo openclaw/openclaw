@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import { resolveDatabaseEngineInput, resolveDatabaseEngineSelection } from "./config.js";
+import { createSqliteFamilyEngines } from "./selection-fixture.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const connection = "postgresql://localhost/synthetic";
@@ -12,16 +13,7 @@ const input = (database: OpenClawConfig["database"]) => resolveDatabaseEngineInp
 const select = (database: OpenClawConfig["database"], env?: NodeJS.ProcessEnv) =>
   resolveDatabaseEngineSelection({ database }, env);
 
-const sqliteEngines = {
-  state: "sqlite",
-  agent: "sqlite",
-  workboard: "sqlite",
-  logbook: "sqlite",
-  "team-reports": "sqlite",
-  quarantine: "sqlite",
-  "managed-update": "sqlite",
-  "package-activation": "sqlite",
-};
+const sqliteEngines = createSqliteFamilyEngines();
 
 describe("host database engine selection", () => {
   it.each([undefined, "sqlite", "postgres"] as const)(

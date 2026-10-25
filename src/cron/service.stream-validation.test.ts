@@ -32,7 +32,6 @@ async function createCron(triggersEnabled: boolean, deps: Partial<CronServiceDep
     cronConfig: { triggers: { enabled: triggersEnabled } },
     log: logger,
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     ...deps,
   });
@@ -418,10 +417,11 @@ describe("cron stream trigger composition", () => {
   });
 });
 
-it("skips invalid main jobs with agentTurn payloads loaded from disk", async () => {
+it("skips invalid main jobs with command payloads loaded from disk", async () => {
   const { storePath } = await makeStorePath();
   const enqueueSystemEvent = vi.fn();
-  const requestHeartbeat = vi.fn();
+  const runCommandJob = vi.fn<NonNullable<CronServiceDeps["runCommandJob"]>>();
+  const runSessionEvent = vi.fn<NonNullable<CronServiceDeps["runSessionEvent"]>>();
   await writeCronStoreSnapshot({
     storePath,
     jobs: [
@@ -434,7 +434,7 @@ it("skips invalid main jobs with agentTurn payloads loaded from disk", async () 
         schedule: { kind: "at", at: "2025-12-13T00:00:01.000Z" },
         sessionTarget: "main",
         wakeMode: "now",
-        payload: { kind: "agentTurn", message: "bad" },
+        payload: { kind: "command", argv: ["echo", "invalid main payload"] },
         state: {},
       },
     ],
@@ -443,13 +443,15 @@ it("skips invalid main jobs with agentTurn payloads loaded from disk", async () 
     storePath,
     cronConfig: undefined,
     enqueueSystemEvent,
-    requestHeartbeat,
+    runCommandJob,
+    runSessionEvent,
   });
   try {
     vi.setSystemTime(new Date("2025-12-13T00:00:01.000Z"));
     await cron.run("job-1", "due");
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
-    expect(requestHeartbeat).not.toHaveBeenCalled();
+    expect(runCommandJob).not.toHaveBeenCalled();
+    expect(runSessionEvent).not.toHaveBeenCalled();
     const [job] = await cron.list({ includeDisabled: true });
     expect(job?.state.lastStatus).toBe("skipped");
     expect(job?.state.lastError).toMatch(/sessionTarget "main" requires payload\.kind/i);

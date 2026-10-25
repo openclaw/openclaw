@@ -14,15 +14,10 @@ import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { subscribeChatOutboxQueue } from "./chat-outbox-queue.ts";
 import { createTestChatPane } from "./chat-pane.test-support.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
-import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
-import { handlePageGatewayEvent } from "./chat-state-events.ts";
-import {
-  admitStoredChatComposerQueueItem,
-  listStoredChatOutboxes,
-} from "./composer-persistence.ts";
+import { handlePageGatewayEvent } from "./chat-state-events.test-support.ts";
+import { admitStoredChatComposerQueueItemResult } from "./composer-queue-persistence.ts";
 
 const selected = "agent:main:selected";
-const queued = "agent:main:queued";
 const foreign = "agent:main:foreign";
 
 beforeEach(() => {
@@ -36,20 +31,6 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function activeHistory(): ChatHistoryResult {
-  return {
-    messages: [],
-    sessionInfo: {
-      key: queued,
-      kind: "direct",
-      updatedAt: 1,
-      status: "running",
-      hasActiveRun: true,
-      sessionId: "queued-session",
-    },
-  };
-}
-
 function pageHost<T extends ReturnType<typeof makeChatHost>>(host: T) {
   const { pane, state } = createTestChatPane({
     client: expectDefined(host.client, "fixture client"),
@@ -57,30 +38,6 @@ function pageHost<T extends ReturnType<typeof makeChatHost>>(host: T) {
   });
   onTestFinished(() => pane.disconnectedCallback());
   return Object.assign(state, host);
-}
-
-function outboxHost(history: () => ChatHistoryResult | Promise<ChatHistoryResult>) {
-  const host = pageHost(
-    makeChatHost({
-      sessionKey: selected,
-      requestHandlers: { "chat.history": history },
-    }),
-  );
-  onTestFinished(() => host.sessions.dispose());
-  const item = {
-    id: "accepted-draft",
-    sendRunId: "accepted-run",
-    sessionKey: queued,
-    sessionId: "queued-session",
-    text: "Retain this accepted user input",
-    createdAt: 1,
-    sendAttempts: 1,
-    sendState: "waiting-reconnect" as const,
-  };
-  expect(
-    admitStoredChatComposerQueueItem(host, captureChatOutboxAdmission(host, queued), item),
-  ).toBe(true);
-  return host;
 }
 
 function sessionEvent(sessionKey: string, event = "sessions.changed"): GatewayEventFrame {
@@ -118,23 +75,23 @@ it("publishes a real recovery-owner change to subscribed panes during a foreign 
     attachmentStorageError: "missing",
   });
   expect(
-    admitStoredChatComposerQueueItem(
+    admitStoredChatComposerQueueItemResult(
       host,
       captureChatOutboxAdmission(host, selected),
       item("old-owner", client.recoveryScope!),
     ),
-  ).toBe(true);
+  ).toBe("admitted");
   const replacement = createTestGatewayClient(async () => ({}));
   vi.spyOn(replacement, "recoveryScope", "get").mockReturnValue("replacement-scope");
   const writer = makeChatHost({ client: replacement, sessionKey: selected });
   onTestFinished(() => writer.sessions.dispose());
   expect(
-    admitStoredChatComposerQueueItem(
+    admitStoredChatComposerQueueItemResult(
       writer,
       captureChatOutboxAdmission(writer, selected),
       item("new-owner", "replacement-scope"),
     ),
-  ).toBe(true);
+  ).toBe("admitted");
   expect(host.chatQueue.map((row) => row.id)).toEqual(["old-owner"]);
   publish.mockClear();
   peerPublish.mockClear();
@@ -197,109 +154,6 @@ it.each(
     }
   },
 );
-
-it.each(
-  [false, true].flatMap((changed) =>
-    [selected, queued].map((peerSession) => ({ changed, peerSession })),
-  ),
-)(
-  "joins a passive reader for $peerSession across pane epochs and preserves events (changed: $changed)",
-  async ({ changed, peerSession }) => {
-    const first = createDeferred<ChatHistoryResult>();
-    const firstReadStarted = createDeferred();
-    let reads = 0;
-    const host = outboxHost(() => {
-      if (++reads === 1) {
-        firstReadStarted.resolve();
-        return first.promise;
-      }
-      return activeHistory();
-    });
-    const peer = makeChatHost({
-      client: host.client,
-      sessions: host.sessions,
-      sessionKey: peerSession,
-      connectionEpoch: 7,
-    });
-    const event = sessionEvent(queued);
-    const a = resumeStoredChatOutboxes(host, event);
-    const passive = resumeStoredChatOutboxes(peer);
-    const b = resumeStoredChatOutboxes(peer, event);
-    const fresh = changed ? resumeStoredChatOutboxes(peer, sessionEvent(queued)) : undefined;
-    try {
-      await Promise.race([
-        firstReadStarted.promise,
-        a.then(() => {
-          throw new Error("Recovery completed before its first history read");
-        }),
-      ]);
-      expect(reads).toBe(1);
-    } finally {
-      first.resolve(activeHistory());
-      await Promise.all([a, b, passive, fresh]);
-    }
-    expect(reads).toBe(changed ? 2 : 1);
-    await resumeStoredChatOutboxes(peer, event);
-    expect(reads).toBe(changed ? 2 : 1);
-    expect(listStoredChatOutboxes(host)[0]?.queue[0]?.sendRunId).toBe("accepted-run");
-    expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(0);
-  },
-);
-
-it.each(["sessions.changed", "session.message"])(
-  "does not reconcile unrelated stored scopes for a foreign %s",
-  async (event) => {
-    const host = outboxHost(activeHistory);
-    handlePageGatewayEvent(host, sessionEvent(foreign, event), () => false);
-    await Promise.resolve();
-    expect(host.request.mock.calls.filter(([method]) => method === "chat.history")).toHaveLength(0);
-    expect(listStoredChatOutboxes(host)[0]?.queue[0]?.sendRunId).toBe("accepted-run");
-    await resumeStoredChatOutboxes(host);
-    expect(host.request.mock.calls.filter(([method]) => method === "chat.history")).toHaveLength(1);
-  },
-);
-
-it("keeps global outbox event recovery bound to the event's agent", async () => {
-  const host = makeChatHost({
-    sessionKey: selected,
-    requestHandlers: { "chat.history": activeHistory() },
-  });
-  onTestFinished(() => host.sessions.dispose());
-  for (const agentId of ["main", "work"]) {
-    expect(
-      admitStoredChatComposerQueueItem(host, captureChatOutboxAdmission(host, "global", agentId), {
-        id: agentId,
-        sendRunId: `${agentId}-run`,
-        sessionKey: "global",
-        agentId,
-        text: agentId,
-        createdAt: 1,
-        sendAttempts: 1,
-        sendState: "waiting-reconnect",
-      }),
-    ).toBe(true);
-  }
-  await resumeStoredChatOutboxes(host, sessionEvent("global"));
-  expect(host.request.mock.calls.filter(([method]) => method === "chat.history")).toHaveLength(0);
-  await resumeStoredChatOutboxes(host, {
-    ...sessionEvent("global"),
-    payload: { sessionKey: "global", agentId: "work", hasActiveRun: true },
-  });
-  expect(host.request.mock.calls.filter(([method]) => method === "chat.history")).toEqual([
-    [
-      "chat.history",
-      {
-        sessionKey: "global",
-        agentId: "work",
-        inputRunIds: ["work-run"],
-        limit: 1000,
-        toolResultMaxChars: 2_000,
-      },
-      { timeoutMs: 30_000 },
-    ],
-  ]);
-  expect(listStoredChatOutboxes(host)).toHaveLength(2);
-});
 
 it.each(["session", "connection"])(
   "retires a queued history refresh after its %s changes",

@@ -4,6 +4,7 @@ import {
   readErrorName,
 } from "openclaw/plugin-sdk/error-runtime";
 import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
+import { estimateBase64DecodedBytes } from "openclaw/plugin-sdk/media-runtime";
 import {
   createProviderOperationDeadline,
   executeProviderOperationWithRetry,
@@ -20,7 +21,6 @@ import {
   normalizeVideoGenerationDuration,
   type GeneratedVideoAsset,
   type VideoGenerationProvider,
-  type VideoGenerationRequest,
 } from "openclaw/plugin-sdk/video-generation";
 import { canonicalizeGoogleProviderBase64 } from "./base64.js";
 import { parseGeminiAuth } from "./gemini-auth.js";
@@ -44,13 +44,6 @@ const GOOGLE_VIDEO_EMPTY_RESULT_MESSAGE =
 
 function resolveGoogleVideoRestBaseUrl(configuredBaseUrl?: string): string {
   return `${configuredBaseUrl ?? "https://generativelanguage.googleapis.com"}/v1beta`;
-}
-
-function resolveGoogleVideoRestModelPath(model: string): string {
-  const id = stripGoogleProviderPrefix(
-    normalizeOptionalString(model) || DEFAULT_GOOGLE_VIDEO_MODEL,
-  );
-  return id.startsWith("models/") ? id : `models/${id}`;
 }
 
 function parseVideoSize(size: string | undefined): { width: number; height: number } | undefined {
@@ -101,28 +94,6 @@ function resolveResolution(params: {
   }
   const maxEdge = Math.max(parsedSize.width, parsedSize.height);
   return maxEdge >= 1920 ? "1080p" : maxEdge >= 1280 ? "720p" : undefined;
-}
-
-function resolveInputImage(req: VideoGenerationRequest) {
-  const input = req.inputImages?.[0];
-  if (!input?.buffer) {
-    return undefined;
-  }
-  return {
-    imageBytes: input.buffer.toString("base64"),
-    mimeType: normalizeOptionalString(input.mimeType) || "image/png",
-  };
-}
-
-function resolveInputVideo(req: VideoGenerationRequest) {
-  const input = req.inputVideos?.[0];
-  if (!input?.buffer) {
-    return undefined;
-  }
-  return {
-    videoBytes: input.buffer.toString("base64"),
-    mimeType: normalizeOptionalString(input.mimeType) || "video/mp4",
-  };
 }
 
 function resolveGoogleGeneratedVideoFileDownloadUrl(params: {
@@ -252,61 +223,6 @@ async function requestGoogleVideoJson(params: {
   });
 }
 
-async function generateGoogleVideoViaRest(params: {
-  baseUrl: string;
-  headers: Record<string, string>;
-  deadline: ReturnType<typeof createProviderOperationDeadline>;
-  model: string;
-  prompt: string;
-  durationSeconds?: number;
-  aspectRatio?: "16:9" | "9:16";
-  resolution?: "720p" | "1080p";
-}): Promise<unknown> {
-  let operation = await requestGoogleVideoJson({
-    url: `${params.baseUrl}/${resolveGoogleVideoRestModelPath(params.model)}:predictLongRunning`,
-    method: "POST",
-    headers: params.headers,
-    deadline: params.deadline,
-    stage: "create",
-    body: {
-      instances: [{ prompt: params.prompt }],
-      parameters: {
-        ...(params.durationSeconds !== undefined
-          ? { durationSeconds: params.durationSeconds }
-          : {}),
-        ...(params.aspectRatio ? { aspectRatio: params.aspectRatio } : {}),
-        ...(params.resolution ? { resolution: params.resolution } : {}),
-      },
-    },
-  });
-
-  for (let attempt = 0; !((operation as { done?: boolean }).done ?? false); attempt += 1) {
-    if (attempt >= MAX_POLL_ATTEMPTS) {
-      throw new Error("Google video generation did not finish in time");
-    }
-    await waitProviderOperationPollInterval({
-      deadline: params.deadline,
-      pollIntervalMs: POLL_INTERVAL_MS,
-    });
-    const operationName = (operation as { name?: unknown }).name;
-    if (typeof operationName !== "string" || !operationName) {
-      throw new Error("Google video operation response missing name for polling");
-    }
-    operation = await requestGoogleVideoJson({
-      url: `${params.baseUrl}/${operationName}`,
-      method: "GET",
-      headers: params.headers,
-      deadline: params.deadline,
-      stage: "poll",
-    });
-  }
-  const error = (operation as { error?: unknown }).error;
-  if (error) {
-    throw new Error(redactProviderResponseErrorText(JSON.stringify(error), params.headers));
-  }
-  return operation;
-}
-
 export const googleVideoGenerationProvider: VideoGenerationProvider = {
   ...createGoogleVideoGenerationProviderMetadata(),
   async generateVideo(req) {
@@ -358,25 +274,71 @@ export const googleVideoGenerationProvider: VideoGenerationProvider = {
         }),
       },
     });
-    const generateViaRest = () =>
-      generateGoogleVideoViaRest({
-        baseUrl: restBaseUrl,
+    const generateViaRest = async (): Promise<unknown> => {
+      const prompt = req.prompt;
+      const id = stripGoogleProviderPrefix(
+        normalizeOptionalString(model) || DEFAULT_GOOGLE_VIDEO_MODEL,
+      );
+      const modelPath = id.startsWith("models/") ? id : `models/${id}`;
+      let restOperation = await requestGoogleVideoJson({
+        url: `${restBaseUrl}/${modelPath}:predictLongRunning`,
+        method: "POST",
         headers: authHeaders,
         deadline,
-        model,
-        prompt: req.prompt,
-        durationSeconds,
-        aspectRatio,
-        resolution,
+        stage: "create",
+        body: {
+          instances: [{ prompt }],
+          parameters: {
+            ...(durationSeconds !== undefined ? { durationSeconds } : {}),
+            ...(aspectRatio ? { aspectRatio } : {}),
+            ...(resolution ? { resolution } : {}),
+          },
+        },
       });
+
+      for (let attempt = 0; !((restOperation as { done?: boolean }).done ?? false); attempt += 1) {
+        if (attempt >= MAX_POLL_ATTEMPTS) {
+          throw new Error("Google video generation did not finish in time");
+        }
+        await waitProviderOperationPollInterval({ deadline, pollIntervalMs: POLL_INTERVAL_MS });
+        const operationName = (restOperation as { name?: unknown }).name;
+        if (typeof operationName !== "string" || !operationName) {
+          throw new Error("Google video operation response missing name for polling");
+        }
+        restOperation = await requestGoogleVideoJson({
+          url: `${restBaseUrl}/${operationName}`,
+          method: "GET",
+          headers: authHeaders,
+          deadline,
+          stage: "poll",
+        });
+      }
+      const error = (restOperation as { error?: unknown }).error;
+      if (error) {
+        throw new Error(redactProviderResponseErrorText(JSON.stringify(error), authHeaders));
+      }
+      return restOperation;
+    };
     let usedRestFallback = false;
     let operation;
     try {
+      const inputImage = req.inputImages?.[0];
+      const inputVideo = req.inputVideos?.[0];
       operation = await client.models.generateVideos({
         model: stripGoogleProviderPrefix(model),
         prompt: req.prompt,
-        image: resolveInputImage(req),
-        video: resolveInputVideo(req),
+        image: inputImage?.buffer
+          ? {
+              imageBytes: inputImage.buffer.toString("base64"),
+              mimeType: normalizeOptionalString(inputImage.mimeType) || "image/png",
+            }
+          : undefined,
+        video: inputVideo?.buffer
+          ? {
+              videoBytes: inputVideo.buffer.toString("base64"),
+              mimeType: normalizeOptionalString(inputVideo.mimeType) || "video/mp4",
+            }
+          : undefined,
         config: {
           ...(durationSeconds !== undefined ? { durationSeconds } : {}),
           ...(aspectRatio ? { aspectRatio } : {}),
@@ -428,14 +390,14 @@ export const googleVideoGenerationProvider: VideoGenerationProvider = {
           | { videoBytes?: string; uri?: string; mimeType?: string }
           | undefined;
         if (inline?.videoBytes) {
+          if (estimateBase64DecodedBytes(inline.videoBytes) > maxVideoBytes) {
+            throw new Error(`Google generated video download exceeds ${maxVideoBytes} bytes`);
+          }
           const canonicalVideo = canonicalizeGoogleProviderBase64(inline.videoBytes);
           if (!canonicalVideo) {
             throw new Error("Google video generation returned malformed base64 video data");
           }
           const buffer = Buffer.from(canonicalVideo, "base64");
-          if (buffer.length > maxVideoBytes) {
-            throw new Error(`Google generated video download exceeds ${maxVideoBytes} bytes`);
-          }
           return {
             buffer,
             mimeType: normalizeOptionalString(inline.mimeType) || "video/mp4",

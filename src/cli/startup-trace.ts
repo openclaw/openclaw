@@ -12,9 +12,6 @@ import {
 type GatewayStartupTraceSource = "entry" | "cli.main";
 type GatewayStartupTraceLineFormatter = (message: string) => string;
 type DiagnosticsTimelineModule = typeof import("../infra/diagnostics-timeline.js");
-type StartupTraceMeasureOptions = {
-  timeline?: boolean;
-};
 type PendingTimelineEvent =
   | {
       type: "mark";
@@ -300,7 +297,9 @@ export function createGatewayDispatchStartupTrace(
     async measure<T>(
       name: string,
       run: () => T | PromiseLike<T>,
-      options: StartupTraceMeasureOptions = {},
+      options: {
+        timeline?: boolean;
+      } = {},
     ): Promise<T> {
       const before = performance.now();
       if (progressEnabled && STARTUP_PROGRESS_PHASES.has(timelineName(name))) {

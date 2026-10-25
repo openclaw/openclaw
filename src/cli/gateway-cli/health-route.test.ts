@@ -21,16 +21,18 @@ describe("runGatewayHealthJsonRoute", () => {
     mocks.readNonObservingHealthConfig.mockResolvedValue({});
     mocks.emitReachableGatewayAuthDiagnostic.mockResolvedValue(false);
     vi.doMock("../gateway-rpc.js", () => ({ callGatewayFromCliWithTransport: mocks.callGateway }));
-    vi.doMock("../../commands/health.js", () => {
+    vi.doMock("../../commands/health.js", async (importOriginal) => {
       mocks.loadHealth();
       return {
+        ...(await importOriginal<typeof import("../../commands/health.js")>()),
         readNonObservingHealthConfig: mocks.readNonObservingHealthConfig,
         emitReachableGatewayAuthDiagnostic: mocks.emitReachableGatewayAuthDiagnostic,
       };
     });
-    vi.doMock("../../gateway/call.js", () => {
+    vi.doMock("../../gateway/call.js", async (importOriginal) => {
       mocks.loadCall();
       return {
+        ...(await importOriginal<typeof import("../../gateway/call.js")>()),
         formatGatewayAuthErrorJson: mocks.formatGatewayAuthErrorJson,
         formatGatewayClientRequestErrorJson: mocks.formatGatewayClientRequestErrorJson,
         formatGatewayTransportErrorJson: mocks.formatGatewayTransportErrorJson,
@@ -65,19 +67,52 @@ describe("runGatewayHealthJsonRoute", () => {
       { defaultTimeoutMs: 10_000, sharedStateMode: "read-only" },
     );
     expect(runtime.writeJson).toHaveBeenCalledWith({ ok: true }, 2);
-    expect(mocks.loadCall).not.toHaveBeenCalled();
     expect(mocks.emitReachableGatewayAuthDiagnostic).not.toHaveBeenCalled();
   });
 
-  it("preserves structured transport errors", async () => {
+  it.each(["auth", "request", "transport"] as const)(
+    "preserves structured %s errors",
+    async (kind) => {
+      const runtime = createNonExitingRuntimeEnv();
+      mocks.callGateway.mockRejectedValue(new Error("gateway unavailable"));
+      const payload = { ok: false, error: { type: `gateway_${kind}_error` } };
+      const formatters = {
+        auth: mocks.formatGatewayAuthErrorJson,
+        request: mocks.formatGatewayClientRequestErrorJson,
+        transport: mocks.formatGatewayTransportErrorJson,
+      };
+      formatters[kind].mockReturnValue(payload);
+
+      await runGatewayHealthJsonRoute({ rpc: { json: true, timeout: "10000" } }, runtime);
+
+      expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith(payload, 2);
+      expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
+      expect(vi.mocked(runtime.writeJson).mock.invocationCallOrder[0]).toBeLessThan(
+        vi.mocked(runtime.exit).mock.invocationCallOrder[0]!,
+      );
+    },
+  );
+
+  it("rethrows unknown failures without emitting a replacement", async () => {
     const runtime = createNonExitingRuntimeEnv();
-    mocks.callGateway.mockRejectedValue(new Error("gateway unavailable"));
-    const payload = { ok: false, error: { type: "gateway_transport_error" } };
-    mocks.formatGatewayTransportErrorJson.mockReturnValue(payload);
+    const error = new Error("unclassified failure");
+    mocks.callGateway.mockRejectedValue(error);
+    await expect(runGatewayHealthJsonRoute({ rpc: { json: true } }, runtime)).rejects.toBe(error);
+    expect(runtime.writeJson).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
 
-    await runGatewayHealthJsonRoute({ rpc: { json: true, timeout: "10000" } }, runtime);
+  it("keeps a successful default route free of health config and error presentation", async () => {
+    const runtime = createNonExitingRuntimeEnv();
+    const rpc = { json: true, timeout: "10000" };
+    mocks.callGateway.mockResolvedValue({ ok: true });
 
-    expect(runtime.writeJson).toHaveBeenCalledWith(payload, 2);
-    expect(runtime.exit).toHaveBeenCalledWith(1);
+    await runGatewayHealthJsonRoute({ rpc }, runtime);
+
+    expect(mocks.callGateway.mock.calls[0]?.[1]).toBe(rpc);
+    expect(runtime.writeJson).toHaveBeenCalledWith({ ok: true }, 2);
+    expect(mocks.loadHealth).not.toHaveBeenCalled();
+    expect(mocks.readNonObservingHealthConfig).not.toHaveBeenCalled();
+    expect(mocks.loadCall).not.toHaveBeenCalled();
   });
 });

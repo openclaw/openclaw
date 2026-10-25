@@ -1,6 +1,7 @@
 import { safeParseJsonRecord } from "@openclaw/normalization-core";
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
+import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   listMessageReceiptSourceTargets,
   resolveMessageReceiptPrimaryId,
@@ -408,9 +409,7 @@ export function readEmbeddedMessageDeliveryFact(
   value: unknown,
 ): EmbeddedMessageDeliveryFact | undefined {
   const fact = asOptionalRecord(value);
-  const createdThreadIds = Array.isArray(fact?.createdThreadIds)
-    ? fact.createdThreadIds.filter((id): id is string => typeof id === "string")
-    : [];
+  const createdThreadIds = filterStringEntries(fact?.createdThreadIds);
   if (
     !fact ||
     !isDeliveryStatus(fact.status) ||

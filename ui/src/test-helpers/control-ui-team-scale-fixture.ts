@@ -6,18 +6,20 @@ import type {
 import type { AgentsListResult, PresenceEntry } from "../api/types.ts";
 import type { PresencePayload } from "../app/user-profile.ts";
 import type { BoardSnapshot } from "../lib/board/types.ts";
+import { createBoardWidget } from "../lib/board/widget.test-support.ts";
 import { createTeamScaleDuplicateReadFixture } from "./control-ui-duplicate-read-fixture.ts";
 import { defaultControlUiFeatureMethods } from "./control-ui-e2e-defaults.ts";
-import type { ControlUiMockGatewayScenario } from "./control-ui-e2e.ts";
 import {
   createTeamScaleSessionEvents,
   prepareTeamScaleSidebarListChurn,
   type TeamScaleLiveEvent,
 } from "./control-ui-sidebar-list-fixture.ts";
+import { withTeamScaleConfig } from "./control-ui-team-scale-config.ts";
 import { createTeamScaleHistoryFixture } from "./control-ui-team-scale-history-fixture.ts";
 import {
   createTeamScaleCronInventory,
   createTeamScaleSessionInventory,
+  TEAM_SCALE_COUNTS,
 } from "./control-ui-team-scale-inventory.ts";
 import {
   createTeamScalePeople,
@@ -31,25 +33,6 @@ import {
 } from "./control-ui-team-scale-widget-html.ts";
 
 export { TEAM_SCALE_SELF_INSTANCE_ID };
-
-const TEAM_SCALE_COUNTS = {
-  sessions: 300,
-  firstPage: 200,
-  pinned: 30,
-  owners: 34,
-  people: 120,
-  agents: 6,
-  plugins: 7,
-  cronJobs: 120,
-  childSessions: 54,
-  cronSessions: 24,
-  systemSessions: 12,
-  transcriptMessages: 240,
-  inlineWidgets: 12,
-  catalogHosts: 6,
-  catalogSessionsPerHost: 20,
-  presenceEvents: 12,
-} as const;
 
 const TEAM_SCALE_CATALOG_PROGRESS_ID = "team-scale-progress";
 const TEAM_SCALE_LIVE_RUN_ID = "team-scale-live-run";
@@ -73,12 +56,15 @@ type FixtureOptions = {
   liveRun?: boolean;
   sidebarListChurn?: boolean;
   sidebarLiveChurn?: boolean;
+  sidebarAvatars?: boolean;
+  sidebarPersistentChildren?: boolean;
   sessionEventChurn?: boolean;
   sessionEventDurationMs?: number;
   sessionEventAncestorRefs?: boolean;
   duplicateBootReads?: boolean;
   closedMenuMembers?: boolean;
   largeSnapshot?: boolean;
+  offRosterSession?: boolean;
   transcriptMessages?: number;
   dashboardMcpApp?: { font: Buffer };
   /** Opt into a scripted HTML dashboard with an independently fetched web font. */
@@ -112,25 +98,26 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
     counts.people,
     now,
     {
-      avatars: options.sidebarLiveChurn,
+      avatars: options.sidebarLiveChurn || options.sidebarAvatars,
       sharing: options.closedMenuMembers,
     },
   );
   const assets = new Map<string, FixtureAsset>(avatarAssets);
-  const { sessions, pinnedRows, pinnedKeys, selectedSessionKey } = createTeamScaleSessionInventory({
-    now,
-    people,
-    counts,
-  });
+  const { sessions, pinnedRows, pinnedKeys, selectedSessionKey, sidebarPersistentChildren } =
+    createTeamScaleSessionInventory({
+      now,
+      people,
+      counts,
+      offRosterSession: options.offRosterSession,
+      sidebarPersistentChildren: options.sidebarPersistentChildren,
+    });
   const duplicateReads = options.duplicateBootReads
     ? createTeamScaleDuplicateReadFixture(selectedSessionKey, now)
     : undefined;
-  if (duplicateReads) {
-    assets.set(duplicateReads.mediaPath, duplicateReads.asset);
-  }
   pinnedRows[0]!.sharingRole = "admin";
   pinnedRows[0]!.visibility = "shared";
   if (duplicateReads) {
+    assets.set(duplicateReads.mediaPath, duplicateReads.asset);
     pinnedRows[0]!.worktree = duplicateReads.worktree;
   }
   if (options.liveRun) {
@@ -150,7 +137,7 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
         pinnedRows[(index - 8) % pinnedRows.length]!.key,
       ];
     }
-    if (options.sidebarLiveChurn) {
+    if (options.sidebarLiveChurn || options.sidebarAvatars) {
       assets.set(`/api/users/${person.id}/avatar`, {
         contentType: "image/svg+xml",
         body:
@@ -332,15 +319,11 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
     revision: 1,
     tabs: [{ tabId: "main", title: "Overview", position: 0, chatDock: "right" }],
     widgets: [
-      {
+      createBoardWidget({
         name: "team-overview",
-        tabId: "main",
         title: "Team overview",
         sizeW: 12,
         sizeH: 8,
-        position: 0,
-        grantState: "none",
-        revision: 1,
         ...(options.dashboardMcpApp
           ? { contentKind: "mcp-app", instanceId: "team-overview-instance" }
           : {
@@ -351,15 +334,15 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
               viewGeneration: "0123456789abcdef0123456789abcdef",
               ...sandbox,
             }),
-      },
+      }),
     ],
   };
   const sidebarEntries = [
-    "route:agents-home",
+    "route:sessions",
     ...pinnedKeys.map((key) => `session:${key}`),
     ...plugins.map((plugin) => `plugin:${plugin.pluginId}/overview`),
   ];
-  const scenario: ControlUiMockGatewayScenario = {
+  const scenario = withTeamScaleConfig({
     awaitInitialRoster: false,
     authMethod: "trusted-proxy",
     authMode: "trusted-proxy",
@@ -481,20 +464,28 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
         })),
       },
       "progressCard.get": {
-        card: {
-          sessionKey: selectedSessionKey,
-          revision: 1,
-          updatedAt: now,
-          markdown: "Synthetic project verification is in progress.",
-          steps: [
-            { step: "Review fixture inventory", status: "completed" },
-            { step: "Validate cold-load rendering", status: "in_progress" },
-            { step: "Record performance evidence", status: "pending" },
-          ],
-        },
+        cases: [
+          {
+            match: { sessionKey: selectedSessionKey },
+            response: {
+              card: {
+                sessionKey: selectedSessionKey,
+                revision: 1,
+                updatedAt: now,
+                markdown: "Synthetic project verification is in progress.",
+                steps: [
+                  { step: "Review fixture inventory", status: "completed" },
+                  { step: "Validate cold-load rendering", status: "in_progress" },
+                  { step: "Record performance evidence", status: "pending" },
+                ],
+              },
+            },
+          },
+          { response: { card: null } },
+        ],
       },
     },
-  };
+  });
   // 125 frames over 20 seconds: streaming is mixed with unrelated Team activity.
   const liveKinds = [
     ...Array<string>(5).fill("presence.offscreen"),
@@ -681,6 +672,7 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
     scenario,
     board,
     selectedSessionKey,
+    sidebarPersistentChildren,
     pinnedKeys,
     sidebarEntries,
     events,
@@ -704,7 +696,7 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
           },
         }
       : undefined,
-    counts: { ...counts, sessions: sessions.length },
+    counts: { ...counts, sessions: sessions.length, pinned: pinnedKeys.length },
     assets,
   };
 }

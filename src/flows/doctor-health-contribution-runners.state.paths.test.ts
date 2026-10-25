@@ -12,6 +12,10 @@ import {
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { resolveOpenClawRegisteredAgentDatabasePath } from "../state/openclaw-state-db.paths.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
+import {
+  createDoctorHealthFlowContext,
+  createDoctorPrompterFixture,
+} from "./doctor-health-context.test-support.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
 import { initialDoctorHealthContribution } from "./doctor-health-contributions-selection.test-support.js";
 
@@ -46,6 +50,12 @@ vi.mock("../commands/doctor-state-integrity.js", () => ({ noteStateIntegrity: vi
 vi.mock("../commands/backup-health.js", () => ({ noteBackupDoctorHint: vi.fn() }));
 
 const relative = String.raw`agents\main\agent\openclaw-agent.sqlite`;
+const databaseRow = (
+  pathname: string,
+  schema_version = 20,
+  last_seen_at = 200,
+  size_bytes: number | null = 20,
+) => ({ agent_id: "main", path: pathname, schema_version, last_seen_at, size_bytes });
 
 function seedDatabase(stateDir = String.raw`C:\synthetic\state`) {
   const db = new (requireNodeSqlite().DatabaseSync)(":memory:");
@@ -70,11 +80,13 @@ function seedDatabase(stateDir = String.raw`C:\synthetic\state`) {
   const external = path.toNamespacedPath(String.raw`D:\other\openclaw-agent.sqlite`);
   executeSqliteQuerySync(
     db,
-    queries.insertInto("agent_databases").values([
-      { agent_id: "main", path: relative, schema_version: 18, last_seen_at: 100, size_bytes: 10 },
-      { agent_id: "main", path: namespaced, schema_version: 20, last_seen_at: 200, size_bytes: 20 },
-      { agent_id: "main", path: external, schema_version: 20, last_seen_at: 300, size_bytes: 30 },
-    ]),
+    queries
+      .insertInto("agent_databases")
+      .values([
+        databaseRow(relative, 18, 100, 10),
+        databaseRow(namespaced),
+        databaseRow(external, 20, 300, 30),
+      ]),
   );
   const readRows = () =>
     executeSqliteQuerySync(db, queries.selectFrom("agent_databases").selectAll().orderBy("path"))
@@ -109,32 +121,13 @@ function seedDatabase(stateDir = String.raw`C:\synthetic\state`) {
 }
 
 function context(env: NodeJS.ProcessEnv = {}, shouldRepair = true): DoctorHealthFlowContext {
-  return {
-    runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+  return createDoctorHealthFlowContext({
     options: { repair: shouldRepair },
-    prompter: {
-      confirm: async () => shouldRepair,
-      confirmAutoFix: async () => shouldRepair,
-      confirmAggressiveAutoFix: async () => shouldRepair,
-      confirmRuntimeRepair: async () => shouldRepair,
-      select: async (_params, fallback) => fallback,
-      shouldRepair,
-      shouldForce: false,
-      repairMode: {
-        shouldRepair,
-        shouldForce: false,
-        nonInteractive: true,
-        canPrompt: false,
-        updateInProgress: false,
-      },
-    },
-    configResult: { cfg: {} },
-    cfg: {},
-    cfgForPersistence: {},
-    sourceConfigValid: true,
+    prompter: createDoctorPrompterFixture(shouldRepair),
+    configResult: { confirmedConfigSource: undefined },
     configPath: String.raw`C:\synthetic\state\openclaw.json`,
     env,
-  };
+  });
 }
 
 describe("Doctor Windows database path repair", () => {
@@ -155,20 +148,8 @@ describe("Doctor Windows database path repair", () => {
       const state = seedDatabase(stateDir);
       await initialDoctorHealthContribution("doctor:state-integrity").run(context());
       expect(state.readRows()).toHaveLength(2);
-      expect(state.readRows()).toContainEqual({
-        agent_id: "main",
-        path: relative,
-        schema_version: 20,
-        last_seen_at: 200,
-        size_bytes: 20,
-      });
-      expect(state.readRows()).toContainEqual({
-        agent_id: "main",
-        path: state.external,
-        schema_version: 20,
-        last_seen_at: 300,
-        size_bytes: 30,
-      });
+      expect(state.readRows()).toContainEqual(databaseRow(relative));
+      expect(state.readRows()).toContainEqual(databaseRow(state.external, 20, 300, 30));
       const baseline = state.versions();
       state.startUpdate();
       await initialDoctorHealthContribution("doctor:state-integrity").run(context());
@@ -196,25 +177,20 @@ describe("Doctor Windows database path repair", () => {
         .where("path", "=", relative),
     );
     await initialDoctorHealthContribution("doctor:state-integrity").run(context());
-    expect(state.readRows().find((row) => row.path === relative)).toEqual({
-      agent_id: "main",
-      path: relative,
-      schema_version: 18,
-      last_seen_at: 500,
-      size_bytes: null,
-    });
+    expect(state.readRows().find((row) => row.path === relative)).toEqual(
+      databaseRow(relative, 18, 500, null),
+    );
     expect(state.readRows()).toHaveLength(2);
   });
 
   it("preserves distinct internal databases for one agent and does nothing on a standalone rerun", async () => {
     const state = seedDatabase();
-    const retained = {
-      agent_id: "main",
-      path: String.raw`agents\main\archive\openclaw-agent.sqlite`,
-      schema_version: 18,
-      last_seen_at: 400,
-      size_bytes: 40,
-    };
+    const retained = databaseRow(
+      String.raw`agents\main\archive\openclaw-agent.sqlite`,
+      18,
+      400,
+      40,
+    );
     executeSqliteQuerySync(
       state.database.db,
       state.queries.insertInto("agent_databases").values(retained),

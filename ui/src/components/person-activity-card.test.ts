@@ -6,6 +6,7 @@ import type { GatewaySessionRow } from "../api/types.ts";
 import { captureI18nStateForTesting } from "../i18n/lib/translate.test-support.ts";
 import { i18n } from "../i18n/lib/translate.ts";
 import { createSessionsListResult } from "../test-helpers/chat-model.ts";
+import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { updatePersonActivityCard } from "./person-activity-card.tsx";
 import type { PersonActivityData } from "./person-activity-data.ts";
 
@@ -51,8 +52,8 @@ type Input = Extract<
   NonNullable<Parameters<typeof updatePersonActivityCard>[1]>,
   { user: unknown }
 >;
-function show(overrides: Partial<Input> = {}) {
-  updatePersonActivityCard(container, {
+function input(overrides: Partial<Input> = {}): Input {
+  return {
     user: alice,
     sessionData: undefined,
     watchAgentId: "main",
@@ -61,12 +62,68 @@ function show(overrides: Partial<Input> = {}) {
     routing: { basePath: "/ui", navigate: vi.fn() },
     openSession: vi.fn(),
     ...overrides,
-  });
+  };
+}
+function show(overrides: Partial<Input> = {}) {
+  updatePersonActivityCard(container, input(overrides));
 }
 const card = (part: string) => container.querySelector(`.person-activity-card__${part}`);
 const links = () => [
   ...container.querySelectorAll<HTMLAnchorElement>(".person-activity-card__session"),
 ];
+
+it("shows admitted read readiness and retains the loaded card through refresh", async () => {
+  const first = Promise.withResolvers<Input>();
+  updatePersonActivityCard(container, { name: "Alice", read: first.promise });
+  flush();
+  expect(getQueriesForElement(container).getByRole("status").textContent).toBe("Loading…");
+  expect(container.getAttribute("aria-label")).toBe("Activity for Alice");
+
+  first.resolve(input({ sessionData: data([session("one", 1)]) }));
+  await waitForSolid(() => expect(links()).toHaveLength(1));
+  const loaded = container.querySelector(".person-activity-card");
+  const link = links()[0]!;
+  link.focus();
+
+  const refresh = Promise.withResolvers<Input>();
+  updatePersonActivityCard(container, { name: "Alice", read: refresh.promise });
+  flush();
+  expect(container.querySelector(".person-activity-card")).toBe(loaded);
+  expect(links()[0]).toBe(link);
+  expect(document.activeElement).toBe(link);
+
+  refresh.resolve(input({ sessionData: data([{ ...session("one", 2), label: "Updated" }]) }));
+  await waitForSolid(() => expect(link.textContent).toContain("Updated"));
+  expect(container.querySelector(".person-activity-card")).toBe(loaded);
+  expect(links()[0]).toBe(link);
+  expect(document.activeElement).toBe(link);
+});
+
+it("replaces a failed read without retaining its error or accepting an obsolete result", async () => {
+  const failed = Promise.withResolvers<Input>();
+  updatePersonActivityCard(container, { name: "Alice", read: failed.promise });
+  failed.reject(new Error("Unavailable"));
+  await waitForSolid(() =>
+    expect(getQueriesForElement(container).getByRole("status").textContent).toBe(
+      "Could not load people. Try again.",
+    ),
+  );
+
+  const obsolete = Promise.withResolvers<Input>();
+  updatePersonActivityCard(container, { name: "Alice", read: obsolete.promise });
+  flush();
+  const current = Promise.withResolvers<Input>();
+  updatePersonActivityCard(container, { name: "Bob", read: current.promise });
+  flush();
+  current.resolve(input({ user: { ...alice, id: "bob", name: "Bob" } }));
+  await waitForSolid(() => expect(container.getAttribute("aria-label")).toBe("Activity for Bob"));
+  obsolete.resolve(input());
+  await obsolete.promise;
+  flush();
+  expect(container.getAttribute("aria-label")).toBe("Activity for Bob");
+  expect(container.querySelector(".person-activity-card")).not.toBeNull();
+  expect(getQueriesForElement(container).queryByRole("status")).toBeNull();
+});
 
 it("retains recent selection and focused nodes while fresh roster facts update", () => {
   const initial = ["one", "two", "three", "four"].map((key, index) => session(key, 3 - index));

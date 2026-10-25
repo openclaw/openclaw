@@ -12,7 +12,7 @@ import { sessionDeliveryOrigin } from "../utils/delivery-context.read.js";
 import { matchesChannelAvatarSender } from "./channel-avatar-reference.js";
 import { parseControlUiResourcePath } from "./control-ui-contract.js";
 import { respondNotFound } from "./control-ui-http-utils.js";
-import { sendMethodNotAllowed } from "./http-common.js";
+import { sendMethodNotAllowed, sendSessionReadForbidden } from "./http-common.js";
 import {
   HTTP_IMAGE_MAX_BYTES,
   resolveHttpImageRepresentation,
@@ -141,6 +141,12 @@ export async function handleChannelAvatarHttpRequest(
   };
   if (source) {
     const entry = source.readCurrent();
+    // Visibility is settled once per request; a share revoked during the byte
+    // read is an accepted brief overlap, like the icon route.
+    if (entry && !requestAuth.canReadSession(sessionKey, entry)) {
+      sendSessionReadForbidden(res);
+      return true;
+    }
     const origin = sessionDeliveryOrigin(entry);
     const reference = origin?.avatar;
     const assertCurrent = () => {
@@ -168,6 +174,10 @@ export async function handleChannelAvatarHttpRequest(
       key: requestedKey,
       assertActive: requestAuth.assertCurrent,
     });
+    if (entry && !requestAuth.canReadSession(requestedKey, entry)) {
+      sendSessionReadForbidden(res);
+      return true;
+    }
     const origin = sessionDeliveryOrigin(entry);
     reference = matchesChannelAvatarSender(requestUrl.searchParams, origin)
       ? origin?.avatar

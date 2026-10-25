@@ -29,6 +29,9 @@ export type QuestionPromptDelivery = {
   messageChannel?: string;
 };
 
+/** Host-generated capability guidance that is safe to return to the model. */
+export class QuestionPromptUnavailableError extends Error {}
+
 /** Builds a portable prompt sender for Gateway-scoped / loopback tool construction. */
 export function createChannelQuestionPromptDelivery(params: {
   cfg: OpenClawConfig;
@@ -107,7 +110,7 @@ export async function sendQuestionToolPrompt(params: {
     await send({ text, channelData: { askUser: { questionId } } });
     if (!controlUiBase) {
       // A visible blocker is not a delivered entry form; cancel the pending wait.
-      throw new Error(text);
+      throw new QuestionPromptUnavailableError(text);
     }
     return;
   }

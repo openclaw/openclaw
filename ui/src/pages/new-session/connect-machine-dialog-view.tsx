@@ -1,12 +1,29 @@
-import { Show } from "solid-js";
+import { action, createOptimistic, onSettled, Show } from "solid-js";
 import { ConnectCommand } from "../../components/solid/connect-command.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
-import "../../components/modal-dialog.ts";
+import "../../components/modal-dialog.tsx";
 import { formatTimeMs } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import type { ConnectMachineSetupState } from "./connect-machine-dialog.ts";
+import type { ConnectMachineRequest, ConnectMachineSetupState } from "./connect-machine-dialog.ts";
 
 export function ConnectMachineDialog(props: ReturnType<ConnectMachineSetupState["view"]>) {
+  const [saving, setSaving] = createOptimistic(false);
+  const presentRequest = action(function* (request: ConnectMachineRequest) {
+    if (request.isCurrent()) {
+      setSaving(true);
+    }
+    yield Promise.race([request.completion, request.retired]);
+  });
+  // The ordered receipt covers minting from either host as well as dialog refresh.
+  onSettled(() =>
+    props.subscribeRequests((request) => {
+      // The native modal must finish opening before its operation joins an action.
+      onSettled(() => {
+        void presentRequest(request).catch(request.reportError);
+      });
+    }),
+  );
+  const busy = () => saving() || props.loading;
   const expiresAt = () =>
     props.setup?.expiresAtMs
       ? formatTimeMs(props.setup.expiresAtMs, { hour: "numeric", minute: "2-digit" }, "")
@@ -35,7 +52,7 @@ export function ConnectMachineDialog(props: ReturnType<ConnectMachineSetupState[
             </button>
           </header>
           <div class="connect-machine-dialog__body">
-            {props.loading && !props.setup?.command ? (
+            {busy() && !props.setup?.command ? (
               <p class="connect-machine-dialog__status" role="status">
                 {t("newSession.connectMachineGenerating")}
               </p>
@@ -76,14 +93,9 @@ export function ConnectMachineDialog(props: ReturnType<ConnectMachineSetupState[
           </div>
           <openclaw-modal-actions class="exec-approval-actions connect-machine-dialog__actions">
             {props.setup?.command || props.error ? (
-              <button
-                class="btn"
-                type="button"
-                disabled={props.loading}
-                onClick={() => props.onRefresh()}
-              >
+              <button class="btn" type="button" disabled={busy()} onClick={() => props.onRefresh()}>
                 <Icon name="refresh" />
-                {props.loading
+                {busy()
                   ? t("newSession.connectMachineRefreshing")
                   : t("newSession.connectMachineFreshCode")}
               </button>

@@ -7,10 +7,28 @@ import type {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { runWithAsyncWorkResources } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import { createAgentHarnessHostCapabilitiesForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { createCopilotAgentHarness as createCopilotAgentHarnessImpl } from "./harness.js";
+import { vi } from "vitest";
+import {
+  createCopilotAgentHarness as createCopilotAgentHarnessImpl,
+  type CopilotSessionBinding,
+} from "./harness.js";
 import { createCopilotTestHostCapabilities } from "./src/host-capability.test-support.js";
 
 type CanonicalAttemptResult = Extract<AgentHarnessAttemptResult, { terminal: unknown }>;
+
+export function makeSessionStoreMock() {
+  const entries = new Map<string, CopilotSessionBinding>();
+  return {
+    entries,
+    store: {
+      register: vi.fn(async (key: string, value: CopilotSessionBinding) => {
+        entries.set(key, value);
+      }),
+      lookup: vi.fn(async (key: string) => entries.get(key)),
+      delete: vi.fn(async (key: string) => entries.delete(key)),
+    },
+  };
+}
 
 export function asAttemptParams(value: Record<string, unknown>): AgentHarnessAttemptParams {
   return {

@@ -203,7 +203,11 @@ function resolveFoundryOpenAIModelTokenLimits(
   if (/^gpt-5\.(?:4(?:-pro)?|5|6(?:-(?:sol|terra|luna))?)$/u.test(normalized)) {
     return { contextWindow: 1_050_000, maxTokens: 128_000 };
   }
-  if (/^gpt-5\.4-(?:mini|nano)$/u.test(normalized)) {
+  if (
+    /^(?:gpt-5(?:-(?:mini|nano|codex|pro))?|gpt-5\.(?:1(?:-codex(?:-(?:mini|max))?)?|2(?:-codex)?|3-codex|4-(?:mini|nano)))$/u.test(
+      normalized,
+    )
+  ) {
     return { contextWindow: 400_000, maxTokens: 128_000 };
   }
   return undefined;
@@ -339,7 +343,7 @@ export function buildFoundryProviderBaseUrl(
   const resolvedApi = resolveFoundryApi(modelId, modelNameHint, configuredApi);
   const base = normalizeFoundryEndpoint(endpoint);
   const path = resolvedApi === ANTHROPIC_MESSAGES_API ? "/anthropic" : "/openai/v1";
-  return base.endsWith(path) ? base : `${base}${path}`;
+  return `${base}${path}`;
 }
 
 export function extractFoundryEndpoint(baseUrl: string | null | undefined): string | undefined {

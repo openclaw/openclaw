@@ -192,13 +192,6 @@ describe("git commit resolution", () => {
     },
   );
 
-  it("treats invalid moduleUrl inputs as a fallback hint instead of throwing", async () => {
-    const repoRoot = await makeFakeGitRepo();
-    await makeFakeOpenClawPackage(repoRoot);
-
-    expect(resolveAt(repoRoot, { moduleUrl: "not-a-file-url" })).toBe("abcdef0");
-  });
-
   it("reads packed refs after short commondir reads in worktree-style checkouts", async () => {
     const temp = await tempDir();
     const checkoutRoot = path.join(temp, "checkout");

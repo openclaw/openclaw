@@ -32,9 +32,10 @@ async function writeArgvFixture(cwd: string, file: string, script = stdoutScript
 }
 
 it("leaves Linux commands unchanged", () => {
-  const platform = "linux";
+  using platform = vi.spyOn(process, "platform", "get");
+  platform.mockReturnValue("linux");
   const cmdCommands = ["pnpm"];
-  expect(resolveWindowsCommandShim({ command: "pnpm", platform, cmdCommands })).toBe("pnpm");
+  expect(resolveWindowsCommandShim({ command: "pnpm", cmdCommands })).toBe("pnpm");
 });
 
 type Dir = string | undefined;

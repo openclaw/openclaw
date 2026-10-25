@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { randomUUID } from "node:crypto";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
 import { createPluginValueInstances } from "./plugin-instance-owned-values.js";
@@ -71,6 +72,7 @@ export type PluginInvocationContext = {
 export type PluginInstanceOwner = {
   record: PluginRecord;
   instance?: PluginInstanceHandle;
+  incarnationId?: string;
 } & (
   | { revoked: false; registry: PluginRegistry }
   | { revoked: true; registry: PluginRegistry | undefined }
@@ -163,6 +165,30 @@ export function getPluginInstanceRuntimeSlot(
 
 export function getPluginInstance(record: PluginRecord): PluginInstanceHandle | undefined {
   return pluginInstanceState.records.get(record)?.instance;
+}
+
+/**
+ * Digest of a live instance's captured plugin generation source. Core-bundled plugins load
+ * host-owned modules and have none; `getPluginInstanceCodeIdentity` covers both.
+ */
+export function getPluginInstanceSourceDigest(record: PluginRecord): string | undefined {
+  return getPluginInstanceIncarnation(record)
+    ? pluginInstanceState.records.get(record)?.instance?.sourceDigest
+    : undefined;
+}
+
+/** Process-local exact-instance identity, preserved by adoption, never reconstructed on reload. */
+export function getPluginInstanceIncarnation(record: PluginRecord): string | undefined {
+  const owner = pluginInstanceState.records.get(record);
+  if (
+    !owner?.instance ||
+    owner.revoked ||
+    !owner.instance.acceptingCalls ||
+    owner.instance.lifecycle.signal.aborted
+  ) {
+    return undefined;
+  }
+  return (owner.incarnationId ??= randomUUID());
 }
 
 /** Exact owner of a callable public view; never inferred from a plugin id or path. */

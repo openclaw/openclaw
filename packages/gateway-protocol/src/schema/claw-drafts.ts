@@ -40,6 +40,7 @@ export const ClawsDraftsSaveParamsSchema = closedObject({
 });
 const ReviewChoices = closedObject({
   name: Type.String({ pattern: "^[a-z][a-z0-9_-]{0,63}$" }),
+  displayName: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
   description: Text,
   excluded: Type.Array(Type.String({ minLength: 1, maxLength: 640 }), { maxItems: 128 }),
 });
@@ -74,6 +75,7 @@ export type ClawsDraftsReviewResult = {
   reviewToken: string;
   publisher: string;
   name: string;
+  displayName: string;
   version: string;
   description: string;
   items: ClawDraftReviewItem[];

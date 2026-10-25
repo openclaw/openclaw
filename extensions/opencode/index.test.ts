@@ -5,6 +5,7 @@ import {
 import { NON_ENV_SECRETREF_MARKER } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { expectPassthroughReplayPolicy } from "openclaw/plugin-sdk/provider-test-contracts";
+import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
@@ -18,6 +19,10 @@ import {
 const requireRecord = createRequireRecord("record", "expected-label-record");
 const METADATA_URL = "https://models.opencode.ai/api.json";
 const MODELS_URL = "https://opencode.ai/zen/v1/models";
+function prepareModel(modelId: string, fetchGuard: typeof ssrfRuntime.fetchWithSsrFGuard) {
+  vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockImplementation(fetchGuard);
+  return prepareOpencodeZenModel({ modelId });
+}
 const OFFLINE_MODEL_IDS = [
   "claude-opus-5",
   "gpt-5.6-sol",
@@ -524,7 +529,7 @@ describe("opencode provider plugin", () => {
       metadata: [{ id: "refreshed-model-fixture" }],
       advertised: [],
     });
-    await prepareOpencodeZenModel({ modelId: "refreshed-model-fixture", fetchGuard });
+    await prepareModel("refreshed-model-fixture", fetchGuard);
     expect(
       provider.resolveDynamicModel?.({ modelId: "refreshed-model-fixture" } as never),
     ).toMatchObject({
@@ -533,25 +538,19 @@ describe("opencode provider plugin", () => {
 
     clearLiveCatalogCacheForTests();
     const removedFetchGuard = createCatalogFetchGuard({ metadata: [], advertised: [] });
-    await prepareOpencodeZenModel({
-      modelId: "refreshed-model-fixture",
-      fetchGuard: removedFetchGuard,
-    });
+    await prepareModel("refreshed-model-fixture", removedFetchGuard);
     expect(
       provider.resolveDynamicModel?.({ modelId: "refreshed-model-fixture" } as never),
     ).toBeUndefined();
 
     clearLiveCatalogCacheForTests();
-    await prepareOpencodeZenModel({ modelId: "refreshed-model-fixture", fetchGuard });
+    await prepareModel("refreshed-model-fixture", fetchGuard);
     clearLiveCatalogCacheForTests();
     const unsupportedFetchGuard = createCatalogFetchGuard({
       metadata: [{ id: "refreshed-model-fixture", npm: "@untrusted/unknown" }],
       advertised: [],
     });
-    await prepareOpencodeZenModel({
-      modelId: "refreshed-model-fixture",
-      fetchGuard: unsupportedFetchGuard,
-    });
+    await prepareModel("refreshed-model-fixture", unsupportedFetchGuard);
     expect(
       provider.resolveDynamicModel?.({ modelId: "refreshed-model-fixture" } as never),
     ).toBeUndefined();
@@ -632,10 +631,7 @@ describe("opencode provider plugin", () => {
         });
       } finally {
         clearLiveCatalogCacheForTests();
-        await prepareOpencodeZenModel({
-          modelId: retiredId,
-          fetchGuard: createCatalogFetchGuard({ metadata: [], advertised: [] }),
-        });
+        await prepareModel(retiredId, createCatalogFetchGuard({ metadata: [], advertised: [] }));
         clearLiveCatalogCacheForTests();
       }
     },

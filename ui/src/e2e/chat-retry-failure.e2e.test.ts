@@ -159,10 +159,14 @@ suite.define(() => {
           retryAt: now + 8_000,
         },
       });
-      // Agent events publish through the presentation owner’s animation frame.
-      await page.clock.runFor(32);
       const status = page.locator(".chat-working-indicator__status");
-      await expect.poll(() => status.textContent()).toContain("Retrying in 8s");
+      // The first live event can load its owner before scheduling the presentation frame.
+      await expect
+        .poll(async () => {
+          await page.clock.runFor(32);
+          return status.textContent();
+        })
+        .toContain("Retrying in 8s");
       expect(await page.locator(".chat-run-failure, .chat-error").count()).toBe(0);
       expect(await status.locator(".chat-working-indicator__elapsed").count()).toBe(1);
       await page.clock.runFor(8_000);

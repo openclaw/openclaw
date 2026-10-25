@@ -20,6 +20,11 @@ import {
 import { resolveNostrAccount } from "./types.js";
 
 const npub = nip19.npubEncode(TEST_HEX_PUBLIC_KEY);
+const setupInput = (privateKey: string) => ({
+  cfg: {},
+  accountId: "default",
+  input: { privateKey },
+});
 const secretCfg: OpenClawConfig = {
   channels: {
     nostr: {
@@ -186,23 +191,13 @@ describe("nostr setup", () => {
   });
 
   it("uses the configured setup default when accountId is omitted", () => {
-    expect(
-      nostrPlugin.setupContract?.resolveAccountId?.({
-        cfg: createConfiguredNostrCfg({ defaultAccount: "work" }),
-        input: {},
-      }),
-    ).toBe("work");
+    const cfg = createConfiguredNostrCfg({ defaultAccount: "work" });
+    expect(nostrPlugin.setupContract?.resolveAccountId?.({ cfg, input: {} })).toBe("work");
   });
 
   it("accepts uppercase bech32 private keys in lightweight setup", () => {
     const privateKey = nip19.nsecEncode(Buffer.from(TEST_HEX_PRIVATE_KEY, "hex")).toUpperCase();
-    expect(
-      nostrSetupPlugin.setupContract?.validateInput?.({
-        cfg: {},
-        accountId: "default",
-        input: { privateKey },
-      }),
-    ).toBeNull();
+    expect(nostrSetupPlugin.setupContract?.validateInput?.(setupInput(privateKey))).toBeNull();
   });
 
   it.each([
@@ -210,7 +205,7 @@ describe("nostr setup", () => {
     ["wrong payload length", nip19.nsecEncode(new Uint8Array(31))],
     ["curve-order scalar", "fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141"],
   ])("rejects %s across setup surfaces", (_label, privateKey) => {
-    const input = { cfg: {}, accountId: "default", input: { privateKey } };
+    const input = setupInput(privateKey);
     const error = "Nostr private key must be valid nsec or 64-character hex.";
     expect(nostrSetupContract.validateInput?.(input)).toBe(error);
     expect(nostrSetupPlugin.setupContract?.validateInput?.(input)).toBe(error);

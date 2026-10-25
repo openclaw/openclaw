@@ -192,7 +192,7 @@ describe("github-copilot runtime auth", () => {
       await expect(authenticate(fetchImpl)).rejects.toMatchObject({
         name: "CopilotRuntimeAuthError",
         reason: "timeout",
-        timeoutMs: 30_000,
+        message: "Copilot authentication failed: timed out after 30000ms",
       });
     } finally {
       timeoutSpy.mockRestore();
@@ -384,6 +384,8 @@ describe("fetchCopilotModelCatalog", () => {
       {
         id: "gpt-5.5",
         name: "GPT-5.5",
+        // No vendor in this fixture: the bundled row for this exact id declares the family.
+        family: "openai",
         api: "openai-responses",
         reasoning: true,
         input: ["text", "image"],
@@ -505,6 +507,33 @@ describe("fetchCopilotModelCatalog", () => {
     });
   });
 
+  it("names a listed model's family from its vendor, else from the catalog row", async () => {
+    const listed = (id: string, vendor?: string) => ({
+      id,
+      ...(vendor ? { vendor } : {}),
+      capabilities: { type: "chat" },
+    });
+    const models = await fetchSelectionFixture([
+      listed("claude-opus-5.5", "Anthropic"),
+      listed("gpt-5-mini", "Azure OpenAI"),
+      listed("kimi-k3", "Moonshot AI"),
+      // No vendor: the bundled catalog row for this exact id declares its family.
+      listed("gemini-3.1-pro-preview"),
+      // An unknown vendor and an id OpenClaw has no row for: never inferred from the name.
+      listed("claude-lookalike-9", "Acme Labs"),
+      listed("gpt-unlisted"),
+    ]);
+
+    expect(Object.fromEntries(models.map(({ id, family }) => [id, family]))).toEqual({
+      "claude-opus-5.5": "anthropic",
+      "gpt-5-mini": "openai",
+      "kimi-k3": "moonshot",
+      "gemini-3.1-pro-preview": "google",
+      "claude-lookalike-9": undefined,
+      "gpt-unlisted": undefined,
+    });
+  });
+
   it("sends adaptive thinking for a listed Claude id OpenClaw does not know", async () => {
     const [listed] = await fetchSelectionFixture([
       {
@@ -561,45 +590,33 @@ describe("fetchCopilotModelCatalog", () => {
     },
   );
 
-  it.each(["timeout", "caller"] as const)(
-    "cancels pending catalog transport on %s abort",
-    async (source) => {
-      vi.useFakeTimers();
-      const started = Promise.withResolvers<void>();
-      const controller = new AbortController();
-      const fetchImpl = vi.fn<typeof fetch>(async (_url, init) => {
-        const signal = expectDefined(init?.signal, "catalog request signal");
-        return await new Promise<Response>((_resolve, reject) => {
-          signal.addEventListener(
-            "abort",
-            () =>
-              reject(
-                signal.reason instanceof Error
-                  ? signal.reason
-                  : new Error("Expected catalog abort to carry an Error"),
-              ),
-            { once: true },
-          );
-          started.resolve();
-        });
+  it("cancels pending catalog transport on timeout", async () => {
+    vi.useFakeTimers();
+    const started = Promise.withResolvers<void>();
+    const fetchImpl = vi.fn<typeof fetch>(async (_url, init) => {
+      const signal = expectDefined(init?.signal, "catalog request signal");
+      return await new Promise<Response>((_resolve, reject) => {
+        signal.addEventListener(
+          "abort",
+          () =>
+            reject(
+              signal.reason instanceof Error
+                ? signal.reason
+                : new Error("Expected catalog abort to carry an Error"),
+            ),
+          { once: true },
+        );
+        started.resolve();
       });
-      const pending = fetchCatalogWithFetch(
-        fetchImpl,
-        source === "caller" ? { signal: controller.signal } : {},
-      );
-      const rejected = expect(pending).rejects.toMatchObject({ name: "AbortError" });
-      await started.promise;
-      if (source === "timeout") {
-        await vi.advanceTimersByTimeAsync(COPILOT_MODELS_LIST_DEFAULT_TIMEOUT_MS);
-      } else {
-        expect(vi.getTimerCount()).toBe(0);
-        controller.abort();
-      }
-      await rejected;
-      expect(fetchImpl).toHaveBeenCalledOnce();
-      expect(vi.getTimerCount()).toBe(0);
-    },
-  );
+    });
+    const pending = fetchCatalogWithFetch(fetchImpl);
+    const rejected = expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    await started.promise;
+    await vi.advanceTimersByTimeAsync(COPILOT_MODELS_LIST_DEFAULT_TIMEOUT_MS);
+    await rejected;
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
 
   it("cancels stalled non-2xx response bodies before the caller falls back", async () => {
     const cancel = vi.fn();

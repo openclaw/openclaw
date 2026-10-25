@@ -121,7 +121,7 @@ describe("async config plugin validation", () => {
           ? validateConfigObjectWithStrictFactsAsync
           : validateConfigObjectWithPluginsAsync;
       const result = await validateCore(
-        { gateway: { mode: "local" }, agents: { defaults: { heartbeat: { target: "none" } } } },
+        { gateway: { mode: "local" }, agents: { defaults: { timeoutSeconds: 30 } } },
         {
           env,
           loadPluginMetadataSnapshotAsync: async () => {
@@ -131,7 +131,7 @@ describe("async config plugin validation", () => {
       );
       expect(result).toMatchObject({
         ok: true,
-        config: { gateway: { mode: "local" } },
+        config: { gateway: { mode: "local" }, agents: { defaults: { timeoutSeconds: 30 } } },
         warnings: [],
         ...(mode === "strict" ? { strictIssues: [] } : {}),
       });

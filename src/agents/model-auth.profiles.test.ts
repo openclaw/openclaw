@@ -8,7 +8,6 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import type { ModelProviderConfig, OpenClawConfig } from "../config/types.js";
-import { snapshotReaderSlot } from "../plugins/plugin-metadata-snapshot-readers.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -34,7 +33,6 @@ import type { AuthProfileCredential, OAuthCredential } from "./auth-profiles/typ
 import { upsertAuthProfileWithLockOrThrow } from "./auth-profiles/upsert-with-lock.js";
 import { resolveInlineProviderApiKeyUsageId } from "./auth-profiles/usage.js";
 import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
-import { resolveProviderEnvAuthLookupMaps } from "./model-auth-env-vars.js";
 import {
   configFor,
   configForProviders,
@@ -81,16 +79,16 @@ vi.mock("../plugins/setup-registry.js", () => ({
   },
 }));
 
+const providerEnvCandidates = vi.hoisted(() => ({
+  anthropic: ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
+  "google-vertex": ["GOOGLE_CLOUD_API_KEY"],
+  "demo-local": ["DEMO_LOCAL_API_KEY"],
+  openai: ["OPENAI_API_KEY"],
+  zai: ["ZAI_API_KEY", "Z_AI_API_KEY"],
+}));
+
 // mock-isolation: Auth precedence fixtures define every provider credential source.
 vi.mock("./model-auth-env-vars.js", () => {
-  const candidates = {
-    anthropic: ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
-    "google-vertex": ["GOOGLE_CLOUD_API_KEY"],
-    "demo-local": ["DEMO_LOCAL_API_KEY"],
-    openai: ["OPENAI_API_KEY"],
-    zai: ["ZAI_API_KEY", "Z_AI_API_KEY"],
-  } as const;
-
   const authEvidenceMap = {
     "google-vertex": [
       {
@@ -107,12 +105,20 @@ vi.mock("./model-auth-env-vars.js", () => {
   return {
     resolveProviderEnvAuthLookupMaps: () => ({
       aliasMap: {},
-      envCandidateMap: candidates,
+      envCandidateMap: providerEnvCandidates,
       authEvidenceMap,
       setupProviderFallbackRefs: ["anthropic-vertex"],
     }),
   };
 });
+
+vi.mock("../plugins/plugin-metadata-snapshot-required.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/plugin-metadata-snapshot-required.js")>()),
+  // Marker caches must read the same fixture policy as auth lookup from their first use.
+  listKnownProviderAuthEnvVarNamesRuntime: () => [
+    ...new Set(Object.values(providerEnvCandidates).flat()),
+  ],
+}));
 
 // mock-isolation: Profile and environment precedence fixtures define every credential source, excluding live provider overlays.
 vi.mock("../plugins/provider-external-auth-core.js", () => ({
@@ -154,14 +160,7 @@ const cliCredentialMocks = vi.hoisted(() => ({
 
 vi.mock("./cli-credentials.js", () => cliCredentialMocks);
 
-let previousEnvNameReader: typeof snapshotReaderSlot.listKnownProviderAuthEnvVarNamesCore;
 beforeEach(() => {
-  previousEnvNameReader = snapshotReaderSlot.listKnownProviderAuthEnvVarNamesCore;
-  // Marker classification must use the same invented provider policy as auth lookup.
-  const { envCandidateMap } = resolveProviderEnvAuthLookupMaps();
-  snapshotReaderSlot.listKnownProviderAuthEnvVarNamesCore = () => [
-    ...new Set(Object.values(envCandidateMap).flat()),
-  ];
   prepareSharedAuthStoreOwnershipForNative();
   clearRuntimeAuthProfileStoreSnapshots();
   cliCredentialMocks.readCodexCliCredentialsCached.mockReset().mockReturnValue(null);
@@ -169,7 +168,6 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  snapshotReaderSlot.listKnownProviderAuthEnvVarNamesCore = previousEnvNameReader;
   clearRuntimeAuthProfileStoreSnapshots();
   clearRuntimeConfigSnapshot();
 });

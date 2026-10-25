@@ -140,6 +140,7 @@ type AgentRunInputContext = Pick<
   | "ownerNumbers"
   | "inputProvenance"
   | "extraSystemPrompt"
+  | "extraSystemPromptTurnContext"
 > & {
   /** Canonical agent workspace used for bootstrap files when execution runs elsewhere. */
   bootstrapWorkspaceDir?: string;
@@ -155,7 +156,6 @@ type AgentRunInputContext = Pick<
   /** User-visible prompt body to submit and persist; runtime context travels separately. */
   transcriptPrompt?: string;
   currentInboundEventKind?: InboundEventKind;
-  heartbeatEventQueueSessionKey?: string;
   images?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];
   /** Ordered facts represented by attachment text in the current prompt. */

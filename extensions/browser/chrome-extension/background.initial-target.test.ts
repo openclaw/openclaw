@@ -7,6 +7,7 @@ import {
   createTab,
   deferredScope,
   expectType,
+  expectResult,
   expectUnused,
   relayConfig,
   runtime,
@@ -86,7 +87,7 @@ describe("created initial target in selected mode", () => {
     expectUnused(h.tabsRemove);
   });
   it.each(["Chrome query", "completed policy read"])(
-    "keeps a blank-first CDP target alive when an earlier %s resolves after creation",
+    "survives a stale %s after blank-target creation",
     async (phase) => {
       let inspecting = false;
       let holdSnapshot = false;
@@ -118,7 +119,7 @@ describe("created initial target in selected mode", () => {
       const bridge = new ExtensionRelayBridge();
       connectExtension(bridge, h);
       const client = connectCdpClient(bridge);
-      const request: typeof client.requestResult = (...args) => client.requestResult(...args);
+      const request = client.requestResult;
       try {
         await request("Target.setAutoAttach", { autoAttach: true, flatten: true });
         const staleTabs = await h.tabsQuery();
@@ -176,7 +177,7 @@ describe("created initial target in selected mode", () => {
     },
   );
   it.each(["matching", "different"])(
-    "checks a lagging initial-blank snapshot against the native commit with a %s pending URL",
+    "checks a lagging blank snapshot against a %s pending URL",
     async (pending) => {
       const h = await createHarness(mode);
       await h.command(createTab());
@@ -203,7 +204,7 @@ describe("created initial target in selected mode", () => {
         expectType(response, "error");
         return;
       }
-      expect(response, JSON.stringify(response)).toMatchObject({ type: "result", result });
+      expectResult(response, result);
       h.updateTab(100, { title: "Trigger discovery" });
       await vi.waitFor(() =>
         expect(h.frames().findLast((frame) => frame.type === "tabs")?.tabs).toContainEqual(
@@ -240,26 +241,23 @@ describe("created initial target in selected mode", () => {
     expectType(await initializing.result);
     expectType(await h.command({ type: "closeTab", tabId: 101 }));
   });
-  it.each([true, false])(
-    "handles late self-group naming with prior revocation: %s",
-    async (revoked) => {
-      const h = await createHarness(mode);
-      if (!revoked) {
-        h.tabGroupsUpdate.mockResolvedValueOnce(undefined);
-      }
-      const creating = await heldCreation(h, revoked ? "group" : "attach");
-      if (revoked) {
-        await runtime(h, "toggleTabAccess", { tabId: 101, accessMode: mode, grant: false });
-      }
-      h.tabGroupUpdatedListener?.({ id: 7, title: "OpenClaw" });
-      creating.finish();
-      expectType(await creating.result, revoked ? "error" : "result");
-      expectUnused(h.tabsRemove);
-      if (revoked) {
-        expectUnused(h.debuggerAttach);
-      }
-    },
-  );
+  it.each([true, false])("handles late self-group naming after revocation: %s", async (revoked) => {
+    const h = await createHarness(mode);
+    if (!revoked) {
+      h.tabGroupsUpdate.mockResolvedValueOnce(undefined);
+    }
+    const creating = await heldCreation(h, revoked ? "group" : "attach");
+    if (revoked) {
+      await runtime(h, "toggleTabAccess", { tabId: 101, accessMode: mode, grant: false });
+    }
+    h.tabGroupUpdatedListener?.({ id: 7, title: "OpenClaw" });
+    creating.finish();
+    expectType(await creating.result, revoked ? "error" : "result");
+    expectUnused(h.tabsRemove);
+    if (revoked) {
+      expectUnused(h.debuggerAttach);
+    }
+  });
   it("keeps Pause/Allow or selected-group regrant coherent for the same initial document", async () => {
     const h = await createHarness(mode);
     await h.command(createTab());
@@ -277,11 +275,7 @@ describe("created initial target in selected mode", () => {
       const creating = await heldCreation(h);
       let mutation: Promise<unknown> | undefined;
       if (revocation === "pause") {
-        mutation = runtime(h, "toggleTabAccess", {
-          tabId: 101,
-          accessMode: mode,
-          grant: false,
-        });
+        mutation = runtime(h, "toggleTabAccess", { tabId: 101, accessMode: mode, grant: false });
         await vi.waitFor(async () =>
           expect(await runtime(h, "getTabAccess", { tabId: 101 })).toMatchObject({
             accessible: false,
@@ -352,7 +346,7 @@ describe("navigation command authority", () => {
     { mode: "selected" as const, revocation: "replacement" },
     { mode: "selected" as const, revocation: "file" },
   ] as const)(
-    "rejects navigation completion after $revocation in $mode even if an ordinary document returns",
+    "rejects navigation after $revocation in $mode despite a later ordinary document",
     async ({ mode, revocation }) => {
       const h = await createHarness(mode);
       await h.command(createTab());

@@ -362,6 +362,7 @@ export class SqliteDatabaseAdmissionRegistry {
   private exchangeCursor = createSqliteDatabaseAdmissionCursor();
   private readonly locations = new Map<string, string>();
   private readonly published = new Map<string, PublishedAdmission>();
+  private readonly scopeSweeps = new WeakMap<Admission, number>();
   readonly descriptors = new Map<
     string,
     { descriptor: number; facts: Map<string, AdmissionFact> }
@@ -424,6 +425,7 @@ export class SqliteDatabaseAdmissionRegistry {
   }
 
   releaseWorker(owner: number): void {
+    const changedRecords = new Set<Admission>();
     for (const record of this.records.values()) {
       const references = owner > 0 ? record.references.get(owner) : undefined;
       if (!references) {
@@ -432,8 +434,11 @@ export class SqliteDatabaseAdmissionRegistry {
       // Zero permits a live worker to reopen; negative cells cannot be revived by old snapshots.
       Atomics.store(new Int32Array(references), 0, -1);
       this.retireUnreferenced(record);
+      changedRecords.add(record);
     }
-    this.publish();
+    if (changedRecords.size > 0) {
+      this.publish(changedRecords);
+    }
   }
 
   observeLocation(location: string, identity: string): void {
@@ -550,12 +555,18 @@ export class SqliteDatabaseAdmissionRegistry {
         }
       }
       const previous = this.published.get(current.identity);
-      // Discovery already knows its keys; general publication also sweeps remote retirements.
+      const scopeRevision = readSqliteDatabaseGeneration(current, "writeScopeRevision");
+      const keys = previous && selected === current ? scopeKeys : undefined;
+      const sweep = keys === undefined && this.scopeSweeps.get(current) !== scopeRevision;
       const writeScopes = snapshotWriteScopes(
         current.writeScopes,
         previous?.writeScopes,
-        previous && selected === current ? scopeKeys : undefined,
+        keys ?? (sweep ? undefined : []),
       );
+      // Keyed publications can acknowledge a revision without sweeping remote retirements.
+      if (sweep) {
+        this.scopeSweeps.set(current, scopeRevision);
+      }
       changed ||= writeScopes !== previous?.writeScopes;
       if (!changed) {
         continue;
@@ -721,6 +732,8 @@ export class SqliteDatabaseAdmissionRegistry {
         if (threadId === 0) {
           advanceSqliteDatabaseGeneration(record, "writeScopeRevision");
         }
+        // Workers can import a new scope after already observing its shared revision.
+        this.scopeSweeps.delete(record);
         retainSqliteDatabaseWriteScope(record, key, revision);
         changed = true;
       }
@@ -752,8 +765,7 @@ export class SqliteDatabaseAdmissionRegistry {
     }
     if (changedRecords.size > 0) {
       this.publish(changedRecords);
-      return true;
     }
-    return false;
+    return changedRecords.size > 0;
   }
 }

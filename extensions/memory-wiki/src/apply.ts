@@ -14,6 +14,8 @@ import {
 import { compileMemoryWikiVault, type CompileMemoryWikiResult } from "./compile.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import {
+  HUMAN_START_MARKER,
+  HUMAN_END_MARKER,
   parseWikiMarkdown,
   renderWikiMarkdown,
   slugifyWikiPageStem,
@@ -28,8 +30,6 @@ import { initializeMemoryWikiVault } from "./vault.js";
 
 const GENERATED_START = "<!-- openclaw:wiki:generated:start -->";
 const GENERATED_END = "<!-- openclaw:wiki:generated:end -->";
-const HUMAN_START = "<!-- openclaw:human:start -->";
-const HUMAN_END = "<!-- openclaw:human:end -->";
 
 type MemoryWikiMutationMetadata = {
   sourceIds?: string[];
@@ -148,12 +148,12 @@ function normalizeUniqueStrings(values: string[] | undefined): string[] | undefi
 }
 
 function ensureHumanNotesBlock(body: string): string {
-  if (body.includes(HUMAN_START) && body.includes(HUMAN_END)) {
+  if (body.includes(HUMAN_START_MARKER) && body.includes(HUMAN_END_MARKER)) {
     return body;
   }
   const trimmed = body.trimEnd();
   const prefix = trimmed.length > 0 ? `${trimmed}\n\n` : "";
-  return `${prefix}## Notes\n${HUMAN_START}\n${HUMAN_END}\n`;
+  return `${prefix}## Notes\n${HUMAN_START_MARKER}\n${HUMAN_END_MARKER}\n`;
 }
 
 function buildSynthesisBody(params: {
@@ -163,7 +163,7 @@ function buildSynthesisBody(params: {
 }): string {
   const base = params.originalBody?.trim().length
     ? params.originalBody
-    : `# ${params.title}\n\n## Notes\n${HUMAN_START}\n${HUMAN_END}\n`;
+    : `# ${params.title}\n\n## Notes\n${HUMAN_START_MARKER}\n${HUMAN_END_MARKER}\n`;
   const withGenerated = replaceManagedMarkdownBlock({
     original: base,
     heading: "## Summary",

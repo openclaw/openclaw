@@ -12,17 +12,13 @@ import { prepareSessionGenerationFacts } from "../../../config/sessions/session-
 import { runWithGatewayIndependentRootWorkAdmission } from "../../../process/gateway-work-admission.js";
 import { runOutsideAsyncWorkScope } from "../../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
-import * as writerQueue from "../../../shared/store-writer-queue.js";
-import type {
-  AgentDatabaseExecutionScope,
-  OpenClawAgentDatabaseExecution,
-} from "../../../state/openclaw-agent-execution-contract.js";
+import type { OpenClawAgentDatabaseExecution } from "../../../state/openclaw-agent-execution-contract.js";
 import * as executionOwner from "../../../state/openclaw-agent-execution.js";
-import { SQLITE_SESSION_WRITER_QUEUES } from "../../../state/openclaw-agent-write-admission-state.js";
 import {
   prepareSubagentKillSession,
   type SubagentKillSession,
 } from "./subagent-control-session.js";
+import { holdControlSessionPublication } from "./subagent-control.fixtures.test-support.js";
 import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
 
 const fixture = useSubagentControlFixture();
@@ -39,15 +35,11 @@ it.for(["unrelated", "same session"] as const)(
     const revision = "warm-preparation-revision";
     const peerKey = "agent:main:subagent:unrelated-publication";
     const peerId = "unrelated-publication-session";
-    const producerScope = new AsyncLocalStorage<boolean>();
     const operationScope = new AsyncLocalStorage<"preparation" | "publication">();
-    const nativeReplyHeld = createDeferredCore();
-    const releaseNativeReply = createDeferredCore();
     const preparationQueued = createDeferredCore();
     const publicationQueued = createDeferredCore();
     const generationPublicationPending = createDeferredCore();
-    let nativeReplyPending = false;
-    let producerPath: string | undefined;
+    let heldPublication: ReturnType<typeof holdControlSessionPublication> | undefined;
     let initial: SubagentKillSession | undefined;
     let prepared: SubagentKillSession | undefined;
     let execution: OpenClawAgentDatabaseExecution | undefined;
@@ -55,8 +47,7 @@ it.for(["unrelated", "same session"] as const)(
     let producer: Promise<void> | undefined;
     let preparation: Promise<SubagentKillSession> | undefined;
     let publication: Promise<void> | undefined;
-    const release = () => releaseNativeReply.resolve();
-    signal.addEventListener("abort", release, { once: true });
+    const release = () => heldPublication?.release();
 
     try {
       const storePath = await writeSubagentSessionEntry({
@@ -104,67 +95,14 @@ it.for(["unrelated", "same session"] as const)(
         },
       );
 
-      const runQueued = writerQueue.runQueuedStoreWrite;
-      vi.spyOn(writerQueue, "runQueuedStoreWrite").mockImplementation((params) => {
-        if (params.queues !== SQLITE_SESSION_WRITER_QUEUES) {
-          return runQueued(params);
-        }
-        if (producerScope.getStore()) {
-          producerPath ??= params.storePath;
-        }
-        const observing = operationScope.getStore();
-        const before =
-          observing && nativeReplyPending && params.storePath === producerPath
-            ? new Set(params.queues.get(params.storePath)?.pending ?? [])
-            : undefined;
-        const result = runQueued(params);
-        if (
-          before &&
-          params.queues.get(params.storePath)?.pending.some((entry) => !before.has(entry))
-        ) {
-          (observing === "preparation" ? preparationQueued : publicationQueued).resolve();
-        }
-        return result;
+      heldPublication = holdControlSessionPublication({
+        signal,
+        consumerScope: operationScope,
+        reserveBeforeReply: false,
+        onJoined: (observing) =>
+          (observing === "preparation" ? preparationQueued : publicationQueued).resolve(),
       });
-      const wrapExecution = (borrowed: OpenClawAgentDatabaseExecution) => {
-        if (!producerScope.getStore()) {
-          return borrowed;
-        }
-        const runExisting: typeof borrowed.runExisting = (source, operation, options) =>
-          borrowed.runExisting(
-            source,
-            (scope) => {
-              const wrapped: AgentDatabaseExecutionScope = {
-                async execute(command, commandOptions) {
-                  const value = await scope.execute(command, commandOptions);
-                  if (command.type === "session.entries.replace" && !nativeReplyPending) {
-                    // The real write has replied; its owner still retains publication custody.
-                    nativeReplyPending = true;
-                    nativeReplyHeld.resolve();
-                    await releaseNativeReply.promise;
-                  }
-                  return value;
-                },
-              };
-              return operation(wrapped);
-            },
-            options,
-          );
-        return new Proxy(borrowed, {
-          get(original, key, receiver) {
-            return key === "runExisting" ? runExisting : Reflect.get(original, key, receiver);
-          },
-        });
-      };
-      const captureExecution = executionOwner.captureOpenClawAgentDatabaseExecution;
-      vi.spyOn(executionOwner, "captureOpenClawAgentDatabaseExecution").mockImplementation(
-        (...args) => wrapExecution(captureExecution(...args)),
-      );
-      const capturePreparation = executionOwner.captureOpenClawAgentDatabasePreparationExecution;
-      vi.spyOn(
-        executionOwner,
-        "captureOpenClawAgentDatabasePreparationExecution",
-      ).mockImplementation((...args) => wrapExecution(capturePreparation(...args)));
+      const { producerScope, nativeHeld } = heldPublication;
       producer = runOutsideAsyncWorkScope(() =>
         runWithGatewayIndependentRootWorkAdmission(
           () =>
@@ -195,11 +133,7 @@ it.for(["unrelated", "same session"] as const)(
         ),
       );
       await withinTest(
-        awaitGateBeforeSettlement(
-          nativeReplyHeld.promise,
-          producer,
-          "Writer publication was not held",
-        ),
+        awaitGateBeforeSettlement(nativeHeld.promise, producer, "Writer publication was not held"),
         signal,
       );
       // Both the retained native incarnation and freshly read A facts are valid while B's
@@ -301,8 +235,7 @@ it.for(["unrelated", "same session"] as const)(
       await prepared?.release();
       await initial?.release();
       await execution?.release();
-      signal.removeEventListener("abort", release);
-      producerScope.disable();
+      heldPublication?.dispose();
       operationScope.disable();
     }
   },

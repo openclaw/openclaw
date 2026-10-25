@@ -3,6 +3,7 @@ import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-su
 import type { TemplateContext } from "../templating.js";
 import { setupExecutionSuite } from "./agent-runner-execution-suite.test-support.js";
 import {
+  createRunResult,
   createFollowupRun,
   initialFallbackAttemptOptions,
   requireRecord,
@@ -37,7 +38,7 @@ function selectFallback(provider: string, model: string) {
 function opaqueCliTurn(chatType: "group" | "direct", currentChatType?: string) {
   state.isCliProviderMock.mockReturnValue(true);
   selectFallback("codex-cli", "gpt-5.4");
-  state.runCliAgentMock.mockResolvedValueOnce({ payloads: [{ text: "final" }], meta: {} });
+  state.runCliAgentMock.mockResolvedValueOnce(createRunResult("final"));
   const followupRun = createFollowupRun();
   Object.assign(followupRun.run, {
     agentId: "main",
@@ -59,7 +60,7 @@ function opaqueCliTurn(chatType: "group" | "direct", currentChatType?: string) {
   };
 }
 
-it("prepares OpenAI thinking capability for the concrete Codex runtime", async () => {
+it("prepares OpenAI thinking and forwards turn context for the concrete Codex runtime", async () => {
   const provider = "openai",
     model = "gpt-5.6-luna",
     agentRuntime = "codex";
@@ -80,8 +81,12 @@ it("prepares OpenAI thinking capability for the concrete Codex runtime", async (
   };
   loadProviderScopedThinkingCatalog.mockResolvedValue([catalogEntry]);
   selectFallback(provider, model);
-  state.runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [{ text: "final" }], meta: {} });
-  const followupRun = createFollowupRun();
+  state.runEmbeddedAgentMock.mockResolvedValueOnce(createRunResult("final"));
+  const turnContext = { start: 0, text: "Current conversation." };
+  const followupRun = createFollowupRun({
+    extraSystemPrompt: "Current conversation.\n\nPersistent policy.",
+    extraSystemPromptTurnContext: turnContext,
+  });
   followupRun.run.provider = provider;
   followupRun.run.model = model;
   followupRun.run.thinkLevel = thinkLevel;
@@ -108,6 +113,8 @@ it("prepares OpenAI thinking capability for the concrete Codex runtime", async (
     forceCodeModeTools: true,
     toolsAllow: ["message"],
     modelThinkingCapability: { provider, modelId: model, agentRuntime, compat },
+    extraSystemPrompt: "Current conversation.\n\nPersistent policy.",
+    extraSystemPromptTurnContext: turnContext,
   });
   expect(loadProviderScopedThinkingCatalog).toHaveBeenCalledExactlyOnceWith(
     expect.objectContaining({ provider, model, agentRuntime: "codex" }),
@@ -141,10 +148,7 @@ it("does not pass CLI runtime overrides as embedded harness ids for fallback pro
   });
   state.isCliProviderMock.mockImplementation((provider: unknown) => provider === "claude-cli");
   selectFallback("openai", "gpt-5.4");
-  state.runEmbeddedAgentMock.mockResolvedValueOnce({
-    payloads: [{ text: "fallback" }],
-    meta: {},
-  });
+  state.runEmbeddedAgentMock.mockResolvedValueOnce(createRunResult("fallback"));
 
   const followupRun = createFollowupRun();
   followupRun.run.provider = "anthropic";
@@ -182,7 +186,7 @@ it("keeps plugin-owned CLI turns on the CLI path after observing that runtime", 
   });
   state.isCliProviderMock.mockImplementation((provider: unknown) => provider === "claude-cli");
   selectFallback("anthropic", "claude-sonnet-4-6");
-  state.runCliAgentMock.mockResolvedValueOnce({ payloads: [{ text: "continued" }], meta: {} });
+  state.runCliAgentMock.mockResolvedValueOnce(createRunResult("continued"));
   const followupRun = createFollowupRun();
   followupRun.run.provider = "anthropic";
   followupRun.run.model = "claude-sonnet-4-6";

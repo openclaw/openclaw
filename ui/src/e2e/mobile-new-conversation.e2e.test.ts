@@ -56,93 +56,13 @@ async function installScenario(page: Page, operatorScopes?: string[], team = fal
         key: "agent:research:current",
         kind: "direct",
         label: "Launch planning",
-        model: "demo-model",
-        modelProvider: "demo",
         updatedAt: 1791871200000,
-      },
-    ],
-    historyMessages: [
-      { role: "user", content: [{ type: "text", text: "Let's review the launch checklist." }] },
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "text",
-            text: "The release notes and design review are ready. What would you like to work on next?",
-          },
-        ],
       },
     ],
   });
 }
 
 suite.define(() => {
-  it("keeps creation in chat navigation and non-chat page headers", async () => {
-    await suite.withPage(mobile, async ({ page }) => {
-      const gateway = await installScenario(page);
-      const dir =
-        process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
-          ? createControlUiE2eArtifactDir("mobile-new-conversation-after")
-          : null;
-      const capture = async (name: string) => {
-        if (!dir) {
-          return;
-        }
-        const frame = await takeControlUiScreenshotFrame(
-          page,
-          page.locator(".shell"),
-          [page.locator(".chat-pane__header:visible, .header-new-session:visible").first()],
-          { animations: "disabled" },
-        );
-        await writeFile(path.join(dir, name + ".png"), frame.png);
-      };
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:research:current"));
-      await page.locator(".agent-chat__composer-combobox textarea").waitFor();
-      expect(await page.locator(".header-new-session").count()).toBe(0);
-      await capture("chat");
-      await navigationDrawerToggle(page).tap();
-      await waitForMobileSidebarDrawerOpen(page);
-      const create = page.getByRole("link", { name: "New conversation", exact: true });
-      await create.waitFor();
-      expect(await create.count()).toBe(1);
-      expect(await create.getAttribute("href")).toBe("/new?agent=research");
-      const box = await create.boundingBox();
-      expect(box).not.toBeNull();
-      expect(box!.x).toBeGreaterThanOrEqual(0);
-      expect(box!.x + box!.width).toBeLessThanOrEqual(390);
-      expect(await page.locator(".sidebar-rail .sidebar-new-session").isVisible()).toBe(true);
-      await create.tap();
-      await waitForControlUiRoute(page, { routeId: "new-session", search: "?agent=research" });
-      await page.locator(".new-session-page__message").waitFor();
-      expect(await page.locator(".topbar .header-new-session").count()).toBe(1);
-      await capture("topbar");
-      await page.goto(suite.server.baseUrl + "agents");
-      await waitForControlUiRoute(page, { routeId: "agents-home" });
-      expect(await page.locator(".topbar .header-new-session").isVisible()).toBe(true);
-      expect(await create.count()).toBe(1);
-      expect(await create.getAttribute("href")).toBe("/new?agent=research");
-      await create.focus();
-      await page.keyboard.press("Enter");
-      await waitForControlUiRoute(page, { routeId: "new-session" });
-      expect(new URL(page.url()).pathname + new URL(page.url()).search).toBe("/new?agent=research");
-      expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
-      if (dir) {
-        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:research:current"));
-        await page.locator(".agent-chat__composer-combobox textarea").waitFor();
-        await page.emulateMedia({ colorScheme: "light" });
-        await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("light");
-        await capture("chat-light");
-        await page.setViewportSize({ width: 1280, height: 800 });
-        const sidebar = page.locator("openclaw-app-sidebar .sidebar");
-        const frame = await takeControlUiScreenshotFrame(page, page.locator(".shell"), [sidebar], {
-          animations: "disabled",
-          elements: [sidebar],
-        });
-        await writeFile(path.join(dir, "rail-light.png"), frame.elements[0]!.png);
-      }
-    });
-  });
-
   it("keeps the mobile welcome with its composer across phone and keyboard viewports", async () => {
     await suite.withPage(mobile, async ({ page }) => {
       await installScenario(page, undefined, true);
@@ -254,7 +174,18 @@ suite.define(() => {
         )
         .waitFor();
       if (route === "new") {
+        await page.goto(suite.server.baseUrl + "sessions");
+        await waitForControlUiRoute(page, { routeId: "sessions" });
+        const create = page.getByRole("link", { name: "New conversation", exact: true });
+        expect(await page.locator(".topbar .header-new-session").isVisible()).toBe(true);
+        expect(await create.count()).toBe(1);
+        expect(await create.getAttribute("href")).toBe("/new?agent=research");
+        await create.focus();
+        await page.keyboard.press("Enter");
+        await waitForControlUiRoute(page, { routeId: "new-session", search: "?agent=research" });
         await page.locator(".new-session-page__message").fill(draft);
+      } else {
+        expect(await page.locator(".header-new-session").count()).toBe(0);
       }
       const dir =
         process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
@@ -280,6 +211,12 @@ suite.define(() => {
       await waitForMobileSidebarDrawerOpen(page);
       expect(await page.locator(".header-new-session:visible").count()).toBe(0);
       expect(await action.count()).toBe(1);
+      expect(await action.getAttribute("href")).toBe("/new?agent=research");
+      const box = await action.boundingBox();
+      expect(box).not.toBeNull();
+      expect(box!.x).toBeGreaterThanOrEqual(0);
+      expect(box!.x + box!.width).toBeLessThanOrEqual(390);
+      expect(await page.locator(".sidebar-rail .sidebar-new-session").isVisible()).toBe(true);
       if (route === "new") {
         // The drawer moves focus after rendering; Escape must not reach the departing text field.
         await page.locator(".shell-nav:focus, .shell-nav :focus").waitFor();
@@ -290,6 +227,7 @@ suite.define(() => {
       await waitForControlUiRoute(page, { routeId: "new-session", search: "?agent=research" });
       const composer = page.locator(".new-session-page__message");
       await composer.waitFor();
+      expect(await page.locator(".topbar .header-new-session").count()).toBe(1);
       if (route === "chat") {
         await expect
           .poll(() => composer.evaluate((element) => element === document.activeElement))

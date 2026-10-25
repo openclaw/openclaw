@@ -87,7 +87,7 @@ async function expectLocalSharedAuthScopesPreserved(
     });
     expect(res.ok, JSON.stringify(res)).toBe(true);
     expect(res.payload).toHaveProperty("auth.scopes", ["operator.admin"]);
-    expect((await rpcReq(ws, "set-heartbeats", { enabled: false })).ok).toBe(true);
+    expect((await rpcReq(ws, "exec.approvals.get", {})).ok).toBe(true);
   });
 }
 

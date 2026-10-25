@@ -42,15 +42,13 @@ type ToolUsePairingFrame = {
   failed: boolean;
 };
 
-type ToolCallOccurrenceQueue<T> = {
+/** Tracks repeated provider ids by occurrence instead of collapsing them into a set. */
+export function createToolCallOccurrenceQueue<T>(): {
   add: (id: string, occurrence: T) => void;
   claim: (id: string) => T | undefined;
   clear: () => void;
   readonly size: number;
-};
-
-/** Tracks repeated provider ids by occurrence instead of collapsing them into a set. */
-export function createToolCallOccurrenceQueue<T>(): ToolCallOccurrenceQueue<T> {
+} {
   const pendingById = new Map<string, T[]>();
   let pendingCount = 0;
   return {
@@ -133,6 +131,7 @@ export function makeMissingToolResult(params: {
   toolCallId: string;
   toolName?: string;
   text?: string;
+  timestamp?: number;
 }): ToolResultMessage {
   return {
     role: "toolResult",
@@ -141,7 +140,7 @@ export function makeMissingToolResult(params: {
     content: [{ type: "text", text: params.text ?? DEFAULT_MISSING_TOOL_RESULT_TEXT }],
     details: { [SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY]: true, reason: "missing_tool_result" },
     isError: true,
-    timestamp: Date.now(),
+    timestamp: params.timestamp ?? Date.now(),
   };
 }
 

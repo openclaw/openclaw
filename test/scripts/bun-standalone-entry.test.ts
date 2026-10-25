@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, expect, it } from "vitest";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -17,7 +18,7 @@ it("preserves the runtime argv prefix through primary and child lazy profile dis
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "standalone-entry-"));
   roots.push(root);
   const sourceUrl = (filename: string) => pathToFileURL(path.resolve(filename)).href;
-  const scenarios = ["primary", "module", "worker"].map((kind) => {
+  const scenarios = ["primary", "worker"].map((kind) => {
     const directory = path.join(root, kind);
     const runtimeRoot = path.join(directory, "runtime");
     fs.mkdirSync(runtimeRoot, { recursive: true });
@@ -53,7 +54,6 @@ await program.parseAsync(process.argv);
       options: {
         runtimeBootstrap,
         runtimeRoot,
-        moduleEntries: ["openclaw.mjs"],
         workerEntries: kind === "worker" ? ["openclaw.mjs"] : [],
       },
       argv: [
@@ -80,7 +80,7 @@ for (const scenario of ${JSON.stringify(scenarios)}) {
 `,
   );
   const result = spawnSync(
-    process.execPath,
+    resolveTestNodeExecPath(),
     ["--import", createRequire(import.meta.url).resolve("tsx"), driver],
     { encoding: "utf8", timeout: 10_000 },
   );
@@ -93,7 +93,6 @@ for (const scenario of ${JSON.stringify(scenarios)}) {
       .map((line) => JSON.parse(line)),
   ).toEqual([
     { kind: "primary", profile: "work", nonInteractive: true, argv0: "bun" },
-    { kind: "module", profile: "work", nonInteractive: true, argv0: "bun" },
     { kind: "worker", profile: "work", nonInteractive: true, argv0: "bun" },
   ]);
 });

@@ -40,6 +40,16 @@ format checks; remove them when touched. Identify replacement files by volume,
 inode, and birthtime with `fstat`, not SQL. Migration/repair owners publish new
 facts after their DDL; Doctor and explicit verification retain full checks.
 
+On Linux, a separate process, such as a CLI `agent exec` run while the Gateway
+holds the same agent database, reuses the Gateway's completed admission. The peer
+must hold a lease on the exact path, have finished admission, still match its
+recorded PID and start time, and carry the same lease provenance (boot, PID
+namespace, build, and file inode), so a file replaced at that path is checked again.
+Aliases, unfinished admissions, stale leases, and platforms without lease
+provenance still run the full check. The borrowing process never checked the file
+itself, so if it closes last it leaves the next opener to verify instead of writing
+a seal.
+
 Independent read-only subprocesses do not share the Gateway's writer invalidations.
 Their local admission facts retire at final native close, even while the pooled
 process remains alive. Canonical auth reads can reuse the owner's compact schema
@@ -197,14 +207,15 @@ owner and grant for the normal lease duration. A fence lasting longer than that
 duration produces a Doctor warning; a replaced owner still refuses settlement.
 Rollback releases the fence and restores ordinary expiry handling.
 
-| When                                                   | Check                                                                                                                                                                                      |
-| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Startup with a matching, recent clean-close seal       | Match checksum, schema identity, file metadata, and empty journals; reuse admitted facts without startup or post-ready scans                                                               |
-| Startup without a reusable seal                        | Run the normal full format, schema, canonical-index, integrity, and foreign-key validation                                                                                                 |
-| Same-process reopen or new worker                      | Reuse live file-bound facts or a matching seal; retain current ownership and durable quarantine-row checks                                                                                 |
-| Before a migration or ordinary same-version repair     | Run whole-database quick integrity, full integrity of affected tables, and existing foreign-key, role, schema, and index checks; `--full-integrity-check` requests full database integrity |
-| After a migration or repair                            | Verify changes and publish committed facts through the existing owner                                                                                                                      |
-| Explicit verification, Doctor recovery, and compaction | Retain full checks before accepting or rewriting the database; ordinary Doctor migrations use the migration policy above                                                                   |
+| When                                                   | Check                                                                                                                                                                                                                            |
+| ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Startup with a matching, recent clean-close seal       | Match checksum, schema identity, file metadata, and empty journals; reuse admitted facts without startup or post-ready scans                                                                                                     |
+| Startup without a reusable seal                        | Run the normal full format, schema, canonical-index, integrity, and foreign-key validation                                                                                                                                       |
+| Same-process reopen or new worker                      | Reuse live file-bound facts or a matching seal; retain current ownership and durable quarantine-row checks                                                                                                                       |
+| Another live process already admitted the same file    | On Linux, reuse that admission instead of a full scan when the peer's PID, start time, and lease provenance (including inode) still match; schema and index checks still run, and the borrower cannot publish a clean-close seal |
+| Before a migration or ordinary same-version repair     | Run whole-database quick integrity, full integrity of affected tables, and existing foreign-key, role, schema, and index checks; `--full-integrity-check` requests full database integrity                                       |
+| After a migration or repair                            | Verify changes and publish committed facts through the existing owner                                                                                                                                                            |
+| Explicit verification, Doctor recovery, and compaction | Retain full checks before accepting or rewriting the database; ordinary Doctor migrations use the migration policy above                                                                                                         |
 
 The migration default does not compare every untouched index with its table.
 An index/table mismatch outside the declared migration scope therefore needs
@@ -570,6 +581,14 @@ in one worker transaction. Read-only admission and bundled status reads use the
 retrieval worker without creating or migrating a missing database. The released
 synchronous status API retains a lazily opened diagnostic reader.
 
+Memory facts readers retain semantic-chunk presence and invalidated-source flags
+under the persisted `memory_index_state.revision`. Each read still obtains the
+revision, metadata, and vector rebuild marker in one statement; unchanged
+revisions skip the corpus scans on both SQLite and PostgreSQL. Corpus writers,
+including legacy embedding invalidation, advance the revision in the same
+transaction. Transactional reads bypass the cache so a rollback cannot publish
+speculative facts under a revision that a later commit reuses.
+
 If nested rollback or savepoint cleanup fails, the transaction owner preserves the original failure, discards staged state and post-commit observers, and closes the connection. Catching that failure cannot resume writes on the abandoned handle. A later operation must acquire a fresh connection through its database owner. Doctor plugin-state imports retain earlier committed batches; an aborted batch cannot commit its prefix. Ordinary row refusals that successfully roll back their savepoint still commit the successful prefix for resumable imports.
 
 The shared cache targets 64 handles, but live borrows, synchronous transactions, and incognito state are not evicted. After owners release them, the next new connection trims idle handles back to that target.
@@ -764,6 +783,17 @@ Operator `send` requests check admission before delivery even when they specify
 only an `agentId` and omit `sessionKey`. Pending preparation returns a retryable
 startup refusal. Failed inspection keeps refusing delivery with the recorded
 repair guidance after startup work settles.
+
+Deferred startup retries classified SQLite lock failures during opening or session
+migration up to four attempts with cancellable backoff. Each retry checks deletion
+status and the original database file identity again; migration retries retain the
+completed opening, and publication retries do not repeat migration. Corruption,
+incompatible schemas, changed file identities, and mixed cleanup failures remain
+terminal. If locks persist through the retry budget, the agent remains degraded
+with `database locked by another process` and guidance to close competing processes
+and restart the Gateway. There is no periodic or on-demand in-process admission
+retry after exhaustion; a new Gateway startup retries admission. No schema or
+configuration changes are required.
 
 Startup deletion-journal checks use at most eight concurrent reads, so releasing
 more than 128 agents from preparation readiness does not exhaust the shared
@@ -1030,6 +1060,12 @@ checkpoint clears the warning; a large WAL alone does not mean a checkpoint is
 blocked. File-size observation failures are recorded and logged separately from
 SQLite's completion result; they do not turn a completed checkpoint into a failure.
 
+Non-quiet checkpoint logs use the same warning threshold, including explicit and
+final-close checkpoints; a blocked checkpoint still returns an incomplete result.
+Best-effort incremental vacuum quietly skips writer contention before its
+transaction starts and retries on the next maintenance pass. Failures after
+transaction entry retain their diagnostics.
+
 Periodic maintenance yields before native work so the Gateway event loop can
 continue. After yielding, it rechecks the same database owner, physical file,
 and captured maintenance authority. Retirement cancels and joins pending work.
@@ -1222,6 +1258,12 @@ this repair. If startup cannot repair the indexes, stop the Gateway and run
 `openclaw doctor --fix` with the Node version that will run the Gateway, then
 restart it. Switching SQLite versions again may require another rebuild,
 without changing stored content or the database schema.
+
+Update rehearsal snapshots and update database backups do not repair these
+indexes. When every finding names a canonical, schema-validated FTS table, they
+copy the database unchanged and leave the rebuild to the runtime that admits it,
+because a check under the target SQLite can flag an index the previous runtime
+reads correctly. Such a check is not recorded as a full verification.
 
 <a id="downgrades-are-unsupported" />
 

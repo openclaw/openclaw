@@ -118,80 +118,8 @@ function splitGoogleTtsDialogue(
 function composeGoogleInteractionsSpeechStyle(
   parts: Array<string | undefined>,
 ): string | undefined {
-  const style = parts
-    .map((part) => normalizeOptionalString(part))
-    .filter((part): part is string => part !== undefined)
-    .join("\n\n");
+  const style = parts.filter((part): part is string => part !== undefined).join("\n\n");
   return style || undefined;
-}
-
-function buildGoogleInteractionsTtsBody(params: {
-  model: string;
-  text: string;
-  voiceName: string;
-  audioProfile?: string;
-  speakerName?: string;
-  speakers?: GoogleTtsDialogueSpeaker[];
-  personaPrompt?: string;
-}): Record<string, unknown> {
-  const dialogue = params.speakers
-    ? splitGoogleTtsDialogue(params.text, params.speakers)
-    : undefined;
-  let content: Array<Record<string, unknown>>;
-  if (dialogue) {
-    content = dialogue.map((turn) => {
-      const cast = params.speakers?.find((speaker) => speaker.speaker === turn.speaker);
-      const style = composeGoogleInteractionsSpeechStyle([
-        cast?.style,
-        params.audioProfile,
-        params.personaPrompt,
-      ]);
-      return {
-        type: "text",
-        text: turn.text,
-        annotations: [
-          { type: "speech_metadata", speaker: turn.speaker, ...(style ? { style } : {}) },
-        ],
-      };
-    });
-  } else {
-    const style = composeGoogleInteractionsSpeechStyle([params.audioProfile, params.personaPrompt]);
-    const speaker = normalizeOptionalString(params.speakerName);
-    const textBlock: Record<string, unknown> = { type: "text", text: params.text };
-    if (style || speaker) {
-      textBlock.annotations = [
-        { type: "speech_metadata", ...(speaker ? { speaker } : {}), ...(style ? { style } : {}) },
-      ];
-    }
-    content = [textBlock];
-  }
-  return {
-    model: params.model,
-    // Interactions stores requests by default (55 days paid / 1 day free); TTS is stateless.
-    store: false,
-    input: [{ type: "user_input", content }],
-    response_format: {
-      type: "audio",
-      mime_type: "audio/l16",
-      sample_rate: GOOGLE_TTS_SAMPLE_RATE,
-    },
-    generation_config: dialogue
-      ? {
-          speech_config: {
-            mode: "conversational",
-            speakers: params.speakers?.map((speaker) => ({
-              speaker: speaker.speaker,
-              voice: speaker.voice,
-            })),
-          },
-        }
-      : {
-          // Single-voice requests keep the array form. Google only accepts a per-speaker voice
-          // map for two-speaker dialogue (live probe 2026-09-28: one entry is rejected with
-          // HTTP 400), so a lone speaker label travels in speech_metadata.speaker.
-          speech_config: [{ voice: params.voiceName }],
-        },
-  };
 }
 
 const GOOGLE_TTS_CHANNELS = 1;
@@ -277,20 +205,6 @@ function wrapPcm16MonoToWav(pcm: Buffer, sampleRate = GOOGLE_TTS_SAMPLE_RATE): B
   header.writeUInt32LE(pcm.length, 40);
 
   return Buffer.concat([header, pcm]);
-}
-
-function extractOpenClawGoogleAudioProfileTranscript(text: string): string | undefined {
-  if (!isOpenClawGoogleAudioProfilePrompt(text)) {
-    return undefined;
-  }
-  // The wrapper emits the delimiter as its own line after a blank line and the transcript is
-  // always the last section, so the first structural delimiter wins. A later "### TRANSCRIPT"
-  // inside the spoken text is content, not structure.
-  const match = /\n\n### TRANSCRIPT(?:\n|$)/u.exec(text);
-  if (!match) {
-    return undefined;
-  }
-  return text.slice(match.index + match[0].length).trim() || undefined;
 }
 
 function stripWavContainerToPcm(audio: Buffer): Buffer {
@@ -435,19 +349,18 @@ async function synthesizeConfiguredGoogleTts(req: GoogleTtsSynthesisRequest): Pr
     personaPrompt: config.personaPrompt,
     timeoutMs: req.timeoutMs,
   };
+  assertSupportedGoogleTtsModel(params.model);
+  const interactions = isGoogleInteractionsTtsModel(params.model);
+  const dialogue = params.speakers
+    ? splitGoogleTtsDialogue(params.text, params.speakers)
+    : undefined;
+  if (!interactions && dialogue) {
+    throw new Error(
+      "Google TTS multi-speaker dialogue requires gemini-3.8-flash-tts or gemini-3.8-flash-lite-tts.",
+    );
+  }
   return retryAsync(
     async () => {
-      assertSupportedGoogleTtsModel(params.model);
-      const interactions = isGoogleInteractionsTtsModel(params.model);
-      if (
-        !interactions &&
-        params.speakers &&
-        splitGoogleTtsDialogue(params.text, params.speakers)
-      ) {
-        throw new Error(
-          "Google TTS multi-speaker dialogue requires gemini-3.8-flash-tts or gemini-3.8-flash-lite-tts.",
-        );
-      }
       const { assertOkOrThrowProviderError, postJsonRequest, readProviderJsonResponse } =
         await import("openclaw/plugin-sdk/provider-http");
       const { resolveGoogleGenerativeAiHttpRequestConfig } = await import("./http-request.js");
@@ -461,13 +374,78 @@ async function synthesizeConfiguredGoogleTts(req: GoogleTtsSynthesisRequest): Pr
           transport: "http",
         });
 
+      let interactionsBody: Record<string, unknown> | undefined;
+      if (interactions) {
+        let content: Array<Record<string, unknown>>;
+        if (dialogue) {
+          content = dialogue.map((turn) => {
+            const cast = params.speakers?.find((speaker) => speaker.speaker === turn.speaker);
+            const style = composeGoogleInteractionsSpeechStyle([
+              cast?.style,
+              params.audioProfile,
+              params.personaPrompt,
+            ]);
+            return {
+              type: "text",
+              text: turn.text,
+              annotations: [
+                { type: "speech_metadata", speaker: turn.speaker, ...(style ? { style } : {}) },
+              ],
+            };
+          });
+        } else {
+          const style = composeGoogleInteractionsSpeechStyle([
+            params.audioProfile,
+            params.personaPrompt,
+          ]);
+          const speaker = params.speakerName;
+          const textBlock: Record<string, unknown> = { type: "text", text: params.text };
+          if (style || speaker) {
+            textBlock.annotations = [
+              {
+                type: "speech_metadata",
+                ...(speaker ? { speaker } : {}),
+                ...(style ? { style } : {}),
+              },
+            ];
+          }
+          content = [textBlock];
+        }
+        interactionsBody = {
+          model: params.model,
+          // Interactions stores requests by default (55 days paid / 1 day free); TTS is stateless.
+          store: false,
+          input: [{ type: "user_input", content }],
+          response_format: {
+            type: "audio",
+            mime_type: "audio/l16",
+            sample_rate: GOOGLE_TTS_SAMPLE_RATE,
+          },
+          generation_config: dialogue
+            ? {
+                speech_config: {
+                  mode: "conversational",
+                  speakers: params.speakers?.map((speaker) => ({
+                    speaker: speaker.speaker,
+                    voice: speaker.voice,
+                  })),
+                },
+              }
+            : {
+                // Single-voice requests keep the array form. Google only accepts a per-speaker voice
+                // map for two-speaker dialogue (live probe 2026-09-28: one entry is rejected with
+                // HTTP 400), so a lone speaker label travels in speech_metadata.speaker.
+                speech_config: [{ voice: params.voiceName }],
+              },
+        };
+      }
       const { response: res, release } = await postJsonRequest({
         url: interactions
           ? `${baseUrl}/interactions`
           : `${baseUrl}/models/${params.model}:generateContent`,
         headers,
         body: interactions
-          ? buildGoogleInteractionsTtsBody(params)
+          ? interactionsBody
           : {
               contents: [
                 {
@@ -475,10 +453,8 @@ async function synthesizeConfiguredGoogleTts(req: GoogleTtsSynthesisRequest): Pr
                   parts: [
                     {
                       text: [
-                        normalizeOptionalString(params.audioProfile),
-                        normalizeOptionalString(params.speakerName)
-                          ? `Speaker name: ${params.speakerName}`
-                          : undefined,
+                        params.audioProfile,
+                        params.speakerName ? `Speaker name: ${params.speakerName}` : undefined,
                         params.text,
                       ]
                         .filter((part): part is string => part !== undefined)
@@ -615,7 +591,17 @@ export function buildGoogleSpeechProvider(): SpeechProviderPlugin {
       assertSupportedGoogleTtsModel(model);
       if (isGoogleInteractionsTtsModel(model)) {
         // Gemini 3.8 speaks the transcript verbatim; the persona label is not delivery style.
-        const transcript = extractOpenClawGoogleAudioProfileTranscript(ctx.text);
+        if (!isOpenClawGoogleAudioProfilePrompt(ctx.text)) {
+          return undefined;
+        }
+        // The wrapper emits the delimiter as its own line after a blank line and the transcript is
+        // always the last section, so the first structural delimiter wins. A later "### TRANSCRIPT"
+        // inside the spoken text is content, not structure.
+        const match = /\n\n### TRANSCRIPT(?:\n|$)/u.exec(ctx.text);
+        if (!match) {
+          return undefined;
+        }
+        const transcript = ctx.text.slice(match.index + match[0].length).trim();
         return transcript ? { text: transcript } : undefined;
       }
       const shouldWrap =

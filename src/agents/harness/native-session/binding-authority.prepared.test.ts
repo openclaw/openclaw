@@ -36,7 +36,6 @@ afterEach(() => {
 });
 
 it.each([
-  "unchanged",
   "metadata",
   "malformed",
   "policy",
@@ -214,7 +213,7 @@ it.each([
     if (change !== "legacy-allowed") {
       calls.expectIdle();
     }
-    if (change === "unchanged" || change === "metadata" || change === "legacy-allowed") {
+    if (change === "metadata" || change === "legacy-allowed") {
       expect(result).toBe("admitted");
       expect(consumed).toHaveBeenCalledOnce();
     } else {

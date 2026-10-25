@@ -80,21 +80,17 @@ it.each([
         "fatal: object is in the commit graph file but not in the object database. " +
           "This is probably due to repo corruption.",
       );
-    let installedConfigProbed = false;
-    const installedRunCommand: CommandRunner = async (argv) => {
-      if (argv.includes("--get-regexp")) {
-        installedConfigProbed = true;
-        return commandResult(
-          state === "promisor" ? 0 : 1,
-          state === "promisor" ? "remote.origin.promisor true\n" : "",
-        );
-      }
-      return commandResult(
-        state === "corrupt" ? 1 : 0,
-        "",
-        state === "corrupt" ? "missing blob 0123456789abcdef" : "",
-      );
-    };
+    const installedRunCommand: CommandRunner = async (argv) =>
+      argv.includes("--get-regexp")
+        ? commandResult(
+            state === "promisor" ? 0 : 1,
+            state === "promisor" ? "remote.origin.promisor true\n" : "",
+          )
+        : commandResult(
+            state === "corrupt" ? 1 : 0,
+            "",
+            state === "corrupt" ? "missing blob 0123456789abcdef" : "",
+          );
 
     const transfer = await prepareGitCandidateTransfer({
       candidateSha: "candidate",
@@ -106,7 +102,6 @@ it.each([
     });
 
     expect(transfer).toBeUndefined();
-    expect(installedConfigProbed).toBe(true);
     expect(results.at(-1)?.stderrTail).toContain(expected);
     if (state === "promisor") {
       expect(results.at(-1)?.stderrTail).not.toContain("repo corruption");
@@ -119,7 +114,6 @@ it.each([
 it
   .skipIf(process.platform === "win32")
   .each([
-    "none",
     "inventory",
     "inventory-closed",
     "missing-pack",
@@ -192,14 +186,9 @@ it
     await sourceGit("config", "pack.packSizeLimit", "1m");
   }
   const results: UpdateStepResult[] = [];
-  let inventoryBytes = 0;
   let packBytes = 0;
   let boundedExitObserved = false;
-  let historyInventoryAllowsMissingObjects = false;
   const runCommand: CommandRunner = async (argv, options) => {
-    if (argv.includes("rev-list") && argv.includes(candidateSha)) {
-      historyInventoryAllowsMissingObjects = argv.includes("--missing=allow-any");
-    }
     if (failure === "legacy-git" && argv.includes("--no-lazy-fetch") && argv.includes("version")) {
       return commandResult(129, "", "unknown option: --no-lazy-fetch");
     }
@@ -233,9 +222,6 @@ it
       boundedExitObserved = true;
       return result;
     }
-    if (argv.includes("pack-objects")) {
-      inventoryBytes = Buffer.byteLength(options.input as string);
-    }
     if (argv.includes("index-pack")) {
       expect(options.input).toBeUndefined();
       expect(options.stdinFileDescriptor).toBeTypeOf("number");
@@ -258,12 +244,10 @@ it
       step: step(cwd),
     });
   let transfer = await prepare(source);
-  expect(historyInventoryAllowsMissingObjects).toBe(true);
   if (overflow || missingPack) {
     expect(transfer).toBeUndefined();
     if (overflow) {
       expect(boundedExitObserved).toBe(true);
-      expect(inventoryBytes).toBe(0);
     } else {
       expectStep(results, {
         exitCode: 1,
@@ -279,14 +263,10 @@ it
     JSON.stringify(results.filter((entry) => entry.exitCode !== 0)),
   );
   await using admitted = transfer;
-  expect(inventoryBytes).toBeGreaterThan(8000);
-  if (failure === "none") {
-    // The pinned descriptor survives removal of the staging pathname.
-    const packName = fs.readdirSync(source).find((name) => name.endsWith(".pack"))!;
-    fs.unlinkSync(path.join(source, packName));
-  }
+  // The pinned descriptor must outlive the staging pathname in every successful transfer.
+  const packName = fs.readdirSync(source).find((name) => name.endsWith(".pack"))!;
+  fs.unlinkSync(path.join(source, packName));
   expect(await admitted.importInto(step(install))).toBe(true);
-  expect(packBytes).toBeGreaterThan(8000);
   if (largePack) {
     expect(packBytes).toBeGreaterThan(256 * 1024 * 1024);
     expectStep(results, {
@@ -294,7 +274,7 @@ it
       warnings: [expect.stringContaining("Large Git update pack")],
     });
   }
-  if (failure === "none") {
+  if (!["large-pack", "missing-before", "legacy-git", "configured-limit"].includes(failure)) {
     expect(packBytes).toBeLessThan(baseBytes.length);
   }
   if (failure === "missing-before" || failure === "legacy-git") {

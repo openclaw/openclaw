@@ -1,14 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import {
-  For,
-  Show,
-  createProjection,
-  createSignal,
-  mapArray,
-  merge,
-  onCleanup,
-  onSettled,
-} from "solid-js";
+import { For, Show, createProjection, createSignal, mapArray, merge, onSettled } from "solid-js";
 import type { useSessionMenuEntries } from "../../../components/session-menu-view.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import {
@@ -125,7 +116,6 @@ export function createMobileHeaderSessionMenu(options: {
   currentOwner: () => SessionCreatedActor | null;
   category: () => string | null | undefined;
   viewOptions: () => MenuEntry[];
-  palette: () => MenuItem;
   host: () => HeaderSessionMenuMobileHost | undefined;
   source: () => HTMLElement | undefined;
   closeMenu: () => void;
@@ -360,9 +350,9 @@ export function createMobileHeaderSessionMenu(options: {
       // Navigation and the picker ref settle before this one entry request is armed.
       onSettled(() => {
         setFocusArmed(true);
-      });
-      onCleanup(() => {
-        focusCancelled = true;
+        return () => {
+          focusCancelled = true;
+        };
       });
     }
     return view;

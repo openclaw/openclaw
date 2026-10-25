@@ -1,8 +1,8 @@
 import { once } from "node:events";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
-import type { Locator, Page } from "playwright";
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import type { OpenClawTestInstance } from "../../../test/helpers/openclaw-test-instance.ts";
 import type { GatewaySessionRow as SessionRow } from "../api/types.ts";
@@ -21,7 +21,6 @@ if (process.env.OPENCLAW_PEER_RESTART_LIVE !== "1") {
     { pairControlUiPage },
     { evaluateControlUiContext },
     { waitForControlUiGatewayReady },
-    { takeControlUiScreenshotFrame },
     { controlUiSessionUrl },
     { createControlUiE2eSuite },
   ] = await Promise.all([
@@ -34,7 +33,6 @@ if (process.env.OPENCLAW_PEER_RESTART_LIVE !== "1") {
     import("../test-helpers/control-ui-browser-pairing.ts"),
     import("../test-helpers/control-ui-e2e-context.ts"),
     import("../test-helpers/control-ui-e2e-readiness.ts"),
-    import("../test-helpers/control-ui-e2e-screenshot.ts"),
     import("../test-helpers/control-ui-e2e.ts"),
     import("./control-ui-e2e-suite.test-support.ts"),
   ]);
@@ -246,7 +244,6 @@ if (process.env.OPENCLAW_PEER_RESTART_LIVE !== "1") {
                 },
               },
               thinkingDefault: "low",
-              heartbeat: { every: "0m" },
               skipBootstrap: true,
               skills: [],
               timeoutSeconds: 240,
@@ -287,7 +284,7 @@ if (process.env.OPENCLAW_PEER_RESTART_LIVE !== "1") {
           const commandGate = gate!;
           await suite.withPage(
             { viewport, locale: "en-US", serviceWorkers: "block" },
-            async ({ page, context }) => {
+            async ({ page }) => {
               const sent: string[] = [];
               const errors: string[] = [];
               page.on("websocket", (socket) => {
@@ -322,22 +319,6 @@ if (process.env.OPENCLAW_PEER_RESTART_LIVE !== "1") {
               const targetRow = async () => (await rows()).find((row) => row.key === targetKey);
               const readEffect = () =>
                 readFile(path.join(owner.state.workspaceDir, effectFile), "utf8");
-              const capture = async (name: string, surface: Locator) => {
-                // Crop the transcript only; exclude model metadata, controls, and auth-bearing URLs.
-                const text = (await surface.textContent()) ?? "";
-                expect(sanitize(text), "Screenshot surface contains private fixture data").toBe(
-                  text,
-                );
-                expect(new URL(page.url()).hash).toBe("");
-                const frame = await takeControlUiScreenshotFrame(page, surface, [surface], {
-                  elements: [surface],
-                  animations: "disabled",
-                });
-                await writeFile(
-                  path.join(suite.artifactDir, name + ".png"),
-                  frame.elements[0]!.png,
-                );
-              };
               try {
                 await page.addInitScript(() =>
                   localStorage.setItem(
@@ -365,22 +346,6 @@ if (process.env.OPENCLAW_PEER_RESTART_LIVE !== "1") {
                 }
                 await page.goto(controlUiSessionUrl(suite.server.baseUrl, sourceKey));
                 await waitForControlUiGatewayReady(page);
-                const assetPath = await page
-                  .locator('script[type="module"][src]')
-                  .first()
-                  .getAttribute("src");
-                expect(assetPath).toMatch(/^\/assets\/.+\.js$/);
-                const asset = await context.request.get(
-                  new URL(assetPath!, suite.server.baseUrl).href,
-                );
-                expect(asset.ok()).toBe(true);
-                const assetBytes = await asset.body();
-                expect(
-                  assetBytes.equals(
-                    await readFile(path.join("dist/control-ui", assetPath!.slice(1))),
-                  ),
-                ).toBe(true);
-
                 const effectCommand = "echo " + effect + " >> " + effectFile + "; echo " + effect;
                 const safeCommand =
                   "node -e " +
@@ -429,8 +394,6 @@ if (process.env.OPENCLAW_PEER_RESTART_LIVE !== "1") {
                 expect(before?.sessionId).toEqual(expect.stringMatching(/./s));
                 await page.goto(controlUiSessionUrl(suite.server.baseUrl, targetKey));
                 await waitForControlUiGatewayReady(page);
-                const thread = pane.locator(".chat-thread");
-                await capture("01-before-crash", thread);
                 expect(commandGate.beforeCrashRequests()).toBe(1);
 
                 const child = owner.child;
@@ -475,8 +438,6 @@ if (process.env.OPENCLAW_PEER_RESTART_LIVE !== "1") {
                 );
                 expect(effects).toHaveLength(1);
                 expect(await readEffect()).toBe(effect + "\n");
-                // Capture only the answer; the collapsed group still contains private tool/model metadata.
-                await capture("02-automatically-finished", answer);
               } catch (error) {
                 const failure = sanitize(
                   error instanceof Error ? (error.stack ?? error.message) : String(error),

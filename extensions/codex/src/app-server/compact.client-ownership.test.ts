@@ -13,7 +13,10 @@ import {
 } from "./client-runtime.js";
 import { CodexAppServerClient } from "./client.js";
 import { threadStartResult } from "./codex-app-server.test-fixtures.js";
-import { compactCodexSessionWithTestHost as maybeCompactCodexAppServerSession } from "./compact.test-support.js";
+import {
+  compactCodexSessionWithTestHost as maybeCompactCodexAppServerSession,
+  compactionItemEvent,
+} from "./compact.test-support.js";
 import { resolveCodexAppServerRuntimeOptions, type CodexPluginConfig } from "./config.js";
 import {
   registerCodexTestSessionIdentity,
@@ -109,15 +112,8 @@ function sendCompactionCompleted(
     method: "turn/started",
     params: { threadId, turn: { ...turn, status: "inProgress" } },
   });
-  for (const method of ["item/started", "item/completed"]) {
-    send({
-      method,
-      params: {
-        threadId,
-        turnId,
-        item: { id: "compacted", type: "contextCompaction" },
-      },
-    });
+  for (const method of ["item/started", "item/completed"] as const) {
+    send(compactionItemEvent(method, turnId, "compacted", threadId));
   }
   send({ method: "turn/completed", params: { threadId, turn } });
 }

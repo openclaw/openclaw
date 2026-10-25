@@ -197,7 +197,10 @@ OpenClaw release:
         use protected file-descriptor forwarding, including tokens saved with
         `openclaw models auth paste-token --provider anthropic`. API keys saved for
         the `anthropic` provider require an explicit account selection for CLI
-        forwarding. Existing sessions keep their account until you select another
+        forwarding. Saved subscription accounts also make configured Claude CLI
+        models available in the picker without a native `claude auth login`;
+        switching models preserves the configured Claude CLI runtime.
+        Existing sessions keep their account until you select another
         or remove its saved profile. Native-tool approvals remain under OpenClaw
         control. Schema-valid native calls pass through OpenClaw's shared
         tool policy before native approval. Isolated side-question completions
@@ -856,7 +859,6 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
       agents: {
         ownership: "explicit",
         defaults: {
-          heartbeat: { agentId: "research" },
           systemAgent: { agentId: "research" },
           authInheritance: { agentId: "research" },
           model: { primary: "anthropic/claude-opus-4-6" },
@@ -974,8 +976,9 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
 
     When `anthropicCompactThreshold` is omitted, OpenClaw uses
     `max(50000, floor(budget * 0.7))`, where the budget is the model's
-    `contextTokens` cap when set and its `contextWindow` otherwise. With the
-    default trigger, Anthropic compacts before local preflight compaction
+    `contextTokens` cap when set and its `contextWindow` otherwise. Explicit session
+    context-window choices still apply when live model discovery is unavailable.
+    With the default trigger, Anthropic compacts before local preflight compaction
     would. If a trigger falls inside the local compaction reserve, for example
     the 50000 minimum on a small window, local compaction may run first; that
     only skips server compaction, never overflows. An explicit

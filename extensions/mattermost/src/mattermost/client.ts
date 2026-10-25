@@ -185,8 +185,6 @@ export async function readMattermostError(
 export function createMattermostClient(params: {
   baseUrl: string;
   botToken: string;
-  /** Timeout for REST requests in milliseconds (default: 30000). */
-  timeoutMs?: number;
   /** Allow requests to private/internal IPs (self-hosted/LAN deployments). */
   allowPrivateNetwork?: boolean;
   assertRequestCurrent?: () => void;
@@ -197,7 +195,6 @@ export function createMattermostClient(params: {
   }
   const apiBaseUrl = `${baseUrl}/api/v4`;
   const token = params.botToken.trim();
-  const requestTimeoutMs = resolveTimerTimeoutMs(params.timeoutMs, MATTERMOST_REQUEST_TIMEOUT_MS);
   const assertSenderCurrent = params.assertRequestCurrent;
   let postDispatchStarted = false;
   const assertRequestCurrent = assertSenderCurrent
@@ -229,7 +226,7 @@ export function createMattermostClient(params: {
     const url =
       typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
     const { timeoutMs: initTimeoutMs, isMessagePost, ...requestInit } = init ?? {};
-    const timeoutMs = resolveTimerTimeoutMs(initTimeoutMs, requestTimeoutMs);
+    const timeoutMs = resolveTimerTimeoutMs(initTimeoutMs, MATTERMOST_REQUEST_TIMEOUT_MS);
     const { response, release } = await fetchWithSsrFGuard({
       url,
       init: requestInit,

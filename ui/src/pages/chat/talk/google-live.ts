@@ -1,5 +1,6 @@
 import { bytesToBase64 } from "../../../lib/bytes-base64.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
+import { listen } from "../../../lib/reactive/listener.ts";
 import {
   floatToPcm16,
   RealtimeTalkMediaStreamMeter,
@@ -150,7 +151,8 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
       );
     }, GOOGLE_LIVE_SETUP_TIMEOUT_MS);
     const listenerOptions = { signal: this.socketListeners.signal };
-    ws.addEventListener(
+    listen(
+      ws,
       "open",
       () => {
         if (this.closed || this.ws !== ws) {
@@ -160,21 +162,24 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
       },
       listenerOptions,
     );
-    ws.addEventListener(
+    listen(
+      ws,
       "message",
       (event) => {
         this.handleMessage(ws, event.data);
       },
       listenerOptions,
     );
-    ws.addEventListener(
+    listen(
+      ws,
       "close",
       () => {
         this.failConnection(ws, "Realtime connection closed");
       },
       listenerOptions,
     );
-    ws.addEventListener(
+    listen(
+      ws,
       "error",
       () => {
         this.failConnection(ws, "Realtime connection failed");

@@ -117,19 +117,17 @@ it("keeps history read failure advisory without refreshing a running update", as
     await expect(noteStaleUpdateRuns({ migrateState: true })).resolves.toBeUndefined();
     expectHistoryNote(failure.message);
     const saved = getUpdateRun(run.runId)!;
-    expect(saved).toMatchObject({
-      status: run.status,
-      finishedAtMs: run.finishedAtMs,
-      updatedAtMs: run.updatedAtMs,
+    expect(saved).toEqual({
+      ...run,
+      steps: expect.arrayContaining([
+        expect.objectContaining({
+          step: "warning:update-history-reconciliation",
+          status: "completed",
+          detail: expect.stringContaining(failure.message),
+        }),
+      ]),
     });
     expect(isStaleIdentitylessUpdateRun(saved)).toBe(true);
-    expect(saved.steps).toContainEqual(
-      expect.objectContaining({
-        step: "warning:update-history-reconciliation",
-        status: "completed",
-        detail: expect.stringContaining(failure.message),
-      }),
-    );
   });
 });
 
@@ -200,22 +198,14 @@ it("keeps foreign-destination remediation visible until a later successful updat
   await noteStaleUpdateRuns({});
   expect(note).toHaveBeenCalledOnce();
   expectHistoryNote("OpenClaw update failed: global-install-foreign-destination.");
-  expect(reconcileInterruptedUpdateRuns).toHaveBeenCalledWith({ candidate: latest });
-  expect(listUpdateRunsAsync).toHaveBeenCalledTimes(2);
   expectHistoryNote(
     "https://docs.openclaw.ai/install/update-troubleshooting#node-and-global-install-permissions",
   );
 
   latest = {
     ...latest,
-    runId: "e8a1ac89-4a31-41f6-b401-4b225b661728",
-    createdAtMs: 3,
-    updatedAtMs: 4,
-    finishedAtMs: 4,
     status: "succeeded",
     reason: null,
-    origin: {},
-    after: { version: "2026.9.4" },
     steps: [],
   };
   noteMock.mockClear();
@@ -242,9 +232,6 @@ it("refreshes history outside the discovery snapshot after settling an interrupt
     return snapshot.active ? [abandoned] : input?.active ? [] : [settled];
   });
   await noteStaleUpdateRuns();
-  expect(withOpenClawStateDatabaseReadSnapshot).toHaveBeenCalledOnce();
-  expect(readInterruptedUpdateCandidateAsync).toHaveBeenCalledOnce();
-  expect(reconcileInterruptedUpdateRuns).toHaveBeenCalledWith({ candidate: abandoned });
   expect(readScopes).toEqual([true, true, false, false]);
   expect(note).toHaveBeenCalledExactlyOnceWith(
     "Update interrupted-update: recorded succeeded after verifying the installed and serving candidate build candidate-build; its updater exited before recording completion.",

@@ -15,6 +15,7 @@ import type {
   WorkerWorkspaceManifest,
   WorkerWorkspaceManifestEntry,
 } from "./workspace-manifest.js";
+import { joinStagedWorkspaceManifestRead } from "./workspace-result-git.js";
 import {
   resolveStagedWorkspaceReadEntry,
   stagedWorkspaceEntryBytes,
@@ -89,7 +90,7 @@ async function computeValue(
   signal?: AbortSignal,
 ) {
   signal?.throwIfAborted();
-  return await computeWorkspaceManifest(
+  return computeWorkspaceManifest(
     { type, input: { payload: new TextEncoder().encode(JSON.stringify(input)) } },
     signal,
   );
@@ -105,7 +106,9 @@ function captureHashes(includeMemo = true) {
     : undefined;
   return {
     hashes,
-    accept<T>(result: WorkspaceComputationHashResult<T>): T {
+    accept<Result extends WorkspaceComputationHashResult<unknown>>(
+      result: Result,
+    ): Result["value"] {
       if (context) {
         for (const [identity, digest] of result.hashes) {
           context.memo.set(identity, digest);
@@ -121,7 +124,11 @@ function captureHashes(includeMemo = true) {
   };
 }
 
-type WorkspaceCaptureCommand = "workspace.manifest.capture" | "workspace.manifest.snapshot";
+type WorkspaceCaptureCommand =
+  | "workspace.manifest.capture"
+  | "workspace.manifest.snapshot"
+  | "workspace.manifest.document"
+  | "workspace.manifest.reference";
 
 function captureWorkspace<Type extends WorkspaceCaptureCommand>(
   type: Type,
@@ -132,9 +139,15 @@ async function captureWorkspace(type: WorkspaceCaptureCommand, params: Workspace
   if (hasGitWorkerContext()) {
     const { readActualWorkspaceManifestImpl } = await import("./workspace-actual-manifest.js");
     const snapshot = await readActualWorkspaceManifestImpl(params);
-    return type === "workspace.manifest.snapshot"
-      ? snapshot
-      : { manifest: snapshot.manifest, manifestRef: snapshot.manifestRef };
+    if (type === "workspace.manifest.document") {
+      const { manifestRef, rawManifest } = snapshot;
+      return { manifestRef, rawManifest };
+    }
+    return type === "workspace.manifest.reference"
+      ? snapshot.manifestRef
+      : type === "workspace.manifest.snapshot"
+        ? snapshot
+        : { manifest: snapshot.manifest, manifestRef: snapshot.manifestRef };
   }
   signal?.throwIfAborted();
   const hashes = captureHashes();
@@ -163,13 +176,20 @@ export async function captureWorkspaceSnapshot(params: WorkspaceCaptureArguments
   return await captureWorkspace("workspace.manifest.snapshot", params);
 }
 
+export async function captureWorkspaceManifestDocument(params: WorkspaceCaptureArguments) {
+  return await captureWorkspace("workspace.manifest.document", params);
+}
+
+export async function captureWorkspaceManifestReference(params: WorkspaceCaptureArguments) {
+  return await captureWorkspace("workspace.manifest.reference", params);
+}
+
 export async function preflightWorkspaceApply(
   params: Omit<WorkspaceManifestValueInputs["workspace.reconcile.preflight"], "hashes"> & {
     signal?: AbortSignal;
   },
 ) {
-  const { root, base, current, signal } = params;
-  const input = { root, base, current };
+  const { signal, ...input } = params;
   if (hasGitWorkerContext()) {
     const { preflightWorkspaceApplyImpl } = await import("./workspace-reconcile-preflight.js");
     return await preflightWorkspaceApplyImpl(input);
@@ -260,10 +280,12 @@ export async function loadStagedWorkspaceManifest(
   signal?: AbortSignal,
   buildCacheInputs?: string[],
 ) {
-  return await computeWorkspaceManifest(
-    { type: "workspace.manifest.staged", input: { root, ref, buildCacheInputs } },
-    signal,
-  );
+  const input = { root, ref, buildCacheInputs };
+  const read = () => computeWorkspaceManifest({ type: "workspace.manifest.staged", input }, signal);
+  // A worker's host exchange context owns its policy and authority independently.
+  return hasGitWorkerContext()
+    ? await read()
+    : await joinStagedWorkspaceManifestRead(input, signal, read);
 }
 
 export async function* readStagedWorkspaceManifestEntries(input: {
@@ -312,6 +334,8 @@ export async function prepareWorkspaceStageInput(input: WorkspaceStageInput<stri
       stagingRoot: input.stagingRoot,
       stagedResultRef: input.stagedResultRef,
       buildCacheInputs: input.buildCacheInputs,
+      gitHistory: input.gitHistory,
+      parentCommit: input.parentCommit,
       ...("publication" in input
         ? {
             publication: {
@@ -332,5 +356,5 @@ export async function prepareWorkspaceStageInput(input: WorkspaceStageInput<stri
 export async function prepareWorkspaceTreeInput(
   input: WorkspaceManifestValueInputs["workspace.manifest.tree-input"],
 ): Promise<null> {
-  return await computeValue("workspace.manifest.tree-input", input);
+  return computeValue("workspace.manifest.tree-input", input);
 }

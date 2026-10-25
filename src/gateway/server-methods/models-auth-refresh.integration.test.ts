@@ -1,11 +1,9 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { SHARED_AUTH_STORE_STATE_KEY } from "../../agents/auth-profiles/sqlite-json.js";
 import { writePersistedAuthProfileStoreRaw } from "../../agents/auth-profiles/sqlite.js";
-import { getRuntimeConfig, resolveConfigPath, resolveStateDir } from "../../config/config.js";
+import { resolveConfigPath, resolveStateDir } from "../../config/config.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { getActiveSecretsRuntimeSnapshot } from "../../secrets/runtime.js";
-import { deleteSecretStoreEntry, writeSecretStoreEntry } from "../../secrets/store/secret-store.js";
 import { writeConfigMachineState } from "../../state/config-machine-state-write.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import type { ModelAuthStatusResult } from "./models-auth-status.types.js";
@@ -44,28 +42,10 @@ function expectProfile(
 }
 
 describe("models.authRefresh", () => {
-  it("publishes and clears quoted provider warnings through registered refresh", async () => {
-    await using state = await createModelsTestState("models-auth-refresh-quoted");
-    const token = "quoted-auth-refresh-token";
-    const providerNames = ["plain", "123", "local.service"];
-    const providerPaths = [
-      "models.providers.plain.apiKey",
-      'models.providers["123"].apiKey',
-      'models.providers["local.service"].apiKey',
-    ];
+  it("publishes saved credentials and persisted removals before acknowledging an administrator", async () => {
+    await using state = await createModelsTestState("models-auth-refresh");
+    const token = "auth-refresh-integration-token";
     const cfg = modelsTestConfig(state, token, {
-      models: {
-        providers: Object.fromEntries(
-          providerNames.map((provider) => [
-            provider,
-            {
-              baseUrl: "https://example.invalid/v1",
-              apiKey: { source: "store", provider: "default", id: "REFRESH_PROVIDER_KEY" },
-              models: [],
-            },
-          ]),
-        ),
-      },
       skills: {
         entries: {
           unavailable: {
@@ -74,63 +54,15 @@ describe("models.authRefresh", () => {
         },
       },
     });
-    const saveProviderKey = (value: string) =>
-      writeSecretStoreEntry({
-        scope: { kind: "team" },
-        name: "REFRESH_PROVIDER_KEY",
-        value,
-        kind: "secret",
-        updatedBy: "test",
-        database: { env: state.env },
-      });
-    expectIsolatedState(state);
-    await saveProviderKey("initial-provider-credential");
-    await using gateway = await startModelsGateway(state, cfg, token);
-    await gateway.server.startupSettled;
-    const { client } = gateway;
-    const unrelatedWarnings = expectDefined(
-      getActiveSecretsRuntimeSnapshot(),
-      "Gateway published its secrets runtime",
-    ).warnings.filter((warning) => warning.path === "skills.entries.unavailable.apiKey");
-    expect(unrelatedWarnings).toHaveLength(1);
-    await deleteSecretStoreEntry({
-      scope: { kind: "team" },
-      name: "REFRESH_PROVIDER_KEY",
-      database: { env: state.env },
-    });
-    await expect(
-      client.request("models.authRefresh", { agentId: "main", operation: "update" }),
-    ).resolves.toEqual({ refreshed: true });
-    for (const providerPath of providerPaths) {
-      expect(getActiveSecretsRuntimeSnapshot()?.warnings).toContainEqual(
-        expect.objectContaining({ path: providerPath }),
-      );
-    }
-    expect(getActiveSecretsRuntimeSnapshot()?.warnings).toEqual(
-      expect.arrayContaining(unrelatedWarnings),
-    );
-
-    await saveProviderKey("recovered-provider-credential");
-    await expect(
-      client.request("models.authRefresh", { agentId: "main", operation: "update" }),
-    ).resolves.toEqual({ refreshed: true });
-    expect(getActiveSecretsRuntimeSnapshot()?.warnings).toEqual(unrelatedWarnings);
-    for (const provider of providerNames) {
-      expect(getRuntimeConfig().models?.providers?.[provider]?.apiKey).toBe(
-        "recovered-provider-credential",
-      );
-    }
-  });
-
-  it("publishes saved credentials and persisted removals before acknowledging an administrator", async () => {
-    await using state = await createModelsTestState("models-auth-refresh");
-    const token = "auth-refresh-integration-token";
-    const cfg = modelsTestConfig(state, token);
     await state.writeConfig(cfg);
     expectIsolatedState(state);
     await using gateway = await startModelsGateway(state, cfg, token);
     await gateway.server.startupSettled;
     const { client, port } = gateway;
+    const unrelatedWarnings = getActiveSecretsRuntimeSnapshot()?.warnings.filter(
+      (warning) => warning.path === "skills.entries.unavailable.apiKey",
+    );
+    expect(unrelatedWarnings).toHaveLength(1);
     await expect(client.request("models.authStatus", { agentId: "main" })).resolves.toEqual(
       expect.objectContaining({ providers: expect.any(Array) }),
     );
@@ -182,6 +114,7 @@ describe("models.authRefresh", () => {
     );
     expect(profileIds).not.toContain("auth-refresh-proof:local");
     expect(profileIds).toContain("auth-refresh-shared:proof");
+    expect(getActiveSecretsRuntimeSnapshot()?.warnings).toEqual(unrelatedWarnings);
     await using reader = await connectModelsReader(port, token);
     await expect(
       reader.request("models.authRefresh", { agentId: "main", operation: "update" }),

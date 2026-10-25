@@ -45,7 +45,6 @@ describe("media defaults generation ownership", () => {
       nativePdf: providerSupportsNativePdfDocument({ providerId: "media-owner", cfg }),
       documentModel: resolveDocumentMediaModel({
         providerId: "media-owner",
-        document: "pdf",
         mode: "textExtraction",
         cfg,
       }),

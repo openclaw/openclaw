@@ -1,4 +1,5 @@
 // Threads inherit admission; forks also run this bootstrap in their own process.
+import "../helpers/postgres-pool-roots.ts";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -125,6 +126,7 @@ export const sharedVitestConfig = {
     ...controlUiSolidPlugin([
       `${repoRoot.replaceAll("\\", "/")}/ui/**/*.tsx`,
       `${repoRoot.replaceAll("\\", "/")}/extensions/*/browser/**/*.tsx`,
+      `${repoRoot.replaceAll("\\", "/")}/extensions/*/src/control-ui.tsx`,
     ]),
     createStateSchemaInlinePlugin(repoRoot),
     compiledSubprocessesPlugin(),

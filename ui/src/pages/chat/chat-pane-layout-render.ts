@@ -10,8 +10,6 @@ import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { resolveSessionWorkspace } from "../../lib/sessions/workspace.ts";
-import { clawCreatorAction, clawCreatorFlow } from "../claws/creator-flow.ts";
-import { canCreateClawDraft } from "../claws/draft-navigation.ts";
 import { PaneOutboxRecovery } from "./chat-outbox-recovery.tsx";
 import { PaneAttachmentCatalog } from "./chat-pane-attachment-catalog.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
@@ -21,12 +19,12 @@ import { resolveChatPaneDesktopTarget } from "./chat-pane-placement.ts";
 import type { createChatPaneRails } from "./chat-pane-rails.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import { renderSidebarRegion } from "./chat-pane-sidebar-layout.ts";
-import { createSideChatModelControlProps } from "./chat-session-companion-model-controls.ts";
+import { hasTerminalRunStatus } from "./chat-run-working.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createChatToolIcons, type PluginToolIcons } from "./chat-tool-icon-controller.ts";
 import type { ChatProps } from "./chat-view.tsx";
 import { publishChatWorkContext } from "./chat-work-context.ts";
-import { getChatComposerState, hasTerminalRunStatus } from "./components/chat-composer-state.ts";
+import { getChatComposerState } from "./components/chat-composer-state.ts";
 import type { ChatDetailsElements } from "./components/chat-details.tsx";
 import type { SidebarRegionCallbacks } from "./components/chat-sidebar-region-types.ts";
 import { resolveAssistantDisplayAvatar } from "./components/chat-welcome.ts";
@@ -224,7 +222,16 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
       chatProps.canAbort &&
       chatProps.onAbort &&
       !hasTerminalRunStatus(chatProps.runStatus)
-        ? { onAbort: chatProps.onAbort }
+        ? {
+            target: JSON.stringify([
+              this.connectionGeneration,
+              state.sessionKey,
+              state.currentSessionId,
+              observerRunId ?? state.chatRunId,
+              selectedSession?.activeRunIds,
+            ]),
+            onAbort: chatProps.onAbort,
+          }
         : undefined;
     const subagentStopInNotice =
       this.sessionPresentation === "desktop" &&
@@ -282,9 +289,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
         : undefined,
       onOpenSubagent: ownsSubagentsPanel ? (key) => this.showSubagents(key) : undefined,
       onOpenSubagents: ownsSubagentsPanel ? (focus) => this.showSubagents(null, focus) : undefined,
-      onOpenProcesses: ownsSubagentsPanel
-        ? () => this.requestBackgroundPanel("processes", "open")
-        : undefined,
+      onOpenProcesses: ownsSubagentsPanel ? this.showDetailsProcess : undefined,
       composerRecovery: recovery,
       pluginToolIcons: this.toolIcons,
       presented: {
@@ -410,8 +415,12 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
       subagentsInputRegion: this.inputRegion,
       subagentsPresented: slotPresentation("subagents"),
       processesPresented: slotPresentation("processes"),
+      contextPresented: slotPresentation("context"),
+      contextDetails: ownsSubagentsPanel ? paneChatProps : undefined,
       subagentsAvailable: !catalog,
       subagentsShowRequest: this.companionIntents.subagentsShowRequest,
+      processesShowRequest: this.companionIntents.processesShowRequest,
+      onBackToProcessDetails: this.returnToProcessDetails,
       onSubagentSessionSelect: (sessionKey, options) =>
         this.onPaneSessionChange?.(this.paneId, sessionKey, options),
       panePresentation,
@@ -488,11 +497,8 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
       activeRunId: observerRunId,
       pullRequests: this.sessionPullRequests,
       companion: companionThread,
-      companionModelControls: createSideChatModelControlProps({
-        state,
-        companion: companionThread,
-        onSelect: (patch) => this.sessionCompanionThreads.setModelSelection(currentAgentId, patch),
-      }),
+      onCompanionModelSelect: (patch) =>
+        this.sessionCompanionThreads.setModelSelection(currentAgentId, patch),
       companionFocusRequest: this.companionIntents.focusRequest,
       companionPresented,
       onCompanionSubmit: (question) => void this.submitSessionCompanionQuestion(question),
@@ -506,10 +512,6 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
         ),
       connected: state.connected,
       onClearCompanion: this.clearSessionCompanion,
-      onCreateClaw:
-        currentAgentId && canCreateClawDraft(this.context)
-          ? () => void clawCreatorFlow(this.context).start(currentAgentId)
-          : undefined,
       discussion,
       discussionAvailable,
       discussionOpenUrl: discussion?.openUrl ?? null,
@@ -517,7 +519,6 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
       pluginPanels: this.context.plugins.registrations("panels"),
       isPluginPanelPresented: (slot) => slotPresentation(slot, "active"),
     });
-    const setPanelOpen = (open: boolean) => this.setChatSidePanelOpen(open, savedLayout);
     const nativeCallbacks: SidebarRegionCallbacks = {
       newTab: {
         open: (options) => state.updateSidebarLayout(openSidebarNewTab(savedLayout, options)),
@@ -528,11 +529,10 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
         },
         finishCloseAll: () => {
           const next = finishSidebarCloseAll(state.sidebarLayout);
-          if (!next) {
-            return false;
+          if (next) {
+            state.updateSidebarLayout(next);
           }
-          state.updateSidebarLayout(next);
-          return true;
+          return Boolean(next);
         },
       },
       activatePanel: (panelId) => {
@@ -558,7 +558,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
         state.updateSidebarLayout(setSidebarDock(savedLayout, dock), { geometryOnly: true }),
       closeSlot: (slot) => {
         if (slot === "conversation") {
-          setPanelOpen(false);
+          this.setChatSidePanelOpen(false, savedLayout);
           return;
         }
         if (slot === "discussion") {
@@ -570,7 +570,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
       reorderPanel: (panelId, targetPanelId, placement) =>
         state.updateSidebarLayout(reorderPanel(savedLayout, panelId, targetPanelId, placement)),
       resizePanel: (columnId, size) => this.commitSidebarPanelResize(savedLayout, columnId, size),
-      setOpen: setPanelOpen,
+      setOpen: (open) => this.setChatSidePanelOpen(open, savedLayout),
     };
     const updateMobileCatalogLayout = (next: SidebarLayout) => {
       // Catalog navigation changes selection, not the retained desktop expansion.
@@ -633,9 +633,6 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
             headerDetails,
             { openPanelSlot: callbacks.openSlot, closePanelSlot: callbacks.closeSlot },
           );
-    if (paneHeader) {
-      paneHeader.header.onCreateClaw = clawCreatorAction(this.context, currentAgentId);
-    }
     const header = paneHeader && {
       header: paneHeader,
       notice:
@@ -661,6 +658,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
     }
     const avatar = resolveAssistantDisplayAvatar(chatProps);
     const region = renderSidebarRegion({
+      onPanelReady: () => this.flushPendingPanelToggles(),
       mobileScrollFades: this.mobileScrollFades,
       onRegionElementRef: (element) => {
         this.sidebarRegionElement = element;

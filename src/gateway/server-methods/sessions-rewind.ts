@@ -13,7 +13,7 @@ import type {
   SessionBranchSwitchMutationResult,
   SessionMessageCutMutationResult,
 } from "../../config/sessions/session-accessor.js";
-import { mutateSessionAtMessageWithPreconditions } from "../../config/sessions/session-accessor.sqlite-message-cut.js";
+import { mutateSqliteSessionAtMessage } from "../../config/sessions/session-accessor.sqlite-message-cut.js";
 import {
   getSessionActorStorageBinding,
   runWithSessionActorStorage,
@@ -568,7 +568,7 @@ async function mutatePreparedSessionAtMessage({
           forkWorkspace: forkWorkspace?.value,
           creation: { ...creation, sandbox },
         };
-        result = await mutateSessionAtMessageWithPreconditions(
+        result = await mutateSqliteSessionAtMessage(
           action === "fork" ? forkParams : { ...mutationParams, entryId },
           action,
           memory ? undefined : expectedState,

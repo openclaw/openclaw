@@ -1,6 +1,6 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { assert, describe, expect, it, vi } from "vitest";
+import { assert, beforeEach, describe, expect, it, vi } from "vitest";
 import * as agentEvents from "../../infra/agent-events.js";
 import { attachErrorDiagnostic } from "../../infra/error-diagnostics.js";
 import { normalizeAgentRunTerminalDeliverySnapshot } from "../agent-run-terminal-delivery.js";
@@ -24,34 +24,72 @@ vi.mock("../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => lifecycleLog,
 }));
 
-function createLifecycle(runId: string) {
+function createLifecycle(options: Partial<Parameters<typeof createAgentCommandLifecycle>[0]> = {}) {
   return createAgentCommandLifecycle({
-    runId,
+    runId: "command",
     lifecycleGeneration: () => "test-generation",
     startedAt: 100,
     state: {
       lifecycleFinishing: false,
       lifecycleEnded: false,
     },
+    ...options,
   });
 }
+
+function emittedEvent() {
+  const event = emitAgentEvent.mock.calls[0]?.[0];
+  assert.isDefined(event, "Expected the lifecycle owner to emit an event");
+  return event;
+}
+
+function expectEvent(data: Record<string, unknown>, once = false) {
+  const matcher = expect.objectContaining({
+    runId: "command",
+    stream: "lifecycle",
+    data: expect.objectContaining(data),
+  });
+  if (once) {
+    expect(emitAgentEvent).toHaveBeenCalledExactlyOnceWith(matcher);
+  } else {
+    expect(emitAgentEvent).toHaveBeenCalledWith(matcher);
+  }
+}
+
+type Terminal = Parameters<ReturnType<typeof createLifecycle>["emitEnd"]>[0];
+function terminal(
+  outcome: Parameters<typeof buildAgentRunTerminalOutcome>[0] = {
+    status: "error",
+    stopReason: "error",
+  },
+  metadata: Terminal["metadata"] = {},
+): Terminal {
+  return { metadata, outcome: buildAgentRunTerminalOutcome(outcome) };
+}
+const receipt = {
+  runId: "command",
+  sessionId: "session",
+  turnId: "recovery",
+  requested: { provider: "openai", model: "model" },
+  effective: { provider: "openai", model: "model", responseModel: "model" },
+  successfulToolNames: ["write"],
+  assistantTranscriptIdempotencyKey: "selected",
+  rerouted: false,
+  terminalDisposition: "visible" as const,
+};
+
+beforeEach(() => vi.clearAllMocks());
 
 describe("createAgentCommandLifecycle", () => {
   it.each(["recovered", "later-failure", "preparation-failure"] as const)(
     "selects command terminal facts after %s without an observed native start",
     async (outcome) => {
-      emitAgentEvent.mockClear();
       const state: AgentAttemptLifecycleState = {
         lifecycleFinishing: false,
         lifecycleEnded: false,
       };
       const callbacks = createAgentAttemptLifecycleCallbacks(state);
-      const lifecycle = createAgentCommandLifecycle({
-        runId: "recovered-command",
-        lifecycleGeneration: () => "generation",
-        startedAt: 100,
-        state,
-      });
+      const lifecycle = createLifecycle({ state });
       await callbacks.onAgentEvent({
         stream: "lifecycle",
         data: {
@@ -72,39 +110,23 @@ describe("createAgentCommandLifecycle", () => {
           ...(error ? { error: { kind: "incomplete_turn" as const, message: error } } : {}),
         },
       };
-      const receipt = {
-        runId: "recovered-command",
-        sessionId: "session",
-        turnId: "recovery",
-        requested: { provider: "openai", model: "model" },
-        effective: { provider: "openai", model: "model", responseModel: "model" },
-        successfulToolNames: ["write"],
-        assistantTranscriptIdempotencyKey: "selected",
-        rerouted: false,
-        terminalDisposition: "visible" as const,
-      };
-      const terminal = {
-        metadata: { terminalReceipt: receipt },
-        outcome: buildAgentRunTerminalOutcome({
+      const completion = terminal(
+        {
           status: error ? "error" : "ok",
           stopReason: error ? "error" : "stop",
           error,
-        }),
-      };
-      // Exercise the same error selector and publisher used by command post-run settlement.
-      expect(lifecycle.resolveResultError(result, false)).toBe(error);
+        },
+        { terminalReceipt: receipt },
+      );
       if (lifecycle.resolveResultError(result, false)) {
-        lifecycle.emitResultError(result, false, terminal);
+        lifecycle.emitResultError(result, false, completion);
       } else {
-        lifecycle.emitEnd(terminal);
+        lifecycle.emitEnd(completion);
       }
       callbacks.onAttemptTerminalReplaced();
-      lifecycle.emitEnd(terminal);
-      expect(state.lifecycleEnded).toBe(true);
+      lifecycle.emitEnd(completion);
       expect(emitAgentEvent).toHaveBeenCalledOnce();
-      const event = emitAgentEvent.mock.calls[0]?.[0];
-      assert.isDefined(event);
-      const data = event.data;
+      const { data } = emittedEvent();
       expect(data).toMatchObject({
         phase: error ? "error" : "end",
         terminalReceipt: receipt,
@@ -112,48 +134,35 @@ describe("createAgentCommandLifecycle", () => {
       });
       expect(data.error).toBe(error);
       expect(data).not.toHaveProperty("errorObservation");
+      if (outcome === "recovered") {
+        expect(lifecycleLog.info).toHaveBeenCalledOnce();
+        expect(lifecycleLog.warn).not.toHaveBeenCalled();
+        expect(lifecycleLog.error).not.toHaveBeenCalled();
+      }
     },
   );
 
   it("publishes an outer timeout that arrives after a yielded result", () => {
-    emitAgentEvent.mockClear();
     const controller = new AbortController();
-    const lifecycle = createAgentCommandLifecycle({
-      runId: "yield-then-outer-timeout",
-      lifecycleGeneration: () => "test-generation",
-      startedAt: 100,
+    const lifecycle = createLifecycle({
       abortSignal: controller.signal,
-      state: {
-        lifecycleFinishing: false,
-        lifecycleEnded: false,
-      },
     });
-    const terminal = {
-      metadata: { yielded: true, aborted: false },
-      outcome: buildAgentRunTerminalOutcome({
-        status: "ok",
-        stopReason: "end_turn",
-        livenessState: "paused",
-      }),
-    };
-    controller.abort(new DOMException("outer deadline", "TimeoutError"));
-    lifecycle.emitEnd(terminal);
-    expect(emitAgentEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runId: "yield-then-outer-timeout",
-        data: expect.objectContaining({
-          phase: "end",
-          yielded: true,
-          aborted: true,
-          stopReason: "timeout",
-          executionSettled: true,
-        }),
-      }),
+    const completion = terminal(
+      { status: "ok", stopReason: "end_turn", livenessState: "paused" },
+      { yielded: true, aborted: false },
     );
+    controller.abort(new DOMException("outer deadline", "TimeoutError"));
+    lifecycle.emitEnd(completion);
+    expectEvent({
+      phase: "end",
+      yielded: true,
+      aborted: true,
+      stopReason: "timeout",
+      executionSettled: true,
+    });
   });
 
   it("turns an embedded-runtime stale install post-turn error into restart guidance", () => {
-    emitAgentEvent.mockClear();
     const missingChunk = path.join(process.cwd(), "dist", "session-transcript-reconcile-stale.mjs");
     const importingChunk = path.join(process.cwd(), "dist", "embedded-agent-stale.mjs");
     const error = Object.assign(
@@ -163,50 +172,19 @@ describe("createAgentCommandLifecycle", () => {
         url: pathToFileURL(missingChunk).href,
       },
     );
-    const lifecycle = createAgentCommandLifecycle({
-      runId: "stale-install",
-      lifecycleGeneration: () => "test-generation",
-      startedAt: 100,
-      state: {
-        lifecycleFinishing: false,
-        lifecycleEnded: false,
-      },
-    });
+    const lifecycle = createLifecycle();
 
-    lifecycle.emitPostTurnError(error, {
-      metadata: {},
-      outcome: buildAgentRunTerminalOutcome({ status: "error", stopReason: "error" }),
-    });
+    lifecycle.emitPostTurnError(error, terminal());
 
-    const event = emitAgentEvent.mock.calls[0]?.[0];
-    assert.isDefined(event, "Expected the lifecycle owner to emit an event");
+    const event = emittedEvent();
     expect(event.data.error).toMatch(/installation may have changed.*gateway restart/i);
     expect(JSON.stringify(event)).not.toContain(missingChunk);
     expect(JSON.stringify(event)).not.toContain(importingChunk);
   });
 
-  it("logs successful stops at the expected severity", () => {
-    vi.clearAllMocks();
-    const lifecycle = createLifecycle("logged-terminal-owner");
-
-    lifecycle.emitEnd({
-      metadata: {},
-      outcome: buildAgentRunTerminalOutcome({ status: "ok", stopReason: "stop" }),
-    });
-
-    for (const candidate of ["info", "warn", "error"] as const) {
-      if (candidate === "info") {
-        expect(lifecycleLog[candidate]).toHaveBeenCalledOnce();
-      } else {
-        expect(lifecycleLog[candidate]).not.toHaveBeenCalled();
-      }
-    }
-  });
-
   it.each(["finishing", "end", "error"] as const)(
     "preserves only canonical terminal facts on %s events",
     (phase) => {
-      emitAgentEvent.mockClear();
       const secret = ["sk", "abcdefghijklmnopqrstuv"].join("-");
       const metadata = {
         aborted: true,
@@ -226,20 +204,20 @@ describe("createAgentCommandLifecycle", () => {
         }),
         unsafeMetadata: { credential: secret },
       };
-      const lifecycle = createLifecycle("terminal-owner");
-      const terminal = {
-        metadata,
-        outcome: buildAgentRunTerminalOutcome({
+      const lifecycle = createLifecycle();
+      const completion = terminal(
+        {
           status: "timeout",
           ...metadata,
           error: "Request timed out before a response was generated.",
-        }),
-      };
+        },
+        metadata,
+      );
 
       if (phase === "finishing") {
-        lifecycle.emitFinishing(terminal);
+        lifecycle.emitFinishing(completion);
       } else if (phase === "end") {
-        lifecycle.emitEnd(terminal);
+        lifecycle.emitEnd(completion);
       } else {
         lifecycle.emitResultError(
           {
@@ -250,31 +228,24 @@ describe("createAgentCommandLifecycle", () => {
             },
           },
           true,
-          terminal,
+          completion,
         );
       }
 
-      expect(emitAgentEvent).toHaveBeenCalledWith(
-        expect.objectContaining({
-          runId: "terminal-owner",
-          stream: "lifecycle",
-          data: expect.objectContaining({
-            phase,
-            aborted: true,
-            stopReason: "timeout",
-            timeoutPhase: "provider",
-            providerStarted: true,
-            livenessState: "blocked",
-            yielded: true,
-            replayInvalid: true,
-            suppressErrorNotice: phase === "finishing",
-            error: "Request timed out before a response was generated.",
-            ...(phase !== "finishing" ? { executionSettled: true } : {}),
-          }),
-        }),
-      );
-      const event = emitAgentEvent.mock.calls[0]?.[0];
-      assert.isDefined(event, "Expected the lifecycle owner to emit an event");
+      expectEvent({
+        phase,
+        aborted: true,
+        stopReason: "timeout",
+        timeoutPhase: "provider",
+        providerStarted: true,
+        livenessState: "blocked",
+        yielded: true,
+        replayInvalid: true,
+        suppressErrorNotice: phase === "finishing",
+        error: "Request timed out before a response was generated.",
+        ...(phase !== "finishing" ? { executionSettled: true } : {}),
+      });
+      const event = emittedEvent();
       if (phase === "finishing") {
         expect(event.data).not.toHaveProperty("executionSettled");
       }
@@ -288,16 +259,7 @@ describe("createAgentCommandLifecycle", () => {
     { message: "Context compaction failed.", expected: "Context compaction failed." },
     { message: "  ", expected: "Agent run failed" },
   ])("publishes structured failure detail: $message", ({ message, expected }) => {
-    emitAgentEvent.mockClear();
-    const lifecycle = createAgentCommandLifecycle({
-      runId: "structured-failure-owner",
-      lifecycleGeneration: () => "test-generation",
-      startedAt: 100,
-      state: {
-        lifecycleFinishing: false,
-        lifecycleEnded: false,
-      },
-    });
+    const lifecycle = createLifecycle();
 
     lifecycle.emitResultError(
       {
@@ -305,27 +267,38 @@ describe("createAgentCommandLifecycle", () => {
         meta: { durationMs: 0, error: { kind: "compaction_failure", message } },
       },
       false,
-      {
-        metadata: {},
-        outcome: buildAgentRunTerminalOutcome({ status: "error", stopReason: "error" }),
-      },
+      terminal(),
     );
 
-    expect(emitAgentEvent).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        runId: "structured-failure-owner",
-        stream: "lifecycle",
-        data: expect.objectContaining({
-          phase: "error",
-          error: expected,
-          executionSettled: true,
-        }),
-      }),
+    expectEvent(
+      {
+        phase: "error",
+        error: expected,
+        executionSettled: true,
+      },
+      true,
     );
   });
 
-  it("replaces a provisional overflow with the final compaction failure", async () => {
-    emitAgentEvent.mockClear();
+  it.each([
+    {
+      name: "replaces a provisional overflow with the final compaction failure",
+      text: "Auto-compaction failed before the next model request: the model exhausted its summary output budget without producing summary text. Try again or run /compact.",
+      message: "Summary output budget exhausted",
+      observation: { failoverReason: "context_overflow" as const },
+      preserveObservation: false,
+    },
+    {
+      name: "preserves overflow observations for overflow-shaped compaction failures",
+      text: "request_too_large: summarization failed - Request size exceeds model context window",
+      observation: {
+        failoverReason: "context_overflow" as const,
+        provider: "test-provider",
+        model: "test-model",
+      },
+      preserveObservation: true,
+    },
+  ])("$name", async ({ text, message, observation, preserveObservation }) => {
     const state: AgentAttemptLifecycleState = {
       lifecycleFinishing: false,
       lifecycleEnded: false,
@@ -336,92 +309,26 @@ describe("createAgentCommandLifecycle", () => {
         phase: "finishing",
         error:
           "Context overflow: prompt too large for the model. Try /reset (or /new) to start a fresh session, or use a larger-context model.",
-        errorObservation: { failoverReason: "context_overflow" },
-      },
-    });
-    const lifecycle = createAgentCommandLifecycle({
-      runId: "compaction-recovery-owner",
-      lifecycleGeneration: () => "test-generation",
-      startedAt: 100,
-      state,
-    });
-    const text =
-      "Auto-compaction failed before the next model request: the model exhausted its summary output budget without producing summary text. Try again or run /compact.";
-    const result = {
-      payloads: [{ text, isError: true }],
-      meta: {
-        durationMs: 0,
-        finalAssistantVisibleText: text,
-        error: { kind: "compaction_failure" as const, message: "Summary output budget exhausted" },
-      },
-    };
-    const terminal = {
-      metadata: {},
-      outcome: buildAgentRunTerminalOutcome({ status: "error", stopReason: "error" }),
-    };
-    expect(lifecycle.resolveResultError(result, false)).toBe(text);
-    expect(lifecycle.resolveTerminalError(result, false, terminal)).toBe(text);
-    lifecycle.emitResultError(result, false, terminal);
-    expect(emitAgentEvent).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        data: expect.objectContaining({ phase: "error", error: text, executionSettled: true }),
-      }),
-    );
-    expect(emitAgentEvent.mock.calls[0]?.[0].data).not.toHaveProperty("errorObservation");
-  });
-
-  it("preserves overflow observations for overflow-shaped compaction failures", async () => {
-    emitAgentEvent.mockClear();
-    const observation = {
-      failoverReason: "context_overflow" as const,
-      provider: "test-provider",
-      model: "test-model",
-    };
-    const state: AgentAttemptLifecycleState = {
-      lifecycleFinishing: false,
-      lifecycleEnded: false,
-    };
-    await createAgentAttemptLifecycleCallbacks(state).onAgentEvent({
-      stream: "lifecycle",
-      data: {
-        phase: "finishing",
-        error: "Context overflow: prompt too large for the model.",
         errorObservation: observation,
       },
     });
-    const lifecycle = createAgentCommandLifecycle({
-      runId: "overflow-shaped-compaction-owner",
-      lifecycleGeneration: () => "test-generation",
-      startedAt: 100,
-      state,
-    });
-    const text =
-      "request_too_large: summarization failed - Request size exceeds model context window";
+    const lifecycle = createLifecycle({ state });
     const result = {
       payloads: [{ text, isError: true }],
       meta: {
         durationMs: 0,
         finalAssistantVisibleText: text,
-        error: { kind: "compaction_failure" as const, message: text },
+        error: { kind: "compaction_failure" as const, message: message ?? text },
       },
     };
-    const terminal = {
-      metadata: {},
-      outcome: buildAgentRunTerminalOutcome({ status: "error", stopReason: "error" }),
-    };
-
-    lifecycle.emitResultError(result, false, terminal);
-
-    expect(emitAgentEvent).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        data: expect.objectContaining({
-          phase: "error",
-          error: text,
-          errorObservation: observation,
-          executionSettled: true,
-        }),
-      }),
-    );
+    const completion = terminal();
+    lifecycle.emitResultError(result, false, completion);
+    expectEvent({ phase: "error", error: text, executionSettled: true }, true);
+    if (preserveObservation) {
+      expect(emittedEvent().data.errorObservation).toEqual(observation);
+    } else {
+      expect(emittedEvent().data).not.toHaveProperty("errorObservation");
+    }
   });
 
   it.each([
@@ -430,7 +337,6 @@ describe("createAgentCommandLifecycle", () => {
     "structured result",
     "post-turn error",
   ] as const)("redacts credentials from a %s before publishing the lifecycle event", (source) => {
-    emitAgentEvent.mockClear();
     const secret = ["sk", "abcdefghijklmnopqrstuv"].join("-");
     const error = `The provider failed. Authorization: Bearer ${secret}`;
     const state = {
@@ -438,19 +344,11 @@ describe("createAgentCommandLifecycle", () => {
       lifecycleEnded: false,
       ...(source === "lifecycle callback" ? { lifecycleError: error } : {}),
     };
-    const lifecycle = createAgentCommandLifecycle({
-      runId: "secret-safe-terminal-owner",
-      lifecycleGeneration: () => "test-generation",
-      startedAt: 100,
-      state,
-    });
-    const terminal = {
-      metadata: {},
-      outcome: buildAgentRunTerminalOutcome({ status: "error", stopReason: "error" }),
-    };
+    const lifecycle = createLifecycle({ state });
+    const completion = terminal();
 
     if (source === "post-turn error") {
-      lifecycle.emitPostTurnError(new Error(error), terminal);
+      lifecycle.emitPostTurnError(new Error(error), completion);
     } else {
       lifecycle.emitResultError(
         {
@@ -463,12 +361,11 @@ describe("createAgentCommandLifecycle", () => {
           },
         },
         source === "fallback payload",
-        terminal,
+        completion,
       );
     }
 
-    const event = emitAgentEvent.mock.calls[0]?.[0];
-    assert.isDefined(event, "Expected the lifecycle owner to emit an event");
+    const event = emittedEvent();
     expect(event.data.error).toContain("The provider failed.");
     expect(event.data.error).toContain("Authorization: Bearer");
     expect(JSON.stringify(event)).not.toContain(secret);
@@ -477,20 +374,12 @@ describe("createAgentCommandLifecycle", () => {
   it.each(["timeout", "abort"] as const)(
     "displays diagnostics on post-turn errors while retaining native %s facts",
     (kind) => {
-      emitAgentEvent.mockClear();
       const controller = new AbortController();
       if (kind === "abort") {
         controller.abort();
       }
-      const lifecycle = createAgentCommandLifecycle({
-        runId: "diagnostic-terminal-owner",
-        lifecycleGeneration: () => "test-generation",
-        startedAt: 100,
+      const lifecycle = createLifecycle({
         abortSignal: controller.signal,
-        state: {
-          lifecycleFinishing: false,
-          lifecycleEnded: false,
-        },
       });
       const error = attachErrorDiagnostic(
         kind === "timeout"
@@ -508,14 +397,10 @@ describe("createAgentCommandLifecycle", () => {
         "stderr: an earlier request timed out and was aborted",
       );
 
-      lifecycle.emitPostTurnError(error, {
-        metadata: {},
-        outcome: buildAgentRunTerminalOutcome({ status: "error", stopReason: "error" }),
-      });
+      lifecycle.emitPostTurnError(error, terminal());
 
       expect(emitAgentEvent).toHaveBeenCalledOnce();
-      const event = emitAgentEvent.mock.calls[0]?.[0];
-      assert.isDefined(event, "Expected the lifecycle owner to emit an event");
+      const event = emittedEvent();
       expect(event.data.error).toContain(error.message);
       expect(event.data.error).toContain("an earlier request timed out and was aborted");
       if (kind === "timeout") {
@@ -529,11 +414,10 @@ describe("createAgentCommandLifecycle", () => {
   );
 
   it("publishes bounded selected-profile recovery from basic lifecycle errors", () => {
-    emitAgentEvent.mockClear();
     const profileId = "openai:private-profile";
     const rawCause = `Codex app-server auth profile "${profileId}" was not found`;
     const secret = ["sk", "abcdefghijklmnopqrstuv"].join("-");
-    const lifecycle = createLifecycle("missing-selected-profile");
+    const lifecycle = createLifecycle();
     const error = new FailoverError(rawCause, {
       reason: "auth",
       code: "selected_auth_profile_unavailable",
@@ -547,8 +431,7 @@ describe("createAgentCommandLifecycle", () => {
 
     lifecycle.emitBasicError(error);
 
-    const event = emitAgentEvent.mock.calls[0]?.[0];
-    assert.isDefined(event, "Expected the lifecycle owner to emit an event");
+    const event = emittedEvent();
     expect(event.data.error).toContain(
       renderFailoverCodeUserCopy("selected_auth_profile_unavailable"),
     );
@@ -560,72 +443,46 @@ describe("createAgentCommandLifecycle", () => {
   });
 
   it("does not let generic abort metadata erase a superseded outcome", () => {
-    emitAgentEvent.mockClear();
     const controller = new AbortController();
     controller.abort();
-    const lifecycle = createAgentCommandLifecycle({
-      runId: "superseded-owner",
-      lifecycleGeneration: () => "test-generation",
-      startedAt: 100,
-      abortSignal: controller.signal,
-      state: {
-        lifecycleFinishing: false,
-        lifecycleEnded: false,
-      },
-    });
+    const lifecycle = createLifecycle({ abortSignal: controller.signal });
+    lifecycle.emitEnd(terminal({ status: "error", stopReason: "superseded" }, { aborted: true }));
 
-    lifecycle.emitEnd({
-      metadata: { aborted: true },
-      outcome: buildAgentRunTerminalOutcome({ status: "error", stopReason: "superseded" }),
+    expectEvent({
+      aborted: true,
+      phase: "end",
+      stopReason: "superseded",
     });
-
-    expect(emitAgentEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({
-          aborted: true,
-          phase: "end",
-          stopReason: "superseded",
-        }),
-      }),
-    );
   });
 
   it("keeps post-turn errors narrow while publishing bounded delivery evidence", () => {
-    emitAgentEvent.mockClear();
     const secret = ["sk", "abcdefghijklmnopqrstuv"].join("-");
-    const lifecycle = createLifecycle("post-turn-delivery-owner");
-    lifecycle.emitPostTurnError(new Error("delivery failed"), {
-      metadata: {
-        suppressErrorNotice: true,
-        terminalDelivery: normalizeAgentRunTerminalDeliverySnapshot({
-          status: "failed",
-          resultCount: 0,
-          errorMessage: secret,
-        }),
-        terminalReceipt: {
-          runId: "unrelated-receipt",
-          sessionId: "session",
-          turnId: "turn",
-          requested: { provider: "provider", model: "model" },
-          effective: { provider: "provider", model: "model", responseModel: "model" },
-          successfulToolNames: [],
-          rerouted: false,
-          terminalDisposition: "visible",
+    const lifecycle = createLifecycle();
+    lifecycle.emitPostTurnError(
+      new Error("delivery failed"),
+      terminal(
+        {
+          status: "timeout",
+          stopReason: "timeout",
+          livenessState: "blocked",
+          timeoutPhase: "provider",
+          providerStarted: true,
         },
-        terminalReply: { disposition: "visible", text: secret },
-        unsafeMetadata: { secret },
-      },
-      outcome: buildAgentRunTerminalOutcome({
-        status: "timeout",
-        stopReason: "timeout",
-        livenessState: "blocked",
-        timeoutPhase: "provider",
-        providerStarted: true,
-      }),
-    });
+        {
+          suppressErrorNotice: true,
+          terminalDelivery: normalizeAgentRunTerminalDeliverySnapshot({
+            status: "failed",
+            resultCount: 0,
+            errorMessage: secret,
+          }),
+          terminalReceipt: { ...receipt, runId: "unrelated-receipt" },
+          terminalReply: { disposition: "visible", text: secret },
+          unsafeMetadata: { secret },
+        },
+      ),
+    );
 
-    const event = emitAgentEvent.mock.calls[0]?.[0];
-    assert.isDefined(event, "Expected the lifecycle owner to emit an event");
+    const event = emittedEvent();
     expect(event.data).toMatchObject({
       phase: "error",
       error: "delivery failed",
@@ -648,31 +505,26 @@ describe("createAgentCommandLifecycle", () => {
   });
 
   it("rejects malformed canonical metadata on error events", () => {
-    emitAgentEvent.mockClear();
     const secret = ["sk", "abcdefghijklmnopqrstuv"].join("-");
     const malicious = { authorization: `Bearer ${secret}`, nested: { secret } };
-    const lifecycle = createLifecycle("malformed-terminal-owner");
-    const terminal = {
-      metadata: {
-        aborted: malicious,
-        stopReason: malicious,
-        yielded: malicious,
-        timeoutPhase: malicious,
-        providerStarted: malicious,
-        livenessState: malicious,
-        replayInvalid: malicious,
-        terminalReceipt: normalizeAgentRunTerminalReceipt(malicious),
-        terminalDelivery: normalizeAgentRunTerminalDeliverySnapshot(malicious),
-        error: malicious,
-        unknownMetadata: malicious,
-      },
-      outcome: buildAgentRunTerminalOutcome({ status: "error", stopReason: "error" }),
-    };
+    const lifecycle = createLifecycle();
+    const completion = terminal(undefined, {
+      aborted: malicious,
+      stopReason: malicious,
+      yielded: malicious,
+      timeoutPhase: malicious,
+      providerStarted: malicious,
+      livenessState: malicious,
+      replayInvalid: malicious,
+      terminalReceipt: normalizeAgentRunTerminalReceipt(malicious),
+      terminalDelivery: normalizeAgentRunTerminalDeliverySnapshot(malicious),
+      error: malicious,
+      unknownMetadata: malicious,
+    });
 
-    lifecycle.emitResultError({ payloads: [], meta: { durationMs: 0 } }, false, terminal);
+    lifecycle.emitResultError({ payloads: [], meta: { durationMs: 0 } }, false, completion);
 
-    const event = emitAgentEvent.mock.calls[0]?.[0];
-    assert.isDefined(event, "Expected the lifecycle owner to emit an event");
+    const event = emittedEvent();
     expect(event.data).toMatchObject({ phase: "error", aborted: false, stopReason: "error" });
     expect(JSON.stringify(event)).not.toContain(secret);
     for (const field of [

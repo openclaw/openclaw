@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { CodeModeHeadlessAbortError, CodeModeHeadlessTimeoutError } from "./code-mode-errors.js";
+import { resolveCodeModeConfig } from "./code-mode-runtime.js";
 import { runCodeModeScriptHeadless } from "./code-mode.js";
 import {
   createHeadlessCodeModeHarness,
@@ -67,7 +68,7 @@ describe("headless Code Mode cancellation", () => {
 
   it("terminates an in-flight worker leg when aborted", async () => {
     const ctx = createHeadlessCodeModeHarness();
-    const config = testing.resolveCodeModeHeadlessConfig(ctx);
+    const config = resolveCodeModeConfig(ctx.runtimeConfig ?? ctx.config, ctx.agentId);
     const controller = new AbortController();
     const resultPromise = testing.runCodeModeExecutor(
       {
@@ -123,7 +124,7 @@ describe("headless Code Mode cancellation", () => {
     "classifies a host exchange that rejects with the scope $name error before its signal settles",
     async ({ createError, code, error }) => {
       const ctx = createHeadlessCodeModeHarness();
-      const config = testing.resolveCodeModeHeadlessConfig(ctx);
+      const config = resolveCodeModeConfig(ctx.runtimeConfig ?? ctx.config, ctx.agentId);
       // The scope observes its own deadline inside the host exchange, so the run
       // can reject before the abort controller that shares that deadline settles.
       const scopeSignal = new AbortController().signal;

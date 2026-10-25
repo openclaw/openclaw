@@ -12,6 +12,7 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import { planLegacyStateMigrationsReadOnly } from "./state-migrations.doctor.js";
 import { captureLegacyStateSnapshotIdentity as captureIdentity } from "./state-migrations.plan.js";
+import { createMigrationFixture } from "./state-migrations.shard-fixture.test-support.js";
 
 const tempDirs = createTrackedTempDirs();
 const byteOrder = endianness();
@@ -68,33 +69,7 @@ function writeWalIndexHeaderChecksum(header: Buffer): void {
 }
 
 async function makeFixture() {
-  const root = await tempDirs.make("openclaw-migration-plan-identity-");
-  const homeDir = path.join(root, "home");
-  const stateDir = path.join(root, "copied-state");
-  const configPath = path.join(root, "copied-openclaw.json");
-  fs.mkdirSync(homeDir, { recursive: true });
-  fs.mkdirSync(stateDir, { recursive: true });
-  fs.writeFileSync(configPath, "{}\n");
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    HOME: homeDir,
-    OPENCLAW_CONFIG_PATH: configPath,
-    OPENCLAW_STATE_DIR: stateDir,
-  };
-  const snapshot = { homeDir, stateDir, configPath };
-  return {
-    root,
-    ...snapshot,
-    env,
-    plan(stateDigest?: string) {
-      return planLegacyStateMigrationsReadOnly({
-        mode: "doctor",
-        candidate: { root, version: "test" },
-        snapshot: { ...snapshot, ...(stateDigest ? { stateDigest } : {}) },
-        env,
-      });
-    },
-  };
+  return createMigrationFixture(await tempDirs.make("openclaw-migration-plan-identity-"));
 }
 
 afterEach(async () => {
@@ -148,7 +123,15 @@ it.each([false, true])("plans without mutating WAL state (missing shm: %s)", asy
     expect(sha256(fs.readFileSync(shmPath))).toBe(sharedMemoryBefore);
     const stateDigest = requireDigest(plan);
     database.exec("INSERT INTO planner_probe(value) VALUES ('durable-change');");
-    expect((await fixture.plan(stateDigest)).refusal?.code).toBe("snapshot-identity-mismatch");
+    const stale = await fixture.plan({ snapshot: { ...plan.snapshot, stateDigest } });
+    expect(stale).toMatchObject({
+      mutationAllowed: false,
+      outcome: "refused",
+      refusal: { code: "snapshot-identity-mismatch" },
+      steps: [],
+    });
+    expect(stale.snapshot.stateDigest).toMatch(/^sha256:[0-9a-f]{64}$/u);
+    expect(stale.snapshot.stateDigest).not.toBe(stateDigest);
   }
 });
 
@@ -163,7 +146,7 @@ it("continues binding ordinary copied-state files whose names end in -shm", asyn
   const stateDigest = requireDigest(first);
 
   fs.writeFileSync(similarlyNamedPath, "second\n");
-  const stale = await fixture.plan(stateDigest);
+  const stale = await fixture.plan({ snapshot: { ...first.snapshot, stateDigest } });
   expect(stale.refusal?.code).toBe("snapshot-identity-mismatch");
 });
 

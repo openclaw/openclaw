@@ -1,6 +1,6 @@
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import {
   appendTranscriptEvent,
@@ -26,6 +26,7 @@ import { MAIN_SESSION_RESTART_RECOVERY_SOURCE_TOOL } from "../../../sessions/inp
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import type { PersistedUserTurnMessage } from "../../../sessions/user-turn-transcript.types.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import { createEnteredGate } from "../../entered-gate.test-support.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import {
@@ -53,6 +54,7 @@ async function withPersistedOrphanBoundary(
   options: {
     parent: boolean;
     metadata: boolean;
+    orphanProvenance?: Record<string, unknown>;
     detachLeaf?: boolean;
     restartRecovery?: boolean;
     suppressNextUserMessagePersistence?: boolean;
@@ -86,6 +88,7 @@ async function withPersistedOrphanBoundary(
       role: "user",
       content: "orphan wake",
       timestamp: 1,
+      ...(options.orphanProvenance ? { provenance: options.orphanProvenance } : {}),
       ...(options.idempotencyKey ? { idempotencyKey: options.idempotencyKey } : {}),
       ...(options.excludeFromContext ? { excludeFromContext: true } : {}),
       ...(options.detachLeaf
@@ -232,6 +235,60 @@ describe("prepareEmbeddedAttemptSessionBoundary orphan recovery", () => {
     },
   );
 
+  it.each([
+    { parent: false, metadata: false, prompt: "orphan wake" },
+    { parent: true, metadata: true, prompt: "new consult" },
+  ])("retains finalized Talk user speech through consult startup: $parent", async (options) => {
+    await withPersistedOrphanBoundary(
+      { ...options, orphanProvenance: { kind: "realtime_voice", sourceChannel: "talk" } },
+      async ({ input, manager, orphanId, target }) => {
+        input.attempt.prompt = options.prompt;
+        const boundary = await prepareEmbeddedAttemptSessionBoundary(input);
+        expect(boundary.orphanRepair?.removeLeaf).toBe(false);
+        expect(boundary.orphanRepair?.contextEnginePrompt.match(/orphan wake/g)).toHaveLength(1);
+        expect(input.activeSession.agent.state.messages).toEqual([]);
+        const consult: PersistedUserTurnMessage = {
+          role: "user",
+          content: boundary.orphanRepair?.contextEnginePrompt ?? options.prompt,
+          excludeFromContext: true,
+          display: false,
+          timestamp: 3,
+        };
+        await manager.appendMessageAsync(consult);
+        await manager.appendMessageAsync(
+          makeAssistantMessageFixture({
+            content: [{ type: "text", text: "consult reply" }],
+            timestamp: 4,
+          }),
+        );
+        const reopened = await SessionManager.openAsync(target);
+        expect(reopened.getBranch().map((entry) => entry.id)).toContain(orphanId);
+        expect(reopened.buildSessionContext().messages).toMatchObject([
+          { role: "user", content: "orphan wake" },
+          { role: "assistant", content: [{ type: "text", text: "consult reply" }] },
+        ]);
+        expect(loadTranscriptEventsSync(target)).not.toEqual(
+          expect.arrayContaining([expect.objectContaining({ type: "leaf" })]),
+        );
+      },
+    );
+  });
+
+  it.each([
+    { kind: "realtime_voice", sourceChannel: "discord" },
+    { kind: "realtime_voice" },
+    { kind: "internal_system", sourceChannel: "talk" },
+  ] as const)("keeps ordinary orphan repair for $kind / $sourceChannel", async (provenance) => {
+    await withPersistedOrphanBoundary(
+      { parent: false, metadata: false, orphanProvenance: provenance },
+      async ({ input, manager, orphanId }) => {
+        const boundary = await prepareEmbeddedAttemptSessionBoundary(input);
+        expect(boundary.orphanRepair?.removeLeaf).toBe(true);
+        expect(manager.getBranch().map((entry) => entry.id)).not.toContain(orphanId);
+      },
+    );
+  });
+
   it.each(["orphan", "current", "excluded"] as const)(
     "preserves speech finalized while orphan repair waits for write admission: %s",
     async (kind) => {
@@ -262,8 +319,7 @@ describe("prepareEmbeddedAttemptSessionBoundary orphan recovery", () => {
             input.attempt.userTurnTranscriptRecorder = recorder;
           }
           const reload = vi.spyOn(manager, "reloadPersistedTranscriptAsync");
-          const admitted = createDeferred();
-          const release = createDeferred();
+          const admittedGate = createEnteredGate();
           const speech = {
             ...makeAssistantMessageFixture({
               content: [{ type: "text", text: "voice reply" }],
@@ -273,13 +329,12 @@ describe("prepareEmbeddedAttemptSessionBoundary orphan recovery", () => {
             provenance: { kind: "realtime_voice" as const, sourceChannel: "talk" },
           };
           const writing = withSessionManagerWrite(manager, async () => {
-            admitted.resolve();
-            await release.promise;
+            await admittedGate.wait();
             await appendSessionTranscriptNote(target, speech);
           });
-          await admitted.promise;
+          await admittedGate.entered;
           const preparing = prepareEmbeddedAttemptSessionBoundary(input);
-          release.resolve();
+          admittedGate.release();
           const [, boundary] = await Promise.all([writing, preparing]);
 
           expect(boundary.orphanRepair).toBeUndefined();
@@ -403,12 +458,11 @@ describe("prepareEmbeddedAttemptSessionBoundary orphan recovery", () => {
           (error: unknown) => ({ kind: "rejected" as const, error }),
         );
         try {
-          await Promise.race([
+          await awaitGateBeforeSettlement(
             claimed.promise,
-            outcome.then(() => {
-              throw new Error("repair settled before its projection was claimed");
-            }),
-          ]);
+            outcome,
+            "repair settled before its projection was claimed",
+          );
           const abortReason = new Error("cancel owned projection wait");
           controller.abort(abortReason);
           await expect(outcome).resolves.toMatchObject({

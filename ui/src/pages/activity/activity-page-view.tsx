@@ -25,6 +25,7 @@ import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { LoadingState } from "../../components/solid/loading-state.tsx";
 import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
+import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import { SettingsStatus, SettingsToggle } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { registerActivityEnglish } from "../../i18n/locales/en-activity.ts";
@@ -210,68 +211,44 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
     }
 
     function ToolFilter(props: { toolNames: string[] }) {
-      let anchor!: HTMLButtonElement;
       let popover: PopoverHandle | undefined;
       return (
-        <>
-          <button
-            ref={(node) => {
-              anchor = node;
-            }}
-            id="activity-live-filter-trigger"
-            type="button"
-            class={[
-              "btn btn--sm activity-live-filter-trigger",
-              { active: Boolean(filters.toolFilter) },
-            ]}
-            title={t("activity.filters")}
-            aria-label={t("activity.filters")}
-            aria-haspopup="dialog"
-            aria-controls="activity-live-filter-popover"
-            aria-expanded="false"
-            onClick={() => popover?.overlay.request(!popover.overlay.open)}
-          >
-            <Icon name="listFilter" />
-          </button>
-          <Popover
-            id="activity-live-filter-popover"
-            ref={(handle) => {
-              popover = handle;
-            }}
-            anchor={anchor}
-            label={t("activity.filters")}
-            class="activity-live-filter-popover"
-            placement="bottom-end"
-            onOpenChange={(open) => {
-              if (open) {
-                popover?.overlay.surface.focus({ preventScroll: true });
-              }
-            }}
-          >
-            <div class="activity-live-filter-popover__panel">
-              <label class="field">
-                <span>{t("activity.toolFilter")}</span>
-                <select
-                  class="settings-select"
-                  aria-label={t("activity.toolFilter")}
-                  value={filters.toolFilter}
-                  onChange={(event) => update({ toolFilter: event.currentTarget.value })}
-                >
-                  <option value="" selected={filters.toolFilter === ""}>
-                    {t("activity.allTools")}
-                  </option>
-                  <For each={props.toolNames}>
-                    {(name) => (
-                      <option value={name} selected={name === filters.toolFilter}>
-                        {name}
-                      </option>
-                    )}
-                  </For>
-                </select>
-              </label>
-            </div>
-          </Popover>
-        </>
+        <Popover
+          id="activity-live-filter-popover"
+          triggerId="activity-live-filter-trigger"
+          triggerClass={[
+            "btn btn--sm activity-live-filter-trigger",
+            { active: Boolean(filters.toolFilter) },
+          ]}
+          triggerTitle={t("activity.filters")}
+          trigger={<Icon name="listFilter" />}
+          ref={(handle) => {
+            popover = handle;
+          }}
+          label={t("activity.filters")}
+          class="activity-live-filter-popover"
+          placement="bottom-end"
+          onOpenChange={(open) => {
+            if (open) {
+              popover?.overlay.surface.focus({ preventScroll: true });
+            }
+          }}
+        >
+          <div class="activity-live-filter-popover__panel">
+            <label class="field">
+              <span>{t("activity.toolFilter")}</span>
+              <SettingsSelect
+                aria-label={t("activity.toolFilter")}
+                value={filters.toolFilter}
+                onChange={(event) => update({ toolFilter: event.currentTarget.value })}
+                options={[
+                  { value: "", label: t("activity.allTools") },
+                  ...props.toolNames.map((name) => ({ value: name, label: name })),
+                ]}
+              />
+            </label>
+          </div>
+        </Popover>
       );
     }
 
@@ -534,7 +511,8 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
                 presenceViewers={presence()}
                 presentationRevision={pageRevision() + presentationTime()}
                 result={state().sessionActivity.result}
-                loading={pending() || state().sessionActivity.loading}
+                read={state().sessionActivity.read}
+                loading={pending()}
                 retrying={state().sessionActivity.retrying}
                 error={state().sessionActivity.error}
                 onRetry={() => pageProps.page.syncSessionActivity("retry")}
@@ -577,6 +555,7 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
                   basePath={state().context.basePath}
                   connected={state().context.gateway.snapshot.phase === "connected"}
                   state={state().runInspector}
+                  request={state().inspectorRead}
                   selector={runRoute()?.selector ?? null}
                   selectorId={runRoute()?.selectorId ?? null}
                   onLoadMoreExecutions={() => pageProps.page.loadMoreInspectorPage("executions")}
@@ -602,7 +581,8 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
                   navigate={state().context.navigate}
                   connected={state().context.gateway.snapshot.phase === "connected"}
                   result={state().sessionActivity.result}
-                  loading={pending() || state().sessionActivity.loading}
+                  read={state().sessionActivity.read}
+                  loading={pending() || state().sessionActivity.incomplete}
                   incomplete={state().sessionActivity.incomplete}
                   error={state().sessionActivity.error}
                   onRetry={() => pageProps.page.syncSessionActivity("retry")}

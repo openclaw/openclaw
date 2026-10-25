@@ -1,6 +1,7 @@
 import { expect, it, onTestFinished, vi } from "vitest";
 import { resolveAgentHarnessSelectionDecision } from "../../agents/harness/selection-decision.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
+import { modelDefinition } from "../../agents/model-auth.fixtures.test-support.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createTestPluginApi } from "../../plugin-sdk/plugin-test-api.js";
@@ -12,9 +13,10 @@ import {
 } from "../../plugins/runtime.js";
 import type { OpenClawPluginDefinition } from "../../plugins/types.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   listModels,
+  modelAuthStore,
+  withModelsListState,
   WITHOUT_OPENAI_ENV_AUTH,
 } from "./models-list-result.openai-routes.test-support.js";
 
@@ -30,22 +32,17 @@ const route = {
   baseUrl: "https://api.openai.com/v1",
 };
 function configuration(): OpenClawConfig {
-  const model: ModelDefinitionConfig = {
-    id: route.id,
+  const model: ModelDefinitionConfig = modelDefinition(route.id, {
     name: route.name,
     api: route.api,
-    reasoning: true,
-    input: ["text"],
     contextWindow: 1000000,
-    maxTokens: 8192,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     compat: {
       supportsReasoningEffort: true,
       supportedReasoningEfforts: ["low", "medium", "high"],
       supportsTemperature: false,
       codeMode: "preferred",
     },
-  };
+  });
   const defaults = {
     model: "openai/" + modelId,
     models: {
@@ -77,13 +74,7 @@ function configuration(): OpenClawConfig {
 it("accepts shared host tuning without changing normal OpenClaw selection", async () => {
   const previous = captureActivePluginRegistrySnapshot();
   onTestFinished(() => restoreActivePluginRegistrySnapshot(previous));
-  await withOpenClawTestState(
-    {
-      layout: "state-only",
-      prefix: "agentsapi-picker-",
-      agentEnv: "main",
-      env: WITHOUT_OPENAI_ENV_AUTH,
-    },
+  await withModelsListState(
     async (state) => {
       const cfg = configuration();
       const original = structuredClone(cfg);
@@ -104,16 +95,13 @@ it("accepts shared host tuning without changing normal OpenClaw selection", asyn
         workspaceDir: state.workspaceDir,
         pluginRegistry: registry,
         catalog: [route],
-        preparedAuthStore: {
-          version: 1,
-          profiles: {
-            "openai:fixture": {
-              type: "api_key",
-              provider: "openai",
-              key: "synthetic-test-key",
-            },
+        preparedAuthStore: modelAuthStore({
+          "openai:fixture": {
+            type: "api_key",
+            provider: "openai",
+            key: "synthetic-test-key",
           },
-        },
+        }),
       });
       expect(result.models.find((model) => model.id === modelId)?.runtimeChoices).toEqual(
         expect.arrayContaining([
@@ -130,8 +118,7 @@ it("accepts shared host tuning without changing normal OpenClaw selection", asyn
           modelId,
           agentHarnessRuntimeOverride,
         }).selectedHarnessId;
-      expect(select()).toBe("openclaw");
-      expect(select("agentsapi")).toBe("agentsapi");
+      expect([select(), select("agentsapi")]).toEqual(["openclaw", "agentsapi"]);
       const selectPrepared = (
         config: OpenClawConfig,
         requestTransportOverrides: "none" | "present" = "none",
@@ -179,5 +166,6 @@ it("accepts shared host tuning without changing normal OpenClaw selection", asyn
       registry.agentHarnesses[0]!.harness = harness;
       expect(cfg).toEqual(original);
     },
+    { agentEnv: "main", env: WITHOUT_OPENAI_ENV_AUTH },
   );
 });

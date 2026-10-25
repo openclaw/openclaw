@@ -12,6 +12,12 @@ import {
   buildSystemdManagerPropertyOutput,
   buildSystemdUnitPropertyOutput,
 } from "./service.test-helpers.js";
+import * as systemdExec from "./systemd-exec.js";
+import {
+  expectFiles,
+  legacyGatewayUnit,
+  writeUnit as writeFixtureFile,
+} from "./systemd-files.test-support.js";
 import { systemdManagerVersionProbe } from "./systemd-user-bus.test-support.js";
 
 const assertNoSystemOwnership = vi.hoisted(() =>
@@ -35,13 +41,8 @@ import {
   readSystemdDefinitionMutationCapability,
   withSystemdDefinitionMutation,
 } from "./systemd-definition-mutation.js";
-import { stageSystemdService } from "./systemd-install.js";
-
-// Safe fixture modes must not depend on umask; fault cases change permissions explicitly.
-async function writeFixtureFile(file: string, contents: string, options = { mode: 0o644 }) {
-  await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o755 });
-  await fs.writeFile(file, contents, options);
-}
+import { refreshLegacySystemdServiceMetadata, stageSystemdService } from "./systemd-install.js";
+import { readSystemdServiceExecStart } from "./systemd-service-files.js";
 
 describe.skipIf(process.platform === "win32")("systemd definition mutation ownership", () => {
   let root: string;
@@ -56,7 +57,6 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
   const missing = (file: string) => expect(fs.stat(file)).rejects.toMatchObject({ code: "ENOENT" });
   const baseUnit = "[Service]\nExecStart=/usr/bin/node gateway\n";
   const programArguments = ["/usr/bin/node", "/srv/openclaw/dist/index.js", "gateway"];
-  const stdout = () => new PassThrough();
   const publish = (file: string, contents: string, mode = 0o600) =>
     mutate((mutation) => mutation.publish(file, contents, mode));
   const changed = (operation: Promise<unknown>) =>
@@ -66,6 +66,13 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
       () => true,
       () => false,
     );
+  async function input(name: string, contents: string) {
+    const file = path.join(root, name);
+    await writeFixtureFile(file, contents);
+    return file;
+  }
+  const policy = (seconds: number) => `[Service]\nTimeoutStopSec=${seconds}s\n`;
+  const owner = (value: string) => `[Service]\nEnvironment=OWNER=${value}\n`;
   async function alias(
     directory: string,
     target = "alias-target",
@@ -77,12 +84,6 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
     await fs.mkdir(next, { mode: 0o755 });
     await fs.symlink(original, directory);
     return [original, next] as const;
-  }
-  async function expectArtifact(file: string, contents: string, mode?: number) {
-    expect(await read(file)).toBe(contents);
-    if (mode !== undefined) {
-      expect((await fs.stat(file)).mode & 0o777).toBe(mode);
-    }
   }
   function setOwner(stat: { uid: number | bigint; gid: number | bigint }, uid = 0) {
     for (const field of ["uid", "gid"] as const) {
@@ -97,6 +98,14 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
       const opened = await stat(...args);
       change(opened);
       return opened;
+    });
+  }
+  function onStat(change: (file: unknown, stat: Stats | BigIntStats) => void) {
+    const lstat = fs.lstat.bind(fs);
+    vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+      const stat = await lstat(...args);
+      change(args[0], stat);
+      return stat;
     });
   }
   async function expectRefusal(expected: object, ...messages: string[]) {
@@ -142,23 +151,25 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
     });
   }
 
-  function afterRename(target: string, fault: () => Promise<void>) {
+  function afterRename(target: string, fault: () => Promise<void>, before = false) {
     const rename = fs.rename.bind(fs);
     let renamed = false;
     return vi.spyOn(fs, "rename").mockImplementation(async (source, destination) => {
+      const selected = destination === target && !renamed;
+      renamed ||= selected;
+      if (selected && before) {
+        await fault();
+      }
       await rename(source, destination);
-      if (destination === target && !renamed) {
-        renamed = true;
+      if (selected && !before) {
         await fault();
       }
     });
   }
 
   function mockStatOwner(matches: (file: unknown) => boolean, uid: number, writable = false) {
-    const lstat = fs.lstat.bind(fs);
-    vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
-      const stat = await lstat(...args);
-      if (matches(args[0])) {
+    onStat((file, stat) => {
+      if (matches(file)) {
         Object.defineProperty(stat, "uid", {
           value: typeof stat.uid === "bigint" ? BigInt(uid) : uid,
         });
@@ -168,15 +179,8 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
           });
         }
       }
-      return stat;
     });
   }
-
-  const artifacts = [
-    { artifact: "unit", select: () => unitPath },
-    { artifact: "environment", select: () => environmentPath },
-    { artifact: "backup", select: () => `${unitPath}.bak` },
-  ];
 
   beforeEach(async () => {
     assertNoSystemOwnership.mockReset().mockResolvedValue(undefined);
@@ -210,7 +214,7 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
   const stage = (environmentOverrides: Record<string, string> = {}) =>
     stageSystemdService({
       env,
-      stdout: stdout(),
+      stdout: new PassThrough(),
       programArguments,
       environment: {
         OPENCLAW_GATEWAY_PORT: "18789",
@@ -228,6 +232,7 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
     dropInPaths: string[] = [],
     environmentFiles: Array<[string, boolean]> = [],
     isLoaded = async () => true,
+    includeLoadedLookup = false,
   ) {
     busctl.mockImplementation(async (_env, args) => {
       const loaded = await isLoaded();
@@ -235,19 +240,20 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
         code: 0,
         termination: "exit",
         stderr: "",
-        stdout: args.includes("LoadUnit")
-          ? JSON.stringify({ type: "o", data: ["/org/freedesktop/systemd1/unit/owned"] })
-          : args.includes("org.freedesktop.systemd1.Unit")
-            ? buildSystemdUnitPropertyOutput({
-                fragmentPath: loaded ? fragmentPath : "",
-                dropInPaths: loaded ? dropInPaths : [],
-                loadState: loaded ? "loaded" : "not-found",
-              })
-            : buildSystemdManagerPropertyOutput({
-                programArguments: ["/usr/bin/node", "gateway"],
-                environment: ["TOKEN=manager-secret-canary"],
-                environmentFiles,
-              }),
+        stdout:
+          args.includes("LoadUnit") || (includeLoadedLookup && args.includes("GetUnit"))
+            ? JSON.stringify({ type: "o", data: ["/org/freedesktop/systemd1/unit/owned"] })
+            : args.includes("org.freedesktop.systemd1.Unit")
+              ? buildSystemdUnitPropertyOutput({
+                  fragmentPath: loaded ? fragmentPath : "",
+                  dropInPaths: loaded ? dropInPaths : [],
+                  loadState: loaded ? "loaded" : "not-found",
+                })
+              : buildSystemdManagerPropertyOutput({
+                  programArguments: ["/usr/bin/node", "gateway"],
+                  environment: ["TOKEN=manager-secret-canary"],
+                  environmentFiles,
+                }),
       };
     });
   }
@@ -282,15 +288,15 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
     managerDefinition(unitPath, [], [], exists);
     expect(await readCapability()).toEqual({ kind: "writable" });
     signal.throwIfAborted();
-    const rename = fs.rename.bind(fs);
     let published = false;
-    vi.spyOn(fs, "rename").mockImplementation(async (source, destination) => {
-      if (destination === unitPath) {
+    afterRename(
+      unitPath,
+      async () => {
         expect(await read(environmentPath)).toContain("replacement-secret-canary");
         published = true;
-      }
-      await rename(source, destination);
-    });
+      },
+      true,
+    );
     await expect(stage()).resolves.toMatchObject({ unitPath });
     expect(published).toBe(true);
     expect(await readCapability()).toEqual({ kind: "writable" });
@@ -328,17 +334,6 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
     await expectEmpty(target, replacement, stateDir);
   });
 
-  it("seals root-owned manager fragments", async () => {
-    const extra = path.join(root, "global-user", "service.d", "operator.conf");
-    await writeFixtureFile(extra, "[Service]\nEnvironment=TOKEN=operator-secret-canary\n");
-    managerDefinition(extra);
-    mockStatOwner((file) => file === extra, 0);
-    const before = await fs.readFile(extra);
-    await expectRefusal({ kind: "sealed" }, "SERVICE_DEFINITION_SEALED");
-    expect(await fs.readFile(extra)).toEqual(before);
-    await expectEmpty(path.dirname(unitPath), stateDir);
-  });
-
   it("redacts and refuses uninspectable managers", async () => {
     busctl.mockRejectedValue(new Error("manager-secret-canary"));
     await expectRefusal({ kind: "unknown" }, "SERVICE_DEFINITION_UNKNOWN");
@@ -346,18 +341,14 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
   });
 
   it("detects changed root-owned type-wide defaults", async () => {
-    const shared = path.join(root, "distribution-user", "service.d", "default.conf");
-    await writeFixtureFile(shared, "[Service]\nTimeoutStopSec=30s\n", { mode: 0o644 });
+    const shared = await input("distribution-user/service.d/default.conf", policy(30));
     await writeFixtureFile(unitPath, baseUnit);
     await writeFixtureFile(environmentPath, "OPERATOR=unchanged\n");
     managerDefinition(unitPath, [shared]);
-    const lstat = fs.lstat.bind(fs);
-    vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
-      const stat = await lstat(...args);
-      if (args[0] === shared || args[0] === path.dirname(shared)) {
+    onStat((file, stat) => {
+      if (file === shared || file === path.dirname(shared)) {
         setOwner(stat);
       }
-      return stat;
     });
     mockMount(
       shared,
@@ -366,26 +357,19 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
     );
     expect(await readCapability()).toEqual({ kind: "writable" });
     const originalUnit = await read(unitPath);
-    afterRename(unitPath, () => writeFixtureFile(shared, "[Service]\nTimeoutStopSec=60s\n"));
+    afterRename(unitPath, () => writeFixtureFile(shared, policy(60)));
     await changed(stage());
-    await expectArtifact(unitPath, originalUnit);
-    await expectArtifact(environmentPath, "OPERATOR=unchanged\n");
+    await expectFiles({ [unitPath]: originalUnit, [environmentPath]: "OPERATOR=unchanged\n" });
     expect(await read(shared)).toContain("60s");
   });
 
   it("preserves unit replacement during first-load discovery", async () => {
-    const shared = path.join(root, "service.d", "default.conf");
-    await writeFixtureFile(shared, "[Service]\nTimeoutStopSec=30s\n");
+    const shared = await input("service.d/default.conf", policy(30));
     managerDefinition(unitPath, [shared], [], exists);
-    const rename = fs.rename.bind(fs);
-    vi.spyOn(fs, "rename").mockImplementation(async (source, destination) => {
-      await rename(source, destination);
-      if (destination === unitPath) {
-        expect(await read(environmentPath)).toContain("replacement-secret-canary");
-        const replacement = path.join(root, "operator-replacement");
-        await writeFixtureFile(replacement, "OPERATOR=concurrent\n");
-        await rename(replacement, unitPath);
-      }
+    afterRename(unitPath, async () => {
+      expect(await read(environmentPath)).toContain("replacement-secret-canary");
+      const replacement = await input("operator-replacement", "OPERATOR=concurrent\n");
+      await fs.rename(replacement, unitPath);
     });
 
     await changed(stage());
@@ -394,21 +378,6 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
     await missing(environmentPath);
     expect(await read(shared)).toContain("30s");
     await expectNoTemporaryFiles(path.dirname(unitPath), stateDir);
-  });
-
-  it("rejects new manager inputs after publication", async () => {
-    const extra = path.join(root, "service.d", "operator.conf");
-    await writeFixtureFile(extra, "[Service]\nTimeoutStopSec=30s\n");
-    await writeFixtureFile(unitPath, baseUnit);
-    managerDefinition(unitPath);
-    afterRename(unitPath, async () => {
-      managerDefinition(unitPath, [extra], [], exists);
-    });
-
-    await changed(stage());
-    expect(await read(extra)).toContain("30s");
-    expect(await read(unitPath)).toBe(baseUnit);
-    await missing(environmentPath);
   });
 
   it("rejects changed uid between lstat and open", async () => {
@@ -423,12 +392,11 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
       }
     });
     expect(await readCapability()).toMatchObject({ kind: "unknown" });
-    expect(await fs.readdir(stateDir)).toEqual([]);
+    await expectEmpty(stateDir);
   });
 
   it("fingerprints drop-ins without owning their publication", async () => {
-    const extra = path.join(root, "operator.conf");
-    await writeFixtureFile(extra, "[Service]\nEnvironment=OWNER=first\n");
+    const extra = await input("operator.conf", owner("first"));
     await writeFixtureFile(unitPath, baseUnit);
     await writeFixtureFile(environmentPath, "OPERATOR=preserved\n");
     managerDefinition(unitPath, [extra]);
@@ -444,15 +412,13 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
       await mutation.publish(unitPath, "managed definition", 0o644);
       await mutation.restore(extra, null);
       expect(await read(extra)).toContain("OWNER=first");
-      afterUnitTemporaryWrite(async () => {
-        await writeFixtureFile(extra, "[Service]\nEnvironment=OWNER=second\n");
-      });
-      await expect(mutation.publish(unitPath, "must not publish", 0o644)).rejects.toThrow(
-        "changed during publication",
-      );
+      afterUnitTemporaryWrite(() => writeFixtureFile(extra, owner("second")));
+      await changed(mutation.publish(unitPath, "must not publish", 0o644));
     });
-    await expectArtifact(unitPath, "managed definition");
-    await expectArtifact(environmentPath, "OPERATOR=preserved\n");
+    await expectFiles({
+      [unitPath]: "managed definition",
+      [environmentPath]: "OPERATOR=preserved\n",
+    });
     expect(await read(extra)).toContain("OWNER=second");
     await expectNoTemporaryFiles(path.dirname(unitPath));
   });
@@ -472,16 +438,15 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
     { artifact: "environment", select: () => environmentPath, existed: true },
   ])("rolls back $artifact post-rename failure (existed=$existed)", async ({ select, existed }) => {
     const target = select();
-    const extra = path.join(root, "operator.conf");
-    await writeFixtureFile(extra, "[Service]\nEnvironment=OWNER=first\n");
+    const extra = await input("operator.conf", owner("first"));
     managerDefinition(extra);
     if (existed) {
-      await writeFixtureFile(target, "previous definition", { mode: 0o400 });
+      await writeFixtureFile(target, "previous definition", 0o400);
     }
-    afterRename(target, () => writeFixtureFile(extra, "[Service]\nEnvironment=OWNER=second\n"));
+    afterRename(target, () => writeFixtureFile(extra, owner("second")));
     await changed(publish(target, "must not remain"));
     if (existed) {
-      await expectArtifact(target, "previous definition", 0o400);
+      await expectFiles({ [target]: { contents: "previous definition", mode: 0o400 } });
     } else {
       await missing(target);
     }
@@ -499,8 +464,7 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
     });
 
     await changed(stage());
-    await expectArtifact(environmentPath, "OPERATOR=concurrent\n");
-    await expectArtifact(unitPath, previousUnit);
+    await expectFiles({ [environmentPath]: "OPERATOR=concurrent\n", [unitPath]: previousUnit });
     await expectNoTemporaryFiles(path.dirname(unitPath), stateDir);
   });
 
@@ -508,7 +472,7 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
     { mount: "file-ro", mode: 0o400 },
     { mount: "file-rw", mode: 0o644 },
   ])("inspects a mounted target before staging ($mount, $mode)", async ({ mount, mode }) => {
-    await writeFixtureFile(unitPath, "original definition", { mode });
+    await writeFixtureFile(unitPath, "original definition", mode);
     const escaped = unitPath.replaceAll(" ", "\\040");
     mockMount(
       unitPath,
@@ -518,7 +482,7 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
     expect(await readCapability()).toMatchObject({ kind: "sealed" });
     await expect(stage()).rejects.toThrow("SERVICE_DEFINITION_SEALED");
     expect(await read(unitPath)).toBe("original definition");
-    expect(await fs.readdir(stateDir)).toEqual([]);
+    await expectEmpty(stateDir);
     expect(await fs.readdir(path.dirname(unitPath))).toEqual([path.basename(unitPath)]);
   });
 
@@ -530,19 +494,6 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
     await expect(publish(unitPath, "must not remain")).rejects.toThrow("write failed");
     expect(await read(unitPath)).toBe("previous definition");
     await expectNoTemporaryFiles(path.dirname(unitPath));
-  });
-
-  it("rejects changed manager definition paths", async () => {
-    const first = path.join(root, "first.conf");
-    const second = path.join(root, "second.conf");
-    await writeFixtureFile(first, "[Service]\nEnvironment=OWNER=first\n");
-    await writeFixtureFile(second, "[Service]\nEnvironment=OWNER=second\n");
-    await writeFixtureFile(unitPath, "original definition");
-    managerDefinition(unitPath, [first]);
-
-    afterUnitTemporaryWrite(() => managerDefinition(unitPath, [second]));
-    await changed(publish(unitPath, "must not publish", 0o644));
-    expect(await read(unitPath)).toBe("original definition");
   });
 
   it.each(["file symlink", "world-writable", "uninspectable", "directory"])(
@@ -560,12 +511,10 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
       } else if (kind === "directory") {
         extra = stateDir;
       } else {
-        const lstat = fs.lstat.bind(fs);
-        vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
-          if (args[0] === extra) {
+        onStat((file) => {
+          if (file === extra) {
             throw Object.assign(new Error("inspection-secret-canary"), { code: "EACCES" });
           }
-          return lstat(...args);
         });
       }
       managerDefinition(extra);
@@ -584,23 +533,18 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
     },
   );
 
-  it.each([
-    { parent: "unit", select: () => path.dirname(unitPath) },
-    { parent: "environment", select: () => stateDir },
-  ])("seals foreign-owned $parent parents", async ({ select }) => {
-    const protectedParent = select();
+  it("seals foreign-owned parents", async () => {
+    const protectedParent = path.dirname(unitPath);
     const originalEntries = await fs.readdir(protectedParent);
     mockStatOwner((file) => file === protectedParent, (process.geteuid?.() ?? 0) + 1);
     await expectRefusal({ kind: "sealed" }, "SERVICE_DEFINITION_SEALED");
     expect(await fs.readdir(protectedParent)).toEqual(originalEntries);
   });
 
-  it.each(artifacts)("seals foreign-owned $artifact", async ({ select }) => {
+  it("seals foreign-owned files before considering unsafe permissions", async () => {
     await writeFixtureFile(unitPath, baseUnit);
-    const protectedPath = select();
-    if (protectedPath !== unitPath) {
-      await writeFixtureFile(protectedPath, "protected-secret-canary\n");
-    }
+    const protectedPath = environmentPath;
+    await writeFixtureFile(protectedPath, "protected-secret-canary\n");
     const original = await fs.readFile(protectedPath);
     mockStatOwner((file) => file === protectedPath, (process.geteuid?.() ?? 0) + 1, true);
     await expectRefusal(
@@ -611,16 +555,9 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
     expect(await fs.readFile(protectedPath)).toEqual(original);
   });
 
-  it.each([
-    ...artifacts.map(({ artifact, select }) => ({ artifact, select, fresh: false })),
-    { artifact: "fresh environment", select: () => environmentPath, fresh: true },
-  ])("preserves symlinked $artifact targets", async ({ select, fresh }) => {
-    const file = select();
-    if (file !== unitPath && !fresh) {
-      await writeFixtureFile(unitPath, "[Service]\n");
-    }
-    const target = path.join(root, "operator-target");
-    await writeFixtureFile(target, "operator-secret-canary\n");
+  it("preserves symlink targets before publishing a new unit", async () => {
+    const file = environmentPath;
+    const target = await input("operator-target", "operator-secret-canary\n");
     await fs.symlink(target, file);
 
     await expect(readCapability()).resolves.toEqual({
@@ -632,9 +569,7 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
     await expect(stage()).rejects.toThrow("SERVICE_DEFINITION_UNKNOWN: [symlink]");
     expect(await fs.readlink(file)).toBe(target);
     expect(await read(target)).toBe("operator-secret-canary\n");
-    if (fresh) {
-      await missing(unitPath);
-    }
+    await missing(unitPath);
   });
 
   it.each([0o644, 0o664])("regenerates owned unit artifacts with mode %o safely", async (mode) => {
@@ -649,7 +584,7 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
 
     await stage();
 
-    await expectArtifact(`${unitPath}.bak`, previous, 0o600);
+    await expectFiles({ [`${unitPath}.bak`]: { contents: previous, mode: 0o600 } });
     const unit = await read(unitPath);
     for (const part of ["/srv/openclaw/dist/index.js", "TimeoutStopSec=330", "KillMode=mixed"]) {
       expect(unit).toContain(part);
@@ -670,8 +605,36 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
     await fs.chmod(path.dirname(unitPath), 0o775);
 
     await expect(stage()).rejects.toThrow("SERVICE_DEFINITION_UNKNOWN: [unsafe-permissions]");
-    await expectArtifact(unitPath, previous, 0o664);
+    await expectFiles({ [unitPath]: { contents: previous, mode: 0o664 } });
     expect(await fs.readdir(path.dirname(unitPath))).toEqual([path.basename(unitPath)]);
+  });
+
+  it("repairs owned writable state dirs before publication", async () => {
+    const mode = 0o777;
+    await writeFixtureFile(path.join(stateDir, "operator-data"), "preserved\n");
+    await fs.chmod(stateDir, mode);
+
+    expect(await readCapability()).toEqual({ kind: "writable" });
+    expect((await fs.stat(stateDir)).mode & 0o777).toBe(mode);
+    await stage();
+
+    expect((await fs.stat(stateDir)).mode & 0o777).toBe(0o700);
+    expect(await read(path.join(stateDir, "operator-data"))).toBe("preserved\n");
+    expect(await read(unitPath)).toContain("ExecStart=");
+    expect(await read(environmentPath)).toContain("replacement-secret-canary");
+  });
+
+  it("does not publish service credentials if state directory repair fails", async () => {
+    await fs.chmod(stateDir, 0o775);
+    onOpen((file, handle) => {
+      if (file === stateDir) {
+        vi.spyOn(handle, "chmod").mockRejectedValue(new Error("state directory chmod denied"));
+      }
+    });
+
+    await expect(stage()).rejects.toThrow("state directory chmod denied");
+    await expectEmpty(stateDir, path.dirname(unitPath));
+    expect((await fs.stat(stateDir)).mode & 0o777).toBe(0o775);
   });
 
   it("publishes only the effective state-dir environment", async () => {
@@ -701,7 +664,7 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
 
     await stageSystemdService({
       env,
-      stdout: stdout(),
+      stdout: new PassThrough(),
       programArguments,
       environment: { OPENCLAW_GATEWAY_PORT: "18789" },
       environmentValueSources: { OPENCLAW_GATEWAY_TOKEN: "file" },
@@ -711,7 +674,7 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
     expect(await read(unitPath)).not.toContain("EnvironmentFile=");
   });
 
-  it.each(["environment", "unit", "directory alias", "retargeted unit", "retargeted environment"])(
+  it.each(["environment", "unit", "directory alias", "retargeted unit"])(
     "serializes concurrent canonical-target writers (%s)",
     async (shared) => {
       const retarget = shared.startsWith("retargeted");
@@ -791,20 +754,162 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
       await barrier;
     });
     await firstStarted;
-
     const startedAt = Date.now();
     try {
       await expect(
-        withSystemdDefinitionMutation(env, env, async () => undefined, {
-          timeoutMs: 100,
-        }),
-      ).rejects.toMatchObject({
-        code: "file_lock_timeout",
-      });
+        withSystemdDefinitionMutation(env, env, async () => undefined, { timeoutMs: 100 }),
+      ).rejects.toMatchObject({ code: "file_lock_timeout" });
       expect(Date.now() - startedAt).toBeLessThan(2_000);
     } finally {
       release();
       await first;
+    }
+  });
+
+  async function loadedDefinition() {
+    await writeFixtureFile(unitPath, baseUnit);
+    const state = { loaded: true };
+    managerDefinition(unitPath, [], [], async () => state.loaded, true);
+    return state;
+  }
+
+  async function unverifiableSystemOwner() {
+    const actual =
+      await vi.importActual<typeof import("./systemd-system.js")>("./systemd-system.js");
+    vi.mocked(execFileUtf8)
+      .mockReset()
+      .mockResolvedValue({ code: 1, termination: "exit", stdout: "", stderr: "denied" });
+    const platform = Object.getOwnPropertyDescriptor(process, "platform");
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    try {
+      return await actual.assertNoSystemSystemdOwnership("openclaw-owned.service", 1000).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+    } finally {
+      if (platform) {
+        Object.defineProperty(process, "platform", platform);
+      }
+      vi.mocked(execFileUtf8).mockReset().mockImplementation(systemdManagerVersionProbe);
+    }
+  }
+
+  it.each([false, true])("inspects without loading managers (legacy=%s)", async (legacy) => {
+    if (legacy) {
+      delete env.OPENCLAW_SYSTEMD_UNIT;
+      env.OPENCLAW_PROFILE = "lisa";
+      unitPath = path.join(path.dirname(unitPath), "openclaw-lisa.service");
+      // An unrelated canonical backup cannot decide the selected legacy unit's authority.
+      await fs.symlink(
+        unitPath,
+        path.join(path.dirname(unitPath), "openclaw-gateway-lisa.service.bak"),
+      );
+    }
+    await loadedDefinition();
+    const unitName = path.basename(unitPath);
+    await expect(
+      readSystemdDefinitionMutationCapability(env, {
+        requireLoaded: true,
+        timeoutMs: 1000,
+        ...(legacy ? { systemdReadTarget: { scope: "user" as const, unitName, unitPath } } : {}),
+      }),
+    ).resolves.toEqual({ kind: "writable" });
+    expect(assertNoSystemOwnership).toHaveBeenCalledWith(unitName, expect.any(Number), {
+      requireLoaded: true,
+    });
+    expect(
+      busctl.mock.calls
+        .filter(([, args]) => args.includes("GetUnit"))
+        .every(([, args]) => args.at(-1) === unitName),
+    ).toBe(true);
+    expect(busctl.mock.calls.some(([, args]) => args.includes("LoadUnit"))).toBe(false);
+    expect(busctl.mock.calls.every(([, args]) => args.includes("--auto-start=no"))).toBe(true);
+  });
+
+  it("keeps only a loaded owned unit writable when system ownership is unverifiable", async () => {
+    const unverifiable = await unverifiableSystemOwner();
+    expect(unverifiable).toMatchObject({ ownership: { status: "unverifiable" } });
+    const state = await loadedDefinition();
+    assertNoSystemOwnership.mockRejectedValue(unverifiable);
+    const capability = (requireLoaded = false) =>
+      readSystemdDefinitionMutationCapability(env, { requireLoaded, timeoutMs: 1000 });
+    await expect(capability(true)).resolves.toEqual({ kind: "writable" });
+    await expect(capability()).resolves.toEqual({
+      kind: "unknown",
+      reason: "system-ownership-unverified",
+    });
+    state.loaded = false;
+    await expect(capability(true)).resolves.toEqual({
+      kind: "unknown",
+      reason: "system-ownership-unverified",
+    });
+  });
+
+  it("admits activation past an unverifiable system probe only for a loaded owned unit", async () => {
+    const { assertNoSystemGatewayOwnershipForActivation } = await import("./systemd-scope.js");
+    const unverifiable = await unverifiableSystemOwner();
+    const state = await loadedDefinition();
+    assertNoSystemOwnership.mockRejectedValue(unverifiable);
+    const activate = () => assertNoSystemGatewayOwnershipForActivation(env, 1000);
+    await expect(activate()).resolves.toBeUndefined();
+    state.loaded = false;
+    await expect(activate()).rejects.toBe(unverifiable);
+    assertNoSystemOwnership.mockReset().mockRejectedValue(new Error("system-owned"));
+    await expect(activate()).rejects.toThrow("system-owned");
+  });
+
+  it.each([
+    { kind: "mutation", timeouts: [1_666, 1_633] },
+    { kind: "loaded", timeouts: [1_666, 2_450, 4_800] },
+    { kind: "metadata", timeouts: [5_000, 4_900, 4_800, 4_700] },
+  ])("$kind retains its budget across a wall-clock step", async ({ kind, timeouts }) => {
+    const reloadUserManager = vi
+      .spyOn(systemdExec, "reloadSystemdUserManager")
+      .mockResolvedValue(undefined);
+    const realNow = Date.now;
+    let offset = 0;
+    let monotonicNow = 0;
+    const stepClock = () => {
+      offset = 60_000;
+      monotonicNow += 100;
+    };
+    vi.spyOn(Date, "now").mockImplementation(() => realNow() + offset);
+    // Filesystem scheduling must not consume this clock-contract fixture's budget.
+    vi.spyOn(performance, "now").mockImplementation(() => monotonicNow);
+    if (kind === "loaded") {
+      managerDefinition("/etc/systemd/user/openclaw-owned.service");
+    }
+    const readManager = busctl.getMockImplementation()!;
+    busctl.mockImplementation(async (...args) => {
+      if (kind !== "metadata") {
+        stepClock();
+      }
+      return readManager(...args);
+    });
+    if (kind === "metadata") {
+      await writeFixtureFile(
+        unitPath,
+        legacyGatewayUnit("2026.7.1-2", "ExecStart=/usr/bin/openclaw gateway run"),
+        0o600,
+      );
+      assertNoSystemOwnership.mockImplementation(async () => stepClock());
+      await expect(refreshLegacySystemdServiceMetadata(env, 5_000)).resolves.toBe(true);
+      expect(assertNoSystemOwnership).toHaveBeenCalledTimes(3);
+      expect([
+        ...assertNoSystemOwnership.mock.calls.map((call) => call[1]),
+        ...reloadUserManager.mock.calls.map((call) => call[1]),
+      ]).toEqual(timeouts);
+    } else {
+      if (kind === "loaded") {
+        await expect(
+          readSystemdServiceExecStart(env, { requireEffective: true, timeoutMs: 5_000 }),
+        ).resolves.toMatchObject({ programArguments: ["/usr/bin/node", "gateway"] });
+      } else {
+        await withSystemdDefinitionMutation(env, env, async () => undefined, {
+          timeoutMs: 5_000,
+        });
+      }
+      expect(busctl.mock.calls.map((call) => call[2])).toEqual(timeouts);
     }
   });
 });

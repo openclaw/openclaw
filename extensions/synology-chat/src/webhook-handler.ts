@@ -19,6 +19,7 @@ import {
 } from "openclaw/plugin-sdk/webhook-ingress";
 import { sendHttpRequestRejection } from "openclaw/plugin-sdk/webhook-request-guards";
 import * as synologyClient from "./client.js";
+import type { SynologyInboundMessage } from "./inbound-context.js";
 import { validateToken, authorizeUserForDmWithIngress, sanitizeInput } from "./security.js";
 import type { SynologyWebhookPayload, ResolvedSynologyChatAccount } from "./types.js";
 import {
@@ -87,50 +88,6 @@ class InvalidTokenRateLimiter {
   }
 }
 
-function getRateLimiter(account: ResolvedSynologyChatAccount): FixedWindowRateLimiter {
-  let entry = rateLimiters.get(account.accountId);
-  if (!entry || entry.limit !== account.rateLimitPerMinute) {
-    entry?.limiter.clear();
-    entry = {
-      limit: account.rateLimitPerMinute,
-      limiter: createFixedWindowRateLimiter({
-        windowMs: 60_000,
-        maxRequests: Math.max(1, Math.floor(account.rateLimitPerMinute)),
-        maxTrackedKeys: 5_000,
-      }),
-    };
-    rateLimiters.set(account.accountId, entry);
-  }
-  return entry.limiter;
-}
-
-function getInvalidTokenRateLimiter(account: ResolvedSynologyChatAccount): InvalidTokenRateLimiter {
-  const limit = Math.min(account.rateLimitPerMinute, PREAUTH_MAX_REQUESTS_PER_MINUTE);
-  let rl = invalidTokenRateLimiters.get(account.accountId);
-  if (!rl || rl.limit !== limit) {
-    rl?.clear();
-    rl = new InvalidTokenRateLimiter(limit);
-    invalidTokenRateLimiters.set(account.accountId, rl);
-  }
-  return rl;
-}
-
-function getSynologyWebhookInvalidTokenRateLimitKey(params: {
-  req: IncomingMessage;
-  trustedProxies?: string[];
-  allowRealIpFallback?: boolean;
-}): string {
-  return (
-    resolveRequestClientIp(
-      params.req,
-      params.trustedProxies,
-      params.allowRealIpFallback === true,
-    ) ??
-    params.req.socket?.remoteAddress ??
-    "unknown"
-  );
-}
-
 function pickAlias(record: Record<string, unknown>, aliases: string[]): string | undefined {
   for (const alias of aliases) {
     const normalized = firstNonEmptyString(record[alias]);
@@ -139,19 +96,6 @@ function pickAlias(record: Record<string, unknown>, aliases: string[]): string |
     }
   }
   return undefined;
-}
-
-function parseQueryParams(req: IncomingMessage): Record<string, unknown> {
-  try {
-    const url = new URL(req.url ?? "", "http://localhost");
-    const out: Record<string, unknown> = {};
-    for (const [key, value] of url.searchParams.entries()) {
-      out[key] = value;
-    }
-    return out;
-  } catch {
-    return {};
-  }
 }
 
 function parseJsonBody(body: string): Record<string, unknown> {
@@ -184,40 +128,6 @@ function extractTokenFromHeaders(req: IncomingMessage): string | undefined {
     return bearerMatch[1].trim();
   }
   return auth;
-}
-
-// Token precedence is body, query, then headers.
-function parseRawEvent(
-  req: IncomingMessage,
-  body: string,
-): {
-  rawEvent: SynologyWebhookRawEvent;
-  token: string | undefined;
-} {
-  const contentType = normalizeLowercaseStringOrEmpty(req.headers["content-type"]);
-
-  let bodyFields: Record<string, unknown>;
-  if (contentType.includes("application/json")) {
-    bodyFields = parseJsonBody(body);
-  } else if (contentType.includes("application/x-www-form-urlencoded")) {
-    bodyFields = querystring.parse(body);
-  } else {
-    // Fallback for clients with missing/incorrect content-type.
-    // Try JSON first, then form-urlencoded.
-    try {
-      bodyFields = parseJsonBody(body);
-    } catch {
-      bodyFields = querystring.parse(body);
-    }
-  }
-
-  const queryFields = parseQueryParams(req);
-  const headerToken = extractTokenFromHeaders(req);
-
-  return {
-    rawEvent: { bodyFields, queryFields },
-    token: pickAlias(bodyFields, ["token"]) ?? pickAlias(queryFields, ["token"]) ?? headerToken,
-  };
 }
 
 function parsePayload(
@@ -266,10 +176,7 @@ export interface WebhookHandlerDeps {
 
 export async function processSynologyWebhookIngressEvent(params: {
   account: ResolvedSynologyChatAccount;
-  deliver: (
-    msg: import("./inbound-context.js").SynologyInboundMessage,
-    lifecycle: SynologyIngressLifecycle,
-  ) => Promise<unknown>;
+  deliver: (msg: SynologyInboundMessage, lifecycle: SynologyIngressLifecycle) => Promise<unknown>;
   log?: WebhookHandlerDeps["log"];
   rawEvent: SynologyWebhookRawEvent;
   lifecycle: SynologyIngressLifecycle;
@@ -347,8 +254,28 @@ export async function processSynologyWebhookIngressEvent(params: {
 
 export function createWebhookHandler(deps: WebhookHandlerDeps) {
   const { account, log } = deps;
-  const rateLimiter = getRateLimiter(account);
-  const invalidTokenRateLimiter = getInvalidTokenRateLimiter(account);
+  let rateLimiterEntry = rateLimiters.get(account.accountId);
+  if (!rateLimiterEntry || rateLimiterEntry.limit !== account.rateLimitPerMinute) {
+    rateLimiterEntry?.limiter.clear();
+    rateLimiterEntry = {
+      limit: account.rateLimitPerMinute,
+      limiter: createFixedWindowRateLimiter({
+        windowMs: 60_000,
+        maxRequests: Math.max(1, Math.floor(account.rateLimitPerMinute)),
+        maxTrackedKeys: 5_000,
+      }),
+    };
+    rateLimiters.set(account.accountId, rateLimiterEntry);
+  }
+  const rateLimiter = rateLimiterEntry.limiter;
+  const limit = Math.min(account.rateLimitPerMinute, PREAUTH_MAX_REQUESTS_PER_MINUTE);
+  let invalidTokenLimiterEntry = invalidTokenRateLimiters.get(account.accountId);
+  if (!invalidTokenLimiterEntry || invalidTokenLimiterEntry.limit !== limit) {
+    invalidTokenLimiterEntry?.clear();
+    invalidTokenLimiterEntry = new InvalidTokenRateLimiter(limit);
+    invalidTokenRateLimiters.set(account.accountId, invalidTokenLimiterEntry);
+  }
+  const invalidTokenRateLimiter = invalidTokenLimiterEntry;
 
   return async (req: IncomingMessage, res: ServerResponse) => {
     if (req.method !== "POST") {
@@ -395,25 +322,57 @@ export function createWebhookHandler(deps: WebhookHandlerDeps) {
         return;
       }
 
-      let raw: ReturnType<typeof parseRawEvent>;
+      let parsedRawEvent: SynologyWebhookRawEvent;
+      let parsedToken: string | undefined;
       try {
-        raw = parseRawEvent(req, body);
+        // Token precedence is body, query, then headers.
+        const contentType = normalizeLowercaseStringOrEmpty(req.headers["content-type"]);
+
+        let bodyFields: Record<string, unknown>;
+        if (contentType.includes("application/json")) {
+          bodyFields = parseJsonBody(body);
+        } else if (contentType.includes("application/x-www-form-urlencoded")) {
+          bodyFields = querystring.parse(body);
+        } else {
+          // Fallback for clients with missing/incorrect content-type.
+          // Try JSON first, then form-urlencoded.
+          try {
+            bodyFields = parseJsonBody(body);
+          } catch {
+            bodyFields = querystring.parse(body);
+          }
+        }
+
+        let queryFields: Record<string, unknown>;
+        try {
+          const url = new URL(req.url ?? "", "http://localhost");
+          queryFields = {};
+          for (const [key, value] of url.searchParams.entries()) {
+            queryFields[key] = value;
+          }
+        } catch {
+          queryFields = {};
+        }
+        const headerToken = extractTokenFromHeaders(req);
+
+        parsedRawEvent = { bodyFields, queryFields };
+        parsedToken =
+          pickAlias(bodyFields, ["token"]) ?? pickAlias(queryFields, ["token"]) ?? headerToken;
       } catch (err) {
         log?.warn("Failed to parse webhook payload", err);
         respondJson(res, 400, { error: "Invalid request body" });
         return;
       }
-      const payload = parsePayload(raw.rawEvent, raw.token);
+      const payload = parsePayload(parsedRawEvent, parsedToken);
       if (!payload) {
         respondJson(res, 400, { error: "Missing required fields (token, user_id, text)" });
         return;
       }
       const { trustedProxies, allowRealIpFallback } = deps;
-      const invalidTokenRateLimitKey = getSynologyWebhookInvalidTokenRateLimitKey({
-        req,
-        trustedProxies,
-        allowRealIpFallback,
-      });
+      const invalidTokenRateLimitKey =
+        resolveRequestClientIp(req, trustedProxies, allowRealIpFallback === true) ??
+        req.socket?.remoteAddress ??
+        "unknown";
       // Once a source has exhausted its invalid-token budget, reject all requests in the window.
       if (invalidTokenRateLimiter.isLocked(invalidTokenRateLimitKey)) {
         log?.warn(`Rate limit exceeded for remote IP: ${invalidTokenRateLimitKey}`);
@@ -462,7 +421,7 @@ export function createWebhookHandler(deps: WebhookHandlerDeps) {
         respondJson(res, 429, { error: "Rate limit exceeded" });
         return;
       }
-      rawEvent = raw.rawEvent;
+      rawEvent = parsedRawEvent;
     } finally {
       // Only bound the pre-auth request pipeline; async reply delivery is outside webhook ingress.
       requestLifecycle.release();

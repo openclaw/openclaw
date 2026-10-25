@@ -15,6 +15,7 @@ import {
 import { personalGitHubStatusAsync as personalGitHubStatus } from "../github-personal-status.js";
 import * as publicationAvailability from "../github-publication-availability.js";
 import { handleGatewayRequest } from "../server-methods.js";
+import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 export const sessionKey = "agent:main:publication-read";
@@ -39,6 +40,35 @@ export const receipt = {
   },
   confirmation: null,
 };
+
+export type ReadFixture = ReturnType<typeof createFixture>;
+export const optionsResult = (overrides: Record<string, unknown> = {}) => ({
+  personal: null,
+  shared: publisher,
+  pendingPersonal: null,
+  latestShared: receipt,
+  ...overrides,
+});
+export const expectReply = (respond: unknown, result: unknown) =>
+  expect(respond).toHaveBeenCalledWith(true, result);
+export const expectFailure = (
+  respond: unknown,
+  detail: Record<string, unknown> = { code: "FORBIDDEN" },
+) => expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining(detail));
+export function expectNoCalls(...mocks: unknown[]) {
+  for (const mock of mocks) {
+    expect(mock).not.toHaveBeenCalled();
+  }
+}
+export function expectNoPersonalReads(fixture: ReadFixture) {
+  expectNoCalls(
+    fixture.personalConnectionStatus,
+    fixture.personalPending,
+    fixture.preparePersonalStatus,
+    fixture.personalStatus,
+    fixture.requestForSession,
+  );
+}
 
 export async function withHeldReceipt(
   fixture: ReturnType<typeof createFixture>,
@@ -143,21 +173,14 @@ function createFixture(
 ) {
   const client: GatewayClient = {
     connId: "publication-reader",
-    connect: {
-      role: "operator",
-      scopes,
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: { id: "test", mode: "test", platform: "test", version: "1" },
-    },
+    connect: gatewayConnect(scopes, { id: "test", mode: "test", version: "1" }),
   };
   if (profile) {
-    client.authenticatedUserProfile = {
-      profileId: profile.id,
-      displayName: profile.displayName,
-      hasAvatar: false,
-      updatedAt: profile.updatedAt,
-    };
+    client.authenticatedUserProfile = gatewayProfile(
+      profile.id,
+      profile.displayName,
+      profile.updatedAt,
+    );
   }
   let connected = true;
   const publication = {

@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
+import type { GatewayHelloOk } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { readSystemInfo } from "../../lib/system-info.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { DraftGatewayState } from "./draft-gateway-state.ts";
@@ -55,9 +57,11 @@ function createBrowser(
     browser?.resetProjects(reset);
   });
   const hello = {
+    type: "hello-ok",
+    protocol: 4,
     auth: { recoveryScope: "principal-a", role: "operator", scopes: ["operator.read"] },
     features: { methods: ["projects.list"] },
-  };
+  } satisfies GatewayHelloOk;
   const context = {
     gateway: {
       subscribe: () => () => undefined,
@@ -256,6 +260,7 @@ describe("DraftPlaceBrowser", () => {
     "typed directory fails",
     "reopen",
     "retry",
+    "connection loss",
   ])("selects a registered project only while its browser remains current (%s)", async (change) => {
     const registered = project("registered-workspace", "Workspace", "/workspace");
     const registration = createDeferred<typeof registered>();
@@ -280,7 +285,12 @@ describe("DraftPlaceBrowser", () => {
       },
       () => ({ projects: [registered] }),
     );
-    const { browser, onSelectProject } = createBrowser(request, undefined, true, true);
+    const { browser, onSelectProject, gateway, context } = createBrowser(
+      request,
+      undefined,
+      true,
+      true,
+    );
     browser.selectGatewayBrowser("/workspace");
     await waitForFast(() => expect(browser.browserProjectPath).toBe("/workspace"));
     if (change === "retry") {
@@ -292,6 +302,7 @@ describe("DraftPlaceBrowser", () => {
       });
     }
     const pending = browser.registerBrowserProject("/workspace");
+    expect(browser.browser.readCompletion).toBeNull();
     const initiallyBusy = browser.browserRegistering;
     const failedDirectory = change === "typed directory fails";
     if (failedDirectory) {
@@ -324,6 +335,10 @@ describe("DraftPlaceBrowser", () => {
         browser.close();
         browser.selectGatewayBrowser("/workspace");
         await waitForFast(() => expect(browser.browserProjectPath).toBe("/workspace"));
+      } else if (change === "connection loss") {
+        context.gateway.snapshot.phase = "reconnecting";
+        // The write must not publish even before the browser observes this disconnect.
+        gateway.synchronize(context.gateway);
       }
       const stillBusy = browser.browserRegistering;
       const duplicate =
@@ -531,6 +546,27 @@ describe("DraftGatewayState", () => {
     expect(fixture.browser.projectId).toBe("");
   });
 
+  it("reuses current machine info and refreshes it after reconnect", async () => {
+    let machineName = "Gateway A";
+    const request = requestFor({ "system.info": () => ({ machineName }) });
+    const fixture = createBrowser(request);
+    fixture.hello.features.methods.push("system.info");
+    await readSystemInfo(fixture.context.gateway);
+
+    fixture.update();
+    await waitForFast(() => expect(fixture.gateway.gatewayName).toBe("Gateway A"));
+    expect(calls(request, "system.info")).toBe(1);
+
+    fixture.context.gateway.snapshot.phase = "reconnecting";
+    fixture.update();
+    machineName = "Gateway B";
+    fixture.context.gateway.snapshot.hello = { ...fixture.hello };
+    fixture.context.gateway.snapshot.phase = "connected";
+    fixture.update();
+    await waitForFast(() => expect(fixture.gateway.gatewayName).toBe("Gateway B"));
+    expect(calls(request, "system.info")).toBe(2);
+  });
+
   it("ignores a late name from the replaced client", async () => {
     const oldName = createDeferred<{ machineName: string }>();
     const newName = createDeferred<{ machineName: string }>();
@@ -585,6 +621,7 @@ describe("DraftGatewayState", () => {
       expect(fixture.gateway.gatewayName).toBe("");
       fixture.hello.features.methods = advertised ? ["system.info"] : [];
       fixture.hello.auth.scopes = [scope];
+      fixture.context.gateway.snapshot.hello = { ...fixture.hello };
       fixture.context.gateway.snapshot.phase = "connected";
       fixture.update();
       expect(fixture.gateway.gatewayName).toBe("");

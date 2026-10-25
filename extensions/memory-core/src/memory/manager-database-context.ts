@@ -232,6 +232,11 @@ export class MemoryIndexDatabase {
     return !this.closed && !this.terminalSignal?.aborted && this.nativeDb?.isOpen !== false;
   }
 
+  get supportsReindexSuspension(): boolean {
+    // PostgreSQL's TEMP stage cannot outlive its pooled connection lease.
+    return this.admission?.engine !== "postgres";
+  }
+
   /** Released synchronous status compatibility; runtime callers use worker reads. */
   get db(): DatabaseSync {
     if (!this.isOpen) {

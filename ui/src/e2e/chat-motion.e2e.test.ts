@@ -10,7 +10,16 @@ import {
   waitForChatScrollIdle,
 } from "./chat-flow.test-support.ts";
 const suite = createChatFlowE2eSuite();
-type SendMotionFrame = { y: number | null; opacity: string | null; same: boolean };
+type SendMotionFrame = {
+  y: number | null;
+  opacity: string | null;
+  same: boolean;
+  height: number | null;
+  scrollTop: number;
+  scrollHeight: number;
+  clientHeight: number;
+  transform: string | null;
+};
 type SendMotionScroll = { behavior?: ScrollBehavior; jump: number; remaining: number };
 type SendMotionProbe = { frames: SendMotionFrame[]; scrolls: SendMotionScroll[]; stop: () => void };
 
@@ -43,10 +52,17 @@ async function observeSendMotion(page: Page, prompt: string) {
         (element) => element.dataset.messageText === text,
       );
       firstBubble ??= bubble;
+      const bounds = bubble?.getBoundingClientRect();
+      const style = bubble ? getComputedStyle(bubble) : undefined;
       probe.frames.push({
-        y: bubble?.getBoundingClientRect().top ?? null,
-        opacity: bubble ? getComputedStyle(bubble).opacity : null,
+        y: bounds?.top ?? null,
+        opacity: style?.opacity ?? null,
         same: bubble === firstBubble,
+        height: bounds?.height ?? null,
+        scrollTop: thread.scrollTop,
+        scrollHeight: thread.scrollHeight,
+        clientHeight: thread.clientHeight,
+        transform: style?.transform ?? null,
       });
       frame = requestAnimationFrame(sample);
     };
@@ -75,17 +91,22 @@ async function finishSendMotion(page: Page, reducedMotion: string) {
     true,
   );
   if (reducedMotion !== "reduce") {
-    expect({
-      noInstantJump: scrolls.every((scroll) => Math.abs(scroll.jump) <= 1),
-      monotonic: visible.every((frame, index) => {
-        const previous = visible[index - 1];
-        return !previous || (frame.y !== null && previous.y !== null && frame.y <= previous.y + 1);
-      }),
-      // Check commands rather than frame counts: a loaded browser may skip intermediate frames.
-      smoothFromDistance: scrolls.some(
-        (scroll) => scroll.behavior === "smooth" && scroll.remaining > 8,
-      ),
-    }).toEqual({ noInstantJump: true, monotonic: true, smoothFromDistance: true });
+    expect(
+      {
+        noInstantJump: scrolls.every((scroll) => Math.abs(scroll.jump) <= 1),
+        monotonic: visible.every((frame, index) => {
+          const previous = visible[index - 1];
+          return (
+            !previous || (frame.y !== null && previous.y !== null && frame.y <= previous.y + 1)
+          );
+        }),
+        // Check commands rather than frame counts: a loaded browser may skip intermediate frames.
+        smoothFromDistance: scrolls.some(
+          (scroll) => scroll.behavior === "smooth" && scroll.remaining > 8,
+        ),
+      },
+      JSON.stringify({ scrolls, endDistance, frames }),
+    ).toEqual({ noInstantJump: true, monotonic: true, smoothFromDistance: true });
     expect(endDistance).toBeLessThanOrEqual(8);
   }
 }

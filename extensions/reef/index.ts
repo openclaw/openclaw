@@ -12,7 +12,7 @@ function registerReefFullRuntime(api: OpenClawPluginApi): void {
     requireAuth: true,
     exposeSenderIsOwner: true,
     handler: async (params) => {
-      const { handleReefCommand } = await import("./commands.runtime.js");
+      const { handleReefCommand } = await import("./src/commands.js");
       return await handleReefCommand(params);
     },
   });

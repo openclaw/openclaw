@@ -5,6 +5,51 @@ import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-paylo
 import { appendUsageLine, resolveResponseUsageLine } from "./agent-runner-usage-line.js";
 
 type Usage = Parameters<typeof resolveResponseUsageLine>[0]["usage"];
+
+it("renders a full footer from a reply usage snapshot", () => {
+  const replyUsageState = {
+    provider: "openai",
+    model: "claude-opus-4-6",
+    reasoningEffort: "medium",
+    fastMode: false,
+    fallbackUsed: false,
+    contextTokenBudget: 272000,
+    contextUsedTokens: 204000,
+    usage: { input: 204000, output: 15, cacheRead: 0, cacheWrite: 0, total: 204015 },
+    turnUsd: 0.03771985,
+  };
+  const pieces = [
+    { text: "{model.display_name|alias:models}" },
+    { map: "model.is_fallback", cases: { true: "🔄" } },
+    { text: " | " },
+    { when: "model.reasoning", text: "{model.reasoning|alias:reasoning}" },
+    { map: "state.fast_mode", cases: { true: "⚡", false: "🐌" } },
+    { text: " | 📚 [{context.pct_used|meter:5:braille}]{context.max_tokens|num}" },
+    { text: " | ${cost.turn_usd|fixed:4}" },
+  ];
+  const line = resolveResponseUsageLine({
+    config: {
+      messages: {
+        responseUsage: "full",
+        usageTemplate: {
+          scales: {
+            braille: "⠐⡀⡄⡆⡇⣇⣧⣷⣿",
+          },
+          aliases: {
+            models: { "claude-opus-4-6": "opus46" },
+            reasoning: { medium: "med" },
+          },
+          output: { sep: "", surfaces: { discord: pieces } },
+        },
+      },
+    },
+    agentDir: "/synthetic/usage-contract-agent",
+    channel: "discord",
+    usage: replyUsageState.usage,
+    replyUsageState,
+  });
+  expect(line).toBe("opus46 | med🐌 | 📚 [⣿⣿⣿⣧⠐]272k | $0.0377");
+});
 const usageLine = "Usage: 12 in / 3 out";
 
 it("marks a standalone usage footer as non-terminal status", () => {
@@ -68,7 +113,7 @@ it.each(["off", "tokens"] as const)("hides cost-only usage in %s mode", (mode) =
   ).toBeUndefined();
 });
 
-it("preserves reply payload metadata when appending usage text", () => {
+it("decorates a completed source reply and keeps its private final separate", () => {
   const mirror = {
     sessionKey: "agent:main:telegram:direct:123",
     agentId: "main",
@@ -83,14 +128,35 @@ it("preserves reply payload metadata when appending usage text", () => {
     },
   );
 
-  const [updated] = appendUsageLine([payload], usageLine);
+  const privateFinal = { text: "private final" };
+  const [updated, untouchedPrivateFinal] = appendUsageLine([payload, privateFinal], usageLine, {
+    completedSourceReply: true,
+  });
 
   expect(updated).toEqual({ text: "message tool reply\nUsage: 12 in / 3 out" });
+  expect(untouchedPrivateFinal).toBe(privateFinal);
+  expect(getReplyPayloadMetadata(privateFinal)).toBeUndefined();
   expect(getReplyPayloadMetadata(expectDefined(updated, "updated test invariant"))).toMatchObject({
     deliverDespiteSourceReplySuppression: true,
     sourceReplyTranscriptMirror: {
       ...mirror,
       text: "message tool reply\nUsage: 12 in / 3 out",
     },
+  });
+});
+
+it("emits a suppression-authorized footer when no captured source payload exists", () => {
+  const result = appendUsageLine([{ text: "private final" }], usageLine, {
+    completedSourceReply: true,
+  });
+
+  expect(result).toHaveLength(2);
+  expect(result[0]).toEqual({ text: "private final" });
+  expect(result[1]).toMatchObject({ text: usageLine, isStatusNotice: true });
+  expect(
+    getReplyPayloadMetadata(expectDefined(result[1], "completed source footer")),
+  ).toMatchObject({
+    deliverDespiteSourceReplySuppression: true,
+    responseUsageLine: usageLine,
   });
 });

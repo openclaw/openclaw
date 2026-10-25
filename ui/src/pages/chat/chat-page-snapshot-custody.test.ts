@@ -5,6 +5,7 @@ import { createRouter } from "@openclaw/uirouter";
 import { IDBFactory } from "fake-indexeddb";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import { SESSION_FACE_PREFERENCE_PARAM } from "../../lib/sessions/route-navigation.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
@@ -13,7 +14,7 @@ import { createSolidApplicationContextProvider } from "../../test-helpers/solid-
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { chatHistoryRequests } from "./chat-history-state.ts";
 import { settleChatPage, stubMatchMedia } from "./chat-page.test-support.ts";
-import "./chat-page.ts";
+import "./chat-page.tsx";
 import { createMountedPanes } from "./chat-pane-mounted.test-support.ts";
 import { ChatPaneRuntime } from "./chat-pane-render.ts";
 import { nativeHistoryMessage } from "./chat-pane.test-support.ts";
@@ -78,12 +79,7 @@ it.each([false, true])(
     const originalRequest = client.request.bind(client);
     const routedClient = createTestGatewayClient(async (method, params, options) => {
       if (method === "agents.list") {
-        return {
-          defaultId: "main",
-          mainKey: "main",
-          scope: "global",
-          agents: [{ id: "main" }, { id: "research" }],
-        };
+        return makeBootRoster({ scope: "global", agents: [{ id: "main" }, { id: "research" }] });
       }
       if (method === "sessions.resolve") {
         return {

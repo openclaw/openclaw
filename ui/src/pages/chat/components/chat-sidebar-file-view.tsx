@@ -177,6 +177,7 @@ export function SidebarFile(props: {
                       scopeKey={[
                         props.runtime?.sessionKey,
                         props.content.path,
+                        props.content.sessionFileSource?.messageEntryId,
                         props.runtime?.connectionEpoch,
                       ].join("\0")}
                       download={(signal) => download()(signal)}
@@ -284,7 +285,7 @@ export function SidebarFile(props: {
           >
             <Show when={desktop()}>
               <div class="sidebar-file-view__floating-copy">
-                <FileCopyButton action="contents" controls={props.controls} />
+                <FileCopyButton controls={props.controls} />
               </div>
             </Show>
             <Show when={props.controls?.markdown && props.controls.readingMode === "preview"}>

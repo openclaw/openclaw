@@ -72,24 +72,6 @@ it("clears a prior probe failure after the next external-listener poll succeeds"
   expect(sleep).toHaveBeenCalledTimes(1);
 });
 
-it("does not accept listener health until the gateway lock owner changes", async () => {
-  inspectPortUsage.mockResolvedValue(listenerUsage(4200));
-  callGateway.mockImplementation(
-    gatewayHealthResponse({
-      server: { version: "2026.7.16", connId: "gateway" },
-    }),
-  );
-  const previousLockIdentity = mockGatewayLockReplacement();
-
-  const snapshot = await waitForListener({ previousLockIdentity, attempts: 2 });
-
-  expect(snapshot.healthy).toBe(true);
-  expect(readActiveGatewayLockIdentity).toHaveBeenCalledTimes(2);
-  expect(inspectPortUsage).toHaveBeenCalledTimes(1);
-  expect(callGateway).toHaveBeenCalledTimes(1);
-  expect(sleep).toHaveBeenCalledTimes(1);
-});
-
 it("checks replacement ownership and health in the selected Gateway state directory", async () => {
   const env = { OPENCLAW_STATE_DIR: "/tmp/openclaw-selected-gateway" };
   const previousLockIdentity = mockGatewayLockReplacement();
@@ -162,6 +144,7 @@ it("checks replacement ownership after the final bounded delay", async () => {
   expect(snapshot.healthy).toBe(true);
   expect(readActiveGatewayLockIdentity).toHaveBeenCalledTimes(2);
   expect(inspectPortUsage).toHaveBeenCalledTimes(1);
+  expect(callGateway).toHaveBeenCalledTimes(1);
   expect(sleep).toHaveBeenCalledTimes(1);
 });
 

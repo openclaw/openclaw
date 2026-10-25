@@ -15,6 +15,7 @@ import {
 } from "./agent-database-readers.js";
 import { withDatabaseEngineSelection } from "./database-engine/context.js";
 import type { DiagnosticWorkerRetainedData } from "./diagnostic-process-types.js";
+import { bindPostgresPool, postgresPoolWorkerFailure } from "./postgres-sync/pool.js";
 import { withSqliteDatabaseAdmissionExchange } from "./sqlite-database-admission-context.js";
 import {
   bindSqliteDatabaseAdmissionUpstream,
@@ -60,7 +61,7 @@ export function serveOwnedWorkerTasks<Output, Input = unknown>(
   let databaseAdmissionPort: MessagePort | undefined;
   let databaseAdmissionDeadlineAtMs: number | undefined;
   let databaseEngineSelection: WorkerTaskContext["databaseEngineSelection"];
-  let closeMemorySamples: (() => void) | undefined;
+  let memorySamples: ReturnType<typeof serveWorkerMemorySamples> | undefined;
   const runWithTaskContext = async <T>(operation: () => T | Promise<T>): Promise<T> => {
     const run = async () => {
       const port = databaseAdmissionPort;
@@ -91,10 +92,23 @@ export function serveOwnedWorkerTasks<Output, Input = unknown>(
           deadlineAtMs: databaseAdmissionDeadlineAtMs,
           assertActive: () => control.throwIfCancelled(),
         },
-        () => runWithTaskContext(() => handler(input, channel, control)),
+        () =>
+          runWithTaskContext(async () => {
+            const result = await handler(input, channel, control);
+            // Some handlers encode database failures as results; their dead endpoints
+            // still require the same retirement as a thrown transport failure.
+            const failure = postgresPoolWorkerFailure();
+            if (failure) {
+              throw failure;
+            }
+            return result;
+          }),
       ),
     {
       ...options,
+      get retireOnError() {
+        return options.retireOnError || postgresPoolWorkerFailure() !== undefined;
+      },
       closeResource: (key) =>
         runWithTaskContext(async () => {
           const request = decodeAgentDatabaseReaderRequest(key);
@@ -129,14 +143,19 @@ export function serveOwnedWorkerTasks<Output, Input = unknown>(
         taskPort?.postMessage({ status: "ready" }, []);
       },
       onMessage(sampleMemory) {
-        if (sampleMemory && !closeMemorySamples) {
-          closeMemorySamples = serveWorkerMemorySamples(memoryPort, options.retainedData);
+        if (sampleMemory && !memorySamples) {
+          memorySamples = serveWorkerMemorySamples(memoryPort, options.retainedData);
         }
         cancelWorkerIdleGc();
       },
       installTaskContext(context) {
+        // Carry demand on the task itself so even its first synchronous work is observed.
+        memorySamples?.setTaskMetrics(context.collectWorkerMetrics === true);
         databaseAdmissionDeadlineAtMs = context.databaseAdmissionDeadlineAtMs;
         databaseEngineSelection = context.databaseEngineSelection;
+        if (context.postgresPool) {
+          bindPostgresPool(context.postgresPool);
+        }
         installDeletedAgentDatabaseFences(context.deletedAgentDatabaseFences);
         if (context.databaseAdmissionPort) {
           bindSqliteDatabaseAdmissionUpstream(context.databaseAdmissionPort);
@@ -150,10 +169,11 @@ export function serveOwnedWorkerTasks<Output, Input = unknown>(
           scheduleWorkerIdleGc();
         }
       },
+      collectTaskDiagnostics: () => memorySamples?.collectTask(),
       onRetire() {
         cancelWorkerIdleGc();
         try {
-          closeMemorySamples?.();
+          memorySamples?.close();
         } finally {
           // Exchanges are synchronous; the runtime already joined task cleanup and resource receipts.
           databaseAdmissionPort?.close();

@@ -1,44 +1,31 @@
-import { createServer, type Server } from "node:http";
+import { createServer } from "node:http";
 import type { Duplex } from "node:stream";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { promisify } from "node:util";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import { createGatewayWsClient } from "../../scripts/lib/gateway-ws-client.js";
 
-let server: Server | undefined;
-let wss: WebSocketServer | undefined;
-let activeClient: ReturnType<typeof createGatewayWsClient> | undefined;
-let closing = false;
-const sockets = new Set<Duplex>();
-
-afterEach(async () => {
-  closing = true;
-  activeClient?.close();
-  // Terminate peers before wss.close(), including after a failed assertion.
-  for (const client of wss?.clients ?? []) {
-    client.terminate();
-  }
-  for (const socket of sockets) {
-    socket.destroy();
-  }
-  if (wss) {
-    await new Promise<void>((resolve) => {
-      wss!.close(() => resolve());
-    });
-  }
-  wss = undefined;
-  if (server) {
-    await new Promise<void>((resolve, reject) => {
-      server!.close((error) => (error ? reject(error) : resolve()));
-    });
-  }
-  server = undefined;
-  activeClient = undefined;
-  sockets.clear();
-});
-
 async function makeClient(handler?: (ws: WebSocket) => void, openTimeoutMs = 8000) {
-  closing = false;
-  server = createServer();
+  const server = createServer();
+  const sockets = new Set<Duplex>();
+  let wss: WebSocketServer | undefined;
+  let client: ReturnType<typeof createGatewayWsClient> | null = null;
+  let closing = false;
+  onTestFinished(async () => {
+    closing = true;
+    client?.close();
+    // Join both peers and TCP sockets, including after a failed assertion.
+    for (const peer of wss?.clients ?? []) {
+      peer.terminate();
+    }
+    for (const socket of sockets) {
+      socket.destroy();
+    }
+    if (wss) {
+      await promisify(wss.close.bind(wss))();
+    }
+    await promisify(server.close.bind(server))();
+  });
   server.on("connection", (socket) => {
     sockets.add(socket);
     socket.once("close", () => sockets.delete(socket));
@@ -54,19 +41,16 @@ async function makeClient(handler?: (ws: WebSocket) => void, openTimeoutMs = 800
     server.on("upgrade", () => {});
   }
   await new Promise<void>((resolve) => {
-    server!.listen(0, "127.0.0.1", resolve);
+    server.listen(0, "127.0.0.1", resolve);
   });
   const address = server.address();
   if (!address || typeof address === "string") {
     throw new Error("test websocket server did not get a TCP address");
   }
-  activeClient = createGatewayWsClient({ url: `ws://127.0.0.1:${address.port}`, openTimeoutMs });
-  return activeClient;
-}
-
-async function openClient(handler: (ws: WebSocket) => void = () => {}) {
-  const client = await makeClient(handler);
-  await client.waitOpen();
+  client = createGatewayWsClient({
+    url: `ws://127.0.0.1:${address.port}`,
+    openTimeoutMs,
+  });
   return client;
 }
 
@@ -76,11 +60,12 @@ describe("createGatewayWsClient", () => {
     ["gateway closes", "gateway websocket closed (1011): boom"],
     ["socket errors", "socket exploded"],
   ])("rejects pending RPC requests when the %s", async (cause, error) => {
-    const client = await openClient((ws) => {
+    const client = await makeClient((ws) => {
       if (cause === "gateway closes") {
         ws.on("message", () => ws.close(1011, "boom"));
       }
     });
+    await client.waitOpen();
     const pending = client.request("health", {}, 1000);
     if (cause === "client closes") {
       client.close();

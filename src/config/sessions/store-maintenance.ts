@@ -90,7 +90,7 @@ function resolveMaxDiskBytes(maintenance?: SessionMaintenanceConfig): number | n
     return DEFAULT_SESSION_MAX_DISK_BYTES;
   }
   try {
-    const bytes = parseByteSize(normalized, { defaultUnit: "b" });
+    const bytes = parseByteSize(normalized);
     // A zero or negative budget is not a usable cap; treat it the same as an
     // explicit disable so maintenance does not delete every session artifact.
     if (bytes <= 0) {
@@ -121,7 +121,7 @@ function resolveHighWaterBytes(
     return defaultHighWaterBytes;
   }
   try {
-    const parsed = parseByteSize(normalized, { defaultUnit: "b" });
+    const parsed = parseByteSize(normalized);
     // A zero target cannot stop cleanup while any bytes remain, so use the
     // default instead of evicting every unprotected session and archive.
     return parsed > 0 ? Math.min(parsed, maxDiskBytes) : defaultHighWaterBytes;
@@ -304,13 +304,6 @@ export function pruneStaleModelRunEntries(
 }
 
 const DEFAULT_QUOTA_SUSPENSION_TTL_MS = 30 * 60 * 1000;
-const QUOTA_SUSPENSION_CLEANUP_FACTOR = 2; // entries beyond N*ttl are deleted outright
-
-type QuotaSuspensionEntryMaintenanceResult = {
-  /** Patch to apply to the entry, or null when no TTL transition is due. */
-  patch: Partial<SessionEntry> | null;
-  cleared: boolean;
-};
 
 /**
  * Resolves the TTL maintenance patch for one session entry without reading or
@@ -320,26 +313,21 @@ type QuotaSuspensionEntryMaintenanceResult = {
 export function resolveQuotaSuspensionEntryMaintenance(params: {
   entry: SessionEntry;
   now: number;
-  ttlMs?: number;
-}): QuotaSuspensionEntryMaintenanceResult {
+}): Partial<SessionEntry> | null {
   const suspension = params.entry.quotaSuspension;
   if (!suspension) {
-    return { patch: null, cleared: false };
+    return null;
   }
-  const ttlMs = params.ttlMs ?? DEFAULT_QUOTA_SUSPENSION_TTL_MS;
-  const cleanupAfterResumeMs = ttlMs * (QUOTA_SUSPENSION_CLEANUP_FACTOR - 1);
+  const ttlMs = DEFAULT_QUOTA_SUSPENSION_TTL_MS;
   const resumeAtMs = suspension.expectedResumeBy ?? suspension.suspendedAt + ttlMs;
-  const cleanupAtMs = resumeAtMs + cleanupAfterResumeMs;
+  const cleanupAtMs = resumeAtMs + ttlMs;
   if (params.now >= cleanupAtMs) {
-    return { patch: { quotaSuspension: undefined }, cleared: true };
+    return { quotaSuspension: undefined };
   }
   if (suspension.state === "suspended" && params.now >= resumeAtMs) {
-    return {
-      patch: { quotaSuspension: { ...suspension, state: "resuming" } },
-      cleared: false,
-    };
+    return { quotaSuspension: { ...suspension, state: "resuming" } };
   }
-  return { patch: null, cleared: false };
+  return null;
 }
 
 /** Archive inactive dashboard sessions while retaining runtime-owned or explicitly active keys. */

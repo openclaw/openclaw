@@ -45,13 +45,14 @@ describe("Create Claw from the agent's main chat", () => {
           return { revision: "a".repeat(64), content: JSON.stringify({ scope }) };
         case "claws.drafts.review": {
           const choices = params.choices as
-            | { name: string; description: string; excluded: string[] }
+            | { name: string; displayName?: string; description: string; excluded: string[] }
             | undefined;
           return {
             revision: "a".repeat(64),
             reviewToken: choices?.excluded.length ? "c".repeat(64) : "b".repeat(64),
             publisher: "maker",
             name: `@maker/${choices?.name ?? "release-brief"}`,
+            displayName: choices?.displayName ?? "Release Brief",
             version: "0.1.0",
             description: choices?.description ?? "Summarizes releases",
             items: [
@@ -108,6 +109,7 @@ describe("Create Claw from the agent's main chat", () => {
     expect(flow.reviewCurrent).toBe(true);
     flow.updateChoices({
       name: "release-brief",
+      displayName: "Research Brief",
       description: "Summarizes releases",
       excluded: ["file:workspace/checklist.md"],
     });
@@ -128,7 +130,10 @@ describe("Create Claw from the agent's main chat", () => {
       method: "claws.drafts.publish",
       params: {
         reviewToken: "c".repeat(64),
-        choices: { excluded: ["file:workspace/checklist.md"] },
+        choices: {
+          displayName: "Research Brief",
+          excluded: ["file:workspace/checklist.md"],
+        },
       },
     });
     expect(requests.some((entry) => entry.method === "sessions.create")).toBe(false);

@@ -128,15 +128,6 @@ export async function resolveSlackRoomHistory(params: {
       if (files.length === 0 && attachments.length === 0) {
         return { media: [], attempted: 0 };
       }
-      const attempted =
-        files.length +
-        attachments.reduce(
-          (count, attachment) =>
-            count +
-            (normalizeOptionalString(attachment.image_url) ? 1 : 0) +
-            (attachment.files?.length ?? 0),
-          0,
-        );
       const { resolveSlackAttachmentContent } = await loadSlackMediaModule();
       const content = await resolveSlackAttachmentContent({
         files,
@@ -154,7 +145,7 @@ export async function resolveSlackRoomHistory(params: {
           kind: "image",
           messageId: message.ts,
         }),
-        attempted,
+        attempted: maxAttachments - remaining,
       };
     }
     const entries: HistoryEntry[] = [];

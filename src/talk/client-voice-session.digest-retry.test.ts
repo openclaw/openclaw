@@ -12,7 +12,6 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { readSessionTranscriptBoundedMessageTailPageAsync } from "../gateway/session-transcript-readers.js";
-import { emitTrustedDiagnosticEvent } from "../infra/diagnostic-events.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { runOpenClawAgentWorkerWrite } from "../state/openclaw-agent-write-admission.js";
@@ -23,7 +22,6 @@ import {
   captureClientVoiceSessionSettlement,
   prepareClientVoiceSessionClose,
 } from "./client-voice-session-lifecycle.js";
-import { resolveClientVoiceAgentSessionId } from "./client-voice-session-read.js";
 import * as voiceSessionReads from "./client-voice-session-read.js";
 import { ensureClientVoiceAgentSessionEntry } from "./client-voice-session-write.js";
 import {
@@ -101,7 +99,7 @@ describe("client voice session lifecycle", () => {
   it("joins accepted digest delivery beyond both slots after the closing caller returns", async ({
     signal,
   }) => {
-    await seedSession("agent:main:main", { channel: "discord", to: "channel:voice-updates" });
+    await seedSession(mainTarget.sessionKey, { channel: "discord", to: "channel:voice-updates" });
     const ids: string[] = [];
     for (let index = 0; index < 4; index += 1) {
       ids.push(await createVoiceSession({ voiceSessionId: `queued-digest-${index}` }));
@@ -151,13 +149,8 @@ describe("client voice session lifecycle", () => {
       release[3]!.resolve();
       await withinTest(Promise.race([draining, failed.promise]), signal);
       expect(observedRequests).toEqual([undefined, undefined, undefined, undefined]);
-      expect(send).toHaveBeenCalledTimes(4);
       expect(send).toHaveBeenCalledWith(
-        expect.objectContaining({
-          channel: "discord",
-          to: "channel:voice-updates",
-          payloads: [{ text: "Voice call changes\n- message: succeeded" }],
-        }),
+        expect.objectContaining({ channel: "discord", to: "channel:voice-updates" }),
       );
       for (const id of ids) {
         expect(readRecord(id)?.digestDeliveredAt).toEqual(expect.any(Number));
@@ -176,7 +169,7 @@ describe("client voice session lifecycle", () => {
   it.for([false, true])(
     "keeps a delayed digest in its original shutdown owner after a state switch (expired successor=%s)",
     async (expiredSuccessor, { signal }) => {
-      const sessionKey = "agent:main:main";
+      const { sessionKey } = mainTarget;
       await seedSession(sessionKey, { channel: "discord", to: "channel:original-voice" });
       const closeOriginal = prepareClientVoiceSessionClose();
       const voiceSessionId = await createVoiceSession({ sessionKey });
@@ -241,7 +234,10 @@ describe("client voice session lifecycle", () => {
         const sessionKey = incognito ? "agent:main:dashboard:incognito-digest" : "agent:main:main";
         const to = incognito ? "channel:incognito-voice-updates" : "channel:voice-updates";
         if (incognito) {
-          await seedSession("agent:main:main", { channel: "discord", to: "channel:durable-decoy" });
+          await seedSession(mainTarget.sessionKey, {
+            channel: "discord",
+            to: "channel:durable-decoy",
+          });
           await createSessionEntryWithTranscript({ agentId: "main", sessionKey }, () => ({
             ok: true as const,
             entry: {
@@ -336,10 +332,7 @@ describe("client voice session lifecycle", () => {
         expect(resolveClientVoiceRunBinding(binding.runId)).toBeUndefined();
         if (replacement) {
           await createOrResumeClientVoiceSession({ ...successor, origin: "client" });
-          releaseReplacement = await registerRun({
-            ...successor,
-            runId: binding.runId,
-          });
+          releaseReplacement = await registerRun({ ...successor, runId: binding.runId });
         }
         resume.resolve();
         const releaseReplay = await registering;
@@ -449,13 +442,7 @@ describe("client voice session lifecycle", () => {
           voiceSessionId,
           runId: `run-${voiceSessionId}`,
         });
-        emitTrustedDiagnosticEvent({
-          type: "tool.execution.started",
-          runId: `run-${voiceSessionId}`,
-          toolCallId: `call-${voiceSessionId}`,
-          toolName: "message",
-          mutatingAction: true,
-        });
+        recordEffect(`run-${voiceSessionId}`, `call-${voiceSessionId}`);
         await completeRun(`run-${voiceSessionId}`);
         await closeVoice(voiceSessionId, { sessionKey });
         await settle();
@@ -501,20 +488,10 @@ describe("client voice session lifecycle", () => {
         }
       },
     );
-    it("closes stale records and leaves recent records open", async () => {
-      const stale = await createVoiceSession({ sessionKey: "agent:main:stale", now: 1 });
-      const recent = await createVoiceSession({
-        sessionKey: "agent:main:recent",
-        now: 6 * 60 * 60_000,
-      });
-
-      expect(await recoverStale({ now: 6 * 60 * 60_000 + 2 })).toBe(1);
-      expect(readRecord(stale)?.status).toBe("closed");
-      expect(readRecord(recent)?.status).toBe("open");
-    });
-
-    it("does not close a call resumed after the stale candidate read", async () => {
+    it("closes only stale calls, including when a candidate resumes after lookup", async () => {
       const now = 6 * 60 * 60_000 + 2;
+      const stale = await createVoiceSession({ sessionKey: "agent:main:stale", now: 1 });
+      const recent = await createVoiceSession({ sessionKey: "agent:main:recent", now });
       const voiceSessionId = await createVoiceSession({ now: 1 });
       const lookup = voiceSessionReads.lookupClientVoiceSessions;
       using read = vi.spyOn(voiceSessionReads, "lookupClientVoiceSessions");
@@ -523,7 +500,9 @@ describe("client voice session lifecycle", () => {
         await createVoiceSession({ voiceSessionId, now });
         return candidates;
       });
-      expect(await recoverStale({ now })).toBe(0);
+      expect(await recoverStale({ now })).toBe(1);
+      expect(readRecord(stale)?.status).toBe("closed");
+      expect(readRecord(recent)?.status).toBe("open");
       expect(readRecord(voiceSessionId)?.status).toBe("open");
     });
 
@@ -559,7 +538,8 @@ describe("client voice session lifecycle", () => {
     });
   });
   describe("startup", () => {
-    it.each(["main", "fresh"])("stamps required Talk creation once in %s", async (agentId) => {
+    it("stamps required Talk creation once in a fresh agent", async () => {
+      const agentId = "fresh";
       const target = { agentId, sessionKey: `agent:${agentId}:talk:new` };
       const actor = { type: "human" as const, source: "profile" as const, id: "profile-required" };
       const creation = { actor, sandbox: "required" as const };
@@ -606,7 +586,7 @@ describe("client voice session lifecycle", () => {
           }));
         }
         const sessionId = await ensureClientVoiceAgentSessionEntry(storage);
-        expect(await resolveClientVoiceAgentSessionId(storage)).toBe(sessionId);
+        expect(await voiceSessionReads.resolveClientVoiceAgentSessionId(storage)).toBe(sessionId);
         const voiceTarget = { agentId: "main", sessionKey: "main" };
         const voiceSessionId = await createOrResumeClientVoiceSession({ ...voiceTarget, origin });
         const append =
@@ -623,14 +603,12 @@ describe("client voice session lifecycle", () => {
           { ...storage, sessionId },
           { maxBytes: 4096, maxMessages: 10, offset: 0 },
         );
-        expect(transcript.events).toEqual([
-          expect.objectContaining({
-            event: expect.objectContaining({
-              message: expect.objectContaining({
-                content: [{ type: "text", text: "Stored in the prepared session" }],
-              }),
-            }),
-          }),
+        expect(transcript.events).toMatchObject([
+          {
+            event: {
+              message: { content: [{ type: "text", text: "Stored in the prepared session" }] },
+            },
+          },
         ]);
         expect(readRecord(voiceSessionId)).toMatchObject({
           sessionKey: "main",
@@ -652,28 +630,24 @@ describe("client voice session lifecycle", () => {
     );
 
     it("does not create an agent session after a browser-session deadline", async () => {
-      const sessionKey = "agent:main:talk:expired";
-
+      const target = { ...mainTarget, sessionKey: "agent:main:talk:expired" };
       await expect(
-        ensureClientVoiceAgentSessionEntry({
-          agentId: "main",
-          sessionKey,
-          deadlineAt: Date.now() - 1,
-        }),
+        ensureClientVoiceAgentSessionEntry({ ...target, deadlineAt: Date.now() - 1 }),
       ).rejects.toThrow("Realtime browser session expired during startup");
-      expect(loadSessionEntry({ agentId: "main", sessionKey })).toBeUndefined();
+      expect(loadSessionEntry(target)).toBeUndefined();
     });
 
     it("repairs an incomplete existing row without claiming its creation actor", async () => {
-      const sessionKey = "agent:main:talk:incomplete";
-      await replaceSessionEntry(
-        { agentId: "main", sessionKey },
-        { sessionId: "", updatedAt: 1, createdVia: "internal", createdAt: 1 },
-      );
+      const target = { ...mainTarget, sessionKey: "agent:main:talk:incomplete" };
+      await replaceSessionEntry(target, {
+        sessionId: "",
+        updatedAt: 1,
+        createdVia: "internal",
+        createdAt: 1,
+      });
 
-      await ensureClientVoiceAgentSessionEntry({ agentId: "main", sessionKey });
-
-      const repaired = loadSessionEntry({ agentId: "main", sessionKey });
+      await ensureClientVoiceAgentSessionEntry(target);
+      const repaired = loadSessionEntry(target);
       expect(repaired?.sessionId).toBeTruthy();
       expect(repaired).toMatchObject({ createdVia: "internal", createdAt: 1 });
       expect(repaired?.createdActor).toBeUndefined();

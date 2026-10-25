@@ -150,35 +150,23 @@ it("indexes real edits, deletion and root replacement, then joins every subscrip
     ...files,
   ];
   expect(rows.all()).toEqual(expected([{ path: "memory/note.md", text: "Amethyst sentinel." }]));
-  let indexed = createDeferred<void>();
-  const sync = manager.sync.bind(manager);
-  vi.spyOn(manager, "sync").mockImplementation(async (options) => {
-    try {
-      await sync(options);
-      if (options?.reason === "watch") {
-        indexed.resolve();
-      }
-    } catch (error) {
-      indexed.reject(error);
-      throw error;
-    }
-  });
+  const idle = () =>
+    (manager as unknown as { awaitManagerIdle(): Promise<void> }).awaitManagerIdle();
   const flush = async (files: Array<{ path: string; text: string }>) => {
-    indexed = createDeferred<void>();
     await Promise.all(
       subscriptions
         .filter((entry) => entry.health().state !== "closed")
         .map((entry) => entry.reconcile()),
     );
     await vi.advanceTimersByTimeAsync(debounceMs);
-    await indexed.promise;
     // Read published rows directly: search could repair a broken watcher itself.
-    expect(rows.all()).toEqual(expected(files));
+    await vi.waitFor(() => expect(rows.all()).toEqual(expected(files)));
+    await idle();
   };
   // Join the actual bootstrap invalidation; an unchanged reconcile emits no callback.
   await bootstrap.promise;
   await vi.advanceTimersByTimeAsync(debounceMs);
-  await indexed.promise;
+  await idle();
   expect(rows.all()).toEqual(expected([{ path: "memory/note.md", text: "Amethyst sentinel." }]));
   await fs.writeFile(note, "Cobalt sentinel after edit.");
   await flush([{ path: "memory/note.md", text: "Cobalt sentinel after edit." }]);

@@ -56,6 +56,8 @@ The secret egress proxy lets Gateway-hosted agent subprocesses use shared-store 
 
 The listener runs in a dedicated Gateway Worker that owns TLS, certificate preparation, substitution, and forwarding. Request and response bytes stay off the Gateway's main event loop. The Gateway exchanges process grants and certificate health with that Worker; revocation immediately fences the grant before its connections are closed. A failed Worker closes protected egress and requires a Gateway restart.
 
+The proxy's destination trust and exported subprocess CA bundle exclude the emSign ECC G3 root following the published eMudhra incident distrust policy. This also rejects legitimate chains relying exclusively on that root. The generated local proxy CA and other bundled public roots remain trusted. Restart the Gateway after installing this repair. Child runtimes and clients that use their own trust stores, including blind `bypassHosts` tunnels, still require their appropriate security updates; an extra CA file does not remove Node's built-in trust.
+
 Upstream connections honor the Gateway's `HTTPS_PROXY` and `HTTP_PROXY` environment settings and `NO_PROXY` exclusions, including loopback destinations, using the same routing rules as Gateway outbound traffic. This also applies to `bypassHosts` tunnels and permitted loopback HTTP requests. HTTPS destinations use CONNECT through the upstream proxy, keeping substituted secrets inside destination TLS. Destination allowlists and secret bindings still apply to the destination, not the proxy hop. With no proxy environment configured, connections remain direct. Restart the Gateway after changing its proxy environment.
 
 Each secret must also name the exact HTTPS hosts where substitution is allowed. Hostnames are stored lowercase in ASCII/punycode form and matched exactly; wildcards, suffix matching, and ports are not supported. A secret with no allowed hosts is never substituted. Bind a host without replacing the stored value:
@@ -187,7 +189,7 @@ grant destinations. Missing mappings are reported together before repository
 commands run. See [cloud environment files](/gateway/cloud-workers/environment-file).
 
 Profile setup, preparation, and post-create/start use Crabbox native `egress run`
-on the worker's owned coordinator Linux lease. Crabbox 0.77.0 or newer permits
+on the worker's owned coordinator Linux lease. Crabbox 0.79.2 or newer permits
 public destinations for ordinary HTTPS package downloads, while the Gateway
 substitutes each sentinel only at that secret's bound host. This job does not
 require `secrets.egressProxy.enabled`. Unsupported leases, unavailable helpers or

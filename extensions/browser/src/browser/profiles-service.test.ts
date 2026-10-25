@@ -101,14 +101,6 @@ function createCtx(resolved = resolveBrowserConfig({})) {
   return { state, ctx, service: createBrowserProfilesService(ctx) };
 }
 
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
-
 function writtenBrowserConfig() {
   return expectDefined(writeConfigFile.mock.calls[0]?.[0].browser, "written browser config");
 }
@@ -139,7 +131,7 @@ async function pendingStart(
   runtime: ReturnType<typeof profileRuntime>,
   run: (signal: AbortSignal) => Promise<void>,
 ) {
-  const entered = deferred();
+  const entered = Promise.withResolvers<void>();
   const starting = enqueueProfileStart({
     state,
     runtime,
@@ -167,6 +159,11 @@ function createDeletionFixture(profile: BrowserProfileConfig = WORK_PROFILE, nam
   return fixture;
 }
 
+function expectNoDeletion() {
+  expect(writeConfigFile).not.toHaveBeenCalled();
+  expect(movePathToTrash).not.toHaveBeenCalled();
+}
+
 describe("BrowserProfilesService", () => {
   beforeEach(() => {
     getChromeMcpModule.clear();
@@ -180,9 +177,9 @@ describe("BrowserProfilesService", () => {
       writeConfigFile.mockClear();
       vi.mocked(getRuntimeConfig).mockReturnValue({ browser: { profiles: {} } });
       const { state, service } = createCtx();
-      const result = await service.createProfile({ name: profileName });
-
-      expect(result.profile).toBe(profileName);
+      await expect(service.createProfile({ name: profileName })).resolves.toMatchObject({
+        profile: profileName,
+      });
       expect(Object.hasOwn(state.resolved.profiles, profileName)).toBe(true);
       const createdProfiles = writtenProfiles();
       expect(Object.hasOwn(createdProfiles, profileName)).toBe(true);
@@ -289,9 +286,7 @@ describe("BrowserProfilesService", () => {
       { ...WORK_PROFILE, driver: "existing-session", attachOnly: true },
       "chrome-live",
     );
-    const result = await service.deleteProfile("chrome-live");
-
-    expect(result.deleted).toBe(false);
+    await expect(service.deleteProfile("chrome-live")).resolves.toMatchObject({ deleted: false });
     expect(ctx.forProfile).not.toHaveBeenCalled();
     expect(resolveOpenClawUserDataDir).not.toHaveBeenCalled();
     expect(movePathToTrash).not.toHaveBeenCalled();
@@ -307,11 +302,10 @@ describe("BrowserProfilesService", () => {
       'cannot delete the default profile "work"',
     );
 
-    expect(writeConfigFile).not.toHaveBeenCalled();
+    expectNoDeletion();
     expect(state.resolved.profiles).toHaveProperty("work");
     expect(state.profiles.has("work")).toBe(true);
     expect(ctx.forProfile).not.toHaveBeenCalled();
-    expect(movePathToTrash).not.toHaveBeenCalled();
   });
 
   it("preserves profile config and data when a live browser cannot be safely stopped", async () => {
@@ -323,8 +317,7 @@ describe("BrowserProfilesService", () => {
 
     await expect(service.deleteProfile("work")).rejects.toThrow("managed process identity changed");
 
-    expect(writeConfigFile).not.toHaveBeenCalled();
-    expect(movePathToTrash).not.toHaveBeenCalled();
+    expectNoDeletion();
     expect(state.resolved.profiles).toHaveProperty("work");
 
     await expect(service.deleteProfile("work")).resolves.toMatchObject({ ok: true });
@@ -336,9 +329,7 @@ describe("BrowserProfilesService", () => {
     const userDataDir = localUserDataDir("openclaw-trash-failure-", false);
     vi.mocked(movePathToTrash).mockRejectedValueOnce(new Error("Trash unavailable"));
 
-    const result = await service.deleteProfile("work");
-
-    expect(result.deleted).toBe(false);
+    await expect(service.deleteProfile("work")).resolves.toMatchObject({ deleted: false });
     expect(state.resolved.profiles).not.toHaveProperty("work");
     expect(state.profiles.has("work")).toBe(false);
     expect(fs.existsSync(path.dirname(userDataDir))).toBe(true);
@@ -348,7 +339,7 @@ describe("BrowserProfilesService", () => {
     const { service, state } = createDeletionFixture();
     const runtime = profileRuntime(state);
     const userDataDir = localUserDataDir("openclaw-delete-race-");
-    const launch = deferred();
+    const launch = Promise.withResolvers<void>();
     const running = {
       pid: 42,
       exe: { kind: "chromium", path: "/usr/bin/chromium" },
@@ -388,7 +379,7 @@ describe("BrowserProfilesService", () => {
       resolveBrowserConfig({ profiles: { work: WORK_PROFILE } }),
     );
     const runtime = profileRuntime(state);
-    const release = deferred();
+    const release = Promise.withResolvers<void>();
     const { rejected } = await pendingStart(state, runtime, async (signal) => {
       await release.promise;
       signal.throwIfAborted();
@@ -402,18 +393,12 @@ describe("BrowserProfilesService", () => {
     release.resolve();
 
     await Promise.all([rejected, deleteExpectation]);
-    expect(writeConfigFile).not.toHaveBeenCalled();
-    expect(movePathToTrash).not.toHaveBeenCalled();
+    expectNoDeletion();
     expect(state.profiles.get("work")).toBe(runtime);
     expect(getProfileLifecycle(runtime).terminal).toBeNull();
     expect(getProfileLifecycle(runtime).blockedReason).toBeNull();
     await expect(
-      enqueueProfileStart({
-        state,
-        runtime,
-        key: "after-drift",
-        run: async () => {},
-      }),
+      enqueueProfileStart({ state, runtime, key: "after-drift", run: async () => {} }),
     ).resolves.toBeUndefined();
   });
 });

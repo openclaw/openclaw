@@ -230,21 +230,6 @@ export async function prepareChatSendAttachments(params: {
                 return refsByManagedPath(mediaPathRefs);
               }
 
-              // The parser admits more than the sandbox can stage. Reject non-PDF files
-              // in that gap as permanent 4xx instead of a retryable staging failure.
-              const oversizedForSandbox = refsToStage.filter(
-                (ref) => ref.sizeBytes > SANDBOX_MEDIA_MAX_BYTES,
-              );
-              if (oversizedForSandbox.length > 0) {
-                const details = oversizedForSandbox
-                  .map((ref) => `${ref.label} (${ref.sizeBytes} bytes)`)
-                  .join(", ");
-                throw new UnsupportedAttachmentError(
-                  "non-image-too-large-for-sandbox",
-                  `attachments exceed sandbox staging limit (${SANDBOX_MEDIA_MAX_BYTES} bytes): ${details}`,
-                );
-              }
-
               const stagingCtx: MsgContext = {
                 media: refsToStage.map((ref) => ({ path: ref.path, contentType: ref.mimeType })),
               };

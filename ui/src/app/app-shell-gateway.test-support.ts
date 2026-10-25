@@ -1,6 +1,7 @@
 import { expect, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { createConfigCapabilityHarness } from "../lib/config/config-test-harness.ts";
 import { createChatPageSessions } from "../pages/chat/chat-page-sessions.test-support.ts";
 import { createShellConfigFixture } from "./app-host.test-support.ts";
 import { ShellGatewayOwner, type ShellGatewayHost } from "./app-shell-gateway.ts";
@@ -11,13 +12,10 @@ export function createProfileAppearanceGateway(profileId: string | null) {
   let requestStarted = createDeferred();
   const request = vi.fn(
     () =>
-      new Promise<{
-        status: string;
-        entries: { "ui.accent": string; "ui.railShortcuts": string[] };
-      }>((resolve) => {
+      new Promise<ProfileAppearanceReply>((resolve) => {
         pendingResponses.push((accent) =>
           // Existing personal navigation keeps this appearance fixture out of legacy inventory.
-          resolve({ status: "ok", entries: { "ui.accent": accent, "ui.railShortcuts": [] } }),
+          resolve(profileAppearanceReply(accent)),
         );
         requestStarted.resolve();
       }),
@@ -50,7 +48,8 @@ export function createProfileAppearanceGateway(profileId: string | null) {
     sessions: createChatPageSessions(),
     runtimeConfig: {
       canPatch: false,
-      ensureLoaded: vi.fn(async () => undefined),
+      ensureDisplayLoaded: vi.fn(async () => undefined),
+      refreshDisplay: vi.fn(async () => undefined),
       runExternalMutation: vi.fn(),
       state: {
         client,
@@ -65,7 +64,7 @@ export function createProfileAppearanceGateway(profileId: string | null) {
     activeSessionKey: "",
     lastLocalePrefSignature: null,
     outboxStoreImport: { load: vi.fn(async () => undefined) },
-    recoverDeletedActiveSession: vi.fn(),
+    shellNavigation: { recoverDeletedActiveSession: vi.fn() },
     invalidate,
     routeState: {},
   } as unknown as ShellGatewayHost;
@@ -95,4 +94,32 @@ export function createProfileAppearanceGateway(profileId: string | null) {
     request,
     snapshot,
   };
+}
+
+export function createShellConfig(request: Parameters<typeof createConfigCapabilityHarness>[0]) {
+  const harness = createConfigCapabilityHarness(request);
+  const { context, owner } = createProfileAppearanceGateway(null);
+  Object.assign(context, { runtimeConfig: harness.runtimeConfig });
+  return { ...harness, context, owner };
+}
+
+export function holdProfileAppearanceRead(
+  request: ReturnType<typeof createProfileAppearanceGateway>["request"],
+) {
+  const readStarted = createDeferred();
+  const reply = createDeferred<ProfileAppearanceReply>();
+  request.mockImplementationOnce(() => {
+    readStarted.resolve();
+    return reply.promise;
+  });
+  return { readStarted, reply };
+}
+
+type ProfileAppearanceReply = {
+  status: string;
+  entries: { "ui.accent": string; "ui.railShortcuts": string[] };
+};
+
+export function profileAppearanceReply(accent: string): ProfileAppearanceReply {
+  return { status: "ok", entries: { "ui.accent": accent, "ui.railShortcuts": [] } };
 }

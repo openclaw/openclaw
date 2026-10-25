@@ -276,7 +276,6 @@ function broadcastSessionsChanged(
         ? {
             ...buildGatewaySessionSnapshot({
               sessionRow,
-              includeSession: true,
               agentId: eventAgentId,
               activeRunState,
               // A send publication is the producer's current running fact; a queued

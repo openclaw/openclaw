@@ -3,27 +3,35 @@ import path from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import * as nodeService from "../../daemon/node-service.js";
+import * as runtimePaths from "../../daemon/runtime-paths.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
+import * as nodeConfig from "../../node-host/config.js";
+import * as exec from "../../process/exec.js";
+import { nodeProbeOutput } from "../daemon-cli/install.test-helpers.js";
+import { expectPartialCall } from "../daemon-cli/lifecycle-assertions.test-support.js";
 import { registerNodeCli } from "./register.js";
 
 const mocks = vi.hoisted(() => ({
   runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn(), writeJson: vi.fn() },
   pin: vi.fn(),
   pending: vi.fn(),
-  probe: vi.fn(),
 }));
 const service = createMockGatewayService();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const observed = { revision: "observed", definition: "failed-node", stored: false };
 const workingDirectory = "/retained/node-workspace";
+const programArguments = ["/failed/node", "/failed/openclaw.mjs", "node", "run"];
+
+async function runNode(command: string, ...args: string[]) {
+  const program = new Command().exitOverride();
+  registerNodeCli(program);
+  await program.parseAsync(["node", "openclaw", "node", ...command.split(" "), ...args]);
+}
 
 vi.mock("../../runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../runtime.js")>()),
   defaultRuntime: mocks.runtime,
-}));
-vi.mock("../../daemon/node-service.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../daemon/node-service.js")>()),
-  resolveNodeService: () => service,
 }));
 vi.mock("../../daemon/runtime-pin-state.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../daemon/runtime-pin-state.js")>()),
@@ -32,45 +40,26 @@ vi.mock("../../daemon/runtime-pin-state.js", async (importOriginal) => ({
   readDaemonRuntimePin: mocks.pin,
   readDaemonRuntimePinMigrationPending: mocks.pending,
 }));
-vi.mock("../../process/exec.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../process/exec.js")>()),
-  runExec: mocks.probe,
-}));
-vi.mock("../../node-host/config.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../node-host/config.js")>()),
-  loadNodeHostConfig: async () => null,
-}));
-vi.mock("../../daemon/runtime-paths.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../daemon/runtime-paths.js")>()),
-  resolveSystemNodeInfo: async () => null,
-}));
-vi.mock("../../daemon/systemd.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../daemon/systemd.js")>()),
-  isSystemdUserServiceAvailable: async () => false,
-}));
-
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.spyOn(nodeService, "resolveNodeService").mockReturnValue(service);
   vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
   vi.stubEnv("OPENCLAW_NIX_MODE", undefined);
   vi.stubEnv("OPENCLAW_WRAPPER", undefined);
   vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", undefined);
   mocks.pin.mockReturnValue(observed);
   mocks.pending.mockReturnValue(false);
-  mocks.probe.mockImplementation(async (executable: string) => ({
-    stdout: JSON.stringify({
-      nodeVersion: "26.8.1",
-      bunVersion: path.basename(executable) === "bun" ? "1.4.3" : null,
-      sqliteVersion: "3.53.4",
-      sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
-    }),
+  vi.spyOn(nodeConfig, "loadNodeHostConfig").mockResolvedValue(null);
+  vi.spyOn(runtimePaths, "resolveSystemNodeInfo").mockResolvedValue(null);
+  vi.spyOn(exec, "runExec").mockImplementation(async (executable) => ({
     stderr: "",
+    stdout: JSON.stringify({
+      ...JSON.parse(nodeProbeOutput("26.12.1").stdout),
+      bunVersion: path.basename(executable) === "bun" ? "1.4.3" : null,
+    }),
   }));
   vi.mocked(service.isLoaded).mockResolvedValue(true);
-  vi.mocked(service.readCommand).mockResolvedValue({
-    programArguments: ["/failed/node", "/failed/openclaw.mjs", "node", "run"],
-    workingDirectory,
-  });
+  vi.mocked(service.readCommand).mockResolvedValue({ programArguments, workingDirectory });
 });
 
 afterEach(() => {
@@ -84,14 +73,11 @@ it.each([
   { runtime: "node", pinned: false, changed: false, launcher: "dist/entry.js" },
   { runtime: "node", pinned: false, changed: true, launcher: "openclaw.mjs" },
 ] as const)(
-  "restores a retained $runtime CLI through $launcher with pin=$pinned and changed custody=$changed",
+  "restores $runtime via $launcher (pin=$pinned, changed=$changed)",
   async ({ runtime, pinned, changed, launcher }) => {
     const root = tempDirs.make("openclaw-node-restore-");
     const cli = {
-      executable: path.join(
-        root,
-        runtime === "node" && process.platform === "win32" ? "node.exe" : runtime,
-      ),
+      executable: path.join(root, runtime),
       entrypoint: path.join(root, "dist", "index.js"),
       sqliteLibrary: pinned ? path.join(root, "libsqlite3.dylib") : null,
     };
@@ -103,23 +89,9 @@ it.each([
       }
     }
     vi.stubEnv("OPENCLAW_SQLITE_LIBRARY", "/controller/libsqlite3.dylib");
-    const program = new Command().exitOverride();
-    program.configureOutput({ writeErr: () => {}, writeOut: () => {} });
-    registerNodeCli(program);
-    await program.parseAsync([
-      "node",
-      "openclaw",
-      "node",
-      "install",
-      "--host",
-      "gateway.example",
-      "--port",
-      "18789",
-      "--runtime",
-      runtime,
-      "--force",
-      "--json",
-      "--auth-from-env",
+    await runNode(
+      "install --host=gateway.example --port=18789 --force --json --auth-from-env",
+      `--runtime=${runtime}`,
       "--expected-runtime-pin",
       JSON.stringify({
         revision: changed ? "stale" : observed.revision,
@@ -128,26 +100,27 @@ it.each([
       "--restore-service-cli",
       JSON.stringify(cli),
       ...(pinned ? ["--runtime-path", cli.executable] : []),
-    ]);
+    );
     if (changed) {
       expect(service.install).not.toHaveBeenCalled();
-      expect(mocks.runtime.writeJson).toHaveBeenCalledWith(
-        expect.objectContaining({
-          ok: false,
-          error: expect.stringContaining("newer selection was preserved"),
-        }),
-      );
+      expectPartialCall(mocks.runtime.writeJson, {
+        ok: false,
+        error: expect.stringContaining("newer selection was preserved"),
+      });
       return;
     }
     expect(service.install).toHaveBeenCalledOnce();
     const installed = vi.mocked(service.install).mock.calls[0]?.[0];
     const runtimeArgs = runtime === "bun" ? ["--no-install"] : [];
-    expect(installed?.programArguments.slice(0, 4 + runtimeArgs.length)).toEqual([
-      cli.executable,
-      ...runtimeArgs,
-      launcherPath,
-      "node",
-      "run",
+    const prefix = [cli.executable, ...runtimeArgs, launcherPath, "node", "run"];
+    expect(installed?.programArguments).toEqual([
+      ...prefix,
+      "--host",
+      "gateway.example",
+      "--port",
+      "18789",
+      "--no-tls",
+      "--auth-from-env",
     ]);
     expect(installed?.runtimePinUpdate).toEqual({
       expected: observed,
@@ -160,42 +133,26 @@ it.each([
   },
 );
 
-it.each([true, false])(
-  "observes node runtime custody only from an inspected definition (%s)",
-  async (known) => {
-    if (!known) {
-      vi.mocked(service.readCommand).mockRejectedValueOnce(new Error("inspection unavailable"));
-    }
-    const program = new Command().exitOverride();
-    registerNodeCli(program);
-    await program.parseAsync(["node", "openclaw", "node", "status", "--json"]);
-    expect(mocks.runtime.writeJson).toHaveBeenCalledWith({
-      service: expect.objectContaining({
-        runtimeIntent: known ? { ...observed, status: "known" } : { status: "unknown" },
-      }),
-    });
-    if (known) {
-      expect(mocks.pin).toHaveBeenCalledWith(
-        expect.objectContaining({ kind: "node" }),
-        expect.objectContaining({
-          programArguments: ["/failed/node", "/failed/openclaw.mjs", "node", "run"],
-        }),
-      );
-    } else {
-      expect(mocks.pin).not.toHaveBeenCalled();
-    }
-  },
-);
-
-it("reports pending node runtime migration without claiming unpinned custody", async () => {
-  mocks.pending.mockReturnValue(true);
-  const program = new Command().exitOverride();
-  registerNodeCli(program);
-  await program.parseAsync(["node", "openclaw", "node", "status", "--json"]);
+it.each([
+  { status: "known", ...observed },
+  { status: "unknown" },
+  { status: "migrationPending", nextStep: "run openclaw doctor" },
+])("reports $status node runtime custody", async (runtimeIntent) => {
+  const { status } = runtimeIntent;
+  if (status === "unknown") {
+    vi.mocked(service.readCommand).mockRejectedValueOnce(new Error("inspection unavailable"));
+  }
+  mocks.pending.mockReturnValue(status === "migrationPending");
+  await runNode("status --json");
   expect(mocks.runtime.writeJson).toHaveBeenCalledWith({
-    service: expect.objectContaining({
-      runtimeIntent: { status: "migrationPending", nextStep: "run openclaw doctor" },
-    }),
+    service: expect.objectContaining({ runtimeIntent }),
   });
-  expect(mocks.pin).not.toHaveBeenCalled();
+  if (status === "known") {
+    expect(mocks.pin).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "node" }),
+      expect.objectContaining({ programArguments }),
+    );
+  } else {
+    expect(mocks.pin).not.toHaveBeenCalled();
+  }
 });

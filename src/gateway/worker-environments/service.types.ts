@@ -31,6 +31,7 @@ export type WorkerEnvironmentCreateRequest = {
 export type WorkerEnvironmentServiceOptions = WorkerProviderLifecycleInputOptions &
   Pick<PreparedPoolPresenceOptions, "resolveHumanPresenceDemand" | "presenceDemandStore"> &
   WorkerEnvironmentSessionAttachmentOptions & {
+    resolveGatewayContext?: import("../server-methods/types.js").GatewayContextResolver;
     prepareComputer?: (
       claim: import("./placement-store.js").WorkerSessionTurnClaim,
     ) => Promise<import("./computer-transport.js").PreparedWorkerComputer | undefined>;

@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createWebSearchTestProvider } from "../test-utils/web-provider-runtime.test-helpers.js";
 import type * as Metadata from "./plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "./plugin-metadata.test-support.js";
-import type { PluginWebFetchProviderEntry, PluginWebSearchProviderEntry } from "./types.js";
 import type * as Explicit from "./web-provider-public-artifacts.explicit.js";
+import { resolveManifestDeclaredWebProviderCandidatePluginIds as resolveCandidates } from "./web-provider-resolution-shared.js";
 
 const mocks = vi.hoisted(() => ({
   loadMetadata: vi.fn<typeof Metadata.loadPluginMetadataSnapshot>(),
@@ -44,19 +45,12 @@ const {
 const { loadSearch, loadFetch } = mocks;
 
 function createProvider(pluginId: string, id = pluginId) {
-  return {
-    id,
+  return createWebSearchTestProvider({
     pluginId,
-    label: id,
-    hint: `${id} fixture`,
-    envVars: [],
-    placeholder: "fixture-key",
-    signupUrl: "https://example.com",
+    id,
     credentialPath: `plugins.entries.${pluginId}.config.apiKey`,
-    getCredentialValue: () => undefined,
-    setCredentialValue: () => {},
     createTool: () => null,
-  } satisfies PluginWebSearchProviderEntry & PluginWebFetchProviderEntry;
+  });
 }
 
 const searchProvider = createProvider("fallback-search");
@@ -67,6 +61,65 @@ const snapshot = createPluginMetadataSnapshotFixture({
     { id: "fallback-search", contracts: { webSearchProviders: ["fallback-search"] } },
     { id: "fallback-fetch", contracts: { webFetchProviders: ["fallback-fetch"] } },
   ],
+});
+
+describe("manifest-declared web candidates", () => {
+  const resolve = (params: { onlyPluginIds?: string[]; origin?: "bundled" } = {}) =>
+    resolveCandidates({ contract: "webSearchProviders", configKey: "webSearch", ...params });
+  beforeEach(() => {
+    vi.resetAllMocks();
+    mocks.resolveMetadata.mockReturnValue(
+      createPluginMetadataSnapshotFixture({
+        plugins: [
+          { id: "alpha", configSchema: { properties: { webSearch: {} } } },
+          { id: "beta", contracts: { webSearchProviders: ["beta-search"] } },
+        ],
+      }),
+    );
+  });
+  it("keeps explicit empty scopes off discovery", () => {
+    expect(resolve({ onlyPluginIds: [] })).toStrictEqual([]);
+    expect(mocks.resolveMetadata).not.toHaveBeenCalled();
+    expect(mocks.loadMetadata).not.toHaveBeenCalled();
+  });
+  it("keeps scoped plugins with no candidates scoped-empty", () => {
+    expect(resolve({ onlyPluginIds: ["missing-plugin"] })).toStrictEqual([]);
+    expect(mocks.resolveMetadata).toHaveBeenCalledOnce();
+  });
+  it("keeps unmatched origin filters scoped-empty", () => {
+    mocks.resolveMetadata.mockReturnValue(
+      createPluginMetadataSnapshotFixture({
+        plugins: [{ id: "workspace-tool", origin: "workspace", configSchema: { properties: {} } }],
+      }),
+    );
+    expect(resolve({ origin: "bundled" })).toStrictEqual([]);
+  });
+  it("limits sandboxed fetch to bundled and trusted official installs", () => {
+    mocks.resolveMetadata.mockReturnValue(
+      createPluginMetadataSnapshotFixture({
+        plugins: (
+          [
+            ["bundled-fetch", "bundled", false],
+            ["firecrawl", "global", true],
+            ["third-party-fetch", "global", false],
+            ["workspace-fetch", "workspace", false],
+          ] as const
+        ).map(([id, origin, trustedOfficialInstall]) => ({
+          id,
+          origin,
+          trustedOfficialInstall,
+          contracts: { webFetchProviders: [id] },
+        })),
+      }),
+    );
+    expect(
+      resolveCandidates({ contract: "webFetchProviders", configKey: "webFetch", sandboxed: true }),
+    ).toEqual(["bundled-fetch", "firecrawl"]);
+  });
+  it("derives config and contract candidates in one metadata read", () => {
+    expect(resolve()).toEqual(["alpha", "beta"]);
+    expect(mocks.resolveMetadata).toHaveBeenCalledTimes(1);
+  });
 });
 
 function expectLoad(

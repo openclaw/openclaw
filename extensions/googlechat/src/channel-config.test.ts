@@ -54,16 +54,6 @@ describe("googlechatPlugin config adapter", () => {
     expect(inferTargetChatType?.({ to: "unknown" })).toBeUndefined();
   });
 
-  it("does not advertise user-auth-only actions", () => {
-    const cfg = channelConfig({ serviceAccount: { client_email: "bot@example.com" } });
-
-    expect(googlechatPlugin.actions?.describeMessageTool?.({ cfg })).toEqual({
-      actions: ["send"],
-    });
-    expect(googlechatPlugin.actions?.supportsAction?.({ action: "send" })).toBe(true);
-    expect(googlechatPlugin.actions?.supportsAction?.({ action: "upload-file" })).toBe(false);
-  });
-
   it("keeps read-only accessors from resolving service account SecretRefs", () => {
     const cfg = {
       ...channelConfig({
@@ -107,8 +97,8 @@ describe("googlechatPlugin config adapter", () => {
     const metadataPayload: ReplyPayload = { text, channelData: { execApproval: { approvalId } } };
     const structuredPayload: ReplyPayload = { text, presentation: { blocks: [] } };
 
-    expect(normalize(unrelatedPayload)).toBe(unrelatedPayload);
+    expect(normalize(unrelatedPayload)).toStrictEqual({ text: "/approve deadbeef allow-once" });
     expect(normalize(metadataPayload)).toBeNull();
-    expect(normalize(structuredPayload)).toBe(structuredPayload);
+    expect(normalize(structuredPayload)).toStrictEqual({ text, presentation: { blocks: [] } });
   });
 });

@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { vi } from "vitest";
+import { expect, vi } from "vitest";
 import type { AgentHarness } from "../../agents/harness/types.js";
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -12,6 +12,7 @@ import {
   ensureCanonicalUserProfileForEmail,
   setCanonicalUserProfileRole,
 } from "../../state/user-profile-writes.js";
+import { gatewayProfile } from "../server/client-fixtures.test-support.js";
 import { sessionRewindHandlers } from "./sessions-rewind.js";
 import type {
   GatewayClient,
@@ -115,6 +116,17 @@ export async function invokeHandler(
   return respond;
 }
 
+export function expectCutFailure(
+  respond: ReturnType<typeof vi.fn>,
+  error: Record<string, unknown>,
+) {
+  expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining(error));
+}
+
+export function expectCutReply(respond: ReturnType<typeof vi.fn>, result: unknown) {
+  expect(respond).toHaveBeenCalledWith(true, result, undefined);
+}
+
 export async function restrictedOperator(
   email: string,
   agentId: string,
@@ -132,12 +144,7 @@ export async function restrictedOperator(
       }),
       scopes: ["operator.write"],
     },
-    authenticatedUserProfile: {
-      profileId: profile.id,
-      displayName: profile.displayName,
-      hasAvatar: false,
-      updatedAt: profile.updatedAt,
-    },
+    authenticatedUserProfile: gatewayProfile(profile.id, profile.displayName, profile.updatedAt),
   } as GatewayClient;
   const roles = sessionRoleConfig("guest", {
     sessions: { others: "view" },

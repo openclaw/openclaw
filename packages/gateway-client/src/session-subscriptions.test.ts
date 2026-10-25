@@ -18,6 +18,34 @@ afterEach(() => {
 });
 
 describe("GatewaySessionMessageSubscriptionCoordinator", () => {
+  it.each([
+    { ok: true as const, payload: { messages: [{ role: "assistant", content: "initial" }] } },
+    { ok: false as const, error: { code: "UNAVAILABLE", message: "history unavailable" } },
+  ])("keeps an initial history outcome with its acquiring viewer ($ok)", async (initialHistory) => {
+    const { client, request } = createClient(async () => ({ key: "main", initialHistory }));
+    const coordinator = new GatewaySessionMessageSubscriptionCoordinator(client);
+    const first = await coordinator.acquire("main", {
+      initialHistory: { limit: 80, cursor: "first" },
+    });
+    const later = await coordinator.acquire("main", {
+      initialHistory: { limit: 20, cursor: "later" },
+    });
+
+    expect(first.initialHistory).toEqual(initialHistory);
+    expect(later).not.toHaveProperty("initialHistory");
+    expect(request).toHaveBeenCalledExactlyOnceWith("sessions.messages.subscribe", {
+      key: "main",
+      subscriptionId: expect.any(String),
+      initialHistory: { limit: 80, cursor: "first" },
+    });
+    await coordinator.release(first);
+    await coordinator.release(later);
+    expect(request).toHaveBeenLastCalledWith("sessions.messages.unsubscribe", {
+      key: "main",
+      subscriptionId: expect.any(String),
+    });
+  });
+
   it("shares one in-flight wire subscription across canonical session aliases", async () => {
     const { client, request } = createClient();
     const coordinator = new GatewaySessionMessageSubscriptionCoordinator(client, {

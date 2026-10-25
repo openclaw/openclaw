@@ -44,15 +44,17 @@ async function fixture(
       return respond(bodies.length);
     },
   });
+  const request = {
+    model: model.id,
+    stream: true,
+    service_tier: "ultrafast",
+    input: [{ role: "user", content: "Hello" }],
+  } satisfies Parameters<typeof createResponsesStreamWithRecovery>[0]["request"];
   const stream = await createResponsesStreamWithRecovery({
     client,
     model: opts.native === false ? { ...model, baseUrl: "https://proxy.example/v1" } : model,
-    request: {
-      model: model.id,
-      stream: true,
-      service_tier: "ultrafast",
-      input: [{ role: "user", content: "Hello" }],
-    },
+    request,
+    buildFullHistoryRequest: () => request,
     requestOptions: { signal: opts.signal },
     canRetryStream: () => true,
     onServiceTierRejected: (tier) => {

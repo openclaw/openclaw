@@ -276,7 +276,6 @@ export async function runPreparedEmbeddedLoop(
               lastRunPromptUsage,
             }),
             replayInvalid: accumulatedReplayState.replayInvalid ? true : undefined,
-            livenessState: "blocked",
           }),
         );
       }

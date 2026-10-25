@@ -1,5 +1,6 @@
-import { For, Show } from "solid-js";
-import { t } from "../../lib/reactive/i18n.ts";
+import { For, Loading, Show } from "solid-js";
+import { registerTerminalEnglish } from "../../i18n/locales/en-terminal.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { nativeListener } from "../../lib/solid-native-listener.ts";
 import { Icon } from "../solid/icon.tsx";
 import { PanelEmptyState } from "../solid/panel-empty-state.tsx";
@@ -9,6 +10,8 @@ import { useScrollState } from "../solid/scroll-state.ts";
 import "../tooltip.ts";
 import "../../styles/session-panel-rail.css";
 import type { TerminalPanelViewState } from "./terminal-panel-view-types.ts";
+
+registerEnglishCatalog(registerTerminalEnglish);
 
 type TerminalSessionPickerState = TerminalPanelViewState["picker"];
 
@@ -113,8 +116,8 @@ export function SessionMenu(props: {
             </div>
           </Show>
         </div>
-        <Show
-          when={!props.state.loading()}
+        <Loading
+          on={props.state.requestKey()}
           fallback={
             <PanelLoadingSkeleton
               variant="terminal"
@@ -131,6 +134,7 @@ export function SessionMenu(props: {
                 fallback={<div class="tp-session-empty">{t("terminal.noSessions")}</div>}
               >
                 <PanelEmptyState
+                  presentation="mobile"
                   heading={t("terminal.noSessions")}
                   description={t("chat.sidePanel.terminalEmpty")}
                   icon={<Icon name="terminal" />}
@@ -176,7 +180,7 @@ export function SessionMenu(props: {
               </Show>
             </div>
           </Show>
-        </Show>
+        </Loading>
       </div>
     </Show>
   );

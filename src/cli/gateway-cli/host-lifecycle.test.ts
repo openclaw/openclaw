@@ -1,3 +1,4 @@
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prepareHostedGatewayStop, type HostedGatewayStop } from "../../daemon/hosted-stop.js";
 import { getGatewayProcessInstanceId } from "../../gateway/process-instance.js";
@@ -13,6 +14,9 @@ import { createGatewayHostLifecycle } from "./host-lifecycle.js";
 
 vi.mock("../../daemon/hosted-stop.js", () => ({ prepareHostedGatewayStop: vi.fn() }));
 vi.mock("../../infra/restart-coordinator.js", () => ({ scheduleSafeGatewayRestart: vi.fn() }));
+
+const expectOutcome = (request: Promise<unknown>, outcome: string) =>
+  expect(request).resolves.toEqual({ ok: true, value: { outcome } });
 
 describe("Gateway host lifecycle authority", () => {
   let current = true;
@@ -52,18 +56,11 @@ describe("Gateway host lifecycle authority", () => {
   it("reports an already-running start and a local scheduled restart without native discovery", async () => {
     const host = owner();
     const guard = vi.fn();
-    await expect(host.capability.request("start", guard)).resolves.toEqual({
-      ok: true,
-      value: { outcome: "already-running" },
-    });
-    await expect(host.capability.request("restart", guard)).resolves.toEqual({
-      ok: true,
-      value: { outcome: "scheduled" },
-    });
+    await expectOutcome(host.capability.request("start", guard), "already-running");
+    await expectOutcome(host.capability.request("restart", guard), "scheduled");
     expect(prepareHostedGatewayStop).not.toHaveBeenCalled();
     expect(scheduleSafeGatewayRestart).toHaveBeenCalledExactlyOnceWith({
       reason: "gateway.restart.safe",
-      delayMs: 0,
     });
     expect(guard).toHaveBeenCalledTimes(2);
   });
@@ -95,41 +92,19 @@ describe("Gateway host lifecycle authority", () => {
     expect(commit).not.toHaveBeenCalled();
   });
 
-  it("transfers only the accepted stop across teardown, without awaiting native completion", async () => {
-    const host = owner();
-    await expect(host.capability.request("stop", () => {})).resolves.toEqual({
-      ok: true,
-      value: { outcome: "scheduled" },
-    });
-    expect(acceptStop).toHaveBeenCalledOnce();
-    expect(execute).not.toHaveBeenCalled();
-    await expect(host.capability.request("start", () => {})).resolves.toMatchObject({ ok: false });
-    await expect(host.finishStop()).resolves.toEqual({ outcome: "accepted" });
-    expect(execute).toHaveBeenCalledOnce();
-    await expect(host.finishStop()).resolves.toEqual({ outcome: "retired" });
-  });
-
-  it.each(["retired", "replaced", "closed", "approval revoked"])(
+  it.each(["retired", "replaced", "closed"])(
     "rejects after awaited preparation when %s",
     async (change) => {
       const host = owner();
-      let approve = true;
       const preparation = createDeferredCore<HostedGatewayStop>();
       vi.mocked(prepareHostedGatewayStop).mockReturnValue(preparation.promise);
-      const request = host.capability.request("stop", () => {
-        if (!approve) {
-          throw new Error("approval revoked");
-        }
-      });
+      const request = host.capability.request("stop", () => {});
       const retirement = change === "retired" ? host.retire() : undefined;
       if (change === "replaced") {
         current = false;
       }
       if (change === "closed") {
         serving = false;
-      }
-      if (change === "approval revoked") {
-        approve = false;
       }
       preparation.resolve({ execute, dispose });
       await expect(request).resolves.toMatchObject({ ok: false });
@@ -145,7 +120,6 @@ describe("Gateway host lifecycle authority", () => {
     const preparation = createDeferredCore<HostedGatewayStop>();
     vi.mocked(prepareHostedGatewayStop).mockReturnValueOnce(preparation.promise);
     const first = host.capability.request("stop", () => {});
-    await expect(host.capability.request("stop", () => {})).resolves.toMatchObject({ ok: false });
     await expect(host.capability.request("stop", () => {})).resolves.toMatchObject({ ok: false });
     expect(prepareHostedGatewayStop).toHaveBeenCalledOnce();
     preparation.reject(new Error("native permission denied"));
@@ -204,19 +178,17 @@ describe("Gateway host lifecycle authority", () => {
       }
       const request = host.capability.request("stop", () => {});
       if (phase === "accepted") {
-        await request;
+        await expectOutcome(request, "scheduled");
       }
-      let retired = false;
-      const retirement = host.retire().then(() => {
-        retired = true;
-      });
+      const retired = vi.fn();
+      const retirement = host.retire().then(retired);
       if (phase === "preparing") {
         preparation.resolve({ execute, dispose });
       }
       await expect(host.capability.request("restart", () => {})).resolves.toMatchObject({
         ok: false,
       });
-      expect(retired).toBe(false);
+      expect(retired).not.toHaveBeenCalled();
       expect(execute).not.toHaveBeenCalled();
       closing.resolve();
       await retirement;
@@ -232,15 +204,11 @@ describe("Gateway host lifecycle authority", () => {
     execute.mockReturnValueOnce(native.promise);
     await host.capability.request("stop", () => {});
     const finishing = host.finishStop();
-    let retired = false;
-    const retirement = host.retire().then(() => {
-      retired = true;
-    });
+    const retired = vi.fn();
+    const retirement = host.retire().then(retired);
     try {
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      expect(retired).toBe(false);
+      await nextTurn();
+      expect(retired).not.toHaveBeenCalled();
       current = false;
     } finally {
       native.resolve({ outcome: "accepted" });

@@ -12,8 +12,13 @@ import {
 } from "../../../components/session-progress-card.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Menu, type MenuEntry, type MenuHandle } from "../../../components/solid/menu.tsx";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
+import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 type Props = {
   props?: ChatDetailsProps;
@@ -31,9 +36,11 @@ export function ChatDetailsProgress(props: Props) {
         when={props.props?.progressCard}
         fallback={
           props.props?.progressCardInitialLoading && (
-            <div class="chat-details__muted" role="status">
-              {t("sessionProgressCard.widgetLoading")}
-            </div>
+            <PanelLoadingSkeleton
+              variant="document"
+              label={t("sessionProgressCard.widgetLoading")}
+              compact
+            />
           )
         }
       >
@@ -121,22 +128,32 @@ export function MobileTaskProgressContent(props: MobileTaskProgressProps) {
           <Show
             when={props.initialLoading || props.error || props.card === undefined}
             fallback={
-              <div class="task-progress-details__empty">
-                <Icon name="listChecks" />
-                <strong>{t("sessionProgressCard.detailsEmptyTitle")}</strong>
-                <p>{t("sessionProgressCard.detailsEmptyDescription")}</p>
-              </div>
+              <PanelEmptyState
+                presentation="mobile"
+                icon={<Icon name="listChecks" />}
+                heading={t("sessionProgressCard.detailsEmptyTitle")}
+                description={t("sessionProgressCard.detailsEmptyDescription")}
+              />
             }
           >
-            <div class="chat-details__muted" role="status">
-              {t(
-                props.error === "access-denied"
-                  ? "sessionProgressCard.widgetAccessDenied"
-                  : props.error
-                    ? "sessionProgressCard.widgetUnavailable"
-                    : "sessionProgressCard.widgetLoading",
-              )}
-            </div>
+            <Show
+              when={props.error}
+              fallback={
+                <PanelLoadingSkeleton
+                  variant="document"
+                  label={t("sessionProgressCard.widgetLoading")}
+                  compact
+                />
+              }
+            >
+              <div class="chat-details__muted" role="status">
+                {t(
+                  props.error === "access-denied"
+                    ? "sessionProgressCard.widgetAccessDenied"
+                    : "sessionProgressCard.widgetUnavailable",
+                )}
+              </div>
+            </Show>
           </Show>
         }
       >

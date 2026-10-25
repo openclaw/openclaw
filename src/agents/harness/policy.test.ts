@@ -24,46 +24,35 @@ function providerConfig(
   } as OpenClawConfig).config;
 }
 
-function policy(
+function checkPolicy(
   config: OpenClawConfig,
+  runtime: string,
   params: Parameters<typeof resolveAgentHarnessPolicy>[0] = {},
+  runtimeSource = "implicit",
 ) {
-  return resolveAgentHarnessPolicy({
-    provider: "openai",
-    modelId: "gpt-5.5",
-    env: {},
-    ...params,
-    config,
-  });
+  expect(
+    resolveAgentHarnessPolicy({
+      provider: "openai",
+      modelId: "gpt-5.5",
+      env: {},
+      ...params,
+      config,
+    }),
+  ).toEqual({ runtime, runtimeSource });
 }
 
 const agentParams = { entries: { writer: { params: { temperature: 0.2 } } } };
 const routeModel = (facts: Record<string, unknown> = {}, id = "gpt-5.5") => ({ id, ...facts });
 
 describe("resolveAgentHarnessPolicy", () => {
-  it.each<[string, Record<string, unknown>, string, string?]>([
-    ["official Responses", {}, "codex"],
-    ["HTTP Responses", { baseUrl: "http://api.openai.com/v1" }, "openclaw"],
-    [
-      "HTTP ChatGPT",
-      { api: "openai-chatgpt-responses", baseUrl: "http://chatgpt.com/backend-api/codex" },
+  it("preserves the source of an explicit provider runtime", () => {
+    checkPolicy(
+      providerConfig({ api: "openai-completions", agentRuntime: { id: "openclaw" } }),
       "openclaw",
-    ],
-    ["custom endpoint", { baseUrl: "https://relay.example.test/v1" }, "openclaw"],
-    ["Completions", { api: "openai-completions" }, "openclaw"],
-    [
-      "explicit Completions",
-      { api: "openai-completions", agentRuntime: { id: "openclaw" } },
-      "openclaw",
+      {},
       "provider",
-    ],
-    ["request override", { headers: { "x-route": "custom" } }, "openclaw"],
-  ])(
-    "uses the provider-owned runtime for %s",
-    (_name, overrides, runtime, runtimeSource = "implicit") => {
-      expect(policy(providerConfig(overrides))).toEqual({ runtime, runtimeSource });
-    },
-  );
+    );
+  });
 
   it.each(["default", "auto"] as const)("treats %s as implicit route selection", (id) => {
     const agentRuntime = { id };
@@ -76,24 +65,15 @@ describe("resolveAgentHarnessPolicy", () => {
       undefined,
       "anthropic",
     );
-    expect(policy(anthropic, { provider: "anthropic", modelId: "claude-sonnet-4-6" })).toEqual({
-      runtime: "auto",
-      runtimeSource: "implicit",
-    });
-    expect(policy(providerConfig({ agentRuntime }))).toEqual({
-      runtime: "codex",
-      runtimeSource: "implicit",
-    });
-    expect(
-      policy(
-        providerConfig(
-          { baseUrl: "https://relay.example.test/v1" },
-          {
-            defaults: { models: { "openai/gpt-5.5": { agentRuntime } } },
-          },
-        ),
+    checkPolicy(anthropic, "auto", { provider: "anthropic", modelId: "claude-sonnet-4-6" });
+    checkPolicy(providerConfig({ agentRuntime }), "codex");
+    checkPolicy(
+      providerConfig(
+        { baseUrl: "https://relay.example.test/v1" },
+        { defaults: { models: { "openai/gpt-5.5": { agentRuntime } } } },
       ),
-    ).toEqual({ runtime: "openclaw", runtimeSource: "implicit" });
+      "openclaw",
+    );
   });
 
   it.each<[string, OpenClawConfig["agents"], string?, string?]>([
@@ -105,27 +85,20 @@ describe("resolveAgentHarnessPolicy", () => {
     ["agent params", agentParams, "writer"],
     ["session agent params", agentParams, undefined, "agent:writer:main"],
   ])("keeps %s on OpenClaw", (_name, agents, agentId, sessionKey) => {
-    expect(policy(providerConfig({}, agents), { agentId, sessionKey })).toEqual({
-      runtime: "openclaw",
-      runtimeSource: "implicit",
-    });
+    checkPolicy(providerConfig({}, agents), "openclaw", { agentId, sessionKey });
   });
 
   it("keeps prepared request overrides on OpenClaw", () => {
-    expect(
-      policy(createCanonicalAgentConfigFixture().config, {
-        modelApi: "openai-responses",
-        modelBaseUrl: "https://api.openai.com/v1",
-        requestTransportOverrides: "present",
-      }),
-    ).toEqual({ runtime: "openclaw", runtimeSource: "implicit" });
+    checkPolicy(createCanonicalAgentConfigFixture().config, "openclaw", {
+      modelApi: "openai-responses",
+      modelBaseUrl: "https://api.openai.com/v1",
+      requestTransportOverrides: "present",
+    });
   });
 
   it("applies global request params before a concrete model is selected", () => {
-    const config = providerConfig({}, { defaults: { params: { temperature: 0.2 } } });
-    expect(policy(config, { modelId: undefined })).toEqual({
-      runtime: "openclaw",
-      runtimeSource: "implicit",
+    checkPolicy(providerConfig({}, { defaults: { params: { temperature: 0.2 } } }), "openclaw", {
+      modelId: undefined,
     });
   });
 
@@ -159,7 +132,7 @@ describe("resolveAgentHarnessPolicy", () => {
     ],
   ] as const)("keeps duplicate model config aligned: %s", (_name, models, runtime, api) => {
     const config = providerConfig({ models });
-    expect(policy(config)).toEqual({ runtime, runtimeSource: "implicit" });
+    checkPolicy(config, runtime);
     const resolution = resolveOpenAIModelRoutes({ provider: "openai", modelId: "gpt-5.5", config });
     expect(
       resolution?.kind === "routes"

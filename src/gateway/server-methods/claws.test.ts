@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ClawHubSourceError } from "../../claws/clawhub-source.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
 import { clawsHandlers } from "./claws.js";
@@ -52,6 +53,7 @@ describe("ClawHub Claw catalog Gateway methods", () => {
     updatedAtMs: 1,
   };
   const release = { packageName: entry.packageName, version: "1.0.0" };
+  const previewParams = { ...release, kind: "instruction", name: "AGENTS.md" };
 
   it("registers read-scoped catalog methods but rejects discovery with Labs off", async () => {
     for (const method of [
@@ -97,26 +99,51 @@ describe("ClawHub Claw catalog Gateway methods", () => {
     expect(replies[0]?.[1]).toEqual({ preview });
   });
 
-  it.each(["claws.catalog.search", "claws.catalog.detail"] as const)(
+  it.each([
+    ["claws.catalog.search", listClawHubClaws, {}, [entry]],
+    ["claws.catalog.detail", readClawHubClawDetail, release, { ...entry, version: "1.0.0" }],
+    ["claws.catalog.preview", readClawHubClawPreview, previewParams, { content: "# Instructions" }],
+  ] as const)(
     "drops %s when Labs turns off during the ClawHub request",
-    async (method) => {
+    async (method, sourceMock, params, result) => {
       const source = createDeferredCore<unknown>();
-      const sourceMock =
-        method === "claws.catalog.search" ? listClawHubClaws : readClawHubClawDetail;
       sourceMock.mockReturnValue(source.promise);
       let labsEnabled = true;
-      const { replies, pending } = catalogRequest(
-        method,
-        method === "claws.catalog.search" ? {} : release,
-        () => (labsEnabled ? enabled : {}),
+      const { replies, pending } = catalogRequest(method, params, () =>
+        labsEnabled ? enabled : {},
       );
 
       labsEnabled = false;
-      source.resolve(method === "claws.catalog.search" ? [entry] : { ...entry, version: "1.0.0" });
+      source.resolve(result);
       await pending;
 
       expect(replies).toHaveLength(1);
       expect(replies[0]?.[2]).toMatchObject({ code: "FORBIDDEN" });
     },
   );
+
+  it.each([
+    ["claws.catalog.search", { query: 42 }],
+    ["claws.catalog.detail", { packageName: 42 }],
+    ["claws.catalog.preview", { ...release, kind: "unknown", name: "AGENTS.md" }],
+  ])("rejects malformed %s before catalog I/O", async (method, params) => {
+    const { replies, pending } = catalogRequest(method, params);
+    await pending;
+    expect(replies).toHaveLength(1);
+    expect(replies[0]?.[2]).toMatchObject({ code: "INVALID_REQUEST" });
+    expect(listClawHubClaws).not.toHaveBeenCalled();
+    expect(readClawHubClawDetail).not.toHaveBeenCalled();
+    expect(readClawHubClawPreview).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [new ClawHubSourceError("unavailable", "Release is unavailable."), "Release is unavailable."],
+    [new Error("upstream internal detail"), "ClawHub catalog is unavailable."],
+  ])("preserves the public catalog failure for %s", async (failure, message) => {
+    readClawHubClawDetail.mockRejectedValue(failure);
+    const { replies, pending } = catalogRequest("claws.catalog.detail", release);
+    await pending;
+    expect(replies).toHaveLength(1);
+    expect(replies[0]?.[2]).toMatchObject({ code: "UNAVAILABLE", message });
+  });
 });

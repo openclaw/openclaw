@@ -32,7 +32,7 @@ not expose dynamic tools that duplicate Codex-native workspace operations:
 and `tool_search`. Goal operations stay native to Codex,
 so OpenClaw does not project a second goal store into Codex turns. Most
 remaining OpenClaw integration tools, such as messaging, media, cron,
-browser, nodes, gateway, `progress_card`, and `heartbeat_respond` are available through
+browser, nodes, gateway, and `progress_card` are available through
 Codex tool search under the `openclaw` namespace, keeping the initial model
 context smaller. The restricted-turn shell fallback is the exception for
 `exec` and `process` when a finite allowlist disables native Code Mode;
@@ -95,8 +95,8 @@ dynamic calls; submit several `sessions_spawn` calls in a bounded loop rather
 than expecting `Promise.all` to launch them concurrently. Already-accepted
 children can still overlap while later calls are submitted. See
 [Swarm](/tools/swarm#use-swarm-from-other-harnesses) for a complete pattern.
-Scheduled heartbeat user messages identify `heartbeat_respond` when structured
-responses are enabled; the tool remains discoverable through Codex tool search.
+Migrated heartbeat monitors use ordinary scheduled automation turns and their
+configured delivery policy. The retired `heartbeat_respond` tool is not exposed.
 
 Set `codexDynamicToolsLoading: "direct"` only when connecting to a custom
 Codex app-server that cannot search deferred dynamic tools or when
@@ -211,6 +211,10 @@ service-owned startup running even if it was the only waiter. Later callers can
 join it; once ready, an unused client retires after the idle grace. Isolated
 startup remains caller-owned. See
 [startup budgets](/plugins/codex-harness-reference/timeouts#timeouts).
+
+Temporary capability, native-hook, and tool-catalog probes wait for their isolated
+app-server to close before returning, including after a failed or timed-out read.
+Probes using a shared connection release their lease so other work can continue.
 
 OpenClaw preserves assistant text supplied with the initial native item and
 reasoning supplied with a completed item, even when Codex sends no text deltas.
@@ -334,8 +338,14 @@ with room for 16 pending or closing admissions. It retains up to 64 usable
 WebSockets and reclaims the oldest completed idle connection when either
 transport needs room. Active responses and newly opened connections awaiting
 their first request are not evicted. HTTP connections close after each response;
-native WebSocket reuse remains intact. The separate limit of 64 admitted root
-contexts is unchanged; transport capacity is not a count of saved conversations.
+native WebSocket reuse remains intact. Separately, each inference relay admits at
+most 64 active root contexts. Additional turns wait in arrival order for a root
+to be released; cancellation removes a waiting turn, and relay shutdown rejects
+its waiters. Admission rechecks the turn and transport ownership before starting.
+Debug logs identify the root limit and waiting count. A completed, failed,
+aborted, or yielded turn releases its root; retained parent subscriptions and
+prepared context do not occupy active roots. Transport capacity is not a count
+of saved conversations.
 
 A new WebSocket waits before opening its upstream connection; admission and its
 handshake share a 10-second deadline. HTTP admission and queued WebSocket

@@ -1,7 +1,8 @@
-import { mkdir, readFile, readdir, realpath, writeFile } from "node:fs/promises";
+import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
+import { listDirectoryTreeStrict } from "../../infra/directory-walk.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { runNodeWorkerWorkspaceTransfer } from "../../node-host/node-worker-transfer-client.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
@@ -19,8 +20,8 @@ import {
   MANIFEST_REF,
   OWNER_EPOCH,
   SESSION_ID,
-  attachedEnvironment,
   acknowledgeCompletedWorkerTurn,
+  attachedEnvironment,
   cleanupWorkerTurnLauncherTest,
   createWorkerSessionTurnPlacementProvider,
   createWorkerTurnTunnel,
@@ -32,7 +33,7 @@ import {
   sessionTarget,
   setupWorkerTurnLauncherTest,
   turn,
-  unusedEnvironments,
+  workerTurnEnvironments,
 } from "./worker-turn-launcher.test-support.js";
 import { captureWorkspaceManifest } from "./workspace-manifest-worker.js";
 import { parseWorkerWorkspaceManifest } from "./workspace-manifest.js";
@@ -88,7 +89,9 @@ it.each(["worker-turn", "remote-exec"] as const)(
     let acceptedManifestPaths: string[] = [];
     const verifyFiles = async (prompt: string) => {
       const files: Buffer[] = [];
-      for (const entry of await readdir(remote, { recursive: true, withFileTypes: true })) {
+      for (const entry of (await listDirectoryTreeStrict(remote)).map(
+        (walkEntry) => walkEntry.dirent,
+      )) {
         if (!entry.isFile() || entry.name === "remote-edits.txt") {
           continue;
         }
@@ -216,13 +219,9 @@ it.each(["worker-turn", "remote-exec"] as const)(
     const provider = createWorkerSessionTurnPlacementProvider({
       placements,
       resolveWorkspace: async () => ({ kind: "local", path: local }),
-      environments: {
-        ...unusedEnvironments(),
-        get: attachedEnvironment,
-        acquireTurnCredential: async () => credential(),
+      environments: workerTurnEnvironments(tunnel, {
         acknowledgeCredentialDelivery: async () => true,
-        startTunnel: async () => tunnel,
-      },
+      }),
     });
     await provider.executeTurn({ ...sessionTarget, runId: input.runId }, input, async () => {
       await verifyFiles(input.prompt);
@@ -248,7 +247,8 @@ it.each(["worker-turn", "remote-exec"] as const)(
     expect(workerManifestPaths).toEqual(expectedPaths);
     expect(acceptedManifestPaths).toEqual(expectedFiles);
     expect(
-      (await readdir(local, { recursive: true }))
+      (await listDirectoryTreeStrict(local))
+        .map((walkEntry) => walkEntry.relativePath)
         .map((entry) => entry.split(path.sep).join("/"))
         .toSorted(),
     ).toEqual(expectedPaths);

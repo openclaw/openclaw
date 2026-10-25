@@ -1,11 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, vi } from "vitest";
+import { afterEach, beforeEach, expect, vi } from "vitest";
 import { buildTaskScript } from "../../daemon/schtasks-layout.js";
 import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
 import type { GatewayService } from "../../daemon/service.js";
-import { mockSystemAccountHome } from "../../daemon/service.test-helpers.js";
+import {
+  createMockGatewayService,
+  mockSystemAccountHome,
+} from "../../daemon/service.test-helpers.js";
 import * as processAncestry from "../../infra/restart-stale-pids.js";
+import { gatewayCommand } from "./update-command-service-fixtures.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   service: vi.fn<() => GatewayService>(),
@@ -27,6 +31,27 @@ const mocks = vi.hoisted(() => ({
 export { mocks };
 export { withServiceHome } from "./update-command-service-home.test-support.js";
 export const fixtureGatewayPid = Math.max(process.pid, process.ppid) + 1;
+
+export function mockMaintenanceService(home: string, overrides: Partial<GatewayService> = {}) {
+  const service = createMockGatewayService({
+    readCommand: async () => gatewayCommand(home),
+    readRuntime: async () => ({
+      status: "running",
+      pid: fixtureGatewayPid,
+      systemd: { managerUid: 2001 },
+    }),
+    isLoaded: async () => true,
+    ...overrides,
+  });
+  mocks.service.mockReturnValue(service);
+  return service;
+}
+
+export function expectNoServiceCalls(...methods: GatewayService[keyof GatewayService][]) {
+  for (const method of methods) {
+    expect(method).not.toHaveBeenCalled();
+  }
+}
 
 vi.mock("../../daemon/service-process-membership.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../daemon/service-process-membership.js")>()),

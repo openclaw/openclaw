@@ -7,7 +7,6 @@ import {
   resolveAgentHarnessBeforePromptBuildResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { getSessionEntryAsync } from "openclaw/plugin-sdk/session-store-runtime";
-import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   buildCodexSystemPromptReport,
   prependCodexOpenClawPromptContext,
@@ -33,7 +32,6 @@ import { estimateCodexAppServerProjectedTurnTokens } from "./run-attempt-lifecyc
 import { prependCurrentInboundContext } from "./run-attempt-state.js";
 import { rotateOversizedCodexAppServerStartupBinding } from "./startup-binding.js";
 import { resolveCodexProjectionStartupBinding } from "./thread-restricted-resume.js";
-import { hasCodexMirrorOrigin } from "./transcript-mirror-attestation.js";
 import {
   buildCodexHistoryProvenancePrefix,
   buildCodexParentLocalInstructions,
@@ -147,21 +145,11 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
   const prepareFileContext: NonNullable<
     Parameters<typeof projectContextEngineAssemblyForCodex>[0]["prepareFileContext"]
   > = async (message, maxChars) => {
-    // Older hosts retain ordinary text history, but cannot claim restored attachments.
     const prepare = params.hostCapabilities.prepareContextMedia;
     if (!prepare) {
-      const media = asOptionalRecord(Reflect.get(message, "__openclaw"))?.media;
-      if (
-        (Array.isArray(media) && media.length) ||
-        (message.role === "user" &&
-          Array.isArray(message.content) &&
-          message.content.some((part) => part.type === "image"))
-      ) {
-        throw new CodexContextAttachmentError(
-          "Saved attachments require a newer OpenClaw host. Update the Gateway and Codex plugin together, then retry.",
-        );
-      }
-      return { images: [] };
+      throw new CodexContextAttachmentError(
+        "Saved attachments require a newer OpenClaw host. Update the Gateway and Codex plugin together, then retry.",
+      );
     }
     try {
       const files = await prepare({ message, maxChars });
@@ -494,6 +482,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     binding: NonNullable<typeof mutable.startupBinding>,
   ) => {
     const cutoff = Date.parse(binding.historyCoveredThrough ?? "");
+    const nativeThreadPrefix = `codex-app-server:${binding.threadId}:`;
     const newerVisibleMessages = historyState.messages.filter((message) => {
       if (
         message.role !== "user" &&
@@ -513,10 +502,11 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
         !(
           "idempotencyKey" in message &&
           typeof message.idempotencyKey === "string" &&
-          message.idempotencyKey.startsWith("codex-app-server:")
+          message.idempotencyKey.startsWith(nativeThreadPrefix)
         ) &&
-        !hasCodexMirrorOrigin(message) &&
-        !mirrorIdentity?.startsWith("codex-app-server:") &&
+        // Origin alone does not imply coverage: temporary threads and host-admitted
+        // user rows belong in the unseen delta. Unqualified rows rely on the cutoff.
+        !mirrorIdentity?.startsWith(nativeThreadPrefix) &&
         Number.isFinite(timestamp) &&
         timestamp > (Number.isFinite(cutoff) ? cutoff : 0)
       );

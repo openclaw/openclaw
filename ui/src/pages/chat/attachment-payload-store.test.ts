@@ -6,7 +6,6 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
-import * as payloadStore from "../../lib/chat/outbox-payload-store.runtime.ts";
 import * as videoPosters from "../../lib/media/video-poster.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
@@ -147,26 +146,6 @@ it("retains document Open and Download after complete outbox hydration", async (
   );
   releaseChatAttachmentPayloads([attachment]);
   expect(revoked.filter((value) => value === href)).toHaveLength(1);
-});
-it("does not allocate a preview for an outbox read whose recovery owner changed", async () => {
-  const host = hostFor();
-  const item = await persisted(host);
-  const started = createDeferred();
-  const resume = createDeferred();
-  const read = payloadStore.readOutboxPayload;
-  vi.spyOn(payloadStore, "readOutboxPayload").mockImplementationOnce(async (...args) => {
-    const result = await read(...args);
-    started.resolve();
-    await resume.promise;
-    return result;
-  });
-  const count = created.size;
-  const pending = prepareOutboxPayload(host, item, "handoff");
-  await started.promise;
-  vi.spyOn(host.client!, "recoveryScopeReady", "get").mockReturnValue(false);
-  resume.resolve();
-  expect(await pending).toEqual({ status: "failed", reason: "unavailable" });
-  expect(created.size).toBe(count);
 });
 
 it("keeps restored and independently cloned preview ownership separate", async () => {

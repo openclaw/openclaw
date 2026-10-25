@@ -32,20 +32,21 @@ const enabledOptions = (id: string) => ({
   onlyPluginIds: [id],
 });
 
-function expectDiagnostic(
-  diagnostics: readonly { level?: string; pluginId?: string; message?: string }[],
-  pluginId: string,
-  message: string,
-): void {
-  expect(
-    diagnostics.find(
-      (diagnostic) => diagnostic.pluginId === pluginId && diagnostic.message === message,
-    )?.level,
-  ).toBe("error");
-}
-
-function createTempDir(): string {
-  return createTempPluginDir(tempDirs, "openclaw-codex-ext-");
+function writeMiddleware(dir: string, id: string, text: string, bundled = false) {
+  return writeTempPlugin({
+    dir,
+    id,
+    ...(bundled ? { filename: "index.mjs" } : {}),
+    manifest: {
+      ...(!bundled ? { activation: { onStartup: false } } : {}),
+      contracts: middlewareContract,
+    },
+    body: `export default { id: ${JSON.stringify(id)}, register(api) {
+  api.registerAgentToolResultMiddleware(async (event) => ({
+    result: { ...event.result, content: [{ type: "text", text: ${text} }] }
+  }), { runtimes: ["codex"] });
+} };`,
+  });
 }
 
 function createBundledTempDir(): string {
@@ -69,19 +70,14 @@ afterEach(async () => {
 
 describe("agent tool result middleware", () => {
   it("does not treat auto-enabled runtime config as explicit middleware opt-in", async () => {
-    const tmp = createTempDir();
+    const tmp = createTempPluginDir(tempDirs, "openclaw-codex-ext-");
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
 
-    const pluginFile = writeTempPlugin({
-      dir: tmp,
-      id: "tool-result-middleware",
-      manifest: { activation: { onStartup: false }, contracts: middlewareContract },
-      body: `export default { id: "tool-result-middleware", register(api) {
-  api.registerAgentToolResultMiddleware(async (event) => ({
-    result: { ...event.result, content: [{ type: "text", text: event.toolName + " should not run" }] }
-  }), { runtimes: ["codex"] });
-} };`,
-    });
+    const pluginFile = writeMiddleware(
+      tmp,
+      "tool-result-middleware",
+      'event.toolName + " should not run"',
+    );
 
     const sourceConfig = { plugins: { load: { paths: [pluginFile] } } };
     setRuntimeConfigSnapshot(
@@ -104,30 +100,20 @@ describe("agent tool result middleware", () => {
 
   it("loads missing installed middleware when bundled middleware is already active", async () => {
     const bundledDir = createBundledTempDir();
-    const installedDir = createTempDir();
+    const installedDir = createTempPluginDir(tempDirs, "openclaw-codex-ext-");
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
 
-    writeTempPlugin({
-      dir: bundledDir,
-      id: "bundled-tool-result-middleware",
-      filename: "index.mjs",
-      manifest: { contracts: middlewareContract },
-      body: `export default { id: "bundled-tool-result-middleware", register(api) {
-  api.registerAgentToolResultMiddleware(async (event) => ({
-    result: { ...event.result, content: [{ type: "text", text: event.result.content[0].text + " | bundled" }] }
-  }), { runtimes: ["codex"] });
-} };`,
-    });
-    const installedPluginFile = writeTempPlugin({
-      dir: installedDir,
-      id: "installed-tool-result-middleware",
-      manifest: { activation: { onStartup: false }, contracts: middlewareContract },
-      body: `export default { id: "installed-tool-result-middleware", register(api) {
-  api.registerAgentToolResultMiddleware(async (event) => ({
-    result: { ...event.result, content: [{ type: "text", text: event.result.content[0].text + " | installed" }] }
-  }), { runtimes: ["codex"] });
-} };`,
-    });
+    writeMiddleware(
+      bundledDir,
+      "bundled-tool-result-middleware",
+      'event.result.content[0].text + " | bundled"',
+      true,
+    );
+    const installedPluginFile = writeMiddleware(
+      installedDir,
+      "installed-tool-result-middleware",
+      'event.result.content[0].text + " | installed"',
+    );
 
     const config = {
       plugins: {
@@ -191,17 +177,7 @@ it("restores plugin-registered middleware from cache", async () => {
   const dir = createBundledTempDir();
   process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = dir;
   const id = "tool-result-middleware";
-  writeTempPlugin({
-    dir,
-    id,
-    filename: "index.mjs",
-    manifest: { contracts: middlewareContract },
-    body: `export default { id: "tool-result-middleware", register(api) {
-  api.registerAgentToolResultMiddleware(async (event) => ({
-    result: { ...event.result, content: [{ type: "text", text: event.toolName + " compacted" }] }
-  }), { runtimes: ["codex"] });
-} };`,
-  });
+  writeMiddleware(dir, id, 'event.toolName + " compacted"', true);
   const options = enabledOptions(id);
   setRuntimeConfigSnapshot(options.config);
   loadOpenClawPlugins(options);
@@ -230,10 +206,12 @@ it("rejects middleware without its runtime contract", () => {
 } };`,
   });
   const registry = loadOpenClawPlugins(enabledOptions(id));
-  expectDiagnostic(
-    registry.diagnostics,
-    id,
-    "plugin must declare contracts.agentToolResultMiddleware for: codex",
+  expect(registry.diagnostics).toContainEqual(
+    expect.objectContaining({
+      level: "error",
+      pluginId: id,
+      message: "plugin must declare contracts.agentToolResultMiddleware for: codex",
+    }),
   );
   expect(listAgentToolResultMiddlewares("codex")).toHaveLength(0);
 });

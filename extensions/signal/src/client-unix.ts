@@ -3,7 +3,10 @@ import { randomUUID } from "node:crypto";
 import net from "node:net";
 import { fileURLToPath } from "node:url";
 import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
-import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import {
+  floorPositiveFiniteNumber,
+  resolveTimerTimeoutMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { SignalRpcOptions, SignalSseEvent } from "./client-types.js";
 import { isSignalQuoteMetadataRejection } from "./quote-rejection.js";
@@ -132,12 +135,7 @@ export async function signalUnixRpcRequest<T>(
   const effect = captureEffectAuthority();
   const connection = await openSocket(options);
   const id = randomUUID();
-  const maxBytes =
-    typeof options.maxResponseBytes === "number" &&
-    Number.isFinite(options.maxResponseBytes) &&
-    options.maxResponseBytes >= 1
-      ? Math.floor(options.maxResponseBytes)
-      : MAX_FRAME_BYTES;
+  const maxBytes = floorPositiveFiniteNumber(options.maxResponseBytes) || MAX_FRAME_BYTES;
   try {
     const frame = `${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`;
     await effect.initiate(() => {

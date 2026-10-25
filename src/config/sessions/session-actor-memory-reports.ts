@@ -131,9 +131,12 @@ export function executeSessionActorMemoryReportCommand(
         if (!key || !keys.has(key)) {
           continue;
         }
+        const anchor = state.hot.transcript.anchors.find((item) => item.entryId === event?.id);
+        if (command.input.activeBranchOnly && !anchor) {
+          continue;
+        }
         facts.existingIdempotencyKeys.add(key);
         facts.messagesByIdempotencyKey.set(key, event?.message);
-        const anchor = state.hot.transcript.anchors.find((item) => item.entryId === event?.id);
         if (anchor) {
           facts.anchorsByIdempotencyKey.set(key, anchor);
         }
@@ -309,7 +312,10 @@ export function executeSessionActorMemoryReportCommand(
             };
           }),
         );
-        state.hot.entry = projectManuallyCompactedSessionEntry(entry, command.input.nowMs);
+        state.hot.entry = projectManuallyCompactedSessionEntry(
+          state.hot.entry!,
+          command.input.nowMs,
+        );
       }
       return selected.result;
     }

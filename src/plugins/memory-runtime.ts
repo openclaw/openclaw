@@ -8,6 +8,7 @@ import type { MemorySearchManager } from "../memory-host-sdk/host/types.js";
 import { normalizePluginsConfig } from "./config-state.js";
 import { withPluginHostCleanupTimeout } from "./host-hook-cleanup-timeout.js";
 import { loadPluginRegistryHandle } from "./loader.js";
+import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
 import {
   assertMemoryCallerCurrent,
   isHostMemoryAudience,
@@ -172,6 +173,8 @@ function ensureMemoryRuntime(params: {
   const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
   const registry = loadPluginRegistryHandle({
     config: params.cfg,
+    registrationConfigOrigin: params.cfg,
+    manifestRegistry: loadPluginManifestRegistryCore({ config: params.cfg, workspaceDir }),
     onlyPluginIds,
     workspaceDir,
     activate: false,

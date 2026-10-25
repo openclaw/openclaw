@@ -3,6 +3,7 @@ import {
   errorShape,
   type SessionFileEntry,
 } from "../../../packages/gateway-protocol/src/index.js";
+import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { WORKSPACE_PREVIEW_MAX_BYTES } from "../workspace-file-limits.js";
 import type { RespondFn } from "./types.js";
 
@@ -44,4 +45,22 @@ export function respondSessionFileNotFound(respond: RespondFn, filePath: string,
       ...(reason ? { reason } : {}),
     }),
   );
+}
+
+export function rejectDeviceFolderFiles(
+  entry: Pick<InternalSessionEntry, "deviceFolder"> | undefined,
+  respond: RespondFn,
+): boolean {
+  if (!entry?.deviceFolder) {
+    return false;
+  }
+  respond(
+    false,
+    undefined,
+    sessionFilesError(
+      "device_folder_files_unavailable",
+      "Files access is unavailable for existing folders on paired devices. Use the session's file tools on the selected device.",
+    ),
+  );
+  return true;
 }

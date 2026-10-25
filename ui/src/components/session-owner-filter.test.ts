@@ -103,26 +103,6 @@ function expectReads(host: ReturnType<typeof fixture>["host"], scheduled: number
 }
 
 describe("sidebar owner filter", () => {
-  it("schedules the default self filter and immediately refreshes explicit owner choices", () => {
-    const { filter, host, update } = fixture();
-    update();
-    expectOwner(host, "profile-ada");
-    expectReads(host, 1);
-    expect(host.sessionData.resetSessionList).not.toHaveBeenCalled();
-    filter.set("owner-bob");
-    update();
-    expectOwner(host, "owner-bob");
-    expectReads(host, 1, 1);
-  });
-
-  it.each([null, undefined])("uses everyone when self identity is %s", (selfUser) => {
-    const { host, update } = fixture({ selfUser });
-    update();
-    expectOwner(host, null);
-    update({ selfUser: { id: "profile-ada" } });
-    expectOwner(host, "profile-ada");
-  });
-
   it("retains a known profile's filter while reconnect identity is unresolved", () => {
     const { gateway, host, update } = fixture();
     update();
@@ -172,6 +152,40 @@ describe("sidebar owner filter", () => {
       expect(fixture().host.sidebarSessionOwnerFilter()).toEqual(savedFilter);
     },
   );
+
+  describe("guest default", () => {
+    const auth = (scopes: string[], sessionCap?: "view" | "write") =>
+      ({
+        hello: { auth: { role: "operator", scopes, sessionCap } },
+      }) as unknown as Partial<ApplicationGatewaySnapshot>;
+    const guest = auth(["operator.sessions.write"], "view");
+
+    it("starts a guest without a saved choice on Involving me, then keeps their later choice", () => {
+      const { filter, host, update } = fixture(guest);
+      update();
+      expectOwner(host, null, true);
+      expect(localStorage.length).toBe(0);
+      filter.set("profile-ada");
+      expect(fixture(guest).host.sidebarSessionOwnerFilter()).toEqual(choice("profile-ada"));
+    });
+
+    it.each([choice("profile-ada"), choice("owner-bob"), choice(null)])(
+      "keeps a guest's saved $ownerId choice",
+      (savedFilter) => {
+        storeSidebarSessionOwnerFilter(gatewayUrl, "profile-ada", savedFilter);
+        expect(fixture(guest).host.sidebarSessionOwnerFilter()).toEqual(savedFilter);
+      },
+    );
+
+    it.each([
+      ["team member", auth(["operator.read", "operator.write"], "view")],
+      ["write role", auth(["operator.sessions.write"], "write")],
+      ["admin operator", auth(["operator.admin"])],
+      ["legacy hello", {}],
+    ])("keeps the own-sessions default: %s", (_label, snapshot) => {
+      expect(fixture(snapshot).host.sidebarSessionOwnerFilter()).toEqual(choice("profile-ada"));
+    });
+  });
 
   it("keeps profiles and gateways isolated, including a temporarily unavailable identity", () => {
     const { filter, update, host } = fixture();

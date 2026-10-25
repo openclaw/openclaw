@@ -7,7 +7,7 @@ import {
   asOptionalRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { normalizeClawRouterApiBaseUrl } from "./provider-catalog.js";
+import { normalizeClawRouterApiBaseUrl } from "./base-url.js";
 
 const MODEL = "openai/tts-1";
 const VOICES = ["alloy", "echo", "fable", "onyx", "nova", "shimmer"];
@@ -43,12 +43,9 @@ function ttsConfig(raw: Record<string, unknown>) {
   );
 }
 
-type Context = Pick<
-  PluginCapabilityCatalogContext,
-  "resolveApiKeyForProvider" | "fetchWithSsrFGuard"
->;
-
-export function buildClawRouterSpeechProvider(context: Context): SpeechProviderPlugin {
+export function buildClawRouterSpeechProvider(
+  context: Pick<PluginCapabilityCatalogContext, "resolveApiKeyForProvider" | "fetchWithSsrFGuard">,
+): SpeechProviderPlugin {
   async function resolveAuth(cfg: SpeechSynthesisRequest["cfg"], raw: Record<string, unknown>) {
     const config = readConfig(raw, "tts.providers.clawrouter");
     const baseUrl = normalizeClawRouterApiBaseUrl(

@@ -1,4 +1,4 @@
-import { Show } from "solid-js";
+import { Errored, For, latest, Show } from "solid-js";
 import type {
   ControlUiSessionBranch,
   ControlUiSessionPullRequest,
@@ -6,11 +6,12 @@ import type {
 } from "../../../../../src/gateway/control-ui-contract.js";
 import type { ApplicationGateway } from "../../../app/gateway.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
-import "../../../components/tooltip.ts";
 import { registerGitHubEnglish } from "../../../i18n/locales/en-github.ts";
+import "../../../components/tooltip.ts";
 import type { PresentationValue } from "../../../lib/presentation.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import type { GitHubPublicationView } from "../../../lib/sessions/github-publication-owner.ts";
+import type { createPullRequestCopy } from "./chat-pull-request-copy.ts";
 registerGitHubEnglish();
 
 export type ChatPullRequestsProps = {
@@ -30,6 +31,8 @@ export type ChatPullRequestsProps = {
   publication?: GitHubPublicationView;
   /** Compact row in the user-opened Details surface; actions keep their owners. */
   compact?: boolean;
+  /** Keep publication work in Environment; only completed receipts and PRs belong here. */
+  publishedOnly?: boolean;
 };
 export const STATE_LABEL_KEYS = {
   merged: "chat.pullRequests.merged",
@@ -37,27 +40,55 @@ export const STATE_LABEL_KEYS = {
   closed: "chat.pullRequests.closed",
   open: "chat.pullRequests.open",
 } as const;
-export function ChecksRow(props: {
-  label: string;
-  count: number;
-  modifier: "failed" | "passed" | "running" | "skipped";
+const CHECK_ROW_LABELS = {
+  failed: "chat.pullRequests.checksFailed",
+  passed: "chat.pullRequests.checksPassed",
+  running: "chat.pullRequests.checksRunning",
+  skipped: "chat.pullRequests.checksSkipped",
+} as const;
+
+export function PullRequestCopyError(props: {
+  clipboard: ReturnType<typeof createPullRequestCopy>;
 }) {
   return (
-    <Show when={props.count !== 0}>
-      <div class={["chat-pr__checks-row", `chat-pr__checks-row--${props.modifier}`]}>
-        <span class="chat-pr__check-symbol" aria-hidden="true">
-          <Show when={props.modifier !== "running"} fallback={<span class="btn__spinner" />}>
-            <Icon
-              name={
-                props.modifier === "failed" ? "x" : props.modifier === "passed" ? "check" : "circle"
-              }
-            />
-          </Show>
-        </span>
-        <span class="chat-pr__checks-row-label">{props.label}</span>
-        <span class="chat-pr__checks-row-count">{props.count}</span>
-      </div>
+    <Show when={!props.clipboard.copying()}>
+      <Errored
+        fallback={
+          <p class="chat-pr-menu__error" role="alert">
+            {t("chat.pullRequests.copyFailed")}
+          </p>
+        }
+      >
+        {latest(props.clipboard.outcome)}
+      </Errored>
     </Show>
+  );
+}
+
+export function ChecksRows(props: {
+  checks: ControlUiSessionPullRequest["checks"];
+  runningFirst?: boolean;
+}) {
+  const order = () =>
+    props.runningFirst
+      ? (["failed", "running", "passed", "skipped"] as const)
+      : (["failed", "passed", "running", "skipped"] as const);
+  return (
+    <For each={order()}>
+      {(kind) => (
+        <Show when={(props.checks?.[kind] ?? 0) !== 0}>
+          <div class={["chat-pr__checks-row", `chat-pr__checks-row--${kind}`]}>
+            <span class="chat-pr__check-symbol" aria-hidden="true">
+              <Show when={kind !== "running"} fallback={<span class="btn__spinner" />}>
+                <Icon name={kind === "failed" ? "x" : kind === "passed" ? "check" : "circle"} />
+              </Show>
+            </span>
+            <span class="chat-pr__checks-row-label">{t(CHECK_ROW_LABELS[kind])}</span>
+            <span class="chat-pr__checks-row-count">{props.checks?.[kind] ?? 0}</span>
+          </div>
+        </Show>
+      )}
+    </For>
   );
 }
 

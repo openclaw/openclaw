@@ -57,12 +57,9 @@ describe("legacy JSON plugin migration diagnostics", () => {
   });
 
   describe.each(["detection", "migration"] as const)("%s", (phase) => {
-    it.each([
-      { fault: "EACCES", expectedError: "EACCES" },
-      { fault: "unrecognized shape", expectedError: null },
-    ])(
-      "reports $fault without importing or archiving the source",
-      async ({ fault, expectedError }) => {
+    it.each(["EACCES", "unrecognized shape"])(
+      "reports %s without importing or archiving the source",
+      async (fault) => {
         const source = "{}";
         await fs.writeFile(sourcePath, source, "utf8");
         const readFile = fs.readFile.bind(fs);
@@ -104,7 +101,7 @@ describe("legacy JSON plugin migration diagnostics", () => {
         }
 
         expect(warnings).toEqual(
-          expectedError
+          fault === "EACCES"
             ? [
                 expect.stringContaining(
                   `Failed ${phase === "detection" ? "detecting" : "migrating"} Fixture legacy state:`,
@@ -112,8 +109,8 @@ describe("legacy JSON plugin migration diagnostics", () => {
               ]
             : [],
         );
-        if (expectedError) {
-          expect(warnings[0]).toContain(expectedError);
+        if (fault === "EACCES") {
+          expect(warnings[0]).toContain(fault);
         }
         await expect(readFile(sourcePath, "utf8")).resolves.toBe(source);
         await expect(fs.stat(`${sourcePath}.migrated`)).rejects.toMatchObject({ code: "ENOENT" });

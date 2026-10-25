@@ -1,12 +1,5 @@
 import { execFileSync } from "node:child_process";
-import {
-  copyFileSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
+import fs from "node:fs";
 import path from "node:path";
 import { makeTempDir as makeTempRepoRoot } from "./helpers/temp-dir.js";
 
@@ -28,8 +21,8 @@ export const rulePath = ".git/private rules.txt";
 export const ruleSetting = "hooks.blockedLiteralsFile";
 export const literals = ["GUARD_SYNTHETIC_ALPHA", "GUARD_SYNTHETIC_BETA_[x].*42"] as const;
 
-export const run = (cwd: string, cmd: string, args: string[] = [], env?: NodeJS.ProcessEnv) => {
-  return execFileSync(cmd, args, {
+export const run = (cwd: string, cmd: string, args: string[] = [], env?: NodeJS.ProcessEnv) =>
+  execFileSync(cmd, args, {
     cwd,
     encoding: "utf8",
     stdio: "pipe",
@@ -45,50 +38,41 @@ export const run = (cwd: string, cmd: string, args: string[] = [], env?: NodeJS.
       ...env,
     },
   }).trim();
-};
 
-type FailedCommand = {
-  status: number;
-  stderr: string;
-  stdout: string;
-};
-
-export const runFailure = (
-  cwd: string,
-  cmd: string,
-  args: string[] = [],
-  env?: NodeJS.ProcessEnv,
-): FailedCommand => {
+export const runFailure = (...args: Parameters<typeof run>) => {
   try {
-    run(cwd, cmd, args, env);
+    run(...args);
   } catch (error) {
-    if (error instanceof Error && "status" in error) {
-      const failure = error as Error & { status?: number; stderr?: string; stdout?: string };
-      return {
-        status: failure.status ?? 1,
-        stderr: failure.stderr ?? "",
-        stdout: failure.stdout ?? "",
-      };
+    if (!(error instanceof Error) || !("status" in error)) {
+      throw error;
     }
-    throw error;
+    const failure = error as Error & {
+      status?: number;
+      stderr?: string;
+      stdout?: string;
+    };
+    return {
+      status: failure.status ?? 1,
+      stderr: failure.stderr ?? "",
+      stdout: failure.stdout ?? "",
+    };
   }
 
   throw new Error("expected command to fail");
 };
 
 export function writeExecutable(dir: string, name: string, contents: string): void {
-  writeFileSync(path.join(dir, name), contents, {
-    encoding: "utf8",
-    mode: 0o755,
-  });
+  fs.writeFileSync(path.join(dir, name), contents, { mode: 0o755 });
 }
 
 export function installPreCommitFixture(dir: string): string {
-  mkdirSync(path.join(dir, "git-hooks"), { recursive: true });
-  mkdirSync(path.join(dir, "scripts", "pre-commit"), { recursive: true });
-  symlinkSync(
+  const at = (...names: string[]) => path.join(dir, ...names);
+  for (const name of ["git-hooks", "scripts/pre-commit", "node_modules/.bin", "bin"]) {
+    fs.mkdirSync(at(name), { recursive: true });
+  }
+  fs.symlinkSync(
     path.join(process.cwd(), "git-hooks", "pre-commit"),
-    path.join(dir, "git-hooks", "pre-commit"),
+    at("git-hooks", "pre-commit"),
   );
   for (const name of [
     "run-node-tool.sh",
@@ -96,30 +80,27 @@ export function installPreCommitFixture(dir: string): string {
     "guard-staged-content.mjs",
     "format-staged.sh",
   ]) {
-    copyFileSync(
+    fs.copyFileSync(
       path.join(process.cwd(), "scripts/pre-commit", name),
-      path.join(dir, "scripts/pre-commit", name),
+      at("scripts/pre-commit", name),
     );
   }
   // Freshness checks import repository planners; hook behavior tests isolate formatting and guards.
-  writeFileSync(path.join(dir, "scripts/pre-commit/check-staged-freshness.mts"), "");
+  fs.writeFileSync(at("scripts/pre-commit/check-staged-freshness.mts"), "");
   const privateRules = path.resolve(
     dir,
     run(dir, "git", ["rev-parse", "--git-path", "private rules.txt"]),
   );
-  writeFileSync(privateRules, `${literals.join("\n")}\n`, { mode: 0o600 });
+  fs.writeFileSync(privateRules, `${literals.join("\n")}\n`, { mode: 0o600 });
   run(dir, "git", ["config", "--local", ruleSetting, privateRules]);
-  mkdirSync(path.join(dir, "node_modules/.bin"), { recursive: true });
   // Stdin mode must echo the blob or the hook treats the empty output as formatter failure.
   writeExecutable(
-    path.join(dir, "node_modules/.bin"),
+    at("node_modules/.bin"),
     "oxfmt",
     '#!/bin/sh\ncase "$*" in *--stdin-filepath=*) cat ;; esac\nexit 0\n',
   );
 
-  const fakeBinDir = path.join(dir, "bin");
-  mkdirSync(fakeBinDir, { recursive: true });
-  return fakeBinDir;
+  return at("bin");
 }
 
 export function createContentGuardFixture(tempDirs: string[]): string {
@@ -130,8 +111,8 @@ export function createContentGuardFixture(tempDirs: string[]): string {
 }
 
 export function stageContent(dir: string, name: string, content: string | Buffer): void {
-  mkdirSync(path.dirname(path.join(dir, name)), { recursive: true });
-  writeFileSync(path.join(dir, name), content);
+  fs.mkdirSync(path.dirname(path.join(dir, name)), { recursive: true });
+  fs.writeFileSync(path.join(dir, name), content);
   run(dir, "git", ["--literal-pathspecs", "add", "-f", "--", name]);
 }
 
@@ -153,8 +134,5 @@ ${body}
 }
 
 export function readFormatterLog(logPath: string): string[] {
-  if (!existsSync(logPath)) {
-    return [];
-  }
-  return readFileSync(logPath, "utf8").split("\n").filter(Boolean);
+  return fs.existsSync(logPath) ? fs.readFileSync(logPath, "utf8").split("\n").filter(Boolean) : [];
 }

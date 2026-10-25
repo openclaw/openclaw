@@ -108,3 +108,19 @@ export function createUnsafeIndexDrift(databasePath: string): void {
     database.exec(`PRAGMA writable_schema = OFF; PRAGMA schema_version = ${schemaVersion + 1};`);
   });
 }
+
+export function readGlobalRows(file: string) {
+  return withDatabase(
+    file,
+    (database) => ({
+      queue: database.prepare("SELECT COUNT(*) AS count FROM delivery_queue_entries").get(),
+      leases: database.prepare("SELECT COUNT(*) AS count FROM state_leases").get(),
+      blobs: database
+        .prepare(
+          "SELECT plugin_id, entry_key FROM plugin_blob_entries ORDER BY plugin_id, entry_key",
+        )
+        .all(),
+    }),
+    { readOnly: true },
+  );
+}

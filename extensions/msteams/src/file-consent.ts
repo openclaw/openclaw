@@ -1,8 +1,8 @@
 import { lookup } from "node:dns/promises";
-import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
 import { isPrivateIpAddress } from "openclaw/plugin-sdk/ssrf-policy";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { fetchWithTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
+import { GRAPH_HOSTS, SHAREPOINT_HOSTS } from "./microsoft-hosts.js";
 import { resolveMSTeamsSharePointUploadTimeoutMs } from "./request-timeout.js";
 import { buildUserAgent } from "./user-agent.js";
 
@@ -12,18 +12,11 @@ import { buildUserAgent } from "./user-agent.js";
  * as upload destinations in the FileConsentCard flow.
  */
 const CONSENT_UPLOAD_HOST_ALLOWLIST = [
-  "sharepoint.com",
-  "sharepoint.us",
-  "sharepoint.de",
-  "sharepoint.cn",
-  "sharepoint-df.com",
+  ...SHAREPOINT_HOSTS,
   "storage.live.com",
   "onedrive.com",
   "1drv.ms",
-  "graph.microsoft.com",
-  "graph.microsoft.us",
-  "graph.microsoft.de",
-  "graph.microsoft.cn",
+  ...GRAPH_HOSTS,
 ] as const;
 
 async function validateConsentUploadUrl(url: string): Promise<void> {
@@ -167,7 +160,8 @@ export async function uploadToConsentUrl(params: {
         "Content-Type": params.contentType ?? "application/octet-stream",
         "Content-Range": `bytes 0-${params.buffer.length - 1}/${params.buffer.length}`,
       },
-      body: new Blob([bufferToBlobPart(params.buffer)]),
+      // Snapshot the slice without a Blob stream, which retains async context on Node 24.16–24.19.
+      body: Uint8Array.from(params.buffer),
     },
     resolveMSTeamsSharePointUploadTimeoutMs(params.buffer.length),
   );

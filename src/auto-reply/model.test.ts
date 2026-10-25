@@ -19,6 +19,14 @@ describe("extractModelDirective", () => {
     expect(parsed).toMatchObject({ hasDirective: true, rawModel, rawRuntime, cleaned });
   });
 
+  it("parses a quoted model ID", () => {
+    expect(extractModelDirective('/model "openrouter/free"')).toMatchObject({
+      hasDirective: true,
+      rawModel: "openrouter/free",
+      cleaned: "",
+    });
+  });
+
   it("allows profile overrides after OpenRouter preset paths", () => {
     expect(extractModelDirective("/model openrouter/@preset/kimi-2-5@work")).toMatchObject({
       hasDirective: true,

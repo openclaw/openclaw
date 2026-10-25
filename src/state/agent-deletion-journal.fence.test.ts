@@ -7,8 +7,15 @@ import {
   readAgentDeletionJournal as readJournal,
   removeAgentDeletionJournal as removeJournal,
 } from "../test-utils/agent-deletion-journal.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { retireAgentDeletionJournalInDatabase as retireJournal } from "./agent-deletion-journal-authority.worker.js";
-import { completeAgentDeletionJournalInDatabase } from "./agent-deletion-journal.js";
+import {
+  beginAgentDeletionJournalInDatabase as beginInDatabase,
+  completeAgentDeletionJournalInDatabase as complete,
+  listPendingAgentDeletionJournalsInDatabase as pending,
+  readAgentDeletionJournalInDatabase as read,
+} from "./agent-deletion-journal.js";
+import { readRetainedAgentDeletionsFromDatabase } from "./agent-deletion-journal.read.js";
 import type { AgentDeletionJournalInput } from "./agent-deletion-journal.types.js";
 import {
   assertNoOpenClawAgentDatabaseLeases as assertDrained,
@@ -16,32 +23,41 @@ import {
   releaseOpenClawAgentDatabaseLease as releaseLease,
 } from "./openclaw-agent-db-lease.js";
 import { registerOpenClawAgentDatabase as registerDatabase } from "./openclaw-agent-db-registry.js";
-import { closeOpenClawStateDatabaseForTest as closeStateDbForTest } from "./openclaw-state-db-cache.js";
-import { runOpenClawStateWriteTransaction as writeState } from "./openclaw-state-db.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction as writeState,
+} from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath as stateSqlitePath } from "./openclaw-state-db.paths.js";
 
-afterEach(() => closeStateDbForTest());
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    await closeStateDatabaseForTest();
+    cleanup();
+  }),
+);
 
-function fixture(agentId = "survivor") {
+function fixture(agentId = "survivor", input: Partial<AgentDeletionJournalInput> = {}) {
   const stateDir = tempDirs.make("agent-deletion-fence-");
   const env = { OPENCLAW_STATE_DIR: stateDir };
+  const entry = {
+    agentId: "deleted",
+    operationId: "deletion",
+    agentDir: path.join(stateDir, "agents/deleted/agent"),
+    workspaceDir: path.join(stateDir, "workspace-deleted"),
+    sessionsDir: path.join(stateDir, "sessions-deleted"),
+    deleteFiles: true,
+    ...input,
+  };
+  const write = <T>(run: Parameters<typeof writeState<T>>[0]) => writeState(run, { env });
   return {
     env,
+    input: entry,
     claim: { agentId, path: path.join(stateDir, `${agentId}.sqlite`), env },
     begin: (overrides: Partial<AgentDeletionJournalInput> = {}) =>
-      beginJournal(
-        {
-          agentId: "deleted",
-          operationId: "deletion",
-          agentDir: path.join(stateDir, "agents/deleted/agent"),
-          workspaceDir: path.join(stateDir, "workspace-deleted"),
-          sessionsDir: path.join(stateDir, "sessions-deleted"),
-          deleteFiles: true,
-          ...overrides,
-        },
-        { env },
-      ),
+      beginJournal({ ...entry, ...overrides }, { env }),
+    open: () => openOpenClawStateDatabase({ env }),
+    write,
+    restart: () => write((database) => beginInDatabase(database, entry)),
   };
 }
 
@@ -78,9 +94,7 @@ it("admits settlement leases while draining and fences them once retirement begi
   const lease = claimLease(claim);
   try {
     expect(() => claimLease({ ...claim, agentId: "survivor" })).toThrow("deletion owns");
-    expect(
-      writeState((db) => completeAgentDeletionJournalInDatabase(db, agentId, operationId), { env }),
-    ).toBe(false);
+    expect(writeState((db) => complete(db, agentId, operationId), { env })).toBe(false);
     expect(writeState((db) => retireJournal(db, agentId, operationId), { env })).toBe(true);
     expect(() => claimLease(claim)).toThrow("while agent deleted is deleted");
   } finally {
@@ -168,3 +182,91 @@ it.each(["registration", "lease claim"])(
     expect(writer.prepare("SELECT * FROM agent_database_leases").all()).toEqual([]);
   },
 );
+
+function phaseFixture(input: Partial<Parameters<typeof beginInDatabase>[1]>) {
+  const result = fixture("delete-me", {
+    agentId: "delete-me",
+    operationId: "first-attempt",
+    ...input,
+  });
+  result.restart();
+  return result;
+}
+
+it.each(["draining", "legacy-null"] as const)(
+  "recovers %s without reopening retired drains",
+  async (format) => {
+    const { input, open, write, restart } = phaseFixture({ phase: "draining" });
+    const original = open();
+    const version = original.db.prepare("PRAGMA user_version").get();
+    if (format === "legacy-null") {
+      original.db.exec("UPDATE agent_deletion_journal SET phase = NULL");
+    }
+    await closeStateDatabaseForTest();
+    const recovered = open();
+    const phase = format === "draining" ? "draining" : "retiring";
+    expect(read(recovered, input.agentId)?.phase).toBe(phase);
+    expect(pending(recovered).entries).toEqual([
+      expect.objectContaining({ agentId: input.agentId, phase }),
+    ]);
+
+    write((database) => {
+      const retry = beginInDatabase(database, {
+        ...input,
+        operationId: "recovery-attempt",
+      });
+      expect(retry.entry.phase).toBe(phase);
+      if (format === "draining") {
+        expect(complete(database, input.agentId, "recovery-attempt")).toBe(false);
+      }
+      expect(retireJournal(database, input.agentId, input.operationId)).toBe(false);
+      expect(retireJournal(database, input.agentId, "recovery-attempt")).toBe(true);
+    });
+    await closeStateDatabaseForTest();
+
+    expect(restart().entry.phase).toBe("retiring");
+    expect(open().db.prepare("PRAGMA user_version").get()).toEqual(version);
+  },
+);
+
+it.each([false, true])("preserves Claw cleanup custody: gateway=%s", (gatewayOwned) => {
+  const { input, open, write } = phaseFixture({
+    agentId: "claw-worker",
+    operationId: "interrupted",
+    deleteFiles: false,
+    ...(gatewayOwned ? { phase: "draining" as const } : {}),
+  });
+  const database = open();
+  expect(pending(database).entries).toHaveLength(1);
+  database.db
+    .prepare(
+      `INSERT INTO claw_workspace_files
+          (agent_id, target_path, schema_version, workspace, source_path,
+           content_digest, status, created_at_ms, updated_at_ms)
+         VALUES (?, ?, '1', ?, 'AGENTS.md', 'sha256:fixture', 'modified', 1, 1)`,
+    )
+    .run(input.agentId, path.join(input.workspaceDir, "AGENTS.md"), input.workspaceDir);
+  expect(pending(database)).toMatchObject({
+    entries: gatewayOwned ? [expect.objectContaining({ agentId: input.agentId })] : [],
+    manualClawAgentIds: gatewayOwned ? [] : [input.agentId],
+  });
+  const facts = readRetainedAgentDeletionsFromDatabase(database.db, database.path);
+  expect(facts).toMatchObject({
+    status: "present",
+    entries: [{ agentId: input.agentId, cleanupCompleted: false }],
+  });
+  expect(facts.status === "present" && facts.entries[0]?.manualClawRemoval).toBe(
+    gatewayOwned ? undefined : true,
+  );
+  const recover = (operationId: string) =>
+    write((current) =>
+      beginInDatabase(current, { ...input, operationId: "successor" }, false, operationId),
+    );
+  expect(() => recover("stale-attempt")).toThrow("changed before recovery");
+  if (gatewayOwned) {
+    expect(recover(input.operationId).entry.phase).toBe("draining");
+  } else {
+    expect(() => recover(input.operationId)).toThrow("Claw removal owner");
+    expect(read(database, input.agentId)?.operationId).toBe(input.operationId);
+  }
+});

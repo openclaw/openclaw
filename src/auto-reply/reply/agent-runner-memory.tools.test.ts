@@ -101,7 +101,7 @@ async function runDefaultMemoryFlush(sessionEntry: SessionEntry, overrides: Flus
     resolvedVerboseLevel: "off",
     sessionEntry,
     sessionStore: { [overrides.sessionKey]: sessionEntry },
-    isHeartbeat: false,
+
     ...overrides,
     cfg: withTestModelContextTokens({
       cfg: overrides.cfg ?? {},
@@ -144,9 +144,11 @@ describe("provider-owned memory flush", () => {
 
   // Tools-arm fixtures use a real host audience and registry slot marker; the
   // existing file-arm fixtures intentionally have neither of these grants.
-  function registerToolsFlushPlan(sidecar = false) {
+  function registerToolsFlushPlan(sidecar = false, legacyModel?: string) {
     const registry = createEmptyPluginRegistry();
     const providerFlushPlanResolver = () => ({
+      // Older JavaScript plugins may still return the retired field.
+      ...(legacyModel ? { model: legacyModel } : {}),
       softThresholdTokens: 4_000,
       forceFlushTranscriptBytes: 1_000_000_000,
       reserveTokensFloor: 20_000,
@@ -306,6 +308,47 @@ describe("provider-owned memory flush", () => {
     expect(result.outcome).toBe("skipped");
     expect(flushPlanResolver).not.toHaveBeenCalled();
     expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+  });
+
+  it("uses the active session model and its fallback chain for memory flushes", async () => {
+    registerToolsFlushPlan(false, "fixture/obsolete");
+    const { entry, overrides } = await createToolsFlushFixture();
+    const run = overrides.followupRun.run;
+    run.provider = "fixture";
+    run.model = "active";
+    runEmbeddedAgentMock.mockImplementation(async (params: EmbeddedAgentParams) => {
+      await executePersistenceTool(params);
+      return { payloads: [], meta: {} };
+    });
+
+    const result = await runDefaultMemoryFlush(entry, {
+      ...overrides,
+      cfg: {
+        agents: {
+          defaults: { model: { primary: "fixture/default", fallbacks: ["fixture/backup"] } },
+        },
+      },
+    });
+
+    expect(result.outcome).toBe("completed");
+    expect(runEmbeddedAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "fixture", model: "active" }),
+    );
+    expect(runWithModelFallbackMock.mock.calls[0]?.[0]).toMatchObject({
+      fallbacksOverride: undefined,
+      cfg: {
+        agents: {
+          defaults: {
+            model: { primary: "fixture/default", fallbacks: ["fixture/backup"] },
+          },
+        },
+      },
+    });
+    expect(
+      loadSessionEntry({ storePath: overrides.storePath, sessionKey: overrides.sessionKey }),
+    ).toMatchObject({
+      memoryFlush: { kind: "succeeded", compactionCount: 1 },
+    });
   });
 
   it("delegates the source audience to detached tools flushes with source sandbox policy", async () => {

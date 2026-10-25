@@ -78,6 +78,7 @@ export const PluginControlUiDescriptorSchema = closedObject({
     "tab",
     "widget",
     "link-reader",
+    "inline",
   ]),
   linkReader: Type.Optional(ControlUiLinkReaderMetadataSchema),
   label: NonEmptyString,
@@ -87,6 +88,7 @@ export const PluginControlUiDescriptorSchema = closedObject({
   placement: Type.Optional(Type.String()),
   group: Type.Optional(stringLiteralUnion(["control", "agent"])),
   order: Type.Optional(Type.Number()),
+  version: Type.Optional(Type.Integer({ minimum: 1, maximum: 65535 })),
   schema: Type.Optional(PluginJsonValueSchema),
   requiredScopes: Type.Optional(Type.Array(NonEmptyString)),
 });
@@ -159,14 +161,27 @@ export const PluginsControlUiReloadParamsSchema = closedObject({
 export const PluginsControlUiCatalogSchema = closedObject({
   revision: NonEmptyString,
   plugins: Type.Array(PluginControlUiModuleSchema, { maxItems: 64 }),
+  inlineViews: Type.Optional(
+    Type.Array(
+      closedObject({
+        pluginId: NonEmptyString,
+        id: NonEmptyString,
+        label: NonEmptyString,
+        version: Type.Integer({ minimum: 1, maximum: 65535 }),
+      }),
+    ),
+  ),
   diagnostics: Type.Array(PluginControlUiDiagnosticSchema, { maxItems: 64 }),
 });
 export const PluginsControlUiChangedEventSchema = closedObject({ revision: NonEmptyString });
-export const PluginsControlUiReportParamsSchema = closedObject({
+const PluginControlUiActivationSchema = closedObject({
   pluginId: NonEmptyString,
   revision: NonEmptyString,
   status: stringLiteralUnion(["activated", "failed"]),
   error: Type.Optional(Type.String({ maxLength: 512 })),
+});
+export const PluginsControlUiReportParamsSchema = closedObject({
+  reports: Type.Array(PluginControlUiActivationSchema, { minItems: 1, maxItems: 64 }),
 });
 export const PluginsControlUiStatusParamsSchema = closedObject({
   pluginId: Type.Optional(NonEmptyString),
@@ -175,7 +190,7 @@ export const PluginsControlUiStatusResultSchema = closedObject({
   clients: Type.Array(
     closedObject({
       connId: NonEmptyString,
-      activations: Type.Array(PluginsControlUiReportParamsSchema, { maxItems: 64 }),
+      activations: Type.Array(PluginControlUiActivationSchema, { maxItems: 64 }),
     }),
     { maxItems: 128 },
   ),
@@ -787,6 +802,6 @@ export type PluginControlUiModule = Static<typeof PluginControlUiModuleSchema>;
 export type PluginControlUiDiagnostic = Static<typeof PluginControlUiDiagnosticSchema>;
 export type PluginsControlUiCatalog = Static<typeof PluginsControlUiCatalogSchema>;
 export type PluginsControlUiReloadParams = Static<typeof PluginsControlUiReloadParamsSchema>;
-export type PluginControlUiActivation = Static<typeof PluginsControlUiReportParamsSchema>;
+export type PluginControlUiActivation = Static<typeof PluginControlUiActivationSchema>;
 export type PluginsSessionActionParams = Static<typeof PluginsSessionActionParamsSchema>;
 export type PluginsSessionActionResult = Static<typeof PluginsSessionActionResultSchema>;

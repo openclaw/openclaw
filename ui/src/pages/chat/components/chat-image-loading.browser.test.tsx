@@ -1,6 +1,7 @@
 import { Show } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
+import { mediaTicketPayload } from "../../../test-helpers/control-ui-attachment-fixtures.ts";
 import { cleanupSolid } from "../../../test-helpers/mount-solid.ts";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { waitForFast } from "../../../test-helpers/wait-for.ts";
@@ -142,7 +143,7 @@ function expectContentSizedError(card: HTMLElement) {
   expect(getComputedStyle(reason).whiteSpace).toBe("normal");
   expect(getComputedStyle(reason).textOverflow).not.toBe("ellipsis");
   const action = card.querySelector("button")!;
-  expect(action.getBoundingClientRect().height).toBeGreaterThanOrEqual(44);
+  expect(action.getBoundingClientRect().height).toBeGreaterThanOrEqual(24);
   expect(action.getBoundingClientRect().width).toBeGreaterThanOrEqual(44);
 }
 
@@ -234,8 +235,8 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
     ["landscape", 1200, 800, 500, 400, 400 / 1.5, "assistant", true],
     ["portrait", 800, 1600, 500, 180, 360, "user", true],
     ["tiny image", 1, 1, 500, 160, 160, "assistant", true],
-    ["narrow pane", 1200, 800, 180, 128, 128 / 1.5, "user", true],
-    ["panorama", 1200, 80, 500, 400, 400 / 15, "assistant", true],
+    ["narrow pane", 1200, 800, 180, 180, 120, "user", true],
+    ["panorama", 1200, 80, 500, 400, 32, "assistant", true],
     ["tiny tall image", 80, 1600, 500, 160, 360, "user", true],
     ["unknown dimensions", 800, 1600, 500, 400, 400 / 1.5, "assistant", false],
   ] as const)(
@@ -330,13 +331,7 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
       expect(frame(container).textContent?.trim()).toBe("");
       expect(container.querySelector(".chat-image-skeleton")).not.toBeNull();
       expect(container.querySelector(".chat-assistant-attachment-card")).toBeNull();
-      response.resolve(
-        Response.json({
-          available: true,
-          mediaTicket: "test-ticket",
-          mediaTicketExpiresAt: new Date(Date.now() + 300_000).toISOString(),
-        }),
-      );
+      response.resolve(Response.json(mediaTicketPayload("test-ticket", 300_000)));
       await waitForFast(() => expect(container.querySelector("img")).not.toBeNull());
       const loadable = geometry(container);
       expect(loadable.height).toBeCloseTo(400 / 1.5, 1);
@@ -383,7 +378,7 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
       expect(before).toHaveLength(count);
       for (const rect of before) {
         expect(rect.width).toBe(tile);
-        expect(rect.height).toBe(tile - 52);
+        expect(rect.height).toBe(tile);
       }
       const nextTop = container.querySelector("[data-next-message]")!.getBoundingClientRect().top;
       ready.resolve();
@@ -462,7 +457,7 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
         frames[0]!.getBoundingClientRect().bottom,
       );
       const messageColumn = container.querySelector<HTMLElement>(".chat-group-messages")!;
-      const fallbackWidth = Math.min(400, messageColumn.clientWidth - 52);
+      const fallbackWidth = Math.min(400, messageColumn.clientWidth);
       for (const [index, expectedWidth] of [160, 84, 160, fallbackWidth, fallbackWidth].entries()) {
         const element = frames[index]!;
         await page.getByAltText(images[index]!.alt, { exact: true }).hover();
@@ -474,14 +469,15 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
         const surface = element.querySelector(".chat-image-surface")!;
         const surfaceRect = surface.getBoundingClientRect();
         expect(getComputedStyle(element, "::after").content).toBe("none");
-        expect(actionsRect.left).toBeGreaterThanOrEqual(surfaceRect.right + 8);
+        expect(actionsRect.left).toBeGreaterThanOrEqual(surfaceRect.left);
         expect(actionsRect.right).toBeLessThanOrEqual(frameRect.right);
-        expect(actionsRect.top).toBe(frameRect.top);
+        expect(actionsRect.top).toBeGreaterThanOrEqual(surfaceRect.top);
+        expect(actionsRect.bottom).toBeLessThanOrEqual(surfaceRect.bottom);
         const action = element.querySelector<HTMLButtonElement>(".chat-image-action")!;
         const rect = action.getBoundingClientRect();
-        expect(rect.width).toBe(44);
-        expect(rect.height).toBe(44);
-        expect(action.contains(document.elementFromPoint(rect.x + 22, rect.y + 22))).toBe(true);
+        expect(rect.width).toBe(30);
+        expect(rect.height).toBe(30);
+        expect(action.contains(document.elementFromPoint(rect.x + 15, rect.y + 15))).toBe(true);
         expect(surfaceRect.width).toBeCloseTo(expectedWidth, 0);
         expect(getComputedStyle(surface).overflow).toBe("hidden");
       }
@@ -611,13 +607,7 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
         expect(card.getBoundingClientRect().width).toBe(before[index]!.width);
         expectContentSizedError(card);
         expect(before[index]!.height).toBeCloseTo(card.getBoundingClientRect().height, 1);
-        // Measure the card outline independently of its sibling secondary menu.
-        // Menu hit targets are exercised separately above; restore them immediately.
-        const menu = card.parentElement!.querySelector<HTMLElement>(".chat-image-actions");
-        const menuPointerEvents = menu?.style.pointerEvents;
-        if (menu) {
-          menu.style.pointerEvents = "none";
-        }
+        expect(card.parentElement!.querySelector(".chat-image-actions")).toBeNull();
         const cardCorners = cornerInsets(card);
         const rect = card.getBoundingClientRect();
         // Compare both outlines at the same subpixel coordinates so browser hit
@@ -627,9 +617,6 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
         document.body.append(file);
         file.style.cssText = `position: fixed; left: ${rect.left}px; top: ${rect.top}px; width: ${rect.width}px; height: ${rect.height}px; z-index: 1`;
         const fileCorners = cornerInsets(file);
-        if (menu) {
-          menu.style.pointerEvents = menuPointerEvents ?? "";
-        }
         file.removeAttribute("style");
         fileParent.insertBefore(file, fileNext);
         expect.soft(cardCorners).toEqual(fileCorners);
@@ -684,6 +671,9 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
         "load",
       );
       const card = container.querySelector<HTMLElement>(".chat-assistant-attachment-card")!;
+      expect(
+        frame(container).querySelector('.chat-image-actions [aria-label="Image actions"]'),
+      ).not.toBeNull();
       expectContentSizedError(card);
       expect(geometry(container).height).toBeCloseTo(card.getBoundingClientRect().height, 1);
       expect(geometry(container).height).toBeLessThan(before.height);

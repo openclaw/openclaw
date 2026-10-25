@@ -36,17 +36,17 @@ import type { ComposerMicrophoneOwner } from "../composer-microphone-picker.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../input-history.ts";
 import type { ChatRunError, ChatRunUiStatus } from "../run-lifecycle.ts";
 import type { FallbackStatus } from "../tool-stream-contract.ts";
-import type { ChatActivityPillsProps } from "./chat-activity-pills.tsx";
+import type { ChatActivityPillsProps } from "./chat-activity-pills-types.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
-import type { ComposerEmojiMenu } from "./chat-composer-emoji.tsx";
+import type { ComposerEmojiMenu } from "./chat-composer-emoji-state.ts";
 import type {
   HumanMentionAccess,
   HumanMentionDirectory,
   HumanMentionMenu,
-} from "./chat-composer-mention-menu.tsx";
+} from "./chat-composer-mention-menu-state.ts";
 import type { ChatComposerCapabilityMenuProps } from "./chat-composer-plus-menu.types.ts";
-import type { SkillMenu } from "./chat-composer-skill-menu.tsx";
-import type { SlashMenu } from "./chat-composer-slash-menu.tsx";
+import type { SkillMenu } from "./chat-composer-skill-menu-state.ts";
+import type { SlashMenu } from "./chat-composer-slash-menu-state.ts";
 import type { ChatPermissionPickerProps } from "./chat-permission-picker.tsx";
 
 type ChatQueuedEditProps = {
@@ -63,10 +63,7 @@ type ChatQueuedEditProps = {
 /** Destinations and owner facts not already carried by ChatProps. */
 type ChatMobileActivities = {
   onOpenSubagents?: NonNullable<ChatActivityPillsProps["subagents"]>["onOpen"];
-  goal?: Pick<
-    NonNullable<ChatActivityPillsProps["goal"]>,
-    "executionConfirmed" | "hidden" | "onOpen"
-  >;
+  goal?: Pick<NonNullable<ChatActivityPillsProps["goal"]>, "executionConfirmed" | "onOpen">;
   onOpenProgress?: NonNullable<ChatActivityPillsProps["progress"]>["onOpen"];
   onOpenPullRequest?: NonNullable<ChatActivityPillsProps["pullRequests"]>["onOpen"];
   /** Eligibility is decided by the publication owner, including retained outcomes. */
@@ -110,8 +107,10 @@ export type ChatSessionProgressProps = {
 export type ChatComposerProps = ChatAttachmentControlsProps & {
   paneId: string;
   getTranscriptElement?: () => HTMLElement | null;
+  getScrollToLatestElement?: () => HTMLButtonElement | null;
   onComposerShellRef?: (element: HTMLElement) => void | (() => void);
   onComposerFloatRef?: (element: HTMLElement) => void | (() => void);
+  onActivityPillsLayout?: ChatActivityPillsProps["onLayout"];
   /** Native merged chrome, supplied by the pane owner; never inferred from pane width. */
   mobileComposer?: boolean;
   /** Observed keyboard visibility from the shell viewport owner, when available. */
@@ -133,6 +132,8 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   submitPending?: boolean;
   disabledReason: string | null;
   disabledReasonTone?: "info" | "danger";
+  /** Optional route that resolves the disabled reason, shown beside it. */
+  disabledReasonAction?: { label: string; href: string; onNavigate: () => void };
   disabledReasonBusy?: boolean;
   disabledBanner?: ChatComposerDisabledBanner;
   runError?: ChatRunError | null;
@@ -171,10 +172,13 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   toolOverrides?: SessionToolOverrides;
   capabilityMenu?: ChatComposerCapabilityMenuProps;
   providerUsage?: ProviderUsageDisplayProps;
+  contextGateway?: ApplicationGateway;
+  onOpenContext?: () => void;
   assistantName: string;
   sendShortcut?: ChatSendShortcut;
   followUpMode?: ControlUiFollowUpMode;
   pendingAttachmentReads?: number;
+  attachmentReadRevision?: number;
   getPendingAttachmentReads?: () => number;
   replyTarget?: ChatReplyTarget | null;
   gatewayClient?: GatewayBrowserClient | null;

@@ -6,7 +6,7 @@ import { PLUGINS_HUB_DOCS_URLS, PLUGINS_HUB_PANEL_ID, type PluginsHubTab } from 
 
 registerEnglishCatalog(registerPluginManagementEnglish);
 
-type PluginsHubHeaderProps = {
+export function PluginsHubHeader(props: {
   active: PluginsHubTab;
   onSelect: (tab: PluginsHubTab) => void;
   secondaryAction?: {
@@ -14,9 +14,7 @@ type PluginsHubHeaderProps = {
     icon?: JSX.Element;
     onClick: () => void;
   };
-};
-
-export function PluginsHubHeader(props: PluginsHubHeaderProps) {
+}) {
   return (
     <HubPageHeader<PluginsHubTab>
       active={props.active}
@@ -44,7 +42,7 @@ export function PluginsHubHeader(props: PluginsHubHeaderProps) {
             ]}
             aria-label={props.secondaryAction.label}
             title={props.secondaryAction.icon ? props.secondaryAction.label : undefined}
-            onClick={props.secondaryAction.onClick}
+            onClick={() => props.secondaryAction?.onClick()}
           >
             {props.secondaryAction.icon ?? props.secondaryAction.label}
           </button>

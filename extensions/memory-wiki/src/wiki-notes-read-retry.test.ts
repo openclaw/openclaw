@@ -7,6 +7,7 @@ import { applyMemoryWikiMutation } from "./apply.js";
 import { importChatGptConversations } from "./chatgpt-import.js";
 import { compileMemoryWikiVault } from "./compile.js";
 import { ingestMemoryWikiSource } from "./ingest.js";
+import { importMemoryWikiOkfBundle } from "./okf.js";
 import { writeImportedSourcePage } from "./source-page-shared.js";
 import { buildSourcePage } from "./source-page.test-helpers.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
@@ -379,6 +380,29 @@ describe("memory-wiki existing-page read retry", () => {
 
     expect(securityRuntimeMock.readTextFailureInjected).toBe(true);
     await expect(fs.readFile(pagePath, "utf8")).resolves.toBe(before);
+  });
+
+  it("leaves OKF concept pages unchanged after a persistent existing-page read failure", async () => {
+    const { rootDir, config } = await createVault({ prefix: "memory-wiki-okf-read-failure-" });
+    const bundlePath = path.join(rootDir, "bundle");
+    await fs.mkdir(bundlePath);
+    await fs.writeFile(
+      path.join(bundlePath, "customers.md"),
+      "---\ntype: Concept\ntitle: Customers\n---\nCustomer body.\n",
+    );
+    const first = await importMemoryWikiOkfBundle({ config, bundlePath });
+    const pagePath = expectDefined(first.pagePaths[0], "imported OKF concept page");
+    const absolutePath = path.join(config.vault.path, pagePath);
+    await addNotes(absolutePath, "Handwritten note must survive the read failure.");
+    const before = await fs.readFile(absolutePath, "utf8");
+    securityRuntimeMock.failReadTextAlwaysFor = pagePath;
+
+    await expect(importMemoryWikiOkfBundle({ config, bundlePath })).rejects.toThrow(
+      "persistent existing-page read failure",
+    );
+
+    expect(securityRuntimeMock.readTextFailureInjected).toBe(true);
+    await expect(fs.readFile(absolutePath, "utf8")).resolves.toBe(before);
   });
 
   it("preserves chatgpt conversation notes containing dollar sequences and marker examples", async () => {

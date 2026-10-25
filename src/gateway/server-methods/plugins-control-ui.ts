@@ -13,6 +13,8 @@ import {
   reportControlUiPluginActivation,
   reloadControlUiPluginCatalog,
 } from "../control-ui-plugin-assets.js";
+import { listControlUiPluginDescriptors } from "../control-ui-plugin-tabs.js";
+import { respondError } from "./response.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { defineValidatedGatewayHandler } from "./validation.js";
 
@@ -25,24 +27,22 @@ export const pluginsControlUiHandlers: GatewayRequestHandlers = {
         client?.connId &&
         context.getClientConnIds?.((candidate) => candidate === client).has(client.connId);
       if (!live || client.connect.client.id !== GATEWAY_CLIENT_IDS.CONTROL_UI) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            "Activation reports require a connected Control UI",
-          ),
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          "Activation reports require a connected Control UI",
         );
         return;
       }
-      if (!reportControlUiPluginActivation(client, params)) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            "Activation report is for an inactive browser revision",
-          ),
+      const rejectedPluginIds = params.reports
+        .filter((report) => !reportControlUiPluginActivation(client, report))
+        .map((report) => report.pluginId);
+      if (rejectedPluginIds.length) {
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          "Activation report is for an inactive browser revision",
+          { details: { rejectedPluginIds } },
         );
         return;
       }
@@ -67,11 +67,7 @@ export const pluginsControlUiHandlers: GatewayRequestHandlers = {
         return false;
       });
       if (clients.length > 128) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, "Too many connected Control UI clients"),
-        );
+        respondError(respond, ErrorCodes.UNAVAILABLE, "Too many connected Control UI clients");
         return;
       }
       respond(true, {
@@ -83,9 +79,24 @@ export const pluginsControlUiHandlers: GatewayRequestHandlers = {
   "plugins.controlUi.list": defineValidatedGatewayHandler(
     "plugins.controlUi.list",
     validatePluginsControlUiListParams,
-    async ({ respond }) => {
+    async ({ respond, client }) => {
       const catalog = await listControlUiPluginCatalog();
-      respond(true, catalog);
+      const inlineViews = listControlUiPluginDescriptors(client?.connect.scopes ?? []).flatMap(
+        (descriptor) => {
+          if (descriptor.surface !== "inline") {
+            return [];
+          }
+          return [
+            {
+              pluginId: descriptor.pluginId,
+              id: descriptor.id,
+              label: descriptor.label,
+              version: descriptor.version!,
+            },
+          ];
+        },
+      );
+      respond(true, { ...catalog, ...(inlineViews.length ? { inlineViews } : {}) });
     },
     () => errorShape(ErrorCodes.UNAVAILABLE, "Control UI plugin catalog is unavailable"),
   ),

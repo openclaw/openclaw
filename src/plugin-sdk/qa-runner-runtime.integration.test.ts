@@ -1,22 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { setTestEnvValue } from "../test-utils/env.js";
 import * as activationCheckRuntime from "./facade-activation-check.runtime.js";
 import {
   testing as facadeRuntimeTesting,
   resetFacadeRuntimeStateForTest,
 } from "./facade-runtime.js";
 import { listQaRunnerCliContributions } from "./qa-runner-runtime.js";
-
-const ORIGINAL_ENV = {
-  OPENCLAW_ENABLE_PRIVATE_QA_CLI: process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI,
-  OPENCLAW_DISABLE_BUNDLED_PLUGINS: process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS,
-  OPENCLAW_CONFIG_PATH: process.env.OPENCLAW_CONFIG_PATH,
-  OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
-  OPENCLAW_TEST_FAST: process.env.OPENCLAW_TEST_FAST,
-} as const;
 
 const tempDirs = createTempDirTracker();
 
@@ -57,27 +48,21 @@ function linkedPlugin(id: string, commandName: string, description?: string) {
   const stateDir = tempDirs.make("openclaw-qa-runner-state-");
   const configPath = path.join(stateDir, "openclaw.json");
   fs.writeFileSync(configPath, JSON.stringify({ plugins: {} }), "utf8");
-  process.env.OPENCLAW_CONFIG_PATH = configPath;
-  process.env.OPENCLAW_STATE_DIR = stateDir;
+  vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   return writePlugin(stateDir, id, commandName, description);
 }
 
 beforeEach(() => {
   resetQaRunnerRuntimeState();
-  process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "1";
-  process.env.OPENCLAW_TEST_FAST = "1";
+  vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
+  vi.stubEnv("OPENCLAW_TEST_FAST", "1");
 });
 
 afterEach(() => {
   resetQaRunnerRuntimeState();
   tempDirs.cleanup();
-  for (const [key, value] of Object.entries(ORIGINAL_ENV)) {
-    if (value === undefined) {
-      delete process.env[key];
-    } else {
-      setTestEnvValue(key, value);
-    }
-  }
+  vi.unstubAllEnvs();
 });
 
 it("loads an activated qa runner from a linked plugin path without a bundled install fallback", async () => {
@@ -147,10 +132,10 @@ it("ignores operator runner metadata and state during private QA discovery", () 
   writePlugin(stateDir, "operator-runner", "operator-sentinel", undefined, false);
   fs.writeFileSync(stateDatabasePath, stateDatabaseSentinel, "utf8");
 
-  process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI = "1";
-  process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "0";
-  process.env.OPENCLAW_STATE_DIR = stateDir;
-  process.env.OPENCLAW_CONFIG_PATH = path.join(stateDir, "openclaw.json");
+  vi.stubEnv("OPENCLAW_ENABLE_PRIVATE_QA_CLI", "1");
+  vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "0");
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
 
   const contributions = listQaRunnerCliContributions();
 

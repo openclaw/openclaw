@@ -1,5 +1,5 @@
 import { types } from "node:util";
-import { isMainThread } from "node:worker_threads";
+import { isMainThread, type Worker } from "node:worker_threads";
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.ts";
 import { resolveGlobalSingleton } from "../shared/global-singleton.ts";
 
@@ -209,4 +209,28 @@ export function observeWorkerMessage(
       payloadBytes === undefined ? workerMessagePayloadBytes(message) : (payloadBytes ?? undefined),
     );
   }
+}
+
+/** Inspect instrumentation safety without invoking foreign worker accessors. */
+export function canObserveWorkerMessages(worker: Worker): boolean {
+  if (!Object.isExtensible(worker)) {
+    return false;
+  }
+  for (const method of ["postMessage", "emit"]) {
+    let owner: object | null = worker;
+    while (owner) {
+      const descriptor = Object.getOwnPropertyDescriptor(owner, method);
+      if (descriptor) {
+        if (!descriptor.writable || typeof descriptor.value !== "function") {
+          return false;
+        }
+        break;
+      }
+      owner = Reflect.getPrototypeOf(owner);
+    }
+    if (!owner) {
+      return false;
+    }
+  }
+  return true;
 }

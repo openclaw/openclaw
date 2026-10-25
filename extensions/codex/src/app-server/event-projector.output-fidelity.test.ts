@@ -1,15 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
 import { createNativeCommandItem } from "./event-projector-command.test-support.js";
+import { createConfiguredProjection } from "./event-projector-projection.test-support.js";
+import {
+  notify,
+  result as snapshot,
+  rawAssistant,
+} from "./event-projector.compact.test-support.js";
 import * as h from "./event-projector.test-harness.js";
 
 h.registerCodexEventProjectorTestLifecycle();
 
 type Projector = Awaited<ReturnType<typeof h.createProjector>>;
-type Method = Parameters<typeof h.forCurrentTurn>[0];
 type Item = Record<string, unknown>;
-function notify(projector: Projector, method: Method, params: Item) {
-  return projector.handleNotification(h.forCurrentTurn(method, params));
-}
 function raw(projector: Projector, item: Item) {
   return notify(projector, "rawResponseItem/completed", { item });
 }
@@ -31,14 +33,14 @@ function startCommand(projector: Projector, item: Item) {
 async function createVerboseProjector(
   overrides: Partial<Awaited<ReturnType<typeof h.createParams>>> = {},
 ) {
-  return h.createProjector({ ...(await h.createParams()), verboseLevel: "full", ...overrides });
+  return (await createConfiguredProjection({ verboseLevel: "full", ...overrides })).projector;
 }
 
 describe("Codex tool response fidelity", () => {
   function toolResult(projector: Awaited<ReturnType<typeof h.createProjector>>) {
-    const results = projector
-      .buildResult(h.buildEmptyToolTelemetry())
-      .messagesSnapshot.filter((message) => message.role === "toolResult");
+    const results = snapshot(projector).messagesSnapshot.filter(
+      (message) => message.role === "toolResult",
+    );
     expect(results).toHaveLength(1);
     return h.requireRecord(results[0], "result");
   }
@@ -95,11 +97,10 @@ describe("Codex tool response fidelity", () => {
       "text(await tools.exec_command({cmd: 'transcript'}))",
     );
     await projector.handleNotification(h.turnCompleted());
-    const result = toolResult(projector);
-    expect(result.toolCallId).toBe("outer-exec");
-    expect(result.isError).toBe(false);
-    expect(outcome(result)).toBeUndefined();
-    expect(outputText(result)).toBe(output);
+    const outputResult = toolResult(projector);
+    expect(outputResult).toMatchObject({ toolCallId: "outer-exec", isError: false });
+    expect(outcome(outputResult)).toBeUndefined();
+    expect(outputText(outputResult)).toBe(output);
   });
 
   it.each(["before", "after"])(
@@ -170,18 +171,14 @@ describe("Codex tool response fidelity", () => {
 });
 
 describe("streamed-output-echo", () => {
-  function rawMessage(text: string, id = "raw-echo") {
-    return h.forCurrentTurn("rawResponseItem/completed", {
-      item: { type: "message", id, role: "assistant", content: [{ type: "output_text", text }] },
-    });
-  }
-
   function expectNoReply(projector: Projector) {
-    const result = projector.buildResult(h.buildEmptyToolTelemetry());
-    expect(result.assistantTexts).toEqual([]);
-    expect(result.lastAssistant).toBeUndefined();
-    expect(result.currentAttemptAssistant).toBeUndefined();
-    return result;
+    const value = snapshot(projector);
+    expect(value).toMatchObject({
+      assistantTexts: [],
+      lastAssistant: undefined,
+      currentAttemptAssistant: undefined,
+    });
+    return value;
   }
 
   it("keeps typed final answers that verbatim-equal tool output", async () => {
@@ -202,10 +199,10 @@ describe("streamed-output-echo", () => {
       text: output,
     });
     await projector.handleNotification(h.turnCompleted());
-    const result = projector.buildResult(h.buildEmptyToolTelemetry());
-    expect(result.assistantTexts).toEqual([output]);
-    expect(result.lastAssistant).toBeDefined();
-    expect(result.currentAttemptAssistant).toBeDefined();
+    const value = snapshot(projector);
+    expect(value.assistantTexts).toEqual([output]);
+    expect(value.lastAssistant).toBeDefined();
+    expect(value.currentAttemptAssistant).toBeDefined();
   });
 
   it("keeps a channel summary echo suppressed after later streamed output", async () => {
@@ -244,7 +241,7 @@ describe("streamed-output-echo", () => {
     expect(
       onToolResult.mock.calls.map(([payload]) => payload.channelData?.openclawToolProgressId),
     ).toEqual([prepared[0]?.data.itemId, prepared[0]?.data.itemId]);
-    await projector.handleNotification(rawMessage(summary));
+    await rawAssistant(projector, summary, { id: "raw-echo" });
     await projector.handleNotification(h.turnCompleted());
     expectNoReply(projector);
   });
@@ -280,8 +277,8 @@ describe("streamed-output-echo", () => {
     }
     expect(onToolResult).toHaveBeenCalledTimes(21);
     expect(onToolResult.mock.calls[20]?.[0].text).toContain("...(truncated)...");
-    await projector.handleNotification(rawMessage(summary, "raw-summary"));
-    await projector.handleNotification(rawMessage(chunks.join(""), "raw-stream"));
+    await rawAssistant(projector, summary, { id: "raw-summary" });
+    await rawAssistant(projector, chunks.join(""), { id: "raw-stream" });
     await projector.handleNotification(
       h.turnCompleted([createNativeCommandItem({ id: item.id, command, cwd })]),
     );

@@ -69,6 +69,92 @@ function createSubscriptionState(options?: {
   return { selected, state, subscribeMessages, unsubscribeMessages, publishedLoads };
 }
 
+it("makes the new subscription ready before the old unsubscribe settles", async () => {
+  const previous = { key: "agent:main:previous", agentId: null };
+  const release = createDeferred();
+  const { state, selected, subscribeMessages, unsubscribeMessages } = createSubscriptionState({
+    previous,
+    unsubscribeMessages: vi.fn(() => release.promise),
+  });
+  const sync = syncSelectedSessionMessageSubscription(state);
+  await Promise.resolve();
+  expect(unsubscribeMessages).toHaveBeenCalledOnce();
+  expect(subscribeMessages).toHaveBeenCalledWith(
+    selected.key,
+    {
+      agentId: undefined,
+      includeApprovals: true,
+    },
+    undefined,
+  );
+  try {
+    await vi.waitFor(() => expect(state.chatSessionMessageSubscription).toEqual(selected));
+    await expect(sync).resolves.toBe(true);
+    await expect(chatHistoryRequests(state).subscriptionReady).resolves.toBe(true);
+  } finally {
+    release.resolve();
+    await sync;
+  }
+});
+
+it("releases an active message subscription when its pane is disposed", () => {
+  const { state, selected, unsubscribeMessages } = createSubscriptionState();
+  state.chatSessionMessageSubscriptionRequestedKey = selected.key;
+  state.chatSessionMessageSubscription = selected;
+  state.chatSessionApprovalQueue = [
+    {
+      id: "approval-1",
+      kind: "plugin",
+      request: { command: "Approve", sessionKey: selected.key },
+      createdAtMs: 1,
+      expiresAtMs: 2,
+    },
+  ];
+  state.chatSessionApprovalReplay = {
+    complete: true,
+    client: state.client,
+    connectionEpoch: state.connectionEpoch,
+    sessionKey: state.sessionKey,
+  };
+  disposeSelectedSessionMessageSubscription(state);
+  expect(unsubscribeMessages).toHaveBeenCalledExactlyOnceWith(selected);
+  expect(state).toMatchObject({
+    chatSessionApprovalReplay: undefined,
+    chatSessionMessageSubscriptionRequestedKey: null,
+    chatSessionMessageSubscription: null,
+    chatSessionApprovalQueue: [],
+  });
+});
+
+it.each([false, true])(
+  "releases a subscription that resolves after its pane is disposed (initial release fails: %s)",
+  async (failInitialRelease) => {
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    onTestFinished(() => warning.mockRestore());
+    const requested = createDeferred();
+    const pending = createDeferred<Subscription>();
+    const { state, selected, unsubscribeMessages } = createSubscriptionState({
+      subscribeMessages: vi.fn(() => {
+        requested.resolve();
+        return pending.promise;
+      }),
+    });
+    state.hello = null;
+    if (failInitialRelease) {
+      unsubscribeMessages.mockRejectedValueOnce(new Error("temporary observer release failure"));
+    }
+    const sync = syncSelectedSessionMessageSubscription(state);
+    await requested.promise;
+    disposeSelectedSessionMessageSubscription(state);
+    pending.resolve(selected);
+    await sync;
+    expect(unsubscribeMessages).toHaveBeenCalledExactlyOnceWith(selected);
+    expect(unsubscribeMessages.mock.calls[0]?.[0]).toBe(selected);
+    expect(state.chatSessionMessageSubscription).toBeNull();
+    expect(warning).toHaveBeenCalledTimes(failInitialRelease ? 1 : 0);
+  },
+);
+
 it.each(["dispose", "selection", "capability", "deadline"] as const)(
   "settles transient subscription recovery on %s without touching drafts",
   async (change) => {
@@ -144,13 +230,10 @@ it("keeps a successful replacement and warns when the previous release fails", a
   expect(state.chatSessionMessageSubscription).toBe(selected);
   expect(unsubscribeMessages).toHaveBeenCalledExactlyOnceWith(previous);
   expect(warning).toHaveBeenCalledOnce();
-  expect(getChatHistoryLoadState(state)).toMatchObject({
-    phase: "failed",
-    message: "Previous observer release failed",
-  });
+  expect(getChatHistoryLoadState(state).phase).toBe("idle");
   expect(state).toMatchObject({ lastError: null, chatError: null });
   flush();
-  expect(publishedLoads.map((load) => load.phase)).toEqual(["idle", "failed"]);
+  expect(publishedLoads.map((load) => load.phase)).toEqual(["idle"]);
   expect(state.chatLoading).toBe(false);
   state.lastError = "Sending the message failed";
   state.chatError = "Sending the message failed";
@@ -167,7 +250,7 @@ it("keeps a successful replacement and warns when the previous release fails", a
     sessionsError: "Session list refresh failed",
   });
   expect(unsubscribeMessages).toHaveBeenCalledOnce();
-  expect(publishedLoads.map((load) => load.phase)).toEqual(["idle", "failed", "idle"]);
+  expect(publishedLoads.map((load) => load.phase)).toEqual(["idle"]);
   expect(state.chatLoading).toBe(false);
 });
 
@@ -269,8 +352,12 @@ it("clears stale approvals while switching the selected global agent", async () 
   await sync;
 
   expect(queueWhileReplacementIsPending).toEqual([]);
-  expect(subscribeMessages).toHaveBeenCalledWith("global", {
-    agentId: "research",
-    includeApprovals: true,
-  });
+  expect(subscribeMessages).toHaveBeenCalledWith(
+    "global",
+    {
+      agentId: "research",
+      includeApprovals: true,
+    },
+    undefined,
+  );
 });

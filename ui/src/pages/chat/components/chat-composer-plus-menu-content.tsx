@@ -1,4 +1,5 @@
-import { onSettled } from "solid-js";
+import type { JSX } from "@solidjs/web";
+import { createMemo, Errored, For, Loading, onSettled } from "solid-js";
 import { pathForRoute } from "../../../app-route-paths.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { MenuEntry, MenuHandle, MenuItem } from "../../../components/solid/menu.tsx";
@@ -15,7 +16,9 @@ import {
   resolveWebSearchToolOverrideState,
 } from "../../../lib/sessions/tool-overrides.ts";
 import { uploadsEnabled } from "../../../lib/uploads.ts";
-import { useSingleAttachmentPicker } from "./chat-attachment-picker-policy.ts";
+import "./chat-camera-capture.tsx";
+import { resolveComposerSkills } from "../composer-capability-catalog.ts";
+import { useNativeAttachmentSourceMenu } from "./chat-attachment-picker-policy.ts";
 import {
   handleComposerLibrarySelection,
   composerLibraryMenuItems,
@@ -24,6 +27,7 @@ import {
   toolsForServer,
   isToolDenied,
   MCP_DISCOVERY_NOTICE_IDS,
+  menuRenderInputs,
 } from "./chat-composer-menu-inputs.ts";
 import {
   renderBackRow,
@@ -32,6 +36,8 @@ import {
   menuDivider,
 } from "./chat-composer-menu-rows.tsx";
 import type {
+  ChatComposerMenuSkill,
+  ChatComposerPlusMenuBodyProps,
   ChatComposerPlusMenuContentProps,
   ChatComposerPlusMenuView,
 } from "./chat-composer-plus-menu.types.ts";
@@ -42,11 +48,17 @@ function rootItems(menu: ChatComposerPlusMenuContentProps): MenuEntry[] {
   const entries: MenuEntry[] = [];
   const canUpload = uploadsEnabled(menu.attachments.uploadConfig);
   if (canUpload) {
-    for (const [id, icon, label] of useSingleAttachmentPicker()
-      ? ([["file", "paperclip", t("chat.composer.attach")]] as const)
+    const mediaOption = menu.attachments.imagesOnly
+      ? (["photo", "image", t("chat.composer.attachPhoto")] as const)
+      : (["media", "image", t("chat.composer.attachMedia")] as const);
+    for (const [id, icon, label] of useNativeAttachmentSourceMenu()
+      ? ([
+          ...(!menu.attachments.imagesOnly ? [mediaOption] : []),
+          ["file", "paperclip", t("chat.composer.attach")],
+        ] as const)
       : ([
           ["camera", "camera", t("chat.composer.takePhoto")],
-          ["photo", "image", t("chat.composer.attachPhoto")],
+          mediaOption,
           // Image-only composers keep the single picker's file input, filtered to images.
           ...(menu.attachments.imagesOnly
             ? []
@@ -161,36 +173,68 @@ function rootItems(menu: ChatComposerPlusMenuContentProps): MenuEntry[] {
   return entries;
 }
 
-function skillItems(menu: ChatComposerPlusMenuContentProps): MenuEntry[] {
-  const header = [menuDivider("back-divider"), ...composerLibraryMenuItems(menu.library)];
-  const notice = menu.skillsLoading
-    ? (["chat.composer.menu.loadingSkills", "status"] as const)
-    : menu.skillsError
-      ? (["chat.composer.menu.skillsLoadFailed", "alert"] as const)
-      : !menu.skills?.length
-        ? (["chat.composer.menu.noSkills", undefined] as const)
-        : null;
-  if (notice) {
-    header.push(renderCapabilityMenuState("skills-notice", t(notice[0]), notice[1]));
+function skillRows(
+  rows: readonly ChatComposerMenuSkill[] | null,
+  menu: ChatComposerPlusMenuContentProps,
+): MenuEntry[] {
+  if (!rows?.length) {
+    return [renderCapabilityMenuState("skills-notice", t("chat.composer.menu.noSkills"))];
   }
-  const skills: MenuEntry[] = [];
-  for (const skill of menu.skills ?? []) {
+  return rows.map((skill) => {
     const title = skill.missingDeps
       ? t("chat.composer.menu.depsMissing")
       : skill.blocked
         ? t("chat.composer.menu.skillBlocked")
         : menu.mutationBlockedReason;
-    skills.push(
-      renderCapabilityToggleRow({
-        value: `skill:${skill.key}`,
-        label: skill.name,
-        checked: skill.enabled,
-        disabled: skill.missingDeps || skill.blocked || menu.mutationBlockedReason !== null,
-        title,
-        note: skill.missingDeps || skill.blocked ? title : null,
-      }),
-    );
-  }
+    return renderCapabilityToggleRow({
+      value: `skill:${skill.key}`,
+      label: skill.name,
+      checked: skill.enabled,
+      disabled: skill.missingDeps || skill.blocked || menu.mutationBlockedReason !== null,
+      title,
+      note: skill.missingDeps || skill.blocked ? title : null,
+    });
+  });
+}
+
+function SkillCatalog(props: {
+  menu: ChatComposerPlusMenuContentProps;
+  renderItems: (items: () => readonly MenuEntry[]) => JSX.Element;
+}) {
+  const skills = createMemo(() => props.menu.skillsRead ?? props.menu.skills);
+  return (
+    <Errored
+      fallback={(_error) => (
+        <div class="agent-chat__capability-menu-state" role="alert">
+          {t("chat.composer.menu.skillsLoadFailed")}
+        </div>
+      )}
+    >
+      <Loading
+        fallback={
+          <div class="agent-chat__capability-menu-state" role="status">
+            {t("chat.composer.menu.loadingSkills")}
+          </div>
+        }
+      >
+        {props.renderItems(() =>
+          skillRows(
+            props.menu.skillsRead
+              ? resolveComposerSkills(skills(), props.menu.toolOverrides)
+              : props.menu.skills,
+            props.menu,
+          ),
+        )}
+      </Loading>
+    </Errored>
+  );
+}
+
+function skillItems(
+  menu: ChatComposerPlusMenuContentProps,
+  readMenu: () => ChatComposerPlusMenuContentProps,
+): MenuEntry[] {
+  const header = [menuDivider("back-divider"), ...composerLibraryMenuItems(menu.library)];
   const manage: MenuItem = {
     id: "manage-skills",
     label: t("chat.composer.menu.manageSkills"),
@@ -203,7 +247,18 @@ function skillItems(menu: ChatComposerPlusMenuContentProps): MenuEntry[] {
   return [
     renderBackRow(),
     { kind: "group", id: "skills-header", items: header },
-    { kind: "group", id: "skills-list", items: skills },
+    {
+      kind: "group",
+      id: "skills-list",
+      // Native click admission still reads the current synchronous owner snapshot.
+      items: skillRows(menu.skills, menu),
+      // A replacement read retires the failed row owner without remounting menu chrome.
+      render: (renderItems) => (
+        <For each={[readMenu().skillsRead]}>
+          {() => <SkillCatalog menu={readMenu()} renderItems={renderItems} />}
+        </For>
+      ),
+    },
     { kind: "group", id: "skills-footer", items: [menuDivider("skills-manage-divider"), manage] },
   ];
 }
@@ -324,7 +379,7 @@ function toolItems(menu: ChatComposerPlusMenuContentProps, serverName: string): 
   return entries;
 }
 
-export function handleMenuSelection(
+function handleMenuSelection(
   { id: value }: MenuItem,
   event: CustomEvent<MenuItem>,
   menu: MenuHandle,
@@ -335,7 +390,7 @@ export function handleMenuSelection(
   const { surface } = overlay;
   if (
     uploadsEnabled(props.attachments.uploadConfig) &&
-    (value === "camera" || value === "photo" || value === "file")
+    (value === "camera" || value === "photo" || value === "file" || value === "media")
   ) {
     props.inputHandle.open(value);
     return;
@@ -477,14 +532,13 @@ export function handleMenuSelection(
   }
 }
 
-export { menuRenderInputs } from "./chat-composer-menu-inputs.ts";
-
-export function menuItems(
+function menuItems(
   menu: ChatComposerPlusMenuContentProps,
   view: ChatComposerPlusMenuView,
+  readMenu: () => ChatComposerPlusMenuContentProps,
 ): MenuEntry[] {
   return view === "skills"
-    ? skillItems(menu)
+    ? skillItems(menu, readMenu)
     : view === "connectors"
       ? connectorItems(menu)
       : view.startsWith("tools:")
@@ -492,4 +546,36 @@ export function menuItems(
         : view.startsWith("library:")
           ? composerLibraryMenuItems(menu.library, view.slice("library:".length))
           : rootItems(menu);
+}
+
+export function ChatComposerPlusMenuContent(props: ChatComposerPlusMenuBodyProps) {
+  const inputs = createMemo(
+    () => {
+      const view = props.view;
+      const menu = props.menu;
+      return { view, menu, values: menuRenderInputs(menu, view) };
+    },
+    {
+      lazy: true,
+      equals: (previous, next) =>
+        previous.view === next.view &&
+        previous.values.length === next.values.length &&
+        previous.values.every((value, index) => Object.is(value, next.values[index])),
+    },
+  );
+  const items = createMemo(
+    () => {
+      const { view, menu } = inputs();
+      return menuItems(menu, view, () => inputs().menu);
+    },
+    { lazy: true },
+  );
+  onSettled(() => {
+    props.onReady({
+      items,
+      select: (item, event) => handleMenuSelection(item, event, props.readMenu(), props),
+    });
+    return () => props.onReady(undefined);
+  });
+  return <>{props.renderItems(items)}</>;
 }

@@ -11,7 +11,7 @@ import {
   type WorkerWorkspaceTunnelHandle,
   type WorkerTunnelStatus,
 } from "./tunnel-contract.js";
-import { createWorkerSshRunner, type WorkerSshRunner } from "./tunnel-ssh-runner.js";
+import { workerSshRunner, type WorkerSshRunner } from "./tunnel-ssh-runner.js";
 import { createWorkerWorkspaceActions } from "./workspace-sync.js";
 
 export type { WorkerTunnelHandle } from "./tunnel-contract.js";
@@ -43,7 +43,7 @@ type WorkerTunnelManagerOptions = {
 
 /** Owns SSH workspace state for remote-exec environments and fences replacement epochs. */
 export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = {}) {
-  const runner = options.runner ?? createWorkerSshRunner();
+  const runner = options.runner ?? workerSshRunner;
   const desktop = createWorkerDesktopTunnels({
     runner,
     ...(options.desktopSessionRegistry ? { registry: options.desktopSessionRegistry } : {}),

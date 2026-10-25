@@ -17,6 +17,7 @@ type ProgressResult = boolean | void;
 type ProgressReturn = Promise<ProgressResult> | ProgressResult;
 type AsyncVisibility = (() => Promise<boolean>) | undefined;
 type PublicReplyKey =
+  | "assertChannelAuthority"
   | "internalEventExecution"
   | "onReplyOperationAdmitted"
   | "onReplyOperationOwned";
@@ -122,7 +123,7 @@ it("keeps internal event authority out of the public reply option types", () => 
 it("rejects plugin-supplied event custody while retaining public reply options", async () => {
   const callback = vi.fn();
   const options = {
-    isHeartbeat: true,
+    disableTools: true,
     onReplyStart: callback,
     internalEventExecution: { assertCurrent: callback, onStarted: callback },
     onReplyOperationAdmitted: callback,
@@ -145,7 +146,7 @@ it("rejects plugin-supplied event custody while retaining public reply options",
       expect(replyOptions).not.toHaveProperty("onReplyOperationAdmitted");
       expect(replyOptions).not.toHaveProperty("onReplyOperationOwned");
       expect(replyOptions).toMatchObject({
-        isHeartbeat: true,
+        disableTools: true,
         onReplyStart: callback,
         [PLUGIN_COMMAND_DISPATCH]: { kind: "non-plugin" },
       });

@@ -1,5 +1,7 @@
-import { createMemo, onCleanup } from "solid-js";
+import { createMemo } from "solid-js";
+import { isMobileBrowserPlatform } from "../../../lib/browser-platform.ts";
 import { clearCompositionEnd } from "../../../lib/ime.ts";
+import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { liveValue } from "../../../lib/reactive/live-value.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
@@ -44,19 +46,20 @@ export function renderComposerTextarea(
     // The native IME preview owns the field until composition commits.
     return ownerState.composerComposing && element ? element.value : next;
   });
-  onCleanup(() => {
-    if (ownerState.composerTextarea === element) {
-      ownerState.composerComposing = false;
-      ownerState.textareaRef?.();
-    }
+  const textareaRef = elementRef<HTMLTextAreaElement>((node) => {
+    element = node;
+    valueRef(node);
+    ownerState.textareaRef?.(node);
+    return () => {
+      if (ownerState.composerTextarea === node) {
+        ownerState.composerComposing = false;
+        ownerState.textareaRef?.();
+      }
+    };
   });
   return (
     <textarea
-      ref={(node) => {
-        element = node;
-        valueRef(node);
-        ownerState.textareaRef?.(node);
-      }}
+      ref={[textareaRef]}
 
       dir={detectTextDirection(value())}
       disabled={!context().canCompose}
@@ -68,7 +71,14 @@ export function renderComposerTextarea(
       aria-describedby={`${view.announcementId}${
         composer.disabledReason ? ` ${view.disabledReasonId}` : ""
       }`}
-      aria-keyshortcuts={context().sendShortcut === "enter" ? "Enter" : "Control+Enter Meta+Enter"}
+      enterkeyhint="enter"
+      aria-keyshortcuts={
+        isMobileBrowserPlatform()
+          ? undefined
+          : context().sendShortcut === "enter"
+            ? "Enter"
+            : "Control+Enter Meta+Enter"
+      }
       onKeyDown={(event) => {
         handleTextareaOverflowInteraction(event);
         context().handleKeyDown(event);

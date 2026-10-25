@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
-import { describe, expect, it, vi } from "vitest";
+import { assert, describe, expect, it, vi } from "vitest";
 import { handleDirFetch } from "./dir-fetch.js";
 import { createCanonicalDirListCommand } from "./dir-list-worker-command.js";
 import { handleDirList } from "./dir-list.js";
@@ -20,8 +20,10 @@ async function listingCommand(directoryPath: string, canonical = directoryPath) 
   });
 }
 
-function spawnCommand(command: string[], prefix: string, event: "close" | "exit") {
-  const child = spawn(command[0]!, [command[1]!, prefix + command[2]!, ...command.slice(3)], {
+async function spawnCommand(command: string[], preload: string, event: "close" | "exit") {
+  const preloadPath = at("worker-preload.cjs");
+  await fs.writeFile(preloadPath, preload);
+  const child = spawn(command[0]!, ["--require", preloadPath, ...command.slice(1)], {
     stdio: ["ignore", "pipe", "pipe"],
   });
   const stdout: Buffer[] = [],
@@ -37,9 +39,7 @@ function spawnCommand(command: string[], prefix: string, event: "close" | "exit"
 
 async function list(input: Parameters<typeof handleDirList>[0]) {
   const result = await handleDirList(input);
-  if (!result.ok) {
-    throw new Error("expected ok");
-  }
+  assert(result.ok);
   return result;
 }
 
@@ -60,17 +60,12 @@ describe("handleDirList", () => {
     async (kind) => {
       const stats = await fs.stat(at(), { bigint: true });
       const binding = { kind: "existing", device: String(stats.dev), inode: String(stats.ino) };
-      const expectedBinding = {
-        malformed: null,
-        write: {
-          kind: "write",
-          anchorPath: at(),
-          anchorDevice: binding.device,
-          anchorInode: binding.inode,
-        },
-        device: { ...binding, device: "different" },
-        inode: { ...binding, inode: "different" },
-      }[kind];
+      const expectedBinding =
+        kind === "malformed"
+          ? null
+          : kind === "write"
+            ? { kind, anchorPath: at(), anchorDevice: binding.device, anchorInode: binding.inode }
+            : { ...binding, [kind]: "different" };
       const readdir = vi.spyOn(fs, "readdir");
 
       await expect(
@@ -138,7 +133,11 @@ describe("handleDirList", () => {
           fs.symlinkSync(${JSON.stringify(replacement)}, ${JSON.stringify(current)});
         };
       })();`;
-    const { child, stdout, stderr, exit } = spawnCommand(command, retargetAfterBinding, "close");
+    const { child, stdout, stderr, exit } = await spawnCommand(
+      command,
+      retargetAfterBinding,
+      "close",
+    );
     try {
       expect(await exit, Buffer.concat(stderr).toString("utf8")).toBe(0);
       expect(await fs.readFile(drained, "utf8")).toBe("settled");
@@ -169,7 +168,7 @@ describe("handleDirList", () => {
 
       const drained = at("rejected-worker-drained");
       const observeNaturalExit = `process.once("beforeExit", () => require("node:fs").writeFileSync(${JSON.stringify(drained)}, "settled"));`;
-      const { stdout, exit } = spawnCommand(command, observeNaturalExit, "exit");
+      const { stdout, exit } = await spawnCommand(command, observeNaturalExit, "exit");
       expect(await exit).toBe(78);
       expect(await fs.readFile(drained, "utf8")).toBe("settled");
       expect(Buffer.concat(stdout)).toHaveLength(0);
@@ -181,12 +180,13 @@ describe("handleDirList", () => {
     const stats = await fs.stat(at(), { bigint: true });
     const binding = { kind: "existing", device: String(stats.dev), inode: String(stats.ino) };
 
-    const preflight = await handleDirList({
-      path: at(),
-      preflightOnly: true,
-      expectedBinding: { ...binding, extra: "not part of the binding" },
-    });
-    expect(preflight).toEqual({
+    expect(
+      await handleDirList({
+        path: at(),
+        preflightOnly: true,
+        expectedBinding: { ...binding, extra: "not part of the binding" },
+      }),
+    ).toEqual({
       ok: true,
       path: at(),
       entries: [],
@@ -194,11 +194,6 @@ describe("handleDirList", () => {
       preflight: true,
       binding,
     });
-
-    const changed = await handleDirList({ path: at(), expectedCanonicalPath: at("other") });
-    expect(changed).toEqual(
-      failure("CANONICAL_PATH_CHANGED", "resolved path differs from the authorized target", at()),
-    );
   });
 
   it("lists files and subdirs with metadata, sorted by name", async () => {

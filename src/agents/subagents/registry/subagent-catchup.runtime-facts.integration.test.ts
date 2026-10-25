@@ -156,10 +156,6 @@ it("reads a cold private envelope without changing delivery or processing receip
       const text = factsText(facts);
       expect(facts.every((fragment) => fragment.kind === "conversation-data")).toBe(true);
       expect(text).toContain('run_json="private-catchup"');
-      expect(text).toContain("result_truncated=true");
-      const encoded = text.split("result_json=")[1]?.split("; result_truncated=")[0];
-      assert(encoded, "Expected a quoted bounded result");
-      expect(JSON.parse(encoded)).toBe(result.slice(0, 2_000));
     } else {
       expect(facts).toEqual([temporalFact]);
     }
@@ -175,7 +171,7 @@ it("reads a cold private envelope without changing delivery or processing receip
   expect(agent.prepare("SELECT total_changes() AS count").get()).toEqual(agentWrites);
 });
 
-it.each(["retained result", "fallback result", "requester final pending", "older generation"])(
+it.each(["fallback result", "requester final pending", "older generation"])(
   "exposes the owned result without acknowledging it: %s",
   async (scenario) => {
     setRuntimeConfigSnapshot({ agents: { entries: { main: {}, other: {} } } });

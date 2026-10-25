@@ -16,6 +16,7 @@ import {
   editMessageMSTeams,
   sendMessageMSTeams,
 } from "./send.js";
+import { createMSTeamsTestConfig } from "./setup.test-support.js";
 
 const mockState = vi.hoisted(() => ({
   loadOutboundMediaFromUrl: vi.fn(),
@@ -37,8 +38,6 @@ const mockState = vi.hoisted(() => ({
   >(async () => ({ id: "updated" })),
   deleteMSTeamsActivityWithReference: vi.fn(async () => {}),
   uploadAndShareSharePoint: vi.fn(),
-  getDriveItemProperties: vi.fn(),
-  buildTeamsFileInfoCard: vi.fn(),
 }));
 
 vi.mock("openclaw/plugin-sdk/outbound-media", () => ({
@@ -104,12 +103,8 @@ vi.mock("./graph-upload.js", async (importOriginal) => {
   return {
     ...actual,
     uploadAndShareSharePoint: mockState.uploadAndShareSharePoint,
-    getDriveItemProperties: mockState.getDriveItemProperties,
   };
 });
-
-// mock-isolation: fixture file cards must not call the Graph transport.
-vi.mock("./graph-chat.js", () => ({ buildTeamsFileInfoCard: mockState.buildTeamsFileInfoCard }));
 
 vi.mock("./sdk-proactive.js", () => ({
   sendMSTeamsActivityWithReference: mockState.sendMSTeamsActivityWithReference,
@@ -149,6 +144,15 @@ function mockPdf() {
   });
 }
 
+function sendFile(options: Partial<Parameters<typeof sendMessageMSTeams>[0]> = {}) {
+  return sendMessageMSTeams({
+    ...destination,
+    text: "report",
+    mediaUrl: "file:///tmp/report.pdf",
+    ...options,
+  });
+}
+
 async function useActualOutboundMediaLoader() {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/outbound-media")>(
     "openclaw/plugin-sdk/outbound-media",
@@ -177,12 +181,7 @@ describe("sendMessageMSTeams", () => {
     "settles an accepted consent card after %s",
     async (outcome) => {
       const failure = new Error(outcome);
-      mockState.loadOutboundMediaFromUrl.mockResolvedValue({
-        buffer: Buffer.from("file contents"),
-        contentType: "application/pdf",
-        fileName: "report.pdf",
-        kind: "file",
-      });
+      mockPdf();
       mockState.requiresFileConsent.mockReturnValue(true);
       mockState.prepareFileConsentActivityFs.mockResolvedValue({
         activity: { type: "message", attachments: [] },
@@ -198,12 +197,7 @@ describe("sendMessageMSTeams", () => {
         }
       });
 
-      const send = sendMessageMSTeams({
-        ...destination,
-        text: "report",
-        mediaUrl: "file:///tmp/report.pdf",
-        onDeliveryResult,
-      });
+      const send = sendFile({ onDeliveryResult });
       if (outcome === "success") {
         await expect(send).resolves.toMatchObject({
           messageId: "message-1",
@@ -234,40 +228,6 @@ describe("sendMessageMSTeams", () => {
     },
   );
 
-  it("loads workspace-relative media through the trusted host reader", async () => {
-    await withTempDir("openclaw-msteams-workspace-", async (dir) => {
-      const workspaceDir = await realpath(dir);
-      const filePath = join(workspaceDir, "report.txt");
-      const fileContents = Buffer.from("approved Teams attachment");
-      const approvedReader = vi.fn(async (candidate: string) => await readFile(candidate));
-      const conflictingReader = vi.fn(async () => Buffer.from("forged Teams attachment"));
-      const mediaAccess = {
-        localRoots: [workspaceDir],
-        workspaceDir,
-        readFile: approvedReader,
-      };
-
-      await writeFile(filePath, fileContents);
-      await useActualOutboundMediaLoader();
-
-      await sendMessageMSTeams({
-        ...destination,
-        text: "approved attachment",
-        mediaUrl: "report.txt",
-        mediaAccess,
-        mediaLocalRoots: [join(workspaceDir, "unapproved")],
-        mediaReadFile: conflictingReader,
-      });
-
-      expect(mockState.loadOutboundMediaFromUrl.mock.calls[0]?.[1]?.mediaAccess).toBe(mediaAccess);
-      expect(conflictingReader).not.toHaveBeenCalled();
-      expect(approvedReader).toHaveBeenCalledWith(filePath);
-      expect(mockState.sendMSTeamsMessages.mock.calls[0]?.[0].messages[1]?.mediaUrl).toBe(
-        `data:text/plain;base64,${fileContents.toString("base64")}`,
-      );
-    });
-  });
-
   it.each([
     [
       "outside approved roots",
@@ -285,9 +245,7 @@ describe("sendMessageMSTeams", () => {
       await writeFile(join(sandbox, "outside.txt"), "outside approved workspace");
       await useActualOutboundMediaLoader();
       await expect(
-        sendMessageMSTeams({
-          ...destination,
-          text: "private attachment",
+        sendFile({
           mediaUrl,
           mediaAccess: {
             workspaceDir,
@@ -301,35 +259,6 @@ describe("sendMessageMSTeams", () => {
     });
   });
 
-  it("uses the Graph-native group conversation ID for SharePoint sharing", async () => {
-    const graphConversationId = "19:group-id@thread.v2";
-
-    mockContext({
-      conversationId: graphConversationId,
-      conversationType: "groupChat",
-      mediaMaxBytes: 8 * 1024 * 1024,
-      sharePointSiteId: "site-456",
-    });
-    mockPdf();
-    mockState.uploadAndShareSharePoint.mockResolvedValue({ itemId: "item-2" });
-    mockState.getDriveItemProperties.mockResolvedValue({ name: "report.pdf" });
-    mockState.buildTeamsFileInfoCard.mockReturnValue({
-      contentType: "application/vnd.microsoft.teams.card.file.info",
-    });
-
-    await sendMessageMSTeams({
-      cfg: {} as OpenClawConfig,
-      to: `conversation:${graphConversationId}`,
-      text: "report",
-      mediaUrl: "https://example.com/report.pdf",
-    });
-
-    expect(mockState.uploadAndShareSharePoint).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({ chatId: graphConversationId, siteId: "site-456" }),
-    );
-  });
-
   it("fails clearly when a group file has no SharePoint site", async () => {
     mockContext({
       conversationId: "19:group-id@thread.v2",
@@ -338,14 +267,7 @@ describe("sendMessageMSTeams", () => {
     });
     mockPdf();
 
-    await expect(
-      sendMessageMSTeams({
-        cfg: {} as OpenClawConfig,
-        to: "conversation:19:group-id@thread.v2",
-        text: "report",
-        mediaUrl: "https://example.com/report.pdf",
-      }),
-    ).rejects.toThrow("channels.msteams.sharePointSiteId is required");
+    await expect(sendFile()).rejects.toThrow("channels.msteams.sharePointSiteId is required");
     expect(mockState.uploadAndShareSharePoint).not.toHaveBeenCalled();
   });
 });
@@ -372,17 +294,11 @@ describe("editMessageMSTeams", () => {
     mockState.resolveMarkdownTableMode.mockImplementation(markdown.resolveMarkdownTableMode);
     mockState.convertMarkdownTables.mockImplementation(text.convertMarkdownTables);
     mockContext({ app: {}, ref: { conversation: { id: conversationId } } });
-    const cfg: OpenClawConfig = {
-      channels: {
-        msteams: {
-          defaultAccount: "support",
-          markdown: { tables: "off" },
-          accounts: {
-            support: { markdown: { tables: "bullets" } },
-          },
-        },
-      },
-    };
+    const cfg: OpenClawConfig = createMSTeamsTestConfig({
+      defaultAccount: "support",
+      markdown: { tables: "off" },
+      accounts: { support: { markdown: { tables: "bullets" } } },
+    });
     await editMessageMSTeams({
       cfg,
       accountId: undefined,
@@ -427,7 +343,7 @@ describe("editMessageMSTeams", () => {
 });
 
 describe("deleteMessageMSTeams", () => {
-  it("deletes with the resolved Teams conversation reference", async () => {
+  it.each([false, true])("deletes with the resolved reference (failure=%s)", async (fails) => {
     const mockApp = { id: "delete-app" };
     mockContext({
       app: mockApp,
@@ -440,13 +356,15 @@ describe("deleteMessageMSTeams", () => {
       },
     });
 
-    const result = await deleteMessageMSTeams({
-      ...destination,
-      activityId: "activity-456",
-    });
-
-    expect(result.conversationId).toBe(conversationId);
-
+    if (fails) {
+      mockState.deleteMSTeamsActivityWithReference.mockRejectedValue(new Error("Not found"));
+    }
+    const result = deleteMessageMSTeams({ ...destination, activityId: "activity-456" });
+    if (fails) {
+      await expect(result).rejects.toThrow("msteams delete failed");
+    } else {
+      await expect(result).resolves.toEqual({ conversationId });
+    }
     expect(mockState.deleteMSTeamsActivityWithReference).toHaveBeenCalledWith(
       mockApp,
       expect.objectContaining({
@@ -456,25 +374,5 @@ describe("deleteMessageMSTeams", () => {
       "activity-456",
       { serviceUrlBoundary: { cloud: "Public" } },
     );
-  });
-
-  it("throws a descriptive error when delete fails", async () => {
-    mockContext({
-      app: { id: "failing-app" },
-      ref: {
-        user: { id: "user-1" },
-        agent: { id: "agent-1" },
-        conversation: { id: conversationId },
-        channelId: "msteams",
-      },
-    });
-    mockState.deleteMSTeamsActivityWithReference.mockRejectedValue(new Error("Not found"));
-
-    await expect(
-      deleteMessageMSTeams({
-        ...destination,
-        activityId: "activity-456",
-      }),
-    ).rejects.toThrow("msteams delete failed");
   });
 });

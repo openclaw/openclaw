@@ -66,15 +66,15 @@ vi.mock("./manifest-registry.js", () => ({
 const throwingFactory = (error: Error) => () => {
   throw error;
 };
+const pdfFields = { id: "pdf", label: "PDF", mimeTypes: ["application/pdf"] };
 
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.readBundledDiscoveryModeMemoized.mockReturnValue("compat");
   mocks.publicArtifactModule = {
     createPdfDocumentExtractor: () => ({
-      id: "pdf",
-      label: "PDF",
-      mimeTypes: ["application/pdf"],
+      ...pdfFields,
+      mimeTypes: [...pdfFields.mimeTypes],
       extract: vi.fn(),
     }),
   };
@@ -92,15 +92,12 @@ it("reuses one manifest registry pass in allowlist mode", () => {
 
 const normalizedAllow = [" document-extract ", "document-extract"];
 it.each([
-  ["global disablement", false, ["document-extract"], undefined, []],
-  ["cannot expand allowlist", undefined, ["openai"], ["document-extract"], []],
-  ["normalized overlap", undefined, normalizedAllow, ["document-extract"], ["pdf"]],
-  ["disjoint scope", undefined, normalizedAllow, ["openai"], []],
-  ["empty scope", undefined, ["document-extract"], [], []],
-] as const)("enforces %s", (_name, enabled, allow, onlyPluginIds, expected) => {
+  ["global disablement", false, ["document-extract"], []],
+  ["cannot expand allowlist", undefined, ["openai"], []],
+  ["normalized allowlist", undefined, normalizedAllow, ["pdf"]],
+] as const)("enforces %s", (_name, enabled, allow, expected) => {
   const result = resolvePluginDocumentExtractors({
     config: { plugins: { enabled, allow: [...allow] } },
-    onlyPluginIds,
   });
   expect(result).toStrictEqual(expected.map((id) => expect.objectContaining({ id })));
   if (enabled === false) {
@@ -114,13 +111,7 @@ it("isolates a throwing factory when another extractor factory succeeds", () => 
   mocks.publicArtifactModule.createBrokenDocumentExtractor = throwingFactory(error);
 
   expect(resolvePluginDocumentExtractors()).toStrictEqual([
-    {
-      id: "pdf",
-      label: "PDF",
-      mimeTypes: ["application/pdf"],
-      extract: expect.any(Function),
-      pluginId: "document-extract",
-    },
+    { ...pdfFields, extract: expect.any(Function), pluginId: "document-extract" },
   ]);
   expect(mocks.warn).toHaveBeenCalledExactlyOnceWith(
     expect.stringMatching(/document extractors.*document-extract/),

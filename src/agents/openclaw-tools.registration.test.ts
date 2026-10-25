@@ -25,6 +25,7 @@ import {
 import { resolveSandboxToolPolicyForAgent } from "./sandbox/tool-policy.js";
 import { withPreparedSessionCapabilityRead } from "./subagents/spawn/subagent-session-store.js";
 import { createAgentToolsSandboxContext } from "./test-helpers/agent-tools-sandbox-context.js";
+import { createOpenClawOnlyToolConstructionPlan } from "./test-helpers/tool-construction-plan.js";
 import { resolveCoreToolFactoryFamily } from "./tool-catalog.js";
 import {
   getGatewayToolCallerIdentity,
@@ -564,13 +565,7 @@ describe("gateway client capability tool filtering", () => {
             additionalInheritedToolNamesRef,
             senderIsOwner: false,
             wrapBeforeToolCallHook: false,
-            toolConstructionPlan: {
-              includeBaseCodingTools: false,
-              includeShellTools: false,
-              includeChannelTools: false,
-              includeOpenClawTools: true,
-              includePluginTools: false,
-            },
+            toolConstructionPlan: createOpenClawOnlyToolConstructionPlan(),
           }),
       );
       expect(additionalInheritedToolNamesRef.includes("github_publish")).toBe(
@@ -590,6 +585,12 @@ describe("gateway client capability tool filtering", () => {
       ).toBe(actions);
       expect(Value.Check(tool.parameters, { title: "Publish workspace" })).toBe(publishing);
       expect(Value.Check(tool.parameters, { action: "publish" })).toBe(publishing);
+      expect(
+        Value.Check(tool.parameters, {
+          action: "prepare_pr",
+          pullRequestUrl: "https://github.com/example/repository/pull/1",
+        }),
+      ).toBe(false);
       expect(Value.Check(tool.parameters, { action: "refresh_base" })).toBe(false);
       expect(Value.Check(tool.parameters, { action: "edit" })).toBe(publishing);
       expect(Value.Check(tool.parameters, { action: "ready" })).toBe(publishing || actions);
@@ -602,6 +603,7 @@ describe("gateway client capability tool filtering", () => {
       } else if (!actions) {
         expect(tool.parameters).toHaveProperty("properties", {
           action: expect.any(Object),
+          pullRequestUrl: expect.any(Object),
           draft: expect.any(Object),
           title: expect.any(Object),
           body: expect.any(Object),
@@ -673,13 +675,7 @@ describe("gateway client capability tool filtering", () => {
         githubPublicationAvailable: available,
         senderIsOwner: false,
         wrapBeforeToolCallHook: false,
-        toolConstructionPlan: {
-          includeBaseCodingTools: false,
-          includeShellTools: false,
-          includeChannelTools: false,
-          includeOpenClawTools: true,
-          includePluginTools: false,
-        },
+        toolConstructionPlan: createOpenClawOnlyToolConstructionPlan(),
       });
       expect(hasTool(tools, "github_publish")).toBe(expected);
       if (expected) {

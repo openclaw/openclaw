@@ -1,7 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadProviderUsageSummary } from "./provider-usage.load.js";
 
 describe("Ollama provider usage integration", () => {
+  afterEach(() => vi.restoreAllMocks());
   const configFor = (baseUrl: string, apiKey?: string) => ({
     models: {
       providers: {
@@ -33,7 +34,9 @@ describe("Ollama provider usage integration", () => {
     };
   };
   const balanceFetch = () =>
-    vi.fn(async () => Response.json({ included: { session: { remaining_percent: 80 } } }));
+    vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(Response.json({ included: { session: { remaining_percent: 80 } } }));
   const load = (
     options: Omit<NonNullable<Parameters<typeof loadProviderUsageSummary>[0]>, "providers">,
   ) => loadProviderUsageSummary({ providers: ["ollama"], env: {}, timeoutMs: 5000, ...options });
@@ -49,7 +52,6 @@ describe("Ollama provider usage integration", () => {
     const fetchFn = balanceFetch();
     const summary = await load({
       config: configFor("http://127.0.0.1:11434/v1", "ollama-local"),
-      fetch: fetchFn,
     });
     expect(summary.providers).toEqual([
       expect.objectContaining({
@@ -61,10 +63,11 @@ describe("Ollama provider usage integration", () => {
   });
 
   it.each([401, 404])("omits unavailable Cloud balance for HTTP %i", async (status) => {
-    const fetchFn = vi.fn(async () => new Response("private", { status }));
+    const fetchFn = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response("private", { status }));
     const summary = await load({
       config: configFor("http://127.0.0.1:11434", "ollama-local"),
-      fetch: fetchFn,
     });
     expect(summary.providers).toEqual([]);
     expect(fetchFn).toHaveBeenCalledTimes(1);
@@ -79,7 +82,6 @@ describe("Ollama provider usage integration", () => {
     const summary = await load({
       config: configFor("http://10.0.0.5:11434", apiKey),
       env: { OLLAMA_API_KEY: "ambient-cloud-key" },
-      fetch: fetchFn,
     });
     expect(summary.providers[0]?.error).toBeUndefined();
     expect(fetchFn).toHaveBeenCalledExactlyOnceWith(
@@ -106,7 +108,6 @@ describe("Ollama provider usage integration", () => {
         },
       },
       env,
-      fetch: fetchFn,
     });
     expect(summary.providers[0]?.windows).toEqual([{ label: "Session", usedPercent: 20 }]);
     expectRequest(fetchFn, "http://10.0.0.5:11434", "endpoint-key");
@@ -126,9 +127,11 @@ describe("Ollama provider usage integration", () => {
       true,
     ],
   ] as const)("resolves local-daemon ownership for %s", async (_name, config, apiKey, local) => {
-    const fetchFn = local ? balanceFetch() : vi.fn();
+    const fetchFn = local
+      ? balanceFetch()
+      : vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Unexpected usage fetch"));
     const env = apiKey ? { OLLAMA_API_KEY: apiKey } : {};
-    const summary = await load({ config, env, fetch: fetchFn });
+    const summary = await load({ config, env });
     if (local) {
       expect(summary.providers[0]?.windows).toEqual([{ label: "Session", usedPercent: 20 }]);
       expectRequest(fetchFn, "http://127.0.0.1:11434");

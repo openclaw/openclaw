@@ -1,19 +1,13 @@
 import fs from "node:fs";
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { describe, expect, test } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "../config/runtime-snapshot.js";
 import { persistSessionTranscriptTurn } from "../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
-import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../test-utils/openclaw-test-state.js";
+  transcriptMessage as event,
+  useTranscriptFixture,
+} from "./session-transcript-fixtures.test-support.js";
 import { visitSessionMessagesAsync } from "./session-transcript-native.test-support.js";
 import {
   readRecentSessionMessagesWithStatsAsync as readRecent,
@@ -28,47 +22,8 @@ import {
 import { readLatestSessionUsageFromTranscriptAsync as readUsage } from "./session-transcript-usage.js";
 
 describe("session transcript reader facade", () => {
-  let tempDir: string;
-  let storePath: string;
-  let state: OpenClawTestState;
-
-  beforeEach(async () => {
-    state = await createOpenClawTestState({ prefix: "transcript-readers-", layout: "state-only" });
-    setRuntimeConfigSnapshot({});
-    tempDir = state.stateDir;
-    storePath = path.join(tempDir, "sessions.json");
-  });
-
-  afterEach(async () => {
-    await state.cleanup();
-    clearRuntimeConfigSnapshot();
-  });
-
-  function scopeFor(sessionId: string) {
-    return { agentId: "main", sessionId, sessionKey: `agent:main:${sessionId}`, storePath };
-  }
-  function database() {
-    return openOpenClawAgentDatabase({
-      agentId: "main",
-      path: path.join(tempDir, "openclaw-agent.sqlite"),
-    });
-  }
-  function event(
-    id: string,
-    parentId: string | null,
-    message: Record<string, unknown>,
-    fields = {},
-  ) {
-    return { type: "message", id, parentId, ...fields, message };
-  }
-  async function writeTranscript(sessionId: string, events: unknown[]) {
-    const scope = scopeFor(sessionId);
-    await replaceTranscriptEvents(scope, [
-      { type: "session", version: 3, id: sessionId },
-      ...events,
-    ]);
-    return scope;
-  }
+  const fixture = useTranscriptFixture("transcript-readers-");
+  const { scopeFor, database, writeTranscript } = fixture;
 
   function chain(count: number, prefix: string, content: (index: number) => string) {
     return Array.from({ length: count }, (_, index) =>
@@ -79,7 +34,7 @@ describe("session transcript reader facade", () => {
     );
   }
   function writeArtifact(sessionId: string, message: Record<string, unknown>, suffix = "") {
-    const file = path.join(tempDir, `${sessionId}.jsonl${suffix}`);
+    const file = fixture.path(`${sessionId}.jsonl${suffix}`);
     const header = JSON.stringify({ type: "session", version: 1, id: sessionId });
     fs.writeFileSync(file, `${header}\n${JSON.stringify({ message })}\n`, "utf8");
     return file;
@@ -391,7 +346,7 @@ describe("session transcript reader facade", () => {
             agentId: "main",
             sessionId,
             sessionKey,
-            storePath: path.join(tempDir, "agents", "main", "sessions", "sessions.json"),
+            storePath: fixture.path("agents", "main", "sessions", "sessions.json"),
           },
           { messages: [{ message }], updateMode: "file-only" },
         );

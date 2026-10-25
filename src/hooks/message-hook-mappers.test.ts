@@ -20,7 +20,19 @@ import {
 } from "./message-hook-mappers.js";
 
 const audio = { path: "/tmp/a.ogg", url: "https://cdn.test/a.ogg", contentType: "audio/ogg" };
-const photo = { path: "/tmp/p.jpg", url: "https://cdn.test/p.jpg", contentType: "image/jpeg" };
+const photo = {
+  path: "/tmp/p.jpg",
+  url: "/tmp/p.jpg",
+  contentType: "image/jpeg",
+  workspaceDir: "/tmp",
+};
+const inboundRouting = {
+  channelId: "demo-chat",
+  accountId: "acc-1",
+  conversationId: "demo-chat:chat:456",
+};
+const message = { from: "demo-chat:user:123", content: "commands-body", timestamp: 1710000000 };
+const inboundTurn = { sessionKey: "session-1", runId: "run-1", messageId: "msg-1" };
 
 function makeInboundCtx(overrides: Partial<FinalizedMsgContext> = {}): FinalizedMsgContext {
   return {
@@ -62,7 +74,7 @@ const expectedMediaMetadata = {
   mediaUrl: "https://cdn.test/a.ogg",
   mediaType: "audio/ogg",
   mediaPaths: ["/tmp/a.ogg", "/tmp/p.jpg"],
-  mediaUrls: ["https://cdn.test/a.ogg", "https://cdn.test/p.jpg"],
+  mediaUrls: ["https://cdn.test/a.ogg", "/tmp/p.jpg"],
   mediaTypes: ["audio/ogg", "image/jpeg"],
 };
 
@@ -182,24 +194,13 @@ it("supports explicit content/messageId overrides", () => {
 });
 
 it.each([
-  {
-    name: "sparse",
-    input: { media: [{}, { path: "/tmp/sparse.png", contentType: "image/png" }] },
-    expectedPath: "/tmp/sparse.png",
-    expectedIndex: 1,
-  },
-  {
-    name: "type-only",
-    input: { media: [{ contentType: "image/png" }] },
-    expectedPath: undefined,
-    expectedIndex: 0,
-  },
-])("dual-emits $name hook media from canonical facts", (testCase) => {
-  const ctx = finalizeInboundContextForSdk(makeInboundCtx(testCase.input));
+  ["sparse", [{}, { path: "/tmp/sparse.png", contentType: "image/png" }], "/tmp/sparse.png", 1],
+  ["type-only", [{ contentType: "image/png" }], undefined, 0],
+] as const)("dual-emits %s hook media from canonical facts", (_name, media, path, index) => {
+  const ctx = finalizeInboundContextForSdk(makeInboundCtx({ media: [...media] }));
   const { event } = toPluginInboundClaimPair(deriveInboundMessageHookContext(ctx));
-
-  expect(event.media?.[testCase.expectedIndex]?.path).toBe(testCase.expectedPath);
-  expect(event.metadata?.mediaPath).toBe(testCase.expectedPath);
+  expect(event.media?.[index]?.path).toBe(path);
+  expect(event.metadata?.mediaPath).toBe(path);
 });
 
 it("withholds pending remote media from every inbound hook event", () => {
@@ -247,23 +248,6 @@ it("projects retained facts into hook media metadata", () => {
     mediaUrls: ["/tmp/tree.jpg", "https://example.test/ramp.jpg"],
     mediaTypes: ["image/jpeg", "image"],
   });
-
-  const staged = makeCanonicalInbound({
-    media: [
-      {
-        path: "/tmp/staged/tree.jpg",
-        url: "/tmp/staged/tree.jpg",
-        contentType: "image/jpeg",
-        workspaceDir: "/tmp/staged",
-      },
-    ],
-  });
-  expect(staged).toMatchObject({
-    mediaPath: "/tmp/staged/tree.jpg",
-    mediaUrl: "/tmp/staged/tree.jpg",
-    mediaPaths: ["/tmp/staged/tree.jpg"],
-    mediaUrls: ["/tmp/staged/tree.jpg"],
-  });
 });
 
 it("uses complete staged compatibility projections in hook media metadata", () => {
@@ -301,6 +285,12 @@ it.each([undefined, "01"])(
       parentSpanId: "3333333333333333",
       ...(traceFlags ? { traceFlags } : {}),
     };
+    const traceFields = {
+      trace,
+      traceId: trace.traceId,
+      spanId: trace.spanId,
+      parentSpanId: trace.parentSpanId,
+    };
     const canonical = {
       ...makeCanonicalInbound({ TopicName: "Deployments", media: [audio, photo] }),
       runId: "run-1",
@@ -312,17 +302,10 @@ it.each([undefined, "01"])(
     const receivedEvent = toPluginMessageReceivedEvent(canonical);
     const { metadata: receivedMetadata, ...receivedEventBase } = receivedEvent;
     expect(pluginContext).toEqual({
-      channelId: "demo-chat",
-      accountId: "acc-1",
-      conversationId: "demo-chat:chat:456",
-      sessionKey: "session-1",
-      runId: "run-1",
-      messageId: "msg-1",
+      ...inboundRouting,
+      ...inboundTurn,
       senderId: "sender-1",
-      trace,
-      traceId: trace.traceId,
-      spanId: trace.spanId,
-      parentSpanId: trace.parentSpanId,
+      ...traceFields,
       callDepth: 2,
     });
     const claim = toPluginInboundClaimPair(canonical);
@@ -345,19 +328,12 @@ it.each([undefined, "01"])(
       expect(Object.isFrozen(copy)).toBe(true);
     }
     expect(receivedEventBase).toEqual({
-      from: "demo-chat:user:123",
-      content: "commands-body",
-      timestamp: 1710000000,
+      ...message,
+      ...inboundTurn,
       threadId: 42,
-      messageId: "msg-1",
       senderId: "sender-1",
-      sessionKey: "session-1",
-      runId: "run-1",
       media: expectedMedia,
-      trace: receivedEvent.trace,
-      traceId: trace.traceId,
-      spanId: trace.spanId,
-      parentSpanId: trace.parentSpanId,
+      ...traceFields,
     });
     expect(receivedMetadata).toMatchObject({
       ...expectedMediaMetadata,
@@ -369,12 +345,8 @@ it.each([undefined, "01"])(
     const internalReceived = toInternalMessageReceivedContext(canonical);
     const { metadata: internalMetadata, ...internalReceivedBase } = internalReceived;
     expect(internalReceivedBase).toEqual({
-      from: "demo-chat:user:123",
-      content: "commands-body",
-      timestamp: 1710000000,
-      channelId: "demo-chat",
-      accountId: "acc-1",
-      conversationId: "demo-chat:chat:456",
+      ...message,
+      ...inboundRouting,
       messageId: "msg-1",
       media: receivedEvent.media,
     });
@@ -388,14 +360,9 @@ it.each([undefined, "01"])(
 );
 
 it.each([
-  { name: "rejected", from: undefined, to: "channel:room-123", conversationId: undefined },
-  {
-    name: "direct-message",
-    from: "claim-chat:123",
-    to: "channel:456",
-    conversationId: "user:123",
-  },
-])("honors the channel plugin's $name claim resolution", ({ from, to, conversationId }) => {
+  ["rejected", undefined, "channel:room-123", undefined],
+  ["direct-message", "claim-chat:123", "channel:456", "user:123"],
+])("honors the channel plugin's %s claim resolution", (_name, from, to, conversationId) => {
   const canonical = makeCanonicalInbound({
     Provider: "claim-chat",
     Surface: "claim-chat",
@@ -423,17 +390,13 @@ it.each([
 });
 
 it.each([
-  {
-    name: "transcribed",
-    project: toInternalMessageTranscribedContext,
-    expected: { transcript: "" },
-  },
-  {
-    name: "preprocessed",
-    project: toInternalMessagePreprocessedContext,
-    expected: { transcript: undefined, isGroup: true, groupId: "demo-chat:chat:456" },
-  },
-])("maps the internal $name payload", ({ project, expected }) => {
+  ["transcribed", toInternalMessageTranscribedContext, { transcript: "" }],
+  [
+    "preprocessed",
+    toInternalMessagePreprocessedContext,
+    { transcript: undefined, isGroup: true, groupId: "demo-chat:chat:456" },
+  ],
+] as const)("maps the internal %s payload", (_name, project, expected) => {
   const cfg: OpenClawConfig = {};
   const result = project(makeCanonicalInbound({ Transcript: undefined }), cfg);
   expect(result).toMatchObject(expected);

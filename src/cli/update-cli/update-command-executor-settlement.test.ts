@@ -30,6 +30,7 @@ import {
   type UpdateCommandExecutor,
   registerUpdateCommandTerminalPreparation,
 } from "./update-command-executor.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import { resolvePackageRuntimePreflight } from "./update-command-runtime-preflight.js";
 import { createUpdateOperationDeadline } from "./update-operation-deadline.js";
 
@@ -72,6 +73,7 @@ type SettlementStore = Pick<
   | "current"
   | "owns"
   | "isProcessIdentityCurrent"
+  | "inspectProcessIdentity"
   | "acceptParentBoundExecutor"
 >;
 const rows = new Map<string, ManagedHandoffLease>();
@@ -201,10 +203,33 @@ beforeEach(() => {
     current,
     owns: current,
     isProcessIdentityCurrent: () => true,
+    inspectProcessIdentity: () => "live",
     acceptParentBoundExecutor: current,
   };
   boundaries.store.mockResolvedValue(store);
 });
+
+it.each(["parent", "childKey"])(
+  "rejects malformed delegated %s before opening a store",
+  async (field) => {
+    boundaries.store.mockClear();
+    const operation = vi.fn();
+    const input: Record<string, unknown> = {
+      runId: "run",
+      root,
+      databasePath: boundaries.databasePath,
+      parent: lease(root, "parent", process.ppid),
+      childKey: `${root}/.openclaw-update-child-00000000-0000-0000-0000-000000000000`,
+      [field]: null,
+    };
+
+    await expect(withDelegatedExecutor(input, "run", root, operation)).rejects.toBeInstanceOf(
+      UpdateCommandRecoveryPendingError,
+    );
+    expect(boundaries.store).not.toHaveBeenCalled();
+    expect(operation).not.toHaveBeenCalled();
+  },
+);
 
 function runWithExecutorFence<T>(
   kind: "direct" | "delegated",
@@ -454,12 +479,12 @@ it.each(cleanupResults)(
         admitted.resolve();
         return { status: "probe-failed", error: new Error("configured runtime probe timed out") };
       })
-      .mockResolvedValueOnce({ status: "supported", version: "24.16.0" });
+      .mockResolvedValueOnce({ status: "supported", version: "24.22.1" });
     const work = state.direct(async (executor) => {
       const fence = await executor.enter(root, { preflight: true });
       const runtime = await resolvePackageRuntimePreflight({
         root,
-        target: { version: "2026.9.17", nodeEngine: ">=24.16.0" },
+        target: { version: "2026.9.17", nodeEngine: ">=24.22.1" },
         fallbackNodeRunner,
         alreadyCurrent: true,
         shouldRestart: true,

@@ -54,9 +54,9 @@ function loadConfigRoute(
           revision: context.settingsAgentSelection.intentRevision,
         }
       : undefined;
-  const primaryLoad = context.runtimeConfig.ensureLoaded();
+  void context.runtimeConfig.ensureLoaded().catch(() => undefined);
   if (pageId !== "updates") {
-    void primaryLoad.then(() => context.runtimeConfig.ensureSchemaLoaded()).catch(() => undefined);
+    void context.runtimeConfig.ensureSchemaLoaded().catch(() => undefined);
   }
   return {
     ...route,
@@ -76,13 +76,15 @@ function configPage(id: ConfigPageId) {
         : locationKey;
     },
     loader: (context: ApplicationContext, { location }) => loadConfigRoute(context, location, id),
-    component: () =>
-      import("./config-page.tsx").then((module) => ({
-        header: true,
+    component: async () => {
+      const module = await import("./config-page.tsx");
+      await module.preloadConfigPage(id);
+      return {
         // Keep the current owner while another Settings subpage loads its data.
         renderOwnerKey: () => "settings-config",
         renderSolid: module.ConfigRoute,
-      })),
+      };
+    },
   });
 }
 
@@ -102,7 +104,7 @@ const removedGeneralRedirectPage = definePage({
     });
   },
   // Redirect routes still require a module by contract, but never render page content.
-  component: async () => ({ header: true, renderSolid: () => null }),
+  component: async () => ({ renderSolid: () => null }),
 });
 
 export const pages = [

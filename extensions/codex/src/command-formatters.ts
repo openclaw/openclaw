@@ -126,7 +126,7 @@ function formatAccountAuthOverview(overview: CodexAccountAuthOverview): string {
     lines.push("");
   }
   if (overview.rows.length > 0) {
-    lines.push(overview.orderTitle);
+    lines.push("Auth order");
     for (const [index, row] of overview.rows.entries()) {
       lines.push(
         `  ${index + 1}. ${row.label}   ${row.kind}   — ${row.billingNote ? `${row.status} · ${row.billingNote}` : row.status}`,

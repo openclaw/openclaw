@@ -31,7 +31,6 @@ async function mirrorInto(sessionKey: string, deferToSessionLane = false): Promi
       cfg: {},
       channel: "discord",
       to: "1497965766035640391",
-      payloads: [],
       mirror: { agentId: "wolf", sessionKey, deferToSessionLane },
     },
     payloads: [{ text: "delivered to the user", mediaUrls: [] }],

@@ -4,7 +4,8 @@ import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { watchDirectory, type DirectoryWatch } from "./directory-watch-host.js";
 import { isPathInside } from "./path-guards.js";
 
-type Listener = (filename?: string) => void;
+// Missing event/filename means recovery or an unclassified notification, not a content write.
+type Listener = (filename?: string, event?: string) => void;
 type Directory = {
   key: string;
   path: string;
@@ -106,10 +107,10 @@ function detach(directory: Directory) {
   }
 }
 
-function notify(directory: Directory, filename?: string) {
+function notify(directory: Directory, filename?: string, event?: string) {
   const listeners = Array.from(directory.listeners);
   for (const listener of listeners) {
-    listener(filename);
+    listener(filename, event);
   }
 }
 
@@ -145,31 +146,32 @@ function attach(directory: Directory) {
               return;
             }
             const affected = [...source.directories];
-            const changedPath = filename ? path.resolve(candidate, filename) : undefined;
+            const renamedRoot =
+              event === "rename" && (!filename || filename === path.basename(candidate));
+            let changedPath: string | undefined;
             for (const entry of affected) {
               if (
                 entry.path === candidate ||
-                !changedPath ||
-                (event === "rename" && filename === path.basename(candidate)) ||
-                isPathInside(entry.path, changedPath) ||
+                !filename ||
+                renamedRoot ||
+                isPathInside(entry.path, (changedPath ??= path.resolve(candidate, filename))) ||
                 isPathInside(changedPath, entry.path)
               ) {
-                notify(entry, entry.path === candidate ? filename : undefined);
+                notify(entry, entry.path === candidate ? filename : undefined, event);
               }
             }
             // A renamed directory's watcher can remain bound to its retired inode.
             // Child-file renames do not retire the directory or its queued events.
             if (event === "rename") {
-              const renamedRoot = !filename || filename === path.basename(candidate);
               // An absent directory waits on its nearest ancestor. Only the next segment
               // toward it can move that attach point; closing a native watch for other
               // children (SQLite sidecars) can block the main thread for seconds on macOS.
               const readmit = affected.filter(
-                (entry) =>
+                ({ watchRoot }) =>
                   renamedRoot ||
-                  (entry.watchRoot !== candidate &&
-                    changedPath !== undefined &&
-                    isPathInside(changedPath, entry.watchRoot)),
+                  (watchRoot !== candidate &&
+                    filename !== undefined &&
+                    isPathInside((changedPath ??= path.resolve(candidate, filename)), watchRoot)),
               );
               for (const entry of readmit) {
                 detach(entry);
@@ -244,7 +246,7 @@ export function observeOwnedDirectory(
     directories.set(key, selected);
     attach(selected);
   }
-  const listener: Listener = (filename) => onChange(filename);
+  const listener: Listener = (filename, event) => onChange(filename, event);
   selected.listeners.add(listener);
   retainEarlierFallback(selected, nextFallback(reconcileIntervalMs));
   scheduleFallback(selected);

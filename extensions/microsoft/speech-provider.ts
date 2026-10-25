@@ -1,5 +1,4 @@
 import { readFileSync, statSync, writeFileSync } from "node:fs";
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import {
   CHROMIUM_FULL_VERSION,
@@ -245,7 +244,6 @@ export function buildMicrosoftSpeechProvider(): SpeechProviderPlugin {
             volume: config.volume,
             timeout: config.timeoutMs ?? req.timeoutMs,
           });
-          await mkdir(path.dirname(outputPath), { recursive: true });
           for (let attempt = 0; attempt < 2; attempt += 1) {
             let outputSize = 0;
             await writeExternalFileWithinRoot({

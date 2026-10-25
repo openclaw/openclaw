@@ -13,7 +13,6 @@ import type { MemoryIndexManager } from "./manager.js";
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
 
 // Matches the fixture provider: one count per token, four dimensions per chunk.
-const DIMENSIONS = 4;
 const embedText = (text: string) =>
   ["alpha", "beta", "image", "audio"].map((token) => text.toLowerCase().split(token).length - 1);
 
@@ -42,7 +41,13 @@ describe("memory publication host printing", () => {
     const rows = memoryIndexFixtureWriter(manager)
       .prepare("SELECT text, embedding FROM memory_index_chunks WHERE source = 'memory'")
       .all() as Array<{ text: string; embedding: Uint8Array }>;
-    return { coordinates, rows };
+    expect(coordinates).toBe(rows.length * 4);
+    for (const row of rows) {
+      expect(new Uint8Array(row.embedding)).toEqual(
+        new Uint8Array(encodeMemoryEmbedding(embedText(row.text))),
+      );
+    }
+    return rows;
   }
 
   // Only source-wide batch embedding publishes several files as one group.
@@ -59,29 +64,24 @@ describe("memory publication host printing", () => {
     );
   }
 
-  function expectStoredVectors(rows: Array<{ text: string; embedding: Uint8Array }>) {
-    for (const row of rows) {
-      expect(new Uint8Array(row.embedding)).toEqual(
-        new Uint8Array(encodeMemoryEmbedding(embedText(row.text))),
-      );
+  async function writeFiles(count: number, name: string, content: (index: number) => string) {
+    for (let index = 0; index < count; index++) {
+      await fs.writeFile(path.join(fixture.paths.memory, `${name}-${index}.md`), content(index));
     }
   }
 
   it("prints each row of a published source group once", async () => {
-    for (let index = 0; index < 6; index++) {
-      await fs.writeFile(
-        path.join(fixture.paths.memory, `group-${index}.md`),
-        `# Group ${index}\nAlpha note ${index}.\nBeta line ${index}.\n`,
-      );
-    }
+    await writeFiles(
+      6,
+      "group",
+      (index) => `# Group ${index}\nAlpha note ${index}.\nBeta line ${index}.\n`,
+    );
     const manager = await createManager(true);
     const publish = vi.spyOn(MemoryIndexDatabase.prototype, "replaceSource");
-    const { coordinates, rows } = await syncCountingVectorCoordinates(manager);
+    await syncCountingVectorCoordinates(manager);
     expect(publish).toHaveBeenCalledTimes(1);
     const group = publish.mock.calls[0]?.[0];
     expect(Array.isArray(group) && group.length > 1).toBe(true);
-    expect(coordinates).toBe(rows.length * DIMENSIONS);
-    expectStoredVectors(rows);
   });
 
   it("prints each row of a source refused by the group byte budget once", async () => {
@@ -89,23 +89,18 @@ describe("memory publication host printing", () => {
     // prints to roughly 300 KiB in the group accounting (two bytes per printed character) across
     // about 20 rows. One file fits an inline command and two files stay far below the row limit
     // but exceed the 512 KiB group budget, which refuses the second file by bytes alone.
-    for (let index = 0; index < 3; index++) {
-      await fs.writeFile(
-        path.join(fixture.paths.memory, `budget-${index}.md`),
-        Array.from(
-          { length: 200 },
-          (_, line) => `Alpha ${index} ${line} ${"\u0001".repeat(120)}`,
-        ).join("\n"),
-      );
-    }
+    await writeFiles(3, "budget", (index) =>
+      Array.from(
+        { length: 200 },
+        (_, line) => `Alpha ${index} ${line} ${"\u0001".repeat(120)}`,
+      ).join("\n"),
+    );
     const manager = await createManager(true);
     const publish = vi.spyOn(MemoryIndexDatabase.prototype, "replaceSource");
     const group = vi.spyOn(transfer, "memoryPublicationGroup");
-    const { coordinates, rows } = await syncCountingVectorCoordinates(manager);
+    await syncCountingVectorCoordinates(manager);
     expect(group.mock.results.some((result) => result.value === undefined)).toBe(true);
     expect(publish.mock.calls.length).toBeGreaterThan(1);
-    expect(coordinates).toBe(rows.length * DIMENSIONS);
-    expectStoredVectors(rows);
   });
 
   it("prints each row of a staged source once", async () => {
@@ -117,10 +112,8 @@ describe("memory publication host printing", () => {
       ).join("\n"),
     );
     const manager = await createManager();
-    const { coordinates, rows } = await syncCountingVectorCoordinates(manager);
+    const rows = await syncCountingVectorCoordinates(manager);
     const staged = rows.filter((row) => row.text.includes("memory line"));
     expect(staged.reduce((bytes, row) => bytes + row.text.length, 0)).toBeGreaterThan(512 * 1024);
-    expect(coordinates).toBe(rows.length * DIMENSIONS);
-    expectStoredVectors(rows);
   });
 });

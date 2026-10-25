@@ -1,4 +1,4 @@
-import { For } from "solid-js";
+import { Repeat } from "solid-js";
 import { beginNativeWindowDrag } from "../../app/native-window-drag.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 
@@ -27,9 +27,25 @@ export function LoadingSkeleton() {
 }
 
 export function ConnectingSplash(props: { status?: string }) {
+  const basePath = document.documentElement.dataset.openclawControlUiBasePath ?? "";
+  const pathname = location.pathname.slice(basePath.length) || "/";
+  // The document's inline boot frame uses this same data-free route selection.
+  const route = /^\/new\/?$/.test(pathname)
+    ? "new"
+    : /^\/(?:settings\/)?sessions\/?$/.test(pathname)
+      ? "sessions"
+      : /^\/(?:automations|cron)\/?$/.test(pathname)
+        ? "cron"
+        : /^\/settings(?:\/|$)/.test(pathname)
+          ? "settings"
+          : /^\/chat(?:\/|$)/.test(pathname) && !new URLSearchParams(location.search).has("catalog")
+            ? "chat"
+            : "other";
   return (
     <main
       class="connect-splash connect-splash--skeleton"
+      data-route={route}
+      data-chat={route === "chat" ? "" : undefined}
       role="status"
       aria-live="polite"
       aria-label={props.status ?? t("common.loading")}
@@ -38,13 +54,15 @@ export function ConnectingSplash(props: { status?: string }) {
         <aside class="connect-splash__sidebar">
           <div class="skeleton loading-skeleton__avatar" />
           <div class="skeleton connect-splash__new-session" />
-          <For each={[85, 65, 75, 55, 80, 60]}>
-            {(width) => <div class="skeleton skeleton-line" style={{ width: `${width}%` }} />}
-          </For>
+          <Repeat count={6}>{() => <div class="skeleton skeleton-line" />}</Repeat>
         </aside>
-        <LoadingSkeleton />
+        <div class="connect-splash__main">
+          <LoadingSkeleton />
+          <span class="connect-splash__status" onMouseDown={(event) => event.stopPropagation()}>
+            {props.status ?? t("common.loading")}
+          </span>
+        </div>
       </div>
-      {props.status ? <span class="connect-splash__status">{props.status}</span> : undefined}
     </main>
   );
 }

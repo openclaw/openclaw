@@ -31,47 +31,69 @@ export function resolveSessionWorkspaceDiff(
     kind: "session-diff",
     // Checkout retirement replaces this identity; ordinary refreshes retain it.
     owner: workspace,
-    load: (scope) => {
-      // Review and Environment ask the same owner; join only identical in-flight scopes.
-      if (scope.scope === "uncommitted" && uncommittedLoad) {
+    load: (scope, options) => {
+      // Background readers share a request; explicit refresh revalidates native state.
+      if (scope.scope === "uncommitted" && uncommittedLoad && !options?.refresh) {
         return uncommittedLoad;
       }
       const request = client.request<SessionsDiffResult>("sessions.diff", {
         sessionKey,
         ...(agentId ? { agentId } : {}),
         ...scope,
+        poll: !options?.refresh,
       });
       if (scope.scope !== "uncommitted") {
         return request;
       }
-      uncommittedLoad = request
+      const load: Promise<SessionsDiffResult> = request
         .then((result) => {
-          content.onResult?.({ owner: workspace, scope, result });
+          if (uncommittedLoad === load) {
+            content.onResult?.({ owner: workspace, scope, result });
+          }
           return result;
         })
         .finally(() => {
-          uncommittedLoad = undefined;
+          if (uncommittedLoad === load) {
+            uncommittedLoad = undefined;
+          }
         });
-      return uncommittedLoad;
+      uncommittedLoad = load;
+      return load;
     },
     requestUncommitted: () => {
-      const current = workspace.diffContent;
-      if (
-        !state.connected ||
-        !isCurrentSessionWorkspace(state, workspace) ||
-        current?.kind !== "session-diff" ||
-        current.load !== content.load
-      ) {
-        return;
-      }
-      // Renewed visible demand revalidates even clean/unavailable results: external
-      // edits need not emit a session event. Ordinary renders keep this callback stable.
-      void content.load({ scope: "uncommitted" }).catch(() => {});
+      let active = true;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const refresh = async () => {
+        const current = workspace.diffContent;
+        if (
+          !active ||
+          !state.connected ||
+          !isCurrentSessionWorkspace(state, workspace) ||
+          current?.kind !== "session-diff" ||
+          current.load !== content.load
+        ) {
+          return;
+        }
+        try {
+          const result = await content.load({ scope: "uncommitted" });
+          if (active && result.computing) {
+            timer = setTimeout(() => void refresh(), 500);
+          }
+        } catch {
+          // A later visible demand retries errors; only computing responses poll.
+        }
+      };
+      void refresh();
+      return () => {
+        active = false;
+        clearTimeout(timer);
+      };
     },
     onResult: ({ owner, scope, result }) => {
       const current = workspace.diffContent;
       if (
         owner !== workspace ||
+        result.computing ||
         scope.scope !== "uncommitted" ||
         !isCurrentSessionWorkspace(state, workspace) ||
         current?.kind !== "session-diff" ||

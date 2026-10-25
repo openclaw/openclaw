@@ -2,14 +2,14 @@
 // Native activation requires exact parent exit; foreground activation joins server/lock closure.
 // Both use the same prepared helper before activation, migration and successor verification.
 // No-op updates and failed validation leave the serving parent untouched.
-import { spawn } from "node:child_process";
+import { spawn, type SpawnOptions } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { formatInstallationTargetCommand } from "../cli/installation-target-format.js";
-import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { resolveServiceManagerEnv } from "../daemon/service-process-env.js";
 import { resolveSystemdServiceName } from "../daemon/systemd-service-files.js";
 import { forceKillChildProcessTree } from "../process/child-process-tree.js";
@@ -18,9 +18,8 @@ import {
   isGatewayRestartDraining,
 } from "../process/gateway-work-admission.js";
 import { isPidAlive } from "../shared/pid-alive.js";
-import { SKIPPED_UPDATE_OUTCOMES } from "../shared/update-outcome.js";
+import { SKIPPED_UPDATE_OUTCOMES } from "../shared/update-outcome-classification.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { resolveExecutableFromPathEnv } from "./executable-path.js";
 import { readActiveGatewayLockIdentity } from "./gateway-lock.js";
 import { readGatewayOwnerLease } from "./gateway-owner-lease.js";
@@ -29,6 +28,7 @@ import { resolveNodeSqliteLocation } from "./node-sqlite.js";
 import { resolveOpenClawCliEntryPath } from "./openclaw-cli-invocation.js";
 import { probePortUsage } from "./ports-probe.js";
 import type { GatewayRestartIntent } from "./restart-intent.js";
+import { resolveRuntimeScriptEntrypointUrl } from "./runtime-process-url.js";
 import { resolveRuntimeArgs } from "./runtime-worker-url.js";
 import {
   readControlPlaneUpdateSentinelMeta,
@@ -36,7 +36,7 @@ import {
   type ControlPlaneUpdateSentinelMetaFile,
 } from "./update-control-plane-sentinel.js";
 import { applyDevUpdateTargetEnv } from "./update-dev-target.js";
-import { resolvePnpmGlobalInstallOwner, verifyPackageUpdateRecovery } from "./update-global.js";
+import { verifyPackageUpdateRecovery } from "./update-global.js";
 import { resolveUpdateInstallRoot } from "./update-install-root.js";
 import { MANAGED_SERVICE_UPDATE_HANDOFF_TEMP_PREFIX } from "./update-managed-service-handoff-cleanup.js";
 import { MANAGED_HANDOFF_COMMAND_SOURCE } from "./update-managed-service-handoff-command-source.js";
@@ -63,6 +63,10 @@ import {
   assertManagedUpdateLeaseDatabaseIdentity,
   prepareManagedHandoffLeaseDatabaseIdentity,
 } from "./update-managed-service-handoff-database.js";
+import {
+  describeManagedHandoffBlocker,
+  readHandoffStartupFailure,
+} from "./update-managed-service-handoff-diagnostics.js";
 import { MANAGED_HANDOFF_LEASE_SOURCE } from "./update-managed-service-handoff-lease-source.js";
 import {
   prepareManagedHandoffLeaseStore,
@@ -73,6 +77,7 @@ import {
   prepareManagedHandoffCliRuntime,
   resolveManagedHandoffNodeExecutable,
 } from "./update-managed-service-handoff-node.js";
+import { hasForegroundUpdatePaths } from "./update-managed-service-handoff-origin.js";
 import { MANAGED_HANDOFF_PARENT_SOURCE } from "./update-managed-service-handoff-parent-source.js";
 import { MANAGED_HANDOFF_RESULT_SOURCE } from "./update-managed-service-handoff-result-source.js";
 import { MANAGED_HANDOFF_RUNTIME_ENTRY } from "./update-managed-service-handoff-runtime-assets.js";
@@ -442,7 +447,7 @@ async function restoreGatewayService(reason, decision = params.recovery, childSt
   // the new process to answer; never reuse the pre-activation runtime identity.
   runLedger?.recordUpdateRunVerification(params.runId, {
     serviceRunning, pid: servicePid, runningVersion: undefined, runningBuildId: undefined, versionMatch: undefined,
-    readyz: undefined, settled: undefined, channelsReady: undefined, pluginErrors: undefined,
+    readyz: undefined, coreReady: undefined, settled: undefined, channelsReady: undefined, pluginErrors: undefined,
   });
   if (restored) {
     try {
@@ -647,7 +652,7 @@ async function collectUpdateFailureTriage() {
     const recovery = typeof triageFailure.restored === "boolean"
       ? "Service recovery " + (triageFailure.restored ? "succeeded." : "failed.")
       : "Service recovery outcome was not recorded; inspect the handoff log before restarting.";
-    failure.error = [failure.error, recovery].filter(Boolean).join("\n");
+    failure.error = [failure.error, recovery, triageFailure.recoveryReason].filter(Boolean).join("\n");
     // Keep the canonical export intact even when installed triage cannot start.
     // Only this private annotated input is removed with the helper's other files.
     fs.writeFileSync(params.triageInputPath, JSON.stringify(failure), { mode: 0o600, flag: "wx" });
@@ -922,6 +927,7 @@ async function collectUpdateFailureTriage() {
     const childStatus = !exit.signal && resultRoot === params.updateLeaseKey && ["error", "skipped"].includes(result?.status) ? result.status : undefined;
     if (childStatus) closedUpdateResult = result;
     const recovery = childStatus ? result.recovery : null;
+    if (triageFailure && recovery?.service) triageFailure.restored = recovery.service === "healthy";
     const safe = !exit.signal && recovery?.serviceRestartSafe === true &&
       typeof recovery.version === "string" && recovery.version.trim() &&
       (recovery.buildId === undefined ? result.mode !== "git" :
@@ -962,7 +968,6 @@ async function collectUpdateFailureTriage() {
       if (restorationArmed && safe && recovery.service === undefined) {
         restored = await restoreGatewayService(previousGeneration ? result.reason : "managed-service-handoff-failed", recovery, childStatus, previousGeneration);
       } else {
-        if (restorationArmed && restored && triageFailure) triageFailure.restored = true;
         appendLog("managed update recovery not attempted: " +
           (recovery?.serviceRestartSafe === false ? "updater explicitly rejected activation" :
             recovery?.service === "healthy" ? "updater already verified recovery" :
@@ -1060,7 +1065,7 @@ async function spawnManagedServiceUpdateHandoff(
   owner.leaseStore = identityStore;
   const parentStartIdentity = identityStore.processIdentity(parentPid).startIdentity;
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), MANAGED_SERVICE_UPDATE_HANDOFF_TEMP_PREFIX));
-  const scriptPath = path.join(dir, "handoff.cjs");
+  const scriptPath = fileURLToPath(resolveRuntimeScriptEntrypointUrl("managedUpdateHandoff", dir));
   const paramsPath = path.join(dir, "handoff.json");
   const metaPath = path.join(dir, "sentinel-meta.json");
   const triageInputPath = path.join(dir, "update-failure.json");
@@ -1108,10 +1113,9 @@ async function spawnManagedServiceUpdateHandoff(
       ...(params.foregroundOrigin ? { foregroundOrigin: params.foregroundOrigin } : {}),
     },
   };
-  let spawnCommand = handoffNodeExecutable;
   const spawnArgs = [...runtimeArgs, scriptPath, paramsPath];
   let scopeUnit: string | undefined;
-  let systemdRunPath: string | undefined;
+  let systemdScope: { command: string; args: string[] } | undefined;
   if (
     !params.foregroundOrigin &&
     params.supervisor === "systemd" &&
@@ -1125,22 +1129,24 @@ async function spawnManagedServiceUpdateHandoff(
     if (!systemdRun) {
       throw new Error("systemd-run is required to launch a transient user scope");
     }
-    systemdRunPath = systemdRun;
     const normalized = params.handoffId.trim().replace(/[^A-Za-z0-9_.:@-]+/gu, "-");
     const suffix =
       normalized.replace(/^-+|-+$/gu, "").slice(0, 80) || `${process.pid}-${Date.now()}`;
     scopeUnit = `openclaw-${params.action ? "triage" : "update"}-${suffix}.scope`;
-    spawnArgs.unshift(
-      "--user",
-      "--scope",
-      "--collect",
-      `--unit=${scopeUnit}`,
-      ...(params.action
-        ? [`--property=PartOf=${resolveSystemdServiceName(serviceEnv)}.service`]
-        : []),
-      spawnCommand,
-    );
-    spawnCommand = systemdRun;
+    systemdScope = {
+      command: systemdRun,
+      args: [
+        "--user",
+        "--scope",
+        "--collect",
+        `--unit=${scopeUnit}`,
+        ...(params.action
+          ? [`--property=PartOf=${resolveSystemdServiceName(serviceEnv)}.service`]
+          : []),
+        handoffNodeExecutable,
+        ...spawnArgs,
+      ],
+    };
   }
   const stateDatabasePath = resolveOpenClawStateSqlitePath(serviceEnv);
   const preparedEnv = resolveManagedHandoffCommandEnv(serviceEnv, metaPath, metaFile.meta.runId);
@@ -1162,7 +1168,7 @@ async function spawnManagedServiceUpdateHandoff(
     action: params.action?.kind ?? "update",
     failure: params.action?.failure,
     scopeUnit,
-    systemdRun: systemdRunPath,
+    systemdRun: systemdScope?.command,
     parentPid,
     parentStartIdentity,
     parentExitTimeoutMs: owner.parentExitTimeoutMs,
@@ -1231,6 +1237,7 @@ async function spawnManagedServiceUpdateHandoff(
   };
 
   let child!: HandoffChild;
+  let helperLog: fs.FileHandle | undefined;
   let readiness!: string;
   const onExit = () => {
     // Keep exact ownership until cancellation proves the durable lease was released.
@@ -1243,21 +1250,25 @@ async function spawnManagedServiceUpdateHandoff(
     await fs.writeFile(paramsPath, `${JSON.stringify(helperParams, null, 2)}\n`, { mode: 0o600 });
     await fs.writeFile(metaPath, `${JSON.stringify(metaFile, null, 2)}\n`, { mode: 0o600 });
 
+    helperLog = await fs.open(logPath, "a", 0o600).catch(() => undefined);
     assertManagedUpdateLeaseDatabaseIdentity(updateLeaseDatabaseIdentity);
     owner.requesterAuthority?.assertCurrent();
     owner.requesterAuthority?.signal?.throwIfAborted();
     if (params.foregroundOrigin && isGatewayRestartDraining()) {
       throw new GatewayDrainingError();
     }
-    const spawned = spawn(spawnCommand, spawnArgs, {
+    const spawnOptions: SpawnOptions = {
       cwd: dir,
       env,
       detached: true,
       stdio:
         helperParams.stateEngine === "postgres"
-          ? ["pipe", "pipe", "ignore", "ipc"]
-          : ["pipe", "pipe", "ignore"],
-    });
+          ? ["pipe", "pipe", helperLog?.fd ?? "ignore", "ipc"]
+          : ["pipe", "pipe", helperLog?.fd ?? "ignore"],
+    };
+    const spawned = systemdScope
+      ? spawn(systemdScope.command, systemdScope.args, spawnOptions)
+      : spawn(handoffNodeExecutable, spawnArgs, spawnOptions);
     const { stdin, stdout } = spawned;
     if (!stdin || !stdout) {
       throw new Error("Managed handoff control pipes are unavailable");
@@ -1357,8 +1368,13 @@ async function spawnManagedServiceUpdateHandoff(
     child?.removeListener("exit", onExit);
     child?.stdin.destroy();
     child?.stdout.destroy();
+    const failure = await readHandoffStartupFailure(err, logPath, serviceEnv);
+    await helperLog?.close().catch(() => {});
+    helperLog = undefined;
     await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
-    throw err;
+    throw failure;
+  } finally {
+    await helperLog?.close().catch(() => {});
   }
   if (params.beforePark) {
     let noticePending = false;
@@ -1429,40 +1445,12 @@ async function spawnManagedServiceUpdateHandoff(
     : {
         ...result,
         status: "joined",
+        message: describeManagedHandoffBlocker(rootIdentity, handoffId, identityStore, serviceEnv),
         ...(handoffId ? { handoffId } : {}),
       };
 }
 
-export async function assertManagedServiceUpdateHandoffRoot(params: {
-  expectedRoot: string;
-  root: string;
-  executingRoot: string | null;
-  postCore: boolean;
-}): Promise<void> {
-  const expectedRoot = resolveUpdateInstallRoot(params.expectedRoot);
-  const root = params.executingRoot ? resolveUpdateInstallRoot(params.executingRoot) : null;
-  const activeExecution = root !== null && resolveUpdateInstallRoot(params.root) === root;
-  if (activeExecution && expectedRoot === root) {
-    return;
-  }
-  if (activeExecution && params.postCore) {
-    const [previous, current] = await Promise.all([
-      resolvePnpmGlobalInstallOwner(expectedRoot),
-      resolvePnpmGlobalInstallOwner(root),
-    ]);
-    if (
-      previous &&
-      current &&
-      previous.ownerRoot === current.ownerRoot &&
-      resolveUpdateInstallRoot(current.packageRoot) === root
-    ) {
-      return;
-    }
-  }
-  throw new Error(
-    `Managed update handoff root mismatch: expected ${params.expectedRoot}, running from ${params.root}.`,
-  );
-}
+export { assertManagedServiceUpdateHandoffRoot } from "./update-managed-service-handoff-root.js";
 
 export async function startManagedServiceUpdateHandoff(
   params: ManagedServiceUpdateHandoffParams,
@@ -1523,6 +1511,17 @@ export async function startManagedServiceUpdateHandoff(
     const handoffId = unsettledOwner ?? joined.handoffId;
     return {
       status: "joined",
+      message: describeManagedHandoffBlocker(
+        root,
+        handoffId,
+        active.leaseStore,
+        params.env ?? process.env,
+        active.cancelling
+          ? "cancellation settlement is pending"
+          : active.claimed && !active.transferred
+            ? "the Gateway still holds an untransferred handoff claim"
+            : "helper exit or settlement has not been confirmed",
+      ),
       command: joined.command,
       logPath: joined.logPath,
       ...(joined.pid ? { pid: joined.pid } : {}),
@@ -1647,15 +1646,6 @@ function currentManagedServiceUpdateHandoff(
     return undefined;
   }
   return active;
-}
-
-function hasForegroundUpdatePaths(origin: ForegroundUpdateOrigin, env: NodeJS.ProcessEnv): boolean {
-  return (
-    resolvePathViaExistingAncestorSync(resolveOpenClawStateSqlitePath(env)) ===
-      origin.stateDatabasePath &&
-    resolvePathViaExistingAncestorSync(resolveConfigPath(env, resolveStateDir(env))) ===
-      origin.configPath
-  );
 }
 
 /** Called only before activation; later admission consumes the live helper's joined park fact. */

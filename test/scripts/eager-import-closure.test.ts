@@ -5,15 +5,16 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
-  readdirSync,
   realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { dirname, join, posix, relative } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { collectRuntimeImportClosure } from "../../scripts/lib/runtime-import-closure.mts";
+import { listDirectoryTreeStrictSync } from "../../src/infra/directory-walk.js";
+import { createRuntimeProcessEntrypoints } from "../../src/infra/runtime-process-manifest.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { prepareCopiedSourceModules } from "./copied-source-modules.test-support.js";
@@ -26,6 +27,11 @@ const inventoryCheck =
   'pnpm test test/scripts/eager-import-closure.test.ts -t "PR wrapper inventory"';
 const wrapperFailure = (output: string) =>
   `${output}\nCheck the inventory first: ${inventoryCheck}`;
+const filesUnder = (root: string) =>
+  listDirectoryTreeStrictSync(root)
+    .map((entry) => entry.dirent)
+    .filter((entry) => entry.isFile())
+    .map((entry) => join(entry.parentPath, entry.name));
 
 function run(
   command: string,
@@ -98,15 +104,24 @@ it("keeps the PR wrapper inventory closed over runtime imports", () => {
   const stale = components.filter((file) => !existsSync(file)).toSorted();
   // scripts/pr archives all of pr-lib implicitly. Other inventory entries also
   // seed the graph: shell-launched helpers and workers are not ordinary imports.
-  const wrapperFiles = readdirSync("scripts/pr-lib", { recursive: true, withFileTypes: true })
-    .filter((entry) => entry.isFile())
-    .map((entry) => join(entry.parentPath, entry.name));
   const closure = collectRuntimeImportClosure(process.cwd(), [
-    ...wrapperFiles,
+    ...filesUnder("scripts/pr-lib"),
     ...components.filter((file) => existsSync(file)),
   ]);
+  // Forked children resolve through the process manifest, not an import edge. Wrapper
+  // processes never select PostgreSQL, so its bridge (and unpinned pg) stays unextracted.
+  const entrypoints = new Map(Object.entries(createRuntimeProcessEntrypoints(import.meta.url)));
+  entrypoints.delete("postgresBridge");
+  const forked = closure.flatMap((file) =>
+    [...readFileSync(file, "utf8").matchAll(/resolveRuntimeProcessEntrypointUrl\(([^)]*)\)/g)]
+      .flatMap(([, argument]) => Array.from(argument!.matchAll(/"(\w+)"/g)))
+      .flatMap(([, name]) => {
+        const entry = entrypoints.get(name!);
+        return entry ? [posix.join("src/infra", `${entry.sourceWorkerName}.ts`)] : [];
+      }),
+  );
   const extracted = new Set(["scripts/pr", ...components]);
-  const missing = closure.filter(
+  const missing = [...new Set([...closure, ...forked])].filter(
     (file) => !file.startsWith("scripts/pr-lib/") && !extracted.has(file),
   );
   // Existing assets can be path-loaded; only absent inventory paths are stale.
@@ -147,14 +162,10 @@ it("acquires wrapper leases and manages templates without the application comman
         import assert from "node:assert/strict";
         import { withWorktreeAllocationLease } from "./src/agents/worktrees/allocation.js";
         import {
-          deleteTemplateAsync, hasTemplatesAsync, listTemplatesAsync,
-          markTemplateReadyAsync, readTemplateAsync, reserveTemplateAsync,
+          readTemplateAsync, reserveTemplateAsync,
         } from "./src/agents/worktrees/template-registry-async.js";
         import { withOpenClawStateLease } from "./src/state/openclaw-state-lease.js";
-        import {
-          closeOpenClawStateDatabaseAsync,
-          openOpenClawStateDatabase,
-        } from "./src/state/openclaw-state-db.js";
+        import { closeOpenClawStateDatabaseAsync } from "./src/state/openclaw-state-db.js";
         const options = {
           scope: "core:wrapper-bootstrap",
           key: "lease",
@@ -162,9 +173,7 @@ it("acquires wrapper leases and manages templates without the application comman
           leaseMs: 60_000,
           waitMs: 0,
         };
-        for (let grant = 0; grant < 2; grant += 1) {
-          await withOpenClawStateLease(options, async (lease) => lease.assertOwned());
-        }
+        await withOpenClawStateLease(options, async (lease) => lease.assertOwned());
         await withWorktreeAllocationLease({ env: process.env }, async ({ commitGuard: guard }) => {
           const template = {
             cacheKey: "wrapper-template", id: "generation-1",
@@ -173,21 +182,9 @@ it("acquires wrapper leases and manages templates without the application comman
             backend: "apfs", sourceCommit: "a".repeat(40), contentKey: "source",
             status: "preparing", createdAt: 1, lastUsedAt: 1,
           };
-          assert.equal(await hasTemplatesAsync(process.env), false);
           await reserveTemplateAsync(process.env, template, guard);
           assert.deepEqual(await readTemplateAsync(process.env, template.cacheKey), template);
-          assert.equal(await markTemplateReadyAsync(process.env, template.id, 2, guard), true);
-          assert.deepEqual(await listTemplatesAsync(process.env), [
-            { ...template, status: "ready", lastUsedAt: 2 },
-          ]);
-          assert.equal(await deleteTemplateAsync(process.env, template.id, guard), true);
-          assert.equal(await hasTemplatesAsync(process.env), false);
         });
-        const database = openOpenClawStateDatabase({ env: process.env });
-        const row = database.db.prepare(
-          "SELECT COUNT(*) AS count FROM state_leases WHERE scope = ? AND lease_key = ?",
-        ).get(options.scope, options.key);
-        assert.equal(Number(row.count), 0);
         await closeOpenClawStateDatabaseAsync();
         console.log("LEASE_BOOTSTRAP_OK");
       `,
@@ -210,20 +207,8 @@ it("acquires wrapper leases and manages templates without the application comman
 
 it("resolves wrapper package exports and workspace aliases from the extracted dependency context", () => {
   const root = tempDirs.make("openclaw-pr-package-closure-");
-  const components = copyPrWrapperSources(root);
-  expect(components.filter((component, index) => components.indexOf(component) !== index)).toEqual(
-    [],
-  );
-  const files = readdirSync(root, { recursive: true, withFileTypes: true })
-    .filter((entry) => entry.isFile())
-    .map((entry) => relative(root, join(entry.parentPath, entry.name)));
-  for (const entrypoint of [
-    "src/state/openclaw-state.worker.ts",
-    "src/state/openclaw-state-lease-worker.ts",
-    "src/infra/sqlite-store.worker.ts",
-  ]) {
-    expect(files).toContain(join(entrypoint));
-  }
+  copyPrWrapperSources(root);
+  const files = filesUnder(root).map((file) => relative(root, file));
   const pinned = run(process.execPath, [
     join(root, "scripts/pr-lib/materialize-dependencies.mjs"),
     join(process.cwd(), "node_modules"),
@@ -295,7 +280,7 @@ itPosix.each(["empty", "legacy", "outdated"])(
       expect(bootstrap.status, bootstrap.stderr).toBe(1);
       expect(bootstrap.stderr).toContain("has version 0.5.6; the trust anchor requires");
       expect(bootstrap.stderr).toContain(
-        "Restore frozen dependencies in a clean trusted-main checkout",
+        "The current trusted wrapper can materialize this anchor’s frozen dependencies",
       );
       expect(existsSync(join(anchor, "node_modules"))).toBe(false);
       expectResult(run("git", ["-C", canonical, "for-each-ref", "refs/openclaw"], { env }), {

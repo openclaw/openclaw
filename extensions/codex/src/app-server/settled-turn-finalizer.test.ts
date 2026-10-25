@@ -108,6 +108,7 @@ function boundedResult() {
   return {
     text: "The update was sent successfully.",
     items: [],
+    submittedInput: [{ type: "text", text: createAttempt().prompt, text_elements: [] }],
     model: "synthetic-catalog-id",
     nativeSelection: { model: "synthetic-summary-model", modelProvider: "openai" },
     usage: { input: 5, output: 4, cacheRead: 2, cacheWrite: 1, reasoningTokens: 3, total: 12 },
@@ -372,13 +373,11 @@ it("rejects forged context before host auth or an isolated client can be used", 
   const settledAttempt = createSettledAttempt();
   settledAttempt.settledTurnFinalizationContext = { source: "harness", data: [] };
   const before = structuredClone(settledAttempt);
-  const clientFactory = vi.fn();
-  await expect(finalize(createAttempt(), settledAttempt, { clientFactory })).rejects.toThrow(
+  await expect(finalize(createAttempt(), settledAttempt)).rejects.toThrow(
     "finalization context is unavailable",
   );
   expect(authBridge.resolveCodexAppServerPreparedAuthHandoff).not.toHaveBeenCalled();
   expect(mocks.runBounded).not.toHaveBeenCalled();
-  expect(clientFactory).not.toHaveBeenCalled();
   expect(mocks.mirror).not.toHaveBeenCalled();
   expect(structuredClone(settledAttempt)).toEqual(before);
 });

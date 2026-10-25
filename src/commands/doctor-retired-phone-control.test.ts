@@ -156,6 +156,29 @@ it.each(["legacy", "canonical", "unreadable"] as const)(
   },
 );
 
+it("preserves policy and original bytes for malformed UTF-8 legacy journals", async () => {
+  const legacyPath = await writeLegacy({
+    version: 1,
+    armedAtMs: 1,
+    expiresAtMs: null,
+    removedFromDeny: ["CORRUPT"],
+  });
+  const bytes = Buffer.from(
+    (await fs.readFile(legacyPath, "utf8")).replace("CORRUPT", "\x80"),
+    "latin1",
+  );
+  await fs.writeFile(legacyPath, bytes);
+  const cfg = config({ deny: ["operator.command"] });
+
+  const result = await prepareRetiredPhoneControlCleanup({ cfg, env });
+
+  expect(result.config).toBe(cfg);
+  expect(result.cleanupSafe).toBe(false);
+  expect(result.configChanges).toEqual([]);
+  expect(result.warnings).toEqual([expect.stringContaining("must be valid UTF-8")]);
+  expect(await fs.readFile(legacyPath)).toEqual(bytes);
+});
+
 it("does not touch operator-authored command entries that differ from the old seed", async () => {
   const deny = [...seedDeny, "custom.command"];
   const cfg = config({ allow: ["sms.send"], deny });

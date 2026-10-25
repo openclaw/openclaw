@@ -1,5 +1,14 @@
 import type { JSX } from "@solidjs/web";
-import { Show, createMemo, createSignal, flush, onCleanup } from "solid-js";
+import {
+  Show,
+  action,
+  createMemo,
+  createOptimistic,
+  createSignal,
+  Errored,
+  latest,
+  onSettled,
+} from "solid-js";
 import type { UpdateRunRecord } from "../../../src/infra/update-run-record.ts";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import {
@@ -66,22 +75,53 @@ export function SidebarUpdateCard(
   },
 ) {
   let host!: HTMLElement;
-  const [holdingCampaignId, setHoldingCampaignId] = createSignal<string | null>(null);
+  const [holdingCampaignId, setHoldingCampaignId] = createOptimistic<string | null>(null);
   const [nativeUpdateAvailable, setNativeUpdateAvailable] = createSignal(hasNativeUpdateBridge());
-  const refreshScope = createMemo(() => ({ required: props.refreshRequired }));
-  const [refreshState, setRefreshState] = createSignal(() => {
+  const refreshScope = createMemo(() => ({ required: props.refreshRequired }), {
+    equals: (before, after) => before.required === after.required,
+  });
+  const [refreshInFlight, setRefreshInFlight] = createSignal(() => {
     // Re-entering recovery starts with a fresh retry surface.
     refreshScope();
-    return { inFlight: false, failed: false };
+    return false;
   });
-  const [checkingTarget, setCheckingTarget] = createSignal(false);
-  const [targetCheckFailed, setTargetCheckFailed] = createSignal(false);
+  const [refreshCompletion, setRefreshCompletion] = createSignal<
+    { result: Promise<boolean> } | undefined
+  >(() => {
+    refreshScope();
+    return undefined;
+  });
+  const refreshOutcome = createMemo(
+    () =>
+      refreshCompletion()?.result.then((reloading) => {
+        if (!reloading) {
+          throw new Error("Control UI refresh did not reload the document");
+        }
+        return null;
+      }),
+    { loadingValue: undefined },
+  );
+  const [targetCompletion, setTargetCompletion] = createSignal<{ result: Promise<boolean> }>();
+  const targetReady = createMemo(() => targetCompletion()?.result ?? true, { loadingValue: true });
+  const targetOutcome = createMemo(
+    () =>
+      targetCompletion()?.result.then((ready) => {
+        if (!ready) {
+          throw new Error("Update target check failed");
+        }
+        return null;
+      }),
+    { loadingValue: undefined },
+  );
+  const [checkingTarget, setCheckingTarget] = createOptimistic(false);
   const [expanded, setExpanded] = createSignal(false);
   const [now, setNow] = createSignal(Date.now());
   let refreshPending: ReturnType<typeof refreshScope> | undefined;
   let targetCheckPending = false;
   const updateNativeAvailability = () => setNativeUpdateAvailable(hasNativeUpdateBridge());
-  onCleanup(listen(window, NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT, updateNativeAvailability));
+  onSettled(() =>
+    listen(window, NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT, updateNativeAvailability),
+  );
   createInterval(
     () => setNow(Date.now()),
     () => {
@@ -92,9 +132,7 @@ export function SidebarUpdateCard(
   const visibleStatusBanner = () =>
     props.statusBanner?.source === "read" || !props.updateRun ? props.statusBanner : null;
   function renderStatus() {
-    const statusBanner =
-      visibleStatusBanner() ??
-      (targetCheckFailed() ? { tone: "warn", text: t("updates.sidebar.checkFailed") } : null);
+    const statusBanner = visibleStatusBanner();
     // The Gateway recorded this outcome; unlike the client's own update
     // metadata it stays true even when this client is stale.
     return statusBanner ? (
@@ -104,7 +142,19 @@ export function SidebarUpdateCard(
       >
         {statusBanner.text}
       </div>
-    ) : null;
+    ) : (
+      <Show when={!checkingTarget()}>
+        <Errored
+          fallback={
+            <div class="sidebar-update-card__status sidebar-update-card__status--warn" role="alert">
+              {t("updates.sidebar.checkFailed")}
+            </div>
+          }
+        >
+          {targetOutcome()}
+        </Errored>
+      </Show>
+    );
   }
 
   const openRun = () => props.updateRun && confirmUpdate(props.updateRun);
@@ -114,28 +164,29 @@ export function SidebarUpdateCard(
     !nativeUpdateAvailable() &&
     !isUpdateRunAttentionVisible(props.updateRun ?? null, props.updateRunAcknowledged ?? false);
 
+  const checkStatus = action(async function* (pending: Promise<boolean>) {
+    setCheckingTarget(true);
+    const refreshed = await pending;
+    yield;
+    return refreshed;
+  });
+
   const checkTarget = async () => {
-    if (!props.onCheckStatus) {
+    const check = props.onCheckStatus;
+    if (!check) {
       return true;
     }
     if (targetCheckPending || props.connected === false || props.updateBusy) {
       return false;
     }
     targetCheckPending = true;
-    setCheckingTarget(true);
-    setTargetCheckFailed(false);
+    // Observe the owner operation, not the action whose settlement these reads can hold.
+    const completion = (async () => check())().catch(() => false);
+    setTargetCompletion({ result: completion });
     try {
-      const refreshed = await props.onCheckStatus();
-      setTargetCheckFailed(!refreshed);
-      // The overlay publishes before resolving; commit its fresh presentation props.
-      flush();
-      return refreshed;
-    } catch {
-      setTargetCheckFailed(true);
-      return false;
+      return await checkStatus(completion);
     } finally {
       targetCheckPending = false;
-      setCheckingTarget(false);
     }
   };
 
@@ -187,11 +238,10 @@ export function SidebarUpdateCard(
     });
   }
 
-  const holdUpdate = async (campaignId: string) => {
+  const holdUpdate = action(function* (campaignId: string) {
     setHoldingCampaignId(campaignId);
-    await props.onHoldUpdate?.();
-    setHoldingCampaignId(null);
-  };
+    yield props.onHoldUpdate?.();
+  });
 
   const refreshControlUi = async () => {
     const scope = refreshScope();
@@ -199,19 +249,17 @@ export function SidebarUpdateCard(
       return;
     }
     refreshPending = scope;
-    setRefreshState({ inFlight: true, failed: false });
-    let reloading = false;
-    try {
-      reloading = (await props.onRefresh?.()) ?? false;
-    } catch {
-      // The current document remains the recovery surface when its probe fails.
-    }
+    // A successful reload owns this affordance until document unload, not promise settlement.
+    setRefreshInFlight(true);
+    const completion = (async () => (await props.onRefresh?.()) ?? false)().catch(() => false);
+    setRefreshCompletion({ result: completion });
+    const reloading = await completion;
     if (scope !== refreshScope() || !props.refreshRequired) {
       return;
     }
     if (!reloading) {
       refreshPending = undefined;
-      setRefreshState({ inFlight: false, failed: true });
+      setRefreshInFlight(false);
     }
   };
 
@@ -236,7 +284,7 @@ export function SidebarUpdateCard(
         detail:
           props.statusBanner?.source === "read"
             ? props.statusBanner.text
-            : targetCheckFailed()
+            : !latest(targetReady)
               ? t("updates.sidebar.checkFailed")
               : view.compactLabel,
         timestampMs:
@@ -337,7 +385,7 @@ export function SidebarUpdateCard(
                 ref={sidebarAttentionFocusRef()}
                 class="sidebar-update-card__review sidebar-update-card__review--primary"
                 type="button"
-                onClick={props.onReviewUpdate}
+                onClick={() => props.onReviewUpdate?.()}
               >
                 {t("updates.reviewUpdate")}
               </button>
@@ -383,20 +431,29 @@ export function SidebarUpdateCard(
     return (
       <div class="sidebar-update-card" role="status" aria-live="polite">
         {renderStatus()}
-        {refreshState().failed ? (
-          <div class="sidebar-update-card__status sidebar-update-card__status--warn" role="alert">
-            {t("updates.refreshFailed")}
-          </div>
-        ) : null}
+        <Show when={!refreshInFlight()}>
+          <Errored
+            fallback={
+              <div
+                class="sidebar-update-card__status sidebar-update-card__status--warn"
+                role="alert"
+              >
+                {t("updates.refreshFailed")}
+              </div>
+            }
+          >
+            {refreshOutcome()}
+          </Errored>
+        </Show>
         <button
           ref={sidebarAttentionFocusRef()}
           class={[
             "sidebar-update-card__action",
-            { "sidebar-update-card__action--busy": refreshState().inFlight },
+            { "sidebar-update-card__action--busy": refreshInFlight() },
           ]}
           type="button"
-          disabled={refreshState().inFlight}
-          aria-busy={refreshState().inFlight ? "true" : "false"}
+          disabled={refreshInFlight()}
+          aria-busy={refreshInFlight() ? "true" : "false"}
           onClick={() => void refreshControlUi()}
         >
           <span class="sidebar-update-card__icon" aria-hidden="true">
@@ -405,11 +462,11 @@ export function SidebarUpdateCard(
           <span class="sidebar-update-card__text sidebar-update-card__text--stacked">
             <span class="sidebar-update-card__title">{t("chat.sidebar.serverUpdatedTitle")}</span>
             <span class="sidebar-update-card__subtitle">
-              {refreshState().inFlight
-                ? t("lazyView.reloading")
-                : refreshState().failed
-                  ? t("connection.retryNow")
-                  : t("chat.sidebar.serverUpdatedRefresh")}
+              <Show when={!refreshInFlight()} fallback={t("lazyView.reloading")}>
+                <Errored fallback={t("connection.retryNow")}>
+                  {refreshOutcome() ?? t("chat.sidebar.serverUpdatedRefresh")}
+                </Errored>
+              </Show>
             </span>
           </span>
         </button>
@@ -544,12 +601,12 @@ export function SidebarUpdateCard(
               ref={sidebarAttentionFocusRef()}
               class="sidebar-update-card__review"
               type="button"
-              onClick={props.onReviewUpdate}
+              onClick={() => props.onReviewUpdate?.()}
             >
               {t("updates.reviewUpdate")}
             </button>
           </Show>
-          <Show when={actionable() && !busy() && !checking() && !targetCheckFailed()}>
+          <Show when={actionable() && !busy() && !checking() && latest(targetReady)}>
             <UpdateGitRevisions
               schedule={props.updateSchedule}
               updateAvailable={props.updateAvailable}

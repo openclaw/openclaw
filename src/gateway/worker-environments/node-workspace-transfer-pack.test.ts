@@ -4,13 +4,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { requireGit } from "../../agents/worktrees/git.js";
+import { listDirectoryTreeStrict } from "../../infra/directory-walk.js";
 import { runNodeWorkerWorkspaceTransfer } from "../../node-host/node-worker-transfer-client.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
-import { createNodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 import {
-  startNodeWorkspaceTransferTestServer,
-  transferOwner,
-} from "./node-workspace-transfer.test-support.js";
+  commitWorkspace,
+  transferFixture,
+} from "./node-workspace-transfer-fixtures.test-support.js";
+import { startNodeWorkspaceTransferTestServer } from "./node-workspace-transfer.test-support.js";
 import { captureWorkspaceManifest } from "./workspace-manifest-worker.js";
 import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
 
@@ -48,26 +49,10 @@ function interceptPackObjects(beforeAppend: (file: string) => Promise<void>) {
 
 async function createGitTransfer() {
   const root = await fs.realpath(tempDirs.make("node-workspace-lazy-pack-"));
-  const localPath = path.join(root, "workspace");
-  const temporaryRoot = path.join(root, "transfers");
-  await fs.mkdir(localPath);
-  await fs.writeFile(path.join(localPath, "input.txt"), "captured base\n");
-  await requireGit(localPath, ["init", "--quiet"]);
-  await requireGit(localPath, ["config", "user.name", "Workspace Test"]);
-  await requireGit(localPath, ["config", "user.email", "workspace@example.invalid"]);
-  await requireGit(localPath, ["add", "."]);
-  await requireGit(localPath, ["commit", "--quiet", "-m", "captured base"]);
-  const service = createNodeWorkspaceTransferService({
-    temporaryRoot,
-    getOwner: () => transferOwner("session"),
-  });
-  const prepared = await service.prepareSync({
-    environmentId: "environment",
-    ownerEpoch: 1,
-    sessionId: "session",
-    localPath,
-    isAuthorized: () => true,
-  });
+  const { localPath, temporaryRoot, service, request, files } = await transferFixture(root);
+  await files.write("input.txt", "captured base\n");
+  await commitWorkspace(localPath, "captured base");
+  const prepared = await service.prepareSync(request);
   const server = await startNodeWorkspaceTransferTestServer(service);
   closeTransfer = async () => {
     await service.closeAll();
@@ -96,9 +81,9 @@ async function createGitTransfer() {
       return fetchPack(token, captured.manifestRef);
     },
     packs: async () =>
-      (await fs.readdir(temporaryRoot, { recursive: true })).filter((name) =>
-        name.endsWith(".pack"),
-      ),
+      (await listDirectoryTreeStrict(temporaryRoot))
+        .map((walkEntry) => walkEntry.relativePath)
+        .filter((name) => name.endsWith(".pack")),
   };
 }
 

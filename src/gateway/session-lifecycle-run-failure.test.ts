@@ -36,8 +36,8 @@ import {
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import { runWithoutOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context-store.js";
 import {
-  runWithoutOwnedSessionTranscriptWrites,
   SessionTranscriptWriterClaimReboundError,
   withOwnedSessionTranscriptWrites,
 } from "../config/sessions/transcript-write-context.js";
@@ -61,6 +61,7 @@ import { createChatRunState } from "./server-chat-state.js";
 import { createAgentEventTestHarness } from "./server-chat.agent-events.test-harness.js";
 import { captureRpcTargetForTest } from "./server-methods/rpc-source-fixtures.test-support.js";
 import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
+import { createSessionGoalFixture } from "./session-goal.test-support.js";
 import { createSessionLifecyclePersistenceOwner } from "./session-lifecycle-persistence-owner.js";
 import { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";
 import { readSessionMessagesAsync } from "./session-transcript-readers.js";
@@ -92,17 +93,10 @@ async function seed(
     startedAt: 1_000,
     lifecycleRunId: runId,
     activeWriterRunId: runId,
-    goal: {
-      schemaVersion: 1,
-      id: "failure-goal",
-      objective: "Finish the requested work",
-      status: "active",
+    goal: createSessionGoalFixture("failure-goal", "Finish the requested work", {
       createdAt: 1_000,
       updatedAt: 1_000,
-      tokenStart: 0,
-      tokensUsed: 0,
-      continuationTurns: 0,
-    },
+    }),
   });
   await replaceTranscriptEvents(target, [
     { type: "session", id: target.sessionId, version: CURRENT_SESSION_VERSION },
@@ -323,7 +317,6 @@ describe("durable pre-reply run failure", () => {
                 lastRunError: stored.lastRunError,
                 suppressErrorNotice: stored.suppressErrorNotice,
               },
-              includeSession: true,
             }),
           ).toMatchObject({
             status: "failed",
@@ -499,7 +492,6 @@ describe("durable pre-reply run failure", () => {
                 lifecycleRunId: runId,
                 activeRunState: { active: true, runIds: [runId] },
                 event: queuedEvent,
-                includeSession: true,
                 lifecycle: true,
               }),
             ).toMatchObject({

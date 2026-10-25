@@ -2,6 +2,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { restorePropertyDescriptor } from "../test-helpers/property-descriptor.ts";
 import {
   getExistingSubscription,
   subscribeToWebPush,
@@ -54,11 +55,7 @@ function gatewayClient(vapidBytes: number[]) {
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
-  if (originalServiceWorkerDescriptor) {
-    Object.defineProperty(navigator, "serviceWorker", originalServiceWorkerDescriptor);
-  } else {
-    Reflect.deleteProperty(navigator, "serviceWorker");
-  }
+  restorePropertyDescriptor(navigator, "serviceWorker", originalServiceWorkerDescriptor);
 });
 
 describe("web push service worker readiness", () => {
@@ -102,7 +99,10 @@ describe("web push service worker readiness", () => {
     const { client } = gatewayClient([4, 1, 2, 3]);
 
     for (let i = 0; i < 3; i += 1) {
-      await expect(subscribeToWebPush(client, () => {})).resolves.toEqual({ state: "registered" });
+      await expect(subscribeToWebPush(client, () => {})).resolves.toEqual({
+        state: "registered",
+        subscription,
+      });
       expect(vi.getTimerCount()).toBe(0);
     }
   });
@@ -163,6 +163,7 @@ describe("web push Gateway identity", () => {
 
     await expect(subscribeToWebPush(client, () => {})).resolves.toEqual({
       state: "registered",
+      subscription,
     });
     expect(request).toHaveBeenNthCalledWith(1, "push.web.vapidPublicKey", {});
     expect(request).toHaveBeenNthCalledWith(2, "push.web.subscribe", {

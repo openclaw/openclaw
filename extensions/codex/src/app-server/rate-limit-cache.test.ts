@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ensureCodexAppServerClientRuntime } from "./client-runtime.js";
 import type { CodexAppServerClient } from "./client.js";
 import {
@@ -24,20 +24,26 @@ const unavailable = {
 };
 
 describe("Codex rate-limit cache", () => {
+  afterEach(() => vi.restoreAllMocks());
   it("isolates snapshots by physical client", () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(100);
     const first = clientIdentity();
     const second = clientIdentity();
     expect(readCodexRateLimitsRevision(first)).toBe(0);
-    rememberCodexRateLimitsRead(first, { rateLimits: { limitId: "codex" } }, 100);
-    rememberCodexRateLimitsRead(second, { rateLimits: { limitId: "codex_other" } }, 200);
+    rememberCodexRateLimitsRead(first, { rateLimits: { limitId: "codex" } });
+    now.mockReturnValue(200);
+    rememberCodexRateLimitsRead(second, { rateLimits: { limitId: "codex_other" } });
     expect(readCodexRateLimitsRevision(first)).toBe(1);
     expect(readCodexRateLimitsRevision(second)).toBe(0);
 
-    expect(
-      [first, second].map((client) => readRecentCodexRateLimits(client, { nowMs: 250 })),
-    ).toEqual([{ rateLimits: { limitId: "codex" } }, { rateLimits: { limitId: "codex_other" } }]);
-    expect(readRecentCodexRateLimits(first, { nowMs: 301, maxAgeMs: 200 })).toBeUndefined();
-    expect(readRecentCodexRateLimits(second, { nowMs: 301, maxAgeMs: 200 })).toEqual({
+    now.mockReturnValue(600_099);
+    expect([first, second].map((client) => readRecentCodexRateLimits(client))).toEqual([
+      { rateLimits: { limitId: "codex" } },
+      { rateLimits: { limitId: "codex_other" } },
+    ]);
+    now.mockReturnValue(600_100);
+    expect(readRecentCodexRateLimits(first)).toBeUndefined();
+    expect(readRecentCodexRateLimits(second)).toEqual({
       rateLimits: { limitId: "codex_other" },
     });
   });
@@ -104,12 +110,13 @@ describe("Codex rate-limit cache", () => {
     try {
       const addNotificationHandler = vi.spyOn(harness.client, "addNotificationHandler");
       ensureCodexAppServerClientRuntime(harness.client, { agentDir: "/tmp/agent" });
+      const initialHandlerCount = addNotificationHandler.mock.calls.length;
 
       vi.resetModules();
       const nextRuntime = await import("./client-runtime.js");
       const nextCache = await import("./rate-limit-cache.js");
       nextRuntime.ensureCodexAppServerClientRuntime(harness.client, { agentDir: "/tmp/agent" });
-      expect(addNotificationHandler).toHaveBeenCalledTimes(1);
+      expect(addNotificationHandler).toHaveBeenCalledTimes(initialHandlerCount);
 
       const notificationObserved = new Promise<void>((resolve) => {
         stopObserving = harness.client.addNotificationHandler((notification) => {

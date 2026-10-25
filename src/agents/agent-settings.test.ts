@@ -18,6 +18,21 @@ const settingsWithReserve = (reserveTokens: number, enabled?: boolean) =>
   SettingsManager.inMemory({
     compaction: { reserveTokens, ...(enabled === undefined ? {} : { enabled }) },
   });
+function applyReserve(
+  reserveTokens?: number,
+  contextTokenBudget?: number,
+  compaction?: AgentCompactionConfig,
+) {
+  const settingsManager =
+    reserveTokens === undefined ? SettingsManager.inMemory() : settingsWithReserve(reserveTokens);
+  const applyOverrides = vi.spyOn(settingsManager, "applyOverrides");
+  applySettings({
+    settingsManager,
+    contextTokenBudget,
+    cfg: compaction && compactionConfig(compaction),
+  });
+  return { settingsManager, applyOverrides };
+}
 
 describe("applyAgentCompactionSettingsFromConfig", () => {
   it.each([false, true])("applies compaction.enabled=%s idempotently", (configuredEnabled) => {
@@ -63,70 +78,37 @@ describe("applyAgentCompactionSettingsFromConfig", () => {
   );
 
   it("preserves the embedded project setting when compaction.enabled is omitted", () => {
-    const settingsManager = SettingsManager.inMemory({
-      compaction: { enabled: false, reserveTokens: 20_000 },
-    });
+    const settingsManager = settingsWithReserve(20_000, false);
     const setCompactionEnabled = vi.spyOn(settingsManager, "setCompactionEnabled");
 
-    applySettings({
-      settingsManager,
-      cfg: { agents: { defaults: { compaction: {} } } },
-    });
+    applySettings({ settingsManager, cfg: compactionConfig({}) });
 
     expect(settingsManager.getCompactionEnabled()).toBe(false);
     expect(setCompactionEnabled).not.toHaveBeenCalled();
   });
 
-  it("bumps reserveTokens when below floor", () => {
-    const settingsManager = SettingsManager.inMemory();
-    const applyOverrides = vi.spyOn(settingsManager, "applyOverrides");
-
-    applySettings({ settingsManager });
-
-    expect(settingsManager.getCompactionReserveTokens()).toBe(reserveFloor);
-    expect(applyOverrides).toHaveBeenCalledWith({
-      compaction: { reserveTokens: reserveFloor },
-    });
-  });
-
   it("can restore reserveTokens after a simulated resource loader reload drops them below floor", () => {
-    const settingsManager = SettingsManager.inMemory({
-      compaction: { reserveTokens: 16_384 },
-    });
-
-    applySettings({
-      settingsManager,
-      contextTokenBudget: 100_000,
-    });
+    const { settingsManager, applyOverrides } = applyReserve(16_384, 100_000);
     expect(settingsManager.getCompactionReserveTokens()).toBe(reserveFloor);
+    expect(applyOverrides).toHaveBeenCalledWith({ compaction: { reserveTokens: reserveFloor } });
 
     settingsManager.applyOverrides({ compaction: { reserveTokens: 16_384 } });
-    applySettings({
-      settingsManager,
-      contextTokenBudget: 100_000,
-    });
+    applySettings({ settingsManager, contextTokenBudget: 100_000 });
     expect(settingsManager.getCompactionReserveTokens()).toBe(reserveFloor);
   });
 
   it("does not override when already above floor and not in safeguard mode", () => {
-    const settingsManager = SettingsManager.inMemory({ compaction: { reserveTokens: 32_000 } });
-    const applyOverrides = vi.spyOn(settingsManager, "applyOverrides");
-
-    applySettings({
-      settingsManager,
-      cfg: { agents: { defaults: { compaction: { mode: "default" } } } },
+    const { settingsManager, applyOverrides } = applyReserve(32_000, undefined, {
+      mode: "default",
     });
-
     expect(settingsManager.getCompactionReserveTokens()).toBe(32_000);
     expect(applyOverrides).not.toHaveBeenCalled();
   });
 
   it("applies keepRecentTokens when explicitly configured", () => {
-    const settingsManager = settingsWithReserve(20_000);
-    const applyOverrides = vi.spyOn(settingsManager, "applyOverrides");
-
-    applySettings({ settingsManager, cfg: compactionConfig({ keepRecentTokens: 15_000 }) });
-
+    const { settingsManager, applyOverrides } = applyReserve(20_000, undefined, {
+      keepRecentTokens: 15_000,
+    });
     expect(settingsManager.getCompactionKeepRecentTokens()).toBe(15_000);
     expect(applyOverrides).toHaveBeenCalledWith({
       compaction: { keepRecentTokens: 15_000 },
@@ -134,29 +116,15 @@ describe("applyAgentCompactionSettingsFromConfig", () => {
   });
 
   it("preserves current keepRecentTokens when safeguard mode leaves it unset", () => {
-    const settingsManager = SettingsManager.inMemory({ compaction: { reserveTokens: 25_000 } });
-    const applyOverrides = vi.spyOn(settingsManager, "applyOverrides");
-
-    applySettings({
-      settingsManager,
-      cfg: { agents: { defaults: { compaction: { mode: "safeguard" } } } },
+    const { settingsManager, applyOverrides } = applyReserve(25_000, undefined, {
+      mode: "safeguard",
     });
-
     expect(settingsManager.getCompactionKeepRecentTokens()).toBe(20_000);
     expect(applyOverrides).not.toHaveBeenCalled();
   });
 
   it("caps the effective reserve so small-context models do not compact at token one", () => {
-    // Embedded runner default reserveTokens is 16 384. With a 16 384 context window
-    // both the default reserve and floor exceed one quarter of the model window.
-    const settingsManager = SettingsManager.inMemory();
-    const applyOverrides = vi.spyOn(settingsManager, "applyOverrides");
-
-    applySettings({
-      settingsManager,
-      contextTokenBudget: 16_384,
-    });
-
+    const { settingsManager, applyOverrides } = applyReserve(undefined, 16_384);
     expect(applyOverrides).toHaveBeenCalledWith({
       compaction: { reserveTokens: 4_096 },
     });
@@ -168,20 +136,14 @@ describe("applyAgentCompactionSettingsFromConfig", () => {
     expect(shouldCompact(1, 16_384, settingsManager.getCompactionSettings())).toBe(false);
   });
 
-  it("applies capped floor when current reserve is below it on small-context models", () => {
-    // A smaller project reserve is raised to the context-scaled floor.
-    const settingsManager = SettingsManager.inMemory({ compaction: { reserveTokens: 2_048 } });
-    const applyOverrides = vi.spyOn(settingsManager, "applyOverrides");
-
-    applySettings({
-      settingsManager,
-      contextTokenBudget: 16_384,
-    });
-
-    expect(settingsManager.getCompactionReserveTokens()).toBe(4_096);
-    expect(applyOverrides).toHaveBeenCalledWith({
-      compaction: { reserveTokens: 4_096 },
-    });
+  it.each<[number | undefined, number | undefined, number]>([
+    [2_048, 16_384, 4_096],
+    [undefined, undefined, reserveFloor],
+    [16_384, 200_000, reserveFloor],
+  ])("raises reserve %s to %s-context floor %s", (initial, budget, expected) => {
+    const { settingsManager, applyOverrides } = applyReserve(initial, budget);
+    expect(settingsManager.getCompactionReserveTokens()).toBe(expected);
+    expect(applyOverrides).toHaveBeenCalledWith({ compaction: { reserveTokens: expected } });
   });
 
   it("keeps a fresh 32K tool turn out of compaction until the conversation grows", () => {
@@ -193,15 +155,6 @@ describe("applyAgentCompactionSettingsFromConfig", () => {
     expect(shouldCompact(12_824, 32_768, settings)).toBe(false);
     expect(shouldCompact(24_576, 32_768, settings)).toBe(false);
     expect(shouldCompact(24_577, 32_768, settings)).toBe(true);
-  });
-
-  it("does not cap floor when context window is large enough", () => {
-    const settingsManager = settingsWithReserve(16_384);
-    const applyOverrides = vi.spyOn(settingsManager, "applyOverrides");
-
-    applySettings({ settingsManager, contextTokenBudget: 200_000 });
-    expect(settingsManager.getCompactionReserveTokens()).toBe(reserveFloor);
-    expect(applyOverrides).toHaveBeenCalledWith({ compaction: { reserveTokens: reserveFloor } });
   });
 });
 
@@ -299,14 +252,8 @@ describe("isSilentOverflowProneModel", () => {
 
 describe("applyAgentAutoCompactionGuard", () => {
   it("preserves configured reserve tokens when disabling embedded auto-compaction", () => {
-    const settingsManager = SettingsManager.inMemory({
-      compaction: { enabled: true, reserveTokens: 50_000 },
-    });
-
-    applyGuard({
-      settingsManager,
-      compactionMode: "safeguard",
-    });
+    const settingsManager = settingsWithReserve(50_000, true);
+    applyGuard({ settingsManager, compactionMode: "safeguard" });
 
     expect(settingsManager.getCompactionSettings()).toEqual({
       enabled: false,
@@ -315,10 +262,6 @@ describe("applyAgentAutoCompactionGuard", () => {
     });
   });
 
-  // Default-mode runs against ordinary providers must keep OpenClaw runtime's auto-compaction
-  // enabled. Disabling it across the board would silently remove OpenClaw runtime's
-  // overflow-recovery path inside Session.prompt() for users who are not
-  // affected by z.ai's silent-overflow accounting.
   it("leaves embedded auto-compaction alone for non-z.ai providers without engine ownership", () => {
     const settingsManager = SettingsManager.inMemory({
       compaction: { enabled: true, reserveTokens: 20_000, keepRecentTokens: 4_000 },

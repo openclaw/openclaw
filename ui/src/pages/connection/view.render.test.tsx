@@ -41,7 +41,7 @@ function mountConnection({ authMode, gatewayUrl, ...overrides }: ConnectionOptio
     lastError: null,
     systemInfo: null,
     systemInfoUnavailable: false,
-    systemInfoLoading: false,
+    systemInfoReady: () => null,
     ping: null,
     pingFailed: false,
     pingSamples: [],

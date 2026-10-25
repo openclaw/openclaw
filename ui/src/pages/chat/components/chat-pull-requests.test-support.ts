@@ -29,6 +29,7 @@ export function pullRequest(
 
 export function publication(overrides: Partial<GitHubPublicationView> = {}): GitHubPublicationView {
   return {
+    readiness: { read: null, retired: new Promise(() => {}) },
     activity: null,
     canPublishShared: true,
     canPublishPersonal: true,
@@ -68,7 +69,16 @@ const views = new WeakMap<
   { update: (props: ChatPullRequestsProps) => void; unmount: () => void }
 >();
 
-export function paintChatPullRequests(props: ChatPullRequestsProps, container: HTMLElement) {
+export function paintChatPullRequests(
+  overrides: Partial<ChatPullRequestsProps>,
+  container: HTMLElement,
+) {
+  const props: ChatPullRequestsProps = {
+    pullRequests: [],
+    status: "ready",
+    onDismiss: () => {},
+    ...overrides,
+  };
   const view = views.get(container);
   if (view) {
     view.update(props);

@@ -1,5 +1,6 @@
-import { createEffect, createMemo } from "solid-js";
+import { createEffect, createMemo, Loading } from "solid-js";
 import { pathForRoute } from "../../app-route-paths.ts";
+import type { SolidRouteProps } from "../../app-route-types.tsx";
 import { AgentScopeControl } from "../../components/agent-scope-control.tsx";
 import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
@@ -17,7 +18,7 @@ export function CronPageContent(props: { page: ReturnType<typeof createCronPage>
     revision();
     return buildCronViewProps(props.page);
   });
-  const header = () => {
+  const pageHeader = () => {
     revision();
     const page = props.page;
     return {
@@ -30,10 +31,10 @@ export function CronPageContent(props: { page: ReturnType<typeof createCronPage>
     <>
       <HubPageHeader
         active="cron"
-        subtitle={header().filtered ? t("cron.list.sessionFilter") : undefined}
+        subtitle={pageHeader().filtered ? t("cron.list.sessionFilter") : undefined}
         docsUrl="https://docs.openclaw.ai/automation/cron-jobs"
         actions={
-          header().filtered ? (
+          pageHeader().filtered ? (
             <a
               class="btn"
               href={pathForRoute("cron", props.page.context().basePath)}
@@ -48,16 +49,20 @@ export function CronPageContent(props: { page: ReturnType<typeof createCronPage>
             </a>
           ) : (
             <AgentScopeControl
-              agents={header().agents}
+              agents={pageHeader().agents}
               selection={props.page.context().agentSelection}
-              selectedId={header().selectedAgentId}
+              selectedId={pageHeader().selectedAgentId}
             />
           )
         }
       />
       <CronRunTranscriptView transcript={props.page.runTranscript} revision={revision} />
       <SettingsWorkspace>
-        <CronView {...viewProps()} />
+        <CronView
+          {...viewProps()}
+          busy={props.page.saving() || viewProps().busy}
+          toggleSavingJobId={props.page.toggleSavingJobId()}
+        />
       </SettingsWorkspace>
     </>
   );
@@ -77,11 +82,19 @@ function CronPageBody(props: { routeSearch?: string; host: HTMLElement }) {
   return <CronPageContent page={page} />;
 }
 
-export function CronPage(props: { routeSearch?: string }) {
+function CronPage(props: { routeSearch?: string }) {
   let host!: HTMLElement;
   return (
     <openclaw-cron-page ref={(element) => (host = element)}>
       <CronPageBody routeSearch={props.routeSearch} host={host} />
     </openclaw-cron-page>
+  );
+}
+
+export function renderSolid(props: SolidRouteProps) {
+  return (
+    <Loading>
+      <CronPage routeSearch={typeof props.data === "string" ? props.data : ""} />
+    </Loading>
   );
 }

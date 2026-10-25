@@ -4,8 +4,10 @@ import { Command } from "commander";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { ManagedWorktreeService } from "../agents/worktrees/service.js";
+import { makeWorktreeRecord } from "../agents/worktrees/service.test-support.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import { defaultRuntime } from "../runtime.js";
+import { formatCliFailureLines } from "./failure-output.js";
 import { parseCliProfileArgs } from "./profile.js";
 import { registerWorktreesCli } from "./worktrees-cli.js";
 
@@ -38,6 +40,48 @@ function parseProfile(args: string[]) {
 
 describe("worktrees cli", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+  it("escapes terminal table cells while preserving raw registry records in JSON", async () => {
+    const record = makeWorktreeRecord("/repo/café\x1b[31m\nforged", "worktree-id", {
+      name: "ordinary",
+      repoFingerprint: "fingerprint",
+      path: "/state/worktree-id",
+      branch: "openclaw/ordinary",
+      ownerKind: "manual",
+    });
+    vi.spyOn(owner, "list").mockResolvedValue([record]);
+    const text = muteOutput(false);
+    await run(["list"]);
+    const output = text.mock.calls.map(([line]) => String(line)).join("\n");
+    expect(output).toContain("/repo/café\\nforged");
+    expect(output).toContain("openclaw/ordinary");
+    expect(output.replaceAll("\n", "")).not.toMatch(/\p{Cc}/u);
+
+    const json = muteOutput();
+    await run(["list", "--json"]);
+    expect(json).toHaveBeenCalledWith({ worktrees: [record] });
+    expect(record.repoRoot).toBe("/repo/café\x1b[31m\nforged");
+  });
+
+  it("escapes the creation acknowledgement without changing its JSON record", async () => {
+    const repoRoot = await fs.realpath(tempDirs.make("openclaw-terminal-worktree-"));
+    const record = makeWorktreeRecord(repoRoot, "worktree-id", {
+      name: "ordinary",
+      repoFingerprint: "fingerprint",
+      path: "/state/café\x1b[31m\nforged\tpath\r\x00\x85",
+      branch: "openclaw/ordinary",
+      ownerKind: "manual",
+    });
+    const args = ["create", repoRoot];
+    vi.spyOn(owner, "create").mockResolvedValue(record);
+    const text = muteOutput(false);
+    await run(args);
+    expect(text).toHaveBeenCalledWith("worktree-id\t/state/café\\nforged\\tpath\\r");
+
+    const json = muteOutput();
+    await run([...args, "--json"]);
+    expect(json).toHaveBeenCalledWith(record);
+  });
   const exactRequest = {
     ownerKind: "session",
     ownerId: "example-owner",
@@ -100,18 +144,15 @@ describe("worktrees cli", () => {
     "passes source profiles through early parsing: %j %j",
     async (runtime, selected, profiles, state) => {
       const repoRoot = await fs.realpath(tempDirs.make("openclaw-cli-profile-input-"));
-      const create = vi.spyOn(owner, "create").mockResolvedValue({
-        id: "created",
-        name: "task",
-        repoFingerprint: "fingerprint",
-        repoRoot,
-        path: "/state/task",
-        branch: "openclaw/task",
-        baseRef: "HEAD",
-        ownerKind: "manual",
-        createdAt: 1,
-        lastActiveAt: 1,
-      });
+      const create = vi.spyOn(owner, "create").mockResolvedValue(
+        makeWorktreeRecord(repoRoot, "created", {
+          name: "task",
+          repoFingerprint: "fingerprint",
+          path: "/state/task",
+          branch: "openclaw/task",
+          ownerKind: "manual",
+        }),
+      );
       muteOutput();
       const parsed = parseProfile([
         ...runtime,
@@ -168,28 +209,51 @@ describe("worktrees cli", () => {
     });
   });
 
-  it("rejects an invalid --removed-at before retiring a snapshot", async () => {
+  const retireSnapshotArgs = (removedAt: string) => [
+    "retire-snapshot",
+    "worktree-id",
+    "--expected-ref",
+    "refs/openclaw/snapshots/worktree-id",
+    "--expected-oid",
+    "a".repeat(40),
+    "--removed-at",
+    removedAt,
+    "--retained-ref",
+    "refs/heads/main",
+    "--retained-oid",
+    "b".repeat(40),
+  ];
+
+  it.each(["1700000000100ms", "1,700,000,000,100", "12abc", "1.5", "-1", "", "9007199254740993"])(
+    "rejects the malformed --removed-at value %j before retiring a snapshot",
+    async (removedAt) => {
+      setRuntimeConfigSnapshot({}, {});
+      const retire = vi
+        .spyOn(owner, "retireSnapshot")
+        .mockRejectedValue(new Error("Unexpected snapshot retirement"));
+      await expect(run(retireSnapshotArgs(removedAt))).rejects.toThrow(
+        "--removed-at must be a non-negative integer (epoch milliseconds).",
+      );
+      expect(retire).not.toHaveBeenCalled();
+    },
+  );
+
+  it("renders the rejected --removed-at value instead of the generic CLI failure", async () => {
     setRuntimeConfigSnapshot({}, {});
-    const retire = vi
-      .spyOn(owner, "retireSnapshot")
-      .mockRejectedValue(new Error("Unexpected snapshot retirement"));
-    await expect(
-      run([
-        "retire-snapshot",
-        "worktree-id",
-        "--expected-ref",
-        "refs/openclaw/snapshots/worktree-id",
-        "--expected-oid",
-        "a".repeat(40),
-        "--removed-at",
-        "1700000000100ms",
-        "--retained-ref",
-        "refs/heads/main",
-        "--retained-oid",
-        "b".repeat(40),
-      ]),
-    ).rejects.toThrow("--removed-at must be a non-negative integer (epoch milliseconds).");
-    expect(retire).not.toHaveBeenCalled();
+    vi.spyOn(owner, "retireSnapshot").mockRejectedValue(
+      new Error("Unexpected snapshot retirement"),
+    );
+    const error = await run(retireSnapshotArgs("1700000000100ms")).catch((cause: unknown) => cause);
+    expect(
+      formatCliFailureLines({
+        title: "The CLI command failed.",
+        error,
+        argv: ["node", "openclaw", "worktrees", "retire-snapshot"],
+        env: {},
+      }),
+    ).toEqual([
+      '--removed-at must be a non-negative integer (epoch milliseconds). Got: "1700000000100ms"',
+    ]);
   });
 
   it("rejects an empty cleanup job selector before cleanup", async () => {

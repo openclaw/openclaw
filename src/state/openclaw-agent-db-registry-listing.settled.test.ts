@@ -157,9 +157,9 @@ it("reuses registry admission across writes and unrelated pending migrations", (
 
   db.exec("ALTER TABLE session_watch_cursors DROP COLUMN provenance");
   expect(read(true)).toEqual(expectedRows);
-  expect(probes.counts.registryPrimaryKey).toBe(1);
+  expect(probes.counts.registryPrimaryKey).toBe(0);
   expect(read()).toEqual(expectedRows);
-  expect(probes.counts.registryPrimaryKey).toBe(2);
+  expect(probes.counts.registryPrimaryKey).toBe(0);
   db.exec(`DROP TABLE agent_databases;
       CREATE TABLE agent_databases (agent_id TEXT PRIMARY KEY, path TEXT, schema_version INTEGER,
         last_seen_at INTEGER, size_bytes INTEGER)`);

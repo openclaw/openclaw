@@ -23,9 +23,9 @@ function normalizeTwitchToken(raw?: string | null): string | undefined {
 // Root credentials precede accounts.default; the environment is a default-account fallback only.
 export function resolveTwitchToken(
   cfg?: OpenClawConfig,
-  opts: { accountId?: string | null; envToken?: string | null } = {},
+  accountIdInput?: string | null,
 ): TwitchTokenResolution {
-  const accountId = normalizeAccountId(opts.accountId);
+  const accountId = normalizeAccountId(accountIdInput);
 
   const twitchCfg = cfg?.channels?.twitch;
   const accounts = twitchCfg?.accounts as Record<string, Record<string, unknown>> | undefined;
@@ -47,7 +47,7 @@ export function resolveTwitchToken(
 
   const allowEnv = accountId === DEFAULT_ACCOUNT_ID;
   const envToken = allowEnv
-    ? normalizeTwitchToken(opts.envToken ?? process.env.OPENCLAW_TWITCH_ACCESS_TOKEN)
+    ? normalizeTwitchToken(process.env.OPENCLAW_TWITCH_ACCESS_TOKEN)
     : undefined;
   if (envToken) {
     return { token: envToken };

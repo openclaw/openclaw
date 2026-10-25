@@ -9,6 +9,7 @@ import {
 } from "../../../test/helpers/openclaw-test-instance.js";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.js";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.js";
+import { expandProvider } from "./model-providers.test-support.ts";
 
 let instance: OpenClawTestInstance;
 const key = "synthetic-shared-model-key";
@@ -82,32 +83,37 @@ suite.define(() => {
       async ({ page }) => {
         await page.goto(url.href);
         await waitForControlUiGatewayReady(page);
-        const card = page.locator('[data-provider-id="fixture"]');
-        const removeKey = card.getByRole("button", { name: "Remove key", exact: true });
-        await card.waitFor();
+        const card = await expandProvider(page, "fixture");
         await card.getByRole("button", { name: "Set API key" }).click();
-        await card.getByLabel("API key").fill(key);
+        await card.getByLabel("API key", { exact: true }).fill(key);
         await card.getByRole("button", { name: "Save", exact: true }).click();
         await expect.poll(() => card.textContent()).toContain("Secret saved.");
         const saved = await persistedAuth();
-        expect(saved).toMatchObject({
-          profiles: { "fixture:manual": { type: "api_key", provider: "fixture", key } },
-          provider: { apiKey: "fixture:manual" },
-          model: "fixture/current",
+        expect(saved.profiles["fixture:manual"]).toMatchObject({
+          type: "api_key",
+          provider: "fixture",
+          key,
         });
+        expect(saved.provider?.apiKey).toBe("fixture:manual");
+        expect(saved.model).toBe("fixture/current");
         expect(await card.textContent()).not.toContain("could not refresh");
 
-        await removeKey.click();
-        await expect.poll(() => card.textContent()).toContain("Saved API keys removed.");
+        await card.getByRole("button", { name: "Remove provider: Fixture", exact: true }).click();
+        await page
+          .locator("openclaw-modal-dialog")
+          .getByRole("button", { name: "Remove provider", exact: true })
+          .click();
+        await expect
+          .poll(async () => (await persistedAuth()).profiles["fixture:manual"])
+          .toBeUndefined();
         const removed = await persistedAuth();
         expect(removed.profiles["fixture:manual"]).toBeUndefined();
         expect(removed.provider?.apiKey).toBeUndefined();
         expect(removed.auth?.profiles?.["fixture:manual"]).toBeUndefined();
         expect(removed.model).toBe("fixture/current");
 
-        const authArgs = ["models", "auth"];
         const agentArgs = ["--agent", "main"];
-        const args = [...authArgs, "paste-api-key", "--provider", "fixture", ...agentArgs];
+        const args = ["models", "auth", "paste-api-key", "--provider", "fixture", ...agentArgs];
         const pasted = spawnSync(process.execPath, ["scripts/run-node.mjs", ...args], {
           env: instance.env,
           input: key,
@@ -117,7 +123,7 @@ suite.define(() => {
         expect(pasted.status, pasted.stderr).toBe(0);
         expect(pasted.stderr, authRefreshDiagnostics()).not.toContain("could not refresh");
         expect(await persistedAuth()).toEqual(saved);
-        const logoutArgs = [...authArgs, "logout", "fixture:manual", ...agentArgs, "--yes"];
+        const logoutArgs = ["models", "auth", "logout", "fixture:manual", ...agentArgs, "--yes"];
         const refused = await instance.cli(logoutArgs);
         expect(refused.code, refused.stderr).toBe(1);
         expect(refused.stderr).toContain("stop the Gateway");
@@ -133,7 +139,15 @@ suite.define(() => {
         await instance.startGateway();
         await page.reload();
         await waitForControlUiGatewayReady(page);
-        await expect.poll(() => removeKey.count()).toBe(0);
+        const summary = card.locator("button.provider-row__summary");
+        if ((await summary.count()) > 0) {
+          await expandProvider(page, "fixture");
+        }
+        await expect
+          .poll(() =>
+            card.getByRole("button", { name: "Remove provider: Fixture", exact: true }).count(),
+          )
+          .toBe(0);
       },
     );
   });

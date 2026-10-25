@@ -28,6 +28,9 @@ import {
 } from "./session-entry-read-runtime.js";
 import { readSessionEntryInWorker } from "./session-entry-read-writable.js";
 
+const authority = { assertCurrent() {}, authorize() {} };
+const lifetime = { assertCurrent() {}, assertReadable() {} };
+
 function fixture() {
   const env = { OPENCLAW_STATE_DIR: `/tmp/openclaw-memory-entry-${randomUUID()}` };
   const agentId = "main";
@@ -42,8 +45,6 @@ function fixture() {
 it("unbound child readers observe memory lineage writes without opening SQLite", async () => {
   const { scope, database } = fixture();
   const owner = memorySessionActorOwners.get(database);
-  const authority = { assertCurrent() {}, authorize() {} };
-  const lifetime = { assertCurrent() {}, assertReadable() {} };
   const childKey = "agent:main:dashboard:incognito-child";
   const actor = await owner.acquire({ database: owner.identity, sessionKey: childKey }, lifetime);
   try {
@@ -105,8 +106,6 @@ it("keeps absent incognito metadata absent across ordinary read entry points", a
 
 it("unbound readers observe committed entry and sharing changes without replacing their owner", async () => {
   const { scope, database } = fixture();
-  const authority = { assertCurrent() {}, authorize() {} };
-  const lifetime = { assertCurrent() {}, assertReadable() {} };
   const binding = await acquireSessionActorStorage(scope, { authority, lifetime, create: true });
   expect(binding).toBeDefined();
   try {
@@ -118,45 +117,37 @@ it("unbound readers observe committed entry and sharing changes without replacin
         }),
       ).toBeUndefined();
     });
-    const created = await binding!.actor.storage.mutate(
-      {
-        type: "session.entry.create",
-        input: {
-          entry: {
-            sessionId: "memory-read",
-            updatedAt: 1,
-            incognito: true,
-            modelSelectionLocked: false,
-          },
+    const storage = binding!.actor.storage;
+    const commit = async (command: Parameters<typeof storage.mutate>[0]) => {
+      expect((await storage.mutate(command, authority)).kind).toBe("committed");
+    };
+    await commit({
+      type: "session.entry.create",
+      input: {
+        entry: {
+          sessionId: "memory-read",
+          updatedAt: 1,
+          incognito: true,
+          modelSelectionLocked: false,
         },
       },
-      authority,
-    );
-    expect(created.kind).toBe("committed");
+    });
     const current = captureNativeSessionEntryCurrentRead(scope);
     const list = createSessionEntryListReader(scope);
     expect(current.readCurrent()?.modelSelectionLocked).toBe(false);
     expect((await list()).entries[0]?.entry.updatedAt).toBe(1);
     using now = vi.spyOn(Date, "now");
     now.mockReturnValue(2);
-    const patched = await binding!.actor.storage.mutate(
-      {
-        type: "session.entry.patch",
-        input: {
-          operation: { kind: "fields", patch: { updatedAt: 2, modelSelectionLocked: true } },
-        },
+    await commit({
+      type: "session.entry.patch",
+      input: {
+        operation: { kind: "fields", patch: { updatedAt: 2, modelSelectionLocked: true } },
       },
-      authority,
-    );
-    expect(patched.kind).toBe("committed");
-    const shared = await binding!.actor.storage.mutate(
-      {
-        type: "session.collaboration.add",
-        input: { params: { identityId: "fixture-reader", addedBy: "fixture-owner", addedAt: 3 } },
-      },
-      authority,
-    );
-    expect(shared.kind).toBe("committed");
+    });
+    await commit({
+      type: "session.collaboration.add",
+      input: { params: { identityId: "fixture-reader", addedBy: "fixture-owner", addedAt: 3 } },
+    });
     expect(current.readCurrent()?.modelSelectionLocked).toBe(true);
     expect((await list()).entries[0]?.entry.updatedAt).toBe(2);
     expect((await readSessionEntryInWorker(scope))?.updatedAt).toBe(2);
@@ -219,7 +210,6 @@ it("admits an absent memory session and keeps creation and subsequent reads on t
       kind: "memory",
       incarnation: claim.incarnation,
     });
-    const authority = { assertCurrent() {}, authorize() {} };
     expect(
       (
         await actor.patch(

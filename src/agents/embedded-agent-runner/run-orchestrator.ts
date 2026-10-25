@@ -94,6 +94,7 @@ import {
 import { createEmbeddedRunProgressController } from "./run/progress-controller.js";
 import { createRecoveryMessageActionTurnCapability } from "./run/recovery-message-action-capability.js";
 import {
+  resolveEmbeddedRuntimePluginPreparation,
   resolveEmbeddedRuntimePluginSelections,
   resolveInitialEmbeddedRunModel,
 } from "./run/runtime-resolution.js";
@@ -313,9 +314,7 @@ async function runEmbeddedAgentForSession(
           workspaceDir: runtimeWorkspaceResolution.workspaceDir,
           preserveWorkspaceDirOnRefresh: !runtimeWorkspaceResolution.isCanonicalWorkspace,
           ...(params.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
-          ...(params.preparedModelRuntimeMode === "isolated-read-only"
-            ? { loadRuntimePlugins: true }
-            : {}),
+          ...resolveEmbeddedRuntimePluginPreparation(params),
           runtimePluginSelections,
         };
         startupStages.mark("harness-selection");
@@ -486,10 +485,7 @@ async function runEmbeddedAgentForSession(
                 runId: params.runId,
                 trigger: params.trigger,
                 event: { cleanedBody: params.prompt },
-                context: {
-                  ...hookCtx,
-                  heartbeatEventQueueSessionKey: params.heartbeatEventQueueSessionKey,
-                },
+                context: hookCtx,
                 onDispatch: () =>
                   notifyExecutionPhase("before_agent_reply", { provider, model: modelId }),
                 onDeclined: () =>

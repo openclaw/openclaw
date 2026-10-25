@@ -1,7 +1,10 @@
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeOptionalString as readNonEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-type DiscordActivitiesConfigResolution =
+export function resolveDiscordActivitiesConfig(
+  account: DiscordAccountConfig,
+  env: NodeJS.ProcessEnv = process.env,
+):
   | {
       enabled: true;
       clientSecret: string;
@@ -10,12 +13,7 @@ type DiscordActivitiesConfigResolution =
   | {
       enabled: false;
       reason: "not-configured" | "missing-client-secret";
-    };
-
-export function resolveDiscordActivitiesConfig(
-  account: DiscordAccountConfig,
-  env: NodeJS.ProcessEnv = process.env,
-): DiscordActivitiesConfigResolution {
+    } {
   if (!account.activities) {
     return { enabled: false, reason: "not-configured" };
   }

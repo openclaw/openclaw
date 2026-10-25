@@ -52,7 +52,6 @@ describeLive("transcript presentation backlog through a real Gateway", () => {
         defaults: {
           workspace: state.workspaceDir,
           skipBootstrap: true,
-          heartbeat: { every: "0m" },
           model: { primary: model },
           models: { [model]: { agentRuntime: { id: "openclaw" } } },
         },

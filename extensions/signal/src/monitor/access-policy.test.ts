@@ -11,32 +11,19 @@ beforeEach(() => {
 });
 
 const SIGNAL_GROUP_ID = "signal-group-id";
-const OTHER_SIGNAL_GROUP_ID = "other-signal-group-id";
 const SIGNAL_SENDER = { kind: "phone" as const, e164: "+15551230000", raw: "+15551230000" };
 const SIGNAL_UUID = "f4d0fe67-3b38-446d-828e-317c285ffa75";
 const accessGroups: AccessGroupsConfig = {
   operators: { type: "message.senders", members: { signal: [SIGNAL_SENDER.e164] } },
 };
 
-function resolveAliasedSignalSender() {
-  return expectDefined(
-    resolveSignalSender({ sourceNumber: SIGNAL_SENDER.e164, sourceUuid: SIGNAL_UUID }),
-    "Signal sender",
-  );
-}
+const aliasedSender = expectDefined(
+  resolveSignalSender({ sourceNumber: SIGNAL_SENDER.e164, sourceUuid: SIGNAL_UUID }),
+  "Signal sender",
+);
+type AccessParams = Partial<Parameters<typeof resolveSignalAccessState>[0]>;
 
-async function resolveGroupAccess(params: Partial<Parameters<typeof resolveSignalAccessState>[0]>) {
-  return (
-    await resolveAccess({
-      groupId: SIGNAL_GROUP_ID,
-      readStoreAllowFrom: async () => [],
-      ...params,
-      isGroup: true,
-    })
-  ).senderAccess;
-}
-
-function resolveAccess(params: Partial<Parameters<typeof resolveSignalAccessState>[0]>) {
+function resolveAccess(params: AccessParams) {
   return resolveSignalAccessState({
     accountId: "default",
     dmPolicy: "allowlist",
@@ -45,55 +32,53 @@ function resolveAccess(params: Partial<Parameters<typeof resolveSignalAccessStat
     groupAllowFrom: [],
     sender: SIGNAL_SENDER,
     isGroup: false,
+    ...(params.isGroup ? { readStoreAllowFrom: async () => [] } : {}),
     ...params,
   });
 }
 
 describe("resolveSignalAccessState", () => {
-  it("allows Signal group target forms in groupAllowFrom", async () => {
-    const groupTargetDecision = await resolveGroupAccess({
-      groupAllowFrom: [`group:${SIGNAL_GROUP_ID}`],
-    });
-    const signalGroupTargetDecision = await resolveGroupAccess({
-      groupAllowFrom: [`signal:group:${SIGNAL_GROUP_ID}`],
-    });
-
-    expect(groupTargetDecision.decision).toBe("allow");
-    expect(signalGroupTargetDecision.decision).toBe("allow");
-  });
-
-  it("falls back to allowFrom for group sender access when groupAllowFrom is unset", async () => {
-    const groupDecision = await resolveGroupAccess({ allowFrom: [SIGNAL_SENDER.e164] });
-
-    expect(groupDecision.decision).toBe("allow");
-  });
-
-  it("does not match group ids against direct-message allowFrom entries", async () => {
-    const { senderAccess } = await resolveAccess({
-      allowFrom: [SIGNAL_GROUP_ID],
-      groupId: SIGNAL_GROUP_ID,
-    });
-
-    expect(senderAccess.decision).toBe("block");
-  });
-
-  it("allows direct messages through static message sender access groups", async () => {
-    const { senderAccess } = await resolveAccess({
-      allowFrom: ["accessGroup:operators"],
-      cfg: { accessGroups },
-    });
-
-    expect(senderAccess.decision).toBe("allow");
+  it.each<[string, AccessParams, "allow" | "block"]>([
+    ["group target", { isGroup: true, groupAllowFrom: [`group:${SIGNAL_GROUP_ID}`] }, "allow"],
+    [
+      "prefixed group target",
+      { isGroup: true, groupAllowFrom: [`signal:group:${SIGNAL_GROUP_ID}`] },
+      "allow",
+    ],
+    ["group sender fallback", { isGroup: true, allowFrom: [SIGNAL_SENDER.e164] }, "allow"],
+    ["no DM group-id match", { allowFrom: [SIGNAL_GROUP_ID] }, "block"],
+    ["DM access group", { allowFrom: ["accessGroup:operators"], cfg: { accessGroups } }, "allow"],
+    [
+      "unrelated UUID",
+      { allowFrom: ["uuid:00000000-0000-0000-0000-000000000000"], sender: aliasedSender },
+      "block",
+    ],
+    [
+      "no group pairing-store fallback",
+      { isGroup: true, readStoreAllowFrom: async () => [SIGNAL_SENDER.e164] },
+      "block",
+    ],
+    [
+      "explicit group mismatch",
+      { isGroup: true, allowFrom: [SIGNAL_GROUP_ID], groupAllowFrom: ["other-signal-group-id"] },
+      "block",
+    ],
+  ])("%s", async (_name, params, decision) => {
+    expect(
+      (await resolveAccess({ groupId: SIGNAL_GROUP_ID, ...params })).senderAccess.decision,
+    ).toBe(decision);
   });
 
   it("preserves matched Signal senders in effective group allowlists", async () => {
-    const groupDecision = await resolveGroupAccess({
+    const { senderAccess } = await resolveAccess({
+      isGroup: true,
+      groupId: SIGNAL_GROUP_ID,
       groupAllowFrom: ["accessGroup:operators"],
       cfg: { accessGroups },
     });
 
-    expect(groupDecision.decision).toBe("allow");
-    expect(groupDecision.effectiveGroupAllowFrom).toContain(SIGNAL_SENDER.e164);
+    expect(senderAccess.decision).toBe("allow");
+    expect(senderAccess.effectiveGroupAllowFrom).toContain(SIGNAL_SENDER.e164);
   });
 
   it("allows paired direct senders from the pairing store", async () => {
@@ -109,39 +94,12 @@ describe("resolveSignalAccessState", () => {
   it("keeps a UUID-paired sender allowed after signal-cli learns its phone alias", async () => {
     const { senderAccess } = await resolveAccess({
       dmPolicy: "pairing",
-      sender: resolveAliasedSignalSender(),
+      sender: aliasedSender,
       readStoreAllowFrom: async () => [`uuid:${SIGNAL_UUID}`],
     });
 
     expect(senderAccess.decision).toBe("allow");
     expect(senderAccess.effectiveAllowFrom).toContain(`uuid:${SIGNAL_UUID}`);
-  });
-
-  it("does not authorize an aliased sender through an unrelated UUID", async () => {
-    const { senderAccess } = await resolveAccess({
-      allowFrom: ["uuid:00000000-0000-0000-0000-000000000000"],
-      sender: resolveAliasedSignalSender(),
-    });
-
-    expect(senderAccess.decision).toBe("block");
-  });
-
-  it("does not let pairing-store senders satisfy group access", async () => {
-    const groupDecision = await resolveGroupAccess({
-      groupAllowFrom: [],
-      readStoreAllowFrom: async () => [SIGNAL_SENDER.e164],
-    });
-
-    expect(groupDecision.decision).toBe("block");
-  });
-
-  it("does not let group ids in allowFrom satisfy an explicit groupAllowFrom mismatch", async () => {
-    const groupDecision = await resolveGroupAccess({
-      allowFrom: [SIGNAL_GROUP_ID],
-      groupAllowFrom: [OTHER_SIGNAL_GROUP_ID],
-    });
-
-    expect(groupDecision.decision).toBe("block");
   });
 
   it.each<[string, "open" | "allowlist", string[], boolean, boolean]>([
@@ -152,7 +110,7 @@ describe("resolveSignalAccessState", () => {
     const access = await resolveAccess({
       groupPolicy,
       groupAllowFrom,
-      sender: aliased ? resolveAliasedSignalSender() : SIGNAL_SENDER,
+      sender: aliased ? aliasedSender : SIGNAL_SENDER,
       groupId: SIGNAL_GROUP_ID,
       isGroup: true,
       hasControlCommand: true,

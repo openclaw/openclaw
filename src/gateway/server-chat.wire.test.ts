@@ -17,6 +17,7 @@ import { createAssistantTextStream } from "./agent-event-assistant-text.js";
 import { abortChatRunById, registerChatAbortController } from "./chat-abort.js";
 import { projectInFlightRunSnapshot } from "./chat-inflight-snapshot.js";
 import { capLiveAssistantText } from "./live-chat-projector.js";
+import type { SerializedGatewayFrame } from "./serialized-json.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import {
   emitAgentEvent,
@@ -117,7 +118,7 @@ function connect(
     readyState: 1,
     bufferedAmount: 0,
     send: (
-      wire: string | Buffer,
+      wire: string | Buffer | SerializedGatewayFrame,
       options?: { binary: false } | (() => void),
       callback?: () => void,
     ) => {

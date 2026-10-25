@@ -2,7 +2,7 @@ import { For, Show } from "solid-js";
 import type { ChatMobilePeople } from "../chat-mobile-people.ts";
 import { ChatAuthorAvatar } from "./chat-author-avatar-view.tsx";
 import type { ChatMobilePeopleBodyProps } from "./chat-mobile-people.tsx";
-import "../../../styles/chat/mobile-people.css";
+import "./chat-mobile-people-grid.css";
 
 export type ChatMobilePeopleGridProps = {
   people: ChatMobilePeople;
@@ -33,12 +33,7 @@ export function ChatMobilePeopleGrid(props: ChatMobilePeopleGridProps) {
         <span class="chat-mobile-people-grid__canvas" data-count={Math.min(count(), 4)}>
           <For each={visible()}>
             {(person) => (
-              <span
-                class={[
-                  "chat-mobile-people-grid__avatar",
-                  { "chat-mobile-people-grid__avatar--away": !person.viewing },
-                ]}
-              >
+              <span class="chat-mobile-people-grid__avatar">
                 <ChatAuthorAvatar sender={person.sender} hideTooltip />
               </span>
             )}

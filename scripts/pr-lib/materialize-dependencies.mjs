@@ -39,7 +39,12 @@ const markdownManifest = existsSync(markdownManifestPath)
   ? JSON.parse(readFileSync(markdownManifestPath, "utf8"))
   : undefined;
 const markdownDependencies = markdownManifest
-  ? ["mdast-util-from-markdown", "mdast-util-gfm-table", "micromark-extension-gfm-table"]
+  ? [
+      "mdast-util-from-markdown",
+      "mdast-util-gfm-table",
+      "micromark",
+      "micromark-extension-gfm-table",
+    ]
   : [];
 // Pre-#149585 anchors contain no package manifest and need only these tooling pins.
 const dependencies = [
@@ -111,10 +116,10 @@ const dependencies = [
       `Cannot resolve installed scripts/pr dependency '${dependency}' at ${installedPath}.`,
     );
     console.error(
-      "Restore frozen dependencies in a clean trusted-main checkout or set OPENCLAW_PR_TOOLING_ROOT before retrying; no dependencies were installed.",
+      "The current trusted wrapper can materialize this anchor’s frozen dependencies; retry from current main or select a matching OPENCLAW_PR_TOOLING_ROOT.",
     );
-    // Distinguish dependency drift from a destination write failure. Only the
-    // former may trigger a refresh of an explicitly selected tooling checkout.
+    // Only dependency drift permits the parent to prepare a frozen installation;
+    // destination write failures must never trigger package installation.
     return process.exit(78);
   }
 });
