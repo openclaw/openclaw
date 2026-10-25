@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -119,10 +118,15 @@ describe("maintenance table integrity", () => {
   });
 });
 
-function withDatabase(sql: string, run: (database: DatabaseSync) => void) {
-  using database = new (requireNodeSqlite().DatabaseSync)(":memory:");
-  database.exec(sql);
-  run(database);
+function memoryDatabase(sql: string) {
+  const database = new (requireNodeSqlite().DatabaseSync)(":memory:");
+  try {
+    database.exec(sql);
+    return database;
+  } catch (error) {
+    database.close();
+    throw error;
+  }
 }
 
 function caught(run: () => unknown): unknown {
@@ -149,29 +153,24 @@ function taskOrphans(parent = "task_id", child = "task_id", action = "CASCADE", 
 
 describe("assertSqliteIntegrity", () => {
   it("retains every finding for offline repair without repeating the check", () => {
-    withDatabase(
+    using database = memoryDatabase(
       `CREATE TABLE damaged (value INTEGER CHECK(value > 0));
        PRAGMA ignore_check_constraints = ON;
        WITH RECURSIVE rows(n) AS (VALUES(1) UNION ALL SELECT n + 1 FROM rows WHERE n < 105)
        INSERT INTO damaged SELECT -n FROM rows;
        PRAGMA ignore_check_constraints = OFF;`,
-      (database) => {
-        const observer = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
-        try {
-          const failure = caught(() =>
-            assertSqliteIntegrity(database, "offline repair", { allFindings: true }),
-          );
-          expect(failure).toBeInstanceOf(SqliteIntegrityError);
-          if (!(failure instanceof SqliteIntegrityError)) {
-            throw new Error("Expected captured integrity findings");
-          }
-          expect(failure.findings).toHaveLength(105);
-          expect(observer.queries).toEqual(["PRAGMA integrity_check(2147483647);"]);
-        } finally {
-          observer.restore();
-        }
-      },
     );
+    const observer = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+    try {
+      const failure = caught(() =>
+        assertSqliteIntegrity(database, "offline repair", { allFindings: true }),
+      );
+      expect(failure).toBeInstanceOf(SqliteIntegrityError);
+      expect(failure).toHaveProperty("findings.length", 105);
+      expect(observer.queries).toEqual(["PRAGMA integrity_check(2147483647);"]);
+    } finally {
+      observer.restore();
+    }
   });
 
   it.each([
@@ -207,25 +206,24 @@ describe("assertSqliteIntegrity", () => {
   );
 
   it("classifies cascade-owned task delivery orphans without admitting writes", () => {
-    withDatabase(taskOrphans(), (database) => {
-      const failure = caught(() => assertSqliteIntegrity(database, "test database"));
-      expect(failure).toMatchObject({
-        name: "SqliteRepairableForeignKeyError",
-        repair: {
-          kind: "task-delivery-orphans",
-          relation: "task_delivery_state.task_id",
-          parentTable: "task_runs",
-          orphanCount: 6,
-        },
-        message: expect.stringMatching(/foreign_key_check failed.*openclaw doctor --fix/u),
-      });
-      if (!(failure instanceof Error)) {
-        throw new Error("Expected integrity admission to refuse unrepaired rows");
-      }
-      expect(isTerminalSqliteIntegrityError(failure)).toBe(false);
-      expect(database.prepare("SELECT count(*) AS count FROM task_delivery_state").get()).toEqual({
-        count: 6,
-      });
+    using database = memoryDatabase(taskOrphans());
+    const failure = caught(() => assertSqliteIntegrity(database, "test database"));
+    expect(failure).toMatchObject({
+      name: "SqliteRepairableForeignKeyError",
+      repair: {
+        kind: "task-delivery-orphans",
+        relation: "task_delivery_state.task_id",
+        parentTable: "task_runs",
+        orphanCount: 6,
+      },
+      message: expect.stringMatching(/foreign_key_check failed.*openclaw doctor --fix/u),
+    });
+    if (!(failure instanceof Error)) {
+      throw new Error("Expected integrity admission to refuse unrepaired rows");
+    }
+    expect(isTerminalSqliteIntegrityError(failure)).toBe(false);
+    expect(database.prepare("SELECT count(*) AS count FROM task_delivery_state").get()).toEqual({
+      count: 6,
     });
   });
 
@@ -252,15 +250,14 @@ describe("assertSqliteIntegrity", () => {
               PRAGMA ignore_check_constraints = OFF;`,
     },
   ])("refuses task delivery violations with $label", ({ parent, child, action, extra }) => {
-    withDatabase(taskOrphans(parent, child, action, extra), (database) => {
-      expect(() => assertSqliteIntegrity(database, "test database")).toThrow(
-        expect.objectContaining({ name: "SqliteIntegrityError" }),
-      );
-    });
+    using database = memoryDatabase(taskOrphans(parent, child, action, extra));
+    expect(() => assertSqliteIntegrity(database, "test database")).toThrow(
+      expect.objectContaining({ name: "SqliteIntegrityError" }),
+    );
   });
 
   it("does not classify a component of a composite foreign key as repairable", () => {
-    withDatabase(
+    using database = memoryDatabase(
       `
         PRAGMA foreign_keys = OFF;
         CREATE TABLE task_runs (task_id TEXT, revision INTEGER, PRIMARY KEY (task_id, revision));
@@ -271,11 +268,9 @@ describe("assertSqliteIntegrity", () => {
         );
         INSERT INTO task_delivery_state (task_id, revision) VALUES ('missing', 1);
       `,
-      (database) => {
-        expect(() => assertSqliteIntegrity(database, "test database")).toThrow(
-          expect.objectContaining({ name: "SqliteIntegrityError" }),
-        );
-      },
+    );
+    expect(() => assertSqliteIntegrity(database, "test database")).toThrow(
+      expect.objectContaining({ name: "SqliteIntegrityError" }),
     );
   });
 
@@ -298,22 +293,20 @@ describe("assertSqliteIntegrity", () => {
   ] as const)("reports foreign key violations with %s", (variant, rows, expected) => {
     const withoutRowid = variant === "WITHOUT ROWID tables";
     const type = withoutRowid ? "TEXT" : "INTEGER";
-    withDatabase(
+    using database = memoryDatabase(
       `PRAGMA foreign_keys = OFF;
        CREATE TABLE parents (id ${type} PRIMARY KEY);
        CREATE TABLE children (id ${type} PRIMARY KEY, parent_id ${type} NOT NULL REFERENCES parents(id))
          ${withoutRowid ? "WITHOUT ROWID" : ""};
        INSERT INTO children (id, parent_id) VALUES ${rows};`,
-      (database) => {
-        if (variant === "a shadowing schema object") {
-          database.exec(
-            'CREATE TABLE pragma_foreign_key_check ("table" TEXT NOT NULL, rowid INTEGER, parent TEXT NOT NULL, fkid INTEGER NOT NULL)',
-          );
-          expect(database.prepare("SELECT * FROM pragma_foreign_key_check").all()).toEqual([]);
-        }
-        expect(() => assertSqliteIntegrity(database, "test database")).toThrow(expected);
-      },
     );
+    if (variant === "a shadowing schema object") {
+      database.exec(
+        'CREATE TABLE pragma_foreign_key_check ("table" TEXT NOT NULL, rowid INTEGER, parent TEXT NOT NULL, fkid INTEGER NOT NULL)',
+      );
+      expect(database.prepare("SELECT * FROM pragma_foreign_key_check").all()).toEqual([]);
+    }
+    expect(() => assertSqliteIntegrity(database, "test database")).toThrow(expected);
   });
 });
 

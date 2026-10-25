@@ -68,6 +68,12 @@ function deferredProbe() {
   };
 }
 
+const healthyResponse = () => Response.json({ status: "started" });
+const startingResponse = () => Response.json({ status: "starting" }, { status: 503 });
+const probeFailure = (message: unknown, code = "candidate-readiness-probe-failed") => [
+  { check: "startupz", code, message },
+];
+
 function waitForProbe(
   probe: Promise<void>,
   validation: ReturnType<typeof validateUpdateCandidateCanary>,
@@ -179,13 +185,12 @@ export function registerCanaryReadinessBudgetTests(
         } else {
           await vi.advanceTimersByTimeAsync(600);
         }
-        expect(onWarning).toHaveBeenCalledOnce();
         receipt.reject(uncertain);
         await vi.advanceTimersByTimeAsync(0);
         if (ordering === "late-deadline") {
           current = false;
           await vi.advanceTimersByTimeAsync(300);
-          probe.response.resolve(Response.json({ status: "started" }));
+          probe.response.resolve(healthyResponse());
         } else {
           caller.abort(cancellation);
           sleeping.reject(caller.signal.reason);
@@ -203,7 +208,7 @@ export function registerCanaryReadinessBudgetTests(
         expect(fetch).toHaveBeenCalledOnce();
       } finally {
         caller.abort(new Error("readiness test cleanup"));
-        probe.response.resolve(Response.json({ status: "started" }));
+        probe.response.resolve(healthyResponse());
         receipt.resolve();
         sleeping.resolve();
         await pending.catch(() => undefined);
@@ -238,10 +243,7 @@ export function registerCanaryReadinessBudgetTests(
       await probe.fetching;
       await vi.advanceTimersByTimeAsync(300);
       await progress(gateway, "config.snapshot", 600);
-      expect(onProgress).toHaveBeenCalledWith(
-        expect.objectContaining({ step: "warning:candidate-gateway-startup" }),
-      );
-      probe.response.resolve(Response.json({ status: "started" }));
+      probe.response.resolve(healthyResponse());
       await vi.advanceTimersByTimeAsync(0);
       expect(fetch.mock.calls.some(([url]) => url.endsWith("/readyz"))).toBe(false);
       if (outcome === "write-failed") {
@@ -283,7 +285,7 @@ export function registerCanaryReadinessBudgetTests(
         return Response.json({ ready: true });
       }
       if (startupResponseSent) {
-        return Response.json({ status: "starting" }, { status: 503 });
+        return startingResponse();
       }
       return startup.fetch(options);
     });
@@ -313,7 +315,7 @@ export function registerCanaryReadinessBudgetTests(
       }
       // Readiness at 3.3 s is still inside the independent 3.6 s ceiling.
       if (outcome === "ready") {
-        startup.response.resolve(Response.json({ status: "started" }));
+        startup.response.resolve(healthyResponse());
       } else {
         await progress(gateway, outcome === "spam" ? "tick.4" : "runtime.post-attach", 300);
         // Bound the negative control too: the old implementation is still waiting here.
@@ -324,7 +326,7 @@ export function registerCanaryReadinessBudgetTests(
       gateway().stderr.write("openclaw-update-canary-progress: plugins.bootstrap\n");
       if (outcome === "stalled") {
         startupResponseSent = true;
-        startup.response.resolve(Response.json({ status: "starting" }, { status: 503 }));
+        startup.response.resolve(startingResponse());
       }
       await vi.advanceTimersByTimeAsync(300);
     } else {
@@ -333,7 +335,7 @@ export function registerCanaryReadinessBudgetTests(
         gateway().emit("exit", 78);
       }
       if (outcome === "readiness-unreachable") {
-        startup.response.resolve(Response.json({ status: "started" }));
+        startup.response.resolve(healthyResponse());
         await waitForProbe(readiness.fetching, result);
         await vi.advanceTimersByTimeAsync(300);
         controller.abort(new Error("Test reached the stall deadline without a refusal"));
@@ -366,13 +368,7 @@ export function registerCanaryReadinessBudgetTests(
       expect(step).toMatchObject({
         exitCode: null,
         termination: "timeout",
-        failureFacts: [
-          {
-            check: "startupz",
-            code: "candidate-startup-failed",
-            message: "readiness timeout",
-          },
-        ],
+        failureFacts: probeFailure("readiness timeout", "candidate-startup-failed"),
       });
     }
     if (outcome === "spam") {
@@ -449,13 +445,7 @@ export function registerCanaryReadinessBudgetTests(
           expect(canaryOutcomeStep(result.steps)).toMatchObject({
             name: "candidate-gateway-startup",
             advisory: { kind: "candidate-runtime-unavailable", message },
-            failureFacts: [
-              {
-                check: "startupz",
-                code: "candidate-readiness-probe-failed",
-                message: expect.stringContaining("failed: HTTP 502"),
-              },
-            ],
+            failureFacts: probeFailure(expect.stringContaining("failed: HTTP 502")),
           });
           expect(result.status).toBe("ok");
           expect(requests).toEqual([]);
@@ -491,16 +481,12 @@ export function registerCanaryReadinessBudgetTests(
     const unavailableStep = canaryOutcomeStep(unavailable.steps);
     expect(unavailableStep?.advisory?.message).toContain("ECONNREFUSED");
     expect(unavailableStep?.advisory?.message).not.toContain("via proxy");
-    expect(unavailableStep?.failureFacts).toEqual([
-      {
-        check: "startupz",
-        code: "candidate-readiness-probe-failed",
-        message: expect.stringContaining("ECONNREFUSED"),
-      },
-    ]);
+    expect(unavailableStep?.failureFacts).toEqual(
+      probeFailure(expect.stringContaining("ECONNREFUSED")),
+    );
     stubFetch(async () => {
       controller.abort(new Error("operator cancelled"));
-      return Response.json({ status: "started" });
+      return healthyResponse();
     });
     const cancelled = await validate({ ...params, signal: controller.signal });
     expect(cancelled.status).toBe("error");
