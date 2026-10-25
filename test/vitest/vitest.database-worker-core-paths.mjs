@@ -742,6 +742,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/claws/packages.runtime.test.ts",
   "src/claws/packages.capability-consent.test.ts",
   "src/cli/local-state-owner.process.test.ts",
+  "src/cli/config-owner-route.process.test.ts",
   "src/cli/mcp-cli.login-loopback.test.ts",
   "src/cli/mcp-cli.oauth.test.ts",
   "src/cli/mcp-cli.path-case.windows.test.ts",
