@@ -61,7 +61,15 @@ try {
     if (bound >= placements - 1) {
       throw new Error("Orphan recovery needs a no-binding and an absent-entry placement");
     }
-    const index = bound;
+    // listAsync orders session IDs lexically; skip the three warm retry batches.
+    const index = Array.from({ length: placements }, (_, value) => value).sort((left, right) => {
+      const leftId = `polling-${left}`;
+      const rightId = `polling-${right}`;
+      return leftId < rightId ? -1 : leftId > rightId ? 1 : 0;
+    })[25];
+    if (index === undefined || index < bound || index === placements - 1) {
+      throw new Error("Orphan recovery needs a no-binding session at lexical position 25");
+    }
     const agentId = agents[index % agents.length]!;
     const root = entries[agentId]?.workspace;
     if (!root) {
