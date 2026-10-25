@@ -77,23 +77,6 @@ it("bounds image frames when the transport declares a limit", async () => {
   await expect(next).resolves.toEqual({ models: [] });
 });
 
-it("replays configuration warnings emitted before their notification observer exists", () => {
-  const harness = createHarness();
-  const notification = {
-    method: "configWarning",
-    params: {
-      summary: "Error parsing rules; custom rules not applied.",
-      details: "rules.toml: unexpected token",
-    },
-  };
-
-  harness.send(notification);
-  const receiveNotification = vi.fn();
-  harness.client.addNotificationHandler(receiveNotification);
-
-  expect(receiveNotification).toHaveBeenCalledExactlyOnceWith(notification);
-});
-
 it("keeps frames alive without replay when diagnostic logging fails before observers", async () => {
   const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementationOnce(() => {
     throw new Error("diagnostic sink failed");

@@ -9,7 +9,6 @@ import { sendResult } from "./sandbox-exec-server/json-rpc.js";
 
 const CODEX_SANDBOX_EXEC_SERVER_MAX_INBOUND_MESSAGE_BYTES = 100 * 1024 * 1024;
 import {
-  collectNotifications,
   codexFsSandboxContext,
   createClient,
   createSandboxContext,
@@ -97,8 +96,8 @@ function setBackend(sandbox: Sandbox, backendId?: string) {
 
 async function registeredSocket(sandbox = createSandboxContext({})) {
   const client = createClient();
-  await register(sandbox, client);
-  return { client, socket: await openSocket(execServerUrlFromClient(client)) };
+  const environment = await register(sandbox, client);
+  return { client, environment, socket: await openSocket(execServerUrlFromClient(client)) };
 }
 
 it("rejects an incomplete sandbox environment before publishing an exec-server", async () => {
@@ -115,7 +114,14 @@ it("rejects an incomplete sandbox environment before publishing an exec-server",
 it("reports target shell, encoded workdir, and readiness", async () => {
   const sandbox = createSandboxContext({});
   sandbox.containerWorkdir = "/workspace/space #project";
-  const socket = await openSandboxSocket(sandbox);
+  const { client, environment, socket } = await registeredSocket(sandbox);
+  expect(environment).toEqual({
+    environmentId: expect.stringMatching(/^openclaw-sandbox-/),
+    cwd: sandbox.containerWorkdir,
+  });
+  expect(execServerUrlFromClient(client)).toMatch(/^ws:\/\/127\.0\.0\.1:/);
+  await rpc(socket, "initialize", { clientName: "test" });
+  socket.send(JSON.stringify({ method: "initialized" }));
   await expect(rpc(socket, "environment/info", {})).resolves.toEqual({
     shell: { name: "sh", path: "/bin/sh" },
     cwd: "file:///workspace/space%20%23project",
@@ -142,60 +148,6 @@ it("does not treat 127-prefixed DNS names as local app-server hosts", async () =
     }),
   ).rejects.toThrow("cannot be registered with a remote Codex app-server");
   expect(client.request).not.toHaveBeenCalled();
-});
-
-it("registers a sandbox-backed Codex environment and routes process execution through it", async () => {
-  const buildExecSpec = vi.fn(async () =>
-    execSpec("process.stdout.write('sandbox-process-ok\\n')"),
-  );
-  const sandbox = createSandboxContext({ buildExecSpec });
-  const client = createClient();
-  const environment = await register(sandbox, client);
-  expect(client.request.mock.calls[0]?.[0]).toBe("environment/add");
-  expect(environment).toEqual({
-    environmentId: expect.stringMatching(/^openclaw-sandbox-/),
-    cwd: "/workspace",
-  });
-  const execServerUrl = execServerUrlFromClient(client);
-  expect(execServerUrl).toMatch(/^ws:\/\/127\.0\.0\.1:/);
-  const socket = await openSocket(execServerUrl);
-  const notifications = collectNotifications(socket);
-  await rpc(socket, "initialize", { clientName: "test" });
-  socket.send(JSON.stringify({ method: "initialized" }));
-  const start = await startProcess(socket, "proc-1", {
-    argv: ["/bin/sh", "-lc", "printf ok"],
-    cwd: "file:///projects/example%20repo",
-    env: {
-      POLICY_SET: "env-wins",
-      TEST_FLAG: "1",
-      CODEX_API_KEY: "must-not-cross",
-      OPENAI_API_KEY: "must-not-cross",
-    },
-    envPolicy: envPolicy("none", {
-      POLICY_SET: "policy",
-      POLICY_ONLY: "1",
-      CODEX_ACCESS_TOKEN: "must-not-cross",
-    }),
-  });
-  expect(start).toEqual({ processId: "proc-1", sandboxType: "none" });
-  const read = await readUntilClosed(socket, "proc-1");
-  expect(read).toMatchObject({ exited: true, exitCode: 0, closed: true });
-  expect(output(read.chunks?.slice(0, 1))).toBe("sandbox-process-ok\n");
-  expect(buildExecSpec).toHaveBeenCalledWith(
-    expect.objectContaining({
-      env: expect.objectContaining({
-        CODEX_SANDBOX_EXEC_ID: expect.any(String),
-        POLICY_ONLY: "1",
-        POLICY_SET: "env-wins",
-        TEST_FLAG: "1",
-      }),
-      usePty: false,
-      workdir: "/projects/example repo",
-    }),
-  );
-  expect(notifications.map((notification) => notification.method)).toEqual(
-    expect.arrayContaining(["process/output", "process/exited", "process/closed"]),
-  );
 });
 
 it.each([
@@ -347,11 +299,28 @@ it("does not let Codex env policy inherit host secret variables", async () => {
     async () => {
       const buildExecSpec = vi.fn(async () => ({ ...execSpec(), env: {} }));
       const socket = await connect({ buildExecSpec });
-      await startProcess(socket, "proc-secret-env", { envPolicy: envPolicy("all") });
+      await startProcess(socket, "proc-secret-env", {
+        env: {
+          POLICY_SET: "env-wins",
+          TEST_FLAG: "1",
+          CODEX_API_KEY: "must-not-cross",
+          OPENAI_API_KEY: "must-not-cross",
+        },
+        envPolicy: envPolicy("all", {
+          POLICY_SET: "policy",
+          POLICY_ONLY: "1",
+          CODEX_ACCESS_TOKEN: "must-not-cross",
+        }),
+      });
       const [{ env: execEnv }] = buildExecSpec.mock.calls[0] as unknown as [
         { env: Record<string, string> },
       ];
-      expect(execEnv).toEqual({ CODEX_SANDBOX_EXEC_ID: expect.any(String) });
+      expect(execEnv).toEqual({
+        CODEX_SANDBOX_EXEC_ID: expect.any(String),
+        POLICY_SET: "env-wins",
+        POLICY_ONLY: "1",
+        TEST_FLAG: "1",
+      });
     },
   );
 });
@@ -491,19 +460,23 @@ it.runIf(process.platform !== "win32")(
   "preserves literal argv process identity and exit status through a shell backend",
   async () => {
     const sandbox = createSandboxContext({
-      buildExecSpec: async ({ command, env }) => ({
-        argv: [
-          "/bin/sh",
-          "-c",
-          // Prevent implicit shell exec optimization, which otherwise hides the extra process.
-          `export BACKEND_EXEC_PID=$$; trap 'printf "BACKEND_EXIT\\n"; exit 99' EXIT; ${command}`,
-        ],
-        env: { ...env, PATH: process.env.PATH },
-        stdinMode: "pipe-closed",
-      }),
+      buildExecSpec: async ({ command, env, workdir, usePty }) => {
+        expect({ workdir, usePty }).toEqual({ workdir: "/projects/example repo", usePty: false });
+        return {
+          argv: [
+            "/bin/sh",
+            "-c",
+            // Prevent implicit shell exec optimization, which otherwise hides the extra process.
+            `export BACKEND_EXEC_PID=$$; trap 'printf "BACKEND_EXIT\\n"; exit 99' EXIT; ${command}`,
+          ],
+          env: { ...env, PATH: process.env.PATH },
+          stdinMode: "pipe-closed",
+        };
+      },
     });
     const socket = await openSandboxSocket(sandbox);
     await startProcess(socket, "literal-command", {
+      cwd: "file:///projects/example%20repo",
       argv: [
         process.execPath,
         "-e",

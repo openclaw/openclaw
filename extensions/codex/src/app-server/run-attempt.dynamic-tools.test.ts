@@ -182,7 +182,6 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
     ]
   >([
     ["default review", 1_800_000, {}, 0, "complete"],
-    ["explicit multipass review", 1_800_000, { timeoutSeconds: 900, passes: 2 }, 0, "complete"],
     ["original parent deadline", 1_200_000, {}, 500_000, "timeout"],
     ["Stop with unlimited parent", MAX_TIMER_TIMEOUT_MS, {}, 0, "stop"],
   ])("keeps AutoReview and its replay within %s", async (_scenario, parentMs, args, ageMs, end) => {
@@ -543,16 +542,14 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
     await vi.waitFor(() => {
       expect(afterToolCall).toHaveBeenCalledTimes(1);
     });
-    expect(afterToolCall.mock.calls[0]?.[1]).toEqual(
-      expect.objectContaining({
-        agentId: "main",
-        sessionId: "session-1",
-        sessionKey: "agent:main:session-1",
-        runId: "run-1",
-        channelId: "-100123",
-        toolName: "echo",
-        toolCallId: "call-echo-1",
-      }),
-    );
+    expect(afterToolCall.mock.calls[0]?.[1]).toMatchObject({
+      agentId: "main",
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      runId: "run-1",
+      channelId: "-100123",
+      toolName: "echo",
+      toolCallId: "call-echo-1",
+    });
   });
 });

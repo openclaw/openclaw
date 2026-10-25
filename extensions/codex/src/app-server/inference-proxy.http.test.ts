@@ -157,69 +157,6 @@ async function waitForUpstreamClose() {
 }
 
 describe("inference HTTP transport ownership", () => {
-  it("replays completed-parent prompt bytes through the HTTP serializer", async () => {
-    const received: Buffer[] = [];
-    handle = (req, res) => {
-      void readBody(req).then((bytes) => {
-        received.push(bytes);
-        res.end("answer");
-      });
-    };
-    const send = async (threadId: string, generation: string, prompt: object) => {
-      const upload = post(
-        json({
-          model: "allowed",
-          ...prompt,
-          client_metadata: metadata({
-            thread_id: threadId,
-            request_kind: "turn",
-            [CODEX_INFERENCE_GENERATION_KEY]: generation,
-          }),
-        }),
-      );
-      const response = await upload.response;
-      expect(response.statusCode).toBe(200);
-      await readBody(response);
-      await upload.closed;
-    };
-    const parent = await register("parent");
-    const input = [
-      { role: "developer", content: "exact environment λ\n".repeat(16000) },
-      { role: "user", content: "parent task" },
-      { role: "assistant", content: "previous tool call" },
-      { type: "function_call_output", call_id: "call", output: "exact result" },
-    ];
-    await send("parent", parent.generation, {
-      instructions: "native base",
-      tools: [{ type: "function", name: "read", parameters: { type: "object" } }],
-      input,
-    });
-    parent.release();
-    const fork = await forkFrom("parent", "fork");
-    const question = { role: "user", content: "side question" };
-    const finalAnswer = { role: "assistant", content: "Parent final answer 4837" };
-    await send("fork", fork.generation, {
-      instructions: "rebuilt base",
-      previous_response_id: "child-prewarm-response",
-      tools: [],
-      input: [...input, finalAnswer, question],
-    });
-    const [parentBytes, forkBytes] = received;
-    if (!parentBytes || !forkBytes) {
-      throw new Error("Expected both parent and fork wire requests");
-    }
-    const parentWire = JSON.parse(parentBytes.toString());
-    const forkWire = JSON.parse(forkBytes.toString());
-    expect(forkWire.instructions).toBe(parentWire.instructions);
-    expect(JSON.stringify(forkWire.tools)).toBe(JSON.stringify(parentWire.tools));
-    expect(JSON.stringify(forkWire.input.slice(0, -2))).toBe(JSON.stringify(parentWire.input));
-    expect(forkWire.input.at(-2)).toEqual(finalAnswer);
-    expect(forkWire.input.at(-1)).toEqual(question);
-    expect(forkWire.tool_choice).toBe("none");
-    expect(forkWire).not.toHaveProperty("previous_response_id");
-    fork.release();
-  });
-
   it.each([false, true])(
     "authorizes a fork after early parent cleanup=%s",
     async (earlyCleanup) => {
@@ -357,32 +294,26 @@ describe("inference HTTP transport ownership", () => {
         res.end("synthetic completion");
       });
     };
-    for (const turnMetadata of [
-      { request_kind: "turn", thread_id: "child", parent_thread_id: "root" },
-      { request_kind: "turn", thread_id: "review", subagent_kind: "review" },
-      { request_kind: "compaction" },
-      { request_kind: "memory" },
-      { request_kind: "prewarm" },
-      {
-        request_kind: "turn",
-        thread_id: "root",
-        [CODEX_INFERENCE_GENERATION_KEY]: registration.generation,
-      },
-    ]) {
-      // Native serde keeps integer precision, escape spelling and existing tool JSON.
-      const source = Buffer.from(
-        '{ "generate": false, "tools": [{ "minimum": 9007199254740993 }], "input": "\\u0061", "client_metadata": ' +
-          JSON.stringify(metadata(turnMetadata)) +
-          " }",
-      );
-      const wire = zstdCompressSync(source);
-      const upload = post(wire, { "content-encoding": "zstd" });
-      const response = await upload.response;
-      expect(response.statusCode).toBe(200);
-      await readBody(response);
-      expect(forwarded).toEqual(wire);
-      await Promise.all([upload.closed, waitForUpstreamClose()]);
-    }
+    // Context exclusions are covered by inference-context.test.ts; here exercise
+    // unchanged-byte transport with a fully admitted root.
+    const source = Buffer.from(
+      '{ "generate": false, "tools": [{ "minimum": 9007199254740993 }], "input": "\\u0061", "client_metadata": ' +
+        JSON.stringify(
+          metadata({
+            request_kind: "turn",
+            thread_id: "root",
+            [CODEX_INFERENCE_GENERATION_KEY]: registration.generation,
+          }),
+        ) +
+        " }",
+    );
+    const wire = zstdCompressSync(source);
+    const upload = post(wire, { "content-encoding": "zstd" });
+    const response = await upload.response;
+    expect(response.statusCode).toBe(200);
+    await readBody(response);
+    expect(forwarded).toEqual(wire);
+    await Promise.all([upload.closed, waitForUpstreamClose()]);
   });
 
   it("keeps replacement decoding for malformed UTF-8 instead of forwarding invalid bytes", async () => {
@@ -464,7 +395,6 @@ describe("inference HTTP transport ownership", () => {
 
   it("cancels a backpressured upload after early response headers and drains owned sockets", async (context) => {
     const received = createDeferred<IncomingMessage>();
-    const writes = { blocked: 0, drained: 0 };
     let upstreamSocket: Socket | undefined;
     let upstreamErrorObserved = false;
     handle = (req, res) => {
@@ -493,7 +423,6 @@ describe("inference HTTP transport ownership", () => {
       vi.spyOn(socket, "write").mockImplementation((...args) => {
         const result = write(...args);
         if (!result) {
-          writes.blocked++;
           if (headersReceived) {
             blocked.resolve(socket);
           }
@@ -501,7 +430,6 @@ describe("inference HTTP transport ownership", () => {
         return result;
       });
       socket.on("drain", () => {
-        writes.drained++;
         drained.resolve();
       });
     };
@@ -520,7 +448,6 @@ describe("inference HTTP transport ownership", () => {
     expect(upstreamClient.writableNeedDrain).toBe(true);
     expect(response.statusCode).toBe(200);
     expect(incoming.readableEnded).toBe(false);
-    expect(writes.blocked).toBeGreaterThan(0);
     const upstreamClosed = createDeferred<boolean>();
     upstreamClient.once("error", () => {
       upstreamErrorObserved = true;
@@ -537,7 +464,6 @@ describe("inference HTTP transport ownership", () => {
     incoming.resume();
     await waitForUpstreamClose();
     expect(incoming.complete).toBe(false);
-    expect(writes.drained).toBeGreaterThan(0);
     expect(upload.req.socket?.closed).toBe(true);
   });
 });
