@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, expect, test, vi } from "vitest";
+import type { SessionsCreateResult } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import { captureMethodCall } from "../../test/helpers/capture-method-call.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
@@ -42,10 +43,28 @@ const { createSessionStoreDir, openClient } = setupSessionCreateTestHarness(asyn
 });
 const execFileAsync = promisify(execFile);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const git = (cwd: string, ...args: string[]) => execFileAsync("git", ["-C", cwd, ...args]);
+const createWorkspace = (prefix: string) =>
+  copyGitWorkspace(gitWorkspaceTemplate, tempDirs.make(prefix));
+const adminOptions = { client: { connect: { scopes: ["operator.admin"] } } as never };
+const createSession = (
+  params: Record<string, unknown>,
+  options: Parameters<typeof directSessionReq>[2] = adminOptions,
+) =>
+  directSessionReq<SessionsCreateResult>(
+    "sessions.create",
+    { agentId: "main", ...params },
+    options,
+  );
+
+async function removeLiveWorktree(id?: string) {
+  if (id && getRegistryWorktree(process.env, id)?.removedAt === undefined) {
+    await managedWorktrees.remove({ id, reason: "test-cleanup", allowSnapshotLoss: true });
+  }
+}
 
 test("sessions.create fences the first workspace write behind its diff baseline", async () => {
-  const root = tempDirs.make("openclaw-session-diff-first-write-");
-  const workspace = await copyGitWorkspace(gitWorkspaceTemplate, root);
+  const workspace = await createWorkspace("openclaw-session-diff-first-write-");
   await fs.appendFile(path.join(workspace, "README.md"), "dirty before session\n");
   const { storePath } = await createSessionStoreDir();
   const sessionKey = "agent:main:dashboard:diff-first-write";
@@ -91,14 +110,8 @@ test("sessions.create fences the first workspace write behind its diff baseline"
   };
 
   try {
-    const created = await directSessionReq<{ runStarted?: boolean; sessionId?: string }>(
-      "sessions.create",
-      {
-        agentId: "main",
-        cwd: workspace,
-        key: sessionKey,
-        message: "write a file",
-      },
+    const created = await createSession(
+      { cwd: workspace, key: sessionKey, message: "write a file" },
       client,
     );
     expect(created).toMatchObject({
@@ -129,13 +142,11 @@ test("sessions.create fences the first workspace write behind its diff baseline"
 });
 
 test("sessions.create rolls back failed provisioning before a same-key creator proceeds", async () => {
-  const root = tempDirs.make("openclaw-session-worktree-rollback-");
-  const workspace = await copyGitWorkspace(gitWorkspaceTemplate, root);
+  const workspace = await createWorkspace("openclaw-session-worktree-rollback-");
   testState.agentConfig = { workspace };
   testState.sessionConfig = { sharing: { drafts: false } };
   const { storePath } = await createSessionStoreDir();
   const key = "agent:main:dashboard:worktree-rollback";
-  const adminClient = { connect: { scopes: ["operator.admin"] } } as never;
   const originalRollback = captureMethodCall("rollbackPreparation")(
     ManagedWorktreeService.prototype,
   );
@@ -153,16 +164,7 @@ test("sessions.create rolls back failed provisioning before a same-key creator p
       await originalRollback(this, record, withRollback);
     });
   try {
-    const failedPromise = directSessionReq(
-      "sessions.create",
-      {
-        key,
-        agentId: "main",
-        visibility: "draft",
-        worktree: true,
-      },
-      { client: adminClient },
-    );
+    const failedPromise = createSession({ key, visibility: "draft", worktree: true });
     await Promise.race([
       rollbackStarted,
       failedPromise.then((result) => {
@@ -170,22 +172,10 @@ test("sessions.create rolls back failed provisioning before a same-key creator p
       }),
     ]);
     let successorSettled = false;
-    const successorPromise = directSessionReq<{
-      entry: {
-        worktree?: {
-          id: string;
-          branch: string;
-          repoRoot: string;
-          canonicalWorkspaceDir?: string;
-        };
-      };
-      worktree: { id: string; path: string; branch: string };
-    }>("sessions.create", { key, agentId: "main", worktree: true }, { client: adminClient }).then(
-      (result) => {
-        successorSettled = true;
-        return result;
-      },
-    );
+    const successorPromise = createSession({ key, worktree: true }).then((result) => {
+      successorSettled = true;
+      return result;
+    });
     await Promise.resolve();
     expect(successorSettled).toBe(false);
 
@@ -204,7 +194,7 @@ test("sessions.create rolls back failed provisioning before a same-key creator p
       removedAt: expect.any(Number),
     });
     expect(successor.ok).toBe(true);
-    const successorWorktree = successor.payload!.worktree;
+    const successorWorktree = successor.payload!.worktree!;
     successorWorktreeId = successorWorktree.id;
     expect(successorWorktree.id).not.toBe(failedWorktreeId);
     await fs.access(successorWorktree.path);
@@ -215,11 +205,7 @@ test("sessions.create rolls back failed provisioning before a same-key creator p
       canonicalWorkspaceDir: workspace,
     });
 
-    const adoptedFailure = await directSessionReq(
-      "sessions.create",
-      { key, agentId: "main", visibility: "draft", worktree: true },
-      { client: adminClient },
-    );
+    const adoptedFailure = await createSession({ key, visibility: "draft", worktree: true });
     expect(adoptedFailure).toMatchObject({
       ok: false,
       error: { message: "sessions.create visibility requires a new session" },
@@ -231,16 +217,7 @@ test("sessions.create rolls back failed provisioning before a same-key creator p
   } finally {
     releaseRollback();
     rollbackSpy.mockRestore();
-    if (
-      successorWorktreeId &&
-      getRegistryWorktree(process.env, successorWorktreeId)?.removedAt === undefined
-    ) {
-      await managedWorktrees.remove({
-        id: successorWorktreeId,
-        reason: "test-cleanup",
-        allowSnapshotLoss: true,
-      });
-    }
+    await removeLiveWorktree(successorWorktreeId);
     await disposeSessionReadContexts();
     testState.agentConfig = undefined;
     testState.sessionConfig = undefined;
@@ -307,11 +284,9 @@ test.each([
       });
     const client = soloClient();
     client.connect.scopes = ["operator.admin"];
-    const creation = directSessionReq(
-      "sessions.create",
+    const creation = createSession(
       {
         key,
-        agentId: "main",
         visibility: "draft",
         worktree: true,
         worktreeName: owner.name,
@@ -347,14 +322,7 @@ test.each([
         expect(record?.removedAt).toEqual(expect.any(Number));
         await expect(fs.stat(worktree.path)).rejects.toMatchObject({ code: "ENOENT" });
         expect(
-          (
-            await execFileAsync("git", [
-              "-C",
-              worktree.repoRoot,
-              "show",
-              `${record!.snapshotRef}:draft.txt`,
-            ])
-          ).stdout,
+          (await git(worktree.repoRoot, "show", `${record!.snapshotRef}:draft.txt`)).stdout,
         ).toBe("Keep the restored checkout.\n");
       }
     } finally {
@@ -362,13 +330,7 @@ test.each([
       await Promise.allSettled([creation]);
       createSpy.mockRestore();
       createEmptySpy.mockRestore();
-      if (getRegistryWorktree(process.env, worktree.id)?.removedAt === undefined) {
-        await managedWorktrees.remove({
-          id: worktree.id,
-          reason: "test-cleanup",
-          allowSnapshotLoss: true,
-        });
-      }
+      await removeLiveWorktree(worktree.id);
       diskSpace.mockRestore();
       await disposeSessionReadContexts();
       testState.agentConfig = undefined;
@@ -378,9 +340,8 @@ test.each([
 );
 
 test("sessions.create provisions and reuses a session worktree for later runs", async () => {
-  const root = tempDirs.make("openclaw-session-worktree-");
-  const workspace = await copyGitWorkspace(gitWorkspaceTemplate, root);
-  await execFileAsync("git", ["-C", workspace, "branch", "selected-base"]);
+  const workspace = await createWorkspace("openclaw-session-worktree-");
+  await git(workspace, "branch", "selected-base");
   testState.agentConfig = { workspace };
   const { dir, storePath } = await createSessionStoreDir();
   const originalCreate = captureMethodCall("createWithOutcome")(ManagedWorktreeService.prototype);
@@ -392,33 +353,22 @@ test("sessions.create provisions and reuses a session worktree for later runs", 
     });
   let sessionKey: string | undefined;
   try {
-    const created = await directSessionReq<{
-      key: string;
-      entry: {
-        permissionMode?: string;
-        sessionRoot?: string;
-        spawnedCwd?: string;
-      };
-      worktree: { id: string; path: string; branch: string };
-    }>(
-      "sessions.create",
-      {
-        agentId: "main",
-        label: "Release planning",
-        worktree: true,
-        worktreeBaseRef: "selected-base",
-      },
-      { client: { connect: { scopes: ["operator.admin"] } } as never },
-    );
+    const created = await createSession({
+      label: "Release planning",
+      worktree: true,
+      worktreeBaseRef: "selected-base",
+    });
 
     expect(created.ok).toBe(true);
     const key = requireNonEmptyString(created.payload?.key, "created session key");
     const worktree = created.payload?.worktree;
     expect(worktree?.branch).toBe("openclaw/release-planning");
-    expect(created.payload?.entry.spawnedCwd).toBe(worktree?.path);
-    expect(created.payload?.entry.permissionMode).toBeUndefined();
+    expect(created.payload?.entry).toMatchObject({
+      spawnedCwd: worktree?.path,
+      sessionRoot: worktree?.path,
+    });
+    expect(created.payload?.entry?.permissionMode).toBeUndefined();
     expect(loadSessionEntry({ sessionKey: key, storePath })?.permissionMode).toBeUndefined();
-    expect(created.payload?.entry.sessionRoot).toBe(worktree?.path);
     sessionKey = key;
     expect(findLiveRegistryWorktreeByOwner(process.env, "session", key)).toMatchObject({
       id: worktree?.id,
@@ -429,27 +379,21 @@ test("sessions.create provisions and reuses a session worktree for later runs", 
 
     const retainedDraft = path.join(worktree!.path, "session-draft.txt");
     await fs.writeFile(retainedDraft, "uncommitted work survives reuse\n");
-    const originalHead = (await execFileAsync("git", ["-C", worktree!.path, "rev-parse", "HEAD"]))
-      .stdout;
+    const originalHead = (await git(worktree!.path, "rev-parse", "HEAD")).stdout;
 
-    await execFileAsync("git", ["-C", workspace, "branch", "-D", "selected-base"]);
-    const recreated = await directSessionReq<{
-      entry: { spawnedCwd?: string };
-      worktree: { id: string; path: string; branch: string };
-    }>(
-      "sessions.create",
-      { key, agentId: "main", worktree: true, worktreeBaseRef: "selected-base" },
-      { client: { connect: { scopes: ["operator.admin"] } } as never },
-    );
+    await git(workspace, "branch", "-D", "selected-base");
+    const recreated = await createSession({
+      key,
+      worktree: true,
+      worktreeBaseRef: "selected-base",
+    });
     expect(recreated.ok).toBe(true);
     expect(recreated.payload?.worktree).toEqual(worktree);
-    expect(recreated.payload?.entry.spawnedCwd).toBe(worktree?.path);
+    expect(recreated.payload?.entry?.spawnedCwd).toBe(worktree?.path);
     await expect(fs.readFile(retainedDraft, "utf8")).resolves.toBe(
       "uncommitted work survives reuse\n",
     );
-    expect((await execFileAsync("git", ["-C", worktree!.path, "rev-parse", "HEAD"])).stdout).toBe(
-      originalHead,
-    );
+    expect((await git(worktree!.path, "rev-parse", "HEAD")).stdout).toBe(originalHead);
     expect(
       listRegistryWorktrees(process.env).filter(
         (record) =>
@@ -578,13 +522,7 @@ test("sessions.create runs an existing managed worktree cwd for initial and foll
 
   try {
     mockPreparedRuntime();
-    const created = await rpcReq<{
-      entry?: { permissionMode?: string; sessionRoot?: string; spawnedCwd?: string };
-      key?: string;
-      runId?: string;
-      runStarted?: boolean;
-      sessionId?: string;
-    }>(ws, "sessions.create", {
+    const created = await rpcReq<SessionsCreateResult>(ws, "sessions.create", {
       agentId: "roboclaw",
       cwd: requestedCwd,
       permissionMode: "full",
@@ -663,28 +601,17 @@ test("sessions.create runs an existing managed worktree cwd for initial and foll
 });
 
 test("sessions.create preserves pending worktree intent when initial-turn admission fails", async () => {
-  const root = tempDirs.make("openclaw-session-worktree-post-commit-failure-");
-  const workspace = await copyGitWorkspace(gitWorkspaceTemplate, root);
+  const workspace = await createWorkspace("openclaw-session-worktree-post-commit-failure-");
   testState.agentConfig = { workspace };
   const { storePath } = await createSessionStoreDir();
   const key = "agent:main:dashboard:post-commit-worktree";
   try {
-    const created = await directSessionReq<{
-      key: string;
-      runError: { code: string; message: string };
-      runStarted: boolean;
-      sessionId: string;
-    }>(
-      "sessions.create",
-      {
-        agentId: "main",
-        key,
-        message: "reject this initial input\u0000",
-        worktree: true,
-        worktreeName: "post-commit-worktree",
-      },
-      { client: { connect: { scopes: ["operator.admin"] } } as never },
-    );
+    const created = await createSession({
+      key,
+      message: "reject this initial input\u0000",
+      worktree: true,
+      worktreeName: "post-commit-worktree",
+    });
     expect(created).toMatchObject({
       ok: true,
       payload: {

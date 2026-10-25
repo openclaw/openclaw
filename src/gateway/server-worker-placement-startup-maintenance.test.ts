@@ -15,6 +15,7 @@ import {
 import { applySessionEntryLifecycleMutation } from "../config/sessions/session-accessor.sqlite-projection.js";
 import { prepareSessionMaintenancePreservation } from "../config/sessions/store-maintenance-preserve.js";
 import { resolveMaintenanceConfigFromInput } from "../config/sessions/store-maintenance.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -210,11 +211,30 @@ async function startMaintenanceRuntime(
 
 async function preservedSessionKeys() {
   const prepared = await prepareSessionMaintenancePreservation("unused-store");
-  try {
-    return new Set(prepared.capture().providerKeys);
-  } finally {
-    prepared.dispose();
-  }
+  using _ = { [Symbol.dispose]: prepared.dispose };
+  return new Set(prepared.capture().providerKeys);
+}
+
+function seedEntry(
+  scope: Parameters<typeof patchSessionEntryCore>[0],
+  entry: SessionEntry,
+  replaceEntry = false,
+) {
+  return patchSessionEntryCore(scope, () => entry, {
+    fallbackEntry: entry,
+    replaceEntry,
+    skipMaintenance: true,
+  });
+}
+
+function upsertEntry(
+  scope: Parameters<typeof applySessionEntryLifecycleMutation>[0] & { sessionKey: string },
+  entry: SessionEntry,
+) {
+  return applySessionEntryLifecycleMutation({
+    ...scope,
+    upserts: [{ sessionKey: scope.sessionKey, entry }],
+  });
 }
 
 describe("worker placement session maintenance ownership", () => {
@@ -242,11 +262,7 @@ describe("worker placement session maintenance ownership", () => {
         let claim = publication === "release" && turn ? await store.claimTurn(turn) : undefined;
         const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
         const preservedEntry = { sessionId: identity.sessionId, updatedAt: 1 };
-        await patchSessionEntryCore(
-          { ...identity, storePath, env: state.env },
-          () => preservedEntry,
-          { fallbackEntry: preservedEntry, skipMaintenance: true },
-        );
+        await seedEntry({ ...identity, storePath, env: state.env }, preservedEntry);
         const preservedSnapshot = loadSessionEntryReadOnly({
           ...identity,
           env: state.env,
@@ -284,23 +300,17 @@ describe("worker placement session maintenance ownership", () => {
         };
         try {
           await expect(
-            applySessionEntryLifecycleMutation({
-              ...trigger,
-              upserts: [
-                {
-                  sessionKey: trigger.sessionKey,
-                  entry: {
-                    sessionId: "concurrent-maintenance-trigger",
-                    updatedAt: Date.now(),
-                  },
-                },
-              ],
-              maintenanceOverride: resolveMaintenanceConfigFromInput({
-                mode: "enforce",
-                maxEntries: 1,
-                maxDiskBytes: false,
-              }),
-            }),
+            upsertEntry(
+              {
+                ...trigger,
+                maintenanceOverride: resolveMaintenanceConfigFromInput({
+                  mode: "enforce",
+                  maxEntries: 1,
+                  maxDiskBytes: false,
+                }),
+              },
+              { sessionId: "concurrent-maintenance-trigger", updatedAt: Date.now() },
+            ),
           ).resolves.toBeDefined();
           expect(preservationReads).toBe(1);
           expect(loadSessionEntryReadOnly({ ...identity, env: state.env, storePath })).toEqual(
@@ -369,18 +379,10 @@ describe("worker placement session maintenance ownership", () => {
           storePath: resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
           sessionKey: "agent:main:fresh-local-session",
         };
-        const mutate = () =>
-          applySessionEntryLifecycleMutation({
-            ...scope,
-            upserts: [
-              {
-                sessionKey: scope.sessionKey,
-                entry: { sessionId: "fresh-local-session", updatedAt: 1000 },
-              },
-            ],
-          });
         try {
-          await expect(mutate()).resolves.toMatchObject({ afterCount: 1 });
+          await expect(
+            upsertEntry(scope, { sessionId: "fresh-local-session", updatedAt: 1000 }),
+          ).resolves.toMatchObject({ afterCount: 1 });
           expect(loadSessionEntryReadOnly(scope)?.sessionId).toBe("fresh-local-session");
         } finally {
           interleave.mockRestore();
@@ -453,10 +455,7 @@ describe("worker placement session maintenance ownership", () => {
         repositoryWorkspaceId: repository.workspaceId,
         updatedAt: Date.now(),
       };
-      await patchSessionEntryCore({ ...placement, storePath }, () => entry, {
-        fallbackEntry: entry,
-        skipMaintenance: true,
-      });
+      await seedEntry({ ...placement, storePath }, entry);
       expect(loadSessionEntryReadOnly(placement)).toBeUndefined();
       setRuntimeConfigSnapshot(cfg);
       const createRetention = vi.spyOn(workspaceRetention, "createNodeWorkspaceRetainCoordinator");
@@ -516,21 +515,13 @@ describe("worker placement session maintenance ownership", () => {
           sessionId: placement.sessionId,
           updatedAt: maintenance === "entry capping" ? now - 1_000 : now - 31 * 86_400_000,
         };
-        await patchSessionEntryCore(sessionScope(sessionKey), () => entry, {
-          fallbackEntry: entry,
-          replaceEntry: true,
-          skipMaintenance: true,
-        });
+        await seedEntry(sessionScope(sessionKey), entry, true);
         const sentinelKey = "agent:main:explicit:maintenance-sentinel";
         const sentinelEntry = {
           sessionId: "maintenance-sentinel",
           updatedAt: now - 31 * 86_400_000,
         };
-        await patchSessionEntryCore(sessionScope(sentinelKey), () => sentinelEntry, {
-          fallbackEntry: sentinelEntry,
-          replaceEntry: true,
-          skipMaintenance: true,
-        });
+        await seedEntry(sessionScope(sentinelKey), sentinelEntry, true);
         const { forceDestroyEnvironment, runtime } = createMaintenanceRuntime({
           placements: [placement],
         });

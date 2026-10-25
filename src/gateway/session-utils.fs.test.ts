@@ -30,6 +30,7 @@ let imageBytes: number;
 const requireRecord = createRequireRecord("object", "expected-label");
 const textBlock = (text: string) => ({ type: "text", text });
 const messageRow = (role: string, content: unknown, extra = {}) => ({ role, content, ...extra });
+const assistant = (extra: Record<string, unknown>) => ({ role: "assistant", ...extra });
 const artifact = (role: string, content: unknown) => ({ message: messageRow(role, content) });
 const imageSource = (data: string, media_type = "image/png") => ({
   type: "base64",
@@ -261,16 +262,12 @@ describe("artifact usage", () => {
 
   test("aggregates assistant usage asynchronously without readFileSync", async () => {
     writeUsage([
-      {
-        role: "assistant",
+      assistant({
         provider: "anthropic",
         model: "claude-sonnet-4-6",
         usage: { input: 1800, output: 400, cacheRead: 600, cost: { total: 0.0055 } },
-      },
-      {
-        role: "assistant",
-        usage: { input: 2400, output: 250, cacheRead: 900, cost: { total: 0.006 } },
-      },
+      }),
+      assistant({ usage: { input: 2400, output: 250, cacheRead: 900, cost: { total: 0.006 } } }),
     ]);
     const readFile = vi.spyOn(fs, "readFileSync");
     const snapshot = await usage();
@@ -290,22 +287,15 @@ describe("artifact usage", () => {
   test.each(["command", "delivery-mirror", "gateway-injected", "automation-result"])(
     "retains a meaningful zero-cost artifact snapshot without a %s model identity",
     async (model) => {
-      writeUsage([
-        {
-          role: "assistant",
-          provider: "openclaw",
-          model,
-          usage: { cost: { total: 0 } },
-        },
-      ]);
+      writeUsage([assistant({ provider: "openclaw", model, usage: { cost: { total: 0 } } })]);
       await expect(usage()).resolves.toEqual({ costUsd: 0 });
     },
   );
 
   test("keeps the provider model after a delivered command", async () => {
     writeUsage([
-      { role: "assistant", provider: "anthropic", model: "claude-sonnet-4-6" },
-      { role: "assistant", provider: "openclaw", model: "command" },
+      assistant({ provider: "anthropic", model: "claude-sonnet-4-6" }),
+      assistant({ provider: "openclaw", model: "command" }),
     ]);
     await expect(usage()).resolves.toMatchObject({
       modelProvider: "anthropic",
@@ -314,23 +304,20 @@ describe("artifact usage", () => {
   });
 
   test("treats unavailable JSONL context as terminal until a later valid snapshot", async () => {
-    const identity = { role: "assistant", provider: "claude-cli", model: "claude-opus-4-7" };
-    const old = {
-      ...identity,
-      api: "cli",
-      usage: { input: 128_814, output: 3000, cacheRead: 992_953, totalTokens: 1_124_767 },
-    };
-    const unavailable = {
-      ...identity,
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        contextUsage: { state: "unavailable" },
-      },
-    };
+    const cliUsage = (tokens: Record<string, unknown>, extra = {}) =>
+      assistant({ provider: "claude-cli", model: "claude-opus-4-7", usage: tokens, ...extra });
+    const old = cliUsage(
+      { input: 128_814, output: 3000, cacheRead: 992_953, totalTokens: 1_124_767 },
+      { api: "cli" },
+    );
+    const unavailable = cliUsage({
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      contextUsage: { state: "unavailable" },
+    });
     writeUsage([old]);
     const legacy = await usage();
     expect(legacy?.contextUsage).toEqual({ state: "unavailable" });
@@ -343,10 +330,7 @@ describe("artifact usage", () => {
     writeUsage([
       old,
       unavailable,
-      {
-        ...identity,
-        usage: { input: 67_932, output: 2000, cacheRead: 18_944, totalTokens: 88_876 },
-      },
+      cliUsage({ input: 67_932, output: 2000, cacheRead: 18_944, totalTokens: 88_876 }),
     ]);
     expect(await usage()).toMatchObject({ totalTokens: 86_876, totalTokensFresh: true });
   });
@@ -356,12 +340,11 @@ describe("artifact usage", () => {
     const answer = "local response ".repeat(120);
     writeUsage([
       { role: "user", content: prompt },
-      {
-        role: "assistant",
+      assistant({
         provider: "openai-completions",
         model: "local-llama",
         content: [{ type: "text", text: answer }],
-      },
+      }),
     ]);
     expect(await usage()).toMatchObject({
       modelProvider: "openai-completions",
@@ -635,57 +618,51 @@ describe("buildSessionPreviewItems bounded projection", () => {
     messageRow("user", "older excluded text"),
     messageRow("assistant", "NO_REPLY"),
     messageRow("toolResult", "tool output"),
-    { role: "user", content: [{ type: "input_text", text: "  question  " }] },
-    { role: "assistant", content: "model only", display: false },
-    {
-      role: "assistant",
-      content: [
-        signedText("private commentary", "commentary"),
-        signedText(`${"x".repeat(16)}🦊tail`, "final_answer"),
-      ],
-    },
+    messageRow("user", [{ type: "input_text", text: "  question  " }]),
+    messageRow("assistant", "model only", { display: false }),
+    messageRow("assistant", [
+      signedText("private commentary", "commentary"),
+      signedText(`${"x".repeat(16)}🦊tail`, "final_answer"),
+    ]),
     messageRow("assistant", "REPLY_SKIP"),
-    { role: "assistant", content: [textBlock("   ")] },
+    messageRow("assistant", [textBlock("   ")]),
     messageRow("system", "system metadata"),
   ];
+  const visiblePreview = [
+    { role: "user", text: "question" },
+    { role: "assistant", text: `${"x".repeat(16)}...` },
+    { role: "assistant", text: "REPLY_SKIP" },
+  ];
   test.each([
-    ...(["display", "model-context"] as const).map((view) => ({
-      name: `${view} visibility, order and UTF-16 bounds`,
-      messages: visibilityMessages,
-      view,
-      limit: 3,
-      maxChars: 20,
-      expected: [
-        { role: "user", text: "question" },
-        { role: "assistant", text: `${"x".repeat(16)}...` },
-        { role: "assistant", text: "REPLY_SKIP" },
-      ],
-    })),
-    {
-      name: "fewer visible items than the limit",
-      messages: [
+    ["display", visibilityMessages, 3, 20, visiblePreview],
+    ["model-context", visibilityMessages, 3, 20, visiblePreview],
+    [
+      undefined,
+      [
         null,
         undefined,
         {},
         messageRow("user", "first"),
         messageRow("toolResult", "tool output"),
         messageRow("assistant", "ANNOUNCE_SKIP"),
-        { role: "assistant", content: "hidden", display: false },
+        messageRow("assistant", "hidden", { display: false }),
         messageRow("assistant", "last"),
-        { role: "assistant", content: [signedText("commentary only", "commentary")] },
+        messageRow("assistant", [signedText("commentary only", "commentary")]),
       ],
-      view: undefined,
-      limit: 12,
-      maxChars: 120,
-      expected: [
+      12,
+      120,
+      [
         { role: "user", text: "first" },
         { role: "assistant", text: "ANNOUNCE_SKIP" },
         { role: "assistant", text: "last" },
       ],
+    ],
+  ] as const)(
+    "preserves %s preview visibility, order and bounds",
+    (view, messages, limit, maxChars, expected) => {
+      const original = JSON.stringify(messages);
+      expect(buildSessionPreviewItems(messages, limit, maxChars, view)).toEqual(expected);
+      expect(JSON.stringify(messages)).toBe(original);
     },
-  ])("preserves $name", ({ messages, expected, limit, maxChars, view }) => {
-    const original = JSON.stringify(messages);
-    expect(buildSessionPreviewItems(messages, limit, maxChars, view)).toEqual(expected);
-    expect(JSON.stringify(messages)).toBe(original);
-  });
+  );
 });

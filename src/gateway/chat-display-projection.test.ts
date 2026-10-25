@@ -41,7 +41,9 @@ function expectSanitized(
   maxChars?: number,
   options?: Parameters<typeof sanitizeChatHistoryMessages>[2],
 ) {
+  const original = structuredClone(input);
   expect(sanitizeChatHistoryMessages([input], maxChars, options)).toEqual([expected]);
+  expect(input).toEqual(original);
 }
 const toolRows = (result: Record<string, unknown>) => [
   { ...result, role: "toolResult" },
@@ -66,7 +68,7 @@ it("hides private yield inputs without changing canonical arguments", () => {
   const call = { type: "toolCall", name: "sessions_yield", arguments: args, input: args };
   const publicCall = { type: "toolCall", name: "message", arguments: { message: "Public reply" } };
   const message = assistant([call, publicCall], {});
-  expect(projectChatDisplayMessages([message])).toEqual([
+  expect(projectStable([message])).toEqual([
     {
       ...message,
       content: [{ ...call, arguments: publicInput, input: publicInput }, publicCall],
@@ -87,16 +89,12 @@ it.each(["<", "<tool_"])(
     const message = assistant([text(fragment), call], { stopReason: "toolUse" });
     const original = structuredClone(message);
     const projected = sanitizeChatHistoryMessages([message]);
-    expect(projected).toEqual([
-      expect.objectContaining({
-        content: expect.arrayContaining([call]),
-      }),
-    ]);
-    expect(projected).toEqual([
-      expect.objectContaining({
-        content: expect.not.arrayContaining([expect.objectContaining(text(fragment))]),
-      }),
-    ]);
+    expect(projected).toHaveLength(1);
+    expect(projected[0]).toHaveProperty("content", expect.arrayContaining([call]));
+    expect(projected[0]).toHaveProperty(
+      "content",
+      expect.not.arrayContaining([expect.objectContaining(text(fragment))]),
+    );
     expect(message).toEqual(original);
     expect(sanitizeChatHistoryMessages(projected)).toEqual(projected);
   },
@@ -175,7 +173,7 @@ describe("transcript display metadata", () => {
       chatInputRecovery: Object.freeze({ source: "private-operator-snapshot" }),
     });
     expect(
-      projectChatDisplayMessages([
+      projectStable([
         {
           ...message,
           providerReplay: {
@@ -300,19 +298,17 @@ describe("current user profile display", () => {
     );
     const projected = projectStable(messages, { resolveCurrentUserProfileDisplay });
     expect(resolveCurrentUserProfileDisplay.mock.calls).toEqual([["ada"], ["missing"]]);
-    expect(projected).toEqual(
-      messages.map((message, index) =>
-        index < 2
-          ? {
-              ...message,
-              __openclaw: {
-                ...message["__openclaw"],
-                senderProfileAvatarUrl: "/api/users/ada/avatar?v=20",
-              },
-            }
-          : message,
+    expect(projected).toEqual([
+      ...messages.slice(0, 2).map((message) =>
+        Object.assign({}, message, {
+          __openclaw: {
+            ...message["__openclaw"],
+            senderProfileAvatarUrl: "/api/users/ada/avatar?v=20",
+          },
+        }),
       ),
-    );
+      ...messages.slice(2),
+    ]);
     expect(projected[0]).not.toBe(messages[0]);
     for (const index of [2, 3, 4]) {
       expect(projected[index]).toBe(messages[index]);
@@ -492,7 +488,6 @@ it.each([{ maxChars: 32 }, { maxChars: 8_000, toolResultMaxChars: 32 }])(
       ],
       { __openclaw: metadata },
     );
-    const original = structuredClone(message);
     expectSanitized(
       message,
       assistant(
@@ -507,7 +502,6 @@ it.each([{ maxChars: 32 }, { maxChars: 8_000, toolResultMaxChars: 32 }])(
       options.maxChars,
       options,
     );
-    expect(message).toEqual(original);
   },
 );
 
@@ -517,11 +511,7 @@ it("retains complete structured tool previews and tool arguments under a smaller
     view: { id: "preview", title: "x".repeat(3_000) },
   });
   const call = { type: "toolCall", id: "structured", name: "exec", arguments: { input: payload } };
-  const result = {
-    type: "toolResult",
-    toolCallId: "structured",
-    content: [text(payload)],
-  };
+  const result = { type: "toolResult", toolCallId: "structured", content: [text(payload)] };
   const messages = [
     { role: "toolResult", content: result.content },
     { role: "assistant", content: [call, result] },
@@ -531,21 +521,17 @@ it("retains complete structured tool previews and tool arguments under a smaller
   );
 });
 
-const user = { role: "user", content: "hello", __openclaw: { seq: 1 } };
-const failed = {
-  role: "assistant",
-  content: [],
+const user = userRow("hello", { seq: 1 });
+const failed = assistant([], {
   stopReason: "error",
   errorMessage: "model unavailable",
   __openclaw: { id: "failed", seq: 2, runId: "run-a" },
-};
+});
 const tool = { type: "toolCall", id: "partial-call", name: "read", arguments: {} };
-const answer = {
-  role: "assistant",
-  content: [text("Recovered answer")],
+const answer = assistant([text("Recovered answer")], {
   stopReason: "stop",
   __openclaw: { id: "answer", seq: 3, runId: "run-a" },
-};
+});
 const terminal = (runId = "run-a") => ({
   role: "custom",
   customType: "run-failed-before-reply",

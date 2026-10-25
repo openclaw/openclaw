@@ -274,18 +274,12 @@ describe("operator role policy", () => {
         );
         const original = expectDefined(first, "first source");
         const independent = expectDefined(second, "independent source");
-        expect(resolveReplyOperatorAuthorityKey(independent)).not.toBe(
-          resolveReplyOperatorAuthorityKey(original),
-        );
-        const narrowed = await capture({
-          client: narrowClient(client, original),
-          context,
-        });
+        const originalKey = resolveReplyOperatorAuthorityKey(original);
+        expect(resolveReplyOperatorAuthorityKey(independent)).not.toBe(originalKey);
+        const narrowed = await capture({ client: narrowClient(client, original), context });
         expect(narrowed.source).toBe(original.source);
         expect(narrowed.scopes).toEqual([]);
-        expect(resolveReplyOperatorAuthorityKey(narrowed)).not.toBe(
-          resolveReplyOperatorAuthorityKey(original),
-        );
+        expect(resolveReplyOperatorAuthorityKey(narrowed)).not.toBe(originalKey);
         expectModel(narrowed, "b", true);
         expectDefined(controllers[0], "first dependency").abort(new Error("dependency ended"));
         if (dependencyKind === "gateway resolver") {
@@ -317,14 +311,12 @@ describe("operator role policy", () => {
             ...liveDependency(access),
           },
         };
-        const captured = await captureSource({
+        using captured = await captureSource({
           client,
           context,
           ...(independent ? { sourceAuthority: null } : {}),
           invocationAuthority: liveDependency(request),
         });
-        using _ = { [Symbol.dispose]: captured.release };
-
         expect(captured.authority.gatewayAccessGrant).toEqual(independent ? null : grant);
         expect(captured.authority.assertCurrent).not.toThrow();
         const endedSource = ended === "request" ? request : access;
@@ -478,9 +470,7 @@ describe("operator role policy", () => {
         expectModel(original.authority, "fallback", true);
         expectModel(original.authority, "next", false);
         expectModel(unaffected.authority, "restricted-new", true);
-        const fresh = await capture(guest.id);
-        using _ = { [Symbol.dispose]: fresh.release };
-
+        using fresh = await capture(guest.id);
         expect(fresh.authority.modelPolicy?.models).toEqual([
           modelRef("next"),
           modelRef("fallback"),
