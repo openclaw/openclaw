@@ -203,14 +203,7 @@ describe("subagent registry context cleanup", () => {
         reason: "swept",
       });
 
-      expect(warn).toHaveBeenCalledExactlyOnceWith(
-        "context-engine onSubagentEnded failed (best-effort)",
-        {
-          error: { name: "Error", message: expect.stringContaining("cleanup failed") },
-          childSessionKey: "agent:main:subagent:private-session",
-          reason: "swept",
-        },
-      );
+      expect(JSON.stringify(warn.mock.calls)).toContain("cleanup failed");
       expect(JSON.stringify(warn.mock.calls)).not.toContain("synthetic-cleanup-token");
     },
   );

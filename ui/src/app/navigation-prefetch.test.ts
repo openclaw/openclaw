@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ApplicationRouter } from "../app-routes.ts";
+import { createApplicationGatewaySnapshot } from "../test-helpers/application-context-fixtures.ts";
 import { connectNavigationPrefetch } from "./navigation-prefetch.ts";
 
 const cleanups: Array<() => void> = [];
@@ -69,17 +70,11 @@ function setup() {
       },
     },
     gateway: {
-      snapshot: {
+      snapshot: createApplicationGatewaySnapshot({
         phase: "connected",
-        client: null,
-        hello: null,
         assistantAgentId: "main",
         sessionKey: "main",
-        lastError: null,
-        lastErrorCode: null,
-        offlineStable: false,
-        canvasPluginSurfaceUrl: null,
-      },
+      }),
       subscribe: () => () => {},
     },
     outlet: () => outlet,
@@ -100,7 +95,7 @@ async function idle() {
   await vi.advanceTimersByTimeAsync(0);
 }
 
-it("waits for presentation, preloads inert assets serially, and yields to navigation and disposal", async () => {
+it("warms New Session after presentation and leaves other routes for intent", async () => {
   const fixture = setup();
   await idle();
   expect(fetch).not.toHaveBeenCalled();
@@ -129,7 +124,16 @@ it("waits for presentation, preloads inert assets serially, and yields to naviga
   fixture.state.status = "success";
   fixture.notify();
   await idle();
-  expect(hints()).toHaveLength(3);
+  expect(hints()).toHaveLength(2);
+  const claws = fixture.shell.appendChild(document.createElement("a"));
+  claws.className = "nav-item";
+  claws.href = "/control/claws";
+  claws.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+  await vi.advanceTimersByTimeAsync(50);
+  expect(hints().map((link) => link.href)).toContain(
+    new URL("/control/assets/claws-1234abcd.js", location.origin).href,
+  );
+  expect(fixture.preloadRoute).toHaveBeenCalledExactlyOnceWith("claws");
   fixture.stop();
   await idle();
   expect(hints()).toHaveLength(0);

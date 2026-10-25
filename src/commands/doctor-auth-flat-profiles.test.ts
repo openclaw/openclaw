@@ -36,6 +36,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { markCanonicalSessionValidationPending } from "../config/sessions/session-canonical-key.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createDoctorPrompterFixture as makePrompter } from "../flows/doctor-health-context.test-support.js";
 import {
   detectSharedAuthStoreMigration,
   migrateSharedAuthStore,
@@ -61,10 +62,7 @@ import {
   maybeMigrateAuthProfileJsonStoresToSqlite,
   maybeRepairOpenAICodexAuthConfig,
 } from "./doctor-auth-flat-profiles.js";
-import {
-  makePrompter,
-  withPersistedAuthProfileStoreRead,
-} from "./doctor-auth-flat-profiles.test-support.js";
+import { withPersistedAuthProfileStoreRead } from "./doctor-auth-flat-profiles.test-support.js";
 import {
   prepareAuthProfileSourceReceipt,
   type AuthProfileMigrationSourceReceipt,
@@ -86,7 +84,7 @@ function migrateAuthProfiles(
 ) {
   return maybeMigrateAuthProfileJsonStoresToSqlite({
     cfg: {},
-    prompter: makePrompter(true),
+    prompter: makePrompter(true, true),
     ...params,
   });
 }
@@ -223,7 +221,7 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
       profiles: { [profileId]: credential },
     });
     const migrate = (repair = true) =>
-      migrateAuthProfiles({ prompter: makePrompter(repair), env: state.env });
+      migrateAuthProfiles({ prompter: makePrompter(repair, true), env: state.env });
     await migrate();
     const db = openOpenClawStateDatabase({ env: state.env }).db;
     const receipt = db
@@ -939,7 +937,7 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
 
     const result = await maybeMigrateAuthProfileJsonStoresToSqlite({
       cfg,
-      prompter: makePrompter(true),
+      prompter: makePrompter(true, true),
       now: () => 475,
     });
 

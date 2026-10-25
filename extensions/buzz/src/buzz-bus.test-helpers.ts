@@ -1,6 +1,9 @@
 import type { Event, Filter } from "nostr-tools";
 import { vi } from "vitest";
 
+export const createBuzzRelayInfoFetchMock = (self: string) =>
+  vi.fn(async () => Response.json({ self, software: "https://github.com/block/buzz" }));
+
 type Handlers = {
   onevent: (event: Event) => void;
   oneose?: () => void;

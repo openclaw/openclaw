@@ -3,6 +3,7 @@ import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { sessionStorageStatus } from "./session-storage.test-support.ts";
 import { SessionStorageSettings } from "./session-storage.tsx";
 import {
   clickSettings,
@@ -13,8 +14,8 @@ import {
 
 type Maintenance = Partial<SessionsStorageStatusResult["maintenance"]>;
 function inventory(count: number, maintenance: Maintenance = {}): SessionsStorageStatusResult {
-  return {
-    agents: [
+  return sessionStorageStatus(
+    [
       {
         agentId: "main",
         storePath: "/synthetic/agent.sqlite",
@@ -26,16 +27,8 @@ function inventory(count: number, maintenance: Maintenance = {}): SessionsStorag
         embeddedArchiveBytes: 0,
       },
     ],
-    maintenance: {
-      running: false,
-      lastStartedAt: null,
-      lastCompletedAt: null,
-      lastError: null,
-      archivedTranscripts: 0,
-      externalizedTranscripts: 0,
-      ...maintenance,
-    },
-  };
+    maintenance,
+  );
 }
 async function mount(initialInventory = inventory(7)) {
   const config = { session: { maintenance: { coldStorage: { enabled: true, afterDays: 30 } } } };

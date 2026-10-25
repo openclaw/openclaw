@@ -9,6 +9,36 @@ import {
 import { toolResultFitsBudget } from "./tool-result-limits.js";
 
 describe("Code Mode JSON normalization", () => {
+  it.each(["output", "error"])("bounds serialization work for oversized %s", (channel) => {
+    const text = "x".repeat(64_000);
+    const state = new CodeModeOutputState(65_536, {
+      maxChars: 16_000,
+      maxContextChars: 32_000,
+    });
+    if (channel === "output") {
+      state.append(captureCodeModeOutput([{ type: "text", text }], 65_536));
+    }
+    const stringify = JSON.stringify;
+    let serializedChars = 0;
+    const spy = vi.spyOn(JSON, "stringify").mockImplementation((...args) => {
+      const json = stringify(...args);
+      serializedChars += json?.length ?? 0;
+      return json;
+    });
+    let result;
+    try {
+      result = state.takeResult(
+        { status: channel === "error" ? "failed" : "completed" },
+        channel === "error" ? { error: text } : {},
+      );
+    } finally {
+      spy.mockRestore();
+    }
+    expect(JSON.stringify(result)).toHaveLength(16_000);
+    // Budget trials still serialize the envelope, but must not also serialize each fitted channel.
+    expect(serializedChars).toBeLessThan(450_000);
+  });
+
   it.each(["capacity", "undeliverable reference"])(
     "preserves successful output when %s guidance exceeds the model budget",
     (failure) => {

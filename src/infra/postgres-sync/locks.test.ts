@@ -1,14 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
-import { getEnvironmentData, Worker } from "node:worker_threads";
+import { getEnvironmentData } from "node:worker_threads";
 import { Client } from "pg";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createConformanceWorker } from "../database-engine/conformance.test-support.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
-import {
-  resolveRuntimeWorkerThreadExecArgv,
-  resolveRuntimeWorkerUrl,
-} from "../runtime-worker-url.js";
+import { resolveRuntimeWorkerUrl } from "../runtime-worker-url.js";
 import {
   captureSqliteDatabaseAdmissions,
   readSqliteDatabaseWriteTokenForPath,
@@ -32,10 +30,11 @@ function launch(options: Omit<PostgresLockWorkerInput, "connection" | "gates">) 
     done: Promise.withResolvers<Message>(),
   };
   const url = resolveRuntimeWorkerUrl(postgresLockTestEntrypoint);
-  const worker = new Worker(url, {
-    execArgv: resolveRuntimeWorkerThreadExecArgv(url),
-    workerData: { ...options, connection, gates: gates.buffer },
-  });
+  const worker = createConformanceWorker(
+    url,
+    { ...options, connection, gates: gates.buffer },
+    { connection: connection! },
+  );
   const fail = (error: Error) => Object.values(events).forEach((event) => event.reject(error));
   // Some events intentionally remain unobserved in the other scenario.
   for (const event of Object.values(events)) {

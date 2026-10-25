@@ -62,7 +62,7 @@ function sampled(fields: Partial<GatewaySessionRow> = {}): GatewaySessionRow {
   return { ...idle, snapshotAt: 200, ...fields };
 }
 
-function expectLive(state: ChatPageHost, live: ReturnType<typeof h.start>) {
+function expectLive(state: ChatPageHost, live: Awaited<ReturnType<typeof h.start>>) {
   expect.soft(state).toMatchObject({ chatRunId: live.runId, chatStream: live.stream });
   expect.soft(state.toolStreamById.has(live.toolIdentity)).toBe(true);
   expect.soft(isChatBusy(state)).toBe(true);
@@ -114,7 +114,7 @@ async function fixture() {
       pending.push(operation);
       return operation;
     },
-    start(runId: string, target: ChatPageHost = state) {
+    async start(runId: string, target: ChatPageHost = state) {
       const stream = `${runId} is working.`;
       const toolCallId = `${runId}-read`;
       const identity = { sessionKey: idle.key, agentId: "main", runId };
@@ -133,8 +133,10 @@ async function fixture() {
         data: { phase: "start", name: "read", toolCallId, args: { path: "README.md" } },
       } satisfies AgentEventPayload);
       const toolIdentity = buildToolStreamIdentity(runId, toolCallId);
-      expect(target.chatRunId).toBe(runId);
-      expect(target.toolStreamById.has(toolIdentity)).toBe(true);
+      await vi.waitFor(() => {
+        expect(target.chatRunId).toBe(runId);
+        expect(target.toolStreamById.has(toolIdentity)).toBe(true);
+      });
       return { runId, stream, toolIdentity, tool: target.toolStreamById.get(toolIdentity) };
     },
     async finish() {
@@ -155,7 +157,7 @@ it.each(["previous-terminal", "identity-less"] as const)(
     const [method, params] = await read.issued.promise;
     expect(method).toBe("chat.history");
     expect(params).toHaveProperty("cursor", "cursor-custody-before");
-    const live = h.start("run-after-cursor-issuance");
+    const live = await h.start("run-after-cursor-issuance");
     // The Gateway samples run facts before awaiting its cursor worker.
     read.response.resolve(
       delta(
@@ -188,12 +190,12 @@ it.each(["fresh", "retry", "reset-fallback"] as const)(
       resumeRetry.resolve();
       sleep?.mockRestore();
     });
-    const initialRun = attempt === "fresh" ? h.start("missed-terminal-run") : undefined;
+    const initialRun = attempt === "fresh" ? await h.start("missed-terminal-run") : undefined;
     const first = h.arm();
     const next = attempt === "fresh" ? first : h.arm();
     const refresh = h.refresh();
     await first.issued.promise;
-    const live = initialRun ?? h.start("run-between-history-attempts");
+    const live = initialRun ?? (await h.start("run-between-history-attempts"));
     if (attempt === "retry") {
       first.response.reject(
         new GatewayRequestError({
@@ -250,7 +252,7 @@ it("does not transfer an already-issued cursor's custody to a later consumer", a
   const read = h.arm();
   const refreshFirst = h.refresh(first.state);
   await read.issued.promise;
-  const live = h.start("run-before-late-consumer", first.state);
+  const live = await h.start("run-before-late-consumer", first.state);
   const issuedCount = h.request.mock.calls.length;
   const refreshJoining = h.refresh(joining.state);
   expect(getChatHistoryLoadState(joining.state).phase).toBe("in-flight");

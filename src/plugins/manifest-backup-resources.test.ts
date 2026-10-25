@@ -3,10 +3,10 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { writeDoctorFiles as writeFiles } from "./doctor-contract.test-support.js";
 import { resolveActivatedPluginBackupInventory } from "./manifest-backup-resources.js";
 import { loadPluginManifest } from "./manifest.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
+import { writeArtifacts as writeFiles } from "./public-surface.test-support.js";
 
 const roots = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(() => {

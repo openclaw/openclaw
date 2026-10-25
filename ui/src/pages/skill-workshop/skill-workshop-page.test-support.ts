@@ -17,6 +17,7 @@ export function createRuntimeConfigStub(options?: {
       lastError: null as string | null,
     },
     ensureLoaded: vi.fn(async () => undefined),
+    ensureDisplayLoaded: vi.fn(async () => undefined),
     refresh: vi.fn(async () => undefined),
     patch: options?.patch ?? vi.fn(async () => true),
     subscribe: () => () => undefined,

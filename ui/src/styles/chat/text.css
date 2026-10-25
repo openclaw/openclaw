@@ -930,6 +930,7 @@
   margin: 0;
   border: 0;
   border-radius: 50%;
+  outline: 0;
   box-shadow: none;
 }
 

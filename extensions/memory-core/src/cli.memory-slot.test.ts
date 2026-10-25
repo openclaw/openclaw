@@ -168,6 +168,27 @@ it("refuses search instead of answering from the sidecar index", async () => {
   expect(open).not.toHaveBeenCalled();
 });
 
+it.each(["--deep", "--index", "--fix"])(
+  "reports a JSON failure when selected-provider status rejects %s",
+  async (flag) => {
+    const { open } = registerSelectedProvider();
+    const json = spyRuntimeJson(defaultRuntime);
+    spyRuntimeErrors(defaultRuntime);
+    await runMemoryCli(["status", flag, "--json"]);
+    expect(json).toHaveBeenCalledOnce();
+    expect(firstWrittenJsonArg(json)).toEqual({
+      ok: false,
+      error: {
+        type: "cli_error",
+        message: expect.stringContaining('plugins.slots.memory selects "knowledge"'),
+      },
+    });
+    expect(process.exitCode).toBe(1);
+    expect(getMemorySearchManager).not.toHaveBeenCalled();
+    expect(open).not.toHaveBeenCalled();
+  },
+);
+
 const diagnosticConfig: OpenClawConfig = {
   agents: { entries: { main: {} } },
   memory: {

@@ -39,7 +39,9 @@ import {
   hookMocks,
   internalHookMocks,
   messageAuditMocks,
+  mockPluginBinding,
   mocks,
+  mockSessionStorePath,
   noAbortResult,
   parseGenericThreadSessionInfo,
   placementContextMocks,
@@ -551,7 +553,7 @@ export const describe0BeforeEach0 = () => {
   sessionStoreMocks.loadSessionStoreEntry.mockReset();
   sessionStoreMocks.loadSessionStoreEntry.mockImplementation(() => sessionStoreMocks.currentEntry);
   sessionStoreMocks.resolveSessionStorePathCore.mockReset();
-  sessionStoreMocks.resolveSessionStorePathCore.mockReturnValue("/tmp/mock-sessions.json");
+  sessionStoreMocks.resolveSessionStorePathCore.mockReturnValue(mockSessionStorePath);
   transcriptMocks.persistAcpDispatchTranscript.mockClear();
   transcriptMocks.appendAssistantMessageToSessionTranscript.mockClear();
   stageSandboxMediaMocks.stageSandboxMedia.mockReset();
@@ -561,6 +563,16 @@ export const describe0BeforeEach0 = () => {
     () => getActivePluginRegistry() ?? runtimePluginMocks.pluginRegistry,
   );
 };
+
+export function mockPluginBoundDiscordBinding({
+  conversationId = "channel:1481858418548412579",
+  ...params
+}: Omit<Parameters<typeof mockPluginBinding>[0], "conversation"> & { conversationId?: string }) {
+  return mockPluginBinding({
+    ...params,
+    conversation: { channel: "discord", accountId: "default", conversationId },
+  });
+}
 
 export const createHookCtx = (overrides: Partial<MsgContext> = {}) =>
   buildTestCtx({

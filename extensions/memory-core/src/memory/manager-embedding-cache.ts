@@ -356,8 +356,8 @@ export function upsertMemoryEmbeddingCache(params: {
 }
 
 /*
- * Evicts before inserting so even an uncommitted write never holds more rows than the cap;
- * a forced rebuild otherwise grows the primary file before the excess is deleted. The
+ * Evicts before inserting so even an uncommitted write stays within its capacity budget;
+ * full rebuilds temporarily raise that budget until publication or abort. The
  * retained count needs a reread only when inexact. Below capacity a direct UPSERT cannot
  * overflow; at capacity, removing replaced rows makes every UPSERT row a true insert.
  */

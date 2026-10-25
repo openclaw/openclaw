@@ -8,6 +8,7 @@ import { GatewayRequestError } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import { createTestSessionCapability } from "../../lib/sessions/session-capability.test-support.ts";
+import { createState } from "./chat-gateway.test-support.ts";
 import { handleChatGatewayEvent, type ChatEventPayload } from "./chat-gateway.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
@@ -98,34 +99,6 @@ const expectAssistant = (state: ChatState, ...texts: string[]) =>
   expectTranscript(state, ...texts.map((text): [string, string] => ["assistant", text]));
 
 const requireRecord = createRequireRecord("record", "expected-non-array-record");
-
-function createState(overrides: Partial<ChatState> = {}): ChatState {
-  return {
-    chatAttachments: [],
-    chatHistoryPagination: { hasMore: false },
-    chatLoading: false,
-    chatMessage: "",
-    chatMessages: [],
-    chatQueue: [],
-    chatRunId: null,
-    chatSending: false,
-    chatStream: null,
-    chatStreamStartedAt: null,
-    chatStreamSegments: [],
-    chatToolMessages: [],
-    toolStreamById: new Map(),
-    toolStreamOrder: [],
-    chatRunStartup: null,
-    chatVerboseLevel: null,
-    client: null,
-    connected: true,
-    connectionEpoch: 0,
-    hello: null,
-    lastError: null,
-    sessionKey: "main",
-    ...overrides,
-  };
-}
 
 it.each([true, false])(
   "keeps identical injected notes separate without adopting a run (persisted first=%s)",

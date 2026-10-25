@@ -609,7 +609,7 @@ describe("recoverEmbeddedRunAttempt", () => {
           data: expect.objectContaining({
             phase: "retrying",
             attempt: 2,
-            maxAttempts: 10,
+            maxAttempts: 16,
             reason: "rate_limit",
             retryAt: pacingNow + delayMs,
           }),
@@ -638,7 +638,7 @@ describe("recoverEmbeddedRunAttempt", () => {
     }
   });
 
-  it("exhausts ten rate-limited attempts before profile rotation and model failover", async () => {
+  it("exhausts sixteen rate-limited attempts before profile rotation and model failover", async () => {
     const fixture = await recoverAfterTransportDrop({
       errorMessage: "429 provider rate limit",
       diagnostics: [],
@@ -647,14 +647,14 @@ describe("recoverEmbeddedRunAttempt", () => {
     });
     const { failoverRetryController: failover } = fixture;
     expect(fixture.recovery.action).toBe("retry");
-    for (let retry = 2; retry <= 9; retry++) {
+    for (let retry = 2; retry <= 15; retry++) {
       expect((await fixture.recover()).action).toBe("retry");
     }
     expect(failover.advanceAuthProfile).not.toHaveBeenCalled();
     expect(await fixture.recover()).toEqual({ action: "proceed" });
-    expect(fixture.continueFromCurrentTranscript).toHaveBeenCalledTimes(9);
+    expect(fixture.continueFromCurrentTranscript).toHaveBeenCalledTimes(15);
     expect(fixture.onAgentEvent.mock.calls.map(([event]) => event.data.attempt)).toEqual([
-      2, 3, 4, 5, 6, 7, 8, 9, 10,
+      2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
     ]);
     await expect(handleAssistantFailureAfterRecovery(fixture, "rate_limit")).rejects.toMatchObject({
       name: "FailoverError",
@@ -662,6 +662,31 @@ describe("recoverEmbeddedRunAttempt", () => {
       status: 429,
     });
     expect(failover.advanceAuthProfile).toHaveBeenCalledOnce();
+  });
+
+  it.each<[string, TransportDropScenario, boolean]>([
+    ["no output after settled tools", { content: [] }, true],
+    ["no output before work", { content: [], noTools: true, replaySafe: true }, true],
+    ["partial reasoning", {}, false],
+    ["a native harness thread", { content: [], pluginHarnessOwnsTransport: true }, false],
+    ["an active lifecycle item", { content: [], activeCount: 1 }, false],
+    [
+      "a thrown prompt failure",
+      { content: [], ...promptError(providerError(undefined, "429 provider rate limit")) },
+      false,
+    ],
+  ])("replays the user turn after a rate limit with %s: %s", async (_name, scenario, replays) => {
+    const fixture = await recoverAfterTransportDrop({
+      errorMessage: "Rate limit reached on tokens per min (TPM). Please try again in 25ms.",
+      diagnostics: [],
+      ...scenario,
+    });
+    expect(fixture.recovery.action).toBe("retry");
+    expect(fixture.continueFromCurrentTranscript).toHaveBeenCalledExactlyOnceWith({
+      includeToolFailureInstruction: false,
+      messages: fixture.attempt.messagesSnapshot,
+      ...(replays ? { replayCurrentUserTurn: true } : {}),
+    });
   });
 
   it.each<[string, TransportDropScenario]>([

@@ -30,6 +30,7 @@ import {
   loadDeviceAuthToken,
   storeDeviceAuthToken,
 } from "../lib/nodes/index.ts";
+import { listSessionPlacementRecoveryStorageKeys } from "../lib/sessions/session-placement-recovery-storage-key.ts";
 import { generateUUID } from "../lib/uuid.ts";
 import { createBrowserGatewaySocket, probeGatewayReachability } from "./gateway-browser-socket.ts";
 import { GatewayChatEvents } from "./gateway-chat-events.ts";
@@ -91,7 +92,8 @@ const INBOUND_SILENCE_PROBE_TIMEOUT_MS = 10_000;
 
 export class GatewayBrowserClient {
   private readonly client: GatewayProtocolClient<ConnectPlan>;
-  private readonly initialConnectDispatch = Promise.withResolvers<void>();
+  private connectDispatch = Promise.withResolvers<boolean>();
+  private readonly initialConnectDispatch = this.connectDispatch.promise.then(() => undefined);
   private readonly chatEvents = new GatewayChatEvents((reason) => this.forceReconnect(reason));
   private maxPayloadBytes: number | undefined;
   private scopeUpgradeRuntime: Promise<GatewayScopeUpgrade> | null = null;
@@ -185,7 +187,7 @@ export class GatewayBrowserClient {
           this.pendingDeviceTokenRetry,
         ),
       onClose: (context, decision) => {
-        this.initialConnectDispatch.resolve();
+        this.retireConnectDispatch();
         this.catalogRetryAbort.abort();
         this.connectionHello = null;
         this.nativeAuthAbort?.abort();
@@ -235,7 +237,7 @@ export class GatewayBrowserClient {
       },
       onReconnectScheduled: (delayMs) => this.opts.onReconnectScheduled?.(delayMs),
       onSocketFactoryError: (error) => {
-        this.initialConnectDispatch.resolve();
+        this.retireConnectDispatch();
         this.pendingDeviceTokenRetry = false;
         notifyBrowserWebSocketError(error, this.opts);
       },
@@ -254,7 +256,7 @@ export class GatewayBrowserClient {
       onRequestTiming: (timing) => this.opts.onRequestTiming?.(timing),
       onTiming: ({ phase }) => {
         if (phase === "request-sent") {
-          this.initialConnectDispatch.resolve();
+          this.connectDispatch.resolve(true);
         }
       },
       onCallbackError: (label, error) => console.error(`[gateway] ${label} handler error:`, error),
@@ -280,7 +282,7 @@ export class GatewayBrowserClient {
   }
 
   stop() {
-    this.initialConnectDispatch.resolve();
+    this.retireConnectDispatch();
     this.catalogRetryAbort.abort();
     this.connectionHello = null;
     this.nativeAuthAbort?.abort();
@@ -300,9 +302,19 @@ export class GatewayBrowserClient {
     return this.client.connected;
   }
 
+  private retireConnectDispatch() {
+    this.connectDispatch.resolve(false);
+    this.connectDispatch = Promise.withResolvers<boolean>();
+  }
+
+  /** One connection's dispatch receipt; replacement retires pending read pipelines. */
+  get connectSent(): Promise<boolean> {
+    return this.connectDispatch.promise;
+  }
+
   /** Cached views can mount during the first handshake's network wait. */
   get initialConnectSent(): Promise<void> {
-    return this.initialConnectDispatch.promise;
+    return this.initialConnectDispatch;
   }
 
   get auth() {
@@ -433,7 +445,10 @@ export class GatewayBrowserClient {
             plan.selectedAuth.authToken),
     );
     const migrateRecoveryScope =
-      serverScope && hello.auth?.recoveryMigrationAllowed === true && legacyScope
+      serverScope &&
+      hello.auth?.recoveryMigrationAllowed === true &&
+      legacyScope &&
+      listSessionPlacementRecoveryStorageKeys(this.opts.url, legacyScope).length > 0
         ? (await import("../lib/sessions/session-placement-recovery-migration.runtime.ts")).default
         : undefined;
     if (plan.generation !== this.recovery.generation || !this.client.connected) {

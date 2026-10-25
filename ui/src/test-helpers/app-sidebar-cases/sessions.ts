@@ -388,7 +388,7 @@ describe("AppSidebar session accessibility", () => {
     const tree = row?.closest(".sidebar-session-tree");
     const link = row?.querySelector<HTMLAnchorElement>(".sidebar-recent-session__link");
     expectAttributes(list, { "aria-label": "Other" });
-    expect(tree?.parentElement).toBe(list);
+    expect(tree?.closest('[role="list"]')).toBe(list);
     expectAttributes(tree, { role: "listitem" });
     expectAttributes(row, { role: null, "aria-label": null });
     expectAttributes(sidebar.querySelector(".sidebar-recent-sessions"), { "aria-label": null });

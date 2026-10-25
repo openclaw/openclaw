@@ -11,6 +11,7 @@ import {
   installMockGateway,
   type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
+import { agentRoster } from "./agent-roster.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -84,15 +85,7 @@ const highPressureSessions = {
   sessions: [{ ...gatewayInjectedSessions.sessions[0], totalTokens: 190_000 }],
 };
 
-const agentsList = {
-  agents: [
-    { id: "main", name: "Main" },
-    { id: "work", name: "Work" },
-  ],
-  defaultId: "main",
-  mainKey: "main",
-  scope: "global",
-};
+const agentsList = agentRoster({ main: "Main", work: "Work" }, "main", "global");
 
 function agentAuthStatus(agentId: "main" | "work") {
   const isMain = agentId === "main";

@@ -33,6 +33,7 @@ import {
   buildCliLiveOwnerKey,
   restartCliLiveSession,
 } from "./cli-live-session-registry.js";
+import { resolveCliSessionId } from "./cli-run-recovery.js";
 import { createCliEventHandlers } from "./execute-events.js";
 import { NODE_CLAUDE_FORWARD_ENV_KEYS, resolveNodeClaudeAuthEnv } from "./execute-logging.js";
 import { stripGatewayLocalClaudeArgs } from "./execute-node-claude.js";
@@ -130,9 +131,18 @@ export async function executePreparedCliRun(
   let systemPromptFile: Awaited<ReturnType<typeof writeCliSystemPromptFile>> | undefined;
   const nodeSystemPrompt = nodePlacement && shouldSendSystemPrompt ? systemPromptArg : undefined;
 
-  const basePrompt = cliSessionIdToUse
+  const attemptPrompt = cliSessionIdToUse
     ? params.prompt
     : (context.openClawHistoryPrompt ?? params.prompt);
+  // Recovery reuses preparation. Only the same native resume receives this handoff.
+  const basePrompt = composeCliPromptContext(attemptPrompt, {
+    prependContext:
+      useResume &&
+      cliSessionIdToUse === resolveCliSessionId(context.reusableCliSession) &&
+      !params.forkCliSessionOnResume
+        ? context.resumeContext
+        : undefined,
+  });
   let prompt =
     params.controlOperation !== undefined
       ? basePrompt
@@ -301,14 +311,17 @@ export async function executePreparedCliRun(
           });
       cleanupMcpCaptureAttempt = mcpCaptureAttempt.cleanup;
       const preparedBackendEnv = context.preparedBackend.env ?? {};
-      const { env, selectedClaudeClearEnv } = resolveCliChildEnv(context.preparedBackend);
+      const { env, selectedClaudeClearEnv } = resolveCliChildEnv(context.preparedBackend, params, {
+        ...mcpCaptureAttempt.env,
+        ...localProcessEnv,
+      });
       const nodeEnvEntries = Object.entries(preparedBackendEnv).filter(([key]) =>
         NODE_CLAUDE_FORWARD_ENV_KEYS.has(key),
       );
       const nodeEnv = nodePlacement
         ? {
             ...Object.fromEntries(nodeEnvEntries),
-            ...resolveNodeClaudeAuthEnv(context),
+            ...(params.nativeAuthOnly ? {} : resolveNodeClaudeAuthEnv(context)),
           }
         : undefined;
       const nodeRuntimeClearEnv = nodePlacement
@@ -317,10 +330,6 @@ export async function executePreparedCliRun(
       const nodeClearEnv = [
         ...new Set([...(selectedClaudeClearEnv ?? []), ...nodeRuntimeClearEnv]),
       ];
-      Object.assign(env, mcpCaptureAttempt.env, localProcessEnv);
-      // Never mark Claude CLI as host-managed. That marker routes runs into
-      // Anthropic's separate host-managed usage tier instead of normal CLI use.
-      delete env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST;
       // The history writer's native owner must be the one this final environment selects.
       context.cliHistoryWriter?.bindExecutionEnv(env, carriesSavedHistory);
 

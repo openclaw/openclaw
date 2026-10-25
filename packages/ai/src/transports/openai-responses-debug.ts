@@ -174,14 +174,6 @@ function buildResponsesFailedEventSummary(
   };
 }
 
-function isResponseFailedIdentifierKey(key: string): boolean {
-  const normalized = key.replace(/[-_\s]/g, "").toLowerCase();
-  return (
-    (normalized.includes("request") && normalized.endsWith("id")) ||
-    (normalized.includes("provider") && normalized.endsWith("id"))
-  );
-}
-
 function collectResponseFailedIdentifierHashes(input: unknown): string[] {
   const out: string[] = [];
   const seen = new WeakSet<object>();
@@ -197,7 +189,10 @@ function collectResponseFailedIdentifierHashes(input: unknown): string[] {
       }
       const childPath = typeof key === "number" ? `${path}[${key}]` : path ? `${path}.${key}` : key;
       const childIdentifierKey = typeof key === "number" ? identifierKey : key;
-      const isIdentifier = isResponseFailedIdentifierKey(childIdentifierKey);
+      const normalizedKey = childIdentifierKey.replace(/[-_\s]/g, "").toLowerCase();
+      const isIdentifier =
+        (normalizedKey.includes("request") && normalizedKey.endsWith("id")) ||
+        (normalizedKey.includes("provider") && normalizedKey.endsWith("id"));
       const childString =
         typeof child === "string" || typeof child === "number" ? String(child).trim() : "";
       if (isIdentifier && childString) {
@@ -214,9 +209,7 @@ function collectResponseFailedIdentifierHashes(input: unknown): string[] {
 function buildResponsesFailedNoDetailsObservation(
   event: Record<string, unknown>,
   model: Model,
-  response: Record<string, unknown> | undefined = isRecord(event.response)
-    ? event.response
-    : undefined,
+  response: Record<string, unknown> | undefined,
 ) {
   const failureFieldNames = RESPONSE_FAILED_FAILURE_FIELD_KEYS.filter(
     (key) => response?.[key] !== undefined && response[key] !== null,
@@ -238,20 +231,6 @@ function buildResponsesFailedNoDetailsObservation(
     requestIdHashes: collectResponseFailedIdentifierHashes(event),
     failureFieldNames,
   };
-}
-
-function summarizeResponsesFailedNoDetailsObservation(
-  observation: ResponsesFailedNoDetailsObservation,
-): string {
-  const requestIds = observation.requestIdHashes.join(",");
-  const metadataKeys = observation.metadataKeys.join(",");
-  return (
-    `responseId=${safeDebugValue(observation.responseId || undefined)} ` +
-    `responseStatus=${safeDebugValue(observation.responseStatus || undefined)} ` +
-    `responseModel=${safeDebugValue(observation.responseModel || undefined)} ` +
-    `requestIds=${requestIds || "none"} metadataKeys=${metadataKeys || "none"} ` +
-    `failureFields=${observation.failureFieldNames.join(",") || "none"}`
-  );
 }
 
 export function normalizeResponsesFailedEvent(
@@ -306,10 +285,16 @@ export class ResponsesStreamFailure extends Error {
 export function logResponsesFailedNoDetails(
   observation: ResponsesFailedNoDetailsObservation,
 ): void {
+  const requestIds = observation.requestIdHashes.join(",");
+  const metadataKeys = observation.metadataKeys.join(",");
   log.warn(
     `[responses] response.failed missing error details provider=${observation.provider} ` +
       `api=${observation.api} model=${observation.transportModel} ` +
-      summarizeResponsesFailedNoDetailsObservation(observation),
+      `responseId=${safeDebugValue(observation.responseId || undefined)} ` +
+      `responseStatus=${safeDebugValue(observation.responseStatus || undefined)} ` +
+      `responseModel=${safeDebugValue(observation.responseModel || undefined)} ` +
+      `requestIds=${requestIds || "none"} metadataKeys=${metadataKeys || "none"} ` +
+      `failureFields=${observation.failureFieldNames.join(",") || "none"}`,
     observation,
   );
 }

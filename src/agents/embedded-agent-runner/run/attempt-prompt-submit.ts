@@ -25,12 +25,12 @@ import { updateActiveEmbeddedRunSnapshot } from "../runs.js";
 import type { ToolResultPromptProjectionState } from "../session-prompt-state.js";
 import { truncateOversizedToolResultsInMessages } from "../tool-result-truncation.js";
 import { snapshotRecentMessages } from "./attempt-context-summary.js";
-import type { UserTranscriptContext } from "./attempt-history.js";
 import {
   installModelPromptProjection,
   installRuntimeContextMessageForPrompt,
   resolveModelPromptText,
 } from "./attempt-llm-boundary.js";
+import type { UserTranscriptContext } from "./attempt-llm-boundary.types.js";
 import {
   isSessionsYieldAbortError,
   stripSessionsYieldArtifacts,

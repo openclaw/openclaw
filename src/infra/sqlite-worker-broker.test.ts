@@ -50,14 +50,15 @@ const { databasePath, open } = useSqliteWorkerStoreFixture("sqlite-worker-broker
 const { explicitSqliteCloseReleasesNativeResources } = await initializeSqliteRuntimeCapabilities();
 const poolIt = explicitSqliteCloseReleasesNativeResources ? it : it.skip;
 const queueRows = Array.from({ length: 128 }, (_, index) => String(index));
+const rejectedOutcome = (reason: unknown) => ({ status: "rejected", reason });
 
 it("retires a disk-full nested transaction without claiming a definite write outcome", async () => {
   const file = databasePath();
   const store = await open(file, { type: "disk-full" });
   const outcomes = await Promise.allSettled([append(store, "full"), append(store, "queued")]);
   expect(outcomes).toMatchObject([
-    { status: "rejected", reason: { code: "outcome-unknown" } },
-    { status: "rejected", reason: { code: "unavailable" } },
+    rejectedOutcome({ code: "outcome-unknown" }),
+    rejectedOutcome({ code: "unavailable" }),
   ]);
   for (const outcome of outcomes) {
     assert(outcome.status === "rejected");
@@ -217,24 +218,23 @@ it("waits for schema publication after opening, then dispatches queued writes on
     await waitForDiagnosticEventsDrained();
     expect(completed).toHaveLength(3);
     for (const { timing } of completed) {
-      expect(timing).toBeDefined();
+      assert(timing);
       const stages = [
-        timing?.enqueued,
-        timing?.dispatched,
-        timing?.posted,
-        timing?.received,
-        timing?.inputReady,
-        timing?.executeStarted,
-        timing?.executeFinished,
-        timing?.serialized,
-        timing?.replied,
-        timing?.replyReceived,
-      ];
-      for (const stamp of stages) {
-        expect(stamp).toEqual(expect.any(Number));
-      }
-      expect(stages).toEqual(stages.toSorted((a, b) => a! - b!));
-      expect(timing?.postFinished).toBeGreaterThanOrEqual(timing!.posted!);
+        "enqueued",
+        "dispatched",
+        "posted",
+        "received",
+        "inputReady",
+        "executeStarted",
+        "executeFinished",
+        "serialized",
+        "replied",
+        "replyReceived",
+      ] as const;
+      const stamps = stages.map((stage) => timing[stage]);
+      expect(stamps).toEqual(stages.map(() => expect.any(Number)));
+      expect(stamps).toEqual(stamps.toSorted((a, b) => a! - b!));
+      expect(timing.postFinished).toBeGreaterThanOrEqual(timing.posted!);
     }
   } finally {
     await admission.finish(outcomes);
@@ -285,7 +285,7 @@ it.each(["cancellation", "revocation", "deadline"] as const)(
           : ending === "revocation"
             ? revoked
             : admission.pending;
-      expect(await outcome).toMatchObject([{ status: "rejected", reason: expectedReason }]);
+      expect(await outcome).toMatchObject([rejectedOutcome(expectedReason)]);
       expect(requests).not.toHaveBeenCalled();
       admission.release();
       expect(await append(store, "successor")).toMatchObject({ writes: 1 });
@@ -447,8 +447,8 @@ poolIt("keeps an independent database responsive while another worker is at capa
     expect((await accepted).every((outcome) => outcome.status === "fulfilled")).toBe(true);
   }
   expect(await waiting).toMatchObject([
-    { status: "rejected", reason: canceled },
-    { status: "rejected", reason: revoked },
+    rejectedOutcome(canceled),
+    rejectedOutcome(revoked),
     { status: "fulfilled" },
     { status: "fulfilled" },
   ]);
@@ -510,7 +510,7 @@ it.each([
     const [first, second] = await outcomes;
     expect(first.status).toBe("fulfilled");
     if (revoke) {
-      expect(second).toEqual({ status: "rejected", reason: revoked });
+      expect(second).toEqual(rejectedOutcome(revoked));
     } else {
       expect(second.status).toBe("fulfilled");
     }
@@ -550,12 +550,9 @@ it.each(["drain", "timeout"] as const)(
         expect(settled).toBe(false);
         vi.advanceTimersByTime(1);
       }
-      for (const outcome of await waiters) {
-        expect(outcome).toMatchObject({
-          status: "rejected",
-          reason: { code: "overloaded" },
-        });
-      }
+      expect(await waiters).toMatchObject(
+        Array.from({ length: 2 }, () => rejectedOutcome({ code: "overloaded" })),
+      );
       if (action === "timeout") {
         expect(warn).toHaveBeenCalledExactlyOnceWith("SQLite worker admission delayed", {
           queueDepth: 2,
@@ -591,16 +588,14 @@ it("charges admission waiters to the byte budget and releases canceled reservati
       code: "overloaded",
     });
     cancel.abort(new Error("release waiting bytes"));
-    expect(await outcome).toMatchObject([
-      { status: "rejected", reason: { message: "release waiting bytes" } },
-    ]);
+    expect(await outcome).toMatchObject([rejectedOutcome({ message: "release waiting bytes" })]);
     const replacement = new AbortController();
     const replacementOutcome = Promise.allSettled([
       append(store, "x".repeat(40 * 1024 * 1024), replacement.signal),
     ]);
     replacement.abort(new Error("replacement admitted"));
     expect(await replacementOutcome).toMatchObject([
-      { status: "rejected", reason: { message: "replacement admitted" } },
+      rejectedOutcome({ message: "replacement admitted" }),
     ]);
   } finally {
     for (const prepared of concurrentInputs) {

@@ -1,6 +1,7 @@
 import type { BrowserContextOptions, Locator, Page } from "playwright";
 import { expect } from "vitest";
 import type { SystemAgentSetupDetectResult, WizardStep } from "../api/types.ts";
+import { sourceConfigSnapshot } from "../lib/config/config-snapshot.test-support.ts";
 import type { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { pickerValue } from "../test-helpers/select-picker-e2e.ts";
 import type { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -134,17 +135,6 @@ export function makeDetection(overrides: Partial<SystemAgentSetupDetectResult> =
   };
 }
 
-export function configSnapshot(config: object, hash: string) {
-  return {
-    config,
-    sourceConfig: config,
-    raw: JSON.stringify(config),
-    hash,
-    valid: true,
-    issues: [],
-  };
-}
-
 export function installLocalSetupGateway(
   page: Page,
   detection: ReturnType<typeof makeDetection>,
@@ -157,7 +147,10 @@ export function installLocalSetupGateway(
     models: [{ id: "gpt-5", name: "GPT-5", provider: "openai", available: true }],
     featureMethods: localSetupFeatures,
     methodResponses: {
-      "config.get": configSnapshot({ agents: { defaults: { model } } }, "before-local-activation"),
+      "config.get": sourceConfigSnapshot(
+        { agents: { defaults: { model } } },
+        "before-local-activation",
+      ),
       [setupRpc.detect]: detection,
       [setupRpc.prepare]: runningWizard(`${provider}-prepare-session`),
       [setupRpc.activate]: runningWizard("activation-session"),
@@ -224,7 +217,7 @@ export async function returnToLocalModelSettings(
     defaults: { model: globalModel },
     entries: { main: { model: { primary: modelRef } } },
   };
-  await gateway.setMethodResponse("config.get", configSnapshot({ agents }, hash));
+  await gateway.setMethodResponse("config.get", sourceConfigSnapshot({ agents }, hash));
   await gateway.setMethodResponse("models.list", {
     models: [
       { id: "gpt-5", name: "GPT-5", provider: "openai", available: true },

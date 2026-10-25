@@ -423,19 +423,13 @@ export async function agentsListCommand(opts: {
   if (opts.tree) {
     const summaryById = new Map(summaries.map((summary) => [summary.id, summary]));
     const provenanceById = new Map(provenance.map((record) => [record.agentId, record]));
-    const childrenById = new Map<string, AgentSummary[]>();
-    const roots: AgentSummary[] = [];
-
-    for (const summary of summaries) {
+    const childrenById = groupRecords(summaries, (summary) => {
       const creatorAgentId = provenanceById.get(summary.id)?.creatorAgentId;
-      if (creatorAgentId && creatorAgentId !== summary.id && summaryById.has(creatorAgentId)) {
-        const children = childrenById.get(creatorAgentId) ?? [];
-        children.push(summary);
-        childrenById.set(creatorAgentId, children);
-      } else {
-        roots.push(summary);
-      }
-    }
+      return creatorAgentId && creatorAgentId !== summary.id && summaryById.has(creatorAgentId)
+        ? creatorAgentId
+        : undefined;
+    });
+    const roots = childrenById.get(undefined) ?? [];
 
     const lines: string[] = [];
     const visited = new Set<string>();

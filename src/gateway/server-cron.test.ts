@@ -205,6 +205,7 @@ vi.mock("../cron/trigger-script.js", () => ({
   createCronScriptRuntime: mocks.scriptRuntime,
 }));
 
+import { listenLoopback } from "../../test/helpers/gateway-integration-fixtures.js";
 import {
   abortActiveCronTaskRuns,
   registerActiveCronTaskRun,
@@ -2129,14 +2130,7 @@ describe("buildGatewayCronService", () => {
       req.resume();
       res.writeHead(204).end();
     });
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("expected loopback webhook listener address");
-    }
+    const origin = await listenLoopback(server);
 
     const cfg = createCronConfig(`server-cron-ssrf-${expectedDeliveryStatus}`);
     if (ssrfPolicy) {
@@ -2156,7 +2150,7 @@ describe("buildGatewayCronService", () => {
         sessionTarget: "main",
         delivery: {
           mode: "webhook",
-          to: `http://127.0.0.1:${address.port}/cron-finished`,
+          to: `${origin}/cron-finished`,
         },
       });
 

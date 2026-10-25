@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildInboundMediaNoteProjection } from "../../../auto-reply/media-note.js";
 import { readRuntimePromptImageFactIndexes } from "../../../media/runtime-prompt-image-provenance.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
+import { describedImageUnderstanding } from "./image-description.test-support.js";
+import { suppressedInlineImageFacts } from "./image-media-facts.test-support.js";
 import { prepareEmbeddedAttemptPromptExecution } from "./prompt-image-preparation.js";
 
 type Attempt = Parameters<typeof prepareEmbeddedAttemptPromptExecution>[0]["attempt"];
@@ -32,6 +34,8 @@ async function preparePluginHarnessPromptImages(
 
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAsTAAALEwEAmpwYAAAADUlEQVR4nGP4////KwAJ5gPoxLp9owAAAABJRU5ErkJggg==";
+const image = { type: "image" as const, data: TINY_PNG_BASE64, mimeType: "image/png" };
+const pngFact = (filePath: string) => ({ path: filePath, contentType: "image/png" });
 describe("plugin harness prompt media", () => {
   let stateDir: string;
   let workspaceDir: string;
@@ -101,9 +105,7 @@ describe("plugin harness prompt media", () => {
     } as unknown as Parameters<typeof preparePluginHarnessPromptImages>[0];
     const result = await preparePluginHarnessPromptImages(input, workspaceDir);
 
-    expect(result.images).toEqual([
-      { type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" },
-    ]);
+    expect(result.images).toEqual([image]);
     expect(readRuntimePromptImageFactIndexes(result.images ?? [])).toEqual([0]);
     expect(result.imageOrder).toEqual(["inline"]);
     expect(result.media).toMatchObject([documentFact]);
@@ -116,11 +118,10 @@ describe("plugin harness prompt media", () => {
     const siblingWorkspaceDir = path.join(stateDir, "workspace-merlin");
     const ownedImage = path.join(ownedWorkspace, "media", "inbound", "photo.png");
     const siblingImagePath = path.join(siblingWorkspaceDir, "media", "inbound", "photo.png");
-    const image = Buffer.from(TINY_PNG_BASE64, "base64");
-    await fs.mkdir(path.dirname(ownedImage), { recursive: true });
-    await fs.mkdir(path.dirname(siblingImagePath), { recursive: true });
-    await fs.writeFile(ownedImage, image);
-    await fs.writeFile(siblingImagePath, image);
+    for (const file of [ownedImage, siblingImagePath]) {
+      await fs.mkdir(path.dirname(file), { recursive: true });
+      await fs.writeFile(file, Buffer.from(TINY_PNG_BASE64, "base64"));
+    }
     const hydrate = (mediaPath: string, sessionId: string) =>
       prepareEmbeddedAttemptPromptExecution({
         attempt: {
@@ -132,7 +133,7 @@ describe("plugin harness prompt media", () => {
               },
             },
           },
-          media: [{ path: mediaPath, contentType: "image/png" }],
+          media: [pngFact(mediaPath)],
           model: { input: ["text", "image"] },
           sessionId,
         },
@@ -145,7 +146,7 @@ describe("plugin harness prompt media", () => {
 
     const owned = await hydrate(ownedImage, "session-embedded-media");
 
-    expect(owned.images).toEqual([{ type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" }]);
+    expect(owned.images).toEqual([image]);
     expect(owned.failedMediaCount).toBe(0);
 
     // The embedded path returns before the plugin-harness throw, so a refused
@@ -156,43 +157,23 @@ describe("plugin harness prompt media", () => {
     expect(sibling.failedMediaCount).toBe(1);
   });
 
-  it("surfaces an unsuppressed identity-less inline fact with no image block", async () => {
+  it.each([
+    { name: "identity-less fact", media: [{ kind: "image" as const }] },
+    {
+      name: "sanitization after a suppressed fact",
+      images: [{ ...image, data: "%%%" }],
+      media: suppressedInlineImageFacts(),
+    },
+  ])("surfaces inline hydration failure: $name", async ({ name: _name, ...input }) => {
     await expect(
-      preparePluginHarnessPromptImages({
-        imageOrder: ["inline"],
-        media: [{ kind: "image" }],
-      }),
-    ).rejects.toThrow("failed to hydrate 1 structured image attachment");
-  });
-
-  it("surfaces inline sanitization failure when a preceding plugin image fact is suppressed", async () => {
-    await expect(
-      preparePluginHarnessPromptImages({
-        images: [{ type: "image", data: "%%%", mimeType: "image/png" }],
-        imageOrder: ["inline"],
-        media: [
-          {
-            path: "/tmp/described-missing.png",
-            contentType: "image/png",
-            hydrationSuppressed: true,
-          },
-          { path: "/tmp/inline.png", contentType: "image/png" },
-        ],
-      }),
+      preparePluginHarnessPromptImages({ imageOrder: ["inline"], ...input }),
     ).rejects.toThrow("failed to hydrate 1 structured image attachment");
   });
 
   it("retains an intentionally non-hydrating remote-only image as a type-only fact", async () => {
     const media = buildInboundMediaNoteProjection({
       media: [{ url: "https://example.com/described.png", contentType: "image/png" }],
-      MediaUnderstanding: [
-        {
-          kind: "image.description",
-          attachmentIndex: 0,
-          text: "already described",
-          provider: "test",
-        },
-      ],
+      MediaUnderstanding: describedImageUnderstanding(),
     }).media;
     const result = await preparePluginHarnessPromptImages({ media });
 
@@ -201,13 +182,9 @@ describe("plugin harness prompt media", () => {
   });
 
   it("retains layout-derived suppression after plugin host materialization", async () => {
-    const inlineImage = { type: "image" as const, data: TINY_PNG_BASE64, mimeType: "image/png" };
-    const media = [
-      { path: "/tmp/described.png", contentType: "image/png" },
-      { path: "/tmp/inline.png", contentType: "image/png" },
-    ];
+    const media = [pngFact("/tmp/described.png"), pngFact("/tmp/inline.png")];
     const result = await preparePluginHarnessPromptImages({
-      images: [inlineImage],
+      images: [{ ...image }],
       imageOrder: ["inline"],
       media,
       userTurnTranscriptRecorder: {
@@ -228,7 +205,7 @@ describe("plugin harness prompt media", () => {
       },
     } as unknown as Parameters<typeof preparePluginHarnessPromptImages>[0]);
 
-    expect(result.images).toEqual([inlineImage]);
+    expect(result.images).toEqual([image]);
     expect(result.imageOrder).toEqual(["inline"]);
     expect(result.media).toBeUndefined();
   });

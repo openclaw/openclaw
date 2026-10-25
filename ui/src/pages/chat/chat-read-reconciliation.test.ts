@@ -14,7 +14,7 @@ import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { subscribeChatOutboxQueue } from "./chat-outbox-queue.ts";
 import { createTestChatPane } from "./chat-pane.test-support.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
-import { handlePageGatewayEvent } from "./chat-state-events.ts";
+import { handlePageGatewayEvent } from "./chat-state-events.test-support.ts";
 import { admitStoredChatComposerQueueItemResult } from "./composer-queue-persistence.ts";
 
 const selected = "agent:main:selected";

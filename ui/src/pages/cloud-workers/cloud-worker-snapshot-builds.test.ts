@@ -179,6 +179,7 @@ it("refreshes rebuild eligibility after a machine configuration save", async () 
   });
   await waitText(() => sheet(page), "01234567");
   expect(button(sheet(page), "Rebuild").disabled).toBe(true);
+  await waitForSolid(() => expect(button(page, "Edit").disabled).toBe(false));
   click(page, "Edit");
   change(
     expectDefined(

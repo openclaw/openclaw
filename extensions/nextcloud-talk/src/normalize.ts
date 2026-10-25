@@ -16,10 +16,6 @@ export function normalizeNextcloudTalkMessagingTarget(raw: string): string | und
 
 export function looksLikeNextcloudTalkTargetId(raw: string): boolean {
   const trimmed = raw.trim();
-  if (!trimmed) {
-    return false;
-  }
-
   if (/^(nextcloud-talk|nc-talk|nc|room):/i.test(trimmed)) {
     return true;
   }

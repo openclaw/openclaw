@@ -6,7 +6,6 @@ const agentsRoot = "src/agents";
 const embeddedRoot = `${agentsRoot}/embedded-agent-runner`;
 const spawnProductionBoundaryFiles = [
   "src/agents/subagents/spawn/subagent-spawn.production-boundary.test.ts",
-  "src/agents/subagents/spawn/subagent-spawn.profiles.production-boundary.test.ts",
 ];
 
 // These suites mock shared runtime, network, or plugin modules and cannot

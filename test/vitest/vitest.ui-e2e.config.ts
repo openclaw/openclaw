@@ -39,6 +39,7 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/chat-composer-websearch-kill-switch.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-html-publication.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-json-tree.e2e.test.ts",
+  "ui/src/e2e/chat-loading-geometry.e2e.test.ts",
   "ui/src/e2e/chat-loading-performance.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-managed-media-order.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-project-media.real-gateway.e2e.test.ts",
@@ -79,6 +80,7 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/post-deploy-session-entry.e2e.test.ts",
   "ui/src/e2e/presentation-primitives.e2e.test.ts",
   "ui/src/e2e/provider-browser-login.real-gateway.e2e.test.ts",
+  "ui/src/e2e/quiet-automations.real-gateway.e2e.test.ts",
   "ui/src/e2e/quota-reset-status.real-gateway.e2e.test.ts",
   "ui/src/e2e/session-management.delete.e2e.test.ts",
   "ui/src/e2e/session-management.promotion.e2e.test.ts",
@@ -91,6 +93,7 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/terminal-runtime.e2e.test.ts",
   "ui/src/pages/agents-home/claws-catalog.e2e.test.ts",
   "ui/src/pages/claws/creator-review.e2e.test.ts",
+  "ui/src/pages/plugins/plugins-base-path.e2e.test.ts",
   "ui/src/pages/workboard/workboard-distribution.e2e.test.ts",
   "ui/src/pages/workboard/workboard-selection-focus.e2e.test.ts",
 ].map((file) => resolveUiTypeScriptPath(file));

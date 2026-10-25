@@ -23,7 +23,10 @@ import type { LocalWorkspaceManifestCheckpoint } from "./local-workspace-manifes
 import type { LocalWorkspaceStore, LocalWorkspaceProjection } from "./local-workspace-store.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
 import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
-import { captureWorkspaceManifestDocument } from "./workspace-manifest-worker.js";
+import {
+  captureWorkspaceManifestDocument,
+  workspaceManifestPaths,
+} from "./workspace-manifest-worker.js";
 import {
   parseWorkerWorkspaceManifest,
   serializeWorkerWorkspaceManifest,
@@ -187,8 +190,8 @@ export function projectionOperations(
       preparedPaths: preparedInputPaths,
       signal,
       assertCurrent,
-      baseline: document
-        ? parseWorkerWorkspaceManifest(document.rawManifest, document.manifestRef, retained)
+      baselinePaths: document
+        ? await workspaceManifestPaths(document, retained, signal)
         : undefined,
     });
   };

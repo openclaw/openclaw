@@ -9,20 +9,17 @@ import type { CoreConfig, MatrixAccountConfig } from "./types.js";
 
 const mocks = getMatrixActionMocks();
 const emptyCfg: CoreConfig = {};
-const enabledCfg: CoreConfig = {
-  channels: {
-    matrix: {
-      actions: {
-        messages: true,
-        reactions: true,
-        pins: true,
-        profile: true,
-        memberInfo: true,
-        channelInfo: true,
-      },
-    },
-  },
-};
+const actionConfig = (actions: MatrixAccountConfig["actions"]): CoreConfig => ({
+  channels: { matrix: { actions } },
+});
+const enabledCfg = actionConfig({
+  messages: true,
+  reactions: true,
+  pins: true,
+  profile: true,
+  memberInfo: true,
+  channelInfo: true,
+});
 const roomId = "!room:example";
 const target = { roomId, messageId: "$msg" };
 const account = { accountId: "ops" };
@@ -52,6 +49,8 @@ const readParams = {
   after: "after",
   threadId: "$thread",
 };
+const expectError = (result: ReturnType<typeof runMatrixAction>, message: string) =>
+  expect(result).rejects.toThrow(message);
 
 describe("Matrix public message actions", () => {
   beforeEach(resetMatrixActionMocks);
@@ -92,9 +91,7 @@ describe("Matrix public message actions", () => {
       error: "pollOptionIndexes must contain positive integers.",
     },
   ])("rejects invalid vote: $error", async ({ params, error }) => {
-    await expect(runMatrixAction("poll-vote", { roomId, ...params }, emptyCfg)).rejects.toThrow(
-      error,
-    );
+    await expectError(runMatrixAction("poll-vote", { roomId, ...params }, emptyCfg), error);
     expect(mocks.voteMatrixPoll).not.toHaveBeenCalled();
   });
 
@@ -161,9 +158,10 @@ describe("Matrix public message actions", () => {
     "rejects blocked %s before reading or mutating Matrix",
     async (action, params, forbidden, config = enabledCfg, context = {}) => {
       mocks.withAuthorizedMatrixReadTarget.mockRejectedValueOnce(new Error(blockedMessage));
-      await expect(
+      await expectError(
         runMatrixAction(action, { ...params, roomId: "!blocked:example" }, config, context),
-      ).rejects.toThrow(blockedMessage);
+        blockedMessage,
+      );
       for (const call of forbidden) {
         expect(call).not.toHaveBeenCalled();
       }
@@ -325,9 +323,6 @@ describe("Matrix public message actions", () => {
 describe("Matrix action composition", () => {
   beforeEach(resetMatrixActionMocks);
   const cfg: CoreConfig = {};
-  const actionConfig = (actions: MatrixAccountConfig["actions"]): CoreConfig => ({
-    channels: { matrix: { actions } },
-  });
   const disabledActions = { messages: false, reactions: false, pins: false, memberInfo: false };
   const disabledCfg = actionConfig(disabledActions);
   const verificationParams = { operation: "verification-list" };
@@ -343,8 +338,7 @@ describe("Matrix action composition", () => {
     threadId: undefined,
     audioAsVoice: undefined,
   };
-  const expectError = (result: ReturnType<typeof runMatrixAction>, message: string) =>
-    expect(result).rejects.toThrow(message);
+  const mediaContext = { accountId: "ops", mediaAccess, mediaLocalRoots: mediaAccess.localRoots };
   const discarded = (...keys: string[]) =>
     Object.fromEntries(keys.map((key) => [key, "discarded"] as const));
 
@@ -357,11 +351,9 @@ describe("Matrix action composition", () => {
   ) => runMatrixAction(action, params, config, context);
 
   it.each([
-    {
-      name: "public precedence and dropped fields",
-      params: {
+    [
+      {
         ...discarded("content", "replyToId", "accountId", "account_id"),
-        to: " room:!room:example ",
         message: "    indented",
         media: " first.png ",
         mediaUrl: "second.png",
@@ -369,59 +361,39 @@ describe("Matrix action composition", () => {
         asVoice: false,
         audioAsVoice: true,
       },
-      context: { accountId: " ops ", mediaAccess, mediaLocalRoots: mediaAccess.localRoots },
-      message: "    indented",
-      options: {
-        ...sendDefaults,
-        mediaUrl: " first.png ",
-        mediaAccess,
-        mediaLocalRoots: mediaAccess.localRoots,
-        replyToId: "$reply",
-        audioAsVoice: false,
-        accountId: "ops",
-      },
-    },
-    {
-      name: "shadowed snake-case fields and private aliases",
-      params: {
+      "    indented",
+      { mediaUrl: " first.png ", replyToId: "$reply", audioAsVoice: false },
+      { ...mediaContext, accountId: " ops " },
+    ],
+    [
+      {
         ...discarded("media_url", "file_path", "replyToId", "thread_id", "accountId"),
-        to: "room:!room:example",
         mediaUrl: undefined,
         filePath: "kept.png",
         threadId: undefined,
         as_voice: true,
         audio_as_voice: true,
       },
-      context: undefined,
-      message: undefined,
-      options: { ...sendDefaults, mediaUrl: "kept.png" },
-    },
-    {
-      name: "media-only path, voice flag and thread",
-      params: {
-        to: "room:!room:example",
-        path: "/tmp/clip.mp3",
-        asVoice: true,
-        threadId: "$thread",
-      },
-      context: { accountId: "ops", mediaAccess, mediaLocalRoots: mediaAccess.localRoots },
-      message: undefined,
-      options: {
-        ...sendDefaults,
-        accountId: "ops",
-        mediaUrl: "/tmp/clip.mp3",
-        mediaAccess,
-        mediaLocalRoots: mediaAccess.localRoots,
-        threadId: "$thread",
-        audioAsVoice: true,
-      },
-    },
-  ])(
-    "preserves send $name and optional property presence",
-    async ({ params, context, message, options }) => {
-      await run("send", params, context);
+      undefined,
+      { mediaUrl: "kept.png" },
+      undefined,
+    ],
+    [
+      { path: "/tmp/clip.mp3", asVoice: true, threadId: "$thread" },
+      undefined,
+      { mediaUrl: "/tmp/clip.mp3", threadId: "$thread", audioAsVoice: true },
+      mediaContext,
+    ],
+  ] as const)(
+    "preserves send parameter precedence for %j",
+    async (params, message, options, context) => {
+      await run("send", { to: " room:!room:example ", ...params }, context);
       const call = mocks.sendMatrixMessage.mock.lastCall;
-      expect(call).toStrictEqual(["room:!room:example", message, { ...options, cfg }]);
+      expect(call).toStrictEqual([
+        "room:!room:example",
+        message,
+        { ...sendDefaults, ...(context ? mediaContext : {}), ...options, cfg },
+      ]);
       expect(call?.[2].mediaAccess).toBe(context?.mediaAccess);
       expect(call?.[2].cfg).toBe(cfg);
     },

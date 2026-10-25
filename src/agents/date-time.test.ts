@@ -41,6 +41,16 @@ describe("resolveUserTimeFormat", () => {
 });
 
 describe("resolveUserTimezone", () => {
+  it("labels current time as UTC when the host timezone identifier is unresolved", () => {
+    const options = new Intl.DateTimeFormat().resolvedOptions();
+    // Node can omit this field for POSIX timezone settings such as TZ=UTC0.
+    Reflect.deleteProperty(options, "timeZone");
+    vi.spyOn(Intl.DateTimeFormat.prototype, "resolvedOptions").mockReturnValue(options);
+
+    expect(resolveUserTimezone()).toBe("UTC");
+    expect(resolveCronStyleNow({}, Date.parse("2026-01-01T00:00:00Z")).timeLine).toContain("(UTC)");
+  });
+
   it("keeps configured zones fixed while host fallback follows timezone changes", () => {
     const RealDateTimeFormat = Intl.DateTimeFormat;
     let hostTimezone = "UTC";

@@ -3,7 +3,6 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import { loadExactSessionEntry } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { deleteSessionEntryLifecycle } from "../config/sessions/session-accessor.sqlite-lifecycle.js";
-import { readMigrationArtifactIdentity } from "../infra/session-sqlite-migration-artifact.js";
 import {
   createSessionSqliteMigrationRun,
   readSessionSqliteMigrationManifest,
@@ -11,7 +10,6 @@ import {
   recordPlannedMigrationMoves,
   updateMigrationManifestTarget,
   writeSessionSqliteMigrationManifest,
-  type SessionSqliteMigrationMove,
 } from "../infra/session-sqlite-migration-manifest.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { seedDeferredPluginSessionSource } from "./doctor-session-sqlite.deferred-plugin.test-support.js";
@@ -20,6 +18,7 @@ import {
   runDoctorSessionSqlite,
   settleRetainedDoctorSessionSources,
 } from "./doctor-session-sqlite.js";
+import { retainedHistoryMove } from "./doctor-session-sqlite.recovery-fixtures.test-support.js";
 import { withDoctorSqliteMaintenanceLock } from "./doctor-sqlite-maintenance-lock.js";
 
 it("settles plugin repair after a deleted session archive is removed", async () => {
@@ -75,18 +74,10 @@ it("settles plugin repair with a warning when an older retained original is gone
     const originals = [1, 2].map((generation) => {
       const archivePath = path.join(directory, `archive-tier.history.jsonl.imported-${generation}`);
       fs.writeFileSync(archivePath, bytes);
-      const move: SessionSqliteMigrationMove = {
-        kind: "unreferenced-jsonl",
-        sourcePath: path.join(path.dirname(storePath), "history.jsonl"),
+      const move = retainedHistoryMove(
+        path.join(path.dirname(storePath), "history.jsonl"),
         archivePath,
-        artifact: {
-          identity: readMigrationArtifactIdentity(archivePath),
-          classification: "protected",
-          reason: "unreferenced-history",
-          dependencies: [],
-          disposal: { state: "retained" },
-        },
-      };
+      );
       recordPlannedMigrationMoves(prior, target, [move]);
       recordCompletedMigrationMoves(prior, target, [move]);
       return archivePath;

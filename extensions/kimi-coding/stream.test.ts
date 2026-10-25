@@ -1,3 +1,4 @@
+/// <reference lib="esnext.array" />
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type {
   AssistantMessage,
@@ -151,10 +152,7 @@ describe("kimi tool-call markup wrapper", () => {
     const wrapped = wrapKimiStream(baseStreamFn);
     const stream = await wrapped(KIMI_MODEL, KIMI_CONTEXT, {});
 
-    const events: AssistantMessageEvent[] = [];
-    for await (const event of stream) {
-      events.push(event);
-    }
+    const events: AssistantMessageEvent[] = await Array.fromAsync(stream);
     const result = await stream.result();
     const toolMessage = {
       role: "assistant",

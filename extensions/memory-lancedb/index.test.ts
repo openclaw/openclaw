@@ -204,6 +204,7 @@ function createStandardMemoryTableHarness(
     toArray?: ReturnType<typeof vi.fn>;
     limit?: ReturnType<typeof vi.fn>;
     vectorSearch?: ReturnType<typeof vi.fn>;
+    query?: ReturnType<typeof vi.fn>;
     countRows?: ReturnType<typeof vi.fn>;
     add?: ReturnType<typeof vi.fn>;
     deleteRows?: ReturnType<typeof vi.fn>;
@@ -220,6 +221,7 @@ function createStandardMemoryTableHarness(
     schema: createAgentScopedSchemaMock(),
     checkoutLatest: vi.fn(async () => undefined),
     vectorSearch,
+    query: options.query,
     countRows,
     add,
     delete: deleteRows,
@@ -951,19 +953,7 @@ describe("memory plugin e2e", () => {
     const limit = vi.fn(() => ({ toArray }));
     const select = vi.fn(() => ({ limit, toArray }));
     const query = vi.fn(() => ({ where: vi.fn(() => ({ select })) }));
-    const loadLanceDbModule = vi.fn(async () => ({
-      connect: vi.fn(async () => ({
-        tableNames: vi.fn(async () => ["memories"]),
-        openTable: vi.fn(async () => ({
-          checkoutLatest: vi.fn(async () => undefined),
-          schema: createAgentScopedSchemaMock(),
-          query,
-          countRows: vi.fn(async () => 0),
-          add: vi.fn(async () => undefined),
-          delete: vi.fn(async () => undefined),
-        })),
-      })),
-    }));
+    const { loadLanceDbModule } = createStandardMemoryTableHarness({ query });
 
     installOpenAiMemoryModuleMocks({
       ensureGlobalUndiciEnvProxyDispatcher,
@@ -1099,16 +1089,14 @@ describe("memory plugin e2e", () => {
     const post = vi.fn(
       () =>
         new Promise((resolve) => {
-          setTimeout(
-            () =>
-              resolve({
-                data: [{ embedding: [0.1, 0.2, 0.3] }],
-              }),
-            30_000,
-          );
+          setTimeout(resolve, 30_000, { data: [{ embedding: [0.1, 0.2, 0.3] }] });
         }),
     );
-    const toArray = vi.fn(() => new Promise(() => {}));
+    const queryStarted = createDeferred<void>();
+    const toArray = vi.fn(() => {
+      queryStarted.resolve();
+      return new Promise(() => {});
+    });
     const limit = vi.fn(() => ({ toArray }));
     const {
       api: mockApi,
@@ -1166,7 +1154,7 @@ describe("memory plugin e2e", () => {
     await vi.advanceTimersByTimeAsync(60_000);
     post.mockResolvedValueOnce({ data: [{ embedding: [0.1, 0.2, 0.3] }] });
     const probeResult = recall();
-    await vi.advanceTimersByTimeAsync(0);
+    await queryStarted.promise;
     expect(loadLanceDbModule).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(15_000);
     await expect(probeResult).resolves.toBeUndefined();
@@ -1238,13 +1226,8 @@ describe("memory plugin e2e", () => {
   });
 
   test("gates every memory surface on the agent's memorySearch.enabled", async () => {
-    const embeddingsCreate = vi.fn(async () => ({
-      data: [{ embedding: [0.1, 0.2, 0.3] }],
-    }));
-    const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
     const add = vi.fn(async () => undefined);
     const deleteRows = vi.fn(async () => ({ numDeletedRows: 1 }));
-    const { loadLanceDbModule } = createStandardMemoryTableHarness({ add, deleteRows });
     const pluginEntryConfig = parseConfig({ autoCapture: true, autoRecall: true });
     let configFile: Record<string, unknown> = {
       memory: { search: { enabled: true } },
@@ -1263,11 +1246,7 @@ describe("memory plugin e2e", () => {
       },
     };
 
-    installOpenAiMemoryModuleMocks({
-      ensureGlobalUndiciEnvProxyDispatcher,
-      embeddingsCreate,
-      loadLanceDbModule,
-    });
+    const { embeddingsCreate, loadLanceDbModule } = setupDirectMemoryHarness({ add, deleteRows });
 
     const on = vi.fn();
     const mockApi = createMemoryPluginApi(getDbPath(), {
@@ -2447,20 +2426,12 @@ describe("memory plugin e2e", () => {
     const limitFn = vi.fn(() => ({ toArray }));
     const vectorSearch = vi.fn(() => createAgentScopedVectorQuery(limitFn));
 
-    const embeddingsCreate = vi.fn(async () => ({
-      data: [{ embedding: [0.1, 0.2, 0.3] }],
-    }));
     const countRows = vi.fn(async () => 2);
-    const { loadLanceDbModule } = createStandardMemoryTableHarness({
+    setupDirectMemoryHarness({
       toArray,
       limit: limitFn,
       vectorSearch,
       countRows,
-    });
-    installOpenAiMemoryModuleMocks({
-      ensureGlobalUndiciEnvProxyDispatcher: vi.fn(),
-      embeddingsCreate,
-      loadLanceDbModule,
     });
 
     const mockApi = createMemoryPluginApi(getDbPath());
