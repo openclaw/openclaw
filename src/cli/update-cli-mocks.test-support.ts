@@ -297,22 +297,8 @@ vi.mock("../infra/update-check.js", async (importOriginal) => ({
   resolveUpdateInstallKind: vi.fn(),
   resolveUpdateInstallIdentity: vi.fn(),
   compareSemverStrings: vi.fn((left: string | null, right: string | null) => {
-    const parse = (value: string | null) => {
-      if (!value) {
-        return null;
-      }
-      const match = value.match(/(\d+)\.(\d+)\.(\d+)/);
-      if (!match) {
-        return null;
-      }
-      return [
-        Number.parseInt(match[1] ?? "0", 10),
-        Number.parseInt(match[2] ?? "0", 10),
-        Number.parseInt(match[3] ?? "0", 10),
-      ] as const;
-    };
-    const a = parse(left);
-    const b = parse(right);
+    const a = parseVersion(left);
+    const b = parseVersion(right);
     if (!a || !b) {
       return null;
     }
@@ -355,7 +341,7 @@ vi.mock("../infra/restart-stale-pids.js", () => ({
     const pids = mockGetSelfAndAncestorPidsSync();
     return { pids, complete: pids.has(1) };
   },
-  terminateStaleGatewayPids: (...args: unknown[]) => terminateStaleGatewayPids(...args),
+  terminateStaleGatewayPids,
 }));
 
 vi.mock("../infra/update-managed-service-handoff-cleanup.js", async (importOriginal) => ({
@@ -487,7 +473,7 @@ vi.mock("../utils.js", async (importOriginal) => {
     ...actual,
     displayString: (input: string) => input,
     isRecord: isRecordGuard,
-    pathExists: (...args: unknown[]) => pathExists(...args),
+    pathExists,
     resolveConfigDir: () => "/tmp/openclaw-config",
     sleep: vi.fn(async () => undefined),
   };
@@ -501,8 +487,8 @@ vi.mock("../plugins/official-external-install-records.js", async (importOriginal
 
 vi.mock("../plugins/update.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/update.js")>()),
-  syncPluginsForUpdateChannel: (...args: unknown[]) => syncPluginsForUpdateChannel(...args),
-  updateNpmInstalledPlugins: (...args: unknown[]) => updateNpmInstalledPlugins(...args),
+  syncPluginsForUpdateChannel,
+  updateNpmInstalledPlugins,
 }));
 
 vi.mock("../plugins/installed-plugin-index-records.js", async (importOriginal) => ({
@@ -538,7 +524,7 @@ vi.mock("../commands/doctor/shared/post-core-plugin-convergence.js", () => ({
 
 vi.mock("../config/backup-rotation.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/backup-rotation.js")>()),
-  createPreUpdateConfigSnapshot: (...args: unknown[]) => createPreUpdateConfigSnapshotMock(...args),
+  createPreUpdateConfigSnapshot: createPreUpdateConfigSnapshotMock,
 }));
 
 vi.mock("../daemon/inspect.js", async (importOriginal) => ({
@@ -552,20 +538,20 @@ vi.mock("../daemon/service.js", async () => {
     await import("./update-cli/update-command-service-state.test-support.js");
   return {
     readGatewayServiceState: createUpdateServiceStateReader({
-      readCommand: (...args) => serviceReadCommand(...args),
-      isLoaded: (...args) => serviceLoaded(...args),
-      readRuntime: (...args) => serviceReadRuntime(...args),
+      readCommand: serviceReadCommand,
+      isLoaded: serviceLoaded,
+      readRuntime: serviceReadRuntime,
       readCapability: () => serviceDefinitionMutationCapability(),
       absentPort: () => serviceFixtureState.absentServicePort,
     }),
     resolveGatewayService: vi.fn(() => ({
-      isLoaded: (...args: unknown[]) => serviceLoaded(...args),
-      isEnabled: (...args: unknown[]) => serviceEnabled(...args),
-      readCommand: (...args: unknown[]) => serviceReadCommand(...args),
-      readRuntime: (...args: unknown[]) => serviceReadRuntime(...args),
-      start: (...args: unknown[]) => serviceStart(...args),
-      stop: (...args: unknown[]) => serviceStop(...args),
-      restart: (...args: unknown[]) => serviceRestart(...args),
+      isLoaded: serviceLoaded,
+      isEnabled: serviceEnabled,
+      readCommand: serviceReadCommand,
+      readRuntime: serviceReadRuntime,
+      start: serviceStart,
+      stop: serviceStop,
+      restart: serviceRestart,
     })),
   };
 });
@@ -586,10 +572,8 @@ vi.mock("../daemon/launchd.js", async (importOriginal) => ({
 
 vi.mock("../daemon/schtasks-control.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../daemon/schtasks-control.js")>()),
-  suspendScheduledTaskAutoStartForUpdate: (...args: unknown[]) =>
-    suspendScheduledTaskAutoStartForUpdate(...args),
-  resumeScheduledTaskAutoStartAfterUpdate: (...args: unknown[]) =>
-    resumeScheduledTaskAutoStartAfterUpdate(...args),
+  suspendScheduledTaskAutoStartForUpdate,
+  resumeScheduledTaskAutoStartAfterUpdate,
 }));
 
 vi.mock("../daemon/schtasks-runtime.js", async (importOriginal) => ({
@@ -598,22 +582,22 @@ vi.mock("../daemon/schtasks-runtime.js", async (importOriginal) => ({
 }));
 
 vi.mock("../infra/ports-inspect.js", () => ({
-  inspectPortUsage: (...args: unknown[]) => inspectPortUsage(...args),
+  inspectPortUsage,
 }));
 
 vi.mock("../infra/ports-probe.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/ports-probe.js")>()),
-  probePortUsage: (...args: unknown[]) => probePortUsage(...args),
+  probePortUsage,
 }));
 
 vi.mock("../infra/ports-format.js", () => ({
-  classifyPortListener: (...args: unknown[]) => classifyPortListener(...args),
-  formatPortDiagnostics: (...args: unknown[]) => formatPortDiagnostics(...args),
+  classifyPortListener,
+  formatPortDiagnostics,
 }));
 
 vi.mock("../gateway/call.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../gateway/call.js")>()),
-  callGateway: (opts: CallGatewayOptions) => callGateway(opts),
+  callGateway,
 }));
 
 // These cases simulate a ready Gateway; no listener is started for HTTP startup probes.
@@ -645,8 +629,8 @@ vi.mock("../commands/doctor.js", () => ({
   doctorCommand: vi.fn(),
 }));
 vi.mock("../commands/doctor-completion.js", () => ({
-  checkShellCompletionStatus: (...args: unknown[]) => checkShellCompletionStatus(...args),
-  ensureCompletionCacheExists: (...args: unknown[]) => ensureCompletionCacheExists(...args),
+  checkShellCompletionStatus,
+  ensureCompletionCacheExists,
 }));
 vi.mock("../commands/doctor/legacy-config-repair.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../commands/doctor/legacy-config-repair.js")>()),
@@ -654,7 +638,7 @@ vi.mock("../commands/doctor/legacy-config-repair.js", async (importOriginal) => 
 }));
 vi.mock("./completion-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./completion-runtime.js")>()),
-  installCompletion: (...args: unknown[]) => installCompletion(...args),
+  installCompletion,
 }));
 // Mock the daemon-cli module
 vi.mock("./daemon-cli.js", () => ({
