@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import * as snapshots from "../../infra/sqlite-transaction.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
@@ -79,6 +80,35 @@ it("rejects oversized raw event bytes without preparing a transcript snapshot", 
     },
   ]);
   expect(batch.envelopeBytes).toBe(0);
+});
+
+it("bounds UTF-16 stores by UTF-8 bytes instead of stored UTF-16 bytes", async () => {
+  const storePath = state.statePath("oversized-utf16.sqlite");
+  const seed = new DatabaseSync(storePath);
+  try {
+    seed.exec(
+      "PRAGMA encoding='UTF-16le'; CREATE TABLE encoding_probe(value TEXT); DROP TABLE encoding_probe;",
+    );
+  } finally {
+    seed.close();
+  }
+  const utf16 = await createSessionColdStorageFixture(storePath);
+  const batch = await prepareSessionColdBatchInWorker({
+    databaseOptions: utf16.options,
+    admissionIdentities: [],
+    liveSessionKeys: [],
+    cooledSessionIds: [],
+    beforeMs: 100,
+    maxTranscripts: 128,
+    maxBytes: 4096,
+  });
+  const utf8Bytes = utf16.original.events
+    .filter((event) => event.session_id === historicalId)
+    .reduce((bytes, event) => bytes + Buffer.byteLength(event.event_json), 0);
+  const [oversized] = batch.oversizedTranscripts;
+  expect(oversized?.sessionId).toBe(historicalId);
+  // Stored UTF-16 bytes double ASCII text; a larger "lower bound" would skip archivable windows.
+  expect(oversized?.lowerBoundBytes).toBeLessThanOrEqual(utf8Bytes);
 });
 
 it("archives the next eligible window in the same pass after an oversized window", async () => {

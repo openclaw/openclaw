@@ -20,7 +20,6 @@ import { readSessionColdStorageProtection } from "./session-cold-storage-eligibi
 import { readSessionColdTranscript } from "./session-cold-storage-state.js";
 import type { SessionColdOversized } from "./session-cold-storage.types.js";
 import { collectSessionAdmissionReferences } from "./session-history-eviction-candidates.js";
-import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 
 export type SessionColdBatchInput = {
@@ -99,15 +98,38 @@ export function selectSessionColdBatch(input: SessionColdBatchInput) {
                 ).rows
               : [];
           const oversizedTranscripts: SessionColdOversized[] = [];
+          // UTF-16 stores leave event_utf8_bytes null; half the stored bytes bounds UTF-8 below.
+          const utf16Storage =
+            candidates.length > 0 &&
+            !isPostgresSqlConnection(database.db) &&
+            executeSqliteQuerySync(
+              database.db,
+              getNodeSqliteKysely<{ pragma_encoding: { encoding: string } }>(database.db)
+                .selectFrom("pragma_encoding")
+                .select("encoding"),
+            ).rows[0]?.encoding !== "UTF-8";
           const plans = candidates.flatMap(({ session_id: sessionId }) => {
+            const sizes = executeSqliteQuerySync(
+              database.db,
+              db
+                .selectFrom("transcript_events")
+                .select((eb) => [
+                  eb.fn.sum<number>("event_utf8_bytes").as("known"),
+                  eb.fn
+                    .sum<number>(
+                      eb
+                        .case()
+                        .when("event_utf8_bytes", "is", null)
+                        .then(eb.fn<number>("octet_length", ["event_json"]))
+                        .end(),
+                    )
+                    .as("stored"),
+                ])
+                .where("session_id", "=", sessionId),
+            ).rows[0];
+            const stored = sizes?.stored ?? 0;
             const lowerBoundBytes =
-              executeSqliteQuerySync(
-                database.db,
-                db
-                  .selectFrom("transcript_events")
-                  .select((eb) => eb.fn.sum<number>(transcriptEventReadBytesSql()).as("bytes"))
-                  .where("session_id", "=", sessionId),
-              ).rows[0]?.bytes ?? 0;
+              (sizes?.known ?? 0) + (utf16Storage ? Math.ceil(stored / 2) : stored);
             // The uncompressed envelope contains every original event body plus restore metadata.
             if (lowerBoundBytes > MAX_COLD_ARCHIVE_BYTES) {
               oversizedTranscripts.push({ sessionId, lowerBoundBytes });
