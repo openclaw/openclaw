@@ -20,17 +20,6 @@ type PendingRowCopyHost = PendingRowHost & {
   copyRow: (row: GatewaySessionRow, patch: Partial<GatewaySessionRow>) => GatewaySessionRow;
 };
 
-/** `canonical` is what the Gateway confirmed; `previous` is the value the intent replaced. */
-type PendingRowPatch<T> = {
-  token: symbol;
-  order: number;
-  sessionId: string | undefined;
-  hasProjectedRow: boolean;
-  isCurrent?: () => boolean;
-  previous: T;
-  next: T;
-  canonical: T;
-};
 export type SessionPinFields = { pinned: boolean; pinnedAt: number | undefined };
 type SessionFastModeFields = Pick<GatewaySessionRow, "fastMode" | "effectiveFastMode">;
 export const optimisticSessionRowFields = [
@@ -204,7 +193,19 @@ export function createOptimisticRowPatches<T>(
     observe: (previous: T, row: GatewaySessionRow, names: readonly string[]) => T;
   },
 ) {
-  const pending = new Map<string, PendingRowPatch<T>>();
+  const pending = new Map<
+    string /** `canonical` is what the Gateway confirmed; `previous` is the value the intent replaced. */,
+    {
+      token: symbol;
+      order: number;
+      sessionId: string | undefined;
+      hasProjectedRow: boolean;
+      isCurrent?: () => boolean;
+      previous: T;
+      next: T;
+      canonical: T;
+    }
+  >();
   let nextOrder = 0;
   const owns = (target: PendingRowPresentationTarget, token: symbol): boolean => {
     const current = pending.get(target.identity);
@@ -365,8 +366,6 @@ export function createOptimisticPinPatches(host: PendingRowCopyHost) {
   };
 }
 
-type SessionSettingsPatch = Pick<SessionPatch, "thinkingLevel" | "fastMode" | "contextWindow">;
-
 /** Settings share the row-intent owner; their token group is captured before queued dispatch. */
 export function createOptimisticSettingsPatches(host: PendingRowCopyHost) {
   const thinking = createOptimisticRowField(host, "thinkingLevel");
@@ -403,7 +402,10 @@ export function createOptimisticSettingsPatches(host: PendingRowCopyHost) {
           }
         : undefined;
     },
-    prepare(patch: SessionSettingsPatch, isCurrent: () => boolean) {
+    prepare(
+      patch: Pick<SessionPatch, "thinkingLevel" | "fastMode" | "contextWindow">,
+      isCurrent: () => boolean,
+    ) {
       const starts: Array<
         readonly [Pick<typeof thinking, "settle" | "owns">, ReturnType<typeof thinking.prepare>]
       > = [];

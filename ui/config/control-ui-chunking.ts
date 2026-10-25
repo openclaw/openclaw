@@ -110,7 +110,6 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/pages/chat/chat-send-queue-runtime.ts":
     case "ui/src/pages/chat/chat-model-recovery.runtime.ts":
     case "ui/src/pages/chat/chat-command-dispatch.runtime.ts":
-    case "ui/src/pages/chat/chat-pane-session-metadata-patch.ts":
     case "ui/src/pages/chat/chat-pane-session-operations.ts":
     case "ui/src/pages/chat/chat-pane-session-operations.runtime.ts":
       return "chat-interaction-runtime";

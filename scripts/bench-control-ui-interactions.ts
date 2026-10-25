@@ -11,6 +11,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { chromium, type CDPSession, type Page } from "playwright";
 import { buildSandboxHostPath } from "../src/agents/sandbox-host.ts";
 import { createControlUiE2eArtifactDir } from "../ui/src/test-helpers/control-ui-e2e-artifacts.ts";
+import { waitForControlUiInitialRoster } from "../ui/src/test-helpers/control-ui-e2e-readiness.ts";
 import {
   controlUiBundledGatewayUrl,
   controlUiBundledSettingsStorageKey,
@@ -48,6 +49,7 @@ const { values } = parseArgs({
     steps: { type: "string" },
     viewport: { type: "string", default: "both" },
     pairs: { type: "string", default: "1" },
+    "cpu-throttle": { type: "string", default: "1" },
     trace: { type: "boolean", default: false },
     "selector-stats": { type: "boolean", default: false },
     theme: { type: "string", default: "light" },
@@ -65,6 +67,10 @@ if (values.theme !== "light" && values.theme !== "dark") {
 }
 const theme = values.theme;
 const pairs = Number(values.pairs);
+const cpuThrottle = Number(values["cpu-throttle"]);
+if (!Number.isFinite(cpuThrottle) || cpuThrottle < 1) {
+  throw new Error("cpu-throttle must be at least 1");
+}
 if (!Number.isInteger(pairs) || pairs < 1) {
   throw new Error("pairs must be a positive integer");
 }
@@ -240,6 +246,7 @@ type Result = {
   taskMs?: number;
   layoutMs?: number;
   styleMs?: number;
+  longTasks?: { count: number; totalMs: number; maxMs: number };
   requests?: Record<string, number>;
   scenarioEvidence?: InteractionEvidence;
   domBefore?: { nodes: number; menuItems: number; namedAnchors: number };
@@ -427,6 +434,8 @@ try {
           ? "CDP trace + 1ms CPU profiler (overhead included)"
           : "untraced CDP metrics",
         metricTimeDomain: values["thread-cpu-time"] ? "threadTicks" : "timeTicks",
+        cpuThrottle,
+        mobileTouchEmulation: true,
         screenshots: values["first-pair-screenshots"] ? "first pair per cell" : "all",
         resourceCounts: values["resource-counts"]
           ? "Instrumented top-frame native registrations, including fixture resources; measure timings separately without this flag."
@@ -491,6 +500,8 @@ try {
             nativeVisibility?.context ??
             (await browser.newContext({
               viewport: { width: viewport.width, height: viewport.height },
+              isMobile: viewport.name === "mobile",
+              hasTouch: viewport.name === "mobile",
               serviceWorkers: "block",
               colorScheme: theme,
             }));
@@ -509,7 +520,7 @@ try {
               await page.emulateMedia({ colorScheme: theme });
               await page.bringToFront();
             }
-            page.setDefaultTimeout(15_000);
+            page.setDefaultTimeout(15_000 * cpuThrottle);
             // tsx preserves names in serialized fixture callbacks, as in the cold-load runner.
             await page.addInitScript("globalThis.__name = (fn) => fn");
             await page.addInitScript(() => performance.setResourceTimingBufferSize(2048));
@@ -562,12 +573,13 @@ try {
           const events: unknown[] = [];
           const styleSheets = new Map<string, InteractionStyleSheet>();
           try {
+            cdp = await context.newCDPSession(page);
+            await cdp.send("Emulation.setCPUThrottlingRate", { rate: cpuThrottle });
             if (
               nativeVisibility &&
               (scenario.fixture?.boardFrameResources || scenario.fixture?.browserResources)
             ) {
               // Native default contexts allow service workers, which hide fixture fetches from page.route.
-              cdp = await context.newCDPSession(page);
               await cdp.send("Network.enable");
               await cdp.send("Network.setBypassServiceWorker", { bypass: true });
             }
@@ -584,23 +596,34 @@ try {
               defaults: { model: "model-0", modelProvider: "example", contextTokens: 128_000 },
               owners: [],
             });
-            const gateway = await installMockGateway(page, fixture, {
-              requestHandlers: {
-                "sessions.list": (params) => {
-                  if (!isRecord(params)) {
-                    throw new Error("Expected sessions.list query parameters");
-                  }
-                  return sessions.list(params).result;
+            // Keep the same readiness contract with a timeout scaled for intentional throttling.
+            const gateway = await installMockGateway(
+              page,
+              { ...fixture, awaitInitialRoster: false },
+              {
+                requestHandlers: {
+                  "sessions.list": (params) => {
+                    if (!isRecord(params)) {
+                      throw new Error("Expected sessions.list query parameters");
+                    }
+                    return sessions.list(params).result;
+                  },
                 },
               },
-            });
+            );
             await scenario.setup?.(page);
             await page.goto(new URL(scenario.route, slot.server.baseUrl).href);
+            await waitForControlUiInitialRoster(page, 15_000 * cpuThrottle);
             await scenario.prepare(page, gateway);
-            if (cdp) {
+            if (
+              nativeVisibility &&
+              (scenario.fixture?.boardFrameResources || scenario.fixture?.browserResources)
+            ) {
               await cdp.send("Network.setBypassServiceWorker", { bypass: false });
               await cdp.send("Network.disable");
             }
+            // Slow CPUs can still be loading boot modules after the first ready frame.
+            await page.waitForLoadState("networkidle");
             await page.evaluate(() => document.fonts.ready.then(() => undefined));
             await settle(page);
             const activePet = await page.evaluate(
@@ -610,7 +633,6 @@ try {
               throw new Error("Warm interaction fixture must disable unrelated pet visits");
             }
             await page.locator(`html[data-theme-mode="${theme}"]`).waitFor({ state: "attached" });
-            cdp ??= await context.newCDPSession(page);
             await cdp.send("Performance.enable", {
               timeDomain: values["thread-cpu-time"] ? "threadTicks" : "timeTicks",
             });
@@ -742,6 +764,14 @@ try {
                 }
               }
             }
+            const taskProbe = await page.evaluateHandle(() => {
+              const durations: number[] = [];
+              const observer = new PerformanceObserver((list) => {
+                durations.push(...list.getEntries().map((entry) => entry.duration));
+              });
+              observer.observe({ type: "longtask" });
+              return { durations, observer };
+            });
             const before = await metrics(cdp);
             await page.evaluate(() => performance.mark("interaction:start"));
             const start = performance.now();
@@ -752,6 +782,16 @@ try {
             result.wallMs = performance.now() - start;
             await page.evaluate(() => performance.mark("interaction:end"));
             const after = await metrics(cdp);
+            result.longTasks = await taskProbe.evaluate(({ durations, observer }) => {
+              durations.push(...observer.takeRecords().map((entry) => entry.duration));
+              observer.disconnect();
+              return {
+                count: durations.length,
+                totalMs: durations.reduce((sum, duration) => sum + duration, 0),
+                maxMs: Math.max(0, ...durations),
+              };
+            });
+            await taskProbe.dispose();
             if (processSession && processWakeupReader && result.processWakeups?.before) {
               try {
                 result.processWakeups.after = await readProcessWakeups(

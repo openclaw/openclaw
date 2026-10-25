@@ -31,6 +31,7 @@ import {
   createDispatcher,
   diagnosticMocks,
   mocks,
+  mockSessionStorePath,
   noAbortResult,
   resetPluginTtsAndThreadMocks,
   sessionStoreMocks,
@@ -58,7 +59,7 @@ type ReplyResolver = NonNullable<DispatchFromConfigParams["replyResolver"]>;
 
 const sessionKey = "agent:main:telegram:direct:1";
 const sessionTarget = captureSessionTarget({
-  storeScope: "/tmp/mock-sessions.json",
+  storeScope: mockSessionStorePath,
   sessionKey,
   agentId: "main",
 });

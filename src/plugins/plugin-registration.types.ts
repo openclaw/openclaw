@@ -22,21 +22,12 @@ import type { OpenClawPluginNodeWorkspace } from "./types.node-host.js";
 
 export type { PluginServiceSchedulerV1 } from "./service-scheduler.types.js";
 
-type ChannelPlugin = import("../channels/plugins/types.plugin.js").ChannelPlugin;
-type AnyChannelPlugin = import("../channels/plugins/types.plugin.js").AnyChannelPlugin;
-type DiagnosticTracePropagationBridge = DiagnosticTracePropagationBridgeContract<
-  DiagnosticEventPayload,
-  DiagnosticEventMetadata
->;
-
-type PluginInteractiveHandlerResult = {
-  handled?: boolean;
-} | void;
-
 export type PluginInteractiveRegistration<
   TContext = unknown,
   TChannel extends string = string,
-  TResult = PluginInteractiveHandlerResult,
+  TResult = {
+    handled?: boolean;
+  } | void,
 > = {
   channel: TChannel;
   namespace: string;
@@ -100,7 +91,7 @@ export type WidgetPresentationSuccess =
   | { kind: "node"; nodeId: string; nodeName?: string }
   | { kind: "message"; receipt: MessageReceipt };
 
-type WidgetPresenterBase = {
+export type WidgetPresenter = {
   description: string;
   availability: (
     context: WidgetPresenterContext,
@@ -110,24 +101,21 @@ type WidgetPresenterBase = {
     title: string;
     context: WidgetPresenterContext;
   }) => Promise<Result<WidgetPresentationSuccess, WidgetPresentationError>>;
-};
-
-export type WidgetPresenter = WidgetPresenterBase &
-  (
-    | {
-        target: "node_panel";
-        match?: never;
-        capabilities?: never;
-      }
-    | {
-        target: "current_channel";
-        match: (context: WidgetPresenterContext) => boolean;
-        capabilities: Readonly<{
-          sourceKinds: readonly string[];
-          maxSourceBytes?: number;
-        }>;
-      }
-  );
+} & (
+  | {
+      target: "node_panel";
+      match?: never;
+      capabilities?: never;
+    }
+  | {
+      target: "current_channel";
+      match: (context: WidgetPresenterContext) => boolean;
+      capabilities: Readonly<{
+        sourceKinds: readonly string[];
+        maxSourceBytes?: number;
+      }>;
+    }
+);
 
 export type OpenClawPluginCliContext = {
   /**
@@ -160,23 +148,18 @@ export type OpenClawPluginCliRootCommandDescriptor = OpenClawPluginCliCommandDes
   machineOutput?: (params: { argv: readonly string[]; stdoutIsTTY: boolean }) => boolean;
 };
 
-type OpenClawPluginRootCliRegistrationOptions = {
-  /** Omit or pass an empty path for root commands. */
-  parentPath?: readonly [];
-  commands?: readonly string[];
-  descriptors?: readonly OpenClawPluginCliRootCommandDescriptor[];
-};
-
-/** Backward-compatible registration shape for dynamic root or nested paths. */
-type OpenClawPluginLegacyCliRegistrationOptions = {
-  parentPath?: readonly string[];
-  commands?: readonly string[];
-  descriptors?: readonly OpenClawPluginCliCommandDescriptor[];
-};
-
 export type OpenClawPluginCliRegistrationOptions =
-  | OpenClawPluginRootCliRegistrationOptions
-  | OpenClawPluginLegacyCliRegistrationOptions;
+  | {
+      /** Omit or pass an empty path for root commands. */
+      parentPath?: readonly [];
+      commands?: readonly string[];
+      descriptors?: readonly OpenClawPluginCliRootCommandDescriptor[];
+    } /** Backward-compatible registration shape for dynamic root or nested paths. */
+  | {
+      parentPath?: readonly string[];
+      commands?: readonly string[];
+      descriptors?: readonly OpenClawPluginCliCommandDescriptor[];
+    };
 
 export type OpenClawPluginNodeCliFeatureOptions = {
   /** Explicit node feature command names owned under `openclaw nodes`. */
@@ -217,24 +200,6 @@ export type OpenClawPluginNodeInvokeTransportResult =
 
 type OpenClawPluginNodeInvokeApprovalDecision = "allow-once" | "allow-always" | "deny";
 
-type OpenClawPluginNodeInvokePolicyApprovalRuntime = {
-  request: (input: {
-    title: string;
-    description: string;
-    scope?: ApprovalScope;
-    severity?: "info" | "warning" | "critical";
-    toolName?: string;
-    toolCallId?: string;
-    agentId?: string;
-    sessionKey?: string;
-    allowedDecisions?: readonly OpenClawPluginNodeInvokeApprovalDecision[];
-    timeoutMs?: number;
-  }) => Promise<{
-    id?: string;
-    decision?: OpenClawPluginNodeInvokeApprovalDecision | null;
-  }>;
-};
-
 export type OpenClawPluginNodeInvokePolicyContext = {
   nodeId: string;
   command: string;
@@ -260,7 +225,23 @@ export type OpenClawPluginNodeInvokePolicyContext = {
     /** Stable, content-free family name; never include user or action arguments. */
     family: string;
   };
-  approvals?: OpenClawPluginNodeInvokePolicyApprovalRuntime;
+  approvals?: {
+    request: (input: {
+      title: string;
+      description: string;
+      scope?: ApprovalScope;
+      severity?: "info" | "warning" | "critical";
+      toolName?: string;
+      toolCallId?: string;
+      agentId?: string;
+      sessionKey?: string;
+      allowedDecisions?: readonly OpenClawPluginNodeInvokeApprovalDecision[];
+      timeoutMs?: number;
+    }) => Promise<{
+      id?: string;
+      decision?: OpenClawPluginNodeInvokeApprovalDecision | null;
+    }>;
+  };
   /** Full covers only the selected harness's declared node commands; undefined requires a human decision. */
   invokeNodeWithSessionFull?: (input: {
     workspace: OpenClawPluginNodeWorkspace;
@@ -450,7 +431,12 @@ export type OpenClawPluginServiceContext = {
       /** Defaults to true; false skips private payload copies and passes a frozen empty object. */
       options?: { includePrivateData?: boolean },
     ) => () => void;
-    registerTracePropagationBridge?: (bridge: DiagnosticTracePropagationBridge) => () => void;
+    registerTracePropagationBridge?: (
+      bridge: DiagnosticTracePropagationBridgeContract<
+        DiagnosticEventPayload,
+        DiagnosticEventMetadata
+      >,
+    ) => () => void;
   };
 };
 
@@ -478,7 +464,10 @@ export type OpenClawPluginServiceV2 = Omit<
   stop?: (ctx: OpenClawPluginServiceContextV2) => void | Promise<void>;
 };
 
-export type OpenClawPluginChannelRegistration<Plugin extends AnyChannelPlugin = ChannelPlugin> = {
+export type OpenClawPluginChannelRegistration<
+  Plugin extends import("../channels/plugins/types.plugin.js").AnyChannelPlugin =
+    import("../channels/plugins/types.plugin.js").ChannelPlugin,
+> = {
   plugin: Plugin;
 };
 
