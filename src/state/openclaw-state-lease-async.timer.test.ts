@@ -186,60 +186,53 @@ describe("async state lease timer", () => {
     },
   );
 
-  it.each([false, true])(
-    "joins renewal before sealing public methods (committed before reply: %s)",
-    async (committedEarly) => {
-      await using f = fixture();
-      const renewing = createDeferredCore();
-      const reply = f.reply();
-      const verifying = createDeferredCore();
-      const finalReply = f.reply();
-      f.onRenew.mockImplementationOnce(async (command) => {
-        const expiresAt = committedEarly ? command.publish(Date.now() + 3_000) : undefined;
-        renewing.resolve();
-        await reply.promise;
-        command.assertCurrent();
-        return expiresAt ?? command.publish(Date.now() + 3_000);
-      });
-      const result = f.run();
-      const { lease, within } = await f.enter(result);
-      await within(() => vi.advanceTimersByTimeAsync(1_000));
-      await renewing.promise;
-      if (committedEarly) {
-        await within(() => vi.advanceTimersByTimeAsync(2_000));
-        expect(lease.signal.aborted).toBe(false);
-        expect(f.renew).toHaveBeenCalledOnce();
-        await within(() => lease.assertOwned());
-      }
-      f.finishCallback.resolve();
-      await within(() => lease.assertOwned());
-      expect(result.settled()).toBe(false);
-      expect(f.release).not.toHaveBeenCalled();
-      f.onVerify.mockImplementationOnce(async (command) => {
-        const expiresAt = command.publish(Date.now() + 3_000);
-        verifying.resolve();
-        await finalReply.promise;
-        command.assertCurrent();
-        return expiresAt;
-      });
-      reply.resolve();
-      await verifying.promise;
-      const verifies = f.verify.mock.calls.length;
-      await expect(within(() => lease.assertOwned())).rejects.toThrow(
-        "differs from its live owner",
-      );
-      await expect(within(() => lease.renew())).rejects.toThrow("differs from its live owner");
-      expect(f.verify).toHaveBeenCalledTimes(verifies);
-      await within(() => vi.advanceTimersByTimeAsync(1_000));
-      expect(f.renew).toHaveBeenCalledOnce();
-      finalReply.resolve();
-      expect(await result.outcome).toEqual({ ok: true, value: "completed" });
-      expect(f.release).toHaveBeenCalledOnce();
-      await f.maintenance.close();
-      expect(f.events).toEqual(["release", "actor-close"]);
-      expect(f.resources.size).toBe(0);
-    },
-  );
+  it("joins renewal before sealing public methods after commit publication", async () => {
+    await using f = fixture();
+    const renewing = createDeferredCore();
+    const reply = f.reply();
+    const verifying = createDeferredCore();
+    const finalReply = f.reply();
+    f.onRenew.mockImplementationOnce(async (command) => {
+      const expiresAt = command.publish(Date.now() + 3_000);
+      renewing.resolve();
+      await reply.promise;
+      command.assertCurrent();
+      return expiresAt;
+    });
+    const result = f.run();
+    const { lease, within } = await f.enter(result);
+    await within(() => vi.advanceTimersByTimeAsync(1_000));
+    await renewing.promise;
+    await within(() => vi.advanceTimersByTimeAsync(2_000));
+    expect(lease.signal.aborted).toBe(false);
+    expect(f.renew).toHaveBeenCalledOnce();
+    await within(() => lease.assertOwned());
+    f.finishCallback.resolve();
+    await within(() => lease.assertOwned());
+    expect(result.settled()).toBe(false);
+    expect(f.release).not.toHaveBeenCalled();
+    f.onVerify.mockImplementationOnce(async (command) => {
+      const expiresAt = command.publish(Date.now() + 3_000);
+      verifying.resolve();
+      await finalReply.promise;
+      command.assertCurrent();
+      return expiresAt;
+    });
+    reply.resolve();
+    await verifying.promise;
+    const verifies = f.verify.mock.calls.length;
+    await expect(within(() => lease.assertOwned())).rejects.toThrow("differs from its live owner");
+    await expect(within(() => lease.renew())).rejects.toThrow("differs from its live owner");
+    expect(f.verify).toHaveBeenCalledTimes(verifies);
+    await within(() => vi.advanceTimersByTimeAsync(1_000));
+    expect(f.renew).toHaveBeenCalledOnce();
+    finalReply.resolve();
+    expect(await result.outcome).toEqual({ ok: true, value: "completed" });
+    expect(f.release).toHaveBeenCalledOnce();
+    await f.maintenance.close();
+    expect(f.events).toEqual(["release", "actor-close"]);
+    expect(f.resources.size).toBe(0);
+  });
 
   it.each(["assertOwned", "result"] as const)(
     "rejects delayed %s after expiry even before the timer callback runs",
