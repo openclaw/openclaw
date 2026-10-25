@@ -1,6 +1,6 @@
 /** Focused HTTP coverage for hook admission feedback and pending replay behavior. */
 import fs from "node:fs/promises";
-import { Agent, request as httpRequest } from "node:http";
+import { Agent, request as httpRequest, type IncomingMessage } from "node:http";
 import path from "node:path";
 import { afterEach, assert, describe, expect, test, vi, type TestContext } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
@@ -211,52 +211,43 @@ async function waitForHookStatus(params: {
     .toBe(params.status);
 }
 
-async function postOversizedChunkedHook(port: number): Promise<{
-  statusCode: number | undefined;
-  body: string;
-  connection: string | undefined;
-  events: string[];
-}> {
+async function postOversizedChunkedHook(port: number) {
   const agent = new Agent({ keepAlive: true });
   const events: string[] = [];
+  const response = createDeferred<IncomingMessage>();
+  const requestFailed = createDeferred<never>();
+  const req = httpRequest(
+    { agent, host: "127.0.0.1", port, path: "/hooks/wake", method: "POST", headers: hookHeaders() },
+    response.resolve,
+  );
+  const socketClosed = new Promise<void>((resolve) => {
+    req.once("socket", (socket) => socket.once("close", resolve));
+  });
+  req.on("error", requestFailed.reject);
+  req.setTimeout(5_000, () => req.destroy(new Error("chunked hook request timed out")));
   try {
-    return await new Promise((resolve, reject) => {
-      const req = httpRequest(
-        {
-          agent,
-          host: "127.0.0.1",
-          port,
-          path: "/hooks/wake",
-          method: "POST",
-          headers: hookHeaders(),
-        },
-        (res) => {
-          const chunks: Buffer[] = [];
-          res.on("data", (chunk: Buffer) => chunks.push(chunk));
-          res.on("error", reject);
-          res.on("end", () => {
-            events.push("response-end");
-            void socketClosed.then(() => {
-              events.push("socket-close");
-              resolve({
-                statusCode: res.statusCode,
-                body: Buffer.concat(chunks).toString("utf8"),
-                connection: res.headers.connection,
-                events,
-              });
-            }, reject);
-          });
-        },
-      );
-      const socketClosed = new Promise<void>((resolveClose) => {
-        req.once("socket", (socket) => socket.once("close", resolveClose));
-      });
-      req.on("error", reject);
-      req.setTimeout(5_000, () => req.destroy(new Error("chunked hook request timed out")));
-      req.write('{"text":"');
-      req.write("x".repeat(DEFAULT_WEBHOOK_MAX_BODY_BYTES + 1));
-      req.end('"}');
-    });
+    return await Promise.race([
+      requestFailed.promise,
+      (async () => {
+        req.write('{"text":"');
+        req.write("x".repeat(DEFAULT_WEBHOOK_MAX_BODY_BYTES + 1));
+        req.end('"}');
+        const res = await response.promise;
+        const chunks: Buffer[] = [];
+        for await (const chunk of res) {
+          chunks.push(chunk);
+        }
+        events.push("response-end");
+        await socketClosed;
+        events.push("socket-close");
+        return {
+          statusCode: res.statusCode,
+          body: Buffer.concat(chunks).toString("utf8"),
+          connection: res.headers.connection,
+          events,
+        };
+      })(),
+    ]);
   } finally {
     agent.destroy();
   }

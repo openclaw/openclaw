@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { createServer } from "node:net";
 import { DatabaseSync } from "node:sqlite";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
@@ -83,6 +82,8 @@ describe("Gateway startup lifetime", () => {
     "releases idle prepared donor custody before registry retirement during %s",
     async (entry) => {
       const state = await createStartupTestState(`gateway-idle-donor-${entry}`);
+      startupTraceEventLoopDelay.instances.length = 0;
+      state.envVars.OPENCLAW_GATEWAY_STARTUP_TRACE = "1";
       const port = await getFreePort();
       await configureStartup(state, port);
       const previous = captureActivePluginRegistrySnapshot();
@@ -166,6 +167,7 @@ describe("Gateway startup lifetime", () => {
         ]);
         expect(boundary).toEqual({ modelClosed: true, sdkClosed: true });
         expect(await outcome).toBe(entry === "startup failure" ? startupError : undefined);
+        expect(startupTraceEventLoopDelay.instances[0]?.disable).toHaveBeenCalledOnce();
         expect(sdkReads).toEqual([{ value: "donor available", modelClosed: false }]);
         expect(disposed).toHaveBeenCalledOnce();
       } finally {
@@ -354,64 +356,6 @@ describe("Gateway startup lifetime", () => {
     }
   });
 
-  it.each([
-    ["TLS", "gateway tls: cert/key missing"],
-    ["bind", "another gateway instance is already listening"],
-  ] as const)("closes startup tracing after a %s failure", async (phase, message) => {
-    startupTraceEventLoopDelay.instances.length = 0;
-    const port = await getFreePort();
-    const blocker = phase === "bind" ? createServer() : undefined;
-    if (blocker) {
-      await new Promise<void>((resolve, reject) => {
-        blocker.once("error", reject);
-        blocker.listen(port, "127.0.0.1", () => {
-          blocker.off("error", reject);
-          resolve();
-        });
-      });
-    }
-    const state = await createStartupTestState(`gateway-${phase}-startup-trace`);
-    state.envVars.OPENCLAW_GATEWAY_STARTUP_TRACE = "1";
-    await configureStartup(
-      state,
-      port,
-      phase === "TLS"
-        ? {
-            tls: {
-              enabled: true,
-              autoGenerate: false,
-              certPath: state.path("missing-cert.pem"),
-              keyPath: state.path("missing-key.pem"),
-            },
-          }
-        : {},
-    );
-    const listenModule = await import("./server/http-listen.js");
-    const listen = listenModule.listenGatewayHttpServer;
-    // The owned blocker cannot leave; retry policy has its own listener tests.
-    const listenSpy = blocker
-      ? vi
-          .spyOn(listenModule, "listenGatewayHttpServer")
-          .mockImplementation((params) => listen({ ...params, retryEaddrinuse: false }))
-      : undefined;
-    try {
-      const start =
-        phase === "TLS"
-          ? createGatewayKernel
-          : (await import("./server-start.js")).startGatewayServerCore;
-      await expect(start(port, startupOptions())).rejects.toThrow(message);
-      expect(startupTraceEventLoopDelay.instances[0]?.disable).toHaveBeenCalledOnce();
-    } finally {
-      listenSpy?.mockRestore();
-      if (blocker) {
-        await new Promise<void>((resolve) => {
-          blocker.close(() => resolve());
-        });
-      }
-      await state.cleanup();
-    }
-  });
-
   it.for(["clean", "failed"] as const)(
     "joins deferred startup failure while reporting %s cleanup independently",
     async (cleanup, { signal }) => {
@@ -530,6 +474,8 @@ describe("Gateway startup lifetime", () => {
     async (cleanupFails) => {
       const port = await getFreePort();
       const state = await createStartupTestState("gateway-post-ready-startup-failure");
+      startupTraceEventLoopDelay.instances.length = 0;
+      state.envVars.OPENCLAW_GATEWAY_STARTUP_TRACE = "1";
       const startupError = new Error("startup failed after post-attach installation");
       const cleanupError = new Error("startup cleanup failed");
       let failCleanup = cleanupFails;
@@ -599,6 +545,7 @@ describe("Gateway startup lifetime", () => {
         const boundary = await Promise.race([drainEntered.promise, startupOutcome]);
         expect(boundary).toEqual({ barrierReleased: true });
         const startupFailure = await startupOutcome;
+        expect(startupTraceEventLoopDelay.instances[0]?.disable).toHaveBeenCalledOnce();
         if (cleanupFails) {
           const aggregate = expectStartupCleanupError(startupFailure, startupError);
           expect(aggregate.message).toBe(startupError.message);

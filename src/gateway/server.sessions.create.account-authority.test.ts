@@ -1,7 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, onTestFinished, test, vi } from "vitest";
 import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
-import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import * as modelCatalogRuntime from "../agents/model-catalog.runtime.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
@@ -392,49 +391,30 @@ test("raw session-write scopes do not replace recorded session-create admission"
   }));
 
 async function createCatalogFixture(withCapturedAuthority = false) {
-  const { storePath } = await createSessionStoreDir();
-  const owner = ensureProfileForEmail("catalog-wait@example.test");
+  const fixture = await createFixture("operator.write", false);
+  const { client, context } = fixture;
   const connection = new AbortController();
   const revocation = new AbortController();
-  const client: GatewayClient & { connId: string } = {
-    ...identifiedClient(owner.id),
-    connId: "catalog-wait",
-    connectionSignal: connection.signal,
-  };
+  client.connectionSignal = connection.signal;
   if (withCapturedAuthority) {
     client.internal = {
       operatorRunAuthority: createAdmittedRunOperatorAuthority({
-        profileId: owner.id,
+        profileId: fixture.owner.id,
         scopes: client.connect.scopes ?? [],
         signal: revocation.signal,
         assertCurrent: () => revocation.signal.throwIfAborted(),
       }),
     };
   }
-  const config = await getGatewayConfigModule();
-  config.clearRuntimeConfigSnapshot();
-  const cfg = config.getRuntimeConfig();
-  const catalog = {
-    agentId: "main",
-    agentDir: resolveAgentDir(cfg, "main"),
-    workspaceDir: resolveAgentWorkspaceDir(cfg, "main"),
-    config: cfg,
-    catalogComplete: true,
-    entries: catalogEntries(),
-    routeVariants: [],
-  };
-  const context = createDirectChatContext({
-    getRuntimeConfig: () => cfg,
-    getClientConnIds: () => new Set(connection.signal.aborted ? [] : [client.connId]),
-    readPreparedGatewayModelCatalog: async () => catalog,
-    loadGatewayModelCatalogSnapshot: vi.fn(async () => catalog),
-  });
-  await initializeSessionReadContext(context);
-  const key = "agent:main:dashboard:catalog-wait";
-  const request = sessionCreation(client, context, key, storePath, "catalog-wait");
+  const catalog = await context.loadGatewayModelCatalogSnapshot();
+  context.getClientConnIds = () => new Set(connection.signal.aborted ? [] : [client.connId]);
+  context.readPreparedGatewayModelCatalog = async () => catalog;
+  vi.mocked(context.loadGatewayModelCatalogSnapshot)
+    .mockImplementation(async () => catalog)
+    .mockClear();
   const create = (selectedModel?: string, idempotencyKey = "catalog-wait") =>
-    request.create(selectedModel, idempotencyKey);
-  return { storePath, connection, revocation, catalog, context, key, ...request, create };
+    fixture.send({ ...(selectedModel ? { model: selectedModel } : {}), idempotencyKey });
+  return { ...fixture, connection, revocation, create };
 }
 
 test.each(["deadline", "disconnect", "authority revocation"])(
