@@ -123,30 +123,25 @@ describe("gateway --force helpers", () => {
     expect(probePortUsageMock).not.toHaveBeenCalled();
   });
 
-  it("does not suppress listener ownership-guard errors", async () => {
-    execFileSyncMock.mockReturnValue(nodeListener);
-    const guardError = toolError("ownership verification failed", { code: "ESRCH" });
-    await expect(
-      forceFreePortAndWait(18789, {
-        beforeSignal: throwError(guardError),
-      }),
-    ).rejects.toThrow(guardError);
-    expect(defaultKillMock).not.toHaveBeenCalled();
-  });
-
-  it("propagates EPERM from process.kill without fuser fallback", async () => {
-    execFileSyncMock.mockReturnValue(nodeListener);
-    probePortUsageMock.mockResolvedValue("free");
-    defaultKillMock.mockImplementation(
-      throwError(toolError("permission denied", { code: "EPERM" })),
-    );
-
-    await expect(forceFreePortAndWait(18789)).rejects.toThrow(/failed to kill pid 42/);
-
-    expect(defaultKillMock).toHaveBeenCalledOnce();
-    expect(probePortUsageMock).not.toHaveBeenCalled();
-    expect(execFileSyncMock).toHaveBeenCalledOnce();
-  });
+  it.each(["ownership guard", "process.kill"])(
+    "propagates errors from %s without fallback",
+    async (source) => {
+      const guard = source === "ownership guard";
+      execFileSyncMock.mockReturnValue(nodeListener);
+      const error = toolError(guard ? "ownership verification failed" : "permission denied", {
+        code: guard ? "ESRCH" : "EPERM",
+      });
+      if (!guard) {
+        defaultKillMock.mockImplementation(throwError(error));
+      }
+      await expect(
+        forceFreePortAndWait(18789, guard ? { beforeSignal: throwError(error) } : {}),
+      ).rejects.toThrow(guard ? error : /failed to kill pid 42/);
+      expect(defaultKillMock).toHaveBeenCalledTimes(guard ? 0 : 1);
+      expect(probePortUsageMock).not.toHaveBeenCalled();
+      expect(execFileSyncMock).toHaveBeenCalledOnce();
+    },
+  );
 
   it("retries until the port is free", async () => {
     vi.useFakeTimers();

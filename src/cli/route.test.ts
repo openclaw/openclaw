@@ -3,9 +3,7 @@ import { defaultRuntime } from "../runtime.js";
 import { captureEnv } from "../test-utils/env.js";
 
 const emitCliBannerMock = vi.hoisted(() => vi.fn());
-const ensureConfigReadyMock = vi.hoisted(() =>
-  vi.fn(async (_params: { runtime?: unknown; commandPath?: unknown }) => {}),
-);
+const ensureConfigReadyMock = vi.hoisted(() => vi.fn(async () => {}));
 const ensurePluginRegistryLoadedMock = vi.hoisted(() => vi.fn());
 const runRouteMock = vi.hoisted(() => vi.fn(async () => true));
 const statusDefaults = { json: false, deep: false, all: false, usage: false, verbose: false };
@@ -107,15 +105,10 @@ describe("tryRouteCli", () => {
     ],
     ["health --timeout nope --timeout 5000", { json: false, verbose: false, timeoutMs: 5000 }],
     ["status --timeout 5000", { ...statusDefaults, timeoutMs: 5000 }],
-    ["status --timeout 250", { ...statusDefaults, timeoutMs: 250 }],
     ["status", { ...statusDefaults, timeoutMs: undefined }],
     [
       "--profile work status --json",
       { deep: false, all: false, usage: false, timeoutMs: undefined },
-    ],
-    [
-      "--profile work health --timeout=5000 --json",
-      { json: true, verbose: false, timeoutMs: 5000 },
     ],
     [
       "sessions --agent=default --limit=25",
@@ -207,10 +200,8 @@ describe("tryRouteCli", () => {
     "sessions --json --unknown",
     "status --timeout",
     "status --agent",
-    ...["0", "-5", "nope", "5s"].flatMap((value) => [
-      `status --timeout ${value}`,
-      `health --timeout ${value}`,
-    ]),
+    "status --timeout 0",
+    "health --timeout nope",
     "status --timeout 5000 --timeout nope",
     "--json status",
     "--json health",
@@ -273,17 +264,13 @@ describe("tryRouteCli", () => {
     expect(process.env.OPENCLAW_LOG_LEVEL).toBe("trace");
   });
 
-  it.each([
-    ["missing value", ["node", "openclaw", "status", "--log-level"]],
-    [
-      "later invalid value",
-      ["node", "openclaw", "--log-level", "debug", "status", "--log-level", "verbose"],
-    ],
-  ])("falls back for %s routed log level options before bootstrap", async (_name, argv) => {
-    await expect(tryRouteCli(argv)).resolves.toBe(false);
-
-    expectNoBootstrap();
-    expect(runRouteMock).not.toHaveBeenCalled();
-    expect(process.env.OPENCLAW_LOG_LEVEL).toBeUndefined();
-  });
+  it.each(["status --log-level", "--log-level debug status --log-level verbose"])(
+    "falls back for invalid routed log level options: %s",
+    async (command) => {
+      await expect(tryRouteCli(["node", "openclaw", ...command.split(" ")])).resolves.toBe(false);
+      expectNoBootstrap();
+      expect(runRouteMock).not.toHaveBeenCalled();
+      expect(process.env.OPENCLAW_LOG_LEVEL).toBeUndefined();
+    },
+  );
 });

@@ -90,12 +90,7 @@ describe("models cli", () => {
     command: ReturnType<typeof vi.fn>,
     expected: Record<string, unknown>,
   ) {
-    expect(command).toHaveBeenCalledTimes(1);
-    const [options, context] = command.mock.calls[0] ?? [];
-    expect(options).toEqual(expect.objectContaining(expected));
-    if (!context || typeof context !== "object") {
-      throw new Error("expected command context");
-    }
+    expect(command).toHaveBeenCalledWith(expect.objectContaining(expected), expect.any(Object));
   }
 
   async function detectJsonOutput(argv: string) {
@@ -129,19 +124,9 @@ describe("models cli", () => {
   });
 
   it.each([
-    {
-      name: "an ignored parent status alias and a JSON-looking provider value",
-      args: "models --status-json auth list --provider --json",
-      provider: "--json",
-      json: false,
-    },
-    {
-      name: "a real JSON flag before a plain-looking provider value",
-      args: "models auth list --json --provider --plain",
-      provider: "--plain",
-      json: true,
-    },
-  ])("classifies $name by its actual Commander role", async ({ args, provider, json }) => {
+    ["models --status-json auth list --provider --json", "--json", false],
+    ["models auth list --json --provider --plain", "--plain", true],
+  ] as const)("classifies %s by its actual Commander role", async (args, provider, json) => {
     expect(await detectJsonOutput(args)).toBe(json);
     expectCommandOptions(mocks.modelsAuthListCommand, { provider, json });
   });
@@ -156,49 +141,39 @@ describe("models cli", () => {
     expect(await detectJsonOutput("models aliases list --plain")).toBe(false);
   });
 
-  it.each<[string, keyof typeof mocks, Record<string, unknown>]>([
-    ["--agent poe add", "modelsAuthAddCommand", {}],
-    [
-      "--agent poe activate openai:saved",
-      "modelsAuthActivateCommand",
-      { profileId: "openai:saved" },
-    ],
-    [
-      "--agent poe logout openai:manual --yes",
-      "modelsAuthLogoutCommand",
-      { profileId: "openai:manual", yes: true },
-    ],
-    [
-      "--agent poe setup-token --provider anthropic",
-      "modelsAuthSetupTokenCommand",
-      { provider: "anthropic" },
-    ],
-    [
-      "--agent poe paste-token --provider anthropic",
-      "modelsAuthPasteTokenCommand",
-      { provider: "anthropic" },
-    ],
-    [
-      "--agent poe login-github-copilot --yes",
-      "modelsAuthLoginCommand",
-      { provider: "github-copilot", method: "device", yes: true },
-    ],
-    [
-      "order get --provider anthropic --agent poe",
-      "modelsAuthOrderGetCommand",
-      { provider: "anthropic" },
-    ],
-    [
+  const provider = { provider: "anthropic" };
+  const authCase = (
+    args: string,
+    command: keyof typeof mocks,
+    expected: Record<string, unknown> = provider,
+  ) => ({ args, command, expected });
+  it.each([
+    authCase("--agent poe add", "modelsAuthAddCommand", {}),
+    authCase("--agent poe activate openai:saved", "modelsAuthActivateCommand", {
+      profileId: "openai:saved",
+    }),
+    authCase("--agent poe logout openai:manual --yes", "modelsAuthLogoutCommand", {
+      profileId: "openai:manual",
+      yes: true,
+    }),
+    authCase("--agent poe setup-token --provider anthropic", "modelsAuthSetupTokenCommand"),
+    authCase("--agent poe paste-token --provider anthropic", "modelsAuthPasteTokenCommand"),
+    authCase("--agent poe login-github-copilot --yes", "modelsAuthLoginCommand", {
+      provider: "github-copilot",
+      method: "device",
+      yes: true,
+    }),
+    authCase("order get --provider anthropic --agent poe", "modelsAuthOrderGetCommand"),
+    authCase(
       "order set --provider anthropic anthropic:first anthropic:second --agent poe",
       "modelsAuthOrderUpdateCommand",
-      { provider: "anthropic", order: ["anthropic:first", "anthropic:second"] },
-    ],
-    [
-      "order clear --provider anthropic --agent poe",
-      "modelsAuthOrderUpdateCommand",
-      { provider: "anthropic", order: null },
-    ],
-  ])("passes parent or leaf --agent to models auth %s", async (args, command, expected) => {
+      { ...provider, order: ["anthropic:first", "anthropic:second"] },
+    ),
+    authCase("order clear --provider anthropic --agent poe", "modelsAuthOrderUpdateCommand", {
+      ...provider,
+      order: null,
+    }),
+  ])("passes parent or leaf --agent to models auth $args", async ({ args, command, expected }) => {
     await runModelsCommand(`models auth ${args}`);
     expectCommandOptions(mocks[command], { agent: "poe", ...expected });
   });

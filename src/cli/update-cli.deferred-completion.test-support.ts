@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { createDirectorySync, createFileSync } from "@openclaw/fs-safe/advanced";
 import { afterEach, beforeEach, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -18,7 +17,6 @@ const spawn = vi.fn();
 export const observeUpdateGatewayReadiness =
   vi.fn<typeof import("./update-cli/update-command-readiness.js").observeUpdateGatewayReadiness>();
 const { defaultRuntime: runtimeCapture, resetRuntimeCapture } = createCliRuntimeCapture();
-const sqliteHostPlatform = process.platform;
 const sourceRuntimeCompletion = vi.hoisted(() =>
   vi.fn<typeof import("./update-cli/update-command-runtime.js").completeSourceUpdateRuntime>(),
 );
@@ -160,11 +158,7 @@ const {
   stableWhatsAppConfig,
 } = await import("./update-cli/update-cli-config.test-support.js");
 const { writeJsonFixture } = await import("./update-cli/update-cli-package.test-support.js");
-const nodeSqlite = await import("../infra/node-sqlite.js");
-const windowsPrivateDirectory = await import("../infra/windows-private-directory.js");
 const { createTempHomeEnv } = await import("../test-utils/temp-home.js");
-const existingHostUri = nodeSqlite.resolveExistingSqliteFileUri;
-const immutableHostUri = nodeSqlite.resolveImmutableSqliteFileUri;
 export const { updateGitCheckout } = await import("../infra/update-runner-git.js");
 const { runExec, runCommandWithTimeout } = await import("../process/exec.js");
 export { runExec };
@@ -293,22 +287,6 @@ export function installDeferredCompletionFixture() {
     spawn.mockImplementation(() => {
       throw new Error("Completion must not spawn core update");
     });
-    vi.spyOn(nodeSqlite, "resolveExistingSqliteFileUri").mockImplementation((file) =>
-      existingHostUri(file, sqliteHostPlatform),
-    );
-    vi.spyOn(nodeSqlite, "resolveImmutableSqliteFileUri").mockImplementation((file) =>
-      immutableHostUri(file, sqliteHostPlatform),
-    );
-    if (sqliteHostPlatform !== "win32") {
-      vi.spyOn(windowsPrivateDirectory, "createPrivateWindowsDirectory").mockImplementation(
-        (dir) => {
-          createDirectorySync(dir, { mode: 0o700 });
-        },
-      );
-      vi.spyOn(windowsPrivateDirectory, "createPrivateWindowsFile").mockImplementation((file) =>
-        createFileSync(file, { mode: 0o600 }),
-      );
-    }
   });
   afterEach(async () => {
     closeOpenClawStateDatabaseForTest();

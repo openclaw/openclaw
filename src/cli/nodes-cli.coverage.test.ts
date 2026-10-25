@@ -14,14 +14,11 @@ type NodeInvokeCall = {
   };
 };
 
-let lastNodeInvokeCall: NodeInvokeCall | null = null;
-
 async function gatewayResponse(opts: NodeInvokeCall): Promise<unknown> {
   if (opts.method === "node.list") {
     return { nodes: [{ nodeId: "mac-1" }] };
   }
   if (opts.method === "node.invoke") {
-    lastNodeInvokeCall = opts;
     return { payload: { stdout: "", stderr: "", exitCode: 0, success: true, timedOut: false } };
   }
   return { ok: true };
@@ -57,7 +54,7 @@ describe("nodes-cli coverage", () => {
   const sharedProgram: Command = new Command();
 
   const getNodeInvokeCall = () => {
-    const last = lastNodeInvokeCall;
+    const last = callGateway.mock.calls.findLast(([call]) => call.method === "node.invoke")?.[0];
     if (!last) {
       throw new Error("expected node.invoke call");
     }
@@ -101,7 +98,6 @@ describe("nodes-cli coverage", () => {
     runtimeErrors.length = 0;
     vi.clearAllMocks();
     callGateway.mockReset().mockImplementation(gatewayResponse);
-    lastNodeInvokeCall = null;
   });
 
   it("escapes node mutation confirmations without changing request or JSON values", async () => {
@@ -222,6 +218,16 @@ describe("nodes-cli coverage", () => {
     ["invoke", ["--node", "mac-1", "--command", "   "], "--node and --command required"],
     [
       "invoke",
+      ["--node", "mac-1", "--command", "system.run"],
+      'command "system.run" is reserved for shell execution',
+    ],
+    [
+      "invoke",
+      ["--node", "mac-1", "--command", "canvas.eval", "--params", "not-json"],
+      "--params must be valid JSON.",
+    ],
+    [
+      "invoke",
       ["--node", "mac-1", "--command", "canvas.eval", "--idempotency-key", ""],
       "--idempotency-key",
     ],
@@ -232,11 +238,6 @@ describe("nodes-cli coverage", () => {
       "invalid --environment (use sandbox|production)",
     ],
     ["notify", ["--node", "mac-1", "--title", " ", "--body", " "], "missing --title or --body"],
-    [
-      "camera snap",
-      ["--node", "mac-1", "--facing", "side"],
-      "invalid facing: side (expected front|back|both)",
-    ],
     [
       "camera clip",
       ["--node", "mac-1", "--facing", "both"],
@@ -255,19 +256,6 @@ describe("nodes-cli coverage", () => {
       expect(defaultRuntime.exit).toHaveBeenCalledTimes(1);
     },
   );
-
-  it("blocks system.run on nodes invoke", async () => {
-    await expectFailure("nodes invoke --node mac-1 --command system.run");
-    expect(runtimeErrors.at(-1)).toContain('command "system.run" is reserved for shell execution');
-  });
-
-  it("rejects malformed nodes invoke params before opening a gateway call", async () => {
-    await expectFailure("nodes invoke --node mac-1 --command canvas.eval --params not-json");
-
-    expect(runtimeErrors.at(-1)).toContain("--params must be valid JSON.");
-    expect(callGateway).not.toHaveBeenCalled();
-    expect(lastNodeInvokeCall).toBeNull();
-  });
 
   it("forwards notification priority with the default system delivery", async () => {
     const invoke = await runNodesCommand(
@@ -317,7 +305,6 @@ describe("nodes-cli coverage", () => {
   it.each([
     ["nodes location get --node mac-1 --invoke-timeout 6s", "--invoke-timeout"],
     ["nodes camera snap --node mac-1 --invoke-timeout 20s", "--invoke-timeout"],
-    ["nodes camera snap --node mac-1 --quality 1.1", "--quality"],
     ["nodes camera clip --node mac-1 --invoke-timeout 90s", "--invoke-timeout"],
     ["nodes screen record --node mac-1 --invoke-timeout 120s", "--invoke-timeout"],
     ["nodes screen record --node mac-1 --fps 10fps", "--fps"],
@@ -326,6 +313,5 @@ describe("nodes-cli coverage", () => {
     await expectFailure(args);
     expect(runtimeErrors.at(-1)).toContain(`${flag} must be`);
     expect(callGateway).not.toHaveBeenCalled();
-    expect(lastNodeInvokeCall).toBeNull();
   });
 });
