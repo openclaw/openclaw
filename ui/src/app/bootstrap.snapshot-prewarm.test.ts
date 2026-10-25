@@ -24,7 +24,7 @@ function configure(patch: Partial<ReturnType<typeof loadSettings>>, token = "tes
 }
 
 function spyPrewarm() {
-  return vi.spyOn(prewarm, "prewarmChatSnapshot").mockImplementation(() => undefined);
+  return vi.spyOn(prewarm, "prewarmChatSnapshot").mockImplementation(async () => undefined);
 }
 
 afterEach(() => {

@@ -92,10 +92,10 @@ function openingPane(approvals = false) {
     key: string;
     initialHistory: { ok: true; payload: ChatHistoryResult };
   }>();
-  const history: ChatHistoryResult = {
+  const history = {
     messages: [{ role: "assistant", content: [{ type: "text", text: "Pipelined transcript" }] }],
     sessionId: "pipeline-session",
-  };
+  } satisfies ChatHistoryResult;
   const request = createReconnectRequest(history, {
     "sessions.messages.subscribe": (params: { includeApprovals?: boolean }) => {
       if (params.includeApprovals) {
