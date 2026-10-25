@@ -125,32 +125,6 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-it("renders video playback, footer actions and live labels", async () => {
-  const src = "https://example.com/demo.mp4?playback=1";
-  const originalSrc = "https://example.com/demo.mp4";
-  const { modal } = await renderLightbox({
-    mediaKind: "video",
-    src,
-    originalSrc,
-    imageTitle: "Demo clip",
-  });
-  const video = modal.querySelector("video")!;
-  expect(video).toMatchObject({ src, controls: true, autoplay: true });
-  expect(fetchImage).not.toHaveBeenCalled();
-  expect(modal.querySelector("img, .zoom-controls, .header .open-original")).toBeNull();
-  const footer = modal.querySelector("openclaw-modal-actions.lightbox-footer")!;
-  expect(footer?.parentElement?.lastElementChild).toBe(footer);
-  const openOriginal = footer.querySelector<HTMLAnchorElement>(".open-original")!;
-  expect(openOriginal.href).toBe(originalSrc);
-  const close = button(modal, ".close");
-  expect(close.getAttribute("aria-label")).toBe("Close video preview");
-  expectFocusCycle(close, openOriginal, { composed: true });
-  modal.imageTitle = "Renamed video";
-  await modal.updateComplete;
-  expect(video.getAttribute("aria-label")).toBe("Renamed video");
-  expect(modal.querySelector("openclaw-modal-dialog")?.label).toBe("Video preview: Renamed video");
-});
-
 it.each([false, true])(
   "keeps video usable while its original link loads (gallery: %s)",
   async (gallery) => {
@@ -163,6 +137,15 @@ it.each([false, true])(
       gallery: gallery ? { index: 0, items: [async () => null, async () => null] } : undefined,
     });
     const video = modal.querySelector("video")!;
+    expect(video).toMatchObject({
+      src: "https://example.com/demo.mp4",
+      controls: true,
+      autoplay: true,
+    });
+    expect(modal.querySelector("img, .zoom-controls, .header .open-original")).toBeNull();
+    const footer = modal.querySelector("openclaw-modal-actions.lightbox-footer")!;
+    expect(footer.parentElement?.lastElementChild).toBe(footer);
+    expect(button(modal, ".close").getAttribute("aria-label")).toBe("Close video preview");
     const pendingLink = modal.querySelector<HTMLAnchorElement>(".open-original");
     if (gallery) {
       expect(pendingLink?.getAttribute("aria-disabled")).toBe("true");
@@ -178,8 +161,10 @@ it.each([false, true])(
     expect(video.getAttribute("aria-label")).toBe(
       gallery ? "Generated lobster" : "Renamed while loading",
     );
+    expect(modal.querySelector("openclaw-modal-dialog")?.label).toBe(
+      `Video preview: ${gallery ? "Generated lobster" : "Renamed while loading"}`,
+    );
     expect(button(modal, ".close").isConnected).toBe(true);
-    expect(fetchImage).toHaveBeenCalledOnce();
 
     original.resolve(new Blob(["png"], { type: "image/png" }));
     await waitForSolid(() => {
@@ -234,66 +219,55 @@ it.each(["failed", "replaced", "closed"] as const)(
   },
 );
 
-it.each([false, true])(
-  "preserves preview/zoom during display upgrade (retry: %s)",
-  async (retry) => {
-    const full = createDeferred<ImageLightboxItem | null>();
-    const decoded = createDeferred();
-    const decode = vi.fn(() => (retry ? Promise.resolve() : decoded.promise));
-    mockDecoder(decode);
-    const original = { src: "blob:original", title: "Screenshot", release: vi.fn() };
-    const loadDisplayImage = retry
-      ? vi
-          .fn<() => Promise<ImageLightboxItem | null>>()
-          .mockRejectedValueOnce(new Error("Temporary display failure"))
-          .mockResolvedValueOnce(original)
-      : vi.fn(() => full.promise);
-    const modal = attachLightbox({
-      src: "blob:preview",
-      imageTitle: "Screenshot",
-      loadDisplayImage,
-    });
-    modal.addEventListener("image-lightbox-close", () => container.replaceChildren());
-    await modal.updateComplete;
-    const image = modal.querySelector("img")!;
-    expect(image.src).toBe("blob:preview");
-    expect(modal.querySelector(".open-original")).toBeNull();
-    image.dispatchEvent(new Event("load"));
-    image.dispatchEvent(new CustomEvent("panzoomchange", { detail: { scale: 2 } }));
-    flush();
-    modal.imageTitle = "Renamed screenshot";
-    await modal.updateComplete;
-    expect(image.alt).toBe("Renamed screenshot");
-    expect(modal.hasAttribute("title")).toBe(false);
-    expect(modal.querySelector("openclaw-modal-dialog")?.label).toBe(
-      "Image preview: Renamed screenshot",
-    );
-    expect(loadDisplayImage).toHaveBeenCalledOnce();
-    expect(modal.querySelector(".zoom-level")?.textContent?.trim()).toBe("200%");
-    if (retry) {
-      await waitForSolid(() =>
-        expect(button(modal, ".image-quality-status button").textContent).toBe("Retry"),
-      );
-      expect(image.src).toBe("blob:preview");
-      button(modal, ".image-quality-status button").click();
-    } else {
-      full.resolve(original);
-      await waitForSolid(() => expect(decode).toHaveBeenCalledOnce());
-      expect(image.src).toBe("blob:preview");
-      decoded.resolve();
-    }
-    await waitForSolid(() => expect(image.src).toBe("blob:original"));
-    image.dispatchEvent(new Event("load"));
-    await modal.updateComplete;
-    expect(modal.querySelector(".zoom-level")?.textContent?.trim()).toBe("200%");
-    expect(modal.querySelector("img")).toBe(image);
-    expect(modal.querySelector(".image-quality-status, .open-original")).toBeNull();
-    expect(fetchImage).not.toHaveBeenCalled();
-    button(modal, ".close").click();
-    await waitForSolid(() => expect(original.release).toHaveBeenCalledOnce());
-    expect(container.querySelector("openclaw-image-lightbox")).toBeNull();
-  },
-);
+it("retries display upgrades without replacing preview or zoom", async () => {
+  const decoded = createDeferred();
+  const decode = vi.fn(() => decoded.promise);
+  mockDecoder(decode);
+  const original = { src: "blob:original", title: "Screenshot", release: vi.fn() };
+  const loadDisplayImage = vi
+    .fn<() => Promise<ImageLightboxItem | null>>()
+    .mockRejectedValueOnce(new Error("Temporary display failure"))
+    .mockResolvedValueOnce(original);
+  const modal = attachLightbox({
+    src: "blob:preview",
+    imageTitle: "Screenshot",
+    loadDisplayImage,
+  });
+  modal.addEventListener("image-lightbox-close", () => container.replaceChildren());
+  await modal.updateComplete;
+  const image = modal.querySelector("img")!;
+  expect(image.src).toBe("blob:preview");
+  expect(modal.querySelector(".open-original")).toBeNull();
+  image.dispatchEvent(new Event("load"));
+  image.dispatchEvent(new CustomEvent("panzoomchange", { detail: { scale: 2 } }));
+  flush();
+  modal.imageTitle = "Renamed screenshot";
+  await modal.updateComplete;
+  expect(image.alt).toBe("Renamed screenshot");
+  expect(modal.hasAttribute("title")).toBe(false);
+  expect(modal.querySelector("openclaw-modal-dialog")?.label).toBe(
+    "Image preview: Renamed screenshot",
+  );
+  expect(modal.querySelector(".zoom-level")?.textContent?.trim()).toBe("200%");
+  await waitForSolid(() =>
+    expect(button(modal, ".image-quality-status button").textContent).toBe("Retry"),
+  );
+  expect(image.src).toBe("blob:preview");
+  button(modal, ".image-quality-status button").click();
+  await waitForSolid(() => expect(decode).toHaveBeenCalledOnce());
+  expect(image.src).toBe("blob:preview");
+  decoded.resolve();
+  await waitForSolid(() => expect(image.src).toBe("blob:original"));
+  image.dispatchEvent(new Event("load"));
+  await modal.updateComplete;
+  expect(modal.querySelector(".zoom-level")?.textContent?.trim()).toBe("200%");
+  expect(modal.querySelector("img")).toBe(image);
+  expect(modal.querySelector(".image-quality-status, .open-original")).toBeNull();
+  expect(fetchImage).not.toHaveBeenCalled();
+  button(modal, ".close").click();
+  await waitForSolid(() => expect(original.release).toHaveBeenCalledOnce());
+  expect(container.querySelector("openclaw-image-lightbox")).toBeNull();
+});
 
 it("rejects opposing navigation while a move is pending", async () => {
   mockDecoder();

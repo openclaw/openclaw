@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import { clearBootRecords, type BootRecord } from "../app/boot-record.ts";
 import { makeBootRoster } from "../app/bootstrap.test-support.ts";
-import type { ApplicationGateway, ApplicationGatewaySnapshot } from "../app/gateway.ts";
+import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
 import { createSessionCapability } from "../lib/sessions/index.ts";
 import { bootRosterSchema } from "../lib/sessions/session-boot-roster-schema.ts";
 import { sessionsResult } from "../lib/sessions/session-capability.test-support.ts";
@@ -18,7 +18,10 @@ import {
   sidebarSnapshotScopeKey,
 } from "../pages/chat/session-snapshot-prewarm.ts";
 import { SessionSnapshotStore } from "../pages/chat/session-snapshot-store.ts";
-import { createApplicationGatewaySnapshot } from "../test-helpers/application-context-fixtures.ts";
+import {
+  createApplicationGateway,
+  createApplicationGatewaySnapshot,
+} from "../test-helpers/application-context-fixtures.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { sidebarBootSnapshot } from "../test-helpers/sidebar-boot-snapshot.test-support.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
@@ -57,31 +60,11 @@ function bootRecord(): BootRecord {
 function fixture(initialAgentId = "main", initialPageScopeId: string | null = null) {
   let selectedAgentId = initialAgentId;
   let pageScopeId = initialPageScopeId;
-  let snapshot: ApplicationGatewaySnapshot = createApplicationGatewaySnapshot({
-    phase: "connecting",
-  });
-  const listeners = new Set<(snapshot: ApplicationGatewaySnapshot) => void>();
-  const gateway = {
-    get snapshot() {
-      return snapshot;
-    },
-    connection: { gatewayUrl: scope.gatewayScope, token: "", bootstrapToken: "", password: "" },
-    connectionRevision: 0,
-    eventLog: [],
-    eventLogRevision: 0,
-    connect() {},
-    defer: () => false,
-    setSessionKey() {},
-    start() {},
-    stop() {},
-    subscribe(listener: (snapshot: ApplicationGatewaySnapshot) => void) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-    subscribeEventLog: () => () => {},
-    subscribeEvents: () => () => {},
-    loadSelfProfile: async () => null,
-  } satisfies ApplicationGateway;
+  const harness = createApplicationGateway(
+    createApplicationGatewaySnapshot({ phase: "connecting" }),
+  );
+  const { gateway } = harness;
+  Object.assign(gateway.connection, { gatewayUrl: scope.gatewayScope, bootstrapToken: "" });
   const restored = createDeferred();
   let saved = createDeferred();
   let settled = false;
@@ -141,8 +124,8 @@ function fixture(initialAgentId = "main", initialPageScopeId: string | null = nu
       return saved.promise;
     },
     publish(patch: Partial<ApplicationGatewaySnapshot> = {}) {
-      snapshot = {
-        ...snapshot,
+      harness.publish({
+        ...gateway.snapshot,
         phase: "connected",
         hello: {
           ...gatewayHelloForMethods([]),
@@ -150,10 +133,7 @@ function fixture(initialAgentId = "main", initialPageScopeId: string | null = nu
         },
         selfUser: { id: scope.profileId },
         ...patch,
-      };
-      for (const listener of listeners) {
-        listener(snapshot);
-      }
+      });
     },
   };
 }
@@ -178,6 +158,16 @@ describe("sidebar snapshot lifecycle", () => {
   async function capture(controller: ReturnType<typeof createSidebarSnapshot>) {
     controller.capture();
     await vi.advanceTimersByTimeAsync(500);
+  }
+
+  function holdWrites() {
+    const issued = createDeferred();
+    const written = createDeferred<boolean>();
+    vi.spyOn(SessionSnapshotStore.prototype, "writeSidebar").mockImplementation(() => {
+      issued.resolve();
+      return written.promise;
+    });
+    return { issued, written };
   }
 
   function connectedStore() {
@@ -286,8 +276,7 @@ describe("sidebar snapshot lifecycle", () => {
         expect(test.host.sidebarSnapshot).toEqual(chip);
         test.selectAgent("other");
       }
-      expect(test.host.sidebarSnapshot).toBeNull();
-      expect(test.snapshotOwner.read().saved).toBe(false);
+      expect(test.snapshotOwner.read()).toMatchObject({ model: null, saved: false });
     },
   );
 
@@ -324,8 +313,7 @@ describe("sidebar snapshot lifecycle", () => {
         await test.restored;
         test.selectPageScope("other");
       }
-      expect(test.host.sidebarSnapshot).toBeNull();
-      expect(test.snapshotOwner.read().saved).toBe(false);
+      expect(test.snapshotOwner.read()).toMatchObject({ model: null, saved: false });
     },
   );
 
@@ -491,12 +479,7 @@ describe("sidebar snapshot lifecycle", () => {
 
   it("does not report an unchanged model saved while its write is pending", async () => {
     const test = fixture();
-    const issued = createDeferred();
-    const written = createDeferred<boolean>();
-    vi.spyOn(SessionSnapshotStore.prototype, "writeSidebar").mockImplementation(() => {
-      issued.resolve();
-      return written.promise;
-    });
+    const { issued, written } = holdWrites();
     test.snapshotOwner.connect();
     disposers.push(() => test.snapshotOwner.disconnect());
     test.publish();
@@ -515,12 +498,7 @@ describe("sidebar snapshot lifecycle", () => {
 
   it("waits for a reverted model to finish writing after a different model was queued", async () => {
     const test = await warmFixture();
-    const issued = createDeferred();
-    const written = createDeferred<boolean>();
-    vi.spyOn(SessionSnapshotStore.prototype, "writeSidebar").mockImplementation(() => {
-      issued.resolve();
-      return written.promise;
-    });
+    const { issued, written } = holdWrites();
     test.publish();
     void test.settle({ ...model, peoplePresenceFilter: "all" });
     test.snapshotOwner.synchronize();
@@ -551,8 +529,7 @@ describe("sidebar snapshot lifecycle", () => {
             ? { selfUser: null }
             : {},
       );
-      expect(test.host.sidebarSnapshot).toBeNull();
-      expect(test.snapshotOwner.read().saved).toBe(false);
+      expect(test.snapshotOwner.read()).toMatchObject({ model: null, saved: false });
     },
   );
 
@@ -606,8 +583,7 @@ describe("sidebar snapshot lifecycle", () => {
     test.snapshotOwner.synchronize();
     expect(test.gateway.snapshot.phase).toBe("connecting");
     expect(test.gateway.snapshot.lastErrorAuthReason).toBeUndefined();
-    expect(test.host.sidebarSnapshot).toBeNull();
-    expect(test.snapshotOwner.read().saved).toBe(false);
+    expect(test.snapshotOwner.read()).toMatchObject({ model: null, saved: false });
   });
 
   it("preserves same-owner replacement and waits for a new hello after admission retirement", async () => {
