@@ -9,7 +9,7 @@ import {
   validateSessionsReclaimParams,
   validateSessionsReclaimResult,
 } from "../index.js";
-import { schemaValidation, validation, withOverrides } from "./protocol-validation.test-support.js";
+import { schemaValidation, validation } from "./protocol-validation.test-support.js";
 
 const placementStates = [
   "local",
@@ -34,8 +34,6 @@ const workspaceFields = {
 const workerOwnedFields = { ...environmentFields, ...workspaceFields, activeOwnerEpoch: 7 };
 const key = "agent:main:dispatch";
 const expected = { generation: 4, environmentId: "environment-1", ownerEpoch: 7 };
-const moveRequest = { key, expected };
-const move = withOverrides(moveRequest);
 const gateway = { kind: "gateway" };
 const device = (deviceId = "device-1") => ({ kind: "device", deviceId });
 const profile = (overrides: object = {}) => ({
@@ -154,47 +152,6 @@ describe("session dispatch protocol schemas", () => {
     });
   });
 
-  it("accepts explicit abandonment only for a Gateway target", () => {
-    const request = (target: object, abandonSource = true) => move({ target, abandonSource });
-    moving.accepts(request(gateway));
-    moving.rejects(request(device()), request(profile()), request(gateway, false));
-  });
-
-  it("bounds move source and target identifiers", () => {
-    const accepted = "x".repeat(256);
-    const rejected = "x".repeat(257);
-    moving.accepts(
-      move({
-        expected: { ...expected, environmentId: accepted },
-        target: profile({ profileId: accepted, machineClass: "x".repeat(128), os: "x".repeat(64) }),
-      }),
-    );
-    for (const machineClass of ["", "x".repeat(129)]) {
-      moving.rejects(move({ target: profile({ machineClass }) }));
-    }
-    for (const os of ["", "x".repeat(65)]) {
-      moving.rejects(move({ target: profile({ os }) }));
-    }
-    for (const value of [rejected, " leading", "trailing "]) {
-      moving.rejects(
-        move({
-          expected: { ...expected, environmentId: value },
-          target: gateway,
-        }),
-        move({ target: device(value) }),
-      );
-    }
-  });
-
-  it("rejects an inexact move source", () => {
-    moving.rejects(
-      move({
-        expected: { ...expected, ownerEpoch: 0 },
-        target: gateway,
-      }),
-    );
-  });
-
   it("projects bounded durable move progress without operation authority", () => {
     progress.accepts(
       { target: gateway, updatedAtMs: 1 },
@@ -217,20 +174,38 @@ describe("session dispatch protocol schemas", () => {
       { expected, target: gateway, abandonSource: true },
       { expected, target: device() },
       { expected, target: profile({ profileId: "team", os: "linux", machineClass: "tiny" }) },
+      {
+        expected: { ...expected, environmentId: "x".repeat(256) },
+        target: profile({
+          profileId: "x".repeat(256),
+          machineClass: "x".repeat(128),
+          os: "x".repeat(64),
+        }),
+      },
     ];
     for (const retry of retries) {
       progress.accepts(retryProgress(retry));
       moving.accepts({ key, ...retry });
     }
     for (const retry of [
+      { expected: { ...expected, ownerEpoch: 0 }, target: gateway },
       { expected: { ...expected, generation: -1 }, target: gateway },
-      { expected: { ...expected, environmentId: "x".repeat(257) }, target: gateway },
       { expected, target: gateway, abandonSource: false },
       { expected, target: device(), abandonSource: true },
       { expected, target: profile({ profileId: "team" }), abandonSource: true },
       { expected, target: gateway, operationId: "move:v1:opaque" },
+      ...["", "x".repeat(129)].map((machineClass) => ({
+        expected,
+        target: profile({ machineClass }),
+      })),
+      ...["", "x".repeat(65)].map((os) => ({ expected, target: profile({ os }) })),
+      ...["x".repeat(257), " leading", "trailing "].flatMap((value) => [
+        { expected: { ...expected, environmentId: value }, target: gateway },
+        { expected, target: device(value) },
+      ]),
     ]) {
       progress.rejects(retryProgress(retry));
+      moving.rejects({ key, ...retry });
     }
   });
 

@@ -11,6 +11,10 @@ import {
 import { check } from "./protocol-validation.test-support.js";
 import { accepts, rejects, acceptsParams, rejectsParams } from "./schema.test-support.js";
 
+function legacyOptions<T extends { brandId: string; groupLabel?: string }>(options: T[]) {
+  return options.map(({ brandId: _brandId, groupLabel: _groupLabel, ...option }) => option);
+}
+
 it("OpenClaw chat params protocol: accepts a typed wizard cancel and rejects unknown cancel fields", () => {
   acceptsParams(protocol.validateSystemAgentChatParams, {
     sessionId: "session-1",
@@ -147,27 +151,27 @@ describe("OpenClaw setup detection protocol", () => {
 
   it("accepts additive presentation metadata and older results without installs", () => {
     const brand = {
-      brandId: "ollama",
-      label: "Ollama",
-      icon: "https://cdn.simpleicons.org/ollama",
-      website: "https://ollama.com/download",
+      brandId: "local",
+      label: "Local",
+      icon: "https://x.test/i",
+      website: "https://x.test",
     };
     const brandedOption = { id: "ollama", ...brand };
     const authOption = { id: "manual", brandId: "manual", label: "Manual", featured: false };
     const unavailable = {
-      id: "gemini-cli",
-      label: "Gemini CLI",
-      detail: "Login unavailable",
-      reason: "Reconnect",
-      authOptionId: "google-gemini-cli",
-      manualProviderId: "gemini-api-key",
+      id: "cli",
+      label: "CLI",
+      detail: "Unavailable",
+      reason: "Sign in",
+      authOptionId: "auth",
+      manualProviderId: "key",
     };
     const result = {
       candidates: [
         {
           ...brand,
           kind: "provider-auto:ollama",
-          detail: "available locally",
+          detail: "local",
           modelRef: "ollama/qwen3",
           recommended: false,
         },
@@ -178,17 +182,9 @@ describe("OpenClaw setup detection protocol", () => {
         { ...authOption, kind: "install" },
         { ...authOption, kind: "custom" },
       ],
-      prepareOptions: [
-        { ...brandedOption, hint: "Local/self-hosted server", actionLabel: "Connect server" },
-      ],
-      recommendedInstalls: [{ ...brandedOption, hint: "Run open models locally" }],
-      nativeSessionCatalogs: [
-        {
-          pluginId: "codex",
-          label: "Discover Codex Sessions",
-          detail: "List existing Codex conversations without copying them.",
-        },
-      ],
+      prepareOptions: [{ ...brandedOption, hint: "Server", actionLabel: "Connect" }],
+      recommendedInstalls: [{ ...brandedOption, hint: "Run locally" }],
+      nativeSessionCatalogs: [{ pluginId: "codex", label: "Sessions", detail: "Discover" }],
       nativeSessionCatalogPreferenceRequired: true,
       workspace: "/tmp/work",
       setupComplete: false,
@@ -197,15 +193,11 @@ describe("OpenClaw setup detection protocol", () => {
     accepts(SystemAgentSetupDetectResultSchema, result);
     accepts(SystemAgentSetupDetectResultSchema, {
       ...result,
-      candidates: result.candidates.map(({ brandId: _brandId, ...candidate }) => candidate),
+      candidates: legacyOptions(result.candidates),
       unavailableCandidates: [unavailable],
-      manualProviders: result.manualProviders.map(
-        ({ brandId: _brandId, groupLabel: _groupLabel, ...provider }) => provider,
-      ),
-      prepareOptions: result.prepareOptions.map(({ brandId: _brandId, ...option }) => option),
-      recommendedInstalls: result.recommendedInstalls.map(
-        ({ brandId: _brandId, ...install }) => install,
-      ),
+      manualProviders: legacyOptions(result.manualProviders),
+      prepareOptions: legacyOptions(result.prepareOptions),
+      recommendedInstalls: legacyOptions(result.recommendedInstalls),
     });
     accepts(SystemAgentSetupDetectResultSchema, {
       ...result,

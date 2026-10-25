@@ -260,14 +260,11 @@ describe("worker protocol schemas", () => {
       ["response" + "x".repeat(477), true],
       ["x".repeat(MAX_PAYLOAD_BYTES), false],
     ] as const) {
-      expect(
-        isWorkerTranscriptFrameWithinBudget(
-          request(
-            "worker.transcript.commit",
-            transcriptMessage({ ...assistantMessage, responseId }),
-          ),
-        ),
-      ).toBe(withinBudget);
+      const frame = request(
+        "worker.transcript.commit",
+        transcriptMessage({ ...assistantMessage, responseId }),
+      );
+      expect(isWorkerTranscriptFrameWithinBudget(frame)).toBe(withinBudget);
     }
   });
 
