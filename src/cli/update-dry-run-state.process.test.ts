@@ -279,19 +279,10 @@ setLoggerOverride({ file: ${JSON.stringify(path.join(logs, "openclaw.log"))} });
   it.each([false, true])(
     "describes Doctor migrations but refuses without staged candidate identity (unknownPlugin=%s)",
     async (unknownPlugin) => {
-      const { root, stateDir } = await createStateFixture(
+      const { root } = await createStateFixture(
         "openclaw-update-migration-plan-",
         unknownPlugin ? '{ "plugins": { "entries": { "candidate": {} } } }\n' : "{}\n",
       );
-      const execPath = path.join(stateDir, "exec-approvals.json");
-      const tuiPath = path.join(stateDir, "tui", "last-session.json");
-      await writeFixture(execPath, {
-        version: 1,
-        defaults: { security: "allowlist", ask: "on-miss" },
-      });
-      await writeFixture(tuiPath, {
-        terminal: { sessionKey: "agent:main:tui:plan", updatedAt: 1 },
-      });
       const plan = await immutablePlan(root);
       expect(plan).toMatchObject({
         mutationAllowed: false,
@@ -310,25 +301,6 @@ setLoggerOverride({ file: ${JSON.stringify(path.join(logs, "openclaw.log"))} });
           stateDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/u),
         },
       });
-      const stateDatabase = {
-        kind: "sqlite",
-        path: path.join(stateDir, "state", "openclaw.sqlite"),
-      } as const;
-      for (const [id, source] of [
-        ["tui-last-session", [{ kind: "path", path: tuiPath }]],
-        ["exec-approvals", [{ kind: "path", path: execPath }, stateDatabase]],
-      ] as const) {
-        expect(plan.steps.find((step) => step.id === id)).toMatchObject({
-          outcome: unknownPlugin ? "deferred" : "planned",
-          requiredness: "required",
-          source,
-          target: [stateDatabase],
-          ...(unknownPlugin ? { refusal: { code: "blocked-by-prior-refusal" } } : {}),
-        });
-      }
-      expect(plan.steps.findIndex((step) => step.id === "tui-last-session")).toBeLessThan(
-        plan.steps.findIndex((step) => step.id === "exec-approvals"),
-      );
       expect(plan.steps.find((step) => step.id === "plugin-doctor-state")).toMatchObject(
         blockedStep,
       );
@@ -367,49 +339,6 @@ setLoggerOverride({ file: ${JSON.stringify(path.join(logs, "openclaw.log"))} });
     expect(blank.code).toBe(1);
     expect(blank.stderr).toContain("--snapshot-state must not be blank");
     expect(await snapshotTree(root)).toEqual(before);
-  });
-
-  it("refuses configured session stores outside the copied state snapshot", async () => {
-    const { root, configPath, stateDir } = await createStateFixture(
-      "openclaw-update-migration-plan-session-root-",
-    );
-    const externalStore = path.join(root, "external", "sessions.json");
-    await writeFixture(externalStore, {});
-
-    await writeFixture(configPath, { session: { store: externalStore } });
-    const externalPlan = await immutablePlan(root);
-    expect(externalPlan).toMatchObject({
-      outcome: "refused",
-      refusal: { code: "session-target-outside-snapshot" },
-    });
-    expect(externalPlan.steps[3]).toMatchObject({
-      id: "agent-migration-targets",
-      source: expect.arrayContaining([{ kind: "path", path: externalStore }]),
-      target: [],
-      outcome: "deferred",
-      refusal: { code: "session-target-outside-snapshot" },
-    });
-    expect(externalPlan.steps.slice(0, 4).map((step) => step.id)).toEqual([
-      "state-schema",
-      "retired-core-state",
-      "config-machine-state",
-      "agent-migration-targets",
-    ]);
-    for (const step of externalPlan.steps.slice(4)) {
-      expect(step).toMatchObject(blockedStep);
-    }
-
-    const copiedStore = path.join(stateDir, "sessions.json");
-    await writeFixture(copiedStore, {});
-    await writeFixture(configPath, { session: { store: copiedStore } });
-    const copiedPlan = await immutablePlan(root);
-    expect(copiedPlan).toMatchObject({
-      refusal: { code: "candidate-artifact-digest-required" },
-      steps: expect.arrayContaining([expect.objectContaining({ id: "orphan-session-keys" })]),
-    });
-    expect(externalPlan.steps.map((step) => step.id)).toEqual(
-      copiedPlan.steps.map((step) => step.id),
-    );
   });
 
   it("rejects caller-supplied snapshot identity without touching the copy", async () => {

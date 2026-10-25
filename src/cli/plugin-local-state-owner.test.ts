@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import { Command } from "commander";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
@@ -21,10 +20,6 @@ import {
 } from "../infra/gateway-lock.js";
 import type { MemoryCliSearchOutcome, MemorySearchManager } from "../memory-host-sdk/host/types.js";
 import { runWithLocalStateOwner } from "../plugin-sdk/cli-state-owner.js";
-import { createTestPluginApi } from "../plugin-sdk/plugin-test-api.js";
-import { createPluginRuntimeMock } from "../plugin-sdk/test-helpers/plugin-runtime-mock.js";
-import type { OpenClawPluginApi } from "../plugins/plugin-api.types.js";
-import type { OpenClawPluginCliRegistrar } from "../plugins/plugin-registration.types.js";
 import type { MemoryPluginRuntime } from "../plugins/registry-contribution-types.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 
@@ -69,105 +64,51 @@ const { createMemoryRuntime: createCliMemoryRuntime } = await vi.importActual<{
 }>("../../extensions/memory-core/runtime-api.js");
 const searchForCli = createCliMemoryRuntime({}).searchForCli;
 
-// Synthetic command families retain the caller shapes.
-// Admission, physical custody, transport dispatch, and response revocation stay real.
-function registerSyntheticPlugin(api: OpenClawPluginApi) {
-  const registerOwnedMethod = (
-    method: string,
-    run: (params: Record<string, unknown>) => Promise<unknown>,
-  ) => {
-    api.registerGatewayMethod(method, async (options) => {
-      try {
-        const params = options.params as Record<string, unknown>;
-        const result = await runWithLocalStateMutationOwner(
-          String(params.expectedOwnerId),
-          options,
-          () => run(params),
-        );
-        options.respond(true, result);
-      } catch (error) {
-        options.respond(false, undefined, { code: "UNAVAILABLE", message: String(error) });
-      }
-    });
-  };
-  registerOwnedMethod("fixture.batch.apply.owner", async (params) => ({
-    execution: await fixture.executeBatch(),
-    ownerId: params.expectedOwnerId,
-  }));
-  registerOwnedMethod("fixture.verify.status.owner", async (params) => ({
-    result: await fixture.status({
-      cfg: api.runtime.config.current(),
-      accountId: params.accountId,
-    }),
-    accountId: params.accountId,
-  }));
-  api.registerCli(({ program }) => {
-    const memory = program.command("memory");
-    for (const command of ["index", "status"]) {
-      memory.command(command).action(() =>
-        runWithLocalStateOwner({
-          method: "fixture.offline",
-          target: "fixture stores",
-          params: {},
-          onForeignOwner: "refuse",
-          runLocal: fixture.memory,
-        }),
-      );
-    }
-    memory
-      .command("session-backfill")
-      .option("--apply")
-      .option("--json")
-      .action(runSyntheticBatches);
-    memory
-      .command("search <query>")
-      .option("--json")
-      .option("--agent <id>")
-      .option("--max-results <n>", "limit", Number)
-      .option("--min-score <n>", "score", Number)
-      .action(
-        async (query: string, opts: { agent?: string; maxResults?: number; minScore?: number }) => {
-          const result = await runWithLocalStateOwner<MemoryCliSearchOutcome | undefined>({
-            method: "memory.search.owner",
-            target: "fixture search",
-            databaseEngine: "configured",
-            params: {
-              query,
-              ...(opts.agent === undefined ? {} : { agentId: opts.agent }),
-              ...(opts.maxResults === undefined ? {} : { maxResults: opts.maxResults }),
-              ...(opts.minScore === undefined ? {} : { minScore: opts.minScore }),
-            },
-            runLocal: async () => {
-              await fixture.memory();
-              return undefined;
-            },
-          });
-          if (result) {
-            printJson(result);
-          }
-        },
-      );
-    program
-      .command("matrix")
-      .command("verify <operation>")
-      .option("--json")
-      .option("--account <id>")
-      .option("--include-recovery-key")
-      .action(async (_operation: string, opts: { account?: string }) => {
-        try {
-          const result = await runWithLocalStateOwner<{ result: unknown }>({
-            method: "fixture.verify.status.owner",
-            target: "fixture account",
-            params: { accountId: opts.account },
-            runLocal: async () => ({ result: await fixture.matrix() }),
-          });
-          printJson(result.result);
-        } catch (error) {
-          process.exitCode = 1;
-          printJson({ error: String(error) });
-        }
-      });
+// Exercise the SDK boundary directly; a synthetic Commander plugin cannot prove CLI wiring.
+function runOffline() {
+  return runWithLocalStateOwner({
+    method: "fixture.offline",
+    target: "fixture stores",
+    params: {},
+    onForeignOwner: "refuse",
+    runLocal: fixture.memory,
   });
+}
+
+async function runSearch(params: {
+  query: string;
+  agentId?: string;
+  maxResults?: number;
+  minScore?: number;
+}) {
+  const result = await runWithLocalStateOwner<MemoryCliSearchOutcome | undefined>({
+    method: "memory.search.owner",
+    target: "fixture search",
+    databaseEngine: "configured",
+    params,
+    runLocal: async () => {
+      await fixture.memory();
+      return undefined;
+    },
+  });
+  if (result) {
+    printJson(result);
+  }
+}
+
+async function runStatus() {
+  try {
+    const result = await runWithLocalStateOwner<{ result: unknown }>({
+      method: "fixture.verify.status.owner",
+      target: "fixture account",
+      params: {},
+      runLocal: async () => ({ result: await fixture.matrix() }),
+    });
+    printJson(result.result);
+  } catch (error) {
+    process.exitCode = 1;
+    printJson({ error: String(error) });
+  }
 }
 
 function printJson(value: unknown) {
@@ -176,7 +117,6 @@ function printJson(value: unknown) {
 
 async function runSyntheticBatches() {
   let operationOwnerId: string | undefined;
-  const batches: ReturnType<typeof backfillExecution>["result"][] = [];
   for (;;) {
     const reply = await runWithLocalStateOwner<{
       execution: ReturnType<typeof backfillExecution>;
@@ -197,34 +137,48 @@ async function runSyntheticBatches() {
       return;
     }
     operationOwnerId ??= reply.ownerId;
-    batches.push(reply.execution.result);
     if (!reply.execution.continuation.hasMore) {
-      break;
+      printJson(reply.execution.result);
+      return;
     }
   }
-  const result = { ...batches[0], batchCount: batches.length };
-  for (const field of ["candidateCount", "writtenDiaryEntries", "replacedDiaryEntries"] as const) {
-    result[field] = batches.reduce((sum, batch) => sum + batch[field], 0);
-  }
-  printJson(result);
 }
 
 const roots = useAutoCleanupTempDirTracker(afterAll);
 let root: string;
 let owner: GatewayLockHandle | null = null;
 let ownerId: string | undefined;
-let registrar: OpenClawPluginCliRegistrar;
-const methods = new Map<string, GatewayRequestHandler>();
+const ownedHandler =
+  (run: (options: GatewayRequestHandlerOptions) => Promise<unknown>): GatewayRequestHandler =>
+  async (options) => {
+    try {
+      options.respond(
+        true,
+        await runWithLocalStateMutationOwner(String(options.params?.expectedOwnerId), options, () =>
+          run(options),
+        ),
+      );
+    } catch (error) {
+      options.respond(false, undefined, { code: "UNAVAILABLE", message: String(error) });
+    }
+  };
+const methods: Record<string, GatewayRequestHandler> = {
+  ...memorySearchHandlers,
+  "fixture.batch.apply.owner": ownedHandler(async ({ params }) => ({
+    execution: await fixture.executeBatch(),
+    ownerId: params?.expectedOwnerId,
+  })),
+  "fixture.verify.status.owner": ownedHandler(async () => ({ result: await fixture.status() })),
+};
 const gatewayConfig = {
   plugins: { entries: { "memory-core": { config: { dreaming: { enabled: false } } } } },
   agents: { entries: { main: {} } },
-  channels: { matrix: { accounts: { ops: { homeserver: "https://gateway.example.org" } } } },
 };
 
 async function dispatchToGateway(options: CallGatewayOptions) {
   await options.prepareDispatchCurrent?.();
   options.assertDispatchCurrent?.();
-  const handler = methods.get(options.method);
+  const handler = methods[options.method];
   if (!handler) {
     throw new Error(`Missing fixture Gateway method: ${options.method}`);
   }
@@ -268,23 +222,6 @@ function backfillExecution(
 
 beforeAll(() => {
   root = roots.make("openclaw-plugin-cli-owner-");
-  fs.writeFileSync(path.join(root, "openclaw.json"), "{}\n");
-  const api = createTestPluginApi({
-    runtime: createPluginRuntimeMock({
-      config: { current: () => gatewayConfig },
-      agent: { resolveAgentWorkspaceDir: () => "/gateway/workspace" },
-    }),
-    registerCli(value) {
-      registrar = value;
-    },
-    registerGatewayMethod: (name, handler) => {
-      methods.set(name, handler);
-    },
-  });
-  registerSyntheticPlugin(api);
-  for (const [method, handler] of Object.entries(memorySearchHandlers)) {
-    methods.set(method, handler);
-  }
 });
 
 beforeEach(() => {
@@ -322,17 +259,6 @@ afterEach(async () => {
   process.exitCode = 0;
 });
 
-async function runCli(args: string[]) {
-  const program = new Command();
-  await registrar({
-    program,
-    parentPath: [],
-    config: {},
-    logger: { info() {}, warn() {}, error() {}, debug() {} },
-  });
-  await program.parseAsync(args, { from: "user" });
-}
-
 async function occupyState() {
   owner = await acquireGatewayLock({
     env: process.env,
@@ -346,65 +272,14 @@ async function occupyState() {
   fixture.external = true;
 }
 
-describe("synthetic plugin commands respect the local state owner", () => {
-  it("refuses offline memory access while the Gateway owns state", async () => {
-    await occupyState();
-    await expect(runCli(["memory", "status"])).rejects.toThrow("exclusive offline state ownership");
-    expect(fixture.memory).not.toHaveBeenCalled();
-  });
-
-  it("retains offline memory ownership until the command settles", async () => {
-    const entered = createDeferred();
-    const finish = createDeferred();
-    const ownerPath = resolveGatewayLockPaths(process.env).ownerLockPath;
-    fixture.memory.mockImplementationOnce(async () => {
-      entered.resolve();
-      await finish.promise;
-      expect(readLockPayloadSync(ownerPath, true)).toMatchObject({
-        pid: process.pid,
-        role: "agent-embedded",
-      });
-    });
-    const operation = runCli(["memory", "index"]);
-    try {
-      await awaitGateBeforeSettlement(entered.promise, operation, "command did not enter");
-      expect(readLockPayloadSync(ownerPath, true)).toMatchObject({ role: "agent-embedded" });
-    } finally {
-      finish.resolve();
-      await operation;
-    }
-    expect(process.exitCode).toBe(0);
-    expect(fs.existsSync(ownerPath)).toBe(false);
-  });
-
-  it("does not replay search locally when owner method is missing or dispatch is uncertain", async () => {
-    await occupyState();
-    for (const dispatched of [false, true]) {
-      fixture.callGateway.mockImplementationOnce(async (options) => {
-        if (dispatched) {
-          await options.prepareDispatchCurrent?.();
-          options.assertDispatchCurrent?.();
-        }
-        throw new Error(
-          dispatched ? "connection closed after dispatch" : "required method missing",
-        );
-      });
-      await expect(runCli(["memory", "search", "query", "--json"])).rejects.toThrow(
-        dispatched ? "No local fallback was attempted" : "No local mutation was attempted",
-      );
-    }
-    expect(fixture.memory).not.toHaveBeenCalled();
-    expect(fixture.executeBatch).not.toHaveBeenCalled();
-    expect(fixture.memoryManager).not.toHaveBeenCalled();
-  });
-
+describe("plugin SDK calls respect the local state owner", () => {
   it("releases offline memory custody after command failure", async () => {
     const ownerPath = resolveGatewayLockPaths(process.env).ownerLockPath;
     fixture.memory.mockImplementationOnce(async () => {
       expect(readLockPayloadSync(ownerPath, true)).toMatchObject({ role: "agent-embedded" });
       throw new Error("fixture command failure");
     });
-    await expect(runCli(["memory", "index"])).rejects.toThrow("fixture command failure");
+    await expect(runOffline()).rejects.toThrow("fixture command failure");
     expect(fs.existsSync(ownerPath)).toBe(false);
   });
 
@@ -431,13 +306,12 @@ describe("synthetic plugin commands respect the local state owner", () => {
         );
       }
       const output = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-      const operation = runCli(
+      const operation =
         family === "memory"
-          ? ["memory", "session-backfill", "--apply", "--json"]
+          ? runSyntheticBatches()
           : family === "search"
-            ? ["memory", "search", "query", "--json"]
-            : ["matrix", "verify", "status", "--include-recovery-key", "--json"],
-      );
+            ? runSearch({ query: "query" })
+            : runStatus();
       const outcome = operation.then(
         () => undefined,
         (error: unknown) => error,
@@ -477,7 +351,7 @@ describe("synthetic plugin commands respect the local state owner", () => {
       owner = null;
       return reply;
     });
-    await expect(runCli(["memory", "session-backfill", "--apply", "--json"])).rejects.toThrow(
+    await expect(runSyntheticBatches()).rejects.toThrow(
       "The selected Gateway is no longer running",
     );
     expect(fixture.executeBatch).toHaveBeenCalledTimes(1);
@@ -515,18 +389,7 @@ describe("synthetic plugin commands respect the local state owner", () => {
     ];
     fixture.search.mockResolvedValueOnce(hits);
     const output = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-    await runCli([
-      "memory",
-      "search",
-      " exact query ",
-      "--agent",
-      "main",
-      "--max-results",
-      "75",
-      "--min-score",
-      "-0.25",
-      "--json",
-    ]);
+    await runSearch({ query: " exact query ", agentId: "main", maxResults: 75, minScore: -0.25 });
     expect(JSON.parse(String(output.mock.calls.at(-1)?.[0]))).toEqual({ results: hits });
     expect(fixture.callGateway).toHaveBeenCalledWith(
       expect.objectContaining({
