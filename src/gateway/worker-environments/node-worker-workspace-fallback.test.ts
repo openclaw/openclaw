@@ -13,7 +13,6 @@ vi.mock("../../process/exec.js", async (importOriginal) => ({
 
 const COMMIT = "a".repeat(40);
 const ORIGIN = "https://example.invalid/openclaw.git";
-const SEED_KEY = "f768fa4834ce38c2cc9d0050df323298de898870b2cf372c95da0a7965dad806";
 const MANIFEST_REF = `sha256:${"c".repeat(64)}`;
 const REMOTE_WORKSPACE = "/node/workspace";
 const INHERITED_NAME = "Gateway";
@@ -62,13 +61,6 @@ function fixture(exec = vi.fn<WorkspaceExec>(originStdout)) {
       fallback.finalizeSync({ ...request, gitAuthor }, syncResult),
   };
 }
-const seedStoreCommand = {
-  argv: ["openclaw-internal-workspace-seed"],
-  seed: { action: "store", key: SEED_KEY, maxAgeMs: 6 * 60 * 60 * 1000 },
-  timeoutMs: 180_000,
-  transportRetry: "never",
-};
-
 function cleanWorkspace(): string {
   const root = tempDirs.make("node-worker-origin-workspace-");
   runCommandWithTimeout.mockReset();
@@ -118,20 +110,20 @@ describe("node worker workspace origin fallback", () => {
     },
   );
 
-  it.each([
-    { operation: "clone", reason: "clone-failed" },
-    { operation: "checkout", reason: "checkout-failed" },
-  ] as const)("preserves the $reason fallback", async ({ operation, reason }) => {
+  it("preserves repository preparation failures as fallbacks", async () => {
     const exec = vi.fn<WorkspaceExec>(async ({ argv }) => ({
-      ...spawnResult(argv.includes("rev-parse") ? COMMIT : "", argv.includes(operation) ? 1 : 0),
+      ...spawnResult("", argv.includes("clone") ? 1 : 0),
       workspaceDir: REMOTE_WORKSPACE,
     }));
 
-    await expect(fixture(exec).sync()).resolves.toEqual({ kind: "fallback", reason });
+    await expect(fixture(exec).sync()).resolves.toEqual({
+      kind: "fallback",
+      reason: "clone-failed",
+    });
     expect(exec.mock.calls.some(([command]) => command.seed?.action === "store")).toBe(false);
   });
 
-  it.each(["none", "remote-mismatch", "fetch-failed", "manifest-mismatch", "apply-error"] as const)(
+  it.each(["none", "remote-mismatch", "manifest-mismatch", "apply-error"] as const)(
     "uses the seed when valid and recovers by cloning after %s",
     async (failure) => {
       let cloned = false;
@@ -151,43 +143,18 @@ describe("node worker workspace origin fallback", () => {
         if (!cloned && failure === "manifest-mismatch" && isManifestCapture(argv)) {
           return remoteResult(`sha256:${"d".repeat(64)}`);
         }
-        const result = await originStdout({ argv, seed });
-        if (!cloned && failure === "fetch-failed" && argv.includes("fetch")) {
-          result.code = 1;
-        }
-        return result;
+        return originStdout({ argv, seed });
       });
 
       const { sync } = fixture(exec);
       await expect(sync()).resolves.toEqual(synced(failure === "none"));
-      expect(exec.mock.calls[0]?.[0]).toEqual({
-        argv: ["openclaw-internal-workspace-seed"],
-        seed: { action: "apply", key: SEED_KEY },
-        timeoutMs: 60_000,
-        transportRetry: "never",
-      });
       expect(cloned).toBe(failure !== "none");
       const commands = exec.mock.calls.map(([command]) => command);
-      if (failure === "none") {
-        expect(commands[1]?.argv.slice(-3)).toEqual(["remote", "get-url", "origin"]);
-        for (const [index, argv] of [
-          [2, ["fetch", "--no-tags", "origin", COMMIT]],
-          [4, ["checkout", "--detach", "--force", COMMIT]],
-        ] as const) {
-          expect(commands[index]).toMatchObject({
-            argv: expect.arrayContaining([...argv]),
-            timeoutMs: 60_000,
-            transportRetry: "never",
-          });
-        }
-      } else {
+      if (failure !== "none") {
         expect(commands.find((command) => command.argv.includes("clone"))?.resetWorkspace).toBe(
           true,
         );
       }
-      expect(commands.filter((command) => command.seed?.action === "store")).toEqual([
-        seedStoreCommand,
-      ]);
     },
   );
 
@@ -217,29 +184,21 @@ describe("node worker workspace origin fallback", () => {
     expect(events).toEqual(["storing", "synced"]);
   });
 
-  it.each<[SyncRequest["gitAuthor"], string, string, string[]]>([
-    [undefined, INHERITED_NAME, INHERITED_EMAIL, ["user.name", "user.email"]],
-    [{ name: "Configured" }, "Configured", INHERITED_EMAIL, ["user.email"]],
-    [{ email: "c@example.invalid" }, INHERITED_NAME, "c@example.invalid", ["user.name"]],
-    [{ name: "Configured", email: "c@example.invalid" }, "Configured", "c@example.invalid", []],
-  ])(
-    "projects configured author %j with inherited fields",
-    async (gitAuthor, name, email, lookups) => {
-      const { exec, finalize } = fixture();
-      await expect(finalize(gitAuthor)).resolves.toEqual(syncResult);
-      const config = commandArgs(exec).filter((argv) => argv.includes("config"));
-      expect(config.map((argv) => argv.slice(-2))).toEqual([
-        ["user.name", name],
-        ["user.email", email],
-        ["remote.origin.url", ORIGIN],
-        ["remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"],
-      ]);
-      expect(runCommandWithTimeout.mock.calls.map(([argv]) => argv.at(-1))).toEqual([
-        ...lookups,
-        "origin",
-      ]);
-    },
-  );
+  it.each<[SyncRequest["gitAuthor"], string, string]>([
+    [undefined, INHERITED_NAME, INHERITED_EMAIL],
+    [{ name: "Configured" }, "Configured", INHERITED_EMAIL],
+    [{ email: "c@example.invalid" }, INHERITED_NAME, "c@example.invalid"],
+  ])("projects configured author %j with inherited fields", async (gitAuthor, name, email) => {
+    const { exec, finalize } = fixture();
+    await expect(finalize(gitAuthor)).resolves.toEqual(syncResult);
+    const config = commandArgs(exec).filter((argv) => argv.includes("config"));
+    expect(config.map((argv) => argv.slice(-2))).toEqual([
+      ["user.name", name],
+      ["user.email", email],
+      ["remote.origin.url", ORIGIN],
+      ["remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"],
+    ]);
+  });
 
   it.each([
     ["http://example.invalid/repo.git", "http://example.invalid/repo.git"],

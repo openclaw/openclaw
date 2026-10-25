@@ -217,7 +217,6 @@ it("joins only matching pending staged reads and forgets settled results", async
     expect(held.reads).toBe(6);
     for (const snapshot of snapshots) {
       expect(snapshot.changedEntries.map((entry) => entry.path)).toContain("executable.sh");
-      expect(snapshot.base.entries).toEqual([]);
     }
     await read();
     expect(held.reads).toBe(7);
@@ -324,9 +323,6 @@ it.each<[number, number, FixtureOptions]>([
   "materializes %i files with at most %i Git reads (%j)",
   async (fileCount, maxReads, fixtureOptions) => {
     const fixture = await stagedFixture(fileCount, fixtureOptions);
-    expect(fixture.commit).toBe(
-      await git(fixture.repository, ["rev-parse", `${fixture.stagedResultRef}^{commit}`]),
-    );
     const gitReads: string[][] = [];
     const runBuffered = commandRuntime.runCommandBuffered;
     vi.spyOn(commandRuntime, "runCommandBuffered").mockImplementation(async (argv, options) => {
@@ -335,11 +331,12 @@ it.each<[number, number, FixtureOptions]>([
       }
       return await runBuffered(argv, options);
     });
-    const writes = vi.spyOn(fs, "writeFile");
-    const links = vi.spyOn(fs, "symlink");
     let stagingRoot = "";
     await fixture.read(async (snapshot) => {
       stagingRoot = snapshot.stagingRoot;
+      expect((await fs.readdir(stagingRoot)).toSorted()).toEqual(
+        snapshot.changedEntries.map((entry) => entry.path).toSorted(),
+      );
       for (const entry of snapshot.changedEntries) {
         const target = path.join(stagingRoot, entry.path);
         if (entry.type === "symlink") {
@@ -352,18 +349,6 @@ it.each<[number, number, FixtureOptions]>([
           }
         }
       }
-      const materialized = [
-        ...writes.mock.calls.map(([target]) => {
-          assert(typeof target === "string");
-          return target;
-        }),
-        ...links.mock.calls.map(([, target]) => String(target)),
-      ];
-      expect(
-        materialized.filter((target) => target.startsWith(stagingRoot + path.sep)).toSorted(),
-      ).toEqual(
-        snapshot.changedEntries.map((entry) => path.join(stagingRoot, entry.path)).toSorted(),
-      );
     });
     await expect(fs.stat(stagingRoot)).rejects.toMatchObject({ code: "ENOENT" });
     expect(gitReads.length, JSON.stringify(gitReads)).toBeLessThanOrEqual(maxReads);

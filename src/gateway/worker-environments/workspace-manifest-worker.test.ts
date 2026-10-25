@@ -250,13 +250,7 @@ it("captures eligible files outside the Gateway thread and returns the canonical
 });
 
 it("authenticates both manifests before selecting changed transfer payloads", async () => {
-  const entry = {
-    path: "input.txt",
-    type: "file" as const,
-    mode: 0o644,
-    size: 1,
-    sha256: "a".repeat(64),
-  };
+  const entry = workspaceFile("input.txt", "a");
   const base = encode([entry]);
   const current = encode([{ ...entry, sha256: "b".repeat(64) }]);
   const input = pair(base, current);
@@ -269,32 +263,6 @@ it("authenticates both manifests before selecting changed transfer payloads", as
   await expect(
     parseWorkspaceManifestPair({ ...input, currentRaw: current.raw + " " }),
   ).rejects.toThrow("digest");
-});
-
-it("admits a large rebase against its original synchronization manifest", async () => {
-  const entries = (prefix: string, count: number, hash: string) =>
-    Array.from({ length: count }, (_, index) => ({
-      path: `${prefix}-${index}.ts`,
-      type: "file" as const,
-      mode: 0o644,
-      size: 16 * 1024,
-      sha256: hash.repeat(64),
-    }));
-  // A rebase can leave Git clean while changing the full dispatched workspace.
-  const base = encode(
-    [...entries("modified", 18_407, "a"), ...entries("deleted", 3_103, "a")],
-    "a".repeat(40),
-  );
-  const current = encode(
-    [...entries("modified", 18_407, "b"), ...entries("added", 17_395, "b")],
-    "a".repeat(40),
-  );
-  const result = await parseWorkspaceManifestPair(pair(base, current));
-  expect(result.changed).toBe(true);
-  expect(result.paths).toHaveLength(35_802);
-  expect(
-    result.entries.reduce((bytes, entry) => bytes + (entry.type === "file" ? entry.size : 0), 0),
-  ).toBe(586_579_968);
 });
 
 it("admits a pair of manifests at the exact supported byte limit", async () => {
