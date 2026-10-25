@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { SkillBinTrustEntry } from "../infra/exec-approvals.js";
 import { NODE_AGENT_CLI_CLAUDE_RUN_COMMAND } from "../infra/node-commands.js";
@@ -336,9 +336,7 @@ describe("node-host desktop manifest", () => {
     expect(mocks.progressStartHeartbeats).not.toHaveBeenCalled();
     const lastCall = mocks.handleInvoke.mock.calls.at(-1) as unknown[] | undefined;
     const invokeRuntime = lastCall?.[4] as
-      | {
-          emitProgress?: (text: string) => Promise<void>;
-        }
+      | { emitProgress?: (text: string) => Promise<void> }
       | undefined;
     await invokeRuntime?.emitProgress?.("attached\n");
     expect(mocks.progressWrite).toHaveBeenCalledWith("attached\n");
@@ -351,12 +349,17 @@ async function withFramedInvoke(
     runtime: Awaited<ReturnType<typeof startRuntime>>,
     held: ReturnType<typeof holdInvoke>,
   ) => Promise<void>,
+  request: Parameters<Awaited<ReturnType<typeof startRuntime>>["invoke"]>[0] = frame,
 ) {
   const held = holdInvoke();
   const runtime = await startRuntime();
-  const invoking = runtime.invoke(frame);
+  const invoking = runtime.invoke(request);
   try {
-    await vi.waitFor(() => expect(held.io).toBeDefined());
+    await vi.waitFor(() =>
+      expect(
+        request.command === NODE_AGENT_CLI_CLAUDE_RUN_COMMAND ? held.signal : held.io,
+      ).toBeDefined(),
+    );
     await run(runtime, held);
   } finally {
     held.release();
@@ -366,10 +369,6 @@ async function withFramedInvoke(
 }
 
 describe("node-host invoke input dispatch", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
   it.each([
     ["true", '{"skillRuntime":true}', true],
     ["absent", "{}", false],
@@ -381,35 +380,26 @@ describe("node-host invoke input dispatch", () => {
     ["escaped key", '{"skill\\u0052untime":true}', true],
     ["oversize", `${" ".repeat(2 * 1024 * 1024)}{"skillRuntime":true}`, false],
   ] as const)("selects Claude skill frames for %s", async (_name, paramsJSON, framed) => {
-    const held = holdInvoke();
-    const runtime = await startRuntime();
-    const invoking = runtime.invoke({
-      ...frame,
-      command: NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
-      paramsJSON,
-    });
-    try {
-      await vi.waitFor(() => expect(held.signal).toBeDefined());
-      const received: Uint8Array[] = [];
-      held.io?.frames?.onMessage((message) => {
-        received.push(message);
-      });
-      if (framed) {
-        await vi.waitFor(() =>
-          expect(mocks.progressWrite).toHaveBeenCalledWith('{"v":1,"kind":"ready"}'),
+    await withFramedInvoke(
+      async (runtime, held) => {
+        const received: Uint8Array[] = [];
+        held.io?.frames?.onMessage((message) => {
+          received.push(message);
+        });
+        if (framed) {
+          await vi.waitFor(() =>
+            expect(mocks.progressWrite).toHaveBeenCalledWith('{"v":1,"kind":"ready"}'),
+          );
+        }
+        runtime.handleInput(
+          frame.id,
+          0,
+          '{"v":1,"kind":"data","message":0,"index":0,"last":true,"data":"AP8R"}',
         );
-      }
-      runtime.handleInput(
-        frame.id,
-        0,
-        '{"v":1,"kind":"data","message":0,"index":0,"last":true,"data":"AP8R"}',
-      );
-      expect(received).toEqual(framed ? [Uint8Array.of(0, 255, 17)] : []);
-    } finally {
-      held.release();
-      await invoking;
-      await runtime.close();
-    }
+        expect(received).toEqual(framed ? [Uint8Array.of(0, 255, 17)] : []);
+      },
+      { ...frame, command: NODE_AGENT_CLI_CLAUDE_RUN_COMMAND, paramsJSON },
+    );
   });
 
   it("registers framed readiness before exchanging binary messages", async () => {

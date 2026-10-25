@@ -69,7 +69,7 @@ function workspaceFiles(bundleRoot: string, input: Launch) {
 function retainInput(
   input: Launch,
   sequence: number,
-  retain: Retain,
+  retain: Retain = [],
 ): NodeWorkerWorkspaceRetainInput {
   return {
     version: 1,
@@ -91,8 +91,8 @@ function fixture(name: string) {
     generation,
     manifestRefs: [],
   };
-  const collect = (sequence: number, retain: Retain = []) =>
-    workspace.applyRetainSnapshot(retainInput(input, sequence, retain), async () => []);
+  const collect = (sequence: number, retain: Retain = [], signal?: AbortSignal) =>
+    workspace.applyRetainSnapshot(retainInput(input, sequence, retain), async () => [], signal);
   return { root, workspace, input, generation, entry, collect, ...workspaceFiles(root, input) };
 }
 
@@ -185,7 +185,7 @@ it("protects a claimed placement workspace until its owner releases it", async (
 });
 
 it("keeps an in-flight removal fenced until it settles after cancellation", async () => {
-  const { workspace, input, workspaceDir, request } = managedFixture("managed-removal-race");
+  const { workspace, collect, workspaceDir, request } = managedFixture("managed-removal-race");
   const removalStarted = createDeferred();
   const finishRemoval = createDeferred();
   const controller = new AbortController();
@@ -197,12 +197,7 @@ it("keeps an in-flight removal fenced until it settles after cancellation", asyn
     }
     return await remove(target, options);
   });
-  const retention = workspace
-    .applyRetainSnapshot(retainInput(input, 1, []), async () => [], controller.signal)
-    .then(
-      () => undefined,
-      (error: unknown) => error,
-    );
+  const retention = collect(1, [], controller.signal).catch((error: unknown) => error);
 
   try {
     await removalStarted.promise;
@@ -221,9 +216,9 @@ it("keeps an in-flight removal fenced until it settles after cancellation", asyn
 it.each(["manifest", "metadata"] as const)(
   "cancels before deleting a %s verified after cancellation and resumes on replay",
   async (kind) => {
-    const { workspace, input, entry, seed, manifest, session } = fixture("cancel-retention");
+    const { collect, entry, seed, manifest, session } = fixture("cancel-retention");
     const retained = kind === "metadata" ? undefined : seed(2);
-    const snapshot = retainInput(input, 1, retained ? [{ ...entry, generation: 2 }] : []);
+    const retainedEntries = retained ? [{ ...entry, generation: 2 }] : [];
     const target =
       kind === "manifest" ? manifest("b".repeat(64)) : path.join(session, ".openclaw-worker");
     if (kind === "metadata") {
@@ -232,12 +227,9 @@ it.each(["manifest", "metadata"] as const)(
     }
     const { entered, release } = holdLstat(target);
     const controller = new AbortController();
-    const retention = workspace
-      .applyRetainSnapshot(snapshot, async () => [], controller.signal)
-      .then(
-        () => undefined,
-        (error: unknown) => error,
-      );
+    const retention = collect(1, retainedEntries, controller.signal).catch(
+      (error: unknown) => error,
+    );
     try {
       await entered.promise;
       controller.abort(new Error("retention cancelled"));
@@ -247,7 +239,7 @@ it.each(["manifest", "metadata"] as const)(
     expect(await retention).toBe(controller.signal.reason);
     expect(fs.existsSync(target)).toBe(true);
 
-    await expect(workspace.applyRetainSnapshot(snapshot, async () => [])).resolves.toMatchObject({
+    await expect(collect(1, retainedEntries)).resolves.toMatchObject({
       applied: true,
       hasMore: false,
     });
@@ -259,7 +251,7 @@ it.each(["manifest", "metadata"] as const)(
 );
 
 it("settles an issued deletion but leaves empty parents when cancelled", async () => {
-  const { workspace, input, manifest: seedManifest, session } = fixture("cancel-parent-retention");
+  const { collect, manifest: seedManifest, session } = fixture("cancel-parent-retention");
   const manifest = seedManifest("b".repeat(64));
   const controller = new AbortController();
   const reason = new Error("retention cancelled");
@@ -270,14 +262,11 @@ it("settles an issued deletion but leaves empty parents when cancelled", async (
       controller.abort(reason);
     }
   });
-  const snapshot = retainInput(input, 1, []);
-  await expect(
-    workspace.applyRetainSnapshot(snapshot, async () => [], controller.signal),
-  ).rejects.toBe(reason);
+  await expect(collect(1, [], controller.signal)).rejects.toBe(reason);
   expect(fs.existsSync(manifest)).toBe(false);
   expect(fs.existsSync(path.dirname(manifest))).toBe(true);
 
-  await workspace.applyRetainSnapshot(snapshot, async () => []);
+  await collect(1);
   expect(fs.existsSync(session)).toBe(false);
 });
 
@@ -296,7 +285,7 @@ it("continues a bounded backlog with an idempotent snapshot replay", async () =>
   for (let generation = 0; generation <= 260; generation += 1) {
     seed(generation);
   }
-  const snapshot = retainInput(input, 1, []);
+  const snapshot = retainInput(input, 1);
 
   const first = await supervisor.retainWorkspaces(snapshot);
   const second = await supervisor.retainWorkspaces(snapshot);

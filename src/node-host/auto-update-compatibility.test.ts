@@ -60,6 +60,9 @@ const prepare = (stateDir: string) =>
   prepareNodeRuntimeUpdate({ targetVersion: VERSION, stateDir });
 const readPackage = async (root: string): Promise<unknown> =>
   JSON.parse(await fs.readFile(path.join(root, "package.json"), "utf8"));
+const expectAbsent = (file: string) =>
+  expect(fs.access(file)).rejects.toMatchObject({ code: "ENOENT" });
+const commandResult = (stdout: string, code = 0, stderr = "") => ({ code, stdout, stderr });
 
 function expectNoNpm() {
   expect(mocks.resolve).not.toHaveBeenCalled();
@@ -82,14 +85,14 @@ beforeEach(() => {
   });
   mocks.command.mockImplementation(async (argv: string[]) => {
     if (argv.at(-1) === "--version") {
-      return { code: 0, stdout: "12.0.0\n", stderr: "" };
+      return commandResult("12.0.0\n");
     }
     const prefixIndex = argv.indexOf("--prefix");
     const prefix = argv[prefixIndex + 1];
     if (argv.includes("i") && prefixIndex >= 0 && prefix) {
       const layout = resolveNpmGlobalPrefixLayoutFromPrefix(prefix);
       await writeCandidate(path.join(layout.globalRoot, "openclaw"));
-      return { code: 0, stdout: "installed", stderr: "" };
+      return commandResult("installed");
     }
     throw new Error(`Unexpected external command: ${argv.join(" ")}`);
   });
@@ -102,11 +105,10 @@ describe("candidate node runtime and database compatibility", () => {
   });
   afterEach(() => vi.restoreAllMocks());
   function preflightResult(kind: "state" | "agent", status = "exact", code = 0, reason?: string) {
-    return {
+    return commandResult(
+      JSON.stringify({ schema: `openclaw.${kind}-schema-preflight.v1`, status, reason }),
       code,
-      stdout: JSON.stringify({ schema: `openclaw.${kind}-schema-preflight.v1`, status, reason }),
-      stderr: "",
-    };
+    );
   }
 
   async function createCompatibilityFixture(directory: string) {
@@ -204,9 +206,7 @@ describe("candidate node runtime and database compatibility", () => {
         expect([fixture.statePath, agentPath]).not.toContain(copiedPath);
         copiedPaths.push(copiedPath);
         for (const suffix of ["-wal", "-shm", "-journal"]) {
-          await expect(fs.access(`${copiedPath}${suffix}`)).rejects.toMatchObject({
-            code: "ENOENT",
-          });
+          await expectAbsent(`${copiedPath}${suffix}`);
         }
         using snapshot = new DatabaseSync(copiedPath, { readOnly: true });
         if (kind === "state") {
@@ -232,7 +232,7 @@ describe("candidate node runtime and database compatibility", () => {
       expect(snapshotPreflightSourceManifest(fixture.stateDir)).toEqual(before);
       expect(await fs.readdir(path.dirname(fixture.statePath))).toEqual(stateEntries);
       for (const copiedPath of copiedPaths) {
-        await expect(fs.access(copiedPath)).rejects.toMatchObject({ code: "ENOENT" });
+        await expectAbsent(copiedPath);
       }
     });
 
@@ -250,7 +250,7 @@ describe("candidate node runtime and database compatibility", () => {
         });
         await expect(assertNodeRuntimeUpdateCompatible(fixture)).rejects.toThrow(reason);
         expect(await fs.readFile(fixture.statePath)).toEqual(before);
-        await expect(fs.access(copiedPath)).rejects.toMatchObject({ code: "ENOENT" });
+        await expectAbsent(copiedPath);
       },
     );
   });
@@ -303,7 +303,7 @@ describe("Bun private node runtime installation", () => {
         if (argv.join(" ") === [process.execPath, "pm", "bin", "-g"].join(" ")) {
           // Bun requires its global project manifest before any global command.
           await fs.access(path.join(project!, "package.json"));
-          return { code: 0, stdout: `${bin}\n`, stderr: "" };
+          return commandResult(`${bin}\n`);
         }
         if (argv[0] === process.execPath && argv[1] === "add" && project && bin) {
           const archiveSpec = argv.find((arg) => arg.startsWith("openclaw@file:"));
@@ -312,7 +312,7 @@ describe("Bun private node runtime installation", () => {
           const root = path.join(project, "node_modules", "openclaw");
           await writeCandidate(root);
           await fs.symlink(path.join(root, "openclaw.mjs"), path.join(bin, "openclaw"));
-          return { code: 0, stdout: "installed", stderr: "" };
+          return commandResult("installed");
         }
         throw new Error(`Unexpected external command: ${argv.join(" ")}`);
       },
@@ -410,9 +410,7 @@ describe("private node runtime installation", () => {
     expect(candidate).toMatchObject({ version: VERSION, integrity: metadata.integrity });
     expect(await readPackage(candidate.packageRoot)).toMatchObject({ version: VERSION });
     expect(await readPackage(globalRoot)).toMatchObject({ version: "2026.9.17" });
-    await expect(fs.access(path.join(stateDir, "state", "openclaw.sqlite"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    await expectAbsent(path.join(stateDir, "state", "openclaw.sqlite"));
     const install = mocks.command.mock.calls.find(([argv]) => argv.includes("i"));
     expect(install?.[1].env.OPENCLAW_STATE_DIR).not.toBe(stateDir);
     expect(install?.[1].env.OPENCLAW_CONFIG_PATH).toContain("openclaw-node-update-");
@@ -487,8 +485,8 @@ describe("private node runtime installation", () => {
     );
     mocks.command.mockImplementation(async (argv: string[]) =>
       argv.at(-1) === "--version"
-        ? { code: 0, stdout: "12.0.0", stderr: "" }
-        : { code: 1, stdout: "", stderr: "registry offline" },
+        ? commandResult("12.0.0")
+        : commandResult("", 1, "registry offline"),
     );
 
     await expect(prepare(stateDir)).rejects.toThrow("registry offline");

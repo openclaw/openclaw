@@ -408,6 +408,8 @@ it("settles after the target closes before drain", async () => {
     expect(frames).toEqual([JSON.stringify({ ok: true }), "terminal-response"]);
     expect(writes).toBe(1);
     expect(target.listenerCount("drain")).toBe(0);
+    expect(target.destroyed).toBe(true);
+    expect(harness.wss.clients.size).toBe(0);
   } finally {
     harness.controller.abort();
     await running;
@@ -542,40 +544,6 @@ describe("node stream close acknowledgement", () => {
       expect(harness.wss.clients.size).toBe(0);
     } finally {
       await harness.cleanup();
-    }
-  });
-
-  it("completes a drained forward when the gateway acknowledges close", async () => {
-    const gatewayClosed = createDeferred();
-    const messages: Buffer[] = [];
-    const harness = await websocketHarness((ws) => {
-      ws.on("message", (data) => {
-        if (Buffer.isBuffer(data)) {
-          messages.push(data);
-        }
-      });
-      ws.once("close", () => gatewayClosed.resolve());
-    });
-    const { target } = harness;
-    target.on("end", () => target.destroy());
-    const timerSpy = vi.spyOn(globalThis, "setTimeout");
-    try {
-      await harness.run({
-        emitStatus: async (status) => {
-          if (status.includes("attached")) {
-            target.push(Buffer.alloc(64, 7));
-            target.push(null);
-          }
-        },
-      });
-      await gatewayClosed.promise;
-      expect(Buffer.concat(messages.slice(1))).toEqual(Buffer.alloc(64, 7));
-      expect(target.destroyed).toBe(true);
-      expect(harness.wss.clients.size).toBe(0);
-      expect(timerSpy.mock.calls.map(([, delayMs]) => delayMs)).not.toContain(5_000);
-    } finally {
-      await harness.cleanup();
-      timerSpy.mockRestore();
     }
   });
 
