@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -15,13 +16,12 @@ import {
 import { prepareSystemRunMutableFileBinding } from "./system-run-approval-binding.js";
 
 const POSIX_ENV = { PATH: "/usr/bin:/bin" };
+type RenderOptions = Parameters<typeof buildAuthorizedShellCommandFromPlan>[0];
 
 async function render(
   command: string,
-  mode: Parameters<typeof buildAuthorizedShellCommandFromPlan>[0]["mode"],
-  segmentSatisfiedBy: Parameters<
-    typeof buildAuthorizedShellCommandFromPlan
-  >[0]["segmentSatisfiedBy"],
+  mode: RenderOptions["mode"],
+  segmentSatisfiedBy: RenderOptions["segmentSatisfiedBy"],
   env: NodeJS.ProcessEnv = POSIX_ENV,
 ) {
   const plan = await planShellAuthorization({ command, env });
@@ -29,18 +29,13 @@ async function render(
 }
 
 function renderOk(result: ReturnType<typeof buildAuthorizedShellCommandFromPlan>): string {
-  expect(result).toEqual(expect.objectContaining({ ok: true }));
-  if (!result.ok) {
-    throw new Error(result.reason);
-  }
+  assert(result.ok, result.ok ? undefined : result.reason);
   return result.command;
 }
 
 async function prepareReviewedCommand(command: string, env: NodeJS.ProcessEnv, cwd?: string) {
   const plan = await planShellAuthorization({ command, env, cwd });
-  if (!plan.ok) {
-    throw new Error(plan.reason);
-  }
+  assert(plan.ok, plan.ok ? undefined : plan.reason);
   const prepared = await prepareSystemRunMutableFileBinding({
     command: {
       kind: "segments",
@@ -51,9 +46,7 @@ async function prepareReviewedCommand(command: string, env: NodeJS.ProcessEnv, c
     env,
     cwd,
   });
-  if (!prepared.ok) {
-    throw new Error(prepared.message);
-  }
+  assert(prepared.ok, prepared.ok ? undefined : prepared.message);
   return { plan, binding: prepared.binding };
 }
 
@@ -78,25 +71,24 @@ describe("exec authorization renderer", () => {
     await expect(render(command, mode, satisfiedBy)).resolves.toEqual({ ok: false, reason });
   });
 
-  it("renders dispatch-wrapper safe-bin commands without quote-all argv rendering", async () => {
-    const env = makePathEnv(makeExecApprovalsTempDir());
-    expect(renderOk(await render("env rg -n needle", "safeBins", ["safeBins"], env))).toBe(
-      "rg -n needle",
-    );
-  });
-
-  it("preserves non-rewritten wrapper payload commands", async () => {
-    const result = await render("sh -c 'git status && head -c 16'", "safeBins", [null, "safeBins"]);
-    expect(renderOk(result)).toMatch(/^sh -c 'git status && \/.+\/head -c 16'$/);
-  });
-
-  it("leaves POSIX safe builtins unrewritten in enforced mode", async () => {
-    expect(renderOk(await render("cd .", "enforced", ["safeBuiltins"]))).toBe("cd .");
-  });
-
-  it("preserves env assignment prefixes for enforced POSIX commands", async () => {
-    const result = await render("LIMIT=1 head -n 5", "enforced", ["allowlist"]);
-    expect(renderOk(result)).toMatch(/^LIMIT=1 \/.+\/head -n 5$/);
+  it.each<[string, RenderOptions["mode"], RenderOptions["segmentSatisfiedBy"], string | RegExp]>([
+    ["env rg -n needle", "safeBins", ["safeBins"], "rg -n needle"],
+    [
+      "sh -c 'git status && head -c 16'",
+      "safeBins",
+      [null, "safeBins"],
+      /^sh -c 'git status && \/.+\/head -c 16'$/,
+    ],
+    ["cd .", "enforced", ["safeBuiltins"], "cd ."],
+    ["LIMIT=1 head -n 5", "enforced", ["allowlist"], /^LIMIT=1 \/.+\/head -n 5$/],
+  ])("preserves authorized shell semantics: %s", async (command, mode, satisfiedBy, expected) => {
+    const env = command.startsWith("env ") ? makePathEnv(makeExecApprovalsTempDir()) : POSIX_ENV;
+    const rendered = renderOk(await render(command, mode, satisfiedBy, env));
+    if (typeof expected === "string") {
+      expect(rendered).toBe(expected);
+    } else {
+      expect(rendered).toMatch(expected);
+    }
   });
 
   it("fails closed when shell-wrapper safe-bin rewrites would need outer quote escaping", async () => {

@@ -86,6 +86,14 @@ function expectUsage(entry: UsageCostRollupEntry, tokens: number, records: numbe
     Object.values(entry.rollup.buckets).reduce((sum, b) => sum + b.totals.totalTokens, 0),
   ).toBe(tokens);
 }
+function expectIncomplete(entry: UsageCostRollupEntry, total: number) {
+  expect(entry.rollup.buckets[String(timestamp)]?.totals).toMatchObject({
+    usageReport: { state: "unavailable" },
+    totalTokens: total,
+    totalCost: total,
+    missingCostEntries: 1,
+  });
+}
 
 it("stops reading subsequent transcript pages when its owner cancels", async () => {
   const controller = new AbortController();
@@ -106,23 +114,11 @@ it("keeps known billing separate from unavailable usage across incremental refre
   const before = await scan(initial);
   const interrupted = [...initial, makeRow(9, "aborted", "a", 100, true)];
   const afterAbort = await scan(interrupted, before);
-  expect(afterAbort.rollup.buckets[String(timestamp)]?.totals).toMatchObject({
-    usageReport: { state: "unavailable" },
-    totalTokens: 3,
-    totalCost: 3,
-    missingCostEntries: 1,
-  });
-
-  const afterSuccess = await scan(
-    [...interrupted, makeRow(12, "completed", "aborted", 4)],
-    afterAbort,
+  expectIncomplete(afterAbort, 3);
+  expectIncomplete(
+    await scan([...interrupted, makeRow(12, "completed", "aborted", 4)], afterAbort),
+    7,
   );
-  expect(afterSuccess.rollup.buckets[String(timestamp)]?.totals).toMatchObject({
-    usageReport: { state: "unavailable" },
-    totalTokens: 7,
-    totalCost: 7,
-    missingCostEntries: 1,
-  });
 });
 
 it("selects a branch after reading all short pages and preserves sparse sequence numbers", async () => {
