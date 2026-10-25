@@ -1,6 +1,7 @@
 // Onboard custom tests cover custom provider prompts and API-key credential handling.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ensureApiKeyFromEnvOrPrompt } from "../plugins/provider-auth-input.js";
+import * as providerAuthInput from "../plugins/provider-auth-input.js";
 import { promptCustomApiConfig } from "./onboard-custom.js";
 
 const loadManifestMetadataSnapshot = vi.hoisted(() => vi.fn(() => ({ plugins: [] })));
@@ -46,9 +47,31 @@ function queuedAnswers<T>(answers: T[] = [], fallback?: T) {
   return mock;
 }
 
-function createTestPrompter(params: { text: string[]; select?: string[]; confirm?: boolean[] }) {
+// Answers like the interactive terminal: an answer its validator refuses is not accepted.
+function validatedAnswers(answers: string[]) {
+  const queue = [...answers];
+  return vi
+    .fn()
+    .mockImplementation(
+      async (options?: { validate?: (value: string) => string | Error | undefined }) => {
+        const value = queue.shift() ?? "";
+        const error = options?.validate?.(value);
+        if (error) {
+          throw error instanceof Error ? error : new Error(error);
+        }
+        return value;
+      },
+    );
+}
+
+function createTestPrompter(params: {
+  text: string[];
+  select?: string[];
+  confirm?: boolean[];
+  validateText?: boolean;
+}) {
   return {
-    text: queuedAnswers(params.text),
+    text: params.validateText ? validatedAnswers(params.text) : queuedAnswers(params.text),
     progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
     select: queuedAnswers(params.select ?? ["plaintext", "openai"]),
     confirm: queuedAnswers(params.confirm, false),
@@ -77,7 +100,7 @@ async function runPromptCustomApi(
   setup: Partial<
     Pick<
       Parameters<typeof promptCustomApiConfig>[0],
-      "config" | "target" | "verification" | "setAsPrimary"
+      "config" | "target" | "modelWriteTarget" | "verification" | "setAsPrimary"
     >
   > = {},
 ) {
@@ -318,6 +341,33 @@ describe("promptCustomApiConfig", () => {
     );
   });
 
+  it("accepts a shared alias that only the setup agent uses privately", async () => {
+    const prompter = createTestPrompter({
+      text: ["http://localhost:11434/v1", "local-key", "llama3", "custom", "Operations"],
+      validateText: true,
+    });
+    stubFetchSequence([{ ok: true }]);
+
+    const result = await runPromptCustomApi(prompter, {
+      config: {
+        agents: {
+          ownership: "explicit",
+          defaults: { systemAgent: { agentId: "ops" } },
+          entries: { ops: { models: { "openai/ops": { alias: "Operations" } } }, beta: {} },
+        },
+      },
+      target: { agentId: "ops", agentDir: "/tmp/ops-agent", workspaceDir: "/tmp/ops-workspace" },
+      modelWriteTarget: "defaults",
+    });
+
+    expect(result.config.agents?.defaults?.models?.["custom/llama3"]).toEqual({
+      alias: "Operations",
+    });
+    expect(result.config.agents?.entries?.ops?.models).toEqual({
+      "openai/ops": { alias: "Operations" },
+    });
+  });
+
   it("threads one workspace-scoped manifest snapshot through alias validation", async () => {
     const preparedPlugins = [
       {
@@ -452,6 +502,43 @@ describe("promptCustomApiConfig", () => {
       "This endpoint did not respond to OpenAI Chat, OpenAI Responses, or Anthropic style requests.",
       "Endpoint detection",
     );
+  });
+
+  it("finishes a base-URL retry on a fleet with no default agent", async () => {
+    const { ensureApiKeyFromEnvOrPrompt } = await vi.importActual<
+      typeof import("../plugins/provider-auth-input.js")
+    >("../plugins/provider-auth-input.js");
+    vi.mocked(providerAuthInput.ensureApiKeyFromEnvOrPrompt)
+      .mockImplementationOnce(ensureApiKeyFromEnvOrPrompt)
+      .mockImplementationOnce(ensureApiKeyFromEnvOrPrompt);
+    const prompter = createTestPrompter({
+      text: [
+        "https://bad.example.com/v1",
+        "bad-key",
+        "model-a",
+        "https://ok.example.com/v1",
+        "ok-key",
+        "custom",
+        "",
+      ],
+      select: ["plaintext", "openai", "baseUrl", "plaintext"],
+    });
+    stubFetchSequence([{ ok: false, status: 404 }, { ok: true }]);
+    const target = {
+      agentId: "ops",
+      agentDir: "/tmp/ops-agent",
+      workspaceDir: "/tmp/ops-workspace",
+    };
+
+    const result = await runPromptCustomApi(prompter, {
+      config: { agents: { ownership: "explicit", entries: { ops: {}, beta: {} } } },
+      target,
+    });
+
+    expect(result.config.models?.providers?.custom).toMatchObject({
+      baseUrl: "https://ok.example.com/v1",
+      apiKey: "ok-key",
+    });
   });
 
   it("aborts verification after timeout", async () => {

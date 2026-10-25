@@ -238,7 +238,8 @@ vi.mock("../flows/search-setup.js", () => ({
   runSearchSetupFlow: wizardTestMocks.setupSearch,
 }));
 
-vi.mock("../plugins/plugin-registry.js", () => ({
+vi.mock("../plugins/plugin-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/plugin-registry.js")>()),
   resolvePluginContributionOwners: wizardTestMocks.resolvePluginContributionOwners,
 }));
 

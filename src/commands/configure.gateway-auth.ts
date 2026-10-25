@@ -1,7 +1,11 @@
 import { resolveMutableAgentEntry } from "../agents/agent-scope-config.js";
 import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
+import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
+import {
+  normalizeAgentModelRefForConfig,
+  resolveAgentModelPrimaryValue,
+} from "../config/model-input.js";
 import {
   applyModelAllowlist,
   applyModelFallbacksFromSelection,
@@ -10,6 +14,7 @@ import {
 } from "../flows/model-picker.js";
 import { resolvePreferredProviderForAuthChoice } from "../plugins/provider-auth-choice-preference.js";
 import { resolveManifestProviderAuthChoice } from "../plugins/provider-auth-choices.js";
+import { applyPrimaryModel } from "../plugins/provider-model-primary.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { promptAuthChoiceGrouped } from "./auth-choice-prompt.js";
@@ -21,7 +26,7 @@ import {
   applyOnboardingUtilityModel,
   resolveOnboardingAgentTarget,
 } from "./onboard-agent-target.js";
-import type { OnboardingAgentTarget } from "./onboard-agent-target.js";
+import type { ModelWriteTarget, OnboardingAgentTarget } from "./onboard-agent-target.js";
 import { promptCustomApiConfig } from "./onboard-custom.js";
 
 type ProviderChoiceModelPrompt = {
@@ -66,9 +71,12 @@ function resolveCanonicalOpenAISelectionForLegacyCodexPrimary(
   cfg: OpenClawConfig,
   target: OnboardingAgentTarget,
   selectedModels: readonly string[],
+  modelWriteTarget: ModelWriteTarget,
 ): string | undefined {
   const primary = resolveAgentModelPrimaryValue(
-    resolveMutableAgentEntry(cfg, target.agentId)?.model ?? cfg.agents?.defaults?.model,
+    modelWriteTarget === "defaults"
+      ? cfg.agents?.defaults?.model
+      : (resolveMutableAgentEntry(cfg, target.agentId)?.model ?? cfg.agents?.defaults?.model),
   );
   const modelId = primary?.startsWith("codex/") ? primary.slice("codex/".length).trim() : "";
   if (!modelId) {
@@ -78,13 +86,86 @@ function resolveCanonicalOpenAISelectionForLegacyCodexPrimary(
   return selectedModels.find((model) => model.trim() === canonical);
 }
 
+function applySelectedPrimary(
+  config: OpenClawConfig,
+  target: OnboardingAgentTarget,
+  model: string,
+  modelWriteTarget: ModelWriteTarget,
+): OpenClawConfig {
+  switch (modelWriteTarget) {
+    case "defaults":
+      return applyPrimaryModel(config, model);
+    case "agent":
+      return applyOnboardingPrimaryModel(config, target, model);
+    default: {
+      const exhaustive: never = modelWriteTarget;
+      return exhaustive;
+    }
+  }
+}
+
+function applySharedUtilityModel(config: OpenClawConfig, model: string): OpenClawConfig {
+  const primary = normalizeAgentModelRefForConfig(model);
+  const existing = config.agents?.defaults?.utilityModel;
+  const utilityModel = typeof existing === "object" ? { ...existing, primary } : primary;
+  return {
+    ...config,
+    agents: {
+      ...config.agents,
+      defaults: { ...config.agents?.defaults, utilityModel },
+    },
+  };
+}
+
+function applySelectedUtilityModel(
+  config: OpenClawConfig,
+  target: OnboardingAgentTarget,
+  model: string,
+  modelWriteTarget: ModelWriteTarget,
+): OpenClawConfig {
+  switch (modelWriteTarget) {
+    case "defaults":
+      return applySharedUtilityModel(config, model);
+    case "agent":
+      return applyOnboardingUtilityModel(config, target, model);
+    default: {
+      const exhaustive: never = modelWriteTarget;
+      return exhaustive;
+    }
+  }
+}
+
+function hasOwnedPrimary(
+  config: OpenClawConfig,
+  target: OnboardingAgentTarget,
+  modelWriteTarget: ModelWriteTarget,
+): boolean {
+  switch (modelWriteTarget) {
+    case "defaults":
+      return Boolean(resolveAgentModelPrimaryValue(config.agents?.defaults?.model));
+    case "agent":
+      return Boolean(resolveAgentEffectiveModelPrimary(config, target.agentId));
+    default: {
+      const exhaustive: never = modelWriteTarget;
+      return exhaustive;
+    }
+  }
+}
+
 /** Prompt for model provider credentials and explicit default model policy settings. */
 export async function promptAuthConfig(
   cfg: OpenClawConfig,
   runtime: RuntimeEnv,
   prompter: WizardPrompter,
   target: OnboardingAgentTarget = resolveOnboardingAgentTarget(cfg),
+  options?: { modelWriteTarget?: ModelWriteTarget },
 ): Promise<OpenClawConfig> {
+  const modelWriteTarget = options?.modelWriteTarget ?? "agent";
+  // Pickers project an agent's model state over defaults; shared setup must start from defaults.
+  const pickerAgentId = modelWriteTarget === "agent" ? target.agentId : undefined;
+  // Shared defaults need credentials in the store every agent inherits, not the setup agent's.
+  const credentialAgentDir =
+    modelWriteTarget === "agent" ? target.agentDir : resolveSharedMainAuthAgentDir();
   let next = cfg;
   let authChoice = "skip";
   let preferredProvider: string | undefined;
@@ -109,7 +190,8 @@ export async function promptAuthConfig(
         runtime,
         config: next,
         target,
-        setAsPrimary: !resolveAgentEffectiveModelPrimary(next, target.agentId),
+        modelWriteTarget,
+        setAsPrimary: !hasOwnedPrimary(next, target, modelWriteTarget),
       });
       next = customResult.config;
       break;
@@ -124,7 +206,7 @@ export async function promptAuthConfig(
         loadCatalog: true,
         browseCatalogOnDemand: true,
         preferredProvider,
-        agentId: target.agentId,
+        agentId: pickerAgentId,
         agentDir: target.agentDir,
         workspaceDir: target.workspaceDir,
         runtime,
@@ -133,7 +215,7 @@ export async function promptAuthConfig(
         next = modelSelection.config;
       }
       if (modelSelection.model) {
-        next = applyOnboardingPrimaryModel(next, target, modelSelection.model);
+        next = applySelectedPrimary(next, target, modelSelection.model, modelWriteTarget);
         preferredProvider = resolveProviderFromModelRef(modelSelection.model) ?? preferredProvider;
       }
       break;
@@ -146,21 +228,26 @@ export async function promptAuthConfig(
       prompter,
       runtime,
       agentId: target.agentId,
-      agentDir: target.agentDir,
+      agentDir: credentialAgentDir,
       setDefaultModel: false,
       preserveExistingDefaultModel: true,
     });
     next = applied.config;
     if (applied.utilityModelOverride) {
-      return applyOnboardingUtilityModel(next, target, applied.utilityModelOverride);
+      return applySelectedUtilityModel(
+        next,
+        target,
+        applied.utilityModelOverride,
+        modelWriteTarget,
+      );
     }
     // Auth recommendations initialize an unset primary; reauth must not replace
     // the target's explicit or inherited model.
     if (
       applied.agentModelOverride &&
-      !resolveAgentEffectiveModelPrimary(beforeAuthConfig, target.agentId)
+      !hasOwnedPrimary(beforeAuthConfig, target, modelWriteTarget)
     ) {
-      next = applyOnboardingPrimaryModel(next, target, applied.agentModelOverride);
+      next = applySelectedPrimary(next, target, applied.agentModelOverride, modelWriteTarget);
     }
     if (!hasConfiguredProviderModels(next, preferredProvider)) {
       const beforeProviders = beforeAuthConfig.models?.providers ?? {};
@@ -231,7 +318,7 @@ export async function promptAuthConfig(
     const allowlistSelection = await promptModelAllowlist({
       config: next,
       prompter,
-      agentId: target.agentId,
+      agentId: pickerAgentId,
       agentDir: target.agentDir,
       workspaceDir: target.workspaceDir,
       env: process.env,
@@ -248,19 +335,23 @@ export async function promptAuthConfig(
         next,
         target,
         selectedModels,
+        modelWriteTarget,
       );
       if (canonicalPrimary) {
-        next = applyOnboardingPrimaryModel(next, target, canonicalPrimary);
+        next = applySelectedPrimary(next, target, canonicalPrimary, modelWriteTarget);
       }
-      next = applyAgentModelDefaults(next, target, (projected) =>
+      const withAllowlist = (projected: OpenClawConfig) =>
         applyModelAllowlist(
           applyModelFallbacksFromSelection(projected, selectedModels, {
             scopeKeys: allowlistSelection.scopeKeys,
           }),
           selectedModels,
           { scopeKeys: allowlistSelection.scopeKeys },
-        ),
-      );
+        );
+      next =
+        modelWriteTarget === "defaults"
+          ? withAllowlist(next)
+          : applyAgentModelDefaults(next, target, withAllowlist);
     }
   }
 
