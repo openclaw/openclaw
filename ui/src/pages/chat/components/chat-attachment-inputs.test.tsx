@@ -128,34 +128,22 @@ it.each([false, true])(
   },
 );
 
-it("retains the camera across input renders and retires its active read scope", async () => {
+it("retains the lazy camera host and forwards current availability and read scope", async () => {
   const props = { readSignal: new AbortController().signal };
   const { draw, camera } = mountInputs(props);
-  const dialog = () => camera.querySelector("openclaw-modal-dialog");
   await camera.updateComplete;
   expect(camera.childElementCount).toBe(0);
-
-  await draw({ ...props, draft: "A new draft" });
-  expect(host.querySelector("openclaw-chat-camera-capture")).toBe(camera);
-  expect(camera.childElementCount).toBe(0);
-
-  await draw({ ...props, disabled: true });
-  expect(camera.disabled).toBe(true);
-  camera.show();
-  await camera.updateComplete;
-  expect(camera.childElementCount).toBe(0);
-
   const readSignal = new AbortController().signal;
-  await draw({ ...props, disabled: true, readSignal });
-  expect(camera.readSignal).toBe(readSignal);
-  expect(camera.childElementCount).toBe(0);
-
-  await draw({ ...props, disabled: false, readSignal });
-  camera.show();
-  await camera.updateComplete;
-  expect(dialog()).not.toBeNull();
-  await draw({ ...props, readSignal: new AbortController().signal });
-  await waitForSolid(() => expect(dialog()).toBeNull());
+  for (const [next, disabled] of [
+    [{ ...props, draft: "A new draft" }, false],
+    [{ ...props, disabled: true }, true],
+    [{ ...props, cameraActive: false }, true],
+    [{ readSignal }, false],
+  ] as const) {
+    await draw(next);
+    expect(host.querySelector("openclaw-chat-camera-capture")).toBe(camera);
+    expect(camera).toMatchObject({ disabled, readSignal: next.readSignal, childElementCount: 0 });
+  }
 });
 
 it.each(
