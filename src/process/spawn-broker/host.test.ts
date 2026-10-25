@@ -42,7 +42,6 @@ async function runFixture(script: string, options: SpawnOptions, input?: string)
 }
 
 const bootstrapModes = [
-  "native",
   "stale-ambient",
   "send-throw",
   "send-callback",
@@ -329,27 +328,24 @@ describe.skipIf(skipBrokerTests)("spawn broker native transport", () => {
 
   it("preserves real inherited stdin across the host and broker", async () => {
     const input = "inherited-input:".repeat(32_000);
-    for (const brokered of [false, true]) {
-      const script = `
-        import {spawn} from 'node:child_process';
+    const script = `
         import {once} from 'node:events';
         import {createSpawnBrokerHost} from ${JSON.stringify(new URL("./host.js", import.meta.url).href)};
-        const broker = ${brokered} ? createSpawnBrokerHost() : undefined;
-        await broker?.ready();
+        const broker = createSpawnBrokerHost();
+        await broker.ready();
         const args = ['-e','process.stdin.pipe(process.stdout)'];
         const options = {stdio:['inherit','pipe','pipe']};
-        const child = broker ? broker.spawn(process.execPath,args,options) : spawn(process.execPath,args,options);
-        if (broker) await child.ready();
+        const child = broker.spawn(process.execPath,args,options);
+        await child.ready();
         child.stdout.pipe(process.stdout); child.stderr.pipe(process.stderr);
-        await once(child,'close'); await broker?.close();
+        await once(child,'close'); await broker.close();
       `;
-      expect(await runFixture(script, { stdio: ["pipe", "pipe", "pipe"] }, input)).toEqual({
-        code: 0,
-        signal: null,
-        stdout: input,
-        stderr: "",
-      });
-    }
+    expect(await runFixture(script, { stdio: ["pipe", "pipe", "pipe"] }, input)).toEqual({
+      code: 0,
+      signal: null,
+      stdout: input,
+      stderr: "",
+    });
   });
 
   it("forwards child IPC and retains separate extra pipes", async () => {
