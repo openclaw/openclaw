@@ -12,7 +12,7 @@ import {
   workspacePackageExportAliasEntries,
 } from "../src/plugins/sdk-alias-workspace.ts";
 import { createStandaloneArtifactAdapter } from "./lib/bun-standalone-artifacts.mjs";
-import { bundleStandaloneModules } from "./lib/bun-standalone-bundle.mjs";
+import { bundleStandaloneModules, relinkStandaloneModules } from "./lib/bun-standalone-bundle.mjs";
 import { createStandaloneCodegenAdapter } from "./lib/bun-standalone-codegen.mjs";
 import {
   assertStandaloneCompiler,
@@ -799,6 +799,15 @@ do {
   }
   discoverMore = Boolean(sourceGraph) && sourceEntrypoints().length !== discoveredRoots;
 } while (discoverMore);
+result = await relinkStandaloneModules(
+  { ...buildOptions, entrypoints: sourceEntrypoints() },
+  result,
+  Bun.build,
+  parse,
+);
+if (!result.success) {
+  throw new AggregateError(result.logs, "Standalone final link failed");
+}
 if (sourceGraph) {
   for (const output of result.outputs) {
     if (/\.[cm]?js$/.test(output.path)) {
@@ -858,7 +867,7 @@ const compiledEntries = result.outputs
   .filter((output) => output.path.endsWith(".js"))
   .map((output) => output.path);
 const nativeResources = native.finalize({
-  metafile: result.metafile,
+  metafile: result.runtimeMetafile,
   embeddedPaths,
   resolveFilename: nativeFilename,
 });
@@ -922,7 +931,7 @@ if (nativeTables === 0) {
   throw new Error("Standalone bundle omitted its native resource resolution table");
 }
 // Bun preserves CJS -> ESM requires as import.meta.require in split output.
-// The second split pass moves callers, so pin those edges to embedded entry names.
+// Native compilation can move callers again, so pin edges to embedded entry names.
 const splitRequireEdges = [];
 const compiledEntrySet = new Set(compiledEntries);
 for (const filename of compiledEntries) {
@@ -983,12 +992,7 @@ fs.writeFileSync(
 const mainEntry = path.join(outputRoot, "modules/standalone-entry.js");
 const compileRoot = path.join(outputRoot, "modules");
 // Shared chunks remain reachable imports; only public entries and pinned CJS targets need roots.
-const compileEntries = new Set(
-  Object.entries(result.metafile.outputs)
-    .filter(([, output]) => output.entryPoint)
-    .map(([entry]) => path.resolve(compileRoot, entry))
-    .filter((entry) => compiledEntrySet.has(entry)),
-);
+const compileEntries = new Set(result.entryOutputs.filter((entry) => compiledEntrySet.has(entry)));
 for (const { to } of splitRequireEdges) {
   compileEntries.add(path.resolve(compileRoot, to));
 }
@@ -1002,7 +1006,6 @@ fs.writeFileSync(
     2,
   ),
 );
-// Shorter relative names keep the full graph below macOS's exec argument limit.
 const compileCwd = path.join(compileRoot, "runtime/dist");
 const bunIdentity = {
   version: Bun.version,

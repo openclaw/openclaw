@@ -144,7 +144,7 @@ export function createDockLayout<TDock extends DockPanelPlacement>(deps: {
     },
 
     get resizer() {
-      if (isFullscreen() || dock.dock === "main") {
+      if (isFullscreen() || dock.dock === "main" || (!dock.open && !deps.isEmbedded?.())) {
         return null;
       }
       const horizontal = dock.dock === "bottom";

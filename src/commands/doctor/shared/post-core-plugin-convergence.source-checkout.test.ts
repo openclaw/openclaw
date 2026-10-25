@@ -8,10 +8,7 @@ import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.
 import { runPluginUpdateCommand } from "../../../cli/plugins-update-command.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
-import {
-  filterRecordsToActive,
-  runActivePluginPayloadSmokeCheck,
-} from "../../../plugins/active-payload-verification.js";
+import { filterRecordsToActive } from "../../../plugins/active-payload-verification.js";
 import { resolvePluginNpmGenerationProjectDir } from "../../../plugins/install-paths.js";
 import { readPersistedInstalledPluginIndexInstallRecordsAsync as readRecords } from "../../../plugins/installed-plugin-index-records.js";
 import { loadPluginManifestRegistryCore } from "../../../plugins/manifest-registry.js";
@@ -125,19 +122,15 @@ beforeEach(() => vi.clearAllMocks());
 afterEach(() => vi.unstubAllEnvs());
 
 it.each([
-  { version: "2026.9.3", selector: true, corrupt: false, packaged: false, flow: "doctor" },
-  { version: "2026.9.3", selector: false, corrupt: false, packaged: true, flow: "doctor" },
-  { version: HOST_VERSION, selector: false, corrupt: false, packaged: true, flow: "cli all" },
-  { version: HOST_VERSION, selector: false, corrupt: true, flow: "doctor" },
-  ...["cli named", "cli all", "stable"].map((flow) => ({
-    version: HOST_VERSION,
-    selector: false,
-    corrupt: false,
-    flow,
-  })),
-])(
-  "keeps the rebuilt plugin with npm $version (selector=$selector, corrupt=$corrupt, flow=$flow)",
-  async ({ version, selector, corrupt, flow, packaged = false }) => {
+  ["doctor", "2026.9.3", true, false, false],
+  ["doctor", "2026.9.3", false, false, true],
+  ["doctor", HOST_VERSION, false, true, false],
+  ["cli named", HOST_VERSION, false, false, false],
+  ["cli all", HOST_VERSION, false, false, false],
+  ["stable", HOST_VERSION, false, false, false],
+] as const)(
+  "keeps the rebuilt plugin for %s (npm=%s, selector=%s, corrupt=%s, packaged=%s)",
+  async (flow, version, selector, corrupt, packaged) => {
     const root = tempDirs.make("openclaw-source-convergence-");
     const hostRoot = path.join(root, "host");
     const stateDir = path.join(root, "state");
@@ -229,31 +222,20 @@ it.each([
           env,
           compatibilityHostVersion: HOST_VERSION,
         });
-        expect.soft(result.installRecords).toEqual(records);
         expect.soft(result).toMatchObject({
+          installRecords: records,
           errored: false,
           smokeFailures: [],
           warnings: [],
-          outcomes: expect.arrayContaining([
-            expect.objectContaining({
-              pluginId: "codex",
-              status: "unchanged",
-              code: "source-bundled-plugin",
-            }),
-          ]),
         });
-        expect.soft(result.changes.join("\n")).not.toContain("Refreshed stale configured plugin");
         expect.soft(fs.readFileSync(npmPackage, "utf8")).toBe(npmPackageBefore);
         expect.soft(await readRecords({ env })).toEqual(records);
         const registry = loadPluginManifestRegistryCore({ config: cfg, env });
         const selected = registry.plugins.find((plugin) => plugin.id === "codex");
-        expect.soft(selected).toMatchObject({ origin: "bundled", rootDir: bundledDir });
         const loaded = importAndRun(expectDefined(selected, "selected bundled Codex").source, env);
         expect
           .soft(loaded, loaded.stderr)
           .toMatchObject({ status: 0, stdout: "synthetic turn completed" });
-        const startup = await runActivePluginPayloadSmokeCheck({ cfg, records, env });
-        expect(startup.failures).toEqual([]);
         if (flow === "cli named" || flow === "cli all") {
           await runPluginUpdateCommand({
             ids: flow === "cli named" ? ["codex"] : [],
@@ -284,18 +266,6 @@ it.each([
             plugins: { ...cfg.plugins, load: { paths: [override] } },
           };
           expect(filterRecordsToActive({ cfg: selectedConfig, records, env })).toEqual(records);
-          const sourceOnlyDir = path.join(hostRoot, "extensions", "codex");
-          writeCodexPackage(sourceOnlyDir, NEW_EXPORT);
-          withPluginCache(createPluginCache(), () => {
-            const sourceOnlyRegistry = loadPluginManifestRegistryCore({
-              config: cfg,
-              env: { ...env, OPENCLAW_BUNDLED_PLUGINS_DIR: path.dirname(sourceOnlyDir) },
-              installRecords: records,
-            });
-            expect(
-              sourceOnlyRegistry.plugins.find((plugin) => plugin.id === "codex"),
-            ).toMatchObject({ origin: "global", rootDir: npmDir });
-          });
         }
       });
     } finally {

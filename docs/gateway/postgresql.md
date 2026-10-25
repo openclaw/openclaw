@@ -169,6 +169,17 @@ close their cached connections after three minutes idle or on shutdown. Taking a
 connection from the cache cancels its idle timeout; checked-out connections are
 not expired by this cache.
 
+Gateway workers share four PostgreSQL I/O services per process. The Gateway
+starts them when it selects PostgreSQL, overlapping their initialization with
+config and plugin preparation. Replies wake only their own connection; blocked
+callers check for service failure at intervals of at most 50 milliseconds.
+This changes where connections run, not their exclusive ownership or idle retention. An
+externally constructed SDK or plugin worker without inherited pool endpoints
+starts its own four services on first PostgreSQL use. It emits a once-per-thread
+warning and `openclaw.postgres.pool.self-root` diagnostic with the worker label
+and thread ID. Worker diagnostics count these roots separately from physical
+I/O services, so unexpected worker creation remains visible.
+
 Usage reports retain their reader in the existing history worker between requests.
 Each report still uses a fresh read snapshot; database maintenance and worker
 shutdown close the retained connection before releasing custody.
@@ -757,8 +768,14 @@ First boot, ports, rebuilds, and migrations can take longer on slow disks or a
 remote server. Connection waits allow 60 seconds. On runtime store connections,
 OpenClaw sets session-level `lock_timeout` to 60 seconds and `statement_timeout`
 to 90 seconds. These liveness bounds override role, database, and DSN startup
-settings; the synchronous bridge also has a 120-second deadline. These are not per-operation
-config options. Port and restore materialization allow a one-hour statement timeout.
+settings. The synchronous bridge has a 120-second deadline. If it expires, the
+process root terminates the whole I/O service, resetting every connection assigned
+to that service (roughly a quarter of the process's PostgreSQL connections) with
+an unknown outcome. Runtime statements time out after 90 seconds, so the bridge
+deadline covers a wedged service or a black-holed network. Port and restore
+materialization allow a one-hour statement timeout, but a statement running longer
+than 120 seconds still trips the bridge deadline and resets its I/O service.
+These are not per-operation config options.
 A timeout is a failure to investigate, not permission to delete recovery state.
 Inspect server load, locks, network, and storage, and retry only
 after resolving the reported cause.

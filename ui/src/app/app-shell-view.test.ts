@@ -316,6 +316,7 @@ it("keeps one sidebar through drawer and settings takeover transitions", async (
   const outlet = query("openclaw-router-outlet");
   expect(sidebar).toBe(owner.navigationSidebar);
   expect(outlet).not.toBeNull();
+  expect(query(".sidebar-resizer")).not.toBeNull();
 
   mobile = true;
   owner.navDrawerOpen = true;
@@ -324,6 +325,7 @@ it("keeps one sidebar through drawer and settings takeover transitions", async (
   expect(drawer?.getAttribute("role")).toBe("dialog");
   expect(drawer?.getAttribute("aria-modal")).toBe("true");
   expect(drawer?.contains(sidebar)).toBe(true);
+  expect(query(".sidebar-resizer")).toBeNull();
   expect(query("#control-ui-main")?.hasAttribute("inert")).toBe(true);
   expect(query("openclaw-router-outlet")).toBe(outlet);
 
@@ -336,6 +338,7 @@ it("keeps one sidebar through drawer and settings takeover transitions", async (
   mobile = false;
   refresh();
   expect(drawer?.hasAttribute("role")).toBe(false);
+  expect(query(".sidebar-resizer")).not.toBeNull();
   expect(view.container.querySelectorAll("openclaw-app-sidebar")).toHaveLength(1);
   expect(query("openclaw-app-sidebar")).toBe(sidebar);
   expect(query("openclaw-router-outlet")).toBe(outlet);

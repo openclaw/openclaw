@@ -9,6 +9,7 @@ import {
   type MockGatewayWindow,
 } from "../test-helpers/control-ui-e2e.ts";
 import { revealChatModelOption, selectChatModelOption } from "../test-helpers/select-picker-e2e.ts";
+import { agentRoster } from "./agent-roster.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -294,15 +295,7 @@ suite.define(() => {
       const workModel = availableModel("work-model", "Work Model", "openai");
       const otherModel = availableModel("other-model", "Other Model", "anthropic");
       const startupResponse = (sessionId: string, model: typeof workModel) => ({
-        agentsList: {
-          agents: [
-            { id: "work", name: "Work" },
-            { id: "other", name: "Other" },
-          ],
-          defaultId: "work",
-          mainKey: "main",
-          scope: "agent",
-        },
+        agentsList: agentRoster({ work: "Work", other: "Other" }, "work", "agent"),
         messages: [],
         metadata: { commands: [], models: [model] },
         sessionId,

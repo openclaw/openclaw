@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
+import { createBoardWidget } from "../lib/board/widget.test-support.ts";
 import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
 import { openChatPanels, selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import {
@@ -83,18 +84,13 @@ suite.define(() => {
             "board.get": {
               ...boardSnapshot,
               widgets: [
-                {
+                createBoardWidget({
                   name: "status",
-                  tabId: "main",
                   title: "Release overview",
-                  contentKind: "html",
                   sizeW: 12,
                   sizeH: 6,
-                  position: 0,
-                  grantState: "none",
-                  revision: 1,
                   frameUrl: widgetUrl,
-                },
+                }),
               ],
             },
           },

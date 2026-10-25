@@ -6,6 +6,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasErrnoCode } from "../errno.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
+import { getPostgresPool } from "../postgres-sync/pool.js";
 import { runtimeProcessEntrypoints } from "../runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../runtime-worker-url.js";
 import { prepareSqliteReadOnlyLocationSync } from "../sqlite-snapshot-source.js";
@@ -440,6 +441,10 @@ export async function runDatabasePortTask(
   scope: Scope,
 ): Promise<DatabasePortReply> {
   scope.assertCurrent();
+  // Target schema admission needs PostgreSQL while the caller still selects SQLite.
+  if (task.operation === "stage" && task.to === "postgres") {
+    getPostgresPool();
+  }
   const { WorkerTaskPool } = await import("../worker-task-pool.js");
   const pool = new WorkerTaskPool<DatabasePortTask, DatabasePortReply>({
     workerUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.databasePortCommand),

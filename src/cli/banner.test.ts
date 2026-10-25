@@ -1,8 +1,9 @@
 // Banner tests cover CLI banner rendering and suppression behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { formatCliBannerLine } from "./banner.js";
+import { createCliTtyMock } from "./test-runtime-capture.js";
 
-const stdoutIsTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+const { set: setStdoutIsTty, restore: restoreStdoutIsTty } = createCliTtyMock([process.stdout]);
 const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
 const bannerOptions = {
   argv: ["node", "openclaw"],
@@ -27,23 +28,12 @@ afterEach(() => {
   vi.unstubAllEnvs();
   vi.useRealTimers();
   Object.defineProperty(process, "platform", platformDescriptor);
-  if (stdoutIsTtyDescriptor) {
-    Object.defineProperty(process.stdout, "isTTY", stdoutIsTtyDescriptor);
-  } else {
-    delete (process.stdout as { isTTY?: boolean }).isTTY;
-  }
+  restoreStdoutIsTty();
 });
 
 async function importFreshBannerModule() {
   vi.resetModules();
   return await import("./banner.js");
-}
-
-function setStdoutIsTty(value: boolean) {
-  Object.defineProperty(process.stdout, "isTTY", {
-    configurable: true,
-    value,
-  });
 }
 
 describe("formatCliBannerLine", () => {
