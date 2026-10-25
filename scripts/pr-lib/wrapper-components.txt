@@ -1058,6 +1058,7 @@ src/infra/map-size.ts
 src/infra/mutation-authority.ts
 src/infra/native-error-response-schema.ts
 src/infra/native-error-response.ts
+src/infra/native-module-format.ts
 src/infra/net/configured-local-origin-bypass.ts
 src/infra/net/fetch-guard.ts
 src/infra/net/fetch-request-authority.ts
