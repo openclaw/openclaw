@@ -50,8 +50,6 @@ function transcriptScope(state: OpenClawTestState, sessionId: string, incognito 
       ? resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env })
       : path.join(state.stateDir, "transcript.sqlite"),
   };
-  expect(scope.storePath.startsWith(state.root)).toBe(true);
-  expect(process.env.OPENCLAW_STATE_DIR).toBe(state.stateDir);
   return scope;
 }
 

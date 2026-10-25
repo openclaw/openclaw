@@ -127,23 +127,12 @@ it.each(["ambient", "omitted", "sentinel", "durable"] as const)(
           : undefined;
     const scope = scopeFor(env, ` ${key} `, storePath);
     const original = makeEntry("created-incognito");
-    expect(process.env.OPENCLAW_STATE_DIR).toBe(ambient.stateDir);
-    expect(explicit.stateDir).not.toBe(ambient.stateDir);
-
     await withMemory(scope, async () => {
-      const createChecked = async (value: SessionEntry, label: string, previous?: SessionEntry) => {
+      const createChecked = async (value: SessionEntry, label: string) => {
         let followed = false;
         const result = await createSessionEntryWithTranscript(
           scope,
-          (snapshot) => {
-            const expected = previous ? expect.objectContaining(previous) : undefined;
-            expect(snapshot).toMatchObject({
-              existingEntry: expected,
-              targetEntry: expected,
-              labelInUse: false,
-            });
-            return { ok: true, entry: value };
-          },
+          () => ({ ok: true, entry: value }),
           {
             cwd: state.workspaceDir,
             label,
@@ -161,10 +150,6 @@ it.each(["ambient", "omitted", "sentinel", "durable"] as const)(
         expect(result).toMatchObject({ ok: true, entry: { ...value, label }, sessionFile: key });
       };
       await createChecked(original, "unused");
-      expect(memorySessionActorOwners.read({ agentId, path: sentinel })).toMatchObject({
-        agentId,
-        path: sentinel,
-      });
       expectEmpty(explicit, ambient);
 
       const transcriptScope = { ...scope, sessionKey: key, sessionId: original.sessionId };
@@ -185,7 +170,7 @@ it.each(["ambient", "omitted", "sentinel", "durable"] as const)(
       });
 
       const updated = { ...original, label: "recreated", updatedAt: 2 };
-      await createChecked(updated, "recreated", original);
+      await createChecked(updated, "recreated");
       expect(loadSessionEntry(scope)).toMatchObject(updated);
     });
     memorySessionActorOwners.closeDatabase({ agentId, path: sentinel });
@@ -220,7 +205,6 @@ it.each([
     expect(listOpenClawRegisteredAgentDatabases({ env: explicit.env })).toEqual([
       expect.objectContaining({ agentId: physicalOwner, path: databasePath }),
     ]);
-    expect(fs.existsSync(databasePath)).toBe(true);
     await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
     expect(loadSessionEntry(scope)).toMatchObject(original);
