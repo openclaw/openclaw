@@ -102,12 +102,9 @@ describe("metadata notifications after publication", () => {
       }
     });
 
-    const outcome = fixture.session.setThinkingLevel("low").then(
-      () => ({ status: "fulfilled" as const }),
-      (error: unknown) => ({ status: "rejected" as const, error }),
-    );
+    const outcome = fixture.session.setThinkingLevel("low").catch((error: unknown) => error);
     const nestedFailure = await nestedFailureReady.promise;
-    expect(await outcome).toEqual({ status: "rejected", error: nestedFailure });
+    expect(await outcome).toBe(nestedFailure);
     expect(fixture.sessionManager.getEntries().slice(before)).toMatchObject([
       { type: "thinking_level_change", thinkingLevel: "low" },
       { type: "thinking_level_change", thinkingLevel: "medium" },
@@ -136,16 +133,12 @@ describe("metadata notifications after publication", () => {
       },
     });
     let settled = false;
-    const outcome = fixture.session.setModel(reasoningModel).then(
-      () => {
+    const outcome = fixture.session
+      .setModel(reasoningModel)
+      .catch((error: unknown) => error)
+      .finally(() => {
         settled = true;
-        return undefined;
-      },
-      (error: unknown) => {
-        settled = true;
-        return error;
-      },
-    );
+      });
     try {
       await modelHookStarted.promise;
       await setImmediate();

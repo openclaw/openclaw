@@ -187,6 +187,9 @@ describe("model context projection isolation", () => {
   };
   const missingDetails = { openclawSyntheticMissingToolResult: true };
   const missingResult = { ...toolResult, details: missingDetails };
+  const assistant = makeAgentAssistantMessage({
+    content: [{ type: "toolCall", id: "call", name: "read", arguments: { path: "original.txt" } }],
+  });
   const cases: Array<[string, Message, unknown]> = [
     ["plain tool result", toolResult, toolResult],
     ["tool evidence", { ...toolResult, details: { evidence: "private" } }, toolResult],
@@ -202,6 +205,7 @@ describe("model context projection isolation", () => {
       toolResult,
     ],
     ["custom-message details", customMessage, customMessage],
+    ["frozen tool arguments", assistant, assistant],
   ];
   it.each(cases)(
     "preserves canonical payload and input bytes for %s",
@@ -213,6 +217,12 @@ describe("model context projection isolation", () => {
       expect(projected).toEqual([{ ...entry, message: expected }]);
       const projectedEntry = projected[0];
       assert(projectedEntry?.type === "message");
+      if (projectedEntry.message.role === "assistant") {
+        const call = projectedEntry.message.content[0];
+        assert(call?.type === "toolCall");
+        expect(Reflect.set(call.arguments, "path", "changed.txt")).toBe(true);
+        expect(Reflect.set(projectedEntry.message.content, "length", 0)).toBe(true);
+      }
       expect(Reflect.set(projectedEntry, "timestamp", "changed")).toBe(true);
       expect(Reflect.set(projectedEntry.message, "content", [])).toBe(true);
       expect(JSON.stringify(entry)).toBe(before);
@@ -257,22 +267,6 @@ describe("model context projection isolation", () => {
     retained.nested = "context-change";
     expect(argumentsValue.nested.path).toBe("caller-change.txt");
     expect(metadata.retained.nested).toBe("caller-change");
-  });
-
-  it("keeps frozen nested arguments writable only in the projected view", () => {
-    const message = makeAgentAssistantMessage({
-      content: [
-        { type: "toolCall", id: "call", name: "read", arguments: { path: "original.txt" } },
-      ],
-    });
-    freezeJsonSnapshot(message.content);
-    const projected = cloneSessionModelContextEntries([messageEntry(message)])[0];
-    assert(projected?.type === "message" && projected.message.role === "assistant");
-    const call = projected.message.content[0];
-    assert(call?.type === "toolCall");
-    expect(Reflect.set(call.arguments, "path", "changed.txt")).toBe(true);
-    expect(Reflect.set(projected.message.content, "length", 0)).toBe(true);
-    expect(message.content).toMatchObject([{ arguments: { path: "original.txt" } }]);
   });
 });
 

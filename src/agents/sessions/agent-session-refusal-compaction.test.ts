@@ -1,3 +1,4 @@
+import { once } from "node:events";
 import http from "node:http";
 import type {
   AssistantMessage,
@@ -31,6 +32,9 @@ type RefusalCase = {
   later?: boolean;
 };
 
+const sse = (type: string, data: object = {}) =>
+  `event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`;
+
 describe("AgentSession refusal compaction", () => {
   it.each<[string, RefusalCase, number]>([
     ["refusal explanation resembles overflow", { overlap: true }, 1],
@@ -44,75 +48,65 @@ describe("AgentSession refusal compaction", () => {
     const explanation = overlap
       ? "This request is refused; prompt is too long."
       : "This request is not allowed.";
-    const server = http.createServer((request, response) => {
+    const server = http.createServer(async (request, response) => {
       let body = "";
       request.setEncoding("utf8");
-      request.on("data", (chunk: string) => {
+      for await (const chunk of request) {
         body += chunk;
-      });
-      request.on("end", () => {
-        requests.push({ url: request.url, body: JSON.parse(body) });
-        if (requests.length === 1 && overflow) {
-          response.writeHead(400, { "content-type": "application/json" });
-          response.end(
-            JSON.stringify({
-              type: "error",
-              error: {
-                type: "invalid_request_error",
-                message: "prompt is too long: 1200 tokens > 1000 maximum",
-              },
-            }),
-          );
-          return;
-        }
-        const refused = requests.length === 1;
-        response.writeHead(200, { "content-type": "text/event-stream" });
+      }
+      requests.push({ url: request.url, body: JSON.parse(body) });
+      if (requests.length === 1 && overflow) {
+        response.writeHead(400, { "content-type": "application/json" });
         response.end(
-          [
-            {
-              type: "message_start",
-              message: { id: `msg_${requests.length}`, usage: { input_tokens: 2 } },
+          JSON.stringify({
+            type: "error",
+            error: {
+              type: "invalid_request_error",
+              message: "prompt is too long: 1200 tokens > 1000 maximum",
             },
-            ...(refused
-              ? []
-              : [
-                  {
-                    type: "content_block_start",
-                    index: 0,
-                    content_block: { type: "text", text: "" },
-                  },
-                  {
-                    type: "content_block_delta",
-                    index: 0,
-                    delta: { type: "text_delta", text: "Explicit next turn completed." },
-                  },
-                  { type: "content_block_stop", index: 0 },
-                ]),
-            {
-              type: "message_delta",
-              delta: refused
-                ? {
-                    stop_reason: "refusal",
-                    stop_details: {
-                      type: "refusal",
-                      category: "reasoning_extraction",
-                      explanation,
-                    },
-                  }
-                : { stop_reason: "end_turn" },
-              usage: { input_tokens: 2, output_tokens: refused ? 0 : 1 },
-            },
-            { type: "message_stop" },
-          ]
-            .map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
-            .join(""),
+          }),
         );
-      });
+        return;
+      }
+      const refused = requests.length === 1;
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.end(
+        [
+          sse("message_start", {
+            message: { id: `msg_${requests.length}`, usage: { input_tokens: 2 } },
+          }),
+          ...(refused
+            ? []
+            : [
+                sse("content_block_start", {
+                  index: 0,
+                  content_block: { type: "text", text: "" },
+                }),
+                sse("content_block_delta", {
+                  index: 0,
+                  delta: { type: "text_delta", text: "Explicit next turn completed." },
+                }),
+                sse("content_block_stop", { index: 0 }),
+              ]),
+          sse("message_delta", {
+            delta: refused
+              ? {
+                  stop_reason: "refusal",
+                  stop_details: {
+                    type: "refusal",
+                    category: "reasoning_extraction",
+                    explanation,
+                  },
+                }
+              : { stop_reason: "end_turn" },
+            usage: { input_tokens: 2, output_tokens: refused ? 0 : 1 },
+          }),
+          sse("message_stop"),
+        ].join(""),
+      );
     });
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", resolve);
-    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
     try {
       const address = server.address();
       if (!address || typeof address === "string") {

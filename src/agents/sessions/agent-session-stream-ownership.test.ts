@@ -1,11 +1,11 @@
 import { createAssistantMessageEventStream } from "@openclaw/ai/event-stream";
 import type { Message, Model } from "@openclaw/llm-core";
-import { Type } from "typebox";
-import { expect, it, vi } from "vitest";
-import { runAgentLoop } from "../../../packages/agent-core/src/agent-loop.js";
+import { assert, expect, it, vi } from "vitest";
 import {
+  captureToolLoop,
+  finishMessageStream,
   makeAssistantMessage,
-  config as baseConfig,
+  makeTool,
   model as baseModel,
 } from "../../../packages/agent-core/src/agent-loop.test-support.js";
 import type { AgentMessage } from "../../../packages/agent-core/src/types.js";
@@ -127,45 +127,30 @@ it.each([
         },
       };
     }
-    const messages = await runAgentLoop(
-      [{ role: "user", content: "Run lookup.", timestamp: 0 }],
-      {
-        systemPrompt: "Synthetic test",
-        messages: [],
-        tools: [
-          {
-            name: "lookup",
-            label: "Lookup",
-            description: "Lookup",
-            parameters: Type.Object({}),
-            execute,
-          },
-        ],
-      },
-      {
-        ...baseConfig,
-        model,
-        shouldStopAfterTurn: () => true,
-      },
-      async (event) => {
+    const loop = captureToolLoop({
+      prompt: { role: "user", content: "Run lookup.", timestamp: 0 },
+      tools: [{ ...makeTool("lookup"), execute }],
+      config: { model, shouldStopAfterTurn: () => true },
+      onEvent: (event) => {
         if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
           answerStreamed.resolve();
         }
-        if (event.type !== "message_end" || !isModelMessage(event.message)) {
+      },
+      onMessage: async (message) => {
+        if (!isModelMessage(message)) {
           return;
         }
-        await persistAgentSessionMessage(manager, event.message, {
+        await persistAgentSessionMessage(manager, message, {
           invalidateSerializedPrefixCache: false,
         });
         if (
-          event.message.role === "assistant" &&
-          event.message.content.some((block) => block.type === "toolCall")
+          message.role === "assistant" &&
+          message.content.some((block) => block.type === "toolCall")
         ) {
           prefixWasPersisted = true;
         }
       },
-      undefined,
-      () => {
+      streamFn: () => {
         const stream = createAssistantMessageEventStream();
         stream.push({ type: "start", partial: output });
         void processResponsesStream(events(), output, stream, model, {
@@ -176,18 +161,11 @@ it.each([
             output.stopReason = "error";
             output.errorMessage = error instanceof Error ? error.message : String(error);
           })
-          .then(() => {
-            const reason = output.stopReason;
-            if (reason === "error" || reason === "aborted") {
-              stream.push({ type: "error", reason, error: output });
-            } else {
-              stream.push({ type: "done", reason, message: output });
-            }
-            stream.end();
-          });
+          .then(() => finishMessageStream(stream, output));
         return stream;
       },
-    );
+    });
+    const messages = await loop.run;
 
     const final = messages.findLast((message) => message.role === "assistant");
     expect(
@@ -207,13 +185,9 @@ it.each([
       (message) =>
         message.role === "assistant" && message.content.some((block) => block.type === "toolCall"),
     );
-    if (prefix?.role !== "assistant") {
-      throw new Error("Missing persisted async prefix");
-    }
+    assert(prefix?.role === "assistant", "Missing persisted async prefix");
     const thinking = prefix.content[0];
-    if (thinking?.type !== "thinking") {
-      throw new Error("Missing persisted reasoning");
-    }
+    assert(thinking?.type === "thinking", "Missing persisted reasoning");
     if (hasItemDone) {
       const signature = JSON.parse(thinking.thinkingSignature ?? "null");
       expect(signature).toMatchObject({ id: "rs_test" });
