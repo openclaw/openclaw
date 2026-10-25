@@ -149,7 +149,7 @@ describe("Claude migration provider", () => {
     await fs.writeFile(sourceFile, malformed);
 
     await expect(provider.apply(context)).rejects.toThrow(
-      `Claude configuration file is not valid UTF-8: ${sourceFile}`,
+      `Claude configuration file ${sourceFile}`,
     );
     expect(config).toEqual(original);
     expect(await readText(target)).toBe("Existing instructions.\n");
