@@ -75,7 +75,6 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
         props.props?.currentAgentId,
         props.props?.currentSessionId,
       ]);
-    // Descriptor hydration does not replace the transcript's restored incarnation.
     const identity = createMemo(readIdentity);
     const readNavigationIdentity = () =>
       JSON.stringify([readIdentity(), props.props?.selectedSession?.sessionId]);
@@ -100,13 +99,16 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
             Partial<Record<ChatDetailsDesktopSectionId, boolean>>
           >({});
           createLayoutMeasurement(
-            () => props.props?.subagentSessionsHydrated,
+            () =>
+              props.props?.subagentSessionsHydrated &&
+              (!props.props?.onOpenProcesses ||
+                isProcessesPresentationReady(processes(), gateway?.read().snapshot)),
             (hydrated) => {
               const layout = props.props?.widgetLayout;
               const key = `details:v1:${props.scrollport?.clientWidth}:${getComputedStyle(host).font}:${document.documentElement.style.getPropertyValue("--control-ui-text-scale")}:${JSON.stringify([props.props?.desktopDisclosures?.expanded, sectionChoices])}`;
               const height = host.firstElementChild?.getBoundingClientRect().height ?? 0;
               return () => {
-                // Hold Progress in its saved slot until the preceding child roster is known.
+                // Hold Progress in its saved slot until preceding live sections are known.
                 host.style.minHeight = hydrated ? "" : `${layout?.read(key) ?? 0}px`;
                 if (hydrated) {
                   layout?.write(key, height);

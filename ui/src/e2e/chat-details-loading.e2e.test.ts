@@ -63,7 +63,7 @@ suite.define(() => {
       const subagents = page.locator('.chat-details [data-details-group="subagents"]');
       await subagents.getByText("verify", { exact: true }).waitFor();
       const progress = page.locator(".chat-details openclaw-chat-details-progress");
-      await progress.getByText("Keep progress stable", { exact: true }).waitFor();
+      await progress.getByRole("listitem", { name: "Keep progress stable, paused" }).waitFor();
       await nextPaint(page);
       const readOffset = (element: Element) =>
         element.getBoundingClientRect().top -
@@ -96,7 +96,7 @@ suite.define(() => {
       module.release();
       await page.evaluate(`import(${JSON.stringify(moduleUrl)}).then(() => undefined)`);
       await details.locator(".chat-details-session").waitFor();
-      await progress.getByText("Keep progress stable", { exact: true }).waitFor();
+      await progress.getByRole("listitem", { name: "Keep progress stable, paused" }).waitFor();
       await nextPaint(page);
       expect(await subagents.count()).toBe(0);
       const restoredOffset = await progress.evaluate(readOffset);
