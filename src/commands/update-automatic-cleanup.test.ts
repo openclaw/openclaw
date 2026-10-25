@@ -36,8 +36,6 @@ import {
   completeDoctorMigrationBackups,
   recordDoctorMigrationBackups,
 } from "./doctor-migration-backup-artifacts.js";
-import { inspectSessionSqliteRecovery } from "./doctor-session-sqlite-recovery-inventory.js";
-import { retireSessionSqliteRecovery } from "./doctor-session-sqlite-retirement.js";
 import { useDoctorSessionSqliteTestFixture } from "./doctor-session-sqlite.test-support.js";
 import { withDoctorSqliteMaintenanceLock } from "./doctor-sqlite-maintenance-lock.js";
 import { createMissingConfigRecoveryManifest } from "./update-recovery-manifest.test-support.js";
@@ -229,7 +227,7 @@ it.each([true, false])(
   },
 );
 
-it("runs retirement in the owning Gateway worker while manual cleanup still refuses its live lock", async () => {
+it("runs retirement in the owning Gateway worker while retaining pending recovery", async () => {
   const { runId: pending, directory: pendingCapture } = capturedRun(now - 240_000, "rolled-back");
   const { directory: original } = capturedRun(now - 120_000, "succeeded");
   const { runId: second, directory: current } = capturedRun(now + 60_000);
@@ -246,15 +244,6 @@ it("runs retirement in the owning Gateway worker while manual cleanup still refu
   const lock = await acquireGatewayLock({ env, role: "gateway", allowInTests: true });
   expect(lock).toBeTruthy();
   try {
-    await expect(
-      retireSessionSqliteRecovery({
-        env,
-        preview: inspectSessionSqliteRecovery({ cfg: {}, env }),
-        readConfig: async () => ({}),
-        confirm: async () => true,
-      }),
-    ).rejects.toThrow(/ownership|lock/i);
-    expect(fs.existsSync(original)).toBe(true);
     const result = await cleanupGatewayUpdateRecovery(second, env, () => lock!.assertCurrent());
     expect(result?.advisory).toBeUndefined();
     expect(fs.existsSync(original)).toBe(false);

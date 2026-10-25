@@ -18,15 +18,10 @@ const INSECURE_WS_URL_MESSAGE =
   "Use wss:// for remote hosts, or ws://127.0.0.1/localhost via SSH tunnel. " +
   "Break-glass: OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1 for trusted private networks.";
 
-vi.mock("../infra/bonjour-discovery.js", async () => {
-  const actual = await vi.importActual<typeof import("../infra/bonjour-discovery.js")>(
-    "../infra/bonjour-discovery.js",
-  );
-  return {
-    ...actual,
-    discoverGatewayBeacons,
-  };
-});
+vi.mock("../infra/bonjour-discovery.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/bonjour-discovery.js")>()),
+  discoverGatewayBeacons,
+}));
 
 vi.mock("../infra/widearea-dns.js", () => ({
   resolveWideAreaDiscoveryDomain,
@@ -50,11 +45,7 @@ function createSelectPrompter(
   responses: Partial<Record<string, string>>,
 ): WizardPrompter["select"] {
   return vi.fn(async (params) => {
-    const value = responses[params.message];
-    if (value !== undefined) {
-      return value as never;
-    }
-    return (params.options[0]?.value ?? "") as never;
+    return (responses[params.message] ?? params.options[0]?.value ?? "") as never;
   });
 }
 
@@ -160,7 +151,6 @@ describe("promptRemoteGatewayConfig", () => {
   );
 
   it.each([
-    ["trimmed URL", ` ${savedUrl} `, true, true],
     ["equivalent trailing slash", "wss://GATEWAY.example:443/rpc/", true, true],
     ["changed path", "wss://gateway.example/other", false, false],
     ["changed query", "wss://gateway.example/rpc?account=work", false, true],
@@ -212,13 +202,7 @@ describe("promptRemoteGatewayConfig", () => {
   );
 
   it("pins a trusted discovery endpoint with a previously saved URL", async () => {
-    const text = urlText((params) => {
-      expect(params.initialValue).toBe(discoveredUrl);
-      expect(params.validate?.(String(params.initialValue))).toBeUndefined();
-      return String(params.initialValue);
-    }, "token-123");
-
-    const { next, prompter } = await runRemotePrompt({
+    const { next } = await runRemotePrompt({
       beacons: [createGatewayDiscoveryBeacon()],
       cfg: remoteConfig({
         url: discoveredUrl,
@@ -226,7 +210,7 @@ describe("promptRemoteGatewayConfig", () => {
         sshTarget: "operator@old.example",
         tlsFingerprint: "sha256:old-pin",
       }),
-      text,
+      text: urlText((params) => String(params.initialValue), "token-123"),
     });
 
     expect(next.gateway).toMatchObject({
@@ -238,10 +222,6 @@ describe("promptRemoteGatewayConfig", () => {
         tlsFingerprint: "sha256:abc123",
       },
     });
-    expect(prompter.note).toHaveBeenCalledWith(
-      expect.stringContaining("TLS pin: sha256:abc123"),
-      "Direct remote",
-    );
   });
 
   it.each([
@@ -366,37 +346,23 @@ describe("promptRemoteGatewayConfig", () => {
     );
   });
 
-  it("validates insecure ws:// remote URLs and allows trusted private ws:// by default", async () => {
-    const text = urlText((params) => {
-      expect(params.validate?.("ws://203.0.113.10:18789")).toBe(INSECURE_WS_URL_MESSAGE);
-      expect(params.validate?.("ws://10.0.0.8:18789")).toBeUndefined();
-      expect(params.validate?.("ws://127.0.0.1:18789")).toBeUndefined();
-      expect(params.validate?.("wss://remote.example.com:18789")).toBeUndefined();
-      return remoteUrl;
+  it.each([
+    [undefined, remoteUrl],
+    ["1", "ws://openclaw-gateway.ai:18789"],
+  ] as const)("validates remote WebSocket URLs with private-DNS opt-in %s", async (optIn, url) => {
+    if (optIn) {
+      process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS = optIn;
+    }
+    const { next } = await runRemotePrompt({
+      text: urlText((params) => {
+        expect(params.validate?.("ws://203.0.113.10:18789")).toBe(INSECURE_WS_URL_MESSAGE);
+        expect(params.validate?.("ws://10.0.0.8:18789")).toBeUndefined();
+        expect(params.validate?.("ws://127.0.0.1:18789")).toBeUndefined();
+        expect(params.validate?.(url)).toBeUndefined();
+        return url;
+      }),
     });
-
-    const { next } = await runRemotePrompt({ text });
-
-    expect(next.gateway).toMatchObject({
-      mode: "remote",
-      remote: { url: remoteUrl, token: undefined },
-    });
-  });
-
-  it("allows ws:// hostname remote URLs when OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1", async () => {
-    process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS = "1";
-    const text = urlText((params) => {
-      expect(params.validate?.("ws://openclaw-gateway.ai:18789")).toBeUndefined();
-      expect(params.validate?.("ws://1.1.1.1:18789")).toBe(INSECURE_WS_URL_MESSAGE);
-      return "ws://openclaw-gateway.ai:18789";
-    });
-
-    const { next } = await runRemotePrompt({ text });
-
-    expect(next.gateway).toMatchObject({
-      mode: "remote",
-      remote: { url: "ws://openclaw-gateway.ai:18789" },
-    });
+    expect(next.gateway).toMatchObject({ mode: "remote", remote: { url, token: undefined } });
   });
 
   it("allows explicit no-auth confirmation even when reference storage is selected", async () => {

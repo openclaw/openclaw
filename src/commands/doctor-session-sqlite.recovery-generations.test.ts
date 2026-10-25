@@ -51,6 +51,14 @@ function historyFor(store: TestStore, sessionKey?: string) {
   return loadTranscriptEventsSync({ ...scopeFor(store), sessionKey });
 }
 
+function expectOutcome(
+  report: ReturnType<typeof inspectSessionSqliteRecovery>,
+  archivePath: string,
+  outcome: string,
+) {
+  expect(report.artifacts.find((item) => item.path === archivePath)?.outcome).toBe(outcome);
+}
+
 function restoreStore(store: TestStore) {
   return runStoreDoctor(store, "restore");
 }
