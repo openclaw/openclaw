@@ -67,6 +67,7 @@ const upload = {
   files: [{ name: "report.txt", contentBase64: "aGk=" }],
 };
 const uploadBody = { paths: ["/tmp/openclaw/uploads/report.txt"], ref: "e12" };
+const dashboard = { sessionKey: "agent:main:browser-dashboard-proof", name: "service" };
 const hostUnavailable = {
   ok: false,
   error: {
@@ -83,7 +84,6 @@ function policy(mode: "auto" | "manual" | "off" = "auto", selectedNode?: string)
 }
 type NodeInvoke = RequestOptions["context"]["nodeRegistry"]["invoke"];
 type NodeInvokeResult = Awaited<ReturnType<NodeInvoke>>;
-
 function createContext(invokeResult?: NodeInvokeResult | NodeInvoke, connectedNodes?: TestNode[]) {
   const invoke = vi.fn<NodeInvoke>(async (params) =>
     typeof invokeResult === "function"
@@ -148,8 +148,7 @@ beforeEach(() => {
   m.start.mockReset().mockResolvedValue(false);
   m.dispatch.mockReset();
   m.inspect.mockReset().mockResolvedValue({
-    sessionKey: "agent:main:browser-dashboard-proof",
-    name: "service",
+    ...dashboard,
     instanceId: "instance-one",
     paused: false,
     browserTab: { target: "host", profile: "openclaw", targetId: "dashboard-tab" },
@@ -163,7 +162,7 @@ describe("browser.request profile selection", () => {
     dispatchLocally({ ok: true });
     const { respond, nodeRegistry } = await runRequest("/reset-profile", {
       method: "POST",
-      dashboard: { sessionKey: "agent:main:browser-dashboard-proof", name: "service" },
+      dashboard,
     });
     invalid(respond);
     expectNoCalls(m.dispatch, nodeRegistry.invoke);
@@ -173,7 +172,7 @@ describe("browser.request profile selection", () => {
     dispatchLocally({ targetId: "dashboard-tab" });
     const { respond } = await runRequest("/screenshot", {
       method: "POST",
-      dashboard: { sessionKey: "agent:main:browser-dashboard-proof", name: "service" },
+      dashboard,
     });
     expect(reply(respond)[0]).toBe(true);
     expectDispatch({
@@ -323,9 +322,8 @@ describe("browser.request profile selection", () => {
 
   it("does not replay a failed host action on a connected node", async () => {
     m.hostAvailable.mockImplementation((_config, profileName) => profileName === "local-work");
-    m.start.mockResolvedValueOnce(true);
     const message = "navigation timed out after the page received the request";
-    m.dispatch.mockResolvedValueOnce({ status: 500, body: { error: message } });
+    dispatchLocally({ error: message }, 500);
 
     const { respond, nodeRegistry } = await runRequest("/navigate", {
       method: "POST",
@@ -500,7 +498,12 @@ describe("session tab scope", () => {
   const resolved = resolveBrowserConfig({ defaultProfile: "openclaw" });
   const profile = expectDefined(resolveProfile(resolved, "openclaw"), "host profile");
   type DispatchRequest = Parameters<ReturnType<typeof createBrowserRouteDispatcher>["dispatch"]>[0];
-
+  function track(
+    targetId: string,
+    overrides: Partial<Parameters<typeof trackSessionBrowserTab>[0]> = {},
+  ) {
+    return trackSessionBrowserTab({ sessionKey, profile: "openclaw", targetId, ...overrides });
+  }
   function hostResponse(body: unknown, status = 200, afterDispatch?: () => void) {
     m.dispatch.mockImplementation(async (request: DispatchRequest) => {
       await request.assertCurrent?.(profile);
@@ -523,39 +526,89 @@ describe("session tab scope", () => {
     vi.restoreAllMocks();
   });
 
-  it("lists this session's owned and referenced host tabs while the dock lists all tabs", async () => {
-    await trackSessionBrowserTab({ sessionKey, targetId: "owned", profile: "openclaw" });
-    await trackSessionBrowserTab({
-      sessionKey: otherSessionKey,
-      targetId: "other-session",
-      profile: "openclaw",
-    });
-    const owned = { targetId: "owned", tabId: "t0", url: "", blocked: true };
-    const referenced = { targetId: "referenced", tabId: "t9" };
-    const tabs = [
-      owned,
-      referenced,
-      { targetId: "other-session" },
-      { targetId: "outside-openclaw" },
-      { targetId: "profile-collision", tabId: "t1" },
-      { targetId: "node-collision", tabId: "t3" },
-    ];
-    hostResponse({ running: true, tabs });
-    const { respond } = await runRequest("/tabs", {
-      target: "host",
-      tabScope: {
-        sessionKey: ` ${sessionKey} `,
-        referencedTabs: [
-          { target: "host", profile: "openclaw", targetId: "referenced" },
-          { target: "host", profile: "other-profile", targetId: "t1" },
-          { target: "node", node: "node-1", profile: "openclaw", targetId: "t3" },
-        ],
-      },
-    });
-    expect(reply(respond)).toEqual([true, { running: true, tabs: [owned, referenced] }]);
-    const dock = await runRequest("/tabs", { target: "host" });
-    expect(reply(dock.respond)).toEqual([true, { running: true, tabs }]);
-  });
+  it.each(["host", "node"] as const)(
+    "filters %s tabs by session, canonical route and profile",
+    async (target) => {
+      const node = browserNode("canonical-node", {
+        displayName: "Work Browser",
+        declaredCommands: ["browser.proxy"],
+      });
+      const profileName = target === "host" ? "openclaw" : "node-profile";
+      const route = target === "node" ? createBrowserNodeSessionTabRoute(node) : undefined;
+      await track("owned", { profile: profileName, route });
+      await track(
+        "other-owned",
+        target === "host"
+          ? { sessionKey: otherSessionKey }
+          : {
+              profile: profileName,
+              route: createBrowserNodeSessionTabRoute({ ...node, nodeId: "other-node" }),
+            },
+      );
+      const owned = { targetId: "owned", tabId: "t0", url: "", blocked: true };
+      const referenced = { targetId: "referenced", tabId: "t9" };
+      const tabs = [
+        owned,
+        referenced,
+        { targetId: "other-owned" },
+        { targetId: "outside-openclaw" },
+        { targetId: "profile-collision", tabId: "t1" },
+        { targetId: "node-collision", tabId: "t3" },
+      ];
+      hostResponse({ running: true, tabs });
+      const reference = (targetId: string, referenceProfile = profileName) => ({
+        target,
+        profile: referenceProfile,
+        targetId,
+        ...(target === "node" ? { node: node.nodeId } : {}),
+      });
+      const { respond, nodeRegistry } = await runRequest(
+        "/tabs",
+        {
+          target,
+          ...(target === "node"
+            ? { node: "Work Browser", query: { profile: "requested-profile" } }
+            : {}),
+          tabScope: {
+            sessionKey: ` ${sessionKey} `,
+            referencedTabs: [
+              reference(target === "host" ? "referenced" : "t9"),
+              reference("t1", "other-profile"),
+              { target: "node", node: "other-node", profile: profileName, targetId: "t3" },
+            ],
+          },
+        },
+        {
+          ok: true,
+          payload: {
+            result: { running: true, tabs },
+            route: {
+              status: "resolved",
+              profile: profileName,
+              driver: "openclaw",
+            },
+          },
+        },
+        [node],
+      );
+      expect(reply(respond)).toEqual([true, { running: true, tabs: [owned, referenced] }]);
+      if (target === "host") {
+        const dock = await runRequest("/tabs", { target });
+        expect(reply(dock.respond)).toEqual([true, { running: true, tabs }]);
+      } else {
+        expect(nodeInvocation(nodeRegistry)).toMatchObject({
+          nodeId: "canonical-node",
+          params: {
+            method: "GET",
+            path: "/tabs",
+            query: { profile: "requested-profile" },
+            profile: "requested-profile",
+          },
+        });
+        expect(nodeInvocation(nodeRegistry).params).not.toHaveProperty("tabScope");
+      }
+    },
+  );
 
   it("closes a newly opened tab on its resolved profile when cleanup tracking fails", async () => {
     expect(getOptionalBrowserStateRuntime()).toBeNull();
@@ -627,12 +680,7 @@ describe("session tab scope", () => {
     "updates ownership for %s %s (%s)",
     async (method, path, outcome, targetIds, expired) => {
       vi.spyOn(Date, "now").mockReturnValue(9_000);
-      await trackSessionBrowserTab({
-        sessionKey,
-        targetId: "owned",
-        profile: "openclaw",
-        now: 1_000,
-      });
+      await track("owned", { now: 1_000 });
       let current = true;
       hostResponse(
         { targetId: "opened", resolvedProfile: "openclaw" },
@@ -665,73 +713,6 @@ describe("session tab scope", () => {
       expect(closeTab).toHaveBeenCalledTimes(expired);
     },
   );
-
-  it("matches canonical node routes and profiles without forwarding tabScope to the proxy", async () => {
-    const node = {
-      nodeId: "canonical-node",
-      displayName: "Work Browser",
-      caps: ["browser"],
-      commands: ["browser.proxy"],
-      declaredCommands: ["browser.proxy"],
-    };
-    await trackSessionBrowserTab({
-      sessionKey,
-      targetId: "node-owned",
-      profile: "node-profile",
-      route: createBrowserNodeSessionTabRoute(node),
-    });
-    await trackSessionBrowserTab({
-      sessionKey,
-      targetId: "other-node-owned",
-      profile: "node-profile",
-      route: createBrowserNodeSessionTabRoute({ ...node, nodeId: "other-node" }),
-    });
-    const owned = { targetId: "node-owned" };
-    const referenced = { targetId: "node-referenced", tabId: "t1" };
-    const tabs = [
-      owned,
-      referenced,
-      { targetId: "other-node-owned" },
-      { targetId: "wrong-profile", tabId: "t2" },
-      { targetId: "wrong-node", tabId: "t3" },
-    ];
-    const { respond, nodeRegistry } = await runRequest(
-      "/tabs",
-      {
-        target: "node",
-        node: "Work Browser",
-        query: { profile: "requested-profile" },
-        tabScope: {
-          sessionKey,
-          referencedTabs: [
-            { target: "node", node: "canonical-node", profile: "node-profile", targetId: "t1" },
-            { target: "node", node: "canonical-node", profile: "other-profile", targetId: "t2" },
-            { target: "node", node: "other-node", profile: "node-profile", targetId: "t3" },
-          ],
-        },
-      },
-      {
-        ok: true,
-        payload: {
-          result: { running: true, tabs },
-          route: { status: "resolved", profile: "node-profile", driver: "openclaw" },
-        },
-      },
-      [node],
-    );
-    expect(reply(respond)).toEqual([true, { running: true, tabs: [owned, referenced] }]);
-    expect(nodeInvocation(nodeRegistry)).toMatchObject({ nodeId: "canonical-node" });
-    expect(nodeInvocation(nodeRegistry).params).toEqual({
-      method: "GET",
-      path: "/tabs",
-      query: { profile: "requested-profile" },
-      body: undefined,
-      upload: undefined,
-      profile: "requested-profile",
-      timeoutMs: expect.any(Number),
-      errorEnvelope: "browser-v1",
-    });
-  });
 
   it.each([
     { tabScope: { sessionKey: "global" } },
