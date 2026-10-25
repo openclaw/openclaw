@@ -1,4 +1,3 @@
-// Coverage for resolving channel and DM history limits from session keys.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { buildAgentPeerSessionKey } from "../../routing/session-key.js";
@@ -9,16 +8,26 @@ function expectHistoryLimit(...args: Parameters<typeof getHistoryLimitFromSessio
   return expect(getHistoryLimitFromSessionKey(...args));
 }
 
+function telegramConfig(
+  telegram: NonNullable<OpenClawConfig["channels"]>["telegram"],
+  session?: OpenClawConfig["session"],
+) {
+  return { channels: { telegram }, session };
+}
+function peerKey(options: Partial<Parameters<typeof buildAgentPeerSessionKey>[0]>) {
+  return buildAgentPeerSessionKey({
+    agentId: "main",
+    channel: "telegram",
+    accountId: "work",
+    peerId: "123",
+    ...options,
+  });
+}
+
 describe("getHistoryLimitFromSessionKey", () => {
   it("does not match channel history limits across provider id variants", () => {
-    // Channel ids and provider ids are not normalized across spelling variants;
-    // guessing here could apply the wrong retention policy.
     expectHistoryLimit("agent:main:z-ai:channel:general", {
-      channels: {
-        "z.ai": {
-          historyLimit: 17,
-        },
-      },
+      channels: { "z.ai": { historyLimit: 17 } },
     }).toBeUndefined();
   });
 
@@ -28,9 +37,7 @@ describe("getHistoryLimitFromSessionKey", () => {
   });
 
   it("keeps backward compatibility for dm and direct session kinds", () => {
-    const config = {
-      channels: { telegram: { dmHistoryLimit: 10 } },
-    } as OpenClawConfig;
+    const config = telegramConfig({ dmHistoryLimit: 10 });
 
     expectHistoryLimit("telegram:dm:123", config).toBe(10);
     expectHistoryLimit("agent:main:telegram:dm:123", config).toBe(10);
@@ -39,11 +46,7 @@ describe("getHistoryLimitFromSessionKey", () => {
   });
 
   it("strips numeric thread and topic suffixes from direct message session keys", () => {
-    // Numeric thread/topic suffixes are routing detail, not part of the DM id
-    // used for per-contact history limit overrides.
-    const config = {
-      channels: { telegram: { dmHistoryLimit: 10, dms: { "123": { historyLimit: 7 } } } },
-    } as OpenClawConfig;
+    const config = telegramConfig({ dmHistoryLimit: 10, dms: { "123": { historyLimit: 7 } } });
 
     expectHistoryLimit("agent:main:telegram:dm:123:thread:999", config).toBe(7);
     expectHistoryLimit("agent:main:telegram:dm:123:topic:555", config).toBe(7);
@@ -51,34 +54,22 @@ describe("getHistoryLimitFromSessionKey", () => {
   });
 
   it("resolves account-scoped direct session keys", () => {
-    // session.dmScope "per-account-channel-peer" builds
-    // agent:<agent>:<channel>:<account>:direct:<peer>, so the account segment sits
-    // where the kind normally does.
-    const config = {
-      channels: {
-        telegram: {
-          dmHistoryLimit: 4,
-          accounts: { work: { dmHistoryLimit: 11, dms: { "123": { historyLimit: 22 } } } },
-        },
-      },
-    } as unknown as OpenClawConfig;
+    const config = telegramConfig({
+      dmHistoryLimit: 4,
+      accounts: { work: { dmHistoryLimit: 11, dms: { "123": { historyLimit: 22 } } } },
+    });
 
     expectHistoryLimit("agent:main:telegram:work:direct:456", config).toBe(11);
     expectHistoryLimit("agent:main:telegram:work:direct:123", config).toBe(22);
-    // A key without the account segment still resolves the root value.
     expectHistoryLimit("agent:main:telegram:direct:456", config).toBe(4);
   });
 
   it("uses observed peer identity rather than the account name to resolve ambiguous keys", () => {
-    const config = {
-      channels: {
-        telegram: {
-          dmHistoryLimit: 4,
-          dms: { "direct:peer": { historyLimit: 31 } },
-          accounts: { direct: { dmHistoryLimit: 12, dms: { peer: { historyLimit: 41 } } } },
-        },
-      },
-    } as unknown as OpenClawConfig;
+    const config = telegramConfig({
+      dmHistoryLimit: 4,
+      dms: { "direct:peer": { historyLimit: 31 } },
+      accounts: { direct: { dmHistoryLimit: 12, dms: { peer: { historyLimit: 41 } } } },
+    });
 
     expectHistoryLimit("agent:main:telegram:direct:direct:peer", config, {
       accountId: "direct",
@@ -91,17 +82,10 @@ describe("getHistoryLimitFromSessionKey", () => {
   });
 
   it("does not read a root peer id beginning with direct as an account segment", () => {
-    // A root key whose peer id starts with "direct:" has the same segment shape as
-    // the account form, so inferring account scope from segment 2 alone would look
-    // up dms["peer"] and silently ignore the configured dms["direct:peer"].
-    const config = {
-      channels: {
-        telegram: {
-          dmHistoryLimit: 4,
-          dms: { "direct:peer": { historyLimit: 31 }, peer: { historyLimit: 32 } },
-        },
-      },
-    } as unknown as OpenClawConfig;
+    const config = telegramConfig({
+      dmHistoryLimit: 4,
+      dms: { "direct:peer": { historyLimit: 31 }, peer: { historyLimit: 32 } },
+    });
 
     expectHistoryLimit("agent:main:telegram:direct:direct:peer", config, {
       peerId: "direct:peer",
@@ -110,31 +94,26 @@ describe("getHistoryLimitFromSessionKey", () => {
   });
 
   it("preserves a linked DM peer when its first segment matches the routed account", () => {
-    const config = {
-      session: {
-        dmScope: "per-channel-peer",
-        identityLinks: { "direct:peer": ["telegram:123"] },
-      },
-      channels: {
-        telegram: {
-          dmHistoryLimit: 4,
-          accounts: {
-            direct: {
-              dmHistoryLimit: 12,
-              dms: { "direct:peer": { historyLimit: 31 }, peer: { historyLimit: 41 } },
-            },
+    const config = telegramConfig(
+      {
+        dmHistoryLimit: 4,
+        accounts: {
+          direct: {
+            dmHistoryLimit: 12,
+            dms: { "direct:peer": { historyLimit: 31 }, peer: { historyLimit: 41 } },
           },
         },
       },
-    } satisfies OpenClawConfig;
-    const sessionKey = buildAgentPeerSessionKey({
-      agentId: "main",
-      channel: "telegram",
+      {
+        dmScope: "per-channel-peer",
+        identityLinks: { "direct:peer": ["telegram:123"] },
+      },
+    );
+    const sessionKey = peerKey({
       accountId: "direct",
       peerKind: "direct",
-      peerId: "123",
-      dmScope: config.session.dmScope,
-      identityLinks: config.session.identityLinks,
+      dmScope: config.session?.dmScope,
+      identityLinks: config.session?.identityLinks,
     });
 
     expectHistoryLimit(sessionKey, config, {
@@ -145,51 +124,37 @@ describe("getHistoryLimitFromSessionKey", () => {
   });
 
   it("lets an account dms map replace the root map instead of merging per entry", () => {
-    // The account merge contract replaces the whole map, so a root peer that the
-    // account map omits must fall through to the account default, not the root entry.
-    const config = {
-      channels: {
-        telegram: {
-          dmHistoryLimit: 4,
-          dms: { "123": { historyLimit: 99 }, "456": { historyLimit: 98 } },
-          accounts: { work: { dmHistoryLimit: 11, dms: { "123": { historyLimit: 22 } } } },
-        },
-      },
-    } as unknown as OpenClawConfig;
+    const config = telegramConfig({
+      dmHistoryLimit: 4,
+      dms: { "123": { historyLimit: 99 }, "456": { historyLimit: 98 } },
+      accounts: { work: { dmHistoryLimit: 11, dms: { "123": { historyLimit: 22 } } } },
+    });
 
     expectHistoryLimit("agent:main:telegram:direct:123", config, {
       accountId: "work",
     }).toBe(22);
-    // 456 exists only in the root map, so the account default wins over it.
     expectHistoryLimit("agent:main:telegram:direct:456", config, {
       accountId: "work",
     }).toBe(11);
-    // With no account, the root map still applies.
     expectHistoryLimit("agent:main:telegram:direct:456", config).toBe(98);
   });
 
   it.each(["direct", "dm", "group", "channel"])(
     "resolves routed scope for an account named %s",
     (accountId) => {
-      const config = {
-        channels: {
-          telegram: {
-            historyLimit: 8,
-            dmHistoryLimit: 4,
-            accounts: {
-              [accountId]: {
-                historyLimit: 9,
-                dmHistoryLimit: 12,
-                dms: { peer: { historyLimit: 41 }, "direct:peer": { historyLimit: 31 } },
-              },
-            },
+      const config = telegramConfig({
+        historyLimit: 8,
+        dmHistoryLimit: 4,
+        accounts: {
+          [accountId]: {
+            historyLimit: 9,
+            dmHistoryLimit: 12,
+            dms: { peer: { historyLimit: 41 }, "direct:peer": { historyLimit: 31 } },
           },
         },
-      } satisfies OpenClawConfig;
+      });
       const route = { accountId, peerId: "peer", chatType: "direct" as const };
-      const sessionKey = buildAgentPeerSessionKey({
-        agentId: "main",
-        channel: "telegram",
+      const sessionKey = peerKey({
         accountId,
         peerKind: "direct",
         peerId: route.peerId,
@@ -197,17 +162,13 @@ describe("getHistoryLimitFromSessionKey", () => {
       });
       expectHistoryLimit(sessionKey, config, route).toBe(41);
       expectHistoryLimit(`${sessionKey}:thread:99`, config, route).toBe(41);
-      const sharedKey = buildAgentPeerSessionKey({
-        agentId: "main",
-        channel: "telegram",
+      const sharedKey = peerKey({
         accountId,
         peerId: route.peerId,
         dmScope: "main",
       });
       expectHistoryLimit(sharedKey, config, route).toBeUndefined();
-      const groupKey = buildAgentPeerSessionKey({
-        agentId: "main",
-        channel: "telegram",
+      const groupKey = peerKey({
         accountId,
         peerKind: "group",
         peerId: "direct:peer",
@@ -222,28 +183,24 @@ describe("getHistoryLimitFromSessionKey", () => {
   );
 
   it("does not select another peer's override after identity-link changes or a dispatch override", () => {
-    const config = {
-      session: { identityLinks: { "direct:peer": ["telegram:123"] } },
-      channels: {
-        telegram: {
-          accounts: {
-            direct: {
-              dmHistoryLimit: 12,
-              dms: { peer: { historyLimit: 41 }, "direct:peer": { historyLimit: 31 } },
-            },
-            personal: { dmHistoryLimit: 19, dms: { "direct:peer": { historyLimit: 23 } } },
+    const config = telegramConfig(
+      {
+        accounts: {
+          direct: {
+            dmHistoryLimit: 12,
+            dms: { peer: { historyLimit: 41 }, "direct:peer": { historyLimit: 31 } },
           },
+          personal: { dmHistoryLimit: 19, dms: { "direct:peer": { historyLimit: 23 } } },
         },
       },
-    } satisfies OpenClawConfig;
+      { identityLinks: { "direct:peer": ["telegram:123"] } },
+    );
     const route = { accountId: "direct", peerId: "123", chatType: "direct" as const };
-    const sessionKey = buildAgentPeerSessionKey({
-      agentId: "main",
-      channel: "telegram",
+    const sessionKey = peerKey({
       accountId: route.accountId,
       peerId: route.peerId,
       dmScope: "per-channel-peer",
-      identityLinks: config.session.identityLinks,
+      identityLinks: config.session?.identityLinks,
     });
     expectHistoryLimit(sessionKey, config, route).toBe(31);
     expectHistoryLimit(
@@ -254,13 +211,10 @@ describe("getHistoryLimitFromSessionKey", () => {
     expectHistoryLimit(sessionKey, { ...config, session: {} }, route).toBe(12);
     expectHistoryLimit("agent:main:telegram:direct:another", config, route).toBe(12);
     expectHistoryLimit("agent:main:main", config, route).toBeUndefined();
-    const overrideKey = buildAgentPeerSessionKey({
-      agentId: "main",
-      channel: "telegram",
-      accountId: "work",
+    const overrideKey = peerKey({
       peerId: route.peerId,
       dmScope: "per-account-channel-peer",
-      identityLinks: config.session.identityLinks,
+      identityLinks: config.session?.identityLinks,
     });
     expectHistoryLimit(overrideKey, config, { ...route, accountId: "personal" }).toBe(23);
     expectHistoryLimit(overrideKey, config, {
@@ -271,11 +225,7 @@ describe("getHistoryLimitFromSessionKey", () => {
   });
 
   it("keeps non-numeric thread markers in direct message ids", () => {
-    const config = {
-      channels: {
-        telegram: { dms: { "user:thread:abc": { historyLimit: 9 } } },
-      },
-    } as OpenClawConfig;
+    const config = telegramConfig({ dms: { "user:thread:abc": { historyLimit: 9 } } });
 
     expectHistoryLimit("agent:main:telegram:dm:user:thread:abc", config).toBe(9);
   });
@@ -283,31 +233,25 @@ describe("getHistoryLimitFromSessionKey", () => {
   it.each(["a::b", "alice:thread:123", "alice:topic:123"])(
     "preserves linked peer %s and known accounts after peer changes",
     (linkedPeer) => {
-      const config = {
-        session: { identityLinks: { [linkedPeer]: ["telegram:123"] } },
-        channels: {
-          telegram: {
-            dmHistoryLimit: 4,
-            accounts: {
-              work: {
-                dmHistoryLimit: 12,
-                dms: {
-                  [linkedPeer]: { historyLimit: 31 },
-                  "a:b": { historyLimit: 41 },
-                  alice: { historyLimit: 42 },
-                },
+      const config = telegramConfig(
+        {
+          dmHistoryLimit: 4,
+          accounts: {
+            work: {
+              dmHistoryLimit: 12,
+              dms: {
+                [linkedPeer]: { historyLimit: 31 },
+                "a:b": { historyLimit: 41 },
+                alice: { historyLimit: 42 },
               },
             },
           },
         },
-      } satisfies OpenClawConfig;
-      const sessionKey = buildAgentPeerSessionKey({
-        agentId: "main",
-        channel: "telegram",
-        accountId: "work",
-        peerId: "123",
+        { identityLinks: { [linkedPeer]: ["telegram:123"] } },
+      );
+      const sessionKey = peerKey({
         dmScope: "per-account-channel-peer",
-        identityLinks: config.session.identityLinks,
+        identityLinks: config.session?.identityLinks,
       });
       expectHistoryLimit(sessionKey, config, { peerId: "123" }).toBe(31);
       expectHistoryLimit(`${sessionKey}:thread:99`, config, { peerId: "123" }).toBe(31);
@@ -316,18 +260,14 @@ describe("getHistoryLimitFromSessionKey", () => {
   );
 
   it("uses per-DM overrides before provider defaults", () => {
-    const config = {
-      channels: {
-        telegram: {
-          dmHistoryLimit: 15,
-          dms: {
-            "123": { historyLimit: 5 },
-            "456": {},
-            "789": { historyLimit: 0 },
-          },
-        },
+    const config = telegramConfig({
+      dmHistoryLimit: 15,
+      dms: {
+        "123": { historyLimit: 5 },
+        "456": {},
+        "789": { historyLimit: 0 },
       },
-    } as OpenClawConfig;
+    });
 
     expectHistoryLimit("telegram:dm:123", config).toBe(5);
     expectHistoryLimit("telegram:dm:456", config).toBe(15);
@@ -363,31 +303,25 @@ describe("getHistoryLimitFromSessionKey", () => {
   });
 
   it("prefers account-scoped limits over the channel root for that account", () => {
-    const config = {
-      channels: {
-        telegram: {
-          historyLimit: 10,
-          dmHistoryLimit: 15,
-          dms: { "123": { historyLimit: 7 } },
-          accounts: {
-            work: {
-              historyLimit: 40,
-              dmHistoryLimit: 41,
-              dms: { "123": { historyLimit: 42 } },
-            },
-            sparse: { historyLimit: 50 },
-          },
+    const config = telegramConfig({
+      historyLimit: 10,
+      dmHistoryLimit: 15,
+      dms: { "123": { historyLimit: 7 } },
+      accounts: {
+        work: {
+          historyLimit: 40,
+          dmHistoryLimit: 41,
+          dms: { "123": { historyLimit: 42 } },
         },
+        sparse: { historyLimit: 50 },
       },
-    } as unknown as OpenClawConfig;
+    });
 
     const cases: Array<[string, string | undefined, number | undefined]> = [
-      // Account values win for every scope the resolver supports.
       ["telegram:channel:c1", "work", 40],
       ["telegram:group:g1", "work", 40],
       ["telegram:dm:999", "work", 41],
       ["telegram:dm:123", "work", 42],
-      // Without an account id, or for an account that omits the key, the root still applies.
       ["telegram:channel:c1", undefined, 10],
       ["telegram:dm:999", undefined, 15],
       ["telegram:dm:123", undefined, 7],
@@ -405,31 +339,24 @@ describe("getHistoryLimitFromSessionKey", () => {
   });
 
   it("matches an operator-written account key against the canonical routed id", () => {
-    // Routing canonicalizes account ids, so "Work Team" arrives as "work-team".
-    // Exact-key config lookup would miss it and silently fall back to the root.
-    const config = {
-      channels: {
-        telegram: {
-          historyLimit: 10,
-          dmHistoryLimit: 15,
-          dms: { "123": { historyLimit: 7 } },
-          accounts: {
-            "Work Team": {
-              historyLimit: 40,
-              dmHistoryLimit: 41,
-              dms: { "123": { historyLimit: 42 } },
-            },
-          },
+    const config = telegramConfig({
+      historyLimit: 10,
+      dmHistoryLimit: 15,
+      dms: { "123": { historyLimit: 7 } },
+      accounts: {
+        "Work Team": {
+          historyLimit: 40,
+          dmHistoryLimit: 41,
+          dms: { "123": { historyLimit: 42 } },
         },
       },
-    } as unknown as OpenClawConfig;
+    });
 
     for (const accountId of ["work-team", "Work Team", "WORK TEAM"]) {
       expectHistoryLimit("telegram:channel:c1", config, { accountId }).toBe(40);
       expectHistoryLimit("telegram:dm:999", config, { accountId }).toBe(41);
       expectHistoryLimit("telegram:dm:123", config, { accountId }).toBe(42);
     }
-    // An unrelated account still falls back to the root.
     expectHistoryLimit("telegram:channel:c1", config, { accountId: "other" }).toBe(10);
   });
 
@@ -450,9 +377,6 @@ describe("getHistoryLimitFromSessionKey", () => {
 });
 
 describe("account-scoped limits change the retained transcript", () => {
-  // The resolver returning a different number is not the user-visible effect;
-  // what matters is that the transcript actually keeps fewer turns. This drives
-  // the real resolver and the real trimmer together, no mocks.
   function transcript(userTurns: number): AgentMessage[] {
     return Array.from(
       { length: userTurns * 2 },
@@ -467,14 +391,7 @@ describe("account-scoped limits change the retained transcript", () => {
     return messages.filter((message) => message.role === "user").length;
   }
 
-  const cfg = {
-    channels: {
-      telegram: {
-        historyLimit: 20,
-        accounts: { "Work Team": { historyLimit: 2 } },
-      },
-    },
-  } as unknown as OpenClawConfig;
+  const cfg = telegramConfig({ historyLimit: 20, accounts: { "Work Team": { historyLimit: 2 } } });
 
   const sessionKey = "agent:main:telegram:channel:c1";
   const messages = transcript(40);
@@ -484,8 +401,6 @@ describe("account-scoped limits change the retained transcript", () => {
       messages,
       getHistoryLimitFromSessionKey(sessionKey, cfg, { accountId: "work-team" }),
     );
-    // limit 2 with the documented 1.5x eviction cushion keeps far fewer turns
-    // than the root limit of 20, and strictly fewer than the input.
     expect(countUserTurns(limited)).toBeLessThan(countUserTurns(messages));
     expect(countUserTurns(limited)).toBeLessThanOrEqual(3);
   });

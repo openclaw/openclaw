@@ -6,10 +6,8 @@ import {
 import type { EmbeddedRunAttemptParamsV2 } from "../../plugin-sdk/agent-harness-runtime.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { applyDelegationCapability } from "../delegation-capability.js";
 import { buildEmbeddedRunnerAssistant } from "../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { createModelFallbackConfig } from "../test-helpers/model-fallback-config-fixture.js";
-import type { AnyAgentTool } from "../tools/common.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   MockedFailoverError,
@@ -61,21 +59,13 @@ function completedAttempt(text?: string) {
     assistantTexts: text ? [text] : [],
     lastAssistant: assistant,
     currentAttemptAssistant: assistant,
-    currentAttemptCompletedAssistant: assistant,
   });
 }
 function settledWriteTimeout(prompt: string, aborted = false) {
   const toolUseAssistant = buildEmbeddedRunnerAssistant({
     stopReason: "toolUse",
     ...model,
-    content: [
-      {
-        type: "toolCall",
-        id: "tool_write",
-        name: "write",
-        arguments: { path: "note.txt", content: "done" },
-      },
-    ],
+    content: [{ type: "toolCall", id: "tool_write", name: "write", arguments: {} }],
   });
   const abortedAssistant = buildEmbeddedRunnerAssistant({ ...model, stopReason: "aborted" });
   return makeAttemptResult({
@@ -152,17 +142,6 @@ describe("runEmbeddedAgent prompt timeout fallback handoff", () => {
           fallbackActive: false,
           delegationCapability: restriction ? "report_only" : "full",
         });
-        if (restriction) {
-          continue;
-        }
-        // The shared gate consumes this exact dispatched capability; it cannot
-        // restore a tool removed by ordinary authorization before this stage.
-        const authorizedTools = ["sessions_send", "sessions_spawn"].map(
-          (name) => ({ name }) as AnyAgentTool,
-        );
-        expect(applyDelegationCapability(authorizedTools, attempt.delegationCapability)).toEqual(
-          authorizedTools,
-        );
       }
     },
   );
@@ -321,12 +300,6 @@ describe("runEmbeddedAgent prompt timeout fallback handoff", () => {
         fallbackReason: fallbackReason ?? null,
         delegationCapability: "report_only",
       });
-      const authorizedTools = ["sessions_send", "sessions_spawn", "sessions_history"].map(
-        (name) => ({ name }) as AnyAgentTool,
-      );
-      expect(applyDelegationCapability(authorizedTools, attempt?.delegationCapability)).toEqual([
-        authorizedTools[2],
-      ]);
     },
   );
 

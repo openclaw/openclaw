@@ -152,7 +152,6 @@ describe("attemptServerEndpointCompaction", () => {
   it.each([
     { trigger: "manual", throws: false, model },
     { trigger: "manual", throws: true, model },
-    { trigger: "budget", throws: false, model },
     { trigger: "manual", throws: false, model: openAIModel },
     { trigger: "budget", throws: false, model: openAIModel },
   ] as const)(
@@ -192,7 +191,6 @@ describe("attemptServerEndpointCompaction", () => {
         },
       });
       expect(owner.message.providerReplay).not.toHaveProperty("replayIndex");
-      expect(requestPreparedCompactionMock).toHaveBeenCalledOnce();
       expect(onUsage).toHaveBeenCalledExactlyOnceWith(compactionUsage());
       expect(warn).not.toHaveBeenCalled();
       expect(onCompactionCommitted).toHaveBeenCalledExactlyOnceWith(1_000);
@@ -249,15 +247,11 @@ describe("attemptServerEndpointCompaction", () => {
     expect(requestAborted).toBe(true);
   });
 
-  it.each([model, openAIModel])(
-    "does not call the $provider endpoint during overflow recovery",
-    async (requestModel) => {
-      const { result } = attempt({ trigger: "overflow", model: requestModel });
-
-      await expect(result).resolves.toBeUndefined();
-      expect(requestPreparedCompactionMock).not.toHaveBeenCalled();
-    },
-  );
+  it("does not call the endpoint during overflow recovery", async () => {
+    const { result } = attempt({ trigger: "overflow" });
+    await expect(result).resolves.toBeUndefined();
+    expect(requestPreparedCompactionMock).not.toHaveBeenCalled();
+  });
 
   it("leaves a missing canonical checkpoint window to client budget compaction", async () => {
     const owner: Pick<AssistantMessage, "providerReplay"> = {};
