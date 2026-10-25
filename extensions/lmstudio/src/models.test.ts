@@ -24,6 +24,12 @@ import { normalizeLmstudioProviderConfig, resolveLmstudioReasoningCompat } from 
 import { discoverLmstudioProvider } from "./setup.js";
 
 const guardedFetch = vi.hoisted(() => vi.fn());
+function expectRequest(mock: ReturnType<typeof vi.fn>, headers: Record<string, string>) {
+  expect(mock).toHaveBeenCalledWith("http://localhost:1234/api/v1/models", {
+    headers,
+    signal: expect.any(AbortSignal),
+  });
+}
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
@@ -110,6 +116,18 @@ describe("lmstudio-models", () => {
   const expectLoadContext = (fetchMock: ReturnType<typeof mockLoad>, contextLength: number) => {
     expect(parseBody(loadCall(fetchMock)?.[1])).toMatchObject({ context_length: contextLength });
   };
+  const expectedModel = (id: string, overrides: Record<string, unknown> = {}) => ({
+    id,
+    name: id,
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    compat: { supportsUsageInStreaming: true },
+    contextWindow: SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
+    contextTokens: LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH,
+    maxTokens: SELF_HOSTED_DEFAULT_MAX_TOKENS,
+    ...overrides,
+  });
 
   it("preserves an explicit network policy and request headers", () => {
     expect(
@@ -181,43 +199,36 @@ describe("lmstudio-models", () => {
     expect(modelsRequestOptions?.signal).toBeInstanceOf(AbortSignal);
 
     expect(models).toHaveLength(4);
-    expect(models[0]).toEqual({
-      id: "qwen3-8b-instruct",
-      name: "Qwen3 8B (MLX, vision, tool-use, loaded)",
-      reasoning: true,
-      input: ["text", "image"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      compat: {
-        supportsUsageInStreaming: true,
-        supportsReasoningEffort: true,
-        supportedReasoningEfforts: ["none", "minimal", "low", "medium", "high", "xhigh"],
-        reasoningEffortMap: { off: "none", none: "none", adaptive: "xhigh", max: "xhigh" },
-        supportsTools: true,
-      },
-      contextWindow: 262144,
-      contextTokens: 8_192,
-      maxTokens: 8_192,
-    });
-    expect(models[1]).toEqual({
-      id: "deepseek-r1",
-      name: "deepseek-r1",
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      compat: { supportsUsageInStreaming: true },
-      contextWindow: SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
-      contextTokens: LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH,
-      maxTokens: SELF_HOSTED_DEFAULT_MAX_TOKENS,
-    });
-    expect(models[2]).toMatchObject({ id: "graded-reasoning", reasoning: true });
-    expect(models[2]?.compat).toEqual({
-      supportsUsageInStreaming: true,
-      supportsReasoningEffort: true,
-      supportedReasoningEfforts: ["low", "medium", "high"],
-      reasoningEffortMap: { adaptive: "high", max: "high" },
-    });
-    expect(models[3]).toMatchObject({ id: "off-only-reasoning", reasoning: false });
-    expect(models[3]?.compat).toEqual({ supportsUsageInStreaming: true });
+    expect(models[0]).toEqual(
+      expectedModel("qwen3-8b-instruct", {
+        name: "Qwen3 8B (MLX, vision, tool-use, loaded)",
+        reasoning: true,
+        input: ["text", "image"],
+        compat: {
+          supportsUsageInStreaming: true,
+          supportsReasoningEffort: true,
+          supportedReasoningEfforts: ["none", "minimal", "low", "medium", "high", "xhigh"],
+          reasoningEffortMap: { off: "none", none: "none", adaptive: "xhigh", max: "xhigh" },
+          supportsTools: true,
+        },
+        contextWindow: 262144,
+        contextTokens: 8_192,
+        maxTokens: 8_192,
+      }),
+    );
+    expect(models[1]).toEqual(expectedModel("deepseek-r1"));
+    expect(models[2]).toEqual(
+      expectedModel("graded-reasoning", {
+        reasoning: true,
+        compat: {
+          supportsUsageInStreaming: true,
+          supportsReasoningEffort: true,
+          supportedReasoningEfforts: ["low", "medium", "high"],
+          reasoningEffortMap: { adaptive: "high", max: "high" },
+        },
+      }),
+    );
+    expect(models[3]).toEqual(expectedModel("off-only-reasoning"));
   });
 
   it.each([
@@ -236,11 +247,6 @@ describe("lmstudio-models", () => {
       ]);
       const models = await discover(fetchMock, { apiKey: "synthetic-no-account" });
 
-      expect(fetchMock).toHaveBeenCalledTimes(1);
-      expect(fetchMock).toHaveBeenCalledWith(
-        "http://localhost:1234/api/v1/models",
-        expect.objectContaining({ signal: expect.any(AbortSignal) }),
-      );
       expect(models).toHaveLength(1);
       expect(models[0]?.reasoning).toBe(true);
       expect(models[0]?.compat?.reasoningEffortMap).toMatchObject({
@@ -289,33 +295,16 @@ describe("lmstudio-models", () => {
   });
 
   it.each<[string, number, number, number | undefined, number]>([
-    ["reloads for a larger requested window", 4096, 32768, 8192, 8192],
-    ["reloads to the clamped default window", 4096, 32768, undefined, 32768],
-    [
-      "ignores malformed context lengths",
-      4096.5,
-      32768.5,
-      8192.5,
-      LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH,
-    ],
-  ])(
-    "%s",
-    async (
-      _name,
-      loadedContextLength,
-      maxContextLength,
-      requestedContextLength,
-      expectedContextLength,
-    ) => {
-      const fetchMock = mockLoad({ loadedContextLength, maxContextLength });
-      vi.stubGlobal("fetch", asFetch(fetchMock));
-      await expect(
-        loadModel(requestedContextLength === undefined ? {} : { requestedContextLength }),
-      ).resolves.toBe("qwen3-8b-instruct");
-      expect(fetchMock).toHaveBeenCalledTimes(2);
-      expectLoadContext(fetchMock, expectedContextLength);
-    },
-  );
+    ["larger requested window", 4096, 32768, 8192, 8192],
+    ["clamped default window", 4096, 32768, undefined, 32768],
+    ["malformed context lengths", 4096.5, 32768.5, 8192.5, LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH],
+  ])("reloads for %s", async (_name, loaded, max, requested, expected) => {
+    const fetchMock = mockLoad({ loadedContextLength: loaded, maxContextLength: max });
+    vi.stubGlobal("fetch", asFetch(fetchMock));
+    await expect(loadModel({ requestedContextLength: requested })).resolves.toBe(modelKey);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expectLoadContext(fetchMock, expected);
+  });
 
   it.each([
     ["canonical key", "gemma", " gemma@q4_k_m ", "gemma@q4_k_m"],
@@ -507,9 +496,9 @@ it("resolves configured SecretRefs for discovery requests", async () => {
     },
     { LMSTUDIO_DISCOVERY_TOKEN: "secretref-key", LMSTUDIO_PROXY_TOKEN: "proxy-token" },
   );
-  expect(fetchMock).toHaveBeenCalledWith("http://localhost:1234/api/v1/models", {
-    signal: expect.any(AbortSignal),
-    headers: { Authorization: "Bearer secretref-key", "X-Proxy-Auth": "proxy-token" },
+  expectRequest(fetchMock, {
+    Authorization: "Bearer secretref-key",
+    "X-Proxy-Auth": "proxy-token",
   });
   expect(result?.provider.models?.map((model) => model.id)).toEqual(["qwen3-8b-instruct"]);
 });
@@ -536,10 +525,7 @@ it.each<[string, string | undefined, Record<string, string> | undefined, string]
       {},
       discoveryApiKey,
     );
-    expect(fetchMock).toHaveBeenCalledWith("http://localhost:1234/api/v1/models", {
-      signal: expect.any(AbortSignal),
-      headers: { Authorization: `Bearer ${expected}` },
-    });
+    expectRequest(fetchMock, { Authorization: `Bearer ${expected}` });
     if (headers) {
       expect(result?.provider).toMatchObject({
         baseUrl: "http://localhost:1234/v1",
@@ -575,10 +561,7 @@ it.each([401, 503, "disconnect", "invalid-json", "missing-models", "header"])(
       ...(rejected ? { rejectionScope: "catalog" } : {}),
     };
     await expect(runCatalog(ctx)).resolves.toEqual({ providers: {}, outcomes: [outcome] });
-    expect(fetchMock).toHaveBeenCalledWith("http://localhost:1234/api/v1/models", {
-      headers: { Authorization: `Bearer ${key}` },
-      signal: expect.any(AbortSignal),
-    });
+    expectRequest(fetchMock, { Authorization: `Bearer ${key}` });
     await expect(discoverLmstudioProvider(ctx)).resolves.toMatchObject({
       provider: { models: [] },
     });
