@@ -294,9 +294,24 @@ export function startOpenClawStateReadOperation(
           },
         );
         authority.assertCurrent();
+        if (inspected && !inspected.value.ok) {
+          const { retainOpenClawStateWorkerErrorPayload, hydrateOpenClawStateWorkerError } =
+            await import("./openclaw-state-worker-error.js");
+          const error = new Error("Live plugin metadata inspection failed");
+          retainOpenClawStateWorkerErrorPayload(error, inspected.value.error);
+          return consume({
+            error: hydrateOpenClawStateWorkerError(error, { includeOrdinary: true }),
+            sourceAdmitted: inspected.value.sourceAdmitted,
+          });
+        }
         if (inspected) {
           return consume({
-            value: { ok: true, type: command.type, sourceAdmitted: true, rows: inspected.value },
+            value: {
+              ok: true,
+              type: command.type,
+              sourceAdmitted: true,
+              rows: inspected.value.rows,
+            },
           });
         }
       }

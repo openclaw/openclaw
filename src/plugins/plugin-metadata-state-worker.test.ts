@@ -13,6 +13,7 @@ import {
 } from "../config/io.plugin-metadata.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { resolveRuntimeWorkerThreadExecArgv } from "../infra/runtime-worker-url.js";
+import { SqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
 import { sqliteWorkerPreloadEnv } from "../infra/sqlite-worker-preload.test-support.js";
 import { migrateLegacyConfigMachineState } from "../infra/state-migrations.config-machine-state.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -494,7 +495,11 @@ it("reads committed live metadata without space for a database snapshot", async 
         database.exec("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE unrelated_payload(data BLOB)");
         process.on("message", value => {
           database.exec("BEGIN IMMEDIATE; INSERT INTO unrelated_payload VALUES(zeroblob(1048576))");
-          database.prepare("UPDATE config_machine_state SET value_json=? WHERE state_key='plugins.installedIndex'").run(JSON.stringify(value));
+          if (value === "newer-schema") {
+            database.exec("PRAGMA user_version=2147483647");
+          } else {
+            database.prepare("UPDATE config_machine_state SET value_json=? WHERE state_key='plugins.installedIndex'").run(JSON.stringify(value));
+          }
           database.exec("COMMIT");
           process.send("committed");
         });
@@ -550,6 +555,14 @@ it("reads committed live metadata without space for a database snapshot", async 
         );
       }
     });
+    const committed = nextMessage();
+    writer.send("newer-schema");
+    expect((await committed)[0]).toBe("committed");
+    await expect(
+      withArtifactPreservingStateReads(() =>
+        withPluginCache(createPluginCache(), () => readPersistedInstalledPluginIndex({ env })),
+      ),
+    ).rejects.toBeInstanceOf(SqliteSchemaVersionError);
   } finally {
     if (writer.connected) {
       writer.disconnect();
