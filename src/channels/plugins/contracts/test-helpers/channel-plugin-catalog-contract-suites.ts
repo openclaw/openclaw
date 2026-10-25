@@ -43,7 +43,7 @@ function catalogFile(entry: object, dir = tempDir(), rich = false) {
   });
   return file;
 }
-function externalEntry<T extends ReturnType<typeof catalogEntry>>(entry: T, rich = false) {
+function externalEntry(entry: ReturnType<typeof catalogEntry>, rich = false) {
   return lookup(entry.openclaw.channel.id, { catalogPaths: [catalogFile(entry, tempDir(), rich)] });
 }
 function writePlugin(

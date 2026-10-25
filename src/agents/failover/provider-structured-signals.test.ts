@@ -101,7 +101,7 @@ describe("provider failover hook structured signals", () => {
     [{ errorMessage: undefined, errorType: "upstream_error" }, serverCopy, true],
   ] satisfies [Fields, string, boolean?][])(
     "presents structured %j without discovery",
-    (fields, expected, checkDiagnostic) => {
+    (fields, expected, checkDiagnostic?: boolean) => {
       const message = expectSafeCopy(fields, expected);
       if (checkDiagnostic) {
         expect(formatAssistantErrorText(message)).toBe(expected);
