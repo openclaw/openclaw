@@ -100,16 +100,6 @@ export function readStoredTranscriptSummaryRevision(
   return row ? sha256Hex(JSON.stringify(row)) : undefined;
 }
 
-export function readTranscriptSummaryKeys(database: EngineConnection): Set<string> {
-  const rows = executeSqliteQuerySync(
-    database,
-    meetingTranscriptDb(database)
-      .selectFrom("meeting_transcript_summaries")
-      .select(["session_id", "session_started_at"]),
-  ).rows;
-  return new Set(rows.map((row) => `${row.session_id}\0${row.session_started_at}`));
-}
-
 export function readRecentStoppedTranscriptSession(
   database: EngineConnection,
   source: TranscriptSourceLocator,
