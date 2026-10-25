@@ -1,5 +1,5 @@
 /** Browser-only diagnostic, serialized after the mock socket and wire-delay probe. */
-export function warmReloadProbe() {
+export function warmReloadProbe(options: { paneFrames?: boolean } = {}) {
   const milestones: Record<string, number> = {};
   const mutations: Array<{ at: number; count: number; region: string }> = [];
   const shifts: Array<{ at: number; value: number }> = [];
@@ -13,6 +13,16 @@ export function warmReloadProbe() {
     boardFrames: number;
   }> = [];
   const rows = new Set<Element>();
+  const startupResponses: Array<{ kind: string; messages: number }> = [];
+  const paneFrames: Array<{
+    at: number;
+    frame: number;
+    content: boolean;
+    rows: Array<{ keyHash: number; top: number; height: number }>;
+    counts: Record<string, number>;
+  }> = [];
+  let frameIndex = 0;
+  let paneSignature = "";
   const sidebarFrames: Array<{
     at: number;
     cached: boolean;
@@ -186,6 +196,10 @@ export function warmReloadProbe() {
           }
           if (method === "chat.startup") {
             mark("catchupResponse");
+            startupResponses.push({
+              kind: frame.payload?.kind ?? "snapshot",
+              messages: Array.isArray(frame.payload?.messages) ? frame.payload.messages.length : 0,
+            });
           }
         }
       });
@@ -309,6 +323,70 @@ export function warmReloadProbe() {
     const visible = Boolean(
       currentRows.length && inner && getComputedStyle(inner).visibility !== "hidden",
     );
+    if (options.paneFrames) {
+      frameIndex++;
+      const threadBounds = thread?.getBoundingClientRect();
+      const visibleRows = visible
+        ? currentRows.filter((row) => {
+            const rect = row.getBoundingClientRect();
+            return (
+              rect.height > 0 &&
+              rect.bottom > Math.max(0, threadBounds?.top ?? 0) &&
+              rect.top < Math.min(innerHeight, threadBounds?.bottom ?? innerHeight)
+            );
+          })
+        : [];
+      const isVisible = (element: Element) => {
+        const row = element.closest(".chat-virtual-row");
+        return (
+          (!row || visibleRows.includes(row)) &&
+          !element.closest("[hidden], [inert]") &&
+          element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })
+        );
+      };
+      const count = (selector: string, root: ParentNode = pane ?? document) =>
+        [...root.querySelectorAll(selector)].filter(isVisible).length;
+      const counts = {
+        chrome: count(".chat-pane__header, .agent-chat__header--mobile"),
+        activity: count(".chat-activity-group"),
+        review: count(".chat-activity-group__review-status"),
+        failures: count(".chat-run-failure"),
+        detailsSections: count(".chat-details-desktop-section", document),
+        lazySkeletons: count(".lazy-view-state--loading", document),
+        detailsSkeletons: count(".chat-details openclaw-panel-loading-skeleton", document),
+        pendingAvatars: count(".chat-avatar-slot.is-pending"),
+        loadedAvatars: [
+          ...(pane?.querySelectorAll<HTMLImageElement>(".chat-avatar-slot img") ?? []),
+        ].filter((image) => isVisible(image) && image.complete && image.naturalWidth > 0).length,
+      };
+      const paintedRows = visibleRows.map((row) => {
+        const rect = row.getBoundingClientRect();
+        let keyHash = 2166136261;
+        for (const character of row.getAttribute("data-virtual-row-key") ?? "") {
+          keyHash = Math.imul(keyHash ^ character.charCodeAt(0), 16777619) >>> 0;
+        }
+        return {
+          keyHash,
+          top: Math.round(rect.top * 2) / 2,
+          height: Math.round(rect.height * 2) / 2,
+        };
+      });
+      const content = counts.chrome > 0 || visibleRows.length > 0;
+      if (content) {
+        mark("firstPaneContentFrame");
+      }
+      const signature = JSON.stringify([paintedRows, counts]);
+      if (signature !== paneSignature) {
+        paneFrames.push({
+          at: performance.now(),
+          frame: frameIndex,
+          content,
+          rows: paintedRows,
+          counts,
+        });
+        paneSignature = signature;
+      }
+    }
     if (visible) {
       mark("firstTranscript");
       if (!milestones.catchupResponse && milestones.cacheRead) {
@@ -374,12 +452,19 @@ export function warmReloadProbe() {
       stopped = true;
       observer.disconnect();
       const perf = Reflect.get(window, "__perf");
+      const firstContent = paneFrames.findIndex((frame) => frame.content);
+      const contentFrames = firstContent >= 0 ? paneFrames.slice(firstContent) : [];
+      const changes = contentFrames.slice(1);
+      const waves = changes.filter(
+        (frame, index) => index === 0 || frame.frame > changes[index - 1]!.frame + 1,
+      );
       return {
         milestones,
         measures: performance.getEntriesByType("measure").map((entry) => entry.toJSON()),
         transcriptPaints,
         largestPaints,
         reads,
+        startupResponses,
         transactions,
         shifts,
         cls: shifts.reduce((sum, shift) => sum + shift.value, 0),
@@ -388,6 +473,21 @@ export function warmReloadProbe() {
         mutations,
         states,
         sidebarFrames,
+        pane: options.paneFrames
+          ? {
+              frames: paneFrames,
+              visibleChangedFramesAfterContent: changes.length,
+              contiguousMutationWavesAfterContent: waves.map((frame) => frame.at),
+              lazySkeletonFramesAfterContent: contentFrames.filter(
+                (frame) => frame.counts.lazySkeletons! > 0,
+              ).length,
+              detailsSkeletonFramesAfterContent: contentFrames.filter(
+                (frame) => frame.counts.detailsSkeletons! > 0,
+              ).length,
+              measurement:
+                "rAF structural/geometry changes; half-pixel row positions; excludes hidden and clipped transcript rows; filmstrip verifies pixel changes",
+            }
+          : undefined,
         rows: {
           mounted: rows.size,
           removed: removedRows,
