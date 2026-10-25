@@ -1,5 +1,5 @@
 // Root-owned integration may combine the public Telegram plugin with the durable queue runtime.
-import { createServer, type Server } from "node:http";
+import { createServer } from "node:http";
 import { sendDurableMessageBatch } from "openclaw/plugin-sdk/channel-outbound";
 import {
   createEmptyPluginRegistry,
@@ -132,13 +132,9 @@ async function withTransportState<T extends { close: () => Promise<void> }>(
 
 async function startTelegramMigrationLoopback() {
   const requests: Array<{ body: string; method: string | undefined; url: string }> = [];
-  const server: Server = createServer((request, response) => {
+  const server = createServer((request, response) => {
     readBody(request, (body) => {
-      requests.push({
-        body,
-        method: request.method,
-        url: request.url ?? "",
-      });
+      requests.push({ body, method: request.method, url: request.url ?? "" });
       replyJson(
         response,
         {
@@ -174,15 +170,18 @@ describe("Telegram permanent rejection over real Bot API transport", () => {
         const { log, drain } = recoveryDrain(cfg, stateDir);
         await drain("Telegram loopback permanent rejection recovery");
 
-        expect(loopback.requests).toHaveLength(1);
         expect(log.warn).toHaveBeenCalledWith(
           expect.stringContaining(
             "Telegram rejected send: group migrated to supergroup -1001234567890",
           ),
         );
-        expect(loopback.requests[0]).toMatchObject({ method: "POST" });
-        expect(loopback.requests[0]?.url).toMatch(/\/sendMessage$/u);
-        expect(loopback.requests[0]?.body).toContain("real transport permanent rejection");
+        expect(loopback.requests).toEqual([
+          {
+            method: "POST",
+            url: expect.stringMatching(/\/sendMessage$/u),
+            body: expect.stringContaining("real transport permanent rejection"),
+          },
+        ]);
         expect(readQueueRow(stateDir, DELIVERY_INTENT_ID)).toMatchObject({
           retryCount: 1,
           status: "failed",
@@ -280,12 +279,10 @@ describe("Telegram rejected topic delivery over real Bot API transport", () => {
 
 const PROXY_TUNNEL_DELIVERY_INTENT_ID = "telegram-loopback-proxy-tunnel-refusal";
 
-// A forward proxy whose CONNECT handler always answers 503, the shape a stalled
-// upstream (for example an ssh -D hop behind an HTTP proxy) produces. The TLS
-// session to api.telegram.org never starts, so nothing can reach Telegram.
+// Refuse CONNECT before TLS starts: nothing can reach Telegram.
 async function startRefusingProxy() {
   const connectTargets: string[] = [];
-  const server: Server = createServer((_request, response) => {
+  const server = createServer((_request, response) => {
     response.writeHead(405, { "content-length": "0" });
     response.end();
   });
@@ -318,22 +315,16 @@ describe("Telegram proxy tunnel refusal over the real proxy transport", () => {
         const stagedRetryCount = stagedRow?.retryCount ?? 0;
 
         const { log, drain } = recoveryDrain(cfg, stateDir);
-
+        const expectReplayable = (attempt: number) => {
+          const row = readQueueRow(stateDir);
+          expect(row).toMatchObject({ retryCount: stagedRetryCount + attempt, status: "pending" });
+          expect(row?.recoveryState).not.toBe("unknown_after_send");
+        };
         await drain("Telegram loopback proxy tunnel recovery");
-
-        // Every attempt ended at the proxy hop: the in-process retry ran, each
-        // attempt targeted the Bot API tunnel, and nothing was accepted.
         const firstPassConnects = proxy.connectTargets.length;
         expect(firstPassConnects).toBeGreaterThanOrEqual(2);
         expect(new Set(proxy.connectTargets)).toEqual(new Set(["api.telegram.org:443"]));
-        const afterFirstPass = readQueueRow(stateDir);
-        expect(afterFirstPass).toMatchObject({
-          retryCount: stagedRetryCount + 1,
-          status: "pending",
-        });
-        // The typed no-send proof keeps the entry replayable instead of parking
-        // it as an ambiguous send that recovery must refuse to replay.
-        expect(afterFirstPass?.recoveryState).not.toBe("unknown_after_send");
+        expectReplayable(1);
         for (const call of log.warn.mock.calls) {
           expect(String(call[0])).not.toContain("unknown_after_send");
         }
@@ -343,12 +334,7 @@ describe("Telegram proxy tunnel refusal over the real proxy transport", () => {
 
         await drain("Telegram loopback post-restart proxy tunnel recovery");
         expect(proxy.connectTargets.length).toBeGreaterThan(firstPassConnects);
-        const afterSecondPass = readQueueRow(stateDir);
-        expect(afterSecondPass).toMatchObject({
-          retryCount: stagedRetryCount + 2,
-          status: "pending",
-        });
-        expect(afterSecondPass?.recoveryState).not.toBe("unknown_after_send");
+        expectReplayable(2);
       },
     );
   });

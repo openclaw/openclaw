@@ -14,11 +14,6 @@ const { defineDiscordVoiceTests } = await loadDiscordVoiceTestHarness();
 const cli = vi.hoisted(() => vi.fn());
 vi.mock("../src/process/exec.js", () => ({ runExec: cli }));
 const audioId = "synthetic-audio";
-const audioEndpoint = () => ({
-  baseUrl: "https://unused.invalid",
-  apiKey: "synthetic-fixture-key",
-  models: [],
-});
 
 defineDiscordVoiceTests((h) => {
   const { expect, it, agentCommandMock: agent, controlRealtimeVoiceAgentRunMock: control } = h;
@@ -86,11 +81,18 @@ defineDiscordVoiceTests((h) => {
               ...(opening === "fallback" ? [{ ...apiModel, model: "unavailable-stt" }] : []),
               apiModel,
             ];
-      const cfg = {
+      const manager = await joinManager({
         tools: { media: { audio: { maxBytes: 1_048_576 }, models } },
-        models: { providers: { [audioId]: audioEndpoint() } },
-      };
-      const manager = await joinManager(cfg);
+        models: {
+          providers: {
+            [audioId]: {
+              baseUrl: "https://unused.invalid",
+              apiKey: "synthetic-fixture-key",
+              models: [],
+            },
+          },
+        },
+      });
       const entry = h.getSessionEntry(manager);
       const conversations = vi.spyOn(entry.conversations, "enqueue");
       if (dispatch === "control") {
@@ -149,9 +151,7 @@ defineDiscordVoiceTests((h) => {
         : receiving;
       const recordingStream = oversized ? new PassThrough({ objectMode: true }) : stream;
       try {
-        // Main rejects oversized uncaptured input before writing a WAV. A later
-        // capture scan may record its suffix, but cannot admit it as a new command.
-        // Successful-empty and fallback siblings use a one-second opening chunk.
+        // Oversized uncaptured input must not admit a subsequently captured suffix as a command.
         for (let frame = 0; frame < openingFrames; frame++) {
           if (stream.destroyed) {
             break;
@@ -175,7 +175,6 @@ defineDiscordVoiceTests((h) => {
         recordingStream.end();
         await receivingOutcome;
         if (oversized) {
-          // The capture scan owns a new receive operation after the rejected opening.
           await recorded.promise;
         }
         await entry.processingQueue;

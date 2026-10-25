@@ -20,7 +20,7 @@ import { createTempDirTracker } from "./helpers/temp-dir.js";
 const { defineDiscordVoiceTests } = await loadDiscordVoiceTestHarness();
 
 defineDiscordVoiceTests((h) => {
-  const { expect, expectDefined, it, vi, requireRecord } = h;
+  const { expect, expectDefined, it, vi } = h;
   it.each(["manager destruction", "completed", "error", "interleaved finalization"] as const)(
     "retires replaced captures and handles %s without stopping a Discord replacement",
     async (scenario) => {
@@ -144,23 +144,16 @@ defineDiscordVoiceTests((h) => {
         h.expectConnectedStatus(manager, "1001");
         expect(providerStop).not.toHaveBeenCalled();
 
-        const status = await execute({ action: "status" });
-        const active = requireRecord(status.details, "transcript status").active;
-        expect(Array.isArray(active)).toBe(true);
-        if (!Array.isArray(active)) {
-          throw new Error("expected transcript status active sessions");
-        }
         // Keep the stale-status failure first, then exercise historical recovery as well.
-        expect
-          .soft(active.map((capture) => requireRecord(capture, "active capture").sessionId))
-          .toEqual(["second"]);
+        expect.soft((await execute({ action: "status" })).details).toMatchObject({
+          active: [expect.objectContaining({ sessionId: "second" })],
+        });
         await vi.waitFor(async () => {
           expect((await store.readSession("first"))?.stoppedAt).toEqual(expect.any(String));
         });
 
         await execute({ action: "stop", sessionId: "first" });
-        const summarized = await execute({ action: "summarize", sessionId: "first" });
-        expect(summarized).toMatchObject({
+        expect(await execute({ action: "summarize", sessionId: "first" })).toMatchObject({
           details: { summary: { sessionId: "first", utteranceCount: 1 } },
         });
         expect.soft(providerStop).not.toHaveBeenCalled();
@@ -179,8 +172,7 @@ defineDiscordVoiceTests((h) => {
           onClose(terminal === "error" ? "error" : "completed");
           h.expectConnectedStatus(manager, "1001");
           await expectStatus("second", true);
-          const ongoing = await read("second");
-          expect(ongoing.stoppedAt).toBeUndefined();
+          expect((await read("second")).stoppedAt).toBeUndefined();
 
           beginTurn();
           const recovered = expectDefined(h.lastRealtimeBridgeParams(), "recovered speaker");
@@ -225,8 +217,7 @@ defineDiscordVoiceTests((h) => {
             stoppedAt: stoppedSecond.stoppedAt,
           });
           expect(await texts(stoppedSecond)).toEqual(secondTexts);
-          const third = await read("third");
-          expect(await store.readUtterancesForSession(third)).toEqual([]);
+          expect(await texts(await read("third"))).toEqual([]);
         }
       } finally {
         summaryWrite.mockRestore();

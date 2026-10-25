@@ -2,7 +2,7 @@
 import type { TalkCatalogResult } from "@openclaw/gateway-protocol";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { buildOpenAIRealtimeVoiceProvider } from "../extensions/openai/api.js";
 import { setRuntimeConfigSnapshot } from "../src/config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../src/config/sessions/session-accessor.js";
@@ -124,198 +124,192 @@ beforeEach(() => {
   mocks.createSession.mockReset();
 });
 
-describe("OpenAI browser Talk catalog defaults", () => {
-  it.each([
-    ["unpinned browser", undefined, undefined, false, "gpt-live-1", false],
-    ["explicit GA", "gpt-realtime-2.1", undefined, true, "gpt-realtime-2.1", false],
-    [
-      "configured GA through a provider alias",
-      "gpt-realtime-2.1",
-      " OPENAI-VOICE ",
-      true,
-      "gpt-realtime-2.1",
-      false,
-    ],
-    ["audio-only browser", undefined, undefined, false, "gpt-live-1", true],
-  ] as const)(
-    "preserves %s from discovery through session creation",
-    async (_label, model, providerId, camera, expected, audioOnly) => {
-      await withOpenClawTestState({ prefix: "talk-browser-defaults-" }, async (state) => {
-        const cfg: OpenClawConfig = {
-          agents: {
-            entries: { main: { agentDir: state.agentDir(), workspace: state.workspaceDir } },
+it.each([
+  ["unpinned browser", undefined, undefined, false, "gpt-live-1", false],
+  ["explicit GA", "gpt-realtime-2.1", undefined, true, "gpt-realtime-2.1", false],
+  [
+    "configured GA through a provider alias",
+    "gpt-realtime-2.1",
+    " OPENAI-VOICE ",
+    true,
+    "gpt-realtime-2.1",
+    false,
+  ],
+  ["audio-only browser", undefined, undefined, false, "gpt-live-1", true],
+] as const)(
+  "preserves OpenAI browser Talk %s defaults from discovery through session creation",
+  async (_label, model, providerId, camera, expected, audioOnly) => {
+    await withOpenClawTestState({ prefix: "talk-browser-defaults-" }, async (state) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          entries: { main: { agentDir: state.agentDir(), workspace: state.workspaceDir } },
+        },
+        talk: {
+          agentId: "main",
+          realtime: {
+            provider: providerId ?? "openai",
+            ...(model ? { model } : {}),
+            providers: { openai: { apiKey: "test-platform-key" } },
           },
-          talk: {
-            agentId: "main",
-            realtime: {
-              provider: providerId ?? "openai",
-              ...(model ? { model } : {}),
-              providers: { openai: { apiKey: "test-platform-key" } },
-            },
+        },
+      };
+      await state.writeConfig(cfg);
+      setRuntimeConfigSnapshot(cfg);
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: "agent:main:main" },
+        { sessionId: "test-agent-session", updatedAt: 1, visibility: "shared" },
+      );
+      const projection = await createSessionRowProjection({ cfg });
+      const provider = buildOpenAIRealtimeVoiceProvider({
+        quicksilverBrowserSessionBroker: {
+          capabilities: { handlesAgentConsult: true },
+          createBrowserSession: async (request) => {
+            mocks.providerRequests.push({ model: request.model });
+            return {
+              provider: "openai",
+              transport: "webrtc",
+              model: request.model,
+              offerUrl: "/test-offer",
+              clientSecret: "",
+            };
           },
-        };
-        await state.writeConfig(cfg);
-        setRuntimeConfigSnapshot(cfg);
-        await upsertSessionEntryCore(
-          { agentId: "main", sessionKey: "agent:main:main" },
-          { sessionId: "test-agent-session", updatedAt: 1, visibility: "shared" },
-        );
-        const projection = await createSessionRowProjection({ cfg });
-        const provider = buildOpenAIRealtimeVoiceProvider({
-          quicksilverBrowserSessionBroker: {
-            capabilities: { handlesAgentConsult: true },
-            createBrowserSession: async (request) => {
-              mocks.providerRequests.push({ model: request.model });
-              return {
-                provider: "openai",
-                transport: "webrtc",
-                model: request.model,
-                offerUrl: "/test-offer",
-                clientSecret: "",
-              };
-            },
-            cancelBrowserSession: async () => undefined,
-          },
-        });
-        provider.aliases = ["openai-voice"];
-        let catalogReleased = createDeferred<"settled" | "reset">();
-        mocks.providers = [
-          provider,
-          {
-            id: "other",
-            label: "Other voice provider",
-            isConfigured: ({ providerConfig }) => {
-              expectDefined(
-                captureGatewayRootWorkReleaseObserver(),
-                "catalog refresh must own root work admission",
-              )(catalogReleased.resolve);
-              return providerConfig.model === model;
-            },
-            createBridge: () => {
-              throw new Error("unused");
-            },
-          },
-        ];
-        const catalogs: TalkCatalogResult[] = [];
-        const request = async <T>(method: string, params: Record<string, unknown>): Promise<T> => {
-          if (method === "talk.client.close") {
-            return {} as T;
-          }
-          const handler = talkHandlers[method];
-          if (!handler) {
-            throw new Error(`Unexpected method ${method}`);
-          }
-          if (method === "talk.client.create") {
-            mocks.createSession(params);
-          }
-          let payload: unknown;
-          let failure: string | undefined;
-          let warming = false;
-          if (method === "talk.catalog") {
-            catalogReleased = createDeferred<"settled" | "reset">();
-          }
-          await withLocalGatewayRequestScope(
-            { deps: {}, getRuntimeConfig: () => cfg },
-            async () => {
-              const context = getPluginRuntimeGatewayRequestScope()?.context;
-              if (!context) {
-                throw new Error("Local Gateway context was not installed");
-              }
-              bindSessionRowProjection(context, () => projection);
-              const invoke = async () =>
-                handler({
-                  req: { type: "req", id: method, method },
-                  params,
-                  client: {
-                    connId: "camera-defaults",
-                    connect: {
-                      minProtocol: 3,
-                      maxProtocol: 3,
-                      client: {
-                        id: "openclaw-control-ui",
-                        version: "test",
-                        platform: "web",
-                        mode: "webchat",
-                      },
-                      scopes: ["operator.admin"],
-                    },
-                  },
-                  isWebchatConnect: () => false,
-                  respond: (ok, value, error) => {
-                    warming =
-                      method === "talk.catalog" &&
-                      error?.code === "UNAVAILABLE" &&
-                      error.retryable === true &&
-                      asOptionalRecord(error.details)?.reason === "talk-catalog-warming";
-                    if (!ok) {
-                      failure = error?.message ?? "Talk request failed";
-                    }
-                    payload = value;
-                  },
-                  context,
-                  sessionMutationAuthorization: {
-                    talkSessionTarget: {
-                      agentId: "main",
-                      sessionKey: "agent:main:main",
-                      canonicalKey: "agent:main:main",
-                      storePath: state.sessionsDir(),
-                      assertCurrent: () => undefined,
-                    },
-                    assertCurrent: () => undefined,
-                    assertTargetCurrent: () => undefined,
-                  },
-                });
-              await invoke();
-              if (warming) {
-                expect(await catalogReleased.promise).toBe("settled");
-                failure = undefined;
-                await invoke();
-              }
-            },
-          );
-          if (failure) {
-            throw new Error(failure);
-          }
-          if (method === "talk.catalog") {
-            catalogs.push(payload as TalkCatalogResult);
-          }
-          return payload as T;
-        };
-        const onVideoCapability = vi.fn();
-        const session = new RealtimeTalkSession(
-          { request } as GatewayBrowserClient,
-          "agent:main:main",
-          audioOnly ? {} : { onVideoCapability },
-        );
-        try {
-          await session.start();
-          expect(mocks.createSession).toHaveBeenCalledWith({
-            sessionKey: "agent:main:main",
-            capabilities: camera
-              ? ["voice-transcript", "voice-selection", "camera-frame"]
-              : ["voice-transcript", "voice-selection"],
-          });
-          expect(mocks.providerRequests).toHaveLength(1);
-          expect(mocks.providerRequests[0]?.model).toBe(expected);
-          if (!audioOnly) {
-            expect(onVideoCapability).toHaveBeenCalledWith(camera);
-            expect(catalogs[0]?.realtime.providers).toContainEqual(
-              expect.objectContaining({ id: "other", configured: true }),
-            );
-          }
-          if (camera) {
-            expect(mocks.providerRequests[0]?.tools).toContainEqual(
-              expect.objectContaining({ name: "describe_view" }),
-            );
-          }
-        } finally {
-          try {
-            await session.stop();
-          } finally {
-            projection.dispose();
-          }
-        }
+          cancelBrowserSession: async () => undefined,
+        },
       });
-    },
-  );
-});
+      provider.aliases = ["openai-voice"];
+      let catalogReleased = createDeferred<"settled" | "reset">();
+      mocks.providers = [
+        provider,
+        {
+          id: "other",
+          label: "Other voice provider",
+          isConfigured: ({ providerConfig }) => {
+            expectDefined(
+              captureGatewayRootWorkReleaseObserver(),
+              "catalog refresh must own root work admission",
+            )(catalogReleased.resolve);
+            return providerConfig.model === model;
+          },
+          createBridge: () => {
+            throw new Error("unused");
+          },
+        },
+      ];
+      const catalogs: TalkCatalogResult[] = [];
+      const request = async <T>(method: string, params: Record<string, unknown>): Promise<T> => {
+        if (method === "talk.client.close") {
+          return {} as T;
+        }
+        const handler = talkHandlers[method];
+        if (!handler) {
+          throw new Error(`Unexpected method ${method}`);
+        }
+        if (method === "talk.client.create") {
+          mocks.createSession(params);
+        }
+        let payload: unknown;
+        let failure: string | undefined;
+        let warming = false;
+        if (method === "talk.catalog") {
+          catalogReleased = createDeferred<"settled" | "reset">();
+        }
+        await withLocalGatewayRequestScope({ deps: {}, getRuntimeConfig: () => cfg }, async () => {
+          const context = getPluginRuntimeGatewayRequestScope()?.context;
+          if (!context) {
+            throw new Error("Local Gateway context was not installed");
+          }
+          bindSessionRowProjection(context, () => projection);
+          const invoke = async () =>
+            handler({
+              req: { type: "req", id: method, method },
+              params,
+              client: {
+                connId: "camera-defaults",
+                connect: {
+                  minProtocol: 3,
+                  maxProtocol: 3,
+                  client: {
+                    id: "openclaw-control-ui",
+                    version: "test",
+                    platform: "web",
+                    mode: "webchat",
+                  },
+                  scopes: ["operator.admin"],
+                },
+              },
+              isWebchatConnect: () => false,
+              respond: (ok, value, error) => {
+                warming =
+                  method === "talk.catalog" &&
+                  error?.code === "UNAVAILABLE" &&
+                  error.retryable === true &&
+                  asOptionalRecord(error.details)?.reason === "talk-catalog-warming";
+                if (!ok) {
+                  failure = error?.message ?? "Talk request failed";
+                }
+                payload = value;
+              },
+              context,
+              sessionMutationAuthorization: {
+                talkSessionTarget: {
+                  agentId: "main",
+                  sessionKey: "agent:main:main",
+                  canonicalKey: "agent:main:main",
+                  storePath: state.sessionsDir(),
+                  assertCurrent: () => undefined,
+                },
+                assertCurrent: () => undefined,
+                assertTargetCurrent: () => undefined,
+              },
+            });
+          await invoke();
+          if (warming) {
+            expect(await catalogReleased.promise).toBe("settled");
+            failure = undefined;
+            await invoke();
+          }
+        });
+        if (failure) {
+          throw new Error(failure);
+        }
+        if (method === "talk.catalog") {
+          catalogs.push(payload as TalkCatalogResult);
+        }
+        return payload as T;
+      };
+      const onVideoCapability = vi.fn();
+      const session = new RealtimeTalkSession(
+        { request } as GatewayBrowserClient,
+        "agent:main:main",
+        audioOnly ? {} : { onVideoCapability },
+      );
+      try {
+        await session.start();
+        expect(mocks.createSession).toHaveBeenCalledWith({
+          sessionKey: "agent:main:main",
+          capabilities: camera
+            ? ["voice-transcript", "voice-selection", "camera-frame"]
+            : ["voice-transcript", "voice-selection"],
+        });
+        expect(mocks.providerRequests).toMatchObject([{ model: expected }]);
+        if (!audioOnly) {
+          expect(onVideoCapability).toHaveBeenCalledWith(camera);
+          expect(catalogs[0]?.realtime.providers).toContainEqual(
+            expect.objectContaining({ id: "other", configured: true }),
+          );
+        }
+        if (camera) {
+          expect(mocks.providerRequests[0]?.tools).toContainEqual(
+            expect.objectContaining({ name: "describe_view" }),
+          );
+        }
+      } finally {
+        try {
+          await session.stop();
+        } finally {
+          projection.dispose();
+        }
+      }
+    });
+  },
+);
