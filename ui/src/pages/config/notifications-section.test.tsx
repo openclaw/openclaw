@@ -99,17 +99,14 @@ it("keeps the send affordance pending until the command settles", async () => {
   });
 });
 
-it.each([
-  { state: "error", message: "Open System Settings and try again.", role: "alert" },
-  { state: "sent", message: "Test notification queued", role: "status" },
-] as const)("announces $state native test outcomes", ({ state, message, role }) => {
-  const test = state === "sent" ? { state } : { state, message };
-  const { container } = renderSection({ nativeNotifications: { permission: "granted", test } });
-  const announcement = expectDefined(container.querySelector(`[role="${role}"]`), role);
+it("announces a native test error without populating the success region", () => {
+  const message = "Open System Settings and try again.";
+  const { container } = renderSection({
+    nativeNotifications: { permission: "granted", test: { state: "error", message } },
+  });
+  const announcement = expectDefined(container.querySelector('[role="alert"]'), "alert");
   expect(announcement.textContent).toContain(message);
-  if (state === "error") {
-    expect(container.querySelector('.sr-only[role="status"]')?.textContent).toBe("");
-  }
+  expect(container.querySelector('.sr-only[role="status"]')?.textContent).toBe("");
 });
 
 it("establishes the polite live region before announcing a successful test", async () => {
