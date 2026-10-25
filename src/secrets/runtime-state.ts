@@ -47,32 +47,21 @@ import {
   clearActiveCredentialDegradedOwners,
   setActiveDegradedSecretOwners,
   type DegradedSecretOwner,
-  type SecretOwnerRefState,
 } from "./runtime-degraded-state.js";
-import type { SecretResolverWarning } from "./runtime-shared.js";
 import {
   hasSameSecretProviderDefinition,
   isSecretsRuntimeDisplayChange,
 } from "./runtime-source-contract.js";
-import { cloneSecretsRuntimeSnapshot } from "./runtime-state-clone.js";
+import {
+  cloneSecretsRuntimeSnapshot,
+  type PreparedSecretsRuntimeSnapshot,
+} from "./runtime-state-clone.js";
 import {
   clearActiveRuntimeWebToolsMetadata,
   setActiveRuntimeWebToolsMetadata,
 } from "./runtime-web-tools-state.js";
-import type { RuntimeWebToolsMetadata } from "./runtime-web-tools.types.js";
 
-/** Prepared secrets runtime snapshot activated for fast secret resolution. */
-export type PreparedSecretsRuntimeSnapshot = {
-  sourceConfig: OpenClawConfig;
-  config: OpenClawConfig;
-  authStores: OwnedRuntimeAuthProfileStoreSnapshotEntry[];
-  authStoreCredentialsRevision: number;
-  authStoreSnapshotsRevision: number;
-  warnings: SecretResolverWarning[];
-  degradedOwners?: DegradedSecretOwner[];
-  secretOwners?: SecretOwnerRefState[];
-  webTools: RuntimeWebToolsMetadata;
-};
+export type { PreparedSecretsRuntimeSnapshot } from "./runtime-state-clone.js";
 
 /** Context needed to refresh active secrets runtime snapshots without losing plugin origin data. */
 export type SecretsRuntimeRefreshContext = {
