@@ -55,14 +55,6 @@ function parseSent(socket: FakeWebSocketInstance): SentRealtimeEvent[] {
 const socketHarness = createTranscriptionSocketHarness(FakeWebSocket);
 const { waitForFakeSocket, connectFakeSession } = socketHarness;
 
-function mockCallArg(mock: { mock: { calls: unknown[][] } }, index = 0): Record<string, unknown> {
-  const call = mock.mock.calls[index];
-  if (!call) {
-    throw new Error(`expected mock call ${index}`);
-  }
-  return call[0] as Record<string, unknown>;
-}
-
 async function connectSession() {
   const errors: string[] = [];
   const partials: string[] = [];
@@ -182,9 +174,14 @@ describe("buildOpenAIRealtimeTranscriptionProvider", () => {
     const socket = await waitForFakeSocket(session);
 
     expect(socket.headers?.Authorization).toBe("Bearer ek-test");
-    const request = mockCallArg(ssrfMocks.fetchWithSsrFGuard);
-    const init = request.init as { headers?: Record<string, string> };
-    expect(init.headers?.Authorization).toBe("Bearer sk-profile");
+    expect(ssrfMocks.fetchWithSsrFGuard).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        init: expect.objectContaining({
+          headers: expect.objectContaining({ Authorization: "Bearer sk-profile" }),
+        }),
+      }),
+    );
 
     socket.readyState = FakeWebSocket.OPEN;
     socket.emit("open");
@@ -282,8 +279,7 @@ describe("buildOpenAIRealtimeTranscriptionProvider", () => {
     session.close();
     session.close();
 
-    expect(onError).toHaveBeenCalledOnce();
-    expect(onError).toHaveBeenCalledWith(
+    expect(onError).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ message: expect.stringContaining("final audio commit") }),
     );
     expect(parseSent(socket).at(-1)?.type).toBe("input_audio_buffer.append");
@@ -496,17 +492,13 @@ describe("buildOpenAIRealtimeTranscriptionProvider", () => {
       emitCommitted(socket, itemId, null);
     }
 
-    const transcript = `${"🙂".repeat((256 * 1024) / 4)}x`;
-    emitJson(socket, {
-      type: "conversation.item.input_audio_transcription.completed",
-      ...(itemId ? { item_id: itemId } : {}),
-      transcript,
-    });
-    emitJson(socket, {
-      type: "conversation.item.input_audio_transcription.completed",
-      ...(itemId ? { item_id: itemId } : {}),
-      transcript: "late transcript",
-    });
+    for (const transcript of [`${"🙂".repeat((256 * 1024) / 4)}x`, "late transcript"]) {
+      emitJson(socket, {
+        type: "conversation.item.input_audio_transcription.completed",
+        ...(itemId ? { item_id: itemId } : {}),
+        transcript,
+      });
+    }
 
     expectOverflow(session, onError, onTranscript, "256 KiB retained transcript");
     expect(socket.closed).toBe(true);
