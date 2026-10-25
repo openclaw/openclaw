@@ -94,7 +94,7 @@ describe("doctor session snapshot stale runtime metadata", () => {
     bundledSkillsDir = path.join(root, "current", "skills");
     currentSkillPath = path.join(bundledSkillsDir, "doctor", "SKILL.md");
     stalePath = path.join(root, "old-runtime/node_modules/openclaw/skills/doctor/SKILL.md");
-    storePath = path.join(root, "state/agents/main/sessions/sessions.json");
+    storePath = path.join(root, "configured-sessions.json");
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
     vi.stubEnv("OPENCLAW_BUNDLED_SKILLS_DIR", bundledSkillsDir);
     await fs.mkdir(path.dirname(currentSkillPath), { recursive: true });
@@ -199,21 +199,7 @@ describe("doctor session snapshot stale runtime metadata", () => {
 
     await noteHealth({ cfg: { session: { store: storePath } } });
 
-    expectNote("agent:main", "skillsSnapshot.resolvedSkills", stalePath);
-  });
-
-  it("reports stale cached metadata from configured session stores", async () => {
-    const stateDir = path.join(root, "state");
-    const configuredStorePath = path.join(root, "configured-sessions.json");
-    await writeSessionStore(storePath, {});
-    await writeSessionStore(configuredStorePath, { "agent:configured": skillSession(stalePath) });
-
-    await noteHealth({
-      cfg: { session: { store: configuredStorePath } },
-      env: { OPENCLAW_STATE_DIR: stateDir },
-    });
-
-    expectNote(configuredStorePath, "agent:configured", stalePath);
+    expectNote(storePath, "agent:main", "skillsSnapshot.resolvedSkills", stalePath);
   });
 
   it("preserves a missing prompt blob without reporting false findings", async () => {

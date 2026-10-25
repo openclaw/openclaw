@@ -1,5 +1,4 @@
-// Doctor workspace status tests cover workspace inspection and status output.
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshotScopeRunner } from "../plugins/current-plugin-metadata-snapshot.js";
 import { createPluginLoadResult, createPluginRecord } from "../plugins/status.test-fixtures.js";
@@ -26,46 +25,16 @@ vi.mock("../plugins/status.js", () => ({
 }));
 
 describe("collectWorkspaceStatusHealthFindings", () => {
-  it("shares scoped workspace inspection while reporting identical registrar failures once", () => {
-    const diagnostic = {
-      level: "error" as const,
-      pluginId: "broken-fixture",
-      source: "/plugins/broken-fixture/index.js",
-      message: "board widget registration has invalid kind",
-    };
-    mocks.listAgentIds.mockReturnValue(["alpha", "beta"]);
-    mocks.resolveAgentWorkspaceDir.mockImplementation((_cfg, agentId) => `/workspace/${agentId}`);
-    let activeWorkspace: string | undefined;
-    const runWithPluginMetadataSnapshot: PluginMetadataSnapshotScopeRunner = (scope, run) => {
-      activeWorkspace = scope.workspaceDir;
-      try {
-        return run();
-      } finally {
-        activeWorkspace = undefined;
-      }
-    };
-    mocks.buildPluginRegistrySnapshotReport.mockImplementation(({ workspaceDir }) => {
-      expect(activeWorkspace).toBe(workspaceDir);
-      return {
-        workspaceDir,
-        ...createPluginLoadResult({ plugins: [], diagnostics: [diagnostic] }),
-      };
+  beforeEach(() => {
+    vi.resetAllMocks();
+    mocks.listAgentIds.mockReturnValue(["default"]);
+    mocks.resolveAgentWorkspaceDir.mockReturnValue("/workspace");
+    mocks.buildPluginRegistrySnapshotReport.mockReturnValue({
+      workspaceDir: "/workspace",
+      ...createPluginLoadResult({ plugins: [] }),
     });
-    mocks.buildPluginCompatibilityWarnings.mockImplementation(({ workspaceDir }) => {
-      expect(activeWorkspace).toBe(workspaceDir);
-      return ["legacy-plugin is hook-only"];
-    });
-
-    const findings = collectWorkspaceStatusHealthFindings({}, { runWithPluginMetadataSnapshot });
-    expect(findings.map((finding) => finding.message)).toEqual([
-      'Agent "alpha": legacy-plugin is hook-only',
-      'Agent "alpha": board widget registration has invalid kind',
-      'Agent "beta": legacy-plugin is hook-only',
-    ]);
-    expect(findings.filter((finding) => finding.target === "broken-fixture")).toHaveLength(1);
-    expect(activeWorkspace).toBeUndefined();
+    mocks.buildPluginCompatibilityWarnings.mockReturnValue([]);
   });
-
   it("shares scoped workspace inspection while reporting identical registrar failures once", () => {
     const diagnostic = {
       level: "error" as const,
@@ -107,8 +76,6 @@ describe("collectWorkspaceStatusHealthFindings", () => {
   });
 
   it("omits healthy plugins but gives errored metadata records an actionable finding", () => {
-    mocks.listAgentIds.mockReturnValue(["default"]);
-    mocks.resolveAgentWorkspaceDir.mockReturnValue("/workspace");
     mocks.buildPluginRegistrySnapshotReport.mockReturnValue({
       workspaceDir: "/workspace",
       ...createPluginLoadResult({
@@ -118,7 +85,6 @@ describe("collectWorkspaceStatusHealthFindings", () => {
         ],
       }),
     });
-    mocks.buildPluginCompatibilityWarnings.mockReturnValue([]);
     expect(collectWorkspaceStatusHealthFindings({})).toEqual([
       expect.objectContaining({
         target: "broken",
@@ -128,14 +94,7 @@ describe("collectWorkspaceStatusHealthFindings", () => {
     ]);
   });
 
-  it("collects plugin version drift as structured findings", async () => {
-    mocks.resolveAgentWorkspaceDir.mockReturnValue("/workspace");
-    mocks.buildPluginRegistrySnapshotReport.mockReturnValue({
-      workspaceDir: "/workspace",
-      ...createPluginLoadResult({ plugins: [] }),
-    });
-    mocks.buildPluginCompatibilityWarnings.mockReturnValue([]);
-
+  it("collects plugin version drift as structured findings", () => {
     const findings = collectWorkspaceStatusHealthFindings(
       {
         plugins: { entries: { codex: { enabled: true } } },
@@ -172,13 +131,6 @@ describe("collectWorkspaceStatusHealthFindings", () => {
   });
 
   it("reports npm target lookup failure without an uninstallable fix hint", () => {
-    mocks.resolveAgentWorkspaceDir.mockReturnValue("/workspace");
-    mocks.buildPluginRegistrySnapshotReport.mockReturnValue({
-      workspaceDir: "/workspace",
-      ...createPluginLoadResult({ plugins: [] }),
-    });
-    mocks.buildPluginCompatibilityWarnings.mockReturnValue([]);
-
     const findings = collectWorkspaceStatusHealthFindings(
       { plugins: { entries: { brave: { enabled: true } } } },
       {
@@ -218,8 +170,7 @@ describe("collectWorkspaceStatusHealthFindings", () => {
     expect(findings[0]?.fixHint).not.toContain("openclaw gateway restart");
   });
 
-  it("collects compatibility warnings and plugin diagnostics", async () => {
-    mocks.resolveAgentWorkspaceDir.mockReturnValue("/workspace");
+  it("collects compatibility warnings and plugin diagnostics", () => {
     mocks.buildPluginRegistrySnapshotReport.mockReturnValue({
       workspaceDir: "/workspace",
       ...createPluginLoadResult({
@@ -268,7 +219,6 @@ describe("collectWorkspaceStatusHealthFindings", () => {
   });
 
   it("labels workspace diagnostics for the affected secondary agent", () => {
-    mocks.buildPluginRegistrySnapshotReport.mockClear();
     mocks.listAgentIds.mockReturnValue(["default", "secondary"]);
     mocks.resolveAgentWorkspaceDir.mockImplementation((_cfg, agentId) => `/${agentId}`);
     mocks.buildPluginRegistrySnapshotReport.mockImplementation(({ workspaceDir }) => ({
@@ -281,7 +231,6 @@ describe("collectWorkspaceStatusHealthFindings", () => {
             : [],
       }),
     }));
-    mocks.buildPluginCompatibilityWarnings.mockReturnValue([]);
 
     const findings = collectWorkspaceStatusHealthFindings({});
 

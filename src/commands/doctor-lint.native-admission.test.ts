@@ -44,6 +44,15 @@ afterEach(() => {
   clearHealthChecksForTest();
 });
 
+function writePluginFiles(root: string, files: Record<string, string | object>) {
+  for (const [name, content] of Object.entries(files)) {
+    fs.writeFileSync(
+      path.join(root, name),
+      typeof content === "string" ? content : JSON.stringify(content),
+    );
+  }
+}
+
 it("keeps private Doctor native admissions out of the caller and persisted index with prepared metadata", async () => {
   await withOpenClawTestState(
     {
@@ -62,23 +71,16 @@ it("keeps private Doctor native admissions out of the caller and persisted index
         version: "1.0.0",
       });
       const packageJson = path.join(packageDir, "package.json");
-      fs.writeFileSync(
-        packageJson,
-        JSON.stringify({ ...JSON.parse(fs.readFileSync(packageJson, "utf8")), type: "module" }),
-      );
-      fs.writeFileSync(
-        path.join(packageDir, "openclaw.plugin.json"),
-        JSON.stringify({
+      writePluginFiles(packageDir, {
+        "package.json": { ...JSON.parse(fs.readFileSync(packageJson, "utf8")), type: "module" },
+        "openclaw.plugin.json": {
           id: pluginId,
           contracts: { tools: [toolName] },
           configSchema: { type: "object", additionalProperties: false },
-        }),
-      );
-      fs.writeFileSync(path.join(packageDir, "README.md"), "Native companion fixture.\n");
-      fs.writeFileSync(path.join(packageDir, "dist", "fixture.bin"), "native fixture bytes");
-      fs.writeFileSync(
-        path.join(packageDir, "dist", "index.js"),
-        `
+        },
+        "README.md": "Native companion fixture.\n",
+        "dist/fixture.bin": "native fixture bytes",
+        "dist/index.js": `
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -101,14 +103,12 @@ export default {
   },
 };
 `,
-      );
+      });
       const config: OpenClawConfig = {
         agents: {
           ownership: "explicit",
           defaults: { systemAgent: { agentId: "main" }, model: "fixture/local" },
-          entries: {
-            main: { workspace: state.workspaceDir, tools: { allow: [toolName] } },
-          },
+          entries: { main: { workspace: state.workspaceDir, tools: { allow: [toolName] } } },
         },
         models: {
           providers: {
@@ -154,11 +154,10 @@ export default {
       const check = {
         ...runtimeToolSchemaCheck,
         detect(ctx: HealthCheckContext) {
-          const preparedContext = {
+          return runtimeToolSchemaCheck.detect({
             ...ctx,
             runWithPluginMetadataSnapshot: prepared.run,
-          };
-          return runtimeToolSchemaCheck.detect(preparedContext);
+          });
         },
       };
       contributions.resolve.mockResolvedValue([check]);
@@ -234,18 +233,17 @@ it("keeps native plugin captures alive after Doctor retires its private state sn
     await closeOpenClawStateDatabaseAsync();
     const plugin = state.path("channel-plugin");
     fs.mkdirSync(plugin);
-    fs.writeFileSync(path.join(plugin, "package.json"), '{"name":"channel-fixture"}');
-    fs.writeFileSync(path.join(plugin, "README.md"), "channel companion");
-    fs.writeFileSync(path.join(plugin, "addon.node"), "synthetic native bytes");
-    fs.writeFileSync(
-      path.join(plugin, "index.cjs"),
-      `const fs = require("node:fs");
+    writePluginFiles(plugin, {
+      "package.json": { name: "channel-fixture" },
+      "README.md": "channel companion",
+      "addon.node": "synthetic native bytes",
+      "index.cjs": `const fs = require("node:fs");
        const path = require("node:path");
        exports.read = () => {
          const native = fs.realpathSync(path.join(__dirname, "addon.node"));
          return fs.readFileSync(path.join(path.dirname(native), "README.md"), "utf8");
        };`,
-    );
+    });
     const cache = createPluginCache();
     const instances: PluginInstance[] = [];
     const load = () => {
