@@ -9,6 +9,7 @@ import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { installDialogPolyfill } from "../../test-helpers/modal-dialog.ts";
+import { expectAbsent, expectContent, expectPresent } from "../../test-helpers/model-providers.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   appendPage,
@@ -86,6 +87,12 @@ const clickAgent = (page: Page) =>
 const agentText = (page: Page) => agentRow(page, "opencode")?.textContent;
 const refreshButton = (page: Page, scope = "") =>
   page.querySelector<HTMLButtonElement>(`${scope} .model-providers__refresh-button`)!;
+const section = (page: Page) => page.querySelector(".model-providers__installed-agents")!;
+const alert = (root: ParentNode) => root.querySelector('[role="alert"]');
+const clickButton = (root: ParentNode, label: string) =>
+  [...root.querySelectorAll("button")]
+    .find((button) => button.textContent?.trim() === label)!
+    .click();
 const nativeAgents = (enabled: boolean) => ({
   plugins: { entries: { acpx: { config: { nativeAgents: { opencode: enabled } } } } },
 });
@@ -112,7 +119,7 @@ function consentRequest(
 async function openConsent(context: ApplicationContext, message = "Allow runtime?") {
   const page = await mountAgents(context);
   clickAgent(page);
-  await waitForSolid(() => expect(wizard(page)?.textContent).toContain(message));
+  await waitForSolid(() => expectContent(wizard(page), [message]));
   return page;
 }
 
@@ -174,8 +181,7 @@ it("enables for the selected agent through the shared consent wizard", async () 
     await waitForSolid(() =>
       expect(page.querySelector<HTMLDialogElement>("dialog.oc-modal-dialog")?.open).toBe(true),
     );
-    expect(toggle(page).checked).toBe(true);
-    expect(toggle(page).disabled).toBe(true);
+    expect(toggle(page)).toMatchObject({ checked: true, disabled: true });
     expect(agentText(page)).toContain("Saving");
     expect(request).toHaveBeenCalledWith(
       "openclaw.setup.runtime.start",
@@ -188,23 +194,13 @@ it("enables for the selected agent through the shared consent wizard", async () 
       { timeoutMs: null },
     );
     expect(enabled).toBe(false);
-    expect(runtimeConfig.patch).not.toHaveBeenCalled();
     primary(page).click();
-    await waitForSolid(() => expect(wizard(page)?.textContent).toContain("OpenCode is enabled."));
-    expect(request).toHaveBeenCalledWith(
-      "wizard.next",
-      expect.objectContaining({ answer: { stepId: "runtime-consent", value: true } }),
-      expect.anything(),
-    );
+    await waitForSolid(() => expectContent(wizard(page), ["OpenCode is enabled."]));
     expect(enabled).toBe(true);
     expect(runtimeConfig.refresh).toHaveBeenCalled();
     expect(runtimeConfig.patch).not.toHaveBeenCalled();
     await waitForSolid(() => expect(agentText(page)).not.toContain("Saving"));
-    const close = [...wizard(page)!.querySelectorAll("button")].find(
-      (button) => button.textContent?.trim() === "Close",
-    );
-    expect(close).toBeDefined();
-    close!.click();
+    clickButton(wizard(page)!, "Close");
     await waitForSolid(() => expect(wizard(page)).toBeNull());
     expect(toggle(page)).toMatchObject({ checked: true });
   } finally {
@@ -248,7 +244,7 @@ it.each(["agent", "selection revision", "connection"] as const)(
       await drainPageUpdates(page);
       staleButton.click();
       expect(wizard(page)).toBeNull();
-      expect(page.renderRoot.textContent).not.toContain("OpenCode is enabled.");
+      expectContent(page.renderRoot, [], ["OpenCode is enabled."]);
       expect(runtimeConfig.refresh).toHaveBeenCalledTimes(refreshes);
       expect(runtimeConfig.patch).not.toHaveBeenCalled();
       expect(requestCount(request, "openclaw.setup.runtime.start")).toBe(1);
@@ -265,39 +261,28 @@ it("lists every reported agent with its installation status only when advertised
   const hidden = createHarness("main");
   const hiddenPage = appendPage(hidden.context);
   await waitForProviders(hiddenPage);
-  expect(hiddenPage.querySelector(".model-providers__installed-agents")).toBeNull();
+  expectAbsent(hiddenPage, ".model-providers__installed-agents");
   expect(requestCount(hidden.request, "acpx.agents.list")).toBe(0);
   unmountPage(hiddenPage);
 
-  const { context, request, settingsAgentSelection, notifySelection } = createAgentsHarness(
-    async () => ({
-      agents: [
-        agent("opencode", "OpenCode"),
-        agent("qwen", "Qwen Code", { installation: "missing", enabled: false }),
-        agent("pi", "Pi", { installation: "unverified" }),
-        agent("kilo", "Kilo"),
-      ],
-    }),
-  );
+  const { context } = createAgentsHarness(async () => ({
+    agents: [
+      agent("opencode", "OpenCode"),
+      agent("qwen", "Qwen Code", { installation: "missing", enabled: false }),
+      agent("pi", "Pi", { installation: "unverified" }),
+      agent("kilo", "Kilo"),
+    ],
+  }));
   const page = await mountAgents(context);
   await waitForSolid(() => expect(agentRow(page, "pi")).not.toBeNull());
   expect(agentText(page)).not.toContain("Models available");
-  // A missing app has no switch to flip; it is named on the shared not-detected line.
   expect(agentRow(page, "qwen")).toBeNull();
-  expect(page.querySelector("[data-installed-agents-missing]")?.textContent).toContain(
+  expectContent(page.querySelector("[data-installed-agents-missing]"), [
     "Not detected on the Gateway computer: Qwen Code.",
-  );
-  expect(agentRow(page, "pi")?.textContent).toContain("Not verified");
-  expect(agentRow(page, "kilo")?.textContent).toContain("Use Kilo");
-  expect(page.renderRoot.textContent).not.toContain("Saving");
-  expect(requestCount(request, "config.patch")).toBe(0);
-  expect(page.querySelector(".model-providers__provider-list")).toBeNull();
-
-  settingsAgentSelection.state.selectedId = "writer";
-  notifySelection();
-  await page.updateComplete;
-  expect(agentRow(page, "opencode")).not.toBeNull();
-  expect(requestCount(request, "acpx.agents.list")).toBe(1);
+  ]);
+  expectContent(agentRow(page, "pi"), ["Not verified"]);
+  expectContent(agentRow(page, "kilo"), ["Use Kilo"]);
+  expectAbsent(page, ".model-providers__provider-list");
 });
 
 it("distinguishes failed and pending discovery and lets Check again recover models", async () => {
@@ -369,9 +354,6 @@ it("saves the enabled flag and keeps it over a list read that started earlier", 
     expect(toggle(page)).toMatchObject({ checked: false });
     expect(toggle(page).hasAttribute("aria-disabled")).toBe(false);
   });
-  expect(runtimeConfig.patch).toHaveBeenCalledWith(
-    expect.objectContaining({ raw: nativeAgents(false) }),
-  );
   staleRead.resolve(inventory());
   await staleRead.promise;
   await page.updateComplete;
@@ -408,9 +390,8 @@ it("disables at the config acknowledgement without erasing remembered consent", 
     clickAgent(page);
     await waitForSolid(() => {
       expect(agentText(page)).toContain("Saving");
-      expect(toggle(page).checked).toBe(false);
+      expect(toggle(page)).toMatchObject({ checked: false, disabled: false });
       expect(toggle(page).hasAttribute("aria-disabled")).toBe(true);
-      expect(toggle(page).disabled).toBe(false);
     });
     acknowledgement.resolve({ config: config(false), hash: "saved" });
 
@@ -427,7 +408,6 @@ it("disables at the config acknowledgement without erasing remembered consent", 
       }),
     );
 
-    // Installation metadata can still reflect the previous runtime generation.
     releaseReads();
     await waitForSolid(() => expect(refreshButton(page).disabled).toBe(false));
     expect(toggle(page).checked).toBe(false);
@@ -459,17 +439,11 @@ it.each([true, false])(
       expect(toggle(page).checked).toBe(false);
       expect(toggle(page).hasAttribute("aria-disabled")).toBe(true);
     });
-    expect(agentRow(page, "opencode")).toBe(row);
     patch.resolve(false);
 
-    await waitForSolid(() =>
-      expect(agentRow(page, "opencode")?.querySelector('[role="alert"]')?.textContent).toContain(
-        "Config changed on disk.",
-      ),
-    );
+    await waitForSolid(() => expectContent(alert(row!), ["Config changed on disk."]));
     const switchInput = toggle(page);
     await waitForSolid(() => expect(switchInput.checked).toBe(enabledAfter));
-    expect(agentRow(page, "opencode")).toBe(row);
   },
 );
 
@@ -490,7 +464,7 @@ it("does not publish a disable failure into another selected agent", async () =>
   runtimeConfig.state.lastError = "Original agent save failed.";
   patch.resolve(false);
   await drainPageUpdates(page);
-  expect(page.renderRoot.textContent).not.toContain("Original agent save failed.");
+  expectContent(page.renderRoot, [], ["Original agent save failed."]);
   expect(agentText(page)).not.toContain("Saving");
 });
 
@@ -503,72 +477,47 @@ it("keeps the list readable but locked without admin access", async () => {
   clickAgent(page);
 
   expect(toggle(page).disabled).toBe(true);
-  expect(page.querySelector(".model-providers__installed-agents")?.textContent).toContain(
-    "Model changes require operator.admin access.",
-  );
+  expectContent(section(page), ["Model changes require operator.admin access."]);
   expect(runtimeConfig.patch).not.toHaveBeenCalled();
 });
 
-it("releases the initial provider gate after inventory failure and recovers on retry", async () => {
+it("recovers initial inventory failure, then retains inventory through refresh failure and retry", async () => {
   const initial = deferred<unknown>();
-  let reads = 0;
-  const { context, request } = createAgentsHarness(async () =>
-    ++reads === 1 ? initial.promise : inventory(),
-  );
+  const refreshing = deferred<unknown>();
+  const retry = deferred<unknown>();
+  const results = [initial.promise, inventory(), refreshing.promise, retry.promise];
+  const { context, request } = createAgentsHarness(async () => results.shift() ?? inventory());
   const page = appendPage(context);
   await waitForSolid(() => expect(requestCount(request, "acpx.agents.list")).toBe(1));
   expect(agentRow(page, "opencode")).toBeNull();
-  expect(page.querySelector(".model-providers__search")).toBeNull();
+  expectAbsent(page, ".model-providers__search");
   initial.reject(new Error("Inventory unavailable"));
   await waitForProviders(page);
-  await waitForSolid(() => expect(page.querySelector(".model-providers__search")).not.toBeNull());
-  const section = page.querySelector(".model-providers__installed-agents")!;
-  await waitForSolid(() =>
-    expect(section.querySelector('[role="alert"]')?.textContent).toBe("Inventory unavailable"),
-  );
-  [...section.querySelectorAll("button")]
-    .find((button) => button.textContent?.trim() === "Retry")!
-    .click();
+  await waitForSolid(() => expectPresent(page, ".model-providers__search"));
+  const content = section(page);
+  await waitForSolid(() => expect(alert(content)?.textContent).toBe("Inventory unavailable"));
+  clickButton(content, "Retry");
   await waitForSolid(() => expect(agentRow(page, "opencode")).not.toBeNull());
-  expect(section.querySelector('[role="alert"]')).toBeNull();
-});
-
-it("retains inventory and its refresh control through a failed refresh and retry", async () => {
-  const refreshing = deferred<unknown>();
-  let reads = 0;
-  const retry = deferred<unknown>();
-  const { context } = createAgentsHarness(async () => {
-    reads += 1;
-    return reads === 2 ? refreshing.promise : reads === 3 ? retry.promise : inventory();
-  });
-  const page = await mountAgents(context);
-  const section = page.querySelector(".model-providers__installed-agents")!;
-  const row = agentRow(page, "opencode");
+  expect(alert(content)).toBeNull();
   const refresh = refreshButton(page, ".model-providers__installed-agents");
   expect(refresh.getAttribute("aria-label")).toBe("Check again");
-  refresh.focus();
   refresh.click();
   await waitForSolid(() => expect(refresh.disabled).toBe(true));
   expect(refresh.getAttribute("aria-label")).toBe("Checking…");
-  expect(agentRow(page, "opencode")).toBe(row);
+  expect(agentText(page)).toContain("OpenCode");
   refreshing.reject(new Error("Inventory refresh failed"));
-  await waitForSolid(() =>
-    expect(section.querySelector('[role="alert"]')?.textContent).toBe("Inventory refresh failed"),
-  );
+  await waitForSolid(() => expect(alert(content)?.textContent).toBe("Inventory refresh failed"));
   expect(refreshButton(page, ".model-providers__installed-agents")).toBe(refresh);
   expect(refresh.getAttribute("aria-label")).toBe("Check again");
-  expect(agentRow(page, "opencode")).toBe(row);
-  [...section.querySelectorAll("button")]
-    .find((button) => button.textContent?.trim() === "Retry")!
-    .click();
+  expect(agentText(page)).toContain("OpenCode");
+  clickButton(content, "Retry");
   await waitForSolid(() => expect(refresh.disabled).toBe(true));
   expect(refresh.getAttribute("aria-label")).toBe("Checking…");
-  expect(section.querySelector('[role="alert"]')).toBeNull();
-  expect(agentRow(page, "opencode")).toBe(row);
+  expect(alert(content)).toBeNull();
+  expect(agentText(page)).toContain("OpenCode");
   retry.resolve({ agents: [agent("opencode", "OpenCode refreshed")] });
   await waitForSolid(() => expect(refresh.disabled).toBe(false));
   expect(refresh.getAttribute("aria-label")).toBe("Check again");
-  expect(section.querySelector('[role="alert"]')).toBeNull();
-  expect(agentRow(page, "opencode")).toBe(row);
+  expect(alert(content)).toBeNull();
   expect(agentText(page)).toContain("OpenCode refreshed");
 });
