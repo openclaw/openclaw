@@ -59,6 +59,8 @@ export const uiIsolatedTestFiles = [
   "ui/src/pages/chat/chat-pane.session-discussion.test.ts",
   "ui/src/pages/chat/chat-pane.test.ts",
   "ui/src/pages/chat/chat-pane-tool-icons.test.tsx",
+  // Holds the editor import before first use; other comment suites load it eagerly.
+  "ui/src/pages/chat/components/chat-annotation-lazy.test.ts",
   "ui/src/pages/chat/components/chat-transcript-controller.test.ts",
   "ui/src/pages/chat/components/chat-transcript-geometry.test.ts",
   "ui/src/pages/chat/components/chat-transcript-invalidation.test.ts",

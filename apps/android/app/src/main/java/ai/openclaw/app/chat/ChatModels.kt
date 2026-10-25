@@ -2,6 +2,7 @@ package ai.openclaw.app.chat
 
 import ai.openclaw.app.asJsonStringOrNull
 import ai.openclaw.app.gateway.SessionObserverDigest
+import ai.openclaw.app.gateway.isInboundMediaSource
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -12,6 +13,10 @@ import java.util.Locale
 
 private val visibleChatMessageRoles = setOf("user", "assistant", "system", "custom", "toolresult")
 internal const val CHAT_IMAGE_MAX_BASE64_CHARS = 300 * 1024
+internal const val CHAT_COMPOSER_MAX_IMAGE_DECODED_BYTES = 6L * 1024L * 1024L
+
+/** Wire text for an attachment-only send. */
+internal const val CHAT_ATTACHMENT_PLACEHOLDER_TEXT = "See attached."
 
 /** Keeps transcript rows limited to roles Android renders as user-visible chat. */
 internal fun normalizeVisibleChatMessageRole(role: String?): String? =
@@ -193,7 +198,12 @@ data class ChatMessageContent(
   val playback: String? = null,
   val widget: ChatWidgetPreview? = null,
   val toolActivity: ChatToolActivity? = null,
+  /** True when the Gateway recorded that this audio attachment was transcribed for the turn. */
+  val transcribed: Boolean = false,
 )
+
+/** Managed images load by artifact ID; sent uploads load by their canonical inbound reference. */
+internal fun ChatMessageContent.imageLoadKey(): String? = artifactId?.takeIf(String::isNotBlank) ?: url?.takeIf(::isInboundMediaSource)
 
 /** Bounded, display-safe projection of a transcript tool block. */
 @Serializable

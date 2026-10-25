@@ -1,6 +1,10 @@
 import { findLegacyConfigIssues } from "./legacy.js";
 import type { LegacyConfigIssue } from "./types.js";
 
+let doctorIssuesModule:
+  | Promise<typeof import("../commands/doctor/shared/legacy-config-issues.js")>
+  | undefined;
+
 export async function collectInvalidConfigLegacyIssues(
   raw: unknown,
   sourceRaw: unknown,
@@ -17,8 +21,8 @@ export async function collectInvalidConfigLegacyIssues(
   if (options.coreOnly || coreIssues.length > 0) {
     return coreIssues;
   }
-  const { findDoctorLegacyConfigIssues } =
-    await import("../commands/doctor/shared/legacy-config-issues.js");
+  const { findDoctorLegacyConfigIssues } = await (doctorIssuesModule ??=
+    import("../commands/doctor/shared/legacy-config-issues.js"));
   const activatePluginState = await options.preparePluginDiagnostics?.();
   activatePluginState?.();
   return findDoctorLegacyConfigIssues(raw, sourceRaw);

@@ -15,6 +15,10 @@ installation, but the executable and its sidecar must stay together.
 Use this path to prepare application or deployment artifacts from a source
 checkout. For a normal CLI installation, start with [Install](/install).
 
+For a manually enabled, unsigned macOS 27-only CI artifact, see
+[Experimental AOT Actions builds](/install/standalone-aot-actions). This experiment
+does not replace the Mac app release or qualify macOS 15 support.
+
 ## Build the default JIT executable
 
 Use the repository's pinned package manager and the production Bun pin in
@@ -58,6 +62,11 @@ standalone-jit/
 
 Move or distribute the complete directory. `runtime/` is resolved relative to
 the executable; moving only `openclaw` leaves required resources behind.
+
+Embedded routing and file metadata are decoded on demand. Unused module aliases
+stay in immutable embedded text instead of being expanded into lookup objects
+in every worker. Each worker caches the rows it uses, preserving its own
+module-resolution context.
 
 ## Choose a compilation mode
 
@@ -127,6 +136,14 @@ artifact has `mode: "jit"` and `build.flavor: "support"`; the AOT artifact has
 `mode: "aot"` and `build.flavor: "standard"`. Compare `build.id`,
 `openclaw.commit`, `build.pluginSetSha256`, and `build.moduleGraphSha256` before
 reproducing an issue. Matching a version string alone is insufficient.
+
+The build identity is derived from compiled modules, retained resources, compiler,
+target, and compilation options. Independent builds of identical prepared inputs
+share that identity; changing compiled code or native resources invalidates it.
+For reproducible preparation, set the same `OPENCLAW_BUILD_TIMESTAMP` when running
+`pnpm build` in each checkout. Local cache freshness stamps are omitted from the
+standalone runtime. Compare executable hashes before timestamped signing;
+a matching build identity alone does not prove byte-identical executables.
 
 For breakpoints, the companion also retains the selected input runtime, its
 source maps, and a copy of the matching ordinary Bun executable under `debug/`.

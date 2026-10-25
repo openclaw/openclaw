@@ -749,6 +749,7 @@ src/config/sessions/session-store-read-candidates.ts
 src/config/sessions/session-store-target-inventory.ts
 src/config/sessions/session-store-target-runtime.ts
 src/config/sessions/supported-session-store.ts
+src/config/sessions/session-transcript-mutation-projection.ts
 src/config/sessions/session-transcript-projection-error.ts
 src/config/sessions/session-transcript-projection-facts-scope.ts
 src/config/sessions/session-transcript-projection-facts.ts

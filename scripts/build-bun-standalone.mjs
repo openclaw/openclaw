@@ -1,7 +1,6 @@
 #!/usr/bin/env bun
 // Build a relocatable executable and sidecar from a completed pnpm build.
 import { spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -24,6 +23,7 @@ import {
   sha256File,
   STANDALONE_USAGE,
 } from "./lib/bun-standalone-contract.mjs";
+import { standaloneEmbeddedPathsExpression } from "./lib/bun-standalone-data.mjs";
 import { createStandaloneEntrySource } from "./lib/bun-standalone-entry.mjs";
 import { rewriteStandaloneImports } from "./lib/bun-standalone-imports.mjs";
 import { createStandaloneMetadataAdapter } from "./lib/bun-standalone-metadata.mjs";
@@ -51,7 +51,7 @@ import {
   publishStandaloneArtifacts,
   STANDALONE_BUILD_MARKER,
 } from "./lib/bun-standalone-support.mjs";
-import { prepareStandaloneWasm } from "./lib/bun-standalone-wasm.mjs";
+import { prepareStandaloneWasm, standaloneWasmImport } from "./lib/bun-standalone-wasm.mjs";
 import {
   discoverStandaloneWorkers,
   prepareStandaloneWorkers,
@@ -101,7 +101,6 @@ if (!fs.existsSync(path.join(sourceRoot, "dist/cli-startup-metadata.json"))) {
   throw new Error("Run pnpm build before building a standalone executable.");
 }
 const plugins = planStandalonePlugins(sourceRoot, options.pluginIds);
-const buildId = randomUUID();
 fs.mkdirSync(path.dirname(destinationRoot), { recursive: true });
 const outputRoot = fs.mkdtempSync(path.join(path.dirname(destinationRoot), ".standalone-build-"));
 const runtimeRoot = path.join(outputRoot, "runtime");
@@ -345,7 +344,6 @@ const artifacts = createStandaloneArtifactAdapter({
   runtimeRoot,
   embeddedPaths,
   parse,
-  buildIdentity: buildId,
 });
 const metadata = createStandaloneMetadataAdapter({ runtimeRoot, embeddedPaths, parse });
 const requireAdapter = createStandaloneRequireAdapter({ runtimeRoot, embeddedPaths, pluginLoader });
@@ -359,13 +357,11 @@ const root = path.join(path.dirname(process.execPath), "runtime");
 globalThis.__openclawStandaloneRootUrl = pathToFileURL(root + "/").href;
 globalThis.__openclawStandaloneBuildInfo = Object.freeze(${JSON.stringify(STANDALONE_BUILD_MARKER)});
 ${mode === "aot" ? "globalThis.__zod_globalConfig = { ...globalThis.__zod_globalConfig, jitless: true };" : ""}
-const entries = ${JSON.stringify(embeddedPaths)};
-const embeddedEntries = new Set(Object.values(entries));
+const entries = ${standaloneEmbeddedPathsExpression(embeddedPaths)};
 const commonJsEntries = new Set(${JSON.stringify(commonJsEntries)});
 function embedded(pathname) {
   pathname = globalThis.__openclawStandaloneOriginalPath?.(pathname) ?? pathname;
-  if (embeddedEntries.has(pathname)) return pathname;
-  return entries[pathname] ?? entries[path.relative(root, pathname).split(path.sep).join("/")];
+  return entries(pathname) ?? entries(path.relative(root, pathname).split(path.sep).join("/"));
 }
 globalThis.__openclawStandaloneEmbeddedPath = embedded;
 ${artifacts.bootstrap}
@@ -616,7 +612,7 @@ for (const filename of compiledEntries) {
     fs.writeFileSync(
       filename,
       // Every embedded worker imports this bootstrap before its library loaders.
-      (wasm?.registrationPath ? `import ${JSON.stringify(wasm.registrationPath)};\n` : "") +
+      (wasm?.registrationPath ? standaloneWasmImport(filename, wasm.registrationPath) : "") +
         contents.replaceAll(
           nativeResources.bootstrapReplacement.search,
           nativeResources.bootstrapReplacement.replacement,
@@ -716,7 +712,7 @@ const bunIdentity = {
   commit: Bun.revision,
   executableSha256: await sha256File(process.execPath),
 };
-const artifactsToPublish = compileStandaloneArtifacts({
+const artifactsToPublish = await compileStandaloneArtifacts({
   runtimeRoot,
   outputRoot,
   destination: destinationRoot,
@@ -735,7 +731,7 @@ const artifactsToPublish = compileStandaloneArtifacts({
   plugins,
   nativeModules,
   sqlite: sqlite.manifest,
-  buildId,
+  resourcePlan,
 });
 const pruning = pruneStandaloneRuntime(resourcePlan);
 await publishStandaloneArtifacts({

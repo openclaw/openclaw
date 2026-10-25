@@ -30,7 +30,7 @@ export async function fetchSessionHistory(
   );
 }
 
-export type SessionHistoryMessage = {
+type SessionHistoryMessage = {
   role?: string;
   timestamp?: number;
   content?: Array<{ text?: string }>;

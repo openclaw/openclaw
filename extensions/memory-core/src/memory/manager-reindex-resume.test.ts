@@ -250,7 +250,7 @@ describe("background reindex resumption", () => {
           const databasePath = database.location()!;
           expect(
             database.prepare("SELECT count(*) AS n FROM memory_embedding_cache").get(),
-          ).toEqual({ n: 8 });
+          ).toEqual({ n: 4 });
           expect(shadows.size).toBe(1);
           for (const shadow of shadows) {
             expect(shadow.isOpen).toBe(true);

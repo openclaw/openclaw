@@ -1,4 +1,5 @@
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-shared";
+import { resolveProviderHttpRequestConfigWithOriginTrust } from "openclaw/plugin-sdk/provider-http";
 import { getProviderHttpMocks } from "openclaw/plugin-sdk/provider-http-test-mocks";
 import {
   expectExplicitVideoGenerationCapabilities,
@@ -26,28 +27,8 @@ const {
 resolveApiKeyForProviderMock.mockResolvedValue({ apiKey: "openrouter-key" });
 waitProviderOperationPollIntervalMock.mockResolvedValue(undefined);
 resolveProviderHttpRequestConfigMock.mockImplementation((params) => {
-  const request = params.request;
-  const headers = new Headers(omitNullRequestHeaders(params.defaultHeaders));
-  for (const [key, value] of Object.entries(request?.headers ?? {})) {
-    if (value === null) {
-      headers.delete(key);
-    } else {
-      headers.set(key, value);
-    }
-  }
-  if (request?.auth?.mode === "authorization-bearer") {
-    headers.set("Authorization", `Bearer ${request.auth.token}`);
-  } else if (request?.auth?.mode === "header") {
-    headers.delete("Authorization");
-    headers.set(request.auth.headerName, `${request.auth.prefix ?? ""}${request.auth.value}`);
-  }
-  return {
-    baseUrl: params.baseUrl ?? params.defaultBaseUrl ?? "https://openrouter.ai/api/v1",
-    allowPrivateNetwork: request?.allowPrivateNetwork === true,
-    headers,
-    dispatcherPolicy: undefined,
-    requestConfig: {},
-  };
+  const result = resolveProviderHttpRequestConfigWithOriginTrust(params);
+  return { ...result, dispatcherPolicy: result.dispatcherPolicy };
 });
 
 function generateVideo(
@@ -1032,4 +1013,3 @@ describe("openrouter generated video download", () => {
     },
   );
 });
-import { omitNullRequestHeaders } from "openclaw/plugin-sdk/provider-request-headers";

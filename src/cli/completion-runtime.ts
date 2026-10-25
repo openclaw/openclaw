@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { resolvePathPrefixSync } from "@openclaw/fs-safe/advanced";
+import { readRegularFile, resolvePathPrefixSync } from "@openclaw/fs-safe/advanced";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -21,7 +21,7 @@ export const COMPLETION_SKIP_PLUGIN_COMMANDS_ENV = "OPENCLAW_COMPLETION_SKIP_PLU
 type CompletionProfileEncoding = "utf8" | "utf8bom" | "utf16le" | "utf16be";
 
 async function readCompletionProfile(profilePath: string, shell: CompletionShell) {
-  const buffer = await fs.readFile(profilePath);
+  const { buffer } = await readRegularFile({ filePath: await fs.realpath(profilePath) });
   let encoding: CompletionProfileEncoding = "utf8";
   if (shell === "powershell" && process.platform === "win32") {
     const [first, second, third] = buffer;

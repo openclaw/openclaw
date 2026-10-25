@@ -419,9 +419,15 @@ describe("controller-owned execution guard", () => {
 describe("exact attempt deadline transfer", () => {
   const attemptLane = "test:attempt-owner-deadline";
   const cleanups: Array<() => void | Promise<void>> = [];
-  async function setup(rawFailure?: Error) {
+  async function setup(rawFailure?: Error, assertSourceCurrent?: () => void) {
     const runId = "attempt-owner";
-    const admission = prepareSystemAgentRunAdmission({}, runId, "main", "watchdog-controls");
+    const admission = prepareSystemAgentRunAdmission(
+      {},
+      runId,
+      "main",
+      "watchdog-controls",
+      assertSourceCurrent,
+    );
     cleanups.push(admission.close);
     const admittedRunContext = await admission.admit("embedded");
     const state = create(
@@ -634,6 +640,24 @@ describe("exact attempt deadline transfer", () => {
       expect(controller.abortSignal.aborted).toBe(false);
     }
   });
+
+  it.each(["closed", "replaced"] as const)(
+    "refuses an attempt %s during synchronous source validation",
+    async (change) => {
+      let onValidate: (() => void) | undefined;
+      const { controls } = await setup(undefined, () => onValidate?.());
+      const old = controls();
+      onValidate = () => {
+        onValidate = undefined;
+        if (change === "closed") {
+          old.close();
+        } else {
+          controls();
+        }
+      };
+      expect(old.isCurrent()).toBe(false);
+    },
+  );
 
   it("commits Stop before reentrant creation of successor controls", async () => {
     const { controller, controls } = await setup();

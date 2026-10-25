@@ -9,7 +9,6 @@ import {
   clearPluginRegistryLoadCacheMock,
   enablePluginInConfigMock,
   loadPluginManifestRegistryMock,
-  loadPluginMetadataSnapshotMock,
   planPluginUninstallMock,
   replaceConfigFileMock,
   restorePersistedInstalledPluginIndexIfCurrentMock,
@@ -25,6 +24,7 @@ import {
 import { createTestConfigSnapshot } from "../commands/test-runtime-config-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { prepareRealInstallMetadata } from "./install-persistence.test-support.js";
 import type { PluginInstallRuntimeDeferral } from "./install-runtime-batch.js";
 import { hasRetainedManagedNpmInstallMarker } from "./managed-npm-retention.js";
 import { recordPluginManifestInstallOwner } from "./manifest-install-owner.js";
@@ -205,36 +205,7 @@ describe("persistPluginInstall", () => {
   ])(
     "persists manifest engine selection and ownership: $name",
     async ({ enabled, previousIds, declaredIds }) => {
-      enablePluginInConfigMock.mockImplementation((...args: unknown[]) => {
-        const [cfg, pluginId] = args as [OpenClawConfig, string];
-        return {
-          config: {
-            ...cfg,
-            plugins: {
-              ...cfg.plugins,
-              entries: { ...cfg.plugins?.entries, [pluginId]: { enabled: true } },
-            },
-          },
-          enabled: true,
-        };
-      });
-      const actualMetadata = await vi.importActual<typeof import("./plugin-metadata-snapshot.js")>(
-        "./plugin-metadata-snapshot.js",
-      );
-      loadPluginMetadataSnapshotMock.mockImplementation(actualMetadata.loadPluginMetadataSnapshot);
-      const actualSlots = await vi.importActual<typeof import("./slots.js")>("./slots.js");
-      applyExclusiveSlotSelectionMock.mockImplementation((input) =>
-        actualSlots.applyExclusiveSlotSelection(
-          input as Parameters<typeof actualSlots.applyExclusiveSlotSelection>[0],
-        ),
-      );
-      const actualManifest =
-        await vi.importActual<typeof import("./manifest-registry.js")>("./manifest-registry.js");
-      loadPluginManifestRegistryMock.mockImplementation((input) =>
-        actualManifest.loadPluginManifestRegistryCore(
-          input as Parameters<typeof actualManifest.loadPluginManifestRegistryCore>[0],
-        ),
-      );
+      await prepareRealInstallMetadata();
       const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-engine-install-"));
       try {
         fs.writeFileSync(
@@ -307,36 +278,7 @@ describe("persistPluginInstall", () => {
   ])(
     "preserves current engine ownership during real install: $name",
     async ({ competing, denied, selected }) => {
-      enablePluginInConfigMock.mockImplementation((...args: unknown[]) => {
-        const [cfg, pluginId] = args as [OpenClawConfig, string];
-        return {
-          config: {
-            ...cfg,
-            plugins: {
-              ...cfg.plugins,
-              entries: { ...cfg.plugins?.entries, [pluginId]: { enabled: true } },
-            },
-          },
-          enabled: true,
-        };
-      });
-      const actualMetadata = await vi.importActual<typeof import("./plugin-metadata-snapshot.js")>(
-        "./plugin-metadata-snapshot.js",
-      );
-      loadPluginMetadataSnapshotMock.mockImplementation(actualMetadata.loadPluginMetadataSnapshot);
-      const actualSlots = await vi.importActual<typeof import("./slots.js")>("./slots.js");
-      applyExclusiveSlotSelectionMock.mockImplementation((input) =>
-        actualSlots.applyExclusiveSlotSelection(
-          input as Parameters<typeof actualSlots.applyExclusiveSlotSelection>[0],
-        ),
-      );
-      const actualManifest =
-        await vi.importActual<typeof import("./manifest-registry.js")>("./manifest-registry.js");
-      loadPluginManifestRegistryMock.mockImplementation((input) =>
-        actualManifest.loadPluginManifestRegistryCore(
-          input as Parameters<typeof actualManifest.loadPluginManifestRegistryCore>[0],
-        ),
-      );
+      await prepareRealInstallMetadata();
       const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-owner-install-"));
       try {
         const vendorDir = path.join(rootDir, "vendor-plugin");

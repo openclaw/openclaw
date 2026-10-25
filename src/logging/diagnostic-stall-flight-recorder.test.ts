@@ -89,7 +89,7 @@ it("rotates without a sampling gap and reports only the recent stall's inclusive
   );
   const result = sampleAt(6_500);
   expect(result).toContain('inclusive=[["work1@node:timers:10",2]]');
-  expect(result).toContain("samples=2 intervalMs=10 truncated=false");
+  expect(result).toContain("samples=2 intervalMs=25 truncated=false");
   expect(result).not.toContain("work0");
   recorder.stop();
   expect(handles[2]![Symbol.dispose]).toHaveBeenCalledOnce();

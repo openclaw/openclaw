@@ -73,7 +73,7 @@ it("retains model and auth reads across 50 metadata-only publications", async ()
       gateway,
       runtimeConfig: {
         state: { configFormDirty: false },
-        refresh: vi.fn(async () => null),
+        refreshDisplay: vi.fn(async () => null),
       },
     } as unknown as ApplicationContext,
   };
@@ -438,8 +438,8 @@ it.each([
         agentSelection: { state: { selectedId: "main" } },
         runtimeConfig: {
           state: { configFormDirty: false, configSnapshot: null },
-          ensureLoaded: vi.fn(async () => null),
-          refresh: vi.fn(async () => null),
+          ensureDisplayLoaded: vi.fn(async () => null),
+          refreshDisplay: vi.fn(async () => null),
         },
       } as unknown as ApplicationContext,
     };
@@ -497,8 +497,8 @@ it("retires chat metadata through config.changed and the Gateway close callback"
     connectionBootstrap,
     runtimeConfig: {
       state: { configFormDirty: false, configSnapshot: null },
-      ensureLoaded: vi.fn(async () => null),
-      refresh: vi.fn(async () => null),
+      ensureDisplayLoaded: vi.fn(async () => null),
+      refreshDisplay: vi.fn(async () => null),
     },
   } as unknown as ApplicationContext;
   const shell = createShellOwner() as unknown as ChatMetadataShell;

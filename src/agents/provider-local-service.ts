@@ -528,7 +528,7 @@ function scheduleIdleStop(
       }
     }, idleStopMs),
   );
-  managed.idleTimer.unref?.();
+  managed.idleTimer.unref();
 }
 
 function clearIdleTimer(managed: ManagedLocalService) {

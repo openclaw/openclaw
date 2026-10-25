@@ -33,9 +33,14 @@ function normalizeProviderOAuthProfileIdRepairs(
   }
   const normalized = values
     .map((value) => {
-      const legacyProfileId = normalizeOptionalString(value?.legacyProfileId);
-      const promptLabel = normalizeOptionalString(value?.promptLabel);
-      if (!legacyProfileId && !promptLabel) {
+      if (!value || typeof value !== "object" || Array.isArray(value)) {
+        return null;
+      }
+      const { legacyProfileId: rawLegacyProfileId, promptLabel: rawPromptLabel } = value;
+      const legacyProfileId = normalizeOptionalString(rawLegacyProfileId);
+      const promptLabel = normalizeOptionalString(rawPromptLabel);
+      const usesProviderDefaults = rawLegacyProfileId === undefined && rawPromptLabel === undefined;
+      if (!legacyProfileId && !promptLabel && !usesProviderDefaults) {
         return null;
       }
       return {
@@ -201,6 +206,8 @@ export function normalizeRegisteredProvider(params: {
     wizard: _ignoredWizard,
     docsPath: _ignoredDocsPath,
     aliases: _ignoredAliases,
+    deprecatedProfileIds: _ignoredDeprecatedProfileIds,
+    oauthProfileIdRepairs: _ignoredOAuthProfileIdRepairs,
     envVars: _ignoredEnvVars,
     catalog: _ignoredCatalog,
     ...restProvider

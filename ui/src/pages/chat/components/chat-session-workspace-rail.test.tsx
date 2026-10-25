@@ -9,6 +9,7 @@ import {
   createGatewayBrowserClientFixture,
   createSessionCapabilityFixture,
 } from "../chat-pane.test-support.ts";
+import { createSessionWorkspaceHost } from "./chat-session-workspace-host.test-support.ts";
 import { SessionWorkspaceRail } from "./chat-session-workspace-rail-solid.tsx";
 import {
   getSessionWorkspace,
@@ -110,17 +111,13 @@ it("keeps Files search usable during a failed owner read and retries without dup
   const first = createDeferred<List>();
   const retry = createDeferred<List>();
   const listFiles = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(retry.promise);
-  const state: SessionWorkspaceHost = {
+  const state: SessionWorkspaceHost = createSessionWorkspaceHost({
     sessionKey: "agent:main:workspace",
-    connected: true,
-    connectionEpoch: 1,
-    hello: null,
     agentsList: { defaultId: "main", mainKey: "main", scope: "global", agents: [] },
     client: createGatewayBrowserClientFixture({ request: () => ({ artifacts: [] }) }),
     sessions: createSessionCapabilityFixture({ listFiles }),
-    sidebarContent: null,
     handleOpenSidebar: () => {},
-  };
+  });
   const props = () =>
     createSessionWorkspaceProps(state, { expanded: true, presentation: "desktop" });
   const [current, setCurrent] = createSignal(props());
@@ -524,8 +521,16 @@ function setupDesktopLayout() {
   vi.stubGlobal(
     "ResizeObserver",
     class {
-      observe() {}
-      disconnect() {}
+      private readonly targets = new Set<Element>();
+      observe(target: Element) {
+        this.targets.add(target);
+      }
+      unobserve(target: Element) {
+        this.targets.delete(target);
+      }
+      disconnect() {
+        this.targets.clear();
+      }
     },
   );
   vi.stubGlobal("matchMedia", (media: string) => ({
@@ -574,17 +579,13 @@ it("desktop browses lazy directories and restores activity after global search c
       },
     }),
   );
-  const state: SessionWorkspaceHost = {
+  const state: SessionWorkspaceHost = createSessionWorkspaceHost({
     sessionKey: "agent:main:workspace",
-    connected: true,
-    connectionEpoch: 1,
-    hello: null,
     agentsList: { defaultId: "main", mainKey: "main", scope: "global", agents: [] },
     client: createGatewayBrowserClientFixture({ request: () => ({ artifacts: [] }) }),
     sessions: createSessionCapabilityFixture({ listFiles }),
-    sidebarContent: null,
     handleOpenSidebar: () => {},
-  };
+  });
   const props = () =>
     createSessionWorkspaceProps(state, { expanded: true, presentation: "desktop" });
   const mounted = await mountWorkspace(props());
@@ -749,17 +750,13 @@ it("mobile restores folder search and root groups without mixing global search r
           : [{ path: "docs", name: "docs", kind: "directory" as const }],
     },
   }));
-  const state: SessionWorkspaceHost = {
+  const state: SessionWorkspaceHost = createSessionWorkspaceHost({
     sessionKey: "agent:main:workspace",
-    connected: true,
-    connectionEpoch: 1,
-    hello: null,
     agentsList: { defaultId: "main", mainKey: "main", scope: "global", agents: [] },
     client: createGatewayBrowserClientFixture({ request: () => ({ artifacts: [] }) }),
     sessions: createSessionCapabilityFixture({ listFiles }),
-    sidebarContent: null,
     handleOpenSidebar: () => {},
-  };
+  });
   const props = () =>
     createSessionWorkspaceProps(state, { expanded: true, presentation: "mobile" });
   const mounted = await mountWorkspace(props());

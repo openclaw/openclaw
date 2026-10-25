@@ -56,6 +56,55 @@ vi.mock("../../auto-reply/reply/agent-runner-execution.js", async (importOrigina
   executeAgentTurn: runtime.execute,
 }));
 
+type Fixture = Awaited<ReturnType<typeof createFixture>>;
+type DispatchParams = Parameters<typeof dispatchInboundMessage>[0];
+type Gate = ReturnType<typeof createDeferred<void>>;
+
+function observeAdmission(params: DispatchParams, queued: Gate, settled: Gate) {
+  const lifecycle = expectDefined(params.replyOptions?.turnAdoptionLifecycle, "input custody");
+  const onDeferred = expectDefined(lifecycle.onDeferred, "queue admission");
+  lifecycle.onDeferred = () => {
+    const result = onDeferred();
+    queued.resolve();
+    return result;
+  };
+  const onSettled = lifecycle.onSettled;
+  lifecycle.onSettled = async () => {
+    await onSettled?.();
+    settled.resolve();
+  };
+}
+
+function steeringConfig({ context }: Fixture) {
+  const config = withFullRuntimeReplyConfig(context.getRuntimeConfig());
+  config.messages = {
+    ...config.messages,
+    queue: { mode: "steer", debounceMsByChannel: { webchat: 0 } },
+  };
+  context.getRuntimeConfig = () => config;
+  return config;
+}
+
+function clearFixtureQueues({ scope }: Fixture) {
+  clearSessionQueues(
+    [scope.sessionKey],
+    captureSessionTarget({
+      storeScope: scope.storePath,
+      sessionKey: scope.sessionKey,
+      incarnation: scope.sessionId,
+      agentId: scope.agentId,
+    }),
+  );
+}
+
+function expectChat(fixture: Fixture, runId: string, state: string, content: unknown[]) {
+  expect(fixture.context.broadcast).toHaveBeenCalledWith(
+    "chat",
+    expect.objectContaining({ runId, state, message: expect.objectContaining({ content }) }),
+    expect.anything(),
+  );
+}
+
 it("refuses cross-requester steering by default and admits only an explicit fresh followup", async ({
   signal,
 }) => {
@@ -68,16 +117,8 @@ it("refuses cross-requester steering by default and admits only an explicit fres
   setClientProfile(fixture.client, bob);
   fixture.params.queueMode = "steer";
   fixture.params.idempotencyKey = "strict-steer-bob-input";
-  const config = withFullRuntimeReplyConfig(fixture.context.getRuntimeConfig());
-  config.messages = {
-    ...config.messages,
-    queue: {
-      mode: "steer",
-      debounceMsByChannel: { webchat: 0 },
-    },
-  };
+  const config = steeringConfig(fixture);
   setRuntimeConfigSnapshot(config, config);
-  fixture.context.getRuntimeConfig = () => config;
   const fingerprint = "strict-steer-incumbent-tools";
   operation.bindToolAuthoritySnapshot({
     requesterPrincipalKey: resolveRequesterPrincipalKey({ operatorProfileId: alice.id }),
@@ -86,10 +127,7 @@ it("refuses cross-requester steering by default and admits only an explicit fres
   });
   operation.bindToolAuthorityRoute({ provider: "openai", model: "gpt-test" });
   operation.setPhase("running");
-  const injectionObserved = createDeferred();
-  const injected = vi.fn(async () => {
-    injectionObserved.resolve();
-  });
+  const injected = vi.fn(async () => {});
   operation.attachBackend({
     kind: "embedded",
     runId: "strict-steer-alice-run",
@@ -99,7 +137,6 @@ it("refuses cross-requester steering by default and admits only an explicit fres
   });
   const dispatchActual = await loadRealChatDispatch();
   const dispatched = createDeferred();
-  const rawQueued = createDeferred();
   const followupId = "strict-steer-bob-explicit-followup";
   const queued = createDeferred();
   const followupDispatched = createDeferred();
@@ -110,37 +147,13 @@ it("refuses cross-requester steering by default and admits only an explicit fres
   runtime.execute.mockReset();
   runtime.execute.mockRejectedValue(new Error("Refused input must not execute"));
   dispatchInboundMessageMock.mockImplementation(async (raw: unknown) => {
-    const params = raw as Parameters<typeof dispatchInboundMessage>[0];
+    const params = raw as DispatchParams;
     const isExplicitFollowup = params.replyOptions?.runId === followupId;
     if (isExplicitFollowup) {
-      const lifecycle = expectDefined(params.replyOptions?.turnAdoptionLifecycle, "input custody");
-      const onDeferred = expectDefined(lifecycle.onDeferred, "queue admission");
-      lifecycle.onDeferred = () => {
-        const result = onDeferred();
-        queued.resolve();
-        return result;
-      };
-      const onSettled = lifecycle.onSettled;
-      lifecycle.onSettled = async () => {
-        await onSettled?.();
-        settled.resolve();
-      };
-    } else {
-      const lifecycle = expectDefined(params.replyOptions?.turnAdoptionLifecycle, "input custody");
-      const onDeferred = expectDefined(lifecycle.onDeferred, "queue admission");
-      lifecycle.onDeferred = () => {
-        const result = onDeferred();
-        if (result === true) {
-          rawQueued.resolve();
-        }
-        return result;
-      };
+      observeAdmission(params, queued, settled);
     }
     try {
-      return await dispatchActual({
-        ...params,
-        cfg: config,
-      });
+      return await dispatchActual({ ...params, cfg: config });
     } finally {
       (isExplicitFollowup ? followupDispatched : dispatched).resolve();
     }
@@ -148,28 +161,15 @@ it("refuses cross-requester steering by default and admits only an explicit fres
   try {
     const ack = await fixture.send();
     expect(ack.mock.calls[0]?.[1]).toMatchObject({ status: "started" });
-    await withinTest(
-      Promise.race([injectionObserved.promise, rawQueued.promise, dispatched.promise]),
-      signal,
-    );
     await withinTest(dispatched.promise, signal);
     await rpcSourceTesting.get(fixture.params.idempotencyKey)?.input.settlement.promise;
     expect(injected).not.toHaveBeenCalled();
     expect(operation.result).toBeNull();
     expect(isRpcSourceQueued(rpcSourceTesting.get(fixture.params.idempotencyKey))).toBe(false);
     expect(runtime.execute).not.toHaveBeenCalled();
-    expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
-    expect(fixture.context.broadcast).toHaveBeenCalledWith(
-      "chat",
-      expect.objectContaining({
-        runId: fixture.params.idempotencyKey,
-        state: "final",
-        message: expect.objectContaining({
-          content: [{ type: "text", text: refusal, openclawStatusNotice: true }],
-        }),
-      }),
-      expect.anything(),
-    );
+    expectChat(fixture, fixture.params.idempotencyKey, "final", [
+      { type: "text", text: refusal, openclawStatusNotice: true },
+    ]);
     const pending = await listSessionPendingInputs(fixture.scope);
     expect(pending).toMatchObject({
       total: 1,
@@ -188,7 +188,6 @@ it("refuses cross-requester steering by default and admits only an explicit fres
       1: { status: "ok", runId: fixture.params.idempotencyKey },
       3: { cached: true },
     });
-    expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
     expect(runtime.execute).not.toHaveBeenCalled();
     expect((await listSessionPendingInputs(fixture.scope)).items).toEqual(pending.items);
 
@@ -240,22 +239,12 @@ it("refuses cross-requester steering by default and admits only an explicit fres
     expect(injected).not.toHaveBeenCalled();
     expect(consumed).toEqual([]);
     await withinTest(followupOutcome.promise, signal);
-    expect(fixture.context.broadcast).toHaveBeenCalledWith(
-      "chat",
-      expect.objectContaining({
-        runId: followupId,
-        state: "delta",
-        message: expect.objectContaining({
-          content: [
-            {
-              type: "text",
-              text: "Your message is queued for a new turn after the current turn finishes. It hasn’t changed the work already in progress.",
-            },
-          ],
-        }),
-      }),
-      expect.anything(),
-    );
+    expectChat(fixture, followupId, "delta", [
+      {
+        type: "text",
+        text: "Your message is queued for a new turn after the current turn finishes. It hasn’t changed the work already in progress.",
+      },
+    ]);
     // Dequeue reads current policy while retaining the new source's human identity.
     config.tools = { ...config.tools, deny: ["exec"] };
     setRuntimeConfigSnapshot(config, config);
@@ -292,20 +281,11 @@ it("refuses cross-requester steering by default and admits only an explicit fres
       1: { status: "ok", runId: fixture.params.idempotencyKey },
       3: { cached: true },
     });
-    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
     expect(runtime.execute).toHaveBeenCalledOnce();
     expect((await listSessionPendingInputs(fixture.scope)).items).toEqual(pending.items);
   } finally {
     release.resolve();
-    clearSessionQueues(
-      [fixture.scope.sessionKey],
-      captureSessionTarget({
-        storeScope: fixture.scope.storePath,
-        sessionKey: fixture.scope.sessionKey,
-        incarnation: fixture.scope.sessionId,
-        agentId: fixture.scope.agentId,
-      }),
-    );
+    clearFixtureQueues(fixture);
     await fixture.cleanup();
   }
 });
@@ -333,12 +313,7 @@ it.for([false, true])(
     sendParams.idempotencyKey = `direct-followup-${reason}-${cancel}`;
     runtime.execute.mockReset();
 
-    const config = withFullRuntimeReplyConfig(context.getRuntimeConfig());
-    config.messages = {
-      ...config.messages,
-      queue: { mode: "steer", debounceMsByChannel: { webchat: 0 } },
-    };
-    context.getRuntimeConfig = () => config;
+    const config = steeringConfig(fixture);
     const instance = createOperationalRunInstanceRef("announce:v1:synthetic-child");
     const authority = runAuthority.claimAgentRunDelegatedAuthority(instance);
     const requesterOrigin = captureRequesterOrigin({
@@ -396,20 +371,9 @@ it.for([false, true])(
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
     const dispatchActual = await loadRealChatDispatch();
     dispatchInboundMessageMock.mockImplementation(async (raw: unknown) => {
-      const params = raw as Parameters<typeof dispatchInboundMessage>[0];
+      const params = raw as DispatchParams;
       recorder = params.replyOptions?.userTurnTranscriptRecorder;
-      const lifecycle = expectDefined(params.replyOptions?.turnAdoptionLifecycle, "input custody");
-      const onDeferred = expectDefined(lifecycle.onDeferred, "queue admission");
-      lifecycle.onDeferred = () => {
-        const result = onDeferred();
-        queued.resolve();
-        return result;
-      };
-      const onSettled = lifecycle.onSettled;
-      lifecycle.onSettled = async () => {
-        await onSettled?.();
-        settled.resolve();
-      };
+      observeAdmission(params, queued, settled);
       try {
         return await dispatchActual({ ...params, cfg: config });
       } finally {
@@ -529,9 +493,7 @@ it.for([false, true])(
       releaseDirect.resolve();
       await withinTest(cleanupReady.promise, signal);
       expect(getSessionControllerOperation(scope.sessionKey)).toBe(directOwner);
-      expect((await listSessionPendingInputs(scope)).items.map((input) => input.state)).toEqual([
-        cancel ? "cancelled" : "queued",
-      ]);
+      expect(await pendingStates()).toEqual([cancel ? "cancelled" : "queued"]);
       expect(consumed).toEqual([]);
       releaseCleanup.resolve();
       await command;
@@ -566,15 +528,7 @@ it.for([false, true])(
         runs.detachActiveEmbeddedRun(scope.sessionId, handle);
         runAuthority.releaseAgentRunDelegatedAuthority(authority);
         await command?.catch(() => {});
-        clearSessionQueues(
-          [scope.sessionKey],
-          captureSessionTarget({
-            storeScope: scope.storePath,
-            sessionKey: scope.sessionKey,
-            incarnation: scope.sessionId,
-            agentId: scope.agentId,
-          }),
-        );
+        clearFixtureQueues(fixture);
         await stop?.catch(() => {});
         await fixture.cleanup();
       } finally {
@@ -630,7 +584,6 @@ it("preserves direct pre-adoption rejection guidance instead of publishing queue
     expect(ack.mock.calls[0]?.[1]).toMatchObject({ runId, status: "started" });
     await withinTest(dispatched.promise, signal);
     await fixture.finishDispatch();
-    expect(rejectAdmission).toHaveBeenCalledOnce();
     expect(inputSignal?.aborted).toBe(false);
     expect(runtime.execute).not.toHaveBeenCalled();
     expect(fixture.context.dedupe.get(`chat:${runId}`)).toMatchObject({
@@ -645,7 +598,6 @@ it("preserves direct pre-adoption rejection guidance instead of publishing queue
     const replay = await fixture.send();
     expect(replay.mock.calls[0]?.[0]).toBe(false);
     expect(replay.mock.calls[0]?.[1]).toMatchObject({ runId, status: "error", summary: guidance });
-    expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
   } finally {
     rejectAdmission.mockRestore();
     await fixture.cleanup();

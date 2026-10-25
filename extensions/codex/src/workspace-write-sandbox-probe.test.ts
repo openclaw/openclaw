@@ -5,6 +5,7 @@ import { runUtf8CommandWithTimeout, type SpawnResult } from "openclaw/plugin-sdk
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { commandResult } from "../../test-support/command-result.test-support.js";
 import { resolveManagedCodexAppServerStartOptions } from "./app-server/managed-binary.js";
 import { probeCodexWorkspaceWriteSandbox } from "./workspace-write-sandbox-probe.js";
 
@@ -30,14 +31,7 @@ const args = [
   "--",
   "true",
 ];
-const success: SpawnResult = {
-  stdout: "",
-  stderr: "",
-  code: 0,
-  signal: null,
-  killed: false,
-  termination: "exit",
-};
+const success: SpawnResult = commandResult();
 
 function config(appServer: Record<string, unknown> = {}, codex = true): OpenClawConfig {
   const model = codex ? "openai/gpt-5.6-sol" : "anthropic/claude-opus-4-7";

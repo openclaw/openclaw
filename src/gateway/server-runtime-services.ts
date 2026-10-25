@@ -31,8 +31,8 @@ import {
   createScheduledGatewayRunner,
   fenceScheduledGatewayContextResolver,
 } from "./scheduled-run-gateway-context.js";
+import type { GatewayCronState } from "./server-cron-contract.js";
 import type { GatewayCronReconciliation } from "./server-cron-reconciled.js";
-import type { GatewayCronState } from "./server-cron.js";
 import { scheduleGatewayIdleTask } from "./server-idle-task.js";
 import {
   clearGatewayMaintenanceHandles,

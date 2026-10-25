@@ -38,7 +38,7 @@ ui/src/pages/chat/attachment-payload-store.ts	1
 ui/src/pages/chat/chat-outbox-drain.ts	1
 ui/src/pages/chat/chat-outbox-recovery.tsx	1
 ui/src/pages/chat/chat-pane-board.ts	1
-ui/src/pages/chat/chat-pane-session-menu.ts	2
+ui/src/pages/chat/chat-pane-session-menu.ts	1
 ui/src/pages/chat/components/chat-attachment-reads.ts	1
 ui/src/pages/chat/components/chat-detail-panel.tsx	1
 ui/src/pages/chat/components/chat-diff-render.solid.tsx	1

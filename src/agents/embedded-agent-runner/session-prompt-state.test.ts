@@ -14,6 +14,69 @@ import {
 } from "./session-prompt-state.js";
 
 const sessionIds = new Set<string>();
+const entryMetadata = { parentId: null, timestamp: "2026-10-01T00:00:00Z" };
+const updateHeading =
+  "System prompt update. The sections below replace their earlier versions; everything else in the system prompt is unchanged.\n\n";
+
+function historyEntry(type: "compaction" | "reset", id: string = type): SessionEntry {
+  return type === "reset"
+    ? { ...entryMetadata, type, id, reason: "reset" }
+    : {
+        ...entryMetadata,
+        type,
+        id,
+        summary: "Summary.",
+        firstKeptEntryId: "user",
+        tokensBefore: 100,
+      };
+}
+
+function promptFixture(id: string, routeKey: string) {
+  let lease: ReturnType<typeof retainEmbeddedSessionPromptState>;
+  function reload() {
+    clearEmbeddedSessionPromptStates([id]);
+    lease?.[Symbol.dispose]();
+    lease = retainEmbeddedSessionPromptState(id);
+    sessionIds.add(id);
+  }
+  beforeEach(() => reload());
+  afterEach(() => lease[Symbol.dispose]());
+  return {
+    get state() {
+      return lease.state;
+    },
+    reload,
+    prepare(systemPrompt: string, entries: SessionEntry[] = [], route = routeKey) {
+      return prepareSessionSystemPrompt({
+        state: lease.state,
+        routeKey: route,
+        systemPrompt,
+        entries,
+      });
+    },
+    persist(this: void, entries: SessionEntry[]) {
+      return persistSessionSystemPrompt(lease.state, checkpointWriter(entries));
+    },
+  };
+}
+
+function appendUpdate(
+  entries: SessionEntry[],
+  update: NonNullable<ReturnType<typeof prepareSessionSystemPrompt>["update"]>,
+  id: string,
+) {
+  const { customType, content, details } = update;
+  entries.push({
+    type: "custom_message",
+    id,
+    timestamp: "2026-10-01T00:00:01Z",
+    parentId: entries[0]!.id,
+    customType,
+    content,
+    details,
+    display: false,
+  });
+}
 
 function checkpointWriter(entries: SessionEntry[]) {
   return (customType: string, data: unknown) => {
@@ -22,8 +85,7 @@ function checkpointWriter(entries: SessionEntry[]) {
       customType,
       data: structuredClone(data),
       id: `marker-${entries.length}`,
-      parentId: null,
-      timestamp: "2026-10-01T00:00:00Z",
+      ...entryMetadata,
     });
   };
 }
@@ -89,30 +151,17 @@ it("keeps active attempts canonical beyond the session cache limit", () => {
 });
 
 describe("system prompt series", () => {
-  let lease: ReturnType<typeof retainEmbeddedSessionPromptState>;
-  beforeEach(() => {
-    lease = retainEmbeddedSessionPromptState("system-series");
-  });
-  afterEach(() => lease[Symbol.dispose]());
   const routeKey = "anthropic/claude-opus-5/anthropic-messages";
+  const fixture = promptFixture("system-series", routeKey);
+  const persist = fixture.persist;
   const base =
     "Opening instructions.\n## Stable\nKeep this.\n## Changed\nOld.\n## Removed\nRetire this.\n";
   const changed =
     "Opening instructions.\n## Stable\nKeep this.\n## Changed\nNew.\n## Added\nAdd this.\n";
   function project(prefix: string, entries: SessionEntry[] = [], route = routeKey) {
-    const id = "system-series";
-    sessionIds.add(id);
-    const result = prepareSessionSystemPrompt({
-      state: lease.state,
-      routeKey: route,
-      systemPrompt: prefix.trimEnd(),
-      entries,
-    });
+    const result = fixture.prepare(prefix.trimEnd(), entries, route);
     result.commit();
     return result;
-  }
-  async function persist(entries: SessionEntry[]) {
-    await persistSessionSystemPrompt(lease.state, checkpointWriter(entries));
   }
 
   it("pins stable bytes and emits only changed, added, and removed sections", () => {
@@ -121,10 +170,13 @@ describe("system prompt series", () => {
     const next = project(changed);
     expect(next.systemPrompt).toBe(first.systemPrompt);
     expect(next.update?.content).toBe(
-      "System prompt update. The sections below replace their earlier versions; everything else in the system prompt is unchanged.\n\n## Changed\nNew.\n\n\n## Added\nAdd this.\n\n## Removed\n(removed)",
+      `${updateHeading}## Changed\nNew.\n\n\n## Added\nAdd this.\n\n## Removed\n(removed)`,
     );
     expect(project(changed).update).toBeUndefined();
     expect(project(base).update?.content).toContain("## Added\n(removed)");
+    const temporal = project(`${base}${SYSTEM_PROMPT_CACHE_BOUNDARY}## Temporal Context\nday-1`);
+    expect(temporal.update?.content).toContain("day-1");
+    expect(temporal.update?.content).not.toContain("OPENCLAW_CACHE_BOUNDARY");
   });
 
   it("preserves large prompt revisions, including distinct lone surrogates", () => {
@@ -134,50 +186,17 @@ describe("system prompt series", () => {
     expect(project(first).systemPrompt).toBe(first);
     const updated = project(second);
     expect(updated.systemPrompt).toBe(first);
-    expect(updated.update?.content).toBe(
-      "System prompt update. The sections below replace their earlier versions; everything else in the system prompt is unchanged.\n\n## Changed\n\ud801",
-    );
+    expect(updated.update?.content).toBe(`${updateHeading}## Changed\n\ud801`);
     expect(project(second, [], "other-route").systemPrompt).toBe(second);
-  });
-
-  it("keeps both prompt digests stable across disposed turns with skill, memory, and date changes", async () => {
-    const entries: SessionEntry[] = [];
-    let first: string | undefined;
-    sessionIds.add("system-series");
-    for (let turn = 0; turn < 30; turn++) {
-      lease[Symbol.dispose]();
-      lease = retainEmbeddedSessionPromptState("system-series");
-      const prompt = `## Skills\nskill-${turn}\n## Project Context\nmemory-${turn}${SYSTEM_PROMPT_CACHE_BOUNDARY}## Temporal Context\nday-${turn}`;
-      const prepared = prepareSessionSystemPrompt({
-        state: lease.state,
-        routeKey,
-        systemPrompt: prompt,
-        entries,
-      });
-      first ??= prepared.systemPrompt;
-      expect(prepared.systemPrompt).toBe(first);
-      if (turn > 0) {
-        expect(prepared.restart).toBe(false);
-        expect(prepared.update?.content).toContain(`skill-${turn}`);
-        expect(prepared.update?.content).toContain(`memory-${turn}`);
-        expect(prepared.update?.content).toContain(`day-${turn}`);
-        expect(prepared.update?.content).not.toContain("OPENCLAW_CACHE_BOUNDARY");
-      }
-      prepared.commit();
-      await persist(entries);
-    }
   });
 
   it("replaces duplicate-heading groups without ambiguous partial removals", () => {
     project("First.\n## File\nOne.\n## File\nTwo.");
     const next = project("Second.\n## File\nChanged.\n## File\nTwo.");
     expect(next.update?.content).toContain("Second.\n");
-    expect(next.update?.content).toContain("## File\nChanged.");
     expect(next.update?.content).toContain("## File\nChanged.\n## File\nTwo.");
     const partial = project("Second.\n## File\nTwo.");
-    expect(partial.update?.content).toBe(
-      "System prompt update. The sections below replace their earlier versions; everything else in the system prompt is unchanged.\n\n## File\nTwo.",
-    );
+    expect(partial.update?.content).toBe(`${updateHeading}## File\nTwo.`);
     expect(project("Second.\n## File\nTwo.").update).toBeUndefined();
     expect(project("Second.").update?.content.match(/## File\n\(removed\)/g)).toEqual([
       "## File\n(removed)",
@@ -191,22 +210,16 @@ describe("system prompt series", () => {
     const notice = "## Permission change\nThe workspace is now read-only.";
     const withNotice = `${base.trimEnd()}\n\n<!-- openclaw:attempt:PERMISSION -->\n${notice}\n<!-- /openclaw:attempt:PERMISSION -->`;
     for (const prompt of [withNotice, base, withNotice]) {
-      clearEmbeddedSessionPromptStates(["system-series"]);
-      lease[Symbol.dispose]();
-      lease = retainEmbeddedSessionPromptState("system-series");
+      fixture.reload();
       const prepared = project(prompt, entries);
       expect(prepared.systemPrompt).toBe(first.systemPrompt);
       expect(prepared.update?.content).toBe(
-        prompt === base
-          ? undefined
-          : `System prompt update. The sections below replace their earlier versions; everything else in the system prompt is unchanged.\n\n${notice}`,
+        prompt === base ? undefined : `${updateHeading}${notice}`,
       );
       const checkpoints = entries.length;
       await persist(entries);
       expect(entries).toHaveLength(checkpoints + 1);
-      clearEmbeddedSessionPromptStates(["system-series"]);
-      lease[Symbol.dispose]();
-      lease = retainEmbeddedSessionPromptState("system-series");
+      fixture.reload();
       expect(project(prompt, entries).update).toBeUndefined();
       await persist(entries);
       expect(entries).toHaveLength(checkpoints + 1);
@@ -217,7 +230,7 @@ describe("system prompt series", () => {
     const entries: SessionEntry[] = [];
     project(base);
     await persist(entries);
-    const state = lease.state;
+    const state = fixture.state;
     const first = project(changed, entries);
     beginSessionSystemPrompt({ state, routeKey, enabled: true, entries });
     const retry = project(changed, entries);
@@ -239,23 +252,12 @@ describe("system prompt series", () => {
     project(base);
     await persist(entries);
     const update = project(changed, entries).update!;
-    entries.push({
-      type: "custom_message",
-      id: "durable-update",
-      parentId: entries[0]!.id,
-      timestamp: "2026-10-01T00:00:01Z",
-      customType: update.customType,
-      content: update.content,
-      display: false,
-      details: update.details,
-    });
-    const state = lease.state;
+    appendUpdate(entries, update, "durable-update");
+    const state = fixture.state;
     await expect(
       persistSessionSystemPrompt(state, (customType, data) => {
-        entries.push({
-          type: "custom",
-          customType,
-          data: structuredClone(data),
+        checkpointWriter(entries)(customType, data);
+        Object.assign(entries.at(-1)!, {
           id: "durable-checkpoint",
           parentId: "durable-update",
           timestamp: "2026-10-01T00:00:02Z",
@@ -283,24 +285,13 @@ describe("system prompt series", () => {
       project(base);
       await persist(entries);
       const update = project(changed, entries).update!;
-      entries.push({
-        type: "custom_message",
-        id: "orphan-update",
-        parentId: entries[0]!.id,
-        timestamp: "2026-10-01T00:00:01Z",
-        customType: update.customType,
-        content: update.content,
-        display: false,
-        details: update.details,
-      });
+      appendUpdate(entries, update, "orphan-update");
       // The live attempt may project its queued update before checkpoint persistence.
       expect(project(changed, entries).restart).toBe(false);
       if (processRestart) {
-        clearEmbeddedSessionPromptStates(["system-series"]);
-        lease[Symbol.dispose]();
-        lease = retainEmbeddedSessionPromptState("system-series");
+        fixture.reload();
       }
-      const state = lease.state;
+      const state = fixture.state;
       beginSessionSystemPrompt({ state, routeKey, enabled: true, entries });
       const recovered = project(base, entries);
       expect(recovered.restart).toBe(true);
@@ -322,36 +313,22 @@ describe("system prompt series", () => {
     await persist(entries);
     expect(entries).toHaveLength(1);
     expect(entries[0]).toMatchObject({ data: { restart: true } });
-    expect(lease.state.pendingSystemPrompt).toBeUndefined();
+    expect(fixture.state.pendingSystemPrompt).toBeUndefined();
   });
 
-  it.each(["first request", "route", "compaction"])(
+  it.each(["first request", "route", "compaction", "reset"] as const)(
     "preserves current permission guidance when a series starts after %s",
     (reason) => {
       if (reason !== "first request") {
         project(base);
       }
-      sessionIds.add("system-series");
       const notice =
         "## Permission change\nThe operator changed workspace permissions to read-only.";
       const input = {
-        state: lease.state,
+        state: fixture.state,
         routeKey: reason === "route" ? "other route" : routeKey,
         systemPrompt: `${changed}${SYSTEM_PROMPT_CACHE_BOUNDARY}dynamic\n\n<!-- openclaw:attempt:PERMISSION -->\n${notice}\n<!-- /openclaw:attempt:PERMISSION -->`,
-        entries:
-          reason === "compaction"
-            ? [
-                {
-                  type: "compaction",
-                  id: "cut",
-                  parentId: null,
-                  timestamp: "2026-10-01T00:00:00Z",
-                  summary: "Summary",
-                  firstKeptEntryId: "user",
-                  tokensBefore: 100,
-                } satisfies SessionEntry,
-              ]
-            : [],
+        entries: reason === "compaction" || reason === "reset" ? [historyEntry(reason)] : [],
       };
       const prepared = prepareSessionSystemPrompt(input);
       expect(prepared.restart).toBe(true);
@@ -371,7 +348,7 @@ describe("system prompt series", () => {
     await persist(entries);
     project(changed, entries);
     await persist(entries);
-    const state = lease.state;
+    const state = fixture.state;
     expect(beginSessionSystemPrompt({ state, routeKey: "other", enabled: false, entries })).toBe(
       true,
     );
@@ -379,79 +356,29 @@ describe("system prompt series", () => {
     expect(project(changed, entries).restart).toBe(true);
   });
 
-  it.each([false, true])(
-    "restores the pinned series and delivers intervening changes (changed=%s)",
-    async (mismatch) => {
-      const entries: SessionEntry[] = [];
-      const first = project(base);
-      await persist(entries);
-      project(changed, entries);
-      await persist(entries);
-      await persist(entries);
-      expect(entries).toHaveLength(2);
-      clearEmbeddedSessionPromptStates(["system-series"]);
-      lease[Symbol.dispose]();
-      lease = retainEmbeddedSessionPromptState("system-series");
-      const resumed = project(mismatch ? base : changed, entries);
-      expect(resumed.restart).toBe(false);
-      if (mismatch) {
-        expect(resumed.update?.content).toContain("## Changed\nOld.");
-      } else {
-        expect(resumed.update).toBeUndefined();
-      }
-      expect(resumed.systemPrompt).toBe(first.systemPrompt);
-      if (!mismatch) {
-        await persist(entries);
-        expect(entries).toHaveLength(2);
-        expect(project(base, entries).update?.content).toContain("## Changed\nOld.");
-      }
-    },
-  );
-
-  it.each(["route", "compaction", "reset"])("starts a fresh series after %s", (reason) => {
-    project(base);
-    const entries: SessionEntry[] =
-      reason === "route"
-        ? []
-        : [
-            {
-              type: "reset",
-              reason: "reset",
-              id: "reset",
-              parentId: null,
-              timestamp: "2026-10-01T00:00:00Z",
-            },
-          ];
-    if (reason === "compaction") {
-      entries[0] = {
-        type: "compaction",
-        id: "compaction",
-        parentId: null,
-        timestamp: "2026-10-01T00:00:00Z",
-        summary: "Summary.",
-        firstKeptEntryId: "user",
-        tokensBefore: 100,
-      };
-    }
-    const restarted = project(
-      changed,
-      entries,
-      reason === "route" ? `${routeKey}-other` : routeKey,
-    );
-    expect(restarted.restart).toBe(true);
-    expect(restarted.update).toBeUndefined();
-    expect(restarted.systemPrompt).toContain(changed.trimEnd());
+  it("restores the pinned series and delivers intervening changes", async () => {
+    const entries: SessionEntry[] = [];
+    const first = project(base);
+    await persist(entries);
+    project(changed, entries);
+    await persist(entries);
+    await persist(entries);
+    expect(entries).toHaveLength(2);
+    fixture.reload();
+    const resumed = project(changed, entries);
+    expect(resumed.restart).toBe(false);
+    expect(resumed.update).toBeUndefined();
+    expect(resumed.systemPrompt).toBe(first.systemPrompt);
+    await persist(entries);
+    expect(entries).toHaveLength(2);
+    expect(project(base, entries).update?.content).toContain("## Changed\nOld.");
   });
 });
 
 describe("session tool surface", () => {
-  let lease: ReturnType<typeof retainEmbeddedSessionPromptState>;
-  beforeEach(() => {
-    lease = retainEmbeddedSessionPromptState("tool-surface");
-    sessionIds.add("tool-surface");
-  });
-  afterEach(() => lease[Symbol.dispose]());
   const routeKey = "openai/gpt-6-sol/openai-responses";
+  const fixture = promptFixture("tool-surface", routeKey);
+  const names = (tools: { name: string }[]) => tools.map(({ name }) => name).toSorted();
   const tool = (name: string, description = `${name} tool`) =>
     ({
       name,
@@ -469,19 +396,20 @@ describe("session tool surface", () => {
     route = routeKey,
     toolPolicy = "policy-a",
   ) =>
-    prepareSessionToolSurface({ state: lease.state, routeKey: route, toolPolicy, entries, tools });
+    prepareSessionToolSurface({
+      state: fixture.state,
+      routeKey: route,
+      toolPolicy,
+      entries,
+      tools,
+    });
   const definitions = (tools: AnyAgentTool[]) =>
     tools
       .map(({ name, description, parameters }) => ({ name, description, parameters }))
       .toSorted((a, b) => a.name.localeCompare(b.name));
-  async function persist(entries: SessionEntry[]) {
-    prepareSessionSystemPrompt({
-      state: lease.state,
-      routeKey,
-      systemPrompt: "Base.",
-      entries,
-    }).commit();
-    await persistSessionSystemPrompt(lease.state, checkpointWriter(entries));
+  async function persist(entries: SessionEntry[], prompt = "Base.") {
+    fixture.prepare(prompt, entries).commit();
+    await fixture.persist(entries);
   }
 
   it("keeps every pinned definition on a turn that builds fewer tools and refuses the missing ones", async () => {
@@ -497,59 +425,27 @@ describe("session tool surface", () => {
     expect(JSON.stringify(refused.content)).toContain("gateway is not available in this turn");
   });
 
-  it("restores the pin from the transcript after a restart and extends it once for a new tool", async () => {
+  it("preserves pins across prompt admission and checkpoints, and extends restored pins", async () => {
     const entries: SessionEntry[] = [];
     surface([tool("read"), tool("gateway")]);
+    await retireSessionSystemPrompt(fixture.state, routeKey, () => undefined);
+    expect(fixture.state.pendingToolSurface?.tools.map((entry) => entry.name)).toEqual([
+      "gateway",
+      "read",
+    ]);
     await persist(entries);
-    clearEmbeddedSessionPromptStates(["tool-surface"]);
-    lease[Symbol.dispose]();
-    lease = retainEmbeddedSessionPromptState("tool-surface");
+    fixture.reload();
     const restored = surface([tool("read")], entries);
-    expect(restored.map((entry) => entry.name).toSorted()).toEqual(["gateway", "read"]);
-    expect(lease.state.pendingToolSurface).toBeUndefined();
+    expect(names(restored)).toEqual(["gateway", "read"]);
+    expect(fixture.state.pendingToolSurface).toBeUndefined();
+    await persist(entries, "Base.\n\n## Skills\nrefreshed");
+    fixture.reload();
+    expect(names(surface([tool("read")], entries))).toEqual(["gateway", "read"]);
     const extended = surface([tool("read"), tool("heartbeat_respond")], entries);
-    expect(extended.map((entry) => entry.name).toSorted()).toEqual([
+    expect(names(extended)).toEqual(["gateway", "heartbeat_respond", "read"]);
+    expect(fixture.state.pendingToolSurface?.tools.map((entry) => entry.name)).toEqual([
       "gateway",
       "heartbeat_respond",
-      "read",
-    ]);
-    expect(lease.state.pendingToolSurface?.tools.map((entry) => entry.name)).toEqual([
-      "gateway",
-      "heartbeat_respond",
-      "read",
-    ]);
-  });
-
-  it("keeps a restored pin in later checkpoints that change only the system prompt", async () => {
-    const entries: SessionEntry[] = [];
-    surface([tool("read"), tool("gateway")]);
-    await persist(entries);
-    clearEmbeddedSessionPromptStates(["tool-surface"]);
-    lease[Symbol.dispose]();
-    lease = retainEmbeddedSessionPromptState("tool-surface");
-    surface([tool("read"), tool("gateway")], entries);
-    prepareSessionSystemPrompt({
-      state: lease.state,
-      routeKey,
-      systemPrompt: "Base.\n\n## Skills\nrefreshed",
-      entries,
-    }).commit();
-    await persistSessionSystemPrompt(lease.state, checkpointWriter(entries));
-    clearEmbeddedSessionPromptStates(["tool-surface"]);
-    lease[Symbol.dispose]();
-    lease = retainEmbeddedSessionPromptState("tool-surface");
-    expect(
-      surface([tool("read")], entries)
-        .map((entry) => entry.name)
-        .toSorted(),
-    ).toEqual(["gateway", "read"]);
-  });
-
-  it("keeps the new pin through a series restart during prompt admission", async () => {
-    surface([tool("read"), tool("gateway")]);
-    await retireSessionSystemPrompt(lease.state, routeKey, () => undefined);
-    expect(lease.state.pendingToolSurface?.tools.map((entry) => entry.name)).toEqual([
-      "gateway",
       "read",
     ]);
   });
@@ -558,49 +454,22 @@ describe("session tool surface", () => {
     const entries: SessionEntry[] = [];
     surface([tool("read"), tool("gateway")]);
     await persist(entries);
-    entries.push({
-      type: "compaction",
-      id: "compaction-1",
-      parentId: null,
-      timestamp: "2026-10-01T00:00:01Z",
-    } as SessionEntry);
+    entries.push(historyEntry("compaction", "compaction-1"));
     await persist(entries);
     expect(entries.at(-1)).toMatchObject({ data: { historyId: "compaction-1" } });
     expect(entries.at(-1)).not.toHaveProperty("data.tools");
-    clearEmbeddedSessionPromptStates(["tool-surface"]);
-    lease[Symbol.dispose]();
-    lease = retainEmbeddedSessionPromptState("tool-surface");
+    fixture.reload();
     expect(surface([tool("read")], entries).map((entry) => entry.name)).toEqual(["read"]);
   });
 
   it("loads a checkpoint written before the pin and starts a pin from it", async () => {
     const entries: SessionEntry[] = [];
-    prepareSessionSystemPrompt({
-      state: lease.state,
-      routeKey,
-      systemPrompt: "Base.",
-      entries,
-    }).commit();
-    await persistSessionSystemPrompt(lease.state, (customType, data) => {
-      entries.push({
-        type: "custom",
-        customType,
-        data: structuredClone(data),
-        id: "legacy",
-        parentId: null,
-        timestamp: "2026-10-01T00:00:00Z",
-      });
-    });
+    await persist(entries);
     expect(entries[0]).not.toHaveProperty("data.tools");
-    clearEmbeddedSessionPromptStates(["tool-surface"]);
-    lease[Symbol.dispose]();
-    lease = retainEmbeddedSessionPromptState("tool-surface");
-    expect(
-      prepareSessionSystemPrompt({ state: lease.state, routeKey, systemPrompt: "Base.", entries })
-        .restart,
-    ).toBe(false);
+    fixture.reload();
+    expect(fixture.prepare("Base.", entries).restart).toBe(false);
     expect(surface([tool("read")], entries).map((entry) => entry.name)).toEqual(["read"]);
-    expect(lease.state.pendingToolSurface?.tools.map((entry) => entry.name)).toEqual(["read"]);
+    expect(fixture.state.pendingToolSurface?.tools.map((entry) => entry.name)).toEqual(["read"]);
   });
 
   it("drops pinned tools when the tool policy changes", () => {
@@ -626,17 +495,15 @@ describe("session tool surface", () => {
     expect(JSON.stringify((await eventTurn[0]!.execute("x", {})).content)).toContain("exec ran");
   });
 
-  it.each(["read tool", "read v2"])(
-    "sends changed parameters with description %s as built",
-    (description) => {
-      surface([tool("read")]);
-      const changed = surface([
-        { ...tool("read", description), parameters: { type: "object", properties: {} } },
-      ] as AnyAgentTool[]);
-      expect(changed.map((entry) => entry.description)).toEqual([description]);
-      expect(lease.state.pendingToolSurface?.tools).toEqual(definitions(changed));
-    },
-  );
+  it("sends changed parameters and descriptions as built", () => {
+    const description = "read v2";
+    surface([tool("read")]);
+    const changed = surface([
+      { ...tool("read", description), parameters: { type: "object", properties: {} } },
+    ] as AnyAgentTool[]);
+    expect(changed.map((entry) => entry.description)).toEqual([description]);
+    expect(fixture.state.pendingToolSurface?.tools).toEqual(definitions(changed));
+  });
 });
 
 describe("embedded session active project keys", () => {

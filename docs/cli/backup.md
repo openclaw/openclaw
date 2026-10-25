@@ -392,6 +392,8 @@ Snapshot repositories are local directories. Scheduling, upload, retention, incr
 
 ## Versioned Git backups
 
+Human-readable Git backup reports escape control characters in paths, commit subjects, and diagnostics. JSON values and recorded diagnostics are unchanged.
+
 `openclaw backup git create --all` also includes PostgreSQL stores discovered
 through declared plugin backup resources, including retained roots. Each store
 uses its family and resource identity, so multiple PostgreSQL stores have
@@ -800,6 +802,10 @@ Agent-scoped temporary trees under `agents/<agentId>/agent/**/{tmp,.tmp}/` are a
 Symbolic links are archived as link entries, including absolute and dangling targets. Windows target separators are stored as forward slashes to match tar's reader; POSIX target text, including literal backslashes, is preserved. Creation never follows a link to copy its target. Targets outside the state directory, including separately backed-up config, credentials, or workspace targets, are recorded in the manifest and JSON result's `externalSymbolicLinks` list and reported in the text summary. Restore recreates the links after extracting the file content; it never writes through a restored link. Verification rejects archive entries nested beneath a symbolic link.
 
 Absolute links retain their original location after restore, including links to separately backed-up config or credentials. They are no longer rewritten to relative targets. Review these links before activating a restored tree on another host or at another path. Older releases, including v2026.9.4, reject archives with absolute or escaping link targets; use the current release to restore those archives. Existing archives remain readable.
+
+Older backups with source-relative hardlink targets remain restorable when each
+target resolves unambiguously to an archived regular file. Missing or ambiguous
+targets are rejected instead of selecting different recovery data.
 
 Installer-managed and rebuildable runtime roots under the state directory are
 also skipped: `dev/`, `git/`, `npm/`, legacy `npm-runtime/`, `tmp/`, and

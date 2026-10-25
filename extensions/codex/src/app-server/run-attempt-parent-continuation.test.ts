@@ -10,6 +10,7 @@ import {
   isCodexAppServerLiveThreadProtected,
   protectCodexAppServerLiveThread,
 } from "./client-runtime.js";
+import { createDynamicToolCall } from "./dynamic-tools.test-support.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import {
   childTurnCompletedNotification,
@@ -331,14 +332,11 @@ describe("Codex parent continuation with native child custody", () => {
         const response = await harness.handleServerRequest({
           id: "yield-parent",
           method: "item/tool/call",
-          params: {
-            threadId: "thread-1",
-            turnId: "turn-1",
-            callId: "yield-parent",
-            namespace: null,
-            tool: "sessions_yield",
-            arguments: { message: "Waiting for native child" },
-          },
+          params: createDynamicToolCall(
+            "sessions_yield",
+            { message: "Waiting for native child" },
+            "yield-parent",
+          ),
         });
         expect(response, JSON.stringify(response)).toMatchObject({ success: true });
         const outcome = await Promise.allSettled([run]);
