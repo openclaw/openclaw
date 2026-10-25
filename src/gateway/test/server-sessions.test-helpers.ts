@@ -85,16 +85,8 @@ export async function loadSeededTranscriptEvents(scope: TranscriptScope): Promis
 }
 
 const sessionCleanupMocks = vi.hoisted(() => ({
-  clearSessionQueues: vi.fn((keys: Array<string | undefined>) => {
-    const clearedKeys = Array.from(
-      new Set(
-        keys
-          .map((key) => (typeof key === "string" ? key.trim() : ""))
-          .filter((key) => key.length > 0),
-      ),
-    );
-    return clearedKeys;
-  }),
+  clearSessionQueues:
+    vi.fn<typeof import("../../auto-reply/reply/queue/cleanup.js").clearSessionQueues>(),
   stopSessionResetSubagents: vi.fn(
     async (params: { beforeKill?: () => boolean | Promise<boolean> }) => {
       await params.beforeKill?.();
@@ -262,8 +254,7 @@ function createGatewaySessionsTestHarness(startServer: boolean, setup?: GatewayS
     clearConfigCache();
     sessionCleanupMocks.clearSessionQueues.mockClear();
     sessionCleanupMocks.stopSessionResetSubagents.mockClear();
-    sessionHookMocks.hasInternalHookListeners.mockReset();
-    sessionHookMocks.hasInternalHookListeners.mockReturnValue(true);
+    sessionHookMocks.hasInternalHookListeners.mockReset().mockReturnValue(true);
     sessionHookMocks.triggerInternalHook.mockClear();
     beforeResetHookMocks.runBeforeReset.mockClear();
     beforeResetHookState.hasBeforeResetHook = false;
@@ -278,26 +269,24 @@ function createGatewaySessionsTestHarness(startServer: boolean, setup?: GatewayS
     resetSystemEventsForTest();
     acpRuntimeMocks.cancel.mockClear();
     acpRuntimeMocks.close.mockClear();
-    acpRuntimeMocks.getAcpRuntimeBackend.mockReset();
-    acpRuntimeMocks.getAcpRuntimeBackend.mockReturnValue(null);
-    acpRuntimeMocks.requireAcpRuntimeBackend.mockReset();
-    acpRuntimeMocks.requireAcpRuntimeBackend.mockImplementation((backendId?: string) =>
-      acpRuntimeMocks.getAcpRuntimeBackend(backendId),
-    );
+    acpRuntimeMocks.getAcpRuntimeBackend.mockReset().mockReturnValue(null);
+    acpRuntimeMocks.requireAcpRuntimeBackend
+      .mockReset()
+      .mockImplementation((backendId?: string) => acpRuntimeMocks.getAcpRuntimeBackend(backendId));
     Object.values(acpManagerMocks).forEach((mock) => mock.mockClear());
     browserSessionTabMocks.closeTrackedBrowserTabsForSessions.mockClear();
     browserSessionTabMocks.closeTrackedBrowserTabsForSessions.mockResolvedValue(0);
     // Unconsumed one-shot callbacks can retain the previous case's database admission.
-    bundleMcpRuntimeMocks.disposeSessionMcpRuntime.mockReset();
-    bundleMcpRuntimeMocks.disposeSessionMcpRuntime.mockResolvedValue(undefined);
-    bundleMcpRuntimeMocks.retireSessionMcpRuntime.mockReset();
-    bundleMcpRuntimeMocks.retireSessionMcpRuntime.mockImplementation(async ({ sessionId }) => {
-      if (!sessionId) {
-        return false;
-      }
-      await bundleMcpRuntimeMocks.disposeSessionMcpRuntime(sessionId);
-      return true;
-    });
+    bundleMcpRuntimeMocks.disposeSessionMcpRuntime.mockReset().mockResolvedValue(undefined);
+    bundleMcpRuntimeMocks.retireSessionMcpRuntime
+      .mockReset()
+      .mockImplementation(async ({ sessionId }) => {
+        if (!sessionId) {
+          return false;
+        }
+        await bundleMcpRuntimeMocks.disposeSessionMcpRuntime(sessionId);
+        return true;
+      });
   });
 
   const openClient = async (opts?: Parameters<typeof gatewayTestHelpers.connectOk>[1]) => {
@@ -313,18 +302,20 @@ function createGatewaySessionsTestHarness(startServer: boolean, setup?: GatewayS
     return { dir, storePath: testState.sessionStorePath };
   }
 
-  async function createSelectedGlobalSessionStore() {
+  async function createGlobalSessionStore(selectAgents: boolean) {
     const { dir } = await createSessionStoreDir();
     const storeTemplate = path.join(dir, "agents", "{agentId}", "sessions", "sessions.json");
     testState.sessionStorePath = storeTemplate;
     testState.sessionConfig = { scope: "global" };
-    testState.agentsConfig = { ownership: "explicit", entries: { main: {}, work: {} } };
-    testState.agentConfig = {
-      ...testState.agentConfig,
-      systemAgent: { agentId: "main" },
-      sessionStore: { agentId: "main" },
-    };
-    setRuntimeConfigSnapshot(loadGatewayTestConfig());
+    if (selectAgents) {
+      testState.agentsConfig = { ownership: "explicit", entries: { main: {}, work: {} } };
+      testState.agentConfig = {
+        ...testState.agentConfig,
+        systemAgent: { agentId: "main" },
+        sessionStore: { agentId: "main" },
+      };
+      setRuntimeConfigSnapshot(loadGatewayTestConfig());
+    }
     return {
       dir,
       storeTemplate,
@@ -333,6 +324,8 @@ function createGatewaySessionsTestHarness(startServer: boolean, setup?: GatewayS
     };
   }
 
+  const createSelectedGlobalSessionStore = () => createGlobalSessionStore(true);
+
   async function createConfiguredGlobalAgentSessionStore({
     writePrimeStore = false,
     withTranscripts = false,
@@ -340,10 +333,8 @@ function createGatewaySessionsTestHarness(startServer: boolean, setup?: GatewayS
     writePrimeStore?: boolean;
     withTranscripts?: boolean;
   } = {}) {
-    const { dir } = await createSessionStoreDir();
-    const storeTemplate = path.join(dir, "agents", "{agentId}", "sessions", "sessions.json");
-    testState.sessionStorePath = storeTemplate;
-    testState.sessionConfig = { scope: "global" };
+    const { dir, storeTemplate, mainStorePath, workStorePath } =
+      await createGlobalSessionStore(false);
     if (writePrimeStore) {
       await gatewayTestHelpers.writeSessionStore({
         entries: {},
@@ -351,8 +342,6 @@ function createGatewaySessionsTestHarness(startServer: boolean, setup?: GatewayS
       });
     }
 
-    const mainStorePath = storeTemplate.replace("{agentId}", "main");
-    const workStorePath = storeTemplate.replace("{agentId}", "work");
     const stores = Object.entries({ main: mainStorePath, work: workStorePath });
     await fs.mkdir(path.dirname(mainStorePath), { recursive: true });
     await fs.mkdir(path.dirname(workStorePath), { recursive: true });
@@ -418,11 +407,10 @@ function createGatewaySessionsTestHarness(startServer: boolean, setup?: GatewayS
     clearConfigCache,
     clearRuntimeConfigSnapshot,
     configPath,
-  }: {
-    clearConfigCache: () => void;
-    clearRuntimeConfigSnapshot: () => void;
-    configPath: string;
-  }) {
+  }: Pick<
+    Awaited<ReturnType<typeof createConfiguredGlobalAgentSessionStore>>,
+    "clearConfigCache" | "clearRuntimeConfigSnapshot" | "configPath"
+  >) {
     testState.sessionStorePath = undefined;
     testState.sessionConfig = undefined;
     await fs.writeFile(configPath, "{}\n", "utf-8");
@@ -534,9 +522,6 @@ export async function directSessionReq<TPayload = unknown>(
   const contextFields: GatewayRequestContext = createDirectChatContext({
     // Later requests must not orphan active reply buffers and their release callbacks.
     chatRunState: context.chatRunState,
-    broadcastToConnIds: vi.fn(),
-    dedupe: new Map(),
-    getSessionEventSubscriberConnIds: () => new Set<string>(),
     readPreparedGatewayModelCatalog: async () => {
       const catalog = await contextFields.loadGatewayModelCatalogSnapshot();
       return { entries: catalog.entries, routeVariants: catalog.routeVariants };
