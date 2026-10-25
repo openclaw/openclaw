@@ -191,10 +191,14 @@ function buildSseResponse(events: unknown[]): Response {
   return buildRawSseResponse(sse);
 }
 
-function mockGoogleTextResponse(text = "ok"): void {
+function mockGooglePartsResponse(parts: Array<Record<string, unknown>>): void {
   guardedFetchMock.mockResolvedValueOnce(
-    buildSseResponse([{ candidates: [{ content: { parts: [{ text }] }, finishReason: "STOP" }] }]),
+    buildSseResponse([{ candidates: [{ content: { parts }, finishReason: "STOP" }] }]),
   );
+}
+
+function mockGoogleTextResponse(text = "ok"): void {
+  mockGooglePartsResponse([{ text }]);
 }
 
 function buildRateLimitResponse(): Response {
@@ -1390,25 +1394,12 @@ describe("google transport stream", () => {
   );
 
   it("merges tool-call thought signatures from sibling SSE parts", async () => {
-    guardedFetchMock.mockResolvedValueOnce(
-      buildSseResponse([
-        {
-          candidates: [
-            {
-              content: {
-                parts: [
-                  {
-                    functionCall: { id: "call_1", name: "lookup", args: { q: "hello" } },
-                  },
-                  { thoughtSignature: "Y2FsbF9zaWdfbWVyZ2VkXzE=" },
-                ],
-              },
-              finishReason: "STOP",
-            },
-          ],
-        },
-      ]),
-    );
+    mockGooglePartsResponse([
+      {
+        functionCall: { id: "call_1", name: "lookup", args: { q: "hello" } },
+      },
+      { thoughtSignature: "Y2FsbF9zaWdfbWVyZ2VkXzE=" },
+    ]);
 
     const result = await runGeminiStreamResult({
       model: buildGeminiModel({
@@ -1429,36 +1420,23 @@ describe("google transport stream", () => {
   });
 
   it("keeps duplicate tool-call ids and their own thought signatures distinct", async () => {
-    guardedFetchMock.mockResolvedValueOnce(
-      buildSseResponse([
-        {
-          candidates: [
-            {
-              content: {
-                parts: [
-                  {
-                    functionCall: {
-                      id: "call_1",
-                      name: "first",
-                      args: { value: 1 },
-                    },
-                    thoughtSignature: "first_signature",
-                  },
-                  {
-                    functionCall: {
-                      id: "call_1",
-                      name: "second",
-                      args: { value: 2 },
-                    },
-                  },
-                ],
-              },
-              finishReason: "STOP",
-            },
-          ],
+    mockGooglePartsResponse([
+      {
+        functionCall: {
+          id: "call_1",
+          name: "first",
+          args: { value: 1 },
         },
-      ]),
-    );
+        thoughtSignature: "first_signature",
+      },
+      {
+        functionCall: {
+          id: "call_1",
+          name: "second",
+          args: { value: 2 },
+        },
+      },
+    ]);
 
     const result = await runGeminiStreamResult();
     const toolCalls = result.content.filter((block) => block.type === "toolCall");
@@ -1479,27 +1457,14 @@ describe("google transport stream", () => {
   });
 
   it("keeps explicit thinking signatures after tool-call SSE parts", async () => {
-    guardedFetchMock.mockResolvedValueOnce(
-      buildSseResponse([
-        {
-          candidates: [
-            {
-              content: {
-                parts: [
-                  {
-                    functionCall: { id: "call_1", name: "lookup", args: { q: "hello" } },
-                  },
-                  { thought: true, thoughtSignature: "dGhvdWdodF9zaWdfYWZ0ZXJfY2FsbA==" },
-                  { thought: true, text: "draft" },
-                  { text: "answer" },
-                ],
-              },
-              finishReason: "STOP",
-            },
-          ],
-        },
-      ]),
-    );
+    mockGooglePartsResponse([
+      {
+        functionCall: { id: "call_1", name: "lookup", args: { q: "hello" } },
+      },
+      { thought: true, thoughtSignature: "dGhvdWdodF9zaWdfYWZ0ZXJfY2FsbA==" },
+      { thought: true, text: "draft" },
+      { text: "answer" },
+    ]);
 
     const result = await runGeminiStreamResult({
       model: buildGeminiModel({
