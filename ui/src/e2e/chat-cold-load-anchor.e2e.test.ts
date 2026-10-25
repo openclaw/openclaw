@@ -439,16 +439,22 @@ suite.define(() => {
           return thread && thread.scrollHeight - thread.clientHeight - thread.scrollTop > 200;
         });
         const reader = await scroller.evaluate((element) => element.scrollTop);
-        await page
-          .locator(
-            '.sidebar-recent-session[data-session-key="agent:main:recent-0"] a.sidebar-recent-session__link',
-          )
-          .click();
-        await page
-          .locator(".chat-pane__session-title-text")
-          .filter({ hasText: "Recent conversation 0" })
-          .waitFor();
-        await page.goBack();
+        const previousThread = await scroller.evaluateHandle((element) => element);
+        for (let index = 0; index < 3; index++) {
+          await page
+            .locator(
+              `.sidebar-recent-session[data-session-key="agent:main:recent-${index}"] a.sidebar-recent-session__link`,
+            )
+            .click();
+          await page
+            .locator(".chat-pane__session-title-text")
+            .filter({ hasText: `Recent conversation ${index}` })
+            .waitFor();
+        }
+        expect(await previousThread.evaluate((element) => element.isConnected)).toBe(false);
+        for (let index = 0; index < 3; index++) {
+          await page.goBack();
+        }
         await page
           .locator(".chat-pane__session-title-text")
           .filter({ hasText: session.label })
