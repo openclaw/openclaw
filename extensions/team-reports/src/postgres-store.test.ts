@@ -21,7 +21,8 @@ import {
   window,
 } from "./sources/github/responses.fixtures.js";
 import { exercise, report } from "./store-conformance.test-support.js";
-import { openTeamReportsConnection, teamReportsEngineSchema } from "./store-database.js";
+import { openTeamReportsConnection } from "./store-database.js";
+import { teamReportsEngineSchema } from "./store-engine-schema.js";
 import { openTeamReportsDatabase, type createSqliteWorkerBackend } from "./store.worker.js";
 
 const configured = getEnvironmentData("openclaw.test.workboard.connection");

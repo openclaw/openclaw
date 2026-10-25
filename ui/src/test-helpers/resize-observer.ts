@@ -6,6 +6,13 @@ export function installResizeObserverStub() {
     return;
   }
   // JSDOM has no layout; this fixture does not simulate resize geometry.
+  stubResizeObserver();
+  onTestFinished(() => {
+    vi.unstubAllGlobals();
+  });
+}
+
+export function stubResizeObserver() {
   vi.stubGlobal(
     "ResizeObserver",
     class {
@@ -14,7 +21,4 @@ export function installResizeObserverStub() {
       disconnect() {}
     },
   );
-  onTestFinished(() => {
-    vi.unstubAllGlobals();
-  });
 }

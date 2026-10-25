@@ -407,6 +407,12 @@ async function stageMaterialize(ctx: Context, index: number, config: OpenClawCon
     ctx,
   );
   const proof = result.verification;
+  if (result.plannerStatistics) {
+    (ctx.plannerStatistics ??= []).push({
+      path: livePath(target),
+      result: result.plannerStatistics,
+    });
+  }
   target.verification = {
     contentHash: digest(proof.tables),
     allocationHash: digest(proof.allocations),

@@ -40,6 +40,7 @@ import {
   refreshPageChat,
   retireChatMetadataRequests,
 } from "./chat-state-refresh.ts";
+import { selectedChatSessionRow } from "./chat-state-route.ts";
 import { expandModelProviders } from "./components/chat-model-picker.test-support.tsx";
 
 beforeEach(installModelPickerLayout);
@@ -47,7 +48,7 @@ beforeEach(installModelPickerLayout);
 function composerControls(state: ChatPageHost) {
   return renderChatPaneComposerControls({
     state,
-    selectedSession: undefined,
+    selectedSession: selectedChatSessionRow(state),
     agentDefaultModel: undefined,
     modelAccess: { allowed: true, requiredScope: "operator.write" },
     effortAccess: { allowed: true, requiredScope: "operator.write" },

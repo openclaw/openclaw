@@ -51,6 +51,7 @@ afterEach(async () => {
     databasePath,
   );
   vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
 });
 
 async function writePluginFixture(params: {
@@ -129,6 +130,42 @@ it("returns a structured finding when the installed plugin index is missing", as
 
   expect(report.probesRun).toContain("plugin.index_unavailable");
   expectFinding(report, { level: "error", code: "plugin.index_unavailable" });
+});
+
+it("accepts bundled runtime entries compiled into the standalone image", async () => {
+  const entryPath = path.join(root, "extensions", "embedded", "index.js");
+  vi.stubGlobal(
+    "__openclawStandaloneIsEmbeddedModule",
+    (filename: string) => filename === entryPath,
+  );
+  await writePluginFixture({
+    id: "embedded",
+    location: "extensions",
+    origin: "bundled",
+    packageJson: packageManifest("embedded", "./index.js"),
+  });
+
+  expect((await runPostUpgradeProbes()).findings).toEqual([]);
+});
+
+it("rejects embedded runtime entries outside the plugin package", async () => {
+  const entryPath = path.join(root, "extensions", "other.js");
+  vi.stubGlobal(
+    "__openclawStandaloneIsEmbeddedModule",
+    (filename: string) => filename === entryPath,
+  );
+  await writePluginFixture({
+    id: "embedded",
+    location: "extensions",
+    origin: "bundled",
+    packageJson: packageManifest("embedded", "../other.js"),
+  });
+
+  expectFinding(await runPostUpgradeProbes(), {
+    level: "error",
+    code: "plugin.entry_unresolved",
+    message: expect.stringContaining("escapes plugin directory"),
+  });
 });
 
 it("reports unreadable plugin packages as structured errors without losing JSON console diagnostics", async () => {

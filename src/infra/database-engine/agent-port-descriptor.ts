@@ -339,6 +339,7 @@ export async function loadAgentPortDescriptor(
           runWithAgentDatabaseMaintenanceAuthority(
             {
               signal: new AbortController().signal,
+              assertCurrent,
               assertOwned: assertCurrent,
               assertOwnedInTransaction: assertCurrent,
               renew: assertCurrent,

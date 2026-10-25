@@ -65,15 +65,12 @@ async function* malformedSse(events: AsyncIterable<{ type: string }>) {
 }
 
 function failedMessages(manager: SessionManager) {
-  return manager
-    .getBranch()
-    .flatMap((entry) =>
-      entry.type === "message" &&
-      entry.message.role === "assistant" &&
-      entry.message.stopReason === "error"
-        ? [entry.message]
-        : [],
-    );
+  return manager.getBranch().flatMap((entry) => {
+    if (entry.type !== "message" || entry.message.role !== "assistant") {
+      return [];
+    }
+    return entry.message.stopReason === "error" ? [entry.message] : [];
+  });
 }
 
 function createRetrySession(execute?: ToolDefinition["execute"], enabled = true) {
@@ -84,10 +81,7 @@ function createRetrySession(execute?: ToolDefinition["execute"], enabled = true)
     }),
     customTools: execute
       ? [
-          {
-            ...createStubTool("record"),
-            execute,
-          },
+          { ...createStubTool("record"), execute },
           // Async tool calls need sessions_yield to collect their results.
           { ...createStubTool("sessions_yield"), async: false },
         ]

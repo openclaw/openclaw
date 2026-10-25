@@ -392,7 +392,7 @@ Snapshot repositories are local directories. Scheduling, upload, retention, incr
 
 ## Versioned Git backups
 
-Human-readable Git backup reports escape control characters in paths, commit subjects, and diagnostics. JSON values and recorded diagnostics are unchanged.
+Human-readable Git backup reports escape control characters in paths, commit subjects, and diagnostics. Push-failure diagnostics keep escaped lines separated so credential redaction preserves the stderr and stdout tails. JSON values and recorded diagnostics are unchanged.
 
 `openclaw backup git create --all` also includes PostgreSQL stores discovered
 through declared plugin backup resources, including retained roots. Each store

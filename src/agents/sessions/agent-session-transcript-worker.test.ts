@@ -1,6 +1,5 @@
 import path from "node:path";
 import { serialize } from "node:v8";
-import { Type } from "typebox";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
@@ -31,6 +30,7 @@ import { createToolResultPromptProjectionState } from "../embedded-agent-runner/
 import type { AgentEvent } from "../runtime/index.js";
 import { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
 import { installSessionToolResultGuard } from "../session-tool-result-guard.js";
+import { createStubTool } from "../test-helpers/agent-tool-stubs.js";
 import {
   createAssistant,
   createAssistantResultStream,
@@ -375,10 +375,7 @@ it("keeps the active turn and all steers after an earlier steer receipt rewrites
       withSessionWriteSettlement: transcript.withOwnedTranscriptWrite,
       customTools: [
         {
-          name: "hold",
-          label: "Hold",
-          description: "Hold the current tool until steering is queued",
-          parameters: Type.Object({}),
+          ...createStubTool("hold"),
           execute: async () => {
             toolStarted.resolve();
             await releaseTool.promise;

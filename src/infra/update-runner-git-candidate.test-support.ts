@@ -9,6 +9,7 @@ import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import * as processExec from "../process/exec.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
+import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { pathExists } from "../utils.js";
 import { listDirectoryTreeStrict } from "./directory-walk.js";
 import { collectNestedErrorCandidates } from "./error-graph-internal.js";
@@ -336,15 +337,10 @@ export async function expectCancelledGitCandidateCleanup({
         );
         return buildResult;
       }
-      return {
+      return createCommandResult({
         stdout: argv[1] === "--version" ? pnpmVersion : "",
-        stderr: "",
-        code: 0,
-        signal: null,
-        killed: false,
-        termination: "exit",
         noOutputTimedOut: false,
-      };
+      });
     });
   try {
     const commandRunner = await buildUpdateCommandRunner();
