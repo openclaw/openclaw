@@ -56,6 +56,9 @@ async function call(
 }
 
 const searchParams = { version: 2, query: "x" };
+async function expectDenied(method: string, params: Record<string, unknown>, message: string) {
+  expectRpcError(await call(method, params), { message: expect.stringContaining(message) });
+}
 
 let sharedGateway = false;
 
@@ -109,12 +112,8 @@ describe("memory provider reads through Gateway dispatch", () => {
 
   it("requires an administrator for content reads on a shared Gateway", async () => {
     sharedGateway = true;
-    expectRpcError(await call("memory.search", searchParams), {
-      message: expect.stringContaining("requires an administrator"),
-    });
-    expectRpcError(await call("memory.get", { reference }), {
-      message: expect.stringContaining("requires an administrator"),
-    });
+    await expectDenied("memory.search", searchParams, "requires an administrator");
+    await expectDenied("memory.get", { reference }, "requires an administrator");
     expect(open).not.toHaveBeenCalled();
     expectRpcResult(await call("memory.status", {}), expect.objectContaining({ status: "ready" }));
     const admin = await call("memory.search", searchParams, cliClient(["operator.admin"]));
@@ -127,9 +126,7 @@ describe("memory provider reads through Gateway dispatch", () => {
       input.context.assertCurrent();
       return { provider };
     });
-    expectRpcError(await call("memory.search", searchParams), {
-      message: expect.stringContaining("requires an administrator"),
-    });
+    await expectDenied("memory.search", searchParams, "requires an administrator");
     expect(provider.search).not.toHaveBeenCalled();
   });
 

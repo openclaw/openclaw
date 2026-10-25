@@ -127,12 +127,12 @@ describe("fs.listDir", () => {
   });
 
   it("rejects relative paths and invalid params", async () => {
-    const [relativeOk, , relativeError] = await call({ path: "relative/dir" });
-    expect(relativeOk).toBe(false);
-    expect(String((relativeError as { message?: string })?.message)).toContain("absolute");
-
-    const [invalidOk] = await call({ path: 42 });
-    expect(invalidOk).toBe(false);
+    expect(await call({ path: "relative/dir" })).toMatchObject([
+      false,
+      undefined,
+      { message: expect.stringContaining("absolute") },
+    ]);
+    expect((await call({ path: 42 }))[0]).toBe(false);
   });
 
   it("reports missing directories as request errors", async () => {
@@ -201,11 +201,7 @@ describe("fs.listDir", () => {
   it("routes node listings through the connected node capability", async () => {
     const invoke = vi.fn().mockResolvedValue({
       ok: true,
-      payloadJSON: JSON.stringify({
-        path: "/Users/peter",
-        home: "/Users/peter",
-        entries: [],
-      }),
+      payloadJSON: JSON.stringify({ path: "/Users/peter", home: "/Users/peter", entries: [] }),
     });
     const context = nodeContext(invoke, {
       ...connectedNode,
@@ -250,7 +246,6 @@ describe("fs.listDir", () => {
     });
 
     const [ok, , error] = await call({ nodeId: "macbook" }, context);
-
     expect(ok).toBe(false);
     expect(error).toMatchObject({
       code: "INVALID_REQUEST",

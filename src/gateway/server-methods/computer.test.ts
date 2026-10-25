@@ -99,6 +99,7 @@ const snapshot = {
   generation: "provider-one",
   idempotencyKey: "snapshot-one",
 };
+const unavailableStatus = [true, { available: false, configured: false }];
 
 describe("Gateway computer RPC", () => {
   it("retains one ingress execution owner across origin-free RPCs and fences deferred input", async () => {
@@ -119,10 +120,9 @@ describe("Gateway computer RPC", () => {
       };
       return client;
     };
-    expect(await invoke("computer.status", {}, undefined, { client: clientForRequest() })).toEqual([
-      true,
-      { available: false, configured: false },
-    ]);
+    expect(await invoke("computer.status", {}, undefined, { client: clientForRequest() })).toEqual(
+      unavailableStatus,
+    );
     const { owners, entered, prepared, sideEffect, service } = deferredInput(grant.signal, 2);
     const dispatch = (params = snapshot) =>
       invoke("computer.invoke", params, service, { client: clientForRequest() });
@@ -155,10 +155,7 @@ describe("Gateway computer RPC", () => {
         delete client.connId;
         client.internal = { syntheticClient: true };
       }
-      expect(await invoke("computer.status", {}, undefined, { client })).toEqual([
-        true,
-        { available: false, configured: false },
-      ]);
+      expect(await invoke("computer.status", {}, undefined, { client })).toEqual(unavailableStatus);
     },
   );
 
@@ -196,9 +193,7 @@ describe("Gateway computer RPC", () => {
     expect(result).toMatchObject([
       false,
       undefined,
-      {
-        code: synthetic ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST,
-      },
+      { code: synthetic ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST },
     ]);
     expect(dispatch).not.toHaveBeenCalled();
   });
