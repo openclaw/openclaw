@@ -3,7 +3,10 @@ import type {
   EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { projectAgentHarnessTranscriptMessageForDisplay } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   attachCodexMirrorIdentity,
   attachUpstreamUserText,
@@ -118,9 +121,10 @@ export function buildCodexAgentEndMessages(
     if (message.role !== "user") {
       return false;
     }
-    const messageIdempotencyKey = Reflect.get(message, "idempotencyKey");
+    const messageIdempotencyKey = asOptionalRecord(message)?.idempotencyKey;
     return (
-      (persisted.idempotencyKey !== undefined &&
+      (typeof messageIdempotencyKey === "string" &&
+        persisted.idempotencyKey !== undefined &&
         messageIdempotencyKey === persisted.idempotencyKey) ||
       (promptMirrorIdentity !== undefined && readMirrorIdentity(message) === promptMirrorIdentity)
     );
