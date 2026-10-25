@@ -145,12 +145,10 @@ describe("harness tool delegation through the catalog", () => {
         await callCatalog(host, { ...identity, runId, config }, assembled);
 
         if (screenAllowed) {
-          expect(respond).toHaveBeenCalledWith(
+          expect(respond.mock.lastCall).toMatchObject([
             true,
-            expect.objectContaining({
-              environment: expect.objectContaining({ status: "available" }),
-            }),
-          );
+            { environment: { status: "available" } },
+          ]);
           expect(context.broadcastToConnIds).toHaveBeenCalledWith(
             "ui.command",
             expect.objectContaining({
@@ -160,13 +158,11 @@ describe("harness tool delegation through the catalog", () => {
           );
           expect(provision).toHaveBeenCalledOnce();
         } else {
-          expect(respond).toHaveBeenCalledWith(
+          expect(respond.mock.lastCall).toMatchObject([
             false,
             undefined,
-            expect.objectContaining({
-              message: "screen is not allowed by this conversation's tool policy",
-            }),
-          );
+            { message: "screen is not allowed by this conversation's tool policy" },
+          ]);
           expect(provision).not.toHaveBeenCalled();
           expect(context.broadcastToConnIds).not.toHaveBeenCalled();
           expect(service.getSessionAttachmentStatus(identity.sessionId)).toBeUndefined();
@@ -198,11 +194,7 @@ it.each(["preparation", "finalization"] as const)(
         host.closeAdmission();
       }
     });
-    const execute = vi.fn(async () =>
-      jsonResult(
-        stage === "preparation" ? { effect: "must-not-run" } : { marker: "finished-source" },
-      ),
-    );
+    const execute = vi.fn(async () => jsonResult({}));
     const prepareBeforeToolCallParams: AnyAgentTool["prepareBeforeToolCallParams"] = (args) => {
       host.closeAdmission();
       return args;
