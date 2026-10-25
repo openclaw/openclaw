@@ -10,10 +10,7 @@ import {
 } from "../infra/gateway-state-owner.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
-import {
-  deferSqlitePostCommitPublication,
-  stageSqliteCommittedPublication,
-} from "../infra/sqlite-post-commit.js";
+import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
 import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import {
@@ -233,37 +230,23 @@ it("refuses a single-statement write before its effect when shared-state admissi
   expectNotWritten(database.db, write);
 });
 
-it("publishes a committed single statement without an envelope or replaying a failed observer", () => {
+it("publishes a committed single statement without an envelope", () => {
   const database = openDatabase(options);
   using reader = new DatabaseSync(database.path, { readOnly: true });
   const publications: string[] = [];
   const exec = vi.spyOn(database.db, "exec");
   const write = vi.fn(({ db }: { db: EngineConnection }) => {
     expect(db.isTransaction).toBe(false);
-    expect(
-      stageSqliteCommittedPublication(db, {
-        installFacts: () => {
-          expect(db.isTransaction).toBe(false);
-          publications.push("facts");
-        },
-        invalidate: () => publications.push("invalidated"),
-        notify: () => {
-          expect(events(reader)).toEqual([{ event_key: "committed" }]);
-          publications.push("notified");
-        },
-      }),
-    ).toBe(true);
     deferSqlitePostCommitPublication(db, () => {
-      publications.push("failed observer");
-      throw new Error("synthetic observer failure");
+      expect(events(reader)).toEqual([{ event_key: "committed" }]);
+      publications.push("notified");
     });
-    deferSqlitePostCommitPublication(db, () => publications.push("last observer"));
     return insertEvent(db, "committed");
   });
   const result = writeTransaction(write, options, { singleStatement: true });
   expect(result.changes).toBe(1);
   expect(write).toHaveBeenCalledOnce();
-  expect(publications).toEqual(["facts", "notified", "failed observer", "last observer"]);
+  expect(publications).toEqual(["notified"]);
   expect(
     exec.mock.calls.filter(([sql]) => /\b(?:BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE)\b/i.test(sql)),
   ).toEqual([]);

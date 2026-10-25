@@ -38,7 +38,6 @@ import { getOpenClawStateWorkerOwner as workerOwner } from "./openclaw-state-wor
 import { runOpenClawStateWorkerOperation as runOperation } from "./openclaw-state-worker-store.js";
 import { openExistingSqliteWorkerBackend as openBackend } from "./openclaw-state.worker.js";
 
-const hostBirth = { paths: new Set<string>(), ctimeAdvanceNs: 0n };
 const ignoresHostBirthtime = process.platform === "linux" || process.platform === "android";
 
 function fixture(run: (fixture: ReturnType<typeof bindFixture>) => Promise<void>) {
@@ -77,51 +76,31 @@ afterEach(async () => {
   } finally {
     vi.restoreAllMocks();
     syncBuiltinESMExports();
-    hostBirth.paths.clear();
-    hostBirth.ctimeAdvanceNs = 0n;
   }
 });
 
-function observeHostBirthtime(paths: string[]): void {
-  for (const pathname of paths) {
-    hostBirth.paths.add(pathname);
-    hostBirth.paths.add(
-      path.join(fs.realpathSync.native(path.dirname(pathname)), path.basename(pathname)),
-    );
-  }
+function observeHostBirthtime(pathname: string) {
   const readStat = fs.statSync;
   const readFstat = fs.fstatSync;
-  const selectedFiles = new Set<string>();
-  for (const pathname of hostBirth.paths) {
-    const file = readStat(pathname, { bigint: true, throwIfNoEntry: false });
-    if (file) {
-      selectedFiles.add(`${file.dev}:${file.ino}`);
+  const file = readStat(pathname, { bigint: true });
+  let advanceNs = 0n;
+  const applyBirthtime = <T extends fs.Stats | fs.BigIntStats | undefined>(result: T): T => {
+    if (result && "ctimeNs" in result && result.dev === file.dev && result.ino === file.ino) {
+      const ctimeNs = result.ctimeNs + advanceNs;
+      Object.defineProperties(result, {
+        ctimeNs: { value: ctimeNs },
+        birthtimeNs: { value: ctimeNs },
+      });
     }
-  }
-  const applyBirthtime = (result: fs.Stats | fs.BigIntStats) => {
-    if ("ctimeNs" in result) {
-      const ctimeNs = result.ctimeNs + hostBirth.ctimeAdvanceNs;
-      Object.defineProperty(result, "ctimeNs", { value: ctimeNs });
-      Object.defineProperty(result, "birthtimeNs", { value: ctimeNs });
-    }
+    return result;
   };
-  vi.spyOn(fs, "statSync").mockImplementation((...args) => {
-    const result = readStat(...args);
-    if (result && args[1]?.bigint && hostBirth.paths.has(String(args[0]))) {
-      selectedFiles.add(`${result.dev}:${result.ino}`);
-      applyBirthtime(result);
-    }
-    return result;
-  });
-  vi.spyOn(fs, "fstatSync").mockImplementation((...args) => {
-    const result = readFstat(...args);
-    if (args[1]?.bigint && selectedFiles.has(`${result.dev}:${result.ino}`)) {
-      applyBirthtime(result);
-    }
-    return result;
-  });
+  vi.spyOn(fs, "statSync").mockImplementation((...args) => applyBirthtime(readStat(...args)));
+  vi.spyOn(fs, "fstatSync").mockImplementation((...args) => applyBirthtime(readFstat(...args)));
   // Native-passthrough identity modules must observe the same builtin as this test.
   syncBuiltinESMExports();
+  return () => {
+    advanceNs += 1n;
+  };
 }
 
 it("permits a lazy native write after healthy peer changes when birthtime falls back to ctime", async () => {
@@ -129,7 +108,7 @@ it("permits a lazy native write after healthy peer changes when birthtime falls 
     const pathname = open().path;
     await closeDatabases();
     const alias = statePath("same-file-alias.sqlite");
-    observeHostBirthtime([pathname, alias]);
+    const advanceCtime = observeHostBirthtime(pathname);
     const before = fs.statSync(pathname, { bigint: true });
     const captured = context();
     const preparedRead = ignoresHostBirthtime ? prepare(pathname) : undefined;
@@ -149,7 +128,7 @@ it("permits a lazy native write after healthy peer changes when birthtime falls 
       }
       fs.linkSync(pathname, alias);
       // Advance coarse filesystem timestamps so the ctime birthtime fallback moves.
-      hostBirth.ctimeAdvanceNs += 1n;
+      advanceCtime();
       const after = fs.statSync(pathname, { bigint: true });
       expect(after.ino).toBe(before.ino);
       expect(after.birthtimeNs).not.toBe(before.birthtimeNs);

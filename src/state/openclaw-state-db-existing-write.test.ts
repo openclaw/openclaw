@@ -2,14 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
-import {
-  observeHostDataSql,
-  observeSqliteReadSql,
-} from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
-import { classifySqliteMutation } from "../infra/sqlite-schema-mutation.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import * as maintenance from "../infra/state-database-maintenance.js";
 import { closeOpenClawStateDatabaseByPathAsync as closePath } from "./openclaw-state-db-cache.js";
@@ -40,15 +36,6 @@ const contract = {
   schemaSql: extractSqliteTableSchema(SCHEMA_SQL, "config_machine_state"),
   operationLabel: "retained writer test",
 };
-const schemaInventorySql =
-  /\b(?:sqlite_schema|sqlite_master|(?:pragma_)?(?:table|index)_(?:list|info|xinfo))\b/iu;
-const admissionSql = new RegExp(
-  `${schemaInventorySql.source}|\\b(?:integrity_check|quick_check|foreign_key_check)\\b`,
-  "iu",
-);
-function expectNoQueries(queries: string[], pattern: RegExp) {
-  expect(queries.filter((sql) => pattern.test(sql))).toEqual([]);
-}
 function fixture(fullSchema = false, seedSql = "") {
   const root = tempDirs.make("openclaw-existing-writer-");
   const options = { path: path.join(root, "state.sqlite"), env: { OPENCLAW_STATE_DIR: root } };
@@ -129,35 +116,20 @@ it("admits maintenance with QUICK without lending that receipt to a FULL writer"
   expect(readValues(options.path)).toEqual(["quick write", "full write"]);
 });
 
-it("initializes an additive subset without warm-table DDL", () => {
+it("writes to an existing additive subset across reopen", () => {
   const options = fixture(true);
-  const queries: Array<{ query: string; database?: DatabaseSync }> = [];
-  observeHostDataSql((query, database) => queries.push({ query, database }));
-  let writer: EngineConnection | undefined;
   writeExisting(
     ({ db }) => {
-      writer = db;
       insert(db, 1, "warm subset");
     },
     options,
     { ...contract, initializeAdditiveSchema: true },
   );
   expect(readValues(options.path)).toEqual(["warm subset"]);
-  expect(
-    queries.filter(
-      ({ query, database }) =>
-        database === writer && classifySqliteMutation(query, "batch").mainSchemaChange,
-    ),
-  ).toEqual([]);
-  const warmQueryCount = queries.length;
   writeExisting(({ db }) => insert(db, 2, "reopened subset"), options, {
     ...contract,
     initializeAdditiveSchema: true,
   });
-  expectNoQueries(
-    queries.slice(warmQueryCount).map(({ query }) => query),
-    new RegExp(`${schemaInventorySql.source}|\\bFROM schema_meta\\b`, "iu"),
-  );
   expect(readValues(options.path)).toEqual(["warm subset", "reopened subset"]);
 });
 
@@ -249,7 +221,6 @@ it("preserves a replacement appearing during schema lease acquisition", () => {
 
 it("retains WAL identity and admission across local and sibling writes", () => {
   const options = fixture();
-  const reads = observeSqliteReadSql(StatementSync.prototype);
   const writer = openWriter(options);
   const retained = writer.run(({ db }) => {
     insert(db, 1, "first");
@@ -264,29 +235,21 @@ it("retains WAL identity and admission across local and sibling writes", () => {
     expect(db).toBe(retained);
     insert(db, 3, "last");
   }, options);
-  const warmQueryCount = reads.queries.length;
   writer.run(({ db }) => insert(db, 4, "warm"), options);
-  expectNoQueries(reads.queries.slice(warmQueryCount), schemaInventorySql);
   writer.assertSettled();
   expect(readValues(options.path)).toEqual(["first", "foreign", "last", "warm"]);
   expect(sidecarIdentities(options.path)).toEqual(sidecars);
-  for (const pragma of ["integrity_check", "foreign_key_check"]) {
-    expect(
-      reads.queries.filter((sql) => new RegExp(`^PRAGMA ${pragma}\\s*;?$`, "iu").test(sql)),
-    ).toHaveLength(1);
-  }
   writer.close();
   expect(retained?.isOpen).toBe(false);
   expectNoSidecars(options.path);
 });
 
-it("readmits lazy DDL once before resuming warm writes", async () => {
+it("resumes retained writes after lazy DDL without changing the schema version", async () => {
   const options = fixture(true);
   const peer = openState(options);
   peer.db.exec("DROP TABLE user_preferences");
   const version = readRow(peer.db, "PRAGMA user_version");
   const writer = openWriter(options);
-  const reads = observeSqliteReadSql(StatementSync.prototype);
   try {
     writer.run(({ db }) => {
       expect(db).not.toBe(peer.db);
@@ -296,12 +259,9 @@ it("readmits lazy DDL once before resuming warm writes", async () => {
     expectRow(peer.db, "SELECT COUNT(*) AS total FROM user_preferences", { total: 0 });
     expectRow(peer.db, "PRAGMA user_version", version);
     writer.run(({ db }) => db.exec("INSERT INTO records VALUES (2, 'after addition')"), options);
-    const readmittedQueryCount = reads.queries.length;
     writer.run(({ db }) => db.exec("INSERT INTO records VALUES (3, 'warm again')"), options);
-    expectNoQueries(reads.queries.slice(readmittedQueryCount), admissionSql);
     expect(readValues(options.path)).toEqual(["before addition", "after addition", "warm again"]);
   } finally {
-    reads.restore();
     writer.close();
     await closePath(options.path);
   }

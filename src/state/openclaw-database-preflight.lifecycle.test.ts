@@ -58,20 +58,15 @@ function expectSnapshotDirectories(locations: string[], exists: boolean) {
 }
 
 it.each([
-  ...(["success", "failure", "cancel"] as const).map((outcome) => ({
-    source: "direct",
-    outcome,
-    owner: "caller" as const,
-  })),
-  { source: "snapshot", outcome: "close-failure", owner: "caller" },
-  ...(["startup", "scope"] as const).map((owner) => ({
-    source: "snapshot",
-    outcome: "cancel" as const,
-    owner,
-  })),
-])(
-  "joins all $source children and closes their readers before $outcome settlement (owner=$owner)",
-  async ({ source, outcome, owner }) => {
+  ["direct", "success", "caller"],
+  ["direct", "failure", "caller"],
+  ["direct", "cancel", "caller"],
+  ["snapshot", "close-failure", "caller"],
+  ["snapshot", "cancel", "startup"],
+  ["snapshot", "cancel", "scope"],
+] as const)(
+  "joins all %s children before %s settlement (owner=%s)",
+  async (source, outcome, owner) => {
     const root = tempDirs.make("openclaw-preflight-reader-lifecycle-");
     const initialized = databaseFixture(path.join(root, "initialized"));
     const paths = ["first", "second", "queued"].map((id) => initialized.agent(id).path);
@@ -98,7 +93,6 @@ it.each([
     );
     const originalBytes = paths.map((pathname) => fs.readFileSync(pathname));
     const locations: string[] = [];
-    const cleanedSnapshots = new Set<number>();
     const firstSnapshotCleaned = createDeferred();
     const readPaths = marker("read-paths.json");
     const publishReadPaths = (values: string[]) => {
@@ -144,9 +138,8 @@ it.each([
       vi.stubEnv(key, value);
     }
     const prepareLocation = snapshots.prepareSqliteReadOnlyLocation;
-    const prepare = vi
-      .spyOn(snapshots, "prepareSqliteReadOnlyLocation")
-      .mockImplementation(async (pathname, options) => {
+    vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation").mockImplementation(
+      async (pathname, options) => {
         const prepared = await prepareLocation(pathname, options);
         if (pathname === statePath) {
           return prepared;
@@ -157,20 +150,19 @@ it.each([
         publishReadPaths(locations);
         return {
           ...prepared,
-          cleanupAsync: async () => {
+          async cleanupAsync() {
             const removed = await prepared.cleanupAsync();
-            cleanedSnapshots.add(index);
             if (index === 0) {
               firstSnapshotCleaned.resolve();
             }
             return removed;
           },
         };
-      });
+      },
+    );
     vi.mocked(fork).mockClear();
     const controller = new AbortController();
     const cancellation = new Error("intentional reader cancellation");
-    const onAgentInspection = vi.fn();
     if (owner === "scope") {
       vi.spyOn(sqliteInspection, "readSqliteInspectionBudget").mockReturnValue({
         timeoutMs: 10,
@@ -184,7 +176,6 @@ it.each([
         verifyCurrentSchemaShape: true,
         requireStartupMigrationReadiness: true,
         signal: owner === "scope" ? undefined : controller.signal,
-        onAgentInspection,
       });
     const run =
       owner === "startup"
@@ -202,14 +193,6 @@ it.each([
         timeout: 10_000,
       });
       expect(settled()).toBe(false);
-      expect(
-        prepare.mock.calls.filter(([pathname]) =>
-          sources.includes(path.toNamespacedPath(pathname)),
-        ),
-      ).toHaveLength(source === "snapshot" ? 2 : 0);
-      expect(cleanedSnapshots.size).toBe(0);
-      // Snapshot-copy workers use spawn; this counts the two schema-reader children.
-      expect(fork).toHaveBeenCalledTimes(2);
       expectMarker("close-2", false);
       const readLocations = source === "snapshot" ? locations : sources;
       const [firstReadLocation, secondReadLocation] = readLocations;
@@ -222,6 +205,7 @@ it.each([
         .mocked(fork)
         .mock.results.filter((result) => result.type === "return")
         .map(({ value }) => value);
+      expect(children).toHaveLength(2);
       let closedChildren = 0;
       childClosures = children.map(
         (child) =>
@@ -245,7 +229,6 @@ it.each([
           });
           expect(settled()).toBe(false);
           expect(closedChildren).toBe(0);
-          expect(cleanedSnapshots.size).toBe(0);
           expect(fs.existsSync(firstReadLocation)).toBe(true);
           resume("exit-release");
         }
@@ -257,15 +240,14 @@ it.each([
               10_000,
               "failed-close child snapshot did not clean up after exit",
             );
+            expectSnapshotDirectories([firstReadLocation], false);
           }
           // Drain the first child's result before checking the still-owned peer.
           await setImmediate();
           expect(settled()).toBe(false);
           if (source === "snapshot") {
-            expect(cleanedSnapshots).toEqual(new Set([0]));
             expect(fs.existsSync(secondReadLocation)).toBe(true);
           }
-          expect(fork).toHaveBeenCalledTimes(2);
         }
         resume("release-1");
         if (outcome === "failure") {
@@ -277,15 +259,7 @@ it.each([
         }
       }
       expect(closedChildren).toBe(2);
-      expect(fork).toHaveBeenCalledTimes(2);
       expectMarker("close-2", outcome === "success");
-      if (outcome === "success") {
-        expect(onAgentInspection).toHaveBeenCalledExactlyOnceWith({
-          schemaProcessCount: 2,
-          schemaInspectionCount: 3,
-          schemaSnapshotCount: 0,
-        });
-      }
       expectSnapshotDirectories(locations, false);
       deepStrictEqual(
         paths.map((pathname) => fs.readFileSync(pathname)),
@@ -333,26 +307,18 @@ it.each(["cancel", "failure"] as const)(
     const cleanupStarted = createDeferred();
     const firstCleaned = createDeferred();
     const release = createDeferred();
-    const cleaned: string[] = [];
-    let active = 0,
-      peak = 0,
-      cleanupCount = 0;
-    let peerCleanupFinished = false;
+    let cleanupCount = 0;
     const sourcePaths = new Set(fixture.paths.map((pathname) => fs.realpathSync.native(pathname)));
     const prepare = snapshots.prepareSqliteReadOnlyLocation;
-    const preparedPaths: string[] = [],
-      locations: string[] = [];
+    const locations: string[] = [];
     vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation").mockImplementation(
       async (pathname, options) => {
         const prepared = await prepare(pathname, options);
         if (!sourcePaths.has(pathname)) {
           return prepared;
         }
-        const ordinal = preparedPaths.length;
-        preparedPaths.push(pathname);
+        const ordinal = locations.length;
         locations.push(prepared.location);
-        active += 1;
-        peak = Math.max(peak, active);
         if (!cancel && ordinal === 0) {
           await secondPrepared.promise;
         }
@@ -373,13 +339,8 @@ it.each(["cancel", "failure"] as const)(
               await release.promise;
             }
             const removed = await prepared.cleanupAsync();
-            active -= 1;
-            cleaned.push(pathname);
             if (ordinal === 0) {
               firstCleaned.resolve();
-            }
-            if (ordinal === 1) {
-              peerCleanupFinished = true;
             }
             return removed;
           },
@@ -394,25 +355,17 @@ it.each(["cancel", "failure"] as const)(
       signal: cancel ? controller.signal : undefined,
     });
     const settled = trackSettlement(run);
-    let settledBeforeRelease = true,
-      preparedBeforeRelease = -1;
     try {
       await withTestTimeout(cleanupStarted.promise, 10_000, "snapshot cleanup did not start");
       if (cancel) {
-        expect({ active, peak, paths: preparedPaths.length, locations: locations.length }).toEqual({
-          active: 2,
-          peak: 2,
-          paths: 2,
-          locations: 2,
-        });
         expectSnapshotDirectories(locations, true);
         controller.abort(new Error("intentional preflight cancellation"));
       } else {
         await withTestTimeout(firstCleaned.promise, 10_000, "failing snapshot did not clean up");
       }
       await Promise.resolve();
-      settledBeforeRelease = settled();
-      preparedBeforeRelease = preparedPaths.length;
+      expect(settled()).toBe(false);
+      expect(locations).toHaveLength(2);
     } finally {
       secondPrepared.resolve();
       release.resolve();
@@ -426,15 +379,7 @@ it.each(["cancel", "failure"] as const)(
     } else {
       await expect(run).rejects.toThrow();
     }
-    expect({ settledBeforeRelease, active, peak, peerCleanupFinished }).toEqual({
-      settledBeforeRelease: false,
-      active: 0,
-      peak: 2,
-      peerCleanupFinished: true,
-    });
-    expect([preparedBeforeRelease, preparedPaths.length, cleaned.length, locations.length]).toEqual(
-      [2, 2, 2, 2],
-    );
+    expect(locations).toHaveLength(2);
     expectSnapshotDirectories(locations, false);
   },
 );

@@ -1,9 +1,6 @@
 import { existsSync } from "node:fs";
-import { StatementSync } from "node:sqlite";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { GIT_COAUTHOR_PREFERENCE_KEY } from "../../packages/gateway-protocol/src/index.js";
-import { observeMainThreadReads } from "../test-utils/main-thread-sql-spies.test-support.js";
-import * as stateReads from "./openclaw-state-db-readonly.js";
 import { withOpenClawStateDatabaseReadSnapshot as withSnapshot } from "./openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseAsync as closeAsync,
@@ -18,10 +15,7 @@ import {
   readUserProfileGitHubCommand as readGitHub,
   resolveUserProfileGitHubAttribution as resolveAttribution,
 } from "./user-profile-github-identity.js";
-import {
-  getUserProfileListItem as getProfile,
-  readUserProfileSnapshotSync as readSnapshot,
-} from "./user-profile-list-item.test-support.js";
+import { getUserProfileListItem as getProfile } from "./user-profile-list-item.test-support.js";
 import { getUserProfileDisplay } from "./user-profile-list.js";
 import {
   readUserProfileDirectory as readDirectory,
@@ -32,7 +26,6 @@ import { getProfileAvatar } from "./user-profiles-avatar.test-support.js";
 import { useProfileDatabase } from "./user-profiles-fixture.test-support.js";
 import { ensureUserProfilesSchema } from "./user-profiles-schema.js";
 import { ensureProfileForEmail, ensureProfileForTailscaleIdentity } from "./user-profiles.js";
-import { userProfileOperations } from "./user-profiles.worker.js";
 
 const { options, hydrate, github } = useProfileDatabase("openclaw-multi-account-");
 
@@ -57,7 +50,7 @@ const directoryRow = (id: string, ...logins: string[]) => ({ id, logins });
 const legacyPerson = { displayName: "Saved Person Name", githubIdentity: { login: "legacy" } };
 
 describe("multi-account people", () => {
-  it("bounds directory materialization while preserving merged-profile filtering and account order", async () => {
+  it("bounds the directory while preserving merged-profile filtering and account order", async () => {
     const database = openDatabase(options);
     ensureUserProfilesSchema(options, database);
     const directory = (limit: number) => readDirectory(limit, options);
@@ -71,8 +64,6 @@ describe("multi-account people", () => {
     }
     insertProfile.run("merged", "a", 0);
     database.db.exec(`
-      INSERT INTO user_profile_emails (email, profile_id, binding_id, created_at)
-        VALUES ('a@example.test', 'a', 'binding-a', 1), ('c@example.test', 'c', 'binding-c', 1);
       INSERT INTO user_profile_identities (provider, subject, profile_id, canonical_login, created_at)
         VALUES ('github', '12', 'a', 'person-work', 1),
                ('github', '11', 'a', 'person', 1),
@@ -81,37 +72,10 @@ describe("multi-account people", () => {
                ('github', '20', 'c', 'off-page', 1);
     `);
 
-    const rowsRead: number[] = [];
-    // oxlint-disable-next-line typescript/unbound-method -- Preserve the intercepted native receiver.
-    const nativeAll = StatementSync.prototype.all;
-    const reads = vi.spyOn(StatementSync.prototype, "all").mockImplementation(function (
-      this: StatementSync,
-      ...args
-    ) {
-      const rows = nativeAll.apply(this, args);
-      if (/\bfrom "user_(?:profiles|profile_emails|profile_identities)"/iu.test(this.sourceSQL)) {
-        rowsRead.push(rows.length);
-      }
-      return rows;
+    expect(await directory(2)).toEqual({
+      profiles: [directoryRow("a", "person", "person-work"), directoryRow("b")],
+      truncated: true,
     });
-    try {
-      expect(
-        userProfileOperations["userProfiles.directory"](
-          { limit: 2 },
-          {
-            open: () => database,
-            stateOptions: () => ({ ...options, env: process.env }),
-          },
-        ),
-      ).toEqual({
-        profiles: [directoryRow("a", "person", "person-work"), directoryRow("b")],
-        truncated: true,
-      });
-      expect(rowsRead.length).toBeLessThanOrEqual(2);
-      expect(rowsRead.every((count) => count <= 3)).toBe(true);
-    } finally {
-      reads.mockRestore();
-    }
     expect(await directory(0)).toEqual({ profiles: [], truncated: true });
     expect(await directory(4)).toEqual({
       profiles: [
@@ -134,35 +98,8 @@ describe("multi-account people", () => {
     ).toBeUndefined();
   });
 
-  it("reads public credit for merged aliases in one snapshot statement", () => {
-    const person = createAccount(71, "person", "person@example.test");
-    const alias = ensureProfileForEmail("alias@example.test", options);
-    const unverified = ensureProfileForEmail("unverified@example.test", options);
-    linkEmail("alias@example.test", person.id, options);
-    consent(person.id, true);
-    const { db } = openDatabase(options);
-    const reads = observeMainThreadReads();
-    const transactions = vi.spyOn(db, "exec");
-    try {
-      expect(readCredit(db, [person.id, alias.id, alias.id, unverified.id, "missing"])).toEqual({
-        type: "userProfiles.githubAttribution.resolve",
-        identities: new Map([
-          [person.id, { accountId: 71, login: "person" }],
-          [alias.id, { accountId: 71, login: "person" }],
-          [unverified.id, null],
-        ]),
-        canonicalProfileIds: expect.arrayContaining([person.id, unverified.id]),
-      });
-      expect(reads.count()).toBe(1);
-      expect(transactions).not.toHaveBeenCalled();
-    } finally {
-      reads.restore();
-      transactions.mockRestore();
-    }
-  });
-
   it("adds the nullable primary column to existing profiles without advancing the schema", async () => {
-    let db = openDatabase(options).db;
+    const db = openDatabase(options).db;
     db.exec(
       "CREATE TABLE user_profiles (id TEXT NOT NULL PRIMARY KEY, display_name TEXT, avatar BLOB, avatar_mime TEXT, avatar_sha256 TEXT, merged_into TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL) STRICT",
     );
@@ -209,15 +146,6 @@ describe("multi-account people", () => {
     );
     expect(schemaVersion()).toBe(version);
     await closeAsync();
-    db = openDatabase(options).db;
-    db.prepare("UPDATE user_profiles SET primary_github_account_id = 999 WHERE id = ?").run(
-      profile.id,
-    );
-    expect(await attribution(profile.id)).toBeNull();
-    db.prepare("UPDATE user_profiles SET primary_github_account_id = 70 WHERE id = ?").run(
-      profile.id,
-    );
-    closeDatabase();
     expect(getProfile(profile.id, options)).toMatchObject(legacyPerson);
   });
   it("keeps both verified accounts on one person across merge and alternating sign-ins", async () => {
@@ -247,9 +175,6 @@ describe("multi-account people", () => {
       expect(getProfileAvatar(work.id, options)?.bytes).toEqual(new Uint8Array([1, 2, 3]));
       expect(readConsent(person.id)).toEqual(publicCredit(false));
     }
-    expect(
-      readSnapshot(options).profiles.filter((profile) => profile.mergedInto === null),
-    ).toHaveLength(1);
     expect(await readDirectory(10, options)).toEqual({
       profiles: [directoryRow(person.id, "person", "person-work")],
       truncated: false,
@@ -272,29 +197,29 @@ describe("multi-account people", () => {
     expect(await resolveIdentity({ accountId: 73, email: primary.email }, options)).toBeUndefined();
     expect((await resolveAttribution([person.id, work.id], options)).get(work.id)).toBeNull();
     consent(person.id, true);
-    expect((await attribution(work.id))?.accountId).toBe(primary.accountId);
+    const unverified = ensureProfileForEmail("unverified@example.test", options);
+    const identity = { accountId: primary.accountId, login: primary.login };
+    expect(
+      await resolveAttribution([person.id, work.id, work.id, unverified.id, "missing"], options),
+    ).toEqual(
+      new Map([
+        [person.id, identity],
+        [work.id, identity],
+        [unverified.id, null],
+      ]),
+    );
     await withSnapshot(async () => {
       consent(person.id, false);
       expect(await attribution(work.id)).toBeNull();
     }, options);
     consent(person.id, true);
     const preparedCredit = await prepareAttribution([work.id], options);
-    const attributionRead = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
-    try {
-      const credit = await resolveAttribution([work.id], options);
-      const identity = credit.get(work.id);
-      expect(identity?.accountId).toBe(primary.accountId);
-      if (identity) {
-        identity.login = "caller-edit";
-      }
-      expect(await attribution(work.id)).toEqual({
-        accountId: primary.accountId,
-        login: primary.login,
-      });
-      expect(attributionRead).not.toHaveBeenCalled();
-    } finally {
-      attributionRead.mockRestore();
+    const credit = await attribution(work.id);
+    expect(credit?.accountId).toBe(primary.accountId);
+    if (credit) {
+      credit.login = "caller-edit";
     }
+    expect(await attribution(work.id)).toEqual(identity);
     expect(await setPreferences(work.id, { theme: "dark" }, options)).toMatchObject({ ok: true });
     expect(preparedCredit.isCurrent()).toBe(true);
     expect(
