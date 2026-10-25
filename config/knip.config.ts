@@ -104,6 +104,8 @@ const repositoryScriptEntries = [
   "scripts/perf/fsync-scratch-measure.ts!",
   // scripts/perf/README.md invokes this database page-cache benchmark by path.
   "scripts/perf/database-page-cache-measure.ts!",
+  // The ACP eviction PR invokes this isolated stdio/Gateway workload by path.
+  "scripts/perf/acp-ledger-eviction-measure.ts!",
   // The source header documents this GitHub reader benchmark's Node command.
   "scripts/perf/github-reader-measure.ts!",
   // docs/reference/test/performance.md invokes the Decision transport comparison driver.
