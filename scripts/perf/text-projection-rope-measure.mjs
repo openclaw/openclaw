@@ -227,7 +227,9 @@ for (const reader of [
     { ...checkpoint, output: projection.text },
     path.join(output, `${reader}.heapsnapshot`),
   );
-  const final = before("final", { output: projection.text, providerSource: cumulative });
+  // The transcript has a separate text owner. Force a source read here as a
+  // conservative downstream-consumer case, not an actual transcript probe.
+  const final = before("final", { output: projection.text, sourceReadback: cumulative });
   checksum += JSON.stringify({ text: projection.text }).length;
   checksum += JSON.stringify({
     role: "assistant",
