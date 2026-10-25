@@ -27,6 +27,8 @@ import {
 } from "../lib/gateway-bench-runtime.ts";
 import { createGatewayWsClient } from "../lib/gateway-ws-client.ts";
 
+type GatewayReply = Awaited<ReturnType<ReturnType<typeof createGatewayWsClient>["request"]>>;
+
 const output = process.env.PGCENSUS_OUT;
 const engine = process.env.PGCENSUS_ENGINE;
 assert(
@@ -204,7 +206,7 @@ try {
     const [name] = corpus[index % corpus.length]!;
     const startNs = process.hrtime.bigint().toString();
     const clock = performance.now();
-    const result: Awaited<ReturnType<typeof client.request>> = await client.request(
+    const result: GatewayReply = await client.request(
       "memory.search",
       { version: 1, agentId: "main", query: name, maxResults: 3, minScore: 0 },
       180_000,
