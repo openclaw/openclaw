@@ -52,6 +52,7 @@ type LoopbackIrcServer = Awaited<ReturnType<typeof startLoopbackIrcServer>>;
 
 async function startLoopbackIrcServer(options?: {
   rejectInitialNick?: boolean;
+  register?: boolean;
   onLine?: (socket: net.Socket, line: string) => void;
 }) {
   const lines: string[] = [];
@@ -67,7 +68,7 @@ async function startLoopbackIrcServer(options?: {
       if (line.startsWith("QUIT :")) {
         quitReceived.resolve();
       }
-      if (line.startsWith("USER ")) {
+      if (line.startsWith("USER ") && options?.register !== false) {
         if (options?.rejectInitialNick) {
           awaitingFallbackNick = true;
           socket.write(":server 433 * bot :Nickname in use\r\n");
@@ -112,30 +113,6 @@ async function connectAfterNickCollision(nick: string): Promise<string> {
   const nickLines = server.lines.filter((line) => line.startsWith("NICK "));
   expect(nickLines).toHaveLength(2);
   return nickLines[1]!.slice("NICK ".length);
-}
-
-async function startHangingIrcServer() {
-  let acceptedCount = 0;
-  let closedCount = 0;
-  const socketClosed = createDeferred<void>();
-  const server = await startIrcTestServer((socket) => {
-    acceptedCount += 1;
-    socket.on("data", () => {});
-    socket.on("close", () => {
-      closedCount += 1;
-      socketClosed.resolve();
-    });
-  });
-  return {
-    ...server,
-    socketClosed: socketClosed.promise,
-    get acceptedCount() {
-      return acceptedCount;
-    },
-    get closedCount() {
-      return closedCount;
-    },
-  };
 }
 
 describe("irc client nickserv", () => {
@@ -184,13 +161,11 @@ describe("irc client server password", () => {
 
 describe("irc client readiness timeout", () => {
   it("closes the socket when registration never becomes ready", async () => {
-    const server = await startHangingIrcServer();
+    const server = await startLoopbackIrcServer({ register: false });
     await expect(connectTestClient(server, { connectTimeoutMs: 50 })).rejects.toThrow(
       /IRC connect/,
     );
     await withTimeout(server.socketClosed, 1000, "timed-out IRC socket close");
-    expect(server.acceptedCount).toBeGreaterThanOrEqual(1);
-    expect(server.closedCount).toBeGreaterThanOrEqual(1);
     expect(server.openSocketCount()).toBe(0);
   });
 });
@@ -206,16 +181,13 @@ describe("irc client fallback nick", () => {
     expect(new Set([first, second, third]).size).toBe(3);
   });
 
-  it("falls back to openclaw when a colliding nick is entirely special characters", async () => {
-    const nick = await connectAfterNickCollision("!!!");
-    expect(nick).toMatch(/^openclaw_\d*$/);
-  });
-
-  it("truncates a long fallback nick to 30 characters", async () => {
-    const longNick = "a".repeat(50);
-    const nick = await connectAfterNickCollision(longNick);
+  it.each([
+    ["!!!", /^openclaw_\d*$/],
+    ["a".repeat(50), /^a+_\d*$/],
+  ] as const)("normalizes and bounds fallback for %s", async (initial, expected) => {
+    const nick = await connectAfterNickCollision(initial);
     expect(nick.length).toBeLessThanOrEqual(30);
-    expect(nick).toMatch(/^a+_\d*$/);
+    expect(nick).toMatch(expected);
   });
 });
 
@@ -380,23 +352,17 @@ describe("irc client inbound line bound", () => {
     return { client, errors, lines, disconnected: disconnected.promise };
   }
 
-  it("drops a peer that never terminates a line and reports a disconnect", async () => {
-    const server = await startFloodServer("A".repeat(256 * 1024));
-    const { client, errors, disconnected } = await connectToFlood(server);
-    await withTimeout(disconnected, 2000, "IRC disconnect after unterminated flood");
+  it.each([
+    ["unterminated", "A".repeat(256 * 1024)],
+    ["terminated", `:peer!test@example.com PRIVMSG bot :${"B".repeat(64 * 1024)}\r\n`],
+  ])("drops an oversized %s line without dispatch", async (_kind, payload) => {
+    const server = await startFloodServer(payload);
+    const { client, errors, lines, disconnected } = await connectToFlood(server);
+    await withTimeout(disconnected, 2000, "IRC oversized-line disconnect");
     await withTimeout(server.socketClosed, 2000, "IRC peer socket close");
     expect(errors.some((error) => error.message.includes("longer than"))).toBe(true);
     expect(client.isReady()).toBe(false);
     expect(server.openSocketCount()).toBe(0);
-  });
-
-  it("drops a peer that sends an oversized terminated line", async () => {
-    const server = await startFloodServer(
-      `:peer!test@example.com PRIVMSG bot :${"B".repeat(64 * 1024)}\r\n`,
-    );
-    const { errors, lines, disconnected } = await connectToFlood(server);
-    await withTimeout(disconnected, 2000, "IRC disconnect after oversized line");
-    expect(errors.some((error) => error.message.includes("longer than"))).toBe(true);
     expect(lines).toEqual([]);
   });
 
