@@ -5,7 +5,7 @@ import { resolveManifestContractPluginIds } from "../plugin-registry.js";
 import { BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS } from "./inventory/bundled-capability-metadata.js";
 import { pluginRegistrationContractRegistry } from "./registry.js";
 
-const ACTIVATION_SCOPED_WEB_SEARCH_PLUGIN_IDS = ["codex", "qa-lab"] as const;
+const activationScopedSearchIds = ["codex", "qa-lab"] as const;
 function registeredPluginIds(key: "webFetchProviderIds" | "webSearchProviderIds") {
   return sortUniqueStrings(
     pluginRegistrationContractRegistry
@@ -173,15 +173,10 @@ describe("plugin contract registry", () => {
       origin: "bundled",
     }).filter(
       (pluginId) =>
-        snapshotPluginIds.has(pluginId) &&
-        !ACTIVATION_SCOPED_WEB_SEARCH_PLUGIN_IDS.some((id) => id === pluginId),
+        snapshotPluginIds.has(pluginId) && !activationScopedSearchIds.some((id) => id === pluginId),
     );
-    const actualPluginIds = registeredPluginIds("webSearchProviderIds");
-    expect(actualPluginIds).toEqual(
-      sortUniqueStrings([...bundledWebSearchPluginIds, ...ACTIVATION_SCOPED_WEB_SEARCH_PLUGIN_IDS]),
+    expect(registeredPluginIds("webSearchProviderIds")).toEqual(
+      sortUniqueStrings([...bundledWebSearchPluginIds, ...activationScopedSearchIds]),
     );
-    expect(
-      actualPluginIds.filter((pluginId) => !bundledWebSearchPluginIds.includes(pluginId)),
-    ).toEqual([...ACTIVATION_SCOPED_WEB_SEARCH_PLUGIN_IDS]);
   });
 });

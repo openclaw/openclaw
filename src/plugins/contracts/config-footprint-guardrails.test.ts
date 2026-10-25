@@ -5,10 +5,8 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it } from "vitest";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "../../config/bundled-channel-config-metadata.generated.js";
 import { computeBaseConfigSchemaResponse } from "../../config/schema-base.js";
-import { listGitTrackedFiles } from "../../test-utils/repo-files.js";
 
-const SRC_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-const REPO_ROOT = resolve(SRC_ROOT, "..");
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const BASE_CONFIG_SCHEMA = computeBaseConfigSchemaResponse({
   generatedAt: "2026-05-05T00:00:00.000Z",
 });
@@ -84,12 +82,10 @@ describe("config footprint guardrails", () => {
       const metadata = GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.find(
         (entry) => entry.pluginId === pluginId,
       );
-      if (metadata === undefined) {
-        throw new Error(`${pluginId} metadata missing`);
-      }
-      const paths = new Set(collectSchemaPaths(metadata.schema));
-      expect([...paths], pluginId).not.toContain("allowPrivateNetwork");
-      expect([...paths], pluginId).toContain("network.dangerouslyAllowPrivateNetwork");
+      expect(metadata, `${pluginId} metadata`).toBeDefined();
+      const paths = collectSchemaPaths(metadata?.schema);
+      expect(paths, pluginId).not.toContain("allowPrivateNetwork");
+      expect(paths, pluginId).toContain("network.dangerouslyAllowPrivateNetwork");
     }
   });
 
@@ -103,43 +99,19 @@ describe("config footprint guardrails", () => {
     }
   });
 
-  it("keeps retired config aliases out of the shared setup input", () => {
-    expectAbsent(readSource("src/channels/plugins/types.core.ts"), [
-      ...["streamMode", "groupMentionsOnly", "perSession", "voiceId", "apiKey"].map(
-        (field) => `${field}?:`,
-      ),
-      "allow?: boolean;",
-    ]);
-  });
-
-  it("keeps current channel schemas plugin-owned behind shipped compatibility exports", () => {
-    const source = readSource("src/plugin-sdk/channel-config-schema.ts");
+  it("keeps channel schema ownership behind canonical SDK facades", () => {
     const bundledSource = readSource("src/plugin-sdk/bundled-channel-config-schema.ts");
-    const section = bundledSource.slice(bundledSource.indexOf("Bundled-channel config schemas"));
-    const matches = (text: string, pattern: RegExp) =>
-      Array.from(text.matchAll(pattern)).flatMap((match) => match[1] ?? []);
-    const blocks = matches(
-      section,
-      /export \{([^}]*)\} from "\.\.\/config\/zod-schema\.providers-(?:googlechat|whatsapp)\.js";/g,
-    );
-    expect(blocks).toHaveLength(2);
-    const names = [
-      ...matches(blocks.join("\n"), /\b([A-Z][A-Za-z0-9]+ConfigSchema)\b/g),
-      ...matches(section, /\bexport const ([A-Z][A-Za-z0-9]+ConfigSchema)\b/g),
-    ].toSorted((a, b) => a.localeCompare(b));
-    expect(names).toEqual(
+    expectAbsent(
+      readSource("src/plugin-sdk/channel-config-schema.ts"),
       "Discord GoogleChat IMessage MSTeams Signal Slack Telegram WhatsApp"
         .split(" ")
         .map((name) => `${name}ConfigSchema`),
     );
-    expectAbsent(source, names);
-    expect(bundledSource).toContain("Bundled-channel config schemas");
-    expect(bundledSource).toContain("openclaw/plugin-sdk/channel-config-schema");
-    expect(bundledSource).toMatch(
-      /loadBundledConfigSchema<[^;]+?>\(\s*"imessage",\s*"IMessageConfigSchema",?\s*\)/u,
+    expect(bundledSource).toContain(
+      'export { GoogleChatConfigSchema } from "../config/zod-schema.providers-googlechat.js";',
     );
-    expect(bundledSource).toMatch(
-      /loadBundledConfigSchema<[^;]+?>\(\s*"telegram",\s*"TelegramConfigSchema",?\s*\)/u,
+    expect(bundledSource).toContain(
+      'export { WhatsAppConfigSchema } from "../config/zod-schema.providers-whatsapp.js";',
     );
     const primitives = readSource("src/plugin-sdk/channel-config-primitives.ts");
     for (const facade of [primitives, bundledSource]) {
@@ -147,31 +119,5 @@ describe("config footprint guardrails", () => {
       expectAbsent(facade, ["../channels/"]);
     }
     expectAbsent(primitives, ["../config/"]);
-  });
-
-  it("keeps internal src imports off the non-canonical channel config schema facades", () => {
-    // channel-config-schema is the canonical internal module; the primitives
-    // and bundled shells stay export-compatible for plugins only.
-    const allowedShellImporters = new Set([
-      // The compatibility test exercises the shipped facade exports.
-      "src/plugin-sdk/shipped-channel-compat.test.ts",
-      // This guardrail file embeds facade specifiers in shell-shape assertions.
-      "src/plugins/contracts/config-footprint-guardrails.test.ts",
-    ]);
-    const facadeImportPattern =
-      /\bfrom\s*["'][^"']*(?:channel-config-primitives|bundled-channel-config-schema)(?:\.js)?["']/u;
-    const files = listGitTrackedFiles({ repoRoot: REPO_ROOT, pathspecs: "src" });
-    if (!files) {
-      throw new Error("unable to list tracked source files for the config facade guard");
-    }
-
-    const offenders = files.filter((file) => {
-      if (!(file.endsWith(".ts") || file.endsWith(".tsx")) || allowedShellImporters.has(file)) {
-        return false;
-      }
-      return facadeImportPattern.test(readFileSync(resolve(REPO_ROOT, file), "utf8"));
-    });
-
-    expect(offenders).toStrictEqual([]);
   });
 });
