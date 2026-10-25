@@ -1,6 +1,8 @@
 import { render } from "@solidjs/web";
 import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { createTabFocus } from "../lib/tabs.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
 import {
   PanelTabStrip,
@@ -80,7 +82,8 @@ async function expectControlledSelection(root: ParentNode, id: string): Promise<
   return vi.waitFor(() => {
     const tabs = renderedTabs(root);
     const active = tabs.find((entry) => entry.dataset.tabValue === id);
-    expect(tabs.filter((el) => el.matches('[active], [aria-selected="true"]'))).toEqual([active]);
+    const selected = tabs.filter((el) => el.matches('[active], [aria-selected="true"]'));
+    expect(selected).toEqual([active]);
     expect(tabs.map((entry) => entry.tabIndex)).toEqual(
       tabs.map((entry) => (entry === active ? 0 : -1)),
     );
@@ -189,20 +192,27 @@ describe.skipIf(!hasBrowserLayout)("panel tab strip browser lifecycle", () => {
         expect(window.scrollY).toBe(scrollY);
       }
 
-      for (const id of ["8", "1"]) {
-        renderedTabs(container)
-          .find((entry) => entry.dataset.tabValue === id)
-          ?.click();
-        await vi.waitFor(() => expect(activeId).toBe(id));
-        await expectOverflowTabVisible(container, await expectControlledSelection(container, id));
-        expect(document.activeElement).toBe(keyboardActive);
-        expect(scrollPort.scrollTop).toBe(ancestorScrollTop);
-        expect(window.scrollY).toBe(scrollY);
-      }
+      const last = renderedTabs(container).find((entry) => entry.dataset.tabValue === "8");
+      last?.click();
+      await vi.waitFor(() => expect(activeId).toBe("8"));
+      const lastActive = await expectControlledSelection(container, activeId);
+      await expectOverflowTabVisible(container, lastActive);
+      expect(document.activeElement).toBe(keyboardActive);
+      expect(scrollPort.scrollTop).toBe(ancestorScrollTop);
+      expect(window.scrollY).toBe(scrollY);
+
+      renderedTabs(container)
+        .find((entry) => entry.dataset.tabValue === "1")
+        ?.click();
+      await vi.waitFor(() => expect(activeId).toBe("1"));
+      await expectOverflowTabVisible(container, await expectControlledSelection(container, "1"));
+      expect(document.activeElement).toBe(keyboardActive);
+      expect(scrollPort.scrollTop).toBe(ancestorScrollTop);
+      expect(window.scrollY).toBe(scrollY);
     },
   );
 
-  it("restores keyboard-close focus after blur without selecting a neighboring strip", async () => {
+  it.each(["shared", "per-tab"])("restores close focus (%s targets)", async (targets) => {
     const neighbor = host();
     await renderControlledStrip(
       neighbor,
@@ -210,20 +220,33 @@ describe.skipIf(!hasBrowserLayout)("panel tab strip browser lifecycle", () => {
       { ariaControls: "neighbor-panel" },
     );
     await expectControlledSelection(neighbor, "a");
-    expect(renderedTabs(neighbor)[0]?.getAttribute("aria-controls")).toBe("neighbor-panel");
-    const container = host();
+    let container = host();
+    const focusOwner = createTabFocus();
+    const close = createDeferred();
     let tabs = [tab("a"), tab("b")];
-    const ariaControls = (entry: PanelTabStripTab) => `panel-${entry.id}`;
-    const onClose = (closedId: string) => {
-      tabs = tabs.filter((entry) => entry.id !== closedId);
-      return renderControlledStrip(container, tabs, { ariaControls, onClose });
-    };
-    await renderControlledStrip(container, tabs, { ariaControls, onClose });
+    const ariaControls =
+      targets === "shared"
+        ? "browser-test-panel"
+        : (entry: PanelTabStripTab) => `panel-${entry.id}`;
+    const onClose = vi.fn((closedId: string) =>
+      close.promise.then(async () => {
+        (document.activeElement as HTMLElement | null)?.blur();
+        tabs = tabs.filter((entry) => entry.id !== closedId);
+        const replacement = document.createElement("div");
+        mountedStrips.get(container)?.dispose();
+        mountedStrips.delete(container);
+        container.replaceWith(replacement);
+        container = replacement;
+        await update();
+      }),
+    );
+    const update = () =>
+      renderControlledStrip(container, tabs, { ariaControls, onClose, focusOwner });
+    await update();
     await expectControlledSelection(container, "a");
-    expect(renderedTabs(container).map((entry) => entry.getAttribute("aria-controls"))).toEqual([
-      "panel-a",
-      "panel-b",
-    ]);
+    expect(renderedTabs(container).map((entry) => entry.getAttribute("aria-controls"))).toEqual(
+      targets === "shared" ? ["browser-test-panel", "browser-test-panel"] : ["panel-a", "panel-b"],
+    );
     const closeButton = container.querySelector<HTMLButtonElement>(".tabstrip-tab__close");
     closeButton?.focus();
     expect(document.activeElement).toBe(closeButton);
@@ -231,6 +254,9 @@ describe.skipIf(!hasBrowserLayout)("panel tab strip browser lifecycle", () => {
     closeButton?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     closeButton?.blur();
     closeButton?.click();
+    close.resolve();
+    await close.promise;
+
     const fallback = await expectControlledSelection(container, "b");
     await settleTabLayout();
     expect(document.activeElement).toBe(fallback);

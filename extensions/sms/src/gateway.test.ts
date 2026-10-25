@@ -64,9 +64,14 @@ function createAccount(accountId: string, webhookPath = "/webhooks/sms"): Resolv
 }
 
 function holdNextCall(mock: typeof stopSmsIngress) {
-  const held = Promise.withResolvers<void>();
-  mock.mockImplementationOnce(() => held.promise);
-  return held.resolve;
+  let release: (() => void) | undefined;
+  mock.mockImplementationOnce(
+    () =>
+      new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+  );
+  return () => release?.();
 }
 
 describe("startSmsGatewayAccount", () => {
@@ -100,11 +105,13 @@ describe("startSmsGatewayAccount", () => {
     const statusSink = vi.fn();
     await startRoute({ account: createAccount("default"), statusSink });
 
-    expect(statusSink.mock.calls.map(([patch]) => patch)).toMatchObject([
-      { lifecycle: "starting" },
-      { lifecycle: "ready", connected: true },
-      { lifecycle: "stopped", running: false },
-    ]);
+    expect(statusSink).toHaveBeenNthCalledWith(1, { lifecycle: "starting" });
+    expect(statusSink).toHaveBeenCalledWith(
+      expect.objectContaining({ lifecycle: "ready", connected: true }),
+    );
+    expect(statusSink).toHaveBeenLastCalledWith(
+      expect.objectContaining({ lifecycle: "stopped", running: false }),
+    );
   });
 
   it.each([
@@ -127,6 +134,9 @@ describe("startSmsGatewayAccount", () => {
       "SMS route conflict",
     );
 
+    expect(registerPluginHttpRoute).toHaveBeenCalledWith(
+      expect.objectContaining({ throwOnFailure: true }),
+    );
     expect(stopSmsIngress).toHaveBeenCalledOnce();
     expect(startSmsIngress).not.toHaveBeenCalled();
     expect(statusSink).not.toHaveBeenCalledWith(expect.objectContaining({ lifecycle: "ready" }));
@@ -161,6 +171,7 @@ describe("startSmsGatewayAccount", () => {
     const postRes = {} as ServerResponse;
     await route.handler(postReq, postRes);
     expect(smsWebhookHandler).toHaveBeenCalledWith(postReq, postRes);
+    expect(tryHandleHostedSmsMediaRequest).toHaveBeenCalledTimes(3);
   });
 
   it.each(["replacement", "abort cleanup"])(

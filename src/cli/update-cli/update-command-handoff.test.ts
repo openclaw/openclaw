@@ -166,34 +166,43 @@ const callerService = {
   runtime: { status: "running", pid: process.pid },
 } satisfies GatewayServiceState;
 
-it.runIf(process.platform === "darwin")(
-  "refuses absent native membership with an unreadable login ancestor",
-  () => {
+it.runIf(process.platform === "darwin").each([
+  { membership: "outside", ancestor: false, code: undefined },
+  { membership: "absent", ancestor: false, code: "service-ancestry-unverified" },
+  { membership: "inside", ancestor: false, code: "inside-gateway-service" },
+  { membership: "unknown", ancestor: false, code: "service-membership-unverified" },
+  { membership: "outside", ancestor: true, code: "inside-gateway-process-tree" },
+] as const)(
+  "uses native $membership containment with an unreadable login ancestor (gateway ancestor: $ancestor)",
+  ({ membership, ancestor, code }) => {
     const gatewayPid = process.pid + 1_000_000;
+    const identity = (pid: number, parentPid: number, startTimeMicros: number) => ({
+      pid,
+      parentPid,
+      startTimeMicros,
+      startTimeResolutionMicros: 1,
+      exited: false,
+    });
     vi.spyOn(processIdentity, "readProcessAncestry").mockReturnValue({
       chain: [
-        {
-          pid: process.pid,
-          parentPid: gatewayPid + 1,
-          startTimeMicros: 2,
-          startTimeResolutionMicros: 1,
-          exited: false,
-        },
+        identity(process.pid, ancestor ? gatewayPid : gatewayPid + 1, 2),
+        ...(ancestor ? [identity(gatewayPid, gatewayPid + 1, 1)] : []),
       ],
       complete: false,
       stoppedBy: "unreadable-parent",
     });
-    vi.spyOn(serviceMembership, "inspectServiceProcessMembershipSync").mockReturnValue("absent");
+    vi.spyOn(serviceMembership, "inspectServiceProcessMembershipSync").mockReturnValue(membership);
     const block = gatewayMaintenanceBlock(
       { ...callerService, runtime: { status: "running", pid: gatewayPid } },
       process.cwd(),
     );
-    expect(block?.failureFacts).toEqual([
-      expect.objectContaining({
-        check: "managed-service-preflight",
-        code: "service-ancestry-unverified",
-      }),
-    ]);
+    if (code === undefined) {
+      expect(block).toBeUndefined();
+    } else {
+      expect(block?.failureFacts).toEqual([
+        expect.objectContaining({ check: "managed-service-preflight", code }),
+      ]);
+    }
   },
 );
 
@@ -203,6 +212,20 @@ it("never advises stopping the gateway service or running update from the caller
   expect(message).toContain("from a shell outside the gateway service");
   expect(message).not.toContain("stop the gateway service first");
   expect(message).not.toContain("openclaw update");
+});
+
+it("allows a caller with verified external ancestry and native membership", () => {
+  vi.spyOn(serviceMembership, "inspectServiceProcessMembershipSync").mockReturnValue("outside");
+  vi.spyOn(ancestry, "inspectSelfAndAncestorPidsSync").mockReturnValue({
+    pids: new Set([process.pid, 1]),
+    complete: true,
+  });
+  expect(
+    gatewayMaintenanceBlock(
+      { ...callerService, runtime: { status: "running", pid: 2 } },
+      process.cwd(),
+    ),
+  ).toBeUndefined();
 });
 
 it.runIf(process.platform === "linux" || process.platform === "darwin").each([

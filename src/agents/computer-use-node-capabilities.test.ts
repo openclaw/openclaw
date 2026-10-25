@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { startComputerHostProcess } from "../gateway/desktop/computer-process.js";
 import { createGatewayComputerService } from "../gateway/desktop/computer-service.js";
 import { computerCapabilities } from "../gateway/desktop/computer.test-support.js";
 import { NodeRegistry } from "../gateway/node-registry.js";
@@ -7,6 +9,8 @@ import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
 import type { DevicePairingNodeSnapshot } from "../infra/device-pairing-read.types.js";
 import { readDevicePairingNodeSnapshot } from "../infra/device-pairing-store-readonly.js";
 import type { ComputerUseV2ActionName } from "../plugins/computer-use-contract.js";
+import { registerComputerUseProvider } from "../plugins/computer-use-registration.js";
+import { createPluginRecord } from "../plugins/loader-records.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import {
@@ -29,6 +33,10 @@ vi.mock("./tools/computer-tool-gateway.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./tools/computer-tool-gateway.js")>()),
   loadGatewayComputerStatus: vi.fn(),
 }));
+vi.mock("../gateway/desktop/computer-process.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../gateway/desktop/computer-process.js")>()),
+  startComputerHostProcess: vi.fn(),
+}));
 
 const registries: NodeRegistry[] = [];
 const services: ReturnType<typeof createGatewayComputerService>[] = [];
@@ -42,7 +50,6 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  vi.restoreAllMocks();
   for (const registry of registries.splice(0)) {
     for (const session of registry.listConnected()) {
       registry.unregister(session.connId);
@@ -51,6 +58,7 @@ afterEach(async () => {
   for (const service of services.splice(0)) {
     await service.close();
   }
+  vi.useRealTimers();
   vi.clearAllMocks();
 });
 
@@ -137,31 +145,83 @@ it("updates the advertised surface after the local node and pairing owners chang
   });
 });
 
-it("projects fresh local computer owner publications", async () => {
+it("observes the local computer owner's config and provider publications", async () => {
+  vi.useFakeTimers();
+  let config: OpenClawConfig = { plugins: { entries: { fixture: { enabled: true } } } };
+  const registry = createEmptyPluginRegistry();
+  registry.plugins.push(
+    createPluginRecord({
+      id: "fixture",
+      source: "fixture",
+      origin: "bundled",
+      enabled: true,
+      configSchema: false,
+    }),
+  );
+  const publishProvider = (actions: ComputerUseV2ActionName[]) => {
+    registry.nodeHostCommands.length = 0;
+    registerComputerUseProvider(
+      {
+        registerNodeHostCommand: (command) =>
+          registry.nodeHostCommands.push({
+            pluginId: "fixture",
+            pluginName: "Fixture",
+            command,
+            source: "fixture",
+          }),
+      },
+      {
+        id: "fixture",
+        label: "Fixture computer",
+        capabilities: () => capabilities(actions),
+        isAvailable: () => true,
+        openExecution: async () => {
+          throw new Error("Discovery must not open an execution");
+        },
+      },
+    );
+  };
+  publishProvider(["screenshot", "left_click"]);
   const service = createGatewayComputerService({
-    getConfig: () => ({}),
-    getPluginRegistry: createEmptyPluginRegistry,
+    getConfig: () => config,
+    getPluginRegistry: () => registry,
   });
   services.push(service);
-  const status = vi.spyOn(service, "status");
   const context = createContext(service);
-  for (const [configured, available, actions] of [
-    [true, false, ["screenshot", "left_click"]],
-    [true, true, ["screenshot", "left_click"]],
-    [true, false, ["screenshot", "type"]],
-    [false, false, []],
-    [true, false, ["screenshot", "type"]],
-  ] satisfies Array<[boolean, boolean, ComputerUseV2ActionName[]]>) {
-    status.mockResolvedValue({
-      configured,
-      available,
-      computerUse: capabilities(actions),
+  await withContext(context, async () => {
+    await expectPrepared({
+      actions: ["screenshot", "left_click"],
+      gateway: { configured: true, available: false },
     });
-    await expectPrepared({ actions, gateway: { configured, available } }, context);
-  }
-  for (const [options] of status.mock.calls) {
-    expect(options?.probe).toBe(false);
-  }
+    expect(startComputerHostProcess).not.toHaveBeenCalled();
+
+    let active = true;
+    vi.mocked(startComputerHostProcess).mockReturnValue({
+      ready: Promise.resolve(capabilities(["screenshot", "left_click"])),
+      isCurrent: () => active,
+      invoke: async () => {
+        throw new Error("Discovery must not invoke the computer");
+      },
+      close: async () => {
+        active = false;
+      },
+    });
+    await service.status({ probe: true });
+    await expectPrepared({ gateway: { configured: true, available: true } });
+    active = false;
+    await expectPrepared({ gateway: { configured: true, available: false } });
+
+    publishProvider(["screenshot", "type"]);
+    await expectPrepared({ actions: ["screenshot", "type"] });
+
+    config = { plugins: { entries: { fixture: { enabled: false } } } };
+    await expectPrepared({
+      actions: [],
+      gateway: { configured: false, available: false },
+    });
+    config = { plugins: { entries: { fixture: { enabled: true } } } };
+    await expectPrepared({ actions: ["screenshot", "type"] });
+  });
 });
 
 it("keeps inventory scoped to its admitted Gateway and rejects retired bindings locally", async () => {
