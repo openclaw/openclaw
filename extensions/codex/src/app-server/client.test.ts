@@ -123,15 +123,7 @@ it("isolates synchronous notification handler failures", async () => {
   });
   harness.client.addNotificationHandler(receiveNotification);
 
-  const notification = {
-    method: "item/agentMessage/delta",
-    params: {
-      threadId: "thread-1",
-      turnId: "turn-1",
-      itemId: "message-1",
-      delta: "hello",
-    },
-  };
+  const notification = { method: "item/agentMessage/delta", params: { delta: "hello" } };
 
   expect(() => harness.send(notification)).not.toThrow();
   expect(receiveNotification).toHaveBeenCalledWith(notification);
@@ -366,14 +358,10 @@ it("does not write to stdin after the child process exits", () => {
   expect(harness.writes).toHaveLength(0);
 });
 
-it("interleaves a bounded remote file command with a pending dynamic tool request", async () => {
+it("allows a server tool handler to await a nested client request", async () => {
   const harness = createHarness();
-  const remotePath = "/remote/codex-workspace/reports/slack-upload.txt";
   const content = "authoritative remote attachment";
-  const params = {
-    command: ["node", "-e", "fixed-reader", "--", remotePath, "64", "0", "524288"],
-    env: { NODE_OPTIONS: null, NODE_PATH: null },
-  };
+  const params = { command: ["read-file"] };
   harness.client.addRequestHandler(async (request, signal) => {
     if (request.method !== "item/tool/call") {
       return undefined;

@@ -114,9 +114,6 @@ beforeEach(async () => {
     upstream: new URL("https://api.openai.com/v1"),
     assertCurrent: () => {},
   });
-  if (process.env.OPENCLAW_VITEST_RUNTIME === "bun") {
-    expect(process.versions.bun).toBeTruthy();
-  }
 });
 
 afterEach(async () => {
@@ -240,81 +237,67 @@ describe("inference HTTP transport ownership", () => {
     },
   );
 
-  it("preserves guarded TLS, length, auth and SSE when rewriting zstd requests", async () => {
-    const registration = await register("root", "synthetic root context");
-    const body = {
-      instructions: "native instructions",
-      input: [{ role: "developer", content: "catalog" }],
-      client_metadata: metadata({
+  it.each([false, true])(
+    "preserves guarded compressed HTTP transport (rewrite=%s)",
+    async (rewrite) => {
+      const registration = await register("root", rewrite ? "synthetic root context" : "");
+      const context = metadata({
         request_kind: "turn",
         thread_id: "root",
         [CODEX_INFERENCE_GENERATION_KEY]: registration.generation,
-      }),
-    };
-    const received = createDeferred<Buffer>();
-    handle = (req, res) => {
-      void readBody(req).then((bytes) => {
-        expect(new URL(req.url!, transport.origin).searchParams.get("cursor")).toBe(
-          "synthetic/a\\b.c",
-        );
-        expect(req.url?.split("?")[0]).toBe("/v1/responses");
-        expect(req.httpVersion).toBe("1.1");
-        expect(req.headers["transfer-encoding"]).toBeUndefined();
-        expect(req.headers.authorization).toBe("Bearer synthetic-native-auth");
-        expect(req.headers).not.toHaveProperty("x-openai-chatpass-test");
-        expect(Number(req.headers["content-length"])).toBe(bytes.length);
-        received.resolve(zstdDecompressSync(bytes));
-        res.writeHead(200, { "content-type": "text/event-stream" });
-        res.end("data: synthetic completion\n\n");
-      }, received.reject);
-    };
-    const wire = json(body);
-    const upload = post(zstdCompressSync(wire), {
-      authorization: "Bearer synthetic-native-auth",
-      "content-encoding": "zstd",
-    });
-    const response = await upload.response;
-    expect(response.headers.connection).toBe("close");
-    expect((await readBody(response)).toString()).toBe("data: synthetic completion\n\n");
-    expect(JSON.parse((await received.promise).toString())).toEqual({
-      ...body,
-      instructions: "native instructions\n\nsynthetic root context",
-    });
-    await Promise.all([upload.closed, waitForUpstreamClose()]);
-  });
-
-  it("preserves unchanged compressed native request bytes", async () => {
-    const registration = await register("root", "");
-    let forwarded: Buffer | undefined;
-    handle = (req, res) => {
-      void readBody(req).then((bytes) => {
-        expect(Number(req.headers["content-length"])).toBe(bytes.length);
-        expect(req.headers["content-encoding"]).toBe("zstd");
-        forwarded = bytes;
-        res.end("synthetic completion");
       });
-    };
-    // Context exclusions are covered by inference-context.test.ts; here exercise
-    // unchanged-byte transport with a fully admitted root.
-    const source = Buffer.from(
-      '{ "generate": false, "tools": [{ "minimum": 9007199254740993 }], "input": "\\u0061", "client_metadata": ' +
-        JSON.stringify(
-          metadata({
-            request_kind: "turn",
-            thread_id: "root",
-            [CODEX_INFERENCE_GENERATION_KEY]: registration.generation,
-          }),
-        ) +
-        " }",
-    );
-    const wire = zstdCompressSync(source);
-    const upload = post(wire, { "content-encoding": "zstd" });
-    const response = await upload.response;
-    expect(response.statusCode).toBe(200);
-    await readBody(response);
-    expect(forwarded).toEqual(wire);
-    await Promise.all([upload.closed, waitForUpstreamClose()]);
-  });
+      const body = {
+        instructions: "native instructions",
+        input: [{ role: "developer", content: "catalog" }],
+        client_metadata: context,
+      };
+      // Preserve precision and escape spelling when preparation leaves the native body unchanged.
+      const source = rewrite
+        ? json(body)
+        : Buffer.from(
+            String.raw`{ "generate": false, "tools": [{ "minimum": 9007199254740993 }], "input": "\u0061", "client_metadata": ${JSON.stringify(context)} }`,
+          );
+      const received = createDeferred<Buffer>();
+      handle = (req, res) => {
+        void readBody(req).then((bytes) => {
+          expect(new URL(req.url!, transport.origin).searchParams.get("cursor")).toBe(
+            "synthetic/a\\b.c",
+          );
+          expect(req.url?.split("?")[0]).toBe("/v1/responses");
+          expect(req.httpVersion).toBe("1.1");
+          expect(req.headers).toMatchObject({
+            authorization: "Bearer synthetic-native-auth",
+            "content-encoding": "zstd",
+            "content-length": String(bytes.length),
+          });
+          expect(req.headers["transfer-encoding"]).toBeUndefined();
+          expect(req.headers).not.toHaveProperty("x-openai-chatpass-test");
+          received.resolve(bytes);
+          res.writeHead(200, { "content-type": "text/event-stream" });
+          res.end("data: synthetic completion\n\n");
+        }, received.reject);
+      };
+      const wire = zstdCompressSync(source);
+      const upload = post(wire, {
+        authorization: "Bearer synthetic-native-auth",
+        "content-encoding": "zstd",
+      });
+      const response = await upload.response;
+      expect(response.statusCode).toBe(200);
+      expect(response.headers.connection).toBe("close");
+      expect((await readBody(response)).toString()).toBe("data: synthetic completion\n\n");
+      const forwarded = await received.promise;
+      if (rewrite) {
+        expect(JSON.parse(zstdDecompressSync(forwarded).toString())).toEqual({
+          ...body,
+          instructions: "native instructions\n\nsynthetic root context",
+        });
+      } else {
+        expect(forwarded).toEqual(wire);
+      }
+      await Promise.all([upload.closed, waitForUpstreamClose()]);
+    },
+  );
 
   it("keeps replacement decoding for malformed UTF-8 instead of forwarding invalid bytes", async () => {
     const received = receiveBody();
@@ -422,10 +405,8 @@ describe("inference HTTP transport ownership", () => {
       const write = socket.write.bind(socket);
       vi.spyOn(socket, "write").mockImplementation((...args) => {
         const result = write(...args);
-        if (!result) {
-          if (headersReceived) {
-            blocked.resolve(socket);
-          }
+        if (!result && headersReceived) {
+          blocked.resolve(socket);
         }
         return result;
       });

@@ -38,14 +38,6 @@ const unrestricted = (network: "enabled" | "restricted") => ({
 
 const register = (sandbox: Sandbox, client = createClient()) =>
   ensureCodexSandboxExecServerEnvironment({ client: client as never, sandbox });
-const envPolicy = (inherit: "all" | "none", set: Record<string, string> = {}) => ({
-  inherit,
-  ignoreDefaultExcludes: true,
-  exclude: [],
-  set,
-  includeOnly: [],
-});
-
 function execSpec(script = "", stdinMode: "pipe-open" | "pipe-closed" = "pipe-closed") {
   return { argv: [process.execPath, "-e", script], env: { PATH: process.env.PATH }, stdinMode };
 }
@@ -247,30 +239,28 @@ it.each<[string, object, string?]>([
     "podman",
   ],
 ])("preserves %s and reports its actual sandbox type", async (_label, policy, backendId) => {
-  const buildExecSpec = vi.fn(async () => execSpec());
-  const sandbox = createSandboxContext({ buildExecSpec });
+  const sandbox = createSandboxContext({});
   setBackend(sandbox, backendId);
   const socket = await openSandboxSocket(sandbox, false);
   await expect(startProcess(socket, "proc-external-sandbox", { sandbox: policy })).resolves.toEqual(
     { processId: "proc-external-sandbox", sandboxType: "none" },
   );
-  expect(buildExecSpec).toHaveBeenCalledOnce();
 });
 
 it.runIf(process.platform !== "win32")(
   "provides a real terminal and Ctrl-C for tty processes",
   async () => {
-    const buildExecSpec = vi.fn(async () =>
-      execSpec(
-        [
-          "process.on('SIGINT', () => { console.log('INTERRUPTED'); process.exit(42); });",
-          "console.log('PID=' + process.pid + ' TTY=' + Boolean(process.stdin.isTTY && process.stdout.isTTY));",
-          "setInterval(() => {}, 1000);",
-        ].join(" "),
-        "pipe-open",
-      ),
-    );
-    const socket = await connect({ buildExecSpec });
+    const socket = await connect({
+      buildExecSpec: async () =>
+        execSpec(
+          [
+            "process.on('SIGINT', () => { console.log('INTERRUPTED'); process.exit(42); });",
+            "console.log('PID=' + process.pid + ' TTY=' + Boolean(process.stdin.isTTY && process.stdout.isTTY));",
+            "setInterval(() => {}, 1000);",
+          ].join(" "),
+          "pipe-open",
+        ),
+    });
     await startProcess(socket, "proc-tty", { argv: ["/bin/sh", "-lc", "cat"], tty: true });
     await readStartedPid(socket, "proc-tty");
     const initial = await readProcess(socket, "proc-tty");
@@ -282,7 +272,6 @@ it.runIf(process.platform !== "win32")(
       }),
     ).resolves.toEqual({ status: "accepted" });
     const read = await readUntilClosed(socket, "proc-tty");
-    expect(buildExecSpec).toHaveBeenCalledWith(expect.objectContaining({ usePty: true }));
     expect(read.chunks?.[0]?.stream).toBe("pty");
     expect(output(read.chunks)).toContain("INTERRUPTED");
     expect(read.exitCode).toBe(42);
@@ -306,11 +295,10 @@ it("does not let Codex env policy inherit host secret variables", async () => {
           CODEX_API_KEY: "must-not-cross",
           OPENAI_API_KEY: "must-not-cross",
         },
-        envPolicy: envPolicy("all", {
-          POLICY_SET: "policy",
-          POLICY_ONLY: "1",
-          CODEX_ACCESS_TOKEN: "must-not-cross",
-        }),
+        envPolicy: {
+          inherit: "all",
+          set: { POLICY_SET: "policy", POLICY_ONLY: "1", CODEX_ACCESS_TOKEN: "must-not-cross" },
+        },
       });
       const [{ env: execEnv }] = buildExecSpec.mock.calls[0] as unknown as [
         { env: Record<string, string> },

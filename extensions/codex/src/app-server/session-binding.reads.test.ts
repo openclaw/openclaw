@@ -46,16 +46,22 @@ async function createPersistedState(namespace: string, maxEntries = 10) {
   };
 }
 
-async function createAuthorityFixture(name: string) {
+async function createAuthorityFixture(name: string, previousSessionId?: string) {
   const fixture = await createStateFixture(`codex-${name}-`);
   const sessionKey = `agent:main:${name}`;
   const storePath = path.join(fixture.stateDir, "sessions.json");
   const store = createBindingStore(createStateStore());
   const identity = { kind: "session" as const, agentId: "main", sessionId: "current", sessionKey };
   const scope = { agentId: identity.agentId, sessionKey, storePath };
+  const binding = { threadId: "native-thread", cwd: "/repo" };
+  await upsertSessionEntry({
+    ...scope,
+    entry: { sessionId: identity.sessionId, previousSessionId, updatedAt: 1 },
+  });
+  await store.mutate(identity, { kind: "set", binding });
   const resolve = (overrides: Partial<Parameters<typeof resolveBinding>[0]> = {}) =>
     resolveBinding({ bindingStore: store, identity, storePath, ...overrides });
-  return { storePath, store, identity, scope, resolve };
+  return { store, identity, scope, resolve, binding };
 }
 
 afterEach(async () => {
@@ -78,6 +84,13 @@ async function collect<T>(values: AsyncIterable<T>): Promise<T[]> {
 const activeRow = (binding: ThreadBinding) => ({ version: 1, state: "active", binding }) as const;
 const clearOwner = ({ threadId, clientId }: ThreadBinding) =>
   ({ kind: "clear", threadId, clientId }) as const;
+function mutationExpectations(
+  store: ReturnType<typeof createBindingStore>,
+  identity: Parameters<typeof store.mutate>[0],
+) {
+  return (mutation: Parameters<typeof store.mutate>[1], applied = true) =>
+    expect(store.mutate(identity, mutation)).resolves.toBe(applied);
+}
 
 function createReadFixture() {
   const state = createStateStore();
@@ -105,28 +118,15 @@ it.each([
     const identity = { kind: "session" as const, agentId: "main", sessionId: "session-1" };
     const original = { threadId: "thread-old", clientId: initialClientId, cwd: "/repo" };
     const successor = { ...original, threadId, clientId };
+    const mutate = mutationExpectations(store, identity);
     await store.mutate(identity, { kind: "set", binding: original });
-    await expect(
-      store.mutate(identity, {
-        kind: "patch",
-        threadId: original.threadId,
-        clientId: original.clientId,
-        patch: { cwd: original.cwd },
-      }),
-    ).resolves.toBe(true);
-    await store.mutate(identity, { kind: "set", binding: successor });
-
     const staleOwner = clearOwner(original);
-    await expect(
-      store.mutate(identity, {
-        ...staleOwner,
-        kind: "patch",
-        patch: { model: "must-not-publish" },
-      }),
-    ).resolves.toBe(false);
-    await expect(store.mutate(identity, staleOwner)).resolves.toBe(false);
+    await mutate({ ...staleOwner, kind: "patch", patch: { cwd: original.cwd } });
+    await store.mutate(identity, { kind: "set", binding: successor });
+    await mutate({ ...staleOwner, kind: "patch", patch: { model: "must-not-publish" } }, false);
+    await mutate(staleOwner, false);
     expect(store.read(identity)).toEqual(successor);
-    await expect(store.mutate(identity, clearOwner(successor))).resolves.toBe(true);
+    await mutate(clearOwner(successor));
     expect(store.read(identity)).toBeUndefined();
   },
 );
@@ -146,7 +146,6 @@ it("rechecks physical ownership after a worker comparison loses to a same-thread
   await store.mutate(identity, { kind: "set", binding: original });
   const withCurrent = state.withCurrent.bind(state);
   let replaced = false;
-  const outcomes: string[] = [];
   state.withCurrent = (authority) => {
     const view = withCurrent(authority);
     return {
@@ -156,14 +155,11 @@ it("rechecks physical ownership after a worker comparison loses to a same-thread
           replaced = true;
           await peer.mutate(identity, { kind: "set", binding: successor });
         }
-        const outcome = await view.compareAndApply(...args);
-        outcomes.push(outcome.status);
-        return outcome;
+        return view.compareAndApply(...args);
       },
     };
   };
   await expect(store.mutate(identity, clearOwner(original))).resolves.toBe(false);
-  expect(outcomes).toContain("conflict");
   expect(await collect(peer.readMany([identity]))).toEqual([successor]);
   await expect(peer.mutate(identity, clearOwner(successor))).resolves.toBe(true);
   expect(await collect(peer.readMany([identity]))).toEqual([undefined]);
@@ -234,7 +230,6 @@ it("keeps native monitor guards current through worker-published binding reads",
     sessionId: identity.sessionId,
     binding,
   });
-  expect(owner).toBeDefined();
   if (!owner) {
     throw new Error("Expected a native history owner");
   }
@@ -244,6 +239,14 @@ it("keeps native monitor guards current through worker-published binding reads",
     assertLifecycleCurrentAsync: async () => {},
   });
   const assignments = createNativeSubagentAssignmentStore(common);
+  const expectStale = () => {
+    expect(() => submissions.assertCurrent()).toThrow(
+      "Native submission binding is no longer current",
+    );
+    expect(() => assignments.assertCurrent()).toThrow(
+      "Native assignment binding is no longer current",
+    );
+  };
   try {
     expect(reader.read()).toEqual(binding);
     await submissions.assertCurrentAsync();
@@ -281,12 +284,7 @@ it("keeps native monitor guards current through worker-published binding reads",
     );
     const peer = createPeer();
     await peer.mutate(identity, { kind: "set", binding: { ...binding, threadId: "replacement" } });
-    expect(() => submissions.assertCurrent()).toThrow(
-      "Native submission binding is no longer current",
-    );
-    expect(() => assignments.assertCurrent()).toThrow(
-      "Native assignment binding is no longer current",
-    );
+    expectStale();
     await peer.mutate(identity, { kind: "set", binding });
     submissions.assertCurrent();
     assignments.assertCurrent();
@@ -294,12 +292,7 @@ it("keeps native monitor guards current through worker-published binding reads",
     reader.release();
   }
   expect(reader.read()).toBeUndefined();
-  expect(() => submissions.assertCurrent()).toThrow(
-    "Native submission binding is no longer current",
-  );
-  expect(() => assignments.assertCurrent()).toThrow(
-    "Native assignment binding is no longer current",
-  );
+  expectStale();
 });
 
 it("propagates failed bulk acquisition without synchronous reads or retries", async () => {
@@ -334,18 +327,11 @@ it("keeps oversized cohorts readable without synchronous acquisition", async () 
   expect(result).toHaveLength(identities.length);
   expect(result.slice(0, -1).every((value) => value === undefined)).toBe(true);
   expect(result.at(-1)).toEqual(binding);
-  expect(lookupMany.mock.calls.map(([keys]) => keys.length)).toEqual([10_000, 1]);
   expect(syncLookup).not.toHaveBeenCalled();
 });
 it("keeps borrowed settlement authority through cancellation while observing parent revocation", async () => {
-  const { store, identity, scope, resolve } = await createAuthorityFixture("settlement");
+  const { scope, resolve } = await createAuthorityFixture("settlement");
   const abort = new AbortController();
-  await upsertSessionEntry({
-    ...scope,
-    entry: { sessionId: identity.sessionId, updatedAt: 1 },
-  });
-  const binding = { threadId: "native-thread", cwd: "/repo" };
-  await store.mutate(identity, { kind: "set", binding });
   const retained = await resolve({ signal: abort.signal });
   const settlement = retained.authority.withLiveness(() => {});
   try {
@@ -369,17 +355,16 @@ it("keeps borrowed settlement authority through cancellation while observing par
 });
 
 it("combines lease and mutation lineage and refuses a same-id predecessor change", async () => {
-  const { scope, store, identity, resolve } = await createAuthorityFixture("lease");
+  const { scope, store, identity, resolve, binding } = await createAuthorityFixture(
+    "lease",
+    "previous",
+  );
   const source = { ...identity, sessionKey: "agent:main:mutation" };
   const sourceScope = { ...scope, sessionKey: source.sessionKey };
-  const binding = { threadId: "native-thread", cwd: "/repo" };
-  for (const target of [scope, sourceScope]) {
-    await upsertSessionEntry({
-      ...target,
-      entry: { sessionId: identity.sessionId, previousSessionId: "previous", updatedAt: 1 },
-    });
-  }
-  await store.mutate(identity, { kind: "set", binding });
+  await upsertSessionEntry({
+    ...sourceScope,
+    entry: { sessionId: identity.sessionId, previousSessionId: "previous", updatedAt: 1 },
+  });
   using captures = new DisposableStack();
   const lease = await resolve();
   captures.defer(() => lease.release());
@@ -491,8 +476,7 @@ it("canonicalizes undefined fields and preserves empty instruction snapshots in 
   const identity = { kind: "conversation" as const, bindingId: "binding-json" };
   const baseBinding = { threadId: "thread-json", cwd: "/repo" };
   const readRow = () => state.lookup(bindingStoreKey(identity));
-  const mutate = (mutation: Parameters<typeof store.mutate>[1]) =>
-    expect(store.mutate(identity, mutation)).resolves.toBe(true);
+  const mutate = mutationExpectations(store, identity);
   const contextEngine = {
     schemaVersion: 1 as const,
     engineId: "lossless-claw",

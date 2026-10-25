@@ -269,8 +269,26 @@ describe.skipIf(process.platform === "win32")("native Codex warm cleanup", () =>
       expect(sibling).toBeDefined();
       context.onTestFinished(() => sibling?.release(siblingBinding.threadId));
       const before = requests.length;
-      const saved = bindingStore.read(sessionBinding.sessionBindingIdentity(params));
+      const readBinding = () => bindingStore.read(sessionBinding.sessionBindingIdentity(params));
+      const saved = readBinding();
+      const expectNoRequests = (methods: string[], thread?: string, offset = before) => {
+        expect(
+          requests
+            .slice(offset)
+            .filter(
+              ({ method, threadId }) =>
+                methods.includes(method) && (thread === undefined || thread === threadId),
+            ),
+        ).toEqual([]);
+      };
       let publicationClaimed = false;
+      if (contextRefresh) {
+        common.contextEngineProjection = {
+          mode: "thread_bootstrap",
+          epoch: "after",
+          fingerprint: "after",
+        };
+      }
       if (publicationFailure) {
         const readerFailure = new Error("injected warm publication reader settlement failure");
         const fault = failNextWarmPublication(readerFailure);
@@ -280,27 +298,16 @@ describe.skipIf(process.platform === "win32")("native Codex warm cleanup", () =>
           fault.mockRestore();
         }
         publicationClaimed = isCodexAppServerLiveThreadClaimed(client, first.threadId);
-      } else if (!contextRefresh) {
+      } else {
         pluginFingerprint = "changed-policy";
         await expect(startOrResumeThread(common)).rejects.toThrow(
           `Codex thread ${first.threadId} is claimed by active work; stop it first.`,
         );
-        expect(bindingStore.read(sessionBinding.sessionBindingIdentity(params))).toEqual(saved);
+        expect(readBinding()).toEqual(saved);
         pluginFingerprint = "original-policy";
       }
       sibling!.assertCurrent();
       if (contextRefresh) {
-        common.contextEngineProjection = {
-          mode: "thread_bootstrap",
-          epoch: "after",
-          fingerprint: "after",
-        };
-        pluginFingerprint = "changed-policy";
-        await expect(startOrResumeThread(common)).rejects.toThrow(
-          "claimed by active work; stop it first",
-        );
-        expect(bindingStore.read(sessionBinding.sessionBindingIdentity(params))).toEqual(saved);
-        pluginFingerprint = "original-policy";
         const beforePolicyChange = requests.length;
         await expect(
           startOrResumeThread({
@@ -308,22 +315,18 @@ describe.skipIf(process.platform === "win32")("native Codex warm cleanup", () =>
             developerInstructions: "Changed persistent thread policy",
           }),
         ).rejects.toThrow("claimed by active work; stop it first");
-        expect(bindingStore.read(sessionBinding.sessionBindingIdentity(params))).toEqual(saved);
-        expect(
-          requests
-            .slice(beforePolicyChange)
-            .some(({ method }) =>
-              ["thread/start", "thread/unsubscribe", "turn/start"].includes(method),
-            ),
-        ).toBe(false);
+        expect(readBinding()).toEqual(saved);
+        expectNoRequests(
+          ["thread/start", "thread/unsubscribe", "turn/start"],
+          undefined,
+          beforePolicyChange,
+        );
       }
       const resumed = await startOrResumeThread(common);
       if (contextRefresh) {
         expect(resumed.threadId).not.toBe(first.threadId);
         expect(resumed.contextEngine?.projection?.epoch).toBe("after");
-        expect(bindingStore.read(sessionBinding.sessionBindingIdentity(params))?.threadId).toBe(
-          resumed.threadId,
-        );
+        expect(readBinding()?.threadId).toBe(resumed.threadId);
       } else {
         expect(resumed.threadId).toBe(first.threadId);
         expect(resumed.lifecycle.action).toBe("resumed");
@@ -337,35 +340,16 @@ describe.skipIf(process.platform === "win32")("native Codex warm cleanup", () =>
       expect(JSON.stringify(history.thread.turns)).toContain("NATIVE_CONTINUATION_OK");
       const transitionRequests = requests.slice(before);
       if (backgroundWork && !contextRefresh) {
-        expect(
-          transitionRequests.some(({ method }) =>
-            ["thread/start", "thread/resume", "thread/unsubscribe"].includes(method),
-          ),
-        ).toBe(false);
+        expectNoRequests(["thread/start", "thread/resume", "thread/unsubscribe"]);
       } else if (!contextRefresh) {
-        expect(transitionRequests).toContainEqual({
-          method: "thread/unsubscribe",
-          threadId: first.threadId,
-        });
-        expect(transitionRequests).toContainEqual({
-          method: "thread/resume",
-          threadId: first.threadId,
-        });
+        for (const method of ["thread/unsubscribe", "thread/resume"]) {
+          expect(transitionRequests).toContainEqual({ method, threadId: first.threadId });
+        }
       }
       if (contextRefresh) {
-        expect(
-          transitionRequests.some(
-            ({ method, threadId }) =>
-              method === "thread/unsubscribe" && threadId === first.threadId,
-          ),
-        ).toBe(false);
+        expectNoRequests(["thread/unsubscribe"], first.threadId);
       }
-      expect(
-        transitionRequests.some(
-          ({ method, threadId }) =>
-            method === "thread/unsubscribe" && threadId === siblingBinding.threadId,
-        ),
-      ).toBe(false);
+      expectNoRequests(["thread/unsubscribe"], siblingBinding.threadId);
       sibling!.assertCurrent();
       await runTurn(siblingBinding.threadId);
       sibling!.assertCurrent();
