@@ -16,6 +16,11 @@
 // Fixed-work comparison: omit --poll-seed and use --soak-rounds 16,
 // --round-interval-ms 37500 and --list-interval-ms 600000 (256 requests per RPC method).
 // Setup can restore cold histories; report setup-inclusive worker/CPU totals too.
+// --cold-idle-ms 310000 adds a quiet tail after the measured soak, then reads the
+// last cold-summary key reserved from load. Use 257 cold keys for 256 load reads.
+// The tail records worker lifetimes/heaps and the real history response separately
+// from timing gates. A new archive-worker start on the reserved read proves cold
+// restoration after retirement; a hot read alone cannot establish that proof.
 
 // Stream custom syntax with --answer-chunk $'```json\n{"ok":true}\n```\nprose\n'.
 // Add --final-answer-phase to exercise the visible projection during each delta.
@@ -114,6 +119,7 @@ const { values } = parseArgs({
   options: {
     // Cold-history worker-churn instrumentation and fixture workload.
     "cold-history": { type: "boolean", default: false },
+    "cold-idle-ms": { type: "string" },
     "worker-creation-counts": { type: "boolean", default: false },
     "stress-worktree-fanout": { type: "boolean", default: false },
     "state-dir": { type: "string" },
@@ -1073,6 +1079,17 @@ const coldHistoryKeys: string[] = values["cold-history"]
 if (values["cold-history"] && (!values["mixed-rpc"] || !coldHistoryKeys.length)) {
   throw new Error("--cold-history requires --mixed-rpc and a prepared worker-cold fixture");
 }
+const coldIdleMs =
+  values["cold-idle-ms"] === undefined
+    ? undefined
+    : integer(values["cold-idle-ms"], "--cold-idle-ms", 300_000);
+if (
+  coldIdleMs !== undefined &&
+  (!soakScenario || !values["cold-history"] || coldHistoryKeys.length < 2)
+) {
+  throw new Error("--cold-idle-ms requires memory-soak --cold-history with at least two cold keys");
+}
+const coldIdleKey = coldIdleMs === undefined ? undefined : coldHistoryKeys.pop();
 let coldHistorySequence = 0;
 let stressWorktree: string | undefined;
 const worktreeToolRoots = new Map<number, string>();
@@ -6643,6 +6660,61 @@ try {
       }
     }
   }
+  let coldIdle;
+  if (coldIdleMs !== undefined && coldIdleKey !== undefined) {
+    // All polling has stopped and the synthetic stress cron is disabled above.
+    // Keep ordinary Gateway maintenance enabled; request no archive work until restore.
+    await drainEvents();
+    const before = await readGatewayResources(gateway, { includeWorkers: true });
+    const startedAtEpochMs = Date.now();
+    console.log(
+      `PHASE cold-idle ${JSON.stringify({ startedAtEpochMs, durationMs: coldIdleMs, sessionKey: coldIdleKey })}`,
+    );
+    while (Date.now() - startedAtEpochMs < coldIdleMs) {
+      await delay(Math.min(30_000, coldIdleMs - (Date.now() - startedAtEpochMs)));
+      assertGatewayAlive();
+    }
+    const elapsedMs = Date.now() - startedAtEpochMs;
+    const after = await readGatewayResources(gateway, { includeWorkers: true });
+    const restoreStartedAt = performance.now();
+    const history = await rpc(sender, "chat.history", { sessionKey: coldIdleKey, limit: 50 });
+    const restoreMs = performance.now() - restoreStartedAt;
+    if (
+      !isRecord(history) ||
+      !Array.isArray(history.messages) ||
+      !history.messages.length ||
+      !history.messages.some(
+        (message: unknown) => isRecord(message) && contentText(message.content).length > 0,
+      )
+    ) {
+      throw new Error("Post-idle chat.history did not restore the reserved fixture transcript");
+    }
+    const responsePath = path.join(output, "cold-idle-history.json");
+    const response = JSON.stringify(history);
+    writeFileSync(responsePath, `${response}\n`);
+    const restored = await readGatewayResources(gateway, { includeWorkers: true });
+    const archiveStarts = (resources: typeof before) =>
+      resources.workers?.workerLifecycle
+        .filter((worker) =>
+          /^session-accessor\.sqlite-archive\.worker\.[cm]?[jt]s$/.test(worker.script),
+        )
+        .reduce((sum, worker) => sum + worker.started, 0) ?? 0;
+    coldIdle = {
+      requestedMs: coldIdleMs,
+      startedAtEpochMs,
+      elapsedMs,
+      sessionKey: coldIdleKey,
+      before,
+      after,
+      restored,
+      quietArchiveWorkerStarts: archiveStarts(after) - archiveStarts(before),
+      restoreArchiveWorkerStarts: archiveStarts(restored) - archiveStarts(after),
+      restoreMs,
+      messageCount: history.messages.length,
+      responsePath,
+      responseSha256: createHash("sha256").update(response).digest("hex"),
+    };
+  }
   // Process exit plus drained log streams makes promotion accounting independent of pipe buffering.
   await cleanup();
   const wholeChatGc =
@@ -6671,6 +6743,7 @@ try {
   }
   const result = {
     output,
+    ...(coldIdle ? { coldIdle } : {}),
     gatewayPreload,
     gatewayReadyMs,
     syntheticPlugins: Math.max(pluginCount, reloadPluginId || scopePluginId ? 1 : 0),
