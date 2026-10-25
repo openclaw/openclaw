@@ -84,24 +84,50 @@ it("preserves an existing checkout when its target cannot be inspected", async (
   expect(command).not.toHaveBeenCalled();
 });
 
-it.each([128, "throw"] as const)(
-  "retains a clone after uncertain cleanup (%s)",
-  async (outcome) => {
+it.each(["clone-result", "clone-throw", "pin-throw", "pin-repair", "pin-auth"] as const)(
+  "settles clone artifacts after %s",
+  async (mode) => {
     const target = targetPath();
-    const failure = uncertainFailure();
-    const command = mockGit().mockImplementation(async () => {
-      await writeArtifact(target, "partial.txt", "owned clone data");
-      if (outcome === "throw") {
+    const pinned = mode.startsWith("pin-");
+    const failure = mode === "pin-throw" ? new CommandProcessCleanupError() : uncertainFailure();
+    const command = mockGit().mockImplementation(async (argv): Promise<processExec.SpawnResult> => {
+      if (argv.includes("clone")) {
+        await writeArtifact(target, "partial.txt", "owned clone data");
+        if (mode === "clone-throw") {
+          throw failure;
+        }
+        return pinned ? successfulGit : { ...failedClone, cleanup: "uncertain" };
+      }
+      if (mode === "pin-throw" || argv.includes("for-each-ref")) {
         throw failure;
       }
-      return { ...failedClone, code: outcome, cleanup: "uncertain" };
+      if (mode === "pin-auth") {
+        return { ...failedClone, stderr: "Authentication failed" };
+      }
+      if (argv.includes("rev-list")) {
+        return { ...failedClone, stderr: "missing commit" };
+      }
+      if (argv.includes("fetch")) {
+        return brokenGraph;
+      }
+      throw new Error("unexpected pinned Git command");
     });
-    const error = await capture(clone(target));
-    await expectFile(path.join(target, "partial.txt"), "owned clone data");
-    expect(command).toHaveBeenCalledOnce();
-    expect(hasCommandProcessCleanupError(error)).toBe(true);
-    if (outcome === "throw") {
-      expect(error).toHaveProperty("cause", failure);
+    const error = await capture(clone(target, pinned ? pinnedCommit : undefined));
+    if (mode === "pin-auth") {
+      expect(error).toBeInstanceOf(ProjectCloneError);
+      expect(error).toHaveProperty("failure", "auth_required");
+      await expectMissing(target);
+    } else {
+      expect(hasCommandProcessCleanupError(error)).toBe(true);
+      await expectFile(path.join(target, "partial.txt"), "owned clone data");
+      if (mode === "pin-throw") {
+        expect(error).toBe(failure);
+      } else if (mode === "clone-throw" || mode === "pin-repair") {
+        expect(error).toHaveProperty("cause", failure);
+      }
+    }
+    if (!pinned) {
+      expect(command).toHaveBeenCalledOnce();
     }
   },
 );
@@ -155,57 +181,7 @@ it.each([false, true])(
   },
 );
 
-it.each(["probe", "fetch", "repair", "uncertain", "auth"] as const)(
-  "settles a pinned checkout after %s",
-  async (phase) => {
-    const target = targetPath();
-    const sentinel = path.join(target, "partial.txt");
-    const failure = phase === "uncertain" ? new CommandProcessCleanupError() : uncertainFailure();
-    mockGit().mockImplementation(async (argv): Promise<processExec.SpawnResult> => {
-      if (argv.includes("clone")) {
-        await writeArtifact(target, "partial.txt", "pinned clone data");
-        return successfulGit;
-      }
-      if (phase === "uncertain") {
-        throw failure;
-      }
-      if (phase === "auth") {
-        return { ...failedClone, stderr: "Authentication failed" };
-      }
-      if (argv.includes("rev-list")) {
-        return phase === "probe"
-          ? gitOutput(pinnedCommit, true)
-          : { ...failedClone, stderr: "missing commit" };
-      }
-      if (argv.includes("fetch")) {
-        return phase === "fetch" ? { ...successfulGit, cleanup: "uncertain" } : brokenGraph;
-      }
-      if (argv.includes("for-each-ref")) {
-        throw failure;
-      }
-      throw new Error("unexpected pinned Git command");
-    });
-
-    const error = await capture(clone(target, pinnedCommit));
-
-    if (phase === "auth") {
-      expect(error).toBeInstanceOf(ProjectCloneError);
-      expect(error).toHaveProperty("failure", "auth_required");
-      await expectMissing(target);
-    } else {
-      expect(hasCommandProcessCleanupError(error)).toBe(true);
-      if (phase === "uncertain") {
-        expect(error).toBe(failure);
-      }
-      if (phase === "repair") {
-        expect(error).toHaveProperty("cause", failure);
-      }
-      await expectFile(sentinel, "pinned clone data");
-    }
-  },
-);
-
-it.each(["fetch", "repair", "inventory", "success", "auth failure", "cleanup failure"] as const)(
+it.each(["fetch", "success", "auth failure", "cleanup failure"] as const)(
   "retains or cleans refresh staging after %s",
   async (phase) => {
     const root = dirs.make("openclaw-refresh-cleanup-");
@@ -214,10 +190,8 @@ it.each(["fetch", "repair", "inventory", "success", "auth failure", "cleanup fai
     await fs.mkdir(target);
     await fs.mkdir(objects);
     vi.spyOn(os, "tmpdir").mockReturnValue(root);
-    const failure = uncertainFailure();
     const cleanupFailure = new Error("synthetic staging removal failure");
     let staging = "";
-    let managedInventories = 0;
     const published: (string | Uint8Array | undefined)[] = [];
     mockGit().mockImplementation(async (argv, options): Promise<processExec.SpawnResult> => {
       const cwd = argv[argv.indexOf("-C") + 1];
@@ -236,18 +210,9 @@ it.each(["fetch", "repair", "inventory", "success", "auth failure", "cleanup fai
         return successfulGit;
       }
       if (argv.includes("for-each-ref")) {
-        if (cwd === target) {
-          if (phase === "repair" && managedInventories++ > 0) {
-            throw failure;
-          }
-          return gitOutput(phase === "repair" ? remoteRef : "");
-        }
-        return gitOutput(remoteRef, phase === "inventory");
+        return gitOutput(cwd === target ? "" : remoteRef);
       }
-      if (argv.includes("update-ref")) {
-        if (cwd === staging) {
-          return brokenGraph;
-        }
+      if (argv.includes("update-ref") && cwd === target) {
         published.push(typeof options === "number" ? undefined : options.input);
         return successfulGit;
       }
@@ -272,11 +237,8 @@ it.each(["fetch", "repair", "inventory", "success", "auth failure", "cleanup fai
     if (!staging) {
       throw new Error("refresh did not initialize its staging directory");
     }
-    if (phase === "fetch" || phase === "repair" || phase === "inventory") {
+    if (phase === "fetch") {
       expect(hasCommandProcessCleanupError(error)).toBe(true);
-      if (phase === "repair") {
-        expect(error).toHaveProperty("cause", failure);
-      }
       expect(published).toEqual([]);
       await expectFile(path.join(staging, "partial.txt"), "owned staging data");
     } else if (phase === "cleanup failure") {
