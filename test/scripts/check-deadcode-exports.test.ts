@@ -332,7 +332,7 @@ const catalog = module.loadControlUiSourceCatalog();`;
       'import { gatewayBenchTaskOperation as __dynamic1_0 } from "../scripts/lib/gateway-bench-worker-messages.ts";',
     );
     expect(compiled).toContain(
-      'import { fetchWithSsrFGuard as __dynamic3_0 } from "../extensions/team-reports/src/report-run.benchmark-fixtures.test-support.ts";',
+      'import { fetchWithSsrFGuard as __dynamic2_0 } from "../extensions/team-reports/src/report-run.benchmark-fixtures.test-support.ts";',
     );
     expect(compiled).toContain(
       'import { addDoctorLegacyIssues as __dynamic3_0 } from "../src/commands/doctor/shared/legacy-config-issues.js";',
