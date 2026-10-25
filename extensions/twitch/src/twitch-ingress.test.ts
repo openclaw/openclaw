@@ -194,10 +194,15 @@ describe("Twitch durable ingress", () => {
           expect(deliver).toHaveBeenCalledOnce();
         } finally {
           gate.resolve();
-          await Promise.resolve()
-            .then(() => adoptDeferred?.())
-            .finally(() => ingress.stop())
-            .finally(() => vi.useRealTimers());
+          try {
+            await adoptDeferred?.();
+          } finally {
+            try {
+              await ingress.stop();
+            } finally {
+              vi.useRealTimers();
+            }
+          }
         }
       });
     },

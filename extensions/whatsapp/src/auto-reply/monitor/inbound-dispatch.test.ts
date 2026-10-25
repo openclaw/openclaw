@@ -398,9 +398,12 @@ describe("WhatsApp reply delivery", () => {
     const { plan, deliver } = await fixture({ deliverReply });
     const finalizations = [];
     for (const name of ["first", "second", "third"]) {
-      finalizations.push(
-        (await deliver({ mediaUrls: [`/tmp/${name}.jpg`] }, "tool"))?.finalization,
-      );
+      const finalization = (await deliver({ mediaUrls: [`/tmp/${name}.jpg`] }, "tool"))
+        ?.finalization;
+      if (!finalization) {
+        throw new Error("Expected deferred delivery finalization");
+      }
+      finalizations.push(finalization);
     }
     const settlements = Promise.allSettled(finalizations);
     await expect(plan.dispatcherOptions.onSettled?.()).rejects.toMatchObject({
