@@ -68,6 +68,7 @@ describe("loader", () => {
     params: {
       sourceDir?: string;
       handlerCode?: string;
+      message?: string;
       events?: string[];
       exportName?: string;
       hookKey?: string;
@@ -85,7 +86,7 @@ describe("loader", () => {
       hookDir,
       `---\nname: ${hookName}\ndescription: ${hookName} test hook\nmetadata: ${JSON.stringify({ openclaw: metadata })}\n---\n\n# ${hookName}`,
       params.handlerCode ??
-        `export default async function(event) { event.messages.push("${hookName}"); }\n`,
+        `export default async function(event) { event.messages.push(${JSON.stringify(params.message ?? hookName)}); }\n`,
       "handler.js",
     );
     return hookDir;
@@ -235,14 +236,17 @@ describe("loader", () => {
     },
   );
 
-  it("ignores a missing handler for a collision loser during atomic reload", async () => {
+  it("keeps managed code over a workspace collision, even after the losing handler disappears", async () => {
     writeDiscoveredHook("valid");
-    const broken = writeDiscoveredHook("valid", { sourceDir: path.join(tmpDir, "hooks") });
-    await fs.unlink(path.join(broken, "handler.js"));
-
-    await expect(
-      commitPreparedHooks({ browser: { enabled: false }, ...createHooksConfig(["valid"]) }),
-    ).resolves.toBe(1);
+    const losing = writeDiscoveredHook("valid", {
+      sourceDir: path.join(tmpDir, "hooks"),
+      message: "workspace-override",
+    });
+    const config = { browser: { enabled: false }, ...createHooksConfig(["valid"]) };
+    await expect(commitPreparedHooks(config)).resolves.toBe(1);
+    await expectMessages(["valid"]);
+    await fs.unlink(path.join(losing, "handler.js"));
+    await expect(commitPreparedHooks(config)).resolves.toBe(1);
     await expectMessages(["valid"]);
   });
 
@@ -252,7 +256,7 @@ describe("loader", () => {
     writeDiscoveredHook("overridden", {
       sourceDir: bundledHooksDir,
       hookKey: "bundled-selection",
-      handlerCode: 'export default async function(event) { event.messages.push("bundled"); }',
+      message: "bundled",
     });
     const overriding = writeDiscoveredHook("overridden", {
       hookKey: "managed-selection",
@@ -287,7 +291,7 @@ describe("loader", () => {
       writeDiscoveredHook("original", {
         sourceDir: bundledHooksDir,
         hookKey: "lower-name",
-        handlerCode: 'export default async function(event) { event.messages.push("lower"); }',
+        message: "lower",
       });
       const original = writeDiscoveredHook("original", {
         sourceDir: extraDir,
@@ -445,27 +449,7 @@ describe("loader", () => {
     await expectMessages(["workspace-hook"]);
   });
 
-  it("keeps managed hooks active when a workspace hook reuses the same name", async () => {
-    writeDiscoveredHook("session-memory", {
-      handlerCode: 'export default async function(event) { event.messages.push("managed"); }\n',
-    });
-    writeDiscoveredHook("session-memory", {
-      sourceDir: path.join(tmpDir, "hooks"),
-      handlerCode:
-        'export default async function(event) { event.messages.push("workspace-override"); }\n',
-    });
-
-    const count = await commitPreparedHooks(createHooksConfig(["session-memory"], true));
-    expect(count).toBe(1);
-
-    await expectMessages(["managed"]);
-  });
-
   describe("bundle plugin hooks", () => {
-    let workspaceDir: string;
-    beforeEach(() => {
-      workspaceDir = tmpDir;
-    });
     async function writeBundleFiles(root: string, files: Record<string, string>) {
       for (const [relative, content] of Object.entries(files)) {
         const file = path.join(root, relative);
@@ -479,7 +463,7 @@ describe("loader", () => {
       withJsonHooks = false,
       declaredRoot = "hooks",
     ): Promise<string> {
-      const bundleRoot = path.join(workspaceDir, ".openclaw", "extensions", "sample-bundle");
+      const bundleRoot = path.join(tmpDir, ".openclaw", "extensions", "sample-bundle");
       await writeBundleFiles(bundleRoot, {
         [`.${format}-plugin/plugin.json`]: JSON.stringify({
           name: "Sample Bundle",
@@ -488,8 +472,7 @@ describe("loader", () => {
       });
       writeDiscoveredHook("bundle-hook", {
         sourceDir: path.join(bundleRoot, "hooks"),
-        handlerCode:
-          'export default async (event) => { event.messages.push("bundle-hook-ok"); };\n',
+        message: "bundle-hook-ok",
       });
       if (withJsonHooks) {
         await writeBundleFiles(bundleRoot, { "hooks/hooks.json": '{"hooks":[]}' });
@@ -505,13 +488,17 @@ describe("loader", () => {
     }
 
     function publishSnapshot(config: OpenClawConfig, gateway = true) {
-      const snapshot = loadPluginMetadataSnapshot({ config, workspaceDir, env: process.env });
+      const snapshot = loadPluginMetadataSnapshot({
+        config,
+        workspaceDir: tmpDir,
+        env: process.env,
+      });
       const publish = gateway ? setGatewayPluginMetadataSnapshot : setCurrentPluginMetadataSnapshot;
-      publish(snapshot, { config, workspaceDir });
+      publish(snapshot, { config, workspaceDir: tmpDir });
     }
 
     function expectBundleEntry(bundleRoot: string, config: OpenClawConfig) {
-      expect(loadWorkspaceHookEntries(workspaceDir, { config })).toEqual([
+      expect(loadWorkspaceHookEntries(tmpDir, { config })).toEqual([
         expect.objectContaining({
           hook: expect.objectContaining({
             name: "bundle-hook",
@@ -525,7 +512,11 @@ describe("loader", () => {
     }
 
     function projectBundleComponents(pluginId: string, config: OpenClawConfig) {
-      const metadata = loadPluginMetadataSnapshot({ config, workspaceDir, env: process.env });
+      const metadata = loadPluginMetadataSnapshot({
+        config,
+        workspaceDir: tmpDir,
+        env: process.env,
+      });
       const manifest = metadata.manifestRegistry.plugins.find(({ id }) => id === pluginId);
       if (!manifest) {
         throw new Error(`Expected bundle manifest for ${pluginId}`);
@@ -547,7 +538,7 @@ describe("loader", () => {
         if (supported.length > 0) {
           expectBundleEntry(bundleRoot, config);
         } else {
-          expect(loadWorkspaceHookEntries(workspaceDir, { config })).toHaveLength(0);
+          expect(loadWorkspaceHookEntries(tmpDir, { config })).toHaveLength(0);
         }
 
         const { declared, components } = projectBundleComponents("sample-bundle", config);
@@ -586,12 +577,12 @@ describe("loader", () => {
         manifestRegistry,
         "loadPluginManifestRegistryForInstalledIndex",
       );
-      const initial = await prepareInternalHooks(config, workspaceDir);
+      const initial = await prepare(config);
       expect(initial.loadedCount).toBe(1);
       initial.commit();
 
       for (const enabled of [false, true]) {
-        const candidate = await prepareInternalHooks(createConfig(enabled), workspaceDir);
+        const candidate = await prepare(createConfig(enabled));
         expect(candidate.loadedCount).toBe(enabled ? 1 : 0);
         await expectMessages(enabled ? [] : ["bundle-hook-ok"]);
         candidate.commit();
@@ -606,21 +597,21 @@ describe("loader", () => {
         const bundleRoot = await writeBundleHookFixture();
         const config = createConfig(true);
         publishSnapshot(config);
-        (await prepareInternalHooks(config, workspaceDir)).commit();
+        (await prepare(config)).commit();
         const hookRoot = path.join(bundleRoot, "hooks");
         await fs.rm(failure === "root" ? hookRoot : path.join(hookRoot, "bundle-hook", "HOOK.md"), {
           recursive: true,
         });
 
-        await expect(prepareInternalHooks(config, workspaceDir)).rejects.toThrow();
+        await expect(prepare(config)).rejects.toThrow();
         await expectMessages(["bundle-hook-ok"]);
-        (await prepareInternalHooks(createConfig(false), workspaceDir)).commit();
+        (await prepare(createConfig(false))).commit();
         await expectMessages([]);
       },
     );
 
     it("does not treat Claude hooks.json bundles as OpenClaw hook packs", async () => {
-      const bundleRoot = path.join(workspaceDir, ".openclaw", "extensions", "claude-bundle");
+      const bundleRoot = path.join(tmpDir, ".openclaw", "extensions", "claude-bundle");
       await writeBundleFiles(bundleRoot, {
         ".claude-plugin/plugin.json": JSON.stringify({
           name: "Claude Bundle",
@@ -629,7 +620,7 @@ describe("loader", () => {
         "hooks/hooks.json": '{"hooks":[]}',
       });
       const config = createConfig(true, "claude-bundle");
-      const entries = loadWorkspaceHookEntries(workspaceDir, { config });
+      const entries = loadWorkspaceHookEntries(tmpDir, { config });
       expect(entries).toHaveLength(0);
 
       const { declared, components } = projectBundleComponents("claude-bundle", config);

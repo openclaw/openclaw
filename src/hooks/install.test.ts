@@ -88,10 +88,10 @@ beforeAll(() => {
   fs.mkdirSync(fixtureRoot, { recursive: true });
 });
 
-function writeArchiveFixture(params: { fileName: string; contents: Buffer }) {
+function writeArchiveFixture(fileName: string, contents: Buffer) {
   const stateDir = makeTempDir();
-  const archivePath = path.join(stateDir, params.fileName);
-  fs.writeFileSync(archivePath, params.contents);
+  const archivePath = path.join(stateDir, fileName);
+  fs.writeFileSync(archivePath, contents);
   return { stateDir, archivePath, hooksDir: path.join(stateDir, "hooks") };
 }
 
@@ -123,24 +123,8 @@ function writeHookPackManifest(params: {
   });
 }
 
-function writeHookPackFiles(params: {
-  pkgDir: string;
-  packageName?: string;
-  dependencies?: Record<string, string>;
-}) {
-  writeHookPackManifest({ ...params, hooks: ["./hooks/one-hook"] });
-  const hookDir = path.join(params.pkgDir, "hooks", "one-hook");
-  writeHookFixture(
-    hookDir,
-    '---\nname: one-hook\ndescription: One hook\nmetadata: {"openclaw":{"events":["command:new"]}}\n---\n\n# One Hook',
-  );
-}
-
 it("rejects hook packs with traversal-like ids", async () => {
-  const { archivePath, hooksDir } = writeArchiveFixture({
-    fileName: "hooks.tar",
-    contents: tarEvilIdBuffer,
-  });
+  const { archivePath, hooksDir } = writeArchiveFixture("hooks.tar", tarEvilIdBuffer);
   const result = await installHooksFromPath({ path: archivePath, hooksDir });
   expectInstallFailureContains(result, ["reserved path segment"]);
 });
@@ -148,7 +132,11 @@ it("rejects hook packs with traversal-like ids", async () => {
 function makePackage(packageName = "@acme/canonical-hooks", dependencies?: Record<string, string>) {
   const pkgDir = makeTempDir();
   const hooksDir = path.join(makeTempDir(), "hooks");
-  writeHookPackFiles({ pkgDir, packageName, dependencies });
+  writeHookPackManifest({ pkgDir, packageName, dependencies, hooks: ["./hooks/one-hook"] });
+  writeHookFixture(
+    path.join(pkgDir, "hooks", "one-hook"),
+    '---\nname: one-hook\ndescription: One hook\nmetadata: {"openclaw":{"events":["command:new"]}}\n---\n\n# One Hook',
+  );
   return { pkgDir, hooksDir };
 }
 
@@ -269,16 +257,11 @@ describe("installHooksFromPath", () => {
   });
 
   it("validates hook-name uniqueness before package inspection side effects", async () => {
-    const names = ["shared-hook", "shared-hook"];
     const pkgDir = makeTempDir();
     const hooksDir = path.join(makeTempDir(), "managed-hooks");
-    writeHookPackManifest({
-      pkgDir,
-      hooks: names.map((_, index) => `./hooks/${index}`),
-    });
-    for (const [index, name] of names.entries()) {
-      const hookDir = path.join(pkgDir, "hooks", String(index));
-      writeBareHook(hookDir, name);
+    writeHookPackManifest({ pkgDir, hooks: ["./hooks/0", "./hooks/1"] });
+    for (const index of [0, 1]) {
+      writeBareHook(path.join(pkgDir, "hooks", String(index)), "shared-hook");
     }
     const targetAvailability = vi.spyOn(hookInstallRuntime, "ensureInstallTargetAvailable");
 
@@ -354,32 +337,25 @@ describe("installHooksFromPath", () => {
     expect(fs.existsSync(path.join(fixture.hooksDir, pluginId))).toBe(false);
   });
 
-  it("rejects an oversized HOOK.md to prevent OOM during frontmatter parsing", async () => {
-    const stateDir = makeTempDir();
-    const workDir = makeTempDir();
-    const hookDir = path.join(workDir, "my-hook");
-    fs.mkdirSync(hookDir, { recursive: true });
-    fs.writeFileSync(path.join(hookDir, "HOOK.md"), "x".repeat(1024 * 1024 + 1), "utf8");
-    fs.writeFileSync(path.join(hookDir, "handler.ts"), "export default async () => {};\n");
-
-    await expect(
-      installHooksFromPath({ path: hookDir, hooksDir: path.join(stateDir, "hooks") }),
-    ).rejects.toThrow(/File exceeds 1048576 bytes/);
-  });
-
-  it.runIf(process.platform !== "win32")("rejects a symlinked HOOK.md", async () => {
-    const stateDir = makeTempDir();
-    const workDir = makeTempDir();
-    const hookDir = path.join(workDir, "my-hook");
-    const externalHookMd = path.join(workDir, "external-HOOK.md");
-    fs.mkdirSync(hookDir, { recursive: true });
-    fs.writeFileSync(externalHookMd, "---\nname: external\n---\n", "utf8");
-    fs.symlinkSync(externalHookMd, path.join(hookDir, "HOOK.md"), "file");
-    fs.writeFileSync(path.join(hookDir, "handler.ts"), "export default async () => {};\n");
-
-    await expect(
-      installHooksFromPath({ path: hookDir, hooksDir: path.join(stateDir, "hooks") }),
-    ).rejects.toThrow(/path must be a regular file/);
+  it.each([
+    { kind: "oversized", error: /File exceeds 1048576 bytes/ },
+    ...(process.platform === "win32"
+      ? []
+      : [{ kind: "symlinked", error: /path must be a regular file/ }]),
+  ])("rejects a $kind HOOK.md", async ({ kind, error }) => {
+    const hookDir = path.join(makeTempDir(), "my-hook");
+    writeBareHook(hookDir);
+    const descriptor = path.join(hookDir, "HOOK.md");
+    if (kind === "oversized") {
+      fs.writeFileSync(descriptor, "x".repeat(1024 * 1024 + 1));
+    } else {
+      const external = path.join(makeTempDir(), "external-HOOK.md");
+      fs.renameSync(descriptor, external);
+      fs.symlinkSync(external, descriptor, "file");
+    }
+    await expect(installHooksFromPath({ path: hookDir, hooksDir: makeTempDir() })).rejects.toThrow(
+      error,
+    );
   });
 
   it.each(["extensions", "bundle marker"])(
@@ -464,10 +440,7 @@ describe("installHooksFromPath", () => {
   });
 
   it("enforces archive install policy against the validated extracted hook package", async () => {
-    const { stateDir, archivePath } = writeArchiveFixture({
-      fileName: "policy-hooks.zip",
-      contents: zipHooksBuffer,
-    });
+    const { stateDir, archivePath } = writeArchiveFixture("policy-hooks.zip", zipHooksBuffer);
     let scannedExtractedPackage = false;
     scanPackageInstallSourceMock.mockImplementation(async (params: { packageDir: string }) => {
       scannedExtractedPackage =

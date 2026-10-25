@@ -113,65 +113,43 @@ it("uses the session key as the Control UI conversation id", () => {
   expect(canonical).toMatchObject({ channelId: "webchat", conversationId: "agent:main:adopted" });
 });
 
-it("maps inbound reply metadata into canonical and plugin payloads", () => {
-  const canonical = makeCanonicalInbound({
-    ReplyToId: "discord-message-42",
-    ReplyToIdFull: "discord:channel-1:discord-message-42",
-    ReplyToBody: "quoted Discord reply body",
-    ReplyToSender: "Ada",
-    ReplyToIsQuote: true,
-  });
-
-  const expectedReply = {
-    replyToId: "discord-message-42",
-    replyToIdFull: "discord:channel-1:discord-message-42",
-    replyToBody: "quoted Discord reply body",
-    replyToSender: "Ada",
-    replyToIsQuote: true,
-  };
-  const { context: claimContext, event: claimEvent } = toPluginInboundClaimPair(canonical);
-  const receivedEvent = toPluginMessageReceivedEvent(canonical);
-  for (const payload of [
-    canonical,
-    toPluginMessageContext(canonical),
-    claimContext,
-    claimEvent,
-    claimEvent.metadata,
-    receivedEvent,
-    receivedEvent.metadata,
-  ]) {
-    expect(payload).toMatchObject(expectedReply);
-  }
-});
-
-it("preserves undefined optional reply fields across hook projections", () => {
-  const fields = {
-    replyToId: undefined,
-    replyToIdFull: undefined,
-    replyToBody: undefined,
-    replyToSender: undefined,
-    replyToIsQuote: undefined,
-  };
-  const canonical = {
-    from: "sender",
-    content: "hello",
-    channelId: "demo-chat",
-    isGroup: false,
-    ...fields,
-  };
-  const { context, event } = toPluginInboundClaimPair(canonical);
-  const received = toPluginMessageReceivedEvent(canonical);
-  for (const output of [toPluginMessageContext(canonical), context, event, received]) {
-    const entries = Object.entries(output).filter(([key]) => key.startsWith("replyTo"));
-    expect(entries).toEqual([]);
-  }
-  for (const metadata of [event.metadata, received.metadata]) {
-    expect(metadata).toMatchObject(fields);
-    expect(Object.keys(metadata ?? {}).filter((key) => key.startsWith("replyTo"))).toEqual(
-      Object.keys(fields),
+it.each([true, false])(
+  "projects reply fields without leaking undefined keys (present=%s)",
+  (present) => {
+    const canonical = makeCanonicalInbound(
+      present
+        ? {
+            ReplyToId: "discord-message-42",
+            ReplyToIdFull: "discord:channel-1:discord-message-42",
+            ReplyToBody: "quoted Discord reply body",
+            ReplyToSender: "Ada",
+            ReplyToIsQuote: true,
+          }
+        : {},
     );
-  }
-});
+    const fields = {
+      replyToId: present ? "discord-message-42" : undefined,
+      replyToIdFull: present ? "discord:channel-1:discord-message-42" : undefined,
+      replyToBody: present ? "quoted Discord reply body" : undefined,
+      replyToSender: present ? "Ada" : undefined,
+      replyToIsQuote: present ? true : undefined,
+    };
+    const { context, event } = toPluginInboundClaimPair(canonical);
+    const received = toPluginMessageReceivedEvent(canonical);
+    expect(canonical).toMatchObject(fields);
+    for (const output of [toPluginMessageContext(canonical), context, event, received]) {
+      expect(
+        Object.fromEntries(Object.entries(output).filter(([key]) => key.startsWith("replyTo"))),
+      ).toEqual(present ? fields : {});
+    }
+    for (const metadata of [event.metadata, received.metadata]) {
+      expect(metadata).toMatchObject(fields);
+      expect(Object.keys(metadata ?? {}).filter((key) => key.startsWith("replyTo"))).toEqual(
+        Object.keys(fields),
+      );
+    }
+  },
+);
 
 it("falls back to raw body when command body is blank", () => {
   const canonical = makeCanonicalInbound({
