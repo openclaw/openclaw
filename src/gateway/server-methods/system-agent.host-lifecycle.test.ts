@@ -2,6 +2,7 @@
 import "./system-agent.mocks.test-support.js";
 import fs from "node:fs";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { createDeferred, awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
@@ -21,9 +22,12 @@ import { readLastSystemAgentAuditEntry } from "../../system-agent/system-agent.t
 import { createTestApprovalManager } from "../exec-approval-manager.test-support.js";
 import { gatewayRequest } from "../request-frame.test-support.js";
 import { handleGatewayRequest } from "../server-methods.js";
+import type { GatewayHostLifecycle } from "../server-public.js";
 import type { WorkerSessionTurnClaim } from "../worker-environments/placement-record.js";
+import { runSystemAgentGatewayTask } from "./system-agent-execution.js";
 import { systemAgentHandlers, type SystemAgentChatSession } from "./system-agent.js";
 import {
+  callChat,
   defaultClient,
   makeContext,
   makeRespond,
@@ -31,6 +35,7 @@ import {
   transcriptStoreMocks,
   useSystemAgentGatewayTestFixture,
   verifiedConfig,
+  type RespondCall,
 } from "./system-agent.test-support.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
@@ -43,9 +48,21 @@ const {
   seededSession,
 } = useSystemAgentGatewayTestFixture();
 
-it.for(["none", "run", "tool", "gateway", "worker", "session"] as const)(
-  "settles Full Access stop through host acceptance (loss=%s)",
-  async (loss, testContext) => {
+it.for([
+  { action: "restart", fullPermission: false, loss: "none" },
+  { action: "stop", fullPermission: false, loss: "none" },
+  { action: "stop", fullPermission: true, loss: "none" },
+  { action: "stop", fullPermission: false, loss: "run" },
+  ...(["run", "tool", "gateway", "worker", "session"] as const).map((loss) => ({
+    action: "stop" as const,
+    fullPermission: true,
+    loss,
+  })),
+] as const)(
+  "settles delegated $action through host acceptance (Full Access=$fullPermission, loss=$loss)",
+  async ({ action, fullPermission, loss }, testContext) => {
+    const approvalRequested = createDeferred();
+    const sameOwnerHandled = createDeferred();
     const preparationStarted = createDeferred();
     const releasePreparation = createDeferred();
     const auditStarted = createDeferred();
@@ -77,6 +94,19 @@ it.for(["none", "run", "tool", "gateway", "worker", "session"] as const)(
       processOwner: { ownsProcessLifecycle: true, supervisor: null },
       acceptStop,
     });
+    const gatewayHostLifecycle: GatewayHostLifecycle =
+      action === "stop"
+        ? host.capability
+        : {
+            async request(_action, assertCaller) {
+              assertCaller();
+              preparationStarted.resolve();
+              await releasePreparation.promise;
+              assertCaller();
+              return { ok: true, value: { outcome: "scheduled" } };
+            },
+          };
+    const requestLifecycle = vi.spyOn(gatewayHostLifecycle, "request");
     const appendAudit = systemAgentAudit.appendSystemAgentAuditEntry;
     vi.spyOn(systemAgentAudit, "appendSystemAgentAuditEntry").mockImplementation(async (entry) => {
       auditStarted.resolve();
@@ -88,10 +118,20 @@ it.for(["none", "run", "tool", "gateway", "worker", "session"] as const)(
       operatorApprovalOnly: true,
       surface: "gateway",
       verifiedInference: requireVerifiedInferenceFixture(),
-      deps: { gatewayHostLifecycle: host.capability },
+      deps: { gatewayHostLifecycle },
     });
-    engine.propose({ kind: "gateway-stop" });
-    vi.spyOn(engine, "handle").mockResolvedValue({ text: "Approval pending.", action: "none" });
+    engine.propose({ kind: action === "stop" ? "gateway-stop" : "gateway-restart" });
+    const proposalHash = expectDefined(
+      engine.getPendingOperatorProposal(),
+      "lifecycle proposal",
+    ).hash;
+    const handle = vi.spyOn(engine, "handle").mockImplementation(async (message) => {
+      if (message === "yes") {
+        sameOwnerHandled.resolve();
+      }
+      return { text: "Approval pending.", action: "none" };
+    });
+    const resolveOperatorApproval = vi.spyOn(engine, "resolveOperatorApproval");
     const delegatedSession = seededSession({
       engine,
       ownerKey: JSON.stringify(["main", "agent:main:main"]),
@@ -104,10 +144,16 @@ it.for(["none", "run", "tool", "gateway", "worker", "session"] as const)(
       validateAgentRuntimeDelegatedAuthority: (authority) =>
         validateAgentRunDelegatedAuthority(authority) && workerActive,
     });
-    const operationalRunInstance = createOperationalRunInstanceRef("hosted-stop-run");
+    const operationalRunInstance = createOperationalRunInstanceRef(
+      "delegated-gateway-lifecycle-run",
+    );
     const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
     const controller = new AbortController();
-    const broadcast = vi.fn();
+    const broadcast = vi.fn((event: string) => {
+      if (event === "openclaw.approval.requested") {
+        approvalRequested.resolve();
+      }
+    });
     const context = {
       ...makeContext(sessions),
       systemAgentApprovalManager: manager,
@@ -128,7 +174,7 @@ it.for(["none", "run", "tool", "gateway", "worker", "session"] as const)(
       ...delegation,
       operationalRunInstance,
       approvalAuthority: authority,
-      fullPermission: true,
+      fullPermission,
       gatewayContextResolver: () => liveContext,
       approvalSignals: [controller.signal],
       ...(loss === "worker" ? { workerTurnClaim } : {}),
@@ -141,7 +187,7 @@ it.for(["none", "run", "tool", "gateway", "worker", "session"] as const)(
       handleGatewayRequest({
         req: gatewayRequest("delegated-gateway-lifecycle", "openclaw.chat", {
           sessionId: "delegate-1",
-          message: "stop Gateway.",
+          message: `${action} Gateway.`,
           context: { page: "channels" },
           delegation,
         }),
@@ -159,21 +205,66 @@ it.for(["none", "run", "tool", "gateway", "worker", "session"] as const)(
         extraHandlers: { "openclaw.chat": systemAgentHandlers["openclaw.chat"]! },
       }),
     );
-    try {
-      await awaitGateBeforeSettlement(
-        preparationStarted.promise,
-        pendingChat,
-        "Delegated lifecycle replied before host preparation",
-      );
+    const beforeReply = (gate: Promise<unknown>, stage: string) =>
+      awaitGateBeforeSettlement(gate, pendingChat, `Delegated lifecycle replied before ${stage}`);
+    const expectPending = (activeCount: number, roots?: number) => {
       expect(requestResponses.calls).toHaveLength(0);
-      expect(getActiveGatewayRootWorkCount()).toBeGreaterThan(0);
-      expect(systemAgentLane()).toMatchObject({ activeCount: 1, queuedCount: 0 });
+      if (roots === undefined) {
+        expect(getActiveGatewayRootWorkCount()).toBeGreaterThan(0);
+      } else {
+        expect(getActiveGatewayRootWorkCount()).toBe(roots);
+      }
+      expect(systemAgentLane()).toMatchObject({ activeCount, queuedCount: 0 });
+    };
+    let sameOwnerChat: Promise<RespondCall> | undefined;
+    try {
+      if (!fullPermission) {
+        await beforeReply(approvalRequested.promise, "approval publication");
+        await runSystemAgentGatewayTask(async () => undefined);
+        const pendingRecords = await manager.listPendingRecords();
+        expect(pendingRecords).toHaveLength(1);
+        expectPending(0, 1);
+        const proposalId = expectDefined(pendingRecords[0], "pending approval").id;
+        const snapshot = await manager.getSnapshot(proposalId);
+        expect(snapshot).toMatchObject({
+          request: { proposalHash, ...delegation },
+        });
+        expect(snapshot?.decision).toBeUndefined();
+        expect(broadcast).toHaveBeenCalledWith(
+          "openclaw.approval.requested",
+          expect.objectContaining({ id: proposalId }),
+          { dropIfSlow: true },
+        );
+        expect(resolveOperatorApproval).not.toHaveBeenCalled();
+        expect(handle).toHaveBeenNthCalledWith(1, `${action} Gateway.`);
+        if (loss === "none") {
+          sameOwnerChat = withGatewayToolCallerIdentity(identity, () =>
+            callChat(context, {
+              sessionId: "delegate-1",
+              message: "yes",
+              delegation,
+            }),
+          );
+          await awaitGateBeforeSettlement(
+            sameOwnerHandled.promise,
+            sameOwnerChat,
+            "Same-owner chat replied before engine handling",
+          );
+          await runSystemAgentGatewayTask(async () => undefined);
+          expect(handle).toHaveBeenCalledTimes(2);
+        }
+        expect(await manager.resolve(proposalId, "allow-once", "operator-ui")).toBe(true);
+      }
+      await beforeReply(preparationStarted.promise, "host preparation");
+      expectPending(1);
       expect(delegatedSession.pendingApproval).toBeUndefined();
       expect(acceptStop).not.toHaveBeenCalled();
       expect(nativeEffect).not.toHaveBeenCalled();
       expect(validateAgentRunDelegatedAuthority(authority)).toBe(true);
-      expect(await manager.listPendingRecords()).toEqual([]);
-      expect(broadcast).not.toHaveBeenCalled();
+      if (fullPermission) {
+        expect(await manager.listPendingRecords()).toEqual([]);
+        expect(broadcast).not.toHaveBeenCalled();
+      }
       if (loss === "run") {
         expect(releaseAgentRunDelegatedAuthority(authority)).toBe(true);
       } else if (loss === "tool") {
@@ -186,9 +277,16 @@ it.for(["none", "run", "tool", "gateway", "worker", "session"] as const)(
         sessions.set("delegate-1", { ...delegatedSession });
       }
       releasePreparation.resolve();
+      expect(resolveOperatorApproval).toHaveBeenCalledWith(
+        "allow-once",
+        proposalHash,
+        expect.any(Function),
+        undefined,
+      );
+      expect(requestLifecycle).toHaveBeenCalledExactlyOnceWith(action, expect.any(Function));
       if (loss === "none") {
         await auditStarted.promise;
-        expect(acceptStop).toHaveBeenCalledOnce();
+        expect(acceptStop).toHaveBeenCalledTimes(action === "stop" ? 1 : 0);
         expect(nativeEffect).not.toHaveBeenCalled();
         expect(requestResponses.calls).toHaveLength(0);
         expect(getActiveGatewayRootWorkCount()).toBeGreaterThan(0);
@@ -198,9 +296,10 @@ it.for(["none", "run", "tool", "gateway", "worker", "session"] as const)(
       await pendingChat;
       const expectedReply =
         loss === "none"
-          ? "[openclaw] done: gateway.stop"
+          ? `[openclaw] done: gateway.${action}`
           : "system-agent approval authority is no longer active";
       expect(requestResponses.calls).toHaveLength(1);
+      expect(rootsAtResponse).toEqual([expect.any(Number)]);
       expect(rootsAtResponse[0]).toBeGreaterThan(0);
       const expectedTurn = expect.objectContaining({
         role: "assistant",
@@ -211,6 +310,9 @@ it.for(["none", "run", "tool", "gateway", "worker", "session"] as const)(
         ok: true,
         payload: { reply: expect.stringContaining(expectedReply) },
       });
+      if (sameOwnerChat) {
+        expect((await sameOwnerChat).payload).toEqual(requestResponses.calls[0]?.payload);
+      }
       expect(systemAgentLane()).toMatchObject({ activeCount: 0, queuedCount: 0 });
       expect(getActiveGatewayRootWorkCount()).toBe(0);
       expect(appendHistory).toHaveBeenCalledWith(expectedTurn);
@@ -224,14 +326,16 @@ it.for(["none", "run", "tool", "gateway", "worker", "session"] as const)(
         expect(nativeEffect).not.toHaveBeenCalled();
       } else {
         expect(readLastSystemAgentAuditEntry()).toMatchObject({
-          operation: "gateway.stop",
-          summary: "Scheduled Gateway stop",
+          operation: `gateway.${action}`,
+          summary: `Scheduled Gateway ${action}`,
         });
-        // The accepted intent survives its caller; run-loop tests own drain/close ordering.
-        controller.abort();
-        expect(releaseAgentRunDelegatedAuthority(authority)).toBe(true);
-        await expect(host.finishStop()).resolves.toEqual({ outcome: "accepted" });
-        expect(nativeEffect).toHaveBeenCalledOnce();
+        if (action === "stop") {
+          // The accepted intent survives its caller; run-loop tests own drain/close ordering.
+          controller.abort();
+          expect(releaseAgentRunDelegatedAuthority(authority)).toBe(true);
+          await expect(host.finishStop()).resolves.toEqual({ outcome: "accepted" });
+          expect(nativeEffect).toHaveBeenCalledOnce();
+        }
       }
     } finally {
       releasePreparation.resolve();
@@ -240,7 +344,7 @@ it.for(["none", "run", "tool", "gateway", "worker", "session"] as const)(
       for (const record of await manager.listPendingRecords()) {
         await manager.expire(record.id);
       }
-      await Promise.allSettled([pendingChat]);
+      await Promise.allSettled([pendingChat, sameOwnerChat]);
       await host.retire();
       await engine.dispose();
     }

@@ -31,7 +31,6 @@ import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import * as mcpGrants from "../mcp-grant-store.js";
 import { json, prepareAdmission, request } from "../mcp-http-request.test-support.js";
 import { getActiveMcpLoopbackRuntime } from "../mcp-http.loopback-runtime.js";
-import type { McpToolResultPayload } from "../mcp-http.test-support.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { createRequestGatewayMethodRegistry } from "../server-methods.js";
 import type { GatewayUiCommandTarget } from "../ui-command-target.types.js";
@@ -119,7 +118,7 @@ export async function inRun<T>(
     const { operationalRunInstance } = admittedRun;
     const authority = expectDefined(
       runContext.getAdmittedRunDelegatedAuthority(admittedRun),
-      "run",
+      "admitted run",
     );
     registerAgentRunContext(runId, { agentId: "main", sessionKey: SESSION, sessionId: SESSION_ID });
     const caller = {
@@ -212,13 +211,11 @@ export async function createCreatorTransportTools(params: {
   const workspaceDir = params.workspaceDir ?? stateDir;
   const { runId } = admitted.operationalRunInstance;
   const toolsAllow = expectDefined(config.tools?.allow, "fixture tool allowlist");
-  const agent = {
-    agentId: "main",
-    agentAccountId: "default",
-    sessionKey: SESSION,
-    sessionId: SESSION_ID,
-  };
-  const toolContext = { ...agent, runId, workspaceDir, senderIsOwner };
+  const session = { sessionKey: SESSION, sessionId: SESSION_ID };
+  const toolContext = { ...session, runId, workspaceDir, agentAccountId: "default", senderIsOwner };
+  const expectedTools = expect.arrayContaining(
+    toolsAllow.map((name) => expect.objectContaining({ name })),
+  );
   let sequence = 0;
   if (transport === "cli") {
     const runtime = expectDefined(getActiveMcpLoopbackRuntime(), "MCP runtime");
@@ -264,7 +261,14 @@ export async function createCreatorTransportTools(params: {
           signal: AbortSignal.timeout(15_000),
         },
       );
-      const message = (await json(response)) as McpToolResultPayload & { error?: unknown };
+      const message = (await json(response)) as {
+        error?: unknown;
+        result?: {
+          tools?: Array<{ name: string }>;
+          isError?: boolean;
+          content?: Array<{ text?: string }>;
+        };
+      };
       expect(message.error).toBeUndefined();
       if (message.result?.isError) {
         throw new Error(message.result.content?.map((item) => item.text).join("\n"));
@@ -273,7 +277,7 @@ export async function createCreatorTransportTools(params: {
     };
     try {
       expect(mcpGrants.activateMcpLoopbackClientGrantCapture(mcpCapture)).not.toBe(false);
-      await rpc("tools/list");
+      expect((await rpc("tools/list"))?.tools).toEqual(expectedTools);
       return {
         invoke: (name, args) => rpc("tools/call", { name, arguments: args }),
         mcpCapture,
@@ -284,28 +288,32 @@ export async function createCreatorTransportTools(params: {
     }
   }
 
-  const preparedIdentity = expectDefined(
+  const callerIdentity = expectDefined(
     await withPreparedEmbeddedGatewayTools(
       {
         cronCreatorAuthorityCapability: creator,
-        ...agent,
+        agentAccountId: "default",
         admittedRunContext: admitted,
+        agentId: "main",
+        ...session,
         agentHarnessId: "openclaw",
         messageChannel: params.turnSourceChannel,
       },
-      async () => gatewayCaller.getGatewayToolCallerIdentity(),
+      async () => {
+        const identity = gatewayCaller.getGatewayToolCallerIdentity();
+        return identity
+          ? { ...identity, gatewayUiCommandTarget: params.gatewayUiCommandTarget }
+          : undefined;
+      },
     ),
     "embedded Gateway caller",
   );
-  const callerIdentity = {
-    ...preparedIdentity,
-    gatewayUiCommandTarget: params.gatewayUiCommandTarget,
-  };
   const creatorTools: cronTools.CronCreatorToolAllowlistEntry[] = [];
   const creatorCapture: cronTools.CronToolsAllowCaptureRef = {};
   const tools = await gatewayCaller.withGatewayToolCallerIdentity(callerIdentity, () =>
     createOpenClawCodingTools({
       config,
+      agentId: "main",
       ...toolContext,
       forceRestartSafeTools: params.forceRestartSafeTools,
       sessionPermissionPolicy: params.sessionPermissionPolicy,
@@ -327,6 +335,7 @@ export async function createCreatorTransportTools(params: {
     tools,
     getPluginToolMeta,
   );
+  expect(tools).toEqual(expectedTools);
   if (toolsAllow.includes("exec")) {
     expect(creatorTools).toContainEqual({ name: "exec", execOrigin: "openclaw" });
   }
@@ -334,7 +343,7 @@ export async function createCreatorTransportTools(params: {
     invoke: (name, args) => {
       const tool = expectDefined(
         tools.find((entry) => entry.name === name),
-        name,
+        `embedded ${name} tool`,
       );
       return gatewayCaller.withGatewayToolCallerIdentity(callerIdentity, () =>
         tool.execute(`creator-${++sequence}`, args),

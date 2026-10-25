@@ -28,9 +28,6 @@ const process = (instanceId = "first"): SessionProcessSummary => ({
 function page(row = process()): SessionsProcessesListResult {
   return { sessionId: "parent-session", processes: [row], truncated: false };
 }
-function workerUnavailableError() {
-  return new GatewayProtocolRequestError({ code: "UNAVAILABLE", message: "Worker reconnecting" });
-}
 function fixture(read: (method: string, params: unknown) => unknown) {
   const request = vi.fn(read);
   const connection = createGatewayHarness(createTestGatewayClient(request));
@@ -93,10 +90,33 @@ describe("process panel observation ownership", () => {
     f.open(key, false);
     changed();
     await f.advance(120_000, 3);
+  });
+
+  it("shares a live observation across visible panels and releases it with the last panel", async () => {
+    const first = createDeferred<SessionsProcessesListResult>();
+    const f = fixture(() => first.promise);
+    f.open();
+    const second = f.addPanel(key);
+    expect(f.request).toHaveBeenCalledTimes(1);
+    first.resolve(page());
+    await f.data.refresh();
+    expect(second.snapshot.rows[0]?.tail).toBe("Compiling");
+    const settled = f.addPanel(key);
+    expect(settled.snapshot.rows[0]?.tail).toBe("Compiling");
+    expect(f.request).toHaveBeenCalledTimes(1);
+    settled.dispose();
+    await f.advance(60_000, 2);
+    expect(f.request.mock.calls.every(([method]) => method === "sessions.processes.list")).toBe(
+      true,
+    );
+    f.open(key, false);
+    await f.advance(60_000, 3);
+    second.dispose();
+    await f.advance(60_000, 3);
     expect(f.data.snapshot.rows).toEqual([]);
     await f.load();
     expect(f.request).toHaveBeenCalledTimes(4);
-    expect(f.data.snapshot.rows[0]?.tail).toBe("Build complete");
+    expect(f.data.snapshot.rows[0]?.tail).toBe("Compiling");
   });
 
   it("retires shared output while the document is hidden and catches up once on return", async () => {
@@ -175,7 +195,13 @@ describe("process panel observation ownership", () => {
     const second = f.addPanel(key);
     await second.stop(second.snapshot.rows[0]!);
     expect(f.stopCalls()).toHaveLength(1);
-    expect(f.stopCalls()[0]?.[1]).toMatchObject({ instanceId: "replacement" });
+    expect(f.request).toHaveBeenCalledWith("sessions.processes.stop", {
+      key,
+      agentId: "main",
+      sessionId: "parent-session",
+      processId: "build",
+      instanceId: "replacement",
+    });
     expect(f.data.snapshot.stopping.has("replacement")).toBe(true);
     current = { ...current, status: "killed", endedAt: 2, canStop: false };
     await f.data.refresh();
@@ -190,7 +216,10 @@ describe("process panel observation ownership", () => {
       let unavailable = false;
       const f = fixture(() => {
         if (unavailable) {
-          throw workerUnavailableError();
+          throw new GatewayProtocolRequestError({
+            code: "UNAVAILABLE",
+            message: "Worker reconnecting",
+          });
         }
         return result;
       });
@@ -249,7 +278,10 @@ describe("process panel observation ownership", () => {
       const f = fixture((method) => {
         if (method === "sessions.processes.stop") {
           if (unavailable) {
-            throw workerUnavailableError();
+            throw new GatewayProtocolRequestError({
+              code: "UNAVAILABLE",
+              message: "Worker reconnecting",
+            });
           }
           return { requested: false };
         }
@@ -264,12 +296,10 @@ describe("process panel observation ownership", () => {
     },
   );
 
-  it.each(["read", "stop", "both"] as const)(
-    "reconciles %s access loss without repeating Stop",
-    async (revoked) => {
-      const readDenied = revoked !== "stop";
+  it.each([false, true])(
+    "reconciles read access after a rejected Stop without repeating it (read denied: %s)",
+    async (readDenied) => {
       let stopped = false;
-      let denied = false;
       const f = fixture((method) => {
         if (method === "sessions.processes.stop") {
           stopped = true;
@@ -278,39 +308,49 @@ describe("process panel observation ownership", () => {
             message: "Stop access changed",
           });
         }
-        if (denied || (stopped && readDenied)) {
+        if (stopped && readDenied) {
           throw new GatewayProtocolRequestError({
             code: "FORBIDDEN",
-            message: "Access revoked",
+            message: "Read access changed",
           });
         }
         return page({ ...process(), canStop: !stopped });
       });
       await f.load();
       const previous = f.data.snapshot.rows[0]!;
-      if (revoked === "read") {
-        denied = true;
-        f.connection.publishEvent("sessions.changed", { reason: "sharing" });
-        await vi.advanceTimersByTimeAsync(0);
-      } else {
-        await f.data.stop(previous);
-      }
+      await f.data.stop(previous);
       expect(f.data.snapshot.rows).toEqual(readDenied ? [] : [{ ...process(), canStop: false }]);
       await f.data.stop(previous);
-      expect(f.stopCalls()).toHaveLength(revoked === "read" ? 0 : 1);
-      if (revoked === "read") {
-        expect(f.data.snapshot.error).toContain("Access revoked");
-        expect(f.data.snapshot.hasResult).toBe(false);
-        const reads = () =>
-          f.request.mock.calls.filter(([method]) => method === "sessions.processes.list").length;
-        const count = reads();
-        await vi.advanceTimersByTimeAsync(15_000);
-        expect(reads()).toBe(count);
-        denied = false;
-        f.connection.publishEvent("sessions.changed", { reason: "sharing" });
-        await vi.advanceTimersByTimeAsync(0);
-        expect(f.data.snapshot.rows).toEqual([process()]);
-      }
+      expect(f.stopCalls()).toHaveLength(1);
     },
   );
+
+  it("clears private output on access loss and recovers after a sharing change", async () => {
+    let denied = false;
+    const f = fixture(() => {
+      if (denied) {
+        throw new GatewayProtocolRequestError({ code: "FORBIDDEN", message: "Access revoked" });
+      }
+      return page();
+    });
+    await f.load();
+    const previous = f.data.snapshot.rows[0]!;
+    denied = true;
+    f.connection.publishEvent("sessions.changed", { reason: "sharing" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.data.snapshot.rows).toEqual([]);
+    expect(f.data.snapshot.error).toContain("Access revoked");
+    const processReads = () =>
+      f.request.mock.calls.filter(([method]) => method === "sessions.processes.list").length;
+    const count = processReads();
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(processReads()).toBe(count);
+    expect(f.data.snapshot.hasResult).toBe(false);
+    await f.data.stop(previous);
+    expect(f.stopCalls()).toEqual([]);
+    denied = false;
+    f.connection.publishEvent("sessions.changed", { reason: "sharing" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.data.snapshot.rows).toEqual([process()]);
+  });
 });

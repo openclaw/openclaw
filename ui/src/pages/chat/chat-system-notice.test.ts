@@ -1,10 +1,10 @@
 // @vitest-environment node
-import { afterEach, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type { ChatPendingInputsPage } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
-import type { ChatItem } from "../../lib/chat/chat-types.ts";
+import { coalesceAgentRunFrames } from "./chat-agent-run-grouping.ts";
 import { projectChatSystemNotice } from "./chat-system-notice.ts";
-import { buildItems } from "./chat-thread.test-support.ts";
-import { resetChatThreadState } from "./chat-thread.ts";
+import { createProps } from "./chat-thread.test-support.ts";
+import { buildCachedChatItems, resetChatThreadState } from "./chat-thread.ts";
 import { chatItemStartsDisplayTurn, chatItemStartsUserTurn } from "./chat-turn-boundary.ts";
 
 const clients = [{ id: "cli", mode: "cli", displayName: "Release helper" }];
@@ -14,16 +14,6 @@ const baseMessage = {
   timestamp: 1000,
   __openclaw: { id: "input-1", seq: 2, idempotencyKey: "run:user", transport: { clients } },
 };
-const systemMessage = (sourceTool?: string, content = baseMessage.content) => ({
-  ...baseMessage,
-  content,
-  provenance: { kind: "internal_system", sourceTool },
-});
-const messageItem = <T extends object>(message: T) => ({
-  kind: "message" as const,
-  key: "input-1",
-  message,
-});
 
 function pending(
   message: object,
@@ -42,227 +32,337 @@ function pending(
 
 function render(
   messages: unknown[],
-  pendingInputs: ChatPendingInputsPage["items"] = [],
+  pendingInputs: ChatPendingInputsPage["items"],
   searchQuery = "",
 ) {
-  return buildItems({
-    paneId: "notices",
-    messages,
-    pendingInputs,
-    searchOpen: Boolean(searchQuery),
-    searchQuery,
-  });
+  return buildCachedChatItems(
+    createProps({
+      paneId: "notices",
+      messages,
+      pendingInputs,
+      searchOpen: Boolean(searchQuery),
+      searchQuery,
+    }),
+  );
 }
 
 afterEach(() => resetChatThreadState());
 
-const before = { role: "user", content: "Review the patch.", timestamp: 999 };
-const after = {
-  role: "assistant",
-  content: "The rollback path is safe.",
-  timestamp: 1001,
-  __openclaw: { runId: "run" },
-};
-const group = (message: { role: string }) => ({
-  kind: "group",
-  role: message.role,
-  messages: [{ message }],
-});
-function expectMidTurn(notice: ChatItem) {
-  expect(chatItemStartsUserTurn(notice)).toBe(false);
-  expect(chatItemStartsDisplayTurn(notice)).toBe(false);
-}
-
-it.each([
-  ["main_session_restart_recovery", "System · restart recovery", "", false],
-  [
-    "cron_failure_repair",
-    "System · automation recovery",
-    "An automation failed — asked the agent to investigate and continue if needed.",
-    false,
-  ],
-  ["restart-sentinel", "System · gateway restarted", "Gateway restarted.", false],
-  ["cli_harness_context", "System · injected context", "# Auto Review", true],
-  ["claude_cli_task_notification", "System · background task", "<task-notification/>", true],
-  ...[undefined, " restart-sentinel "].map(
-    (sourceTool) => [sourceTool, "System", "Keep the raw fallback copy.", false] as const,
-  ),
-] as const)(
-  "projects %s presentation without exposing internal payloads",
-  (sourceTool, label, text, midTurn) => {
-    const message = systemMessage(
-      sourceTool,
-      sourceTool === "main_session_restart_recovery"
-        ? baseMessage.content
-        : sourceTool === "cron_failure_repair"
-          ? "Private scheduler payload"
-          : (midTurn ? "" : "[System] ") + text,
-    );
-    const [notice] = projectChatSystemNotice(messageItem(message));
-    expect(notice).toMatchObject({ kind: "notice", icon: "cpu", label, text, timestamp: 1000 });
-    expect(notice?.kind === "notice" && [notice.startsTurn, notice.collapsedBody]).toEqual(
-      midTurn ? [undefined, true] : [true, undefined],
-    );
-  },
-);
-
-it.each([false, true])(
-  "preserves notice promotion, search and boundary identity (imported=%s)",
-  (imported) => {
-    const message = {
-      ...systemMessage(imported ? "cli_harness_context" : "restart-sentinel", "[System] Context"),
-      __openclaw: imported
-        ? {
-            id: "input-1",
-            importedFrom: "claude-cli",
-            cliSessionId: "cli-1",
-            externalId: "input-1",
-            transport: { clients },
-          }
-        : baseMessage["__openclaw"],
-    };
-    const inputs = pending(message);
-    const stages = [
-      [before, after],
-      [before, message, after],
-    ];
-    // Search evicts the pending notice: check both promotion stages first.
-    for (const [stage, messages] of stages.entries()) {
-      const items = render(messages, inputs);
-      const notice = items[stage === 1 ? 1 : 2];
-      expect(items).toMatchObject(
-        stage === 1
-          ? [group(before), { kind: "notice", text: "Context" }, group(after)]
-          : [group(before), group(after), { kind: "notice", text: "Context" }],
-      );
-      expect(notice?.kind === "notice" && notice.boundaryId).toBe(
-        stage === 1 && !imported ? "send:run" : undefined,
-      );
-    }
-    for (const messages of stages) {
-      expect(render(messages, inputs, "rollback")).toMatchObject([group(after)]);
-    }
-  },
-);
-
-it.each(["queued", "interrupted", "cancelled"] as const)(
-  "projects %s restart recovery custody",
-  (state) => {
-    const message = systemMessage("main_session_restart_recovery");
-    const text =
-      state === "queued"
-        ? ""
-        : `The Gateway restarted. Automatic recovery was ${state} before the agent could resume. Send a message to continue.`;
-    expect(render([], pending(message, state))).toMatchObject([
-      { kind: "notice", label: "System · restart recovery", text, startsTurn: true },
-    ]);
-    expect(render([message], pending(message, state))).toMatchObject([
-      { kind: "notice", label: "System · restart recovery", text: "", boundaryId: "send:run" },
-    ]);
-  },
-);
-
-it.each([
-  ["cli_harness_context", undefined, undefined],
-  ["claude_cli_task_notification", undefined, undefined],
-  ["plugin:p", { pluginId: "p", pluginName: "Plugin" }, "Plugin"],
-  ["plugin:p", { pluginId: "p" }, "p"],
-  ["plugin:p", { pluginId: "p", pluginName: " " }, "p"],
-  ["plugin:p", undefined, "p"],
-] as const)(
-  "keeps %s between tool groups with source attribution and no new turn",
-  (sourceTool, pluginSteering, name) => {
-    const call = (id: string) => ({
-      role: "assistant",
-      content: [{ type: "toolCall", id, name: "read", arguments: { path: `${id}.ts` } }],
-      timestamp: 999,
-      __openclaw: { runId: "same-run" },
-    });
-    const steering = {
-      ...systemMessage(sourceTool, "Check rollback."),
-      __openclaw: { ...baseMessage["__openclaw"], pluginSteering },
-    };
-    const items = render([call("before"), steering, call("after")]);
-    expect(items).toMatchObject([
-      { kind: "group", role: "tool" },
-      { kind: "notice", collapsedBody: true },
-      { kind: "group", role: "tool" },
-    ]);
-    if (name) {
-      expect(items[1]).toMatchObject({
-        label: `${name} guidance`,
-        text: steering.content,
-        timestamp: 1000,
-        showTimestamp: true,
-      });
-      expect(items[1]).not.toHaveProperty("startsTurn");
-    }
-    expectMidTurn(items[1]!);
-  },
-);
-
-it("keeps a user's System prefix and sender attribution through promotion", () => {
-  const inputs = pending(baseMessage);
-  for (const consumed of [false, true]) {
-    expect(render(consumed ? [baseMessage] : [], inputs)).toMatchObject([
-      {
-        kind: "group",
-        role: "user",
-        sourceClients: clients,
-        messages: [{ message: consumed ? baseMessage : inputs[0]?.message }],
-      },
-    ]);
-  }
-});
-it.each([
-  { role: "user", provenance: { kind: "external_user", sourceTool: "plugin:review-helper" } },
-  {
-    role: "assistant",
-    provenance: { kind: "internal_system", sourceTool: "plugin:review-helper" },
-  },
-])("does not treat unrelated plugin-tagged messages as steering: %j", (fields) => {
-  const item = messageItem({
-    ...baseMessage,
-    ...fields,
-    __openclaw: { pluginSteering: { pluginId: "review-helper", pluginName: "Review Helper" } },
-  });
-  expect(projectChatSystemNotice(item)).toEqual([item]);
-});
-const skillMessage = {
-  role: "assistant",
-  content: "💾 Learned: updated `deploy-staging`.",
-  provider: "openclaw",
-  model: "delivery-mirror",
-  timestamp: 2000,
-};
-
-it.each([
-  [{ idempotencyKey: "skill-workshop-notice:review" }, true],
-  [{ __openclaw: { idempotencyKey: "skill-workshop-notice:review" } }, true],
-  [{ idempotencyKey: "ordinary-delivery" }, false],
-  [{ idempotencyKey: "skill-workshop-notice:" }, false],
-  [{ idempotencyKey: "skill-workshop-notice:review", provider: "model-provider" }, false],
-  [{ idempotencyKey: "skill-workshop-notice:review", model: "model-output" }, false],
-  [{ idempotencyKey: "skill-workshop-notice:review", role: "user" }, false],
-])("uses legacy notice provenance, not Learned text: %j", (fields, projected) => {
-  const item = messageItem({ ...skillMessage, ...fields });
-  expect(projectChatSystemNotice(item)).toEqual(
-    projected
-      ? [{ kind: "notice", key: item.key, text: item.message.content, timestamp: 2000 }]
-      : [item],
+describe("system notices through pending-to-history promotion", () => {
+  it.each([
+    ["main_session_restart_recovery", "System · restart recovery", "", false],
+    [
+      "cron_failure_repair",
+      "System · automation recovery",
+      "An automation failed — asked the agent to investigate and continue if needed.",
+      false,
+    ],
+    [
+      "restart-sentinel",
+      "System · gateway restarted",
+      "Gateway restarted during update 2026.8.2 -> 2026.8.3.",
+      false,
+    ],
+    [
+      "cli_harness_context",
+      "System · injected context",
+      "Base directory for this skill: /tmp/skills/autoreview\n\n# Auto Review",
+      true,
+    ],
+    [
+      "claude_cli_task_notification",
+      "System · background task",
+      "<task-notification>\n<status>completed</status>\n</task-notification>",
+      true,
+    ],
+    ...[undefined, " restart-sentinel "].map(
+      (sourceTool) => [sourceTool, "System", "Keep the raw fallback copy.", false] as const,
+    ),
+  ] as const)(
+    "preserves %s presentation, search and turn boundaries",
+    (sourceTool, label, text, midTurn) => {
+      const imported = sourceTool === "cli_harness_context";
+      const message = {
+        ...baseMessage,
+        content:
+          sourceTool === "main_session_restart_recovery"
+            ? baseMessage.content
+            : sourceTool === "cron_failure_repair"
+              ? "Automation repair request from the scheduler.\n<untrusted-text>Private task payload and last error</untrusted-text>"
+              : (midTurn ? "" : "[System] ") + text,
+        provenance: { kind: "internal_system", sourceTool },
+        __openclaw: imported
+          ? {
+              id: "input-1",
+              importedFrom: "claude-cli",
+              cliSessionId: "cli-1",
+              externalId: "input-1",
+              transport: { clients },
+            }
+          : baseMessage["__openclaw"],
+      };
+      if (sourceTool === "main_session_restart_recovery") {
+        expect(render([], pending(message))).toMatchObject([{ kind: "notice", label }]);
+        for (const state of ["interrupted", "cancelled"] as const) {
+          expect(render([], pending(message, state))).toMatchObject([
+            {
+              kind: "notice",
+              label,
+              text: `The Gateway restarted. Automatic recovery was ${state} before the agent could resume. Send a message to continue.`,
+              startsTurn: true,
+            },
+          ]);
+          expect(render([message], pending(message, state))).toMatchObject([
+            {
+              kind: "notice",
+              label,
+              text,
+              boundaryId: "send:run",
+            },
+          ]);
+        }
+      }
+      const inputs = pending(message);
+      const before = { role: "user", content: "before", timestamp: 999 };
+      const after = {
+        role: "assistant",
+        content: "after",
+        timestamp: 1001,
+        __openclaw: { runId: "run" },
+      };
+      const stages = [
+        [before, after],
+        [before, message, after],
+      ];
+      // Promotion must not be separated by search, which evicts the pending notice.
+      for (const [stage, messages] of stages.entries()) {
+        const items = render(messages, inputs);
+        const canonicalOrder = [
+          { kind: "group", role: "user", messages: [{ message: before }] },
+          { kind: "notice", icon: "cpu", label, text, timestamp: 1000 },
+          { kind: "group", role: "assistant", messages: [{ message: after }] },
+        ];
+        expect(items).toMatchObject(
+          stage === 1 ? canonicalOrder : [canonicalOrder[0], canonicalOrder[2], canonicalOrder[1]],
+        );
+        const notice = items.find((item) => item.kind === "notice");
+        if (notice?.kind !== "notice") {
+          throw new Error("Expected one system notice");
+        }
+        expect(notice.startsTurn).toBe(midTurn ? undefined : true);
+        expect(notice.collapsedBody).toBe(midTurn ? true : undefined);
+        const framed = coalesceAgentRunFrames(items);
+        expect(framed).toContain(notice);
+        // A known-run reply frames even before promotion supplies a causal boundary.
+        expect(framed.filter((item) => item.kind === "agent-run-frame")).toMatchObject([
+          { runId: "run", boundaryId: "send:run", parts: [items[stage === 1 ? 2 : 1]] },
+        ]);
+        expect(notice.boundaryId).toBe(stage === 1 && !imported ? "send:run" : undefined);
+      }
+      for (const messages of stages) {
+        expect(render(messages, inputs, "after")).toMatchObject([
+          { kind: "group", role: "assistant", messages: [{ message: after }] },
+        ]);
+      }
+    },
   );
+
+  it.each(["cli_harness_context", "claude_cli_task_notification", "plugin:review-helper"])(
+    "keeps %s between tool groups without starting a turn",
+    (sourceTool) => {
+      const call = (id: string) => ({
+        role: "assistant",
+        content: [{ type: "toolCall", id, name: "read", arguments: { path: `${id}.ts` } }],
+        timestamp: 999,
+        __openclaw: { runId: "same-run" },
+      });
+      const items = render(
+        [
+          call("before"),
+          { ...baseMessage, provenance: { kind: "internal_system", sourceTool } },
+          call("after"),
+        ],
+        [],
+      );
+      expect(items).toMatchObject([
+        { kind: "group", role: "tool" },
+        { kind: "notice", collapsedBody: true },
+        { kind: "group", role: "tool" },
+      ]);
+      const notice = items[1]!;
+      expect(chatItemStartsUserTurn(notice)).toBe(false);
+      expect(chatItemStartsDisplayTurn(notice)).toBe(false);
+    },
+  );
+
+  it("keeps a user's System prefix and sender attribution through promotion", () => {
+    const inputs = pending(baseMessage);
+    for (const consumed of [false, true]) {
+      expect(render(consumed ? [baseMessage] : [], inputs)).toMatchObject([
+        {
+          kind: "group",
+          role: "user",
+          sourceClients: clients,
+          messages: [{ message: consumed ? baseMessage : inputs[0]?.message }],
+        },
+      ]);
+    }
+  });
 });
 
-it("keeps malformed skill review markers as text", () => {
-  const malformed = {
-    ...skillMessage,
+describe("plugin steering notices", () => {
+  it.each([
+    [{ pluginId: "release-helper", pluginName: "Release Helper" }, "Release Helper"],
+    [{ pluginId: "review-helper" }, "review-helper"],
+    [{ pluginId: "review-helper", pluginName: " " }, "review-helper"],
+    [undefined, "review-helper"],
+  ] as const)(
+    "uses plugin attribution without starting an operator turn: %j",
+    (pluginSteering, name) => {
+      const before = { role: "user", content: "Review the patch.", timestamp: 999 };
+      const steering = {
+        ...baseMessage,
+        content: "Check the rollback path before continuing.",
+        provenance: {
+          kind: "internal_system",
+          sourceTool: `plugin:${pluginSteering?.pluginId ?? "review-helper"}`,
+        },
+        __openclaw: { ...baseMessage["__openclaw"], pluginSteering },
+      };
+      const after = {
+        role: "assistant",
+        content: "The rollback path is safe.",
+        timestamp: 1001,
+        __openclaw: { runId: "run" },
+      };
+
+      const items = render([before, steering, after], []);
+      expect(items).toMatchObject([
+        { kind: "group", role: "user", messages: [{ message: before }] },
+        {
+          kind: "notice",
+          label: `${name} guidance`,
+          text: steering.content,
+          timestamp: 1000,
+          collapsedBody: true,
+          showTimestamp: true,
+        },
+        { kind: "group", role: "assistant", messages: [{ message: after }] },
+      ]);
+      const notice = items.find((item) => item.kind === "notice");
+      expect(notice).not.toHaveProperty("startsTurn");
+      if (!notice) {
+        throw new Error("Expected a plugin steering notice");
+      }
+      expect(chatItemStartsUserTurn(notice)).toBe(false);
+      expect(chatItemStartsDisplayTurn(notice)).toBe(false);
+      expect(coalesceAgentRunFrames(items)).toMatchObject([
+        { kind: "group", role: "user" },
+        { kind: "notice", label: `${name} guidance` },
+        { kind: "agent-run-frame", runId: "run", boundaryId: "send:run" },
+      ]);
+      expect(render([before, steering, after], [], "rollback")).toMatchObject([
+        { kind: "notice", text: steering.content },
+        { kind: "group", role: "assistant" },
+      ]);
+    },
+  );
+
+  it.each([
+    { role: "user", provenance: { kind: "external_user", sourceTool: "plugin:review-helper" } },
+    {
+      role: "assistant",
+      provenance: { kind: "internal_system", sourceTool: "plugin:review-helper" },
+    },
+  ])("does not treat unrelated plugin-tagged messages as steering: %j", (fields) => {
+    const item = {
+      kind: "message" as const,
+      key: "not-steering",
+      message: {
+        ...baseMessage,
+        ...fields,
+        __openclaw: { pluginSteering: { pluginId: "review-helper", pluginName: "Review Helper" } },
+      },
+    };
+    expect(projectChatSystemNotice(item)).toEqual([item]);
+  });
+});
+
+describe("skill review notices", () => {
+  const notice = (skills: unknown) => ({
+    role: "assistant",
+    content: [{ type: "text", text: "💾 Learned: updated `deploy-staging`." }],
+    provider: "openclaw",
+    model: "delivery-mirror",
+    timestamp: 2000,
     openclawDeliveryMirror: {
       kind: "skill-workshop-change",
       agentId: "main",
       runId: "skill-workshop-review:r1",
-      skills: [{ name: "deploy-staging", action: "renamed" }],
+      skills,
     },
+    __openclaw: { id: "notice-1", seq: 3 },
+  });
+  const question = { role: "user", content: "deploy it", timestamp: 1000 };
+  const answer = {
+    role: "assistant",
+    content: "Deployed.",
+    timestamp: 1500,
+    __openclaw: { runId: "run" },
   };
-  const items = render([before, malformed]);
-  expect(items).toMatchObject([{ kind: "group", role: "user" }, group(malformed)]);
+
+  it.each([
+    [{ idempotencyKey: "skill-workshop-notice:review" }, true],
+    [{ __openclaw: { idempotencyKey: "skill-workshop-notice:review" } }, true],
+    [{ idempotencyKey: "ordinary-delivery" }, false],
+    [{ idempotencyKey: "skill-workshop-notice:" }, false],
+    [{ idempotencyKey: "skill-workshop-notice:review", provider: "model-provider" }, false],
+    [{ idempotencyKey: "skill-workshop-notice:review", model: "model-output" }, false],
+    [{ idempotencyKey: "skill-workshop-notice:review", role: "user" }, false],
+  ])("uses legacy notice provenance, not Learned text: %j", (fields, projected) => {
+    const item = {
+      kind: "message" as const,
+      key: "legacy-notice",
+      message: {
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        content: "💾 Learned: updated deploy-staging.",
+        timestamp: 2000,
+        ...fields,
+      },
+    };
+    expect(projectChatSystemNotice(item)).toEqual(
+      projected
+        ? [{ kind: "notice", key: item.key, text: item.message.content, timestamp: 2000 }]
+        : [item],
+    );
+  });
+
+  it("renders a marked review notice natively and keeps malformed markers as text", () => {
+    const skills = [{ name: "deploy-staging", action: "updated", summary: "rollback" }];
+    expect(render([question, answer, notice(skills)], [])).toMatchObject([
+      { kind: "group", role: "user" },
+      { kind: "group", role: "assistant", messages: [{ message: answer }] },
+      {
+        kind: "notice",
+        text: "",
+        timestamp: 2000,
+        skillChanges: {
+          kind: "skill-workshop-change",
+          agentId: "main",
+          runId: "skill-workshop-review:r1",
+          skills,
+        },
+      },
+    ]);
+
+    const malformed = notice([{ name: "deploy-staging", action: "renamed" }]);
+    const items = render([question, malformed], []);
+    expect(items.some((item) => item.kind === "notice")).toBe(false);
+    expect(items).toMatchObject([
+      { kind: "group", role: "user" },
+      { kind: "group", role: "assistant", messages: [{ message: malformed }] },
+    ]);
+  });
 });

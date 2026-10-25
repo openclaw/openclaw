@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { listPluginDoctorStateMigrationEntries } from "../plugins/doctor-contract-registry.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -30,7 +31,8 @@ vi.mock("../plugins/plugin-lifecycle-lease.js", async (importOriginal) => {
     withPluginLifecycleLease: ((options, run) =>
       actual.withPluginLifecycleLease(options, async (lease) => {
         const result = await run(lease);
-        // Fail settlement after the callback's mutations committed.
+        // The lease owner validates again after the callback returns. Model a lost
+        // lease at that boundary, after migrations have already committed.
         if (controls.failSettlement) {
           throw createOpenClawStateLeaseLostError(
             {
@@ -38,7 +40,9 @@ vi.mock("../plugins/plugin-lifecycle-lease.js", async (importOriginal) => {
               key: "global",
               leaseLabel: "agent database maintenance lease",
             },
-            new Error("lease expired or ownership lost"),
+            new Error(
+              "state lease heartbeat exited: lease expired or ownership lost (exitCode=0, acquiredAt=1800000000000, lastRenewedAt=1800000020000)",
+            ),
           );
         }
         return result;
@@ -79,6 +83,9 @@ async function repairEnv() {
 }
 const plannedActions = () =>
   controls.entries.map(({ pluginId, migration }) => ({ pluginId, id: migration.id }));
+const skippedNotices = [
+  "Legacy import: legacy SQLite migration not applicable on PostgreSQL; legacy data is migrated before port. Preserve the source.",
+];
 
 afterEach(async () => {
   controls.entries = [];
@@ -88,12 +95,22 @@ afterEach(async () => {
   await tempDirs.cleanup();
 });
 
-it.each(["postgres", "sqlite"] as const)(
-  "gates legacy imports and replay for %s",
-  async (engine) => {
-    const skipped = engine === "postgres";
+it.each([
+  { engine: "postgres", familyEngine: undefined, skipped: true },
+  { engine: "postgres", familyEngine: "sqlite", skipped: false },
+  { engine: "sqlite", familyEngine: "postgres", skipped: true },
+  { engine: "sqlite", familyEngine: undefined, skipped: false },
+] as const)(
+  "uses the effective family for legacy imports and replay: $engine / $familyEngine",
+  async ({ engine, familyEngine, skipped }) => {
     const stateDir = await tempDirs.make("openclaw-doctor-sqlite-only-");
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const config: OpenClawConfig = {
+      database: {
+        engine,
+        ...(familyEngine ? { families: { state: { engine: familyEngine } } } : {}),
+      },
+    };
     let imported = false;
     const detectLegacyState = vi.fn(() => (imported ? null : { preview: ["legacy"] }));
     const migrateLegacyState = vi.fn(() => {
@@ -114,7 +131,7 @@ it.each(["postgres", "sqlite"] as const)(
     ];
     const params = {
       detected: { stateDir, oauthDir: stateDir, doctorOnlyStateMigrations: true },
-      config: { database: { engine } },
+      config,
       env,
       plannedActions: plannedActions(),
     };
@@ -123,14 +140,10 @@ it.each(["postgres", "sqlite"] as const)(
 
     expect(first).toMatchObject({ warnings: [], changes: skipped ? [] : ["imported"] });
     expect(replay).toMatchObject({ warnings: [], changes: [] });
+    expect(detectLegacyState).toHaveBeenCalledTimes(skipped ? 0 : 2);
     expect(migrateLegacyState).toHaveBeenCalledTimes(skipped ? 0 : 1);
-    if (skipped) {
-      expect(detectLegacyState).not.toHaveBeenCalled();
-    }
-    expect(undeclaredDetector).toHaveBeenCalled();
-    expect(first.notices).toEqual(
-      skipped ? [expect.stringContaining("Preserve the source.")] : undefined,
-    );
+    expect(undeclaredDetector).toHaveBeenCalledTimes(2);
+    expect(first.notices).toEqual(skipped ? skippedNotices : undefined);
     expect(replay.notices).toEqual(first.notices);
     expect(replay.completedPluginIds).toEqual(["legacy-owner", "unrestricted-owner"]);
   },
@@ -140,16 +153,26 @@ it("refuses pre-July shared schema before plugin migrations", async () => {
   const root = await tempDirs.make("openclaw-plugin-doctor-shared-schema-");
   const stateDir = path.join(root, ".openclaw");
   const env = { ...process.env, HOME: root, OPENCLAW_STATE_DIR: stateDir };
+  const cfg = {};
   const stateDbPath = path.join(stateDir, "state", "openclaw.sqlite");
   fs.mkdirSync(path.dirname(stateDbPath), { recursive: true });
   {
     using db = new DatabaseSync(stateDbPath);
-    db.exec(`CREATE TABLE agent_databases (
-      agent_id TEXT PRIMARY KEY, path TEXT NOT NULL, schema_version INTEGER NOT NULL,
-      last_seen_at INTEGER NOT NULL, size_bytes INTEGER);
-      INSERT INTO agent_databases VALUES ('main', 'agent.sqlite', 1, 10, 20);`);
+    db.exec(`
+      CREATE TABLE agent_databases (
+        agent_id TEXT PRIMARY KEY,
+        path TEXT NOT NULL,
+        schema_version INTEGER NOT NULL,
+        last_seen_at INTEGER NOT NULL,
+        size_bytes INTEGER
+      );
+      INSERT INTO agent_databases VALUES ('main', 'agent.sqlite', 1, 10, 20);
+    `);
   }
-  const migrateLegacyState = vi.fn(unchanged);
+  const migrateLegacyState = vi.fn(() => ({
+    changes: ["plugin state migrated"],
+    warnings: [],
+  }));
   controls.entries = [
     entry("memory-core", "memory-core-test", {
       detectLegacyState: () => ({ preview: ["plugin state"] }),
@@ -157,10 +180,9 @@ it("refuses pre-July shared schema before plugin migrations", async () => {
     }),
   ];
 
-  const params = { config: {}, env, homedir: () => root };
-  await expect(autoMigrateLegacyPluginDoctorState(params)).rejects.toThrow(
-    "unsupported agent database registry schema",
-  );
+  await expect(
+    autoMigrateLegacyPluginDoctorState({ config: cfg, env, homedir: () => root }),
+  ).rejects.toThrow("unsupported agent database registry schema");
   expect(migrateLegacyState).not.toHaveBeenCalled();
   {
     using preserved = new DatabaseSync(stateDbPath, { readOnly: true });
@@ -176,7 +198,9 @@ it("refuses pre-July shared schema before plugin migrations", async () => {
   }
 
   const result = await autoMigrateLegacyPluginDoctorState({
-    ...params,
+    config: cfg,
+    env,
+    homedir: () => root,
     doctorOnlyStateMigrations: true,
   });
 
@@ -225,7 +249,10 @@ it.each([
   ["later-action", "second action failed"],
   ["later-warning", "refusal"],
   ["detector", "second detector failed"],
-  ["lease-settlement", "lease expired or ownership lost"],
+  [
+    "lease-settlement",
+    "lease expired or ownership lost (exitCode=0, acquiredAt=1800000000000, lastRenewedAt=1800000020000)",
+  ],
 ] as const)(
   "preserves completed mutations and replay truth when failure is %s",
   async (failure, message) => {

@@ -53,6 +53,7 @@ async function configGraph(state: OpenClawTestState) {
 
 async function restore(state: OpenClawTestState, output: string, includeWorkspace = true) {
   const archive = await backup({ output, includeWorkspace });
+  await verify(output);
   const restored = await backupRestoreCommand(runtime, {
     archive: output,
     target: state.path("restored"),
@@ -62,10 +63,13 @@ async function restore(state: OpenClawTestState, output: string, includeWorkspac
   return { archive, restoredPath };
 }
 
-const expectMissing = (file: string) =>
-  expect(fs.stat(file)).rejects.toMatchObject({ code: "ENOENT" });
-const expectText = (file: string, text: string | undefined) =>
-  expect(fs.readFile(file, "utf8")).resolves.toBe(text);
+async function expectMissing(file: string) {
+  await expect(fs.stat(file)).rejects.toMatchObject({ code: "ENOENT" });
+}
+
+async function expectText(file: string, text: string | undefined) {
+  expect(await fs.readFile(file, "utf8")).toBe(text);
+}
 
 async function expectRefused(state: OpenClawTestState) {
   const output = state.path("refused.tar.gz");
@@ -125,13 +129,17 @@ it.each([
         await fs.rename(state.configPath, authoredRoot);
         await fs.symlink(authoredRoot, state.configPath);
       }
+      await fs.writeFile(state.statePath("ordinary.txt"), "ordinary");
       const { archive, restoredPath } = await restore(state, state.path("backup.tar.gz"));
       expect((await prepare(archive.archivePath)).recoveryConfigPath).toBe(
         archivePath(archive.archiveRoot, await fs.realpath(state.configPath)),
       );
+      const entries = await listArchiveEntries(archive.archivePath);
+      expect(new Set(entries).size).toBe(entries.length);
       for (const [source, raw] of files) {
         await expectText(restoredPath(source), raw);
       }
+      await expectText(restoredPath(state.statePath("ordinary.txt")), "ordinary");
       // Ensure parsing uses restored includes, never the originals.
       await fs.rename(
         path.join(path.dirname(state.configPath), "parts"),
@@ -143,8 +151,11 @@ it.each([
       }).readConfigFileSnapshot();
       expect(snapshot).toMatchObject({
         valid: true,
+        issues: [],
         config: { gateway: { mode: "local" } },
       });
+      expect(snapshot.includeProvenance).toBeDefined();
+      expect(archive.skipped.some(({ reason }) => reason === "unresolved")).toBe(false);
     }),
 );
 

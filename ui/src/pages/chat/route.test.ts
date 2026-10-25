@@ -7,6 +7,7 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { createApplicationRouter } from "../../app-routes.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
+import { createChatPageSessions } from "./chat-page-sessions.test-support.ts";
 import { loadChatRoute } from "./route-loader.ts";
 import { loadRoute, routeLocation as locationFor } from "./route-loading.test-support.ts";
 import {
@@ -41,17 +42,37 @@ function contextFor(resolution: SessionsResolveResult = { ok: false }, mainKey =
 }
 
 function coldContext() {
-  const { context, publishGateway } = contextFor();
-  publishGateway({ phase: "connecting", client: null, hello: null });
-  context.agents.state.agentsList = null;
+  type GatewayListener = Parameters<ApplicationContext["gateway"]["subscribe"]>[0];
+  let listener: GatewayListener | null = null;
+  const gateway = {
+    snapshot: {
+      phase: "connecting",
+      client: null,
+      hello: null,
+    } as ApplicationContext["gateway"]["snapshot"],
+    subscribe: (next: GatewayListener) => {
+      listener = next;
+      return () => undefined;
+    },
+  };
+  const context = {
+    basePath: "",
+    gateway,
+    agents: { state: { agentsList: null } },
+    sessions: createChatPageSessions(),
+  } as unknown as ApplicationContext;
   return {
     context,
     connect(this: void, mainKey = "workspace") {
-      publishGateway({
+      gateway.snapshot = {
         phase: "connected",
         client: {},
         hello: { snapshot: { sessionDefaults: { mainKey } } },
-      } as unknown as ApplicationContext["gateway"]["snapshot"]);
+      } as unknown as ApplicationContext["gateway"]["snapshot"];
+      if (!listener) {
+        throw new Error("expected gateway readiness subscription");
+      }
+      listener(gateway.snapshot);
     },
   };
 }
@@ -104,18 +125,11 @@ describe("loadChatRoute", () => {
   );
 
   it.each(["deploy-monitor-12345678", "deploy-monitor"])(
-    "keeps %s bound to its established key through disconnected revalidation",
+    "keeps a disconnected exact revalidation retryable for %s",
     async (reference) => {
       const { context, request, router, scopedContext } = await mountedSession(reference);
       const pending = createDeferredCore<SessionsResolveResult>();
-      request.mockImplementation(async (_method, params) => {
-        if (!isRecord(params)) {
-          throw new Error("Missing resolution parameters");
-        }
-        return isRecord(params.reference) && params.reference.key === sessionKey
-          ? pending.promise
-          : resolvedRow(replacementKey);
-      });
+      request.mockReturnValueOnce(pending.promise);
       const revalidation = router
         .revalidate(scopedContext, "chat")
         .catch((error: unknown) => error);
@@ -126,6 +140,27 @@ describe("loadChatRoute", () => {
       expect(router.getState().matches[0]?.status).toBe("error");
       context.gateway.snapshot.phase = "connected";
       request.mockResolvedValue({ ok: false });
+      await router.revalidate(scopedContext, "chat");
+      expect(router.getState().matches[0]?.data).toMatchObject({ kind: "missing-session" });
+    },
+  );
+
+  it.each(["deploy-monitor-12345678", "deploy-monitor"])(
+    "keeps revalidation bound to the established session when %s is reassigned",
+    async (reference) => {
+      const { request, router, scopedContext } = await mountedSession(reference);
+      expect(router.getState().matches[0]?.data).toMatchObject({ sessionKey });
+      request.mockImplementation(async (_method, params) => {
+        if (!isRecord(params)) {
+          throw new Error("Missing resolution parameters");
+        }
+        return params.reference &&
+          typeof params.reference === "object" &&
+          "key" in params.reference &&
+          params.reference.key === sessionKey
+          ? { ok: false }
+          : resolvedRow(replacementKey);
+      });
       await router.revalidate(scopedContext, "chat");
       expect(router.getState().matches[0]?.data).toMatchObject({ kind: "missing-session" });
       expect(request).toHaveBeenLastCalledWith(
@@ -155,12 +190,16 @@ describe("loadChatRoute", () => {
     expect(list).not.toHaveBeenCalled();
   });
 
-  it("builds working dashboard links for ambiguous prefixes", async () => {
+  it.each(["slug", "prefix"] as const)("builds working links for ambiguous %s", async (kind) => {
+    const slug = kind === "slug";
+    const face = slug ? "chat" : "dashboard";
+    const agents = slug ? ["roboclaw", "research"] : ["main", "work"];
+    const name = slug ? "Default mode with rare surprises" : "Deploy Monitor";
     const rows = ["0aaa-4000-8000-000000000001", "0bbb-4000-8000-000000000002"].map(
       (suffix, index) =>
         row({
-          key: `agent:${index ? "work" : "main"}:dashboard:12345678-${suffix}`,
-          displayName: index ? "Deploy Monitor Two" : "Deploy Monitor",
+          key: `agent:${agents[index]}:${slug ? "thread" : "dashboard"}:12345678-${suffix}`,
+          displayName: !slug && index === 1 ? "Deploy Monitor Two" : name,
         }),
     );
     const { context, request, list } = contextFor({
@@ -173,22 +212,41 @@ describe("loadChatRoute", () => {
     });
     const ambiguous = await loadRoute(
       context,
-      "/dashboard/ignored/deploy-12345678",
-      "?draft=ship&__openclawComposerFocus=1",
-      "dashboard",
+      slug
+        ? "/chat/roboclaw/default-mode-with-rare-surprises"
+        : "/dashboard/ignored/deploy-12345678",
+      slug ? "" : "?draft=ship&__openclawComposerFocus=1",
+      face,
     );
     expect(ambiguous).toMatchObject({
       kind: "ambiguous",
       truncated: false,
+      ...(slug
+        ? {
+            shortId: "default-mode-with-rare-surprises",
+            candidates: [{ agentId: "roboclaw" }, { agentId: "research" }],
+          }
+        : {}),
     });
     if (!("kind" in ambiguous) || ambiguous.kind !== "ambiguous") {
       throw new Error("expected ambiguous route");
     }
-    expect(ambiguous.candidates.map((candidate) => candidate.href)).toEqual([
-      "/dashboard/main/deploy-monitor-123456780a?draft=ship&__openclawComposerFocus=1",
-      "/dashboard/work/deploy-monitor-two-123456780b?draft=ship&__openclawComposerFocus=1",
-    ]);
+    expect(ambiguous.candidates.map((candidate) => candidate.href)).toEqual(
+      slug
+        ? [
+            "/chat/roboclaw/default-mode-with-rare-surprises-123456780a",
+            "/chat/research/default-mode-with-rare-surprises-123456780b",
+          ]
+        : [
+            "/dashboard/main/deploy-monitor-123456780a?draft=ship&__openclawComposerFocus=1",
+            "/dashboard/work/deploy-monitor-two-123456780b?draft=ship&__openclawComposerFocus=1",
+          ],
+    );
+    expect(request).toHaveBeenCalledOnce();
     expect(list).not.toHaveBeenCalled();
+    if (slug) {
+      return;
+    }
     for (const [index, candidate] of ambiguous.candidates.entries()) {
       const expectedRow = rows[index]!;
       request.mockResolvedValueOnce({ ok: true, ...expectedRow, agentId: candidate.agentId });
@@ -206,13 +264,30 @@ describe("loadChatRoute", () => {
     }
   });
 
+  it.each(["dashboard", "chat"] as const)(
+    "carries expanded dashboard presentation into %s route data",
+    async (face) => {
+      const { context } = contextFor();
+      await expect(
+        loadRoute(context, `/${face}/work`, "?dashboard=expanded", face),
+      ).resolves.toMatchObject(
+        sessionData("agent:work:main", {
+          face,
+          dashboardExpanded: true,
+        }),
+      );
+    },
+  );
+
   it("reclassifies a slug-shaped path after cold defaults reveal the main key", async () => {
     const { context, connect } = coldContext();
     const pending = loadRoute(context, "/chat/research/workspace");
-    const settled = vi.fn();
-    void pending.then(settled);
+    let settled = false;
+    void pending.then(() => {
+      settled = true;
+    });
     await Promise.resolve();
-    expect(settled).not.toHaveBeenCalled();
+    expect(settled).toBe(false);
 
     connect();
 
@@ -256,23 +331,33 @@ describe("loadChatRoute", () => {
   });
   it.each([pages[1]])("isolates $id loader results across connection owners", (page) => {
     const { context } = contextFor();
-    const gateway = { ...context.gateway, connectionRevision: 0 };
+    let snapshot = context.gateway.snapshot;
+    let revision = 0;
+    const gateway = {
+      ...context.gateway,
+      get snapshot() {
+        return snapshot;
+      },
+      get connectionRevision() {
+        return revision;
+      },
+    };
     const scopedContext = { ...context, gateway };
     const location = locationFor(`/${page.id}/main`);
     const cacheKey = () => page.loaderDeps!(scopedContext, location);
     const initial = cacheKey();
 
-    gateway.snapshot = { ...gateway.snapshot, selfUser: { id: "first-user" } };
+    snapshot = { ...snapshot, selfUser: { id: "first-user" } };
     expect(cacheKey()).toBe(initial);
-    gateway.snapshot = { ...gateway.snapshot, phase: "reconnecting", selfUser: null };
+    snapshot = { ...snapshot, phase: "reconnecting", selfUser: null };
     expect(cacheKey()).toBe(initial);
-    gateway.snapshot = { ...gateway.snapshot, phase: "connected", selfUser: { id: "first-user" } };
+    snapshot = { ...snapshot, phase: "connected", selfUser: { id: "first-user" } };
     expect(cacheKey()).toBe(initial);
 
-    gateway.snapshot = { ...gateway.snapshot, selfUser: { id: "second-user" } };
+    snapshot = { ...snapshot, selfUser: { id: "second-user" } };
     const replacementUser = cacheKey();
     expect(replacementUser).not.toBe(initial);
-    gateway.connectionRevision += 1;
+    revision += 1;
     const replacementCredentials = cacheKey();
     expect(replacementCredentials).not.toBe(replacementUser);
     expect(page.loaderDeps!({ ...scopedContext, gateway: { ...gateway } }, location)).not.toBe(

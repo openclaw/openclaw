@@ -29,25 +29,32 @@ const visible = (catalog: ModelCatalogEntry[], params: Partial<VisibleParams> = 
     evaluateEntry: async () => entryState(),
     ...params,
   });
-const emptyMetadata = () => createPluginMetadataSnapshotFixture({ plugins: [] });
-const staticPolicy = (
-  cfg: OpenClawConfig,
-  catalog: ModelCatalogEntry[],
-  defaultProvider: string,
-  defaultModel?: string,
-) =>
-  createModelVisibilityPolicy({
-    cfg,
-    catalog,
-    defaultProvider,
-    defaultModel,
-    allowManifestNormalization: false,
-    allowPluginNormalization: false,
-  });
-const ids = (catalog: ModelCatalogEntry[]) => catalog.map((entry) => entry.id);
 
 describe("resolveLogicalVisibleModelCatalog", () => {
   afterEach(() => vi.restoreAllMocks());
+  it("keeps the selected model ahead of curated and live rows in a large catalog", async () => {
+    const catalog = Array.from({ length: 300 }, (_, index) =>
+      row("fixture", `model-${String(index).padStart(3, "0")}`, {
+        name: `Model ${index}`,
+        providerOrder: index,
+      }),
+    );
+    const result = await visible(catalog, {
+      defaultModel: { provider: "fixture", model: "model-298" },
+      selectedModel: { provider: "fixture", model: "model-299" },
+      metadataSnapshot: createPluginMetadataSnapshotFixture({ plugins: [] }),
+    });
+    expect(result.slice(0, 3).map((entry) => entry.id)).toEqual([
+      "model-299",
+      "model-000",
+      "model-001",
+    ]);
+    expect(result).toHaveLength(300);
+    expect(new Set(result.map((entry) => entry.id))).toEqual(
+      new Set(catalog.map((entry) => entry.id)),
+    );
+  });
+
   it("leads each provider with its hosted-catalog recommendations after the selected model", async () => {
     const catalog = [
       ...["a-0", "a-1", "a-2", "a-3", "a-4"].map((id, providerOrder) =>
@@ -71,10 +78,18 @@ describe("resolveLogicalVisibleModelCatalog", () => {
         visible(catalog, {
           defaultProvider: "alpha",
           selectedModel: { provider: "alpha", model: "a-4" },
-          metadataSnapshot: emptyMetadata(),
+          metadataSnapshot: createPluginMetadataSnapshotFixture({ plugins: [] }),
         }),
     );
-    expect(ids(result)).toEqual(["a-4", "a-3", "a-1", "a-0", "a-2", "b-0", "b-1"]);
+    expect(result.map((entry) => entry.id)).toEqual([
+      "a-4",
+      "a-3",
+      "a-1",
+      "a-0",
+      "a-2",
+      "b-0",
+      "b-1",
+    ]);
   });
 
   it.each(["opaque runtime", "projected API"] as const)(
@@ -101,15 +116,14 @@ describe("resolveLogicalVisibleModelCatalog", () => {
           },
         ],
       });
-      const projected = scenario === "projected API";
-      const api = projected ? "openai-completions" : "openai-responses";
+      const api = scenario === "projected API" ? "openai-completions" : "openai-responses";
       const entry: ModelCatalogEntry = {
         provider: "personal",
         id: "auto",
         name: "Auto",
         api,
         baseUrl,
-        ...(!projected ? { nativeRuntime: "native-owner" } : {}),
+        ...(scenario === "opaque runtime" ? { nativeRuntime: "native-owner" } : {}),
       };
       const cfg: OpenClawConfig = {
         agents: {
@@ -120,7 +134,7 @@ describe("resolveLogicalVisibleModelCatalog", () => {
           },
         },
       };
-      if (projected) {
+      if (scenario === "projected API") {
         const { provider: _provider, ...model } = makeProviderModelFixture<typeof api>({
           id: entry.id,
           name: entry.name,
@@ -136,6 +150,7 @@ describe("resolveLogicalVisibleModelCatalog", () => {
         authRequirement: "api-key" as const,
         requestTransportOverrides: "none" as const,
       };
+      const projected = scenario === "projected API";
       const result = await visible([entry], {
         cfg,
         defaultProvider: "personal",
@@ -145,12 +160,12 @@ describe("resolveLogicalVisibleModelCatalog", () => {
             availability: true,
             routeResolution: projected ? { kind: "routes", routes: [route] } : null,
             ...(projected ? { selectedRoute: route } : {}),
-            ...(!projected
+            ...(scenario === "opaque runtime"
               ? { runtimeAuth: { id: "native-owner", source: "native" as const } }
               : {}),
           }),
       });
-      expect(ids(result)).toEqual(projected ? [] : ["auto"]);
+      expect(result.map((item) => item.id)).toEqual(scenario === "opaque runtime" ? ["auto"] : []);
     },
   );
 
@@ -158,7 +173,13 @@ describe("resolveLogicalVisibleModelCatalog", () => {
     const first = row("fixture", "first", { name: "First" });
     const later = row("fixture", "vendor/first", { name: "Later" });
     const catalog = [first, later];
-    const policy = staticPolicy({}, catalog, "fixture");
+    const policy = createModelVisibilityPolicy({
+      cfg: {},
+      catalog,
+      defaultProvider: "fixture",
+      allowManifestNormalization: false,
+      allowPluginNormalization: false,
+    });
     const resolvePolicy = vi
       .spyOn(providerPolicySurface, "resolveDirectBundledProviderPolicySurface")
       .mockReturnValue({
@@ -249,7 +270,12 @@ describe("resolveLogicalVisibleModelCatalog", () => {
       evaluateEntry: evaluateSelectedEntry,
     });
 
-    expect(ids(result)).toEqual(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.4"]);
+    expect(result.map((entry) => entry.id)).toEqual([
+      "gpt-5.6-sol",
+      "gpt-5.6-terra",
+      "gpt-5.6-luna",
+      "gpt-5.4",
+    ]);
   });
 
   it("keeps deprecated configured primary and alias-key rows visible", async () => {
@@ -267,15 +293,26 @@ describe("resolveLogicalVisibleModelCatalog", () => {
         },
       },
     } as OpenClawConfig;
+    // This unit test covers configured-row retention, not runtime plugin
+    // discovery. Keep fake provider refs on the deterministic static path.
+    const policy = createModelVisibilityPolicy({
+      cfg,
+      catalog,
+      defaultProvider: "demo",
+      defaultModel: "primary",
+      allowManifestNormalization: false,
+      allowPluginNormalization: false,
+    });
+
     const result = await visible(catalog, {
       cfg,
       defaultProvider: "demo",
       defaultModel: "primary",
       view: "configured",
-      policy: staticPolicy(cfg, catalog, "demo", "primary"),
+      policy,
     });
 
-    expect(ids(result).toSorted()).toEqual(["alias-key", "primary"]);
+    expect(result.map((entry) => entry.id).toSorted()).toEqual(["alias-key", "primary"]);
   });
 
   it("dedupes physical routes after selected-route projection in the default view", async () => {
@@ -293,10 +330,9 @@ describe("resolveLogicalVisibleModelCatalog", () => {
   });
 
   it("uses the selected route's deprecated lifecycle status", async () => {
-    const catalog = [
-      { ...platform, status: "available" as const },
-      { ...chatGPT, status: "deprecated" as const },
-    ];
+    const platformAvailable = { ...platform, status: "available" as const };
+    const chatGPTSelected = { ...chatGPT, status: "deprecated" as const };
+    const catalog = [platformAvailable, chatGPTSelected];
     const result = await visible(catalog, {
       routeVariants: catalog,
       defaultProvider: "openai",
@@ -304,7 +340,7 @@ describe("resolveLogicalVisibleModelCatalog", () => {
       evaluateEntry: evaluateSelectedEntry,
     });
 
-    expect(result).toEqual([]);
+    expect(result.map((entry) => entry.id)).toEqual([]);
   });
 
   it("omits physical capabilities while managed route selection is unresolved", async () => {

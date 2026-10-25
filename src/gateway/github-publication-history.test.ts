@@ -1,16 +1,18 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   BRANCH,
+  SESSION_KEY,
   commandResult,
   createRealPublicationWorkspace,
   createTestGitHubPublicationCoordinator,
   githubPublicationTestMocks,
   installGitHubPublicationTestHarness,
-  publicationRequest,
   root,
 } from "./github-publication.test-support.js";
+import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
 const mocks = githubPublicationTestMocks();
 const url = "https://github.com/openclaw/openclaw/pull/125200";
@@ -54,9 +56,10 @@ async function historyFixture() {
       }
       if (argv.includes("fetch")) {
         const sha = argv.at(-1)!;
-        return sha === (await remoteHead())
-          ? gitResult("fetch", "--no-tags", "--no-write-fetch-head", remote, sha)
-          : commandResult();
+        if (sha === (await remoteHead())) {
+          return gitResult("fetch", "--no-tags", "--no-write-fetch-head", remote, sha);
+        }
+        return commandResult();
       }
       if (argv.includes("push")) {
         try {
@@ -84,11 +87,16 @@ async function historyFixture() {
       return await fallback(argv, options);
     },
   );
-  const coordinator = createTestGitHubPublicationCoordinator();
+  const coordinator = createTestGitHubPublicationCoordinator({
+    placements: createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() }),
+  });
   const publish = (idempotencyKey: string, draft?: boolean) =>
-    coordinator.requestForSessionV2(
-      publicationRequest(idempotencyKey, draft === undefined ? {} : { draft }),
-    );
+    coordinator.requestForSessionV2({
+      agentId: "main",
+      sessionKey: SESSION_KEY,
+      idempotencyKey,
+      ...(draft !== undefined ? { draft } : {}),
+    });
   const state = async () => ({
     head: await git("rev-parse", "HEAD"),
     index: await fs.readFile(path.join(cwd, ".git", "index")),
@@ -126,6 +134,7 @@ async function historyFixture() {
     ...workspace,
     calls,
     publish,
+    state,
     remote,
     remoteHead,
     commit,
@@ -170,16 +179,18 @@ describe("GitHub publication branch history", () => {
     const signedCommit = path.join(root, "signed-commit.txt");
     await fs.writeFile(
       signedCommit,
-      `tree ${await f.head("HEAD^{tree}")}
-parent ${await f.head()}
-author Fixture <fixture@example.invalid> 1700000000 +0000
-committer Fixture <fixture@example.invalid> 1700000000 +0000
-gpgsig -----BEGIN PGP SIGNATURE-----
- synthetic-invalid-signature
- -----END PGP SIGNATURE-----
-
-Signed fixture
-`,
+      [
+        `tree ${await f.head("HEAD^{tree}")}`,
+        `parent ${await f.head()}`,
+        "author Fixture <fixture@example.invalid> 1700000000 +0000",
+        "committer Fixture <fixture@example.invalid> 1700000000 +0000",
+        "gpgsig -----BEGIN PGP SIGNATURE-----",
+        " synthetic-invalid-signature",
+        " -----END PGP SIGNATURE-----",
+        "",
+        "Signed fixture",
+        "",
+      ].join("\n"),
     );
     const signedHead = await f.git("hash-object", "-t", "commit", "-w", signedCommit);
     await f.git("update-ref", "HEAD", signedHead);
@@ -207,23 +218,30 @@ Signed fixture
   it("repairs unrecognized published credit without rewriting history or importing body examples", async () => {
     await f.published("initial");
     const other = "Co-authored-by: example <99+example@users.noreply.github.com>";
-    const message = ["Implementation credit", "", "```text", human, other, "```", "", marker].join(
-      "\n",
-    );
-    const previous = await f.publishMessage(message);
-    expect(await f.parsed()).not.toContain(human);
-    const tree = await f.head("HEAD^{tree}");
-    f.calls.length = 0;
-    const repaired = await f.published("repair");
-    expect(await f.parsed()).toBe(`${human}\nOpenClaw-Publication: ${repaired.requestId}`);
-    expect(await f.commitFacts()).toEqual({ parent: previous, tree });
-    expect(await f.message(previous)).toBe(message);
-    expect(f.calls.some((args) => args.includes("POST"))).toBe(false);
-    const beforeReplay = await f.head();
-    await f.unchanged(async () => {
-      expect(await f.publish("repair")).toEqual(repaired);
-      await f.published("reuse", { headCommit: beforeReplay });
-    });
+    const layouts = [
+      `${human}\n\nWorked on by:\n- @alice\n\n${marker}`,
+      `${human}\n\n${other}\n${marker}`,
+      `${human}\n\n${marker}`,
+      ["Example:", "```text", human, other, "```", "", marker].join("\n"),
+    ];
+    for (const [index, layout] of layouts.entries()) {
+      const message = `Implementation credit\n\n${layout}`;
+      const previous = await f.publishMessage(message);
+      expect(await f.parsed()).not.toContain(human);
+      const tree = await f.head("HEAD^{tree}");
+      f.calls.length = 0;
+      const repaired = await f.published(`repair-${index}`);
+      expect(await f.parsed()).toBe(`${human}\nOpenClaw-Publication: ${repaired.requestId}`);
+      expect(await f.commitFacts()).toEqual({ parent: previous, tree });
+      expect(await f.message(previous)).toBe(message);
+      expect(f.calls.filter((args) => args.includes("commit-tree"))).toHaveLength(1);
+      expect(f.calls.some((args) => args.includes("POST"))).toBe(false);
+      const beforeReplay = await f.head();
+      await f.unchanged(async () => {
+        expect(await f.publish(`repair-${index}`)).toEqual(repaired);
+        await f.published(`reuse-${index}`, { headCommit: beforeReplay });
+      });
+    }
     // Commit-format trailer parsing must not treat a Markdown separator as a patch divider.
     const valid = await f.publishMessage(`Implementation credit\n\n---\n\n${human}\n${marker}`);
     expect(await f.parsed()).toBe(`${human}\n${marker}`);

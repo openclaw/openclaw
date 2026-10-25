@@ -21,6 +21,7 @@ import {
   recoverClientCredentialStore,
 } from "./client-credential-migration.js";
 import { openMigrationCredentials } from "./client-credential-migration.test-support.js";
+import { resolveClientCredentialStorePath } from "./client-credential-paths.js";
 import { readClientCredentialReceipt } from "./client-credential-readiness.js";
 import { withEngineStoreAdmission } from "./database-engine/admission-scope.js";
 import { openEngineStore } from "./database-engine/open.js";
@@ -34,8 +35,6 @@ const configured: unknown = getEnvironmentData("openclaw.test.state.conformance.
 const connection = typeof configured === "string" ? configured : undefined;
 const directories = useAutoCleanupTempDirTracker(afterAll);
 const namespaces = new Set<string>();
-const contentVersionSql =
-  "SELECT value_json,updated_at_ms FROM config_machine_state WHERE state_key='state.schema.contentVersion'";
 afterAll(async () => {
   if (!connection || namespaces.size === 0) {
     return;
@@ -97,7 +96,11 @@ async function fixture() {
           beforeMigrate(source, fromVersion) {
             if (fromVersion === CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION - 1) {
               cutoverContentVersionTimestamp = String(
-                source.prepare(contentVersionSql).get()?.updated_at_ms,
+                source
+                  .prepare(
+                    "SELECT updated_at_ms FROM config_machine_state WHERE state_key='state.schema.contentVersion'",
+                  )
+                  .get()?.updated_at_ms,
               );
             }
             prepareClientCredentialMigration(source, {
@@ -133,10 +136,14 @@ async function fixture() {
   const identity = generateStoredDeviceIdentity(12);
   withEngineStoreAdmission(() =>
     source.runTransaction(() => {
-      source.exec(`
-        INSERT INTO schema_meta VALUES ('primary','global',26,NULL,'fixture',123,123);
-        INSERT INTO config_machine_state VALUES ('state.schema.contentVersion','26',1),('unaffected','original',1);
-      `);
+      source
+        .prepare("INSERT INTO schema_meta VALUES ('primary','global',26,NULL,'fixture',123,123)")
+        .run();
+      source
+        .prepare(
+          "INSERT INTO config_machine_state VALUES ('state.schema.contentVersion','26',1),('unaffected','original',1)",
+        )
+        .run();
       source
         .prepare("INSERT INTO device_identities VALUES (?,?,?,?,?,?)")
         .run("primary", identity.deviceId, identity.publicKeyPem, identity.privateKeyPem, 12, 99);
@@ -201,13 +208,6 @@ async function fixture() {
     identity,
     client,
     open,
-    migrate() {
-      const database = open(true);
-      return { database, [Symbol.dispose]: () => database.close() };
-    },
-    async rows(sql: string) {
-      return (await client.query(sql)).rows;
-    },
     get cutoverContentVersionTimestamp() {
       return cutoverContentVersionTimestamp;
     },
@@ -226,73 +226,87 @@ describe.skipIf(!connection)(
   () => {
     it("preserves exact bytes and policy while retiring the verified server rows", async () => {
       await using f = await fixture();
-      using _ = f.migrate();
-      {
-        using local = openMigrationCredentials(f.env);
-        expect(local.database.prepare("SELECT * FROM device_identities").get()).toEqual({
-          identity_key: "primary",
-          device_id: f.identity.deviceId,
-          public_key_pem: f.identity.publicKeyPem,
-          private_key_pem: f.identity.privateKeyPem,
-          created_at_ms: 12,
-          updated_at_ms: 99,
-        });
-        expect(
-          local.database.prepare("SELECT token,scopes_json FROM device_auth_tokens").get(),
-        ).toEqual({ token: "retained-token", scopes_json: '[ "operator.read" ]' });
-        expect(
-          local.database.prepare("SELECT token FROM gateway_origin_device_tokens").get(),
-        ).toEqual({ token: "origin-token" });
-        expect(
-          local.database
-            .prepare("SELECT socket_path,socket_token FROM native_exec_socket_credentials")
-            .get(),
-        ).toEqual({ socket_path: "/synthetic.sock", socket_token: "socket-secret" });
-        expect(readClientCredentialReceipt(local.database)).toMatchObject({
-          phase: "complete",
-          receipt: { source: { kind: "canonical", engine: "postgres", destinationVersion: 1 } },
-        });
-      }
-      const row = (
-        await f.client.query(
-          "SELECT raw_json,socket_path,has_socket_token,updated_at_ms FROM exec_approvals_config",
-        )
-      ).rows[0];
-      expect(JSON.parse(row.raw_json)).toEqual({
-        version: 1,
-        socket: { future: "keep" },
-        defaults: { security: "deny" },
-        agents: {},
-      });
-      expect(row).toMatchObject({
-        socket_path: null,
-        has_socket_token: "0",
-        updated_at_ms: "55",
-      });
-      for (const name of [
-        "device_identities",
-        "device_auth_tokens",
-        "gateway_origin_device_tokens",
-      ]) {
-        expect(
-          (await f.client.query("SELECT to_regclass($1) AS relation", [name])).rows[0].relation,
-        ).toBeNull();
-      }
-      expect(
-        await f.rows("SELECT value_json FROM config_machine_state WHERE state_key='unaffected'"),
-      ).toEqual([{ value_json: "original" }]);
-      expect(await f.rows(contentVersionSql)).toEqual([
+      const migrated = f.open(true);
+      try {
         {
-          value_json: String(OPENCLAW_STATE_SCHEMA_VERSION),
-          updated_at_ms: f.cutoverContentVersionTimestamp,
-        },
-      ]);
+          using local = openMigrationCredentials(f.env);
+          expect(local.database.prepare("SELECT * FROM device_identities").get()).toEqual({
+            identity_key: "primary",
+            device_id: f.identity.deviceId,
+            public_key_pem: f.identity.publicKeyPem,
+            private_key_pem: f.identity.privateKeyPem,
+            created_at_ms: 12,
+            updated_at_ms: 99,
+          });
+          expect(
+            local.database.prepare("SELECT token,scopes_json FROM device_auth_tokens").get(),
+          ).toEqual({ token: "retained-token", scopes_json: '[ "operator.read" ]' });
+          expect(
+            local.database.prepare("SELECT token FROM gateway_origin_device_tokens").get(),
+          ).toEqual({ token: "origin-token" });
+          expect(
+            local.database
+              .prepare("SELECT socket_path,socket_token FROM native_exec_socket_credentials")
+              .get(),
+          ).toEqual({ socket_path: "/synthetic.sock", socket_token: "socket-secret" });
+          expect(readClientCredentialReceipt(local.database)).toMatchObject({
+            phase: "complete",
+            receipt: { source: { kind: "canonical", engine: "postgres", destinationVersion: 1 } },
+          });
+        }
+        const row = (
+          await f.client.query(
+            "SELECT raw_json,socket_path,has_socket_token,updated_at_ms FROM exec_approvals_config",
+          )
+        ).rows[0];
+        expect(JSON.parse(row.raw_json)).toEqual({
+          version: 1,
+          socket: { future: "keep" },
+          defaults: { security: "deny" },
+          agents: {},
+        });
+        expect(row).toMatchObject({
+          socket_path: null,
+          has_socket_token: "0",
+          updated_at_ms: "55",
+        });
+        for (const name of [
+          "device_identities",
+          "device_auth_tokens",
+          "gateway_origin_device_tokens",
+        ]) {
+          expect(
+            (await f.client.query("SELECT to_regclass($1) AS relation", [name])).rows[0].relation,
+          ).toBeNull();
+        }
+        expect(
+          (
+            await f.client.query(
+              "SELECT value_json FROM config_machine_state WHERE state_key='unaffected'",
+            )
+          ).rows,
+        ).toEqual([{ value_json: "original" }]);
+        expect(
+          (
+            await f.client.query(
+              "SELECT value_json,updated_at_ms FROM config_machine_state WHERE state_key='state.schema.contentVersion'",
+            )
+          ).rows,
+        ).toEqual([
+          {
+            value_json: String(OPENCLAW_STATE_SCHEMA_VERSION),
+            updated_at_ms: f.cutoverContentVersionTimestamp,
+          },
+        ]);
+      } finally {
+        migrated.close();
+      }
     });
 
     it("retains source authority across interruption and rebuilds a completed orphan without merging", async () => {
       await using f = await fixture();
       expect(() => f.open(true, true)).toThrow("Interrupted after local copy");
-      expect(await f.rows("SELECT token FROM device_auth_tokens")).toEqual([
+      expect((await f.client.query("SELECT token FROM device_auth_tokens")).rows).toEqual([
         { token: "retained-token" },
       ]);
       {
@@ -308,7 +322,8 @@ describe.skipIf(!connection)(
           local.database.prepare("UPDATE client_credential_migration SET phase='complete'").run();
         });
       }
-      f.open(true).close();
+      const migrated = f.open(true);
+      migrated.close();
       {
         using current = openMigrationCredentials(f.env);
         expect(current.database.prepare("SELECT token FROM device_auth_tokens").all()).toEqual([
@@ -318,21 +333,32 @@ describe.skipIf(!connection)(
       }
     });
 
-    it("resumes interrupted completion after the PostgreSQL source commits", async () => {
+    it("does not retire invalid credentials and resumes interrupted completion only after source commit", async () => {
       await using f = await fixture();
-      using migrated = f.migrate();
-      {
-        using local = openMigrationCredentials(f.env);
-        runSqliteImmediateTransactionSync(local.database, () =>
-          local.database.prepare("UPDATE client_credential_migration SET phase='copied'").run(),
+      await f.client.query("UPDATE device_auth_tokens SET scopes_json='{}'");
+      expect(() => f.open(true)).toThrow("invalid token record");
+      expect(fs.existsSync(resolveClientCredentialStorePath(f.env))).toBe(false);
+      expect((await f.client.query("SELECT token FROM device_auth_tokens")).rows).toEqual([
+        { token: "retained-token" },
+      ]);
+      await f.client.query("UPDATE device_auth_tokens SET scopes_json='[ \"operator.read\" ]'");
+      const migrated = f.open(true);
+      try {
+        {
+          using local = openMigrationCredentials(f.env);
+          runSqliteImmediateTransactionSync(local.database, () =>
+            local.database.prepare("UPDATE client_credential_migration SET phase='copied'").run(),
+          );
+        }
+        withEngineStoreAdmission(() =>
+          recoverClientCredentialStore(migrated, { path: f.pathname, env: f.env }),
         );
-      }
-      withEngineStoreAdmission(() =>
-        recoverClientCredentialStore(migrated.database, { path: f.pathname, env: f.env }),
-      );
-      {
-        using recovered = openMigrationCredentials(f.env);
-        expect(readClientCredentialReceipt(recovered.database)?.phase).toBe("complete");
+        {
+          using recovered = openMigrationCredentials(f.env);
+          expect(readClientCredentialReceipt(recovered.database)?.phase).toBe("complete");
+        }
+      } finally {
+        migrated.close();
       }
     });
   },
