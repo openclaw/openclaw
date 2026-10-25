@@ -6,6 +6,7 @@ import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { resolveAuthProfileOrder } from "./auth-profiles/order.js";
 import { hasAnyAuthProfileStoreSourceAsync } from "./auth-profiles/source-check.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store-runtime.js";
+import type { AuthProfileStore } from "./auth-profiles/types.js";
 import {
   getSoonestCooldownExpiry,
   isProfileInCooldown,
@@ -112,6 +113,7 @@ function cooldownDecision(params: {
   soonest: number;
   hasFallbackCandidates?: boolean;
   throttleKey?: string;
+  usageStats?: AuthProfileStore["usageStats"];
 }) {
   getExpiry.mockReturnValue(params.soonest);
   unavailableReason.mockReturnValue("rate_limit");
@@ -126,7 +128,7 @@ function cooldownDecision(params: {
       getSoonestCooldownExpiry: getExpiry,
       resolveProfilesUnavailableReason: unavailableReason,
     },
-    authStore: { version: 1, profiles: {} },
+    authStore: { version: 1, profiles: {}, usageStats: params.usageStats },
     profileIds: ["openai-profile-1"],
   });
 }
@@ -167,6 +169,13 @@ describe("runWithModelFallback probe logic", () => {
     const params: Parameters<typeof cooldownDecision>[0] = {
       soonest,
       hasFallbackCandidates: false,
+      usageStats: {
+        "openai-profile-1": {
+          blockedUntil: soonest,
+          blockedReason: "subscription_limit",
+          blockedSource: "wham",
+        },
+      },
     };
     expect(cooldownDecision(params)).toEqual(expectedProbe);
     markProbeAttempt(NOW - 10_000, resolveProbeThrottleKey(candidate.provider, agentDir));

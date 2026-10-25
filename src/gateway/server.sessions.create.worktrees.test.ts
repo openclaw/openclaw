@@ -47,7 +47,7 @@ const createWorkspace = (prefix: string) =>
 const adminOptions = { client: { connect: { scopes: ["operator.admin"] } } as never };
 const createSession = (
   params: Record<string, unknown>,
-  options: Parameters<typeof directSessionReq>[2] = adminOptions,
+  options: Parameters<typeof directSessionReq<SessionsCreateResult>>[2] = adminOptions,
 ) =>
   directSessionReq<SessionsCreateResult>(
     "sessions.create",

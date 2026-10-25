@@ -186,13 +186,16 @@ const INFERENCE_REQUEST: WorkerInferenceStartParams = {
 
 const TERMINAL_OUTCOME: WorkerInferenceTerminalOutcome = {
   type: "done",
-  message: makeAgentAssistantMessage({
-    content: [{ type: "text", text: "done" }],
-    provider: "provider-1",
-    model: "model-1",
-    usage: createUsageFixture(1, 1, 2),
-    timestamp: 2,
-  }),
+  message: {
+    ...makeAgentAssistantMessage({
+      content: [{ type: "text", text: "done" }],
+      provider: "provider-1",
+      model: "model-1",
+      usage: createUsageFixture(1, 1, 2),
+      timestamp: 2,
+    }),
+    stopReason: "stop",
+  },
 };
 
 it("rejects a message beyond the frame byte ceiling before submitting it", async () => {

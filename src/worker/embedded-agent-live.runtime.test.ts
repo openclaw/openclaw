@@ -166,6 +166,9 @@ describe("createWorkerLiveRuntime", () => {
         itemId: readAgentAssistantSource(final)?.itemId,
       },
     ]);
+    expect(readAgentAssistantSource(message)?.itemId).not.toBe(
+      readAgentAssistantSource(final)?.itemId,
+    );
   });
 
   it("keeps distinct reasoning occurrences through bounded worker payloads", () => {

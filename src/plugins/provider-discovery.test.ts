@@ -182,7 +182,12 @@ describe("normalizePluginDiscoveryResult", () => {
   const model = makeModel("kept-model");
   const config = makeModelProviderConfig({ models: [model], api: "openai-completions" });
   const ignored = makeModelProviderConfig({ baseUrl: "http://ignored" });
-  it.each([
+  it.each<{
+    name: string;
+    provider: ProviderPlugin;
+    result: Parameters<typeof normalizePluginDiscoveryResult>[0]["result"];
+    keys: string[];
+  }>([
     {
       name: "maps a single provider result to aliases and hook aliases",
       provider: makeProvider({

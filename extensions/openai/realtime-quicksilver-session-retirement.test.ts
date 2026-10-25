@@ -278,6 +278,7 @@ describe("GA Realtime call retirement", () => {
             }
             onTerminal();
             reentered = Promise.resolve(realtime.broker.cancelBrowserSession(reservation));
+            return undefined;
           });
           return bridge;
         });

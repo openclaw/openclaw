@@ -127,6 +127,7 @@ describe("Gateway pending-profile authorization", () => {
         });
         const pending = dispatchProfile(client, method, { handler });
         await gate.during(pending, () => {
+          expect(client.authenticatedGitHubIdentitySync).toHaveBeenCalledTimes(groupRead ? 0 : 1);
           if (groupRead) {
             expect(catalogPreparation).toHaveBeenCalledOnce();
           }
@@ -160,6 +161,7 @@ describe("Gateway pending-profile authorization", () => {
     client.connect.scopes = ["operator.read"];
     const broad = await dispatchProfile(client, "sessions.list", { handler });
     expect(broad).toHaveBeenCalledWith(true, { sessions: [] });
+    expect(handler).toHaveBeenCalledOnce();
   });
 
   it.each([false, true])(
@@ -192,6 +194,7 @@ describe("Gateway pending-profile authorization", () => {
           handler: talkModeHandlers["talk.mode"],
         });
         await gate.during(request, () => {
+          expect(hasConnectedTalkNode).toHaveBeenCalledOnce();
           expect(respond).not.toHaveBeenCalled();
           expect(broadcast).not.toHaveBeenCalled();
           if (merge) {
@@ -317,24 +320,50 @@ describe("Gateway pending-profile authorization", () => {
     },
   );
 
-  it("waits for immutable profile attachment before binding status", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const profile = ensureProfileForEmail("pending-binding@example.test");
-      const client = createPendingProfileClient();
-      using gate = createRequestGate();
-      client.authenticatedGitHubIdentitySync = vi.fn(async () => {
-        await gate.pause();
-        client.authenticatedUserProfile = profileIdentity(profile);
-        return { profileId: profile.id, updatedAt: profile.updatedAt };
-      });
-      const handler = vi.fn<GatewayRequestHandler>(({ respond }) => respond(true, { ok: true }));
-      const request = dispatchProfile(client, "status", { handler, expectedProfileId: profile.id });
-      await gate.during(request, () => {
-        expect(handler).not.toHaveBeenCalled();
-      });
-      expect(await request).toHaveBeenCalledWith(true, { ok: true });
-    });
-  });
+  it.each(["status", "chat.send"] as const)(
+    "waits for immutable profile attachment before %s",
+    async (method) => {
+      const run = async () => {
+        const bound = method === "status";
+        const profile = bound
+          ? ensureProfileForEmail("pending-binding@example.test")
+          : { id: "profile-canonical", updatedAt: 1 };
+        const client = createPendingProfileClient();
+        using gate = createRequestGate();
+        client.authenticatedGitHubIdentitySync = vi.fn(async () => {
+          await gate.pause();
+          if (bound) {
+            client.authenticatedUserProfile = profileIdentity(profile);
+          }
+          return { profileId: profile.id, updatedAt: profile.updatedAt };
+        });
+        const handler = vi.fn<GatewayRequestHandler>(({ respond }) => respond(true, { ok: true }));
+        const request = dispatchProfile(client, method, {
+          handler,
+          ...(bound
+            ? { expectedProfileId: profile.id }
+            : { requestParams: { sessionKey: "agent:main:main" } }),
+        });
+        await gate.during(request, () => {
+          expect(handler).not.toHaveBeenCalled();
+          expect(client.authenticatedGitHubIdentitySync).toHaveBeenCalledOnce();
+          if (!bound) {
+            client.authenticatedUserProfile = {
+              ...profileIdentity(profile),
+              displayName: "Canonical",
+            };
+          }
+        });
+        expect(await request).toHaveBeenCalledWith(true, { ok: true });
+        expect(handler).toHaveBeenCalledOnce();
+      };
+      if (method === "status") {
+        await withOpenClawTestState({ scenario: "minimal" }, run);
+      } else {
+        await run();
+      }
+    },
+  );
 
   it("returns retryable unavailability without dispatch and retries on the next request", async () => {
     const client = createPendingProfileClient();
@@ -357,7 +386,37 @@ describe("Gateway pending-profile authorization", () => {
     });
 
     const retried = await dispatchProfile(client, "agent", { handler });
+    expect(handler).toHaveBeenCalledOnce();
     expect(retried).toHaveBeenCalledWith(true, { ok: true });
+    expect(client.authenticatedGitHubIdentitySync).toHaveBeenCalledTimes(2);
+  });
+
+  it("classifies profile-owned core families and plugin or auxiliary methods fail-closed", async () => {
+    const methods = [
+      "agent approval.resolve artifacts.list board.event chat.history chat.metadata",
+      "controlUi.sessionPreview exec.approval.resolve mcp.app.view mentions.list mentions.dismiss",
+      "message.action models.list openclaw.chat plugin.approval.resolve projects.list secrets.store.set send sessions.list",
+      "skills.library.list skills.library.read skills.library.save skills.library.mutate",
+      "skills.library.activate skills.library.import skills.library.upload taskSuggestions.list",
+      "users.github.status users.github.authorize.start users.github.authorize.poll",
+      "users.github.authorize.cancel users.github.disconnect users.mentionable",
+    ].flatMap((group) => group.split(" "));
+    for (const method of methods) {
+      const client = createPendingProfileClient();
+      client.authenticatedGitHubIdentitySync = vi.fn().mockRejectedValue(new Error("offline"));
+      const handler = vi.fn<GatewayRequestHandler>();
+      const respond = await dispatchProfile(client, method, {
+        handler,
+        requestParams:
+          method === "skills.library.activate" ? { sessionKey: "agent:main:main" } : undefined,
+      });
+      expect(handler, method).not.toHaveBeenCalled();
+      expect(respond, method).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({ code: "UNAVAILABLE", retryable: true }),
+      );
+    }
   });
 
   it("keeps plugin and auxiliary profile access fail-closed unless explicitly independent", async () => {
@@ -407,7 +466,9 @@ describe("Gateway pending-profile authorization", () => {
       handler,
       requestParams: { sessionKey: "agent:main:main" },
     });
+    expect(handler).toHaveBeenCalledOnce();
     expect(allowed).toHaveBeenCalledWith(true, { ok: true });
+    expect(client.authenticatedGitHubIdentitySync).toHaveBeenCalledOnce();
   });
   it("allows read-only users.self without anonymous profile access or edits", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
