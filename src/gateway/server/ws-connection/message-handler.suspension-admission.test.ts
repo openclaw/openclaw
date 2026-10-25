@@ -1,10 +1,7 @@
 import type { IncomingMessage } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
-import {
-  PROTOCOL_VERSION,
-  type ResponseFrame,
-} from "../../../../packages/gateway-protocol/src/index.js";
+import { PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/index.js";
 import {
   getActiveGatewayRootWorkCount,
   markGatewayRestartDraining,
@@ -12,10 +9,10 @@ import {
   tryBeginGatewaySuspendAdmission,
 } from "../../../process/gateway-work-admission.js";
 import { GatewayConnectionWork } from "../../server-connection-work.js";
+import { MAX_PREAUTH_PAYLOAD_BYTES } from "../../server-constants.js";
 import type { GatewayRequestContext } from "../../server-methods/types.js";
 import { gatewayTestTextTransport } from "../connection-transport.test-support.js";
 import { createGatewaySnapshotFixture } from "../health-state.test-support.js";
-import { createGatewayWsTestSocket } from "../ws-connection.test-helpers.js";
 import { createAdmissionHandler } from "./message-handler.admission.test-support.js";
 
 const { loadConfigMock, upsertPresenceMock } = vi.hoisted(() => ({
@@ -52,17 +49,26 @@ const cleanups: Array<() => Promise<void>> = [];
 
 function attachHarness(params: { deferSocketSend?: boolean; startupPending?: boolean } = {}) {
   const connectionWork = new GatewayConnectionWork();
+  let onMessage: ((data: WebSocket.RawData) => void) | undefined;
   let finishSocketSend: (() => void) | undefined;
   let closed = false;
-  const socket = createGatewayWsTestSocket();
-  const socketSend = socket.send.mockImplementation((_payload, options, callback) => {
-    const done = typeof options === "function" ? options : callback;
+  const socketSend = vi.fn((_payload: string, callback?: (error?: Error) => void) => {
     if (params.deferSocketSend && !closed) {
-      finishSocketSend = () => done?.();
+      finishSocketSend = () => callback?.();
       return;
     }
-    done?.();
+    callback?.();
   });
+  const socket = {
+    _receiver: { _maxPayload: MAX_PREAUTH_PAYLOAD_BYTES, _allowSynchronousEvents: false },
+    send: socketSend,
+    on: vi.fn((event: string, handler: (data: WebSocket.RawData) => void) => {
+      if (event === "message") {
+        onMessage = handler;
+      }
+      return socket;
+    }),
+  } as unknown as WebSocket;
   const close = vi.fn(() => {
     closed = true;
     finishSocketSend?.();
@@ -73,7 +79,7 @@ function attachHarness(params: { deferSocketSend?: boolean; startupPending?: boo
     await connectionWork.drain();
   });
   const handler = createAdmissionHandler({
-    socket: gatewayTestTextTransport(socket as unknown as WebSocket),
+    socket: gatewayTestTextTransport(socket),
     connectionWork,
     upgradeReq: {
       headers: { host: "127.0.0.1:19001" },
@@ -89,9 +95,11 @@ function attachHarness(params: { deferSocketSend?: boolean; startupPending?: boo
     isClosed: () => closed,
   });
   attachGatewayWsMessageHandler(handler);
+  if (!onMessage) {
+    throw new Error("expected websocket message handler");
+  }
   const sendConnect = (id: string, connect: unknown) =>
-    socket.emit(
-      "message",
+    onMessage?.(
       Buffer.from(JSON.stringify({ type: "req", id, method: "connect", params: connect })),
     );
   const connectParams = {
@@ -146,21 +154,24 @@ afterEach(async () => {
 });
 
 describe("WebSocket connect suspension admission", () => {
-  it("rejects non-array scopes before admitting the client", async () => {
-    const harness = attachHarness();
-    harness.sendConnect("operator.admin");
+  it.each(["operator.admin", "xoperator.adminx"])(
+    "rejects non-array scopes %s before admitting the client",
+    async (scopes) => {
+      const harness = attachHarness();
+      harness.sendConnect(scopes);
 
-    await vi.waitFor(() => expect(harness.close).toHaveBeenCalled());
-    expect(harness.send).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: "connect-1",
-        ok: false,
-        error: expect.objectContaining({ code: "INVALID_REQUEST" }),
-      }),
-    );
-    expect(harness.client).toBeNull();
-    expect(harness.setClient).not.toHaveBeenCalled();
-  });
+      await vi.waitFor(() => expect(harness.close).toHaveBeenCalled());
+      expect(harness.send).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: "connect-1",
+          ok: false,
+          error: expect.objectContaining({ code: "INVALID_REQUEST" }),
+        }),
+      );
+      expect(harness.client).toBeNull();
+      expect(harness.setClient).not.toHaveBeenCalled();
+    },
+  );
 
   it("rejects a validated connect while suspension is preparing before session mutations", async () => {
     const suspension = tryBeginGatewaySuspendAdmission(() => {});
@@ -170,7 +181,14 @@ describe("WebSocket connect suspension admission", () => {
     harness.sendConnect();
 
     await vi.waitFor(() => expect(harness.socketSend).toHaveBeenCalledOnce());
-    const response = JSON.parse(harness.socketSend.mock.calls[0]?.[0] ?? "{}") as ResponseFrame;
+    const response = JSON.parse(harness.socketSend.mock.calls[0]?.[0] ?? "{}") as {
+      error?: {
+        code?: string;
+        retryable?: boolean;
+        retryAfterMs?: number;
+        details?: Record<string, unknown>;
+      };
+    };
     expect(response.error).toMatchObject({
       code: "UNAVAILABLE",
       retryable: true,

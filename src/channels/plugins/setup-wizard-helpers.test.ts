@@ -139,7 +139,9 @@ describe("setup wizard helpers", () => {
         : { action };
     if (expected.action === "set") {
       vi.stubEnv("OPENCLAW_TEST_TOKEN", "secret-token");
-      onTestFinished(() => vi.unstubAllEnvs());
+      onTestFinished(() => {
+        vi.unstubAllEnvs();
+      });
     }
     const prompter = createPrompter(action === "set" ? ["OPENCLAW_TEST_TOKEN"] : [], {
       selects: action === "use-env" ? ["plaintext"] : ["ref", "env"],

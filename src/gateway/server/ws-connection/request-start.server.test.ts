@@ -16,6 +16,7 @@ import { createDeferredCore } from "../../../shared/deferred.js";
 import { acquireTestPortBlock } from "../../../test-utils/port-claims.js";
 import { createPluginGatewayMethodDescriptor } from "../../methods/descriptor.js";
 import { MAX_PAYLOAD_BYTES } from "../../payload-limits.js";
+import { SerializedJsonArray } from "../../serialized-json.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "../../server-constants.js";
 import {
   connectOk,
@@ -29,7 +30,7 @@ import {
   resetTestPluginRegistry,
   setTestPluginRegistry,
 } from "../../test-helpers.plugin-registry.js";
-import { GATEWAY_PER_MESSAGE_DEFLATE } from "../ws-compression.js";
+import { GATEWAY_PER_MESSAGE_DEFLATE, registerDeflatedSegment } from "../ws-compression.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -42,7 +43,6 @@ async function openOperatorSocket(
   await once(socket, "open");
   try {
     await connectOk(socket, { token, prePairDevice: headers !== undefined });
-    await expect(sendTraceRequest(socket, "warmup")).resolves.toMatchObject({ ok: true });
     return socket;
   } catch (error) {
     socket.terminate();
@@ -51,16 +51,12 @@ async function openOperatorSocket(
 }
 
 async function sendTraceRequest(socket: WebSocket, id: string): Promise<{ ok: boolean }> {
-  const response = responseFor(socket, id);
-  socket.send(rpc(id));
-  return await response;
-}
-
-function responseFor(socket: WebSocket, id: string | undefined) {
-  return onceMessage<{ type: "res"; id: string; ok: boolean }>(
+  const response = onceMessage<{ type: "res"; id: string; ok: boolean }>(
     socket,
     (value) => value.type === "res" && value.id === id,
   );
+  socket.send(rpc(id));
+  return await response;
 }
 
 const token = "gateway-request-start-test-token";
@@ -103,10 +99,15 @@ async function withServer(
   }
 }
 
-function installMethods(handlers: ReturnType<typeof createEmptyPluginRegistry>["gatewayHandlers"]) {
-  const registry = createEmptyPluginRegistry();
-  registry.gatewayHandlers = handlers;
-  for (const [name, handler] of Object.entries(handlers)) {
+function registerMethods(
+  registry: ReturnType<typeof createEmptyPluginRegistry>,
+  names = Object.keys(registry.gatewayHandlers),
+) {
+  for (const name of names) {
+    const handler = registry.gatewayHandlers[name];
+    if (!handler) {
+      throw new Error(`Missing fixture handler: ${name}`);
+    }
     registry.gatewayMethodDescriptors.push(
       createPluginGatewayMethodDescriptor({
         pluginId: "request-start-proof",
@@ -115,20 +116,6 @@ function installMethods(handlers: ReturnType<typeof createEmptyPluginRegistry>["
       }),
     );
   }
-  setTestPluginRegistry(registry);
-  return registry;
-}
-
-function installHeldTrace(held: Promise<void>, complete: () => void) {
-  installMethods({
-    "test.trace": async ({ req, respond }) => {
-      if (req.id === "held") {
-        await held;
-        complete();
-      }
-      respond(true);
-    },
-  });
 }
 
 function rpc(id: string, method = "test.trace", params = {}) {
@@ -204,23 +191,24 @@ describe("authenticated operator request starts", () => {
     const held = createDeferredCore();
     const observedAtYield = createDeferredCore<string[]>();
     let sentinel: ReturnType<typeof setImmediate> | undefined;
-    installMethods({
-      "test.trace": async ({ req, respond }) => {
-        if (req.id === "warmup") {
-          respond(true);
-          return;
-        }
-        starts.push(req.id);
-        if (starts.length === 1) {
-          sentinel = setImmediate(() => observedAtYield.resolve([...starts]));
-        }
-        if (req.id !== ids.at(-1)) {
-          await held.promise;
-        }
-        completed.push(req.id);
+    const registry = createEmptyPluginRegistry();
+    registry.gatewayHandlers["test.trace"] = async ({ req, respond }) => {
+      if (req.id === "warmup") {
         respond(true);
-      },
-    });
+        return;
+      }
+      starts.push(req.id);
+      if (starts.length === 1) {
+        sentinel = setImmediate(() => observedAtYield.resolve([...starts]));
+      }
+      if (req.id !== ids.at(-1)) {
+        await held.promise;
+      }
+      completed.push(req.id);
+      respond(true);
+    };
+    registerMethods(registry);
+    setTestPluginRegistry(registry);
     let restoreClock: (() => void) | undefined;
     let allResponses: Promise<unknown> | undefined;
     await withServer(async ({ capture, open }) => {
@@ -228,6 +216,7 @@ describe("authenticated operator request starts", () => {
         const ws = await openOperatorSocket(open, {
           "x-forwarded-for": "198.51.100.10",
         });
+        await expect(sendTraceRequest(ws, "warmup")).resolves.toMatchObject({ ok: true });
         const { stream } = capture.get();
         expect(ws.extensions).toContain("permessage-deflate");
         // This case isolates cheap-start batching. Other owner cases advance the
@@ -244,7 +233,10 @@ describe("authenticated operator request starts", () => {
         });
         // Observe failures immediately; cleanup still joins the response promise.
         void allResponses.catch(() => {});
-        const markerResponse = responseFor(ws, ids.at(-1));
+        const markerResponse = onceMessage(
+          ws,
+          (value) => value.type === "res" && value.id === ids.at(-1),
+        );
         // Chrome also compresses small requests when the extension is negotiated.
         injectReceiveChunk(
           stream,
@@ -270,25 +262,33 @@ describe("authenticated operator request starts", () => {
   it("delivers operator control frames while ordinary request completions overlap", async () => {
     const held = createDeferredCore();
     let completed = false;
-    installHeldTrace(held.promise, () => {
-      completed = true;
-    });
+    const registry = createEmptyPluginRegistry();
+    registry.gatewayHandlers["test.trace"] = async ({ req, respond }) => {
+      if (req.id === "held") {
+        await held.promise;
+        completed = true;
+      }
+      respond(true);
+    };
+    registerMethods(registry);
+    setTestPluginRegistry(registry);
     await withServer(async ({ capture, open }) => {
       const ws = await openOperatorSocket(open);
+      await sendTraceRequest(ws, "warmup");
       const { socket, stream } = capture.get();
       const signal = AbortSignal.timeout(2_000);
       const peerPongs = on(ws, "pong", { signal });
       const serverPongs = on(socket, "pong", { signal });
-      const response = responseFor(ws, "held");
+      const response = onceMessage(ws, (value) => value.type === "res" && value.id === "held");
       void response.catch(() => {});
       try {
-        const marker = responseFor(ws, "marker");
+        const marker = onceMessage(ws, (value) => value.type === "res" && value.id === "marker");
         injectReceiveChunk(stream, [
           maskedFrame(0x89, "first"),
-          maskedFrame(0x81, rpc("held")),
+          maskedFrame(0x81, JSON.stringify({ type: "req", id: "held", method: "test.trace" })),
           maskedFrame(0x8a, "client-pong"),
           maskedFrame(0x89, "second"),
-          maskedFrame(0x81, rpc("marker")),
+          maskedFrame(0x81, JSON.stringify({ type: "req", id: "marker", method: "test.trace" })),
         ]);
         expect((await peerPongs.next()).value?.[0].toString()).toBe("first");
         expect((await peerPongs.next()).value?.[0].toString()).toBe("second");
@@ -311,10 +311,20 @@ describe("authenticated operator request starts", () => {
   it("completes an ordinary operator request after a coalesced native close", async () => {
     const held = createDeferredCore();
     const completed = createDeferredCore();
-    installHeldTrace(held.promise, () => completed.resolve());
+    const registry = createEmptyPluginRegistry();
+    registry.gatewayHandlers["test.trace"] = async ({ req, respond }) => {
+      if (req.id === "held") {
+        await held.promise;
+        completed.resolve();
+      }
+      respond(true);
+    };
+    registerMethods(registry);
+    setTestPluginRegistry(registry);
     await withServer(async ({ capture, open }) => {
       try {
         const ws = await openOperatorSocket(open);
+        await sendTraceRequest(ws, "warmup");
         const { socket, stream } = capture.get();
         const signal = AbortSignal.timeout(2_000);
         const closed = Promise.all([
@@ -328,7 +338,10 @@ describe("authenticated operator request starts", () => {
             responses.push(frame);
           }
         });
-        injectReceiveChunk(stream, [maskedFrame(0x81, rpc("held")), maskedFrame(0x88, "")]);
+        injectReceiveChunk(stream, [
+          maskedFrame(0x81, JSON.stringify({ type: "req", id: "held", method: "test.trace" })),
+          maskedFrame(0x88, ""),
+        ]);
         await closed;
         expect(socket.readyState).toBe(WebSocket.CLOSED);
         held.resolve();
@@ -391,14 +404,26 @@ describe("authenticated operator request starts", () => {
 
   it("keeps local frames raw and compresses remote frames both ways without stalling", async () => {
     await writeConfigFile({ gateway: { trustedProxies: ["127.0.0.1"] } });
-    const registry = installMethods({
-      "test.echo": async ({ req, respond, acceptsDeflatedSegments }) => {
-        respond(true, {
-          echoed: (req.params as { text: string }).text,
-          acceptsDeflatedSegments: acceptsDeflatedSegments === true,
-        });
-      },
-    });
+    const registry = createEmptyPluginRegistry();
+    const sharedMessages = [
+      { text: 'Escaped "segment" 漢字🦞\n'.repeat(4096) },
+      { text: randomBytes(1536).toString("base64").repeat(16) },
+    ];
+    const sharedBytes = Buffer.from(JSON.stringify(sharedMessages));
+    registerDeflatedSegment(
+      sharedBytes,
+      deflateRawSync(sharedBytes, { level: 1, finishFlush: zlibConstants.Z_SYNC_FLUSH }),
+    );
+    registry.gatewayHandlers["test.echo"] = async ({ req, respond, acceptsDeflatedSegments }) => {
+      respond(true, {
+        echoed: (req.params as { text: string }).text,
+        acceptsDeflatedSegments: acceptsDeflatedSegments === true,
+      });
+    };
+    registry.gatewayHandlers["test.segments"] = async ({ respond }) => {
+      respond(true, { messages: new SerializedJsonArray(sharedBytes) });
+    };
+    registerMethods(registry, ["test.segments", "test.echo"]);
     // Real Gateways advertise many plugin methods; push hello past the compression threshold.
     for (let index = 0; index < 64; index++) {
       registry.gatewayMethodDescriptors.push(
@@ -409,6 +434,7 @@ describe("authenticated operator request starts", () => {
         }),
       );
     }
+    setTestPluginRegistry(registry);
     await withServer(async ({ capture, open }) => {
       const local = open();
       await once(local, "open");
@@ -456,7 +482,7 @@ describe("authenticated operator request starts", () => {
         text: string,
         send = () => socket.send(rpc(id, "test.echo", { text })),
       ) => {
-        const response = responseFor(socket, id);
+        const response = onceMessage(socket, (value) => value.type === "res" && value.id === id);
         const before = stream.bytesWritten;
         send();
         await expect(response).resolves.toMatchObject({
@@ -466,14 +492,39 @@ describe("authenticated operator request starts", () => {
         return stream.bytesWritten - before;
       };
       const request = (id: string, text: string) => rpc(id, "test.echo", { text });
+      // A worker's window-15 cache must not bypass this peer's window-10 limit.
+      // The second response reuses the same segment with a fresh RPC envelope.
+      for (const id of ["segments-first", "segments-again"]) {
+        const response = once(socket, "message");
+        const before = stream.bytesWritten;
+        socket.send(rpc(id, "test.segments"));
+        const [data] = await response;
+        const expected = JSON.stringify({
+          type: "res",
+          id,
+          ok: true,
+          payload: { messages: sharedMessages },
+        });
+        expect(rawDataToString(data)).toBe(expected);
+        expect(stream.bytesWritten - before).toBeLessThan(Buffer.byteLength(expected) / 4);
+      }
       // Live session/tool events stay raw below the threshold.
       const smallText = "x".repeat(GATEWAY_PER_MESSAGE_DEFLATE.threshold / 2);
       expect(await echo("small", smallText)).toBeGreaterThan(smallText.length);
       const inlineText = "x".repeat(MAX_PREAUTH_PAYLOAD_BYTES * 2);
-      expect(await echo("inline", inlineText)).toBeLessThan(inlineText.length / 4);
+      for (const [id, text] of [
+        ["medium", "x".repeat(6 * 1024)],
+        ["inline", inlineText],
+        ["repetitive", "x".repeat(2 * 1024 * 1024)],
+      ] as const) {
+        expect(await echo(id, text)).toBeLessThan(text.length / 4);
+      }
       // Repeats farther apart than the negotiated window must not be referenced.
       const windowText = randomBytes(1536).toString("base64").repeat(16);
       await echo("window", windowText);
+      // Barely compressible frames still round-trip.
+      const randomText = randomBytes(384 * 1024).toString("base64");
+      await echo("random", randomText);
       // Fragmented compressed requests inflate once the final fragment arrives.
       const fragmented = request("fragmented", inlineText);
       const split = fragmented.length >> 1;
