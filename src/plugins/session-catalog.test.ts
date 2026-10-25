@@ -121,7 +121,7 @@ describe("listAdoptedSessionCatalogSessions", () => {
       {
         agentId: "beta",
         sessionKey: "pending",
-        entry: { pluginOwnerId: "acpx", initializationPending: true },
+        entry: { pluginOwnerId: "acpx", initializationPending: true as const },
       },
       { agentId: "beta", sessionKey: "adopted", entry: { pluginOwnerId: "acpx" } },
     ].map((row) => ({
