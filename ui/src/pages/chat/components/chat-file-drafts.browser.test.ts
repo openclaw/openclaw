@@ -218,24 +218,8 @@ describe.runIf(browserMode)("file draft document reload protection", () => {
           ? scheduleStaleChunkReload({ storage, reload })
           : retryStaleChunkReloadWhenReachable({ storage, reload, timeoutMs: 0 });
       };
-      const createFile = (name: string): FileContent => {
-        const file: FileContent = {
-          kind: "file",
-          name,
-          path: name,
-          draftKey: crypto.randomUUID(),
-          content: "Saved content",
-          edit: {
-            hash: "original-hash",
-            save: vi.fn().mockResolvedValue({ ok: true, hash: "saved-hash" }),
-            fetchLatest: vi.fn(),
-          },
-        };
-        files.push(file);
-        return file;
-      };
-      const first = createFile("first.txt");
-      const second = createFile("second.txt");
+      const first = makeFile("first.txt");
+      const second = makeFile("second.txt");
       let panel = await openFile(first);
       await expect(attempt()).resolves.toBe(true);
       expect(reload).toHaveBeenCalledOnce();
@@ -254,11 +238,7 @@ describe.runIf(browserMode)("file draft document reload protection", () => {
       expect(fetchDocument).not.toHaveBeenCalled();
       expect(reload).not.toHaveBeenCalled();
       if (mode === "manual") {
-        await expect
-          .element(
-            page.getByText("Save or discard your file edits before reloading.", { exact: true }),
-          )
-          .toBeVisible();
+        await reloadWarning();
       }
 
       for (const file of [first, second]) {
