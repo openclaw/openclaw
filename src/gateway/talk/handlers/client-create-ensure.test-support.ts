@@ -9,7 +9,11 @@ import {
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
-import { createDeferred, withinTest } from "../../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   loadSessionEntry,
@@ -42,9 +46,7 @@ import {
   browserSession,
   createDelegatedBrowserProviderFixture,
   type BrowserRequest,
-  observeTalkVoiceChangeRequest,
 } from "./client-fixtures.test-support.js";
-import { talkVoiceHandlers } from "./voice.js";
 
 export type EnsureHarness = {
   tempDir: () => string;
@@ -97,83 +99,46 @@ export function browserAuthority(
   };
 }
 
-export function createBrowserHarness(
-  harness: Pick<EnsureHarness, "configureProvider" | "invokeCreate">,
-  params: Record<string, unknown>,
-  provider: (request: BrowserRequest) => Promise<typeof browserSession> = async () =>
-    browserSession,
-) {
-  const createBrowserSession = vi.fn(provider);
-  const fixture = harness.configureProvider(createBrowserSession);
-  const respond = vi.fn();
-  return {
-    ...fixture,
-    respond,
-    createBrowserSession,
-    get reply() {
-      return respond.mock.lastCall;
-    },
-    create: (
-      overrides: Record<string, unknown> = {},
-      options: Partial<GatewayRequestHandlerOptions> = {},
-    ) =>
-      harness.invokeCreate({
-        params: { ...params, ...overrides },
-        respond,
-        context: fixture.context,
-        client: fixture.client,
-        ...options,
-      } as never),
-  };
-}
-
-function observeTargetSql(targetPath: string, pattern: RegExp, enabled = () => true) {
+function observeTargetSql(targetPath: string, pattern: RegExp) {
   const targets = new Set([targetPath, readDatabasePathIdentitySync(targetPath).canonicalPath]);
   const queries: string[] = [];
   const observed = observeHostDataSql((sql, database) => {
-    if (database && targets.has(database.location() ?? "") && enabled() && pattern.test(sql)) {
+    if (database && targets.has(database.location() ?? "") && pattern.test(sql)) {
       queries.push(sql);
     }
   });
   return { ...observed, allQueries: observed.queries, queries };
 }
 
-export function requestBrowserVoiceChange(
-  fixture: Pick<ReturnType<typeof createDelegatedBrowserProviderFixture>, "context" | "client">,
-  voiceSessionId: string | undefined,
-  prepare = (options: GatewayRequestHandlerOptions) => options,
-) {
-  const wait = observeTalkVoiceChangeRequest(fixture.context.broadcastToConnIds);
-  const change = Promise.resolve(
-    talkVoiceHandlers["talk.voice.set"]!(
-      prepare({
-        req: { type: "req", id: "voice-change", method: "talk.voice.set", params: {} },
-        params: { voiceSessionId, voice: "ember" },
-        respond: vi.fn(),
-        context: fixture.context,
-        client: fixture.client,
-        isWebchatConnect: () => false,
-      } as never),
-    ),
-  );
-  const requested = wait(change).then(() => {
-    const changeId = fixture.context.broadcastToConnIds.mock.calls.find(
-      ([event]) => event === "talk.voice.change",
-    )?.[1]?.changeId;
-    expect(changeId).toBeTypeOf("string");
-    return changeId;
-  });
-  return { change, requested };
-}
-
 export function registerClientCreateEnsureTests(harness: EnsureHarness) {
   const file = (name: string) => path.join(harness.tempDir(), name);
-  const browser = (key: string, voiceSessionId?: string) =>
-    createBrowserHarness(harness, {
-      sessionKey: key,
-      provider: "openai",
-      ...(voiceSessionId ? { voiceSessionId } : {}),
-    });
+  const browser = (sessionKey: string, voiceSessionId?: string) => {
+    const fixture = harness.configureProvider(vi.fn(async () => browserSession));
+    const respond = vi.fn();
+    return {
+      ...fixture,
+      respond,
+      get reply() {
+        return respond.mock.lastCall;
+      },
+      create: (
+        overrides: Record<string, unknown> = {},
+        options: Partial<GatewayRequestHandlerOptions> = {},
+      ) =>
+        harness.invokeCreate({
+          params: {
+            sessionKey,
+            provider: "openai",
+            ...(voiceSessionId ? { voiceSessionId } : {}),
+            ...overrides,
+          },
+          respond,
+          context: fixture.context,
+          client: fixture.client,
+          ...options,
+        } as never),
+    };
+  };
   const setStore = (fixture: ReturnType<typeof browser>, storePath: string) => {
     const cfg = fixture.context.getRuntimeConfig();
     fixture.context.getRuntimeConfig = () => ({ ...cfg, session: { store: storePath } });
@@ -247,6 +212,16 @@ export function registerClientCreateEnsureTests(harness: EnsureHarness) {
       const resume = createDeferred();
       const prepare = sharingGrants.prepareSessionSharingWorkerGrant;
       const ensure = voiceWriters.ensureClientVoiceAgentSessionEntry;
+      const interceptGrant: typeof prepare = async (params) => {
+        const grant = await prepare(params);
+        if (!entryChange) {
+          mutate();
+        } else if (params.transactionSource) {
+          prepared.resolve();
+          await resume.promise;
+        }
+        return grant;
+      };
       const interception =
         phase === "publication"
           ? vi
@@ -263,33 +238,18 @@ export function registerClientCreateEnsureTests(harness: EnsureHarness) {
           : (() => {
               const spy = vi.spyOn(sharingGrants, "prepareSessionSharingWorkerGrant");
               return spy[entryChange ? "mockImplementation" : "mockImplementationOnce"](
-                async (params) => {
-                  const grant = await prepare(params);
-                  if (entryChange) {
-                    if (params.transactionSource) {
-                      prepared.resolve();
-                      await resume.promise;
-                    }
-                  } else {
-                    mutate();
-                  }
-                  return grant;
-                },
+                interceptGrant,
               );
             })();
       const pending = fixture.create();
       try {
         if (entryChange) {
           await withinTest(
-            Promise.race([
+            awaitGateBeforeSettlement(
               prepared.promise,
-              pending.then(() => {
-                throw new Error(
-                  "Creation finished before its authority wait: " +
-                    (fixture.reply?.[2]?.message ?? "no error response"),
-                );
-              }),
-            ]),
+              pending,
+              "Creation finished before its authority wait",
+            ),
             signal,
           );
           mutate();
@@ -336,11 +296,7 @@ export function registerClientCreateEnsureTests(harness: EnsureHarness) {
       const creation = {
         createdVia: "internal" as const,
         createdAt: 7,
-        createdActor: {
-          type: "human" as const,
-          source: "profile" as const,
-          id: "original-creator",
-        },
+        createdActor: { type: "human", source: "profile", id: "original-creator" } as const,
         sandbox: "required" as const,
       };
       if (idless) {

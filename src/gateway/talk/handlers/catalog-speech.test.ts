@@ -79,20 +79,22 @@ vi.mock("../../../realtime-transcription/provider-registry.js", async (importOri
 }));
 
 // Existing catalog contract cases consume the documented warming retry before inspecting rows.
-async function callGatewayHandler(...args: Parameters<typeof callGatewayHandlerOnce>) {
+async function readCatalog(cfg: OpenClawConfig, params: Record<string, unknown> = {}) {
+  const context = { getRuntimeConfig: () => cfg };
+  const read = () => callGatewayHandlerOnce(talkHandlers, "talk.catalog", params, { context });
   const ownsTimers = !vi.isFakeTimers();
   if (ownsTimers) {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   }
   try {
-    const result = await callGatewayHandlerOnce(...args);
+    const result = await read();
     if (
       asOptionalRecord(asOptionalRecord(result.error)?.details)?.reason !== "talk-catalog-warming"
     ) {
       return result;
     }
     await vi.advanceTimersByTimeAsync(0);
-    return await callGatewayHandlerOnce(...args);
+    return await read();
   } finally {
     if (ownsTimers) {
       vi.useRealTimers();
@@ -102,9 +104,10 @@ async function callGatewayHandler(...args: Parameters<typeof callGatewayHandlerO
 
 afterEach(() => vi.useRealTimers());
 
-function readCatalog(cfg: OpenClawConfig, params: Record<string, unknown> = {}) {
-  return callGatewayHandler(talkHandlers, "talk.catalog", params, {
-    context: { getRuntimeConfig: () => cfg },
+function expectWarming(result: unknown) {
+  expect(result).toMatchObject({
+    ok: false,
+    error: { retryable: true, details: { reason: "talk-catalog-warming" } },
   });
 }
 
@@ -226,10 +229,7 @@ it("single-flights cold discovery and isolates owner/model snapshots", async () 
   const readAvailability = vi.fn(() => readiness.promise);
   registry.realtime = [realtimeProvider(readAvailability, "slow")];
   const read = () => callGatewayHandlerOnce(talkHandlers, "talk.catalog", {}, { context });
-  expect(await read()).toMatchObject({
-    ok: false,
-    error: { retryable: true, details: { reason: "talk-catalog-warming" } },
-  });
+  expectWarming(await read());
   await vi.advanceTimersByTimeAsync(6_000);
   const waiting = await Promise.all(Array.from({ length: 20 }, read));
   expect(waiting.every((result) => !result.ok)).toBe(true);
@@ -260,10 +260,7 @@ it("serves the last catalog during one slow refresh and publishes its late succe
   registry.providers = [speechProvider(readiness, "slow")];
   const read = () =>
     callGatewayHandlerOnce(talkHandlers, "talk.catalog", {}, { context: context as never });
-  expect(await read()).toMatchObject({
-    ok: false,
-    error: { retryable: true, details: { reason: "talk-catalog-warming" } },
-  });
+  expectWarming(await read());
   await vi.advanceTimersByTimeAsync(0);
   const first = await read();
   expectCatalog(first, "speech", { providers: [{ configured: true }] });

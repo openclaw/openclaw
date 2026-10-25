@@ -127,6 +127,14 @@ describe("cross-store voice creation authority", () => {
               });
             }
           };
+          const reachNativeGuard = () => {
+            if (creating) {
+              nativeGuardReached = true;
+              if (revocation !== "unchanged") {
+                revoke();
+              }
+            }
+          };
           const respond = vi.fn();
           const options: GatewayRequestHandlerOptions = {
             req: { type: "req", id: "admitted-voice", method: "talk.client.create" },
@@ -140,23 +148,18 @@ describe("cross-store voice creation authority", () => {
             }),
             client,
             isWebchatConnect: () => false,
-            ...(writer === "native"
-              ? {
-                  sessionMutationCommitGuard: () => {
-                    if (
-                      creating &&
-                      getOpenClawAgentDatabaseIfOpen({ agentId: "main" })?.db.isTransaction &&
-                      clientVoiceSessionTesting.readRecord("main", voiceSessionId)
-                    ) {
-                      nativeGuardReached = true;
-                      if (revocation !== "unchanged") {
-                        revoke();
-                      }
-                    }
-                  },
-                }
-              : {}),
           };
+          if (writer === "native") {
+            options.sessionMutationCommitGuard = () => {
+              if (
+                creating &&
+                getOpenClawAgentDatabaseIfOpen({ agentId: "main" })?.db.isTransaction &&
+                clientVoiceSessionTesting.readRecord("main", voiceSessionId)
+              ) {
+                reachNativeGuard();
+              }
+            };
+          }
           if (writer !== "wrapper") {
             authority.bind(options);
           }
@@ -197,12 +200,7 @@ describe("cross-store voice creation authority", () => {
             const mutate = voiceKernel.mutateVoiceSessionInDatabase;
             vi.spyOn(voiceKernel, "mutateVoiceSessionInDatabase").mockImplementation((...args) => {
               const result = mutate(...args);
-              if (creating) {
-                nativeGuardReached = true;
-                if (revocation !== "unchanged") {
-                  revoke();
-                }
-              }
+              reachNativeGuard();
               return result;
             });
           }

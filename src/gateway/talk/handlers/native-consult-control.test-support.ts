@@ -60,15 +60,6 @@ export async function createNativeTalkCall(
 
 export function registerNativeConsultExactControlTests(harness: NativeControlHarness) {
   const cancel = { text: "cancel", mode: "cancel" };
-  const success = async (
-    method: string,
-    params: Record<string, unknown>,
-    expected: unknown = expect.any(Object),
-  ) => {
-    const respond = await harness.dispatch(method, params);
-    expect(respond).toHaveBeenCalledWith(true, expected, undefined);
-    return respond.mock.calls[0]![1] as { voiceSessionId?: string; sessionId?: string };
-  };
   const commonReplacements = ["replaced run", "reused run ID", "other call"];
   describe.each([
     ["browser-rpc", commonReplacements],
@@ -188,14 +179,18 @@ export function registerNativeConsultExactControlTests(harness: NativeControlHar
             ),
           );
         } else {
-          await success(
+          const respond = await harness.dispatch(
             browser ? "talk.client.steer" : "talk.session.steer",
             {
               ...(browser ? {} : { sessionId: controlSessionId }),
               sessionKey: "main",
               ...cancel,
             },
+          );
+          expect(respond).toHaveBeenCalledWith(
+            true,
             expect.objectContaining({ ok: cancelsOriginal, mode: "cancel" }),
+            undefined,
           );
         }
         expect(abortOwned).toHaveBeenCalledTimes(cancelsOriginal ? 1 : 0);

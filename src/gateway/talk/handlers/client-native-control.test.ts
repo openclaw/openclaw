@@ -428,7 +428,7 @@ describe("native Talk through the public OpenAI plugin registration", () => {
                   : "I'm not working on an active request right now.",
               ),
             );
-            const transcript = { type: "turn.done", turn: { role: "user", transcript: control } };
+            const transcript = nativeTranscript(control);
             if (eventOrder === "transcript-first") {
               socket.serverEvent(transcript);
             }
