@@ -16,7 +16,7 @@ import { getRenderedModalDialog, installDialogPolyfill } from "../../test-helper
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { trackSolidRoot } from "../../test-helpers/solid-cleanup.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import { createSkillLibrary } from "./library-state.ts";
+import { createSkillLibrary, type SkillLibraryModel } from "./library-state.ts";
 import { SkillLibrary, SkillLibraryDialogs } from "./library-view.tsx";
 import { connectedGateway, libraryEntry, libraryList, requestFor } from "./skills.test-support.ts";
 
@@ -36,6 +36,31 @@ function harness() {
   library.state.list = libraryList(false);
   library.state.view = "mine";
   return { library, config, request, connection };
+}
+function mountLibrary(library: SkillLibraryModel, dialogsOnly = false) {
+  const mounted = mountSolid(() =>
+    dialogsOnly ? (
+      <SkillLibraryDialogs library={library} />
+    ) : (
+      <SkillLibrary library={library} navigationActions={null} />
+    ),
+  );
+  return {
+    ...mounted,
+    query: <T extends Element = HTMLElement>(selector: string) =>
+      mounted.container.querySelector<T>(selector),
+  };
+}
+function buttonIn(container: Element, label: string) {
+  return [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+    (button) => button.textContent?.trim() === label,
+  )!;
+}
+function reconnect(context: Pick<ReturnType<typeof harness>, "library" | "connection">) {
+  const { connection, library } = context;
+  connection.publish({ ...connection.gateway.snapshot, phase: "reconnecting" });
+  library.reset();
+  connection.publish({ ...connection.gateway.snapshot, phase: "connected" });
 }
 function fileWithReader(name: string, read: () => Promise<ArrayBuffer>) {
   const file = new File(["skill"], name);
@@ -73,18 +98,18 @@ function savedReceipt(read: SkillsLibraryReadResult): SkillsLibraryReceipt {
 it("opens only an accepted library read and retains the editor through failure and retry", async () => {
   onTestFinished(installDialogPolyfill());
   const { library, request } = harness();
-  const mounted = mountSolid(() => <SkillLibraryDialogs library={library} />);
+  const mounted = mountLibrary(library, true);
   const first = createDeferred<SkillsLibraryReadResult>();
   request.mockReturnValueOnce(first.promise);
   const opening = library.open(libraryEntry().skillId);
   flush();
-  expect(mounted.container.querySelector(".skill-reader-dialog")).toBeNull();
+  expect(mounted.query(".skill-reader-dialog")).toBeNull();
   await library.open(libraryEntry().skillId);
   expect(request).toHaveBeenCalledTimes(1);
   first.resolve(existingSkill());
   await opening;
   const { dialog } = await getRenderedModalDialog(mounted.container);
-  const editor = mounted.container.querySelector<HTMLTextAreaElement>("textarea")!;
+  const editor = mounted.query<HTMLTextAreaElement>("textarea")!;
   expect(dialog.open).toBe(true);
   expect(editor.value).toBe("# Existing skill");
 
@@ -92,53 +117,44 @@ it("opens only an accepted library read and retains the editor through failure a
   request.mockReturnValueOnce(replacement.promise);
   const replacing = library.open("replacement-skill");
   flush();
-  expect(editor.readOnly).toBe(true);
-  expect(editor.value).toBe("# Existing skill");
+  expect(editor).toMatchObject({ readOnly: true, value: "# Existing skill" });
   replacement.reject(new Error("Library detail unavailable"));
   await replacing;
   await waitForFast(() => {
     expect(editor.readOnly).toBe(false);
-    expect(mounted.container.querySelector('[role="alert"]')?.textContent).toContain(
-      "Library detail unavailable",
-    );
+    expect(mounted.query('[role="alert"]')?.textContent).toContain("Library detail unavailable");
   });
-  expect(mounted.container.querySelector("textarea")).toBe(editor);
+  expect(mounted.query("textarea")).toBe(editor);
   expect(mounted.container.querySelectorAll('[role="alert"]')).toHaveLength(1);
   expect(dialog.open).toBe(true);
 
   request.mockResolvedValueOnce({ ...existingSkill(), content: "# Retried library read" });
   await library.open("replacement-skill");
   await waitForFast(() => expect(editor.value).toBe("# Retried library read"));
-  expect(mounted.container.querySelector("textarea")).toBe(editor);
-  expect(mounted.container.querySelector('[role="alert"]')).toBeNull();
+  expect(mounted.query("textarea")).toBe(editor);
+  expect(mounted.query('[role="alert"]')).toBeNull();
   expect(request).toHaveBeenCalledTimes(3);
 });
 
 it("retires an old library detail failure when the connection is replaced", async () => {
   onTestFinished(installDialogPolyfill());
   const { library, request, connection } = harness();
-  const mounted = mountSolid(() => <SkillLibraryDialogs library={library} />);
+  const mounted = mountLibrary(library, true);
   const oldRead = createDeferred<SkillsLibraryReadResult>();
   request.mockReturnValueOnce(oldRead.promise);
   const previous = library.open(libraryEntry().skillId);
-  connection.publish({ ...connection.gateway.snapshot, phase: "reconnecting" });
-  library.reset();
-  connection.publish({ ...connection.gateway.snapshot, phase: "connected" });
+  reconnect({ library, connection });
   request.mockResolvedValueOnce({ ...existingSkill(), content: "# Current connection" });
   await library.open(libraryEntry().skillId);
   await waitForFast(() => {
-    expect(mounted.container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(
-      "# Current connection",
-    );
-    expect(mounted.container.querySelector('[role="alert"]')).toBeNull();
+    expect(mounted.query<HTMLTextAreaElement>("textarea")?.value).toBe("# Current connection");
+    expect(mounted.query('[role="alert"]')).toBeNull();
   });
   oldRead.reject(new Error("Retired read failed"));
   await previous;
   await waitForFast(() => {
-    expect(mounted.container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(
-      "# Current connection",
-    );
-    expect(mounted.container.querySelector('[role="alert"]')).toBeNull();
+    expect(mounted.query<HTMLTextAreaElement>("textarea")?.value).toBe("# Current connection");
+    expect(mounted.query('[role="alert"]')).toBeNull();
   });
   expect(library.state).toMatchObject({ busy: false, error: null });
   expect(request).toHaveBeenCalledTimes(2);
@@ -159,18 +175,13 @@ it.each(
     const mutation = createDeferred<SkillsLibraryReceipt>();
     const reload = createDeferred<SkillsLibraryListResult>();
     request.mockReturnValueOnce(mutation.promise).mockReturnValueOnce(reload.promise);
-    const mounted = mountSolid(() => <SkillLibrary library={library} navigationActions={null} />);
+    const mounted = mountLibrary(library);
     flush();
-    await waitForFast(() =>
-      expect(mounted.container.querySelector(".settings-row")).not.toBeNull(),
-    );
-    const dialog = mounted.container.querySelector(".skill-reader-dialog")!;
+    await waitForFast(() => expect(mounted.query(".settings-row")).not.toBeNull());
+    const dialog = mounted.query(".skill-reader-dialog")!;
     const { dialog: nativeDialog } = await getRenderedModalDialog(mounted.container);
-    const row = mounted.container.querySelector(".settings-row")!;
-    const button = (label: string) =>
-      [...dialog.querySelectorAll<HTMLButtonElement>("button")].find(
-        (candidate) => candidate.textContent?.trim() === label,
-      )!;
+    const row = mounted.query(".settings-row")!;
+    const button = (label: string) => buttonIn(dialog, label);
     const before = action === "disable" ? "Disable" : "Share with team";
     const after = action === "disable" ? "Enable" : "Make private";
     button(before).click();
@@ -179,8 +190,7 @@ it.each(
       expect(row.textContent).toContain(action === "disable" ? "Disabled" : "Shared with team");
       expect(nativeDialog.open).toBe(true);
     });
-    expect(draft.entry!.enabled).toBe(true);
-    expect(draft.entry!.shared).toBe(false);
+    expect(draft.entry).toMatchObject({ enabled: true, shared: false });
     expect(request).toHaveBeenNthCalledWith(2, "skills.library.mutate", {
       skillId: read.entry.skillId,
       expectedRevision: read.entry.revision,
@@ -210,19 +220,17 @@ it.each(
         expect(draft.entry!.revision).toBe(receipt.entry.revision);
       });
     }
-    expect(mounted.container.querySelector(".skill-reader-dialog")).toBe(dialog);
-    expect(mounted.container.querySelector(".settings-row")).toBe(row);
+    expect(mounted.query(".skill-reader-dialog")).toBe(dialog);
+    expect(mounted.query(".settings-row")).toBe(row);
   },
 );
 
 it("keeps removal confirmation outside mutation presentation", async () => {
   const { library, request } = await openSkill();
   const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
-  const mounted = mountSolid(() => <SkillLibraryDialogs library={library} />);
+  const mounted = mountLibrary(library, true);
   flush();
-  const remove = [...mounted.container.querySelectorAll<HTMLButtonElement>("button")].find(
-    (button) => button.textContent?.trim() === "Remove skill",
-  )!;
+  const remove = buttonIn(mounted.container, "Remove skill");
   remove.click();
   flush();
   expect(confirm).toHaveBeenCalledTimes(1);
@@ -253,7 +261,7 @@ it("releases retired saving presentation and preserves a same-key successor draf
   const { library, request, connection, read } = await openSkill();
   const pending = createDeferred<SkillsLibraryReceipt>();
   request.mockReturnValueOnce(pending.promise);
-  const mounted = mountSolid(() => <SkillLibraryDialogs library={library} />);
+  const mounted = mountLibrary(library, true);
   flush();
   const operation = library.save();
   await waitForFast(() => expect(library.saving()).toBe(true));
@@ -261,7 +269,7 @@ it("releases retired saving presentation and preserves a same-key successor draf
   library.reset();
   await waitForFast(() => {
     expect(library.saving()).toBe(false);
-    expect(mounted.container.querySelector(".skill-reader-dialog")).toBeNull();
+    expect(mounted.query(".skill-reader-dialog")).toBeNull();
   });
   const successor = {
     ...read,
@@ -273,9 +281,7 @@ it("releases retired saving presentation and preserves a same-key successor draf
   await library.open(read.entry.skillId);
   await waitForFast(() => {
     expect(library.saving()).toBe(false);
-    expect(mounted.container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(
-      successor.content,
-    );
+    expect(mounted.query<HTMLTextAreaElement>("textarea")?.value).toBe(successor.content);
   });
   pending.resolve(savedReceipt(read));
   await operation;
@@ -297,9 +303,9 @@ it.each(["files", "clawhub"])(
     if (kind === "clawhub") {
       library.state.importSource = { slug: "@fixture/calendar" };
     }
-    const mounted = mountSolid(() => <SkillLibrary library={library} navigationActions={null} />);
+    const mounted = mountLibrary(library);
     flush();
-    const dialog = mounted.container.querySelector(".skill-reader-dialog")!;
+    const dialog = mounted.query(".skill-reader-dialog")!;
     const submit = dialog.querySelector<HTMLButtonElement>('button[type="submit"]')!;
     const reading = createDeferred<ArrayBuffer>();
     const imported = createDeferred<SkillsLibraryReceipt>();
@@ -321,19 +327,17 @@ it.each(["files", "clawhub"])(
       const receipt = savedReceipt(existingSkill());
       imported.resolve(receipt);
       await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
-      const create = [...mounted.container.querySelectorAll<HTMLButtonElement>("button")].find(
-        (button) => button.textContent?.trim() === "Create skill",
-      )!;
+      const create = buttonIn(mounted.container, "Create skill");
       expect(create.disabled).toBe(true);
       reload.resolve({ ...libraryList(false), entries: [receipt.entry] });
     }
     await operation;
     await waitForFast(() => {
-      expect(mounted.container.querySelector('[name="library-import-slug"]')).toBeNull();
+      expect(mounted.query('[name="library-import-slug"]')).toBeNull();
       if (kind === "files") {
-        expect(
-          mounted.container.querySelector<HTMLTextAreaElement>('[name="library-content"]')?.value,
-        ).toBe("# Imported skill");
+        expect(mounted.query<HTMLTextAreaElement>('[name="library-content"]')?.value).toBe(
+          "# Imported skill",
+        );
       } else {
         expect(mounted.container.textContent).toContain("existing-skill");
       }
@@ -345,9 +349,9 @@ it("disables import while disconnected without losing the local selection", () =
   const { library, connection } = harness();
   library.setImportOpen(true);
   library.state.importSelection = [new File(["# Skill"], "SKILL.md")];
-  const view = mountSolid(() => <SkillLibraryDialogs library={library} />);
+  const view = mountLibrary(library, true);
   flush();
-  const submit = view.container.querySelector<HTMLButtonElement>('button[type="submit"]')!;
+  const submit = view.query<HTMLButtonElement>('button[type="submit"]')!;
   expect(submit.disabled).toBe(false);
   connection.publish({ ...connection.gateway.snapshot, phase: "reconnecting" });
   flush();
@@ -360,14 +364,14 @@ it("retains library controls and keyed rows through pending, failed, and retried
   library.state.list = null;
   const first = createDeferred<SkillsLibraryListResult>();
   request.mockReturnValueOnce(first.promise);
-  const view = mountSolid(() => <SkillLibrary library={library} navigationActions={null} />);
+  const view = mountLibrary(library);
   const initial = library.load();
   flush();
-  const search = view.container.querySelector<HTMLInputElement>('input[name="library-search"]')!;
+  const search = view.query<HTMLInputElement>('input[name="library-search"]')!;
   search.focus();
   expect(document.activeElement).toBe(search);
-  expect(view.container.querySelector('[role="status"]')?.textContent).toContain("Loading");
-  expect(view.container.querySelector(".settings-row")).toBeNull();
+  expect(view.query('[role="status"]')?.textContent).toContain("Loading");
+  expect(view.query(".settings-row")).toBeNull();
   library.create();
   expect(library.state.draft).toBeNull();
 
@@ -382,49 +386,42 @@ it("retains library controls and keyed rows through pending, failed, and retried
   await initial;
   await waitForFast(() => expect(view.container.textContent).toContain("existing-skill"));
   expect(document.activeElement, "after the initial accepted read").toBe(search);
-  const row = view.container.querySelector(".settings-row")!;
-  const refresh = () =>
-    Array.from(view.container.querySelectorAll<HTMLButtonElement>("button")).find(
-      (button) => button.textContent?.trim() === "Refresh",
-    )!;
+  const row = view.query(".settings-row")!;
+  const refresh = () => buttonIn(view.container, "Refresh");
   const failed = createDeferred<SkillsLibraryListResult>();
   request.mockReturnValueOnce(failed.promise);
   refresh().click();
   flush();
-  expect(view.container.querySelector(".settings-row")).toBe(row);
+  expect(view.query(".settings-row")).toBe(row);
   expect(row.querySelector<HTMLButtonElement>("button")?.disabled).toBe(true);
-  expect(view.container.querySelector('input[name="library-search"]')).toBe(search);
+  expect(view.query('input[name="library-search"]')).toBe(search);
   search.value = "existing-skill";
   search.dispatchEvent(new Event("input", { bubbles: true }));
   flush();
   expect(view.container.querySelectorAll(".settings-row")).toHaveLength(1);
-  expect(view.container.querySelector(".settings-row")).toBe(row);
+  expect(view.query(".settings-row")).toBe(row);
 
   failed.reject(new Error("Library list unavailable"));
   await waitForFast(() =>
-    expect(view.container.querySelector('[role="alert"]')?.textContent).toContain(
-      "Library list unavailable",
-    ),
+    expect(view.query('[role="alert"]')?.textContent).toContain("Library list unavailable"),
   );
   expect(view.container.querySelectorAll('[role="alert"]')).toHaveLength(1);
-  expect(view.container.querySelector(".settings-row")).toBe(row);
+  expect(view.query(".settings-row")).toBe(row);
   expect(document.activeElement).toBe(search);
   expect(row.querySelector<HTMLButtonElement>("button")?.disabled).toBe(false);
 
   library.state.error = "A later mutation conflict";
   flush();
-  expect(view.container.querySelector('[role="alert"]')?.textContent).toContain(
-    "A later mutation conflict",
-  );
-  expect(view.container.querySelector(".settings-row")).toBe(row);
+  expect(view.query('[role="alert"]')?.textContent).toContain("A later mutation conflict");
+  expect(view.query(".settings-row")).toBe(row);
   request.mockResolvedValueOnce({
     ...list,
     entries: [{ ...list.entries[0]!, description: "Updated library skill" }],
   });
   refresh().click();
   await waitForFast(() => expect(row.textContent).toContain("Updated library skill"));
-  expect(view.container.querySelector(".settings-row")).toBe(row);
-  expect(view.container.querySelector('[role="alert"]')).toBeNull();
+  expect(view.query(".settings-row")).toBe(row);
+  expect(view.query('[role="alert"]')).toBeNull();
   expect(request).toHaveBeenCalledTimes(3);
 
   const retainedRefresh = createDeferred<SkillsLibraryListResult>();
@@ -432,14 +429,10 @@ it("retains library controls and keyed rows through pending, failed, and retried
   const pendingRefresh = library.load();
   flush();
   view.unmount();
-  const remounted = mountSolid(() => <SkillLibrary library={library} navigationActions={null} />);
+  const remounted = mountLibrary(library);
   flush();
-  expect(remounted.container.querySelector(".settings-row")?.textContent).toContain(
-    "Updated library skill",
-  );
-  expect(
-    remounted.container.querySelector<HTMLButtonElement>(".settings-row button")?.disabled,
-  ).toBe(true);
+  expect(remounted.query(".settings-row")?.textContent).toContain("Updated library skill");
+  expect(remounted.query<HTMLButtonElement>(".settings-row button")?.disabled).toBe(true);
   retainedRefresh.resolve(list);
   await pendingRefresh;
 });
@@ -461,9 +454,7 @@ it.each(["list", "save"] as const)("ignores stale %s failures", async (operation
     return { pending: operation === "list" ? library.load() : library.save() };
   }
   const old = await begin(oldResult, "First connection edit");
-  connection.publish({ ...connection.gateway.snapshot, phase: "reconnecting" });
-  library.reset();
-  connection.publish({ ...connection.gateway.snapshot, phase: "connected" });
+  reconnect({ library, connection });
   const current = await begin(newResult, "Current connection edit");
   expect(request).toHaveBeenCalledTimes(operation === "list" ? 2 : 4);
   expect(library.state[flag]).toBe(true);

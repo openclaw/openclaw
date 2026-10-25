@@ -9,7 +9,41 @@ import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { createSkillsMutationPresentation } from "./mutation-presentation.ts";
 import { mountSkills, personalLibrary, remoteSkill } from "./skills-page.test-support.tsx";
+import { requestFor } from "./skills.test-support.ts";
 import { createProps, createReport, createSkill } from "./view.test-support.ts";
+
+function mutationRequest(
+  mutation: Promise<unknown>,
+  status: () => unknown,
+  results?: (typeof remoteSkill)[],
+) {
+  return requestFor({
+    "skills.update": () => mutation,
+    ...(results ? { "skills.install": () => mutation } : {}),
+    "skills.status": status,
+    "skills.library.list": () => ({ ...personalLibrary, defaultTarget: "workspace" }),
+    "skills.search": () => ({ results: results ?? [] }),
+  });
+}
+function callCount(request: ReturnType<typeof requestFor>, method: string) {
+  return request.mock.calls.filter(([called]) => called === method).length;
+}
+function query<T extends Element = HTMLElement>(page: Element, selector: string) {
+  return page.querySelector<T>(selector);
+}
+const reader = (page: Element) => query(page, ".skill-reader-dialog");
+const toggleIn = (page: Element) => query<HTMLInputElement>(page, 'input[role="switch"]');
+async function openReader(page: Element) {
+  await waitForFast(() => expect(query(page, ".plugins-item__detail-button")).not.toBeNull());
+  query<HTMLButtonElement>(page, ".plugins-item__detail-button")!.click();
+  await waitForFast(() => expect(reader(page)).not.toBeNull());
+  return reader(page)!;
+}
+function expectToggle(toggle: HTMLInputElement, checked: boolean, pending: boolean) {
+  expect(toggle).toMatchObject({ checked, disabled: false });
+  expect(toggle.getAttribute("aria-disabled")).toBe(pending ? "true" : null);
+  expect(document.activeElement).toBe(toggle);
+}
 
 afterEach(() => {
   cleanupSolid();
@@ -21,14 +55,9 @@ describe("Skills mutation presentation", () => {
   it("settles an admitted toggle when its caller retires before the first presentation settle", async () => {
     const pending = deferred<unknown>();
     const report = createReport([createSkill({ disabled: true })]);
-    const request = vi.fn(async (method: string) => {
-      if (method === "skills.update") {
-        return pending.promise;
-      }
-      if (method === "skills.status") {
-        return report;
-      }
-      throw new Error(`Unexpected method: ${method}`);
+    const request = requestFor({
+      "skills.update": () => pending.promise,
+      "skills.status": () => report,
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const { state } = createProps();
@@ -77,29 +106,14 @@ describe("Skills mutation presentation", () => {
       const pending = deferred<unknown>();
       const original = createReport([createSkill({ name: "Original inventory" })]);
       const replacement = createReport([createSkill({ name: "Replacement inventory" })]);
-      const request = vi.fn(async (method: string) => {
-        if (method === "skills.update") {
-          return pending.promise;
-        }
-        if (method === "skills.status") {
-          return replacement;
-        }
-        if (method === "skills.library.list") {
-          return { ...personalLibrary, defaultTarget: "workspace" };
-        }
-        if (method === "skills.search") {
-          return { results: [] };
-        }
-        throw new Error(`Unexpected method: ${method}`);
-      });
+      const request = mutationRequest(pending.promise, () => replacement);
       const mounted = mountSkills(request, "settings");
+      const page = mounted.page;
       mounted.publishRouteData({ report: original });
-      await waitForFast(() => expect(mounted.page.textContent).toContain("Original inventory"));
-      mounted.page.querySelector<HTMLButtonElement>(".plugins-item__detail-button")!.click();
-      await waitForFast(() =>
-        expect(mounted.page.querySelector('input[role="switch"]')).not.toBeNull(),
-      );
-      const toggle = mounted.page.querySelector<HTMLInputElement>('input[role="switch"]')!;
+      await waitForFast(() => expect(page.textContent).toContain("Original inventory"));
+      query<HTMLButtonElement>(page, ".plugins-item__detail-button")!.click();
+      await waitForFast(() => expect(toggleIn(page)).not.toBeNull());
+      const toggle = toggleIn(page)!;
       toggle.click();
       await waitForFast(() => expect(toggle.getAttribute("aria-disabled")).toBe("true"));
 
@@ -108,40 +122,34 @@ describe("Skills mutation presentation", () => {
           ...mounted.connection.gateway.snapshot,
           client: { request } as unknown as GatewayBrowserClient,
         });
-        await waitForFast(() =>
-          expect(mounted.page.textContent).toContain("Replacement inventory"),
-        );
+        await waitForFast(() => expect(page.textContent).toContain("Replacement inventory"));
       } else if (change === "agent") {
         mounted.context.settingsAgentSelection.set("research");
         await waitForFast(() => {
-          expect(mounted.page.textContent).not.toContain("Original inventory");
-          expect(mounted.page.querySelector(".skill-reader-dialog")).toBeNull();
+          expect(page.textContent).not.toContain("Original inventory");
+          expect(reader(page)).toBeNull();
         });
       } else {
         await mounted.router.navigate("skills", mounted.context);
         mounted.changeSurface("discovery");
-        await waitForFast(() =>
-          expect(mounted.page.querySelector('input[name="skills-search"]')).not.toBeNull(),
-        );
+        await waitForFast(() => expect(query(page, 'input[name="skills-search"]')).not.toBeNull());
       }
 
       if (change === "agent") {
         // One owner serializes inventory reads behind the admitted workspace write.
-        expect(request.mock.calls.filter(([method]) => method === "skills.status")).toHaveLength(0);
+        expect(callCount(request, "skills.status")).toBe(0);
         pending.resolve({});
       }
       let successorDialog: Element | null = null;
       if (change !== "route") {
-        await waitForFast(() =>
-          expect(mounted.page.textContent).toContain("Replacement inventory"),
-        );
-        mounted.page.querySelector<HTMLButtonElement>(".plugins-item__detail-button")!.click();
+        await waitForFast(() => expect(page.textContent).toContain("Replacement inventory"));
+        query<HTMLButtonElement>(page, ".plugins-item__detail-button")!.click();
         await waitForFast(() => {
-          const current = mounted.page.querySelector<HTMLInputElement>('input[role="switch"]');
+          const current = toggleIn(page);
           expect(current?.checked).toBe(true);
           expect(current?.getAttribute("aria-disabled")).toBeNull();
         });
-        successorDialog = mounted.page.querySelector(".skill-reader-dialog");
+        successorDialog = reader(page);
       }
       if (change !== "agent") {
         pending.resolve({});
@@ -149,15 +157,15 @@ describe("Skills mutation presentation", () => {
       await pending.promise;
       if (change !== "route") {
         await waitForFast(() => {
-          expect(mounted.page.querySelector(".skill-reader-dialog")).toBe(successorDialog);
-          const current = mounted.page.querySelector<HTMLInputElement>('input[role="switch"]');
+          expect(reader(page)).toBe(successorDialog);
+          const current = toggleIn(page);
           expect(current?.checked).toBe(true);
           expect(current?.getAttribute("aria-disabled")).toBeNull();
-          expect(mounted.page.textContent).not.toContain("Skill disabled");
-          expect(mounted.page.textContent).toContain("Replacement inventory");
+          expect(page.textContent).not.toContain("Skill disabled");
+          expect(page.textContent).toContain("Replacement inventory");
         });
       } else {
-        expect(mounted.page.querySelector('input[name="skills-search"]')).not.toBeNull();
+        expect(query(page, 'input[name="skills-search"]')).not.toBeNull();
       }
     },
   );
@@ -167,38 +175,16 @@ describe("Skills mutation presentation", () => {
     async (outcome) => {
       onTestFinished(installDialogPolyfill());
       const pending = deferred<unknown>();
-      const skill = createSkill();
-      let report = createReport([skill]);
+      let report = createReport([createSkill()]);
       const refreshed = deferred<ReturnType<typeof createReport>>();
       onTestFinished(() => {
         pending.resolve({});
         refreshed.resolve(report);
       });
-      const request = vi.fn(async (method: string) => {
-        if (method === "skills.update") {
-          return pending.promise;
-        }
-        if (method === "skills.status") {
-          return refreshed.promise;
-        }
-        if (method === "skills.library.list") {
-          return { ...personalLibrary, defaultTarget: "workspace" };
-        }
-        if (method === "skills.search") {
-          return { results: [] };
-        }
-        throw new Error(`Unexpected method: ${method}`);
-      });
+      const request = mutationRequest(pending.promise, () => refreshed.promise);
       const { page, publishRouteData } = mountSkills(request, "settings");
       publishRouteData({ report });
-      await waitForFast(() =>
-        expect(
-          page.querySelector<HTMLButtonElement>(".plugins-item__detail-button"),
-        ).not.toBeNull(),
-      );
-      page.querySelector<HTMLButtonElement>(".plugins-item__detail-button")!.click();
-      await waitForFast(() => expect(page.querySelector(".skill-reader-dialog")).not.toBeNull());
-      const dialog = page.querySelector(".skill-reader-dialog")!;
+      const dialog = await openReader(page);
       const { dialog: nativeDialog } = await getRenderedModalDialog(page);
       const toggle = dialog.querySelector<HTMLInputElement>('input[role="switch"]')!;
       const disabledChanges: MutationRecord[] = [];
@@ -208,47 +194,31 @@ describe("Skills mutation presentation", () => {
       toggle.focus();
       toggle.click();
       await waitForFast(() => {
-        expect(toggle.getAttribute("aria-disabled")).toBe("true");
-        expect(toggle.checked).toBe(false);
-        expect(toggle.disabled).toBe(false);
-        expect(document.activeElement).toBe(toggle);
+        expectToggle(toggle, false, true);
         expect(toggle.parentElement!.parentElement!.textContent).toContain("Disabled");
         expect(nativeDialog.open).toBe(true);
       });
       toggle.click();
-      expect(request.mock.calls.filter(([method]) => method === "skills.update")).toHaveLength(1);
-      expect(page.querySelector(".skill-reader-dialog")).toBe(dialog);
+      expect(callCount(request, "skills.update")).toBe(1);
+      expect(reader(page)).toBe(dialog);
 
       if (outcome === "success") {
         report = createReport([createSkill({ disabled: true })]);
         pending.resolve({});
-        await waitForFast(() =>
-          expect(request.mock.calls.filter(([method]) => method === "skills.status")).toHaveLength(
-            1,
-          ),
-        );
-        expect(toggle.disabled).toBe(false);
-        expect(toggle.getAttribute("aria-disabled")).toBe("true");
-        expect(document.activeElement).toBe(toggle);
+        await waitForFast(() => expect(callCount(request, "skills.status")).toBe(1));
+        expectToggle(toggle, false, true);
         refreshed.resolve(report);
       } else {
         pending.reject(new Error("Synthetic rejected skill update"));
       }
-      await waitForFast(() => {
-        expect(toggle.getAttribute("aria-disabled")).toBeNull();
-        expect(toggle.checked).toBe(outcome === "error");
-        expect(toggle.disabled).toBe(false);
-        expect(document.activeElement).toBe(toggle);
-      });
-      expect(page.querySelector(".skill-reader-dialog")).toBe(dialog);
+      await waitForFast(() => expectToggle(toggle, outcome === "error", false));
+      expect(reader(page)).toBe(dialog);
       disabledChanges.push(...observer.takeRecords());
       expect(disabledChanges).toHaveLength(0);
       expect(dialog.textContent).toContain(
         outcome === "success" ? "Skill disabled" : "Synthetic rejected skill update",
       );
-      expect(request.mock.calls.filter(([method]) => method === "skills.status")).toHaveLength(
-        outcome === "success" ? 1 : 0,
-      );
+      expect(callCount(request, "skills.status")).toBe(outcome === "success" ? 1 : 0);
     },
   );
 
@@ -264,21 +234,7 @@ describe("Skills mutation presentation", () => {
         ],
       });
       const report = createReport([skill]);
-      const request = vi.fn(async (method: string) => {
-        if (method === "skills.update" || method === "skills.install") {
-          return mutation.promise;
-        }
-        if (method === "skills.status") {
-          return refreshed.promise;
-        }
-        if (method === "skills.library.list") {
-          return { ...personalLibrary, defaultTarget: "workspace" };
-        }
-        if (method === "skills.search") {
-          return { results: [remoteSkill] };
-        }
-        throw new Error(`Unexpected method: ${method}`);
-      });
+      const request = mutationRequest(mutation.promise, () => refreshed.promise, [remoteSkill]);
       const { page, publishRouteData } = mountSkills(
         request,
         kind === "clawhub" ? "discovery" : "settings",
@@ -286,52 +242,38 @@ describe("Skills mutation presentation", () => {
       publishRouteData({ report });
       let control: HTMLButtonElement;
       if (kind === "clawhub") {
-        await waitForFast(() =>
-          expect(
-            page.querySelector<HTMLButtonElement>(".plugin-catalog-card__install")?.disabled,
-          ).toBe(false),
-        );
-        control = page.querySelector<HTMLButtonElement>(".plugin-catalog-card__install")!;
+        const install = () => query<HTMLButtonElement>(page, ".plugin-catalog-card__install");
+        await waitForFast(() => expect(install()?.disabled).toBe(false));
+        control = install()!;
       } else {
-        await waitForFast(() =>
-          expect(page.querySelector(".plugins-item__detail-button")).not.toBeNull(),
-        );
-        page.querySelector<HTMLButtonElement>(".plugins-item__detail-button")!.click();
-        await waitForFast(() => expect(page.querySelector(".skill-reader-dialog")).not.toBeNull());
+        await openReader(page);
         if (kind === "key") {
-          const input = page.querySelector<HTMLInputElement>('input[type="password"]')!;
+          const input = query<HTMLInputElement>(page, 'input[type="password"]')!;
           input.value = "synthetic-replacement";
           input.dispatchEvent(new Event("input", { bubbles: true }));
-          await waitForFast(() =>
-            expect(
-              page.querySelector<HTMLButtonElement>(".skill-reader-dialog__actions .primary")
-                ?.disabled,
-            ).toBe(false),
-          );
-          control = page.querySelector<HTMLButtonElement>(
-            ".skill-reader-dialog__actions .primary",
-          )!;
+          const save = () =>
+            query<HTMLButtonElement>(page, ".skill-reader-dialog__actions .primary");
+          await waitForFast(() => expect(save()?.disabled).toBe(false));
+          control = save()!;
         } else {
-          control = page.querySelector<HTMLButtonElement>(".skill-reader-dialog__actions .btn")!;
+          control = query<HTMLButtonElement>(page, ".skill-reader-dialog__actions .btn")!;
         }
       }
       control.click();
       await waitForFast(() => expect(control.disabled).toBe(true));
       if (kind !== "clawhub") {
-        expect(page.querySelector<HTMLInputElement>('input[role="switch"]')?.disabled).toBe(true);
+        expect(toggleIn(page)?.disabled).toBe(true);
       }
       mutation.resolve({});
-      await waitForFast(() =>
-        expect(request.mock.calls.filter(([method]) => method === "skills.status")).toHaveLength(1),
-      );
+      await waitForFast(() => expect(callCount(request, "skills.status")).toBe(1));
       expect(control.disabled).toBe(true);
       if (kind !== "clawhub") {
-        expect(page.querySelector<HTMLInputElement>('input[role="switch"]')?.disabled).toBe(true);
+        expect(toggleIn(page)?.disabled).toBe(true);
       }
       refreshed.resolve(report);
       await waitForFast(() => expect(control.disabled).toBe(false));
       expect(control.isConnected).toBe(true);
-      expect(request.mock.calls.filter(([method]) => method === "skills.status")).toHaveLength(1);
+      expect(callCount(request, "skills.status")).toBe(1);
     },
   );
 });
