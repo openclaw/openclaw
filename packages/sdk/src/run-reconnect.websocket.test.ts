@@ -145,8 +145,12 @@ async function baseline(): Promise<AsyncIterator<OpenClawEvent>> {
 it.each(["chat-delta", "accepted", "chat-final"])(
   "preserves the full terminal reply across a %s reconnect",
   async (mode) => {
-    const outputText =
-      mode === "accepted" ? "complete output" : `    ${"complete answer ".repeat(400)}\n`;
+    const accepted = mode === "accepted",
+      delivered = mode === "chat-final";
+    const outputText = accepted ? "complete output" : `    ${"complete answer ".repeat(400)}\n`;
+    const terminalReply = accepted
+      ? { text: "clipped summary" }
+      : { disposition: "visible", text: outputText.slice(0, 4_096) };
     const methods: string[] = [];
     respond((request) => {
       methods.push(request.method);
@@ -154,10 +158,6 @@ it.each(["chat-delta", "accepted", "chat-final"])(
         return runResult("started");
       }
       if (request.method === "agent.wait") {
-        const terminalReply =
-          mode === "accepted"
-            ? { text: "clipped summary" }
-            : { disposition: "visible", text: outputText.slice(0, 4_096) };
         return runResult("ok", { endedAt: 123, terminalReply });
       }
       return historyResult({
@@ -165,45 +165,41 @@ it.each(["chat-delta", "accepted", "chat-final"])(
       });
     });
     const connection = await connect();
-    if (mode === "accepted") {
+    if (accepted) {
       await submit(scope.runId);
     }
-    const events =
-      mode === "accepted" ? oc.runEvents(scope.runId)[Symbol.asyncIterator]() : await baseline();
-    const terminal = mode === "accepted" ? undefined : events.next();
+    const events = accepted ? oc.runEvents(scope.runId)[Symbol.asyncIterator]() : await baseline();
+    const terminal = accepted ? undefined : events.next();
     const socket = gateway.socket();
     const sendGap = (event: string, payload: unknown, seq: number) => {
       socket.send(JSON.stringify({ type: "event", event, payload, seq }));
     };
-    if (mode === "accepted") {
+    if (accepted) {
       socket.close();
     } else {
-      const payload =
-        mode === "chat-final"
-          ? chat("final", outputText)
-          : chat("delta", undefined, { deltaText: " lost suffix" });
+      const payload = delivered
+        ? chat("final", outputText)
+        : chat("delta", undefined, { deltaText: " lost suffix" });
       sendGap("chat", payload, 3);
-      if (mode !== "chat-final") {
+      if (!delivered) {
         sendGap("chat", chat("final", outputText), 4);
       }
     }
-    const delivered = mode === "chat-final" ? await terminal : undefined;
+    const beforeReconnect = delivered ? await terminal : undefined;
     await connection.reconnect(false);
-    const recovered = delivered ?? (await (terminal ?? events.next()));
+    const recovered = beforeReconnect ?? (await (terminal ?? events.next()));
     expect(recovered.value).toMatchObject({
       type: "run.completed",
       data: {
         outputText,
-        ...(mode === "chat-final" ? {} : { recovery: { status: "recovered" } }),
+        ...(delivered ? {} : { recovery: { status: "recovered" } }),
       },
     });
-    if (mode !== "chat-final") {
+    if (!delivered) {
       expect(recovered.value?.raw).toBeUndefined();
     }
     expect(methods).toEqual(
-      mode === "chat-final"
-        ? []
-        : [...(mode === "accepted" ? ["chat.send"] : []), "agent.wait", "chat.history"],
+      delivered ? [] : [...(accepted ? ["chat.send"] : []), "agent.wait", "chat.history"],
     );
     await events.return?.();
   },
@@ -219,9 +215,21 @@ function assistant(
 
 it("bounds replay after 150 confirmed session unsubscribe cycles", async () => {
   createLiveClient();
-  const subscriptions = new Map<string, { runId: string; sessionKey: string }>();
   let runIndex = 0;
-  function sessionDelta(...[socket, target, data]: Parameters<typeof assistant>) {
+  respond((request, _reply, socket) => {
+    const key = request.params.key;
+    if (typeof key !== "string") {
+      throw new Error("Expected a session key");
+    }
+    const canonicalKey = key === "global" ? key : `agent:main:${key}`;
+    if (
+      !["sessions.messages.subscribe", "sessions.messages.unsubscribe"].includes(request.method)
+    ) {
+      throw new Error(`Unexpected request: ${request.method}`);
+    }
+    const subscribed = request.method === "sessions.messages.subscribe";
+    const target = { runId: `run-${runIndex}`, sessionKey: canonicalKey };
+    const data = subscribed ? { text: "prefix", delta: "prefix" } : { delta: " tail" };
     gateway.sendEvent(socket, "chat", {
       ...target,
       agentId: "main",
@@ -230,29 +238,11 @@ it("bounds replay after 150 confirmed session unsubscribe cycles", async () => {
       ...(data.text ? { message: { role: "assistant", content: data.text } } : {}),
     });
     assistant(socket, target, data);
-  }
-  respond((request, _reply, socket) => {
-    const key = request.params.key;
-    if (typeof key !== "string") {
-      throw new Error("Expected a session key");
-    }
-    const canonicalKey = key === "global" ? key : `agent:main:${key}`;
-    if (request.method === "sessions.messages.subscribe") {
-      const target = { runId: `run-${runIndex++}`, sessionKey: canonicalKey };
-      subscriptions.set(key, target);
-      sessionDelta(socket, target, { text: "prefix", delta: "prefix" });
-      return { subscribed: true, key: canonicalKey };
-    } else if (request.method === "sessions.messages.unsubscribe") {
-      const target = subscriptions.get(key);
-      if (!target) {
-        throw new Error("Expected a live subscription");
-      }
-      sessionDelta(socket, target, { delta: " tail" });
+    if (!subscribed) {
       gateway.sendEvent(socket, "board.changed", {});
-      subscriptions.delete(key);
-      return { subscribed: false, key: canonicalKey };
+      runIndex++;
     }
-    return undefined;
+    return { subscribed, key: canonicalKey };
   });
   await oc.connect();
   for (let index = 0; index < 150; index += 1) {
@@ -260,7 +250,6 @@ it("bounds replay after 150 confirmed session unsubscribe cycles", async () => {
     await oc.request("sessions.messages.subscribe", { key, agentId: "main" });
     await oc.request("sessions.messages.unsubscribe", { key, agentId: "main" });
   }
-  expect(subscriptions.size).toBe(0);
   const recent = oc.runEvents("run-50")[Symbol.asyncIterator]();
   await expectNext(recent, { data: { text: "prefix" } });
   const expired = oc.runEvents("run-49")[Symbol.asyncIterator]();
