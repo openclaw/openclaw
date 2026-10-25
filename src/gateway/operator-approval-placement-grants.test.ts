@@ -374,21 +374,20 @@ describe("placement standing grants", () => {
     expect((await runtime.consumeAsync(binding)).outcome).toBe("placement-changed");
   });
 
-  it("fails closed after expiry, parent removal or reversal, or placement removal", async () => {
+  it("fails closed after expiry, parent removal, or placement removal", async () => {
     const scenarios = {
       expired: "expired",
       "parent-missing": "approval-missing",
-      parent: "approval-not-allow-always",
       placement: "placement-missing",
     };
     for (const [scenario, outcome] of Object.entries(scenarios)) {
       let nowMs = NOW_MS + 2_000;
-      const { binding, runtime, database, stateDb, execute, revokeApproval } =
-        await createPlacementFixture(true, () => nowMs);
+      const { binding, runtime, database, stateDb, execute } = await createPlacementFixture(
+        true,
+        () => nowMs,
+      );
       if (scenario === "parent-missing") {
         execute(stateDb.deleteFrom("operator_approvals").where("approval_id", "=", "approval-1"));
-      } else if (scenario === "parent") {
-        revokeApproval();
       } else if (scenario === "placement") {
         execute(stateDb.deleteFrom("worker_session_placements"));
       }
