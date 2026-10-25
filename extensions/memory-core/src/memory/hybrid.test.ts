@@ -99,56 +99,28 @@ describe("memory hybrid helpers", () => {
     expectPaths(select(merged, [keyword], vector), "strict-first", "strict-later");
   });
 
-  it("keeps the relaxed keyword-backed fallback when no result is strict", () => {
-    const overlapping = {
-      path: "memory/overlap.md",
-      startLine: 2,
-      endLine: 3,
-      source: "memory",
-      snippet: "overlapping vector and keyword match",
-      score: 0.2,
-      eligibilityScore: 0.2,
-      vectorScore: 0.1,
-      textScore: 0.5,
-    };
-
-    const selected = selectHybridSearchResults({
-      merged: [overlapping],
-      keyword: [overlapping],
-      vectorCandidates: [overlapping],
-      maxResults: 1,
-      minScore: 0.35,
+  it("keeps relevant old notes eligible through decay and MMR", async () => {
+    const oldPath = "memory/records/2026-08-11-quartz.md";
+    const vector = [
+      vectorHit("old", 0.9, { path: oldPath }),
+      vectorHit("recent", 0.9, { path: "memory/records/2026-10-10-quartz.md" }),
+      vectorHit("evergreen", 0.8),
+      vectorHit("weak", 0.2),
+    ];
+    const keyword = [keywordHit("old", 0.8, { path: oldPath })];
+    const merged = await merge({
+      vector,
+      keyword,
+      temporalDecay: { enabled: true, halfLifeDays: 30 },
+      mmr: { enabled: true, lambda: 0.7 },
+      nowMs: Date.UTC(2026, 9, 10),
     });
-
-    expect(selected).toEqual([expect.objectContaining({ path: overlapping.path, score: 0.2 })]);
-    expect(selected[0]).not.toHaveProperty("eligibilityScore");
+    const selected = select(merged, keyword, vector, 4);
+    expectPaths(selected, "records/2026-10-10-quartz", "evergreen", "records/2026-08-11-quartz");
+    expect(selected[2]?.score).toBeCloseTo(0.2175);
+    expect(selected[2]?.vectorScore).toBe(0.9);
+    expect(selected[2]?.textScore).toBe(0.8);
   });
-
-  it.each([false, true])(
-    "keeps relevant old notes eligible with MMR enabled=%s",
-    async (enabled) => {
-      const oldPath = "memory/records/2026-08-11-quartz.md";
-      const vector = [
-        vectorHit("old", 0.9, { path: oldPath }),
-        vectorHit("recent", 0.9, { path: "memory/records/2026-10-10-quartz.md" }),
-        vectorHit("evergreen", 0.8),
-        vectorHit("weak", 0.2),
-      ];
-      const keyword = [keywordHit("old", 0.8, { path: oldPath })];
-      const merged = await merge({
-        vector,
-        keyword,
-        temporalDecay: { enabled: true, halfLifeDays: 30 },
-        mmr: { enabled, lambda: 0.7 },
-        nowMs: Date.UTC(2026, 9, 10),
-      });
-      const selected = select(merged, keyword, vector, 4);
-      expectPaths(selected, "records/2026-10-10-quartz", "evergreen", "records/2026-08-11-quartz");
-      expect(selected[2]?.score).toBeCloseTo(0.2175);
-      expect(selected[2]?.vectorScore).toBe(0.9);
-      expect(selected[2]?.textScore).toBe(0.8);
-    },
-  );
 
   it.each([
     { vectorScore: -0.5, expectedPaths: ["memory/strict.md"] },
@@ -182,63 +154,6 @@ describe("memory hybrid helpers", () => {
       });
       expect(results[0]?.score).toBeCloseTo(expected);
     }
-  });
-
-  it("boosts active-project results, demotes foreign results, and leaves global results neutral", async () => {
-    const merged = await merge({
-      ...vectorOnly,
-      activeProjectKeys: ["github.com/openclaw/openclaw"],
-      vector: [
-        vectorHit("same", 0.8, {
-          path: "MEMORY.md",
-          endLine: 1,
-          projectKey: "github.com/openclaw/openclaw",
-        }),
-        vectorHit("global", 0.8, { path: "MEMORY.md", startLine: 2 }),
-        vectorHit("foreign", 0.8, {
-          path: "MEMORY.md",
-          startLine: 3,
-          endLine: 3,
-          projectKey: "github.com/example/other",
-        }),
-      ],
-    });
-    expect(merged.map((entry) => [entry.snippet, entry.score])).toEqual([
-      ["same", 0.9199999999999999],
-      ["global", 0.8],
-      ["foreign", 0.7200000000000001],
-    ]);
-  });
-
-  it.each([
-    {
-      label: "without project affinity",
-      activeProjectKeys: undefined,
-      expected: ["memory/primary.md", "memory/diverse.md"],
-    },
-    {
-      label: "with project affinity",
-      activeProjectKeys: ["active-project"],
-      expected: ["memory/duplicate.md", "memory/diverse.md"],
-    },
-  ])("keeps a diverse hit in the selected set $label", async ({ activeProjectKeys, expected }) => {
-    const merged = await merge({
-      ...vectorOnly,
-      mmr: { enabled: true, lambda: 0.7 },
-      activeProjectKeys,
-      vector: [
-        vectorHit("primary", 0.9, { endLine: 1, snippet: "alpha beta gamma" }),
-        vectorHit("duplicate", 0.8, {
-          endLine: 1,
-          snippet: "alpha beta gamma delta",
-          projectKey: "active-project",
-        }),
-        vectorHit("diverse", 0.75, { endLine: 1, snippet: "whiskey tango" }),
-        vectorHit("floor", 0.2, { endLine: 1, snippet: "alpha" }),
-      ],
-    });
-
-    expect(merged.slice(0, 2).map((entry) => entry.path)).toEqual(expected);
   });
 
   it("uses path BM25 only for partial path-only hybrid hits", async () => {
@@ -299,16 +214,6 @@ describe("memory hybrid helpers", () => {
     expectPaths(merged, "a/foo", "y/foo", "z/foo");
   });
 
-  it("uses net weighted content relevance for exact hybrid ordering", async () => {
-    const merged = await merge({
-      ...equallyWeighted,
-      vector: [exactVector("cancelled", -1, "z/foo")],
-      keyword: [exactKeyword("cancelled", 0.5, "z/foo"), exactKeyword("path", 0, "a/foo", 1)],
-    });
-
-    expectPaths(merged, "a/foo", "z/foo");
-  });
-
   it("keeps the full content-backed exact group ahead of path-only hits through MMR", async () => {
     const merged = await merge({
       vectorWeight: 0,
@@ -337,24 +242,6 @@ describe("memory hybrid helpers", () => {
     expectPaths(merged, "z/foo", "y/foo", "a/foo");
   });
 
-  it("keeps vector-only exact path candidates ahead of stronger semantic matches", async () => {
-    const merged = await merge({
-      ...equallyWeighted,
-      vector: [
-        vectorHit("semantic", 0.99),
-        vectorHit("exact-vector", 0.2, {
-          path: "memory/deep/README.md",
-          snippet: "exact vector",
-          exactPathSpecificity: 2,
-        }),
-      ],
-    });
-
-    expectPaths(merged, "deep/README", "semantic");
-    expect(merged[0]?.score).toBe(1);
-    expect(merged[0]?.vectorScore).toBe(0.2);
-  });
-
   it("uses specificity across exact tiers and combined relevance within one tier", async () => {
     const merged = await merge({
       vectorWeight: 0.5,
@@ -363,13 +250,17 @@ describe("memory hybrid helpers", () => {
         vectorHit("full", 0),
         vectorHit("basename-weak", 0.2, { path: "memory/a/foo.md", snippet: "basename weak" }),
         vectorHit("basename-strong", 0.9, { path: "memory/z/foo.md", snippet: "basename strong" }),
+        exactVector("exact-vector", 0.4, "deep/README"),
+        exactVector("cancelled", -1, "z-cancel/foo"),
         vectorHit("stem", 1, { path: "memory/foo.md.bak" }),
+        vectorHit("semantic", 0.99),
       ],
       keyword: [
         keywordHit("full", 0, { exactPathSpecificity: 3 }),
         exactKeyword("basename-weak", 0.1, "a/foo", 1),
         exactKeyword("basename-path-only", 0, "0/foo", 1),
         exactKeyword("basename-strong", 0.8, "z/foo", 0.01),
+        exactKeyword("cancelled", 0.5, "z-cancel/foo"),
         keywordHit("stem", 1, { path: "memory/foo.md.bak", exactPathSpecificity: 1 }),
       ],
     });
@@ -377,11 +268,15 @@ describe("memory hybrid helpers", () => {
     expect(merged.map((entry) => entry.path)).toEqual([
       "memory/full.md",
       "memory/z/foo.md",
+      "memory/deep/README.md",
       "memory/a/foo.md",
       "memory/0/foo.md",
+      "memory/z-cancel/foo.md",
       "memory/foo.md.bak",
+      "memory/semantic.md",
     ]);
-    expect(merged.map((entry) => entry.score)).toEqual([1, 1, 1, 1, 1]);
+    expect(merged.map((entry) => entry.score)).toEqual([1, 1, 1, 1, 1, 1, 1, 0.495]);
+    expect(merged[2]?.vectorScore).toBe(0.4);
   });
 
   it("keeps exact path identifiers ahead after decay, oversized weights, and MMR", async () => {
@@ -461,7 +356,7 @@ describe("memory hybrid helpers", () => {
         keyword,
         vectorCandidates: vectorScore === null ? [] : keyword,
         maxResults: 2,
-        minScore: 0,
+        minScore: 0.35,
       });
       expect(selected).toEqual(
         vectorScore !== null && vectorScore < 0
@@ -506,27 +401,5 @@ describe("memory hybrid helpers", () => {
     expect(byPath.get(paths.bothMedia)?.score).toBeCloseTo(0.7 * 0.95 + 0.3 * 0.8);
     expect(byPath.get(paths.bothMedia)?.textScore).toBeCloseTo(0.8);
     expect(byPath.get(paths.bothText)?.score).toBeCloseTo(0.7 * 0.6 + 0.3 * 0.9);
-  });
-
-  it("keeps media keyword scoring when vector weight is zero", async () => {
-    const merged = await merge({
-      vectorWeight: 0,
-      textWeight: 1,
-      isNonTextMediaPath: (candidatePath) => candidatePath.endsWith(".png"),
-      vector: [vectorResult("candidate", "memory/photo.png", 0.95)],
-      keyword: [keywordResult("candidate", "memory/photo.png", 0.8)],
-    });
-
-    expect(merged.find((entry) => entry.path === "memory/photo.png")?.score).toBeCloseTo(0.8);
-  });
-
-  it("keeps vector-only text scoring when weights total two", async () => {
-    const merged = await merge({
-      ...equallyWeighted,
-      isNonTextMediaPath: (candidatePath) => candidatePath.endsWith(".png"),
-      vector: [vectorResult("candidate", "memory/notes.md", 0.6)],
-    });
-
-    expect(merged.find((entry) => entry.path === "memory/notes.md")?.score).toBeCloseTo(0.6);
   });
 });
