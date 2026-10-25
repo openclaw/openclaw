@@ -173,6 +173,17 @@ function readScratch(fixture: Fixture) {
   return readCronJobScratchState(fixture.storePath, fixture.monitor.id, { env: fixture.env });
 }
 
+async function readTasks(fixture: Fixture) {
+  return (await loadCronJobsStore(fixture.storePath)).jobs.filter(
+    (job) => job.id !== fixture.monitor.id,
+  );
+}
+
+function taskState(fixture: Fixture, agentId = "main") {
+  return resolveLegacyHeartbeatSession(fixture.cfg, agentId, undefined, undefined, fixture.env)
+    .entry?.heartbeatTaskState;
+}
+
 describe("heartbeat scratch task cron migration", () => {
   it.each(["pending", "complete"])(
     "repairs %s task definitions after runs without changing edits",
@@ -339,14 +350,8 @@ describe("heartbeat scratch task cron migration", () => {
       everyMs: 60 * 60_000,
       anchorMs: fixture.nowMs + 30 * 60_000,
     });
-    expect(
-      resolveLegacyHeartbeatSession(fixture.cfg, "research", undefined, undefined, fixture.env)
-        .entry?.heartbeatTaskState,
-    ).toBeUndefined();
-    expect(
-      resolveLegacyHeartbeatSession(fixture.cfg, "main", undefined, undefined, fixture.env).entry
-        ?.heartbeatTaskState,
-    ).toEqual({ inbox: fixture.nowMs - 10 * 60_000 });
+    expect(taskState(fixture, "research")).toBeUndefined();
+    expect(taskState(fixture)).toEqual({ inbox: fixture.nowMs - 10 * 60_000 });
   });
 
   it("converts disabled owners without enabling their monitor or task jobs", async () => {
@@ -354,12 +359,7 @@ describe("heartbeat scratch task cron migration", () => {
     const store = await loadCronJobsStore(fixture.storePath);
     store.jobs[0]!.enabled = false;
     await saveCronJobsStore(fixture.storePath, store);
-    const result = await maybeMigrateHeartbeatTasksToCron({
-      cfg: fixture.cfg,
-      env: fixture.env,
-      shouldRepair: true,
-      nowMs: fixture.nowMs,
-    });
+    const result = await migrate(fixture);
     expect(result.warnings).toEqual([]);
     const jobs = (await loadCronJobsStore(fixture.storePath)).jobs;
     expect(jobs).toHaveLength(3);
@@ -479,49 +479,30 @@ describe("heartbeat scratch task cron migration", () => {
     ]);
     const preview = await migrate(fixture, { shouldRepair: false });
     expect(preview).toEqual({ changes: [], warnings: [] });
-    expect(
-      (await loadCronJobsStore(fixture.storePath)).jobs.filter(
-        (job) => job.id !== fixture.monitor.id,
-      ),
-    ).toEqual([]);
+    expect(await readTasks(fixture)).toEqual([]);
 
     const migrated = await migrate(fixture);
     expect(migrated.warnings).toEqual([]);
     expect(migrated.changes).toHaveLength(1);
 
-    const jobs = (await loadCronJobsStore(fixture.storePath)).jobs
-      .filter((job) => job.id !== fixture.monitor.id)
-      .toSorted((a, b) => a.name.localeCompare(b.name));
-    expect(
-      jobs.map((job) => ({ name: job.name, schedule: job.schedule, payload: job.payload })),
-    ).toEqual([
-      {
-        name: "calendar",
-        schedule: { kind: "every", everyMs: 2 * 60 * 60_000, anchorMs: fixture.nowMs + 1 },
+    const jobs = (await readTasks(fixture)).toSorted((a, b) => a.name.localeCompare(b.name));
+    const expectedTasks = [
+      ["calendar", 2 * 60 * 60_000, 1, "Check the next meetings"],
+      ["inbox", 60 * 60_000, 30 * 60_000, "Check urgent inbox items"],
+    ] as const;
+    expect(jobs.map(({ name, schedule, payload }) => ({ name, schedule, payload }))).toEqual(
+      expectedTasks.map(([name, everyMs, offset, message]) => ({
+        name,
+        schedule: { kind: "every", everyMs, anchorMs: fixture.nowMs + offset },
         payload: expect.objectContaining({
           kind: "agentTurn",
-          message: "Check the next meetings",
+          message,
           model: "openai/gpt-5",
           lightContext: true,
           timeoutSeconds: 75,
         }),
-      },
-      {
-        name: "inbox",
-        schedule: {
-          kind: "every",
-          everyMs: 60 * 60_000,
-          anchorMs: fixture.nowMs + 30 * 60_000,
-        },
-        payload: expect.objectContaining({
-          kind: "agentTurn",
-          message: "Check urgent inbox items",
-          model: "openai/gpt-5",
-          lightContext: true,
-          timeoutSeconds: 75,
-        }),
-      },
-    ]);
+      })),
+    );
     expect(
       jobs.every(
         (job) => job.payload.kind === "agentTurn" && job.payload.skipIfScratchEmpty === undefined,
@@ -536,18 +517,11 @@ describe("heartbeat scratch task cron migration", () => {
     expect(scratch?.content).toContain("# Operations");
     expect(scratch?.content).toContain("# Keep alerts concise");
     expect(scratch?.content).not.toContain("tasks:");
-    expect(
-      resolveLegacyHeartbeatSession(fixture.cfg, "main", undefined, undefined, fixture.env).entry
-        ?.heartbeatTaskState,
-    ).toBeUndefined();
+    expect(taskState(fixture)).toBeUndefined();
 
     const rerun = await migrate(fixture, { nowMs: fixture.nowMs + 10_000 });
     expect(rerun).toEqual({ changes: [], warnings: [] });
-    expect(
-      (await loadCronJobsStore(fixture.storePath)).jobs.filter(
-        (job) => job.id !== fixture.monitor.id,
-      ),
-    ).toHaveLength(2);
+    expect(await readTasks(fixture)).toHaveLength(2);
   });
 
   it("preserves stored task edits while adopting its monitor execution policy", async () => {
@@ -606,14 +580,9 @@ tasks:
     expect(result.changes).toEqual([]);
     expect(result.warnings.join("\n")).toContain("scratch changed during task migration");
     expect(readScratch(fixture).scratch?.content).toBe(concurrentScratch);
-    const jobs = (await loadCronJobsStore(fixture.storePath)).jobs.filter(
-      (job) => job.id !== fixture.monitor.id,
-    );
+    const jobs = await readTasks(fixture);
     expect(jobs).toEqual([existingSnapshot]);
-    expect(
-      resolveLegacyHeartbeatSession(fixture.cfg, "main", undefined, undefined, fixture.env).entry
-        ?.heartbeatTaskState,
-    ).toEqual({ inbox: fixture.nowMs - 30 * 60_000 });
+    expect(taskState(fixture)).toEqual({ inbox: fixture.nowMs - 30 * 60_000 });
   });
 
   it("serializes two plans pinned to one scratch revision and converges the loser on rerun", async () => {
@@ -628,20 +597,14 @@ tasks:
         ),
       ),
     ).toHaveLength(1);
-    const committedJobs = (await loadCronJobsStore(fixture.storePath)).jobs.filter(
-      (job) => job.id !== fixture.monitor.id,
-    );
+    const committedJobs = await readTasks(fixture);
     expect(committedJobs).toHaveLength(2);
     expect(new Set(committedJobs.map((job) => job.id)).size).toBe(2);
     expect(readScratch(fixture).scratch?.content).not.toContain("tasks:");
 
     const rerun = await migrate(fixture, { nowMs: fixture.nowMs + 10_000 });
     expect(rerun).toEqual({ changes: [], warnings: [] });
-    expect(
-      (await loadCronJobsStore(fixture.storePath)).jobs.filter(
-        (job) => job.id !== fixture.monitor.id,
-      ),
-    ).toEqual(committedJobs);
+    expect(await readTasks(fixture)).toEqual(committedJobs);
   });
 
   it("tolerates a crash after the state transaction and before legacy timestamp cleanup", async () => {
@@ -653,26 +616,17 @@ tasks:
 
     expect(result.changes).toHaveLength(1);
     expect(result.warnings.join("\n")).toContain("simulated post-commit crash");
-    const committedJobs = (await loadCronJobsStore(fixture.storePath)).jobs.filter(
-      (job) => job.id !== fixture.monitor.id,
-    );
+    const committedJobs = await readTasks(fixture);
     expect(committedJobs).toHaveLength(2);
     expect(readScratch(fixture).scratch?.content).not.toContain("tasks:");
-    expect(
-      resolveLegacyHeartbeatSession(fixture.cfg, "main", undefined, undefined, fixture.env).entry
-        ?.heartbeatTaskState,
-    ).toEqual({ inbox: fixture.nowMs - 30 * 60_000 });
+    expect(taskState(fixture)).toEqual({ inbox: fixture.nowMs - 30 * 60_000 });
 
     cleanup.mockRestore();
     await expect(migrate(fixture, { nowMs: fixture.nowMs + 10_000 })).resolves.toEqual({
       changes: [],
       warnings: [],
     });
-    expect(
-      (await loadCronJobsStore(fixture.storePath)).jobs.filter(
-        (job) => job.id !== fixture.monitor.id,
-      ),
-    ).toEqual(committedJobs);
+    expect(await readTasks(fixture)).toEqual(committedJobs);
   });
 
   it.each([
@@ -712,11 +666,7 @@ tasks:
       expect(result.changes).toEqual([]);
       expect(result.warnings.join("\n")).toContain(reason);
       expect(readScratch(fixture).scratch?.content).toBe(content);
-      expect(
-        (await loadCronJobsStore(fixture.storePath)).jobs.filter(
-          (job) => job.id !== fixture.monitor.id,
-        ),
-      ).toEqual([]);
+      expect(await readTasks(fixture)).toEqual([]);
     },
   );
 
@@ -736,11 +686,7 @@ tasks:
     );
     await expect(migrate(fixture)).resolves.toEqual({ changes: [], warnings: [] });
 
-    expect(
-      (await loadCronJobsStore(fixture.storePath)).jobs.filter(
-        (job) => job.id !== fixture.monitor.id,
-      ),
-    ).toEqual([]);
+    expect(await readTasks(fixture)).toEqual([]);
     expect(readScratch(fixture).scratch?.content).toBe(content);
   });
 
@@ -761,9 +707,7 @@ tasks:
     const migrated = await migrate(fixture);
 
     expect(migrated.warnings).toEqual([]);
-    const jobs = (await loadCronJobsStore(fixture.storePath)).jobs.filter(
-      (job) => job.id !== fixture.monitor.id,
-    );
+    const jobs = await readTasks(fixture);
     expect(jobs.map((job) => job.name)).toEqual(["active"]);
     const scratch = readScratch(fixture).scratch?.content;
     expect(scratch).toContain(`<!--
