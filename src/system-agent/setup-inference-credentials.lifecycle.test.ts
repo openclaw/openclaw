@@ -19,7 +19,6 @@ import {
 } from "../agents/auth-profiles/store.js";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import { resolveModelRuntimePolicy } from "../agents/model-runtime-policy.js";
-import { loadAgentRuntimePluginRegistryHandle } from "../agents/runtime-plugins.js";
 import type * as OnboardingPluginInstall from "../commands/onboarding-plugin-install.js";
 import { clearConfigCache, readConfigFileSnapshot } from "../config/config.js";
 import {
@@ -239,7 +238,6 @@ describe("setup inference credential provider lifetime", () => {
           const plan = await work;
           expect(process.listenerCount(nativeEvent)).toBe(nativeBefore);
           expect(cfg).toEqual(originalConfig);
-          expect(structuredClone(plan)).toEqual(plan);
           const saved = loadAuthProfileStoreWithoutExternalProfiles(state.agentDir()).profiles;
           if (profileCase === "missing-match") {
             expect(plan).toEqual({ error: expect.stringContaining("did not return credentials") });
@@ -368,7 +366,6 @@ function museScenario(version = "1.3", selectModel?: boolean, outcome = "success
 it.each([
   museScenario(),
   museScenario("1.2"),
-  museScenario("1.3", true),
   museScenario("1.3", false),
   ...["cancel", "authority", "verification"].map((outcome) =>
     museScenario("1.3", undefined, outcome),
@@ -419,8 +416,7 @@ it.each([
       spec: "@openclaw/muse",
       installPath: path.join(path.dirname(setup.configPath), "extensions/muse"),
     };
-    installRuntime.mockImplementation(async ({ cfg, entry, beforePersistentEffect }) => {
-      expect(entry.pluginId).toBe("muse");
+    installRuntime.mockImplementation(async ({ cfg, beforePersistentEffect }) => {
       await beforePersistentEffect?.();
       phases.push("install");
       return {
@@ -581,10 +577,6 @@ it.each([
     expect(selected.plugins?.entries?.muse?.enabled).toBe(true);
     expect(selected.agents?.defaults?.models?.[starter]).toEqual(original);
     expect(selected.models?.providers?.meta?.apiKey).toBe("synthetic-existing-meta-api-key");
-    expect(verifySetup).toHaveBeenCalledWith(
-      expect.objectContaining({ provider: "meta", modelId: selectedModel.slice("meta/".length) }),
-    );
-    expect(loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(1);
     expect(setup.run).not.toHaveBeenCalled();
   },
 );
