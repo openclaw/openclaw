@@ -309,6 +309,29 @@ describe("iMessage approval reactions", () => {
   });
 
   it.each([
+    ["peer reported as sender", "+15555550123"],
+    ["local account reported as sender", "+15551230000"],
+  ])("attributes is_from_me DM tapbacks to the local account (%s)", async (_name, sender) => {
+    const peer = "+15555550123";
+    await registerTarget({ approvalId: "exec-dm", conversation: { handle: peer } });
+    const message = buildTapbackReactionPayload({
+      is_from_me: true,
+      is_group: false,
+      sender,
+      destination_caller_id: "+15551230000",
+      chat_identifier: peer,
+    });
+
+    await resolveReaction(message, { cfg: { channels: { imessage: { allowFrom: [peer] } } } });
+    expect(resolverMocks.resolve).not.toHaveBeenCalled();
+
+    expect(await resolveReaction(message)).toBe(true);
+    expect(resolverMocks.resolve).toHaveBeenCalledWith(
+      expect.objectContaining({ approvalId: "exec-dm", senderId: "+15551230000" }),
+    );
+  });
+
+  it.each([
     {
       name: "ignores removed tapbacks",
       message: buildTapbackReactionPayload({ is_reaction_add: false }),
