@@ -17,6 +17,7 @@
  * --page-start-at (future epoch milliseconds, with enough time for each phase).
  * Repeat separately with OPENCLAW_BENCH_TRACE_GC=1 for isolate-attributed promotion;
  * exclude those traced timings and forced identification collections from gates.
+ * --page-first also records cold paging before final-result reads warm shared imports.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -37,6 +38,7 @@ const { values } = parseArgs({
     output: { type: "string" },
     "prepare-only": { type: "boolean", default: false },
     fixture: { type: "string" },
+    "page-first": { type: "boolean", default: false },
     samples: { type: "string", default: "1000" },
     "start-at": { type: "string" },
     "page-start-at": { type: "string" },
@@ -213,6 +215,18 @@ async function measureFixture() {
     // Preload readiness precedes entry evaluation; an owner reply proves boot finished.
     assert((await request({ operation: "materialize", plans: [] })).type === "done");
     const cold = await probe("cold", memoryOperation);
+    let firstPageColdMs: number | undefined;
+    if (values["page-first"]) {
+      const started = performance.now();
+      const reply = await request({
+        operation: "read-page",
+        plans: [{ ...plan(0), limit: 20, maxBytes: 256 * 1024 }],
+      });
+      firstPageColdMs = performance.now() - started;
+      assert(reply.type === "page-read");
+      assert.equal(reply.results[0]?.entries.length, 20);
+      reply.results.length = 0;
+    }
     const firstFinalStarted = performance.now();
     const warmReply = await request({ operation: "read-final", plans: [plan(0)] });
     const firstFinalMs = performance.now() - firstFinalStarted;
@@ -276,6 +290,7 @@ async function measureFixture() {
       operations: samples,
       firstFinalMs,
       firstPageMs,
+      firstPageColdMs,
       latency: latency(timings),
       pageLatency: latency(pageTimings),
       cold,
