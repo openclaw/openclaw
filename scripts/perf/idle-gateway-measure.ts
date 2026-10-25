@@ -40,6 +40,7 @@ const { values } = parseArgs({
     entry: { type: "string", default: "dist/entry.js" },
     minutes: { type: "string", default: "10" },
     "settle-seconds": { type: "string", default: "60" },
+    "ready-timeout-seconds": { type: "string", default: "180" },
     "config-reloads": { type: "string", default: "0" },
     "watcher-failure": { type: "boolean", default: false },
     "start-at": { type: "string" },
@@ -81,6 +82,7 @@ const integer = (raw: string, label: string, min: number) =>
   parseStrictIntegerOption({ raw, label, min, fallback: min });
 const minutes = integer(values.minutes, "--minutes", 1);
 const settleSeconds = integer(values["settle-seconds"], "--settle-seconds", 0);
+const readyTimeoutSeconds = integer(values["ready-timeout-seconds"], "--ready-timeout-seconds", 1);
 const configReloads = integer(values["config-reloads"], "--config-reloads", 0);
 const needsDevice = values.subscribe || configReloads > 0 || values["watcher-failure"];
 const traceGc = configReloads === 0;
@@ -252,7 +254,7 @@ try {
     closeSync(log);
   }
   writeFileSync(path.join(output, "gateway.pid"), String(child.pid));
-  const deadline = Date.now() + 180_000;
+  const deadline = Date.now() + readyTimeoutSeconds * 1000;
   while (
     !(await fetch(`http://127.0.0.1:${port}/readyz`, { signal: abort.signal }).then(
       (r) => r.ok,
