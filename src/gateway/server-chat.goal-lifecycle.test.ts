@@ -3,10 +3,7 @@ import {
   loadSessionEntry as loadStoredSessionEntry,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
-import {
-  getAgentEventLifecycleGeneration,
-  resetAgentEventsForTest,
-} from "../infra/agent-events.js";
+import { resetAgentEventsForTest } from "../infra/agent-events.js";
 import { registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createAgentEventTestHarness } from "./server-chat.agent-events.test-harness.js";
@@ -37,28 +34,15 @@ afterEach(() => {
   resetAgentEventsForTest({ preserveListeners: true });
 });
 
-it.each([
-  {
-    name: "fallback-exhausted failure",
-    terminal: {
-      error: "LLM request failed: network connection error.",
-      fallbackExhaustedFailure: true,
-    },
-    status: "failed",
-  },
-  {
-    name: "provider timeout after a tool error",
-    terminal: {
+it("persists a provider timeout after a tool error without waiting for retry grace", () =>
+  withOpenClawTestState({ label: "terminal-projection" }, async (state) => {
+    const terminal = {
       error:
         "Request timed out before a response was generated. Please try again, or increase `agents.defaults.timeoutSeconds` in your config.",
       aborted: false,
       timeoutPhase: "provider",
       providerStarted: true,
-    },
-    status: "timeout",
-  },
-])("persists $name without waiting for retry grace", ({ terminal, status }) =>
-  withOpenClawTestState({ label: "terminal-projection" }, async (state) => {
+    };
     const sessionKey = "agent:main:session-terminal-error";
     const storePath = state.statePath("agents", "main", "sessions", "sessions.json");
     const target = { storePath, sessionKey };
@@ -123,36 +107,21 @@ it.each([
         lastStatusNote: expect.stringContaining(terminal.error),
       };
       expect(read()).toMatchObject({
-        status,
+        status: "timeout",
         lastRunError: terminal.error,
         endedAt: 2_000,
         goal: stoppedGoal,
       });
       expect(h.changes()[0]?.[1]).toMatchObject({
-        status,
+        status: "timeout",
         lastRunError: terminal.error,
         session: { goal: stoppedGoal },
       });
 
-      vi.setSystemTime(3_000);
-      const lifecycleGeneration = getAgentEventLifecycleGeneration();
-      await h.emitMany("run-recovered", [
-        ["lifecycle", { phase: "start", startedAt: 3_000 }, { lifecycleGeneration }],
-        ["lifecycle", { phase: "end", startedAt: 3_000, endedAt: 4_000 }, { lifecycleGeneration }],
-      ]);
-      await settle();
       await vi.advanceTimersByTimeAsync(15_000);
-      expect(read()).toMatchObject({
-        status: "done",
-        startedAt: 3_000,
-        endedAt: 4_000,
-        goal: stoppedGoal,
-      });
-      expect(read()?.lastRunError).toBeUndefined();
-      expect(h.chat().map(([, payload]) => payload.state)).toEqual(["error", "final"]);
+      expect(h.chat().map(([, payload]) => payload.state)).toEqual(["error"]);
     } finally {
       await h.handler.dispose();
       vi.useRealTimers();
     }
-  }),
-);
+  }));

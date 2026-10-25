@@ -1,27 +1,20 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import {
   closeHttpServer,
   listenLoopback,
 } from "../../test/helpers/gateway-integration-fixtures.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
-import { createGatewayAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
+import { createGatewayAuthRateLimiter } from "./auth-rate-limit.js";
 import { createGatewayHttpServer } from "./server-http.js";
 import type { ArtifactTransferHttpCallback } from "./worker-environments/artifact-transfer-http.js";
 import type { NodeWorkspaceTransferHttpCallback } from "./worker-environments/node-workspace-transfer-http.js";
 
-const activeLimiters: AuthRateLimiter[] = [];
 const digest = "a".repeat(64);
 const blobDigest = "b".repeat(64);
 const transferPath = "/__openclaw__/worker-transfer/v1/environments/worker%3Afixture";
 const authorizedFetch = (url: string, bearer: string, method = "GET") =>
   fetch(url, { method, headers: { authorization: `Bearer ${bearer}` } });
 const unauthorized = async () => ({ kind: "unauthorized" as const });
-
-afterEach(() => {
-  for (const limiter of activeLimiters.splice(0)) {
-    limiter.dispose();
-  }
-});
 
 async function withTransferServer({
   run,
@@ -167,7 +160,7 @@ it("rate-limits invalid transfer auth before invoking the callback again", async
     { maxAttempts: 1, windowMs: 60_000, lockoutMs: 60_000, exemptLoopback: false },
     { scheduler: createTestGatewayScheduler() },
   );
-  activeLimiters.push(limiter);
+  onTestFinished(() => limiter.dispose());
   const callback = vi.fn<NodeWorkspaceTransferHttpCallback>(unauthorized);
   await withTransferServer({
     handleNodeWorkspaceTransferRequest: callback,

@@ -51,32 +51,6 @@ const openProxySocket = (port: number, user?: string) =>
     ...(user ? { "x-forwarded-user": user } : {}),
   });
 
-function holdResponse(
-  matches: (data: string) => boolean,
-  beforeRelease?: (ws: WebSocket) => void,
-  fail = true,
-) {
-  const pending = createDeferred<() => void>();
-  const originalSend = Reflect.get(WebSocket.prototype, "send");
-  const spy = vi.spyOn(WebSocket.prototype, "send").mockImplementation(function (
-    this: WebSocket,
-    ...args: Parameters<WebSocket["send"]>
-  ) {
-    if (typeof args[0] !== "string" || !matches(args[0])) {
-      return Reflect.apply(originalSend, this, args);
-    }
-    const callback = args.findLast((arg) => typeof arg === "function");
-    if (typeof callback !== "function") {
-      throw new Error("hello delivery requires a callback");
-    }
-    pending.resolve(() => {
-      beforeRelease?.(this);
-      callback(fail ? new Error("synthetic delivery failure") : undefined);
-    });
-  });
-  return { pending: pending.promise, spy, [Symbol.dispose]: () => spy.mockRestore() };
-}
-
 async function openBrowser(port: number, instanceId: string, caps: string[] = []) {
   const identityPath = path.join(tempDirs.make("hello-browser-"), "client", "credentials.sqlite");
   const socket = await openProxySocket(port, `${instanceId}@example.com`);
@@ -255,23 +229,31 @@ test.each(["write-error", "closed-before-callback"] as const)(
       const reader = await openBrowser(port, "established-reader");
       const joining = await openBrowser(port, failedInstanceId);
       const publisher = await openBrowser(port, "presence-publisher");
+      const pendingHello = createDeferred<() => void>();
       let failNextHello = true;
       expect((await reader.connect()).ok).toBe(true);
-      using held = holdResponse(
-        (data) => {
-          if (!failNextHello || !data.includes('"hello-ok"')) {
-            return false;
-          }
+      const originalSend = Reflect.get(WebSocket.prototype, "send");
+      using sendSpy = vi.spyOn(WebSocket.prototype, "send");
+      sendSpy.mockImplementation(function (
+        this: WebSocket,
+        ...args: Parameters<WebSocket["send"]>
+      ) {
+        if (failNextHello && typeof args[0] === "string" && args[0].includes('"hello-ok"')) {
           failNextHello = false;
-          return true;
-        },
-        (socket) => {
-          if (failure === "closed-before-callback") {
-            socket.close(1000, "test close before hello");
+          const callback = args.findLast((arg) => typeof arg === "function");
+          if (typeof callback !== "function") {
+            throw new Error("hello delivery requires a callback");
           }
-        },
-        failure === "write-error",
-      );
+          pendingHello.resolve(() => {
+            if (failure === "closed-before-callback") {
+              this.close(1000, "test close before hello");
+            }
+            callback(failure === "write-error" ? new Error("test hello write failure") : undefined);
+          });
+          return;
+        }
+        Reflect.apply(originalSend, this, args);
+      });
       const closed = once(joining.socket, "close");
       const disconnected = waitForPresence(
         reader.socket,
@@ -281,7 +263,7 @@ test.each(["write-error", "closed-before-callback"] as const)(
         expect(joining.connect()).rejects.toThrow(/closed/),
         closed,
         disconnected,
-        held.pending.then((failHello) =>
+        pendingHello.promise.then((failHello) =>
           Promise.all([
             waitForPresence(reader.socket, (entry) => entry.instanceId === "presence-publisher"),
             expect(publisher.connect()).resolves.toMatchObject({ ok: true }),
