@@ -28,14 +28,7 @@ async function openSession(label: string) {
   const dir = tempDirs.make(`openclaw-${label}-`);
   const scope = sessionScope(path.join(dir, "sessions.json"), label);
   await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-  const options = { agentId: scope.agentId, path: resolveSessionTranscriptDatabasePath(scope) };
-  return {
-    dir,
-    scope,
-    options,
-    manager: SessionManager.open(scope, dir),
-    database: openOpenClawAgentDatabase(options),
-  };
+  return { dir, scope, manager: SessionManager.open(scope, dir) };
 }
 
 function expectCanonicalView(manager: SessionManager, reopened: SessionManager) {
@@ -63,13 +56,19 @@ afterEach(async () => {
 });
 
 it("keeps deprecated sync rewrite publication ahead of synchronous commit observers", async () => {
-  const { scope, manager, database } = await openSession("rewrite-observer");
+  const { scope, manager } = await openSession("rewrite-observer");
   const first = manager.appendMessage(userMessage("first", 1));
   const tail = manager.appendMessage(userMessage("tail", 2));
+  const database = openOpenClawAgentDatabase({
+    agentId: scope.agentId,
+    path: resolveSessionTranscriptDatabasePath(scope),
+  });
   requireNativeSqliteDatabase(database.db).function("queue_observer_append", () => {
-    deferOpenClawAgentPostCommitPublication(database, () => {
-      manager.appendMessage(userMessage("observer", 3));
-    });
+    expect(
+      deferOpenClawAgentPostCommitPublication(database, () => {
+        manager.appendMessage(userMessage("observer", 3));
+      }),
+    ).toBe(true);
     return 0;
   });
   database.db.exec(
@@ -94,7 +93,7 @@ it("keeps deprecated sync rewrite publication ahead of synchronous commit observ
 });
 
 it("does not certify stale navigation with a post-commit replacement version", async () => {
-  const { scope, manager, options } = await openSession("postcommit-race");
+  const { scope, manager } = await openSession("postcommit-race");
   const first = manager.appendMessage(userMessage("first", 1));
   const second = manager.appendMessage(userMessage("second", 2));
   const control = manager.appendLeafControl({
@@ -103,19 +102,34 @@ it("does not certify stale navigation with a post-commit replacement version", a
     appendMode: "side",
   });
   const kept = manager.appendMessage(userMessage("kept-after-trim", 3));
-  const tail = manager.appendMessage(userMessage("remove-tail", 4));
-  runOpenClawAgentWriteTransaction((database) => {
-    deferOpenClawAgentPostCommitPublication(database, () => {
-      const events = loadTranscriptEventsSync(scope);
-      for (const event of events) {
-        if (isRecord(event) && event.id === control.id) {
-          event.targetId = second;
-        }
-      }
-      replaceTranscriptEventsSync(scope, events);
-    });
-    expect(manager.removeTrailingEntries((entry) => entry.id === tail)).toBe(1);
-  }, options);
+  manager.appendMessage(userMessage("remove-tail", 4));
+  let published = false;
+  runOpenClawAgentWriteTransaction(
+    (database) => {
+      expect(
+        deferOpenClawAgentPostCommitPublication(database, () => {
+          published = true;
+          const events = loadTranscriptEventsSync(scope);
+          for (const event of events) {
+            if (isRecord(event) && event.id === control.id) {
+              event.targetId = second;
+            }
+          }
+          replaceTranscriptEventsSync(scope, events);
+        }),
+      ).toBe(true);
+      expect(
+        manager.removeTrailingEntries(
+          (entry) =>
+            entry.type === "message" &&
+            entry.message.role === "user" &&
+            entry.message.content === "remove-tail",
+        ),
+      ).toBe(1);
+    },
+    { agentId: scope.agentId, path: resolveSessionTranscriptDatabasePath(scope) },
+  );
+  expect(published).toBe(true);
   const committed = loadTranscriptEventsSync(scope);
   const rewrite = () => rewriteUser(manager, kept, "replacement", 3);
   await expect(rewrite()).rejects.toThrow("Session transcript changed");
@@ -129,37 +143,41 @@ it("does not certify stale navigation with a post-commit replacement version", a
   ]);
 });
 
-it.each([
-  ["compaction", "replay"],
-  ["reset", "replay"],
-  ["compaction", "stale append"],
-  ["reset", "stale append"],
-] as const)(
-  "adopts canonical %s boundary counts and navigation after %s",
-  async (kind, operation) => {
+it.each(["compaction", "reset"] as const)(
+  "adopts canonical boundary counts and navigation after replaying %s",
+  async (kind) => {
+    const { dir, scope, manager: full } = await openSession("rewrite-boundary");
+    const first = full.appendMessage(userMessage("first", 1));
+    full.appendMessage(userMessage("second", 2));
+    appendBoundary(full, kind, first);
+    full.appendMessage(userMessage("last", 3));
+    const manager = SessionManager.openBounded(scope, { maxEvents: 10, maxBytes: 16384 });
+    expect(manager.getBoundaryCount()).toBe(1);
+    await rewriteUser(manager, first, "rewritten");
+    expectCanonicalView(manager, SessionManager.open(scope, dir));
+  },
+);
+
+it.each(["compaction", "reset"] as const)(
+  "counts a stale bounded %s append exactly once after reload",
+  async (kind) => {
     const { dir, scope, manager: writer } = await openSession("stale-boundary-count");
     const first = writer.appendMessage(userMessage("first", 1));
-    if (operation === "replay") {
-      writer.appendMessage(userMessage("second", 2));
-      appendBoundary(writer, kind, first);
-      writer.appendMessage(userMessage("last", 3));
-    }
-    const limits = { cwd: dir, maxEvents: 20, maxBytes: 16384 };
-    const manager = SessionManager.openBounded(scope, limits);
-    expect(manager.getBoundaryCount()).toBe(operation === "replay" ? 1 : 0);
-    if (operation === "replay") {
-      await rewriteUser(manager, first, "rewritten");
-    } else {
-      writer.appendCustomEntry("concurrent-metadata", { keep: true });
-      appendBoundary(manager, kind, first);
-    }
-    expectCanonicalView(manager, SessionManager.open(scope, dir));
-    expectCanonicalView(manager, SessionManager.openBounded(scope, limits));
+    const stale = SessionManager.openBounded(scope, { cwd: dir, maxEvents: 20, maxBytes: 4096 });
+    expect(stale.getBoundaryCount()).toBe(0);
+    writer.appendCustomEntry("concurrent-metadata", { keep: true });
+    appendBoundary(stale, kind, first);
+    expectCanonicalView(
+      stale,
+      SessionManager.openBounded(scope, { cwd: dir, maxEvents: 20, maxBytes: 4096 }),
+    );
   },
 );
 
 it("appends an assistant without parsing transcript rows outside the bounded context", async () => {
-  const { dir, scope, database } = await openSession("bounded-assistant-append");
+  const dir = tempDirs.make("openclaw-session-manager-bounded-assistant-");
+  const scope = sessionScope(path.join(dir, "sessions.json"), "bounded-assistant-append");
+  await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
   for (const event of [{ eventId: "excluded" }, { eventId: "retained", parentId: "excluded" }]) {
     await appendTranscriptMessage(scope, {
       cwd: dir,
@@ -171,6 +189,10 @@ it("appends an assistant without parsing transcript rows outside the bounded con
     cwd: dir,
     maxBytes: 4096,
     maxEvents: 1,
+  });
+  const database = openOpenClawAgentDatabase({
+    agentId: scope.agentId,
+    path: resolveSessionTranscriptDatabasePath(scope),
   });
   const readIdentity = (id: string) =>
     database.db
