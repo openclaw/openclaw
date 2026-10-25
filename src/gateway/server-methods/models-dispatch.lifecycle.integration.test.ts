@@ -7,7 +7,10 @@ import { waitForCatalogPublication } from "./models-auth-catalog.test-support.js
 import {
   catalogReply,
   catalogSessionRpc,
+  createCatalogAuthProfiles,
+  createCatalogModel,
   expectAssistantReply,
+  writeCatalogPlugin,
 } from "./models-catalog-fixture.test-support.js";
 import {
   closeModelsEndpoint,
@@ -121,21 +124,13 @@ async function withDispatchLifecycle(
   });
   let gateway: Awaited<ReturnType<typeof startModelsGateway>> | undefined;
   const saveAccount = async (key: string) => {
-    await state.writeAuthProfiles({
-      version: 1,
-      profiles: { "opencode:default": { type: "api_key", provider: "opencode", key } },
-    });
+    await state.writeAuthProfiles(createCatalogAuthProfiles({ opencode: key }));
   };
   try {
     const baseUrl = `${await listenModelsEndpoint(endpoint)}/v1`;
-    await state.writeJson("catalog-plugin/openclaw.plugin.json", {
-      id: "opencode",
-      providers: ["opencode"],
-      modelCatalog: { discovery: { opencode: "refreshable" } },
-      configSchema: { type: "object", additionalProperties: false },
-    });
-    const pluginPath = await state.writeText(
-      "catalog-plugin/index.cjs",
+    const pluginPath = await writeCatalogPlugin(
+      state,
+      "opencode",
       `module.exports = {
         id: "opencode",
         register(api) {
@@ -156,10 +151,7 @@ async function withDispatchLifecycle(
                 return { provider: {
                   baseUrl: ${JSON.stringify(baseUrl)}, api: "openai-completions",
                   models: data.map(({ id }) => ({
-                    id, name: id, reasoning: false, input: ["text"],
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                    contextWindow: 32768, maxTokens: 1536,
-                    compat: { maxTokensField: "max_tokens" },
+                    ...${JSON.stringify({ ...createCatalogModel(""), maxTokens: 1536, compat: { maxTokensField: "max_tokens" } })}, id, name: id,
                   })),
                 }, outcomes: [{ provider: "opencode", profileId: auth.profileId, status: "ready" }] };
               },
@@ -167,6 +159,7 @@ async function withDispatchLifecycle(
           });
         },
       };`,
+      { modelCatalog: { discovery: { opencode: "refreshable" } } },
     );
     const token = "dispatch-lifecycle-gateway-token";
     const cfg = modelsTestConfig(state, token, {
