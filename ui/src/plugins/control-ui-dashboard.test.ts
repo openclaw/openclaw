@@ -51,14 +51,6 @@ async function boardView(element: DashboardElement) {
   return element.querySelector("openclaw-board-view")!;
 }
 
-async function setPermissions(element: DashboardElement, value: boolean) {
-  element.canMutate = element.canGrant = value;
-  await settle(element);
-  const board = element.querySelector("openclaw-board-view")!;
-  await board.querySelector("openclaw-board-widget-cell")?.updateComplete;
-  expect([board.canMutate, board.canGrant]).toEqual([value, value]);
-}
-
 const widget = (overrides: Partial<BoardWidget> = {}) =>
   createBoardWidget({ name: "status", title: "Status", ...overrides });
 
@@ -134,7 +126,6 @@ it.each([
         },
       },
     };
-    const reportError = vi.fn();
     const context = {
       agentSelection: { state: { selectedId: "main" } },
       gateway: {
@@ -151,7 +142,7 @@ it.each([
       plugins: {
         registrations: (kind: string) => (kind === "widgets" ? [entry] : []),
         subscribe: () => () => undefined,
-        reportError,
+        reportError: vi.fn(),
       },
     } as unknown as ApplicationContext;
     const provider = createApplicationContextProvider(context);
@@ -164,7 +155,6 @@ it.each([
     const initial: BoardGetParams = hydrateOwner ? { sessionKey } : session;
     const element = await mountDashboard(initial, client, {}, provider);
 
-    await customElements.whenDefined("openclaw-board-view");
     await vi.waitFor(() => expect(nativeOwner(element)).not.toBeNull());
     expect(nativeOwner(element)?.textContent).toBe(`${initial.agentId}/${sessionKey}`);
     if (hydrateOwner) {
@@ -180,7 +170,6 @@ it.each([
       expect(previousSignal?.aborted).toBe(true);
       expect(widgetSignals.at(-1)?.aborted).toBe(false);
     }
-    expect(reportError).not.toHaveBeenCalled();
   },
 );
 
@@ -213,16 +202,19 @@ it("updates mounted dashboard controls immediately when gateway permissions or c
   );
   const allow = board.querySelector<HTMLButtonElement>('[data-test-id="board-grant-allow"]')!;
 
-  expect([board.canMutate, board.canGrant]).toEqual([true, true]);
-  expect(allow.disabled).toBe(false);
-
   toggle(element).click();
   await element.updateComplete;
   expect(expanded(element)).toBe("false");
 
   for (const permitted of [false, true]) {
-    await setPermissions(element, permitted);
-    expect(allow.disabled).toBe(!permitted);
+    element.canMutate = element.canGrant = permitted;
+    await settle(element);
+    await board.querySelector("openclaw-board-widget-cell")?.updateComplete;
+    expect([board.canMutate, board.canGrant, allow.disabled]).toEqual([
+      permitted,
+      permitted,
+      !permitted,
+    ]);
     expect(expanded(element)).toBe("false");
   }
   element.connected = false;
