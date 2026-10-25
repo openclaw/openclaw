@@ -333,8 +333,12 @@ export function createReplyDispatcher(
     kind: ReplyDispatchKind,
     payload: ReplyPayload,
     notifySkip: boolean,
-  ) =>
-    normalizeReplyPayloadOutcome(payload, {
+  ) => {
+    // A channel rewrite cannot turn host-bound reasoning into an ordinary answer.
+    const boundReasoning =
+      payload.isReasoning === true &&
+      getReplyPayloadMetadata(payload)?.reasoningVisibilityOwner !== undefined;
+    const outcome = normalizeReplyPayloadOutcome(payload, {
       responsePrefix: options.responsePrefix,
       responsePrefixContext:
         options.responsePrefixContextProvider?.() ?? options.responsePrefixContext,
@@ -349,6 +353,16 @@ export function createReplyDispatcher(
             })
         : undefined,
     });
+    return boundReasoning && outcome.kind === "deliver" && outcome.payload.isReasoning !== true
+      ? {
+          kind: "deliver" as const,
+          payload: copyReplyPayloadMetadata(outcome.payload, {
+            ...outcome.payload,
+            isReasoning: true,
+          }),
+        }
+      : outcome;
+  };
 
   const notifyBeforeDeliverCancelled = async (
     payload: ReplyPayload,
@@ -389,6 +403,8 @@ export function createReplyDispatcher(
     let deliveryStarted = false;
     let pendingDelivery = false;
     const metadata = getReplyPayloadMetadata(payload);
+    const boundReasoning =
+      payload.isReasoning === true && metadata?.reasoningVisibilityOwner !== undefined;
     const custody = metadata?.pendingFinalDeliveryCompletion;
     const settleCustody =
       custody &&
@@ -440,6 +456,9 @@ export function createReplyDispatcher(
         if (deliverPayload?.textMode === "delta" && deliverPayload.text !== originalText) {
           const { textMode: _textMode, ...snapshot } = deliverPayload;
           deliverPayload = snapshot;
+        }
+        if (boundReasoning && deliverPayload && deliverPayload.isReasoning !== true) {
+          deliverPayload = { ...deliverPayload, isReasoning: true };
         }
         deliveryInput = deliverPayload
           ? replaceDispatchPayload(input, copyReplyPayloadMetadata(payload, deliverPayload))
