@@ -78,6 +78,7 @@ function FrameBody(props: {
   // Mount new ranges under the frame's owner, not the transient reconciliation effect.
   const owner = getOwner();
   const anchor = document.createComment("frame-body");
+  const [readParent, setParent] = createSignal<HTMLElement | null>(null, { ownedWrite: true });
   const ranges = new Map<string, PartRange>();
   const retire = (range: PartRange) => {
     // Native descendants must park their widgets while the range is still connected.
@@ -89,22 +90,29 @@ function FrameBody(props: {
       node = following;
     }
   };
-  onSettled(() => () => {
-    for (const range of ranges.values()) {
-      retire(range);
+  onSettled(() => {
+    const committedParent = anchor.parentElement;
+    if (!committedParent) {
+      throw new Error("Run frame body anchor was not committed");
     }
-    ranges.clear();
+    setParent(committedParent);
+    return () => {
+      for (const range of ranges.values()) {
+        retire(range);
+      }
+      ranges.clear();
+    };
   });
   createEffect(
     () => ({
+      parent: readParent(),
       parts: props.parts,
       options: props.options,
       render: props.children,
     }),
-    ({ parts, options, render }) => {
-      const parent = anchor.parentElement;
+    ({ parent, parts, options, render }) => {
       if (!parent) {
-        throw new Error("Run frame body anchor was not committed");
+        return;
       }
       const keys = new Set(parts.map((part) => `${part.kind}:${part.key}`));
       // Park outgoing canvas views before a new range looks them up.

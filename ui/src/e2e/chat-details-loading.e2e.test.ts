@@ -22,6 +22,11 @@ suite.define(() => {
             sessionId: "00000000-0000-4000-8000-00000000d201",
             kind: "direct",
             label: "Inspect reload",
+            worktree: {
+              id: "details-worktree",
+              branch: "feature/details",
+              repoRoot: "/workspace/details",
+            },
           },
         ],
         historyMessages: [
