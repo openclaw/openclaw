@@ -24,6 +24,8 @@ const noExecution = 'throw new Error("theme discovery must not execute plugin co
 function writeJson(root: string, file: string, value: unknown) {
   fs.writeFileSync(path.join(root, file), JSON.stringify(value));
 }
+const readManifest = (root: string) =>
+  withPluginCache(createPluginCache(), () => loadPluginManifest(root));
 
 type Snapshot = ReturnType<typeof createPluginMetadataSnapshotFixture>;
 
@@ -215,6 +217,7 @@ describe("manifest theme catalog", () => {
     expect(updated?.artwork?.icons?.rocket?.url).not.toBe(original?.artwork?.icons?.rocket?.url);
     expect(updated?.artwork?.hats?.beret?.url).not.toBe(original?.artwork?.hats?.beret?.url);
     expect(updated?.artwork?.critters).toEqual(original?.artwork?.critters);
+    expect(artwork(after, plugin.id, "critter", "ferris")?.body.toString("utf8")).toBe(svg);
     expect(catalog(before)[0]).toEqual(original);
     for (const [snapshot, expected] of [
       [before, svg],
@@ -262,9 +265,10 @@ describe("manifest theme catalog", () => {
     "https://example.invalid/theme.json",
   ])("rejects source declarations outside the portable plugin path contract: %s", (source) => {
     const plugin = fixture(undefined, "space", source);
-    expect(
-      withPluginCache(createPluginCache(), () => loadPluginManifest(plugin.rootDir)),
-    ).toMatchObject({ ok: false, error: expect.stringContaining("themes") });
+    expect(readManifest(plugin.rootDir)).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("themes"),
+    });
   });
 
   it("rejects duplicate theme identities and the imported-theme namespace", () => {
@@ -273,9 +277,7 @@ describe("manifest theme catalog", () => {
     const reserved = fixture(undefined, "user");
     const nestedReserved = fixture(undefined, "user/entry");
     for (const rootDir of [duplicate.rootDir, reserved.rootDir, nestedReserved.rootDir]) {
-      expect(withPluginCache(createPluginCache(), () => loadPluginManifest(rootDir))).toMatchObject(
-        { ok: false },
-      );
+      expect(readManifest(rootDir)).toMatchObject({ ok: false });
     }
   });
 

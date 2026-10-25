@@ -9,6 +9,7 @@ import {
   expectLiveObjects,
   readRegistryLabel,
   selectRegistry,
+  throwing,
 } from "./plugin-instance.test-support.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import {
@@ -280,9 +281,7 @@ it.each(["host", "module"] as const)(
   async (kind) => {
     const { registry, instance } = createOwnedInstance("retention");
     const failure = new Error("cleanup prerequisite failed");
-    const fail = () => {
-      throw failure;
-    };
+    const fail = throwing(failure);
     if (kind === "module") {
       instance.onModuleDispose(fail);
     }

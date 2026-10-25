@@ -73,6 +73,7 @@ afterEach(async () => {
 function collectResources(migration: PluginDoctorStateMigration, pluginId: string) {
   return preparePluginDoctorMigrationResources([{ pluginId, migration }], input);
 }
+const resource = (name: string, kind = "sqlite") => ({ path: path.join(stateDir, name), kind });
 
 it.each([
   { engine: "postgres", stateEngine: undefined, skipped: true },
@@ -87,14 +88,14 @@ it.each([
         ...(stateEngine ? { families: { state: { engine: stateEngine } } } : {}),
       },
     };
-    const resource = { path: path.join(stateDir, "legacy.sqlite"), kind: "sqlite" as const };
-    const collectBackupResources = vi.fn(() => [resource]);
+    const legacy = { ...resource("legacy.sqlite"), kind: "sqlite" as const };
+    const collectBackupResources = vi.fn(() => [legacy]);
     const result = await collectResources(
       { ...fixtureMigration, sqliteOnly: { family: "state" }, collectBackupResources },
       "legacy-owner",
     );
     expect(collectBackupResources).toHaveBeenCalledTimes(skipped ? 0 : 1);
-    expect(result.resources).toEqual(skipped ? [] : [resource]);
+    expect(result.resources).toEqual(skipped ? [] : [legacy]);
     expect(result.notices).toEqual(
       skipped
         ? [
@@ -231,13 +232,10 @@ it.each([
       { path: `${stateDir}${path.sep}linked${path.sep}..${path.sep}data.sqlite`, kind: "sqlite" },
     ],
   ],
-  ["unknown kind", () => [{ path: path.join(stateDir, "data"), kind: "unknown" }]],
+  ["unknown kind", () => [resource("data", "unknown")]],
   [
     "conflicting kinds",
-    () => [
-      { path: path.join(stateDir, "data"), kind: "file" },
-      { path: path.join(stateDir, "data"), kind: "sqlite" },
-    ],
+    () => [resource("data", "file"), resource("data")],
     "Conflicting migration backup resource kinds",
   ],
 ] as const)("still refuses a declared %s", async (_label, collect, message?: string) => {
