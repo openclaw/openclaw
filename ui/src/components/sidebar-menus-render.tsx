@@ -53,6 +53,7 @@ import { isUpdateAttentionForced } from "./sidebar-attention-dismissals.ts";
 import { isReleaseUpdateAvailable } from "./sidebar-attention-update.ts";
 import type { SidebarMenusOwner } from "./sidebar-menus-types.ts";
 import type { SidebarMenus } from "./sidebar-menus.tsx";
+import { useAvatarGatewayContext } from "./solid/identity-avatar-view.ts";
 import type { MenuEntry } from "./solid/menu.tsx";
 
 export { SidebarCatalogMenu as CatalogSessionMenu } from "./app-sidebar-catalog-menu.runtime.tsx";
@@ -184,6 +185,7 @@ function renderSidebarAgentMenuForMenus(
   position: NonNullable<SidebarMenus["agentMenuPosition"]>,
   avatars: () => IdentityAvatars,
 ): JSX.Element {
+  const avatarGateway = useAvatarGatewayContext();
   const trigger = menus.triggers.get("agent");
   const menuRef = menus.menuRef("agent");
   const chipAgent = createMemo(() => host.activeChipAgent());
@@ -233,7 +235,10 @@ function renderSidebarAgentMenuForMenus(
             menus.focusAgentRoster?.();
           });
         },
-        resolveAvatarUrl: (url) => avatars().resolve(url),
+        resolveAvatarUrl: (url) => {
+          avatarGateway();
+          return avatars().resolve(url);
+        },
         avatarErrorHandler: (url) => avatars().imageErrorHandler(url),
         openMode: menus.agentMenuMode,
         agentUnreadCount: (agentId) => host.agentUnreadCount(agentId),

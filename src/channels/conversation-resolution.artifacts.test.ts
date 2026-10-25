@@ -1,5 +1,7 @@
-// Thread binding API tests cover channel plugin thread binding contracts and helpers.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+// Cold conversation resolution uses narrow artifacts before full plugin loading.
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createTestRegistry } from "../test-utils/channel-plugins.js";
 
 const { loadBundledPluginPublicArtifactModuleFromCandidatesSyncMock } = vi.hoisted(() => ({
   loadBundledPluginPublicArtifactModuleFromCandidatesSyncMock: vi.fn(
@@ -25,23 +27,26 @@ const { loadBundledPluginPublicArtifactModuleFromCandidatesSyncMock } = vi.hoist
   ),
 }));
 
-vi.mock("../../plugins/public-surface-loader.js", () => ({
+vi.mock("../plugins/public-surface-loader.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/public-surface-loader.js")>()),
   loadBundledPluginPublicArtifactModuleFromCandidatesSync:
     loadBundledPluginPublicArtifactModuleFromCandidatesSyncMock,
 }));
 
 import {
-  resolveBundledChannelThreadBindingDefaultPlacement,
-  resolveBundledChannelThreadBindingInboundConversation,
-} from "./thread-binding-api.js";
+  resolveChannelDefaultBindingPlacement,
+  resolveInboundConversationResolution,
+} from "./conversation-resolution.js";
 
 describe("bundled channel thread binding fast path", () => {
   beforeEach(() => {
+    setActivePluginRegistry(createTestRegistry());
     loadBundledPluginPublicArtifactModuleFromCandidatesSyncMock.mockClear();
   });
+  afterEach(() => setActivePluginRegistry(createTestRegistry()));
 
   it("loads default placement from the narrow thread binding artifact", () => {
-    expect(resolveBundledChannelThreadBindingDefaultPlacement(" matrix ")).toBe("child");
+    expect(resolveChannelDefaultBindingPlacement(" matrix ")).toBe("child");
     expect(loadBundledPluginPublicArtifactModuleFromCandidatesSyncMock).toHaveBeenCalledWith({
       dirName: "matrix",
       artifactCandidates: ["thread-binding-api.js"],
@@ -50,28 +55,31 @@ describe("bundled channel thread binding fast path", () => {
 
   it("loads inbound conversation resolution from the narrow artifact", () => {
     expect(
-      resolveBundledChannelThreadBindingInboundConversation({
-        channelId: " matrix ",
+      resolveInboundConversationResolution({
+        cfg: {},
+        channel: " matrix ",
         to: "room:!room:example",
         threadId: "$thread",
-        isGroup: true,
       }),
     ).toEqual({
-      conversationId: " $thread ",
-      parentConversationId: " !room:example ",
+      channel: "matrix",
+      accountId: "default",
+      conversationId: "$thread",
+      parentConversationId: "!room:example",
+      threadId: "$thread",
     });
   });
 
   it("treats missing artifacts as absent hints", () => {
     // "absent" is a synthetic channel; real bundled artifacts are covered by
     // the thread-binding artifact parity contract test.
-    expect(resolveBundledChannelThreadBindingDefaultPlacement("absent")).toBeUndefined();
+    expect(resolveChannelDefaultBindingPlacement("absent")).toBeUndefined();
     expect(
-      resolveBundledChannelThreadBindingInboundConversation({
-        channelId: "absent",
+      resolveInboundConversationResolution({
+        cfg: {},
+        channel: "absent",
         to: "channel:general",
-        isGroup: true,
       }),
-    ).toBeUndefined();
+    ).toEqual({ channel: "absent", accountId: "default", conversationId: "general" });
   });
 });

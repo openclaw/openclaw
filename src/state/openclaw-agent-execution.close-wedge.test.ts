@@ -80,31 +80,35 @@ vi.mock("../infra/worker-cpu.js", async (importOriginal) => {
       }
       const statement = prepare.call(this, sql);
       if (/insert into|delete from "?agent_database_leases"?/i.test(sql)) {
-        const run = statement.run.bind(statement);
-        statement.run = (...args) => {
-          const fault = new Int32Array(workerData.closeWedgeEnabled);
-          if (/insert into "?agent_database_leases"?/i.test(sql) &&
-              (Atomics.compareExchange(fault, 0, 3, 0) === 3 || Atomics.load(fault, 0) === 4)) {
-            Atomics.add(fault, 2, 1);
-            throw Object.assign(new Error("database is locked"), { code: "ERR_SQLITE_ERROR", errcode: 5 });
-          }
-          if (/delete from "?agent_database_leases"?/i.test(sql)) {
-            Atomics.add(fault, 1, 1);
-            if (Atomics.load(fault, 0) === 1) {
-              throw Object.assign(new Error("disk I/O error"), { code: "ERR_SQLITE_ERROR", errcode: 10, errstr: "disk I/O error" });
+        // DELETE RETURNING uses all() on Node or iterate() on Bun; exit-time
+        // close must hit the same fault as reclamation through run().
+        for (const method of ["run", "all", "iterate"]) {
+          const execute = statement[method].bind(statement);
+          statement[method] = (...args) => {
+            const fault = new Int32Array(workerData.closeWedgeEnabled);
+            if (/insert into "?agent_database_leases"?/i.test(sql) &&
+                (Atomics.compareExchange(fault, 0, 3, 0) === 3 || Atomics.load(fault, 0) === 4)) {
+              Atomics.add(fault, 2, 1);
+              throw Object.assign(new Error("database is locked"), { code: "ERR_SQLITE_ERROR", errcode: 5 });
             }
-          }
-          try {
-            return run(...args);
-          } catch (error) {
-            if (/insert into/i.test(sql) && [5, 6].includes(Atomics.load(fault, 0)) && error.errcode === 13) {
-              // Lose the reply after a real SQLITE_FULL, leaving its outcome unknown to the host.
-              Atomics.add(fault, 3, 1);
-              process.exit(3);
+            if (/delete from "?agent_database_leases"?/i.test(sql)) {
+              Atomics.add(fault, 1, 1);
+              if (Atomics.load(fault, 0) === 1) {
+                throw Object.assign(new Error("disk I/O error"), { code: "ERR_SQLITE_ERROR", errcode: 10, errstr: "disk I/O error" });
+              }
             }
-            throw error;
-          }
-        };
+            try {
+              return execute(...args);
+            } catch (error) {
+              if (/insert into/i.test(sql) && [5, 6].includes(Atomics.load(fault, 0)) && error.errcode === 13) {
+                // Lose the reply after a real SQLITE_FULL, leaving its outcome unknown to the host.
+                Atomics.add(fault, 3, 1);
+                process.exit(3);
+              }
+              throw error;
+            }
+          };
+        }
       }
       return statement;
     };

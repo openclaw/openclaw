@@ -2139,6 +2139,8 @@ try {
         streamingInput.abort();
         await nativeInput;
       }
+      // Freeze the workload before profiler/trace shutdown adds diagnostic tasks.
+      await page.evaluate(() => Reflect.get(window, "__streamingReply").stop());
       let streamingAllocations;
       const allocationProfile = values["streaming-allocations"]
         ? (await cdp.send("HeapProfiler.stopSampling")).profile

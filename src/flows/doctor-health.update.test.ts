@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createCliTtyMock } from "../cli/test-runtime-capture.js";
 import { UpdateCommandRecoveryPendingError } from "../cli/update-cli/update-command-recovery-error.js";
 import { transformConfigFile } from "../config/mutate.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -322,8 +323,8 @@ it.each(["ok", "pending"] as const)("preserves update handoff (%s)", async (outc
   const beginMaintenance = vi
     .spyOn(maintenance, "beginDoctorMaintenance")
     .mockResolvedValue(undefined);
-  const stdinIsTty = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
-  Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: true });
+  const ttyMock = createCliTtyMock([process.stdin]);
+  ttyMock.set(true);
   try {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const cfg: OpenClawConfig = { gateway: { mode: "local" } };
@@ -370,10 +371,6 @@ it.each(["ok", "pending"] as const)("preserves update handoff (%s)", async (outc
       }
     });
   } finally {
-    if (stdinIsTty) {
-      Object.defineProperty(process.stdin, "isTTY", stdinIsTty);
-    } else {
-      delete (process.stdin as Partial<typeof process.stdin>).isTTY;
-    }
+    ttyMock.restore();
   }
 });

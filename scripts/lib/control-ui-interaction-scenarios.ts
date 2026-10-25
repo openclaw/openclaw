@@ -15,9 +15,11 @@ import {
   waitForControlUiRoute,
 } from "../../ui/src/test-helpers/control-ui-e2e.ts";
 import { navigationDrawerToggle } from "../../ui/src/test-helpers/control-ui-navigation.ts";
+import type { ProjectionFamily } from "../../ui/src/test-helpers/control-ui-projection-fixture-contract.ts";
 import { mcpResourceHtml } from "../../ui/src/test-helpers/control-ui-team-scale-widget-html.ts";
 import { cronListResponseFixture } from "../../ui/src/test-helpers/cron.ts";
 import { meetingStatus } from "../../ui/src/test-helpers/transcripts.test-support.ts";
+import { runProjectionFixture } from "./control-ui-projection-fixtures.ts";
 import type { ControlUiResourceCounts } from "./control-ui-resource-counts.ts";
 
 const sessionKeys = ["agent:main:interaction-a", "agent:main:interaction-b"] as const;
@@ -82,6 +84,8 @@ export type InteractionScenario = {
   /** Resource campaigns opt into the longer inventory and idle scenarios. */
   resourceOnly?: boolean;
   visibility?: "hidden";
+  projectionFamily?: ProjectionFamily;
+  projectionIdle?: boolean;
   /** Count newly inserted rows across the action, including transient replacements. */
   rowSelector?: string;
   setup?: (page: Page) => Promise<void>;
@@ -1317,7 +1321,7 @@ async function settleSidebarCapture(page: Page) {
   );
 }
 
-async function settleSidebarBackgroundWork(page: Page) {
+export async function settleSidebarBackgroundWork(page: Page) {
   // The prefetch owner automatically warms New Session; other groups require navigation intent.
   const prefetchAssets = await page.evaluate(async () => {
     const descriptor = document
@@ -1518,7 +1522,64 @@ async function searchModels(page: Page) {
   );
 }
 
+async function prepareProviderUsage(page: Page) {
+  const summary = page.locator('[data-provider-id="openai"] .provider-row__summary');
+  await summary.waitFor();
+  if ((await summary.getAttribute("aria-expanded")) !== "true") {
+    await summary.click();
+  }
+  await page.locator(".provider-usage__window").first().waitFor();
+}
+
 export const interactionScenarios: readonly InteractionScenario[] = [
+  ...(["sdk-avatars", "sdk-avatar-identities"] as const).map((family): InteractionScenario => ({
+    id: `projection-${family}`,
+    route: controlUiSessionPath(sessionKeys[0]),
+    expected:
+      "120 SDK avatars in A and 40 in B, two real factories per application; twenty native publications update A only, then independent factory/application retirement.",
+    projectionFamily: family,
+    prepare: prepareChat,
+    run: async (page) => {
+      await runProjectionFixture(page);
+    },
+  })),
+  ...(["visible", "hidden"] as const).map((visibility): InteractionScenario => ({
+    id: `projection-outbox-idle-${visibility}`,
+    route: controlUiSessionPath(sessionKeys[0]),
+    expected: `480 actual outbox rows remain mounted for three ${visibility} native-clock idle seconds, then retire independently.`,
+    projectionFamily: "outbox",
+    projectionIdle: true,
+    visibility: visibility === "hidden" ? visibility : undefined,
+    prepare: prepareChat,
+    run: async (page) => {
+      const state = () => page.evaluate(() => document.visibilityState);
+      if ((await state()) !== visibility) {
+        throw new Error(`Expected ${visibility} projection page`);
+      }
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 3_000);
+      });
+      if (
+        (await state()) !== visibility ||
+        (await page
+          .locator('[data-projection-application="A"] [data-attention-kind="outbox"]')
+          .count()) !== 400
+      ) {
+        throw new Error("Projection idle visibility or mounted family changed");
+      }
+    },
+  })),
+  ...(["agent-rows", "outbox", "board-pins"] as const).map((family): InteractionScenario => ({
+    id: `projection-${family}`,
+    route: controlUiSessionPath(sessionKeys[0]),
+    expected:
+      "400 rows in application A and 80 in B; twenty actual native-owner publications update A alone, then both groups retire independently.",
+    projectionFamily: family,
+    prepare: prepareChat,
+    run: async (page) => {
+      await runProjectionFixture(page);
+    },
+  })),
   {
     id: "mcp-app-resize-resources",
     route: controlUiSessionPath(sessionKeys[0]),
@@ -1888,19 +1949,89 @@ export const interactionScenarios: readonly InteractionScenario[] = [
     expected: "Refreshing provider usage retains the plan windows and billing rows.",
     rowSelector:
       ".provider-usage__group, .provider-usage__window, .provider-usage__row, .provider-usage__chip",
-    prepare: async (page) => {
-      const summary = page.locator('[data-provider-id="openai"] .provider-row__summary');
-      await summary.waitFor();
-      if ((await summary.getAttribute("aria-expanded")) !== "true") {
-        await summary.click();
-      }
-      await page.locator(".provider-usage__window").first().waitFor();
-    },
+    prepare: prepareProviderUsage,
     run: async (page, gateway) => {
       const after = (await gateway.getRequests("usage.status")).length;
       await page.getByRole("button", { name: "Refresh", exact: true }).click();
       await gateway.waitForRequest("usage.status", { after });
       await frames(page);
+    },
+  },
+  {
+    id: "provider-model-picker-open-search",
+    route: pathForRoute("model-providers"),
+    expected:
+      "The generic 1,000-model primary picker filters to Warm model 0999, closes without saving, and returns focus.",
+    prepare: async (page) => {
+      await prepareProviderUsage(page);
+      const picker = page.locator(".model-providers__defaults openclaw-select-picker").first();
+      const trigger = picker.locator(".picker-select__trigger");
+      await trigger.click();
+      await picker.locator(".picker-select__search").waitFor();
+      await page.waitForFunction(
+        () =>
+          document
+            .querySelector(".model-providers__defaults openclaw-select-picker")
+            ?.querySelectorAll('[role="option"][data-value^="example/model-"]').length === 1_000,
+      );
+      await picker.locator(".picker-select__search").press("Escape");
+      await page.waitForFunction(() => {
+        const hostElement = document.querySelector(
+          ".model-providers__defaults openclaw-select-picker",
+        );
+        const triggerElement = hostElement?.querySelector(".picker-select__trigger");
+        return (
+          triggerElement?.getAttribute("aria-expanded") === "false" &&
+          triggerElement === document.activeElement
+        );
+      });
+    },
+    run: async (page, gateway) => {
+      const picker = page.locator(".model-providers__defaults openclaw-select-picker").first();
+      const trigger = picker.locator(".picker-select__trigger");
+      const selected = await trigger.getAttribute("aria-label");
+      const saves = (await gateway.getRequests("config.patch")).length;
+      await trigger.click();
+      const search = picker.locator(".picker-select__search");
+      await search.waitFor();
+      await page.waitForFunction(
+        () =>
+          document.querySelector(
+            ".model-providers__defaults openclaw-select-picker .picker-select__search",
+          ) === document.activeElement,
+      );
+      await search.pressSequentially(modelQuery);
+      await picker.locator('[role="option"][data-value="example/model-999"]').waitFor();
+      await page.waitForFunction(() => {
+        const hostElement = document.querySelector(
+          ".model-providers__defaults openclaw-select-picker",
+        );
+        return (
+          [...(hostElement?.querySelectorAll<HTMLElement>('[role="option"]') ?? [])].filter(
+            (option) => option.checkVisibility(),
+          ).length === 1
+        );
+      });
+      await search.press("Escape");
+      await page.waitForFunction(() => {
+        const hostElement = document.querySelector(
+          ".model-providers__defaults openclaw-select-picker",
+        );
+        const triggerElement = hostElement?.querySelector(".picker-select__trigger");
+        return (
+          triggerElement?.getAttribute("aria-expanded") === "false" &&
+          triggerElement === document.activeElement &&
+          hostElement?.querySelectorAll('[role="option"]').length === 0
+        );
+      });
+      if (
+        (await trigger.getAttribute("aria-label")) !== selected ||
+        (await gateway.getRequests("config.patch")).length !== saves
+      ) {
+        throw new Error(
+          "Searching and dismissing the provider model picker must preserve its selection without saving",
+        );
+      }
     },
   },
   {

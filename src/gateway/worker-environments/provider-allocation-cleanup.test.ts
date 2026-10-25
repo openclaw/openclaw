@@ -210,6 +210,7 @@ describe("worker allocation cleanup", () => {
     expect(destroy).toHaveBeenCalledExactlyOnceWith({
       leaseId: "operation-cleanup",
       profile: { region: "test" },
+      signal: expect.any(AbortSignal),
     });
     expect(testState.prepareInstallation).not.toHaveBeenCalled();
     expect(testState.bootstrapWorker).not.toHaveBeenCalled();
@@ -384,11 +385,20 @@ describe("worker allocation cleanup", () => {
       resolution.release();
       await Promise.all([teardownResult, retryResult, stopping]);
     }
-    expect(await retryResult).toMatchObject({ state: "destroyed" });
+    expect(await retryResult).toMatchObject({
+      code: "provider_failure",
+      message: "Worker reconciliation paused",
+    });
     expect(resolveAllocation).toHaveBeenCalledTimes(2);
     expect(provision).toHaveBeenCalledOnce();
-    expect(destroy).toHaveBeenCalledOnce();
+    expect(destroy).not.toHaveBeenCalled();
     expect(stopped).toBe(true);
-    expect(testState.store.get(pending.environmentId)?.state).toBe("destroyed");
+    expectRecord("destroying", "late-allocation");
+    const restarted = await reopenService(
+      createProvider({ provision, resolveAllocation, destroy }),
+    );
+    await restarted.reconcileOnce();
+    expect(destroy).toHaveBeenCalledOnce();
+    expectRecord("destroyed", "late-allocation");
   });
 });

@@ -1421,7 +1421,6 @@ src/channels/plugins/read-only.ts	2
 src/channels/plugins/setup-contract.ts	3
 src/channels/plugins/setup-helpers.ts	3
 src/channels/plugins/setup-promotion-helpers.ts	1
-src/channels/plugins/setup-promotion-keys.ts	1
 src/channels/plugins/setup-wizard-helpers.ts	12
 src/channels/plugins/setup-wizard-proxy.ts	1
 src/channels/plugins/setup-wizard.ts	1

@@ -609,3 +609,13 @@ node --import ./scripts/tsx.mjs scripts/bench-control-ui-rich-boot.ts \
 
 Omit network latency for localhost; a positive latency also applies 10 Mbps
 throughput. These results cover browser rendering, not provider latency.
+
+The rich-boot report also records Resource Timing phases, negotiated protocol,
+compression/cache response headers, and the Gateway's actual request inventory.
+Use those phases to distinguish connection queueing from response transfer.
+Add `--service-worker` to install the production worker, leave the warm document,
+stop the worker, and clear HTTP, asset, and browser-state caches before each
+measured navigation. Worker fetches receive the same network profile as page
+fetches. The report includes preload state and worker requests; each sample must
+issue exactly one document request. This mode measures a stopped worker with
+cold assets, rather than an already-open tab or an offline-cache hit.

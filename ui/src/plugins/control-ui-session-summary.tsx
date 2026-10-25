@@ -383,9 +383,9 @@ function PluginSessionSummaryContent(props: PluginSessionSummaryProps) {
     }
     const state = projectGateway(current);
     let connection = new AbortController();
-    const stop = state.subscribe(() => {
+    const stop = current.subscribe(() => {
       // Retire while the owner publishes; Solid may only see the final reconnected snapshot.
-      if (state.read().snapshot.phase !== "connected") {
+      if (current.snapshot.phase !== "connected") {
         connection.abort();
       } else if (connection.signal.aborted) {
         connection = new AbortController();

@@ -6,24 +6,20 @@ import { buildSlackAssistantThreadMetadata } from "../context.js";
 import type { SlackMonitorContext, SlackAssistantThreadContext } from "../context.js";
 import { resolveSlackIngressTurnLifecycle } from "../ingress.js";
 
-type SlackAssistantThreadPayload = {
-  context?: SlackAssistantThreadContextPayload;
-  channel_id?: string;
-  thread_ts?: string;
-};
-
 type SlackAssistantThreadContextPayload =
   AssistantThreadStartedEvent["assistant_thread"]["context"];
 
-type SlackAssistantThreadEvent = {
-  type: "assistant_thread_started" | "assistant_thread_context_changed";
-  assistant_thread?: SlackAssistantThreadPayload;
-  context?: SlackAssistantThreadContextPayload;
-  event_ts?: string;
-};
-
 function normalizeAssistantThread(
-  event: SlackAssistantThreadEvent,
+  event: {
+    type: "assistant_thread_started" | "assistant_thread_context_changed";
+    assistant_thread?: {
+      context?: SlackAssistantThreadContextPayload;
+      channel_id?: string;
+      thread_ts?: string;
+    };
+    context?: SlackAssistantThreadContextPayload;
+    event_ts?: string;
+  },
   getPrevious?: (channelId: string, threadTs: string) => SlackAssistantThreadContext | undefined,
 ) {
   const thread = event.assistant_thread;

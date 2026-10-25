@@ -53,6 +53,7 @@ export type MenuRuntime = {
   ): void;
   pointerDelta(x: number): number;
   item(
+    api: Api,
     value: string,
     disabled?: boolean,
     type?: "checkbox" | "radio",
@@ -439,13 +440,13 @@ export function createMenuRuntime(
       return delta;
     },
     item(
+      api: Api,
       value: string,
       disabled = false,
       type?: "checkbox" | "radio",
       checked = false,
       label = value,
     ) {
-      const api = read();
       const result = type
         ? api.getOptionItemProps({
             value,

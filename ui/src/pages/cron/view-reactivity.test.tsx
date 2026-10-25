@@ -89,7 +89,7 @@ it("publishes refreshed runtime facts from the mutable selected job", async () =
   expect(counts()[0]).toBe("2");
 });
 
-it("keeps pagination and suggestion nodes current while a query is pending", async () => {
+it("keeps pagination current while a query is pending without mounting editor suggestions", () => {
   const onLoadMoreJobs = vi.fn();
   const [props, setProps] = createSignal(
     createCronViewProps({
@@ -102,7 +102,7 @@ it("keeps pagination and suggestion nodes current while a query is pending", asy
   );
   const view = mountSolid(() => <CronView {...props()} />);
   const button = getElement(view.container, ".cron-load-more", HTMLButtonElement);
-  expect(view.container.querySelector("#cron-tz-suggestions")).toBeNull();
+  expect(view.container.querySelector("datalist")).toBeNull();
   expect(view.container.querySelector(".cron-table__footer")?.textContent).toContain("2 of 12");
   button.click();
   expect(onLoadMoreJobs).toHaveBeenCalledOnce();
@@ -117,20 +117,22 @@ it("keeps pagination and suggestion nodes current while a query is pending", asy
   expect(view.container.querySelector(".cron-load-more")).toBe(button);
   expect(button.disabled).toBe(true);
   expect(button.textContent).toContain("Loading");
+  expect(view.container.querySelector("datalist")).toBeNull();
+});
 
-  setProps((previous) => ({ ...previous, createOpen: true }));
-  flush();
+it("retains live suggestions only while the editor is presented", async () => {
+  const [props, setProps] = createSignal(
+    createCronViewProps({ createOpen: true, timezoneSuggestions: ["UTC", "Europe/Vienna"] }),
+  );
+  const view = mountSolid(() => <CronView {...props()} />);
+  await vi.dynamicImportSettled();
   await waitForSolid(() =>
     expect(view.container.querySelector("#cron-tz-suggestions")).not.toBeNull(),
   );
   const timezones = getElement(view.container, "#cron-tz-suggestions", HTMLDataListElement);
   const options = [...timezones.querySelectorAll("option")];
   expect(options.map((option) => option.value)).toEqual(["UTC", "Europe/Vienna"]);
-  setProps((previous) => ({
-    ...previous,
-    jobsQuery: "ii",
-    timezoneSuggestions: [...previous.timezoneSuggestions],
-  }));
+  setProps((previous) => ({ ...previous, timezoneSuggestions: [...previous.timezoneSuggestions] }));
   flush();
   expect(view.container.querySelector("#cron-tz-suggestions")).toBe(timezones);
   expect(timezones.querySelectorAll("option")[0]).toBe(options[0]);
@@ -142,6 +144,9 @@ it("keeps pagination and suggestion nodes current while a query is pending", asy
     "Europe/Vienna",
     "Asia/Tokyo",
   ]);
+  setProps((previous) => ({ ...previous, createOpen: false }));
+  flush();
+  expect(view.container.querySelector("datalist")).toBeNull();
 });
 
 it("retains history controls and forwards the current transcript target after refresh", () => {
