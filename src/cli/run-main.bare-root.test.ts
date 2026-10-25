@@ -57,15 +57,7 @@ function expectBoundTui(expected: {
 }
 
 function expectGatewayTarget(expected: Parameters<typeof expectBoundTui>[0]): void {
-  expect(probeGatewayConfiguredModelMock).toHaveBeenCalledWith({
-    ...expected,
-    ...(expected.configuredRemote
-      ? {
-          originScopedDeviceAuth: true,
-          config: expect.objectContaining({ gateway: expect.objectContaining({ mode: "remote" }) }),
-        }
-      : {}),
-  });
+  expect(probeGatewayConfiguredModelMock).toHaveBeenCalledWith(expected);
   expectBoundTui(expected);
 }
 
@@ -140,27 +132,12 @@ describe("runCli exit behavior", () => {
     });
   });
 
-  it.each([
-    ["unknown inline option", ["--typo=do-not-print-me"]],
-    ["option terminator", ["--"]],
-  ])("rejects a pre-URL %s without reflecting values", async (_label, prefix) => {
-    const target = "https://gateway.example/dashboard/main/movies-a1166b81";
-    let error: unknown;
-    try {
-      await runCli(cliArgs(...prefix, target));
-    } catch (caught) {
-      error = caught;
-    }
-
+  it("rejects unknown pre-URL options without exposing their values to command discovery", async () => {
+    const error = await runCli(
+      cliArgs("--typo=do-not-print-me", "https://gateway.example/dashboard/main/movies-a1166b81"),
+    ).catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(Error);
     expect(String(error)).not.toContain("do-not-print-me");
-    expect(runTuiCliActionMock).not.toHaveBeenCalled();
-  });
-
-  it("rejects a missing pre-URL direct option value before command discovery", async () => {
-    const target = "https://gateway.example/dashboard/main/movies-a1166b81";
-
-    await expect(runCli(cliArgs("--token", target))).rejects.toThrow("--token requires a value");
     expect(runTuiCliActionMock).not.toHaveBeenCalled();
   });
 

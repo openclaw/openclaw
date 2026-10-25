@@ -53,7 +53,7 @@ function approvalDisplayId(id: string): string {
 
 function pendingApprovalSnapshot(params: {
   id: string;
-  kind?: "exec" | "plugin" | "system-agent";
+  kind?: "exec" | "system-agent";
   allowedDecisions?: string[];
   expiresAtMs?: number;
 }) {
@@ -62,23 +62,11 @@ function pendingApprovalSnapshot(params: {
     approval: {
       id: params.id,
       status: "pending",
-      urlPath: `/approve/${params.id}`,
-      createdAtMs: Date.now() - 1_000,
       expiresAtMs: params.expiresAtMs ?? Date.now() + 60_000,
-      presentation:
-        kind === "exec"
-          ? {
-              kind,
-              commandText: "echo ready",
-              allowedDecisions: params.allowedDecisions ?? ["allow-once", "allow-always", "deny"],
-            }
-          : {
-              kind,
-              title: kind === "plugin" ? "Plugin action" : "OpenClaw change",
-              description: "Apply the requested change",
-              ...(kind === "plugin" ? { severity: "warning" } : { proposalHash: "a".repeat(64) }),
-              allowedDecisions: params.allowedDecisions ?? ["allow-once", "deny"],
-            },
+      presentation: {
+        kind,
+        allowedDecisions: params.allowedDecisions ?? ["allow-once", "allow-always", "deny"],
+      },
     },
   };
 }

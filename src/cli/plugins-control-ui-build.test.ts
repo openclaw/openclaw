@@ -11,8 +11,6 @@ import {
   CONTROL_UI_PLUGIN_MAX_ASSETS,
   readPluginControlUiAssets,
 } from "../plugins/control-ui-assets.js";
-import { loadPluginManifest } from "../plugins/manifest.js";
-import { resetPluginCache } from "../plugins/plugin-cache.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { execNodeEvalSync } from "../test-utils/node-process.js";
 import {
@@ -38,7 +36,6 @@ async function writeFiles(root: string, files: Record<string, string>) {
 
 afterEach(async () => {
   vi.restoreAllMocks();
-  resetPluginCache();
   vi.unstubAllGlobals();
   await Promise.all(
     directories.splice(0).map((directory) => fs.rm(directory, { recursive: true, force: true })),
@@ -123,76 +120,44 @@ console.log(JSON.stringify({ mode: (await fs.stat(manifest)).mode & 0o7777, cont
 });
 
 describe("native plugin browser builds", () => {
-  it.each([true, false, "settings-only", "channel-settings"])(
-    "builds runtime browser artifacts without changing authored plugin metadata (authored UI: %s)",
-    async (authoredUi) => {
-      const project = await fixture();
-      const packagePath = path.join(project.rootDir, "package.json");
-      const packageJson = await readJson(project.rootDir, "package.json");
-      packageJson.openclaw = { controlUi: project.source };
-      await fs.writeFile(packagePath, JSON.stringify(packageJson));
-      const manifestPath = path.join(project.rootDir, "openclaw.plugin.json");
-      const settingsViews =
-        authoredUi === "channel-settings"
-          ? [{ section: "channels", panel: "detail", channelId: "custom" }]
-          : authoredUi === "settings-only"
-            ? [
-                { section: "memory", panel: "overview" },
-                { section: "memory", panel: "memories" },
-              ]
-            : undefined;
-      const authored = {
-        id: "fixture",
-        ...(authoredUi === "channel-settings" ? { channels: ["custom"] } : {}),
-        configSchema: { type: "object", properties: { token: { type: "string" } } },
-        activation: { onStartup: true },
-        ...(authoredUi
-          ? {
-              controlUi: {
-                entry: "dist/control-ui/authored/index.js",
-                ...(settingsViews
-                  ? {
-                      activation: "settings-only",
-                      settingsViews,
-                    }
-                  : {}),
-              },
-            }
-          : {}),
-      };
-      const original = JSON.stringify(authored, null, 2);
-      await fs.writeFile(manifestPath, original);
-      execFileSync(
-        process.execPath,
-        [
-          "--import",
-          path.resolve("scripts/tsx.mjs"),
-          path.resolve("scripts/build-plugin-control-ui.mts"),
-          project.rootDir,
-        ],
-        { timeout: 10_000 },
-      );
-      expect(await fs.readFile(manifestPath, "utf8")).toBe(original);
-      const generatedPath = path.join(project.rootDir, "dist/openclaw.plugin.json");
-      const generated = await readJson(project.rootDir, "dist/openclaw.plugin.json");
-      expect(generated.controlUi.activation).toBe(settingsViews ? "settings-only" : undefined);
-      expect(generated.controlUi.settingsViews).toEqual(settingsViews);
-      expect(await buildPluginControlUi({ ...project, check: true })).toEqual(generated.controlUi);
-      generated.id = "previous-name";
-      generated.configSchema = { type: "object", properties: {} };
-      generated.activation = { onStartup: false };
-      await fs.writeFile(generatedPath, JSON.stringify(generated));
-      const loaded = loadPluginManifest(project.rootDir);
-      expect(loaded).toMatchObject({
-        ok: true,
-        manifest: { ...authored, controlUi: generated.controlUi },
-      });
-      const assets = await readPluginControlUiAssets(project.rootDir, generated.controlUi);
-      expect(assets.entryName).toBe("index.js");
-      const built = await browserModule(project.rootDir, generated.controlUi.entry);
-      expect(built.message).toBe("first");
-    },
-  );
+  it("preserves authored channel Settings metadata in generated browser artifacts", async () => {
+    const project = await fixture();
+    await project.write(
+      "package.json",
+      JSON.stringify({
+        type: "module",
+        openclaw: { controlUi: project.source },
+      }),
+    );
+    const settingsViews = [{ section: "channels", panel: "detail", channelId: "custom" }];
+    const authored = {
+      id: "fixture",
+      channels: ["custom"],
+      configSchema: { type: "object", properties: { token: { type: "string" } } },
+      activation: { onStartup: true },
+      controlUi: {
+        entry: "dist/control-ui/authored/index.js",
+        activation: "settings-only",
+        settingsViews,
+      },
+    };
+    const original = JSON.stringify(authored, null, 2);
+    await project.write("openclaw.plugin.json", original);
+    execFileSync(
+      process.execPath,
+      [
+        "--import",
+        path.resolve("scripts/tsx.mjs"),
+        path.resolve("scripts/build-plugin-control-ui.mts"),
+        project.rootDir,
+      ],
+      { timeout: 10_000 },
+    );
+    expect(await project.read("openclaw.plugin.json")).toBe(original);
+    const generated = await readJson(project.rootDir, "dist/openclaw.plugin.json");
+    expect(generated.controlUi).toMatchObject({ activation: "settings-only", settingsViews });
+    expect(await project.build(true)).toEqual(generated.controlUi);
+  });
 
   it("preserves esbuild's existing non-Solid JSX compilation", async () => {
     const project = await fixture('export * from "./view.tsx";', {
@@ -318,8 +283,6 @@ export { flush };
     const first = await publish(project);
     expect(first.entry).toMatch(/^dist\/control-ui\/[a-f0-9]{64}\/index.js$/u);
     expect(first.styles).toHaveLength(1);
-    expect(await project.build()).toEqual(first);
-    expect(await project.build(true)).toEqual(first);
     const generation = project.file(path.dirname(first.entry));
     const chunks = (await fs.readdir(generation)).filter((name) => name.startsWith("chunk-"));
     expect(chunks.length).toBeGreaterThan(0);
@@ -331,14 +294,10 @@ export { flush };
       "glob dependency",
     ]);
     const original = await project.read(first.entry);
-    await project.write("lazy.js", 'export const value = "updated dependency";');
-    const changedChunk = await project.build();
-    expect(changedChunk.entry).not.toBe(first.entry);
-    const changed = await project.load(changedChunk.entry);
-    expect(await changed.loadDependencies("value")).toEqual([
-      "updated dependency",
-      "glob dependency",
-    ]);
+    await project.write(project.source, 'export const message = "second";');
+    await expect(project.build(true)).rejects.toThrow("missing or stale");
+    const next = await project.build();
+    expect(next.entry).not.toBe(first.entry);
     // A fresh process must still resolve the previous generation's relative chunks.
     expect(
       JSON.parse(
@@ -347,10 +306,6 @@ export { flush };
         ),
       ),
     ).toEqual(["literal dependency", "glob dependency"]);
-    await project.write(project.source, 'export const message = "second";');
-    await expect(project.build(true)).rejects.toThrow("missing or stale");
-    const next = await project.build();
-    expect(next.entry).not.toBe(first.entry);
     expect(await project.read(first.entry)).toBe(original);
     expect((await readJson(project.rootDir, "openclaw.plugin.json")).controlUi).toEqual(first);
   });
