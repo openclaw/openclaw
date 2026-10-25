@@ -8,12 +8,12 @@ import { createGatewayHarness, sessionsResult } from "./session-capability.test-
 import { ownRoster } from "./session-roster-refresh.test-support.ts";
 import { sessionRpc, patchReceipt } from "./session-rpc.test-support.ts";
 
+function bareRow(key: string, fields: Partial<GatewaySessionRow> = {}): GatewaySessionRow {
+  return { key, sessionId: `${key}:session`, kind: "direct", updatedAt: 10, ...fields };
+}
 function pinRow(key: string, fields: Partial<GatewaySessionRow> = {}): GatewaySessionRow {
   return {
-    key,
-    sessionId: `${key}:session`,
-    kind: "direct",
-    updatedAt: 10,
+    ...bareRow(key),
     pinned: false,
     unread: true,
     lastReadAt: 0,
@@ -231,16 +231,7 @@ describe("session pin mutations", () => {
     const response = createDeferred<unknown>();
     const dispatched = createDeferred();
     const h = rowFixture(
-      {
-        key,
-        agentId: "main",
-        sessionId,
-        kind: "direct",
-        updatedAt: 10,
-        archived: true,
-        archivedAt: 10,
-        pinned: false,
-      },
+      bareRow(key, { agentId: "main", sessionId, archived: true, archivedAt: 10, pinned: false }),
       {
         "sessions.patch": () => {
           dispatched.resolve();
@@ -299,16 +290,7 @@ describe("session pin mutations", () => {
         // No primary baseline: only the all-filtered sidebar holds this row.
         return sessionsResult(
           params?.archived === "all"
-            ? [
-                {
-                  key,
-                  sessionId: `${key}:session`,
-                  kind: "direct",
-                  updatedAt: 1,
-                  pinned: true,
-                  pinnedAt: 7,
-                },
-              ]
+            ? [bareRow(key, { updatedAt: 1, pinned: true, pinnedAt: 7 })]
             : [],
           1,
         );
