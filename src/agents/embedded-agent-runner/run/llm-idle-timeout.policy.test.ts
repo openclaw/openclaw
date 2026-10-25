@@ -113,6 +113,43 @@ describe("LLM watchdog policy", () => {
     expect(resolveLlmFirstEventTimeoutMs({ cfg, model })).toBe(expected);
   });
 
+  it.each<[string, Record<string, unknown>, { idle: number; firstEvent: number; cron: number }]>([
+    ["remote: true", { remote: true }, { idle: 120_000, firstEvent: 120_000, cron: 60_000 }],
+    [
+      "remote: true with a local auth marker",
+      { remote: true, apiKey: "custom-local" },
+      { idle: 120_000, firstEvent: 120_000, cron: 60_000 },
+    ],
+    ["remote: false", { remote: false }, { idle: 0, firstEvent: 300_000, cron: 600_000 }],
+  ])("honours the provider remote hint on a loopback baseUrl: %s", (_name, extra, expected) => {
+    const baseUrl = "http://127.0.0.1:8787";
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          relay: { baseUrl, api: "anthropic-messages", models: [], ...extra },
+        },
+      },
+    };
+    const model = { provider: "relay", id: "claude-sonnet-4-6", baseUrl };
+    expect({
+      idle: resolveLlmIdleTimeoutMs({ cfg, model }),
+      firstEvent: resolveLlmFirstEventTimeoutMs({ cfg, model }),
+      cron: resolveLlmIdleTimeoutMs({ cfg, model, trigger: "cron", runTimeoutMs: 600_000 }),
+    }).toEqual(expected);
+  });
+
+  it("keeps explicit provider timeoutSeconds ahead of the remote hint", () => {
+    const model = { provider: "relay", baseUrl: "http://127.0.0.1:8787" };
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          relay: { baseUrl: model.baseUrl, api: "anthropic-messages", models: [], remote: true },
+        },
+      },
+    };
+    expect(resolveLlmIdleTimeoutMs({ cfg, model, modelRequestTimeoutMs: 900_000 })).toBe(900_000);
+  });
+
   it.each([
     ["kimi-k2.5:cloud", "http://127.0.0.1:11434", 0],
     ["gpt-oss:120b-cloud", "http://ollama-box:11434", 300_000],

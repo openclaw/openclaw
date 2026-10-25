@@ -135,9 +135,14 @@ type LlmTimeoutParams = {
 
 /**
  * Classifies the model endpoint locality shared by the idle and first-event
- * watchdogs. Ollama `*:cloud` models stay "cloud" even behind a local proxy.
+ * watchdogs. Ollama `*:cloud` models stay "cloud" even behind a local proxy,
+ * and so does any provider whose config declares `remote: true` (a loopback
+ * or private relay in front of a hosted API).
  */
 function resolveRuntimeModelLocality(params?: LlmTimeoutParams) {
+  if (findConfiguredProviderConfig(params?.cfg, params?.model?.provider)?.remote === true) {
+    return { isLocalRuntimeModel: false, isSelfHostedRuntimeModel: false };
+  }
   const baseUrl = params?.model?.baseUrl;
   const hostname =
     typeof baseUrl === "string" ? URL.parse(baseUrl)?.hostname.toLowerCase() : undefined;

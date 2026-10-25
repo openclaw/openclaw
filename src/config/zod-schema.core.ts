@@ -348,6 +348,8 @@ const ModelProviderSchema = z.strictObject({
   agentRuntime: AgentRuntimePolicySchema,
   /** Optional local service to start before calling this provider. */
   localService: ModelProviderLocalServiceSchema,
+  /** Treat this provider as hosted for watchdog timing even when baseUrl is loopback or private. */
+  remote: z.boolean().optional(),
   /** Secret-bearing headers merged into provider requests. */
   headers: z.record(z.string(), SecretInputSchema.register(sensitive)).optional(),
   /** Whether default Authorization header injection is enabled. */
