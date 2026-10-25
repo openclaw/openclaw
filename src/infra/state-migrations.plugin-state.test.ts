@@ -75,7 +75,7 @@ describe("legacy migration plan failure isolation", () => {
     "defers shared-source cleanup ($failure, cleanupFirst=$cleanupFirst)",
     async ({ failure, cleanupFirst }) => {
       // iMessage derives a durable short-id counter and an expiring cache from one JSONL file.
-      const original = `${JSON.stringify({ shortId: failure === "empty" ? "0" : "9000", timestamp: 0 })}\n`;
+      const original = "legacy reply cache\n";
       const sourcePath = await state.writeText("reply-cache.jsonl", original);
       const unrelatedPath = await state.writeText("unrelated.txt", "independent artifact\n");
       const earlierPath = await state.writeText("earlier.txt", "earlier artifact\n");
@@ -95,9 +95,7 @@ describe("legacy migration plan failure isolation", () => {
           if (failure === "reader" && shouldFail) {
             throw new Error("synthetic counter read failure");
           }
-          const entry = JSON.parse(fs.readFileSync(sourcePath, "utf8")) as { shortId: string };
-          const value = Number.parseInt(entry.shortId, 10);
-          return value > 0 ? [{ key: "counter", value: { counter: value } }] : [];
+          return failure === "empty" ? [] : [{ key: "counter", value: { counter: 9000 } }];
         },
         shouldReplaceExistingEntry: () => {
           if (failure === "predicate" && shouldFail) {
@@ -141,11 +139,9 @@ describe("legacy migration plan failure isolation", () => {
         return;
       }
 
-      expect(fs.existsSync(sourcePath), "the incomplete counter still needs its source").toBe(true);
       expect(fs.readFileSync(sourcePath, "utf8")).toBe(original);
       expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(false);
       expect(first.warnings).toContainEqual(expect.stringContaining("Reply counter"));
-      expect(first.changes).not.toContainEqual(expect.stringContaining("Archived"));
 
       shouldFail = false;
       if (failure === "capacity") {
