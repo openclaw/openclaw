@@ -73,9 +73,7 @@ import { readSessionUpstreamLinkInDatabase } from "./session-upstream-links.kern
 
 type Database = ReturnType<typeof createDatabaseOptions>;
 let database: Database;
-const cleanups: Array<() => void | Promise<unknown>> = [];
-const query = (sql: string, options = database) =>
-  openOpenClawStateDatabase(options).db.prepare(sql);
+const query = (sql: string) => openOpenClawStateDatabase(database).db.prepare(sql);
 const stateEvents = async (options = database) =>
   (await listSessionStateEventsSince(child, "main", 0, 200, options)).events;
 const seedWatcher = (sessionKey = nestedWatcher, storePath?: string, updatedAt = Date.now()) =>
@@ -89,9 +87,6 @@ function insertCursor(sessionKey: string, target: string, storePath: string) {
      notified_sequence, material_sequence, updated_at)
     VALUES (?, ?, ?, 1, 3, 3, ?)`).run(sessionKey, target, storePath, Date.now());
 }
-const queuedNotices = (sessionKey = nestedWatcher) => peekSystemEventEntries(sessionKey);
-const eventSequences = async (options = database) =>
-  (await stateEvents(options)).map(({ sequence }) => sequence);
 const creation = (sessionId: string) => ({
   sessionKey: child,
   entry: { sessionId, updatedAt: 1, createdActor: { type: "system" as const } },
@@ -136,26 +131,7 @@ function holdWorker() {
       await release.promise;
     },
   );
-  const pending: Promise<unknown>[] = [blocking];
-  cleanups.push(async () => {
-    release.resolve();
-    await Promise.allSettled(pending);
-  });
-  return {
-    entered,
-    release,
-    blocking,
-    track<T>(promise: Promise<T>) {
-      pending.push(promise);
-      return promise;
-    },
-  };
-}
-
-function ambientRead(sessionKey = watcher) {
-  const read = prepareAmbientGroupWatchTargetsRead(sessionKey, database);
-  cleanups.push(() => read.release());
-  return read;
+  return { entered, release, blocking };
 }
 
 beforeEach(() => {
@@ -164,9 +140,6 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  for (const cleanup of cleanups.splice(0).toReversed()) {
-    await cleanup();
-  }
   vi.restoreAllMocks();
   publishSystemEventStoreResolver(undefined);
   clearRuntimeConfigSnapshot();
@@ -179,62 +152,73 @@ it("keeps queued signal cleanup on its captured store and removes newly committe
   await seedChild(database);
   const lateTarget = "agent:main:late-target";
   const { db } = openOpenClawStateDatabase(database);
-  const { entered, release, blocking, track } = holdWorker();
-  const read = ambientRead();
-  await withinTest(entered.promise, signal);
-  const resetting = track(handleSessionStateSessionReset(watcher));
-  const deleting = track(handleSessionStateSessionDeleted(child, "main"));
-  expect(read.isCurrent()).toBe(false);
-  const replacement = createDatabaseOptions();
-  const replacementDb = openOpenClawStateDatabase(replacement).db;
-  for (const options of [database, replacement]) {
-    query(
-      "INSERT INTO session_watch_cursors (watcher_session_key, target_session_key, updated_at) VALUES (?, ?, 0)",
-      options,
-    ).run(watcher, lateTarget);
-    expect(
-      upsertSessionUpstreamLink(
-        {
-          sessionKey: child,
-          agentId: "main",
-          catalogId: "codex",
-          hostId: "gateway:local",
-          threadId: "late-link",
-          upstreamKind: "codex-app-server",
-          upstreamRef: null,
-          marker: null,
-        },
-        options,
-      ),
-    ).toBe(true);
+  const { entered, release, blocking } = holdWorker();
+  let resetting: Promise<void> | undefined;
+  let deleting: Promise<void> | undefined;
+  const read = prepareAmbientGroupWatchTargetsRead(watcher, database);
+  try {
+    await withinTest(entered.promise, signal);
+    resetting = handleSessionStateSessionReset(watcher);
+    deleting = handleSessionStateSessionDeleted(child, "main");
+    expect(read.isCurrent()).toBe(false);
+    const replacement = createDatabaseOptions();
+    const replacementDb = openOpenClawStateDatabase(replacement).db;
+    for (const connection of [db, replacementDb]) {
+      connection
+        .prepare(
+          "INSERT INTO session_watch_cursors (watcher_session_key, target_session_key, updated_at) VALUES (?, ?, 0)",
+        )
+        .run(watcher, lateTarget);
+    }
+    for (const options of [database, replacement]) {
+      expect(
+        upsertSessionUpstreamLink(
+          {
+            sessionKey: child,
+            agentId: "main",
+            catalogId: "codex",
+            hostId: "gateway:local",
+            threadId: "late-link",
+            upstreamKind: "codex-app-server",
+            upstreamRef: null,
+            marker: null,
+          },
+          options,
+        ),
+      ).toBe(true);
+    }
+    release.resolve();
+    await withinTest(Promise.all([blocking, resetting, deleting]), signal);
+    expect(readCursor(database, watcher, lateTarget)).toBeUndefined();
+    expect(await getSessionStateVersion(child, "main", database)).toBe(0);
+    expect(readSessionUpstreamLinkInDatabase(db, child, "main")).toBeUndefined();
+    expect(readCursor(replacement, watcher, lateTarget)).toBeDefined();
+    expect(readSessionUpstreamLinkInDatabase(replacementDb, child, "main")?.threadId).toBe(
+      "late-link",
+    );
+  } finally {
+    read.release();
+    release.resolve();
+    await Promise.allSettled([blocking, resetting, deleting]);
   }
-  release.resolve();
-  await withinTest(Promise.all([blocking, resetting, deleting]), signal);
-  expect(readCursor(database, watcher, lateTarget)).toBeUndefined();
-  expect(await getSessionStateVersion(child, "main", database)).toBe(0);
-  expect(readSessionUpstreamLinkInDatabase(db, child, "main")).toBeUndefined();
-  expect(readCursor(replacement, watcher, lateTarget)).toBeDefined();
-  expect(readSessionUpstreamLinkInDatabase(replacementDb, child, "main")?.threadId).toBe(
-    "late-link",
-  );
 });
 
 it("revokes ambient reads through signal cleanup and overlapping pruning", async () => {
   const group = "agent:main:telegram:group:cleanup";
   for (const operation of ["reset", "delete", "reset-with-prune"] as const) {
     await groupWatch(group);
-    const before = ambientRead();
+    const before = prepareAmbientGroupWatchTargetsRead(watcher, database);
     expect(await before.read()).toEqual([group]);
     let finishPrune =
       operation === "reset-with-prune"
         ? beginAmbientWatchPrune(captureOpenClawStateWorkerContext(database).admission.identity.key)
         : undefined;
-    const during: ReturnType<typeof ambientRead>[] = [];
+    const during: ReturnType<typeof prepareAmbientGroupWatchTargetsRead>[] = [];
     const stages: string[] = [];
     const admission = probe.admission(workerAdmission, (request, grant, admit) => {
       stages.push(request.stage);
       expect(before.isCurrent()).toBe(false);
-      const read = ambientRead();
+      const read = prepareAmbientGroupWatchTargetsRead(watcher, database);
       during.push(read);
       expect(read.isCurrent()).toBe(false);
       admit(request, grant);
@@ -251,16 +235,27 @@ it("revokes ambient reads through signal cleanup and overlapping pruning", async
         expect(read.isCurrent()).toBe(false);
       }
       if (finishPrune) {
-        expect(ambientRead().isCurrent()).toBe(false);
+        const held = prepareAmbientGroupWatchTargetsRead(watcher, database);
+        try {
+          expect(held.isCurrent()).toBe(false);
+        } finally {
+          held.release();
+        }
         finishPrune();
         finishPrune = undefined;
       }
-      const after = ambientRead();
-      expect(after.isCurrent()).toBe(true);
-      expect(await after.read()).toEqual([]);
+      const after = prepareAmbientGroupWatchTargetsRead(watcher, database);
+      try {
+        expect(after.isCurrent()).toBe(true);
+        expect(await after.read()).toEqual([]);
+      } finally {
+        after.release();
+      }
     } finally {
       finishPrune?.();
       admission.mockRestore();
+      before.release();
+      during.forEach((read) => read.release());
     }
   }
 });
@@ -284,12 +279,12 @@ it("preserves older readers and version markers when watcher provenance is first
   const pragma = (name: string) => query(`PRAGMA ${name}`).get();
   const schemaBeforeRead = pragma("schema_version");
   expect(await getSessionStateVersion(child, "main", database)).toBe(event.sequence);
-  expect(await eventSequences()).toContain(event.sequence);
+  expect((await stateEvents()).map((entry) => entry.sequence)).toContain(event.sequence);
   await sweepSessionStateWatchNotices({ ...database, now });
   expect(readCursor(database)?.notified_sequence).toBe(event.sequence);
   expect(peekSystemEventEntries(watcher)).toEqual([]);
   expect(getLastHeartbeatEvent()).toMatchObject({ status: "skipped", reason: "store-replaced" });
-  expect(await eventSequences()).not.toContain(event.sequence);
+  expect((await stateEvents()).map((entry) => entry.sequence)).not.toContain(event.sequence);
   expect(await getSessionStateVersion(child, "main", database)).toBe(event.sequence);
   expect(pragma("schema_version")).toEqual(schemaBeforeRead);
   expect(
@@ -339,14 +334,17 @@ it("discovers a cold custom watcher store without caller-thread SQL", async () =
       requesterSessionKey: watcher,
       agentId: "main",
     });
+    expect(sql.count()).toBe(0);
     publishSystemEventStoreConfig(cfg);
     await recordSessionCreated(cfg, { ...creation("custom-created"), agentId: "main" });
+    expect(sql.count()).toBe(0);
     expect(
       await registerSessionStateWatch(
         { watcherSessionKey: watcher, targetSessionKey: child },
         database,
       ),
     ).toBe(true);
+    expect(sql.count()).toBe(0);
     expect(await groupWatch("agent:main:telegram:group:custom")).toBe(true);
     expect(sql.count()).toBe(0);
   } finally {
@@ -386,34 +384,43 @@ it.each([
     const originalStore = watcherStore();
     let currentStore = originalStore;
     publishSystemEventStoreResolver(() => currentStore);
-    await watch();
+    expect(await watch()).toBe(true);
     await recordSessionStateEventAsync(eventInput({ watcherSessionKeys: [] }), database);
     const before = replaced ? readCursor(database, nestedWatcher) : undefined;
     if (!replaced) {
       enqueueSystemEvent("ordinary queued event", { sessionKey: nestedWatcher });
     }
-    const { entered, release, blocking, track } = holdWorker();
-    await entered.promise;
-    const draining = track(drain(nestedWatcher));
-    expect(queuedNotices()).toHaveLength(0);
-    if (replaced) {
-      currentStore = `${originalStore}.replacement`;
-      query(
-        "UPDATE session_watch_cursors SET watcher_store_path = ? WHERE watcher_session_key = ?",
-      ).run(currentStore, nestedWatcher);
-    } else {
-      publishSystemEventStoreResolver(() => currentStore);
-    }
-    release.resolve();
-    await blocking;
-    const formatted = await draining;
-    if (replaced) {
-      expect(formatted).toBeUndefined();
-      expect(readCursor(database, nestedWatcher)).toEqual(before);
-      expect(queuedNotices()).toHaveLength(0);
-    } else {
-      expect(formatted).toContain("ordinary queued event");
-      expect(formatted).toContain(`Session "${child}" changed`);
+    const { entered, release, blocking } = holdWorker();
+    let draining: Promise<string | undefined> | undefined;
+    try {
+      await entered.promise;
+      draining = drain(nestedWatcher);
+      expect(peekSystemEventEntries(nestedWatcher)).toHaveLength(0);
+      if (replaced) {
+        currentStore = `${originalStore}.replacement`;
+        openOpenClawStateDatabase(database)
+          .db.prepare(
+            "UPDATE session_watch_cursors SET watcher_store_path = ? WHERE watcher_session_key = ?",
+          )
+          .run(currentStore, nestedWatcher);
+      } else {
+        publishSystemEventStoreResolver(() => currentStore);
+      }
+      release.resolve();
+      await blocking;
+      const formatted = await draining;
+      if (replaced) {
+        expect(formatted).toBeUndefined();
+        expect(readCursor(database, nestedWatcher)).toEqual(before);
+        expect(peekSystemEventEntries(nestedWatcher)).toHaveLength(0);
+      } else {
+        expect(formatted).toContain("ordinary queued event");
+        expect(formatted).toContain(`Session "${child}" changed`);
+      }
+    } finally {
+      release.resolve();
+      await blocking;
+      await draining;
     }
   },
 );
@@ -432,14 +439,14 @@ it("restores explicit watcher notices as ordinary-turn context without starting 
   await sweepSessionStateWatchNotices(database);
   expect(capture).not.toHaveBeenCalled();
   for (const sessionKey of watchers) {
-    expect(queuedNotices(sessionKey)).toHaveLength(1);
+    expect(peekSystemEventEntries(sessionKey)).toHaveLength(1);
     expectCursor([1, 3, 3], sessionKey);
     expect(await drain(sessionKey)).toContain(`Session "${child}" changed (other actor)`);
     expect(readCursor(database, sessionKey)?.last_seen_sequence).toBe(3);
   }
   await sweepSessionStateWatchNotices(database);
   for (const sessionKey of watchers) {
-    expect(queuedNotices(sessionKey)).toEqual([]);
+    expect(peekSystemEventEntries(sessionKey)).toEqual([]);
   }
   expect(capture).not.toHaveBeenCalled();
 });
@@ -496,7 +503,7 @@ it("rechecks acknowledged, rebound, and advanced cursors after sweep discovery",
     expectCursor([3, 3, 3], nestedWatcher, acked);
     expectCursor([5, 11, 13], nestedWatcher, rebound);
     expectCursor([1, 7, 7], nestedWatcher, advanced);
-    const queued = queuedNotices();
+    const queued = peekSystemEventEntries(nestedWatcher);
     expect(queued).toHaveLength(1);
     expect(queued[0]?.text).toContain(`Session "${advanced}" changed`);
     expect(queued[0]?.text).toContain("changesSince 1");
@@ -558,7 +565,7 @@ it("reads session state and commits watch registration and acknowledgment withou
     expect(await measure("explicit watch registration", () => watch())).toBe(true);
     const frozen = await record({ watcherSessionKeys: [] });
     const interleaved = await record({ watcherSessionKeys: [] });
-    const watcherStorePath = queuedNotices()[0]?.sessionStorePath ?? null;
+    const watcherStorePath = peekSystemEventEntries(nestedWatcher)[0]?.sessionStorePath ?? null;
     await measure("explicit watch acknowledgment", () => acknowledge(child, watcherStorePath));
     expectCursor([frozen.sequence, interleaved.sequence, interleaved.sequence]);
 
@@ -587,10 +594,10 @@ it("reads session state and commits watch registration and acknowledgment withou
 
 it("reconstructs a committed followup when acknowledgment publication is lost", async () => {
   await seedWatcher();
-  await watch();
+  expect(await watch()).toBe(true);
   const frozen = await record({ watcherSessionKeys: [] });
   const newer = await record({ watcherSessionKeys: [] });
-  const originalNotice = expectDefined(queuedNotices()[0], "original notice");
+  const originalNotice = expectDefined(peekSystemEventEntries(nestedWatcher)[0], "original notice");
   resetSystemEventsForTest();
   const publish = vi.fn(() => {
     throw new Error("Publication lost after commit");
@@ -602,10 +609,10 @@ it("reconstructs a committed followup when acknowledgment publication is lost", 
     database,
   );
   expect(publish).toHaveBeenCalledOnce();
-  expect(queuedNotices()).toEqual([]);
+  expect(peekSystemEventEntries(nestedWatcher)).toEqual([]);
   expectCursor([frozen.sequence, newer.sequence, newer.sequence]);
   await sweepSessionStateWatchNotices(database);
-  expect(queuedNotices().map(({ text }) => text)).toEqual([
+  expect(peekSystemEventEntries(nestedWatcher).map(({ text }) => text)).toEqual([
     expect.stringContaining(`changesSince ${frozen.sequence}`),
   ]);
   expectCursor([frozen.sequence, newer.sequence, newer.sequence]);

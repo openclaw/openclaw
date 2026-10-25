@@ -25,48 +25,47 @@ import {
 import { prepareChatMessageRender } from "./chat-message-markdown-view.tsx";
 import { createMessageGroup, createToolResultMessage } from "./chat-message.test-support.ts";
 
-function mount(ui: Parameters<typeof mountSolid>[0], options?: Parameters<typeof mountSolid>[1]) {
-  const view = mountSolid(ui, options);
-  return {
-    ...view,
-    query: <T extends Element = HTMLElement>(selector: string) =>
-      view.container.querySelector<T>(selector),
-    all: (selector: string) => [...view.container.querySelectorAll(selector)],
-    text: () => view.container.textContent,
-  };
-}
-
-const assistant = (timestamp: number, input: number, output: number) => ({
-  role: "assistant",
-  content: "Answer",
-  timestamp,
-  usage: { input, output },
-});
-
-it("does not present a partial response group as complete usage", () => {
-  const first = {
-    ...assistant(1000, 100, 20),
-    usage: { input: 100, output: 20, cost: { total: 1 } },
-  };
-  const second = {
-    ...assistant(1001, 50, 50),
-    usage: { input: 50, output: 50, cost: { total: 2 }, usageReport: { state: "unavailable" } },
-  };
-  const group = createMessageGroup(first, "assistant", {
-    messages: [
-      { key: "first", message: first },
-      { key: "second", message: second },
-    ],
-  });
-  const view = mount(() => (
-    <MessageGroup group={group} options={{ showReasoning: false, contextWindow: 1000 }} />
-  ));
-  flush();
-  expect(view.all(".msg-meta__tokens").map((node) => node.textContent)).toEqual([
-    "Token usage and cost unavailable",
-  ]);
-  expect(view.query(".msg-meta__cost, .msg-meta__ctx")).toBeNull();
-});
+it.each([false, true])(
+  "does not present a partial response group as complete usage (unavailable: %s)",
+  (unavailable) => {
+    const first = {
+      role: "assistant",
+      content: "First answer.",
+      timestamp: 1000,
+      usage: { input: 100, output: 20, cost: { total: 1 } },
+    };
+    const group = createMessageGroup(first, "assistant", {
+      messages: [
+        { key: "first", message: first },
+        {
+          key: "second",
+          message: {
+            ...first,
+            content: "Second answer.",
+            usage: {
+              input: 50,
+              output: 50,
+              cost: { total: 2 },
+              ...(unavailable ? { usageReport: { state: "unavailable" } } : {}),
+            },
+          },
+        },
+      ],
+    });
+    const view = mountSolid(() => (
+      <MessageGroup group={group} options={{ showReasoning: false, contextWindow: 1000 }} />
+    ));
+    flush();
+    const metadata = view.container.querySelector(".msg-meta__details");
+    expect(
+      [...(metadata?.querySelectorAll(".msg-meta__tokens") ?? [])].map((node) => node.textContent),
+    ).toEqual(unavailable ? ["Token usage and cost unavailable"] : ["↑150", "↓70"]);
+    expect([
+      metadata?.querySelector(".msg-meta__cost") === null,
+      metadata?.querySelector(".msg-meta__ctx") === null,
+    ]).toEqual([unavailable, unavailable]);
+  },
+);
 
 it.each([
   ["ends with its answer", true],
@@ -101,11 +100,11 @@ it.each([
   ];
   const group = createMessageGroup(messages[0]!.message, "assistant", { messages });
   const onReply = vi.fn();
-  const view = mount(() => (
+  const view = mountSolid(() => (
     <MessageGroup group={group} options={{ showReasoning: false, onReply }} />
   ));
   flush();
-  expect(view.all(".chat-message-actions-row")).toHaveLength(0);
+  expect(view.container.querySelectorAll(".chat-message-actions-row")).toHaveLength(0);
   const replies = view.container.querySelectorAll<HTMLButtonElement>(
     '.chat-group-footer-actions button[aria-label="Reply to message"]',
   );
@@ -169,22 +168,23 @@ it("keeps distinct peer avatars and focused message content across group updates
     showReasoning: false,
     showToolCalls: false,
   });
-  const view = mount(() => <MessageGroup group={currentGroup()} options={options()} />);
+  const view = mountSolid(() => <MessageGroup group={currentGroup()} options={options()} />);
   await waitForSolid(() => {
-    expect(view.all(".chat-bubble .chat-avatar-slot")).toHaveLength(2);
+    expect(view.container.querySelectorAll(".chat-bubble .chat-avatar-slot")).toHaveLength(2);
     expect(view.getByRole("button", { name: "Open image Peer image" })).toBeDefined();
-    expect(view.query(".chat-text p")?.textContent).toBe("A retained paragraph.");
+    expect(view.container.querySelector(".chat-text p")?.textContent).toBe("A retained paragraph.");
   });
-  const bubbles = view.all(".chat-bubble");
+  const bubbles = [...view.container.querySelectorAll(".chat-bubble")];
   expect(bubbles).toHaveLength(2);
-  const avatars = view.all(".chat-bubble .chat-avatar-slot");
+  const avatars = [...view.container.querySelectorAll(".chat-bubble .chat-avatar-slot")];
+  expect(avatars[0]).not.toBe(avatars[1]);
   avatars.forEach((avatar, index) => {
     expect(avatar.closest(".chat-bubble")).toBe(bubbles[index]);
     expect(avatar.querySelector('[aria-label="Peer"]')).not.toBeNull();
   });
   const control = view.getByRole("button", { name: "Open image Peer image" });
   const image = control.querySelector("img")!;
-  const paragraph = view.query(".chat-text p");
+  const paragraph = view.container.querySelector(".chat-text p");
   image.dispatchEvent(new Event("load"));
   control.focus();
   expect(document.activeElement).toBe(control);
@@ -202,15 +202,16 @@ it("keeps distinct peer avatars and focused message content across group updates
   flush();
   await waitForSolid(() => {
     expect(view.getByRole("button", { name: "Open image Updated peer image" })).toBe(control);
-    expect(view.query(".chat-sender-name")?.textContent).toBe("Peer Updated");
+    expect(view.container.querySelector(".chat-sender-name")?.textContent).toBe("Peer Updated");
   });
   expect(document.activeElement).toBe(control);
   expect(control.querySelector("img")).toBe(image);
-  expect(view.query(".chat-text p")).toBe(paragraph);
-  const updatedBubbles = view.all(".chat-bubble");
+  expect(view.container.querySelector(".chat-text p")).toBe(paragraph);
+  const updatedBubbles = view.container.querySelectorAll(".chat-bubble");
   bubbles.forEach((bubble, index) => expect(updatedBubbles[index]).toBe(bubble));
-  const updatedAvatars = view.all(".chat-bubble .chat-avatar-slot");
+  const updatedAvatars = [...view.container.querySelectorAll(".chat-bubble .chat-avatar-slot")];
   expect(updatedAvatars).toHaveLength(2);
+  expect(updatedAvatars[0]).not.toBe(updatedAvatars[1]);
   expect(
     updatedAvatars.every((avatar) => avatar.querySelector('[aria-label="Peer Updated"]') !== null),
   ).toBe(true);
@@ -236,26 +237,28 @@ it("retains aggregate disclosure and legacy card focus when options refresh", as
     showToolCalls: true,
     isToolMessageExpanded: () => true,
   });
-  const view = mount(() => (
+  const view = mountSolid(() => (
     <ActivityGroup groups={[group]} options={options()} presentation="standalone" />
   ));
   await waitForSolid(() => {
-    expect(view.all(".chat-tools-inline .chat-tool-row:not([aria-busy])")).toHaveLength(2);
+    expect(
+      view.container.querySelectorAll(".chat-tools-inline .chat-tool-row:not([aria-busy])"),
+    ).toHaveLength(2);
   });
-  const summary = view.query<HTMLButtonElement>(".chat-activity-group__summary")!;
-  const card = view.query(".chat-tools-inline .chat-tool-msg-collapse");
+  const summary = view.container.querySelector<HTMLButtonElement>(".chat-activity-group__summary")!;
+  const card = view.container.querySelector(".chat-tools-inline .chat-tool-msg-collapse");
   const cardControl = card!.querySelector<HTMLButtonElement>("button")!;
   cardControl.focus();
   setOptions((previous) => ({ ...previous, assistantName: "Updated assistant" }));
   flush();
   expect(document.activeElement).toBe(cardControl);
-  expect(view.query(".chat-tools-inline .chat-tool-msg-collapse")).toBe(card);
-  expect(view.query(".chat-activity-group__summary")).toBe(summary);
+  expect(view.container.querySelector(".chat-tools-inline .chat-tool-msg-collapse")).toBe(card);
+  expect(view.container.querySelector(".chat-activity-group__summary")).toBe(summary);
   summary.focus();
   setOptions((previous) => ({ ...previous, userName: "Updated viewer" }));
   flush();
   expect(document.activeElement).toBe(summary);
-  expect(view.query(".chat-activity-group__summary")).toBe(summary);
+  expect(view.container.querySelector(".chat-activity-group__summary")).toBe(summary);
 });
 
 it("mounts only selected tool replacements and keeps their context, projection, and disposal current", async () => {
@@ -305,19 +308,13 @@ it("mounts only selected tool replacements and keeps their context, projection, 
   };
   // SAFETY: This grouped-renderer fixture consumes only the complete plugin capability.
   const context = { plugins } as ApplicationContext;
-  const select = (value?: ControlUiReplacement) => {
-    selected = value;
-    for (const listener of listeners) {
-      listener();
-    }
-  };
   const provider = createSolidApplicationContextProvider(context);
-  const toolGroup = (text: string) =>
+  const [group, setGroup] = createSignal(
     createMessageGroup(
-      createToolResultMessage("call-read", "read", text, { timestamp: 1000 }),
+      createToolResultMessage("call-read", "read", "Original tool output", { timestamp: 1000 }),
       "tool",
-    );
-  const [group, setGroup] = createSignal(toolGroup("Original tool output"));
+    ),
+  );
   const [options, setOptions] = createSignal<NativeMessageGroupOptions>({
     sessionKey: "agent:main:fixture",
     agentId: "main",
@@ -327,7 +324,7 @@ it("mounts only selected tool replacements and keeps their context, projection, 
     presented: true,
   });
   const [active, setActive] = createSignal(true);
-  const view = mount(
+  const view = mountSolid(
     () => (
       <ContentPresentation value={active}>
         <MessageGroup group={group()} options={options()} />
@@ -348,8 +345,8 @@ it("mounts only selected tool replacements and keeps their context, projection, 
   };
   flush();
   try {
-    await waitForSolid(() => expect(view.text()).toContain("Original tool output"));
-    expect(view.query("openclaw-plugin-view")).toBeNull();
+    await waitForSolid(() => expect(view.container.textContent).toContain("Original tool output"));
+    expect(view.container.querySelector("openclaw-plugin-view")).toBeNull();
     let latest: Parameters<ControlUiReplacement["mount"]>[1] | undefined;
     const dispose = vi.fn();
     const replacement: ControlUiReplacement = {
@@ -376,9 +373,14 @@ it("mounts only selected tool replacements and keeps their context, projection, 
         };
       },
     };
-    select(replacement);
-    await waitForSolid(() => expect(view.text()).toContain("Selected tool renderer"));
-    expect(view.text()).toContain("Original tool output");
+    selected = replacement;
+    for (const listener of listeners) {
+      listener();
+    }
+    await waitForSolid(() =>
+      expect(view.container.textContent).toContain("Selected tool renderer"),
+    );
+    expect(view.container.textContent).toContain("Original tool output");
     expect(latest?.props).toMatchObject({
       sessionKey: "agent:main:fixture",
       agentId: "main",
@@ -388,21 +390,26 @@ it("mounts only selected tool replacements and keeps their context, projection, 
       output: { text: "Original tool output" },
     });
     expect(latest?.presented).toBe(true);
-    setGroup(toolGroup("Updated tool output"));
+    setGroup(
+      createMessageGroup(
+        createToolResultMessage("call-read", "read", "Updated tool output", { timestamp: 1000 }),
+        "tool",
+      ),
+    );
     setOptions((previous) => ({ ...previous, presented: false }));
     await waitForSolid(() => {
       expect(latest?.props).toMatchObject({ output: { text: "Updated tool output" } });
       expect(latest?.presented).toBe(false);
-      expect(view.text()).toContain("Updated tool output");
+      expect(view.container.textContent).toContain("Updated tool output");
     });
-    const mountedView = view.query("openclaw-plugin-view");
+    const mountedView = view.container.querySelector("openclaw-plugin-view");
     const localDraft = view.getByLabelText<HTMLInputElement>("Plugin local draft");
     localDraft.value = "Retained plugin draft";
     const mountedSignal = latest?.signal;
     setActive(false);
     flush();
     await Promise.resolve();
-    expect(view.query("openclaw-plugin-view")).toBe(mountedView);
+    expect(view.container.querySelector("openclaw-plugin-view")).toBe(mountedView);
     expect(mountedSignal?.aborted).toBe(false);
     expect(dispose).not.toHaveBeenCalled();
     setActive(true);
@@ -413,19 +420,29 @@ it("mounts only selected tool replacements and keeps their context, projection, 
     });
     expect(view.getByLabelText("Plugin local draft")).toBe(localDraft);
     expect(localDraft.value).toBe("Retained plugin draft");
-    select(undefined);
-    await waitForSolid(() => expect(view.query("openclaw-plugin-view")).toBeNull());
-    expect(view.text()).toContain("Updated tool output");
+    selected = undefined;
+    for (const listener of listeners) {
+      listener();
+    }
+    await waitForSolid(() =>
+      expect(view.container.querySelector("openclaw-plugin-view")).toBeNull(),
+    );
+    expect(view.container.textContent).toContain("Updated tool output");
     expect(mountedSignal?.aborted).toBe(true);
     expect(dispose).toHaveBeenCalledOnce();
     expect(reportError).not.toHaveBeenCalled();
     // Replacing the application owner retires subscriptions from the parked tree.
-    select(replacement);
+    selected = replacement;
+    for (const listener of listeners) {
+      listener();
+    }
     setActive(false);
     flush();
     provider.setContext(nextContext);
     setActive(true);
-    await waitForSolid(() => expect(view.text()).toContain("Selected tool renderer"));
+    await waitForSolid(() =>
+      expect(view.container.textContent).toContain("Selected tool renderer"),
+    );
     expect(nextListeners.size).toBeGreaterThan(0);
     expect(listeners.size).toBe(0);
     const reconnectedSignal = latest?.signal;
@@ -452,19 +469,21 @@ describe("owned message controls", () => {
         workContext: { title, page: "chat" },
       });
     const [source, setSource] = createSignal(message("Before"));
-    const view = mount(() => (
+    const view = mountSolid(() => (
       <GroupedMessage
         preparation={prepareChatMessageRender(source())}
         messageKey="same-message"
         options={{ isStreaming: false, showReasoning: false }}
       />
     ));
-    const disclosure = view.query<HTMLDetailsElement>(".chat-context-attachment")!;
+    const disclosure = view.container.querySelector<HTMLDetailsElement>(
+      ".chat-context-attachment",
+    )!;
     expect(disclosure).not.toBeNull();
     disclosure.open = true;
     setSource(message("After"));
     flush();
-    expect(view.query(".chat-context-attachment")).toBe(disclosure);
+    expect(view.container.querySelector(".chat-context-attachment")).toBe(disclosure);
     expect(disclosure.open).toBe(true);
     expect(disclosure.textContent).toContain("After");
   });
@@ -473,14 +492,20 @@ describe("owned message controls", () => {
     const previous = vi.fn();
     const current = vi.fn();
     const prompt = createMessageGroup({ role: "user", content: "Prompt", timestamp: 1000 }, "user");
-    const answer = createMessageGroup(assistant(1001, 100, 10), "assistant");
+    const answerAt = (timestamp: number, input: number, output: number) => ({
+      role: "assistant",
+      content: "Answer",
+      timestamp,
+      usage: { input, output },
+    });
+    const answer = createMessageGroup(answerAt(1001, 100, 10), "assistant");
     const [options, setOptions] = createSignal({ onRewind: previous, contextWindow: 4000 });
-    const [currentAnswer, setAssistant] = createSignal(answer);
-    const view = mount(() => (
+    const [assistant, setAssistant] = createSignal(answer);
+    const view = mountSolid(() => (
       <>
         <MessageGroup group={prompt} options={{ showReasoning: false, ...options() }} />
         <MessageGroup
-          group={currentAnswer()}
+          group={assistant()}
           options={{ showReasoning: false, contextWindow: options().contextWindow }}
         />
       </>
@@ -497,16 +522,20 @@ describe("owned message controls", () => {
     expect(previous).not.toHaveBeenCalled();
     expect(current).toHaveBeenCalledOnce();
 
-    const timestamp = view.query<HTMLButtonElement>(".chat-group.assistant .msg-meta__summary")!;
+    const timestamp = view.container.querySelector<HTMLButtonElement>(
+      ".chat-group.assistant .msg-meta__summary",
+    )!;
     expect(timestamp).not.toBeNull();
     timestamp.focus();
     setAssistant({
       ...answer,
       timestamp: 2001,
-      messages: [{ ...answer.messages[0]!, message: assistant(2001, 200, 20) }],
+      messages: [{ ...answer.messages[0]!, message: answerAt(2001, 200, 20) }],
     });
     flush();
-    expect(view.query(".chat-group.assistant .msg-meta__summary")).toBe(timestamp);
+    expect(view.container.querySelector(".chat-group.assistant .msg-meta__summary")).toBe(
+      timestamp,
+    );
     expect(document.activeElement).toBe(timestamp);
   });
 });
@@ -514,13 +543,16 @@ describe("owned message controls", () => {
 it("leaves timestamp attributes untouched when only message usage changes", () => {
   const calendarFormat = vi.spyOn(Date.prototype, "toLocaleString");
   const clock = vi.spyOn(Date, "now").mockReturnValue(301_000);
-  const answer = createMessageGroup(assistant(1000, 100, 10), "assistant");
+  const answer = createMessageGroup(
+    { role: "assistant", content: "Answer", timestamp: 1000, usage: { input: 100, output: 10 } },
+    "assistant",
+  );
   const [group, setGroup] = createSignal(answer);
-  const view = mount(() => (
+  const view = mountSolid(() => (
     <MessageGroup group={group()} options={{ showReasoning: false, contextWindow: 4000 }} />
   ));
-  const time = view.query<HTMLTimeElement>(".chat-group-timestamp")!;
-  const summary = view.query<HTMLButtonElement>(".msg-meta__summary")!;
+  const time = view.container.querySelector<HTMLTimeElement>(".chat-group-timestamp")!;
+  const summary = view.container.querySelector<HTMLButtonElement>(".msg-meta__summary")!;
   expect(time.textContent).toBe("5m ago");
   const observer = new MutationObserver(() => {});
   observer.observe(time, { attributes: true });
@@ -529,10 +561,20 @@ it("leaves timestamp attributes untouched when only message usage changes", () =
   clock.mockReturnValue(361_000);
   setGroup({
     ...answer,
-    messages: [{ ...answer.messages[0]!, message: assistant(1000, 200, 20) }],
+    messages: [
+      {
+        ...answer.messages[0]!,
+        message: {
+          role: "assistant",
+          content: "Answer",
+          timestamp: 1000,
+          usage: { input: 200, output: 20 },
+        },
+      },
+    ],
   });
   flush();
-  expect(view.query(".msg-meta__tokens")?.textContent).toBe("↑200");
+  expect(view.container.querySelector(".msg-meta__tokens")?.textContent).toBe("↑200");
   expect(time.dateTime).toBe("1970-01-01T00:00:01.000Z");
   expect(time.textContent).toBe("6m ago");
   expect(observer.takeRecords()).toEqual([]);
