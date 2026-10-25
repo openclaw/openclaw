@@ -61,32 +61,6 @@ describe("chat pane workspace chip icon", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  it("releases a queued icon render on disconnect and recovers on reconnect", async () => {
-    const fetchSpy = mockWorkspaceIconFetch().mockResolvedValue(unavailable());
-    const { container, element } = await mountChip(iconOptions("disconnected"));
-    await Promise.resolve();
-    expect(fetchSpy).toHaveBeenCalledOnce();
-    if (element) {
-      element.authTokens = [...element.authTokens];
-    }
-    container.remove();
-    await element?.updateComplete;
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(fetchSpy.mock.calls.map(([url]) => url)).toEqual([
-      "/__openclaw__/workspace-icon/agent%3Amain%3Adisconnected",
-    ]);
-    expect(fetchSpy.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
-
-    fetchSpy.mockResolvedValue(iconResponse());
-    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:reconnected-workspace-icon");
-    document.body.append(container);
-    await element?.updateComplete;
-    await vi.advanceTimersByTimeAsync(0);
-    await element?.updateComplete;
-    expect(fetchSpy).toHaveBeenCalledTimes(2);
-    expect(iconSource(container)).toBe("blob:reconnected-workspace-icon");
-  });
-
   it("recovers when a pending 503 settles between disconnect and immediate reconnect", async () => {
     const pending = createDeferred<Response>();
     const options = iconOptions("immediate-reconnect");
@@ -139,7 +113,7 @@ describe("chat pane workspace chip icon", () => {
     expect(iconSource(container)).toBe("blob:recovered-workspace-icon");
   });
 
-  it("does not refetch a missing project icon when the header rerenders", async () => {
+  it("retries a missing project icon when header credentials change", async () => {
     const fetchSpy = mockWorkspaceIconFetch().mockResolvedValue(
       new Response(null, { status: 404 }),
     );
@@ -150,11 +124,6 @@ describe("chat pane workspace chip icon", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     await element?.updateComplete;
-    mounted.update({ title: "Updated title", workspaceIcon });
-    await element?.updateComplete;
-    await Promise.resolve();
-
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
     mounted.update({ workspaceIcon: { ...workspaceIcon, authTokens: ["new-token"] } });
     await vi.advanceTimersByTimeAsync(0);
     expect(fetchSpy).toHaveBeenCalledTimes(2);

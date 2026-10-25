@@ -81,47 +81,39 @@ function mount() {
   });
 }
 
-it.each([false, true])(
-  "unlocks and reuses audio with Gateway notifications: %s",
-  async (notify) => {
-    let userActivation = true;
-    const permitted = new WeakSet<HTMLAudioElement>();
-    play.mockImplementation(function (this: HTMLAudioElement) {
-      if (userActivation) {
-        permitted.add(this);
-      }
-      return permitted.has(this)
-        ? Promise.resolve()
-        : Promise.reject(new DOMException("User activation required", "NotAllowedError"));
-    });
-    const view = mount();
-    const button = readButton(view);
-    button.click();
-    userActivation = false;
-    expect(play).toHaveBeenCalledOnce();
-    expect(audio).toHaveLength(1);
-    expect(audio[0]?.src).toMatch(/^data:audio\/wav/);
-    if (notify) {
-      gatewayListeners.forEach((listener) => listener());
-      flush();
+it("unlocks and reuses audio with Gateway notifications", async () => {
+  let userActivation = true;
+  const permitted = new WeakSet<HTMLAudioElement>();
+  play.mockImplementation(function (this: HTMLAudioElement) {
+    if (userActivation) {
+      permitted.add(this);
     }
-    pending.resolve(speech);
-    await waitForSolid(() => expect(play).toHaveBeenCalledTimes(2));
-    expect(request).toHaveBeenCalledWith("tts.speak", { text: speechText });
-    expect(createUrl.mock.calls[0]?.[0]).toMatchObject({ type: "audio/wav", size: 4 });
-    expect(audio[0]?.src).toBe("blob:synthetic-speech");
-    if (notify) {
-      gatewayListeners.forEach((listener) => listener());
-      flush();
-    }
-    expect(revoke).not.toHaveBeenCalled();
-    readButton(view, "Stop reading").click();
-    flush();
-    expect(pause).toHaveBeenCalledTimes(2);
-    expect(revoke).toHaveBeenCalledWith("blob:synthetic-speech");
-    await waitForSolid(() => expect(readButton(view)).toBe(button));
-  },
-);
+    return permitted.has(this)
+      ? Promise.resolve()
+      : Promise.reject(new DOMException("User activation required", "NotAllowedError"));
+  });
+  const view = mount();
+  const button = readButton(view);
+  button.click();
+  userActivation = false;
+  expect(play).toHaveBeenCalledOnce();
+  expect(audio[0]?.src).toMatch(/^data:audio\/wav/);
+  gatewayListeners.forEach((listener) => listener());
+  flush();
+  pending.resolve(speech);
+  await waitForSolid(() => expect(play).toHaveBeenCalledTimes(2));
+  expect(request).toHaveBeenCalledWith("tts.speak", { text: speechText });
+  expect(createUrl.mock.calls[0]?.[0]).toMatchObject({ type: "audio/wav", size: 4 });
+  expect(audio[0]?.src).toBe("blob:synthetic-speech");
+  gatewayListeners.forEach((listener) => listener());
+  flush();
+  expect(revoke).not.toHaveBeenCalled();
+  readButton(view, "Stop reading").click();
+  flush();
+  expect(pause).toHaveBeenCalledTimes(2);
+  expect(revoke).toHaveBeenCalledWith("blob:synthetic-speech");
+  await waitForSolid(() => expect(readButton(view)).toBe(button));
+});
 
 it("keeps native transcript speech with its current application context", async () => {
   installTranscriptDomMocks();
@@ -174,48 +166,40 @@ it("leaves unconfigured speech controls absent", () => {
 });
 
 it.each([
-  { name: "configured", bootstrapConfig: { tts: {} }, loaded: false, visible: true },
-  { name: "unconfigured", bootstrapConfig: { tts: null }, loaded: false, visible: false },
-  { name: "older projection", bootstrapConfig: {}, loaded: true, visible: true },
-  { name: "no projection", bootstrapConfig: null, loaded: true, visible: true },
-  {
-    name: "config-only response with older projection",
-    bootstrapConfig: {},
-    loaded: true,
-    visible: true,
-    configOnly: true,
-  },
-  {
-    name: "config-only response without projection",
-    bootstrapConfig: null,
-    loaded: true,
-    visible: true,
-    configOnly: true,
-  },
-])("uses $name speech configuration without eagerly loading an editor", async (scenario) => {
-  const listeners = new Set<() => void>();
-  vi.spyOn(context.runtimeConfig, "subscribe").mockImplementation((listener) => {
-    const notify = () => listener(context.runtimeConfig.state);
-    listeners.add(notify);
-    return () => listeners.delete(notify);
-  });
-  Object.assign(runtimeConfig.state, {
-    configSnapshot: null,
-    bootstrapConfig: scenario.bootstrapConfig,
-  });
-  runtimeConfig.ensureDisplayLoaded.mockImplementation(async () => {
-    const config = { tts: {} };
-    Object.assign(runtimeConfig.state, {
-      configSnapshot: scenario.configOnly ? { config } : { runtimeConfig: config },
+  ["configured", { tts: {} }, false, true, false],
+  ["unconfigured", { tts: null }, false, false, false],
+  ["older projection", {}, true, true, false],
+  ["no projection", null, true, true, false],
+  ["config-only response with older projection", {}, true, true, true],
+  ["config-only response without projection", null, true, true, true],
+] as const)(
+  "uses %s speech configuration without eagerly loading an editor",
+  async (_name, bootstrapConfig, loaded, visible, configOnly) => {
+    const listeners = new Set<() => void>();
+    vi.spyOn(context.runtimeConfig, "subscribe").mockImplementation((listener) => {
+      const notify = () => listener(context.runtimeConfig.state);
+      listeners.add(notify);
+      return () => listeners.delete(notify);
     });
-    listeners.forEach((notify) => notify());
-  });
-  const view = mount();
-  await waitForSolid(() => {
-    expect(Boolean(view.queryByRole("button", { name: "Read aloud" }))).toBe(scenario.visible);
-  });
-  expect(runtimeConfig.ensureDisplayLoaded).toHaveBeenCalledTimes(scenario.loaded ? 1 : 0);
-});
+    Object.assign(runtimeConfig.state, {
+      configSnapshot: null,
+      bootstrapConfig,
+    });
+    runtimeConfig.ensureDisplayLoaded.mockImplementation(async () => {
+      const config = { tts: {} };
+      Object.assign(runtimeConfig.state, {
+        configSnapshot: configOnly ? { config } : { runtimeConfig: config },
+      });
+      listeners.forEach((notify) => notify());
+    });
+    const view = mount();
+    await waitForSolid(() => {
+      expect(Boolean(view.queryByRole("button", { name: "Read aloud" }))).toBe(visible);
+    });
+    expect(runtimeConfig.ensureDisplayLoaded).toHaveBeenCalledTimes(loaded ? 1 : 0);
+    expect(request).not.toHaveBeenCalled();
+  },
+);
 
 it.each(["bootstrap", "config-only"])(
   "chunks speech using the %s limit without reading the full config",

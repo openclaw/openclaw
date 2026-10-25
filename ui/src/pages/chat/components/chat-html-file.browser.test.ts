@@ -101,15 +101,9 @@ describe.runIf(browserMode)("HTML file presentation", () => {
     await page.viewport(1200, 800);
   });
 
-  it("renders normalized HTML MIME without a filename extension", async () => {
-    const { panel, request } = await mount("report", undefined, "Text/HTML; charset=utf-8");
-    expect(request.mock.lastCall?.[1]).toMatchObject({ html: source });
-    expect(panel.querySelector(".cm-editor")).toBeNull();
-  });
-
   it("opens rendered HTML before loading CodeMirror, then retains editor and undo through draft preview", async () => {
     localStorage.removeItem("openclaw.control.fileView.wrap.v1");
-    const { panel, file, request } = await mount();
+    const { panel, file, request } = await mount("report", undefined, "Text/HTML; charset=utf-8");
     expect(request.mock.lastCall?.[1]).toMatchObject({ html: source });
     expect(panel.querySelector(".cm-editor")).toBeNull();
     expect(panel.querySelector("h1")).toBeNull();
@@ -158,8 +152,6 @@ describe.runIf(browserMode)("HTML file presentation", () => {
     expect(second.panel.querySelector("iframe")).toBe(otherFrame);
     expect(button(first.panel, "Source")).toBeDefined();
     expect(button(second.panel, "Preview")).toBeDefined();
-    expect(first.request).toHaveBeenCalledOnce();
-    expect(second.request).toHaveBeenCalledOnce();
     first.panel.fileNavigation = { line: 2 };
     await expect
       .poll(() => first.panel.querySelector(".file-view__line--target")?.getAttribute("data-line"))

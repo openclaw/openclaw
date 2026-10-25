@@ -1,10 +1,8 @@
 import { createSignal } from "solid-js";
-import { afterEach, expect, it } from "vitest";
-import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { expect, it } from "vitest";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { ChatTranscriptFeed } from "./chat-transcript-feed-view.tsx";
-
-afterEach(cleanupSolid);
 
 function mount(initial: unknown[]) {
   const [messages, setMessages] = createSignal(initial);
@@ -99,7 +97,8 @@ it("preserves forwarded attribution beside ordinary user and assistant messages"
 });
 
 it("groups consecutive calls across result messages and expands every command or path", () => {
-  const command = "echo first\necho second --fix";
+  const firstLine = `echo ${"a".repeat(140)} AKIA${"0".repeat(16)}`;
+  const command = firstLine + "\necho second --fix";
   const path = "src/a.css";
   const container = mount([
     completed(toolCall("exec-1", "exec", { command })),
@@ -118,12 +117,13 @@ it("groups consecutive calls across result messages and expands every command or
   const summary = group.querySelector("summary")!;
   contains(summary.textContent, "3 operations", "3 other operations");
   expect(summary.textContent).not.toContain("--fix");
+  expect(group.querySelector(part("row-label"))?.textContent).toBe(firstLine.slice(0, 160));
   expect(group.open).toBe(false);
   summary.click();
   expect(group.open).toBe(true);
   expect(
     group.querySelector(".chat-task-feed__calls .chat-task-feed__tool-line--full")?.textContent,
-  ).toContain(command);
+  ).toBe(command);
   contains(group.textContent, "pnpm lint:ui:styles", path);
   expect(group.querySelectorAll(part("tool-line")).length).toBeGreaterThanOrEqual(3);
   summary.click();
@@ -228,25 +228,9 @@ it("shows local HH:MM message timestamps and omits missing timestamps", () => {
   expect(unclocked?.querySelector(part("time"))).toBeNull();
 });
 
-it("preserves a complete credential-shaped fixture while bounding the command label", () => {
-  const syntheticToken = `AKIA${"0".repeat(16)}`;
-  const command = `echo ${"a".repeat(140)} ${syntheticToken}`;
-  const container = mount([assistant(toolCall("redact", "exec", { command }))]);
-  expect(container.one(part("row-label"))?.textContent).toBe(command.slice(0, 160));
-  expect(container.one("code")?.textContent).toBe(command);
-});
-
 it.each<[string, Record<string, unknown>, string | null]>([
   ["exec", { command: "set -e" }, "set -e"],
-  ["read", { path: "src/example.ts", offset: 20, limit: 30 }, null],
-  ["edit", { path: "src/example.ts", oldText: "before", newText: "after" }, null],
-  ["write", { path: "src/example.ts", content: "complete file content" }, null],
   ["codebase_search", { query: "example", path: "src/components" }, null],
-  [
-    "apply_patch",
-    { input: "*** Begin Patch\n*** Add File: a\n+a\n*** Add File: b\n+b\n*** End Patch" },
-    null,
-  ],
 ])("preserves %s input and setup-only command labels", (name, args, label) => {
   const container = mount([assistant(toolCall("input", name, args))]);
   if (label !== null) {

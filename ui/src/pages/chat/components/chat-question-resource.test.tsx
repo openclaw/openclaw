@@ -100,6 +100,26 @@ function mountResource(
   return { view, selections, setDisabled, setRequestId };
 }
 
+function expectResourceRequest(
+  request: ReturnType<typeof createGatewayRequestMock>,
+  action: "preview" | "upload",
+  payload: object,
+) {
+  expect(request).toHaveBeenCalledWith(
+    "mcp.app.formResource",
+    {
+      sessionKey: `agent:main:${action}-session`,
+      agentId: action === "preview" ? "main" : undefined,
+      viewId: "form-view",
+      requestId: "question-request",
+      questionId: "part",
+      action,
+      ...payload,
+    },
+    { signal: expect.any(AbortSignal) },
+  );
+}
+
 it("keeps the Solid application context when opening a resource preview", async () => {
   const request = createGatewayRequestMock(async (method) => {
     if (method === "mcp.app.formResource") {
@@ -122,19 +142,7 @@ it("keeps the Solid application context when opening a resource preview", async 
       "Preview unavailable",
     ),
   );
-  expect(request).toHaveBeenCalledWith(
-    "mcp.app.formResource",
-    {
-      sessionKey: "agent:main:preview-session",
-      agentId: "main",
-      viewId: "form-view",
-      requestId: "question-request",
-      questionId: "part",
-      action: "preview",
-      optionIndex: 0,
-    },
-    { signal: expect.any(AbortSignal) },
-  );
+  expectResourceRequest(request, "preview", { optionIndex: 0 });
   expect(request).toHaveBeenCalledWith(
     "mcp.app.view",
     { sessionKey: "agent:main:preview-session", viewId: "preview-view" },
@@ -157,19 +165,9 @@ it("publishes uploaded resource selections and follows controlled selections", a
   input.dispatchEvent(new Event("change", { bubbles: true }));
 
   await waitForSolid(() => expect(selections).toHaveBeenCalledWith(["parts://notes"]));
-  expect(request).toHaveBeenCalledWith(
-    "mcp.app.formResource",
-    {
-      sessionKey: "agent:main:upload-session",
-      agentId: undefined,
-      viewId: "form-view",
-      requestId: "question-request",
-      questionId: "part",
-      action: "upload",
-      files: [{ name: "notes.txt", mimeType: "text/plain", content: "ZXhhbXBsZQ==" }],
-    },
-    { signal: expect.any(AbortSignal) },
-  );
+  expectResourceRequest(request, "upload", {
+    files: [{ name: "notes.txt", mimeType: "text/plain", content: "ZXhhbXBsZQ==" }],
+  });
   const remove = await waitForSolid(() =>
     view.getByRole<HTMLButtonElement>("button", { name: "Remove" }),
   );
@@ -219,6 +217,14 @@ it("retires pending previews on disabled and request changes while retaining con
   const button = await waitForSolid(() =>
     view.getByRole<HTMLButtonElement>("button", { name: "Preview resource: Bracket" }),
   );
+  const expectState = async (busy: boolean, error: string | null = null) => {
+    await waitForSolid(() => {
+      expect(button.disabled).toBe(busy);
+      expect(view.queryByRole("alert")?.textContent ?? null).toBe(error);
+      expect(view.getByRole("button", { name: "Preview resource: Bracket" })).toBe(button);
+    });
+  };
+  const expectPreview = () => expect(view.getByText("Current preview")).toBeTruthy();
   button.click();
   button.click();
   await waitForSolid(() => expect(request).toHaveBeenCalledTimes(1));
@@ -229,8 +235,7 @@ it("retires pending previews on disabled and request changes while retaining con
   });
   first.resolve({ preview: { contents: [{ text: "Retired disabled preview" }] } });
   setDisabled(false);
-  await waitForSolid(() => expect(button.disabled).toBe(false));
-  expect(view.getByRole("button", { name: "Preview resource: Bracket" })).toBe(button);
+  await expectState(false);
   button.click();
   await waitForSolid(() => expect(request).toHaveBeenCalledTimes(2));
   setRequestId("replacement-request");
@@ -238,12 +243,10 @@ it("retires pending previews on disabled and request changes while retaining con
     expect(request.mock.calls[1]?.[2]?.signal?.aborted).toBe(true);
     expect(button.disabled).toBe(false);
   });
-  expect(view.getByRole("button", { name: "Preview resource: Bracket" })).toBe(button);
+  await expectState(false);
   button.click();
-  await waitForSolid(() => {
-    expect(view.getByText("Current preview")).toBeTruthy();
-    expect(button.disabled).toBe(false);
-  });
+  await waitForSolid(expectPreview);
+  await expectState(false);
   second.reject(new Error("Retired request failed"));
   await second.promise.catch(() => {});
   expect(view.queryByText("Retired disabled preview")).toBeNull();
@@ -251,29 +254,21 @@ it("retires pending previews on disabled and request changes while retaining con
   expect(request.mock.calls[2]?.[1]).toMatchObject({ requestId: "replacement-request" });
   request.mockRejectedValueOnce(new Error("Resource preview failed"));
   button.click();
-  await waitForSolid(() => {
-    expect(view.getByRole("alert").textContent).toBe("Resource preview failed");
-    expect(button.disabled).toBe(false);
-  });
-  expect(view.getByText("Current preview")).toBeTruthy();
+  await expectState(false, "Resource preview failed");
+  expectPreview();
   const retry = Promise.withResolvers<QuestionResourceActionResult>();
   request.mockImplementationOnce(() => retry.promise);
   button.click();
   button.click();
   await waitForSolid(() => {
-    expect(view.queryByRole("alert")).toBeNull();
     expect(request).toHaveBeenCalledTimes(5);
-    expect(button.disabled).toBe(true);
     expect(view.getByRole("status").textContent).toBe("Loading…");
   });
-  expect(view.getByText("Current preview")).toBeTruthy();
-  expect(view.getByRole("button", { name: "Preview resource: Bracket" })).toBe(button);
+  await expectState(true);
+  expectPreview();
   retry.reject(new Error("Resource retry failed"));
-  await waitForSolid(() => {
-    expect(view.getByRole("alert").textContent).toBe("Resource retry failed");
-    expect(button.disabled).toBe(false);
-  });
-  expect(view.getByText("Current preview")).toBeTruthy();
+  await expectState(false, "Resource retry failed");
+  expectPreview();
   button.click();
   await waitForSolid(() => {
     expect(view.queryByRole("alert")).toBeNull();

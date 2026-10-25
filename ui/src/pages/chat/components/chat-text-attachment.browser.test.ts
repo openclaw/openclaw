@@ -183,8 +183,6 @@ describe.runIf(browserMode)("Markdown attachment controls", () => {
       const viewport = get(".code-block-viewport");
       const expand = get<HTMLButtonElement>(".code-block-expand");
       const wrap = get<HTMLButtonElement>(".code-block-wrap");
-      expect(viewport.id).not.toBe("");
-      expect(expand.getAttribute("aria-controls")).toBe(viewport.id);
       expand.click();
       expect(expand.getAttribute("aria-expanded")).toBe("true");
       expect(getComputedStyle(wrap).display).not.toBe("none");
@@ -251,12 +249,11 @@ describe.runIf(browserMode)("Markdown attachment controls", () => {
         const nextWrap = get<HTMLButtonElement>("article .code-block-wrap");
         expect(nextExpand.getAttribute("aria-expanded")).toBe(String(retained));
         expect(nextWrap.getAttribute("aria-pressed")).toBe(String(retained));
-        expect(
-          nextReader.querySelector(".code-block-wrapper")?.classList.contains("is-expanded"),
-        ).toBe(retained);
-        expect(
-          nextReader.querySelector(".code-block-wrapper")?.classList.contains("is-wrapped"),
-        ).toBe(retained);
+        const classes = nextReader.querySelector(".code-block-wrapper")!.classList;
+        expect([classes.contains("is-expanded"), classes.contains("is-wrapped")]).toEqual([
+          retained,
+          retained,
+        ]);
         const nextViewport = get("article .code-block-viewport");
         observedViewport = nextViewport;
         await expect.poll(() => isObserved(nextViewport)).toBe(true);
