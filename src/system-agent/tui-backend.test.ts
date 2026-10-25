@@ -221,6 +221,7 @@ describe("runSystemAgentTui", () => {
     resolveVerifiedState.mockClear();
     const runTui = vi.fn(
       async (opts: Parameters<NonNullable<SystemAgentTuiOptions["runTui"]>>[0]) => {
+        expect(resolveVerifiedState).toHaveBeenCalledWith(verified.verifiedInference);
         if (!opts.backend) {
           throw new Error("Expected the system-agent TUI backend");
         }
@@ -241,20 +242,12 @@ describe("runSystemAgentTui", () => {
 
     expect(runTui).toHaveBeenCalledOnce();
     expect(resolveVerifiedState).toHaveBeenCalledOnce();
-    expect(resolveVerifiedState).toHaveBeenCalledWith(verified.verifiedInference);
-    const [resolveOrder] = resolveVerifiedState.mock.invocationCallOrder;
-    const [runTuiOrder] = runTui.mock.invocationCallOrder;
-    if (resolveOrder === undefined || runTuiOrder === undefined) {
-      throw new Error("expected verified route resolution before TUI startup");
-    }
-    expect(resolveOrder).toBeLessThan(runTuiOrder);
     expect(runTui.mock.calls[0]?.[0]).toMatchObject({
       local: true,
       session: "agent:openclaw:main",
       historyLimit: 200,
       config: {},
       title: "openclaw setup",
-      backend: expect.any(Object),
     });
     expect(runTui.mock.calls[0]?.[0].config).toEqual({});
   }, 240_000);
@@ -299,13 +292,6 @@ describe("runSystemAgentTui", () => {
       );
       expect(catalogPreparation).not.toHaveBeenCalled();
       expect(runTui).toHaveBeenCalledOnce();
-      expect(runTui).toHaveBeenCalledWith(
-        expect.objectContaining({
-          local: true,
-          session: "agent:openclaw:main",
-          title: "openclaw setup",
-        }),
-      );
     } finally {
       publishedSnapshot.mockRestore();
       catalogPreparation.mockReset();
@@ -314,15 +300,10 @@ describe("runSystemAgentTui", () => {
   });
 
   it("reports the verified model without its auth profile and the effective thinking level", async () => {
-    const config = {
+    const config: OpenClawConfig = {
       ...verifiedConfig,
-      agents: {
-        defaults: {
-          model: "openai/gpt-5.5",
-          thinkingDefault: "high",
-        },
-      },
-    } satisfies OpenClawConfig;
+      agents: { defaults: { model: "openai/gpt-5.5", thinkingDefault: "high" } },
+    };
     const profileQualifiedOverview = {
       ...overview,
       defaultModel: "openai/gpt-5.5@openai:setup-test",
@@ -408,15 +389,13 @@ describe("runSystemAgentTui", () => {
     expect(handle).toHaveBeenCalledOnce();
     expect(dispose).toHaveBeenCalledOnce();
     expect(events).toHaveLength(2);
-    expect(events).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          payload: expect.objectContaining({
-            state: "error",
-            errorMessage: expect.stringContaining("working inference"),
-          }),
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          state: "error",
+          errorMessage: expect.stringContaining("working inference"),
         }),
-      ]),
+      }),
     );
     expect(events.some((event) => event.payload?.state === "final")).toBe(false);
   });

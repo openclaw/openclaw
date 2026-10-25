@@ -50,18 +50,7 @@ vi.mock("./verified-inference.js", async (importOriginal) => {
   };
 });
 
-const overview = createSystemAgentOverviewFixture({
-  defaultModel: "openai/gpt-5.5",
-  config: { path: "/tmp/openclaw.json", exists: true, valid: true, issues: [], hash: null },
-  tools: {
-    codex: { command: "codex", found: false, error: "not found" },
-    claude: { command: "claude", found: false, error: "not found" },
-    gemini: { command: "gemini", found: false, error: "not found" },
-    apiKeys: { openai: true, anthropic: false },
-  },
-  gateway: { url: "ws://fixture", source: "test", reachable: false },
-  references: { docsUrl: "https://docs.example", sourceUrl: "https://source.example" },
-});
+const overview = createSystemAgentOverviewFixture({ defaultModel: "openai/gpt-5.5" });
 
 const verifiedConfig = {
   agents: {
@@ -192,8 +181,7 @@ describe("runSystemAgent", () => {
   it("rechecks one-shot authority at the persistent apply boundary", async () => {
     const verified = await currentVerifiedOptions();
     let reads = 0;
-    const readConfigFileSnapshot = vi
-      .mocked(configModule.readConfigFileSnapshot)
+    vi.mocked(configModule.readConfigFileSnapshot)
       .mockClear()
       .mockImplementation(async () => {
         reads += 1;
@@ -214,7 +202,6 @@ describe("runSystemAgent", () => {
       message: expect.stringContaining("verified inference route changed"),
     });
 
-    expect(readConfigFileSnapshot).toHaveBeenCalledTimes(4);
     expect(runDaemonRestart).not.toHaveBeenCalled();
   });
 

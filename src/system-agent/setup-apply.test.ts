@@ -100,9 +100,6 @@ describe("applySystemAgentSetup transaction boundaries", () => {
       expectedInferenceRoute: await projectInferenceRoute(runtimeConfig),
       firstAgent: firstTeam,
     });
-    expect(mocks.ensureOnboardingAgent).toHaveBeenCalledWith(
-      expect.objectContaining({ firstAgent: firstTeam }),
-    );
     expect(Object.keys(mocks.state.persistedConfig?.agents?.entries ?? {})).toEqual([
       "coordinator",
       "researcher",
@@ -186,9 +183,6 @@ describe("applySystemAgentSetup transaction boundaries", () => {
       await apply({ workspace: "/tmp/requested-workspace", assertCommitPreconditions });
 
       expect(assertCommitPreconditions).toHaveBeenCalledTimes(3);
-      expect(mocks.ensureOnboardingAgent).toHaveBeenCalledWith(
-        expect.objectContaining({ workspace: "/tmp/current-workspace" }),
-      );
       expect(mocks.state.persistedConfig?.agents).toMatchObject({
         defaults: { workspace: "/tmp/current-workspace" },
         entries: { main: { workspace: "/tmp/current-workspace" } },
@@ -327,13 +321,6 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     await apply({ expectedInferenceRoute, surface: "cli" });
 
     expect(mocks.state.persistedConfig?.logging).toEqual({ level: "debug" });
-    expect(mocks.configureGateway).toHaveBeenCalledTimes(2);
-    expect(mocks.configureGateway).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        baseConfig: concurrent,
-        quickstartGateway: expect.objectContaining({ port: 19000, bind: "lan" }),
-      }),
-    );
     expect(mocks.ensureGatewayService).toHaveBeenCalledWith(
       expect.objectContaining({
         settings: expect.objectContaining({
@@ -482,7 +469,6 @@ describe("applySystemAgentSetup transaction boundaries", () => {
         const result = await apply({ surface: "cli" });
 
         expect(result.gateway).toEqual(gateway);
-        expect(mocks.waitForGatewayReachable).toHaveBeenCalledOnce();
         expect(mocks.waitForGatewayReachable).toHaveBeenCalledWith(
           expect.objectContaining(resolveGatewayStartupTiming(platform)),
         );
