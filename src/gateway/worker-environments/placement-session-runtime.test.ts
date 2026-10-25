@@ -53,17 +53,16 @@ async function prepareRuntimePatch(
 
 const originalPluginRegistry = getActivePluginRegistry();
 
+const remotePlacement = (requiredNodeCommands: string[]) => ({
+  mode: "remote-exec" as const,
+  devicePlacement: { requiredNodeCommands, consumesWorkerSlot: false },
+});
+
 function registerHarness(id: string, overrides: Partial<AgentHarness> = {}) {
   registerAgentHarness({
     id,
     label: id,
-    cloudPlacement: {
-      mode: "remote-exec",
-      devicePlacement: {
-        requiredNodeCommands: ["runtime.exec-server.v1"],
-        consumesWorkerSlot: false,
-      },
-    },
+    cloudPlacement: remotePlacement(["runtime.exec-server.v1"]),
     supports: () => ({ supported: true }),
     async runAttempt() {
       throw new Error("not used");
@@ -244,72 +243,45 @@ it("required worker inference overrides persisted runtime", () => {
 });
 
 it.each([
-  {
-    name: "embedded worker turns support paired devices",
-    runtimeId: "openclaw",
-    executionMode: "worker-turn",
-    devicePlacementSupported: true,
-    devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
-  },
-  {
-    name: "device command requirements are deterministic and deduplicated",
-    runtimeId: "ordered-harness",
-    cloudPlacement: {
-      mode: "remote-exec",
-      devicePlacement: {
-        requiredNodeCommands: ["runtime.zeta.v1", "runtime.alpha.v1", "runtime.zeta.v1"],
-        consumesWorkerSlot: false,
-      },
-    },
-    executionMode: "remote-exec",
-    devicePlacementSupported: true,
-    devicePlacement: {
+  ["openclaw", undefined, "worker-turn", { requiredNodeCommands: [], consumesWorkerSlot: true }],
+  [
+    "ordered-harness",
+    remotePlacement(["runtime.zeta.v1", "runtime.alpha.v1", "runtime.zeta.v1"]),
+    "remote-exec",
+    {
       requiredNodeCommands: ["runtime.alpha.v1", "runtime.zeta.v1"],
       consumesWorkerSlot: false,
     },
+  ],
+  ["cloud-harness", { mode: "remote-exec" }, "remote-exec", undefined],
+  ["missing-harness", undefined, undefined, undefined],
+] as const)(
+  "projects %s placement capabilities",
+  (runtimeId, cloudPlacement, executionMode, devicePlacement) => {
+    if (cloudPlacement) {
+      registerHarness(runtimeId, { cloudPlacement });
+    }
+    expect(resolveWorkerPlacementExecutionMode(runtimeId)).toBe(executionMode);
+    expect(resolveWorkerPlacementCapabilities(runtimeId)).toEqual({
+      ...(executionMode ? { executionMode } : {}),
+      ...(devicePlacement ? { devicePlacement } : {}),
+    });
+    expect(projectWorkerPlacementAgentRuntime({ id: runtimeId, source: "model" })).toEqual({
+      id: runtimeId,
+      cloudPlacementSupported: executionMode !== undefined,
+      ...(executionMode ? { cloudPlacementExecutionMode: executionMode } : {}),
+      ...(devicePlacement ? { devicePlacement } : {}),
+      devicePlacementSupported: devicePlacement !== undefined,
+      source: "model",
+    });
   },
-  {
-    name: "cloud-only remote execution does not support paired devices",
-    runtimeId: "cloud-harness",
-    cloudPlacement: { mode: "remote-exec" },
-    executionMode: "remote-exec",
-    devicePlacementSupported: false,
-  },
-  {
-    name: "unknown runtimes support no placement",
-    runtimeId: "missing-harness",
-    executionMode: undefined,
-    devicePlacementSupported: false,
-  },
-] as const)("$name", ({ runtimeId, executionMode, devicePlacementSupported, ...declaration }) => {
-  if ("cloudPlacement" in declaration) {
-    registerHarness(runtimeId, { cloudPlacement: declaration.cloudPlacement });
-  }
-
-  expect(resolveWorkerPlacementExecutionMode(runtimeId)).toBe(executionMode);
-  expect(resolveWorkerPlacementCapabilities(runtimeId)).toEqual({
-    ...(executionMode ? { executionMode } : {}),
-    ...("devicePlacement" in declaration ? { devicePlacement: declaration.devicePlacement } : {}),
-  });
-  expect(projectWorkerPlacementAgentRuntime({ id: runtimeId, source: "model" })).toEqual({
-    id: runtimeId,
-    cloudPlacementSupported: executionMode !== undefined,
-    ...(executionMode ? { cloudPlacementExecutionMode: executionMode } : {}),
-    ...("devicePlacement" in declaration ? { devicePlacement: declaration.devicePlacement } : {}),
-    devicePlacementSupported,
-    source: "model",
-  });
-});
+);
 
 it("fails closed above the device command-count bound", () => {
   registerHarness("oversized-harness", {
-    cloudPlacement: {
-      mode: "remote-exec",
-      devicePlacement: {
-        requiredNodeCommands: Array.from({ length: 33 }, (_, index) => `runtime.${index}.v1`),
-        consumesWorkerSlot: false,
-      },
-    },
+    cloudPlacement: remotePlacement(
+      Array.from({ length: 33 }, (_, index) => `runtime.${index}.v1`),
+    ),
   });
 
   expect(resolveWorkerPlacementCapabilities("oversized-harness").devicePlacement).toBeUndefined();
