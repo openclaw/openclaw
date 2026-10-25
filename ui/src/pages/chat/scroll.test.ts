@@ -105,24 +105,20 @@ function scroll(host: ChatScrollHost, scrollTop: number, clientHeight = 400) {
 }
 
 function installAnimationFrameQueue() {
-  const framesClock = createFrameClock();
-  const callbacks = framesClock.frames;
-
-  vi.spyOn(window, "requestAnimationFrame").mockImplementation(framesClock.request);
+  const clock = createFrameClock();
+  vi.spyOn(window, "requestAnimationFrame").mockImplementation(clock.request);
   vi.spyOn(window, "cancelAnimationFrame").mockImplementation((id) => {
-    framesClock.cancel(id);
+    clock.cancel(id);
   });
   return {
-    get callbacks() {
-      return [...callbacks.values()];
-    },
+    pending: clock.frames,
     runNext(timestamp = 0) {
-      const entry = callbacks.entries().next().value;
+      const entry = clock.frames.entries().next().value;
       if (!entry) {
         throw new Error("expected a queued animation frame");
       }
       const [id, callback] = entry;
-      callbacks.delete(id);
+      clock.frames.delete(id);
       callback(timestamp);
     },
   };
@@ -208,9 +204,9 @@ describe("scheduleChatScroll", () => {
         commit();
       }
       cancel();
-      expect(frames.callbacks).toHaveLength(0);
+      expect(frames.pending.size).toBe(0);
       scheduleCommittedChatScroll(host);
-      expect(frames.callbacks).toHaveLength(1);
+      expect(frames.pending.size).toBe(1);
       frames.runNext();
       expect(host.chatScrollToEnd).toHaveBeenCalledExactlyOnceWith({
         behavior: "auto",
@@ -331,7 +327,7 @@ describe("programmatic scroll ownership", () => {
     frames.runNext();
     expect(canAutoFollowChat(host)).toBe(true);
     expect(host.chatScrollToEnd).toHaveBeenCalledWith({ behavior: "smooth", source: "manual" });
-    expect(frames.callbacks).toHaveLength(0);
+    expect(frames.pending.size).toBe(0);
     scroll(host, 900);
     expect(host).toMatchObject({ chatLastScrollTop: 900, chatNewMessagesBelow: false });
   });
@@ -345,7 +341,7 @@ describe("programmatic scroll ownership", () => {
     scheduleChatScroll(host, true, true, { source: "manual" });
     frames.runNext();
     expect(host.chatScrollToEnd).toHaveBeenCalledWith({ behavior: "auto", source: "manual" });
-    expect(frames.callbacks).toHaveLength(0);
+    expect(frames.pending.size).toBe(0);
   });
 
   it("user takeover retires queued follow after a downward delta", () => {
@@ -356,7 +352,7 @@ describe("programmatic scroll ownership", () => {
     frames.runNext();
     expect(canAutoFollowChat(host)).toBe(false);
     handleChatScrollTakeover(host);
-    expect(frames.callbacks).toHaveLength(0);
+    expect(frames.pending.size).toBe(0);
     expect(host.chatScrollToEnd).not.toHaveBeenCalled();
     expect(container.scrollTop).toBe(600);
     expect(host).toMatchObject({
@@ -373,9 +369,9 @@ it("retires pending follow at the physical end and publishes the locked state on
   const changed = observeScrollState(host);
   const frames = installAnimationFrameQueue();
   scheduleChatScroll(host, true);
-  expect(frames.callbacks).toHaveLength(1);
+  expect(frames.pending.size).toBe(1);
   lockChatScroll(host);
-  expect(frames.callbacks).toHaveLength(0);
+  expect(frames.pending.size).toBe(0);
   expect(host).toMatchObject({
     chatFollowLocked: true,
     chatUserNearBottom: false,

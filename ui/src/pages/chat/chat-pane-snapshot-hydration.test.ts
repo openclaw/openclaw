@@ -203,6 +203,8 @@ describe("stored chat snapshot hydration", () => {
         ),
       );
       const sharedMessages: ChatMessageCache = new Map();
+      const snapshot = (pane: TestChatPane) =>
+        readChatSessionSnapshot(sharedMessages, pane.state, { sessionKey: targetSessionKey });
       const store = new SessionSnapshotStore(sharedMessages);
       observeChatCache(sharedMessages, store);
       const mount = (stored = false) => {
@@ -218,9 +220,7 @@ describe("stored chat snapshot hydration", () => {
       try {
         // A stale network response commits the still-visible local prompt to cache.
         await loadChatHistory(first.state);
-        const cached = readChatSessionSnapshot(sharedMessages, first.state, {
-          sessionKey: targetSessionKey,
-        });
+        const cached = snapshot(first);
         expect(cached?.messages).toEqual(first.state.chatMessages);
         expect(cached?.messages).toHaveLength(1);
         expect(cached?.messages[0]).toMatchObject({ __openclaw: { senderId: "local-author" } });
@@ -251,13 +251,7 @@ describe("stored chat snapshot hydration", () => {
         return view;
       };
       try {
-        await vi.waitFor(() =>
-          expect(
-            readChatSessionSnapshot(sharedMessages, remounted.state, {
-              sessionKey: targetSessionKey,
-            }),
-          ).not.toBeNull(),
-        );
+        await vi.waitFor(() => expect(snapshot(remounted)).not.toBeNull());
         const { container } = renderPane();
         transcript.start();
         flush();
@@ -393,13 +387,12 @@ describe("stored chat snapshot hydration", () => {
     const pane = createMountedPane(targetSessionKey, sharedMessages);
     const context = pane.context;
     context.gateway.snapshot.client = client;
-    let deliverStoredSnapshot: ((snapshot: unknown) => void) | undefined;
-    pane.sessionSnapshotStore = {
-      read: () =>
-        new Promise((resolve) => {
-          deliverStoredSnapshot = resolve;
-        }),
-    } as never;
+    const stored = createDeferred<unknown>();
+    pane.sessionSnapshotStore = { read: () => stored.promise } as never;
+    const prompt = expect.objectContaining({
+      role: "user",
+      content: [expect.objectContaining({ type: "text", text: "retry the rejected prompt" })],
+    });
     context.chatSubmissions.retain(
       buildInitialChatSubmission(
         targetSessionKey,
@@ -410,31 +403,20 @@ describe("stored chat snapshot hydration", () => {
     );
     try {
       const attachedState = startPane(pane);
-      expect(attachedState?.chatMessages).toEqual([
-        expect.objectContaining({
-          role: "user",
-          content: [expect.objectContaining({ type: "text", text: "retry the rejected prompt" })],
-        }),
-      ]);
+      expect(attachedState.chatMessages).toEqual([prompt]);
       const storedMessage = nativeHistoryMessage(1, "stored transcript");
       const storedPagination = { hasMore: true as const, nextOffset: 1, totalMessages: 3 };
-      deliverStoredSnapshot?.({
+      const snapshot = {
         deltaCursor: "stored-cursor",
         displayedLeafEntryId: "stored-leaf",
         messages: [storedMessage],
         pagination: storedPagination,
         sessionId: "stored-session",
-      });
+      };
+      stored.resolve(snapshot);
       await Promise.resolve();
       await Promise.resolve();
-      expect(deliverStoredSnapshot).toBeDefined();
-      expect(attachedState?.chatMessages).toEqual([
-        storedMessage,
-        expect.objectContaining({
-          role: "user",
-          content: [expect.objectContaining({ type: "text", text: "retry the rejected prompt" })],
-        }),
-      ]);
+      expect(attachedState.chatMessages).toEqual([storedMessage, prompt]);
       expect(attachedState).toMatchObject({
         chatDisplayedLeafEntryId: "stored-leaf",
         chatHistoryPagination: storedPagination,
@@ -444,13 +426,7 @@ describe("stored chat snapshot hydration", () => {
         readChatSessionSnapshot(sharedMessages, pane.state, {
           sessionKey: targetSessionKey,
         }),
-      ).toEqual({
-        deltaCursor: "stored-cursor",
-        displayedLeafEntryId: "stored-leaf",
-        messages: attachedState?.chatMessages,
-        pagination: storedPagination,
-        sessionId: "stored-session",
-      });
+      ).toEqual({ ...snapshot, messages: attachedState.chatMessages });
     } finally {
       pane.disconnectedCallback();
     }
