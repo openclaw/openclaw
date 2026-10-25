@@ -263,10 +263,14 @@ sidebarTitle: "Troubleshooting"
 
   </Accordion>
 
-  <Accordion title="Memory embedding rebuild fails">
-    If `openclaw memory index --force` fails against Ollama (for example with
-    `bge-m3`), try [llmman](/providers/llmman#advanced-configuration) as the
+  <Accordion title="Memory embedding sync fails or bursts">
+    If memory sync logs `Ollama embed HTTP 400` or floods `/api/embed` while
+    Ollama's runner restarts, or `openclaw memory index --force` fails (for example
+    with `bge-m3`), try [llmman](/providers/llmman#advanced-configuration) as the
     embedding server. `provider: "ollama"` only needs a new `remote.baseUrl`.
+
+    Then run `openclaw memory status --deep`. `Embeddings: ready` confirms it;
+    `Batch: disabled (failures 0/2)` is the default, not a failure.
 
   </Accordion>
 
