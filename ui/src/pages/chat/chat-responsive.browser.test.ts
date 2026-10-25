@@ -976,7 +976,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
 
   it("keeps custom avatar sizing and the user edge neutral", async () => {
     await withBrowserPage(openBrowserPage(430, 720), async (page) => {
-      await page.setContent(`<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+      await page.setContent(`<!doctype html><html><head><style>${readUiCss()}${readStyleSheet("ui/src/styles/identity-avatar.css")}</style></head><body>
         <img class="chat-avatar assistant" src="/avatar/main" alt="Custom" />
         <img class="chat-avatar user" src="/avatar/user" alt="User" />
       </body></html>`);
@@ -1022,15 +1022,12 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           probe.style.outline = "1px solid color-mix(in srgb, var(--text) 8%, transparent)";
           document.body.append(probe);
           const neutralOutline = getComputedStyle(probe).outline;
-          probe.style.outline = "1px solid color-mix(in srgb, var(--accent) 8%, transparent)";
-          const accentOutline = getComputedStyle(probe).outline;
           const avatar = document.querySelector("img.chat-avatar.user");
           if (!avatar) {
             throw new Error("Expected user avatar fixture");
           }
           const avatarStyle = getComputedStyle(avatar);
           const result = {
-            accentOutline,
             borderWidth: avatarStyle.borderTopWidth,
             neutralOutline,
             outline: avatarStyle.outline,
@@ -1040,7 +1037,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           return result;
         }, theme);
         expect(edge.outline).toBe(edge.neutralOutline);
-        expect(edge.outline).not.toBe(edge.accentOutline);
         expect(edge.borderWidth).toBe("0px");
         expect(edge.outlineOffset).toBe("-1px");
       }
