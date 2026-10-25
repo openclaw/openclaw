@@ -50,7 +50,19 @@ function expectSavedCredentials(
   accountId = "default",
   fields = savedCredentials,
 ) {
-  expect(mock).toHaveBeenCalledWith(expect.objectContaining(fields), expect.any(Object), accountId);
+  expect(mock.mock.calls[0]).toEqual([
+    expect.objectContaining(fields),
+    expect.any(Object),
+    accountId,
+  ]);
+}
+
+function expectWhoami() {
+  expect(mocks.request).toHaveBeenCalledWith({
+    method: "GET",
+    endpoint: "/_matrix/client/v3/account/whoami",
+    timeoutMs: 60_000,
+  });
 }
 
 function expectNoBackfill() {
@@ -58,11 +70,17 @@ function expectNoBackfill() {
   expect(mocks.backfill).not.toHaveBeenCalled();
 }
 
-it("defers constructor module evaluation until client creation", async () => {
+it("defers constructor module evaluation and forwards each creation independently", async () => {
   vi.resetModules();
   try {
-    const client = { id: "client" };
-    const createClient = vi.fn().mockResolvedValue(client);
+    const firstClient = { id: "first client" };
+    const secondClient = { id: "second client" };
+    const failure = new Error("creation failed");
+    const createClient = vi
+      .fn()
+      .mockResolvedValueOnce(firstClient)
+      .mockResolvedValueOnce(secondClient)
+      .mockRejectedValueOnce(failure);
     const evaluateConstructor = vi.fn(() => ({ createMatrixClient: createClient }));
     vi.doMock("./client/create-client.js", evaluateConstructor);
 
@@ -72,9 +90,18 @@ it("defers constructor module evaluation until client creation", async () => {
     const options = {
       homeserver: "https://matrix.example.org",
       accessToken: "synthetic-token",
+      accountId: "ops",
+      persistStorage: false,
+      encryption: true,
+      localTimeoutMs: 1234,
     };
-    await expect(createMatrixClient(options)).resolves.toBe(client);
-    expect(createClient).toHaveBeenCalledWith(options);
+    await expect(createMatrixClient(options)).resolves.toBe(firstClient);
+    const secondOptions = { ...options, accountId: "other" };
+    await expect(createMatrixClient(secondOptions)).resolves.toBe(secondClient);
+    await expect(createMatrixClient(options)).rejects.toBe(failure);
+
+    expect(createClient.mock.calls).toEqual([[options], [secondOptions], [options]]);
+    expect(evaluateConstructor).toHaveBeenCalledTimes(1);
   } finally {
     vi.doUnmock("./client/create-client.js");
     vi.resetModules();
@@ -200,10 +227,15 @@ describe("resolveMatrixAuth", () => {
     );
 
     expect(mocks.request).toHaveBeenCalledTimes(2);
-    expect(mocks.request.mock.calls[0]?.[0].body).toMatchObject({
-      type: "m.login.password",
-      identifier: { type: "m.id.user", user: tokenConfig.userId },
-      password: passwordConfig.password,
+    expect(mocks.request).toHaveBeenNthCalledWith(1, {
+      method: "POST",
+      endpoint: "/_matrix/client/v3/login",
+      timeoutMs: 60_000,
+      body: expect.objectContaining({
+        type: "m.login.password",
+        identifier: { type: "m.id.user", user: "@bot:example.org" },
+        password: "secret",
+      }),
     });
     expect(auth).toMatchObject({ ...encryptedAuth, accountId: "ops" });
     expectSavedCredentials(mocks.save, "ops");
@@ -211,8 +243,10 @@ describe("resolveMatrixAuth", () => {
 
   it("best-effort backfills a missing deviceId after startup", async () => {
     mocks.request.mockResolvedValue(identity);
+
     const deviceId = await backfill();
 
+    expectWhoami();
     expectSavedCredentials(mocks.backfill);
     expect(mocks.repair).toHaveBeenNthCalledWith(1, {
       ...authFixture,
@@ -244,31 +278,30 @@ describe("resolveMatrixAuth", () => {
     },
   );
 
-  it.each(["whoami", "metadata", "replacement"] as const)(
-    "does not publish credentials when retired at %s",
-    async (phase) => {
+  it.each(["aborted", "replaced"])(
+    "does not publish credentials when backfill is %s during metadata persistence",
+    async (reason) => {
       mocks.request.mockResolvedValue(identity);
-      const gate = createDeferred<typeof identity | boolean>();
-      const checkpoint = phase === "whoami" ? mocks.request : mocks.repair;
-      checkpoint.mockReturnValue(gate.promise);
+      const metadata = createDeferred<boolean>();
+      mocks.repair.mockReturnValue(metadata.promise);
       const abortController = new AbortController();
       const pending = backfill({ abortSignal: abortController.signal });
       try {
-        await vi.waitFor(() => expect(checkpoint).toHaveBeenCalled());
+        await vi.waitFor(() => expect(mocks.repair).toHaveBeenCalled());
         expect(mocks.backfill).not.toHaveBeenCalled();
-        if (phase === "replacement") {
-          loadCredentials.mockResolvedValue({ ...cachedCredentials, accessToken: "newer-token" });
-        } else {
+        if (reason === "aborted") {
           abortController.abort();
+        } else {
+          loadCredentials.mockResolvedValue({
+            ...cachedCredentials,
+            accessToken: "newer-token",
+          });
         }
-        gate.resolve(phase === "whoami" ? identity : true);
+        metadata.resolve(true);
         await expect(pending).resolves.toBeUndefined();
         expect(mocks.backfill).not.toHaveBeenCalled();
-        if (phase === "whoami") {
-          expect(mocks.repair).not.toHaveBeenCalled();
-        }
       } finally {
-        gate.resolve(phase === "whoami" ? identity : true);
+        metadata.resolve(true);
         await pending;
       }
     },
@@ -294,6 +327,20 @@ describe("resolveMatrixAuth", () => {
     const deviceId = await backfill({ auth: { ...authFixture, accessToken: "tok-old" } });
 
     expect(deviceId).toBeUndefined();
+    expectNoBackfill();
+  });
+
+  it("skips persistence when startup backfill is aborted before whoami resolves", async () => {
+    const whoami = createDeferred<typeof identity>();
+    mocks.request.mockReturnValue(whoami.promise);
+    const abortController = new AbortController();
+    const backfillPromise = backfill({ abortSignal: abortController.signal });
+
+    await vi.waitFor(() => expect(mocks.request).toHaveBeenCalled());
+    abortController.abort();
+    whoami.resolve(identity);
+
+    await expect(backfillPromise).resolves.toBeUndefined();
     expectNoBackfill();
   });
 
@@ -343,6 +390,7 @@ describe("resolveMatrixAuth", () => {
         path: "channels.matrix.accessToken",
       }),
     );
+    expectWhoami();
     expect(auth).toMatchObject({
       ...authFixture,
       accessToken: "resolved-token",

@@ -37,15 +37,6 @@ function analyze(
   return analyzeBootstrapBudget({ files, bootstrapMaxChars, bootstrapTotalMaxChars });
 }
 
-function injected(bootstrapFiles: WorkspaceBootstrapFile[], lengths: number[]) {
-  return buildBootstrapInjectionStats({
-    bootstrapFiles,
-    injectedFiles: bootstrapFiles.flatMap(({ path, content }, index) =>
-      lengths[index] === undefined ? [] : [{ path, content: content!.slice(0, lengths[index]) }],
-    ),
-  });
-}
-
 type TruncationReport = NonNullable<
   Parameters<typeof resolveBootstrapWarningSignaturesSeen>[0]
 >["bootstrapTruncation"];
@@ -59,44 +50,61 @@ const NOTICE = [
 describe("bootstrap budget", () => {
   it("composes configured limits, ordered injection stats, and warning state", () => {
     const bootstrapFiles: WorkspaceBootstrapFile[] = [
-      bootstrapFile("AGENTS.md", "a".repeat(9)),
-      {
-        ...bootstrapFile("SOUL.md", "b".repeat(8)),
-        origin: { kind: "execution-project", rootPath: "/tmp" },
-      },
+      bootstrapFile("AGENTS.md", "a".repeat(8)),
+      bootstrapFile("SOUL.md", "b".repeat(8)),
     ];
 
     const state = buildBootstrapBudgetState({
       config: {
         agents: { defaults: { bootstrapMaxChars: 10, bootstrapTotalMaxChars: 12 } },
       },
-      files: injected(bootstrapFiles, [9, 3]),
+      files: buildBootstrapInjectionStats({
+        bootstrapFiles,
+        injectedFiles: [
+          { path: "/tmp/AGENTS.md", content: "a".repeat(8) },
+          { path: "/tmp/SOUL.md", content: "b".repeat(4) },
+        ],
+      }),
     });
 
     expect(state).toMatchObject({
       bootstrapMaxChars: 10,
       bootstrapTotalMaxChars: 12,
-      bootstrapAnalysis: {
-        totalNearLimit: true,
-        truncatedFiles: [
-          { causes: ["total-limit"], origin: { kind: "execution-project", rootPath: "/tmp" } },
-        ],
-      },
+      bootstrapAnalysis: { totalNearLimit: true },
       bootstrapPromptWarning: { warningShown: true },
     });
-    expect(
-      buildBootstrapTruncationReportMeta({
-        analysis: state.bootstrapAnalysis,
-        warning: state.bootstrapPromptWarning,
-      }),
-    ).toMatchObject({
-      warningMode: "always",
-      warningShown: true,
-      truncatedFiles: 1,
-      nearLimitFiles: 1,
-      promptWarningSignature: state.bootstrapPromptWarning.signature,
-      warningSignaturesSeen: [state.bootstrapPromptWarning.signature],
+    expect(state.bootstrapAnalysis.truncatedFiles[0]?.causes).toEqual(["total-limit"]);
+  });
+
+  it("gives a budget-dropped file zero injected chars when a sibling shares its basename", () => {
+    const bootstrapFiles: WorkspaceBootstrapFile[] = [
+      {
+        ...bootstrapFile("AGENTS.md", "a".repeat(1_000), "/tmp/workspace/AGENTS.md"),
+        origin: { kind: "agent-workspace", rootPath: "/tmp/workspace" },
+      },
+      {
+        ...bootstrapFile("AGENTS.md", "b".repeat(500), "/tmp/workspace/packages/core/AGENTS.md"),
+        origin: { kind: "execution-project", rootPath: "/tmp/workspace/packages/core" },
+      },
+    ];
+
+    const stats = buildBootstrapInjectionStats({
+      bootstrapFiles,
+      injectedFiles: [{ path: "/tmp/workspace/AGENTS.md", content: "a".repeat(1_000) }],
     });
+    const analysis = analyze(stats, 20_000, 1_000);
+
+    expect(analysis.totals.injectedChars).toBe(1_000);
+    expect(stats.map((file) => file.origin)).toEqual(bootstrapFiles.map((file) => file.origin));
+    expect(analysis.truncatedFiles).toMatchObject([
+      {
+        path: "/tmp/workspace/packages/core/AGENTS.md",
+        rawChars: 500,
+        injectedChars: 0,
+        truncated: true,
+        causes: ["total-limit"],
+      },
+    ]);
   });
 
   it("derives names for path-only files supplied by bootstrap hooks", () => {
@@ -105,7 +113,10 @@ describe("bootstrap budget", () => {
       content: "remember",
       missing: false,
     } as unknown as WorkspaceBootstrapFile;
-    const stats = injected([pathOnlyFile], [8]);
+    const stats = buildBootstrapInjectionStats({
+      bootstrapFiles: [pathOnlyFile],
+      injectedFiles: [{ path: pathOnlyFile.path, content: "remember" }],
+    });
     expect(stats).toMatchObject([
       {
         name: "SELF_IMPROVEMENT_REMINDER.md",
@@ -137,7 +148,20 @@ describe("bootstrap budget", () => {
     });
   });
 
-  it("does not attribute later total exhaustion to the USER.md fixed cap", () => {
+  it("distinguishes lower per-file and exhausted total limits for USER.md", () => {
+    const lowerPerFile = analyze([stat("USER.md", 3_000, 2_000)], 2_000);
+    expect(lowerPerFile.truncatedFiles[0]).toMatchObject({
+      effectiveFileLimit: 2_000,
+      causes: ["per-file-limit"],
+    });
+
+    const exhaustedTotal = analyze(
+      [stat("AGENTS.md", 2_000, 2_000), stat("USER.md", 5_000, 0)],
+      20_000,
+      2_040,
+    );
+    expect(exhaustedTotal.truncatedFiles[0]?.causes).toContain("total-limit");
+
     const laterExhaustion = analyze(
       [stat("USER.md", 5_000, 4_000), stat("SOUL.md", 100, 0)],
       20_000,
@@ -147,6 +171,15 @@ describe("bootstrap budget", () => {
     const soul = laterExhaustion.truncatedFiles.find((file) => file.name === "SOUL.md");
     expect(user?.causes).toStrictEqual(["per-file-limit"]);
     expect(soul?.causes).toContain("total-limit");
+  });
+
+  it("builds a concise agent notice without raw truncation diagnostics", () => {
+    const notice = buildBootstrapPromptWarningNotice([
+      "AGENTS.md: 200 raw -> 0 injected",
+      "If unintentional, raise agents.defaults.bootstrapMaxChars.",
+    ]);
+
+    expect(notice).toBe(NOTICE);
   });
 
   it.each<[TruncationReport, string[]]>([
@@ -178,7 +211,6 @@ describe("bootstrap budget", () => {
       previousSignature: seen.signature,
     }).bootstrapPromptWarning;
     expect(repeated).toMatchObject({ warningShown: true, lines: [NOTICE] });
-    expect(buildBootstrapPromptWarningNotice(["AGENTS.md: 200 raw -> 0 injected"])).toBe(NOTICE);
     expect(repeated.warningSignaturesSeen).toEqual([seen.signature]);
 
     const history = Array.from({ length: 32 }, (_, index) => `previous-${index}`);
@@ -188,5 +220,25 @@ describe("bootstrap budget", () => {
       previousSignature: "latest",
     }).bootstrapPromptWarning;
     expect(bounded.warningSignaturesSeen).toEqual([...history.slice(2), "latest", seen.signature]);
+  });
+
+  it("builds truncation report metadata from analysis + warning decision", () => {
+    const { bootstrapAnalysis: analysis, bootstrapPromptWarning: warning } =
+      buildBootstrapBudgetState({
+        config: { agents: { defaults: { bootstrapMaxChars: 120, bootstrapTotalMaxChars: 200 } } },
+        files: [stat("AGENTS.md", 150, 100)],
+      });
+    const meta = buildBootstrapTruncationReportMeta({
+      analysis,
+      warning,
+    });
+    expect(meta).toMatchObject({
+      warningMode: "always",
+      warningShown: true,
+      truncatedFiles: 1,
+      nearLimitFiles: 1,
+      promptWarningSignature: warning.signature,
+      warningSignaturesSeen: [warning.signature],
+    });
   });
 });

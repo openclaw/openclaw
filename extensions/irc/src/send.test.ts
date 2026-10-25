@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   currentConfig: vi.fn(() => ({})),
   record: vi.fn(),
   connectIrcClient: vi.fn(),
+  stripMarkdown: vi.fn((text: string) => text),
   buildIrcConnectOptions: vi.fn(),
 }));
 // mock-isolation: outbound tests use an owned transport instead of connecting to IRC.
@@ -21,8 +22,13 @@ vi.mock("node:crypto", async (original) => ({
   ...(await original<typeof import("node:crypto")>()),
   randomUUID: () => "irc-msg-1",
 }));
+vi.mock("openclaw/plugin-sdk/text-chunking", async (original) => ({
+  ...(await original<typeof import("openclaw/plugin-sdk/text-chunking")>()),
+  stripMarkdown: mocks.stripMarkdown,
+}));
 
 import { ircPlugin } from "./channel.js";
+import { ircOutboundBaseAdapter } from "./outbound-base.js";
 import { probeIrc } from "./probe.js";
 import { sendIrcMessages, sendMessageIrc } from "./send.js";
 
@@ -35,10 +41,25 @@ const longText = Array.from({ length: 80 }, (_, index) => `word-${index}`).join(
 const id = "irc-msg-1";
 
 afterAll(() => {
-  for (const path of ["./client.js", "./connect-options.js", "node:crypto"]) {
+  for (const path of [
+    "./client.js",
+    "./connect-options.js",
+    "node:crypto",
+    "openclaw/plugin-sdk/text-chunking",
+  ]) {
     vi.doUnmock(path);
   }
   vi.resetModules();
+});
+
+it("exposes outbound chunking without initializing the IRC runtime", () => {
+  expect(ircOutboundBaseAdapter.chunker("alpha beta", 5)).toEqual(["alpha", "beta"]);
+  expect(ircOutboundBaseAdapter).toMatchObject({
+    deliveryMode: "direct",
+    chunkerMode: "markdown",
+    textChunkLimit: 350,
+  });
+  expect(formatted).toBeTypeOf("function");
 });
 
 describe("IRC outbound and probing", () => {
@@ -59,6 +80,7 @@ describe("IRC outbound and probing", () => {
     for (const mock of Object.values(mocks)) {
       mock.mockReset();
     }
+    mocks.stripMarkdown.mockImplementation((text: string) => text);
     mocks.buildIrcConnectOptions.mockReturnValue({});
     client = createClient();
     ircRuntime.setIrcRuntime(
@@ -79,7 +101,7 @@ describe("IRC outbound and probing", () => {
       channels: {
         irc: {
           ...address,
-          accounts: { work: { nick: "workbot" } },
+          accounts: { work: { host: address.host, nick: "workbot" } },
         },
       },
     };
@@ -92,8 +114,17 @@ describe("IRC outbound and probing", () => {
       direction: "outbound",
     });
     expect(result).toMatchObject({ target: "#room", messageId: id });
+    expect(result.receipt.sentAt).toBeTypeOf("number");
     expect(result.receipt.sentAt).toBeGreaterThan(0);
-    expect(result.receipt.platformMessageIds).toEqual([id]);
+    const raw = { channel: "irc", conversationId: "#room", messageId: id };
+    expect({ ...result.receipt, sentAt: 123 }).toEqual({
+      primaryPlatformMessageId: id,
+      platformMessageIds: [id],
+      sentAt: 123,
+      parts: [{ platformMessageId: id, kind: "text", index: 0, raw }],
+      sourceResults: [{ channel: "irc", messageId: id }],
+      raw: [raw],
+    });
   });
 
   it("fails hard when cfg is omitted", async () => {
@@ -108,15 +139,42 @@ describe("IRC outbound and probing", () => {
     const runtime = vi.spyOn(ircRuntime, "getOptionalIrcRuntime").mockReturnValueOnce(null);
     onTestFinished(() => runtime.mockRestore());
     expect(await send()).toMatchObject({ target: "#room", messageId: id });
+    expect(mocks.currentConfig).not.toHaveBeenCalled();
     expect(mocks.record).not.toHaveBeenCalled();
     expect(client.sendPrivmsg).toHaveBeenCalledWith("#room", "hello", undefined);
   });
 
   it("rejects stripped-empty replies before adding reply metadata", async () => {
-    await expect(send({ replyTo: "irc-parent-1" }, " ")).rejects.toThrow(
+    mocks.stripMarkdown.mockReturnValue("");
+    await expect(send({ replyTo: "irc-parent-1" }, "#")).rejects.toThrow(
       "Message must be non-empty for IRC sends",
     );
     unsent();
+  });
+
+  it("uses one transient connection for a chunked outbound message", async () => {
+    const onDeliveryResult = vi.fn(),
+      onPlatformSendDispatch = vi.fn();
+    const chunks = ircOutboundBaseAdapter.chunker(longText, 350);
+    const results = await formatted({
+      ...context,
+      text: longText,
+      replyToId: "parent-1",
+      replyToIdSource: "explicit",
+      replyToMode: "all",
+      onDeliveryResult,
+      onPlatformSendDispatch,
+    });
+    expect(mocks.connectIrcClient).toHaveBeenCalledOnce();
+    expect(client.join).toHaveBeenCalledOnce();
+    expect(client.sendPrivmsg.mock.calls).toEqual(
+      chunks.map((chunk) => ["#room", chunk, "parent-1"]),
+    );
+    expect(client.quit).toHaveBeenCalledOnce();
+    for (const callback of [onPlatformSendDispatch, onDeliveryResult]) {
+      expect(callback).toHaveBeenCalledTimes(chunks.length);
+    }
+    expect(results).toHaveLength(chunks.length);
   });
 
   it.each(
@@ -149,6 +207,10 @@ describe("IRC outbound and probing", () => {
     }
     connecting.resolve(client);
     await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    expect(mocks.buildIrcConnectOptions).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ abortSignal: abort.signal }),
+    );
     for (const callback of [client.join, onPlatformSendDispatch]) {
       expect(callback).toHaveBeenCalledTimes(phase === "connect" ? 0 : 1);
     }
@@ -227,30 +289,68 @@ describe("IRC outbound and probing", () => {
 
   it("declares durable text, media, and reply with receipt proofs", async () => {
     const mediaUrl = "https://example.com/image.png";
-    const proveSend = async (kind: "text" | "media", replyToId?: string) => {
-      const result = await adapter.send![kind]!({ ...context, mediaUrl, replyToId });
-      expect(result).toMatchObject({
-        target: { kind: "conversation", id: "#room" },
-        receipt: { platformMessageIds: [id], ...(replyToId ? { replyToId } : {}) },
-      });
-      expect(client.sendPrivmsg).toHaveBeenLastCalledWith(
+    const proveSend = async (kind: "text" | "media", text: string, replyToId?: string) => {
+      const params = { ...context, text, replyToId };
+      const result =
+        kind === "media"
+          ? await adapter.send!.media!({ ...params, mediaUrl })
+          : await adapter.send!.text!(params);
+      expect(result?.receipt.platformMessageIds).toEqual([id]);
+      expect(client.join).toHaveBeenCalledWith("#room");
+      expect(client.sendPrivmsg).toHaveBeenCalledWith(
         "#room",
-        kind === "media" ? `hello\n\nAttachment: ${mediaUrl}` : "hello",
+        kind === "media" ? `${text}\n\nAttachment: ${mediaUrl}` : text,
         replyToId,
       );
+      return result;
     };
     const proofs = await verifyChannelMessageAdapterCapabilityProofs({
       adapterName: "irc",
       adapter,
       proofs: {
-        text: () => proveSend("text"),
-        media: () => proveSend("media"),
-        replyTo: () => proveSend("text", "parent-1"),
+        text: async () => {
+          expect((await proveSend("text", "hello"))?.target).toEqual({
+            kind: "conversation",
+            id: "#room",
+          });
+        },
+        media: async () => {
+          await proveSend("media", "image");
+        },
+        replyTo: async () => {
+          expect((await proveSend("text", "threaded", "parent-1"))?.receipt.replyToId).toBe(
+            "parent-1",
+          );
+        },
       },
     });
     for (const capability of ["text", "media", "replyTo"]) {
       expect(proofs.find((proof) => proof.capability === capability)?.status).toBe("verified");
     }
+  });
+
+  it("keeps siblings unchanged across named-account additions and edits", () => {
+    const base = {
+      ...address,
+      nick: "default-bot",
+      channels: ["#shared"],
+      nickserv: { service: "NickServ", enabled: false },
+      accounts: { alpha: { nick: "alpha-bot", channels: ["#alpha"] } },
+    };
+    const resolve = (config: CoreConfig) =>
+      ["default", "alpha"].map((name) => ircPlugin.config.resolveAccount(config, name));
+    const original = resolve({ channels: { irc: base } });
+    for (const beta of [
+      { nick: "beta-bot", channels: ["#beta"] },
+      { nick: "beta-next", channels: ["#next"], nickserv: { enabled: true } },
+    ]) {
+      const next: CoreConfig = {
+        channels: { irc: { ...base, accounts: { ...base.accounts, beta } } },
+      };
+      expect(resolve(next)).toEqual(original);
+      expect(ircPlugin.config.resolveAccount(next, "beta").nick).toBe(beta.nick);
+    }
+    expect(ircPlugin.reload).toMatchObject({ accountScopedRestart: true });
   });
 
   it("distinguishes nicknames from channels", () => {

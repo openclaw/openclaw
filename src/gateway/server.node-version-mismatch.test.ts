@@ -16,6 +16,7 @@ import {
 } from "../infra/device-pairing-node.js";
 import { requestDevicePairing } from "../infra/device-pairing.js";
 import { configureNodeHost } from "../node-host/config.js";
+import type { NodeListNode } from "../shared/node-list-types.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -108,42 +109,61 @@ describe("node host version mismatch guard", () => {
     "Gateway %s accepts same-install node version %s",
     async (serverVersion, clientVersion) =>
       await withEnvAsync({ OPENCLAW_VERSION: serverVersion }, async () => {
-        const onHelloOk = vi.fn();
-        const client = await connectNode({ clientVersion, onHelloOk });
+        let helloProtocol: number | undefined;
+        const client = await connectNode({
+          clientVersion,
+          onHelloOk: (hello) => {
+            helloProtocol = hello.protocol;
+          },
+        });
         try {
-          expect(onHelloOk).toHaveBeenCalledWith(
-            expect.objectContaining({ protocol: PROTOCOL_VERSION }),
-          );
+          expect(helloProtocol).toBe(PROTOCOL_VERSION);
         } finally {
           await stopClient(client);
         }
       }),
   );
 
-  test("accepts an independently signed stale node despite copied instance metadata", async () => {
+  test("list and describe mark only the same-install device despite copied instance metadata", async () => {
     const independent = await createOpenClawTestState({
       label: "node-independent",
       applyEnv: false,
     });
-    let client: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
+    const clients: Awaited<ReturnType<typeof connectGatewayClient>>[] = [];
     try {
       const identity = loadOrCreateDeviceIdentity({ env: independent.env });
       expect(identity.deviceId).not.toBe(localIdentity.deviceId);
       await pairNode(identity);
-      const onHelloOk = vi.fn();
-      client = await connectNode({
-        deviceIdentity: identity,
-        clientVersion: "2020.1.1",
-        onHelloOk,
+      clients.push(await connectNode());
+      clients.push(await connectNode({ deviceIdentity: identity, clientVersion: "2020.1.1" }));
+      const operator = await connectGatewayClient({
+        url: `ws://127.0.0.1:${port}`,
+        token: "secret",
+        scopes: ["operator.read"],
       });
-      expect(onHelloOk).toHaveBeenCalledWith(
-        expect.objectContaining({ protocol: PROTOCOL_VERSION }),
-      );
+      clients.push(operator);
+      const localNode = {
+        nodeId: localIdentity.deviceId,
+        gatewayLocal: true,
+        paired: true,
+        connected: true,
+      };
+      const list = await operator.request<{ nodes: NodeListNode[] }>("node.list", {});
+      expect(list.nodes.filter((node) => node.gatewayLocal)).toEqual([
+        expect.objectContaining(localNode),
+      ]);
+      const remote = list.nodes.find((node) => node.nodeId === identity.deviceId);
+      expect(remote).toMatchObject({ paired: true, connected: true, displayName: "test-node" });
+      expect(remote).not.toHaveProperty("gatewayLocal");
+      await expect(
+        operator.request("node.describe", { nodeId: localIdentity.deviceId }),
+      ).resolves.toMatchObject(localNode);
+      const described = await operator.request("node.describe", { nodeId: identity.deviceId });
+      expect(described).toMatchObject({ nodeId: identity.deviceId, paired: true, connected: true });
+      expect(described).not.toHaveProperty("gatewayLocal");
     } finally {
       try {
-        if (client) {
-          await stopClient(client);
-        }
+        await Promise.all(clients.map(stopClient));
       } finally {
         await independent.cleanup();
       }

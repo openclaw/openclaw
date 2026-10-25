@@ -43,12 +43,13 @@ function expectBrokenFetch(result: Awaited<ReturnType<typeof runGit>>) {
   );
 }
 
-let clone: string, source: string, linked: string, url: string;
-let base: string, tip: string, retired: string;
-async function commit(message: string) {
-  await git(source, ["commit", "--allow-empty", "-m", message]);
-  return ref(source, "HEAD");
-}
+let clone: string,
+  source: string,
+  linked: string,
+  url: string,
+  base: string,
+  tip: string,
+  retired: string;
 beforeEach(async () => {
   vi.stubEnv("GIT_NO_LAZY_FETCH", "1");
   const root = tempDirs.make("openclaw-broken-tip-");
@@ -59,15 +60,20 @@ beforeEach(async () => {
   await config(source, "user.email", "test@example.invalid");
   await config(source, "commit.gpgSign", "false");
   await config(source, "uploadpack.allowFilter", "true");
-  base = await commit("base");
+  await git(source, ["commit", "--allow-empty", "-m", "base"]);
+  base = await ref(source, "HEAD");
   url = pathToFileURL(source).href;
   await git(root, ["clone", "--filter=blob:none", "--no-checkout", url, clone]);
-  tip = await commit("remote tip");
+  await git(source, ["commit", "--allow-empty", "-m", "remote tip"]);
+  tip = await ref(source, "HEAD");
   await git(source, ["branch", "keep"]);
-  retired = await commit("retired remote tip");
-  await git(source, ["update-ref", "refs/heads/main", tip]);
   const objects = path.join(clone, ".git", "objects");
-  await fs.cp(path.join(source, ".git", "objects"), objects, { recursive: true });
+  const copyCommit = async (oid: string) => {
+    const relative = path.join(oid.slice(0, 2), oid.slice(2));
+    await fs.mkdir(path.dirname(path.join(objects, relative)), { recursive: true });
+    await fs.copyFile(path.join(source, ".git", "objects", relative), path.join(objects, relative));
+  };
+  await copyCommit(tip);
   await git(clone, ["update-ref", "refs/remotes/origin/keep", tip]);
   await git(clone, ["update-ref", "refs/heads/retained", tip]);
   linked = path.join(root, "linked");
@@ -75,7 +81,11 @@ beforeEach(async () => {
   const unborn = path.join(root, "unborn");
   await git(clone, ["worktree", "add", "--detach", unborn, base]);
   await symbolic(unborn, "HEAD", "refs/heads/unborn");
+  await git(source, ["commit", "--allow-empty", "-m", "retired remote tip"]);
+  retired = await ref(source, "HEAD");
+  await copyCommit(retired);
   await git(clone, ["update-ref", "refs/remotes/origin/retired", retired]);
+  await git(source, ["update-ref", "refs/heads/main", tip]);
   await git(clone, ["commit-graph", "write", "--reachable"]);
   for (const oid of [tip, retired]) {
     await fs.unlink(path.join(objects, oid.slice(0, 2), oid.slice(2)));
@@ -103,12 +113,13 @@ it.each(["dry-run", "option value"])("does not repair origin for %s", async (mod
 });
 
 it.each(["worktree", "renamed project branch", "pinned project commit"] as const)(
-  "repairs tips through %s, preserving branches and detached HEADs",
+  "repairs commit-graph-only tips through %s without removing local branches or detached HEADs",
   async (entry) => {
     if (entry === "renamed project branch") {
       await git(source, ["branch", "-m", "main", "renamed"]);
       await git(source, ["branch", "-D", "keep"]);
     }
+    expectBrokenFetch(await executeGitCommand(clone, fetchArgs, { env }));
     if (entry === "worktree") {
       expect(await resolveWorktreeBase(clone)).toMatchObject({ commit: tip, fetchSucceeded: true });
     } else if (entry === "renamed project branch") {
@@ -117,6 +128,7 @@ it.each(["worktree", "renamed project branch", "pinned project commit"] as const
     } else {
       await ensureProjectCheckoutCommit({ target: clone, url, commit: tip }, { env });
     }
+    expect(await git(clone, ["cat-file", "-t", tip])).toBe("commit");
     expect(await ref(clone, "refs/heads/main")).toBe(base);
     expect(await ref(clone, "refs/heads/retained")).toBe(tip);
     expect(await ref(linked, "HEAD")).toBe(tip);

@@ -9,12 +9,14 @@ import {
 } from "../../../test/helpers/promise.js";
 import * as gitExec from "../../infra/git-exec.js";
 import { git, gitIdentity } from "./git-fixture.test-support.js";
-import { expectFiles, useServiceFixture } from "./service-files.test-support.js";
 import * as preparation from "./service-preparation.js";
 import { ManagedWorktreeService } from "./service.js";
+import { useManagedWorktreeTestRepository } from "./service.test-support.js";
+import { useWorktreeStateRoots } from "./state-fixture.test-support.js";
 
 describe("managed worktree creation groups", () => {
-  const fixture = useServiceFixture();
+  const initializeRepository = useManagedWorktreeTestRepository();
+  const tempDirs = useWorktreeStateRoots();
   let root: string;
   let repo: string;
   let service: ManagedWorktreeService;
@@ -56,42 +58,51 @@ describe("managed worktree creation groups", () => {
   }
 
   beforeEach(async () => {
+    root = tempDirs.make("openclaw-worktree-creation-group-");
     vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
-    vi.stubEnv(
-      "GIT_CONFIG_GLOBAL",
-      path.join(fixture.dirs.make("worktree-git-config-"), "global.gitconfig"),
-    );
-    ({ root, repo, service } = await fixture.create({ getConfig: () => ({}) }));
-  });
-
-  it("creates from local HEAD without origin on a detached checkout", async () => {
-    await git(repo, "remote", "remove", "origin");
-    await git(repo, "switch", "-c", "local-work");
-    await fs.writeFile(path.join(repo, "README.md"), "local commit\n");
-    await git(repo, "add", "README.md");
-    await git(repo, ...gitIdentity, "commit", "-m", "local work");
-    const expectedHead = await head(repo);
-    await git(repo, "checkout", "--detach", expectedHead);
-    joinAllocations(2);
-    const execute = gitExec.executeGitCommand;
-    const remoteCommands: string[] = [];
-    vi.spyOn(gitExec, "executeGitCommand").mockImplementation(async (cwd, args, options) => {
-      if (["remote", "ls-remote", "fetch", "merge"].includes(args[0]!)) {
-        remoteCommands.push(args[0]!);
-      }
-      return await execute(cwd, args, options);
+    vi.stubEnv("GIT_CONFIG_GLOBAL", path.join(root, "global.gitconfig"));
+    repo = await initializeRepository(root);
+    service = new ManagedWorktreeService({
+      env: { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") },
+      getConfig: () => ({}),
     });
-
-    const records = await Promise.all([create("local-first"), create("local-second")]);
-
-    for (const record of records) {
-      expect(record.baseRef).toBe("HEAD");
-      expect(await head(record.path)).toBe(expectedHead);
-      await expectFiles(record.path, { "README.md": "local commit\n" });
-    }
-    expect(await head(repo)).toBe(expectedHead);
-    expect(remoteCommands).toEqual(["remote"]);
   });
+
+  it.each(["branch", "detached"])(
+    "creates from local HEAD without origin on a %s checkout",
+    async (checkout) => {
+      await git(repo, "remote", "remove", "origin");
+      await git(repo, "switch", "-c", "local-work");
+      await fs.writeFile(path.join(repo, "README.md"), "local commit\n");
+      await git(repo, "add", "README.md");
+      await git(repo, ...gitIdentity, "commit", "-m", "local work");
+      const expectedHead = await head(repo);
+      if (checkout === "detached") {
+        await git(repo, "checkout", "--detach", expectedHead);
+      }
+      joinAllocations(2);
+      const execute = gitExec.executeGitCommand;
+      const remoteCommands: string[] = [];
+      vi.spyOn(gitExec, "executeGitCommand").mockImplementation(async (cwd, args, options) => {
+        if (["remote", "ls-remote", "fetch", "merge"].includes(args[0]!)) {
+          remoteCommands.push(args[0]!);
+        }
+        return await execute(cwd, args, options);
+      });
+
+      const records = await Promise.all([create("local-first"), create("local-second")]);
+
+      for (const record of records) {
+        expect(record.baseRef).toBe("HEAD");
+        expect(await head(record.path)).toBe(expectedHead);
+        expect(await fs.readFile(path.join(record.path, "README.md"), "utf8")).toBe(
+          "local commit\n",
+        );
+      }
+      expect(await head(repo)).toBe(expectedHead);
+      expect(remoteCommands).toEqual(["remote"]);
+    },
+  );
 
   it("shares one dirty local-default decision across a burst of twenty creates", async () => {
     const localHead = await head(repo);
@@ -109,6 +120,7 @@ describe("managed worktree creation groups", () => {
         throw error;
       }
     });
+
     const records = await Promise.all(
       Array.from({ length: 20 }, (_, index) => create(`burst-${index}`)),
     );
@@ -148,15 +160,12 @@ describe("managed worktree creation groups", () => {
       );
       const createdFirst = await withinTest(first, signal);
       expect(reads.fetches).toBe(1);
-      const remoteHead = await advanceRemote();
-      clock.mockReturnValue(now + 29_000);
       const late = await create("cohort-late");
       expect(await head(late.path)).toBe(expectedHead);
       expect(reads.fetches).toBe(1);
       // An overlapping creation must not extend the freshness window indefinitely.
       clock.mockReturnValue(now + 30_000);
-      const refreshed = await create("cohort-expired");
-      expect(await head(refreshed.path)).toBe(remoteHead);
+      await create("cohort-expired");
       expect(reads.fetches).toBe(2);
       releaseSecond.resolve();
       const createdSecond = await withinTest(second, signal);
@@ -194,5 +203,19 @@ describe("managed worktree creation groups", () => {
     events.length = 0;
     await service.create({ repoRoot: repo, name: "explicit", baseRef: "HEAD", onProgress });
     expect(events).toEqual(["checkout"]);
+  });
+
+  it("reuses a recent default, then refreshes after its freshness window", async () => {
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    const original = await create("original");
+    const oldHead = await head(original.path);
+    const newHead = await advanceRemote();
+    clock.mockReturnValue(now + 29_000);
+    const recent = await create("recent");
+    expect(await head(recent.path)).toBe(oldHead);
+    clock.mockReturnValue(now + 30_000);
+    const refreshed = await create("refreshed");
+    expect(await head(refreshed.path)).toBe(newHead);
   });
 });

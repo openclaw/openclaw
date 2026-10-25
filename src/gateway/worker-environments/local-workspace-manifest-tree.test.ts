@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import {
-  createLocalWorkspaceManifestTree as createTree,
-  localWorkspaceManifestRootReference as rootReference,
-  updateLocalWorkspaceManifestTree as updateTree,
+  createLocalWorkspaceManifestTree,
+  localWorkspaceManifestRootReference,
+  updateLocalWorkspaceManifestTree,
   type LocalWorkspaceManifestNode,
   type LocalWorkspaceManifestRecord,
 } from "./local-workspace-manifest-tree.js";
@@ -18,39 +18,76 @@ function directory(path: string): LocalWorkspaceManifestNode {
   return { path, type: "directory" };
 }
 
-const rootRef = (records: ReadonlyMap<string, LocalWorkspaceManifestRecord>) =>
-  rootReference(records, null);
 function materialize(
   records: ReadonlyMap<string, LocalWorkspaceManifestRecord>,
 ): LocalWorkspaceManifestNode[] {
   const result: LocalWorkspaceManifestNode[] = [];
   const visited = new Set<string>();
-  function visit(entryPath: string | null): void {
+  function visit(entryPath: string | null, parent: string): void {
     if (entryPath === null) {
       return;
     }
     expect(visited.has(entryPath)).toBe(false);
     visited.add(entryPath);
     const row = records.get(entryPath)!;
-    visit(row.left);
+    expect(row.node.path).toBe(entryPath);
+    expect(entryPath.slice(0, Math.max(0, entryPath.lastIndexOf("/")))).toBe(parent);
+    if (row.left !== null) {
+      expect(row.left < entryPath).toBe(true);
+    }
+    if (row.right !== null) {
+      expect(row.right > entryPath).toBe(true);
+    }
+    visit(row.left, parent);
     result.push(row.node);
     if (row.node.type === "directory") {
-      visit(row.children);
+      visit(row.children, entryPath);
+    } else {
+      expect(row.children).toBeNull();
     }
-    visit(row.right);
+    visit(row.right, parent);
   }
   const root = records.get("")!;
-  visit(root.children);
+  expect(root.node).toEqual(directory(""));
+  expect(root.left).toBeNull();
+  expect(root.right).toBeNull();
+  visit(root.children, "");
   expect(visited.size).toBe(records.size - 1);
   return result.toSorted((left, right) => (left.path < right.path ? -1 : 1));
 }
 
 describe("local workspace manifest tree", () => {
-  it("builds deterministic roots with bounded hashing and base commit identity", () => {
-    const nodes: LocalWorkspaceManifestNode[] = [
+  it("has deterministic roots regardless of insertion order, with base commit identity", () => {
+    const nodes = [
+      file("z-last"),
+      directory("src"),
+      file("src/first"),
+      file("src/second"),
       directory("empty"),
-      { path: "link", type: "symlink", mode: 0o777, target: "dir-0/nested/file-0" },
+      { path: "link", type: "symlink" as const, mode: 0o777, target: "src/first" },
     ];
+    const forward = createLocalWorkspaceManifestTree(nodes);
+    const incremental = createLocalWorkspaceManifestTree([]);
+    for (const node of [nodes[4]!, nodes[1]!, nodes[3]!, nodes[2]!, nodes[5]!, nodes[0]!]) {
+      updateLocalWorkspaceManifestTree(incremental, [{ path: node.path, node }]);
+    }
+    expect(materialize(forward)).toEqual(
+      nodes.toSorted((left, right) => (left.path < right.path ? -1 : 1)),
+    );
+    expect(materialize(incremental)).toEqual(materialize(forward));
+    for (const [entryPath, record] of forward) {
+      expect(JSON.stringify(record)).toBe(JSON.stringify(incremental.get(entryPath)));
+    }
+    expect(localWorkspaceManifestRootReference(incremental, null)).toBe(
+      localWorkspaceManifestRootReference(forward, null),
+    );
+    expect(localWorkspaceManifestRootReference(forward, "1".repeat(40))).not.toBe(
+      localWorkspaceManifestRootReference(forward, null),
+    );
+  });
+
+  it("hashes a full baseline only a bounded number of times per path", () => {
+    const nodes: LocalWorkspaceManifestNode[] = [];
     for (let index = 0; index < 32; index++) {
       const parent = `dir-${index}`;
       nodes.push(directory(parent), directory(`${parent}/nested`));
@@ -58,23 +95,22 @@ describe("local workspace manifest tree", () => {
         nodes.push(file(`${parent}/nested/file-${child}`));
       }
     }
-    vi.mocked(createHash).mockClear();
-    const forward = createTree(nodes.toReversed());
-    expect(vi.mocked(createHash).mock.calls.length).toBeLessThanOrEqual(4 * (nodes.length + 1));
-    const incremental = createTree([]);
-    for (const node of nodes) {
-      updateTree(incremental, [{ path: node.path, node }]);
-    }
-    expect(materialize(forward)).toEqual(
-      nodes.toSorted((left, right) => (left.path < right.path ? -1 : 1)),
+    const incremental = new Map<string, LocalWorkspaceManifestRecord>();
+    updateLocalWorkspaceManifestTree(
+      incremental,
+      nodes.map((node) => ({ path: node.path, node })),
     );
-    expect(materialize(incremental)).toEqual(materialize(forward));
-    expect(rootRef(incremental)).toBe(rootRef(forward));
-    expect(rootReference(forward, "1".repeat(40))).not.toBe(rootRef(forward));
+    vi.mocked(createHash).mockClear();
+    const records = createLocalWorkspaceManifestTree(nodes.toReversed());
+    expect(vi.mocked(createHash).mock.calls.length).toBeLessThanOrEqual(4 * (nodes.length + 1));
+    for (const [entryPath, record] of records) {
+      // Persisted links and hashes must match incremental construction exactly.
+      expect(JSON.stringify(record)).toBe(JSON.stringify(incremental.get(entryPath)));
+    }
   });
 
   it("persists edits, deletes, renames, modes, symlinks, empty directories and type changes", () => {
-    const records = createTree([
+    const records = createLocalWorkspaceManifestTree([
       directory("src"),
       file("src/old"),
       file("src/deleted"),
@@ -86,26 +122,28 @@ describe("local workspace manifest tree", () => {
       { path: "link", type: "symlink", mode: 0o777, target: "src/old" },
     ]);
     const before = new Map(records);
-    const oldRoot = rootRef(records);
+    const oldRoot = localWorkspaceManifestRootReference(records, null);
     const expected: LocalWorkspaceManifestNode[] = [
       directory("becomes-directory"),
       directory("empty"),
-      { ...file("executable"), mode: 0o755 },
+      { path: "executable", type: "file", mode: 0o755, size: 12, sha256: "a".repeat(64) },
       { path: "link", type: "symlink", mode: 0o777, target: "src/new" },
       file("replace"),
       directory("src"),
-      { ...file("src/edited"), sha256: "b".repeat(64) },
+      { path: "src/edited", type: "file", mode: 0o644, size: 12, sha256: "b".repeat(64) },
       file("src/new"),
     ];
-    const result = updateTree(records, [
+    const result = updateLocalWorkspaceManifestTree(records, [
       ...expected.map((node) => ({ path: node.path, node })),
       { path: "src/old" },
       { path: "src/deleted" },
       { path: "replace/child" },
     ]);
     expect(materialize(records)).toEqual(expected);
-    expect(rootRef(records)).not.toBe(oldRoot);
-    expect(rootRef(records)).toBe(rootRef(createTree(expected)));
+    expect(localWorkspaceManifestRootReference(records, null)).not.toBe(oldRoot);
+    expect(localWorkspaceManifestRootReference(records, null)).toBe(
+      localWorkspaceManifestRootReference(createLocalWorkspaceManifestTree(expected), null),
+    );
     expect(result.removed.toSorted()).toEqual(["replace/child", "src/deleted", "src/old"]);
     // Applying only returned rows and tombstones must reconstruct the complete persisted tree.
     const restored = new Map(before);
@@ -116,63 +154,69 @@ describe("local workspace manifest tree", () => {
       restored.set(row.node.path, structuredClone(row));
     }
     expect(materialize(restored)).toEqual(expected);
-    expect(rootRef(restored)).toBe(rootRef(records));
+    expect(localWorkspaceManifestRootReference(restored, null)).toBe(
+      localWorkspaceManifestRootReference(records, null),
+    );
     expect(before.get("src/edited")!.node).toEqual(file("src/edited"));
     expect(before.get("src/old")!.node).toEqual(file("src/old"));
   });
 
   it("requires explicit descendant deletions before removing or replacing a directory", () => {
-    const paths = ["src", "src/nested", "src/nested/file"];
-    const records = createTree([directory(paths[0]!), directory(paths[1]!), file(paths[2]!)]);
-    const root = rootRef(records);
-    expect(() => updateTree(records, [{ path: "src" }])).toThrow(
+    const records = createLocalWorkspaceManifestTree([
+      directory("src"),
+      directory("src/nested"),
+      file("src/nested/file"),
+    ]);
+    const root = localWorkspaceManifestRootReference(records, null);
+    expect(() => updateLocalWorkspaceManifestTree(records, [{ path: "src" }])).toThrow(
       "Cannot remove nonempty workspace directory",
     );
-    expect(() => updateTree(records, [{ path: "src", node: file("src") }])).toThrow(
-      "Cannot replace nonempty workspace directory",
-    );
-    expect(rootRef(records)).toBe(root);
-    const removed = updateTree(
-      records,
-      paths.map((path) => ({ path })),
-    );
-    expect(removed.removed.toSorted()).toEqual(paths);
+    expect(() =>
+      updateLocalWorkspaceManifestTree(records, [{ path: "src", node: file("src") }]),
+    ).toThrow("Cannot replace nonempty workspace directory");
+    expect(localWorkspaceManifestRootReference(records, null)).toBe(root);
+    const removed = updateLocalWorkspaceManifestTree(records, [
+      { path: "src" },
+      { path: "src/nested" },
+      { path: "src/nested/file" },
+    ]);
+    expect(removed.removed.toSorted()).toEqual(["src", "src/nested", "src/nested/file"]);
     expect(materialize(records)).toEqual([]);
-    expect(rootRef(records)).toBe(rootRef(createTree([])));
+    expect(localWorkspaceManifestRootReference(records, null)).toBe(
+      localWorkspaceManifestRootReference(createLocalWorkspaceManifestTree([]), null),
+    );
   });
 
   it("changes the root for each content fact while preserving identities for equal content", () => {
-    const records = createTree([file("entry")]);
+    const records = createLocalWorkspaceManifestTree([file("entry")]);
     const variants: LocalWorkspaceManifestNode[] = [
-      { ...file("entry"), mode: 0o755 },
-      { ...file("entry", 13), mode: 0o755 },
-      { ...file("entry", 13), mode: 0o755, sha256: "b".repeat(64) },
+      { path: "entry", type: "file", mode: 0o755, size: 12, sha256: "a".repeat(64) },
+      { path: "entry", type: "file", mode: 0o755, size: 13, sha256: "a".repeat(64) },
+      { path: "entry", type: "file", mode: 0o755, size: 13, sha256: "b".repeat(64) },
       { path: "entry", type: "symlink", mode: 0o777, target: "target" },
       { path: "entry", type: "symlink", mode: 0o777, target: "another" },
       directory("entry"),
     ];
     for (const node of variants) {
-      const previousRoot = rootRef(records);
-      updateTree(records, [{ path: node.path, node }]);
-      expect(rootRef(records)).not.toBe(previousRoot);
+      const previousRoot = localWorkspaceManifestRootReference(records, null);
+      updateLocalWorkspaceManifestTree(records, [{ path: node.path, node }]);
+      expect(localWorkspaceManifestRootReference(records, null)).not.toBe(previousRoot);
       expect(materialize(records)).toEqual([node]);
     }
-    const previousRoot = rootRef(records);
+    const previousRoot = localWorkspaceManifestRootReference(records, null);
     records.set("entry", {
       ...records.get("entry")!,
       canonicalIdentity: "canonical",
       projectionIdentity: "projection",
     });
-    updateTree(records, [{ path: "entry", node: directory("entry") }]);
-    expect(rootRef(records)).toBe(previousRoot);
-    expect(records.get("entry")).toMatchObject({
-      canonicalIdentity: "canonical",
-      projectionIdentity: "projection",
-    });
+    updateLocalWorkspaceManifestTree(records, [{ path: "entry", node: directory("entry") }]);
+    expect(localWorkspaceManifestRootReference(records, null)).toBe(previousRoot);
+    expect(records.get("entry")!.canonicalIdentity).toBe("canonical");
+    expect(records.get("entry")!.projectionIdentity).toBe("projection");
   });
 
   it("updates fewer than 100 records for one edit among 20,000 siblings", () => {
-    const records = createTree(
+    const records = createLocalWorkspaceManifestTree(
       Array.from({ length: 20_000 }, (_, index) => file(`file-${String(index).padStart(5, "0")}`)),
     );
     for (const [entryPath, row] of records) {
@@ -184,7 +228,9 @@ describe("local workspace manifest tree", () => {
     }
     const before = new Map(records);
     const edited = "file-10000";
-    const result = updateTree(records, [{ path: edited, node: file(edited, 100) }]);
+    const result = updateLocalWorkspaceManifestTree(records, [
+      { path: edited, node: file(edited, 100) },
+    ]);
     expect(result.removed).toEqual([]);
     expect(result.records.length).toBeLessThan(100);
     const touched = new Set(result.records.map((row) => row.node.path));
@@ -194,12 +240,13 @@ describe("local workspace manifest tree", () => {
       } else {
         expect(row).toBe(before.get(entryPath));
       }
-      const invalidated = entryPath === edited || entryPath === "";
-      expect([row.canonicalIdentity, row.projectionIdentity]).toEqual(
-        invalidated
-          ? [undefined, undefined]
-          : [`canonical:${entryPath}`, `projection:${entryPath}`],
-      );
+      if (entryPath === edited || entryPath === "") {
+        expect(row.canonicalIdentity).toBeUndefined();
+        expect(row.projectionIdentity).toBeUndefined();
+      } else {
+        expect(row.canonicalIdentity).toBe(`canonical:${entryPath}`);
+        expect(row.projectionIdentity).toBe(`projection:${entryPath}`);
+      }
     }
     expect(before.get(edited)!.node).toEqual(file(edited));
   });

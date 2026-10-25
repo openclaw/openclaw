@@ -1,4 +1,3 @@
-import { once } from "node:events";
 import http from "node:http";
 import type {
   AssistantMessage,
@@ -25,69 +24,95 @@ import { SessionManager } from "./session-manager.js";
 registerAgentSessionLoopTestLifecycle();
 
 type RefusalCase = {
+  overflow?: boolean;
   overlap?: boolean;
   threshold?: boolean;
   queued?: boolean;
   later?: boolean;
 };
 
-const sse = (type: string, data: object = {}) =>
-  `event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`;
-
 describe("AgentSession refusal compaction", () => {
   it.each<[string, RefusalCase, number]>([
     ["refusal explanation resembles overflow", { overlap: true }, 1],
     ["threshold maintenance after refusal", { threshold: true }, 1],
     ["threshold maintenance preserves explicit queued user", { threshold: true, queued: true }, 2],
+    ["actual overflow still retries", { overflow: true }, 2],
     ["explicit later user turn after refusal", { later: true }, 1],
   ])("%s", async (_name, scenario, expectedRequests) => {
-    const { overlap, threshold, queued, later } = scenario;
+    const { overflow, overlap, threshold, queued, later } = scenario;
     const requests: Array<{ url: string | undefined; body: unknown }> = [];
     const explanation = overlap
       ? "This request is refused; prompt is too long."
       : "This request is not allowed.";
-    const server = http.createServer(async (request, response) => {
+    const server = http.createServer((request, response) => {
       let body = "";
       request.setEncoding("utf8");
-      for await (const chunk of request) {
+      request.on("data", (chunk: string) => {
         body += chunk;
-      }
-      requests.push({ url: request.url, body: JSON.parse(body) });
-      const refused = requests.length === 1;
-      response.writeHead(200, { "content-type": "text/event-stream" });
-      response.end(
-        [
-          sse("message_start", {
-            message: { id: `msg_${requests.length}`, usage: { input_tokens: 2 } },
-          }),
-          ...(refused
-            ? []
-            : [
-                sse("content_block_start", {
-                  index: 0,
-                  content_block: { type: "text", text: "Explicit next turn completed." },
-                }),
-                sse("content_block_stop", { index: 0 }),
-              ]),
-          sse("message_delta", {
-            delta: refused
-              ? {
-                  stop_reason: "refusal",
-                  stop_details: {
-                    type: "refusal",
-                    category: "reasoning_extraction",
-                    explanation,
+      });
+      request.on("end", () => {
+        requests.push({ url: request.url, body: JSON.parse(body) });
+        if (requests.length === 1 && overflow) {
+          response.writeHead(400, { "content-type": "application/json" });
+          response.end(
+            JSON.stringify({
+              type: "error",
+              error: {
+                type: "invalid_request_error",
+                message: "prompt is too long: 1200 tokens > 1000 maximum",
+              },
+            }),
+          );
+          return;
+        }
+        const refused = requests.length === 1;
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        response.end(
+          [
+            {
+              type: "message_start",
+              message: { id: `msg_${requests.length}`, usage: { input_tokens: 2 } },
+            },
+            ...(refused
+              ? []
+              : [
+                  {
+                    type: "content_block_start",
+                    index: 0,
+                    content_block: { type: "text", text: "" },
                   },
-                }
-              : { stop_reason: "end_turn" },
-            usage: { input_tokens: 2, output_tokens: refused ? 0 : 1 },
-          }),
-          sse("message_stop"),
-        ].join(""),
-      );
+                  {
+                    type: "content_block_delta",
+                    index: 0,
+                    delta: { type: "text_delta", text: "Explicit next turn completed." },
+                  },
+                  { type: "content_block_stop", index: 0 },
+                ]),
+            {
+              type: "message_delta",
+              delta: refused
+                ? {
+                    stop_reason: "refusal",
+                    stop_details: {
+                      type: "refusal",
+                      category: "reasoning_extraction",
+                      explanation,
+                    },
+                  }
+                : { stop_reason: "end_turn" },
+              usage: { input_tokens: 2, output_tokens: refused ? 0 : 1 },
+            },
+            { type: "message_stop" },
+          ]
+            .map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
+            .join(""),
+        );
+      });
     });
-    server.listen(0, "127.0.0.1");
-    await once(server, "listening");
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
     try {
       const address = server.address();
       if (!address || typeof address === "string") {
@@ -143,25 +168,29 @@ describe("AgentSession refusal compaction", () => {
       await session.prompt(threshold ? "current user request ".repeat(12) : "current user request");
       const firstTurnRequests = requests.length;
       expect(assistants[0]?.stopReason).toBe("error");
-      expect(assistants[0]?.diagnostics).toContainEqual(
-        expect.objectContaining({ type: "provider_refusal" }),
-      );
+      if (!overflow) {
+        expect(assistants[0]?.diagnostics).toContainEqual(
+          expect.objectContaining({ type: "provider_refusal" }),
+        );
+      }
       if (later) {
         await session.prompt("explicit later user turn");
       }
       expect(firstTurnRequests).toBe(expectedRequests);
       expect(requests.every(({ url }) => url === "/v1/messages")).toBe(true);
-      if (threshold) {
+      if (threshold || overflow) {
         expect(compactions).toContainEqual(
           expect.objectContaining({
-            reason: "threshold",
-            outcome: expect.objectContaining({ status: "completed", willRetry: false }),
+            reason: overflow ? "overflow" : "threshold",
+            outcome: expect.objectContaining({ status: "completed", willRetry: Boolean(overflow) }),
           }),
         );
       }
-      expect(
-        compactions.some(({ outcome }) => outcome.status === "completed" && outcome.willRetry),
-      ).toBe(false);
+      if (!overflow) {
+        expect(
+          compactions.some(({ outcome }) => outcome.status === "completed" && outcome.willRetry),
+        ).toBe(false);
+      }
       if (queued || later) {
         expect(JSON.stringify(requests[1]?.body)).toContain(
           later ? "explicit later user turn" : "explicit queued user turn",

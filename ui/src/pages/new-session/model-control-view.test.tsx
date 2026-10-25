@@ -1,4 +1,4 @@
-import { createSignal, flush } from "solid-js";
+import { createSignal, flush, untrack } from "solid-js";
 import { expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { ModelCatalogResult } from "../../api/types.ts";
@@ -20,7 +20,6 @@ async function focusModelSearch(container: HTMLElement) {
     flush();
   }
   expect(picker.open).toBe(true);
-  await waitForSolid(() => expect(picker.querySelector("[data-chat-model-search]")).not.toBeNull());
   const input = picker.querySelector<HTMLInputElement>("[data-chat-model-search]")!;
   input.focus();
   expect(document.activeElement).toBe(input);
@@ -31,6 +30,7 @@ it("keeps one mounted model view live without depending on draft revisions", asy
   installModelPickerLayout();
   const model = { id: "gpt-5.5", name: "GPT 5.5", provider: "openai", reasoning: true };
   const models = [model, { ...model, id: "fixture-alternative", name: "Alternative" }];
+  const alternate = "openai/fixture-alternative";
   const first = contextWith(models);
   const second = contextWith(models);
   const { sessions, gateway } = first.context;
@@ -44,49 +44,86 @@ it("keeps one mounted model view live without depending on draft revisions", asy
     context: first.context,
     sending: false,
   });
-  await control.metadataRead;
+  await waitForFast(() =>
+    expect(control.renderProps(untrack(options)).modelCatalog).toHaveLength(2),
+  );
   const view = mountSolid(() => (
     <NewSessionModelControlView control={control} options={options()} />
   ));
   const query = (selector: string) => view.container.querySelector(selector);
+  const controlValue = (kind: "model" | "thinking") =>
+    query(`[data-chat-${kind}-select]`)?.getAttribute(
+      kind === "model" ? "data-chat-select-value" : "data-chat-thinking-value",
+    );
   const publish = (owner: Parameters<typeof first.publish>[0]) => {
     first.publish(owner);
     flush();
   };
   const render = vi.spyOn(control, "renderProps");
   try {
-    await focusModelSearch(view.container);
+    setOptions((previous) => ({ ...previous }));
+    await Promise.resolve();
+    expect(render).not.toHaveBeenCalled();
+    for (const owner of ["gateway", "agents", "config"] as const) {
+      first.publish(owner);
+      await waitForFast(() => expect(render).toHaveBeenCalled());
+      render.mockClear();
+    }
     const trigger = () => query("[data-chat-model-select]");
     const option = () => query('[data-chat-model-option="openai/gpt-5.5"]');
     const mountedTrigger = trigger();
+    await waitForSolid(() =>
+      expect(query(".chat-controls__model-picker")?.hasAttribute("data-chat-native-picker")).toBe(
+        true,
+      ),
+    );
+    mountedTrigger?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    flush();
+    expect(query(".chat-controls__model-picker")?.hasAttribute("open")).toBe(true);
+    // First open resolves the lazy picker panel before option identity can be checked.
+    await waitForSolid(() => expect(option()).not.toBeNull(), { timeout: 5_000 });
     const mountedOption = option();
     render.mockClear();
-    setOptions((previous) => ({ ...previous }));
-    const result = sessions.state.result!;
-    result.sessions.push({ key: "agent:main:unrelated", kind: "direct", label: "Background" });
-    first.publish("sessions");
-    invalidateModelCatalogCache(client, { agentId: "main", sessionKey: "agent:main:unrelated" });
-    flush();
-    expect(render).not.toHaveBeenCalled();
-    expect(trigger()).toBe(mountedTrigger);
-    expect(option()).toBe(mountedOption);
+    const labels = vi.spyOn(String.prototype, "toLocaleLowerCase");
+    try {
+      const result = sessions.state.result!;
+      result.sessions.push({ key: "agent:main:unrelated", kind: "direct", label: "Background" });
+      first.publish("sessions");
+      invalidateModelCatalogCache(client, { agentId: "main", sessionKey: "agent:main:unrelated" });
+      flush();
+      expect(render).not.toHaveBeenCalled();
+      expect(labels.mock.contexts.filter((value) => String(value) === "GPT 5.5")).toHaveLength(0);
+      expect(trigger()).toBe(mountedTrigger);
+      expect(option()).toBe(mountedOption);
 
-    // A default can change in place: filtering row traffic must not freeze it.
-    agent.model.primary = "";
-    publish("agents");
-    result.defaults.model = "fixture-alternative";
-    publish("sessions");
-    expect(trigger()?.textContent).toContain("Alternative");
+      // A default can change in place: filtering row traffic must not freeze it.
+      agent.model.primary = "";
+      publish("agents");
+      result.defaults.model = "fixture-alternative";
+      publish("sessions");
+      expect(trigger()?.textContent).toContain("Alternative");
+      render.mockClear();
+      sessions.state.result = { ...result, defaults: { ...result.defaults } };
+      publish("sessions");
+      expect(render).not.toHaveBeenCalled();
+    } finally {
+      labels.mockRestore();
+    }
+    invalidateModelCatalogCache(client, { agentId: "main" });
+    flush();
+    expect(render).toHaveBeenCalled();
     render.mockClear();
-    sessions.state.result = { ...result, defaults: { ...result.defaults } };
-    publish("sessions");
-    expect(render).not.toHaveBeenCalled();
     for (const sending of [true, false]) {
       setOptions((previous) => ({ ...previous, sending }));
       await waitForFast(() =>
         expect(render).toHaveBeenLastCalledWith(expect.objectContaining({ sending })),
       );
     }
+    control.selectModel(alternate);
+    await waitForFast(() => expect(controlValue("model")).toBe(alternate));
+    const current = control.renderProps(untrack(options));
+    current.onThinkingSelect?.("high", current.sessionKey);
+    await waitForFast(() => expect(controlValue("thinking")).toBe("high"));
     for (const [phase, disabled] of [
       ["offline", "true"],
       ["connected", "false"],
@@ -151,7 +188,12 @@ it("keeps CLI targets and a typed search live while initial model metadata is pe
         { provider: "example", id: "extra", name: "Extra model" },
       ],
     });
-    await control.metadataRead;
+    await waitForSolid(() =>
+      expect(
+        control.renderProps({ agent, agentId: "main", context: state.context, sending: false })
+          .modelCatalog,
+      ).toEqual(expect.arrayContaining([expect.objectContaining({ id: "extra" })])),
+    );
     expect(container.querySelector("[data-chat-model-search]")).toBe(input);
     expect(document.activeElement).toBe(input);
     expect(input.value).toBe("Fixture CLI");
@@ -161,6 +203,71 @@ it("keeps CLI targets and a typed search live while initial model metadata is pe
     await waitForSolid(() =>
       expect(container.querySelector('[data-chat-model-option="example/extra"]')).not.toBeNull(),
     );
+  } finally {
+    control.reset();
+  }
+});
+
+it("retains accepted rows and search through failed refresh, then retires them on a new scope", async () => {
+  const initial = { models: [{ provider: "example", id: "current", name: "Current model" }] };
+  const state = contextWith(initial.models);
+  const agent = { id: "main", model: { primary: "example/current" } };
+  Object.assign(state.context.sessions.state.result!.defaults, {
+    model: "example/current",
+    modelProvider: "example",
+  });
+  const refresh = deferred<ModelCatalogResult>();
+  state.request.mockResolvedValueOnce(initial).mockImplementation(() => refresh.promise);
+  const control = new NewSessionModelControl(() => undefined);
+  control.load(state.context, "main", true, { agent });
+  const container = renderControl(control, state.context, "main", agent);
+  try {
+    const current = () =>
+      container.querySelector<HTMLButtonElement>('[data-chat-model-option="example/current"]');
+    await waitForSolid(() => expect(current()).not.toBeNull());
+    const input = await focusModelSearch(container);
+    const row = current();
+    input.value = "current";
+    input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    flush();
+    state.emitCatalogChanged();
+    await waitForSolid(() => expect(state.request).toHaveBeenCalledTimes(2));
+    expect(container.querySelector("[data-chat-model-refresh]")).toBeNull();
+    expect(current()).toBe(row);
+    expect(container.querySelector("[data-chat-model-search]")).toBe(input);
+    refresh.reject(new Error("Fixture metadata unavailable"));
+    await waitForSolid(() =>
+      expect(container.textContent).toContain("Some models could not be refreshed"),
+    );
+    expect(current()).toBe(row);
+    expect(input.value).toBe("current");
+    expect(document.activeElement).toBe(input);
+    const retry = deferred<ModelCatalogResult>();
+    state.request.mockImplementation(() => retry.promise);
+    state.emitCatalogChanged();
+    await waitForSolid(() =>
+      expect(container.querySelector("[data-chat-model-refresh]")).not.toBeNull(),
+    );
+    retry.resolve(initial);
+    await waitForSolid(() => {
+      expect(container.textContent).not.toContain("Some models could not be refreshed");
+      expect(container.querySelector("[data-chat-model-refresh]")).toBeNull();
+    });
+    expect(current()).toBe(row);
+    expect(container.querySelector("[data-chat-model-search]")).toBe(input);
+    expect(document.activeElement).toBe(input);
+    const next = deferred<ModelCatalogResult>();
+    state.request.mockImplementation(() => next.promise);
+    const otherAgent = { id: "other", model: { primary: "example/next" } };
+    control.load(state.context, "other", true, { agent: otherAgent });
+    renderControl(control, state.context, "other", otherAgent);
+    flush();
+    expect(current()).toBeNull();
+    next.resolve({ models: [{ provider: "example", id: "next", name: "Next model" }] });
+    await waitForSolid(() =>
+      expect(container.querySelector('[data-chat-model-option="example/next"]')).not.toBeNull(),
+    );
+    expect(current()).toBeNull();
   } finally {
     control.reset();
   }
