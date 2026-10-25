@@ -162,11 +162,8 @@ describe("prepared model runtime snapshots", () => {
       config: stagedConfig,
       agentDir: input.agentDir,
       workspaceDir: input.workspaceDir,
-      pluginRegistry: expect.any(Object),
+      pluginRegistry: { agentHarnesses: [{ harness: { id: "codex" } }] },
     });
-    expect(lease.snapshot.pluginRegistry?.agentHarnesses.map((entry) => entry.harness.id)).toEqual([
-      "codex",
-    ]);
   });
 
   it("never returns a standalone generation invalidated while it is building", async () => {
@@ -184,12 +181,9 @@ describe("prepared model runtime snapshots", () => {
 
   it("keeps provider catalog outcomes on the published live snapshot", async () => {
     mocks.ensureOpenClawModelsJson.mockImplementationOnce(async (...args: unknown[]) => {
-      const options = args[2] as {
-        onProviderCatalogOutcome?: (outcome: {
-          provider: string;
-          status: "ready" | "auth-rejected" | "unavailable";
-        }) => void;
-      };
+      const options = args[2] as NonNullable<
+        Parameters<typeof import("./models-config.js").ensureOpenClawModelsJson>[2]
+      >;
       options.onProviderCatalogOutcome?.({ provider: "openai", status: "auth-rejected" });
       return {};
     });
@@ -238,11 +232,7 @@ describe("prepared model runtime snapshots", () => {
     const input = inputFor("credential-free");
     await publish(input);
 
-    const credentialFree = await publish({
-      ...input,
-      readOnly: true,
-      skipCredentials: true,
-    });
+    const credentialFree = await publish({ ...input, readOnly: true, skipCredentials: true });
 
     const runtime = await prepare(input);
     expect(credentialFree).not.toBe(runtime);
@@ -274,7 +264,7 @@ describe("prepared model runtime snapshots", () => {
   );
 
   it("reuses read-only owners for equivalent config clones but rejects projections", async () => {
-    const input = { ...inputFor("read-only-config", configFor()), readOnly: true };
+    const input = inputFor("read-only-config", configFor(), { readOnly: true });
     const first = await publish(input);
     const equivalent = { ...input, config: configFor() };
     const different = { ...input, config: configFor("anthropic/claude-opus-4-6") };
@@ -329,10 +319,9 @@ describe("prepared model runtime snapshots", () => {
 
   it("keeps replacement readers blocked when an earlier refresh is superseded", async () => {
     mocks.configuredAgentIds = ["default"];
-    const initialConfig = {};
     const skippedConfig = configFor("openai/gpt-5.4");
     const latestConfig = configFor();
-    await refresh(initialConfig);
+    await refresh({});
     const build = holdNextBuild();
 
     markStale("test overlapping config commit", { waitForReplacement: true });

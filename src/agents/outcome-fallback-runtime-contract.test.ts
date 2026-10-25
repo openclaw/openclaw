@@ -3,7 +3,7 @@ import {
   OUTCOME_FALLBACK_RUNTIME_CONTRACT as contract,
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import { getReplyPayloadMetadata, type ReplyPayload } from "../auto-reply/reply-payload.js";
+import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { resolveTerminalAgentRunFailurePayload } from "../auto-reply/reply/agent-runner-failure-reply.js";
 import { applyInputProvenanceToUserMessage } from "../sessions/input-provenance.js";
 import {
@@ -140,7 +140,6 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
         usage: createMockUsage(89, 4),
       });
       let modelRequests = 0;
-      const notices: ReplyPayload[] = [];
       const run = vi.fn(async () => {
         const attempt = makeEmbeddedRunnerAttempt({
           assistantTexts: [],
@@ -165,9 +164,6 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
           modelRequests += 1;
           const terminal = await resolveEmbeddedRunTerminal(input);
           if (terminal.action === "complete") {
-            notices.push(
-              ...(terminal.result.payloads?.filter((payload) => payload.isStatusNotice) ?? []),
-            );
             expectEmptyFinal(terminal.result, optional);
             return terminal.result;
           }
@@ -188,7 +184,6 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
       expect(result.attempts).toHaveLength(fallbackExpected ? 3 : 0);
       expect(result.result.meta.error?.kind).toBe(optional ? undefined : "incomplete_turn");
       expectEmptyFinal(result.result, optional);
-      expect(notices).toEqual([]);
       if (!result.result.meta.error) {
         return;
       }
@@ -201,21 +196,16 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
         },
         visibleReplyDelivered: async () => false,
       });
-      if (notice) {
-        notices.push(notice);
-      }
       if (expectation === "required") {
         expect(result.outcome).toBe("exhausted");
-        expect(notices).toEqual([
-          expect.objectContaining({
-            text: "No answer was returned. Ask again if you still need one.",
-            isError: true,
-            isStatusNotice: true,
-          }),
-        ]);
+        expect(notice).toMatchObject({
+          text: "No answer was returned. Ask again if you still need one.",
+          isError: true,
+          isStatusNotice: true,
+        });
         expect(getReplyPayloadMetadata(notice ?? {})?.assistantTranscriptOwned).toBe(true);
       } else {
-        expect(notices).toEqual([]);
+        expect(notice).toBeUndefined();
       }
     },
   );
@@ -239,11 +229,7 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
           },
         }),
       });
-      if (!fallback || !("reason" in fallback)) {
-        throw new Error(`Expected format fallback detail for ${classification}`);
-      }
-      expect(fallback?.reason).toBe("format");
-      expect(fallback?.code).toBe(code);
+      expect(fallback).toMatchObject({ reason: "format", code });
     },
   );
 
