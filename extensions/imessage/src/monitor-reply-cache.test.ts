@@ -14,7 +14,6 @@ import {
 } from "./test-support/runtime.js";
 
 type ReplyCacheModule = typeof import("./monitor-reply-cache.js");
-type ChatContext = Parameters<ReplyCacheModule["findLatestIMessageEntryForChat"]>[0];
 async function loadApi(options?: { preservePersistentState?: boolean }) {
   const api = await loadFreshIMessageReplyCacheForTest(options);
   return {
@@ -31,20 +30,13 @@ async function loadReplyCache(options?: { preservePersistentState?: boolean }) {
   cache = await loadApi(options);
 }
 const directChat = { chatGuid: "any;-;+12069106512", chatIdentifier: "+12069106512" };
+const workChat = { accountId: "work", ...directChat, chatId: 42 };
 
 function remember(
   messageId: string,
   overrides: Partial<Parameters<ReplyCacheModule["rememberIMessageReplyCache"]>[0]> = {},
 ) {
   return cache.remember({ accountId: "default", timestamp: Date.now(), ...overrides, messageId });
-}
-
-function currentMessageInChat(
-  accountId: string,
-  currentMessageId: string,
-  chatContext: ChatContext,
-) {
-  return cache.current({ accountId, currentMessageId, chatContext });
 }
 
 beforeEach(async () => {
@@ -60,16 +52,6 @@ describe("imessage short message id resolution", () => {
     await expect(cache.resolve("9999")).rejects.toThrow("requires a chat scope");
   });
 
-  it("rejects short ids from another chat", async () => {
-    await remember("full-guid", { chatGuid: "iMessage;+;chat0000" });
-
-    await expect(
-      cache.resolve("1", {
-        chatContext: { chatGuid: "iMessage;+;other" },
-      }),
-    ).rejects.toThrow("MessageSidFull from another chat is rejected");
-  });
-
   it("recommends the full id when a short id has expired in the current chat", async () => {
     await expect(
       cache.resolve("9999", {
@@ -78,20 +60,16 @@ describe("imessage short message id resolution", () => {
     ).rejects.toThrow("is no longer available. Use MessageSidFull");
   });
 
-  it("guards full guid reuse across chats when cached", async () => {
+  it.each([
+    ["1", "MessageSidFull from another chat is rejected"],
+    ["full-guid", "belongs to a different chat"],
+  ])("rejects cross-chat reuse of %s", async (id, error) => {
     await remember("full-guid", { chatId: 42 });
-
-    await expect(cache.resolve("full-guid", { chatContext: { chatId: 99 } })).rejects.toThrow(
-      "belongs to a different chat",
-    );
+    await expect(cache.resolve(id, { chatContext: { chatId: 99 } })).rejects.toThrow(error);
   });
 
   it("recognizes only cached outbound message ids as own messages", async () => {
-    const chat = {
-      accountId: "default",
-      ...directChat,
-      chatId: 3,
-    };
+    const chat = { accountId: "default", ...directChat, chatId: 3 };
     await remember("outbound-guid", { ...chat, isFromMe: true });
     await remember("inbound-guid", { ...chat, isFromMe: false });
 
@@ -109,36 +87,19 @@ describe("imessage short message id resolution", () => {
   });
 });
 
-describe("requireFromMe (edit / unsend authorization)", () => {
-  it("rejects a short id resolution when the cached entry came from inbound", async () => {
-    const entry = await remember("inbound-guid", { chatGuid: "iMessage;+;chatA", isFromMe: false });
-
-    await expect(
-      cache.resolve(entry.shortId, {
-        chatContext: { chatGuid: "iMessage;+;chatA" },
-        requireFromMe: true,
-      }),
-    ).rejects.toThrow("not one this agent sent");
-  });
-
-  it("allows a short id resolution when the cached entry was sent by the gateway", async () => {
-    const entry = await remember("outbound-guid", { chatGuid: "iMessage;+;chatA", isFromMe: true });
-
-    expect(
-      await cache.resolve(entry.shortId, {
-        chatContext: { chatGuid: "iMessage;+;chatA" },
-        requireFromMe: true,
-      }),
-    ).toBe("outbound-guid");
-  });
+it.each([false, true])("authorizes edit/unsend only for outbound entries: %s", async (isFromMe) => {
+  const entry = await remember("guid", { ...directChat, isFromMe });
+  const resolved = cache.resolve(entry.shortId, { chatContext: directChat, requireFromMe: true });
+  if (isFromMe) {
+    await expect(resolved).resolves.toBe("guid");
+  } else {
+    await expect(resolved).rejects.toThrow("not one this agent sent");
+  }
 });
 
 describe("findLatestIMessageEntryForChat", () => {
   it("returns the latest entry for the matching chat scope", async () => {
-    await remember("older", {
-      ...directChat,
-      timestamp: Date.now() - 1000,
-    });
+    await remember("older", { ...directChat, timestamp: Date.now() - 1000 });
     await remember("newest", directChat);
 
     const result = cache.latest({
@@ -148,33 +109,18 @@ describe("findLatestIMessageEntryForChat", () => {
     expect(result?.messageId).toBe("newest");
   });
 
-  it("requires a positive identifier match — no overlap means no fallback", async () => {
-    // Nonoverlapping identifier kinds must not become an implicit match.
-    await remember("different-chat", { chatGuid: "iMessage;+;chat0000" });
-
-    expect(cache.latest({ accountId: "default", chatId: 99 })).toBeUndefined();
-  });
-
-  it("never crosses account boundaries", async () => {
-    await remember("foreign-account", {
-      accountId: "other-account",
-      chatIdentifier: "+12069106512",
-    });
-
-    expect(cache.latest({ accountId: "default", chatIdentifier: "+12069106512" })).toBeUndefined();
-  });
-
-  it("ignores entries older than the recency window", async () => {
-    const TWELVE_MINUTES_AGO = Date.now() - 12 * 60 * 1000;
-    await remember("stale", { chatIdentifier: "+12069106512", timestamp: TWELVE_MINUTES_AGO });
-
-    expect(cache.latest({ accountId: "default", chatIdentifier: "+12069106512" })).toBeUndefined();
-  });
-
-  it("requires accountId — refuses to guess across all known chats", async () => {
-    await remember("anywhere", { chatIdentifier: "+12069106512" });
-
-    expect(cache.latest({ chatIdentifier: "+12069106512" })).toBeUndefined();
+  it.each([
+    ["nonoverlapping identifier", {}, { accountId: "default", chatId: 99 }],
+    ["foreign account", { accountId: "other" }, { accountId: "default", ...directChat }],
+    [
+      "stale entry",
+      { timestamp: Date.now() - 12 * 60 * 1000 },
+      { accountId: "default", ...directChat },
+    ],
+    ["missing account", {}, directChat],
+  ] as const)("does not guess the latest message for %s", async (_, entry, query) => {
+    await remember("message", { ...directChat, ...entry });
+    expect(cache.latest(query)).toBeUndefined();
   });
 });
 
@@ -222,39 +168,20 @@ describe("SQLite reply-cache hydration", () => {
     const issued = await remember("00000000-0000-4000-8000-000000000008", context);
     expect(issued.shortId).toBe("8");
     for (const entry of [...entries, issued]) {
-      expect(
-        await cache.resolve(entry.shortId, {
-          chatContext: { chatId: context.chatId },
-        }),
-      ).toBe(entry.messageId);
+      expect(await cache.resolve(entry.shortId, { chatContext: { chatId: 42 } })).toBe(
+        entry.messageId,
+      );
     }
   });
 });
 
 describe("current-message chat binding", () => {
   it("preserves concrete service identity while allowing trusted any aliases", async () => {
-    await remember("sms-guid", {
-      accountId: "work",
-      chatGuid: "SMS;-;+12069106512",
-      chatIdentifier: "+12069106512",
-    });
-    await remember("any-guid", {
-      accountId: "work",
-      ...directChat,
-    });
-
-    expect(
-      await cache.binding("sms-guid", {
-        accountId: "work",
-        chatIdentifier: "iMessage;-;+12069106512",
-      }),
-    ).toBe("mismatch");
-    expect(
-      await cache.binding("any-guid", {
-        accountId: "work",
-        chatIdentifier: "iMessage;-;+12069106512",
-      }),
-    ).toBe("match");
+    await remember("sms-guid", { ...workChat, chatGuid: "SMS;-;+12069106512" });
+    await remember("any-guid", workChat);
+    const query = { accountId: "work", chatIdentifier: "iMessage;-;+12069106512" };
+    expect(await cache.binding("sms-guid", query)).toBe("mismatch");
+    expect(await cache.binding("any-guid", query)).toBe("match");
   });
 
   it("treats expired entries as unknown before account or chat mismatches", async () => {
@@ -268,25 +195,21 @@ describe("current-message chat binding", () => {
 
   it("matches a trusted current message through its chat identifier", async () => {
     const chatContext = { chatIdentifier: "+12069106512" };
-    const entry = await remember("current-guid", {
-      accountId: "work",
-      ...directChat,
-      chatId: 42,
-    });
-
-    expect(await currentMessageInChat("work", entry.shortId, chatContext)).toBe(true);
-    expect(await currentMessageInChat("work", "current-guid", chatContext)).toBe(true);
+    const entry = await remember("current-guid", workChat);
+    const query = { accountId: "work", chatContext };
+    expect(await cache.current({ ...query, currentMessageId: entry.shortId })).toBe(true);
+    expect(await cache.current({ ...query, currentMessageId: "current-guid" })).toBe(true);
   });
 
   it("fails closed for wrong accounts, chats, and unknown current messages", async () => {
-    await remember("current-guid", {
+    await remember("current-guid", workChat);
+    const query = {
       accountId: "work",
-      ...directChat,
-      chatId: 42,
-    });
-
-    expect(await currentMessageInChat("other", "current-guid", { chatId: 42 })).toBe(false);
-    expect(await currentMessageInChat("work", "current-guid", { chatId: 99 })).toBe(false);
-    expect(await currentMessageInChat("work", "unknown-guid", { chatId: 42 })).toBe(false);
+      currentMessageId: "current-guid",
+      chatContext: { chatId: 42 },
+    };
+    expect(await cache.current({ ...query, accountId: "other" })).toBe(false);
+    expect(await cache.current({ ...query, chatContext: { chatId: 99 } })).toBe(false);
+    expect(await cache.current({ ...query, currentMessageId: "unknown-guid" })).toBe(false);
   });
 });

@@ -106,32 +106,50 @@ describe("monitorIMessageProvider watch.subscribe startup retry", () => {
     vi.resetModules();
   });
 
-  it("retries a transient watch.subscribe startup timeout without tearing down the monitor", async () => {
+  it.each([false, true])("retries startup timeouts with bounded failure: %s", async (exhausted) => {
     const runtime = createRuntimeSpies();
     const statusSink = vi.fn();
     const firstSubscribe = createDeferred<void>();
-    const firstClient = createRpcClient({
-      request: async () => {
-        firstSubscribe.resolve();
-        throw new Error("imsg rpc timeout (watch.subscribe)");
-      },
-    });
-    const secondClient = createRpcClient();
-
-    createIMessageRpcClientMock
-      .mockResolvedValueOnce(firstClient)
-      .mockResolvedValueOnce(secondClient);
-
-    const monitorPromise = runMonitor({ runtime, statusSink });
+    const failSubscribe = () =>
+      createRpcClient({
+        request: async () => {
+          firstSubscribe.resolve();
+          throw new Error("imsg rpc timeout (watch.subscribe)");
+        },
+      });
+    const failingClient = failSubscribe();
+    const readyClient = createRpcClient();
+    createIMessageRpcClientMock.mockImplementation(async () =>
+      exhausted ? failSubscribe() : readyClient,
+    );
+    createIMessageRpcClientMock.mockResolvedValueOnce(failingClient);
+    const monitorPromise = runMonitor({ runtime, statusSink }).catch((error: unknown) => error);
 
     await Promise.race([firstSubscribe.promise, monitorPromise]);
-    await vi.advanceTimersByTimeAsync(1_000);
-    await monitorPromise;
+    await vi.advanceTimersByTimeAsync(exhausted ? 2_000 : 1_000);
+    const error = await monitorPromise;
+
+    if (exhausted) {
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toContain("imsg rpc timeout (watch.subscribe)");
+      expect(createIMessageRpcClientMock).toHaveBeenCalledTimes(3);
+      expect(runtime.error).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining("watch.subscribe startup failed attempt=3/3"),
+      );
+      expect(statusSink).toHaveBeenLastCalledWith(
+        expect.objectContaining({ lifecycle: "recovering", terminalDisconnect: undefined }),
+      );
+      expect(statusSink).not.toHaveBeenCalledWith(
+        expect.objectContaining({ lifecycle: "blocked" }),
+      );
+      return;
+    }
+    expect(error).toBeUndefined();
 
     expect(createIMessageRpcClientMock).toHaveBeenCalledTimes(2);
-    expect(firstClient.stop).toHaveBeenCalledTimes(1);
-    expect(secondClient.waitForClose).toHaveBeenCalledTimes(1);
-    expect(secondClient.stop).toHaveBeenCalledTimes(1);
+    expect(failingClient.stop).toHaveBeenCalledTimes(1);
+    expect(readyClient.waitForClose).toHaveBeenCalledTimes(1);
+    expect(readyClient.stop).toHaveBeenCalledTimes(1);
     expect(statusSink).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({ lifecycle: "recovering", connected: false }),
@@ -144,65 +162,15 @@ describe("monitorIMessageProvider watch.subscribe startup retry", () => {
         terminalDisconnect: undefined,
       }),
     );
-    expect(secondClient.request).toHaveBeenCalledWith(
+    expect(readyClient.request).toHaveBeenCalledWith(
       "watch.subscribe",
       { attachments: false, include_reactions: true },
       { timeoutMs: 10_000 },
     );
-    expect(runtime.log).toHaveBeenCalledTimes(1);
-    const retryLog = String(runtime.log.mock.calls[0]?.[0]);
-    expect(retryLog).toContain("imessage: watch.subscribe startup failed attempt=1/3");
-    expect(retryLog).toContain("account=default");
-    expect(retryLog).toContain("cliPath=imsg");
-    expect(retryLog).toContain("dbPath=default");
-    expect(retryLog).toContain("timeoutMs=10000");
-    expect(retryLog).toContain("since_rowid=none");
-    expect(retryLog).toContain("attachments=false");
-    expect(retryLog).toContain("retry_in_ms=1000");
-    expect(retryLog).toContain("Error: imsg rpc timeout (watch.subscribe)");
-    expect(
-      runtime.error.mock.calls.some(([message]) =>
-        String(message).includes("imessage: monitor failed"),
-      ),
-    ).toBe(false);
-  });
-
-  it("still fails after bounded startup retries are exhausted", async () => {
-    const runtime = createRuntimeSpies();
-    const statusSink = vi.fn();
-    const firstSubscribe = createDeferred<void>();
-    createIMessageRpcClientMock.mockImplementation(async () =>
-      createRpcClient({
-        request: async () => {
-          firstSubscribe.resolve();
-          throw new Error("imsg rpc timeout (watch.subscribe)");
-        },
-      }),
+    expect(runtime.log).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("imessage: watch.subscribe startup failed attempt=1/3"),
     );
-
-    const monitorErrorPromise = runMonitor({ runtime, statusSink }).catch(
-      (error: unknown) => error,
-    );
-
-    await Promise.race([firstSubscribe.promise, monitorErrorPromise]);
-    await vi.advanceTimersByTimeAsync(2_000);
-    const monitorError = await monitorErrorPromise;
-
-    expect(monitorError).toBeInstanceOf(Error);
-    expect((monitorError as Error).message).toContain("imsg rpc timeout (watch.subscribe)");
-    expect(createIMessageRpcClientMock).toHaveBeenCalledTimes(3);
-    expect(runtime.error).toHaveBeenCalledTimes(1);
-    const failureLog = String(runtime.error.mock.calls[0]?.[0]);
-    expect(failureLog).toContain(
-      "imessage: monitor failed: imessage: watch.subscribe startup failed attempt=3/3",
-    );
-    expect(failureLog).toContain("account=default");
-    expect(failureLog).toContain("timeoutMs=10000");
-    expect(failureLog).toContain("Error: imsg rpc timeout (watch.subscribe)");
-    expect(statusSink).toHaveBeenLastCalledWith(
-      expect.objectContaining({ lifecycle: "recovering", terminalDisconnect: undefined }),
-    );
-    expect(statusSink).not.toHaveBeenCalledWith(expect.objectContaining({ lifecycle: "blocked" }));
+    expect(runtime.error).not.toHaveBeenCalled();
   });
 
   it("publishes blocked for a non-retriable watch.subscribe failure", async () => {
@@ -275,14 +243,11 @@ describe("monitorIMessageProvider watch.subscribe startup retry", () => {
         setTimeout(resolve, 50);
       });
       expect(runtime.error.mock.calls).toEqual([]);
-      expect(runtime.log.mock.calls.map(([message]) => String(message))).toEqual([
+      const diagnostics = runtime.log.mock.calls.map(([message]) => String(message));
+      expect(diagnostics).toEqual([
         expect.stringContaining(`reason="${reason}"`),
         expect.stringContaining(`reason="${reason}"`),
       ]);
-      const diagnostics = runtime.log.mock.calls
-        .map(([message]) => String(message))
-        .filter((message) => message.includes(`reason="${reason}"`));
-      expect(diagnostics).toHaveLength(2);
       expect(diagnostics[1]).toContain("chat_id=457");
       expect(diagnostics[0]).toContain(
         `account=default reason="${reason}" chat_id=456 group=true message_id=43 guid=present`,

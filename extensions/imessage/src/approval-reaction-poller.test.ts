@@ -6,22 +6,18 @@ import { resolvedApproval } from "./test-support/approval.js";
 
 let runtimeEnv: typeof import("openclaw/plugin-sdk/runtime-env");
 let poll: typeof import("./approval-reaction-poller.js").pollPendingIMessageApprovalReactions;
-let registerIMessageApprovalReactionTarget: typeof import("./approval-reactions.js").registerIMessageApprovalReactionTarget;
-let resolveIMessageApprovalReactionTargetWithPersistence: typeof import("./approval-reactions.js").resolveIMessageApprovalReactionTargetWithPersistence;
+let targets: typeof import("./approval-reactions.js");
 
 beforeEach(async () => {
   vi.resetModules();
   runtimeEnv = await import("openclaw/plugin-sdk/runtime-env");
   ({ pollPendingIMessageApprovalReactions: poll } = await import("./approval-reaction-poller.js"));
-  ({
-    registerIMessageApprovalReactionTarget,
-    resolveIMessageApprovalReactionTargetWithPersistence,
-  } = await import("./approval-reactions.js"));
+  targets = await import("./approval-reactions.js");
 });
 
 const resolverMocks = vi.hoisted(() => ({ resolve: vi.fn() }));
 
-type IMessageTargetParams = Parameters<typeof registerIMessageApprovalReactionTarget>[0];
+type TargetParams = Parameters<typeof targets.registerIMessageApprovalReactionTarget>[0];
 
 // mock-isolation: exercise approval handling without a live gateway.
 vi.mock("openclaw/plugin-sdk/approval-gateway-runtime", () => ({
@@ -59,13 +55,9 @@ const reaction = {
   emoji: "👍",
   created_at: "2026-05-27T21:00:00.000Z",
 };
-function buildReaction(overrides: Partial<typeof reaction> & { is_from_me?: boolean } = {}) {
-  return { ...reaction, ...overrides };
-}
+type Reaction = typeof reaction & { is_from_me?: boolean };
 
-function buildApprovalMessage(
-  overrides: IMessagePayload & { reactions?: ReturnType<typeof buildReaction>[] } = {},
-) {
+function buildApprovalMessage(overrides: IMessagePayload & { reactions?: Reaction[] } = {}) {
   return {
     guid: "msg-1",
     chat_id: DEFAULT_CHAT_ID,
@@ -74,15 +66,15 @@ function buildApprovalMessage(
     is_from_me: true,
     sender: APPROVER,
     text: "Exec approval required\nID: exec-1\n\nReply with: /approve exec-1 allow-once|deny",
-    reactions: [buildReaction({ is_from_me: true })],
+    reactions: [{ ...reaction, is_from_me: true }],
     ...overrides,
   };
 }
 
 function buildGroupApprovalMessage(
-  reactions: ReturnType<typeof buildReaction>[] = [
-    buildReaction({ id: 8, created_at: "2026-05-27T21:01:00.000Z" }),
-    buildReaction({ id: 9, type: "dislike", emoji: "👎", created_at: "2026-05-27T21:02:00.000Z" }),
+  reactions: Reaction[] = [
+    { ...reaction, id: 8, created_at: "2026-05-27T21:01:00.000Z" },
+    { ...reaction, id: 9, type: "dislike", emoji: "👎", created_at: "2026-05-27T21:02:00.000Z" },
   ],
 ) {
   return buildApprovalMessage({
@@ -100,7 +92,7 @@ describe("iMessage approval reaction poller", () => {
   let accountId = "";
   const conversation = { chatId: DEFAULT_CHAT_ID, chatGuid: "iMessage;+;chat-guid" };
   function resolveTarget() {
-    return resolveIMessageApprovalReactionTargetWithPersistence({
+    return targets.resolveIMessageApprovalReactionTargetWithPersistence({
       accountId,
       conversation,
       messageId: "msg-1",
@@ -130,9 +122,9 @@ describe("iMessage approval reaction poller", () => {
   }
 
   function registerTarget(
-    overrides: Partial<Omit<IMessageTargetParams, "accountId" | "approvalKind">> = {},
+    overrides: Partial<Omit<TargetParams, "accountId" | "approvalKind">> = {},
   ) {
-    return registerIMessageApprovalReactionTarget({
+    return targets.registerIMessageApprovalReactionTarget({
       accountId,
       conversation,
       messageId: "msg-1",
@@ -193,8 +185,8 @@ describe("iMessage approval reaction poller", () => {
     await registerTarget();
     const request = createRpcRequest([
       buildGroupApprovalMessage([
-        buildReaction({ id: 8, sender: "+15550000000", created_at: "2026-05-27T21:01:00.000Z" }),
-        buildReaction({ id: 9, created_at: "2026-05-27T21:02:00.000Z" }),
+        { ...reaction, id: 8, sender: "+15550000000", created_at: "2026-05-27T21:01:00.000Z" },
+        { ...reaction, id: 9, created_at: "2026-05-27T21:02:00.000Z" },
       ]),
     ]);
 
