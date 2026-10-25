@@ -208,8 +208,7 @@ describe("FeishuStreamingSession", () => {
 
   function mockStreamingTokenStart(resolveAuthJson: (token: string) => Record<string, unknown>): {
     authTokens: string[];
-    client: ConstructorParameters<typeof FeishuStreamingSession>[0];
-    deps: StreamingFetchDeps;
+    startSession: () => Promise<void>;
   } {
     const authTokens: string[] = [];
     const deps = createMemoryFetch((url) => {
@@ -231,7 +230,16 @@ describe("FeishuStreamingSession", () => {
         },
       },
     } as unknown as ConstructorParameters<typeof FeishuStreamingSession>[0];
-    return { authTokens, client, deps };
+    return {
+      authTokens,
+      startSession: () =>
+        createStreamingSession(
+          client,
+          { appId: "app_unsafe_token_expiry", appSecret: "secret" },
+          undefined,
+          deps,
+        ).start("chat_id", "open_id"),
+    };
   }
 
   function mockAcceptedStreamingCard(params: {
@@ -1011,34 +1019,18 @@ describe("FeishuStreamingSession", () => {
   it("bounds streaming token cache lifetime when token expiry overflows", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-29T12:00:00.000Z"));
-    const { authTokens, client, deps } = mockStreamingTokenStart((token) => ({
+    const { authTokens, startSession } = mockStreamingTokenStart((token) => ({
       code: 0,
       msg: "ok",
       tenant_access_token: token,
       expire: Number.MAX_SAFE_INTEGER,
     }));
 
-    await createStreamingSession(
-      client,
-      {
-        appId: "app_unsafe_token_expiry",
-        appSecret: "secret",
-      },
-      undefined,
-      deps,
-    ).start("chat_id", "open_id");
+    await startSession();
     expect(authTokens).toEqual(["token-1"]);
 
     vi.setSystemTime(Date.now() + 7200 * 1000 - 60_000 + 1);
-    await createStreamingSession(
-      client,
-      {
-        appId: "app_unsafe_token_expiry",
-        appSecret: "secret",
-      },
-      undefined,
-      deps,
-    ).start("chat_id", "open_id");
+    await startSession();
 
     expect(authTokens).toEqual(["token-1", "token-2"]);
   });

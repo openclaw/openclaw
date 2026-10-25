@@ -8,7 +8,7 @@ import {
   resolvePluginInstallSourcePlan,
 } from "./install-source-plan.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
-import { writeTree } from "./plugin-generation-capture.test-support.js";
+import { writeArtifacts as writeTree } from "./public-surface.test-support.js";
 
 const host = vi.hoisted(() => ({ root: "" }));
 vi.mock("../infra/openclaw-root.js", async (importOriginal) => ({

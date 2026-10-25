@@ -6,10 +6,10 @@ import {
 import { prepareCronRootSessionGeneration } from "../../../config/sessions/session-delivery-generation.js";
 import { assertSessionEntryCohortScope } from "../../../config/sessions/session-entry-cohort-scope.js";
 import { composeSessionSourceAssertion } from "../../../config/sessions/session-source-authority.js";
+import type { OwnedSessionTranscriptWriteContext } from "../../../config/sessions/transcript-write-context-store.js";
 import {
   getOwnedSessionTranscriptInitialWriter,
   SessionTranscriptWriterClaimReboundError,
-  type OwnedSessionTranscriptWriteContext,
   withOwnedSessionTranscriptWrites,
 } from "../../../config/sessions/transcript-write-context.js";
 import { captureAgentRunTerminalPersistence } from "../../../infra/agent-run-terminal-writes.js";

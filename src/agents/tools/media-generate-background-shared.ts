@@ -14,7 +14,7 @@ import {
   captureSessionTranscriptTargetBinding,
   sameSessionTranscriptStorageEnvironment,
 } from "../../config/sessions/transcript-target-binding.js";
-import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
+import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context-store.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { removeCronRunContinuationSessionIfIdle } from "../../cron/run-continuation-cleanup.js";
 import {

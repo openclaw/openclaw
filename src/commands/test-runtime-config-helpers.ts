@@ -26,6 +26,22 @@ export const baseConfigSnapshot = {
   legacyIssues: [],
 };
 
+export function createPluginPackagingConfigIssues(): Pick<
+  ConfigFileSnapshot,
+  "issues" | "warnings"
+> {
+  return {
+    issues: [{ path: "plugins.slots.memory", message: "plugin not found: source-only-pack" }],
+    warnings: [
+      {
+        path: "plugins",
+        message:
+          "plugin source-only-pack: installed plugin package requires compiled runtime output for TypeScript entry index.ts: expected ./dist/index.js. This is a plugin packaging issue, not a local config problem.",
+      },
+    ],
+  };
+}
+
 export function createTestModelDefinition(
   id: string,
   overrides: Partial<ModelDefinitionConfig> = {},

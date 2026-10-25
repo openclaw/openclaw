@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mockClaudeManagedSettings } from "../../../test/helpers/claude-managed-settings.js";
 import { runWithCliHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { stageSessionPendingInput } from "../../config/sessions/session-accessor.pending-inputs.js";
@@ -100,6 +101,7 @@ describe("native Claude login history on preparation", () => {
     fixture = createCliRunnerPrepareFixture((params) =>
       prepareCliRunContext({ skillsSnapshot: { prompt: "", skills: [] }, ...params }),
     );
+    mockClaudeManagedSettings(path.join(fixture.session.dir, "managed"));
   });
 
   afterEach(async () => {

@@ -11,7 +11,7 @@ import { createCombinedSessionMcpRuntime } from "./agent-bundle-mcp-combined.js"
 import {
   catalogTool,
   fixtureCatalog,
-  fixtureRuntime,
+  staticRuntime,
 } from "./agent-bundle-mcp-fixture.test-support.js";
 import {
   buildBundleMcpToolsFromCatalog,
@@ -76,21 +76,18 @@ function makeToolRuntime(
       params.supportsParallelToolCalls ?? false;
     return catalog;
   };
-  return fixtureRuntime(peekCatalog, {
+  return staticRuntime({
     sessionId: "session-collision",
     workspaceDir: "/tmp",
     configFingerprint: "fingerprint",
-    createdAt: 0,
-    lastUsedAt: 0,
-    markUsed: () => {},
     peekCatalog,
+    getCatalog: async () => peekCatalog(),
     callTool: async () =>
       params.result ?? {
         content: [{ type: "text", text: "FROM-BUNDLE" }],
         isError: false,
       },
     joinCleanup: async () => {},
-    dispose: async () => {},
   });
 }
 

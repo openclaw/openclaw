@@ -153,7 +153,6 @@ describe("createBeamMirrorRunner", () => {
           async (receiverOrigin) => {
             const runner = createBeamTestRunner({
               endpoint: `${receiverOrigin}/beam`,
-              listCatalogs: () => [createBeamTestCatalog()],
             });
             await runner.tick();
             expect(receiverBodies).toHaveLength(1);
@@ -184,7 +183,6 @@ describe("createBeamMirrorRunner", () => {
         const runner = createBeamTestRunner({
           endpoint: `${origin}/beam`,
           logger: { warn: (message) => warnings.push(message), info: () => {} },
-          listCatalogs: () => [createBeamTestCatalog()],
         });
         await runner.tick();
         await runner.tick();
@@ -211,7 +209,6 @@ describe("createBeamMirrorRunner", () => {
         const runner = createBeamTestRunner({
           endpoint: `${origin}/beam`,
           logger: { warn: (message) => warnings.push(message), info: () => {} },
-          listCatalogs: () => [createBeamTestCatalog()],
         });
         await runner.tick();
         await runner.tick();

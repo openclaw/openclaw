@@ -32,9 +32,20 @@ Gateway token through the normal per-tab session-token setting and exercises
 authenticated warm boot. The default `--auth none` preserves the original
 diagnostic fixture; do not combine samples from different auth modes.
 
+Comparisons keep one isolated Gateway and browser alive per side. The coordinator
+starts those workers serially, then admits one complete sample at a time in AB/BA
+order. Every sample still creates a fresh browser context, including fresh caches
+and storage; the cold visit prepares that context's warm reload normally. Workers
+acknowledge only after writing their sample and closing the context, and remain
+idle until the next command. Shutdown waits until both sides finish measuring.
+This keeps repeated Gateway startup outside the measurement campaign. The report's
+`workerLifecycle` identifies persistent comparisons; do not combine their samples
+with earlier per-sample Gateway runs. An explicit `--port`, or two different bundles
+served from the same source checkout, retains the sequential worker lifecycle.
+
 The runner copies its instrumentation into the task-owned comparison checkout.
 It temporarily points each checkout's `dist/control-ui` at the supplied bundle
-and restores the original after the worker exits. Do not use a checkout whose
+and restores the original after its workers exit, including on interruption. Do not use a checkout whose
 build or Gateway another process owns. This exercises the normal bundled-asset
 cache and precompression policy; configuring a custom UI root would measure a
 different policy.
@@ -101,3 +112,14 @@ with localhost median regression at most 5% and no worse p95. On a noisy host,
 collect an A/A control and use twenty pairs with renderer CPU and structural
 counters. A smaller, clean wire-byte reduction remains useful when it misses
 the readiness target; state that gap explicitly.
+
+## Warm navigation policy
+
+The Gateway HTML remains network-first. Authenticated documents are private,
+no-store responses containing viewer preferences and scope-filtered bootstrap
+configuration. The same chat URL can select a public reader or authenticated app
+using current access; the response also carries live terminal and ingress CSP.
+Replaying fetched HTML from a service-worker cache could cross these identity,
+access, and document-policy boundaries. The worker's integrity-bound generic
+shell remains an outage fallback, not an online replacement. An online shell
+would also need a fresh-document bypass for the existing build-mismatch reload.

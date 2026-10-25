@@ -22,7 +22,7 @@ import {
   type McpAppContextState,
   type McpAppMessageEventDetail,
 } from "./mcp-app-security.ts";
-import { mountView } from "./mcp-app-view.test-support.ts";
+import { mockMcpSandboxProxyReady, mountView } from "./mcp-app-view.test-support.ts";
 import { McpAppPanel } from "./solid/mcp-app-panel.tsx";
 const bridgeMocks = vi.hoisted(() => ({
   instances: [] as Array<Record<string, unknown>>,
@@ -570,22 +570,7 @@ describe("mcp-app-view localization", () => {
     vi.stubGlobal("localStorage", createStorageMock());
     vi.stubGlobal("sessionStorage", createStorageMock());
     installTranscriptDomMocks();
-    vi.spyOn(HTMLIFrameElement.prototype, "contentWindow", "get").mockReturnValue(window);
-    const frameSource = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, "src")!;
-    vi.spyOn(HTMLIFrameElement.prototype, "src", "set").mockImplementation(function (
-      this: HTMLIFrameElement,
-      value,
-    ) {
-      frameSource.set!.call(this, value);
-      queueMicrotask(() =>
-        window.dispatchEvent(
-          new MessageEvent("message", {
-            source: window,
-            data: { method: "ui/notifications/sandbox-proxy-ready" },
-          }),
-        ),
-      );
-    });
+    mockMcpSandboxProxyReady();
     const sessionKey = "agent:main:apps-context";
     const viewId = "apps-context-view";
     const fixture = createMountedPanes([

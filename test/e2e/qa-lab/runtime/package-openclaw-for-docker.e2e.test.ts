@@ -37,6 +37,7 @@ import {
   hermeticEnv,
   readRequiredPersistedInstalledPluginIndex,
 } from "../../../../src/commands/doctor-plugin-registry.test-support.js";
+import { listDirectoryTreeStrictSync } from "../../../../src/infra/directory-walk.js";
 import { resolveInstalledPluginIndexStorePath } from "../../../../src/plugins/installed-plugin-index-store-path.js";
 import { writePersistedInstalledPluginIndex } from "../../../../src/plugins/installed-plugin-index-store-write.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../../../../src/state/openclaw-state-db.js";
@@ -1371,8 +1372,8 @@ describe("package-openclaw-for-docker", () => {
       expect(receipt[0].files).toHaveLength(files.length);
       expect(fs.readdirSync(outputDir).toSorted()).toEqual(["openclaw-current.tgz", "pack.json"]);
       // Inspecting the final archive must not copy it into the caller's npm cache.
-      const cachedArtifactCopies = fs
-        .readdirSync(callerNpmCache, { encoding: "utf8", recursive: true })
+      const cachedArtifactCopies = listDirectoryTreeStrictSync(callerNpmCache)
+        .map((walkEntry) => walkEntry.relativePath)
         .map((entry) => path.join(callerNpmCache, entry))
         .filter((entry) => fs.statSync(entry).isFile() && fs.readFileSync(entry).equals(bytes));
       expect(cachedArtifactCopies).toEqual([]);

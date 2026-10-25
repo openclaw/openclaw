@@ -8,6 +8,7 @@ import type {
   SessionReactionsSetResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import type { ApplicationGateway } from "../../app/gateway.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
@@ -37,6 +38,9 @@ function fixture(
   const writes: unknown[] = [];
   const client = createTestGatewayClient((method, params) => {
     requests.push(method);
+    if (method === "agents.list") {
+      return makeBootRoster();
+    }
     if (method === "session.reactions.set") {
       writes.push(params);
     }
@@ -321,7 +325,19 @@ describe("pane reaction ownership", () => {
       assert(pending);
       const replay = pending.run(client);
       if (owner === "replacement client") {
-        pane.context.gateway.snapshot.client = createTestGatewayClient(() => ({}));
+        pane.context.gateway.snapshot.client = createTestGatewayClient((method) => {
+          switch (method) {
+            case "agents.list":
+              return makeBootRoster();
+            case "sessions.list":
+              return sessionsResult([]);
+            case "chat.startup":
+            case "chat.history":
+              return { messages: [] };
+            default:
+              return {};
+          }
+        });
       } else if (owner === "replacement scope") {
         Object.defineProperty(client, "recoveryScope", { get: () => "replacement-scope" });
       }

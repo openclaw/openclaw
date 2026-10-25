@@ -83,6 +83,36 @@ describe("OpenClaw profile schema", () => {
 
 describe("OpenClaw profile reader", () => {
   it.each([
+    { location: "conventional", pointer: undefined },
+    { location: "legacy", pointer: "legacy.yml" },
+  ])(
+    "rejects malformed UTF-8 in a $location profile and accepts repaired Unicode",
+    async ({ pointer }) => {
+      const { root, path } = await profileFixture(pointer);
+      const profilePath = join(root, pointer ?? "profiles/openclaw.yml");
+      const content = profileYaml("  groupChat:", '    mentionPatterns: ["@café �"]');
+      await writeFile(profilePath, Buffer.from(content.replace(" �", ""), "latin1"));
+
+      expect(await readClawManifestFile(path)).toMatchObject({
+        ok: false,
+        diagnostics: [
+          expect.objectContaining({
+            code: "openclaw_profile_read_failed",
+            path: pointer ? "$.metadata.openclaw.config" : "$.profiles.openclaw",
+            message: expect.stringContaining("must be valid UTF-8"),
+          }),
+        ],
+      });
+
+      await writeFile(profilePath, `\uFEFF${content}`, "utf8");
+      expect(await readClawManifestFile(path)).toMatchObject({
+        ok: true,
+        openClawProfile: { agent: { groupChat: { mentionPatterns: ["@café �"] } } },
+      });
+    },
+  );
+
+  it.each([
     ["anchor", "agent: &agent {}", "anchors"],
     ["alias", "agent: *agent", "aliases"],
     ["tag", "agent: !!map {}", "explicit tags"],

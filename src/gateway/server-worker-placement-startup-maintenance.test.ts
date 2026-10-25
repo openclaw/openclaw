@@ -109,6 +109,7 @@ function createMaintenanceRuntime(params: {
     dispatch: vi.fn(),
     forceDestroyEnvironment,
     reclaim: vi.fn(),
+    subscribeOrphanWorkspaceChanges: () => () => {},
     reconcile: vi.fn().mockResolvedValue(undefined),
     reconcileActive: vi.fn().mockResolvedValue(undefined),
   });
