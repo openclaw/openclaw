@@ -55,10 +55,10 @@ function expectInvalidField(container: Element, id: string, errorId: string, mes
 }
 
 describe("cron view list pane", () => {
-  it("combines status filters and run history in one tab row", () => {
+  it("combines status filters and run history in one tab row", async () => {
     const onJobsFiltersChange = vi.fn();
     const onListTabChange = vi.fn();
-    const container = renderView({
+    const container = await renderView({
       jobsEnabledFilter: "enabled",
       onJobsFiltersChange,
       onListTabChange,
@@ -80,9 +80,9 @@ describe("cron view list pane", () => {
     expect(onListTabChange).toHaveBeenCalledWith("activity");
   });
 
-  it("wires search and the advanced jobs filter popover", () => {
+  it("wires search and the advanced jobs filter popover", async () => {
     const onJobsFiltersChange = vi.fn();
-    const container = renderView({ onJobsFiltersChange });
+    const container = await renderView({ onJobsFiltersChange });
     expect(fillInput(container, ".cron-search-box input", "brief")).toBeInstanceOf(
       HTMLInputElement,
     );
@@ -122,7 +122,7 @@ describe("cron view list pane", () => {
     expect(reset.disabled).toBe(true);
   });
 
-  it("renders table rows with independent native buttons for opening tasks", () => {
+  it("renders table rows with independent native buttons for opening tasks", async () => {
     const onSelectJob = vi.fn();
     const job = createJob("job-1", {
       trigger: { script: "json({ fire: true })" },
@@ -133,7 +133,7 @@ describe("cron view list pane", () => {
       name: "Failing task",
       state: { lastRunStatus: "error", lastRunAtMs: Date.now() - 60_000 },
     });
-    const container = renderView({ jobs: [job, paused, failed], onSelectJob });
+    const container = await renderView({ jobs: [job, paused, failed], onSelectJob });
     const rows = Array.from(container.querySelectorAll(".cron-table__row"));
     expect(rows).toHaveLength(3);
     for (const row of container.querySelectorAll('[role="row"]')) {
@@ -160,8 +160,8 @@ describe("cron view list pane", () => {
     expect(onSelectJob).toHaveBeenCalledWith(paused);
   });
 
-  it("renders a truthful inventory state matrix for the tasks table", () => {
-    const pending = renderView({ loading: true, hasLoaded: false, jobs: [], jobsTotal: 0 });
+  it("renders a truthful inventory state matrix for the tasks table", async () => {
+    const pending = await renderView({ loading: true, hasLoaded: false, jobs: [], jobsTotal: 0 });
     const pendingStatus = getElement(pending, testId("cron-jobs-loading"), HTMLDivElement);
     expect(pendingStatus.getAttribute("role")).toBe("status");
     expect(pendingStatus.getAttribute("aria-live")).toBe("polite");
@@ -171,7 +171,7 @@ describe("cron view list pane", () => {
       "true",
     );
     for (const loading of [false, true]) {
-      const empty = renderView({ loading });
+      const empty = await renderView({ loading });
       expectAbsent(empty, testId("cron-jobs-loading"));
       const guidance = getElement(empty, ".cron-empty-state", HTMLDivElement);
       expect(guidance.textContent).toContain("No automations yet");
@@ -180,11 +180,16 @@ describe("cron view list pane", () => {
         loading ? "true" : null,
       );
     }
-    const filtered = renderView({ loading: false, hasLoaded: true, jobs: [], jobsQuery: "zzz" });
+    const filtered = await renderView({
+      loading: false,
+      hasLoaded: true,
+      jobs: [],
+      jobsQuery: "zzz",
+    });
     expect(getElement(filtered, ".cron-empty-state", HTMLDivElement).textContent).toContain(
       "No automations match the current filters.",
     );
-    const refreshing = renderView({
+    const refreshing = await renderView({
       loading: true,
       hasLoaded: true,
       jobs: [createJob("refresh-me")],
@@ -195,7 +200,7 @@ describe("cron view list pane", () => {
       "true",
     );
     expect(refreshing.textContent).toContain("Daily ping");
-    const failed = renderView({
+    const failed = await renderView({
       loading: false,
       hasLoaded: false,
       jobs: [],
@@ -205,7 +210,7 @@ describe("cron view list pane", () => {
     const failedAlert = getElement(failed, ".cron-error-banner", HTMLDivElement);
     expect(failedAlert.getAttribute("role")).toBe("alert");
     expect(failedAlert.textContent).toContain("Unable to load automations.");
-    const unrelatedFailure = renderView({ error: "Run history unavailable." });
+    const unrelatedFailure = await renderView({ error: "Run history unavailable." });
     expect(text(unrelatedFailure, ".cron-empty-state")).toContain("No automations yet");
     expect(text(unrelatedFailure, '.cron-error-banner[role="alert"]')).toContain(
       "Run history unavailable.",
@@ -216,7 +221,7 @@ describe("cron view list pane", () => {
 describe("cron view editor", () => {
   it("wires shared text and select controls without changing their field ownership", async () => {
     const onFormChange = vi.fn();
-    const container = renderEditor(
+    const container = await renderEditor(
       {
         scheduleKind: "cron",
         deliveryMode: "announce",
@@ -262,9 +267,9 @@ describe("cron view editor", () => {
     expect(onFormChange).toHaveBeenLastCalledWith({ failureAlertDeliveryMode: "" });
   });
 
-  it("switches schedule inputs by segmented kind and wires kind changes", () => {
+  it("switches schedule inputs by segmented kind and wires kind changes", async () => {
     const onFormChange = vi.fn();
-    const everyContainer = renderEditor({ scheduleKind: "every" }, { onFormChange });
+    const everyContainer = await renderEditor({ scheduleKind: "every" }, { onFormChange });
     expect(everyContainer.querySelector("#cron-every-amount")).not.toBeNull();
     expect(everyContainer.querySelector("#cron-cron-expr")).toBeNull();
     const activeEvery = getElement(
@@ -277,8 +282,10 @@ describe("cron view editor", () => {
     expect(onFormChange).toHaveBeenCalledWith({ scheduleKind: "cron", deleteAfterRun: false });
     selectSchedule(everyContainer, "at");
     expect(onFormChange).toHaveBeenCalledWith({ scheduleKind: "at", deleteAfterRun: true });
-    expect(renderEditor({ scheduleKind: "at" }).querySelector("#cron-schedule-at")).not.toBeNull();
-    const cronContainer = renderEditor(
+    expect(
+      (await renderEditor({ scheduleKind: "at" })).querySelector("#cron-schedule-at"),
+    ).not.toBeNull();
+    const cronContainer = await renderEditor(
       { scheduleKind: "cron", deleteAfterRun: true },
       { onFormChange },
     );
@@ -287,7 +294,7 @@ describe("cron view editor", () => {
     selectSchedule(cronContainer, "every");
     expect(onFormChange).toHaveBeenCalledWith({ scheduleKind: "every", deleteAfterRun: false });
     const onExitFormChange = vi.fn();
-    const onExitContainer = renderEditor(
+    const onExitContainer = await renderEditor(
       { scheduleKind: "on-exit" },
       { onFormChange: onExitFormChange },
     );
@@ -299,7 +306,7 @@ describe("cron view editor", () => {
   });
 
   it("renders supported delivery options and normalizes stale announce selection", async () => {
-    const container = renderEditor({
+    const container = await renderEditor({
       sessionTarget: "main",
       payloadKind: "systemEvent",
       deliveryMode: "announce",
@@ -312,19 +319,19 @@ describe("cron view editor", () => {
   });
 
   it("shows announce channel/to rows and webhook URL row per delivery mode", async () => {
-    const announce = renderEditor({ deliveryMode: "announce" }, { channels: ["telegram"] });
+    const announce = await renderEditor({ deliveryMode: "announce" }, { channels: ["telegram"] });
     await updatePickers(announce);
     expect(announce.querySelector("#cron-delivery-channel")).not.toBeNull();
     expect(announce.querySelector("#cron-delivery-to")).not.toBeNull();
-    const webhook = renderEditor(
+    const webhook = await renderEditor(
       { deliveryMode: "webhook" },
       { fieldErrors: { deliveryTo: "cron.errors.webhookUrlRequired" }, canSubmit: false },
     );
     expectInvalidField(webhook, "delivery-to", "deliveryTo", "Webhook URL is required.");
   });
 
-  it("announces field validation errors as alerts", () => {
-    const container = renderEditor(
+  it("announces field validation errors as alerts", async () => {
+    const container = await renderEditor(
       { name: "", everyAmount: "0" },
       {
         fieldErrors: {
@@ -341,19 +348,19 @@ describe("cron view editor", () => {
     expectInvalidField(container, "name", "name", "Name is required.");
   });
 
-  it("waits for scheduler status before presenting trigger capability", () => {
-    const pending = renderEditor({}, { status: null });
+  it("waits for scheduler status before presenting trigger capability", async () => {
+    const pending = await renderEditor({}, { status: null });
     expect(findToggleByLabel(pending, "Condition trigger")).toBeNull();
     expect(pending.textContent).not.toContain("disabled by cron.triggers.enabled");
   });
 
-  it("hides trigger authoring when the operator disabled triggers but keeps clear available", () => {
+  it("hides trigger authoring when the operator disabled triggers but keeps clear available", async () => {
     const onFormChange = vi.fn();
     const status = { enabled: true, triggersEnabled: false, jobs: 0 };
-    const disabled = renderEditor({}, { status, onFormChange });
+    const disabled = await renderEditor({}, { status, onFormChange });
     expect(disabled.querySelector("#cron-trigger-script")).toBeNull();
     expect(disabled.textContent).toContain("disabled by cron.triggers.enabled");
-    const configured = renderEditor(
+    const configured = await renderEditor(
       { triggerEnabled: true, triggerScript: "json({ fire: true })" },
       { status, onFormChange },
     );
@@ -368,7 +375,7 @@ describe("cron view editor", () => {
       payload: { kind: "script", script },
       trigger: { script: "json({ fire: true })" },
     });
-    const container = renderView({
+    const container = await renderView({
       jobs: [job],
       editingJob: job,
       onFormChange,
@@ -397,7 +404,7 @@ describe("cron view editor", () => {
   });
 
   it("attaches the triggered minimum-interval error to the visible recurring interval", async () => {
-    const container = renderEditor(
+    const container = await renderEditor(
       {
         everyAmount: "5",
         everyUnit: "seconds",
@@ -427,7 +434,7 @@ describe("cron view editor", () => {
     const onClone = vi.fn();
     const onRemove = vi.fn();
     const actions = { onRun, onToggle, onClone, onRemove };
-    const list = renderView({ jobs: [job], ...actions });
+    const list = await renderView({ jobs: [job], ...actions });
     getElement(list, `[data-test-id="cron-row-run-${job.id}"]`, HTMLButtonElement).click();
     expect(onRun).toHaveBeenCalledWith(job, "force");
     const toggle = getElement(
@@ -440,7 +447,7 @@ describe("cron view editor", () => {
     await openCronMenu(list, ".cron-job-menu");
     getElement(list, '[data-value="clone"]', HTMLButtonElement).click();
     await waitForSolid(() => expect(onClone).toHaveBeenCalledWith(job));
-    const detail = renderView({
+    const detail = await renderView({
       editingJob: job,
       form: { ...DEFAULT_CRON_FORM, payloadKind: "agentTurn", payloadText: "Review the checklist" },
       ...actions,

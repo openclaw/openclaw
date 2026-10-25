@@ -56,13 +56,9 @@ vi.mock("../commands/models/list.list-command.js", async (importOriginal) => ({
 
 vi.mock("../runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../runtime.js")>()),
-  defaultRuntime: {
-    error: vi.fn(),
-    log: vi.fn(),
-    exit: vi.fn(),
-    writeStdout: vi.fn(),
-    writeJson: vi.fn(),
-  },
+  defaultRuntime: (
+    await import("../test-utils/plugin-runtime-env.js")
+  ).createNonExitingRuntimeEnv(),
 }));
 
 describe("tryRouteCli", () => {

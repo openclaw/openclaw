@@ -5,7 +5,7 @@ import { runRegisteredCli } from "../../test-utils/command-runner.js";
 import { registerGatewayCli } from "./register.js";
 import { expectCallCount } from "./run-loop-cleanup.test-support.js";
 
-const mocks = vi.hoisted(() => ({
+const mocks = await vi.hoisted(async () => ({
   callGatewayCli: vi.fn(
     async (method: string, _opts: unknown, _params?: unknown): Promise<unknown> => {
       if (method === "gateway.suspend.prepare") {
@@ -28,13 +28,9 @@ const mocks = vi.hoisted(() => ({
   gatewayStatusCommand: vi.fn(async (_opts: unknown, _runtime: unknown) => {}),
   gatewayAuthTokenCommand: vi.fn(async (_runtime: unknown) => {}),
   consumeGatewayRestartHandoffSync: vi.fn(),
-  defaultRuntime: {
-    log: vi.fn(),
-    error: vi.fn(),
-    writeStdout: vi.fn(),
-    writeJson: vi.fn(),
-    exit: vi.fn(),
-  },
+  defaultRuntime: vi.mocked(
+    (await import("../../test-utils/plugin-runtime-env.js")).createNonExitingRuntimeEnv(),
+  ),
 }));
 
 vi.mock("../../infra/restart-handoff.js", async (importOriginal) => ({

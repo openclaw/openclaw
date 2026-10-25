@@ -2,9 +2,10 @@ import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { posix } from "node:path";
 import { getEnvironmentData, isMainThread, setEnvironmentData } from "node:worker_threads";
-import { getEmbeddedStandaloneRuntimeRoot } from "../../cli-invocation.mjs";
+import { resolveStandaloneSidecarRoot } from "../../cli-invocation.mjs";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { probeSqliteNativeClose } from "./bun-sqlite-close-probe.js";
+import { probeBunSqliteLibrary } from "./bun-sqlite-library-probe.js";
 import { parseDiagnosticEnvFlags } from "./diagnostic-flags-env.js";
 import { SQLITE_DATABASE_ADMISSIONS_KEY } from "./sqlite-database-admission-key.js";
 import { isSqliteWalResetSafeVersion } from "./sqlite-runtime-version.js";
@@ -116,40 +117,6 @@ function createCapabilities(select: () => unknown) {
   };
 }
 
-// Bun is optional: describe only the FFI symbols used at this native boundary.
-type BunFfi = {
-  FFIType: { cstring: number; i32: number };
-  dlopen: (
-    path: string,
-    symbols: Record<string, { args: number[]; returns: number }>,
-  ) => {
-    symbols: {
-      sqlite3_libversion: () => { toString(): string };
-      sqlite3_compileoption_used: (option: Buffer) => number;
-    };
-    close: () => void;
-  };
-};
-
-function probeLibrary(path: string): LibraryProbe {
-  const require = createRequire(import.meta.url);
-  // SAFETY: Called only on Bun; this models its FFI module and the two requested SQLite symbols.
-  const { dlopen, FFIType } = require("bun:ffi") as BunFfi;
-  const library = dlopen(path, {
-    sqlite3_libversion: { args: [], returns: FFIType.cstring },
-    sqlite3_compileoption_used: { args: [FFIType.cstring], returns: FFIType.i32 },
-  });
-  try {
-    return {
-      version: String(library.symbols.sqlite3_libversion()),
-      extensionLoadingSupported:
-        library.symbols.sqlite3_compileoption_used(Buffer.from("OMIT_LOAD_EXTENSION\0")) === 0,
-    };
-  } finally {
-    library.close();
-  }
-}
-
 function selectLibrary(path: string): void {
   const require = createRequire(import.meta.url);
   // SAFETY: Called only on macOS Bun, whose Database exposes the process-wide library selector.
@@ -177,7 +144,7 @@ function createSelector() {
         : { source: "runtime" };
       return selection;
     }
-    const standaloneRoot = options.standaloneRoot ?? getEmbeddedStandaloneRuntimeRoot();
+    const standaloneRoot = options.standaloneRoot ?? resolveStandaloneSidecarRoot();
     const bundled =
       override === undefined && standaloneRoot !== undefined
         ? posix.join(standaloneRoot, "lib/libsqlite3.dylib")
@@ -201,10 +168,10 @@ function createSelector() {
       let probe: LibraryProbe;
       let present = true;
       try {
-        // dlopen decides loadability: Apple's SQLite lives in the dyld shared cache with no
+        // Loading decides availability: Apple's SQLite lives in the dyld shared cache with no
         // file on disk, so a stat-first check would hide its real defect (OMIT_LOAD_EXTENSION).
         try {
-          probe = probeLibrary(path);
+          probe = probeBunSqliteLibrary(path);
         } catch (error) {
           present = existsSync(path);
           throw present ? error : new Error("missing file", { cause: error });
