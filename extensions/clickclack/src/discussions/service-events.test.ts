@@ -9,7 +9,7 @@ import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-tes
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveClickClackDiscussionRoute } from "./routing.js";
 import { expectPatched } from "./service-case.test-support.js";
-import { discussionChannel, createHarness } from "./service-test-support.js";
+import { createHarness } from "./service-test-support.js";
 import { ClickClackDiscussionService } from "./service.js";
 
 function createGatewayEventsHarness() {
@@ -38,18 +38,6 @@ function createGatewayEventsHarness() {
 }
 
 describe("ClickClack discussion session events", () => {
-  it("runs one catch-up reconciliation when gateway events bind", async () => {
-    const gateway = createGatewayEventsHarness();
-    const h = fixture({ label: "Catch up" });
-    const sessionKey = "agent:main:event-catch-up";
-    await h.service.open(sessionKey);
-    const reconcile = vi.spyOn(h.service, "reconcile").mockResolvedValue(undefined);
-    await h.service.bindGatewayEvents(gateway.gatewayEvents, createTestPluginServiceScheduler());
-    await vi.advanceTimersByTimeAsync(0);
-    expect(reconcile).toHaveBeenCalledOnce();
-    expect(reconcile).toHaveBeenCalledWith(sessionKey);
-  });
-
   it("coalesces event bursts at the earliest deadline and reconciles the renamed session", async () => {
     const gateway = createGatewayEventsHarness();
     const h = fixture(
@@ -110,19 +98,11 @@ describe("ClickClack discussion session events", () => {
     try {
       await h.service.open(sessionKey);
       h.updateChannel.mockClear();
-      h.updateChannel.mockImplementationOnce(async (_channelId, patch) => {
+      const updateChannel = h.updateChannel.getMockImplementation()!;
+      h.updateChannel.mockImplementationOnce(async (...args) => {
         updateEntered.resolve();
         await releaseUpdate.promise;
-        return discussionChannel({
-          name: patch.name ?? "renamed",
-          kind: "public",
-          external_managed: true,
-          external_ref: "agent:main:main",
-          external_url: patch.external_url ?? "https://control.example/control/chat/main",
-          sidebar_section: patch.sidebar_section ?? "Projects",
-          ...(patch.display_title !== undefined ? { display_title: patch.display_title } : {}),
-          archived: false,
-        });
+        return updateChannel(...args);
       });
       h.setSessionEntry({
         sessionId: "session-original",
@@ -208,25 +188,18 @@ describe("ClickClack discussion session events", () => {
     expect(reconcile).toHaveBeenCalledTimes(2);
   });
 
-  it.each([true, false])("polls bindings only without gateway events (bound=%s)", async (bound) => {
+  it("does not poll bindings while gateway events are bound", async () => {
     const h = fixture(
       { label: "Polling" },
       {
-        gatewayEvents: bound ? createGatewayEventsHarness().gatewayEvents : undefined,
+        gatewayEvents: createGatewayEventsHarness().gatewayEvents,
         startTimer: true,
       },
     );
     await h.service.open("agent:main:polling");
     const reconcileAll = vi.spyOn(h.service, "reconcileAll");
-    if (!bound) {
-      reconcileAll.mockResolvedValue(undefined);
-    }
     await vi.advanceTimersByTimeAsync(60_000);
-    if (bound) {
-      expect(reconcileAll).not.toHaveBeenCalled();
-    } else {
-      expect(reconcileAll).toHaveBeenCalled();
-    }
+    expect(reconcileAll).not.toHaveBeenCalled();
   });
 
   it("polls persisted bindings only while started, including after a restart", async () => {
@@ -275,6 +248,7 @@ describe("ClickClack discussion session events", () => {
       await h.service.bindGatewayEvents(gateway.gatewayEvents, createTestPluginServiceScheduler());
       await vi.advanceTimersByTimeAsync(0);
       expect(reconcile).toHaveBeenCalledTimes(2);
+      expect(reconcile).toHaveBeenLastCalledWith(sessionKey);
     } finally {
       pending.resolve();
     }

@@ -259,16 +259,12 @@ describe("ClickClack discussion session tool policy", () => {
   });
 
   it("uses a different side-session identity after a server retarget", async () => {
-    const { runtime, sideSessionKey } = await setup();
+    const { runtime, sideSessionKey, binding } = await setup();
     const retargeted = discussionSessionKey({
+      ...binding,
       runtime,
-      agentId: "research",
       mainSessionKey,
-      sessionId: "session-id",
-      accountId: "default",
       serverBaseUrl: "https://other-clickclack.example",
-      channelId: "chn_discussion",
-      externalRef: "openclaw:test:research",
     });
 
     expect(retargeted).not.toBe(sideSessionKey);

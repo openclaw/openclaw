@@ -453,62 +453,47 @@ describe("ClickClack discussion service", () => {
     expectCreated(h, { name: fallbackDiscussionLabel(sessionKey, "main") });
   });
 
-  it("relists and retries when another process claims the selected create name", async () => {
-    const h = createHarness({ label: "Release Planning" });
-    const sessionKey = "agent:main:create-race";
-    const general = await h.channels().then((channels) => channels[0]!);
-    h.channels.mockResolvedValueOnce([general]).mockResolvedValueOnce([
-      general,
-      {
-        ...general,
-        id: "chn_human",
-        route_id: "human-route",
-        name: "release-planning",
-      },
-    ]);
-    h.createChannel.mockRejectedValueOnce(
-      new ClickClackHttpError(
-        400,
-        "UNIQUE constraint failed: channels.workspace_id, channels.name",
-        new Headers(),
-      ),
-    );
-    await h.service.open(sessionKey);
-    expect(h.createChannel).toHaveBeenCalledTimes(2);
-    expect(h.createChannel).toHaveBeenLastCalledWith(
-      "wsp_team",
-      expect.objectContaining({ name: "release-planning-2" }),
-    );
-  });
-
-  it("relists and retries when another process claims the selected rename", async () => {
-    const sessionKey = "agent:main:rename-race";
-    const h = await openHarness(sessionKey, { label: "Original" });
-    const general = await h.channels().then((channels) => channels[0]!);
-    h.channels.mockResolvedValueOnce([general]).mockResolvedValueOnce([
-      general,
-      {
-        ...general,
-        id: "chn_human",
-        route_id: "human-route",
-        name: "renamed",
-      },
-    ]);
-    h.updateChannel.mockRejectedValueOnce(
-      new ClickClackHttpError(
-        409,
-        'duplicate key value violates unique constraint "channels_workspace_id_name_key"',
-        new Headers(),
-      ),
-    );
-    h.setSessionEntry({ label: "Renamed" });
-    await h.service.reconcile(sessionKey);
-    expect(h.updateChannel).toHaveBeenCalledTimes(2);
-    expect(h.updateChannel).toHaveBeenLastCalledWith(
-      "chn_discussion",
-      expect.objectContaining({ name: "renamed-2" }),
-    );
-  });
+  it.each([
+    {
+      operation: "create",
+      code: 400,
+      message: "UNIQUE constraint failed: channels.workspace_id, channels.name",
+    },
+    {
+      operation: "rename",
+      code: 409,
+      message: 'duplicate key value violates unique constraint "channels_workspace_id_name_key"',
+    },
+  ])(
+    "retries a name claimed concurrently during $operation",
+    async ({ operation, code, message }) => {
+      const sessionKey = "agent:main:name-race";
+      const h = createHarness({ label: "Original" });
+      if (operation === "rename") {
+        await h.service.open(sessionKey);
+      }
+      h.setSessionEntry({ label: "Renamed" });
+      const general = (await h.channels())[0]!;
+      h.channels
+        .mockResolvedValueOnce([general])
+        .mockResolvedValueOnce([
+          general,
+          { ...general, id: "chn_human", route_id: "human-route", name: "renamed" },
+        ]);
+      const mutation = operation === "create" ? h.createChannel : h.updateChannel;
+      mutation.mockRejectedValueOnce(new ClickClackHttpError(code, message, new Headers()));
+      if (operation === "create") {
+        await h.service.open(sessionKey);
+      } else {
+        await h.service.reconcile(sessionKey);
+      }
+      expect(mutation).toHaveBeenCalledTimes(2);
+      expect(mutation).toHaveBeenLastCalledWith(
+        operation === "create" ? "wsp_team" : "chn_discussion",
+        expect.objectContaining({ name: "renamed-2" }),
+      );
+    },
+  );
 
   it("reuses a pending generation after an interrupted create", async () => {
     const h = createHarness({ label: "Interrupted create" });
@@ -606,53 +591,41 @@ describe("ClickClack discussion service", () => {
     expect(h.revokedStore.entries()).toHaveLength(1);
   });
 
-  it("retains a pre-existing channel reservation after definitive adoption failures", async () => {
-    const h = createHarness({ label: "Existing adoption failure" });
-    const sessionKey = "agent:main:existing-adoption-failure";
-    const externalRef = await reserveTestExternalRef(h.runtime, sessionKey);
-    h.channels.mockResolvedValue([
-      managedRoom({
-        id: "chn_existing_adoption_failure",
-        route_id: "existing-adoption-failure-route",
-        name: "existing-adoption-failure",
-        external_ref: externalRef,
-      }),
-    ]);
-    h.updateChannel.mockRejectedValue(new ClickClackHttpError(403, "forbidden", new Headers()));
-    await expect(h.service.open(sessionKey)).rejects.toThrow("ClickClack 403: forbidden");
-    expect(h.generationStore.lookup(sessionKey)).toMatchObject({
-      pending: expect.objectContaining({ externalRef }),
-    });
-    expect(h.revokedStore.entries()).toHaveLength(1);
-  });
-
-  it("retains an adopted channel reservation when conflict relisting fails", async () => {
-    const h = createHarness({ label: "Adopted conflict" });
-    const sessionKey = "agent:main:adopted-conflict";
-    const externalRef = await reserveTestExternalRef(h.runtime, sessionKey);
-    h.channels
-      .mockResolvedValueOnce([
-        managedRoom({
-          id: "chn_adopted_conflict",
-          route_id: "adopted-conflict-route",
-          name: "adopted-conflict",
-          external_ref: externalRef,
-        }),
-      ])
-      .mockRejectedValueOnce(new Error("relist unavailable"));
-    h.updateChannel.mockRejectedValueOnce(
-      new ClickClackHttpError(
-        409,
-        'duplicate key value violates unique constraint "channels_workspace_id_name_key"',
+  it.each(["forbidden", "conflict"] as const)(
+    "retains an adopted reservation after %s",
+    async (failure) => {
+      const h = createHarness({ label: "Adopted failure" });
+      const sessionKey = "agent:main:adopted-failure";
+      const externalRef = await reserveTestExternalRef(h.runtime, sessionKey);
+      const room = managedRoom({ external_ref: externalRef, name: "adopted-failure" });
+      if (failure === "conflict") {
+        h.channels
+          .mockResolvedValueOnce([room])
+          .mockRejectedValueOnce(new Error("relist unavailable"));
+      } else {
+        h.channels.mockResolvedValue([room]);
+      }
+      const error = new ClickClackHttpError(
+        failure === "forbidden" ? 403 : 409,
+        failure === "forbidden"
+          ? "forbidden"
+          : 'duplicate key value violates unique constraint "channels_workspace_id_name_key"',
         new Headers(),
-      ),
-    );
-    await expect(h.service.open(sessionKey)).rejects.toThrow("relist unavailable");
-    expect(h.generationStore.lookup(sessionKey)).toMatchObject({
-      pending: expect.objectContaining({ externalRef }),
-    });
-    expect(h.revokedStore.entries()).toHaveLength(1);
-  });
+      );
+      if (failure === "forbidden") {
+        h.updateChannel.mockRejectedValue(error);
+      } else {
+        h.updateChannel.mockRejectedValueOnce(error);
+      }
+      await expect(h.service.open(sessionKey)).rejects.toThrow(
+        failure === "forbidden" ? "ClickClack 403: forbidden" : "relist unavailable",
+      );
+      expect(h.generationStore.lookup(sessionKey)).toMatchObject({
+        pending: expect.objectContaining({ externalRef }),
+      });
+      expect(h.revokedStore.entries()).toHaveLength(1);
+    },
+  );
 
   it("adopts an ambiguous create after the session incarnation changes", async () => {
     const h = createHarness({ sessionId: "old-session", label: "Ambiguous reset" });
