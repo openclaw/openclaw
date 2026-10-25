@@ -11,11 +11,6 @@ import {
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import {
-  harnessRegistry,
-  providerConfig,
-  snapshot as catalogSnapshot,
-} from "./model-catalog-fixtures.test-support.js";
 import { getPreparedModelCatalogOwnerSnapshot as catalogOwner } from "./prepared-model-catalog.js";
 import { getPreparedModelRuntimeAuthStore } from "./prepared-model-runtime-auth.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
@@ -95,7 +90,10 @@ describe("prepared model runtime snapshots", () => {
         : undefined,
     );
     const row = { provider: "anthropic", id: modelId, name: modelId, reasoning: false };
-    mocks.buildPreparedModelCatalogSnapshot.mockResolvedValue(catalogSnapshot([row]));
+    mocks.buildPreparedModelCatalogSnapshot.mockResolvedValue({
+      entries: [row],
+      routeVariants: [row],
+    });
     // A sparse user override must not become an explicit reasoning opt-out.
     const config = {
       ...configFor(`anthropic/${modelId}`, {
@@ -106,10 +104,14 @@ describe("prepared model runtime snapshots", () => {
           },
         },
       }),
-      ...providerConfig("anthropic", {
-        baseUrl: "https://api.anthropic.com",
-        models: [{ id: modelId, name: modelId }],
-      }),
+      models: {
+        providers: {
+          anthropic: {
+            baseUrl: "https://api.anthropic.com",
+            models: [{ id: modelId, name: modelId }],
+          },
+        },
+      },
     } as unknown as OpenClawConfig;
     const snapshot = await publish(
       inputFor("claude-cli-capabilities", config, { agentId: "main" }),
@@ -124,11 +126,21 @@ describe("prepared model runtime snapshots", () => {
     const stagedConfig = configFor("openai/gpt-5.6");
     mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation((params) => {
       // Fresh acquisitions cannot reuse the registry retired by an earlier generation.
-      if (!(params as { selections?: unknown }).selections) {
-        return createEmptyPluginRegistry();
+      const registry = createEmptyPluginRegistry();
+      if ((params as { selections?: unknown }).selections) {
+        registry.agentHarnesses.push({
+          pluginId: "codex",
+          source: "test",
+          harness: {
+            id: "codex",
+            label: "Codex",
+            supports: () => ({ supported: true }),
+            runAttempt: async () => {
+              throw new Error("unused");
+            },
+          },
+        });
       }
-      const registry = harnessRegistry("codex", { label: "Codex" });
-      registry.agentHarnesses[0]!.source = "test";
       return registry;
     });
     await refresh({}, { gatewayLifecycle: true });
@@ -150,8 +162,11 @@ describe("prepared model runtime snapshots", () => {
       config: stagedConfig,
       agentDir: input.agentDir,
       workspaceDir: input.workspaceDir,
-      pluginRegistry: { agentHarnesses: [{ harness: { id: "codex" } }] },
+      pluginRegistry: expect.any(Object),
     });
+    expect(lease.snapshot.pluginRegistry?.agentHarnesses.map((entry) => entry.harness.id)).toEqual([
+      "codex",
+    ]);
   });
 
   it("never returns a standalone generation invalidated while it is building", async () => {
@@ -169,9 +184,12 @@ describe("prepared model runtime snapshots", () => {
 
   it("keeps provider catalog outcomes on the published live snapshot", async () => {
     mocks.ensureOpenClawModelsJson.mockImplementationOnce(async (...args: unknown[]) => {
-      const options = args[2] as NonNullable<
-        Parameters<typeof import("./models-config.js").ensureOpenClawModelsJson>[2]
-      >;
+      const options = args[2] as {
+        onProviderCatalogOutcome?: (outcome: {
+          provider: string;
+          status: "ready" | "auth-rejected" | "unavailable";
+        }) => void;
+      };
       options.onProviderCatalogOutcome?.({ provider: "openai", status: "auth-rejected" });
       return {};
     });
@@ -220,7 +238,11 @@ describe("prepared model runtime snapshots", () => {
     const input = inputFor("credential-free");
     await publish(input);
 
-    const credentialFree = await publish({ ...input, readOnly: true, skipCredentials: true });
+    const credentialFree = await publish({
+      ...input,
+      readOnly: true,
+      skipCredentials: true,
+    });
 
     const runtime = await prepare(input);
     expect(credentialFree).not.toBe(runtime);
@@ -252,7 +274,7 @@ describe("prepared model runtime snapshots", () => {
   );
 
   it("reuses read-only owners for equivalent config clones but rejects projections", async () => {
-    const input = inputFor("read-only-config", configFor(), { readOnly: true });
+    const input = { ...inputFor("read-only-config", configFor()), readOnly: true };
     const first = await publish(input);
     const equivalent = { ...input, config: configFor() };
     const different = { ...input, config: configFor("anthropic/claude-opus-4-6") };
@@ -307,9 +329,10 @@ describe("prepared model runtime snapshots", () => {
 
   it("keeps replacement readers blocked when an earlier refresh is superseded", async () => {
     mocks.configuredAgentIds = ["default"];
+    const initialConfig = {};
     const skippedConfig = configFor("openai/gpt-5.4");
     const latestConfig = configFor();
-    await refresh({});
+    await refresh(initialConfig);
     const build = holdNextBuild();
 
     markStale("test overlapping config commit", { waitForReplacement: true });

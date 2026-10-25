@@ -27,7 +27,9 @@ const traceKey = Symbol.for("openclaw.test.openrouter-decision-path");
 const modelId = "typesafe/jev-1.13";
 const modelRef = `openrouter/${modelId}`;
 const resolvedModel = "typesafe/jev-1.13-20260917";
-afterEach(() => harness.resetDecisionTestRuntime(traceKey));
+afterEach(async () => {
+  await harness.resetDecisionTestRuntime(traceKey);
+});
 
 it.each([
   { route: "canonical", auth: "api-key" },
@@ -44,11 +46,12 @@ it.each([
     const root = state.root;
     const consumerId = "openrouter-decision-consumer";
     const { consumerRoot, trace } = harness.createDecisionConsumer(root, consumerId, traceKey);
-    const cost = 0.000019992;
+    let cost: number | undefined = 0.000019992;
+    let upstreamProvider: string | undefined = "TypeSafe";
     let status = 200;
     const responseBody = () => ({
       model: resolvedModel,
-      provider: "TypeSafe",
+      provider: upstreamProvider,
       answers: {
         q: { type: "noul", noul: 0.37 },
         c: {
@@ -119,6 +122,9 @@ it.each([
                 enabled: true,
                 llm: {
                   allowedCompletionModels: [modelRef],
+                  allowAgentIdOverride: false,
+                  allowModelOverride: false,
+                  allowAuthProfileOverride: false,
                 },
               },
             },
@@ -136,6 +142,9 @@ it.each([
               models: [],
               headers: {
                 "X-Fixture-Tenant": "synthetic-replaced-tenant",
+                ...(route === "declared-proxy"
+                  ? { Authorization: "Bearer synthetic-replaced-auth" }
+                  : {}),
               },
               params: {
                 provider: { data_collection: "deny", only: ["typesafe"], allow_fallbacks: false },
@@ -143,19 +152,19 @@ it.each([
               request: {
                 allowPrivateNetwork: true,
                 headers: { "x-fixture-tenant": "fixture-tenant" },
+                ...(route === "declared-proxy"
+                  ? {
+                      auth: {
+                        mode: "header" as const,
+                        headerName: "x-fixture-auth",
+                        value: "synthetic-prepared-custom",
+                      },
+                    }
+                  : {}),
               },
             },
           },
         };
-        if (route === "declared-proxy") {
-          const provider = cfg.models.providers!.openrouter!;
-          provider.headers!.Authorization = "Bearer synthetic-replaced-auth";
-          provider.request!.auth = {
-            mode: "header",
-            headerName: "x-fixture-auth",
-            value: "synthetic-prepared-custom",
-          };
-        }
         const sourceConfig = structuredClone(cfg);
         const sourceProvider = sourceConfig.models!.providers!.openrouter!;
         sourceProvider.request!.headers = {
@@ -189,6 +198,13 @@ it.each([
               });
             }
             const registry = await harness.activateDecisionRegistry(cfg, {}, sourceConfig);
+            expect({
+              providers: registry.providers.filter((entry) => entry.provider.id === "openrouter")
+                .length,
+              decisions: registry.decisionProviders.filter(
+                (entry) => entry.host.provider.id === "openrouter",
+              ).length,
+            }).toEqual({ providers: 1, decisions: 1 });
             const events = harness.trackDecisionUsage();
             const runtime = trace.runtime;
             if (!runtime) {
@@ -196,6 +212,12 @@ it.each([
             }
             // Warm the lazy import before ProviderHost starts its operation deadline.
             await import("./decision-inference.js");
+            const options = () =>
+              harness.decisionOptions({
+                agentId: "main",
+                purpose: "openrouter-native-fixture",
+                rubricVersion: "1",
+              });
             const batch = {
               state: { type: "text" as const, text: "Synthetic evidence" },
               questions: {
@@ -212,13 +234,23 @@ it.each([
                 },
               },
             };
-            const evaluate = () =>
-              runtime.evaluateV2(batch, harness.decisionOptions({ agentId: "main" }));
+            const evaluate = (overrides: Parameters<typeof harness.decisionOptions>[0] = {}) =>
+              runtime.evaluateV2(batch, { ...options(), ...overrides });
             const selectModel = (decisionModel: string) =>
               setRuntimeConfigSnapshot({
                 ...cfg,
                 agents: { defaults: { ...cfg.agents?.defaults, decisionModel } },
               });
+            const denied = structuredClone(cfg);
+            denied.plugins!.entries![consumerId]!.llm!.allowedCompletionModels = [
+              "openrouter/unrelated-fixture",
+            ];
+            setRuntimeConfigSnapshot(denied);
+            await expect(evaluate()).rejects.toMatchObject({
+              code: "LLM_COMPLETION_NOT_AUTHORIZED",
+            });
+            expect({ received, events }).toEqual({ received: [], events: [] });
+            setRuntimeConfigSnapshot(cfg, sourceConfig);
             const outcome = await evaluate();
             expect(outcome, JSON.stringify({ outcome, received })).toMatchObject({
               status: "ok",
@@ -268,13 +300,33 @@ it.each([
               },
             ]);
             if (auth === "oauth-key") {
+              await resetPreparedModelRuntimeSnapshotsForTest();
               return;
             }
+            cost = 0;
+            expect(await evaluate()).toMatchObject({ result: { usage: { costUsd: 0 } } });
+            expect(events).toHaveLength(2);
+            expect(events[1]?.costUsd).toBe(0);
+            const legacy = { state: "Synthetic evidence", questions: batch.questions };
+            expect(await runtime.evaluate(legacy, options())).toMatchObject({
+              status: "unavailable",
+              reason: "unsupported-input",
+            });
+            cost = undefined;
+            upstreamProvider = undefined;
+            expect(await runtime.evaluate(legacy, options())).toMatchObject({
+              status: "ok",
+              result: { answers: { q: { probabilityTrue: 0.37 } } },
+            });
             const calls = received.length;
-            const expectNoDispatch = async (reason: string) => {
-              expect(await evaluate()).toMatchObject({ status: "unavailable", reason });
+            const expectNoDispatch = async (
+              reason: string,
+              overrides: Parameters<typeof evaluate>[0] = {},
+            ) => {
+              expect(await evaluate(overrides)).toMatchObject({ status: "unavailable", reason });
               expect(received).toHaveLength(calls);
             };
+            await expectNoDispatch("unsupported-input", { reasoning: "on" });
             const foreign = structuredClone(cfg);
             foreign.models!.providers!.openrouter!.baseUrl = origin + "/undeclared";
             setRuntimeConfigSnapshot(foreign);
@@ -290,20 +342,28 @@ it.each([
                 throw new Error("Missing registered OpenRouter V2 provider");
               }
               const providerEvaluate = provider.evaluate.bind(provider);
+              let closedDuringPreparation = false;
               vi.spyOn(provider, "evaluate").mockImplementationOnce((offered, context) => {
                 // Revoke authority after preparation yields, before physical dispatch.
                 queueMicrotask(() => {
+                  closedDuringPreparation = true;
                   selectModel("");
                 });
                 return providerEvaluate(offered, context);
               });
               await expectNoDispatch("retiring");
+              expect(closedDuringPreparation).toBe(true);
               setRuntimeConfigSnapshot(cfg, sourceConfig);
             }
             // Authentication latches the generation; test it last so other errors prove recovery.
-            status = 401;
-            expect(await evaluate()).toMatchObject({ reason: "authentication" });
-            expect(received).toHaveLength(calls + 1);
+            for (const code of [413, 401]) {
+              status = code;
+              expect(await evaluate()).toMatchObject({
+                reason: code === 401 ? "authentication" : "unsupported-input",
+              });
+            }
+            expect(received).toHaveLength(calls + 2);
+            await resetPreparedModelRuntimeSnapshotsForTest();
           },
         );
       },

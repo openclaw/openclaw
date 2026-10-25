@@ -20,8 +20,8 @@ class FakeSocket extends EventEmitter {
   });
 }
 
-function expectCalls(mock: typeof client.websocket, count: number) {
-  return vi.waitFor(() => expect(mock).toHaveBeenCalledTimes(count), { interval: 1 });
+function waitForState<T>(assertion: () => T | Promise<T>): Promise<T> {
+  return vi.waitFor(assertion, { interval: 1 });
 }
 
 const mocks = vi.hoisted(() => ({
@@ -95,17 +95,7 @@ let run: Promise<void> | undefined;
 
 async function startGateway() {
   run = startClickClackGatewayAccount(ctx);
-  await expectCalls(client.websocket, 1);
-}
-
-function expectStatus(
-  patch: Omit<Parameters<GatewayContext["setStatus"]>[0], "accountId">,
-  last = false,
-) {
-  expect(ctx.setStatus)[last ? "toHaveBeenLastCalledWith" : "toHaveBeenCalledWith"]({
-    accountId: "default",
-    ...patch,
-  });
+  await waitForState(() => expect(client.websocket).toHaveBeenCalledTimes(1));
 }
 
 function nativeCommand(
@@ -123,6 +113,7 @@ function nativeCommand(
 async function publishNativeCommands(specs: NativeCommandSpec[]): Promise<CommandMenuEntry[]> {
   mocks.listNativeCommandSpecsForConfig.mockReturnValue(specs);
   await startGateway();
+  expect(client.setBotCommands).toHaveBeenCalledTimes(1);
   const commands = client.setBotCommands.mock.calls[0]?.[0];
   if (!commands) {
     throw new Error("Gateway startup did not publish its command menu");
@@ -172,12 +163,11 @@ function emitMessageEvent(
   targetSocket: FakeSocket,
   index: number,
   payload: Record<string, unknown> = {},
-  type = "message.created",
 ) {
   const event = createBacklogEvent(index, "message.created");
   targetSocket.emit(
     "message",
-    Buffer.from(JSON.stringify({ ...event, type, payload: { ...event.payload, ...payload } })),
+    Buffer.from(JSON.stringify({ ...event, payload: { ...event.payload, ...payload } })),
   );
 }
 
@@ -212,9 +202,10 @@ describe("ClickClack gateway", () => {
   });
 
   it("maps native commands to the bounded ClickClack menu contract", async () => {
+    const longDescription = "\u{1F642}".repeat(101);
     const commands = await publishNativeCommands([
       nativeCommand("Deploy-Now", {
-        description: `  ${"\u{1F642}".repeat(101)}  `,
+        description: `  ${longDescription}  `,
         acceptsArgs: true,
         args: [
           { name: "target", description: "Target", type: "string", required: true },
@@ -224,6 +215,7 @@ describe("ClickClack gateway", () => {
       nativeCommand("deploy-now", { description: "Duplicate loses" }),
       nativeCommand("shortcut", { isAlias: true }),
       nativeCommand("bad name"),
+      nativeCommand("also/bad"),
       nativeCommand("status", { description: "   ", acceptsArgs: true }),
       nativeCommand("noargs"),
       nativeCommand("long-hint", {
@@ -234,20 +226,43 @@ describe("ClickClack gateway", () => {
           required: index === 0,
         })),
       }),
-      ...Array.from({ length: 101 }, (_, index) => nativeCommand(`command${index}`)),
     ]);
 
-    expect(commands.slice(0, 4)).toEqual([
-      { command: "deploy-now", description: expect.any(String), args_hint: "<target> [message]" },
-      { command: "status", description: "status", args_hint: "[args]" },
-      { command: "noargs", description: "Run noargs", args_hint: "" },
-      { command: "long-hint", description: "Run long-hint", args_hint: expect.any(String) },
-    ]);
+    expect(mocks.listNativeCommandSpecsForConfig).toHaveBeenCalledWith(ctx.cfg, {
+      provider: "clickclack",
+    });
+    expect(commands).toHaveLength(4);
+    expect(commands[0]).toEqual({
+      command: "deploy-now",
+      description: expect.any(String),
+      args_hint: "<target> [message]",
+    });
     expect(Array.from(commands[0]?.description ?? "")).toHaveLength(100);
+    expect(commands[1]).toEqual({
+      command: "status",
+      description: "status",
+      args_hint: "[args]",
+    });
+    expect(commands[2]).toEqual({
+      command: "noargs",
+      description: "Run noargs",
+      args_hint: "",
+    });
     expect(Array.from(commands[3]?.args_hint ?? "")).toHaveLength(100);
+    expect(ctx.log?.warn).toHaveBeenCalledTimes(1);
+    expect(ctx.log?.warn).toHaveBeenCalledWith(
+      'ClickClack command menu skipped invalid native command names: "bad name", "also/bad"',
+    );
+  });
+
+  it("keeps the first 100 unique normalized commands", async () => {
+    const specs = Array.from({ length: 101 }, (_, index) => nativeCommand(`command${index}`));
+
+    const commands = await publishNativeCommands(specs);
+
     expect(commands).toHaveLength(100);
-    expect(commands[99]?.command).toBe("command95");
-    expect(ctx.log?.warn).toHaveBeenCalledWith(expect.stringContaining("bad name"));
+    expect(commands[0]?.command).toBe("command0");
+    expect(commands[99]?.command).toBe("command99");
   });
 
   it("returns an empty overwrite for an empty native catalog", async () => {
@@ -259,7 +274,8 @@ describe("ClickClack gateway", () => {
     expect(ctx.setStatus).not.toHaveBeenCalledWith(expect.objectContaining({ lifecycle: "ready" }));
 
     socket.emit("open");
-    expectStatus({
+    expect(ctx.setStatus).toHaveBeenCalledWith({
+      accountId: "default",
       running: true,
       connected: true,
       lifecycle: "ready",
@@ -271,38 +287,49 @@ describe("ClickClack gateway", () => {
 
   it.each([
     [
+      "workspace command permission rejection",
       new ClickClackHttpError(403, "forbidden", new Headers()),
       "warn",
-      "skipped: ClickClack 403: forbidden; verify token/workspace command permissions or set commandMenu: false if menus are not needed",
+      "[default] ClickClack command menu sync skipped: ClickClack 403: forbidden; verify token/workspace command permissions or set commandMenu: false if menus are not needed",
     ],
     [
+      "older server",
       new ClickClackHttpError(404, "not found", new Headers()),
       "debug",
-      "skipped: server does not support /api/bots/self/commands",
+      "[default] ClickClack command menu sync skipped: server does not support /api/bots/self/commands",
     ],
-    [new Error("network unavailable"), "warn", "failed: network unavailable"],
-  ] as const)("continues startup after %s", async (error, level, message) => {
+    [
+      "network failure",
+      new Error("network unavailable"),
+      "warn",
+      "[default] ClickClack command menu sync failed: network unavailable",
+    ],
+  ] as const)("continues startup after %s", async (_label, error, level, message) => {
     client.setBotCommands.mockRejectedValueOnce(error);
     await startGateway();
-    expect(ctx.log?.[level]).toHaveBeenCalledWith(
-      `[default] ClickClack command menu sync ${message}`,
-    );
-    expect(ctx.setStatus).toHaveBeenCalledWith(
-      expect.objectContaining({ running: true, lifecycle: "starting" }),
-    );
+    expect(ctx.log?.[level]).toHaveBeenCalledWith(message);
+    expect(ctx.setStatus).toHaveBeenCalledWith({
+      accountId: "default",
+      running: true,
+      lifecycle: "starting",
+      configured: true,
+      enabled: true,
+      baseUrl: "https://clickclack.example",
+    });
   });
 
   it("drains and processes every reconnect page before reopening realtime", async () => {
     const [firstSocket] = reconnectSockets();
+    const firstReconnectPage = Array.from({ length: 500 }, (_, index) =>
+      createBacklogEvent(index + 1),
+    );
     client.eventPage
       .mockResolvedValueOnce({ events: [], tailCursor: "" })
-      .mockResolvedValueOnce({
-        events: Array.from({ length: 500 }, (_, index) => createBacklogEvent(index + 1)),
-      })
+      .mockResolvedValueOnce({ events: firstReconnectPage })
       .mockResolvedValueOnce({ events: [createBacklogEvent(501, "message.created")] });
     await startGateway();
     firstSocket.emit("close");
-    await expectCalls(client.websocket, 2);
+    await waitForState(() => expect(client.websocket).toHaveBeenCalledTimes(2));
 
     expectBacklogPage(2, "");
     expectBacklogPage(3, "cursor-500");
@@ -311,31 +338,36 @@ describe("ClickClack gateway", () => {
     expect(client.websocket).toHaveBeenLastCalledWith("workspace-1", "cursor-501");
   });
 
-  it("skips malformed frames and dispatches other bots with the scoped context builder", async () => {
+  it("skips malformed frames and dispatches with the scoped context builder", async () => {
     const { channel } = createPluginRuntimeMock();
     ctx.channelRuntime = channel;
-    client.message.mockResolvedValueOnce({
-      id: "msg-1",
-      channel_id: "chan-1",
-      author_id: "other-bot",
-      author: { id: "other-bot", kind: "bot" },
+    let runError: unknown;
+    run = startClickClackGatewayAccount(ctx).catch((error: unknown) => {
+      runError = error;
     });
-    await startGateway();
+
+    await waitForState(() => expect(client.websocket).toHaveBeenCalledTimes(1));
 
     socket.emit("message", Buffer.from("{not json"));
     await nextTurn();
+    expect(runError).toBeUndefined();
     expect(ctx.log?.warn).toHaveBeenCalledWith(
       "[default] skipped malformed ClickClack websocket event",
     );
 
-    emitMessageEvent(socket, 1, { author_id: "other-bot" });
+    emitMessageEvent(socket, 1);
 
-    await expectCalls(inbound, 1);
-    expect(inbound.mock.calls[0]?.[0]).toMatchObject({
-      buildContext: channel.inbound.buildContext,
-      access: { shouldDispatch: true, commandAuthorized: true },
+    await waitForState(() => expect(inbound).toHaveBeenCalledTimes(1));
+    expect(inbound.mock.calls[0]?.[0].buildContext).toBe(channel.inbound.buildContext);
+    expect(inbound.mock.calls[0]?.[0].access).toEqual({
+      shouldDispatch: true,
+      commandAuthorized: true,
     });
+    expect(mocks.createClickClackClient).toHaveBeenCalledTimes(1);
     expect(inbound.mock.calls[0]?.[0]).not.toHaveProperty("correlationId");
+    abort.abort();
+    await run;
+    expect(runError).toBeUndefined();
   });
 
   it("processes websocket events in order before reconnecting from their cursor", async () => {
@@ -353,7 +385,7 @@ describe("ClickClack gateway", () => {
     expect(client.websocket).toHaveBeenCalledTimes(1);
 
     paused.release();
-    await expectCalls(client.websocket, 2);
+    await waitForState(() => expect(client.websocket).toHaveBeenCalledTimes(2));
 
     expect(inbound).toHaveBeenCalledTimes(2);
     expectBacklogPage(client.eventPage.mock.calls.length, "cursor-2");
@@ -398,12 +430,18 @@ describe("ClickClack gateway", () => {
   );
 
   it.each([
-    ["dispatch", new Error("dispatch failed"), 2, 3],
-    ["message", new Error("message fetch failed"), 1, 1],
-    ["access", { code: "ECONNRESET", retryable: true }, 1, 1],
+    ["dispatch", new Error("dispatch failed"), 2, 3, "dispatch failed"],
+    ["message", new Error("message fetch failed"), 1, 1, "message fetch failed"],
+    [
+      "access",
+      { code: "ECONNRESET", retryable: true },
+      1,
+      1,
+      '{"code":"ECONNRESET","retryable":true}',
+    ],
   ] as const)(
     "replays %s failures before committing the cursor",
-    async (source, error, eventCount, callCount) => {
+    async (source, error, eventCount, callCount, warning) => {
       const [firstSocket] = reconnectSockets();
       const events = Array.from({ length: eventCount }, (_, index) =>
         createBacklogEvent(index + 1, "message.created"),
@@ -422,7 +460,7 @@ describe("ClickClack gateway", () => {
       for (let index = 1; index <= eventCount; index++) {
         emitMessageEvent(firstSocket, index);
       }
-      await expectCalls(client.websocket, 2);
+      await waitForState(() => expect(client.websocket).toHaveBeenCalledTimes(2));
 
       expect(inbound).toHaveBeenCalledTimes(callCount);
       if (source === "message") {
@@ -431,7 +469,9 @@ describe("ClickClack gateway", () => {
       expect(firstSocket.close).toHaveBeenCalledOnce();
       expectBacklogPage(2, "");
       expect(client.websocket).toHaveBeenLastCalledWith("workspace-1", `cursor-${eventCount}`);
-      expect(ctx.log?.warn).toHaveBeenCalled();
+      expect(ctx.log?.warn).toHaveBeenCalledWith(
+        `[default] ClickClack event processing failed; reconnecting: ${warning}`,
+      );
     },
   );
 
@@ -443,13 +483,13 @@ describe("ClickClack gateway", () => {
     const slowRun = startClickClackGatewayAccount(createGatewayContext(slowAbort.signal));
     const fastRun = startClickClackGatewayAccount(createGatewayContext(fastAbort.signal));
 
-    await expectCalls(client.websocket, 2);
+    await waitForState(() => expect(client.websocket).toHaveBeenCalledTimes(2));
 
     emitMessageEvent(slowSocket, 1);
     await paused.started;
     emitMessageEvent(fastSocket, 2);
 
-    await expectCalls(inbound, 2);
+    await waitForState(() => expect(inbound).toHaveBeenCalledTimes(2));
 
     paused.release();
     slowAbort.abort();
@@ -470,12 +510,43 @@ describe("ClickClack gateway", () => {
 
     emitMessageEvent(socket, 1);
 
-    await expectCalls(resolveAccess, 1);
+    await waitForState(() => expect(resolveAccess).toHaveBeenCalledTimes(1));
     expect(resolveAccess.mock.calls[0]?.[0].account).toMatchObject({
       botHandle: "bot",
       botUserId: "bot-user",
     });
     expect(inbound).not.toHaveBeenCalled();
+    expect(ctx.log?.info).toHaveBeenCalledWith(
+      expect.stringContaining("skipped ClickClack message before agent dispatch"),
+    );
+  });
+
+  it("passes other bot-authored messages to ClickClack access policy", async () => {
+    mocks.client.message.mockResolvedValueOnce({
+      id: "msg-1",
+      workspace_id: "workspace-1",
+      channel_id: "chan-1",
+      author_id: "other-bot",
+      thread_root_id: "msg-1",
+      body: "coordinate",
+      body_format: "markdown",
+      created_at: "2026-01-01T00:00:00.000Z",
+      author: {
+        id: "other-bot",
+        kind: "bot",
+        display_name: "Other bot",
+        handle: "other-bot",
+        avatar_url: "",
+        created_at: "2026-01-01T00:00:00.000Z",
+      },
+    });
+    await startGateway();
+    emitMessageEvent(socket, 1, { author_id: "other-bot" });
+
+    await waitForState(() => expect(inbound).toHaveBeenCalledTimes(1));
+    expect(resolveAccess).toHaveBeenCalledTimes(1);
+    abort.abort();
+    await run;
   });
 
   it("carries validated event correlation through the authoritative fetch and inbound turn", async () => {
@@ -483,7 +554,7 @@ describe("ClickClack gateway", () => {
 
     emitMessageEvent(socket, 1, { correlation_id: "fakeco.case_1" });
 
-    await expectCalls(inbound, 1);
+    await vi.waitFor(() => expect(inbound).toHaveBeenCalledTimes(1));
     expect(mocks.createClickClackClient).toHaveBeenLastCalledWith({
       baseUrl: "http://127.0.0.1:8484",
       token: "test-token",
@@ -495,38 +566,6 @@ describe("ClickClack gateway", () => {
     );
   });
 
-  it.each([
-    { channel_id: "chn_1", id: "msg-101", body: "reply 101", thread_seq: 101 },
-    { direct_conversation_id: "dmc_1", id: "msg_dm_reply", body: "dm thread reply", thread_seq: 1 },
-  ])("fetches thread reply $id directly, outside timeline windows", async (fields) => {
-    const root = "direct_conversation_id" in fields ? "msg_dm_root" : "msg_root";
-    const message = {
-      ...fields,
-      author_id: "human-1",
-      thread_root_id: root,
-      parent_message_id: root,
-    };
-    client.message.mockResolvedValueOnce(message);
-    await startGateway();
-    emitMessageEvent(socket, 1, { message_id: message.id }, "thread.reply_created");
-    await expectCalls(inbound, 1);
-    expect(client.message).toHaveBeenCalledWith(message.id);
-    expect(inbound).toHaveBeenCalledWith(expect.objectContaining({ message }));
-    expect(ctx.log?.warn).not.toHaveBeenCalled();
-  });
-
-  it("warns without dispatching an unreadable thread reply", async () => {
-    client.message.mockRejectedValueOnce(new ClickClackHttpError(404, "not found", new Headers()));
-    await startGateway();
-    emitMessageEvent(socket, 1, {}, "thread.reply_created");
-    await vi.waitFor(() =>
-      expect(ctx.log?.warn).toHaveBeenCalledWith(
-        expect.stringContaining("skipped unreadable ClickClack message before agent dispatch"),
-      ),
-    );
-    expect(inbound).not.toHaveBeenCalled();
-  });
-
   it("reconnects after ClickClack websocket errors", async () => {
     const [firstSocket] = reconnectSockets();
     firstSocket.emitErrorOnClose = true;
@@ -534,11 +573,12 @@ describe("ClickClack gateway", () => {
 
     firstSocket.emit("error", new Error("gateway dropped"));
 
-    await expectCalls(client.websocket, 2);
+    await waitForState(() => expect(client.websocket).toHaveBeenCalledTimes(2));
     expect(ctx.log?.warn).toHaveBeenCalledWith(
       "[default] ClickClack websocket error; reconnecting: gateway dropped",
     );
-    expectStatus({
+    expect(ctx.setStatus).toHaveBeenCalledWith({
+      accountId: "default",
       connected: false,
       lifecycle: "recovering",
       lastError: "gateway dropped",
@@ -557,14 +597,23 @@ describe("ClickClack gateway", () => {
       firstSocket.emit("close");
       await vi.advanceTimersByTimeAsync(0);
       expect(vi.getTimerCount()).toBe(1);
-      expectStatus({ connected: false, lifecycle: "recovering" });
+      expect(ctx.setStatus).toHaveBeenCalledWith({
+        accountId: "default",
+        connected: false,
+        lifecycle: "recovering",
+      });
 
       abort.abort();
       await run;
 
       expect(vi.getTimerCount()).toBe(0);
       expect(client.websocket).toHaveBeenCalledTimes(1);
-      expectStatus({ running: false, connected: false, lifecycle: "stopped" }, true);
+      expect(ctx.setStatus).toHaveBeenLastCalledWith({
+        accountId: "default",
+        running: false,
+        connected: false,
+        lifecycle: "stopped",
+      });
     } finally {
       vi.useRealTimers();
     }

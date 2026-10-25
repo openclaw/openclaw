@@ -12,6 +12,7 @@ import {
 } from "../../../infra/agent-run-registry.js";
 import type { GithubIssueSubmitHooks, RunGithubCli } from "../../../infra/github-issue.js";
 import type { RestartSentinelPayload } from "../../../infra/restart-sentinel.js";
+import { createDeferredCore } from "../../../shared/deferred.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -19,16 +20,16 @@ import {
 import { createAgentRuntimeApprovalAuthorityValidator } from "../../agent-runtime-approval-authority.js";
 import { gatewayRequest } from "../../request-frame.test-support.js";
 import { createDirectChatContext } from "../../server-chat.agent-events.test-helpers.js";
-import { dispatchProfile } from "../client-fixtures.test-support.js";
-import { createRequestGate } from "./authenticated-request-dispatch.fixtures.test-support.js";
 import {
   createDispatchTestHarness,
   createOperatorWsClient,
 } from "./authenticated-request-dispatch.test-support.js";
+import type { GatewayWsMessageHandlerParams } from "./message-handler-types.js";
 
 const mocks = vi.hoisted(() => ({
   submitGithubIssue: vi.fn(),
   reconcileGithubIssue: vi.fn(),
+  getLatest: vi.fn<() => RestartSentinelPayload | null>(),
   refreshLatest: vi.fn<() => Promise<RestartSentinelPayload | null>>(),
 }));
 
@@ -49,6 +50,7 @@ vi.mock("../../server-update-sentinel.js", async () => {
   );
   return {
     ...actual,
+    getLatestUpdateRestartSentinel: mocks.getLatest,
     refreshLatestUpdateRestartSentinel: mocks.refreshLatest,
   };
 });
@@ -62,9 +64,15 @@ const failure: RestartSentinelPayload = {
   stats: {
     handoffId: "authority-proof",
     mode: "npm",
+    target: "openclaw@next",
     reason: "doctor-failed",
-    steps: [],
+    before: { version: "2026.8.1" },
+    after: { version: "2026.8.2" },
+    steps: [
+      { name: "doctor", command: "openclaw doctor --fix", durationMs: 10, log: { exitCode: 1 } },
+    ],
     durationMs: 20,
+    recovery: { serviceRestartSafe: true, version: "2026.8.1" },
   },
 };
 
@@ -80,16 +88,23 @@ async function countReportReceipts(): Promise<number> {
   if (!existsSync(databasePath)) {
     return 0;
   }
-  const database = new DatabaseSync(databasePath, { readOnly: true });
   try {
-    const row = database
-      .prepare(
-        "SELECT COUNT(*) AS count FROM gateway_restart_sentinel WHERE sentinel_key LIKE 'update-failure-report:%'",
-      )
-      .get() as { count: number };
-    return row.count;
-  } finally {
-    database.close();
+    const database = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      const row = database
+        .prepare(
+          "SELECT COUNT(*) AS count FROM gateway_restart_sentinel WHERE sentinel_key LIKE 'update-failure-report:%'",
+        )
+        .get() as { count: number };
+      return row.count;
+    } finally {
+      database.close();
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return 0;
+    }
+    throw error;
   }
 }
 
@@ -108,8 +123,20 @@ function createReportHarness(
   client: ReturnType<typeof createOperatorWsClient>,
   getGeneration = () => "current",
 ) {
+  let nextFinished = createDeferredCore();
+  const handler: NonNullable<GatewayWsMessageHandlerParams["extraHandlers"][string]> = async (
+    options,
+  ) => {
+    try {
+      await updateReportHandler(options as never);
+    } finally {
+      const finished = nextFinished;
+      nextFinished = createDeferredCore();
+      finished.resolve();
+    }
+  };
   const harness = createDispatchTestHarness({
-    extraHandlers: { "update.report": (options) => updateReportHandler(options as never) },
+    extraHandlers: { "update.report": handler },
     buildRequestContext: () =>
       createDirectChatContext({
         getRuntimeConfig: () => ({}),
@@ -128,6 +155,7 @@ function createReportHarness(
     );
   return {
     harness,
+    waitForNextHandler: () => nextFinished.promise,
     dispatch,
     preview: async (id: string) => {
       await dispatch(id, "preview");
@@ -147,7 +175,23 @@ function grantReportAuthority(
     client.internal = { operatorRoleActor: { kind: "system" } };
     return;
   }
-  client.authenticatedUserProfile = dispatchProfile(GATEWAY_OWNER_PROFILE_ID);
+  client.authenticatedUserProfile = {
+    profileId: GATEWAY_OWNER_PROFILE_ID,
+    displayName: "Gateway owner",
+    avatarRevision: "owner-avatar",
+    hasAvatar: false,
+    updatedAt: 1,
+  };
+}
+
+function identifyNonOwner(client: ReturnType<typeof createOperatorWsClient>): void {
+  client.authenticatedUserProfile = {
+    profileId: "profile-non-owner",
+    displayName: "Delegated operator",
+    avatarRevision: "operator-avatar",
+    hasAvatar: false,
+    updatedAt: 1,
+  };
 }
 
 const authorityCloseReasons = {
@@ -186,10 +230,21 @@ describe("update report live authority boundary", () => {
   beforeEach(async () => {
     vi.restoreAllMocks();
     vi.clearAllMocks();
-    mocks.submitGithubIssue.mockReset();
     stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-report-authority-"));
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    mocks.getLatest.mockReturnValue(failure);
     mocks.refreshLatest.mockResolvedValue(failure);
+    mocks.submitGithubIssue.mockImplementation(
+      async (_issue: unknown, _runGh: unknown, hooks: GithubIssueSubmitHooks) => {
+        await hooks.afterAuthPreflight?.();
+        const commitIssueCreate = await hooks.beforeIssueCreate?.();
+        commitIssueCreate?.();
+        return {
+          status: "created",
+          url: issueUrl,
+        };
+      },
+    );
   });
 
   afterEach(async () => {
@@ -229,11 +284,13 @@ describe("update report live authority boundary", () => {
       };
       client.internal = { ...client.internal, agentRuntimeIdentity: identity };
       const validateAuthority = createAgentRuntimeApprovalAuthorityValidator();
-      const { harness, preview, submit } = createReportHarness(client);
-      const gate = createRequestGate();
+      const { harness, waitForNextHandler, preview, submit } = createReportHarness(client);
+      const entered = createDeferredCore();
+      const released = createDeferredCore();
       const runGh = vi.fn<RunGithubCli>(async (args) => {
         if (args[0] === "auth") {
-          await gate.wait();
+          entered.resolve();
+          await released.promise;
           return { started: true, status: 0, stdout: Buffer.alloc(0) };
         }
         expect(args).toContain("POST");
@@ -266,15 +323,17 @@ describe("update report live authority boundary", () => {
         expect(validateAuthority(identity)).toBe(true);
         const previewDigest = await preview("runtime-preview");
         expect(await countReportFiles()).toBe(0);
+        const finished = waitForNextHandler();
         const dispatch = submit("runtime-submit", previewDigest);
-        await gate.entered;
+        await entered.promise;
         if (retire && boundary === "auth") {
           expect(releaseAgentRunDelegatedAuthority(claim)).toBe(true);
         }
         expect(validateAuthority(identity)).toBe(!(retire && boundary === "auth"));
         expect(client.invalidated).not.toBe(true);
         expect(client.connectionSignal?.aborted).not.toBe(true);
-        gate.release();
+        released.resolve();
+        await finished;
         await dispatch;
 
         expect(validateAuthority(identity)).toBe(!retire);
@@ -294,9 +353,56 @@ describe("update report live authority boundary", () => {
           expect(harness.close).not.toHaveBeenCalled();
         }
       } finally {
-        gate.release();
+        released.resolve();
         releaseAgentRunDelegatedAuthority(claim);
       }
+    },
+  );
+
+  it.each(["identity", "same-identity-facts"] as const)(
+    "refuses changed sentinel $0 during real shared auth preflight",
+    async (change) => {
+      const transport = await vi.importActual<typeof import("../../../infra/github-issue.js")>(
+        "../../../infra/github-issue.js",
+      );
+      const client = createOperatorWsClient({ connId: `report-changed-${change}` });
+      grantReportAuthority(client, "system-admin");
+      const { harness, waitForNextHandler, preview, submit } = createReportHarness(client);
+      const previewDigest = await preview(`preview-changed-${change}`);
+      const entered = createDeferredCore();
+      const released = createDeferredCore();
+      const runGh = vi.fn<RunGithubCli>(async (args) => {
+        expect(args[0]).toBe("auth");
+        entered.resolve();
+        await released.promise;
+        return { started: true, status: 0, stdout: Buffer.alloc(0) };
+      });
+      mocks.submitGithubIssue.mockImplementationOnce((issue, _runGh, hooks) =>
+        transport.submitGithubIssue(issue, runGh, hooks),
+      );
+      const finished = waitForNextHandler();
+      const dispatch = submit(`changed-${change}`, previewDigest);
+      await entered.promise;
+      mocks.refreshLatest.mockResolvedValue({
+        ...failure,
+        stats: {
+          ...failure.stats,
+          ...(change === "identity" ? { handoffId: "replacement" } : { reason: "rollback-failed" }),
+        },
+      });
+      released.resolve();
+      await finished;
+      await dispatch;
+
+      expect(runGh).toHaveBeenCalledOnce();
+      await expectNoReport();
+      expect(harness.send).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: `changed-${change}`,
+          ok: false,
+          error: expect.objectContaining({ code: "INVALID_REQUEST" }),
+        }),
+      );
     },
   );
 
@@ -310,7 +416,7 @@ describe("update report live authority boundary", () => {
         connId: `report-denied-${scopes[0]}`,
         scopes,
       });
-      client.authenticatedUserProfile = dispatchProfile("profile-non-owner");
+      identifyNonOwner(client);
       const { harness, dispatch, submit } = createReportHarness(client);
 
       await dispatch(`denied-${scopes[0]}`, "preview");
@@ -332,6 +438,10 @@ describe("update report live authority boundary", () => {
         if (!isRecord(submitted.payload) || typeof submitted.payload.fallbackUrl !== "string") {
           throw new Error("Missing browser handoff");
         }
+        const url = new URL(submitted.payload.fallbackUrl);
+        expect(url.origin + url.pathname).toBe("https://github.com/openclaw/openclaw/issues/new");
+        expect(url.searchParams.get("body")).toBe(preview.body);
+        expect(url.searchParams.get("title")).toBe(preview.title);
         await submit("browser-repeat", preview.previewDigest);
         expect(await harness.awaitResponseFrame("browser-repeat")).toMatchObject({
           ok: true,
@@ -355,18 +465,21 @@ describe("update report live authority boundary", () => {
   ] as const)("blocks report side effects after %s closes during %s", async (change, stage) => {
     const {
       harness,
+      waitForNextHandler,
       revoke,
       preview,
       dispatch: dispatchReport,
     } = authorityHarness(change, `report-${stage}-${change}`);
     const previewDigest = stage === "sentinel-refresh" ? undefined : await preview("preview");
-    const gate = createRequestGate();
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
     let issueCreateCalls = 0;
     if (stage === "auth-preflight") {
       mocks.submitGithubIssue.mockImplementationOnce(
         async (_issue: unknown, _runGh: unknown, hooks: GithubIssueSubmitHooks) => {
           await hooks.afterAuthPreflight?.();
-          await gate.wait();
+          entered.resolve();
+          await release.promise;
           const commitIssueCreate = await hooks.beforeIssueCreate?.();
           commitIssueCreate?.();
           issueCreateCalls += 1;
@@ -380,24 +493,28 @@ describe("update report live authority boundary", () => {
           typeof args[0] === "string" &&
           args[0].includes(`${path.sep}update-reports${path.sep}`)
         ) {
-          await gate.wait();
+          entered.resolve();
+          await release.promise;
         }
         return result;
       });
     } else {
       mocks.refreshLatest.mockImplementationOnce(async () => {
-        await gate.wait();
+        entered.resolve();
+        await release.promise;
         return failure;
       });
     }
+    const finished = waitForNextHandler();
     const dispatch = dispatchReport(
       "denied",
       stage === "sentinel-refresh" ? "preview" : "submit",
       previewDigest,
     );
-    await gate.entered;
+    await entered.promise;
     revoke();
-    gate.release();
+    release.resolve();
+    await finished;
     await dispatch;
 
     expect(harness.close).toHaveBeenCalledWith(4001, authorityCloseReasons[change]);

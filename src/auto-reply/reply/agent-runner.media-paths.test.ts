@@ -31,6 +31,23 @@ describe("runReplyAgent media path normalization", () => {
   beforeEach(resetAgentRunnerMediaTestState);
   afterEach(cleanupAgentRunnerMediaTestState);
 
+  it.each(["device-a", "device-b"])(
+    "steers active non-streaming prompts from reviewer %s in steer queue mode",
+    async (approvalReviewerDeviceId) => {
+      acceptSteer();
+      const followupRun = createMediaFollowupRun({ prompt: "generate chart" });
+      followupRun.run.taskSuggestionDeliveryMode = "gateway";
+      followupRun.run.approvalReviewerDeviceId = "device-a";
+
+      const params = await makeSteerParams({ followupRun });
+      followupRun.run.approvalReviewerDeviceId = approvalReviewerDeviceId;
+
+      await runReplyAgent(params);
+
+      expectAcceptedSteer("generate chart");
+    },
+  );
+
   const makeSteerParams = (overrides: Parameters<typeof makeReplyParams>[0] = {}) =>
     makeReplyParams({
       resolvedQueue: { mode: "steer" },
@@ -68,6 +85,7 @@ describe("runReplyAgent media path normalization", () => {
 
   it.each([
     { label: "permission mode", run: { permissionMode: "guarded" } },
+    { label: "tool overrides", run: { toolOverrides: { webSearch: false } } },
     { label: "execution policy", run: { execOverrides: { security: "deny" } } },
     { label: "elevation", run: { elevatedLevel: "full" } },
     {
@@ -75,6 +93,11 @@ describe("runReplyAgent media path normalization", () => {
       run: { bashElevated: { enabled: true, allowed: true, defaultLevel: "full" } },
     },
     { label: "workspace", run: { workspaceDir: "/tmp/different-steering-workspace" } },
+    { label: "client capabilities", run: { clientCaps: ["changed-capability"] } },
+    {
+      label: "tool bindings",
+      run: { toolBindings: { browser: { clientId: "different-browser" } } },
+    },
   ] satisfies { label: string; run: Partial<FollowupRun["run"]> }[])(
     "queues a different browser's prompt when its $label differs",
     async ({ run }) => {
@@ -96,7 +119,12 @@ describe("runReplyAgent media path normalization", () => {
 
       expect(queueMessageMock).not.toHaveBeenCalled();
       expectDeferredSteer();
-      expect(reserveSteerCandidateMock).toHaveBeenCalledOnce();
+      expect(reserveSteerCandidateMock).toHaveBeenCalledExactlyOnceWith(
+        params.queueKey,
+        followupRun,
+        params.resolvedQueue,
+        expect.any(Function),
+      );
     },
   );
 
@@ -113,7 +141,14 @@ describe("runReplyAgent media path normalization", () => {
     });
     await runReplyAgent(params);
     expect(source).toMatchObject({ phase: "queued", abortSignal: { aborted: false } });
-    expect(enqueueFollowupRunMock).toHaveBeenCalledOnce();
+    expect(enqueueFollowupRunMock).toHaveBeenCalledExactlyOnceWith(
+      params.queueKey,
+      params.followupRun,
+      params.resolvedQueue,
+      "message-id",
+      expect.any(Function),
+      false,
+    );
     expect(reserveSteerCandidateMock).not.toHaveBeenCalled();
     expect(queueMessageMock).not.toHaveBeenCalled();
   });
@@ -146,6 +181,29 @@ describe("runReplyAgent media path normalization", () => {
     );
   });
 
+  it("defers the complete image turn when the active runtime cannot preserve images", async () => {
+    queueMessageMock.mockImplementation(async (sessionId: string) => ({
+      queued: false,
+      sessionId,
+      reason: "image_input_unsupported",
+      gatewayHealth: "live",
+    }));
+    const followupRun = createMediaFollowupRun({
+      prompt: "inspect this",
+      images: [{ type: "image", data: "png", mimeType: "image/png" }],
+    });
+
+    await runReplyAgent(await makeSteerParams({ followupRun }));
+
+    expect(reserveSteerCandidateMock).toHaveBeenCalledWith(
+      "main",
+      followupRun,
+      expect.objectContaining({ mode: "steer" }),
+      expect.any(Function),
+    );
+    expectDeferredSteer();
+  });
+
   it("latches audio only after the active reply operation accepts the steer", async () => {
     const followupRun = createMediaFollowupRun({
       prompt: "summarize the audio",
@@ -173,6 +231,21 @@ describe("runReplyAgent media path normalization", () => {
 
     expect(op).toMatchObject({ acceptedSteeredInboundAudio: true, sourceReplyDelivered: false });
     expectAcceptedSteer("summarize the audio");
+  });
+
+  it("queues active prompts in followup mode without steering", async () => {
+    await runReplyAgent(
+      await makeSteerParams({
+        resolvedQueue: { mode: "followup" },
+        shouldSteer: false,
+        isRunActive: () => true,
+      }),
+    );
+
+    expect(queueMessageMock).not.toHaveBeenCalled();
+    expect(reserveSteerCandidateMock).not.toHaveBeenCalled();
+    expect(enqueueFollowupRunMock).toHaveBeenCalledOnce();
+    expect(enqueueFollowupRunMock.mock.calls[0]?.[1].prompt).toBe("generate chart");
   });
 
   async function runTurn(
@@ -240,38 +313,51 @@ describe("runReplyAgent media path normalization", () => {
       | undefined;
   }
 
-  it("creates a missing media context for the prepared global owner", async () => {
-    runEmbeddedAgentMock.mockResolvedValue({
-      payloads: [],
-      meta: { agentMeta: { sessionId: "session", provider: "anthropic", model: "claude" } },
-    });
+  it.each([true, false])(
+    "keeps the prepared global owner in executeAgentTurn (provided context: %s)",
+    async (providedContext) => {
+      // Regression: #68056, block and final replies must share the caller's media cache.
+      runEmbeddedAgentMock.mockResolvedValue({
+        payloads: [],
+        meta: { agentMeta: { sessionId: "session", provider: "anthropic", model: "claude" } },
+      });
 
-    const followupRun = createMediaFollowupRun({
-      prompt: "generate",
-      run: {
-        agentId: "qa",
+      const followupRun = createMediaFollowupRun({
+        prompt: "generate",
+        run: {
+          agentId: "qa",
+          sessionKey: "global",
+          workspaceDir: testWorkspaceDir,
+          config: { agents: { ownership: "explicit", entries: { qa: {}, beta: {} } } },
+        },
+      });
+      setRuntimeConfigSnapshot(followupRun.run.config, followupRun.run.config);
+      const result = await runTurn(makeSessionContext(), "generate", {
+        followupRun,
+        blockStreamingEnabled: true,
         sessionKey: "global",
-        workspaceDir: testWorkspaceDir,
-        config: { agents: { ownership: "explicit", entries: { qa: {}, beta: {} } } },
-      },
-    });
-    setRuntimeConfigSnapshot(followupRun.run.config, followupRun.run.config);
-    const result = await runTurn(makeSessionContext(), "generate", {
-      followupRun,
-      blockStreamingEnabled: true,
-      sessionKey: "global",
-      replyMediaContext: undefined,
-    });
+        replyMediaContext: providedContext
+          ? { normalizePayload: async (payload) => payload }
+          : undefined,
+      });
 
-    expect(mediaContextMock).toHaveBeenCalledOnce();
-    expect(mediaContextMock).toHaveBeenCalledWith(
-      expect.objectContaining({ cfg: followupRun.run.config, sessionKey: "global" }),
-    );
-    expect(result.outcome).toMatchObject({ kind: "settled", status: "ok" });
-    expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
-  });
+      if (providedContext) {
+        expect(mediaContextMock).not.toHaveBeenCalled();
+      } else {
+        expect(mediaContextMock).toHaveBeenCalledOnce();
+        expect(mediaContextMock).toHaveBeenCalledWith(
+          expect.objectContaining({ cfg: followupRun.run.config, sessionKey: "global" }),
+        );
+      }
+      expect(result.outcome).toMatchObject({ kind: "settled", status: "ok" });
+      expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+    },
+  );
 
-  it("passes resolved current images and skips unresolved attachments", async () => {
+  it.each([
+    ["passes current inbound media as native images", false],
+    ["retains resolved images and skips unresolved attachments", true],
+  ] as const)("%s", async (_label, unresolvedAttachment) => {
     const { tmpDir, imagePath } = await nativeImage();
     const attachment = (file: string) => ({
       path: file,
@@ -281,9 +367,12 @@ describe("runReplyAgent media path normalization", () => {
     await runTurn(
       {
         ...makeSessionContext(),
-        media: [attachment(path.join(tmpDir, "missing.png")), attachment(imagePath)],
+        media: [
+          ...(unresolvedAttachment ? [attachment(path.join(tmpDir, "missing.png"))] : []),
+          attachment(imagePath),
+        ],
       } as unknown as TemplateContext,
-      "compare these images",
+      unresolvedAttachment ? "compare these images" : "describe this image",
     );
 
     const call = nativeCall();
