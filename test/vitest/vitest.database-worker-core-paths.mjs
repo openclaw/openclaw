@@ -73,6 +73,8 @@ export const databaseWorkerCoreTestFiles = [
   "src/infra/database-engine/gateway-session-startup.conformance.test.ts",
   "src/infra/database-engine/session-actor.conformance.test.ts",
   "src/infra/database-engine/audit-retention.conformance.test.ts",
+  "src/infra/database-engine/acp-retention.conformance.test.ts",
+  "src/infra/database-engine/row-limit.conformance.test.ts",
   "src/infra/database-engine/gateway-agent-inspection.conformance.test.ts",
   "src/infra/database-engine/session-group-catalog.conformance.test.ts",
   "src/infra/database-engine/post-ready.conformance.test.ts",
