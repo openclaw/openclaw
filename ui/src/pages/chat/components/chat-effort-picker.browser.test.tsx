@@ -17,10 +17,9 @@ import { installChatComposerPickerDismissal } from "./chat-picker-overlay.ts";
 
 let host: HTMLDivElement | undefined;
 let updatePicker: ((props: Parameters<typeof ChatEffortPicker>[0]) => void) | undefined;
-const query = <T extends Element = HTMLElement>(selector: string): T =>
-  host!.querySelector<T>(selector)!;
-const speed = (value: string) => query<HTMLButtonElement>(`[data-chat-speed-option="${value}"]`);
-const summary = () => query("summary");
+const speed = (value: string) =>
+  host!.querySelector<HTMLButtonElement>(`[data-chat-speed-option="${value}"]`)!;
+const summary = () => host!.querySelector("summary")!;
 const noBoost = { fill: "none", glow: "none" };
 
 function speedState(
@@ -117,7 +116,7 @@ async function fixture(
     );
   }
   flush();
-  const details = query<HTMLDetailsElement>("details");
+  const details = host.querySelector("details")!;
   if (open && !details.open) {
     const opened = new Promise<void>((resolve) => {
       details.addEventListener("toggle", () => resolve(), { once: true });
@@ -126,12 +125,14 @@ async function fixture(
     // The details toggle commits its native top-layer surface.
     await opened;
   }
-  expect(query("[data-anchored-overlay]").matches(":popover-open")).toBe(open);
+  expect(host.querySelector("[data-anchored-overlay]")!.matches(":popover-open")).toBe(open);
   await expect
-    .poll(() => query<HTMLInputElement>("input[type=range]")?.checkVisibility() ?? false)
+    .poll(
+      () => host?.querySelector<HTMLInputElement>("input[type=range]")?.checkVisibility() ?? false,
+    )
     .toBe(open);
   return {
-    input: query<HTMLInputElement>("input[type=range]"),
+    input: host.querySelector<HTMLInputElement>("input[type=range]")!,
     onThinkingSelect,
     onFastModeSelect,
   };
@@ -179,7 +180,7 @@ describe("effort bar colour and flow", () => {
     await userEvent.keyboard("{Enter}");
     await expect.poll(() => surface.matches(":popover-open")).toBe(true);
     await userEvent.keyboard("{Tab}");
-    await expect.poll(() => document.activeElement).toBe(query("input[type=range]"));
+    await expect.poll(() => document.activeElement).toBe(host!.querySelector("input[type=range]"));
     await userEvent.keyboard("{Escape}");
     await expect.poll(() => details.open).toBe(false);
     await expect.poll(() => surface.matches(":popover-open")).toBe(false);
