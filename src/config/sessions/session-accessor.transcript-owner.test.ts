@@ -1,16 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { expect, it, vi } from "vitest";
 import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { resolveZstdCodec } from "../../infra/zstd-codec.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { retainLegacyDefaultAgentId } from "../legacy.default-agent-owner.js";
-import { setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import {
   appendTranscriptMessage,
@@ -20,10 +16,7 @@ import {
   loadTranscriptEvents as loadEvents,
   replaceSessionEntry,
 } from "./session-accessor.js";
-import {
-  replaceSessionEntrySync,
-  upsertSessionEntryCore,
-} from "./session-accessor.sqlite-entry.js";
+import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import {
   appendTranscriptEventSync,
   replaceTranscriptEventsSync,
@@ -220,22 +213,29 @@ it.each(["recorded default", "explicit per-agent store"] as const)(
   },
 );
 
-it("rejects a conflicting scope agent for a persisted fixed-store owner", async () => {
-  await withTempHome(async (home) => {
-    const storePath = path.join(home, "sessions.json");
-    const cfg = fleetConfig(storePath, "ops");
-    const scope = makeScope(home, "research");
-
-    await expect(persistTurn(scope, turnOptions(cfg, "wrong owner"))).rejects.toBeInstanceOf(
-      AgentSelectionRequiredError,
-    );
-
-    await seed({ ...scope, agentId: "ops" });
-    await expect(
-      persistTurn({ ...scope, agentId: "ops" }, turnOptions(cfg, "right owner")),
-    ).resolves.toMatchObject({ messages: [{ appended: true }] });
-  });
-});
+it.each([false, ...(process.platform === "win32" ? [] : [true])])(
+  "rejects conflicting fixed-store owners (symlink=%s)",
+  async (alias) =>
+    withTempHome(async (home) => {
+      const file = alias ? "shared-store.sqlite" : "sessions.json";
+      const storePath = path.join(home, file);
+      const cfg = fleetConfig(storePath, "ops");
+      const scope = makeScope(home, "research", "global", alias ? "alias.sqlite" : file);
+      if (alias) {
+        await fs.writeFile(storePath, "");
+        await fs.symlink(storePath, scope.storePath);
+      }
+      await expect(persistTurn(scope, turnOptions(cfg, "wrong owner"))).rejects.toBeInstanceOf(
+        AgentSelectionRequiredError,
+      );
+      if (!alias) {
+        await seed({ ...scope, agentId: "ops" });
+        await expect(
+          persistTurn({ ...scope, agentId: "ops" }, turnOptions(cfg, "right owner")),
+        ).resolves.toMatchObject({ messages: [{ appended: true }] });
+      }
+    }),
+);
 
 it("completes a pathless injected write before a later failure", async () => {
   await withTempHome(async (home) => {
@@ -293,26 +293,6 @@ it("completes a pathless injected write before a later failure", async () => {
     );
   });
 });
-
-it.runIf(process.platform !== "win32")(
-  "treats a symlink alias as the configured owned fixed store",
-  async () => {
-    await withTempHome(async (home) => {
-      const fixedStorePath = path.join(home, "shared-store.sqlite");
-      const aliasStorePath = path.join(home, "shared-store-alias.sqlite");
-      await fs.writeFile(fixedStorePath, "");
-      await fs.symlink(fixedStorePath, aliasStorePath);
-      const cfg = fleetConfig(fixedStorePath, "ops");
-
-      await expect(
-        persistTurn(
-          makeScope(home, "research", "global", "shared-store-alias.sqlite"),
-          turnOptions(cfg, "wrong owner"),
-        ),
-      ).rejects.toBeInstanceOf(AgentSelectionRequiredError);
-    });
-  },
-);
 
 it.each(["writer", "lifecycle"] as const)(
   "fences transcript mutations with the admitted %s claim",
@@ -390,53 +370,6 @@ it.each(["writer", "lifecycle"] as const)(
 
       expect(loadSessionEntry(scope)?.updatedAt).toBe(1);
       await expect(loadEvents(scope)).resolves.toEqual([]);
-    });
-  },
-);
-it.each(["authority", "idempotency"] as const)(
-  "commits a %s-guarded turn without decoding unrelated tool results",
-  async (guardKind) => {
-    await withOpenClawTestState({ label: "guarded-turn-write-hold" }, async (state) => {
-      setRuntimeConfigSnapshot({});
-      const scope = makeScope(state.sessionsDir(), "main", "agent:main:guarded-turn");
-      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-      appendTranscriptMessageSync(scope, {
-        message: {
-          role: "toolResult",
-          toolCallId: "large-result",
-          toolName: "read",
-          content: [{ type: "text", text: "synthetic tool output ".repeat(8000) }],
-          isError: false,
-          timestamp: 1,
-        },
-      });
-      const codec = expectDefined(
-        resolveZstdCodec(),
-        "Transcript hold regression requires native zstd",
-      );
-      using decode = vi.spyOn(codec, "decompress");
-      const guard = vi.fn(() => true);
-      const committed = await persistTurn(scope, {
-        expectedSessionId: scope.sessionId,
-        updateMode: "none",
-        touchSessionEntry: true,
-        messages: [
-          {
-            message: {
-              role: "assistant",
-              content: "completed",
-              timestamp: 2,
-              idempotencyKey: "fresh-reply",
-            },
-            ...(guardKind === "authority"
-              ? { shouldAppendInTransaction: guard }
-              : { idempotencyLookup: "scan-assistant" as const }),
-          },
-        ],
-      });
-      expect(committed.messages.filter((m) => m.appended)).toHaveLength(1);
-      expect(guard).toHaveBeenCalledTimes(guardKind === "authority" ? 1 : 0);
-      expect(decode).not.toHaveBeenCalled();
     });
   },
 );

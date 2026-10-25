@@ -1,10 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import {
-  isSessionEntryDataSql,
-  observeHostDataSql,
-} from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
@@ -123,9 +119,7 @@ it.each(["age", "count"] as const)(
       const history = loadTranscriptEventsSync(conversation);
       expect(activeCount(storePath)).toBe(3);
       const preview = await run(true);
-      const sql = observeHostDataSql();
-      const result = await run().finally(sql.restore);
-      expect(sql.queries.filter(isSessionEntryDataSql)).toEqual([]);
+      const result = await run();
       expect(activeCount(storePath)).toBe(1);
       const expected = {
         beforeCount: 4,

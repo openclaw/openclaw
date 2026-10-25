@@ -173,41 +173,6 @@ function trajectory(sessionId: string, text: string, seq: number): TrajectoryEve
 }
 
 describe("memory session side-data consumers", () => {
-  it("reports a committed message-tool outcome publication failure after one write", async () => {
-    const { scope, actor } = await fixture();
-    const sequence = actor.snapshot(authority)!.version.sequence;
-    await publicationFails(scope, () =>
-      recordMessageToolRunOutcome({
-        ...scope,
-        runId: "run",
-        ...outcomeDefaults,
-      }),
-    );
-    expect(actor.snapshot(authority)!.version.sequence).toBe(sequence + 1);
-  });
-
-  it("reports an outbox publication failure while preserving the accepted turn", async () => {
-    const { scope, binding, turn } = await fixture();
-    const boundary = await turn("accepted");
-    const store = outbox(scope, binding);
-    await publicationFails(scope, () => store.acceptIntent({ ...filter, boundary }));
-    await store.publishClosedTurn({ ...filter, boundary, ...publishLimits });
-    expect(await store.readNextPending({ ...filter, sessionId: scope.sessionId })).toMatchObject({
-      advancement_key: "accepted",
-    });
-  });
-
-  it("does not append a committed trajectory batch again after publication fails", async () => {
-    const { scope, binding } = await fixture();
-    const sink = await trajectorySink(scope, binding);
-    const event = trajectory(scope.sessionId, "saved", 1);
-    sink.write(event, JSON.stringify(event));
-    await publicationFails(scope, () => sink.flush());
-    expect(await loadSqliteTrajectoryRuntimeEvents(scope)).toEqual([event]);
-    await sink.flush();
-    expect(await loadSqliteTrajectoryRuntimeEvents(scope)).toEqual([event]);
-  });
-
   it("routes unbound production side data through the current memory owner without recreating closed sessions", async () => {
     const target = {
       agentId: "main",
@@ -226,7 +191,11 @@ describe("memory session side-data consumers", () => {
       runId: "user",
       ...outcomeDefaults,
     };
-    await recordMessageToolRunOutcome(outcome);
+    const owner = memorySessionActorOwners.read({ agentId: scope.agentId, path: scope.storePath })!;
+    const sequence = () => owner.readSession(scope.sessionKey, authority)!.version.sequence;
+    const beforeOutcome = sequence();
+    await publicationFails(scope, () => recordMessageToolRunOutcome(outcome));
+    expect(sequence()).toBe(beforeOutcome + 1);
     const appended = await appendTranscriptMessage(scope, {
       message: { role: "user", content: "unbound turn" },
       now: 1,
@@ -277,7 +246,11 @@ describe("memory session side-data consumers", () => {
     const second = await turn("second");
     for (const boundary of [first, second]) {
       await store.enqueueIntent({ ...filter, admission: boundary.admission });
-      await store.acceptIntent({ ...filter, boundary });
+      if (boundary === first) {
+        await publicationFails(scope, () => store.acceptIntent({ ...filter, boundary }));
+      } else {
+        await store.acceptIntent({ ...filter, boundary });
+      }
     }
     expect(await store.prepareRun({ ...filter, sessionId: scope.sessionId })).toMatchObject({
       pending: true,
@@ -323,6 +296,8 @@ describe("memory session side-data consumers", () => {
     const initial = trajectory(first.scope.sessionId, "old", 1);
     const sink = await trajectorySink(first.scope, first.binding);
     sink.write({ ...initial, data: { text: "unbounded source" } }, JSON.stringify(initial));
+    await publicationFails(first.scope, () => sink.flush());
+    expect(await loadSqliteTrajectoryRuntimeEvents(first.scope)).toEqual([initial]);
     await sink.flush();
     const read = await loadSqliteTrajectoryRuntimeEvents(first.scope);
     expect(read).toEqual([initial]);

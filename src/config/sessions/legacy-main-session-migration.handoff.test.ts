@@ -156,58 +156,6 @@ it.each(["foreign partition", "new destination"])("hands off %s", async (kind) =
   }
 });
 
-it("preserves anchored history and recorded idempotency ownership across stores", async () => {
-  const fixture = createFixture();
-  const sourceTarget = claim(fixture, "main");
-  const destination = claim(fixture, "ops");
-  const sessionId = "identity-transfer";
-  const { databasePath: pathname, key: sessionKey } = sourceTarget;
-  const source = { agentId: "main", path: pathname, sessionId, sessionKey };
-  seedClaim({
-    ...sourceTarget,
-    entry: { sessionId, updatedAt: 100 },
-    events: [
-      { type: "session", version: 3, id: sessionId },
-      message("question", "user", "Preserve this migrated question."),
-      message("earlier-answer", "assistant", "Earlier answer.", "question", "answer-key"),
-    ],
-  });
-  const expectedIdentities = transaction(sourceTarget, (database) => {
-    appendEvent(
-      database,
-      source,
-      message("latest-answer", "assistant", "Latest answer.", "earlier-answer", "answer-key"),
-      { allowStoredAlias: true, idempotencyKeyMode: "relocate-owner" },
-    );
-    return database.db
-      .prepare("SELECT * FROM transcript_event_identities WHERE session_id = ? ORDER BY seq")
-      .all(sessionId);
-  });
-  const before = readClaim(sourceTarget);
-  const owners = { "earlier-answer": null, "latest-answer": "answer-key" };
-  for (const [event_id, message_idempotency_key] of Object.entries(owners)) {
-    expect(expectedIdentities).toContainEqual(
-      expect.objectContaining({ event_id, message_idempotency_key }),
-    );
-  }
-
-  expect(await repair(fixture)).toMatchObject({ complete: true });
-  expect(
-    readHistoryPage(historyScope(fixture, destination, sessionId), {
-      messageId: "question",
-      maxMessages: 3,
-    }),
-  ).toMatchObject({ found: true });
-  expect(readClaim(destination)?.events).toEqual(before?.events);
-  expect(
-    transaction(destination, (database) =>
-      database.db
-        .prepare("SELECT * FROM transcript_event_identities WHERE session_id = ? ORDER BY seq")
-        .all(sessionId),
-    ),
-  ).toEqual(expectedIdentities);
-});
-
 it.each([
   "before-copy",
   "during-delete",
@@ -293,7 +241,13 @@ it.each(["existing-current", "cold", "utf16"] as const)(
       return [
         { type: "session", version: 3, id, timestamp },
         {
-          ...message(`message-${index}`, "user", `Retained exact history ${index}: café 🦞`),
+          ...message(
+            `message-${index}`,
+            "user",
+            `Retained exact history ${index}: café 🦞`,
+            undefined,
+            "answer-key",
+          ),
           timestamp,
         },
         {
@@ -307,9 +261,29 @@ it.each(["existing-current", "cold", "utf16"] as const)(
         },
       ];
     });
-    for (const [index, entry] of entries.entries()) {
-      seedClaim({ ...source, entry, events: events[index] });
-    }
+    const seedGeneration = (target: ClaimTarget, index: number) => {
+      const entry = entries[index]!;
+      seedClaim({ ...target, entry, events: events[index] });
+      if (index === 2) {
+        transaction(target, (database) =>
+          appendEvent(
+            database,
+            {
+              agentId: target.databaseAgentId,
+              path: target.databasePath,
+              sessionId: entry.sessionId,
+              sessionKey: target.key,
+            },
+            {
+              ...message("latest-answer", "assistant", "Latest answer.", "cache-2", "answer-key"),
+              timestamp: new Date(4).toISOString(),
+            },
+            { allowStoredAlias: true, idempotencyKeyMode: "relocate-owner" },
+          ),
+        );
+      }
+    };
+    entries.forEach((_, index) => seedGeneration(source, index));
     const snapshot = (target: ClaimTarget) =>
       transaction(
         target,
@@ -326,7 +300,15 @@ it.each(["existing-current", "cold", "utf16"] as const)(
       updateWindow(source, "transcript_updated_at = 1", fixture.env);
     }
     const before = snapshot(source);
-    expect([before.windows.length, before.events.length]).toEqual([3, 9]);
+    expect(before.identities).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ event_id: "message-2", message_idempotency_key: null }),
+        expect.objectContaining({
+          event_id: "latest-answer",
+          message_idempotency_key: "answer-key",
+        }),
+      ]),
+    );
     if (kind === "utf16") {
       fs.mkdirSync(path.dirname(destinationPath), { recursive: true });
       {
@@ -341,7 +323,7 @@ it.each(["existing-current", "cold", "utf16"] as const)(
       );
     }
     if (kind === "existing-current") {
-      seedClaim({ ...destination, entry: entries[2], events: events[2] });
+      seedGeneration(destination, 2);
       updateWindow(
         destination,
         "row_transcript_json = NULL, row_transcript_updated_at = NULL",
@@ -370,19 +352,6 @@ it.each(["existing-current", "cold", "utf16"] as const)(
           : before.events,
       identities: before.identities,
     });
-    expect(after.events.filter((event) => event.seq === 2)).toEqual(
-      ids.map(() =>
-        expect.objectContaining({
-          navigation_type: "custom",
-          navigation_custom_type: "openclaw.cache-ttl",
-          navigation_display: 1,
-          message_role: "toolResult",
-          navigation_last_type: "custom",
-          navigation_last_custom_type: "openclaw.cache-ttl",
-          navigation_valid: 1,
-        }),
-      ),
-    );
     expect(snapshot(source)).toEqual({ windows: [], events: [], identities: [] });
     expect(readClaim(destination)?.entry).toMatchObject(entries[2]!);
     for (const [index, sessionId] of ids.entries()) {

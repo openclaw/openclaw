@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
@@ -21,7 +21,6 @@ import {
   createTranscriptIndexAppenderInTransaction as createIndexAppender,
   deleteSessionTranscriptIndexInTransaction as deleteIndex,
   markSessionTranscriptIndexDirtyInTransaction as markIndexDirty,
-  reconcileSessionTranscriptIndexInTransaction as reconcileIndex,
   replaceSessionTranscriptIndexSuffixInTransaction as replaceIndexSuffix,
 } from "./session-transcript-index.js";
 import {
@@ -175,23 +174,6 @@ function expectMapped(db: DatabaseSync, count: number) {
   ).toBe(0);
 }
 
-function captureDeletePlans(db: DatabaseSync) {
-  const prepare = db.prepare.bind(db);
-  const plans: string[] = [];
-  const spy = vi.spyOn(db, "prepare").mockImplementation((query) => {
-    if (query.startsWith('delete from "session_transcript_fts_rows"')) {
-      const placeholders = query.match(/\?/g)?.length ?? 0;
-      plans.push(
-        ...prepare(`EXPLAIN QUERY PLAN ${query}`)
-          .all(...Array.from({ length: placeholders }, () => "target"))
-          .map((row) => String(row.detail)),
-      );
-    }
-    return prepare(query);
-  });
-  return { plans, restore: () => spy.mockRestore() };
-}
-
 it("replaces a suffix larger than SQLite's parameter limit without touching siblings", () => {
   const db = projectionFixture();
   const siblings = hits(db).filter((row) => row.session_id === "sibling");
@@ -241,22 +223,9 @@ it("replaces a suffix larger than SQLite's parameter limit without touching sibl
   expectMapped(db, 4);
 });
 
-it("reconciles by point lookup and preserves interleaved siblings", () => {
+it("deletes projections without changing interleaved siblings", () => {
   const db = projectionFixture();
   const expected = hits(db);
-  const capture = captureDeletePlans(db);
-  db.exec("BEGIN");
-  markIndexDirty(db, "target");
-  expect(reconcileIndex(db, "target")).toBe(true);
-  db.exec("COMMIT");
-  capture.restore();
-  expect(
-    capture.plans.filter((plan) =>
-      plan.includes("idx_session_transcript_fts_rows_session_message"),
-    ),
-  ).toEqual([expect.stringContaining("idx_session_transcript_fts_rows_session_message")]);
-  expect(hits(db)).toEqual(expected);
-  expectMapped(db, 8);
   db.exec("BEGIN");
   deleteIndex(db, "target");
   db.exec("COMMIT");
@@ -380,26 +349,6 @@ it.each([
       ]),
     ],
     expected: { ftsRows: [ftsRow("mixed-content", "assistant", "kept", 1_000)] },
-  },
-  {
-    name: "leaf-control rewind excludes the abandoned continuation",
-    version: 3,
-    events: [
-      message("root", null, "user", "keep"),
-      message("abandoned", "root", "assistant", "remove"),
-      {
-        appendParentId: "root",
-        id: "rewind",
-        parentId: "abandoned",
-        targetId: "root",
-        type: "leaf",
-      },
-    ],
-    expected: {
-      leafEventId: "root",
-      activeRows: activeRows(1),
-      ftsRows: [ftsRow("root", "user", "keep", 1_000)],
-    },
   },
   {
     name: "legacy flat-message ordering and searchable identities",

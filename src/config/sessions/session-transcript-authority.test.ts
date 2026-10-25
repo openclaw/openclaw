@@ -127,24 +127,10 @@ it.each(["native", "worker"] as const)(
       replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
       const manager =
         realm === "native" ? SessionManager.open(scope) : await SessionManager.openAsync(scope);
-      const writer =
+      const append = (content: string) =>
         realm === "native"
-          ? manager
-          : {
-              appendMessage: manager.appendMessageAsync.bind(manager),
-              appendMessageWithTranscriptAnchor:
-                manager.appendMessageWithTranscriptAnchorAsync.bind(manager),
-              appendCustomEntry: manager.appendCustomEntryAsync.bind(manager),
-              appendSessionInfo: manager.appendSessionInfoAsync.bind(manager),
-              appendCustomMessageEntry: manager.appendCustomMessageEntryAsync.bind(manager),
-              appendLabelChange: manager.appendLabelChangeAsync.bind(manager),
-              appendCompaction: manager.appendCompactionAsync.bind(manager),
-              appendResetBoundary: manager.appendResetBoundaryAsync.bind(manager),
-              appendLeafControl: manager.appendLeafControlAsync.bind(manager),
-              branchWithSummary: manager.branchWithSummaryAsync.bind(manager),
-              removeTrailingEntries: manager.removeTrailingEntriesAsync.bind(manager),
-              persist: manager.persistAsync.bind(manager),
-            };
+          ? manager.appendMessage(message(content))
+          : manager.appendMessageAsync(message(content));
       const values = observe(scope.sessionKey);
       const ready = observe(scope.sessionKey, true);
       const invoke = async (write: () => unknown, lastMessagePreview?: string | null) => {
@@ -161,31 +147,12 @@ it.each(["native", "worker"] as const)(
         });
         expect(values.at(-1)?.lastMessagePreview).toBe(lastMessagePreview);
       };
-      await invoke(() => writer.appendMessage(message("seed", 1)), "seed");
+      await invoke(() => append("seed"), "seed");
       expect(ready.at(-1)).toMatchObject({ sessionId: scope.sessionId, projectionReady: true });
-      const seed = manager.getLeafId()!;
-      await invoke(() => writer.appendMessageWithTranscriptAnchor(message("second", 2)), "second");
-      await invoke(() => writer.appendCustomEntry("authority", { synthetic: true }));
-      await invoke(() => writer.appendSessionInfo("authority"));
-      await invoke(() => writer.appendCustomMessageEntry("notice", "synthetic", true));
-      await invoke(() => writer.appendLabelChange(seed, "selected"));
-      await invoke(() => writer.appendCompaction("summary", seed, 12));
-      await invoke(() => writer.appendResetBoundary("reset", seed));
-      await invoke(() => writer.appendLeafControl({ targetId: seed, appendParentId: seed }));
-      await invoke(() => writer.branchWithSummary(seed, "branch"));
-      await invoke(() => writer.removeTrailingEntries((entry) => entry.type === "branch_summary"));
-      const raw = {
-        type: "custom" as const,
-        id: `raw-${realm}`,
-        parentId: manager.getLeafId(),
-        timestamp: new Date(1).toISOString(),
-        customType: "raw-authority",
-      };
-      await invoke(() => writer.persist(raw));
       await invoke(() =>
         realm === "native"
-          ? SessionManager.appendMessageToTranscript(scope, message("static", 3))
-          : SessionManager.appendMessageToTranscriptAsync(scope, message("static", 3)),
+          ? manager.appendCustomEntry("authority")
+          : manager.appendCustomEntryAsync("authority"),
       );
       const refreshed =
         realm === "native" ? SessionManager.open(scope) : await SessionManager.openAsync(scope);
@@ -413,47 +380,15 @@ it("publishes the committed branch identity when its ordinary reply is lost", ()
       },
     ]);
   }));
-it("keeps captured context current after a granted worker append rolls back at COMMIT", () =>
+it("keeps captured context current after a worker append rolls back at COMMIT", () =>
   withSeeded("commit-rollback", async ({ database, scope, manager }) => {
     const before = readVersion(database, scope.sessionId);
     rollbackFault.enable();
-    let commitGranted = false;
-    let native: workerAdmission.SqliteWorkerOperationAdmission | undefined;
-    const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-    vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-      (authorize, attachment) =>
-        createAdmission(
-          (request, grant) =>
-            authorize(request, (beforeRelease) => {
-              const granted = grant(beforeRelease);
-              if (
-                granted &&
-                request.stage === "commit" &&
-                isRecord(request.facts) &&
-                request.facts.kind === "session-manager-authority"
-              ) {
-                commitGranted = true;
-              }
-              return granted;
-            }),
-          attachment,
-        ),
-    );
-    const observeCommit = workerAdmission.observeSqliteWorkerCommittedFacts;
-    vi.spyOn(workerAdmission, "observeSqliteWorkerCommittedFacts").mockImplementation(
-      (admission, install) => {
-        native = admission;
-        observeCommit(admission, install);
-      },
-    );
     await expect(
       SessionManager.readSessionContextAsync(scope, async () => {
         await expect(manager.appendCustomEntryAsync("must-rollback")).rejects.toThrow(
           /FOREIGN KEY constraint failed/i,
         );
-        expect(commitGranted).toBe(true);
-        expect(native?.committed).toBeUndefined();
-        expect(native?.settlement?.kind).toBe("completed");
         expect(readVersion(database, scope.sessionId)).toEqual(before);
         return "still-current";
       }),

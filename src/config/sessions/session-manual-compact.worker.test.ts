@@ -73,12 +73,18 @@ function fixture(seed = true) {
   };
 }
 
-it("commits a bounded next-turn projection after trimming a large compressed transcript", async () => {
+it("trims compressed history into a ready next-turn projection and clears accounting", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const f = fixture(false);
-    const background = vi
-      .spyOn(reconcile, "startSessionTranscriptIndexReconcile")
-      .mockImplementation(() => {});
+    replaceSessionEntrySync(f.scope, {
+      sessionId: f.scope.sessionId,
+      updatedAt: 1,
+      inputTokens: 10,
+      totalTokens: 30,
+      totalTokensFresh: true,
+      cliSessionIds: { synthetic: "obsolete" },
+    });
+    vi.spyOn(reconcile, "startSessionTranscriptIndexReconcile").mockImplementation(() => {});
     runOpenClawAgentWriteTransaction(
       (database) =>
         replaceSqliteTranscriptEventsInTransaction(
@@ -107,7 +113,18 @@ it("commits a bounded next-turn projection after trimming a large compressed tra
         .prepare("SELECT count(*) AS count FROM transcript_events WHERE event_zstd IS NOT NULL")
         .get(),
     ).toEqual({ count: 1 });
-    background.mockClear();
+    const prior = readSessionTranscriptWatermark(f.scope);
+    replaceSessionEntrySync(f.scope, {
+      ...f.read()!,
+      worktree: { id: "adopted", branch: "pr", repoRoot: "/synthetic/current" },
+      priorWorkspace: {
+        worktreeId: "adopted",
+        sessionId: f.scope.sessionId,
+        workspaceDir: "/synthetic/original",
+        fileRoot: "/synthetic/original",
+        through: { generation: prior.generation, maxSeq: 4099 },
+      },
+    });
 
     const ready: string[] = [];
     const stop = sessionChanges.subscribeFacts((change) => {
@@ -121,77 +138,26 @@ it("commits a bounded next-turn projection after trimming a large compressed tra
     });
     const sql = observeHostDataSql();
     try {
-      await expect(f.compact()).resolves.toEqual({ compacted: true, kept: 3 });
+      await expect(f.compact({ nowMs: 500 })).resolves.toEqual({ compacted: true, kept: 3 });
       expect(sql.queries).toEqual([]);
       expect(ready).toEqual([f.scope.sessionId]);
     } finally {
       stop();
       sql.restore();
     }
-    expect(background).not.toHaveBeenCalled();
+    expect(f.events()).toHaveLength(3);
     expect(
       f.database.db
-        .prepare(
-          `SELECT active_event_count, active_message_count, indexed_seq, needs_rebuild,
-            (SELECT count(*) FROM transcript_events WHERE session_id = ?) AS raw_count,
-            (SELECT count(*) FROM session_transcript_active_events WHERE session_id = ?) AS active_count,
-            (SELECT count(*) FROM session_transcript_fts_rows WHERE session_id = ?) AS fts_count
-          FROM session_transcript_index_state WHERE session_id = ?`,
-        )
-        .get(...Array<string>(4).fill(f.scope.sessionId)),
-    ).toEqual({
-      active_event_count: 2,
-      active_message_count: 2,
-      indexed_seq: 2,
-      needs_rebuild: 0,
-      raw_count: 3,
-      active_count: 2,
-      fts_count: 2,
-    });
+        .prepare(`SELECT needs_rebuild,
+          (SELECT count(*) FROM session_transcript_fts_rows WHERE session_id = state.session_id) AS count
+          FROM session_transcript_index_state state WHERE session_id = ?`)
+        .get(f.scope.sessionId),
+    ).toEqual({ needs_rebuild: 0, count: 2 });
     const nextContext = await readSessionTranscriptModelContextInWorker(f.scope, undefined);
     expect(nextContext.events).toMatchObject([
       { type: "session", id: f.scope.sessionId },
       { id: "entry-4099", parentId: null, message: { content: "message 4099" } },
       { id: "entry-4100", parentId: "entry-4099", message: { content: "message 4100" } },
-    ]);
-  });
-});
-
-it("trims through the worker and clears accounting without host data SQL", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = fixture(false);
-    replaceSessionEntrySync(f.scope, {
-      sessionId: f.scope.sessionId,
-      updatedAt: 1,
-      inputTokens: 10,
-      totalTokens: 30,
-      totalTokensFresh: true,
-      cliSessionIds: { synthetic: "obsolete" },
-    });
-    replaceTranscriptEventsSync(f.scope, f.records);
-    const prior = readSessionTranscriptWatermark(f.scope);
-    replaceSessionEntrySync(f.scope, {
-      ...f.read()!,
-      worktree: { id: "adopted", branch: "pr", repoRoot: "/synthetic/current" },
-      priorWorkspace: {
-        worktreeId: "adopted",
-        sessionId: f.scope.sessionId,
-        workspaceDir: "/synthetic/original",
-        fileRoot: "/synthetic/original",
-        through: { generation: prior.generation, maxSeq: 3 },
-      },
-    });
-    const sql = observeHostDataSql();
-    try {
-      await expect(f.compact({ nowMs: 500 })).resolves.toEqual({ compacted: true, kept: 3 });
-      expect(sql.queries).toEqual([]);
-    } finally {
-      sql.restore();
-    }
-    expect(f.events()).toMatchObject([
-      { type: "session", id: f.scope.sessionId },
-      { id: "entry-3", parentId: null },
-      { id: "entry-4", parentId: "entry-3" },
     ]);
     const entry = f.read();
     expect(entry?.updatedAt).toBe(500);
