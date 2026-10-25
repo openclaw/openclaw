@@ -1,4 +1,3 @@
-// Tests subagent utility helpers for label, routing, and transcript handling.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.js";
 import { buildSubagentRunView } from "../../agents/subagents/registry/subagent-run-view.js";
@@ -14,17 +13,16 @@ type RunOverrides = Omit<Partial<SubagentRunRecord>, "execution"> & {
   execution?: SubagentRunRecord["execution"];
 };
 
-function makeRun(overrides: RunOverrides): SubagentRunRecord {
-  const id = overrides.runId ?? "run-default";
+function makeRun(id: string, overrides: RunOverrides = {}): SubagentRunRecord {
   const { startedAt, endedAt, outcome, execution, ...recordOverrides } = overrides;
   return {
     runId: id,
-    childSessionKey: overrides.childSessionKey ?? `agent:main:subagent:${id}`,
-    requesterSessionKey: overrides.requesterSessionKey ?? "agent:main:main",
-    requesterDisplayKey: overrides.requesterDisplayKey ?? "main",
-    task: overrides.task ?? "default task",
-    cleanup: overrides.cleanup ?? "keep",
-    createdAt: overrides.createdAt ?? NOW_MS - 2_000,
+    childSessionKey: `agent:main:subagent:${id}`,
+    requesterSessionKey: "agent:main:main",
+    requesterDisplayKey: "main",
+    task: "default task",
+    cleanup: "keep",
+    createdAt: NOW_MS - 2_000,
     ...recordOverrides,
     execution:
       execution ??
@@ -53,11 +51,7 @@ function expectResolvedRunId(
   token: string | undefined,
   expectedRunId: string,
 ): void {
-  const resolved = resolveTarget(runs, token);
-  if (!resolved.entry) {
-    throw new Error(`Expected ${String(token)} to resolve, got ${resolved.error ?? "no target"}`);
-  }
-  expect(resolved.entry.runId).toBe(expectedRunId);
+  expect(resolveTarget(runs, token).entry?.runId).toBe(expectedRunId);
 }
 
 describe("subagents utils", () => {
@@ -70,17 +64,19 @@ describe("subagents utils", () => {
   });
 
   it("resolves subagent label with fallback", () => {
-    expect(resolveSubagentLabel(makeRun({ label: "  runner " }))).toBe("runner");
-    expect(resolveSubagentLabel(makeRun({ label: " ", task: "  task value " }))).toBe("task value");
-    expect(resolveSubagentLabel(makeRun({ label: " ", task: " " }))).toBe("subagent");
+    expect(resolveSubagentLabel(makeRun("label", { label: "  runner " }))).toBe("runner");
+    expect(resolveSubagentLabel(makeRun("task", { label: " ", task: "  task value " }))).toBe(
+      "task value",
+    );
+    expect(resolveSubagentLabel(makeRun("empty", { label: " ", task: " " }))).toBe("subagent");
   });
 
   it("sorts by startedAt then createdAt descending", () => {
     const view = buildSubagentRunView({
       runs: [
-        makeRun({ runId: "a", createdAt: 10 }),
-        makeRun({ runId: "b", startedAt: 15, createdAt: 5 }),
-        makeRun({ runId: "c", startedAt: 12, createdAt: 20 }),
+        makeRun("a", { createdAt: 10 }),
+        makeRun("b", { startedAt: 15, createdAt: 5 }),
+        makeRun("c", { startedAt: 12, createdAt: 20 }),
       ],
       recentMinutes: 30,
       countPendingDescendantRuns: () => 0,
@@ -90,30 +86,24 @@ describe("subagents utils", () => {
 
   it("selects last from sorted runs", () => {
     const runs = [
-      makeRun({ runId: "old", createdAt: NOW_MS - 2_000 }),
-      makeRun({ runId: "new", createdAt: NOW_MS - 500 }),
+      makeRun("old", { createdAt: NOW_MS - 2_000 }),
+      makeRun("new", { createdAt: NOW_MS - 500 }),
     ];
     expectResolvedRunId(runs, " last ", "new");
   });
 
   it("resolves numeric index from running then recent finished order", () => {
     const runs = [
-      makeRun({
-        runId: "running",
-        label: "running",
-        createdAt: NOW_MS - 8_000,
-      }),
-      makeRun({
-        runId: "recent-finished",
+      makeRun("running", { label: "running", createdAt: NOW_MS - 8_000 }),
+      makeRun("recent-finished", {
         label: "recent",
         createdAt: NOW_MS - 6_000,
         endedAt: NOW_MS - 60_000,
       }),
-      makeRun({
-        runId: "old-finished",
+      makeRun("old-finished", {
         label: "old",
         createdAt: NOW_MS - 7_000,
-        endedAt: NOW_MS - 2 * 60 * 60 * 1_000,
+        endedAt: NOW_MS - 7_200_000,
       }),
     ];
 
@@ -123,7 +113,7 @@ describe("subagents utils", () => {
   });
 
   it("resolves session key target and unknown session errors", () => {
-    const run = makeRun({ runId: "abc123", childSessionKey: "agent:beta:subagent:xyz" });
+    const run = makeRun("abc123", { childSessionKey: "agent:beta:subagent:xyz" });
     expectResolvedRunId([run], "agent:beta:subagent:xyz", "abc123");
     expect(resolveTarget([run], "agent:beta:subagent:missing").error).toBe(
       "⚠️ Unknown subagent session: agent:beta:subagent:missing",
@@ -132,9 +122,9 @@ describe("subagents utils", () => {
 
   it("resolves exact label, prefix, run-id prefix and ambiguity errors", () => {
     const runs = [
-      makeRun({ runId: "run-alpha-1", label: "Alpha Core" }),
-      makeRun({ runId: "run-alpha-2", label: "Alpha Orbit" }),
-      makeRun({ runId: "run-beta-1", label: "Beta Worker" }),
+      makeRun("run-alpha-1", { label: "Alpha Core" }),
+      makeRun("run-alpha-2", { label: "Alpha Orbit" }),
+      makeRun("run-beta-1", { label: "Beta Worker" }),
     ];
 
     expectResolvedRunId(runs, "beta worker", "run-beta-1");
@@ -149,17 +139,14 @@ describe("subagents utils", () => {
   });
 
   it("returns ambiguous exact label error before prefix/run id matching", () => {
-    const runs = [
-      makeRun({ runId: "run-a", label: "dup" }),
-      makeRun({ runId: "run-b", label: "dup" }),
-    ];
+    const runs = [makeRun("run-a", { label: "dup" }), makeRun("run-b", { label: "dup" })];
     expect(resolveTarget(runs, "dup").error).toBe("⚠️ Ambiguous subagent label: dup");
   });
 
   it("resolves stable taskName aliases before labels and run ids", () => {
     const runs = [
-      makeRun({ runId: "run-review-1", label: "Review", taskName: "code_review" }),
-      makeRun({ runId: "run-review-2", label: "Review copy", taskName: "copy_review" }),
+      makeRun("run-review-1", { label: "Review", taskName: "code_review" }),
+      makeRun("run-review-2", { label: "Review copy", taskName: "copy_review" }),
     ];
 
     expectResolvedRunId(runs, "code_review", "run-review-1");
@@ -168,8 +155,8 @@ describe("subagents utils", () => {
 
   it("preserves exact label targets before taskName prefix aliases", () => {
     const runs = [
-      makeRun({ runId: "run-review-label", label: "review" }),
-      makeRun({ runId: "run-review-docs", label: "docs", taskName: "review_docs" }),
+      makeRun("run-review-label", { label: "review" }),
+      makeRun("run-review-docs", { label: "docs", taskName: "review_docs" }),
     ];
 
     expectResolvedRunId(runs, "review", "run-review-label");
@@ -178,16 +165,14 @@ describe("subagents utils", () => {
 
   it("ignores stale duplicate taskName aliases when a current run reuses the handle", () => {
     const runs = [
-      makeRun({
-        runId: "run-old-review",
+      makeRun("run-old-review", {
         childSessionKey: "agent:main:subagent:old-review",
         label: "Old review",
         taskName: "review_subagents",
         createdAt: NOW_MS - 2 * 60 * 60 * 1_000,
         endedAt: NOW_MS - 90 * 60 * 1_000,
       }),
-      makeRun({
-        runId: "run-current-review",
+      makeRun("run-current-review", {
         childSessionKey: "agent:main:subagent:current-review",
         label: "Current review",
         taskName: "review_subagents",
@@ -200,16 +185,14 @@ describe("subagents utils", () => {
 
   it("prefers the current live row when stale and current runs share a label on one child session", () => {
     const runs = [
-      makeRun({
-        runId: "run-old",
+      makeRun("run-old", {
         childSessionKey: "agent:main:subagent:worker",
         label: "same worker",
         createdAt: NOW_MS - 10_000,
         startedAt: NOW_MS - 10_000,
         endedAt: NOW_MS - 5_000,
       }),
-      makeRun({
-        runId: "run-new",
+      makeRun("run-new", {
         childSessionKey: "agent:main:subagent:worker",
         label: "same worker",
         createdAt: NOW_MS - 1_000,
