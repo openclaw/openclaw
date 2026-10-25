@@ -565,10 +565,10 @@ describe("buildGuardedModelFetch SSE readability", () => {
     "observes comment lines without event separators on %s streams",
     async (mode) => {
       const chunks = [
-        "\uFEFF: keep",
+        "\uFEFF: 🦞 keep",
         "alive\r",
         "\n: second\n: third\r",
-        'event: ping\n\ndata: {"ok": true}\n\n',
+        '🦞: not a comment\nevent: ping\n\ndata: {"ok": true}\n\n',
       ];
       mockStream(chunks, "text/event-stream");
       const target =

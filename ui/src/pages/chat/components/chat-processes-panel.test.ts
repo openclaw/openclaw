@@ -47,12 +47,30 @@ function mountProcesses(
     disposeSidebarContextLifecycles();
     vi.useRealTimers();
   });
+  const mount = (element: HTMLElement) => {
+    provider.append(element);
+    document.body.append(provider);
+  };
+  function mountDetails(panel: HTMLElementTagNameMap["openclaw-chat-processes-panel"]) {
+    const details = document.createElement("openclaw-chat-details-session");
+    details.props = {
+      sessionKey: panel.sessionKey,
+      currentAgentId: "main",
+      selectedSession: undefined,
+      messages: [],
+      onOpenProcesses: () => {},
+    };
+    details.presented = true;
+    details.desktop = true;
+    const surfaces = document.createElement("div");
+    surfaces.append(panel, details);
+    mount(surfaces);
+    return details;
+  }
   return {
     connection,
-    mount: (element: HTMLElement) => {
-      provider.append(element);
-      document.body.append(provider);
-    },
+    mount,
+    mountDetails,
   };
 }
 
@@ -258,22 +276,10 @@ it("keeps the full panel read-error flow while compact Details retains its share
     .mockResolvedValueOnce(result)
     .mockRejectedValueOnce(new Error("Worker reconnecting"))
     .mockReturnValueOnce(retry.promise);
-  const { connection, mount } = mountProcesses(request);
+  const { connection, mountDetails } = mountProcesses(request);
   const panel = document.createElement("openclaw-chat-processes-panel");
   panel.sessionKey = "agent:main:parent";
-  const details = document.createElement("openclaw-chat-details-session");
-  details.props = {
-    sessionKey: panel.sessionKey,
-    currentAgentId: "main",
-    selectedSession: undefined,
-    messages: [],
-    onOpenProcesses: () => {},
-  };
-  details.presented = true;
-  details.desktop = true;
-  const surfaces = document.createElement("div");
-  surfaces.append(panel, details);
-  mount(surfaces);
+  const details = mountDetails(panel);
   await settle(panel, 0);
   expect(request).toHaveBeenCalledOnce();
   expect(panel.textContent).toContain("Build app");
@@ -320,22 +326,10 @@ it("keeps a shared held read and Stop alive when one presentation moves away", a
     }
     return first.promise;
   });
-  const { mount } = mountProcesses(request);
+  const { mountDetails } = mountProcesses(request);
   const panel = document.createElement("openclaw-chat-processes-panel");
   panel.sessionKey = "agent:main:parent";
-  const details = document.createElement("openclaw-chat-details-session");
-  details.props = {
-    sessionKey: panel.sessionKey,
-    currentAgentId: "main",
-    selectedSession: undefined,
-    messages: [],
-    onOpenProcesses: () => {},
-  };
-  details.presented = true;
-  details.desktop = true;
-  const surfaces = document.createElement("div");
-  surfaces.append(panel, details);
-  mount(surfaces);
+  const details = mountDetails(panel);
   await settle(panel, 0);
   expect(panel.querySelector(".chat-processes__list")?.getAttribute("aria-busy")).toBe("true");
   expect(request).toHaveBeenCalledOnce();

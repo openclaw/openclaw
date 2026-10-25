@@ -6,6 +6,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRuntimeCliBackends } from "../plugins/cli-backends.runtime.js";
 import { setTestEnvValue } from "../test-utils/env.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  createClaudeCliGatewayConfig,
+  createClaudeCliGatewayEnv,
+} from "./server.chat-cli-auth.test-support.js";
 import * as gatewayFixture from "./test-helpers.e2e.js";
 
 export function createWatchdogClock() {
@@ -144,28 +148,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
 export async function createWatchdogFixture() {
   const state = await createOpenClawTestState({
     label: "cli-freeze",
-    env: {
-      PATH: undefined,
-      OPENCLAW_PATH_BOOTSTRAPPED: "1",
-      CLAUDE_CONFIG_DIR: undefined,
-      ANTHROPIC_API_KEY: undefined,
-      ANTHROPIC_OAUTH_TOKEN: undefined,
-      CLAUDE_CODE_OAUTH_TOKEN: undefined,
-      CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR: undefined,
-      CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR: undefined,
-      OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
-      OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(process.cwd(), "dist/extensions"),
-      OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
-      OPENCLAW_SKIP_CHANNELS: "1",
-      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-      OPENCLAW_SKIP_CRON: "1",
-      OPENCLAW_SKIP_CANVAS_HOST: "1",
-      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-      OPENCLAW_SKIP_PROVIDERS: "1",
-      OPENCLAW_GATEWAY_TOKEN: undefined,
-      OPENCLAW_GATEWAY_PASSWORD: undefined,
-    },
+    env: createClaudeCliGatewayEnv(),
   });
   let gateway: Awaited<ReturnType<typeof gatewayFixture.startGatewayWithClient>> | undefined;
   const cleanup = () =>
@@ -201,27 +184,11 @@ export async function createWatchdogFixture() {
     });
     const modelRef = "anthropic/claude-sonnet-4-6";
     const token = "freeze-fixture";
-    const cfg = {
-      agents: {
-        defaults: {
-          workspace: state.workspaceDir,
-          skipBootstrap: true,
-          utilityModel: "",
-          model: { primary: modelRef },
-          models: { [modelRef]: { agentRuntime: { id: "claude-cli" } } },
-        },
-      },
-      plugins: {
-        enabled: true,
-        allow: ["anthropic"],
-        entries: {
-          anthropic: { enabled: true, config: { sessionCatalog: { enabled: false } } },
-        },
-        slots: { memory: "none" },
-      },
-      tools: { profile: "minimal" },
-      gateway: { auth: { mode: "token", token } },
-    } satisfies OpenClawConfig;
+    const cfg = createClaudeCliGatewayConfig(
+      state.workspaceDir,
+      modelRef,
+      token,
+    ) satisfies OpenClawConfig;
     gateway = await gatewayFixture.startGatewayWithClient({
       cfg,
       configPath: state.configPath,

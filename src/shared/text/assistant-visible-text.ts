@@ -1,6 +1,6 @@
 import { scanFenceSpans } from "../../../packages/markdown-core/src/fences.js";
 // Assistant visible text helpers strip hidden reasoning and control marker text.
-import { projectPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
+import { projectPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/payload.js";
 import { escapeRegExp } from "../regexp.js";
 import {
   stripMinimaxToolCallXml,

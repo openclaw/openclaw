@@ -14,12 +14,12 @@ import {
   recoverCrabboxImage,
 } from "./crabbox-gateway-methods.js";
 import { crabboxState, openWarmImageStore } from "./crabbox-state.test-support.js";
+import { warmAllocation, warmImage, warmRecord } from "./crabbox-warm-scenarios.test-support.js";
 import type { CrabboxSnapshotActions } from "./crabbox-worker-snapshot-actions.js";
 import {
   CrabboxWarmImageRequestError,
   listCrabboxWarmImages,
   listCrabboxLegacyWarmLeases,
-  type WarmAllocationRecord,
   type WarmProfileRecord,
 } from "./crabbox-worker-warm-image-store.js";
 
@@ -40,19 +40,8 @@ afterEach(async () => {
 });
 
 function record(): WarmProfileRecord {
-  return {
-    version: 3,
-    allocations: {},
-    image: {
-      checkpointId: "chk_fixture",
-      kind: "native",
-      state: "available",
-      createdAtMs: 1,
-      preparationKey: null,
-      cacheKey: null,
-      purpose: null,
-      lastDemandAtMs: 2,
-    },
+  return warmRecord({
+    image: warmImage("chk_fixture", { lastDemandAtMs: 2 }),
     operation: {
       type: "capture",
       id: SELECTOR,
@@ -61,7 +50,7 @@ function record(): WarmProfileRecord {
       provider: "aws",
       phase: "uncertain",
     },
-  };
+  });
 }
 
 function createApi() {
@@ -210,16 +199,7 @@ describe("Crabbox snapshots Gateway methods", () => {
       projectLabel: "git.example.test/team/project",
       projectRoot: "/projects/example",
     });
-    const allocation: WarmAllocationRecord = {
-      choice: { kind: "cold" },
-      machineClass: "standard",
-      phase: "enrolled",
-      preparationKey: null,
-      cacheKey: null,
-      purpose: null,
-      demandAtMs: null,
-      imageGeneration: null,
-    };
+    const allocation = warmAllocation(undefined, { phase: "enrolled" });
     for (let index = 0; index < 21; index++) {
       current.allocations[`cbx_${String(index).padStart(2, "0")}`] = allocation;
     }

@@ -268,7 +268,7 @@ export function resolvePrivateCompletionDeliveryResult(
   // Successful internal consumption may be silent or start the next child.
   // Queue acceptance alone is not consumption, and no external receipt is owed.
   const delivery: SubagentAnnounceDeliveryResult =
-    response?.status === "ok" && response?.inputProcessingCompleted === true
+    response?.status === "ok" && response.inputProcessingCompleted === true
       ? { delivered: true, path: "direct" }
       : {
           delivered: false,

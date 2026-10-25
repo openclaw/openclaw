@@ -218,14 +218,14 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         },
         onStartError: (err) =>
           logTypingFailure({
-            log: (message) => params.runtime.log?.(message),
+            log: (message) => params.runtime.log(message),
             channel: "feishu",
             action: "start",
             error: err,
           }),
         onStopError: (err) =>
           logTypingFailure({
-            log: (message) => params.runtime.log?.(message),
+            log: (message) => params.runtime.log(message),
             channel: "feishu",
             action: "stop",
             error: err,
@@ -377,7 +377,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       }
 
       const session = new FeishuStreamingSession(createFeishuClient(account), creds, (message) =>
-        params.runtime.log?.(`feishu[${account.accountId}] ${message}`),
+        params.runtime.log(`feishu[${account.accountId}] ${message}`),
       );
       streaming = session;
       try {
@@ -400,7 +400,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           account.accountId,
           Date.now() + STREAMING_START_FAILURE_BACKOFF_MS,
         );
-        params.runtime.error?.(
+        params.runtime.error(
           `feishu[${account.accountId}]: streaming start failed; using non-streaming card fallback for ${
             STREAMING_START_FAILURE_BACKOFF_MS / 1000
           }s: ${String(error)}`,
@@ -528,7 +528,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     });
     if (idleRequestedForReply) {
       void queueIdleSideEffects().catch((error: unknown) =>
-        params.runtime.error?.(
+        params.runtime.error(
           `feishu[${account.accountId}] late reply finalization failed: ${String(error)}`,
         ),
       );
@@ -891,7 +891,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       }
       if (pendingStreamingDeliveries.length > 0) {
         void queueIdleSideEffects().catch((error: unknown) =>
-          params.runtime.error?.(
+          params.runtime.error(
             `feishu[${account.accountId}] queued reply finalization failed: ${String(error)}`,
           ),
         );
@@ -1041,11 +1041,11 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       // when their normal success bookkeeping could not run.
       visibleReplySent = true;
     }
-    params.runtime.error?.(
+    params.runtime.error(
       `feishu[${account.accountId}] ${info.kind} reply failed: ${String(error)}`,
     );
     await queueIdleSideEffects().catch((cleanupError: unknown) =>
-      params.runtime.error?.(
+      params.runtime.error(
         `feishu[${account.accountId}] reply error cleanup failed: ${String(cleanupError)}`,
       ),
     );

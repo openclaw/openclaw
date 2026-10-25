@@ -170,6 +170,8 @@ export function assembleScheduledAdmissionFacts(
     agentId: string;
     runSessionKey: string;
     toolsAllow?: readonly string[];
+    /** The creator role's sandbox, when the caller read it without the resident profile catalog. */
+    creatorRoleSandbox?: "required" | "none";
   },
   parentRow: ScheduledAdmissionFacts["parentRow"],
   owner: boolean | undefined,
@@ -185,7 +187,8 @@ export function assembleScheduledAdmissionFacts(
     runSessionKey: params.runSessionKey,
     agentMainSessionKey: resolveAgentMainSessionKey({ cfg: params.cfg, agentId: params.agentId }),
     agentSandboxMode: resolveSandboxConfigForAgent(params.cfg, params.agentId).mode,
-    ...(resolveCreatorSandbox(params.cfg, { actor: params.job.createdActor })
+    ...((params.creatorRoleSandbox ??
+      resolveCreatorSandbox(params.cfg, { actor: params.job.createdActor })) === "required"
       ? { creatorRoleSandbox: "required" as const }
       : {}),
     ...(params.toolsAllow ? { resolvedToolsAllow: params.toolsAllow } : {}),

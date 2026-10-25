@@ -201,6 +201,8 @@ The scheduler also provides a safety backstop. A time-based recurring job is aut
 
 A job linked to the exact conversation that created it pauses when that conversation is gone. If the conversation was removed or archived, or its bound worktree no longer exists, the next occurrence runs nothing: no trigger script, payload, or session turn. The job is disabled, and its owning agent receives one notice that names the conversation and the `openclaw automations enable <jobId>` command. A failure-alert route that includes skipped runs does not send a second notification. The pause is not an auto-disable, so it records no `state.autoDisabled` reason; the skip reason stays in automation history. Re-enabling does not detach the job, so the next occurrence pauses again while the conversation is still gone. Resetting the conversation with `/new` does not pause the job, and command jobs never pause. Jobs without an exact conversation link are unaffected.
 
+`openclaw doctor` lists linked jobs before they change: jobs that will pause at their next run because the creating conversation was removed or archived or lost its worktree, jobs whose creator is no longer an owner and will lose owner-only tools, jobs linked only by conversation key or to a conversation that was since reset, jobs on a CLI backend whose owner-only tools will match embedded runs, and jobs whose creating conversation has no stored chat type and therefore gets no conversation memory. The review only reads stored jobs and sessions; it changes nothing, including with `--fix`.
+
 ### Output language
 
 Automation jobs do not infer a reply language from channel, locale, or previous messages. Put the language rule in the scheduled message or template:

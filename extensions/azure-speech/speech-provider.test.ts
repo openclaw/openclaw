@@ -244,9 +244,7 @@ describe("buildAzureSpeechProvider", () => {
 
   it("lists voices through config or explicit request auth", async () => {
     fetchMock.mockResolvedValueOnce(
-      new Response(JSON.stringify([{ ShortName: "en-US-JennyNeural", DisplayName: "Jenny" }]), {
-        headers: { "Content-Type": "application/json" },
-      }),
+      Response.json([{ ShortName: "en-US-JennyNeural", DisplayName: "Jenny" }]),
     );
     const guardedFetch = vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard");
     const voices = await provider.listVoices?.({

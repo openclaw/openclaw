@@ -1,5 +1,8 @@
 import type { toStreamingMarkdownDomParts } from "../../../components/markdown-live.ts";
-import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
+import {
+  MARKDOWN_PARSE_LIMIT,
+  type MarkdownRenderOptions,
+} from "../../../components/markdown-render-options.ts";
 import { partitionMarkdownHtml, toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { markdownContentHtml, type MarkdownContent } from "../../../lib/markdown-content.ts";
 import type { LinkFaviconFetcher } from "../link-favicon-cache.ts";
@@ -45,35 +48,50 @@ export function prepareMessageMarkdown(
   const options: MarkdownRenderOptions = recovered
     ? { ...markdownRenderOptions, mode: "document" }
     : markdownRenderOptions;
-  let parts: [MarkdownContent, MarkdownContent] = renderStreaming
-    ? renderStreaming(source, options, isAssistant ? messageKey : undefined)
-    : partitionMarkdownHtml(toSanitizedMarkdownHtml(source, options), messageKey);
-  if (mutableStreaming) {
-    parts = ["", markdownContentHtml(parts[0]) + markdownContentHtml(parts[1])];
-  }
-  if (duplicateSuffix) {
-    const terminalPart = markdownContentHtml(parts[1]).trim() ? 1 : 0;
-    const template = document.createElement("template");
-    const content = parts[terminalPart];
-    if (typeof content === "string") {
-      template.innerHTML = content;
-    } else {
-      template.content.append(content.fragment.cloneNode(true));
+  const streaming = opts.isStreaming;
+  const prepare = () => {
+    let parts: [MarkdownContent, MarkdownContent] =
+      streaming && renderStreaming
+        ? renderStreaming(source, options, isAssistant ? messageKey : undefined)
+        : partitionMarkdownHtml(toSanitizedMarkdownHtml(source, options), messageKey);
+    if (mutableStreaming) {
+      parts = ["", markdownContentHtml(parts[0]) + markdownContentHtml(parts[1])];
     }
-    const terminalBlock = template.content.lastElementChild;
-    const target = terminalBlock ? duplicateSuffixTextOwner(terminalBlock) : null;
+    if (duplicateSuffix) {
+      const terminalPart = markdownContentHtml(parts[1]).trim() ? 1 : 0;
+      const template = document.createElement("template");
+      const content = parts[terminalPart];
+      if (typeof content === "string") {
+        template.innerHTML = content;
+      } else {
+        template.content.append(content.fragment.cloneNode(true));
+      }
+      const terminalBlock = template.content.lastElementChild;
+      const target = terminalBlock ? duplicateSuffixTextOwner(terminalBlock) : null;
 
-    const badge = document.createElement("span");
-    badge.className = "chat-duplicate-count";
-    badge.setAttribute("aria-label", duplicateSuffix.label);
-    badge.textContent = `×${duplicateSuffix.count}`;
-    (target ?? template.content).append(document.createTextNode("\u00a0"), badge);
-    parts[terminalPart] =
-      typeof content === "string"
-        ? template.innerHTML
-        : { html: template.innerHTML, fragment: template.content };
-  }
-  return { messageKey, source, parts, recoverFullMessage };
+      const badge = document.createElement("span");
+      badge.className = "chat-duplicate-count";
+      badge.setAttribute("aria-label", duplicateSuffix.label);
+      badge.textContent = `×${duplicateSuffix.count}`;
+      (target ?? template.content).append(document.createTextNode("\u00a0"), badge);
+      parts[terminalPart] =
+        typeof content === "string"
+          ? template.innerHTML
+          : { html: template.innerHTML, fragment: template.content };
+    }
+    return parts;
+  };
+  // Settled content must be prepared before the row's first measurement.
+  const deferFormatting =
+    streaming && !recovered && !duplicateSuffix && source.length <= MARKDOWN_PARSE_LIMIT;
+  const eagerParts = deferFormatting ? undefined : prepare();
+  return {
+    messageKey,
+    source,
+    parts: eagerParts ? () => eagerParts : prepare,
+    deferFormatting,
+    recoverFullMessage,
+  };
 }
 
 function duplicateSuffixTextOwner(block: Element): Element | null {

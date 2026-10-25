@@ -214,6 +214,7 @@ describe("cli-session helpers", () => {
           "claude-cli": {
             sessionId: "native-parent",
             resumeCheckpointId: "parent-checkpoint",
+            transcriptCursor: { localSessionId: "parent", entryId: "input", runId: "run" },
             forceReuse: true,
             ...auth,
           },

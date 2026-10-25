@@ -1,4 +1,4 @@
-import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
+import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/payload.js";
 import { escapeRegExp } from "../regexp.js";
 import { findCodeRegions, isInsideCode, stripLinesOutsideCode } from "./code-ranges.js";
 

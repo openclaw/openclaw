@@ -58,8 +58,18 @@ function continuityResult(context: RunResultParams["context"], kind: string) {
         })
       : testRunResult({
           context,
-          output: { text: "done" },
-          effectiveCliSessionId: kind === "native" ? "next-native-session" : undefined,
+          output: {
+            text: "done",
+            ...(kind === "interrupted"
+              ? { terminalInterruption: { reason: "aborted" as const } }
+              : {}),
+          },
+          effectiveCliSessionId:
+            kind === "native"
+              ? "next-native-session"
+              : kind === "interrupted"
+                ? "previous-native-session"
+                : undefined,
           bindingFlushOk: kind !== "no-native-id",
           sessionBindingDisabled: kind === "stateless",
         });
@@ -283,17 +293,31 @@ it.each([
   ["blocked", "s1", "previous-native-session"],
   ["no-native-id", "s1", "previous-native-session"],
   ["native", "next-native-session", "next-native-session"],
+  ["interrupted", "", "previous-native-session"],
   ["stateless", "s1", undefined],
 ] as const)(
   "projects only explicit native continuity from a %s result",
   (kind, resultSessionId, bindingSessionId) => {
     const context = buildPreparedCliRunContext({ provider: "claude-cli" });
     context.params.modelProvider = "anthropic";
+    const previousCursor = {
+      localSessionId: context.params.sessionId,
+      entryId: "previous-input",
+      runId: "previous-run",
+    };
+    context.transcriptCursor = {
+      ...previousCursor,
+      entryId: "current-input",
+      runId: context.params.runId,
+    };
+    context.reusableCliSession = { mode: "reuse", sessionId: "previous-native-session" };
     const result = continuityResult(context, kind);
     const entry: SessionEntry = {
       sessionId: context.params.sessionId,
       updatedAt: 1,
-      cliSessionBindings: { "claude-cli": { sessionId: "previous-native-session" } },
+      cliSessionBindings: {
+        "claude-cli": { sessionId: "previous-native-session", transcriptCursor: previousCursor },
+      },
     };
 
     applyCliSessionBindingResult(entry, "claude-cli", result.meta.agentMeta);
@@ -303,6 +327,13 @@ it.each([
       result.meta.agentMeta?.sessionId,
       getCliSessionBinding(entry, "claude-cli")?.sessionId,
     ]).toEqual([context.params.sessionId, resultSessionId, bindingSessionId]);
+    expect(getCliSessionBinding(entry, "claude-cli")?.transcriptCursor).toEqual(
+      kind === "native"
+        ? context.transcriptCursor
+        : kind === "stateless"
+          ? undefined
+          : previousCursor,
+    );
   },
 );
 

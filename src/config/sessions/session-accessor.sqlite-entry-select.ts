@@ -94,7 +94,7 @@ export function readSelectedSessionEntryRows(
       ]),
   );
   const participantQuery = windowQuery.$if(
-    options?.includeWindowFacts === true &&
+    (options?.includeWindowFacts === true || options?.includeRowTranscriptProjection === true) &&
       options.projectParticipants !== false &&
       projection !== "delivery",
     (builder) =>

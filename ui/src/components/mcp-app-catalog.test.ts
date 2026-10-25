@@ -70,6 +70,19 @@ const result: McpAppDiscoverResult = {
   ],
 };
 
+function createDiscoveryGateway(request: Parameters<typeof createTestGatewayClient>[0]) {
+  return {
+    snapshot: {
+      client: { request },
+      phase: "connected",
+      hello: gatewayHelloForMethods(["mcp.app.discover"]),
+    },
+    connectionRevision: 1,
+    subscribe: () => () => {},
+    subscribeEvents: () => () => {},
+  };
+}
+
 function discoveryContext(request: ReturnType<typeof vi.fn>, scopes = ["operator.admin"]) {
   const events = new Set<(event: GatewayEventFrame) => void>();
   return {
@@ -737,16 +750,7 @@ describe("app launch catalog", () => {
       const navigate = vi.fn();
       const mounted = mountCatalog(
         {
-          gateway: {
-            snapshot: {
-              client: { request },
-              phase: "connected",
-              hello: gatewayHelloForMethods(["mcp.app.discover"]),
-            },
-            connectionRevision: 1,
-            subscribe: () => () => {},
-            subscribeEvents: () => () => {},
-          },
+          gateway: createDiscoveryGateway(request),
           agentSelection: { state: { selectedId: "main" }, subscribe: () => () => {} },
           agents: { state: { agentsList: null } },
           sessions: {
@@ -833,16 +837,7 @@ describe("app launch catalog", () => {
       const read = createDeferred<McpAppDiscoverResult>();
       const { element } = mountCatalog(
         {
-          gateway: {
-            snapshot: {
-              client: { request: () => read.promise },
-              phase: "connected",
-              hello: gatewayHelloForMethods(["mcp.app.discover"]),
-            },
-            connectionRevision: 1,
-            subscribe: () => () => {},
-            subscribeEvents: () => () => {},
-          },
+          gateway: createDiscoveryGateway(() => read.promise),
           agentSelection: { state: { selectedId: "main" }, subscribe: () => () => {} },
         },
         { surface, sessionKey: "agent:main:empty" },
@@ -862,16 +857,7 @@ describe("app launch catalog", () => {
     const request = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
     const mounted = mountCatalog(
       {
-        gateway: {
-          snapshot: {
-            client: { request },
-            phase: "connected",
-            hello: gatewayHelloForMethods(["mcp.app.discover"]),
-          },
-          connectionRevision: 1,
-          subscribe: () => () => {},
-          subscribeEvents: () => () => {},
-        },
+        gateway: createDiscoveryGateway(request),
         agentSelection: { state: { selectedId: "main" }, subscribe: () => () => {} },
       },
       { surface: "sidebar", sessionKey: "agent:main:one" },

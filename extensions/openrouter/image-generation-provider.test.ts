@@ -1,3 +1,4 @@
+import { resolveProviderHttpRequestConfigWithOriginTrust } from "openclaw/plugin-sdk/provider-http";
 import {
   getProviderHttpMocks,
   installProviderHttpMockCleanup,
@@ -118,24 +119,8 @@ describe("openrouter image generation provider", () => {
     };
     const dispatcherPolicy = { mode: "explicit-proxy" as const, proxyUrl: requestPolicy.proxy.url };
     resolveProviderHttpRequestConfigMock.mockImplementationOnce((params) => {
-      const headers = new Headers(omitNullRequestHeaders(params.defaultHeaders));
-      for (const [name, value] of Object.entries(params.request?.headers ?? {})) {
-        if (value === null) {
-          headers.delete(name);
-        } else {
-          headers.set(name, value);
-        }
-      }
-      if (params.request?.auth?.mode === "authorization-bearer") {
-        headers.set("Authorization", `Bearer ${params.request.auth.token}`);
-      }
-      return {
-        baseUrl: params.baseUrl ?? params.defaultBaseUrl,
-        allowPrivateNetwork:
-          (params.allowPrivateNetwork ?? params.request?.allowPrivateNetwork) === true,
-        headers,
-        dispatcherPolicy,
-      };
+      const result = resolveProviderHttpRequestConfigWithOriginTrust(params);
+      return { ...result, dispatcherPolicy: result.dispatcherPolicy };
     });
     const release = vi.fn(async () => {});
     postJsonRequestMock.mockImplementation(async () =>
@@ -270,4 +255,3 @@ describe("openrouter image generation provider", () => {
     );
   });
 });
-import { omitNullRequestHeaders } from "openclaw/plugin-sdk/provider-request-headers";
