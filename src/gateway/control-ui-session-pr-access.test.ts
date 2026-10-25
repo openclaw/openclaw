@@ -604,7 +604,6 @@ it.each([
       if (change === "literal-global-visibility") {
         await f.seed("global", f.profile.id, { sessionId: "separate-global-row" });
       }
-      const replacementKey = `${key}:replacement`;
       const projection = getSessionRowProjection(f.context);
       if (change === "archived") {
         if (!projection) {
@@ -614,10 +613,6 @@ it.each([
         sessionChanges.emit({ all: true, scope: "catalog" });
         await projection.ensureMaterialized();
         expect(projection.capture({ agentId: "main", key })?.materialized).toBeUndefined();
-      }
-      if (change === "selection") {
-        await f.seed(replacementKey, f.other.id);
-        await projection?.ensureMaterialized();
       }
       const mutation =
         change === "literal-global" || change === "archived"
@@ -678,12 +673,8 @@ it.each([
           if (!projection) {
             throw new Error("Missing session projection for selection replacement");
           }
-          const capture = projection.capture.bind(projection);
-          const replacement = capture({ agentId: "main", key: replacementKey });
-          expect(replacement).toBeDefined();
-          vi.spyOn(projection, "capture").mockImplementation((query) =>
-            query.key === key ? replacement : capture(query),
-          );
+          await f.seed(key, f.other.id, { sessionId: "replacement-selection" });
+          await projection.ensureMaterialized();
         } else {
           await f.changeReader(mutation, key);
         }
@@ -818,7 +809,7 @@ it("preserves scope order and duplicate multiplicity when checking a retained re
     expect(() => target!.assertCurrent!()).not.toThrow();
     expect(await read()).toBe(target);
     expect(f.client.connect.scopes).toEqual(["operator.write", "operator.read", "operator.read"]);
-    f.client.connect.scopes = ["operator.write", "operator.read"];
+    f.client.connect.scopes.pop();
     expect(() => target!.assertCurrent!()).toThrow("Session pull-request target changed");
     expect(await read()).toBeUndefined();
   });

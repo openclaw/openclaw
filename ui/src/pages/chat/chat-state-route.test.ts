@@ -1,4 +1,5 @@
 import { expect, it, vi } from "vitest";
+import { sessionListResult } from "../../test-helpers/chat-model.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
 
@@ -33,22 +34,16 @@ it("reuses rows for interleaved panes without rescanning a shared session result
   const other: SessionRow = { key: "agent:main:other", kind: "direct" };
   const selected: SessionRow = { key: "agent:main:current", kind: "direct" };
   const state = createLookupState({
-    sessionsResult: {
-      ts: 0,
-      path: "",
-      count: 3,
-      defaults: { modelProvider: null, model: null, contextTokens: null },
-      sessions: [
-        {
-          kind: "direct",
-          get key() {
-            return readKey();
-          },
+    sessionsResult: sessionListResult(0, [
+      {
+        kind: "direct",
+        get key() {
+          return readKey();
         },
-        other,
-        selected,
-      ],
-    },
+      },
+      other,
+      selected,
+    ]),
   });
   expect(selectedChatSessionRow(state)).toBe(selected);
   const otherPane = createLookupState({
@@ -89,13 +84,7 @@ it("recomputes selected rows when routing defaults change in place", () => {
     agentsList,
     assistantAgentId: "work",
     sessionsResultAgentId: "work",
-    sessionsResult: {
-      ts: 0,
-      path: "",
-      count: 3,
-      defaults: { modelProvider: null, model: null, contextTokens: null },
-      sessions: [home, work, global],
-    },
+    sessionsResult: sessionListResult(0, [home, work, global]),
   });
   expect(selectedChatSessionRow(state)).toBe(home);
   agentsList.defaultId = "work";

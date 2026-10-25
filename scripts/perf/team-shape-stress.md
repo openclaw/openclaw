@@ -141,3 +141,20 @@ Production's exported event-loop maximum histogram is not an event-loop sample
 p99. Do not relabel it as one. This script deliberately has no production-load
 target option. Live deployment stress requires a separate, explicitly authorized
 campaign.
+
+Pass `--operator-model-policy` to exercise role-scoped model presentation. All
+clients authenticate as an identified synthetic operator through the loopback
+trusted proxy and share a role allowing `openai/*` except `openai/blocked-*`.
+The setup requires the public `models.list` response to expose the restricted
+selection policy and the mock default, and saves it in `operator-model-policy.json`.
+This avoids the shared-secret owner's role bypass. Use the same option for both
+arms and controls; it also enables the existing trusted-proxy compression path.
+Each `stress-minutes.jsonl` sample includes the host's 1/5/15-minute load averages.
+With this option, allocation passes also write `operator-model-policy-counts.json`:
+main-isolate preparation, restore, and reference-preparation calls during the
+measured window, with the instrumented function names. The private loader adds
+counters to the built policy module only in these diagnostic passes. Check the
+installed names before interpreting zero counts; `prepareRefs` runs twice per
+policy construction for the explicit allow/deny fixture. Timing passes remain
+uninstrumented. Attribute sampled bytes to the policy stacks in
+`stress-allocation.heapprofile`; sampled bytes are estimates, not exact allocation.

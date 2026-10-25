@@ -49,11 +49,17 @@ import {
   readControlUiResourceCounts,
   type ControlUiResourceCounts,
 } from "./lib/control-ui-resource-counts.ts";
+import {
+  createWorkboardResourceFixture,
+  prepareWorkboardResourceSource,
+} from "./lib/control-ui-workboard-resource-fixture.ts";
 
 const { values } = parseArgs({
   options: {
     "bundle-dir": { type: "string", default: "dist/control-ui" },
     "compare-bundle-dir": { type: "string" },
+    "workboard-source-root": { type: "string" },
+    "compare-workboard-source-root": { type: "string" },
     output: { type: "string", default: ".artifacts/control-ui-interactions" },
     steps: { type: "string" },
     viewport: { type: "string", default: "both" },
@@ -316,6 +322,7 @@ const servers: Array<{
   directory: string;
   build: { buildId: string; version: string };
   indexSha256: string;
+  workboardSource?: Awaited<ReturnType<typeof prepareWorkboardResourceSource>>;
   projectionBuild?: { entry: string; descriptorSha256: string; entrySha256: string };
   server: Awaited<ReturnType<typeof startControlUiBenchGatewayServer>>;
 }> = [];
@@ -457,7 +464,7 @@ try {
       sandboxPort: address.port,
     };
   }
-  for (const directory of bundles) {
+  for (const [bundleIndex, directory] of bundles.entries()) {
     const resolved = path.resolve(directory);
     const html = await readFile(path.join(resolved, "index.html"), "utf8");
     const raw = html.match(
@@ -467,6 +474,15 @@ try {
       throw new Error(`Missing build identity: ${directory}`);
     }
     const build: { buildId: string; version: string } = JSON.parse(raw);
+    const sourceRoot = [values["workboard-source-root"], values["compare-workboard-source-root"]][
+      bundleIndex
+    ];
+    const needsWorkboard = scenarios.some((scenario) => scenario.fixture?.workboardResources);
+    if (needsWorkboard && !sourceRoot) {
+      throw new Error(`Missing explicit Workboard source root for bundle ${bundleIndex}`);
+    }
+    const workboardSource =
+      needsWorkboard && sourceRoot ? await prepareWorkboardResourceSource(sourceRoot) : undefined;
     let projectionBuild: (typeof servers)[number]["projectionBuild"];
     if (values["projection-fixtures"]) {
       const descriptor = await readFile(path.join(resolved, "projection-fixture.json"), "utf8");
@@ -488,6 +504,7 @@ try {
     }
     servers.push({
       directory: resolved,
+      workboardSource,
       build,
       indexSha256: createHash("sha256").update(html).digest("hex"),
       projectionBuild,
@@ -574,19 +591,23 @@ try {
           "No sidebar text input exists; measure command palette search separately",
           "No fake clocks, Lit probes or simulated transport delay",
         ],
-        scenarios: scenarios.map(({ id, route, expected, fixture }) => ({
+        scenarios: scenarios.map(({ id, route, expected, fixture, observationBrowser }) => ({
           id,
           route,
           expected,
           fixture,
+          observationBrowser,
         })),
         viewports,
-        bundles: servers.map(({ directory, build, indexSha256, projectionBuild }) => ({
-          directory,
-          ...build,
-          indexSha256,
-          projectionBuild,
-        })),
+        bundles: servers.map(
+          ({ directory, build, indexSha256, workboardSource, projectionBuild }) => ({
+            directory,
+            ...build,
+            indexSha256,
+            workboardSource,
+            projectionBuild,
+          }),
+        ),
       },
       null,
       2,
@@ -699,18 +720,29 @@ try {
             await cdp.send("Emulation.setCPUThrottlingRate", { rate: cpuThrottle });
             if (
               nativeVisibility &&
-              (scenario.fixture?.boardFrameResources || scenario.fixture?.browserResources)
+              (scenario.fixture?.boardFrameResources ||
+                scenario.fixture?.browserResources ||
+                scenario.fixture?.workboardResources)
             ) {
               // Native default contexts allow service workers, which hide fixture fetches from page.route.
               await cdp.send("Network.enable");
               await cdp.send("Network.setBypassServiceWorker", { bypass: true });
             }
-            const fixture = createInteractionFixture(
-              slot.build.buildId,
-              slot.build.version,
-              scenario.fixture,
-              sandbox,
-            );
+            const workboardSource = scenario.fixture?.workboardResources
+              ? slot.workboardSource
+              : undefined;
+            const fixture = workboardSource
+              ? createWorkboardResourceFixture(
+                  slot.build.buildId,
+                  slot.build.version,
+                  workboardSource.root,
+                )
+              : createInteractionFixture(
+                  slot.build.buildId,
+                  slot.build.version,
+                  scenario.fixture,
+                  sandbox,
+                );
             const sessions = createTeamScaleSidebarListOwner({
               rows: fixture.sessions,
               viewerProfileId: "interaction-viewer",
@@ -750,7 +782,9 @@ try {
             await scenario.prepare(page, gateway);
             if (
               nativeVisibility &&
-              (scenario.fixture?.boardFrameResources || scenario.fixture?.browserResources)
+              (scenario.fixture?.boardFrameResources ||
+                scenario.fixture?.browserResources ||
+                scenario.fixture?.workboardResources)
             ) {
               await cdp.send("Network.setBypassServiceWorker", { bypass: false });
               await cdp.send("Network.disable");

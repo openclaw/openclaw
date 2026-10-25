@@ -1,5 +1,6 @@
 /** Transcript-backed prompt projection state cached by an embedded session lifecycle. */
 import { stripSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
+import { getPublishedRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
 import { stableStringify } from "@openclaw/normalization-core";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -65,6 +66,19 @@ function describeTool(tool: AnyAgentTool): ToolDefinition {
   return { name: tool.name, description: tool.description, parameters: tool.parameters };
 }
 
+function sameToolParameters(left: unknown, right: unknown): boolean {
+  if (left === right) {
+    return true;
+  }
+  const a = getPublishedRuntimeToolInputSchema(left);
+  const b = getPublishedRuntimeToolInputSchema(right);
+  // Restored transcript pins have no publication fact; derive only their side.
+  return a || b
+    ? (a?.canonicalFingerprint ?? sha256Hex(stableStringify(left))) ===
+        (b?.canonicalFingerprint ?? sha256Hex(stableStringify(right)))
+    : stableStringify(left) === stableStringify(right);
+}
+
 /**
  * The session pins every tool definition it has sent, so a turn that builds fewer
  * tools keeps the provider prefix: retained definitions refuse their calls. New or
@@ -119,10 +133,7 @@ export function prepareSessionToolSurface(params: {
     if (changed && pin?.description === tool.description) {
       return tool;
     }
-    const sameParameters =
-      pin &&
-      (pin.parameters === tool.parameters ||
-        stableStringify(pin.parameters) === stableStringify(tool.parameters));
+    const sameParameters = pin && sameToolParameters(pin.parameters, tool.parameters);
     changed ||= !sameParameters;
     return sameParameters && pin.description !== tool.description
       ? copyAgentToolMetadata(tool, { ...tool, description: pin.description })
