@@ -19,6 +19,11 @@ import {
 } from "./backup-scratch.js";
 import * as directoryDurability from "./directory-durability.js";
 
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
+
 it("reclaims an interrupted archive's scratch on the next backup run", async () => {
   await withBackupFixture({ prefix: "backup-scratch-next-run-" }, async (state) => {
     await isolateBackupScratch(state);
@@ -41,7 +46,6 @@ it("reclaims an interrupted archive's scratch on the next backup run", async () 
       );
     } finally {
       await finishBackupScratch(live);
-      vi.unstubAllEnvs();
     }
   });
 });
@@ -57,34 +61,27 @@ it("records failed scratch cleanup without failing the published backup", async 
       }
       return remove(target);
     });
-    try {
-      const log = vi.fn();
-      const result = await createBackupArchive({
-        output: state.path("backup.tar.gz"),
-        onlyConfig: true,
-        log,
-      });
-      const [scratch] = await fs.readdir(scratchRoot);
-      expect(scratch).toMatch(/^openclaw-backup-/u);
-      const warning = expect.stringContaining(path.join(scratchRoot, scratch!));
-      expect(result.warnings).toEqual(expect.arrayContaining([warning]));
-      expect(log).toHaveBeenCalledWith(warning);
-      await expect(fs.stat(result.archivePath)).resolves.toMatchObject({
-        size: expect.any(Number),
-      });
-      await expect(fs.stat(path.join(scratchRoot, scratch!, "owner.sqlite"))).rejects.toMatchObject(
-        {
-          code: "ENOENT",
-        },
-      );
-      removal.mockRestore();
-      const repaired = await maintainBackupScratch({ roots: [scratchRoot], repair: true });
-      expect(repaired.reclaimed).toEqual([path.join(scratchRoot, scratch!)]);
-      await expect(fs.readdir(scratchRoot)).resolves.toEqual([]);
-    } finally {
-      removal.mockRestore();
-      vi.unstubAllEnvs();
-    }
+    const log = vi.fn();
+    const result = await createBackupArchive({
+      output: state.path("backup.tar.gz"),
+      onlyConfig: true,
+      log,
+    });
+    const [scratch] = await fs.readdir(scratchRoot);
+    expect(scratch).toMatch(/^openclaw-backup-/u);
+    const warning = expect.stringContaining(path.join(scratchRoot, scratch!));
+    expect(result.warnings).toEqual(expect.arrayContaining([warning]));
+    expect(log).toHaveBeenCalledWith(warning);
+    await expect(fs.stat(result.archivePath)).resolves.toMatchObject({
+      size: expect.any(Number),
+    });
+    await expect(fs.stat(path.join(scratchRoot, scratch!, "owner.sqlite"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    removal.mockRestore();
+    const repaired = await maintainBackupScratch({ roots: [scratchRoot], repair: true });
+    expect(repaired.reclaimed).toEqual([path.join(scratchRoot, scratch!)]);
+    await expect(fs.readdir(scratchRoot)).resolves.toEqual([]);
   });
 });
 
@@ -92,31 +89,25 @@ it.each(["EPERM", "EXDEV"])("fails closed without hard-link support (%s)", async
   const publicationSpy = vi
     .spyOn(directoryDurability, "publishFileExclusive")
     .mockRejectedValue(Object.assign(new Error("hard links unsupported"), { code }));
-  try {
-    await withBackupFixture({ prefix: "openclaw-backup-no-hardlinks-" }, async (state) => {
-      const outputDir = state.path("backups");
-      await fs.mkdir(outputDir, { recursive: true });
+  await withBackupFixture({ prefix: "openclaw-backup-no-hardlinks-" }, async (state) => {
+    const outputDir = state.path("backups");
+    await fs.mkdir(outputDir, { recursive: true });
 
-      await expect(
-        createBackupArchive({
-          output: outputDir,
-          includeWorkspace: false,
-          nowMs: Date.UTC(2026, 4, 9, 12, 0, 0),
-        }),
-      ).rejects.toThrow(/requires hard-link support/iu);
-      expect(publicationSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ strategy: "link-required" }),
-      );
-      await expect(fs.readdir(outputDir)).resolves.toEqual([]);
-    });
-  } finally {
-    publicationSpy.mockRestore();
-  }
+    await expect(
+      createBackupArchive({
+        output: outputDir,
+        includeWorkspace: false,
+        nowMs: Date.UTC(2026, 4, 9, 12, 0, 0),
+      }),
+    ).rejects.toThrow(/requires hard-link support/iu);
+    expect(publicationSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ strategy: "link-required" }),
+    );
+    await expect(fs.readdir(outputDir)).resolves.toEqual([]);
+  });
 });
 
 describe("backup traversal", () => {
-  afterEach(() => vi.restoreAllMocks());
-
   it.each(["lstat", "open"] as const)(
     "records a file vanishing before %s and restores survivors",
     async (operation) => {
@@ -136,7 +127,6 @@ describe("backup traversal", () => {
           }
         };
         if (operation === "lstat") {
-          // Keep the same race reproducible on both filesystem APIs used by the writers.
           const callbackLstat = fsSync.lstat;
           vi.spyOn(fsSync, "lstat").mockImplementation((...args) => {
             remove(args[0]);

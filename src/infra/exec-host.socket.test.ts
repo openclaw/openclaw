@@ -21,6 +21,20 @@ const denial = {
   ok: false,
   error: { code: "UNAVAILABLE", message: "Denied by host policy", reason: "security=deny" },
 };
+type ExecChild = { child: ChildProcessWithoutNullStreams; closed: Promise<unknown> };
+type RequestHandler = (socket: net.Socket, request: ExecHostRequest, id: string) => Promise<void>;
+const faultErrors = {
+  close: {
+    code: "UNKNOWN",
+    reason: "response-lost",
+    message: "UNKNOWN: macOS app exec host response was lost; execution outcome is unknown",
+  },
+  timeout: {
+    code: "TIMEOUT",
+    reason: "timeout",
+    message: "TIMEOUT: macOS app exec host response timed out; execution outcome is unknown",
+  },
+};
 
 // This peer proves the TypeScript transport, not Swift policy or native execution.
 async function withExecPeer(
@@ -29,10 +43,8 @@ async function withExecPeer(
     socketPath: string;
     markers: string;
     order: string[];
-    children: { child: ChildProcessWithoutNullStreams; closed: Promise<unknown> }[];
-    onRequest: (
-      handler: (socket: net.Socket, request: ExecHostRequest, id: string) => Promise<void>,
-    ) => void;
+    children: ExecChild[];
+    onRequest: (handler: RequestHandler) => void;
   }) => Promise<void>,
 ) {
   await withTestDir({ prefix: "oc-exec-", parentDir: "/tmp" }, async (dir) => {
@@ -40,18 +52,12 @@ async function withExecPeer(
     const markers = path.join(dir, "markers");
     const order: string[] = [];
     const sockets: net.Socket[] = [];
-    const closes: Promise<unknown>[] = [];
-    const children: { child: ChildProcessWithoutNullStreams; closed: Promise<unknown> }[] = [];
+    const children: ExecChild[] = [];
     const tasks: Promise<void>[] = [];
     const failures: unknown[] = [];
-    let handler: (socket: net.Socket, request: ExecHostRequest, id: string) => Promise<void>;
+    let handler: RequestHandler;
     const server = net.createServer({ allowHalfOpen: true }, (socket) => {
       sockets.push(socket);
-      closes.push(
-        new Promise<void>((resolve) => {
-          socket.once("close", resolve);
-        }),
-      );
       socket.on("error", (error) => failures.push(error));
       let wire = "";
       socket.setEncoding("utf8");
@@ -120,7 +126,6 @@ async function withExecPeer(
         socket.destroy();
       }
       await Promise.all(children.map(({ closed }) => closed));
-      await Promise.all(closes);
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
       });
@@ -147,8 +152,8 @@ describe.runIf(process.platform !== "win32")("exec host real UDS boundary", () =
     [1_000, 20_000],
   ])(
     "receives a late reply within command budget %s plus approval and grace",
-    async (timeoutMs, elapsed) => {
-      await withExecPeer(async ({ socketPath, onRequest }) => {
+    (timeoutMs, elapsed) =>
+      withExecPeer(async ({ socketPath, onRequest }) => {
         const received = createDeferred<net.Socket>();
         onRequest(async (socket) => {
           received.resolve(socket);
@@ -173,12 +178,11 @@ describe.runIf(process.platform !== "win32")("exec host real UDS boundary", () =
           controller.abort();
           await pending;
         }
-      });
-    },
+      }),
   );
 
-  it("characterizes a missing socket before any request can execute", async () => {
-    await withTestDir({ prefix: "oc-exec-", parentDir: "/tmp" }, async (dir) => {
+  it("characterizes a missing socket before any request can execute", () =>
+    withTestDir({ prefix: "oc-exec-", parentDir: "/tmp" }, async (dir) => {
       const marker = path.join(dir, "never-started");
       await expect(
         requestExecHostViaSocket({
@@ -189,13 +193,12 @@ describe.runIf(process.platform !== "win32")("exec host real UDS boundary", () =
         }),
       ).resolves.toBeNull();
       await expect(fs.readdir(dir)).resolves.toEqual([]);
-    });
-  });
+    }));
 
   it.each([success, denial])(
     "receives a complete response after request half-close: $ok",
-    async (response) => {
-      await withExecPeer(async ({ socketPath, onRequest, order }) => {
+    (response) =>
+      withExecPeer(async ({ socketPath, onRequest, order }) => {
         const request = {
           command: ["/bin/echo", "done"],
           cwd: "/tmp",
@@ -214,14 +217,13 @@ describe.runIf(process.platform !== "win32")("exec host real UDS boundary", () =
           requestExecHostViaSocket({ socketPath, token, request, timeoutMs: 1_000 }),
         ).resolves.toEqual(response);
         expect(order).toEqual(["request-half-closed", "response"]);
-      });
-    },
+      }),
   );
 
   it.each(["close", "malformed matching response", "timeout"] as const)(
     "characterizes the outcome after a signed request starts a child and then %s",
-    async (fault) => {
-      await withExecPeer(async ({ dir, socketPath, markers, order, children, onRequest }) => {
+    (fault) =>
+      withExecPeer(async ({ dir, socketPath, markers, order, children, onRequest }) => {
         const command = [
           "/bin/sh",
           "-c",
@@ -232,7 +234,6 @@ describe.runIf(process.platform !== "win32")("exec host real UDS boundary", () =
         const request = { command, cwd: dir, timeoutMs: 5_000, needsScreenRecording: false };
         const release = createDeferred();
         const faultReady = createDeferred();
-        const childCloses: Promise<unknown>[] = [];
         onRequest(async (socket, received, id) => {
           expect(received).toEqual(request);
           const [executable, ...args] = received.command;
@@ -244,7 +245,6 @@ describe.runIf(process.platform !== "win32")("exec host real UDS boundary", () =
           });
           const closed = once(child, "close");
           children.push({ child, closed });
-          childCloses.push(closed);
           try {
             const [started] = await Promise.race([
               once(child.stdout, "data"),
@@ -281,29 +281,15 @@ describe.runIf(process.platform !== "win32")("exec host real UDS boundary", () =
           if (fault !== "close") {
             await vi.advanceTimersByTimeAsync(1_000);
           }
-          const result = await pending;
-          expect(result).toEqual({
+          expect(await pending).toEqual({
             ok: false,
-            error:
-              fault === "close"
-                ? {
-                    code: "UNKNOWN",
-                    reason: "response-lost",
-                    message:
-                      "UNKNOWN: macOS app exec host response was lost; execution outcome is unknown",
-                  }
-                : {
-                    code: "TIMEOUT",
-                    reason: "timeout",
-                    message:
-                      "TIMEOUT: macOS app exec host response timed out; execution outcome is unknown",
-                  },
+            error: faultErrors[fault === "close" ? "close" : "timeout"],
           });
           order.push("client-outcome-unknown");
           expect(await fs.readFile(markers, "utf8")).toBe("START\n");
         } finally {
           release.resolve();
-          await Promise.all(childCloses);
+          await Promise.all(children.map(({ closed }) => closed));
         }
         expect(await fs.readFile(markers, "utf8")).toBe("START\nCOMPLETE\n");
         expect(order).toEqual([
@@ -315,7 +301,6 @@ describe.runIf(process.platform !== "win32")("exec host real UDS boundary", () =
           "client-outcome-unknown",
           "child-completed",
         ]);
-      });
-    },
+      }),
   );
 });
