@@ -5139,6 +5139,9 @@ A missed deadline fails the run. `--ready-file <path>` records completed fixture
 and connection preparation. Run baseline and candidate with separate state,
 ports, identical counts, counterbalanced launch order, and swapped interleaved
 CPU placements under the campaign's quiet lock and production guard.
+`--codec <absolute-module-path>` selects an alternate compression owner while
+keeping the broadcaster, transport, fixtures, and dependencies identical. Preserve
+the owner's relative imports when saving a baseline copy beside the source module.
 
 Results report CPU per broadcast for the process, main thread, and synchronous
 broadcast call; exact server socket wire bytes; decoded frame bytes; latency and
