@@ -1,7 +1,7 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { expect, it, vi } from "vitest";
+import { assert, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isCronWithinActiveHours } from "../cron/active-hours.js";
@@ -10,12 +10,40 @@ import { normalizeCronJobCreate } from "../cron/normalize.js";
 import { CronService } from "../cron/service.js";
 import { createNoopLogger } from "../cron/service.test-harness.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import { applyClawAddPlanStateless } from "./add-stateless.js";
 import { projectClawAddScheduledJobs } from "./gateway-disclosure.js";
 import { buildClawAddPlan } from "./lifecycle.js";
 import { readClawManifestFile } from "./reader.js";
 import { parseClawOpenClawProfile } from "./schema.js";
+
+const checklist = "# Checklist\nCheck active incidents.\n";
+const baseConfig = (): OpenClawConfig => ({
+  agents: { entries: { main: {} } },
+  plugins: { enabled: false },
+});
+async function portableSource(fixture: OpenClawTestState) {
+  const packageRoot = fixture.statePath("package");
+  await mkdir(packageRoot, { recursive: true });
+  await writeFile(
+    path.join(packageRoot, "claw.json"),
+    JSON.stringify({
+      schemaVersion: 1,
+      agent: { id: "portable", name: "Portable" },
+      workspace: { bootstrapFiles: { "HEARTBEAT.md": { source: "HEARTBEAT.md" } } },
+    }),
+  );
+  await writeFile(
+    path.join(packageRoot, "HEARTBEAT.md"),
+    `${checklist}tasks:\n- name: Summary\n  interval: 15m\n  prompt: Prepare a summary.\n`,
+  );
+  const source = await readClawManifestFile(path.join(packageRoot, "claw.json"));
+  assert(source.ok, JSON.stringify(source.diagnostics));
+  return source;
+}
 
 it.each([
   { every: "5m", changed: "none" },
@@ -30,28 +58,8 @@ it.each([
   "adds portable heartbeat $every with consent and scratch guarded ($changed)",
   async ({ every, changed }) => {
     await withOpenClawTestState({ label: "claw-portable-add" }, async (fixture) => {
-      const packageRoot = fixture.statePath("package");
-      await mkdir(packageRoot, { recursive: true });
-      await writeFile(
-        path.join(packageRoot, "claw.json"),
-        JSON.stringify({
-          schemaVersion: 1,
-          agent: { id: "portable", name: "Portable" },
-          workspace: { bootstrapFiles: { "HEARTBEAT.md": { source: "HEARTBEAT.md" } } },
-        }),
-      );
-      await writeFile(
-        path.join(packageRoot, "HEARTBEAT.md"),
-        "# Checklist\nCheck active incidents.\ntasks:\n- name: Summary\n  interval: 15m\n  prompt: Prepare a summary.\n",
-      );
-      const source = await readClawManifestFile(path.join(packageRoot, "claw.json"));
-      if (!source.ok) {
-        throw new Error(JSON.stringify(source.diagnostics));
-      }
-      let config: OpenClawConfig = {
-        agents: { entries: { main: {} } },
-        plugins: { enabled: false },
-      };
+      const source = await portableSource(fixture);
+      let config = baseConfig();
       setRuntimeConfigSnapshot(config);
       const makePlan = () =>
         buildClawAddPlan({
@@ -76,7 +84,7 @@ it.each([
         }),
       ]);
       if (changed === "source") {
-        await writeFile(path.join(packageRoot, "HEARTBEAT.md"), "Changed after consent.\n");
+        await writeFile(fixture.statePath("package", "HEARTBEAT.md"), "Changed after consent.\n");
       }
       const run = vi.fn(async () => ({ status: "ok" as const }));
       const cron = new CronService({
@@ -118,9 +126,7 @@ it.each([
                 throw new Error("Second automation could not be added");
               }
               const normalized = normalizeCronJobCreate(input);
-              if (!normalized) {
-                throw new Error("invalid cron input");
-              }
+              assert(normalized, "invalid cron input");
               return await cron.add(normalized, { commitGuard: options?.commitGuard });
             },
             list: async () => ({ jobs: await cron.list({ includeDisabled: true }) }),
@@ -146,17 +152,13 @@ it.each([
                       expectedRevision: 0,
                       commitGuard,
                     });
-                    if (!outcome.ok) {
-                      throw new Error("Claw automation scratch changed before import.");
-                    }
+                    assert(outcome.ok, "Claw automation scratch changed before import.");
                     if (changed === "definition") {
                       await cron.update(id, { name: "Operator edit" });
                     }
                   },
             enable: async (id, revision, commitGuard) => {
-              expect((await cron.readScratch(id)).scratch?.content).toBe(
-                "# Checklist\nCheck active incidents.\n",
-              );
+              expect((await cron.readScratch(id)).scratch?.content).toBe(checklist);
               await cron.updateWithPrecondition(
                 id,
                 { enabled: true },
@@ -203,7 +205,7 @@ it.each([
           expect((await cron.readScratch(jobs[0]!.id)).scratch?.content).toBe(
             changed === "scratch" || changed === "rollback-scratch"
               ? "Operator checklist"
-              : "# Checklist\nCheck active incidents.\n",
+              : checklist,
           );
           expect(config.agents?.entries).toHaveProperty("portable");
           expect(run).not.toHaveBeenCalled();
@@ -217,9 +219,7 @@ it.each([
           message: "Prepare a summary.",
         });
         const monitor = jobs.find((job) => job.name !== "Summary")!;
-        expect((await cron.readScratch(monitor.id)).scratch?.content).toBe(
-          "# Checklist\nCheck active incidents.\n",
-        );
+        expect((await cron.readScratch(monitor.id)).scratch?.content).toBe(checklist);
       } finally {
         cron.stop();
         await cron.waitForIdle();
@@ -228,60 +228,27 @@ it.each([
   },
 );
 
+const overnight = { start: "22:00", end: "06:00", timezone: "UTC" };
 it.each([
-  {
-    name: "start only",
-    activeHours: { start: "22:00" },
-    expectedHours: undefined,
-    allowed: [true, true],
-  },
-  {
-    name: "end only",
-    activeHours: { end: "06:00" },
-    expectedHours: undefined,
-    allowed: [true, true],
-  },
-  {
-    name: "complete overnight window",
-    activeHours: { start: "22:00", end: "06:00", timezone: "UTC" },
-    expectedHours: { start: "22:00", end: "06:00", timezone: "UTC" },
-    allowed: [false, true],
-  },
-])(
-  "preserves portable active-hours admission for $name",
-  async ({ activeHours, expectedHours, allowed }) => {
+  ["start only", { start: "22:00" }, undefined, [true, true]],
+  ["end only", { end: "06:00" }, undefined, [true, true]],
+  ["complete overnight window", { ...overnight }, overnight, [false, true]],
+] as const)(
+  "preserves portable active-hours admission for %s",
+  async (_name, activeHours, expectedHours, allowed) => {
     await withOpenClawTestState({ label: "claw-portable-active-hours" }, async (fixture) => {
-      const packageRoot = fixture.statePath("package");
-      await mkdir(packageRoot, { recursive: true });
-      await writeFile(
-        path.join(packageRoot, "claw.json"),
-        JSON.stringify({
-          schemaVersion: 1,
-          agent: { id: "portable", name: "Portable" },
-          workspace: { bootstrapFiles: { "HEARTBEAT.md": { source: "HEARTBEAT.md" } } },
-        }),
-      );
-      await writeFile(
-        path.join(packageRoot, "HEARTBEAT.md"),
-        "# Checklist\nCheck active incidents.\ntasks:\n- name: Summary\n  interval: 15m\n  prompt: Prepare a summary.\n",
-      );
-      const source = await readClawManifestFile(path.join(packageRoot, "claw.json"));
-      if (!source.ok) {
-        throw new Error(JSON.stringify(source.diagnostics));
-      }
+      const source = await portableSource(fixture);
       const profile = parseClawOpenClawProfile({
         schemaVersion: 1,
         agent: { heartbeat: { every: "5m", activeHours } },
       });
-      if (!profile.ok) {
-        throw new Error(JSON.stringify(profile.diagnostics));
-      }
+      assert(profile.ok, JSON.stringify(profile.diagnostics));
       const plan = await buildClawAddPlan({
         manifest: source.manifest,
         source: source.source,
         openClawProfile: profile.profile,
         context: {
-          config: { agents: { entries: { main: {} } }, plugins: { enabled: false } },
+          config: baseConfig(),
           workspace: fixture.statePath("added-workspace"),
         },
       });

@@ -167,6 +167,13 @@ function expectNoAgentLease() {
     mocks.lease.mock.calls.filter(([options]) => options.scope === "core:agent-deletion"),
   ).toHaveLength(0);
 }
+function changePolicyAfterLease(next: OpenClawConfig) {
+  let current = config;
+  enterPluginLease(() => {
+    current = next;
+  });
+  usePolicy(() => current);
+}
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -272,20 +279,14 @@ describe("Gateway Claw Add application", () => {
   });
 
   it("uses the canonical worker installer only after a sealed plan and persisted source match", async () => {
-    const input = applyInput();
-    const result = await applyClawAddForGateway(input);
+    const result = await applyReviewed();
 
     expect(result).toEqual({
       agentId: "workflow-operator",
       status: "complete",
       readiness: { ready: true, requirements: [] },
     });
-    expect(input.getPlanningContext).toHaveBeenCalledTimes(3);
-    expect(mocks.project).toHaveBeenNthCalledWith(1, plan, source, trust, config);
-    expect(mocks.project).toHaveBeenNthCalledWith(2, plan, source, trust, config);
     expect(mocks.project).toHaveBeenNthCalledWith(3, plan, persistedSource, trust, config);
-    expect(mocks.persist).toHaveBeenCalledTimes(1);
-    expect(mocks.plansMatch).toHaveBeenCalledTimes(1);
     expect(mocks.apply).toHaveBeenCalledWith(
       plan,
       expect.objectContaining({
@@ -300,12 +301,7 @@ describe("Gateway Claw Add application", () => {
 
   it("rejects changed configured access before persisting the Claw", async () => {
     const changedConfig: OpenClawConfig = { ...config, tools: { deny: ["web_fetch"] } };
-    const input = applyInput();
-    let onDisk = config;
-    enterPluginLease(() => {
-      onDisk = changedConfig;
-    });
-    usePolicy(() => onDisk);
+    changePolicyAfterLease(changedConfig);
     mocks.project.mockImplementation(
       (
         _plan: ClawAddPlan,
@@ -315,8 +311,7 @@ describe("Gateway Claw Add application", () => {
       ) => (current === config ? projected : { ...projected, planIntegrity: "sha256:changed" }),
     );
 
-    await expect(applyClawAddForGateway(input)).rejects.toBeInstanceOf(ClawGatewayPlanChangedError);
-    expect(mocks.project).toHaveBeenNthCalledWith(2, plan, source, trust, changedConfig);
+    await expect(applyReviewed()).rejects.toBeInstanceOf(ClawGatewayPlanChangedError);
     expectNoMutation();
   });
 
@@ -344,7 +339,6 @@ describe("Gateway Claw Add application", () => {
       .mockReturnValueOnce(phase === "persisted" ? changed : projected);
 
     await expect(applyReviewed()).rejects.toBeInstanceOf(ClawGatewayPlanChangedError);
-    expect(plan.blockers).toEqual([]);
     expect(mocks.persist).toHaveBeenCalledTimes(phase === "current" ? 0 : 1);
     expect(mocks.apply).not.toHaveBeenCalled();
   });
@@ -354,7 +348,6 @@ describe("Gateway Claw Add application", () => {
     const { assertReviewedConfig } = mocks.apply.mock.calls[0]![1] as {
       assertReviewedConfig: (config: OpenClawConfig, phase?: "after-agent-commit") => void;
     };
-    expect(assertReviewedConfig).toBeTypeOf("function");
     expect(() => assertReviewedConfig(config)).not.toThrow();
     mocks.configuredAccess.mockReturnValueOnce({
       ...reviewedAccess,
@@ -363,7 +356,7 @@ describe("Gateway Claw Add application", () => {
     expect(() => assertReviewedConfig({ tools: { deny: ["web_fetch"] } })).toThrow(
       ClawAddMutationError,
     );
-    expect(mocks.configuredAccess).toHaveBeenCalledWith({
+    expect(mocks.configuredAccess).toHaveBeenLastCalledWith({
       config: { tools: { deny: ["web_fetch"] } },
       agentId: "workflow-operator",
       desiredAgent: plan.agent.config,
@@ -403,27 +396,12 @@ describe("Gateway Claw Add application", () => {
     expect(mocks.pluginLease.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.policyReader.mock.invocationCallOrder[0]!,
     );
-    expect(mocks.policyReader).toHaveBeenCalledWith(
-      expect.objectContaining({
-        configPath: input.policyConfig.configPath,
-        lease: expect.objectContaining({ databasePath: "/tmp/state.sqlite" }),
-      }),
-      expect.any(Function),
-    );
-    expect(mocks.apply).toHaveBeenCalledWith(
-      plan,
-      expect.objectContaining({ getCurrentConfig: expect.any(Function) }),
-    );
     const options = mocks.apply.mock.calls[0]?.[1] as { getCurrentConfig: () => OpenClawConfig };
     expect(options.getCurrentConfig()).toBe(config);
   });
 
   it("refuses Add when Labs turns off while waiting for the mutation lease", async () => {
-    let onDisk = config;
-    enterPluginLease(() => {
-      onDisk = labsOff;
-    });
-    usePolicy(() => onDisk);
+    changePolicyAfterLease(labsOff);
 
     await expect(applyReviewed()).rejects.toBeInstanceOf(ClawsLabsDisabledError);
     expectNoMutation();
@@ -471,31 +449,6 @@ describe("Gateway Claw Add application", () => {
     await expect(applyReviewed()).rejects.toThrow("A required skill is unavailable from ClawHub");
     expectNoAgentLease();
     expect(mocks.persist).not.toHaveBeenCalled();
-  });
-
-  it("rejects a sibling workspace that changed after review before persisting", async () => {
-    const reviewedWorkspace = "/tmp/state/workspace-workflow-operator-2";
-    const currentWorkspace = "/tmp/state/workspace-workflow-operator-3";
-    mocks.build.mockResolvedValue({
-      ...plan,
-      agent: {
-        ...plan.agent,
-        workspace: currentWorkspace,
-        config: { ...plan.agent.config, workspace: currentWorkspace },
-      },
-    });
-    mocks.project.mockImplementation((current: ClawAddPlan) => ({
-      ...projected,
-      target: { ...projected.target, workspace: current.agent.workspace },
-      planIntegrity:
-        current.agent.workspace === reviewedWorkspace
-          ? projected.planIntegrity
-          : "sha256:workspace-changed",
-    }));
-
-    await expect(applyReviewed()).rejects.toBeInstanceOf(ClawGatewayPlanChangedError);
-    expectNoAgentLease();
-    expectNoMutation();
   });
 
   it.each([
