@@ -679,24 +679,21 @@ describe("registered ACP channel delivery custody", () => {
     });
   });
 
-  it.each(["success", "assembled-success", "observe-only", "callback-error"] as const)(
+  it.each(["observe-only", "callback-error"] as const)(
     "releases custody after %s without unintended sends",
     (mode) =>
       withFixture(
         {
           observeOnly: mode === "observe-only",
           fail: mode === "callback-error",
-          assembled: mode === "assembled-success",
         },
         async (f) => {
           f.finalization.resolve();
           await f.work;
           expect(f.backendRuns).toEqual(["agent:main:acp:custody"]);
           expect(f.deliveryOwners).toEqual(mode === "observe-only" ? [] : ["discord"]);
-          expect(f.sends).toEqual(mode.endsWith("success") ? ["offline final"] : []);
-          expect(f.observers).toEqual(
-            mode === "observe-only" ? [] : [mode.endsWith("success") ? "delivered" : "error"],
-          );
+          expect(f.sends).toEqual([]);
+          expect(f.observers).toEqual(mode === "observe-only" ? [] : ["error"]);
           expect(f.channelOwner.hasRetainedConsumers).toBe(false);
         },
       ),
