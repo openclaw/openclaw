@@ -6,6 +6,7 @@ import { createServer } from "node:http";
 import { createConnection } from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { setRuntimeConfigSnapshot } from "../../src/config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { projectSessionActor } from "../../src/gateway/session-identity-projection.js";
@@ -33,10 +34,18 @@ async function findFreePort(): Promise<number> {
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   const address = server.address();
-  if (!address || typeof address === "string") throw new Error("Could not reserve a loopback port");
+  if (!address || typeof address === "string") {
+    throw new Error("Could not reserve a loopback port");
+  }
   const port = address.port;
   await new Promise<void>((resolve, reject) => {
-    server.close((error) => (error ? reject(error) : resolve()));
+    server.close((error) => {
+      if (error) {
+        reject(error);
+      } else {
+        resolve();
+      }
+    });
   });
   return port;
 }
@@ -58,7 +67,7 @@ async function waitForListener(port: number): Promise<void> {
       });
       return;
     } catch {
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await delay(100);
     }
   }
   throw new Error(`Gateway did not listen within 120 seconds: ${stderr || stdout}`);
@@ -127,10 +136,15 @@ try {
     ],
     { cwd: repoRoot, env: childEnv, stdio: ["ignore", "pipe", "pipe"] },
   );
-  child.stdout.on("data", (chunk: Buffer) => {
+  const childStdout = child.stdout;
+  const childStderr = child.stderr;
+  if (!childStdout || !childStderr) {
+    throw new Error("Gateway stdout and stderr pipes are unavailable");
+  }
+  childStdout.on("data", (chunk: Buffer) => {
     stdout = append(stdout, chunk);
   });
-  child.stderr.on("data", (chunk: Buffer) => {
+  childStderr.on("data", (chunk: Buffer) => {
     stderr = append(stderr, chunk);
   });
 
@@ -165,11 +179,11 @@ try {
   if (child && child.exitCode === null && child.signalCode === null) {
     const childExit = once(child, "exit");
     child.kill("SIGTERM");
-    await Promise.race([childExit, new Promise((resolve) => setTimeout(resolve, 10_000))]);
+    await Promise.race([childExit, delay(10_000)]);
     if (child.exitCode === null && child.signalCode === null) {
       const forcedExit = once(child, "exit");
       child.kill("SIGKILL");
-      await Promise.race([forcedExit, new Promise((resolve) => setTimeout(resolve, 10_000))]);
+      await Promise.race([forcedExit, delay(10_000)]);
     }
   }
   await rm(rootDir, { recursive: true, force: true });
