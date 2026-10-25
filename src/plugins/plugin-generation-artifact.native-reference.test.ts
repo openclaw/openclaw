@@ -20,6 +20,7 @@ import {
   expectBytes,
   readText,
   type Artifact,
+  type Cache,
 } from "./plugin-generation-capture.test-support.js";
 import {
   preparePluginNativeAdmissions,
@@ -45,6 +46,19 @@ function failHardlink(filename: string) {
 
 function nativeInode(artifact: Artifact, source: string) {
   return fs.statSync(artifact.resolve(path.join(source, "addon-0.node"))).ino;
+}
+
+function captureNativeAt(
+  cache: Cache,
+  fixture: ReturnType<typeof createFixture>,
+  storage: Parameters<typeof withPluginSourceCaptureStorage>[0],
+) {
+  return withPluginCache(cache, () =>
+    withPluginSourceCaptureStorage(storage, () => {
+      preparePluginNativeAdmissions(fixture.index, cache);
+      return capturePluginGenerationArtifact(fixture.root);
+    }),
+  );
 }
 
 it("records a native host mismatch while preserving unrelated channel accounts", async () => {
@@ -325,12 +339,7 @@ it("captures native companions into state on another filesystem", async ({ skip 
       await using resources = captureResources();
       const cache = resources.cache();
       const artifact = resources.keep(
-        withPluginCache(cache, () =>
-          withPluginSourceCaptureStorage({ stateDir: captureState, placement: "state" }, () => {
-            preparePluginNativeAdmissions(fixture.index, cache);
-            return capturePluginGenerationArtifact(fixture.root);
-          }),
-        ),
+        captureNativeAt(cache, fixture, { stateDir: captureState, placement: "state" }),
       );
       expect(fs.statSync(fixture.root).dev).not.toBe(fs.statSync(captureState).dev);
       expectBytes(artifact.resolve(fixture.filename), fixture.bytes);
@@ -354,12 +363,7 @@ it("keeps temporary native inspections from hardlinking rehearsal companions", a
     await using resources = captureResources();
     const cache = resources.cache();
     const artifact = resources.keep(
-      withPluginCache(cache, () =>
-        withPluginSourceCaptureStorage({ stateDir: state.stateDir, placement: "temporary" }, () => {
-          preparePluginNativeAdmissions(fixture.index, cache);
-          return capturePluginGenerationArtifact(fixture.root);
-        }),
-      ),
+      captureNativeAt(cache, fixture, { stateDir: state.stateDir, placement: "temporary" }),
     );
     const captured = fs.realpathSync(artifact.resolve(companion));
     expect(readText(captured)).toBe('{"vips":"fixture"}');
@@ -408,14 +412,7 @@ it.each(["state root", "temporary placement", "publication root"] as const)(
           }
           for (const { storage, roots } of scopes) {
             const artifact = resources.keep(
-              withPluginCache(cache, () =>
-                withPluginInstallRoots(roots, () =>
-                  withPluginSourceCaptureStorage(storage, () => {
-                    preparePluginNativeAdmissions(fixture.index, cache);
-                    return capturePluginGenerationArtifact(fixture.root);
-                  }),
-                ),
-              ),
+              withPluginInstallRoots(roots, () => captureNativeAt(cache, fixture, storage)),
             );
             const captured = fs.realpathSync(artifact.resolve(fixture.filename));
             capturedPaths.push(captured);

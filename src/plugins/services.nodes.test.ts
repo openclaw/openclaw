@@ -323,12 +323,10 @@ async function openServiceDuplex(
   const stream = ctx.client!.internal!.nodeInvokeStream!;
   stream.onDispatchReady("preflight");
   // A non-mutating preflight has no receiver and must not open the channel.
-  let ready = false;
-  void opening.then(() => {
-    ready = true;
-  });
+  const ready = vi.fn();
+  void opening.then(ready);
   await setImmediate();
-  expect(ready).toBe(false);
+  expect(ready).not.toHaveBeenCalled();
   stream.onDispatchReady("upload");
   const endpoint = createNodeDuplexEndpoint({
     sendFrame: (frame) => stream.onProgress(JSON.stringify(frame)),

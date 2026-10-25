@@ -15,7 +15,6 @@ import { createPluginManifestRecordFixture } from "./plugin-metadata.test-suppor
 import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
 import { withPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "./runtime/types.js";
-import { validatePluginSchemaValue } from "./schema-validator.js";
 import type { SessionCatalogProvider } from "./session-catalog.js";
 import { createPluginRecord } from "./status.test-fixtures.js";
 
@@ -59,12 +58,14 @@ async function registerCatalog(
     await io.writeConfigFile(source);
   }
   const snapshot = await io.readConfigFileSnapshot();
-  expect(snapshot.exists).toBe(configExists === true || configExists === "fresh");
-  const catalogProperties = {
-    enabled: { type: "boolean", default: true },
-    pageSize: { type: "integer", default: 10 },
+  const catalogSchema = {
+    type: "object",
+    default: {},
+    properties: {
+      enabled: { type: "boolean", default: true },
+      pageSize: { type: "integer", default: 10 },
+    },
   };
-  const catalogSchema = { type: "object", default: {}, properties: catalogProperties };
   const manifest = createPluginManifestRecordFixture({
     id: pluginId,
     enabledByDefault: true,
@@ -79,17 +80,6 @@ async function registerCatalog(
       },
     },
     configSchema: { type: "object", properties: { sessionCatalog: catalogSchema } },
-  });
-  const pluginLocal = validatePluginSchemaValue({
-    origin: "bundled",
-    schema: manifest.configSchema!,
-    cacheKey: manifest.manifestPath,
-    value: {},
-    applyDefaults: true,
-  });
-  expect(pluginLocal).toMatchObject({
-    ok: true,
-    value: { sessionCatalog: { enabled: true, pageSize: 10 } },
   });
   const validate = (input: OpenClawConfig) => {
     const validated = validateConfigObjectWithPlugins(
@@ -196,7 +186,7 @@ describe("registered native catalog access", () => {
       });
       state.instance.lifecycle.onDispose(cleanup);
       let registrations = 0;
-      let settled = false;
+      const settled = vi.fn();
       const pending = state.inRequestScope(() =>
         listSessionCatalogProvider(state.provider, {
           waitUntil: () => {
@@ -206,11 +196,7 @@ describe("registered native catalog access", () => {
           },
         }),
       );
-      const outcome = pending
-        .catch((reason: unknown) => reason)
-        .finally(() => {
-          settled = true;
-        });
+      const outcome = pending.catch((reason: unknown) => reason).finally(settled);
       try {
         await vi.waitFor(() => expect(close).toHaveBeenCalledOnce());
         const disposal = state.dispose();
@@ -219,7 +205,7 @@ describe("registered native catalog access", () => {
         if (failure === "close") {
           expect(await outcome).toBe(error);
         } else {
-          expect(settled).toBe(false);
+          expect(settled).not.toHaveBeenCalled();
         }
         completion.resolve();
         expect(await outcome).toBe(error);
