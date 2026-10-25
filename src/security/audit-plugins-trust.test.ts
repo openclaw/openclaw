@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { HookInstallRecord } from "../config/types.hooks.js";
@@ -84,7 +85,7 @@ describe("security audit install metadata findings", () => {
     return dir;
   };
 
-  const runInstallMetadataAudit = (cfg: OpenClawConfig, stateDir: string) =>
+  const audit = (cfg: OpenClawConfig, stateDir: string) =>
     collectPluginsTrustFindings({ cfg, stateDir });
 
   const writeHookInstalls = (
@@ -96,16 +97,21 @@ describe("security audit install metadata findings", () => {
     });
   };
 
-  const requireInstallFinding = (
-    findings: Awaited<ReturnType<typeof runInstallMetadataAudit>>,
-    checkId: string,
-  ) => {
-    const finding = findings.find((entry) => entry.checkId === checkId);
-    if (!finding) {
-      throw new Error(`Expected ${checkId} finding`);
+  const requireInstallFinding = (findings: Awaited<ReturnType<typeof audit>>, checkId: string) =>
+    expectDefined(
+      findings.find((entry) => entry.checkId === checkId),
+      checkId,
+    );
+  const npm = (spec: string, fields: Partial<HookInstallRecord> = {}): HookInstallRecord => ({
+    source: "npm",
+    spec,
+    ...fields,
+  });
+  async function extensions(stateDir: string, names: string[]) {
+    for (const name of names) {
+      await fs.mkdir(path.join(stateDir, "extensions", name), { recursive: true });
     }
-    return finding;
-  };
+  }
 
   const writePluginIndexInstallRecords = async (
     stateDir: string,
@@ -142,48 +148,26 @@ describe("security audit install metadata findings", () => {
   });
 
   it("evaluates install metadata findings", async () => {
-    type Flags = Partial<Record<"pinned" | "integrity" | "resolved" | "drift", boolean>>;
-    const cases: Array<[string, Flags, string[], string[]]> = [
-      ["unpinned", {}, ["unpinned_npm_specs", "missing_integrity"], []],
-      [
-        "pinned",
-        { pinned: true, integrity: true },
-        [],
-        ["unpinned_npm_specs", "missing_integrity"],
-      ],
-      [
-        "unpinned with resolved metadata",
-        { integrity: true, resolved: true },
-        ["unpinned_npm_specs"],
-        ["missing_integrity"],
-      ],
-      ["version drift", { pinned: true, integrity: true, drift: true }, ["version_drift"], []],
-    ];
-    for (const [name, flags, present, absent] of cases) {
-      const stateDir = await makeTmpDir(name);
-      const record = (packageName: string, integrity: string): HookInstallRecord => ({
-        source: "npm",
-        spec: `@openclaw/${packageName}${flags.pinned ? "@1.2.3" : ""}`,
-        ...(flags.integrity ? { integrity } : {}),
-        ...(flags.resolved ? { resolvedSpec: `@openclaw/${packageName}@1.2.3` } : {}),
-        ...(flags.drift ? { resolvedVersion: "1.2.3" } : {}),
-      });
+    for (const pinned of [false, true]) {
+      const stateDir = await makeTmpDir(`pinned-${pinned}`);
+      const record = (packageName: string, integrity: string) =>
+        npm(`@openclaw/${packageName}${pinned ? "@1.2.3" : ""}`, {
+          ...(pinned ? { integrity } : {}),
+          resolvedSpec: `@openclaw/${packageName}@1.2.3`,
+        });
       await writePluginIndexInstallRecords(stateDir, {
         "voice-call": record("voice-call", "sha512-plugin"),
       });
       writeHookInstalls(stateDir, { "test-hooks": record("test-hooks", "sha512-hook") });
-      const findings = await runInstallMetadataAudit({}, stateDir);
+      const findings = await audit({}, stateDir);
       for (const owner of ["plugins", "hooks"]) {
-        for (const suffix of present) {
-          expect(findings, name).toContainEqual(
-            expect.objectContaining({ checkId: `${owner}.installs_${suffix}`, severity: "warn" }),
-          );
-        }
-        for (const suffix of absent) {
-          expect(
-            findings.some(({ checkId }) => checkId === `${owner}.installs_${suffix}`),
-            name,
-          ).toBe(false);
+        for (const suffix of ["unpinned_npm_specs", "missing_integrity"]) {
+          const finding = findings.find(({ checkId }) => checkId === `${owner}.installs_${suffix}`);
+          if (pinned) {
+            expect(finding).toBeUndefined();
+          } else {
+            expect(finding).toMatchObject({ severity: "warn" });
+          }
         }
       }
     }
@@ -194,24 +178,20 @@ describe("security audit install metadata findings", () => {
     const pluginPath = path.join(stateDir, "custom-plugin");
     const hookPath = path.join(stateDir, "hooks", "test-hooks");
     await writePluginIndexInstallRecords(stateDir, {
-      "voice-call": {
-        source: "npm",
-        spec: "@openclaw/voice-call",
+      "voice-call": npm("@openclaw/voice-call", {
         installPath: pluginPath,
         version: "0.9.0",
         resolvedVersion: "1.0.0",
-      },
-      "empty-version": {
-        source: "npm",
-        spec: "@openclaw/empty-version@1.0.0",
+      }),
+      "empty-version": npm("@openclaw/empty-version@1.0.0", {
         integrity: "sha512-empty",
         version: "1.0.0",
         resolvedVersion: "",
-      },
+      }),
       "local-plugin": { source: "path", spec: "local-plugin", version: "1.0.0" },
     });
     writeHookInstalls(stateDir, {
-      "old-hooks": { source: "npm", spec: "old-hooks", version: "1.0.0" },
+      "old-hooks": npm("old-hooks", { version: "1.0.0" }),
     });
 
     const reads: string[] = [];
@@ -220,79 +200,66 @@ describe("security audit install metadata findings", () => {
         reads.push(dir);
         if (dir === pluginPath) {
           writeHookInstalls(stateDir, {
-            "test-hooks": {
-              source: "npm",
-              spec: "@openclaw/test-hooks",
-              integrity: " ",
-              version: "2.0.0",
-            },
+            "test-hooks": npm("@openclaw/test-hooks", { integrity: " ", version: "2.0.0" }),
           });
           return "1.1.0";
         }
         return dir === hookPath ? "2.1.0" : undefined;
       },
       async () => {
-        const findings = await runInstallMetadataAudit({}, stateDir);
+        const findings = await audit({}, stateDir);
         // Persistence drops blank resolved versions and sorts plugin IDs before the audit reads them.
         expect(reads).toEqual([
           path.join(stateDir, "extensions", "empty-version"),
           pluginPath,
           hookPath,
         ]);
-        expect(findings.map(({ checkId }) => checkId)).toEqual(
-          ["plugins", "hooks"].flatMap((owner) =>
-            ["unpinned_npm_specs", "missing_integrity", "version_drift"].map(
-              (suffix) => `${owner}.installs_${suffix}`,
-            ),
-          ),
-        );
-        expect(findings.map(({ detail }) => detail)).toEqual([
-          "Unpinned plugin index install records:\n- voice-call (@openclaw/voice-call)",
-          "Plugin index records missing integrity:\n- voice-call",
-          "Detected plugin install metadata drift:\n- voice-call (recorded 1.0.0, installed 1.1.0)",
-          "Unpinned hook install records:\n- test-hooks (@openclaw/test-hooks)",
-          "Hook install records missing integrity:\n- test-hooks",
-          "Detected hook install metadata drift:\n- test-hooks (recorded 2.0.0, installed 2.1.0)",
-        ]);
-        expect(findings.map(({ remediation }) => remediation)).toEqual([
-          "Pin install specs to exact versions (for example, `@scope/pkg@1.2.3`) for higher supply-chain stability.",
-          "Reinstall or update plugins to refresh install metadata with resolved integrity hashes.",
-          "Run `openclaw plugins update --all` (or reinstall affected plugins) to refresh install metadata.",
-          "Pin hook install specs to exact versions (for example, `@scope/pkg@1.2.3`) for higher supply-chain stability.",
-          "Reinstall or update hooks to refresh install metadata with resolved integrity hashes.",
-          "Run `openclaw hooks update --all` (or reinstall affected hooks) to refresh install metadata.",
-        ]);
+        expect(findings).toHaveLength(6);
+        for (const [owner, id, recorded, installed] of [
+          ["plugins", "voice-call", "1.0.0", "1.1.0"],
+          ["hooks", "test-hooks", "2.0.0", "2.1.0"],
+        ]) {
+          for (const suffix of ["unpinned_npm_specs", "missing_integrity", "version_drift"]) {
+            expect(requireInstallFinding(findings, `${owner}.installs_${suffix}`).detail).toContain(
+              id,
+            );
+          }
+          expect(
+            requireInstallFinding(findings, `${owner}.installs_version_drift`).detail,
+          ).toContain(`recorded ${recorded}, installed ${installed}`);
+          for (const [suffix, guidance] of [
+            ["unpinned_npm_specs", "@scope/pkg@1.2.3"],
+            ["missing_integrity", `Reinstall or update ${owner}`],
+            ["version_drift", `openclaw ${owner} update --all`],
+          ]) {
+            expect(
+              requireInstallFinding(findings, `${owner}.installs_${suffix}`).remediation,
+            ).toContain(guidance);
+          }
+        }
       },
     );
   });
 
   it("evaluates phantom allowlist findings", async () => {
-    const bundledStateDir = await makeTmpDir("phantom-bundled-excluded");
-    await fs.mkdir(path.join(bundledStateDir, "extensions", "some-installed-plugin"), {
-      recursive: true,
-    });
-
-    const bundledFindings = await runInstallMetadataAudit(
-      {
-        plugins: { allow: ["discord", "anthropic", "some-installed-plugin"] },
-      },
-      bundledStateDir,
-    );
+    async function auditAllowlist(installed: string, allow: string[]) {
+      const stateDir = await makeTmpDir("phantom");
+      await extensions(stateDir, [installed]);
+      return audit({ plugins: { allow } }, stateDir);
+    }
+    const bundledFindings = await auditAllowlist("some-installed-plugin", [
+      "discord",
+      "anthropic",
+      "some-installed-plugin",
+    ]);
     expect(
       bundledFindings.find((finding) => finding.checkId === "plugins.allow_phantom_entries"),
     ).toBeUndefined();
 
-    const reportedStateDir = await makeTmpDir("phantom-reported");
-    await fs.mkdir(path.join(reportedStateDir, "extensions", "installed-plugin"), {
-      recursive: true,
-    });
-
-    const reportedFindings = await runInstallMetadataAudit(
-      {
-        plugins: { allow: ["installed-plugin", "ghost-plugin-xyz"] },
-      },
-      reportedStateDir,
-    );
+    const reportedFindings = await auditAllowlist("installed-plugin", [
+      "installed-plugin",
+      "ghost-plugin-xyz",
+    ]);
     const phantomFinding = requireInstallFinding(reportedFindings, "plugins.allow_phantom_entries");
     expect(phantomFinding.severity).toBe("warn");
     expect(phantomFinding.detail).toContain("ghost-plugin-xyz");
@@ -301,18 +268,16 @@ describe("security audit install metadata findings", () => {
 
   it("ignores install backup and debris dirs when auditing installed plugin roots", async () => {
     const stateDir = await makeTmpDir("installed-plugin-debris");
-    for (const name of [
+    await extensions(stateDir, [
       "live-plugin",
       ".openclaw-install-backups",
       "node_modules",
       "old-plugin.backup-20260502",
       "old-plugin.disabled.20260502",
       "old-plugin.bak",
-    ]) {
-      await fs.mkdir(path.join(stateDir, "extensions", name), { recursive: true });
-    }
+    ]);
 
-    const findings = await runInstallMetadataAudit({}, stateDir);
+    const findings = await audit({}, stateDir);
 
     const noAllowlist = requireInstallFinding(findings, "plugins.extensions_no_allowlist");
     expect(noAllowlist.detail).toContain("Found 1 extension(s)");

@@ -17,26 +17,12 @@ import { runSecurityAuditCore } from "./audit.js";
 const audit = (cfg: OpenClawConfig) => collectGatewayConfigFindings(cfg, cfg, {});
 const auth = { mode: "token", token: "very-long-browser-token-0123456789" } as const;
 
-function hasFinding(
-  checkId: string,
-  severity: "warn" | "critical",
-  findings: ReturnType<typeof collectGatewayConfigFindings>,
-) {
-  return findings.some((finding) => finding.checkId === checkId && finding.severity === severity);
-}
-
-function dangerousFlags(findings: ReturnType<typeof collectGatewayConfigFindings>) {
-  const flags = findings.filter((entry) => entry.checkId === "config.insecure_or_dangerous_flags");
-  expect(flags.length).toBeGreaterThan(0);
-  return flags;
-}
+const dangerousId = "config.insecure_or_dangerous_flags";
+const originRequired = "gateway.control_ui.allowed_origins_required";
 
 describe("security audit gateway exposure findings", () => {
   it("warns when the MCP Apps bridge is enabled", () => {
-    const cfg: OpenClawConfig = { mcp: { apps: { enabled: true } } };
-    expect(audit(cfg)).toContainEqual(
-      expect.objectContaining({ checkId: "mcp.apps.enabled", severity: "warn" }),
-    );
+    checkFinding(audit({ mcp: { apps: { enabled: true } } }), "mcp.apps.enabled", warn);
   });
 
   it("warns on insecure or dangerous flags", () => {
@@ -47,15 +33,17 @@ describe("security audit gateway exposure findings", () => {
       },
       tools: { exec: { applyPatch: { workspaceOnly: false } } },
     };
-    const dangerousFindings = dangerousFlags(audit(cfg));
-    expect(dangerousFindings.every((finding) => finding.severity === "warn")).toBe(true);
+    const findings = audit(cfg);
+    const flags = findings.filter((entry) => entry.checkId === dangerousId);
+    expect(flags.length).toBeGreaterThan(0);
+    expect(flags.every((finding) => finding.severity === "warn")).toBe(true);
     for (const snippet of [
       "hooks.gmail.allowUnsafeExternalContent=true",
       "hooks.mappings[0].allowUnsafeExternalContent=true",
       "tools.exec.applyPatch.workspaceOnly=false",
     ]) {
       expect(
-        dangerousFindings.some((finding) => finding.detail.includes(snippet)),
+        flags.some((finding) => finding.detail.includes(snippet)),
         snippet,
       ).toBe(true);
     }
@@ -68,38 +56,21 @@ describe("security audit gateway exposure findings", () => {
     const findings = audit({
       gateway: { bind, ...(bind === "lan" ? { auth } : {}), controlUi: { allowedOrigins: ["*"] } },
     });
-    expect(hasFinding("gateway.control_ui.allowed_origins_wildcard", severity, findings)).toBe(
-      true,
-    );
+    checkFinding(findings, "gateway.control_ui.allowed_origins_wildcard", { severity });
     if (bind === "lan") {
-      expect(findings.map((finding) => finding.checkId)).not.toContain(
-        "gateway.control_ui.allowed_origins_required",
-      );
+      expect(findings.map((finding) => finding.checkId)).not.toContain(originRequired);
     }
   });
 
   it("flags dangerous host-header origin fallback and suppresses missing allowed-origins finding", () => {
-    const cfg: OpenClawConfig = {
-      gateway: {
-        bind: "lan",
-        auth,
-        controlUi: { dangerouslyAllowHostHeaderOriginFallback: true },
-      },
-    };
-
-    const findings = audit(cfg);
-    expect(hasFinding("gateway.control_ui.host_header_origin_fallback", "critical", findings)).toBe(
-      true,
-    );
-    expect(
-      findings.some((finding) => finding.checkId === "gateway.control_ui.allowed_origins_required"),
-    ).toBe(false);
-    const flags = dangerousFlags(findings);
-    expect(
-      flags.some((finding) =>
-        finding.detail.includes("gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true"),
-      ),
-    ).toBe(true);
+    const findings = audit({
+      gateway: { bind: "lan", auth, controlUi: { dangerouslyAllowHostHeaderOriginFallback: true } },
+    });
+    checkFinding(findings, "gateway.control_ui.host_header_origin_fallback", critical);
+    expect(findings.map((finding) => finding.checkId)).not.toContain(originRequired);
+    checkFinding(findings, dangerousId, {
+      detail: ["gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true"],
+    });
   });
 
   it.each([
@@ -116,7 +87,7 @@ describe("security audit gateway exposure findings", () => {
         auth: { mode: "trusted-proxy", trustedProxy: { userHeader: "x-forwarded-user" } },
       },
     };
-    expect(hasFinding("gateway.real_ip_fallback_enabled", expectedSeverity, audit(cfg))).toBe(true);
+    checkFinding(audit(cfg), "gateway.real_ip_fallback_enabled", { severity: expectedSeverity });
   });
 
   it.each([
@@ -124,10 +95,10 @@ describe("security audit gateway exposure findings", () => {
     { bind: "lan", expectedSeverity: "critical" },
   ] as const)("scores mDNS full mode risk on $bind", ({ bind, expectedSeverity }) => {
     const cfg: OpenClawConfig = {
-      gateway: { bind, auth: { mode: "token", token: "very-long-token-1234567890" } },
+      gateway: { bind, auth },
       discovery: { mdns: { mode: "full" } },
     };
-    expect(hasFinding("discovery.mdns_full_mode", expectedSeverity, audit(cfg))).toBe(true);
+    checkFinding(audit(cfg), "discovery.mdns_full_mode", { severity: expectedSeverity });
   });
 
   it("evaluates trusted-proxy auth guardrails on lan", () => {
@@ -159,7 +130,7 @@ describe("security audit gateway exposure findings", () => {
         },
       };
       const findings = audit(cfg);
-      expect(hasFinding(`gateway.trusted_proxy_${suffix}`, severity, findings), suffix).toBe(true);
+      checkFinding(findings, `gateway.trusted_proxy_${suffix}`, { severity });
       const checkIds = findings.map((finding) => finding.checkId);
       expect(checkIds, suffix).toContain("gateway.trusted_proxy_auth");
       for (const id of [
@@ -419,18 +390,6 @@ describe("security audit trust model findings", () => {
   });
 });
 
-function hasHookFinding(
-  findings: ReturnType<typeof collectHooksHardeningFindings>,
-  checkId: string,
-  severity: "warn" | "critical",
-) {
-  return findings.some((finding) => finding.checkId === checkId && finding.severity === severity);
-}
-
-function getFinding(findings: ReturnType<typeof collectHooksHardeningFindings>, checkId: string) {
-  return findings.find((finding) => finding.checkId === checkId);
-}
-
 type AuditOptions = Parameters<typeof runSecurityAuditCore>[0];
 const hookToken = "shared-gateway-token-1234567890";
 const baseHooks = { enabled: true, token: hookToken, defaultSessionKey: "hook:ingress" };
@@ -461,72 +420,55 @@ describe("security audit hooks ingress findings", () => {
   it("evaluates hooks ingress auth and routing findings", () => {
     const requestSessionKeyHooks = { ...baseHooks, allowRequestSessionKey: true };
     function checkHooks(
-      cfg: OpenClawConfig,
+      hooks: OpenClawConfig["hooks"],
       suffix: string,
       severity: "warn" | "critical" = "warn",
       env = process.env,
+      gateway?: OpenClawConfig["gateway"],
     ) {
-      const findings = collectHooksHardeningFindings(cfg, env);
-      expect(hasHookFinding(findings, `hooks.${suffix}`, severity), suffix).toBe(true);
+      const findings = collectHooksHardeningFindings({ hooks, gateway }, env);
+      checkFinding(findings, `hooks.${suffix}`, { severity });
       return findings;
     }
-    checkHooks({ hooks: { enabled: true, token: "short" } }, "token_too_short");
-    checkHooks(
-      { hooks: { enabled: true, token: hookToken } },
-      "token_reuse_gateway_token",
-      "critical",
-      {
-        OPENCLAW_GATEWAY_TOKEN: hookToken,
-      },
-    );
-    checkHooks({ hooks: { enabled: true, token: hookToken } }, "default_session_key_unset");
-    checkHooks(
-      { hooks: { ...baseHooks, allowedAgentIds: ["*"] } },
-      "allowed_agent_ids_unrestricted",
-    );
-    checkHooks({ hooks: baseHooks }, "allowed_agent_ids_unrestricted");
-    checkHooks(
-      { gateway: { bind: "lan" }, hooks: baseHooks },
-      "allowed_agent_ids_unrestricted",
-      "critical",
-    );
-    const local = checkHooks({ hooks: requestSessionKeyHooks }, "request_session_key_enabled");
-    expect(hasHookFinding(local, "hooks.request_session_key_prefixes_missing", "warn")).toBe(true);
-    checkHooks(
-      { gateway: { bind: "lan" }, hooks: requestSessionKeyHooks },
-      "request_session_key_enabled",
-      "critical",
-    );
+    checkHooks({ enabled: true, token: "short" }, "token_too_short");
+    checkHooks({ enabled: true, token: hookToken }, "token_reuse_gateway_token", "critical", {
+      OPENCLAW_GATEWAY_TOKEN: hookToken,
+    });
+    checkHooks({ enabled: true, token: hookToken }, "default_session_key_unset");
+    checkHooks({ ...baseHooks, allowedAgentIds: ["*"] }, "allowed_agent_ids_unrestricted");
+    checkHooks(baseHooks, "allowed_agent_ids_unrestricted");
+    checkHooks(baseHooks, "allowed_agent_ids_unrestricted", "critical", process.env, {
+      bind: "lan",
+    });
+    const local = checkHooks(requestSessionKeyHooks, "request_session_key_enabled");
+    checkFinding(local, "hooks.request_session_key_prefixes_missing", warn);
+    checkHooks(requestSessionKeyHooks, "request_session_key_enabled", "critical", process.env, {
+      bind: "lan",
+    });
   });
 
   it("flags explicit audit password reuse when config mode is token", () => {
-    const findings = collectHooksHardeningFindings(
-      {
-        gateway: {
-          auth: {
-            mode: "token",
-            token: "config-gateway-token-1234567890", // pragma: allowlist secret
+    const runtimePassword = "runtime-only-gateway-password-1234567890";
+    checkFinding(
+      collectHooksHardeningFindings(
+        {
+          gateway: { auth },
+          hooks: { enabled: true, token: runtimePassword },
+        },
+        {},
+        {
+          gatewayAuthOverride: {
+            mode: "password",
+            password: runtimePassword,
           },
         },
-        hooks: {
-          enabled: true,
-          token: "runtime-only-gateway-password-1234567890",
-        },
-      },
-      {},
+      ),
+      reuseId,
       {
-        gatewayAuthOverride: {
-          mode: "password",
-          password: "runtime-only-gateway-password-1234567890", // pragma: allowlist secret
-        },
+        severity: "critical",
+        detail: ["gateway.auth password"],
       },
     );
-
-    const finding = getFinding(findings, reuseId);
-    expect(finding).toMatchObject({
-      severity: "critical",
-      detail: expect.stringContaining("gateway.auth password"),
-    });
   });
 
   it("keeps persisted SecretRef reuse findings when audit password override differs", async () => {
@@ -542,10 +484,9 @@ describe("security audit hooks ingress findings", () => {
       },
     );
 
-    const finding = getFinding(report.findings, reuseId);
-    expect(finding).toMatchObject({
+    checkFinding(report.findings, reuseId, {
       severity: "critical",
-      remediation: expect.stringContaining("openclaw doctor --fix"),
+      remediation: ["openclaw doctor --fix"],
     });
   });
 
@@ -560,7 +501,7 @@ describe("security audit hooks ingress findings", () => {
       { env: { GW_PASSWORD: "trusted-proxy-local-password-1234567890" } }, // pragma: allowlist secret
     );
 
-    expect(hasHookFinding(report.findings, reuseId, "critical")).toBe(true);
+    checkFinding(report.findings, reuseId, critical);
   });
 
   it("skips unavailable gateway auth SecretRefs when auditing hooks token reuse", async () => {
@@ -572,7 +513,9 @@ describe("security audit hooks ingress findings", () => {
       "shared-gateway-password-1234567890",
     );
 
-    expect(hasHookFinding(report.findings, reuseId, "critical")).toBe(false);
+    expect(report.findings).not.toContainEqual(
+      expect.objectContaining({ checkId: reuseId, ...critical }),
+    );
   });
 
   it("does not execute gateway auth SecretRefs during hooks token reuse audit", async () => {
@@ -589,7 +532,9 @@ describe("security audit hooks ingress findings", () => {
       },
     );
 
-    expect(hasHookFinding(report.findings, reuseId, "critical")).toBe(false);
+    expect(report.findings).not.toContainEqual(
+      expect.objectContaining({ checkId: reuseId, ...critical }),
+    );
   });
 });
 

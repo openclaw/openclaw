@@ -120,14 +120,6 @@ describe("runInstallPolicy", () => {
     scriptPath = await writePolicyScript(sourceDir);
   });
 
-  async function writeWritableParentPolicy() {
-    const dir = tempDirs.make("openclaw-install-policy-");
-    const writableDir = path.join(dir, "writable-parent");
-    await fs.mkdir(writableDir, { recursive: true });
-    await fs.chmod(writableDir, 0o777);
-    return { writableDir, writableScriptPath: await writePolicyScript(writableDir) };
-  }
-
   function runPolicy(config: OpenClawConfig, options: PolicyOptions = {}) {
     return runInstallPolicy({ config, request: baseRequest(sourceDir), ...options });
   }
@@ -250,9 +242,7 @@ describe("runInstallPolicy", () => {
     const response = JSON.stringify({ protocolVersion: 1, decision: "allow" });
     const result = await runPolicy(
       configWithPolicy(scriptPath, { ENV_FILE: envPath, POLICY_RESPONSE: response }),
-      {
-        env: { PATH: "/tmp/untrusted-path" },
-      },
+      { env: { PATH: "/tmp/untrusted-path" } },
     );
     expect(result).toEqual({});
     const captured = JSON.parse(await fs.readFile(envPath, "utf8")) as {
@@ -370,8 +360,8 @@ describe("runInstallPolicy", () => {
     const findings = Array.from({ length: 101 }, (_, index) =>
       makeFinding(`finding-${index}`, `Finding ${index}`),
     );
-    const runWarning = async (warningFindings: typeof findings) =>
-      await runDecision("warn", { reason: "review all findings", findings: warningFindings });
+    const runWarning = (warningFindings: typeof findings) =>
+      runDecision("warn", { reason: "review all findings", findings: warningFindings });
     const boundary = await runWarning(findings.slice(0, 100));
     const result = await runWarning(findings);
     expect(boundary?.warning).toBeDefined();
@@ -465,7 +455,10 @@ describe("runInstallPolicy", () => {
     if (process.platform === "win32") {
       return;
     }
-    const { writableDir, writableScriptPath } = await writeWritableParentPolicy();
+    const writableDir = path.join(sourceDir, "writable-parent");
+    await fs.mkdir(writableDir);
+    await fs.chmod(writableDir, 0o777);
+    const writableScriptPath = await writePolicyScript(writableDir);
     await expectInvalidExec(
       exec(scriptPath, writableScriptPath),
       `security.installPolicy.exec.${field} parent directory permissions are too open: ${writableDir}`,
@@ -473,10 +466,8 @@ describe("runInstallPolicy", () => {
   });
 
   it.runIf(process.platform !== "win32")("rejects symlinked interpreter script args", async () => {
-    const dir = tempDirs.make("openclaw-install-policy-");
-    const realScriptPath = await writePolicyScript(dir);
-    const symlinkScriptPath = path.join(dir, "policy-link.cjs");
-    await fs.symlink(realScriptPath, symlinkScriptPath);
+    const symlinkScriptPath = path.join(sourceDir, "policy-link.cjs");
+    await fs.symlink(scriptPath, symlinkScriptPath);
 
     await expectInvalidExec(
       { command: process.execPath, args: [symlinkScriptPath] },
