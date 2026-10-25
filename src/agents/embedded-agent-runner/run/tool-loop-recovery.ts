@@ -6,6 +6,7 @@ import {
   attachInternalToolBatchLifecycle,
   type InternalBeforeToolBatchHook,
 } from "../../runtime/internal-hooks.js";
+import { getToolInvocationMetadata } from "../../tool-invocation-metadata.js";
 import { admitToolCallBatch } from "../../tool-loop-admission.js";
 import { hashToolCall, observeRepeatedToolError } from "../../tool-loop-detection.js";
 import { log } from "../logger.js";
@@ -23,6 +24,14 @@ export function createToolLoopBatchAdmission(ctx: HookContext): InternalBeforeTo
       const admission = await admitToolCallBatch(canonicalCalls, ctx);
       const { commitReadyCalls, releaseSkippedCalls, ...result } = admission;
       return attachInternalToolBatchLifecycle(result, {
+        executionMode: canonicalCalls.some(
+          (call) =>
+            !call.validationFailure &&
+            call.tool &&
+            getToolInvocationMetadata(call.tool, call.args).executionMode === "sequential",
+        )
+          ? "sequential"
+          : undefined,
         commitReadyCalls,
         releaseSkippedCalls,
         observeOutcome(outcome, state) {

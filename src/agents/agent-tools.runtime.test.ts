@@ -68,7 +68,7 @@ describe("wrapToolWithAbortSignal", () => {
   });
 
   it.each(["direct", "prepared"] as const)(
-    "only preserves an explicit plugin reload handoff through %s execution",
+    "rejects a plugin-name lookalike handoff through %s execution",
     async (mode) => {
       for (const action of ["reloadAndResume", "reload", "list"]) {
         const runAbort = new AbortController();
@@ -98,11 +98,7 @@ describe("wrapToolWithAbortSignal", () => {
         } else {
           execution = wrapped.execute("reload", { action });
         }
-        if (action === "reloadAndResume") {
-          await expect(execution).resolves.toBe(result);
-        } else {
-          await expect(execution).rejects.toMatchObject(abortError);
-        }
+        await expect(execution).rejects.toMatchObject(abortError);
       }
     },
   );
