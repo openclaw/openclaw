@@ -32,14 +32,10 @@ vi.mock("./api.js", async (importOriginal) => ({
     scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
   },
   approveDevicePairing: vi.fn(),
-  clearDeviceBootstrapTokens: pluginApiMocks.clearDeviceBootstrapTokens,
+  ...pluginApiMocks,
   definePluginEntry: vi.fn((entry) => entry),
-  issueDeviceBootstrapToken: pluginApiMocks.issueDeviceBootstrapToken,
   listDevicePairing: vi.fn(async () => ({ pending: [] })),
-  revokeDeviceBootstrapToken: pluginApiMocks.revokeDeviceBootstrapToken,
-  resolvePreferredOpenClawTmpDir: pluginApiMocks.resolvePreferredOpenClawTmpDir,
   runPluginCommandWithTimeout: vi.fn(),
-  writeQrPngTempFile: pluginApiMocks.writeQrPngTempFile,
 }));
 
 vi.mock("./notify.js", () => ({
@@ -82,14 +78,8 @@ const LIMITED_SETUP_REQUEST = {
 };
 const FULL_SETUP_REQUEST = {
   profile: {
-    roles: ["node", "operator"],
-    scopes: [
-      "operator.admin",
-      "operator.approvals",
-      "operator.read",
-      "operator.talk.secrets",
-      "operator.write",
-    ],
+    ...LIMITED_SETUP_REQUEST.profile,
+    scopes: ["operator.admin", ...LIMITED_SETUP_REQUEST.profile.scopes],
     purpose: "mobile-full",
   },
 };
@@ -138,11 +128,16 @@ async function runPair(context: Partial<PluginCommandContext>, options: Register
   return await registerPairCommand(options).handler(createCommandContext(context));
 }
 
-function requireText(result: { text?: unknown } | null | undefined): string {
-  if (typeof result?.text !== "string") {
-    throw new Error("pair command did not return a text response");
+async function runPairText(...args: Parameters<typeof runPair>) {
+  const { text } = await runPair(...args);
+  expect(text).toEqual(expect.any(String));
+  return text!;
+}
+
+function expectFragments(text: string | undefined, ...fragments: string[]) {
+  for (const fragment of fragments) {
+    expect(text).toContain(fragment);
   }
-  return result.text;
 }
 
 type SendPayload = { to: string; text: string; mediaUrl?: string; [key: string]: unknown };
@@ -228,42 +223,33 @@ afterAll(() => {
   vi.resetModules();
 });
 
-it("declares bare invocation client presentation without changing remote argument handling", () => {
-  const command = registerPairCommand();
-  expect(command.acceptsArgs).toBe(true);
-  expect(command.clientPresentation).toEqual({
-    when: "no-arguments",
-    action: { kind: "device-pairing" },
-  });
-});
-
 describe("device-pair /pair qr", () => {
   it("returns an inline QR image for webchat surfaces", async () => {
     const command = registerPairCommand();
+    expect(command.acceptsArgs).toBe(true);
     expect(command.requiredScopes).toEqual(["operator.pairing"]);
+    expect(command.clientPresentation).toEqual({
+      when: "no-arguments",
+      action: { kind: "device-pairing" },
+    });
     const result = await command.handler(
       createCommandContext({ channel: "webchat", gatewayClientScopes: ["operator.admin"] }),
     );
-    const payload = result as {
-      text?: string;
-      mediaUrl?: string;
-      channelData?: Record<string, unknown>;
-      sensitiveMedia?: boolean;
-    };
-    const text = requireText(result);
-
     expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledWith(FULL_SETUP_REQUEST);
-    expect(text).toContain("Scan this QR code with the OpenClaw iOS app:");
-    expect(payload.mediaUrl).toBeUndefined();
-    expect(payload.channelData?.openclawPairingQr).toEqual({
+    expect(result.channelData?.openclawPairingQr).toEqual({
       setupCode: expect.any(String),
       expiresAtMs: expect.any(Number),
     });
-    expect(payload.sensitiveMedia).toBe(true);
-    expect(text).toContain("- Security: single-use bootstrap token");
-    expect(text).toContain("**Important:** Run `/pair cleanup` after pairing finishes.");
-    expect(text).toContain("If this QR code leaks, run `/pair cleanup` immediately.");
-    expect(text).not.toContain("![OpenClaw pairing QR]");
+    expect(result.sensitiveMedia).toBe(true);
+    expect(result.mediaUrl).toBeUndefined();
+    expectFragments(
+      result.text,
+      "Scan this QR code with the OpenClaw iOS app:",
+      "- Security: single-use bootstrap token",
+      "**Important:** Run `/pair cleanup` after pairing finishes.",
+      "If this QR code leaks, run `/pair cleanup` immediately.",
+    );
+    expect(result.text).not.toContain("![OpenClaw pairing QR]");
   });
 
   it.each`
@@ -282,19 +268,20 @@ describe("device-pair /pair qr", () => {
       }
       return { messageId: "1" };
     });
-    const result = await runPair(
+    const text = await runPairText(
       { channel, ...context, gatewayClientScopes: INTERNAL_SETUP_SCOPES },
       { runtime: createChannelRuntime(channel, sendMessage) },
     );
-    const text = requireText(result);
-
     expect(sendMessage).toHaveBeenCalledTimes(1);
     const payload = sendMessage.mock.calls[0]![0];
     const caption = payload.text;
-    expect(caption).toContain("Scan this QR code with the OpenClaw iOS app:");
-    expect(caption).toContain("IMPORTANT: After pairing finishes, run /pair cleanup.");
-    expect(caption).toContain("If this QR code leaks, run /pair cleanup immediately.");
-    const mediaUrl = requireText({ text: payload.mediaUrl });
+    expectFragments(
+      caption,
+      "Scan this QR code with the OpenClaw iOS app:",
+      "IMPORTANT: After pairing finishes, run /pair cleanup.",
+      "If this QR code leaks, run /pair cleanup immediately.",
+    );
+    const mediaUrl = payload.mediaUrl!;
     expect(mediaUrl).toMatch(/pair-qr\.png$/);
     expect(payload).toEqual({
       to: target,
@@ -315,15 +302,9 @@ describe("device-pair /pair qr", () => {
       .mockResolvedValueOnce({ token: "first-token", expiresAtMs: Date.now() + 10 * 60_000 })
       .mockResolvedValueOnce({ token: "second-token", expiresAtMs: Date.now() + 10 * 60_000 });
     const sendMessage = vi.fn().mockRejectedValue(new Error("upload failed"));
-    const text = requireText(
-      await runPair(
-        {
-          channel: "discord",
-          senderId: "123",
-          gatewayClientScopes: INTERNAL_SETUP_SCOPES,
-        },
-        { runtime: createChannelRuntime("discord", sendMessage) },
-      ),
+    const text = await runPairText(
+      { channel: "discord", senderId: "123", gatewayClientScopes: INTERNAL_SETUP_SCOPES },
+      { runtime: createChannelRuntime("discord", sendMessage) },
     );
 
     expect(pluginApiMocks.revokeDeviceBootstrapToken).toHaveBeenCalledWith({
@@ -336,27 +317,28 @@ describe("device-pair /pair qr", () => {
 
   it("requires QR channel senders to be own entries", async () => {
     const loadAdapter = vi.fn(async () => undefined);
-    const text = requireText(
-      await runPair(
-        {
-          channel: "__proto__",
-          senderId: "prototype-channel",
-          gatewayClientScopes: INTERNAL_SETUP_SCOPES,
-        },
-        {
-          runtime: {
-            channel: { outbound: { loadAdapter } },
-          } as unknown as OpenClawPluginApi["runtime"],
-        },
-      ),
+    const text = await runPairText(
+      {
+        channel: "__proto__",
+        senderId: "prototype-channel",
+        gatewayClientScopes: INTERNAL_SETUP_SCOPES,
+      },
+      {
+        runtime: {
+          channel: { outbound: { loadAdapter } },
+        } as unknown as OpenClawPluginApi["runtime"],
+      },
     );
     expect(pluginApiMocks.writeQrPngTempFile).not.toHaveBeenCalled();
     expect(loadAdapter).not.toHaveBeenCalled();
     expect(pluginApiMocks.revokeDeviceBootstrapToken).not.toHaveBeenCalled();
     expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledTimes(1);
-    expect(text).toContain("QR image delivery is not available on this channel");
-    expect(text).toContain("Setup code:");
-    expect(text).toContain("IMPORTANT: After pairing finishes, run /pair cleanup.");
+    expectFragments(
+      text,
+      "QR image delivery is not available on this channel",
+      "Setup code:",
+      "IMPORTANT: After pairing finishes, run /pair cleanup.",
+    );
     expect(text).not.toContain("```");
   });
 
@@ -463,9 +445,7 @@ describe("device-pair /pair setup", () => {
       if (typeof text === "string") {
         expect(result).toEqual({ text });
       } else {
-        for (const part of text) {
-          expect(requireText(result)).toContain(part);
-        }
+        expectFragments(result.text, ...text);
       }
       if (issued === 0) {
         expect(pluginApiMocks.issueDeviceBootstrapToken).not.toHaveBeenCalled();
@@ -478,7 +458,7 @@ describe("device-pair /pair setup", () => {
         expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledExactlyOnceWith(issued);
       }
       if (absent) {
-        expect(requireText(result)).not.toContain(absent);
+        expect(result.text).not.toContain(absent);
       }
       if (noDiscovery) {
         expect(runPluginCommandWithTimeout).not.toHaveBeenCalled();
@@ -529,7 +509,7 @@ describe("device-pair /pair setup", () => {
   it.each(["publicUrl", "remote"] as const)(
     "keeps /pair setup codes origin-only for a path-qualified %s",
     async (source) => {
-      const result = await runPair(
+      const text = await runPairText(
         { args: "", gatewayClientScopes: INTERNAL_SETUP_SCOPES },
         {
           ...gatewayOptions(
@@ -540,7 +520,6 @@ describe("device-pair /pair setup", () => {
           },
         },
       );
-      const text = requireText(result);
       const code = text.match(/Setup code:\n([A-Za-z0-9_-]+)/u)?.[1];
       if (!code) {
         throw new Error("Missing setup code in /pair reply");
@@ -571,9 +550,7 @@ describe("device-pair notify pending formatting", () => {
       const { formatPendingRequests } =
         await vi.importActual<typeof import("./notify.js")>("./notify.js");
       const text = formatPendingRequests([request]);
-      for (const fragment of fragments) {
-        expect(text).toContain(fragment);
-      }
+      expectFragments(text, ...fragments);
     },
   );
 });
