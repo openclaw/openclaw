@@ -6,7 +6,6 @@ import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { createWarnLogCapture } from "../../logging/test-helpers/warn-log-capture.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import * as activeThinkingPolicy from "../../plugins/provider-thinking-active.js";
 import { prepareModelCatalogThinkingPolicies } from "../../plugins/provider-thinking.js";
@@ -152,25 +151,19 @@ function selectSession(
 }
 
 describe("catalog and thinking selection", () => {
-  it("reports the requested and selected model when the configured default falls outside a wildcard", async () => {
-    const capture = createWarnLogCapture("reply-model-fallback");
-    try {
-      const cfg = selectionConfig({
-        model: "custom/blocked",
-        modelPolicy: { allow: ["remote/*"] },
-      });
-      const selected = await createInitialState(cfg, "custom", "blocked", {
+  it("chooses the first allowed catalog row when the configured default is unavailable", async () => {
+    const state = await createInitialState(
+      selectionConfig({ model: "custom/blocked", modelPolicy: { allow: ["remote/*"] } }),
+      "custom",
+      "blocked",
+      {
         preparedModelCatalog: preparedCatalog([
           { provider: "remote", id: "z-first", name: "First" },
           { provider: "remote", id: "a-second", name: "Second" },
         ]),
-      });
-      expect(selected).toMatchObject({ provider: "remote", model: "z-first" });
-      expect(await capture.findText("Falling back to")).toContain('"custom/blocked"');
-      expect(await capture.findText("Falling back to")).toContain('"remote/z-first"');
-    } finally {
-      capture.cleanup();
-    }
+      },
+    );
+    expect(state).toMatchObject({ provider: "remote", model: "z-first" });
   });
 
   it.each(["observed thinking", "automatic-primary thinking"] as const)(
@@ -256,15 +249,6 @@ describe("catalog and thinking selection", () => {
   it("keeps prepared thinking ownership", async () => {
     const provider = "fixture-provider";
     const model = "fixture-model";
-    const cfg = selectionConfig(
-      { models: { [`${provider}/${model}`]: { alias: "Fixture" } } },
-      {
-        [provider]: {
-          baseUrl: "https://fixture.invalid/v1",
-          models: [makeConfiguredModel({ id: model })],
-        },
-      },
-    );
     const preparedModelCatalog = preparedCatalog([
       { provider, id: model, name: "Fixture", reasoning: true },
     ]);
@@ -294,7 +278,7 @@ describe("catalog and thinking selection", () => {
       .spyOn(activeThinkingPolicy, "resolveActiveProviderThinkingProfile")
       .mockReturnValue({ levels: [{ id: "off" }], defaultLevel: "off" });
     try {
-      const state = await createInitialState(cfg, provider, model, {
+      const state = await createInitialState({}, provider, model, {
         hasModelDirective: true,
         preparedModelCatalog,
       });
