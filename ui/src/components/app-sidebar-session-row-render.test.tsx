@@ -15,7 +15,7 @@ import {
   mountSidebarContext,
 } from "../test-helpers/app-sidebar.ts";
 import "../test-helpers/app-sidebar-suite.ts";
-import { domProbe } from "../test-helpers/dom-probe.ts";
+import { domProbe, allMutationObserverOptions } from "../test-helpers/dom-probe.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { sidebarBootSnapshot } from "../test-helpers/sidebar-boot-snapshot.test-support.ts";
@@ -521,12 +521,7 @@ it.each([false, true])(
     await facepile.updateComplete;
     const updates: MutationRecord[] = [];
     const observer = new MutationObserver((records) => updates.push(...records));
-    observer.observe(facepile, {
-      subtree: true,
-      childList: true,
-      attributes: true,
-      characterData: true,
-    });
+    observer.observe(facepile, allMutationObserverOptions());
     onTestFinished(() => observer.disconnect());
 
     update();

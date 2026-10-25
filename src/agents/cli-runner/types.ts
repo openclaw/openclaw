@@ -253,6 +253,9 @@ export type PreparedCliRunContext = {
   /** Host-held, policy-selected personal Workshop tool for the paired-node adapter. */
   nodeSkillWorkshop?: import("../tools/common.js").AnyAgentTool;
   openClawHistoryPrompt?: string;
+  /** Only the exact resumed native session may receive these newly committed conversation rows. */
+  resumeContext?: string;
+  transcriptCursor?: CliSessionBinding["transcriptCursor"];
   /** Live owner of the transcript account-coverage checkpoint, independent of native continuity. */
   cliHistoryWriter?: import("../../config/sessions/cli-history-boundary.js").CliExecutionHistoryWriter;
   authEpoch?: string;

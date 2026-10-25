@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { moduleResolve } from "import-meta-resolve";
+import { standaloneLookupExpression } from "./bun-standalone-data.mjs";
 
 const TABLE_MARKER = "__OPENCLAW_STANDALONE_NATIVE_TABLE__";
 const NATIVE_LIBRARY = /\.(?:dylib|dll|so(?:\.\d+)*)$/;
@@ -797,7 +798,7 @@ export function createStandaloneNativeAdapter({
     }
     const key = path.relative(root, target).split(path.sep).join("/");
     return table.files[key] ? path.join(root, table.files[key])
-      : table.embedded[key] ? path.join(root, key) : undefined;
+      : table.embedded(key) ? path.join(root, key) : undefined;
   };
   globalThis.__openclawStandaloneNativeResolvePaths = (parent, specifier) => {
     if (typeof specifier !== "string" || specifier.startsWith(".") || path.isAbsolute(specifier)) return undefined;
@@ -1151,13 +1152,16 @@ export function createStandaloneNativeAdapter({
         owners,
         // Hoisted copies share emitted bytes but retain every original resolution path.
         files: Object.fromEntries(files.map((file) => [file.source, file.destination])),
-        embedded: embeddedPaths,
       };
       return {
         files: [...emittedFiles.values()],
         bootstrapReplacement: {
           search: JSON.stringify(TABLE_MARKER),
-          replacement: JSON.stringify(table),
+          replacement: `(() => {
+            const table = ${JSON.stringify(table)};
+            table.embedded = ${standaloneLookupExpression(embeddedPaths)};
+            return table;
+          })()`,
         },
       };
     },

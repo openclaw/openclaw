@@ -78,6 +78,16 @@ export function createChatHeaderState(
   let currentModelProvider = overrides.modelProvider ?? (currentModel ? "openai" : null);
   const omitSessionFromList = overrides.omitSessionFromList ?? false;
   const catalog = overrides.models ?? createModelCatalog(...DEFAULT_CHAT_MODEL_CATALOG);
+  const listSessions = () =>
+    createSessionsListResult({
+      model: currentModel,
+      modelProvider: currentModelProvider,
+      modelOverrideSource: overrides.modelOverrideSource,
+      defaultsThinkingDefault: overrides.defaultsThinkingDefault,
+      thinkingDefault: overrides.thinkingDefault,
+      thinkingLevels: overrides.thinkingLevels,
+      omitSessionFromList,
+    });
   const request = vi.fn(async (method: string, params: Record<string, unknown> = {}) => {
     if (method === "sessions.patch") {
       if (Object.hasOwn(params, "model")) {
@@ -117,15 +127,7 @@ export function createChatHeaderState(
       return { messages: [], thinkingLevel: null };
     }
     if (method === "sessions.list") {
-      return createSessionsListResult({
-        model: currentModel,
-        modelProvider: currentModelProvider,
-        modelOverrideSource: overrides.modelOverrideSource,
-        defaultsThinkingDefault: overrides.defaultsThinkingDefault,
-        thinkingDefault: overrides.thinkingDefault,
-        thinkingLevels: overrides.thinkingLevels,
-        omitSessionFromList,
-      });
+      return listSessions();
     }
     if (method === "models.list") {
       return { models: catalog };
@@ -145,15 +147,7 @@ export function createChatHeaderState(
     subscribe: () => () => undefined,
     subscribeEvents: () => () => undefined,
   });
-  const initialSessionsResult = createSessionsListResult({
-    model: currentModel,
-    modelProvider: currentModelProvider,
-    modelOverrideSource: overrides.modelOverrideSource,
-    defaultsThinkingDefault: overrides.defaultsThinkingDefault,
-    thinkingDefault: overrides.thinkingDefault,
-    thinkingLevels: overrides.thinkingLevels,
-    omitSessionFromList,
-  });
+  const initialSessionsResult = listSessions();
   const state: ChatHeaderTestState = {
     sessionKey: "main",
     connected: true,

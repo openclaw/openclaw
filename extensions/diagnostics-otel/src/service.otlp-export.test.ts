@@ -347,7 +347,13 @@ test("exports cache-write TTL facts without duplicate generic usage", async () =
       { cacheWrite: 0, cacheWrite1h: 0, cacheWrite5m: 0 },
       { cacheWrite: 1_000_000 },
     ]) {
-      emit({ type: "model.call.completed", ...runBase, durationMs: 10, usage });
+      emit({
+        type: "model.call.completed",
+        ...runBase,
+        callId: "cache-write",
+        durationMs: 10,
+        usage,
+      });
     }
     await waitForDiagnosticEventsDrained();
     await service.stop?.(ctx);

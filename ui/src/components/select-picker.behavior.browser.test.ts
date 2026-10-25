@@ -1,5 +1,6 @@
 import { createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { allMutationObserverOptions } from "../test-helpers/dom-probe.ts";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { Picker, type PickerParams, type PickerOption } from "./select-picker.ts";
@@ -93,12 +94,7 @@ describe("Picker", () => {
     expect(p.rows()).toHaveLength(0);
     const mutations: MutationRecord[] = [];
     const observer = new MutationObserver((records) => mutations.push(...records));
-    observer.observe(menu, {
-      attributes: true,
-      childList: true,
-      characterData: true,
-      subtree: true,
-    });
+    observer.observe(menu, allMutationObserverOptions());
     try {
       await p.update({
         options: [{ value: "updated", label: "Updated choice" }],
@@ -215,12 +211,7 @@ describe("Picker", () => {
       if (!grouped) {
         observer.observe(p.picker.querySelector(".picker-select__options")!, { childList: true });
       }
-      observer.observe(retained, {
-        attributes: true,
-        childList: true,
-        characterData: true,
-        subtree: true,
-      });
+      observer.observe(retained, allMutationObserverOptions());
       try {
         await p.search("atlas");
         mutations.push(...observer.takeRecords());

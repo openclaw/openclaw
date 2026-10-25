@@ -660,4 +660,33 @@ describe("waitForAgentRunsToDrain", () => {
       vi.useRealTimers();
     }
   });
+
+  it("keeps the agent.wait budget bounded when the wall clock rewinds mid-drain", async () => {
+    const wallNow = 1_000_000_000;
+    vi.useFakeTimers();
+    vi.setSystemTime(wallNow);
+    callGatewayMock.mockResolvedValue({ status: "pending" });
+    let rounds = 0;
+    try {
+      await waitForAgentRunsToDrain({
+        deadlineAtMs: wallNow + 5_000,
+        getPendingRunIds: async () => {
+          rounds += 1;
+          if (rounds === 1) {
+            vi.setSystemTime(wallNow - 90_000);
+          }
+          return rounds <= 2 ? [`run-${rounds}`] : [];
+        },
+      });
+
+      const requests = gatewayWaitRequests();
+      expect(requests).toHaveLength(2);
+      for (const request of requests) {
+        const paramTimeoutMs = expectNumber(request.params?.timeoutMs, "param timeoutMs");
+        expect(paramTimeoutMs).toBeLessThanOrEqual(5_000);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

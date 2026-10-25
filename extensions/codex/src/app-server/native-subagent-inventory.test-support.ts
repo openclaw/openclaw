@@ -182,14 +182,7 @@ export async function fixture() {
     };
   };
   const spawn = async (client: ReturnType<typeof createClient>, observeTurn = true) => {
-    await client.notify({
-      method: "item/completed",
-      params: {
-        threadId: "parent-thread",
-        turnId: "parent-turn",
-        item: { id: "spawn", ...directSpawnItem("v1", "parent-thread", "child-thread") },
-      },
-    });
+    await client.item({ id: "spawn", ...directSpawnItem("v1", "parent-thread", "child-thread") });
     await client.notify({
       method: "rawResponseItem/completed",
       params: {

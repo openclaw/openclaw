@@ -3,6 +3,7 @@ import { createComponent, createSignal } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createAgentIdentityCapability } from "../lib/agents/identity.ts";
 import { createContext, createGateway, createSessions } from "../test-helpers/app-sidebar.ts";
+import { allMutationObserverOptions } from "../test-helpers/dom-probe.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../test-helpers/solid-application-context.tsx";
@@ -81,12 +82,7 @@ it("leaves retained chip DOM untouched when only the parent's loading state chan
     }),
   );
   const observer = new MutationObserver(() => undefined);
-  observer.observe(container, {
-    attributes: true,
-    childList: true,
-    characterData: true,
-    subtree: true,
-  });
+  observer.observe(container, allMutationObserverOptions());
   setParent({ agentId: "research", loading: true });
   flush();
   const mutations = observer.takeRecords();
