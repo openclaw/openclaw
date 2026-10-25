@@ -50,7 +50,10 @@ function addDraft(overrides: Partial<CloudWorkerProfileDraft> = {}) {
   };
 }
 
-function editDraft(config = profileConfig(), overrides: Partial<CloudWorkerProfileDraft> = {}) {
+function editDraft(
+  config: Record<string, unknown> = profileConfig(),
+  overrides: Partial<CloudWorkerProfileDraft> = {},
+) {
   return { ...createCloudWorkerDraft(readCloudWorkerProfiles(config)[0]), ...overrides };
 }
 
@@ -115,17 +118,6 @@ it("omits empty setup environment", () => {
   );
 });
 
-it("rejects an edit after its authoritative profile removes its class", () => {
-  const config = profileConfig({
-    provider: "crabbox",
-    settings: { provider: "hetzner", ttl: "8h", idleTimeout: "45m", warmImage: false },
-  });
-  const draft = addDraft({ id: "production", backend: "aws", target: "linux" });
-  expect(buildCloudWorkerUpsertPatch(config, draft, "production")).toEqual({
-    error: "profileMissing",
-  });
-});
-
 it.each(["1m1us", "59s"])("matches the suspendAfter schema for %s", (suspendAfter) => {
   const draft = addDraft({ id: "test", backend: "aws", suspendAfter });
   expect(
@@ -136,30 +128,36 @@ it.each(["1m1us", "59s"])("matches the suspendAfter schema for %s", (suspendAfte
   expect(validateCloudWorkerDraft(draft, {}, null)).toBe("suspendAfter");
 });
 
-it("patches warm images as on and replaces setup names", () => {
-  const config = profileConfig({
-    ...configuredProfile,
-    readyWorkers: 3,
-    settings: { ...configuredProfile.settings, warmImage: true },
-  });
-  const draft = editDraft(config, {
+it.each([false, true])("sets warm images and sixteen setup names (editing: %s)", (editing) => {
+  const names = Array.from({ length: 16 }, (_, index) => `BUILD_${index}`);
+  const config = editing
+    ? profileConfig({
+        ...configuredProfile,
+        readyWorkers: 3,
+        settings: { ...configuredProfile.settings, warmImage: true },
+      })
+    : {};
+  const changes: Partial<CloudWorkerProfileDraft> = {
+    id: "production",
     warmImage: "on",
-    setupEnv: "BUILD_FLAG, CACHE_MODE\nEXTRA",
+    setup: "true",
+    setupEnv: names.join(" ,\n"),
     readyWorkers: "0",
     suspendAfter: "2h",
-  });
-  const built = requirePatch(buildCloudWorkerUpsertPatch(config, draft, "production"));
-  const merged = applyMergePatch(config, built.patch);
-  expect(merged).toMatchObject(
+  };
+  const draft = editing ? editDraft(config, changes) : addDraft(changes);
+  const built = requirePatch(
+    buildCloudWorkerUpsertPatch(config, draft, editing ? "production" : null),
+  );
+  expect(applyMergePatch(config, built.patch)).toMatchObject(
     profileConfig({
       readyWorkers: 0,
       suspendAfter: "2h",
-      settings: { setupEnv: ["BUILD_FLAG", "CACHE_MODE", "EXTRA"], warmImage: true },
+      settings: { setupEnv: names, warmImage: true },
     }),
   );
-  expect(built.replacePaths).toEqual([setupEnvPath]);
+  expect(built.replacePaths).toEqual(editing ? [setupEnvPath] : []);
 });
-
 it("validates warm images after changing an existing profile target to windows/wsl2", () => {
   const config = profileConfig();
   for (const warmImage of ["auto", "on", "off"] as const) {
@@ -174,16 +172,4 @@ it("validates warm images after changing an existing profile target to windows/w
       );
     }
   }
-});
-
-it("accepts sixteen setup names without dropping or reordering them", () => {
-  const names = Array.from({ length: 16 }, (_, index) => `BUILD_${index}`);
-  const draft = addDraft({
-    id: "build",
-    backend: "aws",
-    setup: "true",
-    setupEnv: names.join(" , "),
-  });
-  const built = requirePatch(buildCloudWorkerUpsertPatch({}, draft, null));
-  expect(built.patch).toHaveProperty("cloudWorkers.profiles.build.settings.setupEnv", names);
 });

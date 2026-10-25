@@ -6902,8 +6902,6 @@
 ["ui/src/pages/chat/talk/startup-input.test.ts","./google-live.ts","49f02c2ee057acf6c1965964420bc29872498df3ee425b4c8b2c31aa434fc67f",1]
 ["ui/src/pages/chat/talk/startup-input.test.ts","./webrtc.ts","d346d4c716a90d9efb4e8e2d2245c695dc6ec23adfc3dd05e3515abd19bdffa6",1]
 ["ui/src/pages/chat/talk/transcript-queue.test.ts","./webrtc.ts","c56dc41bbd84ce0faf931c5c0d863dc3085c313fafabace09cbf8c4c7ee4827d",1]
-["ui/src/pages/cloud-workers/cloud-worker-snapshot-builds.test.ts","../../components/confirm-dialog.ts","29010d4b48ecb6a8932036adcb5c2d910c9c76c242c0124481a10ac96470b5e9",1]
-["ui/src/pages/cloud-workers/cloud-worker-snapshot-builds.test.ts","../../lib/toast.ts","68c3a82839bf89ff12172a36802f02e76794e74bef5943b01ea140589a6cb2af",1]
 ["ui/src/pages/cloud-workers/cloud-worker-snapshots.test.ts","../../components/confirm-dialog.ts","29010d4b48ecb6a8932036adcb5c2d910c9c76c242c0124481a10ac96470b5e9",1]
 ["ui/src/pages/cloud-workers/cloud-worker-snapshots.test.ts","../../lib/toast.ts","68c3a82839bf89ff12172a36802f02e76794e74bef5943b01ea140589a6cb2af",1]
 ["ui/src/pages/cron/cron-page.delivery-conversations.test.ts","../../components/confirm-dialog.ts","29010d4b48ecb6a8932036adcb5c2d910c9c76c242c0124481a10ac96470b5e9",1]
