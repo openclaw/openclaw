@@ -100,7 +100,7 @@ async function runTransportFlow(
   runScenarioFlow.mockImplementationOnce(actual.runScenarioFlow);
   return await runDefinition(env, scenario);
 }
-function flowScenario(id: string, timeoutMs: number) {
+function flowScenario(id: string, timeoutMs?: number) {
   const scenario = makeQaSuiteTestScenario(id, { config: {} });
   if (scenario.execution.kind !== "flow") {
     throw new Error("expected flow scenario");
@@ -417,109 +417,63 @@ describe("qa suite runtime flow", () => {
     ]);
   });
 
-  it("does not turn the preparation fallback into a whole-flow deadline", async () => {
-    vi.useFakeTimers();
-    const prepareFlow = vi.fn(async () => undefined);
-    const env = createQaSuiteRuntimeFlowTestEnv({ prepareFlow });
-    const scenario = makeQaSuiteTestScenario("flow-without-explicit-deadline", { config: {} });
-    mockStepFlow("No explicit deadline", [
-      step("Longer than preparation fallback", async () => {
-        await delay(66_000);
-      }),
-    ]);
-
-    const pending = runDefinition(env, scenario);
-
-    await vi.advanceTimersByTimeAsync(66_000);
-    const result = await pending;
-    expect(vi.getTimerCount()).toBe(0);
-    expect(result.status).toBe("pass");
-    expect(prepareFlow).toHaveBeenCalledWith(
-      expect.objectContaining({ signal: expect.any(AbortSignal), timeoutMs: 60_000 }),
-    );
-  });
-
-  it("preserves the observation window after 6000ms of preparation", async () => {
-    const preparationMs = 6_000;
-    vi.useFakeTimers();
-    const prepareFlow = vi.fn(async () => {
-      await delay(preparationMs);
-    });
-    const env = createQaSuiteRuntimeFlowTestEnv({ prepareFlow });
-    const scenario = flowScenario("negative-observation", 8_000);
-    const observed = vi.fn();
-    mockStepFlow("Negative observation", [
-      step("Observe the complete no-reply window", async () => {
-        await delay(8_000);
-        observed();
-      }),
-    ]);
-    const pending = runDefinition(env, scenario);
-    await vi.advanceTimersByTimeAsync(preparationMs + 7_999);
-    expect(observed).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1);
-    expect((await pending).status).toBe("pass");
-    expect(observed).toHaveBeenCalledOnce();
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("aborts stuck preparation with scenario timeout 8000", async () => {
-    const timeoutMs = 8_000;
-    vi.useFakeTimers();
-    let preparationSignal: AbortSignal | undefined;
-    const prepareFlow = vi.fn(async (input: { signal?: AbortSignal }) => {
-      preparationSignal = input.signal;
-      await new Promise<void>(() => {});
-    });
-    const env = createQaSuiteRuntimeFlowTestEnv({ prepareFlow });
-    const scenario = flowScenario("stuck-preparation", timeoutMs);
-    const action = vi.fn();
-    mockStepFlow("Stuck preparation", [{ name: "Action", run: action }]);
-    const pending = runDefinition(env, scenario);
-    await vi.advanceTimersByTimeAsync(64_999);
-    expect(preparationSignal?.aborted).toBe(false);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(await pending).toMatchObject({
-      status: "fail",
-      steps: [{ name: "Prepare QA Channel", status: "fail" }],
-    });
-    expect(preparationSignal?.aborted).toBe(true);
-    expect(action).not.toHaveBeenCalled();
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("bounds actions after preparation with an aborting scenario deadline", async () => {
+  it.each([
+    ["leaves the preparation fallback out of the action deadline", 0, 66_000, undefined, 66_000],
+    ["preserves the complete observation window after preparation", 6_000, 8_000, 8_000, 14_000],
+    ["aborts stuck preparation before admitting actions", Infinity, 0, 8_000, 65_000],
+    ["aborts stuck actions with a separate post-preparation deadline", 10, Infinity, 30, 5_040],
+  ] as const)("%s", async (name, preparationMs, actionMs, timeoutMs, settledAt) => {
     vi.useFakeTimers();
     let preparationSignal: AbortSignal | undefined;
     let actionSignal: AbortSignal | undefined;
-    const prepareFlow = vi.fn(async (input: { signal?: AbortSignal }) => {
-      preparationSignal = input.signal;
-      await delay(10);
+    const hold = (ms: number) => (ms === Infinity ? new Promise<void>(() => {}) : delay(ms));
+    const prepareFlow = vi.fn(async ({ signal }: { signal?: AbortSignal }) => {
+      preparationSignal = signal;
+      await hold(preparationMs);
     });
-    const env = createQaSuiteRuntimeFlowTestEnv({ prepareFlow });
-    const scenario = flowScenario("flow-deadline", 30);
-    mockStepFlow("Flow deadline", (api) => [
-      step(
-        "Never settles without abort",
-        async () =>
-          await new Promise<void>(() => {
-            actionSignal = api.signal;
-            api.signal?.addEventListener("abort", () => {}, { once: true });
-          }),
-      ),
+    const observed = vi.fn();
+    const action = vi.fn(async () => {
+      await hold(actionMs);
+      observed();
+    });
+    mockStepFlow(name, (api) => [
+      step("Action", async () => {
+        actionSignal = api.signal;
+        await action();
+      }),
     ]);
-
-    const pending = runDefinition(env, scenario);
-    await vi.advanceTimersByTimeAsync(5_039);
-    expect(actionSignal?.aborted).toBe(false);
+    const pending = runDefinition(
+      createQaSuiteRuntimeFlowTestEnv({ prepareFlow }),
+      flowScenario(name, timeoutMs),
+    );
+    await vi.advanceTimersByTimeAsync(settledAt - 1);
+    expect(observed).not.toHaveBeenCalled();
+    expect(preparationSignal?.aborted).toBe(false);
+    if (actionMs === Infinity) {
+      expect(actionSignal?.aborted).toBe(false);
+    }
     await vi.advanceTimersByTimeAsync(1);
     const result = await pending;
-
-    expect(result).toMatchObject({ status: "fail", details: expect.stringContaining("30ms") });
-    expect(preparationSignal).not.toBe(actionSignal);
-    expect(preparationSignal?.aborted).toBe(true);
-    expect(actionSignal?.aborted).toBe(true);
+    const stuck = preparationMs === Infinity || actionMs === Infinity;
+    expect(result.status).toBe(stuck ? "fail" : "pass");
     expect(vi.getTimerCount()).toBe(0);
+    if (preparationMs === Infinity) {
+      expect(result.steps).toMatchObject([{ name: "Prepare QA Channel", status: "fail" }]);
+      expect(preparationSignal?.aborted).toBe(true);
+      expect(action).not.toHaveBeenCalled();
+    } else if (actionMs === Infinity) {
+      expect(result.details).toContain("30ms");
+      expect(preparationSignal).not.toBe(actionSignal);
+      expect(preparationSignal?.aborted).toBe(true);
+      expect(actionSignal?.aborted).toBe(true);
+    } else {
+      expect(observed).toHaveBeenCalledOnce();
+    }
+    if (timeoutMs === undefined) {
+      expect(prepareFlow).toHaveBeenCalledWith(
+        expect.objectContaining({ signal: expect.any(AbortSignal), timeoutMs: 60_000 }),
+      );
+    }
   });
 
   it.each(["preparation", "action"])(
