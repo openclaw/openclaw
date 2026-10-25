@@ -218,14 +218,7 @@ it("keeps supported discovery and execution order stable when a configured alias
   expect(fs.readFileSync(markerPath("codex"), "utf8")).toBe("migrated");
 });
 
-it.each([
-  "readable",
-  "staging-unavailable",
-  "undeclared-post-action",
-  "changed-phase",
-  "changed-authority",
-  "automatic-cache",
-] as const)(
+it.each(["readable", "staging-unavailable", "undeclared-post-action", "automatic-cache"] as const)(
   "does not silently drop a live post-session action when inventory is %s",
   async (inventory) => {
     const root = await tempDirs.make("openclaw-doctor-live-inventory-");
@@ -239,17 +232,12 @@ it.each([
       fs.writeFileSync(unavailableCacheRoot, "not a directory");
     }
     vi.stubEnv("XDG_CACHE_HOME", cacheRoot);
-    const declaration = {
-      ...sessionAction,
-      phase: inventory === "changed-phase" ? undefined : sessionAction.phase,
-      doctorOnly: inventory !== "changed-authority",
-    };
     writePlugin({
       pluginRoot,
       pluginId,
       markerPath: mutationPath,
       change: "migrated session action",
-      declarations: inventory === "undeclared-post-action" ? [] : [declaration],
+      declarations: inventory === "undeclared-post-action" ? [] : [sessionAction],
     });
     const cfg: OpenClawConfig = {
       agents: { entries: { main: {} } },

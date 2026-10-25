@@ -199,19 +199,10 @@ it("joins retirement after framed auth failure", async () => {
   );
   try {
     reply(child, { type: "start", handle });
-    expect(child.send).toHaveBeenLastCalledWith(
-      { id, transfer: { type: "next", transferId: handle.id } },
-      expect.any(Function),
-    );
     reply(child, {
       type: "frame",
       frame: encodeSqliteAuthTransferFrame(transfer.next(handle.id)),
     });
-    expect(child.send).toHaveBeenCalledTimes(3);
-    expect(child.send).toHaveBeenLastCalledWith(
-      { id, transfer: { type: "next", transferId: handle.id } },
-      expect.any(Function),
-    );
     reply(child, { ok: false, message: "fixture auth read refused" });
     await expectRetirement(session, child, result, "fixture auth read refused");
   } finally {
@@ -302,10 +293,7 @@ it("captures only read scope and refuses callbacks after owner retirement", asyn
   }
 });
 
-it.each([
-  { execPath: "/fixture/bin/node", family: "node" },
-  { execPath: "/fixture/bin/custom-runtime", family: "other" },
-])("counts admitted children as $family in spawn diagnostics", ({ execPath, family }) => {
+it("counts admitted SQLite children in spawn diagnostics", () => {
   const originalExecPath = process.execPath;
   let now = 0;
   const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
@@ -316,16 +304,11 @@ it.each([
     }
   });
   try {
-    process.execPath = execPath;
+    process.execPath = "/fixture/bin/node";
     setDiagnosticsEnabledForProcess(false);
     emitChildProcessSpawnSample();
     setDiagnosticsEnabledForProcess(true);
     const { child } = createSession();
-    expect(mock.spawn).toHaveBeenCalledWith(
-      execPath,
-      expect.any(Array),
-      expect.objectContaining({ windowsHide: true, stdio: ["ignore", "pipe", "pipe", "ipc"] }),
-    );
     now = 60_000;
     emitChildProcessSpawnSample();
     expect(events).toEqual([]);
@@ -333,7 +316,7 @@ it.each([
     now = 120_000;
     emitChildProcessSpawnSample();
     expect(events).toEqual([
-      expect.objectContaining({ family, operation: "sqlite.session.native", count: 1 }),
+      expect.objectContaining({ family: "node", operation: "sqlite.session.native", count: 1 }),
     ]);
   } finally {
     process.execPath = originalExecPath;

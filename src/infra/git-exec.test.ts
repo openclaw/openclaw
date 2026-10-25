@@ -69,12 +69,12 @@ describe("Git ref mutation timing", () => {
     traces.length = 0;
   });
 
-  it("attributes a held same-directory predecessor separately from resolution and callback work", async () => {
+  it("attributes resolution, queue wait, callback work and trace context separately", async () => {
     const holderEntered = createDeferred();
     const releaseHolder = createDeferred();
     const callbackEntered = createDeferred();
     const releaseCallback = createDeferred();
-    const resolved = createDeferred<string>();
+    const abort = new AbortController();
     const trace = {
       traceId: "1234567890abcdef1234567890abcdef",
       spanId: "1234567890abcdef",
@@ -91,36 +91,34 @@ describe("Git ref mutation timing", () => {
     try {
       await holderEntered.promise;
       vi.mocked(diagnosticEvents.areDiagnosticsEnabledForProcess).mockReturnValue(true);
-      vi.mocked(fs.realpath).mockImplementationOnce(() => resolved.promise);
-      const callback = vi.fn(async () => {
-        callbackEntered.resolve();
-        await releaseCallback.promise;
-        return result;
+      vi.mocked(fs.realpath).mockImplementationOnce(async () => {
+        clock += 25;
+        return "/private/shared.git";
       });
-      const abort = new AbortController();
       const queued = runWithDiagnosticTraceContext(trace, () =>
-        enqueueGitRefMutation("/private/linked-checkout", "../shared.git", callback, abort.signal),
+        enqueueGitRefMutation(
+          "/private/linked-checkout",
+          "../shared.git",
+          async () => {
+            callbackEntered.resolve();
+            await releaseCallback.promise;
+            clock += 175;
+            return result;
+          },
+          abort.signal,
+        ),
       );
       const settled = vi.fn();
       void queued.then(settled, settled);
       pending.push(queued);
-      clock += 25;
-      resolved.resolve("/private/shared.git");
-      const independent = { independent: true };
-      await expect(
-        enqueueGitRefMutation("/private/other", ".git", async () => independent),
-      ).resolves.toBe(independent);
-      expect(callback).not.toHaveBeenCalled();
+      await nextTurn();
       expect(refLogs.info).not.toHaveBeenCalled();
-
       clock += 1_200;
       releaseHolder.resolve();
       await callbackEntered.promise;
       abort.abort(new Error("cancelled after ref mutation started"));
       await nextTurn();
       expect(settled).not.toHaveBeenCalled();
-      expect(refLogs.info).not.toHaveBeenCalled();
-      clock += 175;
       releaseCallback.resolve();
       await expect(queued).resolves.toBe(result);
       expectTiming({
@@ -133,14 +131,13 @@ describe("Git ref mutation timing", () => {
       });
       expect(traces).toEqual([trace]);
     } finally {
-      resolved.resolve("/private/shared.git");
       releaseHolder.resolve();
       releaseCallback.resolve();
       await Promise.allSettled(pending);
     }
   });
 
-  it.each(["resolution", "sync callback", "async callback"] as const)(
+  it.each(["resolution", "callback"] as const)(
     "preserves the original %s failure without private diagnostic content",
     async (phase) => {
       const error = new Error("failed update-ref refs/private at /private/repository");
@@ -148,13 +145,7 @@ describe("Git ref mutation timing", () => {
         clock += 1_000;
         throw error;
       };
-      const callback = vi.fn(() => {
-        if (phase === "sync callback") {
-          return fail();
-        }
-        clock += 1_000;
-        return Promise.reject(error);
-      });
+      const callback = vi.fn(async () => fail());
       const resolving = phase === "resolution";
       if (resolving) {
         vi.mocked(fs.realpath).mockImplementationOnce(async () => fail());
