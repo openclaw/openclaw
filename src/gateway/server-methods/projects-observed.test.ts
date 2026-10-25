@@ -46,12 +46,7 @@ function authenticatedClient(user: string, scopes = ["operator.write"]): Gateway
   };
 }
 
-type IdentityResolver = (checkoutPath: string) => Promise<{
-  checkoutRoot: string;
-  repoRoot: string;
-  originUrl: string;
-  fingerprint: string;
-}>;
+type IdentityResolver = typeof managedWorktrees.resolveRepositoryIdentity;
 
 function identity(
   checkoutPath: string,

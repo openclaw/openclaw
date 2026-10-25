@@ -26,6 +26,7 @@ import { SessionMutationFactsUnavailableError } from "../session-sharing-prepara
 import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
 import { createBoardHarness } from "./board.test-support.js";
 import { progressCardHandlers } from "./progress-card.js";
+import { profileSessionEntry } from "./sessions-read-cache.test-support.js";
 import type { RespondFn } from "./types.js";
 
 const methods = [
@@ -62,15 +63,9 @@ it.each([
     const client = { ...roleClient("view", "admission-owner"), connId: "admission-owner" };
     client.connect.scopes = [...scopes];
     const entry = {
-      sessionId: "admission-session",
+      ...profileSessionEntry("admission-session", 1, client.authenticatedUserProfile!.profileId),
       lifecycleRevision: "before",
-      updatedAt: 1,
       visibility: "draft" as const,
-      createdActor: {
-        type: "human" as const,
-        source: "profile" as const,
-        id: client.authenticatedUserProfile!.profileId,
-      },
     };
     await upsertSessionEntryCore(target, entry);
     const widget = {
@@ -100,11 +95,8 @@ it.each([
       tables: readRows(
         "SELECT name FROM sqlite_schema WHERE type = 'table' AND name IN ('board_widgets', 'board_tabs', 'session_progress_cards') ORDER BY name",
       ),
-      counts: readRows(
-        "SELECT (SELECT COUNT(*) FROM board_tabs WHERE session_key = ?) AS tabs, (SELECT COUNT(*) FROM board_widgets WHERE session_key = ?) AS widgets",
-        target.sessionKey,
-        target.sessionKey,
-      ),
+      tabs: readRows("SELECT * FROM board_tabs WHERE session_key = ?", target.sessionKey),
+      widgets: readRows("SELECT * FROM board_widgets WHERE session_key = ?", target.sessionKey),
     });
     const previousState = databaseState();
     const board = createBoardHarness(undefined, {}, boardStore, {
@@ -247,23 +239,6 @@ it.each([
     if (change !== "allow" && change !== "allow-worker") {
       expect(respond.mock.calls.some(([ok]) => ok)).toBe(false);
       expectUnchanged();
-      if (previousWidget) {
-        expect(
-          readRows(
-            "SELECT revision, grant_state FROM board_widgets WHERE session_key = ? AND name = ?",
-            target.sessionKey,
-            "admission",
-          ),
-        ).toEqual({
-          found: true,
-          value: [
-            {
-              revision: previousWidget.revision,
-              grant_state: previousWidget.grantState,
-            },
-          ],
-        });
-      }
       expect(fs.existsSync(replacementPath)).toBe(false);
       if (cold) {
         expect(getOpenClawAgentDatabaseIfOpen(database)).toBeUndefined();
@@ -271,23 +246,19 @@ it.each([
       return;
     }
     expect(respond.mock.calls[0]?.[0]).toBe(true);
-    if (method === "board.update") {
-      expect((await boardStore.getSnapshot(target)).tabs).toEqual([
-        expect.objectContaining({ tabId: "notes", title: "Notes" }),
-      ]);
-    } else if (method === "board.widget.put" || method === "board.widget.grant") {
-      expect((await boardStore.getSnapshot(target)).widgets).toEqual([
-        expect.objectContaining({
-          name: "admission",
-          revision: 1,
-          ...(method === "board.widget.grant" ? { grantState: "rejected" } : {}),
-        }),
-      ]);
-    } else {
-      expect(await progressCardStore.get(target.sessionKey, target.agentId)).toMatchObject({
-        markdown: "admitted",
-        revision: 1,
-      });
-    }
+    const actual =
+      method === "progressCard.put"
+        ? await progressCardStore.get(target.sessionKey, target.agentId)
+        : await boardStore.getSnapshot(target);
+    expect(actual).toMatchObject(
+      {
+        "board.update": { tabs: [{ tabId: "notes", title: "Notes" }] },
+        "board.widget.put": { widgets: [{ name: "admission", revision: 1 }] },
+        "board.widget.grant": {
+          widgets: [{ name: "admission", revision: 1, grantState: "rejected" }],
+        },
+        "progressCard.put": { markdown: "admitted", revision: 1 },
+      }[method],
+    );
   }),
 );

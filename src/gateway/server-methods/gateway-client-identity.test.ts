@@ -130,7 +130,6 @@ describe("chat send command authority", () => {
       },
       false,
     ],
-    ["revoked connection", { invalidated: true }, false],
   ])("matches human allowlists only for %s", (_name, overrides, allowed) => {
     const context = resolveChatSendCallerContext(createClient(overrides));
     expectAuthority(context, allowed);
@@ -185,26 +184,9 @@ describe("chat send command authority", () => {
     expectAuthority(resolveChatSendCallerContext(createClient()), false, "cli");
   });
 
-  it.each(["invalidation", "closure", "profile replacement"])(
-    "rechecks retained context after %s",
-    (change) => {
-      const lifetime = new AbortController();
-      const client = createClient({ connectionSignal: lifetime.signal });
-      const context = resolveChatSendCallerContext(client);
-      expect(authorize(context).isAuthorizedSender).toBe(true);
-      if (change === "invalidation") {
-        client.invalidated = true;
-      } else if (change === "closure") {
-        lifetime.abort();
-      } else {
-        client.authenticatedUserProfile = profile("profile-other", "Other", 2);
-      }
-      expectAuthority(context, false);
-    },
-  );
-
   it.each([
     "profile",
+    "profile-replacement",
     "identity",
     "disconnect",
     "invalidated",
@@ -218,6 +200,8 @@ describe("chat send command authority", () => {
       internal: change === "owner" ? { authenticatedOperator: true } : undefined,
       connectionSignal: lifetime.signal,
     });
+    const commandContext = resolveChatSendCallerContext(client);
+    expectAuthority(commandContext, change !== "owner");
     let current = true;
     const { ctx } = prepareTurn({
       inputText: "Change my theme",
@@ -245,6 +229,9 @@ describe("chat send command authority", () => {
       case "profile":
         client.authenticatedUserProfile!.profileId = "profile-bob";
         break;
+      case "profile-replacement":
+        client.authenticatedUserProfile = profile("profile-other", "Other", 2);
+        break;
       case "identity":
         client.authenticatedUserId = "bob@example.test";
         break;
@@ -266,6 +253,9 @@ describe("chat send command authority", () => {
     }
     expect(render()).not.toContain("requester_profile");
     expect(ctx).not.toHaveProperty("SenderId");
+    if (change !== "admission" && change !== "identity") {
+      expectAuthority(commandContext, false);
+    }
   });
 
   it("does not inherit human or application candidates from ambient agent work", async () => {
