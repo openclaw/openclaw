@@ -17,7 +17,8 @@ import { seedDeferredPluginSessionSource } from "./doctor-session-sqlite.deferre
 import {
   jsonl,
   messageEvent,
-  seedRetainedSource,
+  withRetainedSource,
+  writeJson,
 } from "./doctor-session-sqlite.fixtures.test-support.js";
 import {
   type DoctorSessionSqliteReport,
@@ -38,27 +39,22 @@ const manifestTargets = (env: NodeJS.ProcessEnv) =>
   );
 const resolvePlugin = (env: NodeJS.ProcessEnv) =>
   recordDeferredPluginMigrations({ env, pending: [], resolvedPluginIds: ["fixture-plugin"] });
-const expectPreserved = (files: Map<string, Buffer>) => {
-  for (const [file, bytes] of files) {
-    expect(fs.readFileSync(file)).toEqual(bytes);
-  }
-};
 
 it("settles every receipt sharing an orphan archive after interrupted index publication", async () => {
   await withOpenClawTestState({ label: "shared-orphan-settlement" }, async (state) => {
     const { cfg, storePath } = await seedDeferredPluginSessionSource(state, "legacy-root");
     cfg.session = { store: storePath };
-    cfg.agents = { ...cfg.agents, entries: { ...cfg.agents?.entries, ops: {} } };
+    cfg.agents = { entries: { main: {}, ops: {} } };
     const entries: Record<string, unknown> = JSON.parse(fs.readFileSync(storePath, "utf8"));
     entries["agent:ops:kept"] = {
       sessionId: "ops-kept",
       sessionFile: "ops-kept.jsonl",
       updatedAt: 20,
     };
-    fs.writeFileSync(storePath, JSON.stringify(entries));
+    writeJson(storePath, entries);
     fs.writeFileSync(
       path.join(path.dirname(storePath), "ops-kept.jsonl"),
-      JSON.stringify({ type: "session", version: 3, id: "ops-kept" }) + "\n",
+      jsonl({ type: "session", version: 3, id: "ops-kept" }),
     );
     const orphan = path.join(path.dirname(storePath), "deleted-orphan.jsonl");
     const bytes = Buffer.from('{"artifact":"shared recovery original"}\n');
@@ -144,10 +140,9 @@ it("settles every receipt sharing an orphan archive after interrupted index publ
   });
 });
 
-it("archives unindexed history pointer sidecars with their receipt-bound transcripts", async () => {
-  await withOpenClawTestState({ label: "orphan-pointer-settlement" }, async (state) => {
-    const f = await seedRetainedSource(state);
-    const { storePath } = f;
+it("archives unindexed history pointer sidecars with their receipt-bound transcripts", () =>
+  withRetainedSource(async (f) => {
+    const { state, storePath } = f;
     const sessionsDir = path.dirname(storePath);
     const history = path.join(sessionsDir, "history.jsonl");
     const trajectory = path.join(sessionsDir, "history.trajectory.jsonl");
@@ -167,10 +162,8 @@ it("archives unindexed history pointer sidecars with their receipt-bound transcr
     );
     fs.writeFileSync(pointer, pointerBytes);
     // The unavailable plugin defers archival; this import discovers the history into the receipt.
-    const imported = await f.run();
-    const target = expectDefined(imported.targets[0], "imported target");
-    const receipt = f.readReceipt(target);
-    expect(receipt?.sources.map((source) => source.path)).toEqual(
+    const target = expectDefined((await f.run()).targets[0], "imported target");
+    expect(f.readReceipt(target)?.sources.map((source) => source.path)).toEqual(
       expect.arrayContaining([history, trajectory, pointer]),
     );
     // Files outside the receipt stay put, including a pointer beside its own live transcript.
@@ -205,8 +198,8 @@ it("archives unindexed history pointer sidecars with their receipt-bound transcr
     expect(settledMoves).toHaveLength(1);
     const settledArchive = expectDefined(settledMoves[0], "pointer archive").archivePath;
     expect(fs.readFileSync(settledArchive)).toEqual(pointerBytes);
-    expectPreserved(untouched);
-    for (const file of untouched.keys()) {
+    for (const [file, bytes] of untouched) {
+      expect(fs.readFileSync(file)).toEqual(bytes);
       fs.rmSync(file);
     }
     await resolvePlugin(state.env);
@@ -234,5 +227,4 @@ it("archives unindexed history pointer sidecars with their receipt-bound transcr
       archivedTranscriptFiles: 0,
       archivedUnreferencedJsonlFiles: 0,
     });
-  });
-});
+  }));
