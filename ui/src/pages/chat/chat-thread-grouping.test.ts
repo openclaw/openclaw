@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { MessageClientSource } from "../../../../src/chat/message-client-source.js";
 import type { ChatQueueItem, MessageGroup } from "../../lib/chat/chat-types.ts";
+import { coalesceAgentRunFrames } from "./chat-agent-run-grouping.ts";
 import { assistantGroupCanOwnActiveRunStatus } from "./chat-assistant-reply.ts";
 import {
   groupsOf,
@@ -531,4 +532,73 @@ it("keeps each run's reply visible when completions answer without new user inpu
     "ok",
     "ok",
   ]);
+});
+
+it.each([
+  ["untagged CLI work of the first run", false, false, ["run-user", "announce:v1:child-a"]],
+  ["untagged CLI work across runs", false, true, undefined],
+  ["tagged work across runs", true, true, undefined],
+] as const)(
+  "frames completed work by its run when earlier runs keep replies: %s",
+  (_name, tagged, laterWork, frameRunIds) => {
+    // CLI runtimes import tool rows without a run id; only the persisted reply carries one.
+    const meta = (runId: string) =>
+      tagged ? { __openclaw: { runId } } : { __openclaw: { importedFrom: "claude-cli" } };
+    const items = coalesceAgentRunFrames(
+      coalesceActivityRuns(
+        collapse([
+          message("user", "Start two subagents", 1_000),
+          toolResult("spawn", "sessions_spawn", "accepted", 2_000, meta("run-user")),
+          message("assistant", "Both started.", 3_000, { __openclaw: { runId: "run-user" } }),
+          ...(laterWork
+            ? [toolResult("check", "sessions_list", "ok", 3_500, meta("announce:v1:child-a"))]
+            : []),
+          message("assistant", "Child A finished.", 4_000, {
+            __openclaw: { runId: "announce:v1:child-a" },
+          }),
+        ]),
+      ),
+    );
+    const frames = items.filter((item) => item.kind === "agent-run-frame");
+    if (frameRunIds) {
+      // The rollup stays in the frame of the run that did the work.
+      expect(items.map((item) => item.kind)).toEqual([
+        "group",
+        "agent-run-frame",
+        "agent-run-frame",
+      ]);
+      expect(frames.map((frame) => frame.runId)).toEqual(frameRunIds);
+      expect(frames[0]?.parts.map((part) => part.kind)).toEqual(["work-group", "group"]);
+    } else {
+      // Work across runs has no single owner, with or without run ids.
+      expect(items.map((item) => item.kind)).toEqual([
+        "group",
+        "work-group",
+        "agent-run-frame",
+        "agent-run-frame",
+      ]);
+    }
+  },
+);
+
+it("times completed work only against the run that owns it", () => {
+  const messages = [
+    message("user", "Start two subagents", 1_000),
+    toolResult("spawn", "sessions_spawn", "accepted", 2_000, {
+      __openclaw: { importedFrom: "claude-cli" },
+    }),
+    message("assistant", "Both started.", 3_000, { __openclaw: { runId: "run-user" } }),
+    message("assistant", "Child A finished.", 4_000, {
+      __openclaw: { runId: "announce:v1:child-a" },
+    }),
+  ];
+  const durationFor = (lastRunId: string) =>
+    collapseCompletedTurnWork(cachedGroups(messages), {
+      sessionKey,
+      runWorking: false,
+      session: { key: sessionKey, lastRunId, status: "done", runtimeMs: 7_000 },
+    }).find((item) => item.kind === "work-group")?.durationMs;
+  // The rollup belongs to the user's run; a later completion run's runtime is not its time.
+  expect(durationFor("run-user")).toBe(7_000);
+  expect(durationFor("announce:v1:child-a")).toBeNull();
 });
