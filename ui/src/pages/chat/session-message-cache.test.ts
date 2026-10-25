@@ -73,6 +73,21 @@ describe("session message cache", () => {
     expect(read()?.composer).toBeUndefined();
   });
 
+  it("keeps the settled row reservation through an initial short widget report", () => {
+    const context = createCacheContext();
+    const row = 'row:v1:768:gutter:revision-1:"widget-row"';
+    context.write(
+      widgetSnapshot([], "session-1", {
+        widgetHeights: { [row]: 700, "canvas:widget": 600 },
+      }),
+    );
+    const layout = context.layout();
+    // The existing bridge can report its body before load and late widget content.
+    layout.write("canvas:widget", 200, "widget-row");
+    layout.write(row, 300);
+    expect(layout.read(row)).toBe(700);
+    expect(context.layout().read(row)).toBe(700);
+  });
   it("reserves an unchanged row while keeping widths, revisions and widget resizes independent", () => {
     const context = createCacheContext();
     const row = 'row:v1:768:gutter:revision-1:"notice"';
@@ -103,7 +118,7 @@ describe("session message cache", () => {
     );
     const layout = context.layout();
     layout.write("canvas:widget", 600);
-    layout.write("canvas:widget", 200, "widget-row");
+    layout.write("canvas:widget", 200, "widget-row", true);
     expect([layout.read(row), layout.read(narrow), layout.read(neighbor)]).toEqual([
       undefined,
       undefined,
@@ -114,6 +129,57 @@ describe("session message cache", () => {
     expect(context.layout().read(row)).toBe(200);
     layout.invalidateRow("neighbor");
     expect(layout.read(neighbor)).toBeUndefined();
+  });
+  it("retains an admitted sibling's frame through eviction and uses its settled size on remount", () => {
+    const context = createCacheContext();
+    const row = 'row:v1:768:gutter:revision-1:"widget-row"';
+    context.write(
+      widgetSnapshot([], "session-1", {
+        widgetHeights: { [row]: 1000, "canvas:first": 200, "canvas:pending": 600 },
+      }),
+    );
+    const layout = context.layout();
+    expect(layout.read(row)).toBe(1000);
+    for (let i = 0; i < 100; i++) layout.write(`canvas:other-${i}`, 48);
+    layout.write("canvas:first", 100, "widget-row", true);
+    expect(layout.read(row)).toBeUndefined();
+    expect(layout.write("canvas:pending", 200, "widget-row")).toBe(600);
+    layout.write("canvas:pending", 200, "widget-row", true);
+    expect(layout.write("canvas:pending", 100, "widget-row")).toBe(200);
+  });
+  it.each([false, true])(
+    "retires a settled row even when its frame entry was evicted (early=%s)",
+    (early) => {
+      const context = createCacheContext();
+      const row = 'row:v1:768:gutter:revision-1:"widget-row"';
+      context.write(widgetSnapshot([], "session-1", { widgetHeights: { [row]: 700 } }));
+      const layout = context.layout();
+      if (early) layout.write("canvas:widget", 200, "widget-row");
+      expect(layout.read(row)).toBe(700);
+      layout.write("canvas:widget", 200, "widget-row", true);
+      expect(layout.read(row)).toBeUndefined();
+      layout.write(row, 300);
+      expect(context.layout().read(row)).toBe(300);
+    },
+  );
+  it("releases a failed widget's reservation and frame height without retiring a neighboring row", () => {
+    const context = createCacheContext();
+    const row = 'row:v1:768:gutter:revision-1:"widget-row"';
+    const neighbor = 'row:v1:768:gutter:revision-1:"neighbor"';
+    context.write(
+      widgetSnapshot([], "session-1", {
+        widgetHeights: { [row]: 700, [neighbor]: 300, "canvas:widget": 600 },
+      }),
+    );
+    const layout = context.layout();
+    layout.write("canvas:widget", null, "widget-row", true);
+    expect([layout.read(row), layout.read("canvas:widget"), layout.read(neighbor)]).toEqual([
+      undefined,
+      undefined,
+      300,
+    ]);
+    layout.write(row, 80);
+    expect(context.layout().read(row)).toBe(80);
   });
   it("retains a scoped board through transcript replacement and clears it authoritatively", () => {
     const cache: ChatMessageCache = new Map();

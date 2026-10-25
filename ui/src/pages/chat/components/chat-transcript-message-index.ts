@@ -262,18 +262,12 @@ export function projectTranscriptIndex(
     const loadedReplySources = new Map<string, LoadedReplySource>();
     const messageRowKeysById = new Map<string, string>();
     const transcriptMessageKeys = new Map<string, string>();
-    // New row keys measure expanded work immediately; existing keys keep their
-    // cached height until ResizeObserver reports the changed layout.
     const rows: TranscriptRow<ChatRenderItem>[] = [];
     const row = (item: ChatRenderItem, key = item.key): TranscriptRow<ChatRenderItem> => {
       const messages = chatItemGroups(item).flatMap((group) =>
-        group.messages.map((source) => source.message),
+        group.messages.map(({ message }) => nativeHistoryMessageIdentity(message) ?? message),
       );
-      const content = JSON.stringify(
-        messages.length
-          ? messages.map((message) => nativeHistoryMessageIdentity(message) ?? message)
-          : item,
-      );
+      const content = JSON.stringify(messages.length ? messages : item);
       return { kind: "item", key, item, revision: `${content.length}:${fnv1aUtf16(content)}` };
     };
     for (const item of chain.transcriptItems) {

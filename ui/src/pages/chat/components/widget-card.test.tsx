@@ -415,6 +415,7 @@ describe("widget-card", () => {
           source: original.contentWindow,
         }),
       );
+      flush();
       expect(original.style.height).toBe("48px");
       showCapability(preview, host, "one");
       expect(original.getAttribute("style")).toContain("48px");

@@ -51,17 +51,16 @@ export class TranscriptInitialRange {
     if (!this.tailRows) {
       return;
     }
-    let covered = 0,
-      count = 0;
-    for (let index = virtualizer.options.count - 1; index >= 0 && covered < height; index--) {
-      const size = virtualizer.itemSizeCache.get(virtualizer.options.getItemKey(index));
-      if (size === undefined) {
+    let start = virtualizer.options.count,
+      covered = 0;
+    while (start > 0 && covered < height) {
+      const size = minimum(--start);
+      if (!size) {
         return;
       }
       covered += size;
-      count++;
     }
-    this.tailRows = Math.max(1, count);
+    this.tailRows = Math.max(1, virtualizer.options.count - start);
     this.refresh();
   }
 

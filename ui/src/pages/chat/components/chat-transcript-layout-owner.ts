@@ -79,8 +79,6 @@ export class TranscriptLayoutOwner {
 
   readonly rowMinimum = (index: number): number => {
     const key = this.rowLayoutKey(index);
-    // Keep unchanged content reserved through independently committed lazy children.
-    // A new revision or layout retires it without guessing when every child has hydrated.
     return key ? (this.rowLayout?.read(key) ?? 0) : 0;
   };
 
@@ -88,15 +86,10 @@ export class TranscriptLayoutOwner {
     const size = measureTranscriptRow(element, entry, instance);
     const index = instance.indexFromElement(element);
     const width = entry?.borderBoxSize[0]?.inlineSize;
-    if (
-      this.rowLayout &&
-      width &&
-      this.ready &&
-      element.checkVisibility({ contentVisibilityAuto: true })
-    ) {
+    if (width && this.ready && element.checkVisibility({ contentVisibilityAuto: true })) {
       const key = this.rowLayoutKey(index, Math.round(width));
       if (key) {
-        this.rowLayout.write(key, size);
+        this.rowLayout?.write(key, size);
       }
     }
     return Math.max(size, this.rowMinimum(index));

@@ -94,6 +94,9 @@ it("reserves only the matching width and appearance, including text scale, width
   props.applicationContext = { ...context, theme };
   expect(reserve(1)).toBe(0);
   expect(reserve()).toBe(300);
+  layout.rows = [{ kind: "item", key: "notice", item: null, revision: "notice-v2" }];
+  expect(reserve()).toBe(0);
+  layout.rows = [{ kind: "item", key: "notice", item: null, revision: "notice-v1" }];
   layout.rowWidth = 400;
   expect(reserve()).toBe(0);
   layout.rowWidth = 0;

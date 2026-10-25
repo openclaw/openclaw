@@ -125,6 +125,19 @@ it.each([
   }
 });
 
+it("changes the footprint revision when the same message ID receives new content", () => {
+  const before = indexFor(projectHistory([finalAnswer("answer", 2, { content: "Before" })]))
+    .rows[0]!;
+  const replay = indexFor(projectHistory([finalAnswer("answer", 2, { content: "Before" })]))
+    .rows[0]!;
+  const after = indexFor(projectHistory([finalAnswer("answer", 2, { content: "After" })])).rows[0]!;
+  expect(after.key).toBe(before.key);
+  expect(after.kind === "item" && after.revision).not.toBe(
+    before.kind === "item" && before.revision,
+  );
+  expect(replay.kind === "item" && replay.revision).toBe(before.kind === "item" && before.revision);
+});
+
 describe("completed reply frame ownership", () => {
   function replyHistory(workRunIds: (string | undefined)[] = ["run-1"], prompt = true): unknown[] {
     return [
