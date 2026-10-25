@@ -15,6 +15,7 @@ type BunWorkerRuntime = {
 
 /** Workers reuse the exact SDK modules selected by their host thread. */
 export function installWorkerSdkResolver(sdk: Record<string, string>): void {
+  // SAFETY: Bun exposes this synchronous public API; Node leaves the optional global absent.
   const bun = (globalThis as typeof globalThis & { Bun?: BunWorkerRuntime }).Bun;
   if (bun) {
     const paths = new Map(Object.entries(sdk).map(([name, url]) => [name, fileURLToPath(url)]));
