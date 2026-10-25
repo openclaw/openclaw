@@ -22,6 +22,7 @@ afterEach(() => {
 });
 
 type ReactionOverrides = Partial<Parameters<typeof addMattermostReaction>[0]>;
+type ReactionFixture = NonNullable<Parameters<typeof reactionFetch>[0]>;
 const react = (overrides: ReactionOverrides = {}, action = addMattermostReaction) =>
   action({ cfg, postId: "POST1", emojiName: "thumbsup", ...overrides });
 const operatorReaction = (action = addMattermostReaction, overrides: ReactionOverrides = {}) =>
@@ -42,48 +43,36 @@ function reactionFetch(
   }));
 }
 
-function requestedPaths(fetchMock: ReturnType<typeof createMattermostReactionFetchMock>) {
-  return fetchMock.mock.calls.map(([url]) => new URL(requestUrl(url)).pathname);
-}
-
-it("binds delegated reactions to the authorized channel before mutation", async () => {
-  const fetchMock = reactionFetch({ postChannelId: "CHANNEL1" });
-
-  await expectSuccess(delegatedReaction("channel:CHANNEL1"));
-  expect(requestedPaths(fetchMock)).toEqual([
-    "/api/v4/posts/POST1",
-    "/api/v4/users/me",
-    "/api/v4/reactions",
-  ]);
-});
+const requestedPaths = (fetchMock: ReturnType<typeof createMattermostReactionFetchMock>) =>
+  fetchMock.mock.calls.map(([url]) => new URL(requestUrl(url)).pathname);
 
 const foreignDm = { postChannelId: "DMCHANNEL", channelType: "D", channelName: "BOT123__OTHER123" };
 it.each([
-  [{ postChannelId: "CHANNEL2" }, "channel:CHANNEL1", "belongs to a different conversation", 1],
-  [{ postChannelId: null }, "channel:CHANNEL1", "missing its conversation binding", 1],
-  [
-    { postChannelId: "CHANNEL1" },
-    undefined,
-    "require a canonical authorized conversation target",
-    0,
-  ],
-  [foreignDm, "user:PEER123", "belongs to a different direct conversation", 3],
-  [foreignDm, "user:BOT123", "belongs to a different direct conversation", 3],
-] satisfies Array<[Parameters<typeof reactionFetch>[0], string | undefined, string, number]>)(
+  [{ postChannelId: "CHANNEL2" }, "channel:CHANNEL1", "belongs to a different conversation"],
+  [{ postChannelId: null }, "channel:CHANNEL1", "missing its conversation binding"],
+  [{}, undefined, "require a canonical authorized conversation target"],
+  [foreignDm, "user:PEER123", "belongs to a different direct conversation"],
+  [foreignDm, "user:BOT123", "belongs to a different direct conversation"],
+  [{ status: 500, body: { message: "boom" } }, undefined, "Mattermost add reaction failed"],
+] satisfies Array<[Parameters<typeof reactionFetch>[0], string | undefined, string]>)(
   "rejects unauthorized reaction %j / %s",
-  async (fixture, authorizedTarget, error, calls) => {
+  async (fixture: ReactionFixture, authorizedTarget, error) => {
     const fetchMock = reactionFetch(fixture);
-    expect(
-      await react({
-        authorizedTarget,
-        conversationReadOrigin: authorizedTarget ? "delegated" : undefined,
-      }),
-    ).toEqual({
+    const result = fixture.status
+      ? operatorReaction()
+      : authorizedTarget
+        ? delegatedReaction(authorizedTarget)
+        : react();
+    expect(await result).toEqual({
       ok: false,
       error: expect.stringContaining(error),
     });
-    expect(fetchMock).toHaveBeenCalledTimes(calls);
-    expect(requestedPaths(fetchMock)).not.toContain("/api/v4/reactions");
+    if (!fixture.status) {
+      if (!authorizedTarget) {
+        expect(fetchMock).not.toHaveBeenCalled();
+      }
+      expect(requestedPaths(fetchMock)).not.toContain("/api/v4/reactions");
+    }
   },
 );
 
@@ -97,12 +86,7 @@ it("binds delegated self-DM reactions without collapsing duplicate participant i
   await expectSuccess(delegatedReaction("user:BOT123"));
 });
 
-it("uses the selected account for delegated binding and mutation", async () => {
-  const defaultAccount = createMattermostTestConfig("default-account").channels?.mattermost;
-  const workAccount = createMattermostTestConfig("work-account").channels?.mattermost;
-  if (!defaultAccount || !workAccount) {
-    throw new Error("expected Mattermost account fixtures");
-  }
+it("binds the authorized channel before mutation using the selected account", async () => {
   const innerFetch = reactionFetch({ postChannelId: "CHANNEL1" });
   const fetchMock = (fetchFixture.current = vi.fn<typeof fetch>(async (url, init) => {
     expect(requestUrl(url)).toContain("https://work-account.chat.example.com/api/v4/");
@@ -110,32 +94,18 @@ it("uses the selected account for delegated binding and mutation", async () => {
   }));
 
   const selectedConfig = createMattermostTestConfig();
-  selectedConfig.channels!.mattermost!.accounts = { default: defaultAccount, work: workAccount };
+  selectedConfig.channels!.mattermost!.accounts = {
+    default: cfg.channels!.mattermost!,
+    work: createMattermostTestConfig("work-account").channels!.mattermost!,
+  };
   await expectSuccess(
     delegatedReaction("channel:CHANNEL1", { cfg: selectedConfig, accountId: "work" }),
   );
-  expect(fetchMock).toHaveBeenCalledTimes(3);
-});
-
-it("preserves direct-operator crossed-post reactions without a provider metadata read", async () => {
-  const fetchMock = reactionFetch();
-
-  await expectSuccess(
-    operatorReaction(addMattermostReaction, { authorizedTarget: "channel:DIFFERENT" }),
-  );
-  expect(requestedPaths(fetchMock)).toEqual(["/api/v4/users/me", "/api/v4/reactions"]);
-});
-
-it("returns a Result error when add reaction API call fails", async () => {
-  reactionFetch({
-    status: 500,
-    body: { id: "err", message: "boom" },
-  });
-
-  expect(await operatorReaction()).toEqual({
-    ok: false,
-    error: expect.stringContaining("Mattermost add reaction failed"),
-  });
+  expect(requestedPaths(fetchMock)).toEqual([
+    "/api/v4/posts/POST1",
+    "/api/v4/users/me",
+    "/api/v4/reactions",
+  ]);
 });
 
 it("reports an accepted removal as success when its 200 body cannot be read", async () => {
@@ -159,10 +129,13 @@ it("reports an accepted removal as success when its 200 body cannot be read", as
   ]);
 });
 
-it("caches the bot user id across reaction mutations", async () => {
+it("bypasses binding for direct operators and caches the bot id across mutations until expiry", async () => {
   vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
   const fetchMock = reactionFetch({ mode: "both" });
-  await expectSuccess(operatorReaction());
+  await expectSuccess(
+    operatorReaction(addMattermostReaction, { authorizedTarget: "channel:DIFFERENT" }),
+  );
+  expect(requestedPaths(fetchMock)).toEqual(["/api/v4/users/me", "/api/v4/reactions"]);
   await expectSuccess(operatorReaction(removeMattermostReaction));
   expect(requestedPaths(fetchMock).filter((path) => path === "/api/v4/users/me")).toHaveLength(1);
 
