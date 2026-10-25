@@ -89,33 +89,6 @@ describe("native notification test outcome", () => {
     });
   });
 
-  it("renders pending immediately and disables duplicate sends", () => {
-    const onSend = vi.fn();
-    const { container } = renderSection({
-      nativeNotifications: { permission: "granted", test: { state: "pending" } },
-      onNativeNotificationsSendTest: onSend,
-    });
-
-    const button = container.querySelector<HTMLButtonElement>("button");
-    expect(button?.disabled).toBe(true);
-    expect(button?.textContent).toContain("Sending test");
-    button?.click();
-    expect(onSend).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    { state: "error", message: "Open System Settings and try again." },
-    { state: "sent", message: "Test notification queued" },
-  ] as const)("renders $state independently from permission", ({ state, message }) => {
-    const test = state === "sent" ? { state } : { state, message };
-    const { container } = renderSection({ nativeNotifications: { permission: "granted", test } });
-    expect(container.textContent).toContain("Granted");
-    expect(container.textContent).toContain(message);
-    if (state === "error") {
-      expect(container.querySelector(".settings-status--danger")).not.toBeNull();
-    }
-  });
-
   it("retires a failed receipt during retry and preserves the send control", async () => {
     const message = "Open System Settings and try again.";
     const [native, setNative] = createSignal<NonNullable<NotificationProps["nativeNotifications"]>>(
@@ -134,6 +107,8 @@ describe("native notification test outcome", () => {
     });
     const button = expectDefined(container.querySelector<HTMLButtonElement>("button"), "send");
     await waitForSolid(() => expect(container.textContent).toContain(message));
+    expect(container.textContent).toContain("Granted");
+    expect(container.querySelector(".settings-status--danger")).not.toBeNull();
 
     for (const result of [{ state: "error", message }, { state: "sent" }] as const) {
       button.click();
@@ -144,6 +119,8 @@ describe("native notification test outcome", () => {
           "Sending test",
         );
       });
+      button.click();
+      expect(onSend).toHaveBeenCalledTimes(result.state === "error" ? 1 : 2);
       setNative({ permission: "granted", test: result });
       completion.resolve(undefined);
       await waitForSolid(() => {

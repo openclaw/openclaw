@@ -194,19 +194,13 @@ describe("config form and navigation", () => {
       activeSection: "gateway",
     });
 
-    const retriesRow = Array.from(container.querySelectorAll<HTMLElement>(".settings-row")).find(
-      (row) => row.textContent?.includes("Retries"),
-    );
-    const retries = required(retriesRow ?? container, "input", HTMLInputElement);
+    const retries = required(container, 'input[type="number"]', HTMLInputElement);
     retries.value = "";
     retries.dispatchEvent(new Event("input", { bubbles: true }));
     expect(props.onFormRemove).toHaveBeenCalledWith(["gateway", "retries"]);
     expect(props.onFormPatch).not.toHaveBeenCalled();
 
-    const modeRow = Array.from(container.querySelectorAll<HTMLElement>(".settings-row")).find(
-      (row) => row.textContent?.includes("Mode"),
-    );
-    const select = required(modeRow ?? container, "select", HTMLSelectElement);
+    const select = required(container, "select", HTMLSelectElement);
     expect(select.selectedOptions[0]?.textContent?.trim()).toBe("custom");
     select.value = "__unset__";
     select.dispatchEvent(new Event("change", { bubbles: true }));
@@ -542,12 +536,9 @@ describe("config form and navigation", () => {
       content.scrollTop = 280;
       content.scrollLeft = 24;
       const scrollTo = vi.fn((options?: ScrollToOptions | number, y?: number) => {
-        content.scrollTop =
-          typeof options === "number"
-            ? (y ?? content.scrollTop)
-            : (options?.top ?? content.scrollTop);
-        content.scrollLeft =
-          typeof options === "number" ? options : (options?.left ?? content.scrollLeft);
+        const target = typeof options === "number" ? { top: y, left: options } : options;
+        content.scrollTop = target?.top ?? content.scrollTop;
+        content.scrollLeft = target?.left ?? content.scrollLeft;
       });
       content.scrollTo = scrollTo;
       if (trigger === "section") {

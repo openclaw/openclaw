@@ -225,10 +225,8 @@ describe("config appearance preferences", () => {
     importedButton.click();
     expect(props.setTheme).toHaveBeenCalledWith("custom");
 
-    const replaceButton = findButtonByText(container, "Replace Light Green", false);
-    const clearButton = findButtonByText(container, "Clear Light Green", false);
-    replaceButton.click();
-    clearButton.click();
+    findButtonByText(container, "Replace Light Green", false).click();
+    findButtonByText(container, "Clear Light Green", false).click();
 
     expect(props.onImportCustomTheme).toHaveBeenCalledTimes(1);
     expect(props.onClearCustomTheme).toHaveBeenCalledTimes(1);
@@ -312,19 +310,8 @@ describe("config appearance preferences", () => {
 
     expect(pressed(container, "Knot")).toBe("true");
     expect(pressed(container, "Claw")).toBe("false");
-    const textScaleButtons = [
-      ...container.querySelectorAll<HTMLButtonElement>(".settings-text-scale__btn"),
-    ];
-    expect(
-      textScaleButtons
-        .find((button) => button.textContent?.includes("110%"))
-        ?.getAttribute("aria-pressed"),
-    ).toBe("true");
-    expect(
-      textScaleButtons
-        .find((button) => button.textContent?.includes("100%"))
-        ?.getAttribute("aria-pressed"),
-    ).toBe("false");
+    expect(findButtonByText(container, "110%", false).getAttribute("aria-pressed")).toBe("true");
+    expect(findButtonByText(container, "100%", false).getAttribute("aria-pressed")).toBe("false");
 
     findButtonByText(container, "Claw").click();
     const colorMode = row("Color mode")?.querySelector<HTMLInputElement>(
@@ -333,9 +320,7 @@ describe("config appearance preferences", () => {
     expect(colorMode).toBeDefined();
     colorMode?.click();
     container.querySelector<HTMLButtonElement>('[data-accent-preset="default"]')?.click();
-    Array.from(container.querySelectorAll<HTMLButtonElement>(".settings-text-scale__btn"))
-      .find((button) => button.textContent?.includes("100%"))
-      ?.click();
+    findButtonByText(container, "100%", false).click();
 
     expect(props.setTheme).toHaveBeenCalledWith("claw");
     expect(props.setThemeMode).toHaveBeenCalledWith("system");
@@ -560,16 +545,12 @@ describe("config appearance preferences", () => {
     });
     vi.stubGlobal("AudioContext", audioContextCtor);
 
-    const soundSwitch = (container: HTMLElement) => {
-      const control = settingsRow(container, "Lobster sounds").querySelector<HTMLInputElement>(
+    const soundSwitch = (container: HTMLElement) =>
+      required(
+        settingsRow(container, "Lobster sounds"),
         ".settings-toggle__input",
+        HTMLInputElement,
       );
-      expect(control).toBeDefined();
-      if (!control) {
-        throw new Error("Missing lobster sounds switch");
-      }
-      return control;
-    };
 
     const { container, props } = renderAppearance();
     document.body.append(container);

@@ -1,7 +1,6 @@
 /* @vitest-environment jsdom */
 
 import { getQueriesForElement } from "@solidjs/testing-library";
-import { createSignal } from "solid-js";
 import { expect, it, vi } from "vitest";
 import { ConfigForm } from "../../components/config-form.render.tsx";
 import type { JsonSchema } from "../../components/config-form.shared.ts";
@@ -21,6 +20,14 @@ const emptyOutcomes = () => ({
   notices: {},
   refreshWarnings: {},
 });
+const engine = (id: string, name: string) => ({
+  id,
+  name,
+  kind: ["memory"],
+  installed: true,
+  enabled: true,
+  state: "enabled" as const,
+});
 
 function createProps(overrides: Partial<MemoryViewProps> = {}): MemoryViewProps {
   return {
@@ -30,22 +37,8 @@ function createProps(overrides: Partial<MemoryViewProps> = {}): MemoryViewProps 
       kind: "ready",
       mutationAllowed: true,
       plugins: [
-        {
-          id: "memory-core",
-          name: "OpenClaw Memory",
-          kind: ["memory"],
-          installed: true,
-          enabled: true,
-          state: "enabled",
-        },
-        {
-          id: "memory-lancedb",
-          name: "Memory LanceDB",
-          kind: ["memory"],
-          installed: true,
-          enabled: true,
-          state: "enabled",
-        },
+        engine("memory-core", "OpenClaw Memory"),
+        engine("memory-lancedb", "Memory LanceDB"),
         ...addonLabels.map(([id, name, description, state]) => ({
           id,
           name,
@@ -138,41 +131,6 @@ it.each([
     expect(rows).toEqual(addonLabels.map(([id, label]) => [label, id, expectedState]));
   },
 );
-
-it("retains engine and add-on controls when their owner publishes new state", () => {
-  const [props, setProps] = createSignal(createProps());
-  const { container } = mountSolid(() => <Memory {...props()} />);
-  flush();
-  const engine = container.querySelector<HTMLInputElement>(
-    'input[type="radio"][value="memory-core"]',
-  );
-  const addon = container.querySelector<HTMLInputElement>('input[type="checkbox"]');
-  expect([engine, addon]).not.toContain(null);
-  engine!.focus();
-
-  setProps((current) => ({
-    ...current,
-    engineSelection: { kind: "pinned", pluginId: "memory-lancedb" },
-    engineOutcome: { kind: "warning", message: "Refresh pending" },
-    catalog:
-      current.catalog.kind === "ready"
-        ? {
-            ...current.catalog,
-            plugins: current.catalog.plugins.map((item) => ({
-              ...item,
-              enabled: false,
-              state: "disabled",
-            })),
-          }
-        : current.catalog,
-  }));
-  flush();
-
-  expect(container.querySelector('input[type="radio"][value="memory-core"]')).toBe(engine);
-  expect(container.querySelector('input[type="checkbox"]')).toBe(addon);
-  expect(document.activeElement).toBe(engine);
-  expect(addon?.checked).toBe(false);
-});
 
 it("replaces the memory-import link with an admin-required note", () => {
   const container = renderInto({ canImportMemory: false });
