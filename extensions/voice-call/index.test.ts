@@ -351,6 +351,7 @@ it("does not fall back to one-shot TwiML speak when realtime-only speech is requ
 it.each([true, false])("uses realtime speech or classic fallback (%s)", async (realtime) => {
   runtimeStub.config.realtime.enabled = true;
   const speakRealtime = vi.spyOn(runtimeStub.webhookServer, "speakRealtime");
+  const speak = vi.spyOn(runtimeStub.manager, "speak");
   if (realtime) {
     runtimeStub.manager.getCall = vi.fn(() => undefined);
     runtimeStub.manager.getCallByProviderCallId = vi.fn(() =>
@@ -366,9 +367,7 @@ it.each([true, false])("uses realtime speech or classic fallback (%s)", async (r
     message: "hello",
   });
   expect(speakRealtime).toHaveBeenCalledWith("call-1", "hello");
-  expect(vi.mocked(runtimeStub.manager.speak).mock.calls).toEqual(
-    realtime ? [] : [["call-1", "hello"]],
-  );
+  expect(speak.mock.calls).toEqual(realtime ? [] : [["call-1", "hello"]]);
   expect(result.details.success).toBe(true);
 });
 

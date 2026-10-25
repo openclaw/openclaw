@@ -38,18 +38,13 @@ function harness() {
   return { library, config, request, connection };
 }
 function mountLibrary(library: SkillLibraryModel, dialogsOnly = false) {
-  const mounted = mountSolid(() =>
+  return mountSolid(() =>
     dialogsOnly ? (
       <SkillLibraryDialogs library={library} />
     ) : (
       <SkillLibrary library={library} navigationActions={null} />
     ),
   );
-  return {
-    ...mounted,
-    query: <T extends Element = HTMLElement>(selector: string) =>
-      mounted.container.querySelector<T>(selector),
-  };
 }
 function buttonIn(container: Element, label: string) {
   return [...container.querySelectorAll<HTMLButtonElement>("button")].find(
@@ -116,10 +111,12 @@ it.each([
     request.mockReturnValueOnce(mutation.promise).mockReturnValueOnce(reload.promise);
     const mounted = mountLibrary(library);
     flush();
-    await waitForFast(() => expect(mounted.query(".settings-row")).not.toBeNull());
-    const dialog = mounted.query(".skill-reader-dialog")!;
+    await waitForFast(() =>
+      expect(mounted.container.querySelector(".settings-row")).not.toBeNull(),
+    );
+    const dialog = mounted.container.querySelector(".skill-reader-dialog")!;
     const { dialog: nativeDialog } = await getRenderedModalDialog(mounted.container);
-    const row = mounted.query(".settings-row")!;
+    const row = mounted.container.querySelector(".settings-row")!;
     const button = (label: string) => buttonIn(dialog, label);
     const before = action === "disable" ? "Disable" : "Share with team";
     const after = action === "disable" ? "Enable" : "Make private";
@@ -153,8 +150,8 @@ it.each([
         expect(draft.entry!.revision).toBe(receipt.entry.revision);
       });
     }
-    expect(mounted.query(".skill-reader-dialog")).toBe(dialog);
-    expect(mounted.query(".settings-row")).toBe(row);
+    expect(mounted.container.querySelector(".skill-reader-dialog")).toBe(dialog);
+    expect(mounted.container.querySelector(".settings-row")).toBe(row);
   },
 );
 
@@ -183,7 +180,7 @@ it.each(["files", "clawhub"])(
     }
     const mounted = mountLibrary(library);
     flush();
-    const dialog = mounted.query(".skill-reader-dialog")!;
+    const dialog = mounted.container.querySelector(".skill-reader-dialog")!;
     const submit = dialog.querySelector<HTMLButtonElement>('button[type="submit"]')!;
     const reading = createDeferred<ArrayBuffer>();
     const imported = createDeferred<SkillsLibraryReceipt>();
@@ -211,11 +208,11 @@ it.each(["files", "clawhub"])(
     }
     await operation;
     await waitForFast(() => {
-      expect(mounted.query('[name="library-import-slug"]')).toBeNull();
+      expect(mounted.container.querySelector('[name="library-import-slug"]')).toBeNull();
       if (kind === "files") {
-        expect(mounted.query<HTMLTextAreaElement>('[name="library-content"]')?.value).toBe(
-          "# Imported skill",
-        );
+        expect(
+          mounted.container.querySelector<HTMLTextAreaElement>('[name="library-content"]')?.value,
+        ).toBe("# Imported skill");
       } else {
         expect(mounted.container.textContent).toContain("existing-skill");
       }
@@ -228,7 +225,7 @@ it("disables import while disconnected without losing the local selection", () =
   library.state.importSelection = [new File(["# Skill"], "SKILL.md")];
   const view = mountLibrary(library, true);
   flush();
-  const submit = view.query<HTMLButtonElement>('button[type="submit"]')!;
+  const submit = view.container.querySelector<HTMLButtonElement>('button[type="submit"]')!;
   expect(submit.disabled).toBe(false);
   connection.publish({ ...connection.gateway.snapshot, phase: "reconnecting" });
   flush();
@@ -252,13 +249,15 @@ it.each(["detail", "list"] as const)(
       detail
         ? { ...existingSkill(), content: text }
         : { ...libraryList(false), entries: [libraryEntry({ description: text })] };
-    const item = () => view.query(detail ? "textarea" : ".settings-row");
+    const item = () => view.container.querySelector(detail ? "textarea" : ".settings-row");
     const locked = () =>
       detail
-        ? view.query<HTMLTextAreaElement>("textarea")?.readOnly
-        : view.query<HTMLButtonElement>(".settings-row button")?.disabled;
+        ? view.container.querySelector<HTMLTextAreaElement>("textarea")?.readOnly
+        : view.container.querySelector<HTMLButtonElement>(".settings-row button")?.disabled;
     const text = () =>
-      detail ? view.query<HTMLTextAreaElement>("textarea")?.value : item()?.textContent;
+      detail
+        ? view.container.querySelector<HTMLTextAreaElement>("textarea")?.value
+        : item()?.textContent;
     const expectText = (value: string) =>
       detail ? expect(text()).toBe(value) : expect(text()).toContain(value);
     const first = nextRequest<SkillsLibraryReadResult | SkillsLibraryListResult>(request);
@@ -266,14 +265,14 @@ it.each(["detail", "list"] as const)(
     flush();
     expect(item()).toBeNull();
     if (detail) {
-      expect(view.query(".skill-reader-dialog")).toBeNull();
+      expect(view.container.querySelector(".skill-reader-dialog")).toBeNull();
       await run();
       expect(request).toHaveBeenCalledTimes(1);
     } else {
-      expect(view.query('[role="status"]')?.textContent).toContain("Loading");
+      expect(view.container.querySelector('[role="status"]')?.textContent).toContain("Loading");
       library.create();
       expect(library.state.draft).toBeNull();
-      view.query<HTMLInputElement>('input[name="library-search"]')!.focus();
+      view.container.querySelector<HTMLInputElement>('input[name="library-search"]')!.focus();
     }
     first.resolve(result("Initial skill"));
     await opening;
@@ -290,20 +289,24 @@ it.each(["detail", "list"] as const)(
     failure.reject(new Error("Library unavailable"));
     await waitForFast(() => {
       expect(locked()).toBe(false);
-      expect(view.query('[role="alert"]')?.textContent).toContain("Library unavailable");
+      expect(view.container.querySelector('[role="alert"]')?.textContent).toContain(
+        "Library unavailable",
+      );
     });
     expect(item()).toBe(retained);
     expect(view.container.querySelectorAll('[role="alert"]')).toHaveLength(1);
     if (dialog) {
       expect(dialog.open).toBe(true);
     } else {
-      expect(document.activeElement).toBe(view.query('input[name="library-search"]'));
+      expect(document.activeElement).toBe(
+        view.container.querySelector('input[name="library-search"]'),
+      );
     }
     request.mockResolvedValueOnce(result("Updated skill"));
     void refresh();
     await waitForFast(() => expectText("Updated skill"));
     expect(item()).toBe(retained);
-    expect(view.query('[role="alert"]')).toBeNull();
+    expect(view.container.querySelector('[role="alert"]')).toBeNull();
     if (!detail) {
       const pending = nextRequest<SkillsLibraryListResult>(request);
       const reloading = run();
@@ -311,8 +314,12 @@ it.each(["detail", "list"] as const)(
       view.unmount();
       const remounted = mountLibrary(library);
       flush();
-      expect(remounted.query(".settings-row")?.textContent).toContain("Updated skill");
-      expect(remounted.query<HTMLButtonElement>(".settings-row button")?.disabled).toBe(true);
+      expect(remounted.container.querySelector(".settings-row")?.textContent).toContain(
+        "Updated skill",
+      );
+      expect(
+        remounted.container.querySelector<HTMLButtonElement>(".settings-row button")?.disabled,
+      ).toBe(true);
       pending.resolve({ ...libraryList(false), entries: [libraryEntry()] });
       await reloading;
     }
@@ -389,8 +396,10 @@ it.each([
     }
     if (view) {
       await waitForFast(() => {
-        expect(view.query<HTMLTextAreaElement>("textarea")?.value).toBe("Current edit");
-        expect(view.query('[role="alert"]')).toBeNull();
+        expect(view.container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(
+          "Current edit",
+        );
+        expect(view.container.querySelector('[role="alert"]')).toBeNull();
       });
     }
   },
