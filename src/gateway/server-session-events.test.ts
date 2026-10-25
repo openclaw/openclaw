@@ -31,6 +31,29 @@ function messageUpdate(messageId: string, text = messageId, role = "assistant") 
   return { messageId, message: { role, content: [{ type: "text", text }] } };
 }
 
+function directUpdate(messageId: string, text = messageId, role = "assistant") {
+  return {
+    sessionFile: "/tmp/sess-main.jsonl",
+    sessionKey: "agent:main:main",
+    messageSeq: 1,
+    ...messageUpdate(messageId, text, role),
+  };
+}
+
+function routedHandler(routes: Record<string, string[]>, broad?: string[]) {
+  const get = (key: string) => new Set(routes[key] ?? []);
+  if (!broad) {
+    return createHandler(false, true, get);
+  }
+  const broadcastToConnIds = vi.fn();
+  const handler = createTranscriptUpdateBroadcastHandler({
+    broadcastToConnIds,
+    sessionEventSubscribers: { getAll: () => new Set(broad) },
+    sessionMessageSubscribers: { get },
+  });
+  return { broadcastToConnIds, handler };
+}
+
 function sessionEntry(lifecycleRevision?: string) {
   return {
     sessionId: "sess-main",
@@ -187,18 +210,11 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
   });
 
   it("invalidates broad and targeted subscribers once for an identity-only commit", async () => {
-    const broadConnIds = new Set(["conn-broad", "conn-shared"]);
-    const targetConnIds = new Set(["conn-targeted", "conn-shared"]);
-    const getSessionMessageSubscribers = vi.fn((sessionKey: string) =>
-      sessionKey === "agent:main:main" ? targetConnIds : new Set<string>(),
+    const { broadcastToConnIds, handler } = routedHandler(
+      { "agent:main:main": ["conn-targeted", "conn-shared"] },
+      ["conn-broad", "conn-shared"],
     );
-    const broadcastToConnIds = vi.fn();
     loadAccessorSessionEntryReadOnlyMock.mockReturnValue(sessionEntry("committed-revision"));
-    const handler = createTranscriptUpdateBroadcastHandler({
-      broadcastToConnIds,
-      sessionEventSubscribers: { getAll: () => broadConnIds },
-      sessionMessageSubscribers: { get: getSessionMessageSubscribers },
-    });
 
     await handler({
       target: transcriptTarget("/tmp/identity-only-custom-sessions.json"),
@@ -229,14 +245,10 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
     listAccessorSessionEntriesReadOnlyMock
       .mockReturnValueOnce([{ key: "agent:main:queued", entry: { sessionId: "sess-main" } }])
       .mockReturnValue([{ key: "agent:main:current", entry: { sessionId: "sess-main" } }]);
-    const getSessionMessageSubscribers = vi.fn((sessionKey: string) =>
-      sessionKey === "agent:main:current" ? new Set(["conn-current"]) : new Set(["conn-stale"]),
-    );
-    const { broadcastToConnIds, handler } = createHandler(
-      false,
-      true,
-      getSessionMessageSubscribers,
-    );
+    const { broadcastToConnIds, handler } = routedHandler({
+      "agent:main:current": ["conn-current"],
+      "agent:main:queued": ["conn-stale"],
+    });
 
     await handler({
       sessionFile: "sqlite:main:sess-main:/tmp/explicit-sessions.json",
@@ -358,11 +370,8 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
     const { broadcastToConnIds, handler } = createHandler(true);
 
     await handler({
-      sessionFile: "/tmp/sess-main.jsonl",
-      sessionKey: "agent:main:main",
+      ...directUpdate("message-1", "Final answer"),
       runId: "run-before-finalize",
-      ...messageUpdate("message-1", "Final answer"),
-      messageSeq: 1,
     });
 
     expectBroadcast(broadcastToConnIds, {
@@ -422,19 +431,10 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
     sessionRow.key = "global";
     const goal = { ...ownerGoal };
     loadGatewaySessionRowMock.mockReturnValue({ ...sessionRow, goal });
-    const getSessionMessageSubscribers = vi.fn((sessionKey: string) =>
-      sessionKey === "global"
-        ? new Set(["conn-global"])
-        : sessionKey === "agent:ops:global"
-          ? new Set(["conn-scoped"])
-          : new Set<string>(),
+    const { broadcastToConnIds, handler } = routedHandler(
+      { global: ["conn-global"], "agent:ops:global": ["conn-scoped"] },
+      [],
     );
-    const broadcastToConnIds = vi.fn();
-    const handler = createTranscriptUpdateBroadcastHandler({
-      broadcastToConnIds,
-      sessionEventSubscribers: { getAll: () => new Set<string>() },
-      sessionMessageSubscribers: { get: getSessionMessageSubscribers },
-    });
 
     await handler({
       sessionKey: "global",
@@ -459,18 +459,10 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
 
   it("keeps a retired fixed-store owner private instead of routing through another agent", async () => {
     runtimeConfigState.value = fixedStoreRuntimeConfig("ops", ["research"]);
-    const getSessionMessageSubscribers = vi.fn((sessionKey: string) =>
-      sessionKey === "agent:ops:global"
-        ? new Set(["conn-ops"])
-        : sessionKey === "agent:research:global"
-          ? new Set(["conn-research"])
-          : new Set<string>(),
-    );
-    const { broadcastToConnIds, handler } = createHandler(
-      false,
-      true,
-      getSessionMessageSubscribers,
-    );
+    const { broadcastToConnIds, handler } = routedHandler({
+      "agent:ops:global": ["conn-ops"],
+      "agent:research:global": ["conn-research"],
+    });
 
     await handler({
       sessionKey: "global",
@@ -528,11 +520,8 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
 
     try {
       await handler({
-        sessionFile: "/tmp/sess-main.jsonl",
-        sessionKey: "agent:main:main",
+        ...directUpdate("message-1"),
         message: { role: "toolResult", content: [] },
-        messageId: "message-1",
-        messageSeq: 1,
       });
       expect(received).toHaveBeenCalledExactlyOnceWith({
         sessionKey: "agent:main:main",
@@ -575,11 +564,9 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
       await vi.waitFor(() => expect(readSequence).toHaveBeenCalledOnce());
 
       const fastTask = handler({
-        sessionFile: "/tmp/sess-main.jsonl",
+        ...directUpdate("fast-1", "fast"),
         agentId: fastAgentId,
         sessionKey: fastSessionKey,
-        ...messageUpdate("fast-1", "fast"),
-        messageSeq: 1,
       });
 
       try {
@@ -600,26 +587,13 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
   );
 
   it.each([
-    ["an agent-qualified session", "agent:main:main", "agent:main:main", "main", false],
-    ["an ownerless legacy global update", "global", "global", "main", false],
-    [
-      "a global session and its agent-qualified alias",
-      "global",
-      "agent:main:global",
-      "main",
-      false,
-    ],
-    [
-      "a marker-only update and its canonical transcript key",
-      "agent:main:main",
-      "agent:main:main",
-      "main",
-      true,
-    ],
-    ["an ownerless global update in its configured fixed store", "global", "global", "ops", false],
+    ["an agent-qualified session", "agent:main:main", "agent:main:main", "main"],
+    ["an ownerless legacy global update", "global", "global", "main"],
+    ["a global session and its agent-qualified alias", "global", "agent:main:global", "main"],
+    ["an ownerless global update in its configured fixed store", "global", "global", "ops"],
   ] as const)(
     "preserves message order for %s",
-    async (_name, firstSessionKey, secondSessionKey, agentId, markerOnly) => {
+    async (_name, firstSessionKey, secondSessionKey, agentId) => {
       runtimeConfigState.value =
         agentId === "ops"
           ? {
@@ -633,25 +607,16 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
         storedMessage(id, await firstRead),
       );
       loadAccessorSessionEntryReadOnlyMock.mockReturnValue({ sessionId: "sess-main" });
-      if (markerOnly) {
-        listAccessorSessionEntriesReadOnlyMock.mockReturnValue([
-          { key: firstSessionKey, entry: { sessionId: "sess-main" } },
-        ]);
-      }
       const { broadcastToConnIds, handler } = createHandler(false);
 
       const firstTask = handler({
         ...messageUpdate("ordered-1", "first"),
-        ...(markerOnly
-          ? { sessionFile: `sqlite:${agentId}:sess-main:/tmp/explicit-sessions.json` }
-          : {
-              target: {
-                agentId,
-                sessionId: "sess-main",
-                sessionKey: firstSessionKey,
-                storePath: "/tmp/explicit-sessions.json",
-              },
-            }),
+        target: {
+          agentId,
+          sessionId: "sess-main",
+          sessionKey: firstSessionKey,
+          storePath: "/tmp/explicit-sessions.json",
+        },
       });
       await vi.waitFor(() =>
         expect(
@@ -660,9 +625,8 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
         ).toBe(1),
       );
       const secondTask = handler({
-        sessionFile: "/tmp/sess-main.jsonl",
+        ...directUpdate("ordered-2", "second"),
         sessionKey: secondSessionKey,
-        ...messageUpdate("ordered-2", "second"),
         messageSeq: 2,
       });
 

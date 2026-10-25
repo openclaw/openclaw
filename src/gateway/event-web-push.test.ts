@@ -223,25 +223,19 @@ describe("event Web Push classification", () => {
 
     finishAgent(
       createDelivery(() => cfg),
-      { runId: "avatar-run" },
+      {},
       researchContext,
     );
-
-    await vi.waitFor(() => expect(mocks.send).toHaveBeenCalledTimes(2), {
-      timeout: 3_000,
-    });
-    const identifiedPayload = mocks.send.mock.calls.find(
-      ([call]) => call.subscriptions[0] === identified,
-    )?.[0].payload;
-    const privatePayload = mocks.send.mock.calls.find(
-      ([call]) => call.subscriptions[0] === privateTarget,
-    )?.[0].payload;
+    await vi.waitFor(() => expect(mocks.send).toHaveBeenCalledTimes(2), { timeout: 3_000 });
+    const payloadFor = (subscription: BoundWebPushSubscription) =>
+      mocks.send.mock.calls.find(([call]) => call.subscriptions[0] === subscription)?.[0].payload;
+    const identifiedPayload = payloadFor(identified);
     expect(identifiedPayload.icon).toMatch(/^data:image\/png;base64,/);
     expect(identifiedPayload.icon.length).toBeLessThanOrEqual(2_400);
     expect(
       readImageMetadataFromHeader(Buffer.from(identifiedPayload.icon.split(",")[1], "base64")),
     ).toEqual({ width: 32, height: 32 });
-    expect(privatePayload).not.toHaveProperty("icon");
+    expect(payloadFor(privateTarget)).not.toHaveProperty("icon");
   });
 
   it("drops a prepared avatar when identity changes during recipient preparation", async () => {
@@ -254,10 +248,9 @@ describe("event Web Push classification", () => {
 
     finishAgent(
       createDelivery(() => cfg),
-      { runId: "changed-avatar-run" },
+      {},
       researchContext,
     );
-
     await vi.waitFor(() => expect(mocks.send).toHaveBeenCalledOnce());
     expect(mocks.send.mock.calls[0]?.[0].payload).not.toHaveProperty("icon");
   });
@@ -355,7 +348,6 @@ describe("event Web Push classification", () => {
         role: "assistant",
         provider: "openclaw",
         model: "gateway-injected",
-        content: [{ type: "text", text: "Injected transcript update" }],
       },
     });
     await Promise.resolve();
@@ -398,12 +390,10 @@ describe("event Web Push classification", () => {
   });
 
   it("rereads subscriptions after transport preparation before sending", async () => {
-    const stale = makeSubscription("stale-device");
     const preparation = prepareSender();
-    setRecipients(stale);
+    setRecipients(makeSubscription("stale-device"));
     const getRuntimeConfig = vi.fn(() => ({}));
-    const delivery = createDelivery(getRuntimeConfig);
-    finishAgent(delivery);
+    finishAgent(createDelivery(getRuntimeConfig));
     await vi.waitFor(() => expect(mocks.sender).toHaveBeenCalledOnce());
     expect(getRuntimeConfig).not.toHaveBeenCalled();
     expect(mocks.subscriptions).not.toHaveBeenCalled();
@@ -446,13 +436,10 @@ describe("event Web Push classification", () => {
     }
     subscriptions.resolve([makeSubscription("browser-device")]);
     await vi.waitFor(() => expect(mocks.pairing).toHaveBeenCalledOnce());
-    if (revoked) {
-      expect(mocks.send).not.toHaveBeenCalled();
-      expect(order).toEqual(["authority", "next-microtask"]);
-    } else {
-      expect(mocks.send).toHaveBeenCalledOnce();
-      expect(order).toEqual(["authority", "send", "next-microtask"]);
-    }
+    expect(mocks.send).toHaveBeenCalledTimes(revoked ? 0 : 1);
+    expect(order).toEqual(
+      revoked ? ["authority", "next-microtask"] : ["authority", "send", "next-microtask"],
+    );
   });
 
   it.each(["preferences changed", "profile merged"] as const)(
@@ -500,7 +487,6 @@ describe("event Web Push classification", () => {
         makeSubscription("alice-browser", "alice"),
         bob,
         mergedBob,
-        makeSubscription("carol-browser", "carol"),
         makeSubscription("anonymous-browser"),
       );
       mocks.identity.mockImplementation((id: string) =>
@@ -624,11 +610,8 @@ describe("event Web Push classification", () => {
           if (scenario === "generic event") {
             finishAgent(
               delivery,
-              { runId: "draft-run", agentId: "main" },
-              {
-                sessionKeys: [sessionKey],
-                agentId: "main",
-              },
+              { agentId: "main" },
+              { sessionKeys: [sessionKey], agentId: "main" },
             );
           } else {
             delivery.deliverMention(

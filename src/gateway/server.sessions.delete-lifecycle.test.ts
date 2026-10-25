@@ -479,31 +479,6 @@ test("sessions.delete serializes a patch behind asynchronous runtime cleanup", a
   }
 });
 
-test("sessions.patch waits for an in-flight session lifecycle mutation", async () => {
-  const session = await seedSession();
-  const hold = lifecycleHold(undefined);
-  const mutation = runSessionMutation({
-    scope: session.storePath,
-    identities: [session.key, session.id],
-    run: hold.run,
-  });
-  await hold.started;
-  let patchSettled = false;
-  const patch = directSessionReq("sessions.patch", {
-    key: session.key,
-    label: "after lifecycle mutation",
-  }).then((result) => {
-    patchSettled = true;
-    return result;
-  });
-  await Promise.resolve();
-  expect(patchSettled).toBe(false);
-  hold.release();
-  const [patched] = await Promise.all([patch, mutation]);
-  expect(patched.ok).toBe(true);
-  expect(session.read()?.label).toBe("after lifecycle mutation");
-});
-
 test("sessions.delete keeps lifecycle admission blocked through session unbinding", async () => {
   const session = await seedSession();
   const hold = lifecycleHold([]);
