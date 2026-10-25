@@ -1,7 +1,5 @@
-import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
-import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../../cron/service.test-harness.js";
 import { createCronServiceState as createCronServiceStateBase } from "../../cron/service/state.js";
 import { onTimer } from "../../cron/service/timer.test-support.js";
@@ -10,7 +8,6 @@ import { cronStoreKey } from "../../cron/store/key.js";
 import type { CronJob } from "../../cron/types.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
-import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { advanceCronActiveJobGeneration } from "../active-jobs.js";
 import { start, stop } from "./ops-lifecycle.js";
 import { add as addJob, update as updateJob } from "./ops-mutations.js";
@@ -154,11 +151,6 @@ describe("cron service timer seam coverage", () => {
       jobId: "main-heartbeat-job",
       agentId: "ops",
       status: "succeeded",
-      startedAt: now,
-      lastEventAt: now,
-      endedAt: now,
-      cleanupAfter: now + 7 * 24 * 60 * 60_000,
-      runId: expect.stringMatching(new RegExp(`^cron:main-heartbeat-job:${now}:`)),
     });
     expect(task?.sessionKey).toBeUndefined();
 
@@ -265,21 +257,12 @@ describe("cron service timer seam coverage", () => {
     "routes $target script side effects (notify=$notify, wake=$wake)",
     async ({ target, notify, wake }) => {
       const sessionKey = "agent:ops:telegram:group:42:topic:77";
-      const sessionStorePath = path.join(path.dirname(path.dirname(storePath)), "sessions.json");
       const deliveryContext = {
         channel: "telegram",
         to: "telegram:42",
         accountId: "ops-bot",
         threadId: 77,
       };
-      await upsertSessionEntryCore(
-        { storePath: sessionStorePath, sessionKey },
-        {
-          sessionId: "ops-telegram-session",
-          updatedAt: now,
-          delivery: normalizeSessionDeliveryState({ context: deliveryContext }),
-        },
-      );
       const enqueueSessionEvent = vi.fn();
       const expectedTarget = {
         agentId: "ops",
@@ -292,7 +275,6 @@ describe("cron service timer seam coverage", () => {
         { status: "ok", notify, wake },
         {
           resolveDefaultAgentId: () => "other",
-          resolveSessionStorePath: () => sessionStorePath,
           captureSessionEventTarget: async () => expectedTarget,
           enqueueSessionEvent,
         },

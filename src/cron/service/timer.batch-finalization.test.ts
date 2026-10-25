@@ -410,6 +410,7 @@ describe("cron batch outcome finalization", () => {
         enabled: false,
         state: {
           consecutiveErrors: 10,
+          nextRunAtMs: undefined,
           lastError: error,
           autoDisabled: {
             reason: "consecutive-failures",
