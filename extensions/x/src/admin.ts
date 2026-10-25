@@ -2,7 +2,12 @@ import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { listXAccountIds, resolveDefaultXAccountId, resolveXAccount } from "./accounts.js";
+import {
+  listXAccountIds,
+  resolveDefaultXAccountId,
+  resolveXAccount,
+  resolveXAccountKey,
+} from "./accounts.js";
 import {
   mergeXAllowlist,
   normalizeXUserId,
@@ -48,6 +53,13 @@ function assertAdmin(request: Request) {
   request.sessionMutationCommitGuard?.();
 }
 
+// Requests carry normalized ids; named account keys may keep their authored case.
+function hasXAccount(cfg: OpenClawConfig, accountId: string) {
+  return (
+    listXAccountIds(cfg).includes(accountId) || resolveXAccountKey(cfg, accountId) !== undefined
+  );
+}
+
 function callerIdentity(request: Request): string {
   const client = request.client;
   if (!client) {
@@ -77,7 +89,7 @@ export function registerXAllowlistMethods(
       throw new XAdminError("INVALID_REQUEST", "accountId must be a nonempty string.");
     }
     const accountId = normalizeAccountId(raw ?? resolveDefaultXAccountId(cfg));
-    if (!listXAccountIds(cfg).includes(accountId)) {
+    if (!hasXAccount(cfg, accountId)) {
       throw new XAdminError("INVALID_REQUEST", "The X account is not configured.");
     }
     return { cfg, account: resolveXAccount(cfg, accountId) };
@@ -104,10 +116,10 @@ export function registerXAllowlistMethods(
     assertAdmin(request);
     return {
       accountId: account.accountId,
-      accounts: listXAccountIds(cfg).map((accountId) => ({
-        accountId,
-        username: resolveXAccount(cfg, accountId).username,
-      })),
+      accounts: listXAccountIds(cfg).map((id) => {
+        const { accountId, username } = resolveXAccount(cfg, id);
+        return { accountId, username };
+      }),
       entries: mergeXAllowlist(account.config.allowFrom ?? [], entries),
       guests,
       spend,
@@ -129,10 +141,11 @@ export function registerXAllowlistMethods(
         mutate: (draft) => {
           assertAdmin(request);
           const channel = draft.channels?.x;
-          if (!channel || !listXAccountIds(draft).includes(account.accountId)) {
+          if (!channel || !hasXAccount(draft, account.accountId)) {
             throw new XAdminError("INVALID_REQUEST", "The X account is no longer configured.");
           }
-          const target = channel.accounts?.[account.accountId] ?? channel;
+          const key = resolveXAccountKey(draft, account.accountId);
+          const target = (key === undefined ? undefined : channel.accounts?.[key]) ?? channel;
           target.guests = { ...target.guests, enabled };
         },
       });
