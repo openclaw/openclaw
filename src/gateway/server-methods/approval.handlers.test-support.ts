@@ -36,7 +36,7 @@ const managersForCleanup: Array<{
   expire(id: string, resolvedBy?: string | null): Promise<boolean>;
 }> = [];
 
-export function createDatabaseOptions(): OpenClawStateDatabaseOptions {
+function createDatabaseOptions(): OpenClawStateDatabaseOptions {
   const stateDir = fs.realpathSync(
     fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-handler-")),
   );

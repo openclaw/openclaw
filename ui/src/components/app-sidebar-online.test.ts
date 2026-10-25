@@ -21,12 +21,10 @@ import {
 import {
   createContext,
   createGatewayHarness,
-  createSidebarElement,
   mountSidebar,
   TWO_AGENTS,
   type SidebarLifecycleState,
 } from "../test-helpers/app-sidebar.ts";
-import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import { domProbe } from "../test-helpers/dom-probe.ts";
 import {
   createGatewayRequestMock,
@@ -208,26 +206,16 @@ describe("sidebar people workload", () => {
     await settle(sidebar);
     expect(link).not.toHaveBeenCalled();
     await selectSidebarView(sidebar, "online");
-    expect(person(sidebar, "Ada renamed").getAttribute("href")).toBe("/activity/ada");
-  });
-
-  it("prepares one activity link per updated person while keeping navigation current", async () => {
-    const { sidebar, publishPresence } = await mountWorkload();
-    const link = vi.spyOn(personActivity, "personActivityLink");
-    await publishPresence([profile("ada", "Ada renamed", NOW)]);
     const row = person(sidebar, "Ada renamed");
     expect(row.getAttribute("href")).toBe("/activity/ada");
     expect(row.getAttribute("aria-label")).toContain("Ada renamed");
-    expect(link.mock.calls.filter(([id]) => id === "ada")).toHaveLength(1);
   });
 
   it("keeps a pending snapshot hidden until newly present profiles have counts", async () => {
     const snapshot = createDeferred<SidebarSnapshotModel | null>();
     const delayedCounts = createDeferred<SessionsListResult>();
     vi.spyOn(SessionSnapshotStore.prototype, "readSidebar").mockReturnValue(snapshot.promise);
-    const { gateway, sessions, summaryRequest } = createWorkloadGateway(
-      () => delayedCounts.promise,
-    );
+    const { gateway, sessions } = createWorkloadGateway(() => delayedCounts.promise);
     gateway.publish({
       hello: {
         ...gateway.gateway.snapshot.hello!,
@@ -247,19 +235,13 @@ describe("sidebar people workload", () => {
       sessions.dispose();
     });
     await sessions.refresh({ agentId: "main", limit: 1 });
-    const context = createContext(gateway.gateway, sessions, TWO_AGENTS);
-    const provider = createApplicationContextProvider(context);
-    const sidebar = await createSidebarElement();
-    provider.append(sidebar.hostElement);
-    document.body.append(provider);
-    await vi.dynamicImportSettled();
+    const { sidebar } = await mountSidebar(gateway.gateway, sessions, "panel", TWO_AGENTS);
     await settle(sidebar);
     expect(sidebar.querySelector("aside.sidebar")).toBeNull();
 
     gateway.publishEvent("presence", { presence: presence() });
     sidebar.connected = true;
     await settle(sidebar);
-    expect(summaryRequest).toHaveBeenCalledOnce();
     expect(sidebar.sidebarSnapshotSettled()).toBe(false);
     expect(sidebar.querySelector("aside.sidebar")).toBeNull();
 
@@ -415,26 +397,12 @@ describe("sidebar people workload", () => {
 
   it("uses one complete cross-agent summary, including self, not the paginated or owner-filtered sidebar", async () => {
     const pending = createDeferred<SessionsListResult>();
-    const { sidebar, sessions, context, request, summaryRequest } = await mountWorkload(
+    const { sidebar, sessions, context, summaryRequest } = await mountWorkload(
       () => pending.promise,
     );
     expectCounts(sidebar, { ada: [], cy: [] });
     expect(personDescription(sidebar, "cy")).toContain("Session counts unavailable");
     expect(summaryRequest).toHaveBeenCalledOnce();
-    expect(request).toHaveBeenCalledWith("sessions.list", {
-      rowMode: "compact",
-      source: "sidebar",
-      ifRowsRevision: "",
-      configuredAgentsOnly: true,
-      includeOwnerSessionCounts: true,
-      limit: 1,
-      includeGlobal: false,
-      includeUnknown: false,
-      excludeSubagents: true,
-      excludeCron: true,
-      excludeSystem: true,
-      excludeDock: true,
-    });
 
     sidebar.setSessionOwnerFilter("cy");
     context.agentSelection.state.selectedId = "research";

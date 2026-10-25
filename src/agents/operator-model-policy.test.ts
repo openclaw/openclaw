@@ -1,5 +1,12 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { freezeJsonSnapshot } from "../shared/immutable-data.js";
+import type { ModelManifestNormalizationContext } from "./model-ref-shared.js";
+import * as modelSelection from "./model-selection-shared.js";
 import {
   prepareOperatorModelPolicy,
   resolveOperatorModelDefault,
@@ -77,4 +84,80 @@ it("replaces a denied default with an existing automatic fallback without granti
     resolveOperatorModelDefault({ ...defaults, agentId, model: { provider: "vendor", model } });
   expect(resolve("shared", "primary")).toEqual({ provider: "vendor", model: "fallback" });
   expect(resolve("other", "other")).toBeUndefined();
+});
+
+it("shares agent selection work across interleaved roles, agents, and metadata generations", () => {
+  const config = freezeJsonSnapshot(structuredClone(cfg));
+  const metadata: ModelManifestNormalizationContext["manifestPlugins"] = {
+    owners: { modelIdNormalizationPolicies: new Map() },
+  };
+  const scopedMetadata: ModelManifestNormalizationContext["manifestPlugins"] = {
+    owners: {
+      modelIdNormalizationPolicies: new Map([["vendor", { prefixWhenBare: "scoped" }]]),
+    },
+  };
+  const aliases = vi.spyOn(modelSelection, "buildModelAliasIndex");
+  try {
+    const prepare = (sourceAgent: string, manifestPlugins = metadata, deny: string[] = []) =>
+      prepareOperatorModelPolicy({ cfg: config, policy: { sourceAgent, deny }, manifestPlugins });
+    expect(prepare("shared")?.models.map((ref) => ref.model)).toEqual([
+      "primary",
+      "fallback",
+      "restricted-v1",
+    ]);
+    expect(prepare("other")?.models).toEqual([{ provider: "vendor", model: "other" }]);
+    expect(prepare("shared", scopedMetadata)?.models[0]?.model).toBe("scoped/primary");
+    expect(
+      prepare("shared", metadata, ["fast"])?.allows({ provider: "vendor", model: "fallback" }),
+    ).toBe(false);
+    expect(prepare("other")?.models).toEqual([{ provider: "vendor", model: "other" }]);
+    expect(prepare("shared", scopedMetadata)?.models[0]?.model).toBe("scoped/primary");
+    const replacement = freezeJsonSnapshot<OpenClawConfig>({
+      agents: { entries: { shared: { model: "vendor/replacement" } } },
+    });
+    expect(
+      prepareOperatorModelPolicy({
+        cfg: replacement,
+        policy: { sourceAgent: "shared" },
+        manifestPlugins: metadata,
+      })?.models,
+    ).toEqual([{ provider: "vendor", model: "replacement" }]);
+    expect(prepare("shared")?.models[0]?.model).toBe("primary");
+    expect(aliases).toHaveBeenCalledTimes(4);
+  } finally {
+    aliases.mockRestore();
+  }
+});
+
+it("refreshes same-object config publications and keeps unowned mutable inputs live", () => {
+  const config = structuredClone(cfg);
+  const metadata = { owners: { modelIdNormalizationPolicies: new Map() } };
+  const prepare = () =>
+    prepareOperatorModelPolicy({ cfg: config, policy: {}, manifestPlugins: metadata });
+  const changePrimary = (model: string) => {
+    config.agents!.entries!.shared!.model = { primary: model, fallbacks: ["fast"] };
+  };
+  try {
+    setRuntimeConfigSnapshot(config);
+    expect(prepare()?.models[0]?.model).toBe("primary");
+    changePrimary("vendor/published");
+    setRuntimeConfigSnapshot(config);
+    expect(prepare()?.models[0]?.model).toBe("published");
+    clearRuntimeConfigSnapshot();
+    changePrimary("vendor/unpublished");
+    expect(prepare()?.models[0]?.model).toBe("unpublished");
+    changePrimary("vendor/edited");
+    expect(prepare()?.models[0]?.model).toBe("edited");
+    const frozen = freezeJsonSnapshot(structuredClone(config));
+    const manifestPlugins = [
+      { modelIdNormalization: { providers: { vendor: { prefixWhenBare: "one" } } } },
+    ];
+    const fromLiveArray = () =>
+      prepareOperatorModelPolicy({ cfg: frozen, policy: {}, manifestPlugins });
+    expect(fromLiveArray()?.models[0]?.model).toBe("one/edited");
+    manifestPlugins[0]!.modelIdNormalization.providers.vendor.prefixWhenBare = "two";
+    expect(fromLiveArray()?.models[0]?.model).toBe("two/edited");
+  } finally {
+    clearRuntimeConfigSnapshot();
+  }
 });

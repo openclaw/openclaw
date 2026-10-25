@@ -44,9 +44,7 @@ describe("LM Studio model-load error transport", () => {
         ).rejects.toThrow(expected);
       }
     } finally {
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
+      await server[Symbol.asyncDispose]();
     }
   });
 });

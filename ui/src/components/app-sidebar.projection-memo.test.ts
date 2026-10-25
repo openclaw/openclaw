@@ -69,12 +69,13 @@ async function mount(rows: GatewaySessionRow[]) {
     createTestGatewayClient(vi.fn(async () => ({ questions: [] }))),
   );
   const context = {
-    ...createContext(gateway.gateway, sessions.sessions, {
-      defaultId: "main",
-      mainKey: "main",
-      scope: "per-sender",
-      agents: [{ id: "main" }, { id: "work" }],
-    }),
+    ...createContext(
+      gateway.gateway,
+      sessions.sessions,
+      makeBootRoster({
+        agents: [{ id: "main" }, { id: "work" }],
+      }),
+    ),
     chatSubmissions: createChatSubmissions(),
   };
   const overlayListeners = new Set<(snapshot: ApplicationOverlaySnapshot) => void>();

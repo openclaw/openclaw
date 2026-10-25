@@ -25,7 +25,8 @@ import { listenLoopback } from "./gateway-recovery.test-support.js";
 
 const MODEL = "mock-openai/terminal-primary";
 const PREFIX = "NO_REPLY";
-const MISSING_REPLY_NOTICE = "No answer was returned. Ask again if you still need one.";
+const OUTPUT_LIMIT_NOTICE =
+  "⚠️ The model reached its output token limit before generating an answer. Please try again.";
 
 type Event = {
   event: string;
@@ -167,7 +168,7 @@ it(
             );
             const empty = createScript(`empty-${index}`);
             empty.open(response);
-            // A provider-declared output limit permits fallback; the final model exhausts empty.
+            // Output-limited reasoning is omitted from replay and ends with a terminal notice.
             empty.finish(asOptionalObjectRecord(body)?.model === "terminal-primary");
             return;
           }
@@ -334,11 +335,8 @@ it(
         await send("empty", "Return the scripted empty result.");
         expect(await waitForRun("terminal-empty")).toMatchObject({ status: "error" });
         await withinTest(emptyNoticeDelivered.promise, signal);
-        expect(deliveredTexts("dm:terminal-empty")).toEqual([MISSING_REPLY_NOTICE]);
-        expect([...new Set(requestedModels.slice(cases.length))]).toEqual([
-          "terminal-primary",
-          "terminal-fallback",
-        ]);
+        expect(deliveredTexts("dm:terminal-empty")).toEqual([OUTPUT_LIMIT_NOTICE]);
+        expect(requestedModels.slice(cases.length)).toEqual(["terminal-primary"]);
         const emptyHistory = await readHistory(emptySessionKey);
         expect(
           emptyHistory.messages.filter(

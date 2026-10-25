@@ -54,7 +54,7 @@ describe("node worker Git transfers", () => {
   it.each([1, 2] as const)(
     "uploads worker commits only when result v%s was negotiated",
     async (version) => {
-      const root = tempDirs.make("node-worker-result-history-");
+      const root = tempDirs.make("node-worker-result-history-", process.cwd());
       const source = path.join(root, "source");
       const { workspaceDir } = transferFixture(root, "history");
       await fs.mkdir(source);
@@ -138,7 +138,7 @@ describe("node worker Git transfers", () => {
   it.runIf(process.platform === "win32")(
     "reuses foreign executable Git-base files without requesting an unavailable blob",
     async () => {
-      const root = tempDirs.make("node-worker-transfer-windows-git-executable-");
+      const root = tempDirs.make("node-worker-transfer-windows-git-executable-", process.cwd());
       const source = path.join(root, "source");
       const { workspaceDir, download } = transferFixture(
         root,
@@ -187,7 +187,7 @@ describe("node worker Git transfers", () => {
     const replaceSymlinkAncestor = scenario === "replace symlink ancestor";
     const lateWrite = scenario === "late write";
     const seedState = replaceSymlinkAncestor || lateWrite ? "unused" : scenario;
-    const root = tempDirs.make("node-worker-transfer-git-");
+    const root = tempDirs.make("node-worker-transfer-git-", process.cwd());
     const source = path.join(root, "source");
     const { workspaceDir, read } = transferFixture(root, "environment-git");
     await fs.mkdir(source);
@@ -369,7 +369,7 @@ describe("node worker Git transfers", () => {
     }
   });
   it("downloads repeated blob content once while preserving independent files and modes", async () => {
-    const root = tempDirs.make("node-worker-transfer-repeated-blob-");
+    const root = tempDirs.make("node-worker-transfer-repeated-blob-", process.cwd());
     const { workspaceDir, download } = transferFixture(root, "environment-repeated-blob");
     const body = Buffer.from("shared workspace content\n");
     const first = fileEntry("first.txt", body);

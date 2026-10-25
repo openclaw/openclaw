@@ -20,7 +20,7 @@ function makeDir(workspace = false) {
   return tempDirs.make("openclaw-patch-", workspace ? process.cwd() : undefined);
 }
 
-async function makeFile(content: string, name = "source.txt", dir = makeDir()) {
+async function makeFile(content: string | Buffer, name = "source.txt", dir = makeDir()) {
   const file = path.join(dir, name);
   await fs.writeFile(file, content);
   return { dir, file };
@@ -100,10 +100,8 @@ describe("applyPatch", () => {
   const priceUpdatePatch = buildUpdatePatch("source.txt", "-price: 5\n+price: 7");
 
   it.each([true, false])("rejects invalid UTF-8 (workspaceOnly=%s)", async (workspaceOnly) => {
-    const dir = makeDir();
-    const filePath = path.join(dir, "source.txt");
     const original = Buffer.concat([Buffer.from("heading\nprice: 5\n"), Buffer.from([0xff, 0xfe])]);
-    await fs.writeFile(filePath, original);
+    const { dir, file: filePath } = await makeFile(original);
 
     await expect(applyPatch(priceUpdatePatch, { cwd: dir, workspaceOnly })).rejects.toThrow(
       /not valid UTF-8/,
@@ -578,13 +576,6 @@ describe("apply_patch unrestricted host writes", () => {
     vi.restoreAllMocks();
   });
 
-  async function createHostFile(content: string) {
-    const tempDir = tempDirs.make("openclaw-patch-host-write-");
-    const filePath = path.join(tempDir, "important.txt");
-    await fs.writeFile(filePath, content);
-    return filePath;
-  }
-
   function failWrites(filePath: string, originalByteLength: number, phase: "prefix" | "extension") {
     const realOpen = fs.open.bind(fs);
     vi.spyOn(fs, "open").mockImplementation(async (target, flags, mode) => {
@@ -626,7 +617,7 @@ describe("apply_patch unrestricted host writes", () => {
     async (phase) => {
       const originalContent =
         phase === "prefix" ? `original\n${"important content\n".repeat(64)}` : "original\n";
-      const filePath = await createHostFile(originalContent);
+      const { file: filePath } = await makeFile(originalContent, "important.txt");
       failWrites(filePath, Buffer.byteLength(originalContent), phase);
       await expect(hostUpdate(filePath)).rejects.toThrow("disk full");
 
@@ -636,7 +627,7 @@ describe("apply_patch unrestricted host writes", () => {
   );
 
   it.runIf(process.platform !== "win32")("applies host update hunks in place", async () => {
-    const filePath = await createHostFile("original\n");
+    const { file: filePath } = await makeFile("original\n", "important.txt");
     await fs.chmod(filePath, 0o640);
     const before = await fs.stat(filePath);
 

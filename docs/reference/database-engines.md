@@ -123,10 +123,12 @@ The supported PostgreSQL families are:
   retained registry paths and explicit session or agent directories. Older SQLite
   schemas migrate only in the port's private copy. Compressed transcript events
   become plain JSON on PostgreSQL; transcript search is rebuilt before publication.
-  Rebuildable memory indexes are omitted; canonical memory origins, tombstones,
-  and the embedding cache remain intact. After publication and port-owner release,
+  Rebuildable memory search projections are omitted; canonical memory origins,
+  tombstones, the embedding cache, and stored chunk vectors with their identity metadata
+  remain intact in the verified copy. After publication and port-owner release,
   the selected memory plugin rebuilds ported agents under fresh offline ownership.
-  Unchanged cached chunks reuse their embeddings. Output and `--json` report
+  Unchanged chunks reuse cached or stored embeddings only when provider, model,
+  provider settings, input format, hash, and dimensions match. Output and `--json` report
   per-agent results; a failure leaves the port successful and warns to retry
   `openclaw memory index --agent <id>` before starting the Gateway. Retained stores
   need their original agent configuration to rebuild.

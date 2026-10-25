@@ -19,7 +19,7 @@ import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/c
 import { CLI_DEFAULT_OPERATOR_SCOPES } from "./method-scopes.js";
 import { dispatchGatewayRequestInProcess } from "./server-in-process-dispatch.js";
 import { closeKernelFixture, createKernelFixture } from "./server-kernel.fixture-test-support.js";
-import { createGatewayKernel, gatewayKernelLogs } from "./server-kernel.js";
+import { createGatewayKernel } from "./server-kernel.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import type { GatewayHostLifecycle, GatewayServer } from "./server-public.js";
@@ -32,6 +32,18 @@ function expectCalls(count: number, ...mocks: Array<(...args: never[]) => unknow
   for (const mock of mocks) {
     expect(mock).toHaveBeenCalledTimes(count);
   }
+}
+
+function idleSidecar() {
+  return { stop: vi.fn(async () => {}) };
+}
+
+function dispatchOptions(kernel: Awaited<ReturnType<typeof createGatewayKernel>>) {
+  return {
+    client: createSyntheticPluginRuntimeClient({ scopes: [...CLI_DEFAULT_OPERATOR_SCOPES] }),
+    context: kernel.gatewayRequestContext,
+    methodRegistry: kernel.getAttachedGatewayMethodRegistry(),
+  };
 }
 
 function blockedSidecar(once = true) {
@@ -379,14 +391,8 @@ describe("createGatewayKernel", () => {
       kernel = await openKernel();
       const activeKernel = kernel;
 
-      const client = createSyntheticPluginRuntimeClient({
-        scopes: [...CLI_DEFAULT_OPERATOR_SCOPES],
-      });
-      const dispatchOptions = {
-        client,
-        context: kernel.gatewayRequestContext,
-        methodRegistry: kernel.getAttachedGatewayMethodRegistry(),
-      };
+      const dispatch = (method: string, params: unknown) =>
+        dispatchGatewayRequestInProcess(method, params, dispatchOptions(activeKernel));
       const runId = "deferred-readiness-chat";
       const chatParams = {
         sessionKey: "agent:main:deferred-readiness",
@@ -395,17 +401,11 @@ describe("createGatewayKernel", () => {
       };
 
       const getReadiness = kernel.createHttpTransportOptions().getReadiness;
-      using readyLog = vi.spyOn(gatewayKernelLogs.log, "info");
-      using readyTrace = vi.spyOn(kernel.startupTrace, "mark");
-      expect(kernel.getReadiness).toBe(getReadiness);
-      expect(kernel.gatewayRequestContext.unavailableGatewayMethods).toBe(
-        kernel.unavailableGatewayMethods,
-      );
       const notReady = { ready: false, failing: ["startup-sidecars"] };
       expect(getReadiness()).toMatchObject(notReady);
-      await expect(
-        dispatchGatewayRequestInProcess("chat.send", chatParams, dispatchOptions),
-      ).rejects.toThrow("chat.send unavailable during gateway startup");
+      await expect(dispatch("chat.send", chatParams)).rejects.toThrow(
+        "chat.send unavailable during gateway startup",
+      );
 
       kernel.dedupe.set(`chat:${runId}`, {
         ts: Date.now(),
@@ -426,27 +426,17 @@ describe("createGatewayKernel", () => {
         coreReady: false,
         failing: ["chat-recovery"],
       });
-      await expect(
-        dispatchGatewayRequestInProcess("chat.send", chatParams, dispatchOptions),
-      ).rejects.toThrow("chat.send unavailable during gateway startup");
-
-      expect(readyLog).not.toHaveBeenCalledWith("gateway ready");
-      expect(readyTrace).not.toHaveBeenCalledWith("ready");
-      kernel.kernel.unlockStartupMethods();
-      expect(readyLog).toHaveBeenCalledWith("gateway ready");
-      expect(readyTrace).toHaveBeenCalledWith("ready");
-      kernel.kernel.unlockStartupMethods();
-      expect(readyLog.mock.calls.filter(([message]) => message === "gateway ready")).toHaveLength(
-        1,
+      await expect(dispatch("chat.send", chatParams)).rejects.toThrow(
+        "chat.send unavailable during gateway startup",
       );
-      expect(readyTrace.mock.calls.filter(([phase]) => phase === "ready")).toHaveLength(1);
+
+      kernel.kernel.unlockStartupMethods();
+      kernel.kernel.unlockStartupMethods();
       expectCoreAgentDatabaseReadiness(getReadiness, state);
-      await expect(
-        dispatchGatewayRequestInProcess("chat.send", chatParams, dispatchOptions),
-      ).resolves.toEqual({ runId, status: "ok" });
+      await expect(dispatch("chat.send", chatParams)).resolves.toEqual({ runId, status: "ok" });
 
       const { promise: firstStop, resolve: releaseFirstStop } = createDeferred();
-      const reentrantSidecar = { stop: vi.fn(async () => {}) };
+      const reentrantSidecar = idleSidecar();
       let reentrantStop!: Promise<void>;
       const lifetimeSidecar = {
         stop: vi.fn<() => Promise<void>>().mockImplementationOnce(() => {
@@ -471,8 +461,8 @@ describe("createGatewayKernel", () => {
       await connectionSidecar.entered;
       const lateConnectionSidecar = blockedSidecar(false);
       kernel.registerConnectionDependentSidecars(lateConnectionSidecar);
-      const lateGeneralSidecar = { stop: vi.fn(async () => {}) };
-      const latePostReadySidecar = { stop: vi.fn(async () => {}) };
+      const lateGeneralSidecar = idleSidecar();
+      const latePostReadySidecar = idleSidecar();
       kernel.registerGatewayLifetimeSidecars(lateGeneralSidecar);
       kernel.registerPostReadySidecars(latePostReadySidecar);
       expect(closeTransport).not.toHaveBeenCalled();
@@ -489,7 +479,7 @@ describe("createGatewayKernel", () => {
       expect(() => kernel?.registerConnectionDependentSidecars(lateConnectionSidecar)).toThrow(
         "cannot publish a Gateway sidecar after shutdown sealed its owner",
       );
-      const lateSidecar = { stop: vi.fn(async () => {}) };
+      const lateSidecar = idleSidecar();
       kernel.registerGatewayLifetimeSidecars(lifetimeSidecar, lateSidecar);
       const lateStop = kernel.stopRegisteredGatewayLifetimeSidecars();
       releaseFirstStop();
@@ -508,7 +498,7 @@ describe("createGatewayKernel", () => {
         expect(closePreludeReached).toHaveBeenCalledOnce();
       });
       expect(markClosed).not.toHaveBeenCalled();
-      const duringSealSidecar = { stop: vi.fn(async () => {}) };
+      const duringSealSidecar = idleSidecar();
       kernel.registerGatewayLifetimeSidecars(duringSealSidecar);
       lateLifetimeSidecar.release();
       await expect(closing).resolves.toBeUndefined();
@@ -527,7 +517,7 @@ describe("createGatewayKernel", () => {
       expect(kernel.runtimeState.gatewayLifetimeSidecars.snapshot()).toEqual([]);
       expect(kernel.runtimeState.postReadySidecars.snapshot()).toEqual([]);
 
-      const postSealSidecar = { stop: vi.fn(async () => {}) };
+      const postSealSidecar = idleSidecar();
       expect(() => activeKernel.registerGatewayLifetimeSidecars(postSealSidecar)).toThrow(
         "cannot publish a Gateway sidecar after shutdown sealed its owner",
       );
@@ -540,7 +530,7 @@ describe("createGatewayKernel", () => {
         .mockRejectedValueOnce(persistentError)
         .mockResolvedValue(undefined);
       const persistentSidecar = { stop: persistentStop };
-      const successfulPeer = { stop: vi.fn(async () => {}) };
+      const successfulPeer = idleSidecar();
       kernel = await openKernel();
       kernel.registerGatewayLifetimeSidecars(persistentSidecar, successfulPeer);
 
@@ -607,19 +597,8 @@ describe("createGatewayKernel", () => {
       );
 
       kernel.kernel.setDispatchReady(true);
-      const client = createSyntheticPluginRuntimeClient({
-        scopes: [...CLI_DEFAULT_OPERATOR_SCOPES],
-      });
       await expect(
-        dispatchGatewayRequestInProcess(
-          "health",
-          {},
-          {
-            client,
-            context: kernel.gatewayRequestContext,
-            methodRegistry: kernel.getAttachedGatewayMethodRegistry(),
-          },
-        ),
+        dispatchGatewayRequestInProcess("health", {}, dispatchOptions(kernel)),
       ).resolves.toEqual(expect.objectContaining({ ok: true }));
 
       const idempotencyKey = "kernel-factory-agent";

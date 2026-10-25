@@ -25,9 +25,7 @@ async function withAwsServer(
     await run();
   } finally {
     server.closeAllConnections();
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
+    await server[Symbol.asyncDispose]();
   }
 }
 

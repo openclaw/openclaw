@@ -72,6 +72,16 @@ console.log(JSON.stringify({ answer, mode: getStandaloneRuntimeBuild()?.mode ?? 
     `#!${process.execPath}
 const fs = require('node:fs');
 const args = process.argv.slice(2);
+if (require('node:path').basename(args[0]) === 'compile-aot.mjs') {
+  const compiler = {build: async (options) => {
+    fs.writeFileSync(options.compile.outfile, JSON.stringify({aot: true, source: fs.readFileSync(options.entrypoints[0], 'utf8')}));
+    fs.writeFileSync(__filename + '.options.json', JSON.stringify(options));
+    return {success: true, logs: []};
+  }};
+  const AsyncFunction = Object.getPrototypeOf(async function() {}).constructor;
+  new AsyncFunction('Bun', fs.readFileSync(args[0], 'utf8'))(compiler).catch((error) => {console.error(error); process.exitCode = 1;});
+  return;
+}
 if (args[0] !== 'build') {
   const result = require('node:child_process').spawnSync(process.execPath, args, {stdio:'inherit'});
   process.exit(result.status ?? 1);
@@ -135,6 +145,44 @@ async function compile(
 }
 
 describe("matched standalone support artifacts", () => {
+  it.skipIf(process.platform === "win32")(
+    "retains requested AOT features and entrypoints without applying them to JIT support",
+    async () => {
+      const input = fixture();
+      const second = path.join(input.compileRoot, "worker.js");
+      fs.writeFileSync(second, "console.log('worker');");
+      await compile(input, {
+        compiledEntries: [input.mainEntry, second],
+        compileEntries: new Set([input.mainEntry, second]),
+        external: ["external-package"],
+        compileFlags: ["--aot", "--trim-allow=run,jit", "--trim-locales=en"],
+        aotCompileOptions: { trim: { allow: ["run", "jit"], locales: ["en"] } },
+      });
+      const options = JSON.parse(fs.readFileSync(input.compiler + ".options.json", "utf8"));
+      expect(options).toEqual({
+        entrypoints: ["main.js", "worker.js"],
+        root: input.compileRoot,
+        target: "bun",
+        splitting: true,
+        format: "esm",
+        external: ["external-package"],
+        compile: {
+          outfile: path.join(input.outputRoot, "openclaw"),
+          aot: true,
+          trim: { allow: ["run", "jit"], locales: ["en"] },
+          autoloadPackageJson: true,
+          autoloadDotenv: false,
+          autoloadBunfig: false,
+        },
+      });
+      const support = JSON.parse(
+        fs.readFileSync(path.join(input.outputRoot, "support-artifact/openclaw"), "utf8"),
+      );
+      expect(support.aot).toBe(false);
+      expect(fs.existsSync(path.join(input.outputRoot, "compile-aot.mjs"))).toBe(false);
+    },
+  );
+
   it.skipIf(process.platform === "win32")(
     "binds typed source and transforms to build identity while retaining relocation and support equality",
     async () => {

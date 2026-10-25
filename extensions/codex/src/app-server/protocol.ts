@@ -281,6 +281,7 @@ export type CodexTurnStartParams = JsonObject & {
   sandboxPolicy?: CodexSandboxPolicy;
   serviceTier?: CodexServiceTier | null;
   effort?: string | null;
+  outputSchema?: JsonObject;
   personality?: CodexPersonality | null;
   environments?: CodexTurnEnvironmentParams[] | null;
   collaborationMode?: {
@@ -383,7 +384,11 @@ export type CodexThreadItem = {
   text: string;
   delivery?: "async" | null;
   contentItems?: CodexDynamicToolCallOutputContentItem[] | null;
-  changes: Array<{ path: string; kind: string }>;
+  changes: Array<{
+    path: string;
+    kind: string | { type: "add" | "delete" } | { type: "update"; move_path?: string | null };
+    diff?: string;
+  }>;
   [key: string]: unknown;
 };
 
