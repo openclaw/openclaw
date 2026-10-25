@@ -1016,17 +1016,18 @@ class GatewaySession(
       }
     }
 
-  /** Sends an RPC request frame and reports errors asynchronously through [onError]. */
+  /** Sends an RPC request frame and reports its outcome asynchronously through [onSuccess] or [onError]. */
   internal suspend fun sendRequestFrameForEndpoint(
     expectedEndpointStableId: String?,
     method: String,
     paramsJson: String?,
     timeoutMs: Long = 15_000,
     withEnqueue: (() -> Unit) -> Unit = { it() },
+    onSuccess: () -> Unit = {},
     onError: (ErrorShape) -> Unit = {},
   ) {
     val conn = readyConnection(expectedEndpointStableId) ?: throw IllegalStateException("not connected")
-    conn.sendRequestFrame(method, parseRequestParams(paramsJson), timeoutMs, guardRequestEnqueue(conn, withEnqueue), onError)
+    conn.sendRequestFrame(method, parseRequestParams(paramsJson), timeoutMs, guardRequestEnqueue(conn, withEnqueue), onSuccess, onError)
   }
 
   private data class TicketedMediaRequest(
@@ -1367,6 +1368,7 @@ class GatewaySession(
       params: JsonElement?,
       timeoutMs: Long,
       withEnqueue: (() -> Unit) -> Unit = { it() },
+      onSuccess: () -> Unit,
       onError: (ErrorShape) -> Unit,
     ) {
       val id = UUID.randomUUID().toString()
@@ -1390,7 +1392,9 @@ class GatewaySession(
               onError(ErrorShape("UNAVAILABLE", err.message ?: "request outcome unknown"))
               return@launchDrainingWork
             }
-          if (!response.ok) {
+          if (response.ok) {
+            onSuccess()
+          } else {
             onError(response.error ?: ErrorShape("UNAVAILABLE", "request failed"))
           }
         } finally {

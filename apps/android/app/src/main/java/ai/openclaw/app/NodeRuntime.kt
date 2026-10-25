@@ -2193,10 +2193,10 @@ class NodeRuntime internal constructor(
           val gatewayId = connectedEndpoint?.stableId ?: error("Gateway not connected")
           operatorSession.requestForEndpoint(gatewayId, method, paramsJson, timeoutMs)
         },
-        sendGatewayFrame = { method, paramsJson, timeoutMs, onError ->
+        sendGatewayFrame = { method, paramsJson, timeoutMs, onResult ->
           val gatewayId = connectedEndpoint?.stableId ?: error("Gateway not connected")
-          operatorSession.sendRequestFrameForEndpoint(gatewayId, method, paramsJson, timeoutMs) { error ->
-            onError(error.message)
+          operatorSession.sendRequestFrameForEndpoint(gatewayId, method, paramsJson, timeoutMs, onSuccess = { onResult(null) }) { error ->
+            onResult(error.message)
           }
         },
         sendWatchFrame = { owner, type, payload ->

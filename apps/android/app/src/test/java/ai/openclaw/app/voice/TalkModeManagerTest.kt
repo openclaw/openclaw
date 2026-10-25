@@ -3332,6 +3332,84 @@ class TalkModeManagerTest {
     }
 
   @Test
+  fun stalledAppendsDropInputPastThreeSecondsWithoutEndingTalk() =
+    runBlocking {
+      val frames = java.util.concurrent.LinkedBlockingQueue<ByteArray>()
+      org.robolectric.shadows.ShadowAudioRecord.setSourceProvider {
+        object : org.robolectric.shadows.ShadowAudioRecord.AudioRecordSource {
+          override fun readInByteArray(
+            bytes: ByteArray,
+            offset: Int,
+            size: Int,
+            blocking: Boolean,
+          ): Int {
+            val frame = checkNotNull(frames.poll(5, TimeUnit.SECONDS)) { "Capture fixture did not receive its next frame" }
+            frame.copyInto(bytes, destinationOffset = offset)
+            return frame.size
+          }
+        }
+      }
+      // The Gateway holds every append, as a stalled relay does.
+      val heldAppends = ConcurrentLinkedQueue<Pair<String, WebSocket>>()
+      try {
+        withStartedTalk(interceptRequest = { request, socket ->
+          if (request.getValue("method").jsonPrimitive.content != "talk.session.appendAudio") return@withStartedTalk false
+          heldAppends += request.getValue("id").jsonPrimitive.content to socket
+          true
+        }) { proof ->
+          var capture: Thread? = null
+          try {
+            suspend fun awaitState(condition: () -> Boolean) {
+              val deadline = System.nanoTime() + 5_000_000_000L
+              while (!condition()) {
+                proof.scheduler.runCurrent()
+                proof.drainCancelledCapture()
+                check(System.nanoTime() < deadline) { "Timed out at ${heldAppends.size} appends: ${proof.manager.statusText.value}" }
+                withContext(Dispatchers.Default) { delay(10) }
+              }
+            }
+            // 100 ms of PCM16 at 24 kHz; thirty fill the three-second in-flight budget.
+            val frame = ByteArray(4_800)
+            frames.put(frame)
+            capture = Thread { proof.drainCancelledCapture() }.also { it.start() }
+            awaitState { heldAppends.size == 1 }
+            for (sent in 2..30) {
+              frames.put(frame)
+              awaitState { heldAppends.size == sent }
+            }
+
+            frames.put(frame)
+            awaitState {
+              proof.manager.statusText.value
+                .startsWith("Realtime audio input fell behind; repeat the last part")
+            }
+            assertEquals(30, heldAppends.size)
+            assertTrue(proof.manager.isEnabled.value)
+
+            val (id, socket) = heldAppends.first()
+            socket.send("""{"type":"res","id":"$id","ok":true,"payload":{"ok":true}}""")
+            awaitState {
+              proof.manager.statusText.value
+                .startsWith("Microphone input recovered; repeat the last part")
+            }
+            frames.put(frame)
+            awaitState { heldAppends.size == 31 }
+            assertTrue(proof.manager.isEnabled.value)
+          } finally {
+            proof.manager.stopAllCapture()
+            frames.offer(byteArrayOf())
+            capture?.join(5_000)
+            assertFalse("Capture worker must terminate", capture?.isAlive == true)
+            proof.drainCancelledCapture()
+          }
+        }
+      } finally {
+        org.robolectric.shadows.ShadowAudioRecord
+          .clearSource()
+      }
+    }
+
+  @Test
   fun realtimeAudioFramesStreamUntilPlaybackOrCancellationStarts() {
     val manager = createManager()
 

@@ -281,7 +281,7 @@ class WearRealtimeTalkControllerTest {
   @Test
   fun `late append error from a stopped session does not fail its replacement`() =
     runTest {
-      var staleAppendError: ((String) -> Unit)? = null
+      var staleAppendError: ((String?) -> Unit)? = null
       var createCount = 0
       val controller =
         testTalkController(
@@ -293,8 +293,8 @@ class WearRealtimeTalkControllerTest {
               """{"ok":true}"""
             }
           },
-          sendGatewayFrame = { _, _, _, onError ->
-            if (staleAppendError == null) staleAppendError = onError
+          sendGatewayFrame = { _, _, _, onResult ->
+            if (staleAppendError == null) staleAppendError = onResult
           },
         )
 
@@ -310,6 +310,38 @@ class WearRealtimeTalkControllerTest {
       assertEquals(WearRealtimeTalkStatus.LISTENING, controller.snapshot.value.status)
       assertEquals("attempt-b", controller.snapshot.value.attemptId)
       assertTrue(controller.stop("watch-a", "attempt-b"))
+    }
+
+  @Test
+  fun `stalled appends drop Watch audio past three seconds without ending Talk`() =
+    runTest {
+      val heldAppends = mutableListOf<(String?) -> Unit>()
+      val appendTimeouts = mutableSetOf<Long>()
+      val controller =
+        testTalkController(
+          sendGatewayFrame = { _, _, timeoutMs, onResult ->
+            appendTimeouts += timeoutMs
+            heldAppends += onResult
+          },
+        )
+      assertTrue(controller.start("watch-a", "session-a", "attempt-a", "de"))
+      // 100 ms of PCM16 at 24 kHz; thirty fill the three-second in-flight budget.
+      val frame = ByteArray(4_800)
+
+      repeat(31) { controller.appendAudio("watch-a", frame) }
+      runCurrent()
+
+      assertEquals(30, heldAppends.size)
+      assertEquals(setOf(30_000L), appendTimeouts)
+      assertEquals(WearRealtimeTalkStatus.LISTENING, controller.snapshot.value.status)
+      assertEquals("Realtime audio input fell behind; repeat the last part", controller.snapshot.value.statusText)
+
+      heldAppends.first().invoke(null)
+      assertEquals("Microphone input recovered; repeat the last part", controller.snapshot.value.statusText)
+      controller.appendAudio("watch-a", frame)
+      runCurrent()
+      assertEquals(31, heldAppends.size)
+      assertTrue(controller.stop("watch-a", "attempt-a"))
     }
 
   @Test
@@ -986,7 +1018,7 @@ private fun CoroutineScope.testTalkController(
   requestGateway: suspend (String, String?, Long) -> String = { method, _, _ ->
     if (method == "talk.session.create") """{"relaySessionId":"relay-1"}""" else """{"ok":true}"""
   },
-  sendGatewayFrame: suspend (String, String?, Long, (String) -> Unit) -> Unit = { _, _, _, _ -> },
+  sendGatewayFrame: suspend (String, String?, Long, (String?) -> Unit) -> Unit = { _, _, _, _ -> },
   sendWatchFrame: suspend (WearRealtimeAttemptOwner, WearRealtimeAudioFrameType, ByteArray) -> Unit = { _, _, _ -> },
   onSnapshot: (WearRealtimeTalkSnapshot) -> Unit = {},
   onForceCloseWatchChannel: (WearRealtimeAttemptOwner) -> Unit = {},

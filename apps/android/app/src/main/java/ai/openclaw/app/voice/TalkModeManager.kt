@@ -1415,6 +1415,24 @@ class TalkModeManager internal constructor(
     stopped?.invoke()
   }
 
+  /** Input-loss notices arrive mid-call; Talk keeps listening while the user repeats. */
+  private fun showRealtimeInputNotice(
+    sessionId: String,
+    inputGeneration: Long,
+    notice: RealtimeInputAudioBudget.Notice,
+  ) {
+    synchronized(realtimeCapturePauseLock) {
+      if (realtimeSessionId != sessionId || audioInputGeneration.get() != inputGeneration) return
+      if (currentStatus.state != TalkStatusState.Active) return
+      val text =
+        when (notice) {
+          RealtimeInputAudioBudget.Notice.FellBehind -> nativeText("Realtime audio input fell behind; repeat the last part")
+          RealtimeInputAudioBudget.Notice.Recovered -> nativeText("Microphone input recovered; repeat the last part")
+        }
+      setStatus(currentStatus.copy(text = text))
+    }
+  }
+
   private fun realtimeCloseStatus(reason: String?): TalkStatus =
     when (reason) {
       null, "completed" -> {
@@ -1452,11 +1470,17 @@ class TalkModeManager internal constructor(
         capacity = 4,
         onBufferOverflow = BufferOverflow.DROP_OLDEST,
       )
+    val inputBudget =
+      RealtimeInputAudioBudget(realtimeSampleRateHz) { notice ->
+        showRealtimeInputNotice(sessionId, inputGeneration, notice)
+      }
     realtimeAppendJob =
       gatewayWorkScope.launch(realtimeCaptureDispatcher) {
         for (frame in audioFrames) {
           if (realtimeSessionId != sessionId || audioInputGeneration.get() != inputGeneration) continue
           if (!shouldAppendRealtimeCapturedFrame(frame.size)) continue
+          // Only an explicit append failure or an unanswered append ends a slow relay.
+          if (!inputBudget.admit(frame.size)) continue
           val audioBase64 = Base64.encodeToString(frame, Base64.NO_WRAP)
           val params =
             buildJsonObject {
@@ -1469,7 +1493,7 @@ class TalkModeManager internal constructor(
               lease?.endpointStableId,
               "talk.session.appendAudio",
               params.toString(),
-              timeoutMs = 8_000,
+              timeoutMs = REALTIME_AUDIO_APPEND_LIVENESS_TIMEOUT_MS,
               withEnqueue = { enqueue ->
                 // Cancellation can claim capture while this frame waits for the socket.
                 synchronized(realtimeCapturePauseLock) {
@@ -1480,14 +1504,18 @@ class TalkModeManager internal constructor(
                   enqueue()
                 }
               },
+              onSuccess = { inputBudget.settle(frame.size, acknowledged = true) },
             ) { error ->
+              inputBudget.settle(frame.size, acknowledged = false)
               Log.w(tag, "realtime appendAudio failed: ${error.message}")
               failRealtimeRelay(sessionId, error.message, inputGeneration = inputGeneration)
             }
           } catch (_: CancellationException) {
+            inputBudget.settle(frame.size, acknowledged = false)
             // A rejected frame does not end capture; actual job cancellation does.
             currentCoroutineContext().ensureActive()
           } catch (err: Throwable) {
+            inputBudget.settle(frame.size, acknowledged = false)
             Log.w(tag, "realtime appendAudio failed: ${err.message ?: err::class.simpleName}")
             failRealtimeRelay(sessionId, err.message ?: err::class.simpleName ?: "request failed", inputGeneration = inputGeneration)
           }
