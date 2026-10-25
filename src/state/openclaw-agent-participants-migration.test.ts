@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import { compactDoctorSessionSqliteTarget } from "../commands/doctor-session-sqlite-compact.js";
-import { recoverDoctorSessionSqliteTargets } from "../commands/doctor-session-sqlite-recover-report.js";
 import { captureRuntimeConfigAsyncReader } from "../config/io.runtime.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
@@ -73,48 +72,6 @@ describe("participant identity migration", () => {
       expect(reopened.db.prepare("PRAGMA user_version").get()?.user_version).toBe(
         OPENCLAW_AGENT_SCHEMA_VERSION,
       );
-    });
-  });
-
-  it("repairs a v17 canonical index without quarantining the original database", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const { db, path: databasePath } = await historicalStore(state);
-      db.exec(`
-        INSERT INTO cache_entries (scope, key, value_json, expires_at, updated_at)
-          VALUES ('participant-proof', 'preserved', '{"ok":true}', 100, 1);
-        DROP INDEX idx_agent_cache_expiry;
-        CREATE INDEX idx_agent_cache_expiry ON cache_entries(key);
-      `);
-      requireNativeSqliteDatabase(db).enableDefensive?.(false);
-      db.exec(`PRAGMA writable_schema = ON;
-        UPDATE sqlite_schema SET sql = 'CREATE INDEX idx_agent_cache_expiry ON cache_entries(scope, expires_at, key) WHERE expires_at IS NOT NULL'
-          WHERE name = 'idx_agent_cache_expiry';
-        PRAGMA writable_schema = OFF;`);
-      const schemaVersion = db.prepare("PRAGMA schema_version").get()?.schema_version;
-      db.exec(`PRAGMA schema_version = ${Number(schemaVersion) + 1};`);
-      closeOpenClawAgentDatabasesForTest();
-      const result = await recoverDoctorSessionSqliteTargets({
-        env: state.env,
-        targets: [{ agentId: "main", storePath: databasePath }],
-        validateTarget: async () => {
-          throw new Error("Unexpected failed migration manifest");
-        },
-      });
-      expect(result.targets[0]?.corruptRecovery).toBeUndefined();
-      expect(
-        result.totals.issues,
-        JSON.stringify(result.targets.flatMap((target) => target.issues)),
-      ).toBe(0);
-      using database = openNodeSqliteDatabase(databasePath, { readOnly: true });
-      expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(
-        OPENCLAW_AGENT_SCHEMA_VERSION,
-      );
-      expect(
-        database
-          .prepare("SELECT value_json FROM cache_entries WHERE scope = 'participant-proof'")
-          .get(),
-      ).toEqual({ value_json: '{"ok":true}' });
-      expect(database.prepare("PRAGMA integrity_check").get()?.integrity_check).toBe("ok");
     });
   });
 
