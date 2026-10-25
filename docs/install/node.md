@@ -181,6 +181,9 @@ formula's available stable Homebrew path for new launches without searching
 that share native modules or V8 messages, including the spawn broker, keep the
 exact runtime and report a restart action if it is gone. Restart the Gateway
 after upgrading Node to move the Gateway itself onto the new runtime.
+On macOS, if LAN or tailnet clients stop reaching a Node service after the
+upgrade, check the Application Firewall; see
+[macOS permissions](/platforms/mac/permissions#incoming-connections-after-a-node-upgrade).
 
 ### `openclaw: command not found`
 
