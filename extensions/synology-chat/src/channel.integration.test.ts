@@ -1,4 +1,3 @@
-// Synology Chat tests cover channel.integration plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -202,7 +201,6 @@ describe("Synology channel wiring integration", () => {
 
   it("re-enables a configured named account without replacing root or sibling credentials", async () => {
     const { synologyChatSetupAdapter } = await import("./setup-surface.js");
-    const input = { token: "replacement", url: "https://nas.example.com/alerts" };
     const configured = synologyChatSetupAdapter.applyAccountConfig({
       cfg: {
         channels: {
@@ -217,23 +215,19 @@ describe("Synology channel wiring integration", () => {
         },
       },
       accountId: "alerts",
-      input,
+      input: { token: "replacement", url: "https://nas.example.com/alerts" },
     });
-    expect(configured).toEqual({
-      channels: {
-        "synology-chat": {
+    expect(configured.channels?.["synology-chat"]).toEqual({
+      enabled: true,
+      token: "root-token",
+      accounts: {
+        alerts: {
           enabled: true,
-          token: "root-token",
-          accounts: {
-            alerts: {
-              enabled: true,
-              token: "replacement",
-              webhookPath: "/alerts",
-              incomingUrl: "https://nas.example.com/alerts",
-            },
-            sibling: { enabled: false, token: "sibling-token" },
-          },
+          token: "replacement",
+          webhookPath: "/alerts",
+          incomingUrl: "https://nas.example.com/alerts",
         },
+        sibling: { enabled: false, token: "sibling-token" },
       },
     });
   });
@@ -361,31 +355,20 @@ describe("Synology channel wiring integration", () => {
           accountId,
         });
       }
+      const namedAccount = (id: string) =>
+        account({
+          token: `token-${id}`,
+          incomingUrl: `https://nas.example.com/incoming-${id}`,
+          webhookPath: `/webhook/synology-${id}`,
+          dmPolicy: "open",
+          allowedUserIds: ["*"],
+        });
       const cfg = {
-        channels: {
-          "synology-chat": {
-            enabled: true,
-            accounts: {
-              alpha: account({
-                token: "token-alpha",
-                incomingUrl: "https://nas.example.com/incoming-alpha",
-                webhookPath: "/webhook/synology-alpha",
-                dmPolicy: "open",
-                allowedUserIds: ["*"],
-              }),
-              beta: account({
-                token: "token-beta",
-                incomingUrl: "https://nas.example.com/incoming-beta",
-                webhookPath: "/webhook/synology-beta",
-                dmPolicy: "open",
-                allowedUserIds: ["*"],
-              }),
-            },
-          },
-        },
-        session: {
-          dmScope: "main" as const,
-        },
+        ...config({
+          enabled: true,
+          accounts: { alpha: namedAccount("alpha"), beta: namedAccount("beta") },
+        }),
+        session: { dmScope: "main" as const },
       };
       const alpha = startAccount(cfg, "alpha");
       const beta = startAccount(cfg, "beta");
@@ -410,23 +393,19 @@ describe("Synology channel wiring integration", () => {
         username: "carol",
         post_id: "post-alpha-other-user",
       });
-      expect(alphaRes.status).toBe(204);
-      expect(betaRes.status).toBe(204);
-      expect(otherAlphaRes.status).toBe(204);
+      expect([alphaRes.status, betaRes.status, otherAlphaRes.status]).toEqual([204, 204, 204]);
       expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(3);
       expect(finalizeInboundContextMock).toHaveBeenCalledTimes(3);
-      expect(finalizeInboundContextMock.mock.calls[0]?.[0]).toMatchObject({
-        AccountId: "alpha",
-        SessionKey: `agent:${alphaAgent}:synology-chat:alpha:direct:123`,
-      });
-      expect(finalizeInboundContextMock.mock.calls[1]?.[0]).toMatchObject({
-        AccountId: "beta",
-        SessionKey: `agent:${betaAgent}:synology-chat:beta:direct:123`,
-      });
-      expect(finalizeInboundContextMock.mock.calls[2]?.[0]).toMatchObject({
-        AccountId: "alpha",
-        SessionKey: `agent:${alphaAgent}:synology-chat:alpha:direct:456`,
-      });
+      expect(
+        finalizeInboundContextMock.mock.calls.map(([context]) => ({
+          AccountId: context.AccountId,
+          SessionKey: context.SessionKey,
+        })),
+      ).toEqual([
+        { AccountId: "alpha", SessionKey: `agent:${alphaAgent}:synology-chat:alpha:direct:123` },
+        { AccountId: "beta", SessionKey: `agent:${betaAgent}:synology-chat:beta:direct:123` },
+        { AccountId: "alpha", SessionKey: `agent:${alphaAgent}:synology-chat:alpha:direct:456` },
+      ]);
       await Promise.all([alpha.stop(), beta.stop()]);
     },
   );

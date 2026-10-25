@@ -1,4 +1,3 @@
-// Synology Chat tests cover core plugin behavior.
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -39,15 +38,6 @@ function setupText(overrides: Record<string, string> = {}) {
 }
 
 const synologyChatConfigure = createPluginSetupWizardConfigure(plugin);
-
-function createSynologySetupPrompter(params: { allowedUserIds?: string } = {}) {
-  return createTestWizardPrompter({
-    text: setupText({
-      "Enter Synology Chat outgoing webhook token": "synology-token",
-      ...(params.allowedUserIds ? { "Allowed Synology Chat user ids": params.allowedUserIds } : {}),
-    }) as WizardPrompter["text"],
-  });
-}
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -123,13 +113,15 @@ describe("synology-chat core", () => {
   });
 
   it("records allowed user ids when setup forces allowFrom", async () => {
-    const prompter = createSynologySetupPrompter({
-      allowedUserIds: "123456, synology-chat:789012",
-    });
     const result = await runSetupWizardConfigure({
       configure: synologyChatConfigure,
-      cfg: {} as OpenClawConfig,
-      prompter,
+      cfg: {},
+      prompter: createTestWizardPrompter({
+        text: setupText({
+          "Enter Synology Chat outgoing webhook token": "synology-token",
+          "Allowed Synology Chat user ids": "123456, synology-chat:789012",
+        }) as WizardPrompter["text"],
+      }),
       options: {},
       forceAllowFrom: true,
     });
@@ -150,60 +142,38 @@ describe("synology-chat account resolution", () => {
     webhookPath: "/webhook/shared",
     accounts: { work: accounts.work },
   };
-  it.each<
-    [string, SynologyChatChannelConfig, string | undefined, Partial<ResolvedSynologyChatAccount>]
-  >([
+  it.each(["work", "safe"])("resolves name-matching override for %s", (id) => {
+    expect(
+      resolveAccount(config({ dangerouslyAllowNameMatching: true, accounts }), id),
+    ).toMatchObject({ dangerouslyAllowNameMatching: id === "work" });
+  });
+
+  it.each([undefined, true])("resolves inherited webhook path (opt-in=%s)", (optIn) => {
+    expect(
+      resolveAccount(config({ ...inherited, dangerouslyAllowInheritedWebhookPath: optIn }), "work"),
+    ).toMatchObject({
+      webhookPath: "/webhook/shared",
+      webhookPathSource: "inherited-base",
+      dangerouslyAllowInheritedWebhookPath: optIn ?? false,
+    });
+  });
+
+  it("does not inherit the public callback URL for a named route", () => {
+    const channel = {
+      webhookUrl: "https://gateway.example.com/webhook/synology",
+      accounts: { work: { token: "work-tok", webhookPath: "/webhook/synology-work" } },
+    };
+    expect(resolveAccount(config(channel), "work").webhookUrl).toBe("");
+  });
+
+  it.each([
+    ["user1, user2, user3", ["user1", "user2", "user3"]],
     [
-      "base name matching",
-      { dangerouslyAllowNameMatching: true, accounts },
-      "work",
-      { dangerouslyAllowNameMatching: true },
+      ["u1", "u2"],
+      ["u1", "u2"],
     ],
-    [
-      "disabled name matching",
-      { dangerouslyAllowNameMatching: true, accounts },
-      "safe",
-      { dangerouslyAllowNameMatching: false },
-    ],
-    [
-      "inherited path",
-      inherited,
-      "work",
-      {
-        webhookPath: "/webhook/shared",
-        webhookPathSource: "inherited-base",
-        dangerouslyAllowInheritedWebhookPath: false,
-      },
-    ],
-    [
-      "opted-in inheritance",
-      { ...inherited, dangerouslyAllowInheritedWebhookPath: true },
-      "work",
-      { dangerouslyAllowInheritedWebhookPath: true },
-    ],
-    [
-      "private public URL",
-      {
-        webhookUrl: "https://gateway.example.com/webhook/synology",
-        accounts: { work: { token: "work-tok", webhookPath: "/webhook/synology-work" } },
-      },
-      "work",
-      { webhookUrl: "" },
-    ],
-    [
-      "comma allowlist",
-      { allowedUserIds: "user1, user2, user3" },
-      undefined,
-      { allowedUserIds: ["user1", "user2", "user3"] },
-    ],
-    [
-      "array allowlist",
-      { allowedUserIds: ["u1", "u2"] },
-      undefined,
-      { allowedUserIds: ["u1", "u2"] },
-    ],
-  ])("resolves %s", (_name, channel, id, expected) => {
-    expect(resolveAccount(config(channel), id)).toMatchObject(expected);
+  ])("normalizes allowlist %j", (allowedUserIds, expected) => {
+    expect(resolveAccount(config({ allowedUserIds })).allowedUserIds).toEqual(expected);
   });
 
   it.each([

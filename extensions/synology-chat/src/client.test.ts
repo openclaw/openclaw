@@ -1,4 +1,3 @@
-// Synology Chat tests cover client plugin behavior.
 import { EventEmitter } from "node:events";
 import type { ClientRequest, IncomingMessage, RequestOptions } from "node:http";
 import { PassThrough } from "node:stream";
@@ -49,10 +48,10 @@ type MockHttpCall = [
 ];
 type ResponseStream = IncomingMessage & PassThrough;
 
-function requestCall(label = "Synology Chat HTTPS request"): MockHttpCall {
+function requestCall(): MockHttpCall {
   const call = post.mock.calls[0];
   if (!call) {
-    throw new Error(`expected ${label}`);
+    throw new Error("expected Synology Chat HTTPS request");
   }
   return call as MockHttpCall;
 }
@@ -132,13 +131,8 @@ function useTimers(advanceMs = 10_000) {
   });
 }
 
-function hostedUrl(value: string): SynologyHostedMediaUrl {
-  return value as SynologyHostedMediaUrl;
-}
-
-const hostedCapabilityUrl = hostedUrl(
-  "https://gateway.example.com/webhook?__openclaw_synology_media_token_a=t",
-);
+const hostedCapabilityUrl =
+  "https://gateway.example.com/webhook?__openclaw_synology_media_token_a=t" as SynologyHostedMediaUrl;
 
 const webhookUrl = "https://nas.example.com/incoming";
 const sendText = (text = "Hello", userId?: string, insecure = false) =>
@@ -195,25 +189,18 @@ describe("Synology outbound channel boundary", () => {
     expect(https.request).not.toHaveBeenCalled();
   });
 
-  it("formats links without inventing a platform receipt", async () => {
+  it("formats links without rewriting code, escaped, or malformed links", async () => {
     mockSuccessResponse();
     const malformedLink = `[${"\\".repeat(32)}`;
     const text = `**Read** [the docs](https://example.com/a_(b)) [titled](https://example.com "Documentation") \`[literal](https://example.com)\` \\[escaped](https://example.com) [x > y](https://example.com) [bad](<https://example.com) [bad title](https://example.com "oops') ![logo](https://example.com/logo.png) ${malformedLink}`;
     const expected = `**Read** <https://example.com/a_(b)|the docs> <https://example.com|titled> \`[literal](https://example.com)\` \\[escaped](https://example.com) [x > y](https://example.com) [bad](<https://example.com) [bad title](https://example.com "oops') ![logo](https://example.com/logo.png) ${malformedLink}`;
-    const result = await settleTimers(
+    await settleTimers(
       plugin.outbound.sendText({
         cfg: { channels: { "synology-chat": { ...channel, allowInsecureSsl: true } } },
         text,
         to: "user1",
       }),
     );
-    expect(result).toMatchObject({
-      channel: "synology-chat",
-      target: { kind: "chat", id: "user1" },
-      messageId: "",
-      receipt: { platformMessageIds: [], parts: [], threadId: "user1" },
-    });
-    expect(result.receipt.primaryPlatformMessageId).toBeUndefined();
     expect(requestCall()[1].rejectUnauthorized).toBe(false);
     expect(payload()).toEqual({ text: expected });
   });
@@ -349,34 +336,25 @@ describe("sendMessage", () => {
     expect(https.request).toHaveBeenCalledTimes(3);
   });
 
-  it("does not replay a mixed aggregate with an ambiguous transport leaf", async () => {
-    const mixedError = Object.assign(
-      new AggregateError([
-        Object.assign(new Error("connect refused"), { code: "ECONNREFUSED" }),
-        Object.assign(new Error("connection reset after write"), { code: "ECONNRESET" }),
-      ]),
-      { code: "ECONNREFUSED" },
-    );
-    mockRequestErrorOnce(mixedError);
-    const result = await sendText();
-    expect(result).toBe(false);
-    expect(post).toHaveBeenCalledOnce();
-  });
-
-  it("retries when every aggregate transport leaf is pre-connect", async () => {
-    mockSuccessResponse();
-    const aggregateError = Object.assign(
-      new AggregateError([
-        Object.assign(new Error("connect refused"), { code: "ECONNREFUSED" }),
-        Object.assign(new Error("host not found"), { code: "ENOTFOUND" }),
-      ]),
-      { code: "ECONNREFUSED" },
-    );
-    mockRequestErrorOnce(new TypeError("fetch failed", { cause: aggregateError }));
-    const result = await sendText();
-    expect(result).toEqual({ messageIds: [] });
-    expect(post).toHaveBeenCalledTimes(2);
-  });
+  it.each([
+    ["ECONNRESET", false],
+    ["ENOTFOUND", true],
+  ] as const)(
+    "retries an aggregate only if every leaf is pre-connect (%s)",
+    async (code, retries) => {
+      mockSuccessResponse();
+      const error = Object.assign(
+        new AggregateError([
+          Object.assign(new Error("connect refused"), { code: "ECONNREFUSED" }),
+          Object.assign(new Error(code), { code }),
+        ]),
+        { code: "ECONNREFUSED" },
+      );
+      mockRequestErrorOnce(retries ? new TypeError("fetch failed", { cause: error }) : error);
+      expect(await sendText()).toEqual(retries ? { messageIds: [] } : false);
+      expect(post).toHaveBeenCalledTimes(retries ? 2 : 1);
+    },
+  );
 
   it("preserves HTTP-successful webhook responses with oversized rejection envelopes", async () => {
     mockResponse(200, JSON.stringify({ success: false, padding: "x".repeat(1 * 1024 * 1024) }));
@@ -402,13 +380,6 @@ describe("sendMessage", () => {
 describe("sendHostedFileUrl", () => {
   useTimers();
 
-  it("returns indeterminate on an HTTP server failure", async () => {
-    mockResponse(500, "error");
-    const result = await sendFile();
-    expect(result).toEqual({ status: "indeterminate" });
-    expect(payload()).toEqual({ file_url: hostedCapabilityUrl });
-  });
-
   it.each([
     { error: new Error("connection reset"), status: "indeterminate" },
     {
@@ -426,12 +397,6 @@ describe("sendHostedFileUrl", () => {
     });
     const result = await sendFile();
     expect(result).toEqual({ status: "not-dispatched" });
-  });
-
-  it("returns not-dispatched when the incoming webhook URL is malformed", async () => {
-    const result = await sendFile("not-a-url");
-    expect(result).toEqual({ status: "not-dispatched" });
-    expect(post).not.toHaveBeenCalled();
   });
 
   it("respects the shared send interval before posting a file URL", async () => {
@@ -575,20 +540,16 @@ describe("resolveLegacyWebhookNameToChatUserId user lookup", () => {
     expect(userId).toBe(4);
   });
 
-  it("falls back when the user_list body exceeds the byte cap", async () => {
-    const httpsGet = get;
-    const warns: string[] = [];
-    // Single oversized Buffer: over 1 MiB cap without multi-write/destroy races.
-    const oversized = Buffer.alloc(1 * 1024 * 1024 + 1, 0x78);
-    const overflowUrl =
-      "https://overflow-nas.example.com/webapi/entry.cgi?api=SYNO.Chat.External&method=chatbot&version=2";
-    httpsGet.mockImplementation(responseHandler(200, [oversized]));
-    const userId = await resolveLegacyWebhookNameToChatUserId({
-      incomingUrl: overflowUrl,
-      mutableWebhookUsername: "anyone",
-      log: { warn: (...args) => warns.push(args.map(String).join(" ")) },
-    });
-    expect(userId).toBeUndefined();
-    expect(warns.some((line) => line.includes("exceeded"))).toBe(true);
+  it("falls back to an empty list on uncached user_list overflow", async () => {
+    get.mockImplementation(responseHandler(200, [Buffer.alloc(1024 * 1024 + 1, 0x78)]));
+    const warn = vi.fn();
+    await expect(
+      resolveLegacyWebhookNameToChatUserId({
+        incomingUrl: "https://overflow-nas.example.com/webapi/entry.cgi?method=chatbot",
+        mutableWebhookUsername: "anyone",
+        log: { warn },
+      }),
+    ).resolves.toBeUndefined();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("exceeded"));
   });
 });

@@ -100,6 +100,23 @@ describe("Synology Chat client loopback", () => {
     return port;
   }
 
+  async function capturePayloads(
+    reply: (payload: Record<string, unknown>, index: number, res: http.ServerResponse) => void = (
+      _payload,
+      _index,
+      res,
+    ) => respond(res, true),
+  ) {
+    const payloads: Record<string, unknown>[] = [];
+    const port = await listenLoopback((req, res) =>
+      readPayload(req, (payload) => {
+        payloads.push(payload);
+        reply(payload, payloads.length - 1, res);
+      }),
+    );
+    return { payloads, cfg: config(`http://127.0.0.1:${port}/webapi/entry.cgi`) };
+  }
+
   afterEach(async () => {
     vi.restoreAllMocks();
     if (server) {
@@ -196,15 +213,7 @@ describe("Synology Chat client loopback", () => {
   });
 
   it("acquires durable send custody before webhook bytes cross the loopback boundary", async () => {
-    const receivedPayloads: Array<Record<string, unknown>> = [];
-    const port = await listenLoopback((req, res) => {
-      readPayload(req, (payload) => {
-        receivedPayloads.push(payload);
-        respond(res, true);
-      });
-    });
-    const incomingUrl = `http://127.0.0.1:${port}/webapi/entry.cgi`;
-    const cfg = config(incomingUrl, "synology-custody-proof");
+    const { payloads, cfg } = await capturePayloads();
     const marker = `autoqa-synology-custody-${randomUUID()}`;
     const sendContext = { cfg, text: marker, to: "42" };
     const custodyFailure = new Error(`fault-injected custody failure: ${marker}`);
@@ -218,14 +227,14 @@ describe("Synology Chat client loopback", () => {
       }),
     ).rejects.toThrow(custodyFailure.message);
     expect(rejectedDispatch).toHaveBeenCalledOnce();
-    expect(receivedPayloads).toEqual([]);
+    expect(payloads).toEqual([]);
     const acceptedDispatch = vi.fn(async () => undefined);
     await synologyChatPlugin.message.send?.text?.({
       ...sendContext,
       onPlatformSendDispatch: acceptedDispatch,
     });
     expect(acceptedDispatch).toHaveBeenCalledOnce();
-    expect(receivedPayloads).toEqual([{ text: marker, user_ids: [42] }]);
+    expect(payloads).toEqual([{ text: marker, user_ids: [42] }]);
     const rejectedMediaDispatch = vi.fn(async () => {
       throw custodyFailure;
     });
@@ -239,18 +248,11 @@ describe("Synology Chat client loopback", () => {
     ).rejects.toThrow(custodyFailure.message);
     expect(rejectedMediaDispatch).toHaveBeenCalledOnce();
     expect(hostedCapabilityCleanup).toHaveBeenCalledOnce();
-    expect(receivedPayloads).toHaveLength(1);
+    expect(payloads).toHaveLength(1);
   });
 
   it("rejects invalid recipients before HTTP and delivers normalized numeric IDs", async () => {
-    const payloads: unknown[] = [];
-    const port = await listenLoopback((req, res) => {
-      readPayload(req, (payload) => {
-        payloads.push(payload);
-        respond(res, true);
-      });
-    });
-    const cfg = config(`http://127.0.0.1:${port}/webapi/entry.cgi`);
+    const { payloads, cfg } = await capturePayloads();
     const plugin: ChannelPlugin = synologyChatPlugin;
     const resolve = (to: string) => plugin.outbound?.resolveTarget?.({ cfg, to, mode: "explicit" });
     const invalid = resolve("42oops");
@@ -346,20 +348,15 @@ describe("Synology Chat client loopback", () => {
   it.each([true, false])(
     "bounds attachment captions and preserves media custody when overflow acceptance is %s",
     async (acceptOverflow) => {
-      const receivedPayloads: Array<Record<string, unknown>> = [];
       const dispatchOrder: string[] = [];
-      const port = await listenLoopback((req, res) => {
+      const { payloads, cfg } = await capturePayloads((payload, _index, res) => {
         dispatchOrder.push("post");
-        readPayload(req, (payload) => {
-          receivedPayloads.push(payload);
-          const accepted =
-            typeof payload.text === "string" &&
-            payload.text.length <= 2_000 &&
-            (Boolean(payload.file_url) || acceptOverflow);
-          respond(res, accepted, accepted ? 200 : 413);
-        });
+        const accepted =
+          typeof payload.text === "string" &&
+          payload.text.length <= 2_000 &&
+          (Boolean(payload.file_url) || acceptOverflow);
+        respond(res, accepted, accepted ? 200 : 413);
       });
-      const cfg = config(`http://127.0.0.1:${port}/webapi/entry.cgi`);
       hostedCapabilityCleanup.mockClear();
       const delivery = synologyChatPlugin.message.send?.media?.({
         cfg,
@@ -382,7 +379,7 @@ describe("Synology Chat client loopback", () => {
           },
         });
       }
-      expect(receivedPayloads).toEqual([
+      expect(payloads).toEqual([
         { file_url: hostedCapabilityUrl, text: "x".repeat(2_000), user_ids: [42] },
         { text: "x", user_ids: [42] },
       ]);
@@ -410,28 +407,21 @@ describe("Synology Chat client loopback", () => {
   ])(
     "preserves genuine webhook identities for $name",
     async ({ text, media, missingChunk, ids }) => {
-      let requestCount = 0;
-      const payloads: Record<string, unknown>[] = [];
-      const port = await listenLoopback((req, res) => {
-        readPayload(req, (payload) => {
-          payloads.push(payload);
-          const index = requestCount++;
-          res.writeHead(200, { "Content-Type": "application/json" });
-          res.end(
-            JSON.stringify({
-              success: true,
-              data: {
-                succ: {
-                  user_id_post_map: {
-                    "123456": index === missingChunk ? undefined : 25769804017 + index,
-                  },
+      const { payloads, cfg } = await capturePayloads((_payload, index, res) => {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            success: true,
+            data: {
+              succ: {
+                user_id_post_map: {
+                  "123456": index === missingChunk ? undefined : 25769804017 + index,
                 },
               },
-            }),
-          );
-        });
+            },
+          }),
+        );
       });
-      const cfg = config(`http://127.0.0.1:${port}/incoming`);
       const context = { cfg, text, to: "123456" };
       const result = media
         ? await synologyChatPlugin.message.send?.media?.({
@@ -439,7 +429,7 @@ describe("Synology Chat client loopback", () => {
             mediaUrl: "https://example.com/proof.png",
           })
         : await synologyChatPlugin.message.send?.text?.(context);
-      expect(requestCount).toBe(media ? 1 : Math.ceil(text.length / 2000));
+      expect(payloads).toHaveLength(media ? 1 : Math.ceil(text.length / 2000));
       expect(result?.messageId).toBe(ids[0] ?? "");
       expect(result?.receipt.platformMessageIds).toEqual(ids);
       expect(result?.receipt.parts.map((part) => part.platformMessageId)).toEqual(ids);

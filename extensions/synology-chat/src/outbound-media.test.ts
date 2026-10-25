@@ -1,4 +1,3 @@
-// Synology Chat tests cover guarded outbound attachment staging and same-route capability serving.
 import fs from "node:fs";
 import type { HostedOutboundMediaChunkRecord } from "openclaw/plugin-sdk/outbound-media";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
@@ -116,10 +115,6 @@ function internalCapabilityUrl(publicUrl: string, pathName = "/internal/synology
   return `${pathName}${new URL(publicUrl).search}`;
 }
 
-function prepare(account: ResolvedSynologyChatAccount, mediaUrl: string) {
-  return prepareSynologyHostedMedia({ account, mediaUrl });
-}
-
 function mockPdf(buffer: Buffer, fileName = "report.pdf") {
   mockMedia(buffer, "application/pdf", fileName);
 }
@@ -167,8 +162,18 @@ function utf32Buffer(value: string, endian: "le" | "be", includeBom = true): Buf
 
 describe("Synology Chat hosted outbound media", () => {
   let account: ResolvedSynologyChatAccount;
+  let runtime: ReturnType<typeof installRuntime>;
+  const prepare = (mediaUrl = "https://files.example.com/report.pdf") =>
+    prepareSynologyHostedMedia({ account, mediaUrl });
+  function storeAt(index: number) {
+    const store = runtime.openedStores[index];
+    if (!store) {
+      throw new Error(`expected hosted media store ${index}`);
+    }
+    return store;
+  }
   async function stageUrl(mediaUrl = "https://files.example.com/report.pdf") {
-    return internalCapabilityUrl((await prepare(account, mediaUrl)).url);
+    return internalCapabilityUrl((await prepare(mediaUrl)).url);
   }
   async function get(url: string, method = "GET", requestAccount = account) {
     const response = makeRes();
@@ -189,7 +194,7 @@ describe("Synology Chat hosted outbound media", () => {
     resetPluginStateStoreForTests();
     fs.rmSync(testStateDir, { recursive: true, force: true });
     fs.mkdirSync(testStateDir, { recursive: true });
-    installRuntime();
+    runtime = installRuntime();
     account = createAccount();
     loadWebMediaMock.mockReset();
     loadWebMediaMock.mockResolvedValue(image);
@@ -226,10 +231,9 @@ describe("Synology Chat hosted outbound media", () => {
   });
 
   it("reconstructs persisted bytes before response backpressure", async () => {
-    installRuntime();
     const frozenBytes = Buffer.alloc(40 * 1024, 0x61);
     mockPdf(frozenBytes);
-    const prepared = await prepare(account, "https://files.example.com/report.pdf");
+    const requestUrl = await stageUrl();
     const response = makeRes();
     const write = response.write.bind(response);
     let firstWrite = true;
@@ -243,7 +247,7 @@ describe("Synology Chat hosted outbound media", () => {
     }) as typeof response.write;
     const writeSpy = vi.spyOn(response, "write");
     let settled = false;
-    const serving = serve(internalCapabilityUrl(prepared.url), response, account).finally(() => {
+    const serving = serve(requestUrl, response, account).finally(() => {
       settled = true;
     });
     await vi.waitFor(() => expect(writeSpy).toHaveBeenCalledOnce());
@@ -256,15 +260,9 @@ describe("Synology Chat hosted outbound media", () => {
   });
 
   it("rejects persisted corruption before writing response bytes", async () => {
-    const { openedStores } = installRuntime();
     mockPdf(Buffer.alloc(40 * 1024, 0x61));
-    const prepared = await prepare(account, "https://files.example.com/report.pdf");
-    const chunkStore = openedStores[1] as
-      | PluginStateKeyedStore<HostedOutboundMediaChunkRecord>
-      | undefined;
-    if (!chunkStore) {
-      throw new Error("expected hosted media chunk store");
-    }
+    const requestUrl = await stageUrl();
+    const chunkStore = storeAt(1) as PluginStateKeyedStore<HostedOutboundMediaChunkRecord>;
     const chunk = (await chunkStore.entries()).find(({ value }) => value.index === 1);
     if (!chunk) {
       throw new Error("expected the second persisted payload chunk");
@@ -275,7 +273,7 @@ describe("Synology Chat hosted outbound media", () => {
     });
     const response = makeRes({ finishOnEnd: false });
     const writeSpy = vi.spyOn(response, "write");
-    await expect(serve(internalCapabilityUrl(prepared.url), response, account)).resolves.toBe(true);
+    await expect(serve(requestUrl, response, account)).resolves.toBe(true);
     expect(response.statusCode).toBe(404);
     expect(response.destroyed).toBe(false);
     expect(writeSpy).not.toHaveBeenCalled();
@@ -283,8 +281,10 @@ describe("Synology Chat hosted outbound media", () => {
   });
 
   it("never treats capability query values as an on-demand fetch target", async () => {
-    const prepared = await prepare(account, "https://files.example.com/floor-plan.png");
-    const requestUrl = new URL(internalCapabilityUrl(prepared.url), "http://localhost");
+    const requestUrl = new URL(
+      await stageUrl("https://files.example.com/floor-plan.png"),
+      "http://localhost",
+    );
     requestUrl.searchParams.set("url", "http://127.0.0.1/private");
     requestUrl.searchParams.set("target", "https://files.example.com/changed.png");
     const response = makeRes();
@@ -306,10 +306,10 @@ describe("Synology Chat hosted outbound media", () => {
       await loadGate;
       return image;
     });
-    const first = prepare(account, "https://files.example.com/one.png");
-    const second = prepare(account, "https://files.example.com/two.png");
+    const first = prepare("https://files.example.com/one.png");
+    const second = prepare("https://files.example.com/two.png");
     await vi.waitFor(() => expect(loadWebMediaMock).toHaveBeenCalledTimes(2));
-    const third = prepare(account, "https://files.example.com/three.png");
+    const third = prepare("https://files.example.com/three.png");
     await Promise.resolve();
     releaseLoads();
     await expect(third).rejects.toThrow("attachment preparation is busy");
@@ -318,7 +318,7 @@ describe("Synology Chat hosted outbound media", () => {
   });
 
   it("fails closed for wrong tokens, accounts, routes, and unsupported methods", async () => {
-    const prepared = await prepare(account, "https://files.example.com/report.pdf");
+    const prepared = await prepare();
     const capability = new URL(prepared.url);
     const tokenKey = [...capability.searchParams.keys()].find((key) =>
       key.startsWith("__openclaw_synology_media_token_"),
@@ -339,12 +339,8 @@ describe("Synology Chat hosted outbound media", () => {
   });
 
   it("bounds unauthenticated capability lookups before reading persistent state", async () => {
-    const { openedStores } = installRuntime();
-    const prepared = await prepare(account, "https://files.example.com/report.pdf");
-    const metadataStore = openedStores[0];
-    if (!metadataStore) {
-      throw new Error("expected hosted media metadata store");
-    }
+    const prepared = await prepare();
+    const metadataStore = storeAt(0);
     const originalLookup = metadataStore.lookup.bind(metadataStore);
     const { promise: readGate, resolve: releaseReads } = Promise.withResolvers<void>();
     const lookupSpy = vi.spyOn(metadataStore, "lookup").mockImplementation(async (key) => {
@@ -411,7 +407,6 @@ describe("Synology Chat hosted outbound media", () => {
   it("closes stalled attachment responses and releases their serving slot", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_700_000_000_000);
-    installRuntime();
     const requestUrl = await stageUrl();
     const stalled = makeRes({ finishOnEnd: false });
     await serve(requestUrl, stalled, account);
@@ -423,12 +418,8 @@ describe("Synology Chat hosted outbound media", () => {
   it("starts the response deadline before persisted metadata can stall", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_700_000_000_000);
-    const { openedStores } = installRuntime();
-    const prepared = await prepare(account, "https://files.example.com/report.pdf");
-    const metadataStore = openedStores[0];
-    if (!metadataStore) {
-      throw new Error("expected hosted media metadata store");
-    }
+    const requestUrl = await stageUrl();
+    const metadataStore = storeAt(0);
     const lookup = metadataStore.lookup.bind(metadataStore);
     const { promise: lookupStarted, resolve: markLookupStarted } = Promise.withResolvers<void>();
     const { promise: lookupGate, resolve: releaseLookup } = Promise.withResolvers<void>();
@@ -438,7 +429,7 @@ describe("Synology Chat hosted outbound media", () => {
       return await lookup(key);
     });
     const response = makeRes({ finishOnEnd: false });
-    const pending = serve(internalCapabilityUrl(prepared.url), response, account);
+    const pending = serve(requestUrl, response, account);
     await lookupStarted;
     await vi.advanceTimersByTimeAsync(2 * 60_000);
     expect(response.statusCode).toBe(504);
@@ -449,14 +440,9 @@ describe("Synology Chat hosted outbound media", () => {
   });
 
   it("bounds repeated authenticated downloads without charging HEAD requests", async () => {
-    const { openedStores } = installRuntime();
     mockPdf(Buffer.alloc(32 * 1024 * 1024, 0x61));
     const requestUrl = await stageUrl();
-    const chunkStore = openedStores[1];
-    if (!chunkStore) {
-      throw new Error("expected hosted media chunk store");
-    }
-    const chunkReads = trackChunkReads(chunkStore);
+    const chunkReads = trackChunkReads(storeAt(1));
     for (let index = 0; index < 4; index += 1) {
       const response = await get(requestUrl);
       expect(response.statusCode).toBe(200);
@@ -472,8 +458,7 @@ describe("Synology Chat hosted outbound media", () => {
   });
 
   it("persists frozen capabilities across plugin-state reopen and runtime replacement", async () => {
-    const prepared = await prepare(account, "https://files.example.com/floor-plan.png");
-    const requestUrl = internalCapabilityUrl(prepared.url);
+    const requestUrl = await stageUrl("https://files.example.com/floor-plan.png");
     resetPluginStateStoreForTests();
     installRuntime();
     loadWebMediaMock.mockResolvedValueOnce({
@@ -489,14 +474,14 @@ describe("Synology Chat hosted outbound media", () => {
   });
 
   it("rejects active content and leaves no live capability", async () => {
-    const { getRegisterCallCount, openedStores } = installRuntime();
+    const { getRegisterCallCount, openedStores } = runtime;
     loadWebMediaMock.mockResolvedValueOnce({
       buffer: Buffer.from("<svg onload=alert(1)></svg>"),
       kind: "image",
       contentType: "image/svg+xml",
       fileName: "active.svg",
     });
-    await expect(prepare(account, "https://files.example.com/active.svg")).rejects.toThrow(
+    await expect(prepare("https://files.example.com/active.svg")).rejects.toThrow(
       "do not support active content type",
     );
     await expect(
@@ -540,7 +525,7 @@ describe("Synology Chat hosted outbound media", () => {
     "rejects %s",
     async (_name, buffer, contentType = "application/octet-stream", fileName = "document.bin") => {
       mockMedia(buffer, contentType, fileName);
-      await expect(prepare(account, "https://files.example.com/disguised-content")).rejects.toThrow(
+      await expect(prepare("https://files.example.com/disguised-content")).rejects.toThrow(
         "do not support active content type",
       );
     },
@@ -566,11 +551,10 @@ describe("Synology Chat hosted outbound media", () => {
   it("expires capabilities without falling back to the source URL", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_700_000_000_000);
-    installRuntime();
-    const prepared = await prepare(account, "https://files.example.com/report.pdf");
+    const requestUrl = await stageUrl();
     vi.setSystemTime(1_700_000_000_000 + 10 * 60_000 + 1);
     const response = makeRes();
-    await serve(internalCapabilityUrl(prepared.url), response, account);
+    await serve(requestUrl, response, account);
     expect(response.statusCode).toBe(404);
     expect(loadWebMediaMock).toHaveBeenCalledTimes(1);
   });

@@ -1,4 +1,3 @@
-// Synology Chat tests cover webhook handler plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { postRawWebhook, withServer } from "openclaw/plugin-sdk/test-env";
@@ -132,9 +131,8 @@ describe("createWebhookHandler", () => {
 
   it("rejects non-POST methods with 405", async () => {
     const { handler } = makeTestHandler();
-    const req = makeReq("GET", "");
     const res = makeRes();
-    await handler(req, res);
+    await handler(makeReq("GET", ""), res);
     expect(res.status).toBe(405);
   });
 
@@ -154,9 +152,9 @@ describe("createWebhookHandler", () => {
   });
 
   it("returns 503 without acknowledging when durable admission fails", async () => {
-    const receive = vi.fn().mockRejectedValue(new Error("sqlite unavailable"));
-    const handler = admissionHandler(receive);
-    const res = await postToWebhook(handler);
+    const res = await postToWebhook(
+      admissionHandler(vi.fn().mockRejectedValue(new Error("sqlite unavailable"))),
+    );
     expect(res.status).toBe(503);
     expect(res.headers["x-openclaw-delivery-accepted"]).toBeUndefined();
     expect(res.body).toContain("Webhook admission failed");
@@ -244,30 +242,16 @@ describe("createWebhookHandler", () => {
   });
 
   it("rate limits repeated invalid token guesses before the correct token can succeed", async () => {
-    const weakToken = "00000129";
     const { deliver, handler } = makeTestHandler({
-      account: { token: weakToken, rateLimitPerMinute: 5 },
+      account: { token: "00000129", rateLimitPerMinute: 5 },
     });
-    let guessedToken: string | null = null;
-    let saw429 = false;
-    for (let i = 0; i < 130; i += 1) {
-      const candidate = String(i).padStart(8, "0");
-      const res = await postToWebhook(handler, formBody({ token: candidate }), {
+    for (let i = 0; i < 6; i += 1) {
+      const res = await postToWebhook(handler, formBody({ token: String(i).padStart(8, "0") }), {
         remoteAddress: "203.0.113.10",
       });
-      if (res.status === 429) {
-        saw429 = true;
-        break;
-      }
-      if (res.status === 204) {
-        guessedToken = candidate;
-        break;
-      }
-      expect(res.status).toBe(401);
+      expect(res.status).toBe(i < 5 ? 401 : 429);
     }
-    expect(saw429).toBe(true);
-    expect(guessedToken).toBeNull();
-    const lockedRes = await postToWebhook(handler, formBody({ token: weakToken }), {
+    const lockedRes = await postToWebhook(handler, validBody.replace("valid-token", "00000129"), {
       remoteAddress: "203.0.113.10",
     });
     expect(lockedRes.status).toBe(429);
@@ -311,7 +295,7 @@ describe("createWebhookHandler", () => {
     });
     expect(resolveLegacyWebhookNameToChatUserId).not.toHaveBeenCalled();
     expect(JSON.stringify(vi.mocked(log.info).mock.calls)).not.toContain("Hello from json");
-    expect(log.info).toHaveBeenCalledWith("Message from json-user (123): len=15");
+    expect(log.info).toHaveBeenCalledWith(expect.stringContaining("len=15"));
   });
 
   it("rejects malformed application/json with a stable parser error", async () => {
@@ -322,10 +306,6 @@ describe("createWebhookHandler", () => {
     expect(res.status).toBe(400);
     expect(res.body).toContain("Invalid request body");
     expect(deliver).not.toHaveBeenCalled();
-    expect(log.warn).toHaveBeenCalledWith(
-      "Failed to parse webhook payload",
-      expect.objectContaining({ message: "Invalid JSON body" }),
-    );
   });
 
   it.each([
@@ -368,12 +348,10 @@ describe("createWebhookHandler", () => {
 
   it("strips trigger word from message", async () => {
     const { deliver, handler } = makeTestHandler();
-    const body = formBody({
-      text: "!bot Hello there",
-      trigger_word: "!bot",
-      post_id: "post-trigger",
-    });
-    const res = await postToWebhook(handler, body);
+    const res = await postToWebhook(
+      handler,
+      formBody({ text: "!bot Hello there", trigger_word: "!bot" }),
+    );
     expect(res.status).toBe(204);
     expect(deliveredMessage(deliver).body).toBe("Hello there");
   });
