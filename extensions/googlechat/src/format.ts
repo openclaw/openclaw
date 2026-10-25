@@ -68,7 +68,6 @@ export function formatGoogleChatMediaText(
   return [text, formatTextWithAttachmentLinks(undefined, remoteUrls)].filter(Boolean).join("\n\n");
 }
 
-
 /** Renders CommonMark into byte-bounded Google Chat app-message chunks. */
 export function formatGoogleChatTextChunks(
   text: string,
