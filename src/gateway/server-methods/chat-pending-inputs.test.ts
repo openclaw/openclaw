@@ -43,6 +43,25 @@ async function createScope(name: string, sessionId = name) {
   return scope;
 }
 
+function queueSource(
+  scope: Awaited<ReturnType<typeof createScope>>,
+  runId: string,
+  overrides: Partial<Parameters<typeof createRpcSourceForTest>[1]> = {},
+) {
+  const source = createRpcSourceForTest(
+    {},
+    {
+      ...scope,
+      runId,
+      storeScope: captureRpcTargetForTest(scope).storeScope,
+      phase: "waiting",
+      ...overrides,
+    },
+  );
+  rpcSourceTesting.set(runId, source);
+  return source;
+}
+
 function pendingInputs(scope: Parameters<typeof stageSessionPendingInput>[0]) {
   const receipts: SessionPendingInputReceipt[] = [];
   return {
@@ -161,16 +180,7 @@ describe("pending input read boundary", () => {
       expect(refreshed.metadata).toMatchObject({ commands: [{ name: "replacement_skill" }] });
       expect(refreshed.stateRevision).not.toEqual(warm.stateRevision);
 
-      const source = createRpcSourceForTest(
-        {},
-        {
-          ...scope,
-          runId: "followup",
-          storeScope: captureRpcTargetForTest(scope).storeScope,
-          phase: "waiting",
-        },
-      );
-      rpcSourceTesting.set("followup", source);
+      const source = queueSource(scope, "followup");
       const queued = await call({ cursor: warm.deltaCursor, knownState: warm.stateRevision });
       expect(queued.pendingInputs).toMatchObject({
         queuedCount: 1,
@@ -311,17 +321,7 @@ describe("pending input read boundary", () => {
           {},
         ].entries()) {
           const runId = index === 5 ? "external-run-".repeat(30) : `pending-display-run-${index}`;
-          const ref = createRpcSourceForTest(
-            {},
-            {
-              runId,
-              storeScope: captureRpcTargetForTest(scope).storeScope,
-              phase: "waiting",
-              ...scope,
-              ...overrides,
-            },
-          );
-          rpcSourceTesting.set(runId, ref);
+          const ref = queueSource(scope, runId, overrides);
           if (index === 3) {
             retireSessionControllerSourceCancellation(ref.input);
           } else if (index === 4) {
@@ -504,16 +504,7 @@ it.each(["chat.history", "chat.startup"] as const)(
       for (let index = 0; index < 21; index += 1) {
         retained.push(await inputs.stage(`retained-${index}`, { timestamp: index + 3 }));
       }
-      const retainedSource = createRpcSourceForTest(
-        {},
-        {
-          runId: "retained-0",
-          storeScope: captureRpcTargetForTest(scope).storeScope,
-          phase: "waiting",
-          ...scope,
-        },
-      );
-      rpcSourceTesting.set("retained-0", retainedSource);
+      const retainedSource = queueSource(scope, "retained-0");
       const retainedPage = await call({ inputRunIds: ["retained-0", "retained-1"], limit: 1 });
       expect([retainedPage.inputReceipts, retainedPage.inputConsumptions]).toEqual([
         [

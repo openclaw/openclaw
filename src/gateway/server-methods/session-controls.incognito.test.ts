@@ -161,7 +161,6 @@ afterEach(async () => {
   ingress.mockClear();
   resetSystemEventsForTest();
   vi.restoreAllMocks();
-  clearRuntimeConfigSnapshot();
 });
 afterAll(async () => {
   memorySessionActorOwners.reset();
