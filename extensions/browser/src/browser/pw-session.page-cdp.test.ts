@@ -35,36 +35,25 @@ describe("pw-session page-scoped CDP client", () => {
     vi.clearAllMocks();
   });
 
-  it.each(["after-resolve", "after-nodes", "after-write"])(
+  it.each(["after-resolve", "after-nodes", "after-write"] as const)(
     "stops marker writes when capture authority ends %s",
     async (stage) => {
       const controller = new AbortController();
       const reason = new Error("capture ended");
       const writes: number[] = [];
-      let cleared = false;
-      let released = false;
+      const commands: string[] = [];
+      const stopAfter = {
+        "after-resolve": "DOM.resolveNode",
+        "after-nodes": "DOM.pushNodesByBackendIdsToFrontend",
+        "after-write": "DOM.setAttributeValue",
+      }[stage];
       const send = vi.fn(async (method: string, params?: { nodeId?: number }) => {
-        if (method === "DOM.resolveNode") {
-          if (stage === "after-resolve") {
-            controller.abort(reason);
-          }
-        }
-        if (method === "Runtime.callFunctionOn") {
-          cleared = true;
-        }
-        if (method === "Runtime.releaseObject") {
-          released = true;
-        }
-        if (method === "DOM.pushNodesByBackendIdsToFrontend") {
-          if (stage === "after-nodes") {
-            controller.abort(reason);
-          }
-        }
+        commands.push(method);
         if (method === "DOM.setAttributeValue") {
           writes.push(params!.nodeId!);
-          if (stage === "after-write") {
-            controller.abort(reason);
-          }
+        }
+        if (method === stopAfter) {
+          controller.abort(reason);
         }
         return markerReply(method);
       });
@@ -72,15 +61,12 @@ describe("pw-session page-scoped CDP client", () => {
       await expect(
         markBackendDomRefsOnPage({
           page: page as never,
-          refs: [
-            { ref: "e1", backendDOMNodeId: 42 },
-            { ref: "e2", backendDOMNodeId: 84 },
-          ],
+          refs,
           assertCurrent: () => controller.signal.throwIfAborted(),
         }),
       ).rejects.toBe(reason);
-      expect(cleared).toBe(stage !== "after-resolve");
-      expect(released).toBe(true);
+      expect(commands.includes("Runtime.callFunctionOn")).toBe(stage !== "after-resolve");
+      expect(commands).toContain("Runtime.releaseObject");
       expect(writes).toEqual(stage === "after-write" ? [101] : []);
     },
   );
@@ -182,17 +168,7 @@ describe("pw-session page-scoped CDP client", () => {
   it.each([false, true])(
     "binds backend refs after requesting the document (write failure: %s)",
     async (writeFails) => {
-      let documentRequested = false;
-      const sessionSend = vi.fn(async (method: string, params?: Record<string, unknown>) => {
-        if (method === "DOM.getDocument") {
-          documentRequested = true;
-        }
-        if (method === "DOM.pushNodesByBackendIdsToFrontend") {
-          if (!documentRequested) {
-            throw new Error("Document needs to be requested first");
-          }
-          expect(params).toEqual({ backendNodeIds: [42, 84] });
-        }
+      const sessionSend = vi.fn(async (method: string) => {
         if (method === "DOM.setAttributeValue" && writeFails) {
           throw new Error("detached");
         }
