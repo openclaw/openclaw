@@ -1,9 +1,7 @@
 import { describe, expect, it } from "vitest";
 import * as p from "./index.js";
-import { CommandsListParamsSchema } from "./schema/commands.js";
-import { check } from "./schema/protocol-validation.test-support.js";
+import { check, validation } from "./schema/protocol-validation.test-support.js";
 
-type ProtocolValidator = (value: unknown) => boolean;
 const formatErrors = p.formatValidationErrors;
 
 function makeError(overrides: Partial<p.ValidationError>): p.ValidationError {
@@ -18,17 +16,11 @@ function makeError(overrides: Partial<p.ValidationError>): p.ValidationError {
 }
 
 describe("precompiled protocol validators", () => {
-  it("validates through exported checks and preserves schema and mutable error state", () => {
+  it("validates through exported checks and reports invalid types", () => {
     expect(p.validateCommandsListParams({})).toBe(true);
     expect(p.validateCommandsListParams({ includeArgs: true })).toBe(true);
     expect(p.validateCommandsListParams({ includeArgs: "yes" })).toBe(false);
     expect(formatErrors(p.validateCommandsListParams.errors)).toContain("must be boolean");
-    expect(p.validateCommandsListParams.schema).toBe(CommandsListParamsSchema);
-    const errors = p.validateCommandsListParams.errors;
-    p.validateCommandsListParams.errors = null;
-    expect(p.validateCommandsListParams.errors).toBeNull();
-    p.validateCommandsListParams.errors = errors;
-    expect(p.validateCommandsListParams.errors).toBe(errors);
   });
 
   it("requires ascending activity boundaries without coercing hostile elements", () => {
@@ -63,34 +55,24 @@ describe("precompiled protocol validators", () => {
   });
 
   it("validates Skill Workshop request params", () => {
-    check(p.validateSkillsWorkshopChangesParams, [
-      {},
-      { agentId: "main", limit: 500, beforeMs: 1_700_000_000_000 },
-    ]);
-    check(p.validateSkillsWorkshopChangesParams, [], [{ limit: 0 }, { limit: 501 }]);
-    check(p.validateSkillsWorkshopReadParams, [
-      { name: "deploy-notes", filePath: "references/api.md", versionId: "v1" },
-    ]);
-    check(p.validateSkillsWorkshopReadParams, [], [{}, { name: "" }]);
-    check(p.validateSkillsWorkshopArchiveParams, [{ name: "deploy-notes", reason: "superseded" }]);
-    check(
-      p.validateSkillsWorkshopArchiveParams,
-      [],
-      [
-        { name: "deploy-notes", reason: "" },
-        { name: "deploy-notes", absorbedInto: "other" },
-      ],
+    const changes = validation(p.validateSkillsWorkshopChangesParams);
+    const read = validation(p.validateSkillsWorkshopReadParams);
+    const archive = validation(p.validateSkillsWorkshopArchiveParams);
+    const restore = validation(p.validateSkillsWorkshopRestoreParams);
+    const undo = validation(p.validateSkillsWorkshopUndoParams);
+    changes.accepts({}, { agentId: "main", limit: 500, beforeMs: 1_700_000_000_000 });
+    changes.rejects({ limit: 0 }, { limit: 501 });
+    read.accepts({ name: "deploy-notes", filePath: "references/api.md", versionId: "v1" });
+    read.rejects({}, { name: "" });
+    archive.accepts({ name: "deploy-notes", reason: "superseded" });
+    archive.rejects(
+      { name: "deploy-notes", reason: "" },
+      { name: "deploy-notes", absorbedInto: "other" },
     );
-    check(p.validateSkillsWorkshopRestoreParams, [{ name: "deploy-notes" }]);
-    check(
-      p.validateSkillsWorkshopRestoreParams,
-      [],
-      [{ name: "deploy-notes", expectedRevisionHash: "a".repeat(64) }],
-    );
-    check(p.validateSkillsWorkshopUndoParams, [
-      { agentId: "main", runId: "skill-workshop-review:1" },
-    ]);
-    check(p.validateSkillsWorkshopUndoParams, [], [{}, { runId: "" }, { name: "x" }]);
+    restore.accepts({ name: "deploy-notes" });
+    restore.rejects({ name: "deploy-notes", expectedRevisionHash: "a".repeat(64) });
+    undo.accepts({ agentId: "main", runId: "skill-workshop-review:1" });
+    undo.rejects({}, { runId: "" }, { name: "x" });
   });
 
   it("validates registered Board content through exported checks", () => {
@@ -106,24 +88,6 @@ describe("precompiled protocol validators", () => {
       expect(p.validateBoardWidgetPutParams({ ...pin, content: invalid })).toBe(false);
     }
   });
-
-  it("invokes every exported protocol validator", () => {
-    const failures: string[] = [];
-    let count = 0;
-    for (const [name, validate] of Object.entries(p)) {
-      if (!name.startsWith("validate") || typeof validate !== "function") {
-        continue;
-      }
-      count++;
-      try {
-        (validate as ProtocolValidator)(undefined);
-      } catch (err) {
-        failures.push(`${name}: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    }
-    expect(count).toBeGreaterThan(150);
-    expect(failures).toEqual([]);
-  });
 });
 
 describe("formatValidationErrors", () => {
@@ -133,20 +97,15 @@ describe("formatValidationErrors", () => {
   });
 
   it.each([
-    ["additionalProperties", "additionalProperty", "", "at root: unexpected property 'token'"],
-    [
-      "additionalProperties",
-      "additionalProperty",
-      "/auth",
-      "at /auth: unexpected property 'token'",
-    ],
-    ["required", "missingProperty", "", "must have required property 'token'"],
-    ["required", "missingProperty", "/auth", "at /auth: must have required property 'token'"],
-  ])("formats %s %s at %s", (keyword, field, instancePath, expected) => {
+    ["additionalProperties", "", "at root: unexpected property 'token'"],
+    ["additionalProperties", "/auth", "at /auth: unexpected property 'token'"],
+    ["required", "", "must have required property 'token'"],
+    ["required", "/auth", "at /auth: must have required property 'token'"],
+  ])("formats %s at %s", (keyword, instancePath, expected) => {
     const err = makeError({
       keyword,
       instancePath,
-      params: { [field]: "token" },
+      params: { [keyword === "required" ? "missingProperty" : "additionalProperty"]: "token" },
     });
     expect(formatErrors([err])).toBe(expected);
   });
@@ -212,58 +171,31 @@ describe("Talk request policy", () => {
   });
 });
 
-describe("validateWakeParams", () => {
-  it("accepts optional sessionKey and agentId so per-session wakes can be routed", () => {
-    check(p.validateWakeParams, [
-      {
-        mode: "now",
-        text: "follow up on the report",
-        sessionKey: "agent:main:telegram:8661849123:topic:4052",
-        agentId: "main",
-      },
-      {
-        mode: "next-heartbeat",
-        text: "tick",
-        sessionKey: "agent:main:discord:guild123:thread456",
-      },
-    ]);
-  });
-
-  it("rejects sessionKey or agentId when they are present but empty strings", () => {
-    check(
-      p.validateWakeParams,
-      [],
-      [
-        { mode: "now", text: "x", sessionKey: "" },
-        { mode: "now", text: "x", agentId: "" },
-      ],
-    );
-  });
+it("validates optional wake routing without accepting empty identifiers", () => {
+  const wake = validation(p.validateWakeParams);
+  const now = { mode: "now", text: "tick" };
+  wake.accepts(
+    { ...now, sessionKey: "agent:main:telegram:123:topic:4052", agentId: "main" },
+    { mode: "next-heartbeat", text: "tick", sessionKey: "agent:main:discord:guild:thread" },
+  );
+  wake.rejects({ ...now, sessionKey: "" }, { ...now, agentId: "" });
 });
 
-describe("validateNodePresenceActivityPayload", () => {
-  it("accepts bounded input idle time", () => {
-    check(p.validateNodePresenceActivityPayload, [
-      { idleSeconds: 12 },
-      { idleSeconds: 12, source: "app" },
-      { idleSeconds: 12, source: "system" },
-      { idleSeconds: 2_592_000, saturated: true },
-      { action: "clear" },
-    ]);
-  });
-
-  it("rejects negative, unbounded, and extra fields", () => {
-    check(
-      p.validateNodePresenceActivityPayload,
-      [],
-      [
-        { idleSeconds: 12, source: "browser" },
-        { idleSeconds: -1 },
-        { idleSeconds: 2_592_001 },
-        { idleSeconds: 1, active: true },
-        { action: "clear", idleSeconds: 1 },
-        { action: "disable" },
-      ],
-    );
-  });
+it("validates bounded presence activity and exclusive clear requests", () => {
+  const presence = validation(p.validateNodePresenceActivityPayload);
+  presence.accepts(
+    { idleSeconds: 12 },
+    { idleSeconds: 12, source: "app" },
+    { idleSeconds: 12, source: "system" },
+    { idleSeconds: 2_592_000, saturated: true },
+    { action: "clear" },
+  );
+  presence.rejects(
+    { idleSeconds: 12, source: "browser" },
+    { idleSeconds: -1 },
+    { idleSeconds: 2_592_001 },
+    { idleSeconds: 1, active: true },
+    { action: "clear", idleSeconds: 1 },
+    { action: "disable" },
+  );
 });

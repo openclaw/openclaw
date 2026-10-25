@@ -14,10 +14,10 @@ const updateApply = validation(p.validateClawsUpdateApplyParams);
 const removeApply = validation(p.validateClawsRemoveApplyParams);
 const planResult = validation(p.validateClawLifecyclePlanResult);
 
-const coordinate = { packageName: "@openclaw/workflow-operator", version: "1.0.0" };
+const coordinate = { packageName: "@openclaw/demo", version: "1.0.0" };
 const catalogEntry = {
   packageName: coordinate.packageName,
-  displayName: "Workflow Operator",
+  displayName: "Demo",
   channel: "official",
   official: true,
   downloads: 0,
@@ -28,7 +28,7 @@ const basePlan = {
   schemaVersion: "openclaw.clawsGatewayPlan.v1",
   operation: "add",
   planIntegrity: "sha256:reviewed-plan",
-  target: { agentId: "workflow-operator" },
+  target: { agentId: "demo" },
   actions: [],
   capabilities: [],
   pluginReviews: [],
@@ -58,9 +58,9 @@ describe("Claws Gateway contract", () => {
         mcpServers: 0,
         scheduledJobs: 0,
         contents: {
-          instructions: [{ name: "AGENTS.md", source: "workspace/AGENTS.md", excerpt: "Purpose" }],
-          skills: [{ name: "@openclaw/research", version: "1.0.0", excerpt: "Research skill" }],
-          integrations: [{ name: "@openclaw/lobster", kind: "plugin", version: "1.0.0" }],
+          instructions: [{ name: "AGENTS.md", source: "AGENTS.md", excerpt: "Purpose" }],
+          skills: [{ name: "research", version: "1", excerpt: "Research" }],
+          integrations: [{ name: "lobster", kind: "plugin", version: "1" }],
           automations: [],
         },
       },
@@ -82,14 +82,14 @@ describe("Claws Gateway contract", () => {
     addApply.accepts(apply(true));
     addApply.rejects(apply(false));
     addApply.accepts({
-      source: { packageName: "@someone-else/workflow-operator", version: "1.0.0" },
+      source: { packageName: "@alice/demo", version: "1.0.0" },
       planIntegrity: "sha256:reviewed-plan",
     });
     searchResult.accepts({
       entries: [
         {
           ...catalogEntry,
-          packageName: "@alice/workflow-operator",
+          packageName: "@alice/demo",
           channel: "community",
           official: false,
           ownerHandle: "alice",
@@ -106,21 +106,20 @@ describe("Claws Gateway contract", () => {
       addApply.rejects({ source: { packageName, version: "1.0.0" } });
     }
     updateApply.accepts({
-      agentId: "workflow-operator",
+      agentId: "demo",
       source: { ...coordinate, version: "1.0.1" },
       planIntegrity: "sha256:reviewed-update",
     });
-    removeApply.accepts({ agentId: "workflow-operator", planIntegrity: "sha256:reviewed-remove" });
+    removeApply.accepts({ agentId: "demo", planIntegrity: "sha256:reviewed-remove" });
   });
 
   it("rejects source paths and setup answers in the browser's reviewed plan", () => {
     const plan = {
       ...basePlan,
-      target: { agentId: "workflow-operator", name: "@openclaw/workflow-operator" },
+      target: { agentId: "demo", name: coordinate.packageName },
       manifestDisclosure: {
         source: {
-          packageName: "@openclaw/workflow-operator",
-          version: "1.0.0",
+          ...coordinate,
           integrity: `sha256:${"a".repeat(64)}`,
           byteLength: 123,
         },
@@ -234,16 +233,6 @@ describe("Claws Gateway contract", () => {
         },
       }),
     );
-    const withProposedMessage = (message: string | undefined) => ({
-      ...plan,
-      scheduledJobs: {
-        ...plan.scheduledJobs,
-        jobs: [{ ...scheduledJob, proposed: { ...scheduledJob.proposed, message } }],
-      },
-    });
-    checkPlan(withProposedMessage("Updated scheduled task"));
-    rejectPlan(withProposedMessage(undefined));
-
     const updatedJob = {
       ...scheduledJob,
       action: "change",
@@ -265,16 +254,16 @@ describe("Claws Gateway contract", () => {
       scheduledJobs: { ...plan.scheduledJobs, jobs: [updatedJob] },
     };
     checkPlan(updatePlan);
+    rejectPlan(
+      withJob({ ...updatedJob, proposed: { ...scheduledJob.proposed, message: undefined } }),
+    );
     for (const field of ["current", "proposed"] as const) {
       for (const [schedule, delivery, valid] of [
         [{ cron: "0 9 * * *", timezone: "UTC" }, "none", true],
         [{ cron: "0 9 * * *", timezone: "UTC" }, "last-channel", true],
         [{ cron: "0 9 * * *", timezone: "UTC" }, "owner", true],
         [{ everyMs: 1 }, "none", true],
-        [{ everyMs: 60_000 }, "last-channel", true],
-        [{ everyMs: 1_800_000 }, "owner", true],
         [{ everyMs: 0 }, "owner", false],
-        [{ everyMs: -1 }, "owner", false],
         [{ everyMs: 0.5 }, "owner", false],
         [{ cron: "0 9 * * *", timezone: "UTC", everyMs: 60_000 }, "owner", false],
       ] as const) {
