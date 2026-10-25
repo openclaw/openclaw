@@ -166,24 +166,6 @@ describe("memory search config", () => {
       { inputType: "passage", queryInputType: "query", documentInputType: "document" },
     ],
     [
-      "literal query instruction inheritance",
-      { queryInstruction: "search_query: " },
-      undefined,
-      { queryInstruction: "search_query: " },
-    ],
-    [
-      "literal query instruction override",
-      { queryInstruction: "search_query: " },
-      { queryInstruction: "Instruct: Retrieve notes\nQuery: " },
-      { queryInstruction: "Instruct: Retrieve notes\nQuery: " },
-    ],
-    [
-      "empty query instruction suppresses inheritance",
-      { queryInstruction: "search_query: " },
-      { queryInstruction: "" },
-      { queryInstruction: undefined },
-    ],
-    [
       "session source exclusion",
       { provider: "openai", sources: ["memory", "sessions"] },
       { rememberAcrossConversations: false },
@@ -191,6 +173,15 @@ describe("memory search config", () => {
     ],
   ])("resolves %s", (_name, defaults, overrides, expected) => {
     expect(resolve(defaults, overrides, "personal")).toMatchObject(expected);
+  });
+
+  it.each([
+    [undefined, "search_query: "],
+    ["Instruct: Retrieve notes\nQuery: ", "Instruct: Retrieve notes\nQuery: "],
+    ["", undefined],
+  ])("preserves literal query instruction override %j", (queryInstruction, expected) => {
+    const resolved = resolve({ queryInstruction: "search_query: " }, { queryInstruction });
+    expect(resolved?.queryInstruction).toBe(expected);
   });
 
   it("resolves providers from the generic embedding provider registry", () => {
@@ -256,17 +247,10 @@ describe("memory search config", () => {
   });
 
   it("merges extra memory paths from defaults and overrides", () => {
-    const runbooks = { path: "../team-notes", pattern: "runbooks/**/*.md" };
-    const decisions = { path: "../team-notes", pattern: "decisions/**/*.md" };
-    const resolved = resolve(
-      { extraPaths: ["/shared/notes", " docs ", runbooks] },
-      { extraPaths: ["/shared/notes", { ...runbooks }, decisions] },
-    );
-    expect(resolved?.extraPaths).toEqual([
-      "/shared/notes",
-      "docs",
-      { path: "../team-notes", pattern: "runbooks/**/*.md" },
-      { path: "../team-notes", pattern: "decisions/**/*.md" },
+    // Pattern identity/normalization is owned by memory-host-sdk's config-utils tests.
+    expect(resolve({ extraPaths: ["shared"] }, { extraPaths: ["agent"] })?.extraPaths).toEqual([
+      "shared",
+      "agent",
     ]);
   });
 
