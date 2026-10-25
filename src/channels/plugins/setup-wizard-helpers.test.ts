@@ -65,10 +65,7 @@ const sectionDefaults = {
 
 function createPrompter(
   inputs: string[],
-  options: {
-    selects?: string[];
-    confirms?: boolean[];
-  } = {},
+  options: { selects?: string[]; confirms?: boolean[] } = {},
 ) {
   const confirms = [...(options.confirms ?? [])];
   const texts = [...inputs];
@@ -199,56 +196,31 @@ describe("setup wizard helpers", () => {
       "Slack channels",
     );
   });
-  it.each([
-    {
-      name: "disabled named account",
-      channel: "slack",
+  it.each([false, true])("patches accounts with promotion=%s without losing config", (promote) => {
+    const channel = promote ? "telegram" : "slack";
+    const section = promote
+      ? { enabled: true, ...legacyTelegram }
+      : { enabled: true, accounts: { work: { enabled: false, botToken: "old-bot" } } };
+    const expected = {
+      enabled: true,
+      accounts: promote
+        ? {
+            default: structuredClone(legacyTelegram),
+            work: { enabled: true, botToken: "work-token" },
+          }
+        : { work: { enabled: false, botToken: "new-bot", appToken: "new-app" } },
+    };
+    const cfg: OpenClawConfig = { channels: { [channel]: section } };
+    const next = setup.patchChannelConfigForAccount({
+      cfg,
+      channel,
       accountId: "work",
-      section: { enabled: true, accounts: { work: { enabled: false, botToken: "old-bot" } } },
-      patch: { botToken: "new-bot", appToken: "new-app" },
-      expected: {
-        enabled: true,
-        accounts: { work: { enabled: false, botToken: "new-bot", appToken: "new-app" } },
-      },
-    },
-    {
-      name: "single-account promotion",
-      channel: "telegram",
-      accountId: "work",
-      section: { enabled: true, ...legacyTelegram },
-      patch: { botToken: "work-token" },
-      setupSurface: telegramSetupSurface,
-      expected: {
-        enabled: true,
-        accounts: {
-          default: structuredClone(legacyTelegram),
-          work: { enabled: true, botToken: "work-token" },
-        },
-      },
-    },
-  ] satisfies Array<{
-    name: string;
-    channel: string;
-    accountId: string;
-    section: Record<string, unknown>;
-    patch: Record<string, unknown>;
-    setupSurface?: ChannelSetupAdapter;
-    expected: Record<string, unknown>;
-  }>)(
-    "patches $name without losing existing config",
-    ({ channel, accountId, section, patch, setupSurface, expected }) => {
-      const cfg: OpenClawConfig = { channels: { [channel]: section } };
-      const next = setup.patchChannelConfigForAccount({
-        cfg,
-        channel,
-        accountId,
-        patch,
-        setupSurface,
-      });
-      expect(next.channels?.[channel]).toEqual(expected);
-      expect(cfg.channels?.[channel]).toEqual(section);
-    },
-  );
+      patch: promote ? { botToken: "work-token" } : { botToken: "new-bot", appToken: "new-app" },
+      setupSurface: promote ? telegramSetupSurface : undefined,
+    });
+    expect(next.channels?.[channel]).toEqual(expected);
+    expect(cfg.channels?.[channel]).toEqual(section);
+  });
   it("updates enabled and keeps existing channel fields", () => {
     const cfg: OpenClawConfig = { channels: { discord: { enabled: true, token: "abc" } } };
 

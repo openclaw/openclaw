@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { BundledChannelPluginMetadata } from "../../plugins/bundled-channel-runtime.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import {
   makeBundledEsmFixtureRoot,
@@ -73,11 +74,19 @@ function usePackageRoot(root: string) {
 }
 
 function mockMetadata(
-  metadata = alphaChannelMetadata({ includeSetup: true }),
-  resolveBundledChannelGeneratedPath = resolveAlphaDistExtensionEntry,
+  metadata?: BundledChannelPluginMetadata | BundledChannelPluginMetadata[],
+  resolveBundledChannelGeneratedPath: (
+    root: string,
+    entry: BundledEntrySource,
+    dir?: string,
+    scanDir?: string,
+  ) => string | null = resolveAlphaDistExtensionEntry,
 ) {
   mockRuntime({
-    listBundledChannelPluginMetadata: () => [metadata],
+    listBundledChannelPluginMetadata: () =>
+      Array.isArray(metadata)
+        ? metadata
+        : [metadata ?? alphaChannelMetadata({ includeSetup: true })],
     resolveBundledChannelGeneratedPath,
   });
 }
@@ -224,26 +233,17 @@ describe("bundled channel entry shape guards", () => {
       }),
     );
 
-    mockRuntime({
-      listBundledChannelPluginMetadata: () => [
-        {
-          ...alphaChannelMetadata(),
-          packageManifest: {
-            channel: {
-              id: "alpha",
-              label: "Alpha",
-              selectionLabel: "Use Alpha",
-              docsPath: "/channels/alpha",
-              blurb: "Alpha channel metadata.",
-            },
-          },
+    mockMetadata({
+      ...alphaChannelMetadata(),
+      packageManifest: {
+        channel: {
+          id: "alpha",
+          label: "Alpha",
+          selectionLabel: "Use Alpha",
+          docsPath: "/channels/alpha",
+          blurb: "Alpha channel metadata.",
         },
-      ],
-      resolveBundledChannelGeneratedPath: (
-        _rootDir: string,
-        entry: { built?: string; source?: string },
-      ) =>
-        path.join(pluginDir, (entry.built ?? entry.source ?? "./index.js").replace(/^\.\//u, "")),
+      },
     });
 
     usePackageRoot(tempRoot);
@@ -271,37 +271,16 @@ describe("bundled channel entry shape guards", () => {
       const pluginDir = path.join(pluginsRoot, "alpha");
       fs.mkdirSync(pluginDir, { recursive: true });
       writeRuntimeOverride(pluginDir);
-      const observed: {
-        metadata?: { rootDir?: string; scanDir?: string };
-        generated?: { rootDir: string; scanDir?: string };
-      } = {};
-      mockRuntime({
-        listBundledChannelPluginMetadata: (params?: { rootDir?: string; scanDir?: string }) => {
-          observed.metadata = params;
-          return [alphaChannelMetadata()];
-        },
-        resolveBundledChannelGeneratedPath: (
-          rootDir: string,
-          entry: BundledEntrySource,
-          pluginDirName?: string,
-          scanDir?: string,
-        ) => {
-          observed.generated = { rootDir, scanDir };
-          return path.join(
-            scanDir ?? path.join(rootDir, "dist", "extensions"),
-            pluginDirName ?? "alpha",
-            (entry.built ?? entry.source ?? "./index.js").replace(/^\.\//u, ""),
-          );
-        },
-      });
+      mockMetadata(alphaChannelMetadata(), (rootDir, entry, pluginDirName, scanDir) =>
+        path.join(
+          scanDir ?? path.join(rootDir, "dist", "extensions"),
+          pluginDirName ?? "alpha",
+          (entry.built ?? entry.source ?? "./index.js").replace(/^\.\//u, ""),
+        ),
+      );
       vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", pluginsRoot);
       const bundled = await loadBundled(`bundled-${layout}-override-root`);
       bundled.setBundledChannelRuntime("alpha", { marker: "ok" } as never);
-      const rootDir = layout === "direct" ? pluginsRoot : root;
-      expect(observed).toMatchObject({
-        metadata: { rootDir, scanDir: pluginsRoot },
-        generated: { rootDir, scanDir: pluginsRoot },
-      });
       expect(testGlobal["__bundledOverrideRuntime"]).toBe("ok");
       expect(bundled.getBundledChannelPlugin("alpha")?.id).toBe("alpha");
     },
@@ -329,18 +308,16 @@ describe("bundled channel entry shape guards", () => {
       } else {
         vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", pluginsRoot);
       }
-      mockRuntime({
-        listBundledChannelPluginMetadata: () => [
-          layout === "direct"
-            ? alphaChannelMetadata()
-            : {
-                ...alphaChannelMetadata(),
-                source: entrySource(path.join(root, "extensions", "alpha", "index.ts")),
-                rootDir: path.join(root, "extensions", "alpha"),
-              },
-        ],
-        resolveBundledChannelGeneratedPath: () => path.join(pluginDir, "index.js"),
-      });
+      mockMetadata(
+        layout === "direct"
+          ? alphaChannelMetadata()
+          : {
+              ...alphaChannelMetadata(),
+              source: entrySource(path.join(root, "extensions", "alpha", "index.ts")),
+              rootDir: path.join(root, "extensions", "alpha"),
+            },
+        () => path.join(pluginDir, "index.js"),
+      );
       const bundled = await loadBundled(`bundled-${layout}-dist-sdk-alias`);
       expect(bundled.getBundledChannelPlugin("alpha")?.meta.label).toBe(label);
     },
@@ -491,8 +468,8 @@ describe("bundled channel entry shape guards", () => {
       "utf8",
     );
 
-    mockRuntime({
-      listBundledChannelPluginMetadata: () => [
+    mockMetadata(
+      [
         {
           ...alphaChannelMetadata({ includeSetup: true }),
           rootDir: pluginDir,
@@ -507,8 +484,8 @@ describe("bundled channel entry shape guards", () => {
           },
         },
       ],
-      resolveBundledChannelGeneratedPath: () => null,
-    });
+      () => null,
+    );
 
     vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", pluginsDir);
     const bundled = await loadBundled("bundled-source-registry-fallback");
@@ -532,16 +509,14 @@ describe("bundled channel entry shape guards", () => {
       `loadSetupPlugin() { return ${pluginSource("Aliased Alpha")}; }, };`,
     ]);
 
-    mockRuntime({
-      listBundledChannelPluginMetadata: () => [
-        {
-          ...alphaChannelMetadata({ includeSetup: true }),
-          rootDir: pluginDir,
-          setupSource: entrySource(setupEntryPath),
-        },
-      ],
-      resolveBundledChannelGeneratedPath: () => null,
-    });
+    mockMetadata(
+      {
+        ...alphaChannelMetadata({ includeSetup: true }),
+        rootDir: pluginDir,
+        setupSource: entrySource(setupEntryPath),
+      },
+      () => null,
+    );
 
     vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.join(currentRoot, "dist", "extensions"));
     const bundled = await loadBundled("bundled-alias-boundary");

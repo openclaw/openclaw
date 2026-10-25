@@ -178,37 +178,22 @@ describe("buildChannelAccountSnapshotFromAccount", () => {
     expect(account.baseUrl).toBe(rawBaseUrl);
   });
 
-  it("uses descriptor linkage when no live link resolver exists", async () => {
-    await expect(
-      snapshotAccount(
-        { enabled: true, configured: true },
-        {
-          describeAccount: () => ({ accountId: "default", configured: true, linked: false }),
-        },
-      ),
-    ).resolves.toMatchObject({
-      configured: true,
-      linked: false,
-      running: false,
-      stateReason: "not linked",
-      lastError: null,
-    });
-  });
-
-  it("does not inspect linkage when the account is unconfigured", async () => {
-    const isLinked = vi.fn(() => {
-      throw new Error("linkage unavailable");
-    });
-    await expect(
-      snapshotAccount(
-        { enabled: true, configured: false },
-        { isConfigured: () => false, isLinked },
-      ),
-    ).resolves.toMatchObject({
-      configured: false,
-      stateReason: "not configured",
-      lastError: null,
-    });
-    expect(isLinked).not.toHaveBeenCalled();
-  });
+  it.each([true, false])(
+    "resolves descriptor or unconfigured linkage: configured=%s",
+    async (configured) => {
+      const isLinked = vi.fn(() => {
+        throw new Error("linkage unavailable");
+      });
+      const config = configured
+        ? { describeAccount: () => ({ accountId: "default", configured, linked: false }) }
+        : { isConfigured: () => false, isLinked };
+      await expect(snapshotAccount({ enabled: true, configured }, config)).resolves.toMatchObject({
+        configured,
+        ...(configured ? { linked: false, running: false } : {}),
+        stateReason: configured ? "not linked" : "not configured",
+        lastError: null,
+      });
+      expect(isLinked).not.toHaveBeenCalled();
+    },
+  );
 });

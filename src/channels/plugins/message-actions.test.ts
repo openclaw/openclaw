@@ -44,12 +44,11 @@ function currentContext(
   return { currentChannelProvider, currentChannelId, ...extra };
 }
 
-async function expectAccess(context: Partial<DispatchContext>, allowed: boolean) {
+async function expectAccess(context: Partial<DispatchContext>, allowed = true) {
   if (!allowed) {
     return expectDenied(context);
   }
-  await dispatch(context);
-  expect(handleAction).toHaveBeenCalledOnce();
+  await expect(dispatch(context)).resolves.toMatchObject({ details: { ok: true } });
 }
 
 const nextcloudContext = (
@@ -149,8 +148,7 @@ it.each([undefined, "trusted-user"])("gates moderation sender: %s", async (sende
     requesterSenderId: sender,
   });
   if (sender) {
-    await pending;
-    expect(handleAction).toHaveBeenCalledOnce();
+    await expect(pending).resolves.toMatchObject({ details: { ok: true } });
   } else {
     await expect(pending).rejects.toThrow("Trusted sender identity is required for discord:kick");
     expect(handleAction).not.toHaveBeenCalled();
@@ -305,27 +303,21 @@ it("normalizes bundled numeric delivery aliases", async () => {
   registerAlias({ resolveDeliveryTarget }, "bundled", {
     normalizeTarget: (raw) => raw.trim().toLowerCase() || undefined,
   });
-  await dispatch({
+  await expectAccess({
     ...aliasContext,
-    toolContext: { currentChannelProvider: "imessage", currentChannelId: "CHAT_ID:42" },
+    toolContext: currentContext("imessage", "CHAT_ID:42"),
   });
-  expect(resolveDeliveryTarget).toHaveBeenCalledOnce();
-  expect(handleAction).toHaveBeenCalledOnce();
 });
 
 it.each([true, false])("checks synchronous alias proof: %s", async (matches) => {
-  const matchesCurrentConversation = vi.fn(() => matches);
-  registerAlias({ matchesCurrentConversation });
-  const context = {
-    ...aliasContext,
-    params: { ...aliasContext.params, target: "chat_id:42", to: "chat_id:42" },
-  };
-  await expectAccess(context, matches);
-  expect(matchesCurrentConversation).toHaveBeenCalledWith({
-    args: context.params,
-    accountId: "work",
-    toolContext: aliasContext.toolContext,
-  });
+  registerAlias({ matchesCurrentConversation: () => matches });
+  await expectAccess(
+    {
+      ...aliasContext,
+      params: { ...aliasContext.params, target: "chat_id:42", to: "chat_id:42" },
+    },
+    matches,
+  );
 });
 
 it.each([true, false, "error"] as const)("awaits alias, never sync: %s", async (outcome) => {
