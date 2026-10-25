@@ -231,7 +231,7 @@ describe("elevenlabs speech provider", () => {
   });
 
   it("forwards pronunciation dictionary locators through streaming synthesis", async () => {
-    fetchMock.mockResolvedValue(
+    mockResponse(
       new Response(
         new ReadableStream<Uint8Array>({
           start(controller) {
