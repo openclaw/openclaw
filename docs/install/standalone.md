@@ -44,6 +44,11 @@ The manifest reads the OpenClaw version and commit from `dist/build-info.json`.
 Rerun `pnpm build` after source changes; changing the checkout alone does not update
 the identity of an existing runtime build.
 
+Bundling runs from the temporary staging root so generated chunk names and module
+paths do not depend on the checkout or output directory. Reproducibility checks
+must still pin the source, dependency tree, compiler, target, and build timestamp,
+and compare unsigned outputs before signing.
+
 On macOS, the builder uses `scripts/build-mac-sqlite.sh` and the pin in
 `scripts/lib/sqlite-macos.json` to include `runtime/lib/libsqlite3.dylib` for the
 target architecture. It respects `OPENCLAW_MACOS_DEPLOYMENT_TARGET` (default
@@ -204,7 +209,10 @@ of identical prepared inputs share that identity; changing compiled code or nati
 resources invalidates it.
 For reproducible preparation, set the same `OPENCLAW_BUILD_TIMESTAMP` when running
 `pnpm build` in each checkout. Local cache freshness stamps are omitted from the
-standalone runtime, and retained plugin-loader bytes omit staging directory names.
+standalone runtime. Retained plugin-loader bytes and free CommonJS `__dirname` /
+`__filename` references use relocated runtime paths instead of staging directory
+names. Native package routing metadata is serialized independently of module
+discovery order.
 Compare executable hashes before timestamped signing;
 a matching build identity alone does not prove byte-identical executables.
 

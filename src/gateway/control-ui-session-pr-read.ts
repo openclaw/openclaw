@@ -162,7 +162,7 @@ function withControlUiTaskPrTarget(
   target: ControlUiSessionPrTarget | undefined,
   projection: SessionRowProjection,
   root: EntryRow,
-  getAllows: () => (row: EntryRow) => boolean,
+  getAllows: () => ReturnType<typeof createSessionListEntryFilter>,
   ownerProfileId?: string,
 ): ControlUiSessionPrTarget | undefined {
   if (!target || root.entry.incognito || isIncognitoSessionKey(root.key)) {
@@ -395,10 +395,7 @@ export function createControlUiSessionPrRead(params: {
         projectedTarget,
         projection,
         current,
-        () => {
-          const filter = createSessionListEntryFilter({ cfg: getRuntimeConfig(), client });
-          return (row) => filter?.(row.key, row.entry) !== false;
-        },
+        () => createSessionListEntryFilter({ cfg: getRuntimeConfig(), client }),
         actorProfile,
       );
       return target

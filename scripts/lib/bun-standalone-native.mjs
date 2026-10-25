@@ -1092,6 +1092,7 @@ export function createStandaloneNativeAdapter({
         }
         return dependencies;
       }
+      // Keep longest-prefix lookup while making equal-length owners independent of discovery.
       const owners = [...metadataOwners]
         .map((owner) => ({
           original: owner.original,
@@ -1118,11 +1119,19 @@ export function createStandaloneNativeAdapter({
             }),
           ),
         }))
-        .toSorted((a, b) => b.original.length - a.original.length);
+        .toSorted(
+          (a, b) =>
+            b.original.length - a.original.length ||
+            (a.original < b.original ? -1 : a.original > b.original ? 1 : 0),
+        );
       const table = {
         owners,
         // Hoisted copies share emitted bytes but retain every original resolution path.
-        files: Object.fromEntries(files.map((file) => [file.source, file.destination])),
+        files: Object.fromEntries(
+          files
+            .toSorted((a, b) => (a.source < b.source ? -1 : a.source > b.source ? 1 : 0))
+            .map((file) => [file.source, file.destination]),
+        ),
       };
       return {
         files: [...emittedFiles.values()],

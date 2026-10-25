@@ -3,7 +3,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import type { ClientIdentityRecord } from "./client-credential-operations.js";
+import {
+  performClientCredentialOperation,
+  type ClientIdentityRecord,
+} from "./client-credential-operations.js";
 import { resolveClientCredentialStorePath } from "./client-credential-paths.js";
 import { writeClientCredentialReceipt } from "./client-credential-readiness.js";
 import {
@@ -22,6 +25,7 @@ import {
   storedDeviceIdentityToRow,
 } from "./device-identity-material.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { thrownBy } from "./sqlite-maintenance-fixture.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 function fixture() {
@@ -177,13 +181,7 @@ it("retains exclusive custody across commits and rejects overlapping local owner
     expect.objectContaining({ name: "ClientCredentialBusyError" }),
   );
   using other = openNodeSqliteDatabase(resolveClientCredentialStorePath(env), { timeout: 0 });
-  let failure: unknown;
-  try {
-    other.exec("BEGIN IMMEDIATE");
-  } catch (error) {
-    failure = error;
-  }
-  expect(isClientCredentialBusyError(failure)).toBe(true);
+  expect(isClientCredentialBusyError(thrownBy(() => other.exec("BEGIN IMMEDIATE")))).toBe(true);
   expect(owner!.run({ kind: "identity.read", identity_key: identity.identity_key })).toEqual({
     kind: "identity",
     identity,
@@ -300,14 +298,7 @@ it("requires Doctor for pending legacy files while an existing canonical identit
   );
   expect(fs.existsSync(resolveClientCredentialStorePath(env))).toBe(false);
   withClientCredentialStore(env, true, (db) => {
-    db.prepare("INSERT INTO device_identities VALUES (?,?,?,?,?,?)").run(
-      identity.identity_key,
-      identity.device_id,
-      identity.public_key_pem,
-      identity.private_key_pem,
-      identity.created_at_ms,
-      identity.updated_at_ms,
-    );
+    performClientCredentialOperation(db, { kind: "identity.create", identity }, root);
     writeClientCredentialReceipt(db, emptyClientCredentialReceipt(), "complete");
   });
   expect(run({ kind: "identity.read", identity_key: "node" })).toEqual({

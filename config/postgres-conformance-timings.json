@@ -1,19 +1,19 @@
 {
   "version": 2,
-  "source": "18 successful natural PostgreSQL conformance jobs from runs 39539608388, 39543337003, 39543758828, 39544419189, 39550194897 and 39552806104. File seconds are the median of the latest two observed occupied-slot estimates from timestamped case intervals (including imports/hooks); configurations run sequentially with three file workers. Shared preparation and configuration overhead use observed medians. Calibration includes 39550194897; this is not a holdout forecast. These measurements price work and never select test inventory.",
+  "source": "Six successful PostgreSQL conformance jobs from scheduled main runs 40173153410 and 40177240126 (2026-10-25). File seconds are the median of up to two observed occupied-slot estimates from timestamped case intervals, including imports/hooks; configurations run sequentially with three file workers. Preparation is the observed median from job start to first Vitest process, split by runtime preparation; configuration overhead is the median residual after occupied file slots, clamped at zero for timestamp rounding. This is calibration, not a holdout forecast. Unobserved existing files retain prior weights; new targets retain the allocator default. Measurements price work and never select test inventory.",
   "workers": 3,
   "preparationSeconds": {
-    "base": 35.689,
-    "runtime": 169.053
+    "base": 140.089,
+    "runtime": 287.058
   },
   "groupSeconds": {
-    "commands": 2.188,
-    "extension-database-workers": 3.654,
-    "infra": 1.993,
-    "runtime-config": 1.231,
-    "unit": 0.972,
-    "unit-fast": 1.086,
-    "unit-fast-isolated": 1.033
+    "commands": 0.735,
+    "extension-database-workers": 0.187,
+    "infra": 0.344,
+    "runtime-config": 0.076,
+    "unit": 0,
+    "unit-fast": 0,
+    "unit-fast-isolated": 0.001
   },
   "runtimeTargets": [
     "src/infra/database-engine/cli-oneshot.postgres.test.ts",
@@ -22,135 +22,127 @@
   "files": {
     "extensions/logbook/src/postgres-store.test.ts": {
       "group": "extension-database-workers",
-      "seconds": 2.18
+      "seconds": 6.111
     },
     "extensions/matrix/src/matrix/account-state.postgres.test.ts": {
       "group": "extension-database-workers:matrix",
-      "seconds": 30.438
+      "seconds": 29.551
     },
     "extensions/memory-core/src/memory-forget.postgres.test.ts": {
       "group": "extension-database-workers",
-      "seconds": 2.201
+      "seconds": 6.583
+    },
+    "extensions/memory-core/src/memory/manager-duplicate-chunks.postgres.test.ts": {
+      "group": "extension-database-workers",
+      "seconds": 38.471
+    },
+    "extensions/memory-core/src/memory/manager-embedding-cache-rebuild.postgres.test.ts": {
+      "group": "extension-database-workers",
+      "seconds": 29.495
     },
     "extensions/memory-core/src/memory/manager-embedding-cache.postgres.test.ts": {
       "group": "extension-database-workers",
-      "seconds": 7.093
+      "seconds": 4.413
     },
     "extensions/memory-core/src/memory/manager-publication.postgres.test.ts": {
       "group": "extension-database-workers",
-      "seconds": 17.83
+      "seconds": 28.346
     },
     "extensions/memory-core/src/memory/manager-search.postgres.test.ts": {
       "group": "extension-database-workers",
-      "seconds": 9.842
+      "seconds": 15.779
     },
     "extensions/memory-core/src/memory/manager-source-index-kernel.postgres.test.ts": {
       "group": "extension-database-workers",
-      "seconds": 8.279
+      "seconds": 13.102
     },
     "extensions/memory-core/src/standing-intents.postgres.test.ts": {
       "group": "extension-database-workers",
-      "seconds": 13.115
+      "seconds": 10.401
     },
     "extensions/memory-core/src/tools.postgres.test.ts": {
       "group": "extension-database-workers",
-      "seconds": 23.603
+      "seconds": 46.005
     },
     "extensions/team-reports/src/postgres-store.test.ts": {
       "group": "extension-database-workers",
-      "seconds": 2.682
+      "seconds": 1.801
     },
     "extensions/workboard/backup-resources.test.ts": {
       "group": "extension-database-workers",
-      "seconds": 2.035
+      "seconds": 3.214
     },
     "extensions/workboard/doctor-contract-api.test.ts": {
       "group": "extension-database-workers",
-      "seconds": 6.113
+      "seconds": 6.198
     },
     "extensions/workboard/index.lifecycle.test.ts": {
       "group": "extension-database-workers",
-      "seconds": 10.385
+      "seconds": 19.445
     },
     "extensions/workboard/index.test.ts": {
       "group": "extension-database-workers",
-      "seconds": 4.068
+      "seconds": 4.085
     },
     "extensions/workboard/src/card-redaction.test.ts": {
       "group": "extension-database-workers",
-      "seconds": 1.141
+      "seconds": 0.543
     },
     "extensions/workboard/src/change-events.test.ts": {
       "group": "extension-database-workers",
-      "seconds": 1.182
+      "seconds": 1.365
     },
     "extensions/workboard/src/cli.test.ts": {
       "group": "extension-database-workers",
-      "seconds": 7.846
+      "seconds": 18.817
     },
     "extensions/workboard/src/command.test.ts": {
       "group": "extension-database-workers",
-      "seconds": 13.762
+      "seconds": 16.107
     },
     "extensions/workboard/src/dispatcher-compensation.test.ts": {
       "group": "extension-database-workers",
-      "seconds": 7.656
-    },
-    "extensions/workboard/src/dispatcher-ownership.test.ts": {
-      "group": "extension-database-workers",
-      "seconds": 13.386
-    },
-    "extensions/workboard/src/dispatcher.races.test.ts": {
-      "group": "extension-database-workers",
-      "seconds": 10.165
+      "seconds": 6.61
     },
     "extensions/workboard/src/dispatcher.test.ts": {
       "group": "extension-database-workers",
-      "seconds": 16.89
-    },
-    "extensions/workboard/src/dispatcher.workspace-diagnostics.test.ts": {
-      "group": "extension-database-workers",
-      "seconds": 7.363
-    },
-    "extensions/workboard/src/gateway.cards-list.test.ts": {
-      "group": "extension-database-workers",
-      "seconds": 10.275
+      "seconds": 62.612
     },
     "extensions/workboard/src/gateway.sessions-board-pagination.test.ts": {
       "group": "extension-database-workers",
-      "seconds": 2.894
+      "seconds": 21.983
     },
     "extensions/workboard/src/gateway.test.ts": {
       "group": "extension-database-workers",
-      "seconds": 45.741
+      "seconds": 79.781
     },
     "extensions/workboard/src/lifecycle-sync.archived-session.test.ts": {
       "group": "extension-database-workers",
-      "seconds": 5.273
+      "seconds": 3.768
     },
     "extensions/workboard/src/lifecycle-sync.cleanup-recovery.test.ts": {
       "group": "extension-database-workers",
-      "seconds": 9.661
+      "seconds": 13.262
     },
     "extensions/workboard/src/lifecycle-sync.restart.test.ts": {
       "group": "extension-database-workers",
-      "seconds": 10.838
+      "seconds": 33.472
     },
     "extensions/workboard/src/lifecycle-sync.test.ts": {
       "group": "extension-database-workers",
-      "seconds": 17.577
+      "seconds": 35.341
     },
     "extensions/workboard/src/postgres-store.test.ts": {
       "group": "extension-database-workers",
-      "seconds": 16.489
+      "seconds": 33.824
     },
     "extensions/workboard/src/sessions-board.test.ts": {
       "group": "extension-database-workers",
-      "seconds": 20.767
+      "seconds": 28.329
     },
     "extensions/workboard/src/sqlite-store-batch-read.test.ts": {
       "group": "extension-database-workers",
-      "seconds": 9.394
+      "seconds": 16.064
     },
     "extensions/workboard/src/sqlite-store-policy.test.ts": {
       "group": "extension-database-workers",
@@ -158,35 +150,31 @@
     },
     "extensions/workboard/src/sqlite-store.lifecycle.test.ts": {
       "group": "extension-database-workers",
-      "seconds": 3.079
+      "seconds": 2.124
     },
     "extensions/workboard/src/sqlite-store.recovery.test.ts": {
       "group": "extension-database-workers",
-      "seconds": 4.356
-    },
-    "extensions/workboard/src/sqlite-store.schema.test.ts": {
-      "group": "extension-database-workers",
-      "seconds": 5.666
+      "seconds": 4.372
     },
     "extensions/workboard/src/store-lifecycle.test.ts": {
       "group": "extension-database-workers",
-      "seconds": 8.711
+      "seconds": 17.577
     },
     "extensions/workboard/src/store-promote-completed.test.ts": {
       "group": "extension-database-workers",
-      "seconds": 7.855
+      "seconds": 9.904
     },
     "extensions/workboard/src/store-subscription-scope.test.ts": {
       "group": "extension-database-workers",
-      "seconds": 2.764
+      "seconds": 4.622
     },
     "extensions/workboard/src/store.attempts.test.ts": {
       "group": "extension-database-workers",
-      "seconds": 4.797
+      "seconds": 14.832
     },
     "extensions/workboard/src/store.dispatch-comment-limit.test.ts": {
       "group": "extension-database-workers",
-      "seconds": 4.871
+      "seconds": 16.276
     },
     "extensions/workboard/src/store.scoped-list.test.ts": {
       "group": "extension-database-workers",
@@ -194,15 +182,15 @@
     },
     "extensions/workboard/src/store.sessions-board.test.ts": {
       "group": "extension-database-workers",
-      "seconds": 9.481
+      "seconds": 8.845
     },
     "extensions/workboard/src/store.test.ts": {
       "group": "extension-database-workers",
-      "seconds": 43.021
+      "seconds": 81.069
     },
     "extensions/workboard/src/tools.test.ts": {
       "group": "extension-database-workers",
-      "seconds": 21.986
+      "seconds": 18.235
     },
     "extensions/workboard/src/tools.upload-policy.test.ts": {
       "group": "extension-database-workers",
@@ -210,383 +198,555 @@
     },
     "src/commands/doctor-database-diagnostics.postgres.test.ts": {
       "group": "commands",
-      "seconds": 190.866
+      "seconds": 109.005
+    },
+    "src/commands/startup-client-credentials.postgres.test.ts": {
+      "group": "commands",
+      "seconds": 354.472
+    },
+    "src/config/sessions/session-accessor.sqlite-lifecycle-artifacts.postgres.test.ts": {
+      "group": "infra",
+      "seconds": 12.432
     },
     "src/config/sessions/session-accessor.sqlite-read-hold.postgres.test.ts": {
       "group": "runtime-config",
-      "seconds": 19.861
+      "seconds": 18.925
     },
     "src/config/sessions/session-turn-resident.postgres.test.ts": {
       "group": "runtime-config",
-      "seconds": 17.686
+      "seconds": 3.859
     },
     "src/gateway/server-database-engine.postgres.test.ts": {
       "group": "infra",
-      "seconds": 55.09
+      "seconds": 53.285
     },
     "src/infra/client-credential-migration.postgres.test.ts": {
       "group": "infra",
-      "seconds": 24.966
+      "seconds": 34.45
     },
     "src/infra/client-credential-update.test.ts": {
       "group": "infra",
-      "seconds": 220.371
+      "seconds": 300.13
+    },
+    "src/infra/database-engine/acp-retention.conformance.test.ts": {
+      "group": "infra",
+      "seconds": 8.092
     },
     "src/infra/database-engine/adapters.test.ts": {
       "group": "infra",
-      "seconds": 6.895
+      "seconds": 1.228
     },
     "src/infra/database-engine/admission-scope.test.ts": {
       "group": "unit-fast",
-      "seconds": 5.444
+      "seconds": 4.66
     },
     "src/infra/database-engine/admitted-diagnostics.test.ts": {
       "group": "infra",
-      "seconds": 1.214
+      "seconds": 1.452
+    },
+    "src/infra/database-engine/agent-opening-refusal.conformance.test.ts": {
+      "group": "infra",
+      "seconds": 12.023
     },
     "src/infra/database-engine/agent-port-descriptor.test.ts": {
       "group": "infra",
-      "seconds": 8.925
+      "seconds": 15.878
     },
     "src/infra/database-engine/agent-port.postgres.test.ts": {
       "group": "infra",
-      "seconds": 76.233
+      "seconds": 120.938
     },
     "src/infra/database-engine/agent-port.test.ts": {
       "group": "infra",
-      "seconds": 8.099
+      "seconds": 10.103
+    },
+    "src/infra/database-engine/apns-deletion.conformance.test.ts": {
+      "group": "infra",
+      "seconds": 11.388
     },
     "src/infra/database-engine/archive-restore.postgres.test.ts": {
       "group": "infra",
-      "seconds": 166.676
+      "seconds": 208.913
     },
     "src/infra/database-engine/audit-retention.conformance.test.ts": {
       "group": "infra",
-      "seconds": 22.879
+      "seconds": 20.38
+    },
+    "src/infra/database-engine/auth-native-load.postgres.test.ts": {
+      "group": "infra",
+      "seconds": 4.716
+    },
+    "src/infra/database-engine/backup-runs.conformance.test.ts": {
+      "group": "infra",
+      "seconds": 3.899
     },
     "src/infra/database-engine/backup.test.ts": {
       "group": "infra",
-      "seconds": 51.553
+      "seconds": 51.562
+    },
+    "src/infra/database-engine/bridge-prestart.test.ts": {
+      "group": "infra",
+      "seconds": 6.341
     },
     "src/infra/database-engine/cli-oneshot.postgres.test.ts": {
       "group": "infra",
-      "seconds": 227.79
+      "seconds": 264.131
     },
     "src/infra/database-engine/cli-owner.conformance.test.ts": {
       "group": "infra",
-      "seconds": 31.934
+      "seconds": 27.554
+    },
+    "src/infra/database-engine/commit-receipts.conformance.test.ts": {
+      "group": "infra",
+      "seconds": 11.666
+    },
+    "src/infra/database-engine/config-preflight.postgres.test.ts": {
+      "group": "infra",
+      "seconds": 8.425
     },
     "src/infra/database-engine/config.test.ts": {
       "group": "infra",
-      "seconds": 2.883
+      "seconds": 3.346
     },
     "src/infra/database-engine/context-engine-transcript-reset-window.postgres.test.ts": {
       "group": "infra",
-      "seconds": 17.031
+      "seconds": 14.817
     },
     "src/infra/database-engine/context.test.ts": {
       "group": "unit-fast-isolated",
-      "seconds": 0.608
+      "seconds": 0.737
+    },
+    "src/infra/database-engine/cron-runtime-row.postgres.test.ts": {
+      "group": "infra",
+      "seconds": 7.041
     },
     "src/infra/database-engine/delivery-queue-retention.conformance.test.ts": {
       "group": "infra",
-      "seconds": 4.507
+      "seconds": 9.046
+    },
+    "src/infra/database-engine/device-pairing.conformance.test.ts": {
+      "group": "infra",
+      "seconds": 13.943
     },
     "src/infra/database-engine/diagnostics.test.ts": {
       "group": "infra",
-      "seconds": 24.574
+      "seconds": 40.718
     },
     "src/infra/database-engine/doctor-migration.postgres.test.ts": {
       "group": "infra",
-      "seconds": 287.325
+      "seconds": 455.674
     },
     "src/infra/database-engine/gateway-agent-inspection.conformance.test.ts": {
       "group": "infra",
-      "seconds": 8.815
+      "seconds": 10.144
     },
     "src/infra/database-engine/gateway-session-startup.conformance.test.ts": {
       "group": "infra",
-      "seconds": 41.832
+      "seconds": 42.825
     },
     "src/infra/database-engine/git-backup-secrets.postgres.test.ts": {
       "group": "infra",
-      "seconds": 18.31
+      "seconds": 23.629
     },
     "src/infra/database-engine/git-backup.postgres.test.ts": {
       "group": "infra",
-      "seconds": 41.08
+      "seconds": 92.227
+    },
+    "src/infra/database-engine/goal-receipts.conformance.test.ts": {
+      "group": "infra",
+      "seconds": 28.451
+    },
+    "src/infra/database-engine/inherited-auth.conformance.test.ts": {
+      "group": "infra",
+      "seconds": 127.502
     },
     "src/infra/database-engine/interactive-setup.integration.test.ts": {
       "group": "infra",
-      "seconds": 338.076
+      "seconds": 423.303
     },
     "src/infra/database-engine/json-values.test.ts": {
       "group": "unit-fast",
-      "seconds": 0.888
+      "seconds": 1.611
     },
     "src/infra/database-engine/logbook-port.postgres.test.ts": {
       "group": "infra",
-      "seconds": 10.249
+      "seconds": 13.892
     },
     "src/infra/database-engine/maintenance-custody.conformance.test.ts": {
       "group": "infra",
-      "seconds": 10.513
+      "seconds": 12.856
     },
     "src/infra/database-engine/matrix-roots.postgres.test.ts": {
       "group": "infra",
-      "seconds": 492.422
+      "seconds": 431.432
     },
     "src/infra/database-engine/memory-public.postgres.test.ts": {
       "group": "infra",
-      "seconds": 50.88
+      "seconds": 52.54
+    },
+    "src/infra/database-engine/message-progress-retention.conformance.test.ts": {
+      "group": "infra",
+      "seconds": 10.005
     },
     "src/infra/database-engine/mixed-agent-lifecycle.conformance.test.ts": {
       "group": "infra",
-      "seconds": 118.033
+      "seconds": 109.989
     },
     "src/infra/database-engine/mixed-agent-readers.conformance.test.ts": {
       "group": "infra",
-      "seconds": 59.316
+      "seconds": 73.084
     },
     "src/infra/database-engine/mixed-mode.conformance.test.ts": {
       "group": "infra",
-      "seconds": 57.666
+      "seconds": 71.59
     },
     "src/infra/database-engine/model-catalog.conformance.test.ts": {
       "group": "infra",
-      "seconds": 26.448
+      "seconds": 28.794
     },
     "src/infra/database-engine/multi-namespace.postgres.test.ts": {
       "group": "infra",
-      "seconds": 5.297
+      "seconds": 6.106
+    },
+    "src/infra/database-engine/nullable-ordering.conformance.test.ts": {
+      "group": "infra",
+      "seconds": 7.075
     },
     "src/infra/database-engine/observation.test.ts": {
       "group": "infra",
-      "seconds": 1.232
+      "seconds": 1.751
     },
     "src/infra/database-engine/offline-auth.postgres.test.ts": {
       "group": "infra",
-      "seconds": 32.561
+      "seconds": 37.008
     },
     "src/infra/database-engine/open.test.ts": {
       "group": "unit-fast",
-      "seconds": 6.732
+      "seconds": 3.747
+    },
+    "src/infra/database-engine/outcome-surfaces.postgres.test.ts": {
+      "group": "infra",
+      "seconds": 14.91
+    },
+    "src/infra/database-engine/owner-fragments.conformance.test.ts": {
+      "group": "infra",
+      "seconds": 19.103
+    },
+    "src/infra/database-engine/pending-input-source.conformance.test.ts": {
+      "group": "infra",
+      "seconds": 9.271
     },
     "src/infra/database-engine/physical-facts.test.ts": {
       "group": "infra",
-      "seconds": 2.154
+      "seconds": 3.125
+    },
+    "src/infra/database-engine/plugin-blob-registration.conformance.test.ts": {
+      "group": "infra",
+      "seconds": 17.816
+    },
+    "src/infra/database-engine/plugin-lifecycle-lease.postgres.test.ts": {
+      "group": "infra",
+      "seconds": 9.979
     },
     "src/infra/database-engine/plugin-port-roots.test.ts": {
       "group": "unit-fast",
-      "seconds": 2.641
+      "seconds": -0.228
     },
     "src/infra/database-engine/port-command-refusals.postgres.test.ts": {
       "group": "infra",
-      "seconds": 14.619
+      "seconds": 9.412
+    },
+    "src/infra/database-engine/port-command.credentials-local.test.ts": {
+      "group": "infra",
+      "seconds": 134.755
     },
     "src/infra/database-engine/port-command.credentials.integration.test.ts": {
       "group": "infra",
-      "seconds": 113.483
+      "seconds": 364.385
     },
     "src/infra/database-engine/port-command.integration.test.ts": {
       "group": "infra",
-      "seconds": 279.352
+      "seconds": 632.783
     },
     "src/infra/database-engine/port-command.mixed.integration.test.ts": {
       "group": "infra",
-      "seconds": 219.847
+      "seconds": 240.365
     },
     "src/infra/database-engine/port-command.postgres.test.ts": {
       "group": "infra",
-      "seconds": 5.369
+      "seconds": 6.848
     },
     "src/infra/database-engine/port-command.recovery.integration.test.ts": {
       "group": "infra",
-      "seconds": 289.365
+      "seconds": 429.831
     },
     "src/infra/database-engine/port-command.test.ts": {
       "group": "infra",
-      "seconds": 21.511
+      "seconds": 23.702
     },
     "src/infra/database-engine/port-provider-imports.test.ts": {
       "group": "unit-fast",
-      "seconds": 0.812
+      "seconds": 1.147
     },
     "src/infra/database-engine/port-provider.postgres.test.ts": {
       "group": "infra",
-      "seconds": 2.663
+      "seconds": 2.809
     },
     "src/infra/database-engine/port-provider.test.ts": {
       "group": "unit-fast",
-      "seconds": 2.623
+      "seconds": 0.474
     },
     "src/infra/database-engine/port.test.ts": {
       "group": "infra",
-      "seconds": 3.484
+      "seconds": 5.645
     },
     "src/infra/database-engine/post-ready.conformance.test.ts": {
       "group": "infra",
-      "seconds": 27.919
+      "seconds": 70.511
+    },
+    "src/infra/database-engine/postgres-index-ordering.postgres.test.ts": {
+      "group": "unit-fast",
+      "seconds": 4.986
     },
     "src/infra/database-engine/postgres-search-admission.postgres.test.ts": {
       "group": "infra",
-      "seconds": 3.718
+      "seconds": 10.285
     },
     "src/infra/database-engine/postgres-search.conformance.test.ts": {
       "group": "infra",
-      "seconds": 4.727
+      "seconds": 5.233
+    },
+    "src/infra/database-engine/postgres-vector-search-schema.postgres.test.ts": {
+      "group": "infra",
+      "seconds": 5.166
+    },
+    "src/infra/database-engine/profile-authority.conformance.test.ts": {
+      "group": "infra",
+      "seconds": 10.985
+    },
+    "src/infra/database-engine/receipt-lifecycle.conformance.test.ts": {
+      "group": "infra",
+      "seconds": 12.035
     },
     "src/infra/database-engine/registry.test.ts": {
       "group": "unit-fast",
-      "seconds": 0.853
+      "seconds": 0.025
+    },
+    "src/infra/database-engine/reserved-incognito.conformance.test.ts": {
+      "group": "infra",
+      "seconds": 120.82
+    },
+    "src/infra/database-engine/row-limit.conformance.test.ts": {
+      "group": "infra",
+      "seconds": 7.729
     },
     "src/infra/database-engine/schema-admission.postgres.test.ts": {
       "group": "infra",
-      "seconds": 9.779
+      "seconds": 8.605
+    },
+    "src/infra/database-engine/schema-readers.conformance.test.ts": {
+      "group": "infra",
+      "seconds": 8.042
     },
     "src/infra/database-engine/search-extension.postgres.test.ts": {
       "group": "infra",
-      "seconds": 3.863
+      "seconds": 4.111
     },
     "src/infra/database-engine/search-extension.test.ts": {
       "group": "infra",
-      "seconds": 2.21
+      "seconds": 3.205
     },
     "src/infra/database-engine/search.test.ts": {
       "group": "unit-fast",
-      "seconds": 4.111
+      "seconds": 1.758
     },
     "src/infra/database-engine/session-actor.conformance.test.ts": {
       "group": "infra",
-      "seconds": 39.819
+      "seconds": 32.204
+    },
+    "src/infra/database-engine/session-archive-alias.conformance.test.ts": {
+      "group": "infra",
+      "seconds": 37.002
     },
     "src/infra/database-engine/session-entry-write.conformance.test.ts": {
       "group": "infra",
-      "seconds": 37.78
+      "seconds": 16.968
     },
     "src/infra/database-engine/session-group-catalog.conformance.test.ts": {
       "group": "infra",
-      "seconds": 5.939
+      "seconds": 10.065
+    },
+    "src/infra/database-engine/session-path-alias.conformance.test.ts": {
+      "group": "infra",
+      "seconds": 54.194
+    },
+    "src/infra/database-engine/session-reaction-quota.conformance.test.ts": {
+      "group": "infra",
+      "seconds": 9.263
     },
     "src/infra/database-engine/session-search-product.postgres.test.ts": {
       "group": "infra",
-      "seconds": 10.887
+      "seconds": 12.09
     },
     "src/infra/database-engine/shared-feature.conformance.test.ts": {
       "group": "infra",
-      "seconds": 5.474
+      "seconds": 5.751
+    },
+    "src/infra/database-engine/skills-store.conformance.test.ts": {
+      "group": "infra",
+      "seconds": 11.99
+    },
+    "src/infra/database-engine/sql-probe.conformance.test.ts": {
+      "group": "infra",
+      "seconds": 6.211
     },
     "src/infra/database-engine/sqlite-memory-search-fragments.test.ts": {
       "group": "unit-fast",
-      "seconds": 2.392
+      "seconds": 2.13
     },
     "src/infra/database-engine/sqlite-vec.test.ts": {
       "group": "infra",
-      "seconds": 1.92
+      "seconds": 2.383
     },
     "src/infra/database-engine/sqlite-vector-subprocess.test.ts": {
       "group": "infra",
-      "seconds": 1.552
+      "seconds": 2.33
     },
     "src/infra/database-engine/state-port.postgres.test.ts": {
       "group": "infra",
-      "seconds": 25.826
+      "seconds": 26.434
     },
     "src/infra/database-engine/state-port.test.ts": {
       "group": "unit-fast",
-      "seconds": 5.86
+      "seconds": 4.505
+    },
+    "src/infra/database-engine/state-read-admission-owners.postgres.test.ts": {
+      "group": "infra",
+      "seconds": 25.15
+    },
+    "src/infra/database-engine/state-read-admission-publication.postgres.test.ts": {
+      "group": "infra",
+      "seconds": 38.151
+    },
+    "src/infra/database-engine/state-read-admission.postgres.test.ts": {
+      "group": "infra",
+      "seconds": 26.904
     },
     "src/infra/database-engine/state-read-lock.postgres.test.ts": {
       "group": "infra",
-      "seconds": 4.47
+      "seconds": 9.55
     },
     "src/infra/database-engine/transcript-identity-insert.conformance.test.ts": {
       "group": "infra",
-      "seconds": 6.156
+      "seconds": 4.885
     },
     "src/infra/database-engine/transcript-projection-flush.conformance.test.ts": {
       "group": "infra",
-      "seconds": 11.416
+      "seconds": 10.056
     },
     "src/infra/database-engine/transcript-reader.conformance.test.ts": {
       "group": "unit-fast",
-      "seconds": 4.357
+      "seconds": 2.669
     },
     "src/infra/database-engine/update-command.conformance.test.ts": {
       "group": "infra",
-      "seconds": 35.248
+      "seconds": 40.694
     },
     "src/infra/database-engine/update-preflight.conformance.test.ts": {
       "group": "infra",
-      "seconds": 124.342
+      "seconds": 225.847
+    },
+    "src/infra/database-engine/update-run-admission.conformance.test.ts": {
+      "group": "infra",
+      "seconds": 12.844
+    },
+    "src/infra/database-engine/update-run-interruption.conformance.test.ts": {
+      "group": "infra",
+      "seconds": 2.25
     },
     "src/infra/database-engine/usage-cost-partitions.postgres.test.ts": {
       "group": "infra",
-      "seconds": 13.977
+      "seconds": 15.657
+    },
+    "src/infra/database-engine/web-push-store.conformance.test.ts": {
+      "group": "infra",
+      "seconds": 6.807
+    },
+    "src/infra/database-engine/worker-environment-companion.postgres.test.ts": {
+      "group": "infra",
+      "seconds": 7.405
     },
     "src/infra/database-engine/worktree-backup-discovery.test.ts": {
       "group": "infra",
-      "seconds": 19.96
+      "seconds": 23.489
     },
     "src/infra/exec-approvals-native.test.ts": {
       "group": "infra",
-      "seconds": 83.956
+      "seconds": 121.462
+    },
+    "src/infra/postgres-sync/bridge-prestart.test.ts": {
+      "group": "infra",
+      "seconds": 2.003
+    },
+    "src/infra/postgres-sync/commit-receipts.postgres.test.ts": {
+      "group": "unit-fast",
+      "seconds": 5.544
     },
     "src/infra/postgres-sync/connection.test.ts": {
       "group": "infra",
-      "seconds": 3.389
+      "seconds": 2.249
     },
     "src/infra/postgres-sync/locks.test.ts": {
       "group": "infra",
-      "seconds": 2.777
+      "seconds": 3.74
     },
     "src/infra/postgres-sync/protocol.test.ts": {
       "group": "unit-fast",
-      "seconds": 0.67
+      "seconds": -0.075
     },
     "src/infra/postgres-sync/query-compiler.test.ts": {
       "group": "unit-fast",
-      "seconds": 0.83
+      "seconds": 0.202
     },
     "src/infra/postgres-sync/read-facts.postgres.test.ts": {
       "group": "infra",
-      "seconds": 2.801
+      "seconds": 5.596
     },
     "src/infra/postgres-sync/reuse.postgres.test.ts": {
-      "group": "unit-fast",
-      "seconds": 2.529
+      "group": "infra",
+      "seconds": 3.809
     },
     "src/infra/postgres-sync/session-publication.postgres.test.ts": {
       "group": "infra",
-      "seconds": 14.842
+      "seconds": 26.572
     },
     "src/infra/postgres-sync/transcript-hydration.postgres.test.ts": {
       "group": "infra",
-      "seconds": 4.069
+      "seconds": 24.377
     },
     "src/infra/update-candidate-state.postgres.test.ts": {
       "group": "infra",
-      "seconds": 119.006
+      "seconds": 140.659
     },
     "src/state/openclaw-agent-db-engine.postgres.test.ts": {
       "group": "infra",
-      "seconds": 3.384
+      "seconds": 6.588
     },
     "src/state/openclaw-agent-db.postgres.test.ts": {
       "group": "infra",
-      "seconds": 36.507
+      "seconds": 32.951
     },
     "src/state/openclaw-agent-doctor-media.postgres.test.ts": {
       "group": "infra",
-      "seconds": 21.473
+      "seconds": 38.461
     },
     "src/state/openclaw-state-db.postgres.test.ts": {
       "group": "infra",
-      "seconds": 174.897
+      "seconds": 162.151
     },
     "src/transcripts/meeting-chronology.postgres.test.ts": {
       "group": "unit",
-      "seconds": 5.531
+      "seconds": 9.072
     }
   }
 }

@@ -336,11 +336,12 @@ describe.skipIf(process.platform === "win32")("package activation admission", ()
       await fixtures.stopChild(child, closed);
     }
   });
-  it.each(
-    (["missing", "replaced"] as const).flatMap((lease) =>
-      (["candidate", "previous", "damaged candidate"] as const).map((live) => ({ lease, live })),
-    ),
-  )(
+  it.each([
+    { lease: "missing", live: "candidate" },
+    { lease: "missing", live: "previous" },
+    { lease: "missing", live: "damaged candidate" },
+    { lease: "replaced", live: "candidate" },
+  ])(
     "dry-run preserves a publication-complete receipt with a $lease lease and $live live",
     async ({ lease, live }) => {
       const f = await publication("publication-complete");

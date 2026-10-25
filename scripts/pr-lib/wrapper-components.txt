@@ -407,6 +407,7 @@ src/infra/database-engine/postgres-search.ts
 src/infra/database-engine/postgres-store-metadata.ts
 src/infra/database-engine/postgres-vector.ts
 src/infra/database-engine/registry.ts
+src/infra/database-engine/scalar.ts
 src/infra/database-engine/search-admission.ts
 src/infra/database-engine/search-extension.ts
 src/infra/database-engine/search.ts
@@ -931,6 +932,8 @@ src/infra/boundary-file-read.ts
 src/infra/boundary-path.ts
 src/infra/bun-sqlite-close-probe.ts
 src/infra/bun-sqlite-close-probe.worker.ts
+src/infra/bun-sqlite-library-probe.generated.ts
+src/infra/bun-sqlite-library-probe.ts
 src/infra/bun-sqlite-library.ts
 src/infra/clawhub-integrity.ts
 src/infra/clawhub-spec.ts
@@ -1129,6 +1132,7 @@ src/infra/runtime-dependency-ownership.ts
 src/infra/runtime-process-dependency-url.ts
 src/infra/runtime-process-entrypoints.ts
 src/infra/runtime-process-manifest.ts
+src/infra/runtime-process-script-file.ts
 src/infra/runtime-process-url.ts
 src/infra/runtime-profile.ts
 src/infra/runtime-worker-generation.ts

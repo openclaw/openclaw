@@ -11,7 +11,6 @@ import {
 import { findUpdateCaptureSpaceError, UpdateCaptureSpaceError } from "./update-capture-space.js";
 import { isPublicUpdateFailureCode } from "./update-failure-public-codes.js";
 import { UPDATE_STATE_INSPECTION_PROGRESS_PREFIX } from "./update-state-inspection-protocol.js";
-export { UPDATE_STATE_INSPECTION_PROGRESS_PREFIX } from "./update-state-inspection-protocol.js";
 const DIAGNOSTIC_TAIL_CHARS = 12_000;
 const CAPTURE_SPACE_PREFIX = "Update capture space: ";
 const CaptureSpaceSchema = z

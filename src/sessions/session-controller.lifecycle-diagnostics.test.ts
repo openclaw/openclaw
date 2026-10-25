@@ -391,17 +391,20 @@ it("measures prepare and finalize separately while successors wait for real fina
   await advance(200);
   prepare.release();
   await finalize.entered;
-  const waiter = hold("mutation", target, traces.waiter);
+  const runWaiter = vi.fn(async () => {});
+  const waiter = mutate(target, traces.waiter, { run: runWaiter });
   try {
     await advance(1_000);
+    expect(runWaiter).not.toHaveBeenCalled();
     await expectRecord("waiting", {
       operationTraceId: traces.waiter.traceId,
       holderTraceId: traces.first.traceId,
       holderPhase: "finalize",
     });
   } finally {
-    await finish([prepare.release, finalize.release, waiter.release], first, waiter.promise);
+    await finish([prepare.release, finalize.release], first, waiter);
   }
+  expect(runWaiter).toHaveBeenCalledOnce();
   await expectRecords(
     "slow",
     [
