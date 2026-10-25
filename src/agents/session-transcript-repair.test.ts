@@ -159,40 +159,30 @@ describe("sanitizeToolUseResultPairing", () => {
   });
 });
 
-describe("repairToolUseResultPairing repeated per-turn ids", () => {
-  const call = (id = "exec_0", stopReason = "toolUse") => ({
-    ...sparseAssistant([toolCall(id, "exec")]),
-    stopReason,
-  });
+describe("repeated tool-call ids", () => {
+  const call = (id = "exec_0", stopReason = "toolUse") => callAssistant(id, "exec", stopReason);
   const result = (text: string, id = "exec_0", isError = false) =>
     textToolResult(id, "exec", text, { isError });
   const missing = DEFAULT_MISSING_TOOL_RESULT_TEXT;
-
   it.each([
-    {
-      name: "preserves valid repeated ids across assistant turns without allocating",
-      input: [call(), result("first"), user("next"), call(), result("second")],
-    },
-    {
-      name: "preserves every repeated-id occurrence within one assistant turn",
-      input: [
-        {
-          ...call(),
-          content: [
-            toolCall("exec_0", "exec", { cmd: "first" }),
-            toolCall("exec_0", "exec", { cmd: "second" }),
-          ],
-        },
+    ["across turns", [call(), result("first"), user("next"), call(), result("second")]],
+    [
+      "within one turn",
+      [
+        sparseAssistant([
+          toolCall("exec_0", "exec", { cmd: "first" }),
+          toolCall("exec_0", "exec", { cmd: "second" }),
+        ]),
         result("first"),
         result("second"),
       ],
-    },
-  ])("$name", ({ input: raw }) => {
-    const input = castAgentMessages(raw);
+    ],
+  ] as const)("preserves repeated ids %s without allocating", (_name, raw) => {
+    const input = castAgentMessages([...raw]);
     const repaired = repairToolUseResultPairing(input);
     expect(repaired.messages).toBe(input);
     expect(repaired.added).toEqual([]);
-    expect(repaired.messages.filter((message) => message.role === "toolResult")).toEqual([
+    expect(repaired.messages.filter(({ role }) => role === "toolResult")).toEqual([
       result("first"),
       result("second"),
     ]);
@@ -200,24 +190,24 @@ describe("repairToolUseResultPairing repeated per-turn ids", () => {
 
   it.each([
     {
-      name: "synthesizes a later repeated-id occurrence without dropping the replacement",
+      name: "missing later occurrence",
       input: [call(), result("first"), user("next"), call()],
-      expectedRoles: ["assistant", "toolResult", "user", "assistant", "toolResult"],
+      roles: ["assistant", "toolResult", "user", "assistant", "toolResult"],
       texts: ["first", missing],
       idempotent: true,
     },
     {
-      name: "keeps a later turn's adjacent repeated-id result local",
+      name: "adjacent later result",
       input: [call(), call(), result("second")],
       texts: [missing, "second"],
     },
     {
-      name: "does not guess between repeated ids when multiple delayed results are ambiguous",
+      name: "ambiguous delayed results",
       input: [call(), call(), result("locally first"), result("ambiguous extra")],
       texts: [missing, "locally first"],
     },
     {
-      name: "treats an unresolved failed occurrence as an ambiguity blocker",
+      name: "unresolved failed occurrence",
       input: [
         call(),
         call("exec_0", "error"),
@@ -230,7 +220,7 @@ describe("repairToolUseResultPairing repeated per-turn ids", () => {
       forbidden: "ambiguous displaced output",
     },
     {
-      name: "drops a failed turn and its local repeated-id result without leaking it backward",
+      name: "failed local occurrence",
       input: [
         call(),
         call("exec_0", "error"),
@@ -238,71 +228,67 @@ describe("repairToolUseResultPairing repeated per-turn ids", () => {
         user("retry"),
       ],
       drop: true,
-      expectedRoles: ["assistant", "toolResult", "user"],
+      roles: ["assistant", "toolResult", "user"],
       texts: [missing],
       forbidden: "failed turn output",
     },
-  ])("$name", ({ input, drop, expectedRoles, texts, forbidden, idempotent }) => {
-    const repaired = repairToolUseResultPairing(
-      castAgentMessages(input),
-      drop ? { erroredAssistantResultPolicy: "drop" } : undefined,
-    );
-    expect(repaired.added).toHaveLength(1);
-    expect(roles(repaired.messages)).toEqual(
-      expectedRoles ?? ["assistant", "toolResult", "assistant", "toolResult"],
-    );
-    expect(
-      repaired.messages
-        .filter((message) => message.role === "toolResult")
-        .map((message) => message.content.find((block) => block.type === "text")?.text),
-    ).toEqual(texts);
-    if (forbidden) {
-      expect(JSON.stringify(repaired.messages)).not.toContain(forbidden);
-    }
-    if (idempotent) {
-      expect(repairToolUseResultPairing(repaired.messages).messages).toBe(repaired.messages);
-    }
-  });
+  ])(
+    "repairs %s without cross-turn leakage",
+    ({ input, drop, roles: expectedRoles, texts, forbidden, idempotent }) => {
+      const repaired = repairToolUseResultPairing(
+        castAgentMessages(input),
+        drop ? { erroredAssistantResultPolicy: "drop" } : undefined,
+      );
+      expect(repaired.added).toHaveLength(1);
+      expect(roles(repaired.messages)).toEqual(
+        expectedRoles ?? ["assistant", "toolResult", "assistant", "toolResult"],
+      );
+      expect(
+        repaired.messages
+          .filter((message) => message.role === "toolResult")
+          .map((message) => message.content.find((block) => block.type === "text")?.text),
+      ).toEqual(texts);
+      if (forbidden) {
+        expect(JSON.stringify(repaired.messages)).not.toContain(forbidden);
+      }
+      if (idempotent) {
+        expect(repairToolUseResultPairing(repaired.messages).messages).toBe(repaired.messages);
+      }
+    },
+  );
 });
 
-describe("repairToolUseResultPairing prefers real result over synthetic error", () => {
-  function makeSyntheticResult(toolCallId: string) {
-    return {
-      ...textToolResult(toolCallId, "read", DEFAULT_MISSING_TOOL_RESULT_TEXT, { isError: true }),
-      details: { openclawSyntheticMissingToolResult: true },
-    };
-  }
-
-  it("keeps the real result while dropping its synthetic predecessor and an orphan", () => {
-    const input = castAgentMessages([
-      sparseAssistant([toolCall("call_1")]),
-      makeSyntheticResult("call_1"),
-      textToolResult("call_orphan", "read", "orphan", { isError: false }),
-      textToolResult("call_1", "read", "real output", { isError: false }),
-    ]);
-
-    const result = repairToolUseResultPairing(input);
-
-    expect(result.messages).toEqual([input[0], input[3]]);
+describe("real results replace synthetic errors", () => {
+  const synthetic = (id: string) => ({
+    ...textToolResult(id, "read", DEFAULT_MISSING_TOOL_RESULT_TEXT, { isError: true }),
+    details: { openclawSyntheticMissingToolResult: true },
   });
-
-  it("late real result after another assistant turn replaces prior synthetic", () => {
-    const input = castAgentMessages([
-      sparseAssistant([toolCall("call_1")]),
-      makeSyntheticResult("call_1"),
-      sparseAssistant([toolCall("call_2", "write")]),
-      textToolResult("call_1", "read", "real output", { isError: false }),
-      textToolResult("call_2", "write", "second output", { isError: false }),
-    ]);
-
-    const result = repairToolUseResultPairing(input);
-
-    const toolResults = result.messages.filter((m) => m.role === "toolResult");
-    expect(toolResults).toMatchObject([
-      { toolCallId: "call_1", content: [{ text: "real output" }] },
-      { toolCallId: "call_2", content: [{ text: "second output" }] },
-    ]);
-    expect(toolResults[0]?.isError).not.toBe(true);
+  it.each([
+    [
+      "alongside an orphan",
+      [
+        callAssistant("one"),
+        synthetic("one"),
+        realResult("orphan"),
+        realResult("one", "read", "real"),
+      ],
+      [0, 3],
+    ],
+    [
+      "after another tool turn",
+      [
+        callAssistant("one"),
+        synthetic("one"),
+        callAssistant("two", "write"),
+        realResult("one", "read", "real"),
+        realResult("two", "write", "second"),
+      ],
+      [0, 3, 2, 4],
+    ],
+  ] as const)("keeps the real result %s", (_name, raw, order) => {
+    const input = castAgentMessages([...raw]);
+    const expected = structuredClone(order.map((index) => input[index]));
+    expect(repairToolUseResultPairing(input).messages).toEqual(expected);
   });
 });
 
