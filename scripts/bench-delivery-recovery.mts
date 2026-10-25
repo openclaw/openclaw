@@ -93,7 +93,7 @@ function launch(args: string[], env: NodeJS.ProcessEnv, name: string) {
   const child = spawn(process.execPath, args, {
     env,
     detached: true,
-    stdio: ["ignore", "pipe", "pipe", "ipc"],
+    stdio: ["ignore", "pipe", "pipe"],
   });
   const owned: (typeof children)[number] = { child, log, name };
   child.on("error", (error) => (owned.error = error));
