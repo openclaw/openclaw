@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 281465,
-  "reason": "Streaming-only token-to-DOM: Peter accepted chat boot growth after the original experiment reduced streaming script CPU 8.6% and HTML assignments 2129 to 178. Settled rendering retains HTML plus DOMPurify; startup measures 281465 B with unchanged requests. Ratchet to the measured head.",
+  "startupJsGzipBytes": 281588,
+  "reason": "PR #182993: bounded formatting cadence and no per-delta geometry reads reduce standard streaming script CPU 20.8% (1736.95 to 1375.20 ms) and burst CPU 16.5% in 20 interleaved base/A-A/head triplets. Coordinator approved +648 B chat, +50 B startup, and +49 B New Session under the measured CPU-win allowance; requests and CSS unchanged. Ratchet to measured startup head.",
   "updatedAt": "2026-10-25"
 }
