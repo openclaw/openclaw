@@ -19,12 +19,7 @@ const routeModel = (
   api: NonNullable<ModelProviderConfig["api"]>,
   baseUrl: string,
   provider = "openai",
-) => ({
-  provider,
-  id,
-  api,
-  baseUrl,
-});
+) => ({ provider, id, api, baseUrl });
 
 type MaterializeParams<M extends RuntimeRouteModel> = Parameters<
   typeof materializePreparedRuntimeModel<M>
@@ -46,11 +41,7 @@ function apiPlan(
     ...plan,
     selectedAuthMode: "api-key",
     ...overrides,
-    modelRoute: {
-      ...platformRoute,
-      modelId,
-      baseUrl,
-    },
+    modelRoute: { ...platformRoute, modelId, baseUrl },
   };
 }
 
@@ -166,11 +157,9 @@ describe("materializePreparedRuntimeModel", () => {
     const resolveModel = vi.fn<MaterializeParams<typeof subscriptionModel>["resolveModel"]>(
       async () => ({ model: subscriptionModel }),
     );
-    await expectModel({
-      config: { models: { providers: {} } },
-      model,
-      resolveModel,
-    }).resolves.toBe(subscriptionModel);
+    await expectModel({ config: { models: { providers: {} } }, model, resolveModel }).resolves.toBe(
+      subscriptionModel,
+    );
     expect(resolveModel).toHaveBeenCalledOnce();
     const request = resolveModel.mock.calls[0]?.[0];
     expect(request).toMatchObject({
@@ -214,10 +203,9 @@ describe("materializePreparedRuntimeModel", () => {
   );
 
   it("rejects mismatched targets and mismatched resolved tuples", async () => {
-    await expectModel({
-      modelId: "gpt-5.6",
-      resolveModel: vi.fn(),
-    }).rejects.toThrow(/does not match target/u);
+    await expectModel({ modelId: "gpt-5.6", resolveModel: vi.fn() }).rejects.toThrow(
+      /does not match target/u,
+    );
 
     await expectModel({
       resolveModel: vi.fn(async () => ({ model: platformModel })),

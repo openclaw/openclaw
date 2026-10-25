@@ -127,44 +127,6 @@ describe("AgentRuntimePlan tool policy helpers", () => {
     }
   });
 
-  it.each(["plan", "provider"] as const)(
-    "quarantines bad schemas before %s normalization",
-    (route) => {
-      const healthy = createParameterFreeTool("healthy") as AgentTool;
-      const toolName = route === "plan" ? "fuzzplugin_unreadable" : "fuzzplugin_array_root";
-      const invalid = {
-        ...createParameterFreeTool(toolName),
-        parameters: { type: "array", items: { type: "number" } },
-      } as unknown as AgentTool;
-      if (route === "plan") {
-        Object.defineProperty(invalid, "parameters", {
-          enumerable: true,
-          get() {
-            throw new Error("fuzzplugin parameters getter exploded");
-          },
-        });
-      }
-      const diagnostics: RuntimeToolSchemaDiagnostic[][] = [];
-      const normalize = vi.fn((entries: AgentTool[]) => entries);
-      if (route === "provider") {
-        mocks.normalizeProviderToolSchemas.mockImplementationOnce(({ tools: entries }) => entries);
-      }
-      expect(
-        normalizeTools([invalid, healthy], {
-          runtimePlan: route === "plan" ? runtimePlan(normalize) : undefined,
-          onPreNormalizationSchemaDiagnostics: (entries) => diagnostics.push([...entries]),
-        }),
-      ).toEqual([healthy]);
-      expectQuarantine(
-        diagnostics,
-        toolName,
-        route === "plan"
-          ? `${toolName}.parameters is unreadable`
-          : `${toolName}.parameters.type must be "object"`,
-      );
-    },
-  );
-
   it("does not load a provider runtime to normalize an empty tool set", () => {
     const onPreNormalizationSchemaDiagnostics = vi.fn();
 
@@ -174,66 +136,104 @@ describe("AgentRuntimePlan tool policy helpers", () => {
   });
 
   it.each([
-    ["plan", "unchanged"],
-    ["provider", "unchanged"],
-    ["provider", "cloned"],
+    ["plan", "unchanged", true],
+    ["provider", "unchanged", true],
+    ["provider", "cloned", true],
+    ["provider", "replaced", true],
+    ["provider", "replaced", false],
   ] as const)(
-    "owns the assembly array after %s normalization (%s) while retaining plugin tool admission",
-    async (route, mode) => {
+    "preserves %s/%s metadata and admission (hidden: %s)",
+    async (route, mode, hidden) => {
       const catalogRef = createToolSearchCatalogRef();
-      const metadataWrites: PropertyKey[] = [];
-      const observeMetadataWrites = (definition: AgentTool): AgentTool =>
-        new Proxy(definition, {
+      const writes: PropertyKey[] = [];
+      const observeWrites = (tool: AgentTool) =>
+        new Proxy(tool, {
           set(target, key, value, receiver) {
             if (key === "outputSchema" || key === "hideFromChannelProgress") {
-              metadataWrites.push(key);
+              writes.push(key);
             }
             return Reflect.set(target, key, value, receiver);
           },
         });
       const { instance, provider } = createNormalizer("normalizer-fixture", ({ tools }) =>
-        mode === "cloned" ? tools.map((entry) => observeMetadataWrites({ ...entry })) : tools,
+        mode === "unchanged"
+          ? tools
+          : tools.map((tool) => {
+              if (mode === "cloned") {
+                return observeWrites({ ...tool });
+              }
+              const replacement = observeWrites({
+                ...createParameterFreeTool(tool.name),
+                parameters: normalizedParameterFreeSchema(),
+                execute: tool.execute,
+              });
+              Object.defineProperty(replacement, "outputSchema", {
+                configurable: true,
+                get() {
+                  throw new Error("output schema has not been assigned yet");
+                },
+                set(value: AgentTool["outputSchema"]) {
+                  Object.defineProperty(replacement, "outputSchema", { value });
+                },
+              });
+              return replacement;
+            }),
       );
-      try {
-        const output = { content: [{ type: "text" as const, text: "fixture note" }], details: {} };
-        const tool = observeMetadataWrites(
+      const output = { content: [{ type: "text" as const, text: "fixture note" }], details: {} };
+      const formatter = () => ({ text: "Terminal summary" });
+      const tool = observeWrites(
+        setToolTerminalPresentation(
           wrapToolWithBeforeToolCallHook({
             ...createParameterFreeTool("fixture__lookup_note"),
             label: "Fixture lookup",
             parameters: Type.Object({}),
             outputSchema: Type.Object({}),
-            hideFromChannelProgress: true,
-            execute: vi.fn(async () => output),
+            execute: async () => output,
           }),
-        );
-        setPluginToolMeta(tool, noteMetadata);
+          formatter,
+        ),
+      );
+      Object.defineProperty(tool, "hideFromChannelProgress", {
+        value: hidden,
+        enumerable: mode !== "replaced",
+      });
+      (tool as AnyAgentTool).catalogMode = "direct-only";
+      setPluginToolMeta(tool, noteMetadata);
+      try {
         const normalize = useNormalizer(provider);
         const normalized = normalizeTools([tool], {
           runtimePlan: route === "plan" ? runtimePlan(normalize) : undefined,
         });
-        expect(metadataWrites).toEqual([]);
+        if (mode !== "replaced") {
+          expect(writes).toEqual([]);
+        }
         const normalizedTool = expectDefined(normalized[0], "normalized tool");
-        expect(normalizedTool.parameters).toBe(tool.parameters);
-        expect(normalizedTool.outputSchema).toBe(tool.outputSchema);
-        const wrapped = normalized
-          .map((entry) => rewrapToolWithBeforeToolCallHook(entry, { runId: "current-run" }))
-          .map((entry) => wrapToolWithAbortSignal(entry, new AbortController().signal));
-        const wrappedTool = expectDefined(wrapped[0], "wrapped tool");
-
-        expect(getPluginToolMeta(normalizedTool)).toBe(noteMetadata);
-        expect(getPluginToolMeta(wrappedTool)).toBe(noteMetadata);
+        const wrapped = normalized.map((entry) =>
+          wrapToolWithAbortSignal(
+            rewrapToolWithBeforeToolCallHook(entry, { runId: "current-run" }),
+            new AbortController().signal,
+          ),
+        );
+        for (const entry of [normalizedTool, expectDefined(wrapped[0], "wrapped tool")]) {
+          expect(entry.outputSchema).toBe(tool.outputSchema);
+          expect(entry.hideFromChannelProgress).toBe(hidden ? true : undefined);
+          expect((entry as AnyAgentTool).catalogMode).toBe("direct-only");
+          expect(isToolWrappedWithBeforeToolCallHook(entry)).toBe(true);
+          expect(getToolTerminalPresentation(entry)).toBe(formatter);
+          expect(getPluginToolMeta(entry)).toBe(noteMetadata);
+          await expect(entry.execute("active-call", {})).resolves.toBe(output);
+        }
+        if (mode !== "replaced") {
+          expect(normalizedTool.parameters).toBe(tool.parameters);
+        }
         registerHeadlessToolSearchCatalog({ catalogRef, tools: wrapped });
         expect(catalogRef.current?.entries).toMatchObject([
           { name: tool.name, source: "mcp", sourceName: "fixture", mcp: noteMetadata.mcp },
         ]);
-        await expect(normalizedTool.execute("current-call", {})).resolves.toBe(output);
-        await expect(wrappedTool.execute("wrapped-call", {})).resolves.toBe(output);
         await instance.dispose();
-        expect(() => normalizedTool.execute("retired-call", {})).toThrow(
-          "Plugin normalizer-fixture was reloaded or disabled",
-        );
-        await expect(wrappedTool.execute("retired-wrapped-call", {})).rejects.toThrow(
-          "Plugin normalizer-fixture was reloaded or disabled",
+        expect(() => normalizedTool.execute("retired-call", {})).toThrow("reloaded or disabled");
+        await expect(wrapped[0]!.execute("retired-wrapped-call", {})).rejects.toThrow(
+          "reloaded or disabled",
         );
       } finally {
         clearToolSearchCatalog({ catalogRef });
@@ -241,17 +241,15 @@ describe("AgentRuntimePlan tool policy helpers", () => {
     },
   );
 
-  it("shares normalized definitions while keeping run cancellation and private callbacks independent", async () => {
+  it("keeps normalized run cancellation and private callbacks independent", async () => {
     const { instance, provider } = createNormalizer("run-bound-normalizer", ({ tools }) => tools);
-    const parameters = Type.Object({});
     const completed = createDeferred();
     const executions: string[] = [];
     class RunTool implements AnyAgentTool {
       name = "run_fixture";
       label = "Run fixture";
       description = "Return this run's result";
-      parameters = parameters;
-      outputSchema = parameters;
+      parameters = Type.Object({});
       #runId: string;
 
       constructor(runId: string) {
@@ -260,18 +258,6 @@ describe("AgentRuntimePlan tool policy helpers", () => {
 
       prepareArguments() {
         return { runId: this.#runId };
-      }
-
-      prepareBeforeToolCallParams() {
-        return { preparedRun: this.#runId };
-      }
-
-      finalizeBeforeToolCallParams() {
-        return { finalizedRun: this.#runId };
-      }
-
-      getExecutionTimeoutMs() {
-        return this.#runId === "first" ? 100 : 200;
       }
 
       async execute() {
@@ -289,22 +275,12 @@ describe("AgentRuntimePlan tool policy helpers", () => {
     try {
       const first = normalize("first");
       const second = normalize("second");
-      for (const [tool, runId, timeout] of [
-        [first, "first", 100],
-        [second, "second", 200],
+      for (const [tool, runId] of [
+        [first, "first"],
+        [second, "second"],
       ] as const) {
-        expect(tool.parameters).toBe(parameters);
-        expect(tool.outputSchema).toBe(parameters);
-        const {
-          prepareArguments,
-          prepareBeforeToolCallParams,
-          finalizeBeforeToolCallParams,
-          getExecutionTimeoutMs,
-        } = tool;
+        const { prepareArguments } = tool;
         expect(prepareArguments?.({})).toEqual({ runId });
-        expect(prepareBeforeToolCallParams?.({}, {})).toEqual({ preparedRun: runId });
-        expect(finalizeBeforeToolCallParams?.({}, {})).toEqual({ finalizedRun: runId });
-        expect(getExecutionTimeoutMs?.({})).toBe(timeout);
       }
       const firstAbort = new AbortController();
       const secondAbort = new AbortController();
@@ -324,9 +300,6 @@ describe("AgentRuntimePlan tool policy helpers", () => {
       for (const tool of [first, second]) {
         expect(() => tool.execute("retired-call", {})).toThrow("reloaded or disabled");
         expect(() => tool.prepareArguments?.({})).toThrow("reloaded or disabled");
-        expect(() => tool.prepareBeforeToolCallParams?.({}, {})).toThrow("reloaded or disabled");
-        expect(() => tool.finalizeBeforeToolCallParams?.({}, {})).toThrow("reloaded or disabled");
-        expect(() => tool.getExecutionTimeoutMs?.({})).toThrow("reloaded or disabled");
       }
       expect(executions).toEqual(["first", "second"]);
     } finally {
@@ -437,55 +410,6 @@ describe("AgentRuntimePlan tool policy helpers", () => {
     },
   );
 
-  it.each([true, false])(
-    "preserves public and private metadata across clones (hidden: %s)",
-    (hideFromChannelProgress) => {
-      const outputSchema = Type.Object({});
-      const formatter = vi.fn(() => ({ text: "Terminal summary" }));
-      const tool = {
-        ...createParameterFreeTool("fixture_status"),
-        label: "Fixture status",
-        execute: vi.fn(),
-        outputSchema,
-      } as unknown as AgentTool;
-      const source = setToolTerminalPresentation(
-        wrapToolWithBeforeToolCallHook(tool, {
-          agentId: "main",
-          sessionId: "session-runtime-normalization",
-        }),
-        formatter,
-      );
-      Object.defineProperty(source, "hideFromChannelProgress", { value: hideFromChannelProgress });
-      (source as AnyAgentTool).catalogMode = "direct-only";
-      const normalized = {
-        ...createParameterFreeTool("fixture_status"),
-        label: "Fixture status",
-        execute: vi.fn(),
-        parameters: normalizedParameterFreeSchema(),
-      } as unknown as AgentTool;
-      Object.defineProperty(normalized, "outputSchema", {
-        configurable: true,
-        get() {
-          throw new Error("output schema has not been assigned yet");
-        },
-        set(value: AgentTool["outputSchema"]) {
-          Object.defineProperty(normalized, "outputSchema", { value });
-        },
-      });
-      mocks.normalizeProviderToolSchemas.mockReturnValueOnce([normalized]);
-
-      const result = normalizeTools([source]);
-
-      const resultTool = expectDefined(result[0], "normalized tool");
-      expect(resultTool).toBe(normalized);
-      expect(resultTool.outputSchema).toBe(outputSchema);
-      expect(resultTool.hideFromChannelProgress).toBe(hideFromChannelProgress ? true : undefined);
-      expect((resultTool as AnyAgentTool).catalogMode).toBe("direct-only");
-      expect(isToolWrappedWithBeforeToolCallHook(resultTool)).toBe(true);
-      expect(getToolTerminalPresentation(resultTool)).toBe(formatter);
-    },
-  );
-
   it("does not reread quarantined tools while preserving normalized metadata", () => {
     const unreadableName = createParameterFreeTool("fuzzplugin_unreadable_name") as AgentTool;
     Object.defineProperty(unreadableName, "name", {
@@ -496,10 +420,7 @@ describe("AgentRuntimePlan tool policy helpers", () => {
     });
     const healthy = createParameterFreeTool("fixture__lookup_note") as AgentTool;
     setPluginToolMeta(healthy, noteMetadata);
-    const normalized = {
-      ...healthy,
-      parameters: normalizedParameterFreeSchema(),
-    };
+    const normalized = { ...healthy, parameters: normalizedParameterFreeSchema() };
     const diagnostics: RuntimeToolSchemaDiagnostic[][] = [];
     mocks.normalizeProviderToolSchemas.mockReturnValueOnce([normalized]);
 

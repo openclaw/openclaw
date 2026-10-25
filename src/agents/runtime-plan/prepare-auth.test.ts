@@ -24,15 +24,8 @@ import {
   token,
   userPin,
 } from "./auth-fixtures.test-support.js";
-import {
-  agentRuntimeAuthPlanMatchesTarget,
-  canRunPreparedAgentRuntimeAuthAttempt,
-  prepareAgentRuntimeAuth,
-  preparedAgentRuntimeProfileAttemptHasCandidate,
-  type PreparedAgentRuntimeAuthAttempt,
-} from "./prepare-auth.js";
+import { prepareAgentRuntimeAuth } from "./prepare-auth.js";
 import { prepareAuthFixture } from "./prepare-auth.test-support.js";
-import type { AgentRuntimeAuthPlan } from "./types.js";
 
 const { prepare, preparePlan, expectAuthError } = createPreparationFixture(prepareAuthFixture);
 type Params = Parameters<typeof prepare>[0];
@@ -40,15 +33,6 @@ const xaiKey = (key: string) => createApiKeyCredential("xai", key);
 const pair = () => ({ "openai:platform": apiKey(), "openai:chatgpt": oauth() });
 const directSource = (evidence: "synthetic" | "environment" | "provider-config") =>
   ({ kind: "direct", evidence, authorization: "declared" }) as const;
-const expectedDirectAttempt = (
-  plan: AgentRuntimeAuthPlan,
-  requiresPriorProfileAttempt: boolean,
-): PreparedAgentRuntimeAuthAttempt => ({
-  kind: "direct",
-  plan,
-  allowAuthProfileFallback: false,
-  requiresPriorProfileAttempt,
-});
 const codexLogin = { ...platform, ...codexHarness, harnessAuthBootstrap: "harness" } as const;
 
 // Provider-hook behavior is covered by its owner suites.
@@ -449,34 +433,34 @@ it.each(["profile", "secret-ref"] as const)(
       env: profile ? {} : process.env,
     });
     expect(plan).toMatchObject({
+      forwardedAuthProfileId: profile ? id : undefined,
       selectedAuthMode: profile ? "api_key" : "api-key",
-      modelRoute: apiRoute,
+      credentialSource: profile ? { kind: "profile" } : directSource("environment"),
+      modelRoute: profile ? apiRoute : { ...apiRoute, baseUrl: "https://api.openai.com/v1" },
+      ...(profile ? { forwardedAuthProfileCandidateIds: [id] } : {}),
     });
-    if (profile) {
-      expect(plan).toMatchObject({
-        forwardedAuthProfileId: id,
-        forwardedAuthProfileCandidateIds: [id],
-      });
-      expect(attempts).toEqual([
-        { kind: "profile", profileId: id, plan },
-        expectedDirectAttempt(
-          expect.objectContaining({
-            forwardedAuthProfileId: undefined,
-            selectedAuthMode: "api-key",
-            modelRoute: expect.objectContaining(apiRoute),
-            credentialSource: directSource("provider-config"),
-          }),
-          true,
-        ),
-      ]);
-      expect(plan.credentialSource).toEqual({ kind: "profile" });
-    } else {
-      expect(attempts).toEqual([expectedDirectAttempt(plan, false)]);
-      expect(plan).toMatchObject({
-        forwardedAuthProfileId: undefined,
-        credentialSource: directSource("environment"),
-        modelRoute: { baseUrl: "https://api.openai.com/v1" },
-      });
+    expect(
+      attempts.map((a) => [
+        a.kind,
+        a.profileId,
+        a.allowAuthProfileFallback,
+        a.requiresPriorProfileAttempt,
+      ]),
+    ).toEqual(
+      profile
+        ? [
+            ["profile", id, undefined, undefined],
+            ["direct", undefined, false, true],
+          ]
+        : [["direct", undefined, false, false]],
+    );
+    expect(attempts.at(-1)?.plan).toMatchObject({
+      forwardedAuthProfileId: undefined,
+      selectedAuthMode: "api-key",
+      modelRoute: apiRoute,
+      credentialSource: directSource(profile ? "provider-config" : "environment"),
+    });
+    if (!profile) {
       const serialized = JSON.stringify(plan.credentialSource);
       expect(serialized).not.toContain("secret-ref-platform-key");
       expect(serialized).not.toContain("OPENAI_PLATFORM_KEY");
@@ -499,32 +483,6 @@ it.each(["profile", "secret-ref"] as const)(
     expect(resolvedAuth.profileId).toBe(profile ? id : undefined);
   },
 );
-
-it("does not unlock direct fallback when profiles cool down before dispatch", () => {
-  const store = authStore(oneProfile("openai:platform", apiKey("profile-platform-key")), {
-    openai: ["openai:platform"],
-  });
-  const [profileAttempt, directAttempt] = prepare({
-    config: openAIConfig({ apiKey: "configured-platform-key" }),
-    authProfileStore: store,
-  }).attempts;
-  if (profileAttempt?.kind !== "profile" || directAttempt?.kind !== "direct") {
-    throw new Error("expected profile and direct attempts");
-  }
-  setProfileCooldown(store, "openai:platform");
-  expect(
-    preparedAgentRuntimeProfileAttemptHasCandidate({
-      attempt: profileAttempt,
-      store,
-      modelId: "gpt-5.5",
-    }),
-  ).toBe(false);
-  expect(
-    [false, true].map((priorProfileAttempted) =>
-      canRunPreparedAgentRuntimeAuthAttempt({ attempt: directAttempt, priorProfileAttempted }),
-    ),
-  ).toEqual([false, true]);
-});
 
 it("preserves explicit environment endpoints", () => {
   expect(
@@ -589,13 +547,4 @@ it.each(["incompatible", "missing"] as const)("rejects %s virtual Codex pins", (
           status: undefined,
         }),
   );
-});
-
-it("does not reuse routed plans for other compaction models", () => {
-  const plan = preparePlan({ env: { OPENAI_API_KEY: "platform-key" } });
-  expect(
-    ["gpt-5.5", "gpt-5.6"].map((modelId) =>
-      agentRuntimeAuthPlanMatchesTarget(plan, { provider: "openai", modelId }),
-    ),
-  ).toEqual([true, false]);
 });

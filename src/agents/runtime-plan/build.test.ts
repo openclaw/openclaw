@@ -20,9 +20,7 @@ vi.mock("../provider-auth-aliases.js", async (importOriginal) => ({
 
 vi.mock("../../plugins/provider-hook-runtime.js", () => ({
   clearProviderRuntimePluginCacheForTest: vi.fn(),
-  testing: {
-    clearProviderRuntimePluginCacheForTest: vi.fn(),
-  },
+  testing: { clearProviderRuntimePluginCacheForTest: vi.fn() },
   ensureProviderRuntimePluginHandle: vi.fn(
     (params) => params.runtimeHandle ?? { provider: "openai" },
   ),
@@ -70,7 +68,14 @@ describe("AgentRuntimePlan", () => {
   afterEach(() => resetConfigRuntimeState());
 
   it("defers default transport extra params until they are read", () => {
-    const prepareExtraParams = vi.fn(() => undefined);
+    let calls = 0;
+    const prepareExtraParams: NonNullable<PreparedHandle["plugin"]>["prepareExtraParams"] = ({
+      auth,
+    }) => {
+      calls++;
+      expect(auth).toEqual({ mode: "oauth", authFlow: "test-subscription" });
+      return undefined;
+    };
     const plan = buildPlan({
       providerRuntimeHandle: preparedHandle(prepareExtraParams),
       preparedAuthPlan: {
@@ -81,17 +86,14 @@ describe("AgentRuntimePlan", () => {
       },
     });
 
-    expect(prepareExtraParams).not.toHaveBeenCalled();
+    expect(calls).toBe(0);
     expect(plan.transport.extraParams).toMatchObject({
       parallel_tool_calls: true,
       text_verbosity: "low",
     });
-    expect(prepareExtraParams).toHaveBeenCalledTimes(1);
-    expect(prepareExtraParams).toHaveBeenCalledWith(
-      expect.objectContaining({ auth: { mode: "oauth", authFlow: "test-subscription" } }),
-    );
+    expect(calls).toBe(1);
     void plan.transport.extraParams;
-    expect(prepareExtraParams).toHaveBeenCalledTimes(1);
+    expect(calls).toBe(1);
   });
 
   it("keeps prepared extra params within their provider generation and attempt", () => {
@@ -140,10 +142,7 @@ describe("AgentRuntimePlan", () => {
         extraParamsOverride: { parallel_tool_calls: false },
         resolvedTransport: "websocket",
       }),
-    ).toMatchObject({
-      parallel_tool_calls: false,
-      text_verbosity: "low",
-    });
+    ).toMatchObject({ parallel_tool_calls: false, text_verbosity: "low" });
     expect(
       plan.prompt.resolveSystemPromptContribution({
         provider: "openai",
@@ -151,10 +150,6 @@ describe("AgentRuntimePlan", () => {
         promptMode: "full",
       })?.stablePrefix,
     ).toContain("<persona_latch>");
-  });
-
-  it("keeps OpenClaw-owned tool-schema normalization reachable from the plan", () => {
-    const plan = buildPlan({ model: apiModel });
     const normalized = plan.tools.normalize([createParameterFreeTool()] as never);
     expect(normalized).toMatchObject([{ name: "ping" }]);
     expect(normalized[0]?.parameters).toStrictEqual({});
@@ -187,11 +182,7 @@ describe("AgentRuntimePlan", () => {
     const metadataSnapshot = { plugins: [] };
     vi.mocked(resolveProviderRuntimePluginHandle).mockClear();
     resolveProviderIdForAuth.mockClear();
-    const plan = buildAgentRuntimePlan({
-      provider: "openai",
-      modelId: "gpt-5.4",
-      metadataSnapshot,
-    });
+    const plan = buildPlan({ metadataSnapshot });
 
     expect(plan.tools.preparedPlanning?.metadataSnapshot).toBe(metadataSnapshot);
     expect(resolveProviderRuntimePluginHandle).toHaveBeenCalledWith(

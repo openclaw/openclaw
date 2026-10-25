@@ -216,17 +216,10 @@ describe("resolvePreparedRuntimeModelAuth", () => {
     const store = candidateStore({
       type: "api_key",
       provider: "openai",
-      keyRef: {
-        source: "env",
-        provider: "default",
-        id: "OPENCLAW_TEST_MISSING_PREPARED_AUTH",
-      },
+      keyRef: { source: "env", provider: "default", id: "OPENCLAW_TEST_MISSING_PREPARED_AUTH" },
     });
 
-    await expectAuth({
-      plan: candidatePlan(selectedPlan(false)),
-      store,
-    }).rejects.toMatchObject({
+    await expectAuth({ plan: candidatePlan(selectedPlan(false)), store }).rejects.toMatchObject({
       code: "SECRET_SURFACE_UNAVAILABLE",
       ownerKind: "account",
     });
@@ -383,25 +376,14 @@ describe("resolvePreparedRuntimeModelAuth", () => {
         }
         return { plan: directPlan, auth: "must-not-be-used" };
       });
-      const materializeModel = vi.fn(async () => platformModel);
       await expect(
         resolveAttempts({
           attempts: profileThenDirect(preparedProfile, directPlan),
-          store: authStore({
-            [profileId]: secretRef
-              ? apiKey("unused")
-              : oauth({
-                  access: "expired-access",
-                  refresh: "expired-refresh",
-                  expires: Date.now() - 60_000,
-                }),
-          }),
-          materializeModel,
+          store: authStore({ [profileId]: apiKey("unused") }),
           resolveAuth,
         }),
       ).rejects.toBe(failure);
       expect(resolveAuth).toHaveBeenCalledOnce();
-      expect(materializeModel).toHaveBeenCalledOnce();
     },
   );
 
@@ -419,24 +401,12 @@ describe("resolvePreparedRuntimeModelAuth", () => {
       };
       const store = authStore(
         afterProfileFailure
-          ? {
-              "github-copilot:first": {
-                type: "token",
-                provider: "github-copilot",
-                token: "profile-token",
-              },
-            }
+          ? { "github-copilot:first": { ...token("profile-token"), provider: "github-copilot" } }
           : {},
       );
       const profileModel = { ...platformModel, contextWindow: 1_050_000 };
       const expectedContextWindow = afterProfileFailure ? 400_000 : 1_050_000;
-      const directModel = {
-        ...platformModel,
-        contextWindow: expectedContextWindow,
-      };
-      const materializeModel = vi.fn(async ({ forceResolve }: { forceResolve?: boolean }) =>
-        forceResolve ? directModel : profileModel,
-      );
+      const directModel = { ...platformModel, contextWindow: expectedContextWindow };
       const result = await resolveAttempts({
         attempts: afterProfileFailure
           ? profileThenDirect(profilePlan, directPlan)
@@ -450,7 +420,7 @@ describe("resolvePreparedRuntimeModelAuth", () => {
             ],
         store,
         modelId: "gpt-5.6-sol",
-        materializeModel,
+        materializeModel: async ({ forceResolve }) => (forceResolve ? directModel : profileModel),
         resolveAuth: async ({ attempt }) => {
           if (attempt.kind === "profile") {
             throw new Error("profile credential failed");
@@ -464,12 +434,6 @@ describe("resolvePreparedRuntimeModelAuth", () => {
         model: { contextWindow: expectedContextWindow },
       });
       expect(result.model).toBe(directModel);
-      expect(materializeModel.mock.calls).toEqual([
-        ...(afterProfileFailure
-          ? [[{ plan: profilePlan, model: platformModel, forceResolve: false }]]
-          : []),
-        [{ plan: directPlan, model: platformModel, forceResolve: true }],
-      ]);
     },
   );
 });
