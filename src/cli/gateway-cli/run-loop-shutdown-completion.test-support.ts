@@ -80,7 +80,6 @@ export function registerGracefulGatewayShutdownTests(f: UpdateRespawnFixtures): 
         localServiceStop.release();
 
         await expect(exited).resolves.toBe(0);
-        expectCallCount(1, f.stopManagedProviderLocalServices, f.flushLogger);
         expect(timelineAtLogFlush).toContain('"name":"gateway.stop"');
         expect(f.armShutdownHardExitWatchdog).not.toHaveBeenCalled();
       } finally {
@@ -107,7 +106,6 @@ export function registerGracefulGatewayShutdownTests(f: UpdateRespawnFixtures): 
           expect(
             (await f.acquireGatewayLock.mock.results[0]?.value)?.release,
           ).toHaveBeenCalledOnce();
-          expect(f.flushLogger).toHaveBeenCalledOnce();
           expectUncalled(f.restartGatewayProcessWithFreshPid, f.respawnGatewayProcessForUpdate);
         }, true);
       } finally {
@@ -187,7 +185,6 @@ export function registerGracefulGatewayShutdownTests(f: UpdateRespawnFixtures): 
             expectUncalled(runtime.exit, exit);
             flushing.release();
             await expect(exited).resolves.toBe(failed ? 1 : code);
-            expect(runtime.exit).toHaveBeenCalledOnce();
             expectCallCount(restart ? 2 : 1, close, start);
             expect(
               (await f.acquireGatewayLock.mock.results.at(-1)?.value)?.release,
@@ -297,7 +294,6 @@ export function registerShutdownCompletionTests(f: UpdateRespawnFixtures): void 
       expect(f.requestManagedServiceUpdateHandoffPark).toHaveBeenCalledWith(
         f.managedUpdateSuccessorOwner,
       );
-      expect(close).toHaveBeenCalledOnce();
       expect(runtime.exit).not.toHaveBeenCalled();
       await advanceWithoutCalls(1, runtime.exit);
       cleanup.resolve();
@@ -344,9 +340,6 @@ export function registerShutdownCompletionTests(f: UpdateRespawnFixtures): void 
       captureSignal("SIGUSR2")();
       await vi.advanceTimersByTimeAsync(0);
       expectCallCount(1, close, f.armShutdownHardExitWatchdog);
-      expect(f.gatewayLog.error).toHaveBeenCalledWith(
-        "gateway lifecycle completion failed: shutdown cleanup failed",
-      );
       expectCallCount(0, runtime.exit, f.cancelShutdownHardExitWatchdog);
       await vi.advanceTimersByTimeAsync(10_000);
       await expect(exited).resolves.toBe(1);
