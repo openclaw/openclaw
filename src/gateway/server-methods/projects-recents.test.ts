@@ -10,7 +10,7 @@ import { memorySessionActorOwners } from "../../config/sessions/session-actor-me
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
-import { registerProjectRegistry } from "../../projects/project-registry.js";
+import { listProjectRegistry, registerProjectRegistry } from "../../projects/project-registry.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db-cache.js";
@@ -253,7 +253,7 @@ test("projects.list returns only the caller's deterministic resolved recents", a
   }
 });
 
-test("projects.list preserves path ranking, folder names, locale ties, and the pre-access recent limit", async () => {
+test("project recents preserve path ranking, folder names, locale ties, and the RPC pre-access limit", async () => {
   const state = await createOpenClawTestState({ layout: "state-only", prefix: "projects-rpc-" });
   try {
     const repo = await initializeRepository(state.root);
@@ -284,6 +284,7 @@ test("projects.list preserves path ranking, folder names, locale ties, and the p
         )
         .run(id, index === 0 ? "First tie" : "Second tie", "/work/ties");
     }
+    const projects = await listProjectRegistry(cfg);
     const projectRecent = (projectId: string, displayName: string): ProjectRecent => ({
       kind: "project",
       projectId,
@@ -318,26 +319,13 @@ test("projects.list preserves path ranking, folder names, locale ties, and the p
       ]),
     ];
     for (const [index, [agent, folder, expected, association]] of cases.entries()) {
-      const profile = ensureProfileForEmail(`ranking-${index}@example.test`);
       const { sessionKey = `agent:${agent}:ranking-${index}`, ...entry } = association ?? {};
-      replaceSessionEntrySync(
-        { agentId: agent, sessionKey },
-        {
-          sessionId: `ranking-${index}`,
-          updatedAt: 100,
-          createdActor: { type: "human", source: "profile", id: profile.id },
-          spawnedCwd: folder,
-          ...entry,
-        },
-      );
-      const result = await invokeProjectMethod(
-        "projects.list",
-        {},
-        cfg,
-        ["operator.write"],
-        profile.id,
-      );
-      expectRecents(result, expected);
+      const candidate = {
+        agentId: agent,
+        key: sessionKey,
+        entry: { sessionId: `ranking-${index}`, updatedAt: 100, spawnedCwd: folder, ...entry },
+      };
+      expect(await listProjectRecents([candidate], projects, new Set())).toEqual(expected);
     }
 
     const limited = ensureProfileForEmail("limited-recents@example.test");

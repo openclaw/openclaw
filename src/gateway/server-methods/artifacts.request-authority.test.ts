@@ -116,11 +116,11 @@ async function exercise(
       () => current,
       connection.signal,
     );
-    const guard = vi.fn(() => {
+    const guard = () => {
       if (!guardAllowed) {
         throw refusal;
       }
-    });
+    };
     const respond = vi.fn();
     const invoke = (params: Record<string, unknown>, selectedMethod: Method = method) =>
       handleGatewayRequest({
@@ -172,19 +172,17 @@ async function exercise(
     }
     respond.mockClear();
     boundaries.visit.mockClear();
-    guard.mockClear();
-    const changeAuthority = () => {
-      if (change === "request canceled") {
-        requestController.abort(refusal);
-      } else if (change === "device revoked") {
-        invalidateGatewayDeviceRevocation(context, "artifact-device", "operator");
-      } else if (change === "caller replaced") {
+    const changeAuthority = {
+      "request canceled": () => requestController.abort(refusal),
+      "device revoked": () =>
+        invalidateGatewayDeviceRevocation(context, "artifact-device", "operator"),
+      "caller replaced": () => {
         current = false;
-      } else if (change === "opaque guard refused") {
+      },
+      "opaque guard refused": () => {
         guardAllowed = false;
-      } else {
-        connection.abort();
-      }
+      },
+      reconnected: () => connection.abort(),
     };
     const entered = createDeferred();
     const release = createDeferred();
@@ -221,16 +219,15 @@ async function exercise(
         return prepared;
       });
     }
-    const outcome = Promise.allSettled([
-      invoke({
-        sessionKey,
-        ...(secondPreparation ? { runId } : {}),
-        ...(method === "artifacts.list" ? {} : { artifactId }),
-        ...(method === "artifacts.download" && disclosureBoundary === "transcript"
-          ? { transport: "http" }
-          : {}),
-      }),
-    ]);
+    const outcome = invoke({
+      sessionKey,
+      ...(secondPreparation ? { runId } : {}),
+      ...(method === "artifacts.list" ? {} : { artifactId }),
+      ...(method === "artifacts.download" && disclosureBoundary === "transcript"
+        ? { transport: "http" }
+        : {}),
+    });
+    void outcome.catch(() => {});
     try {
       await entered.promise;
       expect(respond).not.toHaveBeenCalled();
@@ -238,11 +235,10 @@ async function exercise(
       if (!disclosureBoundary) {
         expect(transcriptReadsBeforeRelease).toBe(secondPreparation ? 1 : 0);
       }
-      changeAuthority();
+      changeAuthority[change]();
       release.resolve();
-      const settled = await outcome;
       if (change === "reconnected") {
-        expect(settled).toEqual([{ status: "fulfilled", value: undefined }]);
+        await expect(outcome).resolves.toBeUndefined();
         expect(respond.mock.calls[0]?.[0]).toBe(true);
         if (method === "artifacts.download" && disclosureBoundary === "transcript") {
           expect(respond.mock.calls[0]?.[1]).toMatchObject({
@@ -252,17 +248,11 @@ async function exercise(
           expect(respond.mock.calls[0]?.[1]).not.toHaveProperty("url");
         }
       } else {
-        expect(settled).toMatchObject([
-          {
-            status: "rejected",
-            reason:
-              disclosureBoundary ||
-              change === "request canceled" ||
-              change === "opaque guard refused"
-                ? refusal
-                : { message: "Gateway requester authority changed" },
-          },
-        ]);
+        await expect(outcome).rejects.toMatchObject(
+          disclosureBoundary || change === "request canceled" || change === "opaque guard refused"
+            ? refusal
+            : { message: "Gateway requester authority changed" },
+        );
         expect(respond).not.toHaveBeenCalled();
         if (!disclosureBoundary) {
           expect(boundaries.visit).toHaveBeenCalledTimes(transcriptReadsBeforeRelease);
@@ -272,7 +262,7 @@ async function exercise(
       }
     } finally {
       release.resolve();
-      await outcome;
+      await outcome.catch(() => {});
       captured.release();
       closeGatewayDeviceRevocation(context);
       await closeOpenClawStateDatabaseAsync();

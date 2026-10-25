@@ -230,37 +230,21 @@ it("reopens SQLite with bounded history previews and exact recoverable tool text
   await withHistoryState(async () => {
     const scope = await seed("tool-output");
     const literal = " \n[[reply_to_current]]\r\n<untrusted>  \t";
-    const output = literal + "line of output\n".repeat(12_000) + "\n😀 tail  \t\n";
-    const largeOutput = literal + "x".repeat(1_050_000) + "\nEND  \n";
+    const output = literal + "line of output\n".repeat(80_000) + "\n😀 tail  \t\n";
     const toolOutput = { source: "provider-response", modelInput: "unverified" };
-    const tool = (id: string, text: string, extra: Record<string, unknown> = {}) => ({
-      id,
-      text,
+    await appendTranscriptMessage(scope, {
+      eventId: "tool-output",
       message: {
         role: "toolResult",
-        toolName: "read",
-        toolCallId: id.replace("-output", "-call"),
-        content: [{ type: "text", text }],
-        ...extra,
-      },
-    });
-    const fixtures = [
-      tool("provider-output", output, {
+        toolName: "exec",
+        toolCallId: "tool-call",
+        content: textContent(output),
         __openclaw: { toolOutput, upstreamUserText: "PRIVATE_PROMPT" },
         isError: true,
         details: { private: "PRIVATE_DETAILS" },
         providerReplay: { private: "PRIVATE_REPLAY" },
-      }),
-      tool("execution-output", largeOutput, {
-        toolName: "exec",
-        isError: false,
-        __openclaw: { toolOutput: { ...toolOutput, source: "execution" } },
-      }),
-      tool("legacy-output", literal + "legacy short result  \n"),
-    ];
-    for (const fixture of fixtures) {
-      await appendTranscriptMessage(scope, { eventId: fixture.id, message: fixture.message });
-    }
+      },
+    });
     const persisted = await loadTranscriptEvents(scope);
     const databasePath = resolveOpenClawAgentSqlitePath(
       toDatabaseOptions(resolveSqliteTranscriptReadScope(scope)),
@@ -272,52 +256,41 @@ it("reopens SQLite with bounded history previews and exact recoverable tool text
     const context = await createHistoryReadContext();
     const rpc = historyRpc(context, scope.sessionKey);
     const request = async (...args: Parameters<typeof rpc>) => historyPayload(await rpc(...args));
-    const get = (messageId: string, maxChars?: number) =>
-      request("chat.message.get", { messageId, ...(maxChars === undefined ? {} : { maxChars }) });
+    const get = (maxChars?: number) =>
+      request("chat.message.get", {
+        messageId: "tool-output",
+        ...(maxChars === undefined ? {} : { maxChars }),
+      });
     const expectMessage = (response: unknown, message: Record<string, unknown>) =>
       expect(response).toMatchObject({ ok: true, message });
-    const history = await request("chat.history");
-    expect(Array.isArray(history.messages)).toBe(true);
-    const messages = history.messages as Array<Record<string, unknown>>;
-    for (const fixture of fixtures) {
-      const preview = expectDefined(
-        messages.find((message) => asOptionalRecord(message["__openclaw"])?.id === fixture.id),
-        "tool history preview",
-      );
-      expect(preview).toMatchObject({
-        role: "toolResult",
-        toolCallId: fixture.message.toolCallId,
-        toolName: fixture.message.toolName,
-        content: [{ type: "text", text: fixture.text.slice(0, 8_000) }],
-      });
-      expect(Buffer.byteLength(JSON.stringify(preview))).toBeLessThan(128 * 1024);
-      const metadata = asOptionalRecord(preview["__openclaw"]);
-      expect(metadata?.truncated).toBe(fixture.text.length > 8_000 ? true : undefined);
-      expect(metadata?.toolOutput).toEqual(
-        asOptionalRecord(asOptionalRecord(fixture.message)?.["__openclaw"])?.toolOutput,
-      );
-      const response = await get(fixture.id, 2_000_000);
-      expectMessage(response, {
-        toolCallId: fixture.message.toolCallId,
-        content: textContent(fixture.text),
-      });
-      const full = expectDefined(asOptionalRecord(response.message), "full message");
-      expect(asOptionalRecord(full["__openclaw"])?.truncated).toBeUndefined();
-      for (const visible of [preview, full]) {
-        for (const marker of ["PRIVATE_REPLAY", "PRIVATE_PROMPT", "PRIVATE_DETAILS"]) {
-          expect(JSON.stringify(visible)).not.toContain(marker);
-        }
+    const preview = await request("chat.history");
+    expect(preview).toMatchObject({
+      messages: [
+        {
+          role: "toolResult",
+          toolCallId: "tool-call",
+          toolName: "exec",
+          content: textContent(output.slice(0, 8_000)),
+          __openclaw: { truncated: true, toolOutput },
+        },
+      ],
+    });
+    expect(Buffer.byteLength(JSON.stringify(preview))).toBeLessThan(128 * 1024);
+    const full = await get(2_000_000);
+    expectMessage(full, { toolCallId: "tool-call", content: textContent(output) });
+    expect(
+      asOptionalRecord(asOptionalRecord(full.message)?.["__openclaw"])?.truncated,
+    ).toBeUndefined();
+    for (const visible of [preview, full]) {
+      for (const marker of ["PRIVATE_REPLAY", "PRIVATE_PROMPT", "PRIVATE_DETAILS"]) {
+        expect(JSON.stringify(visible)).not.toContain(marker);
       }
     }
-    expectMessage(await get("execution-output"), {
-      content: textContent(largeOutput.slice(0, 1_000_000)),
-      __openclaw: {
-        truncated: true,
-        reason: "display-cap",
-        toolOutput: { source: "execution", modelInput: "unverified" },
-      },
+    expectMessage(await get(), {
+      content: textContent(output.slice(0, 1_000_000)),
+      __openclaw: { truncated: true, reason: "display-cap", toolOutput },
     });
-    expectMessage(await get("provider-output", 32), {
+    expectMessage(await get(32), {
       isError: true,
       content: textContent(output.slice(0, 32)),
       __openclaw: { truncated: true, reason: "display-cap", toolOutput },

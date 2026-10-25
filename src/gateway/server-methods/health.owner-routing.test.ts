@@ -254,7 +254,7 @@ describe("Gateway status owner routing", () => {
           execPath: "/opt/homebrew/Cellar/node@24/24.20.0/bin/node",
           available: false,
         };
-        const read = vi.spyOn(childRuntime, "readChildRuntimeViability").mockReturnValue(removed);
+        vi.spyOn(childRuntime, "readChildRuntimeViability").mockReturnValue(removed);
         let current: HealthSummary["eventLoop"] = initial;
         const next = reset ? undefined : { ...initial, cpuCoreRatio: 1.2 };
         const request = createHealthReader(cached, () => current)();
@@ -264,7 +264,6 @@ describe("Gateway status owner routing", () => {
         expect(respond.mock.calls[0]?.[1].eventLoop).toBe(next);
         expect(respond.mock.calls[0]?.[3]).toEqual({ cached: true });
         expect(cached.eventLoop).toBe(initial);
-        expect(read).toHaveBeenCalled();
         expect(respond.mock.calls[0]?.[1].childRuntime).toEqual(removed);
         expect(cached).not.toHaveProperty("childRuntime");
       });

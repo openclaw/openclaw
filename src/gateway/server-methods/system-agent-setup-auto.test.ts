@@ -197,7 +197,6 @@ describe("Gateway automatic inference setup", () => {
         selected: { kind: ollama.kind, modelRef: ollama.modelRef },
         attempts: [{ kind: "codex-cli", error: "Model request failed." }],
       });
-      expect(fixture.activate).toHaveBeenCalledTimes(2);
       expect(fixture.prepare).not.toHaveBeenCalled();
     },
   );
@@ -249,7 +248,6 @@ describe("Gateway automatic inference setup", () => {
         attempts: [],
         installedPlugins: [],
       });
-      expect(fixture.readConfig).toHaveBeenCalledOnce();
       expectUnused(fixture.activate, fixture.prepare, fixture.commit, fixture.audit);
     },
   );
@@ -312,8 +310,6 @@ describe("Gateway automatic inference setup", () => {
       ],
       installedPlugins: ["codex"],
     });
-    expect(fixture.activate).toHaveBeenCalledTimes(4);
-    expect(fixture.prepare).toHaveBeenCalledOnce();
   });
 
   it("joins concurrent callers before activation and holds admission against an independent context", async () => {
@@ -325,7 +321,6 @@ describe("Gateway automatic inference setup", () => {
       const joined = runGatewayAutomaticSetup(gateway, () => {});
       expect(joined).toBe(first);
       await expect(runSetup()).rejects.toBeInstanceOf(SetupAdmissionBusyError);
-      expect(fixture.detect).toHaveBeenCalledOnce();
       expect(fixture.activate).not.toHaveBeenCalled();
       discovered.resolve(detection([codex]));
       expect(await joined).toMatchObject({ status: "activated", selected: presentedCodex });

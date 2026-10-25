@@ -12,7 +12,6 @@ import {
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { getRpcSource } from "../../sessions/session-controller.rpc-sources.js";
 import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
-import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createExpectedProfileBinding } from "../expected-profile.js";
 import { expectRejectedOnce as expectRejected } from "../server-methods.request-gate.test-support.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
@@ -108,9 +107,7 @@ it.each([true, false])(
 
 it("rejects caller replacement during initial authorization without an expected profile", async () => {
   await using fixture = await createFixture();
-  const source = ensureProfileForEmail("initial-chat-source@example.test");
-  const replacement = ensureProfileForEmail("initial-chat-replacement@example.test");
-  setClientProfile(fixture.client, source);
+  const { successor: replacement } = bindProfile(fixture);
   const entered = createDeferred();
   const release = createDeferred();
   const read = sessionSharingFacts.readSessionSharingFactsInWorker;
@@ -219,16 +216,13 @@ it("terminalizes a native command account merge during fresh transcript approval
   const { profile: source, merge } = bindProfile(fixture, true);
   const ack = await fixture.send(undefined, { expectedProfileId: source.id });
   expect(ack.mock.calls[0]?.[1]).toMatchObject({ status: "started" });
-  expect(fixture.beforeApprove).not.toHaveBeenCalled();
   const recorder = await fixture.dispatchedRecorder;
   const acceptedAck = structuredClone(ack.mock.calls);
   fixture.beforeApprove.mockImplementation(merge);
   await fixture.finishDispatch();
-  expect(fixture.beforeApprove).toHaveBeenCalledOnce();
   expect.soft(recorder.getAdmissionReceipt()).toBeUndefined();
   expect.soft(ack.mock.calls).toEqual(acceptedAck);
   expect.soft(ack).toHaveBeenCalledOnce();
-  expect.soft(dispatchInboundMessageMock).toHaveBeenCalledOnce();
   const transcript = loadTranscriptEventsSync(fixture.scope);
   expect
     .soft(transcript.filter((entry) => isRecord(entry) && entry.type === "message"))

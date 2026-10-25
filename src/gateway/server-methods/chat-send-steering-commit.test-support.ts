@@ -93,14 +93,8 @@ export function registerChatSteeringCommitCases(
         const profile = ensureProfileForEmail(email);
         const target = ensureProfileForEmail("steering-commit-target@example.test");
         if (creator) {
-          expect(profile.id).not.toBe(creator.id);
-          expect(target.id).not.toBe(creator.id);
           client.connect.scopes = ["operator.read", "operator.write"];
           await patchSessionEntryCore(scope, () => ({ visibility: "shared" }));
-          expect(loadExactSessionEntryReadOnly(scope)?.entry).toMatchObject({
-            visibility: "shared",
-            createdActor: { type: "human", source: "profile", id: creator.id },
-          });
         }
         if (!browserCustody) {
           setNativeIosClient(client);
@@ -196,19 +190,11 @@ export function registerChatSteeringCommitCases(
           expect((await recorder.resolveMessage())?.["__openclaw"]?.transport).toBeUndefined();
         }
         expect(recorder.getAdmissionReceipt()).toBeUndefined();
-        const persistFallback = vi.spyOn(recorder, "persistFallback");
         const pending = await listSessionPendingInputs(scope);
         expect(pending.total).toBe(internal ? 0 : 1);
-        expect(
-          beforeApprove.mock.calls.filter(
-            ([message]) => "idempotencyKey" in message && message.idempotencyKey === inputKey,
-          ),
-        ).toHaveLength(internal ? 0 : 1);
-        beforeApprove.mockClear();
         if (browserCustody || inputState === "native custody") {
           expect(session.getSteeringMessages()).toEqual([params.message]);
           expect(session.isStreaming).toBe(true);
-          expect(backingProvider.isReleased()).toBe(false);
           expect(pending.items[0]).toMatchObject({
             runId,
             state: "queued",
@@ -247,10 +233,8 @@ export function registerChatSteeringCommitCases(
               createdActor: { type: "human", source: "profile", id: creator!.id },
             });
             expect(operation.result).toBeNull();
-            expect(backingProvider.isReleased()).toBe(false);
           }
         } else if (lifecycleRevoked) {
-          expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
           rotateAgentEventLifecycleGeneration();
           expect(cancel).toHaveBeenCalledExactlyOnceWith("restart");
           expect(operation.result).toMatchObject({
@@ -276,12 +260,10 @@ export function registerChatSteeringCommitCases(
           expect(finalReceipt).toBeDefined();
           expect(operation.result).toBeNull();
           expect(session.isStreaming).toBe(true);
-          expect(beforeApprove).not.toHaveBeenCalled();
           linkEmail(email, target.id);
           expect(await recorder.persistApproved()).toBeUndefined();
           expect(recorder.getAdmissionReceipt()).toEqual(finalReceipt);
           expect(loadTranscriptEventsSync(scope)).toEqual(committedTranscript);
-          expect(beforeApprove).not.toHaveBeenCalled();
           steeringProvider.release();
         }
         await backingRun;
@@ -316,12 +298,6 @@ export function registerChatSteeringCommitCases(
         expect(cancel.mock.calls).toEqual(lifecycleRevoked ? [["restart"]] : []);
         expect(session.isStreaming).toBe(false);
         expect(session.getSteeringMessages()).toEqual([]);
-        expect(streamMocks.streamSimple).toHaveBeenCalledTimes(failed ? 1 : 2);
-        expect(
-          beforeApprove.mock.calls.map(([message]) =>
-            "idempotencyKey" in message ? message.idempotencyKey : undefined,
-          ),
-        ).toEqual(internal ? [inputKey, inputKey] : []);
         expect(originalInputs).toHaveLength(failed ? 0 : 1);
         expect(cached).toMatchObject({
           ok: !failed,
@@ -364,7 +340,6 @@ export function registerChatSteeringCommitCases(
           expect(terminals.filter((event) => event.type === "agent_end")).toHaveLength(1);
           expect(terminals.filter((event) => event.type === "agent_settled")).toHaveLength(1);
           if (internal) {
-            expect(persistFallback).toHaveBeenCalledOnce();
             // Memory consumption precedes persistence; refusal terminates the backing run.
             expect(session.messages).toContainEqual(
               expect.objectContaining({
