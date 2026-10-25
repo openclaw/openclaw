@@ -108,7 +108,7 @@ the parent counters. Keep these measurement limits alongside the results.
 ## SQLite admission worker release
 
 `node --expose-gc scripts/perf/sqlite-admission-release-measure.mjs SOURCE_ROOT OWNER_FILE LABEL
-MODE OPERATIONS [WARMUP] [TOUCHED]` measures the complete admission registry owner against 40 synthetic
+MODE OPERATIONS [WARMUP] [TOUCHED] [release|install|install-scope]` measures the complete admission registry owner against 40 synthetic
 databases with 3,000 session scopes each. Save baseline and candidate owner source
 files before running; the source root supplies the unchanged singleton, publication
 key, and path-normalization dependencies. Native identity operations deliberately
@@ -128,6 +128,15 @@ earlier no-op/single-record phases. Report
 absolute deltas and sample counts; this workload does not measure event-loop tails,
 promotion, native SQL, or whole-Gateway performance. The measured loop reattaches
 synthetic reference cells directly, excluding worker admission and transport costs.
+
+The default operation is `release`. Use `install` for reference-only admission
+publication, or `install-scope` to import a fresh scope with each reference.
+Both install modes recreate one synthetic reference per affected database before
+calling the real registry install; they include that fixture work in the totals.
+After a full sweep, reference-only installs should revisit zero scope cells;
+scope imports must still publish their new cells and sweep retirements. Compare
+zero, one, and all 40 affected databases. The scope-import control includes the
+normal receipt-budget pruning as the workload grows.
 
 ## Retained Buffer pool storage
 

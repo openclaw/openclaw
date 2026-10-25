@@ -19,12 +19,14 @@ const [
   count = "1000",
   warmupCount = "50",
   touchedCount,
+  operation = "release",
 ] = process.argv.slice(2);
 assert(
   sourceRoot && ownerFile,
-  "usage: node --expose-gc SCRIPT SOURCE_ROOT OWNER_FILE LABEL [timing|allocation|counts] [OPERATIONS] [WARMUP] [TOUCHED]",
+  "usage: node --expose-gc SCRIPT SOURCE_ROOT OWNER_FILE LABEL [timing|allocation|counts] [OPERATIONS] [WARMUP] [TOUCHED] [release|install|install-scope]",
 );
 assert(["timing", "allocation", "counts"].includes(mode));
+assert(["release", "install", "install-scope"].includes(operation));
 assert(globalThis.gc, "--expose-gc required for cleanup outside measurement");
 const operations = Number(count);
 const warmup = Number(warmupCount);
@@ -110,12 +112,29 @@ for (const touched of scenarios) {
   const { registry, records } = fixture();
   const targets = records.slice(0, touched);
   const refs = new SharedArrayBuffer(8);
+  let installedScopes = 0;
   const run = () => {
     Atomics.store(new Int32Array(refs), 0, 1);
-    for (const record of targets) {
-      record.references.set(worker, refs);
+    if (operation === "release") {
+      for (const record of targets) {
+        record.references.set(worker, refs);
+      }
+      registry.releaseWorker(worker);
+    } else {
+      const incoming = targets.map((record) => {
+        record.references.delete(worker);
+        const writeScopes = new Map();
+        if (operation === "install-scope") {
+          const scope = `installed-${installedScopes++}`;
+          writeScopes.set(scope, {
+            identity: scope,
+            state: new Int32Array(new SharedArrayBuffer(12)),
+          });
+        }
+        return { ...record, facts: new Map(), writeScopes, references: new Map([[worker, refs]]) };
+      });
+      registry.install(incoming);
     }
-    registry.releaseWorker(worker);
   };
   for (let i = 0; i < warmup; i++) {
     run();
@@ -182,18 +201,27 @@ for (const touched of scenarios) {
   await yieldTurn();
   observer.disconnect();
   for (const record of records) {
-    assert(!record.references.has(worker), "departed worker must be absent");
+    assert.equal(
+      record.references.has(worker),
+      operation !== "release" && targets.includes(record),
+    );
     assert.equal(
       Atomics.load(new Int32Array(record.generation), SqliteDatabaseGenerationSlot.retired),
       0,
     );
   }
   if (touched > 0) {
-    assert.equal(Atomics.load(new Int32Array(refs), 0), -1);
+    assert.equal(Atomics.load(new Int32Array(refs), 0), operation === "release" ? -1 : 1);
   }
   const snapshot = getEnvironmentData("openclaw.sqliteDatabaseAdmissions.v1");
   assert.equal(snapshot.length, databaseCount);
-  assert(snapshot.every((record) => !record.references.has(worker)));
+  assert.equal(
+    snapshot.filter((record) => record.references.has(worker)).length,
+    operation !== "release" ? touched : 0,
+  );
+  if (operation === "install-scope" && touched > 0) {
+    assert(snapshot.some((record) => record.writeScopes.has(`installed-${installedScopes - 1}`)));
+  }
   const measuredGC = gc.filter((entry) => entry.start >= start && entry.start <= end);
   results.push({
     touched,
@@ -237,6 +265,7 @@ console.log(
   JSON.stringify({
     label,
     mode,
+    operation,
     node: process.version,
     platform: process.platform,
     sourceSha256: createHash("sha256").update(source).digest("hex"),

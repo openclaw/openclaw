@@ -68,6 +68,9 @@ A new worker or database generation receives a complete snapshot.
 Worker exit republishes only databases that held that worker's reference; an
 unrelated exit does not rescan retained session scopes. Interrupted-write
 settlement and shared reference revocation still precede publication.
+Reference and fact publications reuse the last complete scope sweep while its
+shared revision remains current. Importing scope cells invalidates that result;
+keyed publication never certifies that unrelated remote retirements were swept.
 
 Use the existing read-only worker scope for descriptive reads and the store's
 writer broker for mutations. Keep multi-statement snapshot reads together; use
