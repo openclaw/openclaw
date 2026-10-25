@@ -87,35 +87,15 @@ function createCallRecord(overrides: Partial<CallRecord> = {}): CallRecord {
   };
 }
 
-function createPrivateCallRecord(): CallRecord {
-  return createCallRecord({
-    metadata: { requesterSessionKey: "agent:main:discord:channel:general" },
-    processedEventIds: ["evt-1"],
-    sessionKey: "agent:main:voice:call-1",
-    transcript: [
-      {
-        timestamp: Date.UTC(2026, 4, 2, 9, 1, 0),
-        speaker: "user",
-        text: "private call transcript",
-        isFinal: true,
-      },
-    ],
-  });
-}
-
 const createServiceContext = () => createVoiceCallServiceContext({ logger: noopLogger });
 
-function setup(config: Record<string, unknown>, toolContext: Record<string, unknown> = {}) {
-  const registered = registerVoiceCall({ config, logger: noopLogger });
-  return { ...registered, tools: [registered.toolFactory(toolContext)] as const };
+function setup(config: Record<string, unknown> = { provider: "mock" }) {
+  return registerVoiceCall({ config, logger: noopLogger });
 }
 
-async function setupActive(
-  config: Record<string, unknown>,
-  toolContext: Record<string, unknown> = {},
-): Promise<Registered> {
-  const registered = setup(config, toolContext);
-  await registered.service?.start(createServiceContext());
+async function setupActive(config: Record<string, unknown> = { provider: "mock" }) {
+  const registered = setup(config);
+  await registered.service.start(createServiceContext());
   return registered;
 }
 
@@ -135,7 +115,18 @@ async function invokeGateway(
 }
 
 async function activeTool(context: Record<string, unknown> = {}) {
-  return (await setupActive({ provider: "mock" }, context)).tools[0];
+  const registered = setup();
+  const tool = registered.toolFactory(context);
+  await registered.service.start(createServiceContext());
+  return tool;
+}
+
+async function gateway(
+  method: string,
+  params: Record<string, unknown>,
+  client?: Parameters<typeof invokeGateway>[3],
+) {
+  return invokeGateway((await setupActive()).methods, method, params, client);
 }
 
 function twilioConfig(overrides: Record<string, unknown> = {}) {
@@ -188,11 +179,17 @@ async function registerVoiceCallCli(
   program: Command,
   pluginConfig: Record<string, unknown> = { provider: "mock" },
 ) {
-  const registrar = setup(pluginConfig).cli;
-  if (!registrar) {
-    throw new Error("voice-call CLI registrar was not registered");
+  await setup(pluginConfig).cli({ program, parentPath: [], config: {}, logger: noopLogger });
+}
+
+async function withCallLog(records: unknown[], run: (file: string) => Promise<void>) {
+  const file = path.join(os.tmpdir(), `voicecall-${Date.now()}.jsonl`);
+  fs.writeFileSync(file, records.map((record) => JSON.stringify(record)).join("\n") + "\n");
+  try {
+    await run(file);
+  } finally {
+    fs.unlinkSync(file);
   }
-  await registrar({ program, parentPath: [], config: {}, logger: noopLogger });
 }
 
 async function runVoiceCallCli(
@@ -216,10 +213,9 @@ async function runVoiceCallCli(
 }
 
 beforeEach(() => {
-  noopLogger.info.mockClear();
-  noopLogger.warn.mockClear();
-  noopLogger.error.mockClear();
-  noopLogger.debug.mockClear();
+  for (const log of Object.values(noopLogger)) {
+    log.mockClear();
+  }
   runtimeStub = createRuntimeStub();
   callGatewayFromCliMock.mockReset();
   callGatewayFromCliMock.mockRejectedValue(
@@ -242,20 +238,14 @@ afterEach(() => {
 });
 
 it("defaults canonical plugin config to an enabled mock runtime", async () => {
-  const { service } = setup({});
-
-  await service?.start(createServiceContext());
-
+  await setupActive({});
   expect(createVoiceCallRuntime).toHaveBeenCalledTimes(1);
   expect(firstRuntimeConfig()).toMatchObject({ enabled: true, provider: "mock" });
 });
 
 it("does not start the webhook runtime for CLI-only plugin loading", async () => {
   vi.stubEnv("OPENCLAW_CLI", "1");
-  const { service } = setup({ provider: "mock" });
-
-  await service?.start(createServiceContext());
-
+  await setupActive();
   expect(createVoiceCallRuntime).not.toHaveBeenCalled();
 });
 
@@ -281,11 +271,7 @@ it("reports degraded service health when provider setup is incomplete", async ()
 
 it("registers Twilio configs with SecretRef auth tokens", async () => {
   const authToken = { source: "env", provider: "default", id: "TWILIO_AUTH_TOKEN" };
-  const { service } = setup(
-    twilioConfig({ enabled: true, twilio: { accountSid: "AC123", authToken } }),
-  );
-
-  await service?.start(createServiceContext());
+  await setupActive(twilioConfig({ enabled: true, twilio: { accountSid: "AC123", authToken } }));
 
   expect(createVoiceCallRuntime).toHaveBeenCalledTimes(1);
   expect(firstRuntimeConfig()?.twilio?.authToken).toEqual(authToken);
@@ -294,20 +280,19 @@ it("registers Twilio configs with SecretRef auth tokens", async () => {
 it("still reports missing provider setup when a command needs the runtime", async () => {
   clearTwilioEnv();
   const { methods } = setup({ provider: "twilio" });
-  const respond = await invokeGateway(methods, "voicecall.initiate", {
+  const [ok, payload, error] = await invokeGateway(methods, "voicecall.initiate", {
     message: "Hi",
     to: "+15550001234",
   });
 
   expect(createVoiceCallRuntime).not.toHaveBeenCalled();
-  const [ok, payload, error] = respond;
   expect(ok).toBe(false);
   expect(payload).toBeUndefined();
   expect(String(error?.message)).toContain("TWILIO_ACCOUNT_SID");
 });
 
 it("registers voice call gateway methods with least-privilege scopes", () => {
-  const { methodScopes } = setup({ provider: "mock" });
+  const { methodScopes } = setup();
 
   for (const method of [
     "voicecall.initiate",
@@ -324,41 +309,30 @@ it("registers voice call gateway methods with least-privilege scopes", () => {
   expect(methodScopes.get("voicecall.status")).toBe("operator.read");
 });
 
-it("preserves mode on legacy voicecall.start", async () => {
-  const { methods } = await setupActive({ provider: "mock" });
-  const respond = await invokeGateway(methods, "voicecall.start", {
-    dtmfSequence: "ww123456#",
-    message: "Hi",
-    mode: "conversation",
-    to: "+15550001234",
-  });
-  expect(runtimeStub.manager["initiateCall"]).toHaveBeenCalledWith("+15550001234", undefined, {
-    dtmfSequence: "ww123456#",
-    message: "Hi",
-    mode: "conversation",
-  });
-  expect(respond[0]).toBe(true);
-});
-
-it("accepts per-call agent routing only from plugin runtime", async () => {
-  const { methods } = await setupActive({ provider: "mock" });
-  const respond = await invokeGateway(
-    methods,
+it("preserves legacy start options and accepts agent routing from plugin runtime", async () => {
+  const respond = await gateway(
     "voicecall.start",
-    { to: "+15550001234", agentId: "support" },
+    {
+      to: "+15550001234",
+      agentId: "support",
+      dtmfSequence: "ww123456#",
+      message: "Hi",
+      mode: "conversation",
+    },
     { internal: { pluginRuntimeOwnerId: "google-meet" } },
   );
 
-  expect(runtimeStub.manager["initiateCall"]).toHaveBeenCalledWith(
-    "+15550001234",
-    undefined,
-    expect.objectContaining({ agentId: "support" }),
-  );
+  expect(runtimeStub.manager["initiateCall"]).toHaveBeenCalledWith("+15550001234", undefined, {
+    agentId: "support",
+    dtmfSequence: "ww123456#",
+    message: "Hi",
+    mode: "conversation",
+  });
   expect(respond[0]).toBe(true);
 });
 
 it("rejects external per-call agent routing", async () => {
-  const { methods } = setup({ provider: "mock" });
+  const { methods } = setup();
   const respond = await invokeGateway(methods, "voicecall.start", {
     to: "+15550001234",
     agentId: "spoofed",
@@ -369,15 +343,18 @@ it("rejects external per-call agent routing", async () => {
 });
 
 it.each(["single", "list"])("returns redacted %s call status", async (mode) => {
-  const call = createPrivateCallRecord();
+  const call = createCallRecord({
+    metadata: { requesterSessionKey: "agent:main:discord:channel:general" },
+    processedEventIds: ["evt-1"],
+    sessionKey: "agent:main:voice:call-1",
+    transcript: [{ timestamp: 1, speaker: "user", text: "private call transcript", isFinal: true }],
+  });
   if (mode === "single") {
     runtimeStub.manager.getCallFromMemoryOrStore = vi.fn(async () => call);
   } else {
     runtimeStub.manager.getActiveCalls = vi.fn(() => [call]);
   }
-  const { methods } = await setupActive({ provider: "mock" });
-  const [ok, payload] = await invokeGateway(
-    methods,
+  const [ok, payload] = await gateway(
     "voicecall.status",
     mode === "single" ? { callId: "call-1" } : {},
   );
@@ -388,8 +365,7 @@ it.each(["single", "list"])("returns redacted %s call status", async (mode) => {
 });
 
 it("sends DTMF via voicecall.dtmf", async () => {
-  const { methods } = await setupActive({ provider: "mock" });
-  const respond = await invokeGateway(methods, "voicecall.dtmf", {
+  const respond = await gateway("voicecall.dtmf", {
     callId: "call-1",
     digits: "ww123#",
   });
@@ -400,8 +376,7 @@ it("sends DTMF via voicecall.dtmf", async () => {
 
 it("does not fall back to one-shot TwiML speak when realtime-only speech is requested", async () => {
   runtimeStub.config.realtime.enabled = true;
-  const { methods } = await setupActive({ provider: "mock" });
-  const respond = await invokeGateway(methods, "voicecall.speak", {
+  const respond = await gateway("voicecall.speak", {
     allowTwimlFallback: false,
     callId: "call-1",
     message: "hello",
@@ -443,8 +418,7 @@ it.each([Date.UTC(2026, 4, 2, 9, 18, 23), Number.POSITIVE_INFINITY])(
   "reports stale call history with endedAt=%s",
   async (endedAt) => {
     mockHistoricalCall(endedAt);
-    const { methods } = await setupActive({ provider: "mock" });
-    const [ok, , error] = await invokeGateway(methods, "voicecall.speak", {
+    const [ok, , error] = await gateway("voicecall.speak", {
       callId: "CA123",
       message: "hello",
     });
@@ -487,10 +461,7 @@ it.each([{ action: "initiate_call", message: "Hello" }, { message: "Hello" }])(
 );
 
 it("does not expose requester session identity to the model", () => {
-  const { tools } = setup({ provider: "mock" });
-  const tool = tools[0] as { parameters: unknown };
-
-  expect(JSON.stringify(tool.parameters)).not.toContain("requesterSessionKey");
+  expect(JSON.stringify(setup().tool().parameters)).not.toContain("requesterSessionKey");
 });
 
 it.each([true, false])("tool get_status uses persisted fallback (found=%s)", async (found) => {
@@ -536,9 +507,7 @@ it("CLI rejects invalid numeric options", async () => {
       }),
     ).rejects.toThrow(/Invalid numeric value for --port/);
   }
-  const tmpFile = path.join(os.tmpdir(), `voicecall-invalid-${Date.now()}.jsonl`);
-  fs.writeFileSync(tmpFile, "{}\n", "utf8");
-  try {
+  await withCallLog([{}], async (tmpFile) => {
     for (const last of ["later", "Infinity", "1.5"]) {
       await expect(
         program.parseAsync(["voicecall", "latency", "--file", tmpFile, "--last", last], {
@@ -546,31 +515,22 @@ it("CLI rejects invalid numeric options", async () => {
         }),
       ).rejects.toThrow(/Invalid numeric value for --last/);
     }
-  } finally {
-    fs.unlinkSync(tmpFile);
-  }
+  });
 });
 
 it("CLI latency summarizes turn metrics from JSONL", async () => {
-  const tmpFile = path.join(os.tmpdir(), `voicecall-latency-${Date.now()}.jsonl`);
-  fs.writeFileSync(
-    tmpFile,
+  await withCallLog(
     [
       { metadata: { lastTurnLatencyMs: 100, lastTurnListenWaitMs: 70 } },
       { metadata: { lastTurnLatencyMs: 200, lastTurnListenWaitMs: 110 } },
-    ]
-      .map((record) => JSON.stringify(record))
-      .join("\n") + "\n",
-    "utf8",
+    ],
+    async (tmpFile) => {
+      const printed = await runVoiceCallCli(["latency", "--file", tmpFile, "--last", "10"]);
+      for (const fragment of ['"recordsScanned": 2', '"p50Ms": 100', '"p95Ms": 200']) {
+        expect(printed).toContain(fragment);
+      }
+    },
   );
-  try {
-    const printed = await runVoiceCallCli(["latency", "--file", tmpFile, "--last", "10"]);
-    expect(printed).toContain('"recordsScanned": 2');
-    expect(printed).toContain('"p50Ms": 100');
-    expect(printed).toContain('"p95Ms": 200');
-  } finally {
-    fs.unlinkSync(tmpFile);
-  }
 });
 
 it("CLI start delegates to the running gateway runtime", async () => {
@@ -587,14 +547,11 @@ it("CLI start delegates to the running gateway runtime", async () => {
 });
 
 it("responds with protocol errors for delegated gateway failures", async () => {
-  const { methods } = setup({ provider: "mock" });
-  const respond = await invokeGateway(methods, "voicecall.start", {});
-
-  const [ok, payload, error] = respond;
-  expect(ok).toBe(false);
-  expect(payload).toBeUndefined();
-  expect(error?.code).toBe("INVALID_REQUEST");
-  expect(error?.message).toBe("to required");
+  expect(await invokeGateway(setup().methods, "voicecall.start", {})).toEqual([
+    false,
+    undefined,
+    { code: "INVALID_REQUEST", message: "to required" },
+  ]);
 });
 
 it("starts and polls delegated gateway continue operations", async () => {
@@ -624,7 +581,7 @@ it("starts and polls delegated gateway continue operations", async () => {
 it("caps gateway continue poll timeouts from voice and TTS configuration", async () => {
   const continuation = createDeferred<{ success: true; transcript: string }>();
   runtimeStub.manager.continueCall = vi.fn(async () => await continuation.promise);
-  const { methods } = await setupActive({ provider: "mock" });
+  const { methods } = await setupActive();
   runtimeStub.config.transcriptTimeoutMs = Number.MAX_SAFE_INTEGER;
   runtimeStub.config.tts = { timeoutMs: Number.MAX_SAFE_INTEGER };
   try {
@@ -643,9 +600,7 @@ it("caps gateway continue poll timeouts from voice and TTS configuration", async
 it("gateway continue operations return pending, completed, and failed results", async () => {
   runtimeStub.config.transcriptTimeoutMs = 120000;
   const continuation = createDeferred<{ success: true; transcript: string }>();
-  runtimeStub.manager.continueCall = vi.fn(
-    async () => await continuation.promise,
-  ) as VoiceCallRuntime["manager"]["continueCall"];
+  runtimeStub.manager.continueCall = vi.fn(async () => await continuation.promise);
   const { methods } = await setupActive({
     provider: "mock",
     transcriptTimeoutMs: 120000,
@@ -681,10 +636,7 @@ it("gateway continue operations return pending, completed, and failed results", 
     { code: "INVALID_REQUEST", message: "operation not found" },
   ]);
 
-  runtimeStub.manager.continueCall = vi.fn(async () => ({
-    success: false,
-    error: "turn failed",
-  })) as VoiceCallRuntime["manager"]["continueCall"];
+  runtimeStub.manager.continueCall = vi.fn(async () => ({ success: false, error: "turn failed" }));
   const [, failedStart] = await start("Try again");
   const failedCall = await vi.waitFor(async () => {
     const call = await result(failedStart?.operationId);
@@ -707,7 +659,7 @@ it("CLI setup prints human-readable checks by default", async () => {
 it.each([undefined, "http://127.0.0.1:3334/voice/webhook"])(
   "CLI setup reports invalid webhook exposure (%s) as JSON",
   async (publicUrl) => {
-    const config = publicUrl === undefined ? twilioConfig() : twilioConfig({ publicUrl });
+    const config = twilioConfig({ publicUrl });
     const parsed = JSON.parse(await runVoiceCallCli(["setup", "--json"], config)) as {
       ok?: boolean;
       checks?: Array<{ id: string; ok: boolean; message: string }>;
