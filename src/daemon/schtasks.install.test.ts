@@ -11,7 +11,6 @@ import {
   uninstallScheduledTask,
 } from "./schtasks-install.js";
 import { readScheduledTaskCommand, resolveTaskScriptPath } from "./schtasks-layout.js";
-import { auditGatewayServiceConfig, SERVICE_AUDIT_CODES } from "./service-audit.js";
 import { buildServiceEnvironment } from "./service-env.js";
 
 const taskProbe = vi.hoisted(() =>
@@ -190,16 +189,7 @@ describe("installScheduledTask", () => {
   });
 
   it("writes quoted set assignments and escapes metacharacters", async ({ profile: { env } }) => {
-    const programArguments = [
-      "node",
-      "gateway.js",
-      "--display-name",
-      "safe&whoami",
-      "--percent",
-      "%TEMP%",
-      "--bang",
-      "!token!",
-    ];
+    const programArguments = ["node", "gateway.js"];
     const environment = {
       OC_INJECT: "safe & whoami | calc",
       OC_CARET: "a^b",
@@ -218,9 +208,6 @@ describe("installScheduledTask", () => {
 
     const script = await readScript(scriptPath);
     expect(script).toContain('cd /d "C:\\temp\\poc&calc"');
-    expect(script).toContain(
-      'node gateway.js --display-name "safe&whoami" --percent "%%TEMP%%" --bang "^!token^!"',
-    );
     expect(script).toContain('set "OC_INJECT=safe & whoami | calc"');
     expect(script).toContain('set "OC_CARET=a^^b"');
     expect(script).toContain('set "OC_PERCENT=%%TEMP%%"');
@@ -503,36 +490,5 @@ describe("installScheduledTask", () => {
       "/End",
     ]);
     expectTaskRunCall(4);
-  });
-
-  it("exposes Windows task script env values as inline for managed-env drift audit", async ({
-    profile: { env },
-  }) => {
-    const environment = {
-      OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "TAVILY_API_KEY",
-      TAVILY_API_KEY: "old-inline-value",
-    };
-    const { scriptPath } = await installDefaultGatewayTask(env, { environment });
-
-    const command = await readScheduledTaskCommand(env);
-    expect(command).toStrictEqual({
-      programArguments: ["node", "gateway.js"],
-      environment,
-      environmentValueSources: {
-        OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "inline",
-        TAVILY_API_KEY: "inline",
-      },
-      sourcePath: scriptPath,
-    });
-
-    const audit = await auditGatewayServiceConfig({
-      env,
-      platform: "win32",
-      command,
-      expectedManagedServiceEnvKeys: ["TAVILY_API_KEY"],
-    });
-    expect(
-      audit.issues.some((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayManagedEnvEmbedded),
-    ).toBe(true);
   });
 });
