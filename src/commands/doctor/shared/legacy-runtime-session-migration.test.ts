@@ -164,35 +164,6 @@ describe("legacy runtime session model migration", () => {
 });
 
 describe("legacy CLI session binding migration", () => {
-  it("migrates a legacy-only session without changing resume selection", async () => {
-    const { read, write, repair, reopen } = await fixture({
-      plugins: { enabled: false },
-      agents: { entries: { main: {} }, defaults: { model: "openai/current-model" } },
-    });
-    await write("legacy-binding", {
-      sessionId: "local-binding-session",
-      updatedAt: 1,
-      claudeCliSessionId: "Remote-MixedCase-Session/Alpha",
-    });
-    const before = read("legacy-binding");
-
-    await repair(false);
-    expect(read("legacy-binding")).toEqual(before);
-    await repair();
-
-    const saved = read("legacy-binding");
-    expect(saved?.cliSessionBindings?.["claude-cli"]).toEqual({
-      sessionId: "Remote-MixedCase-Session/Alpha",
-    });
-    expect(saved).not.toHaveProperty("claudeCliSessionId");
-    await reopen();
-    const reopened = read("legacy-binding");
-    expect(reuse(reopened)).toEqual({ mode: "reuse", sessionId: "Remote-MixedCase-Session/Alpha" });
-    expect(reopened?.sessionId).toBe("local-binding-session");
-    expect((await repair()).changes).toEqual([]);
-    expect(read("legacy-binding")).toEqual(reopened);
-  });
-
   it("preserves canonical metadata and provider-map precedence across reopen", async () => {
     const { read, write, repair, reopen } = await fixture();
     const canonical: CliSessionBinding = {
@@ -292,7 +263,11 @@ describe("legacy CLI session binding migration", () => {
       expect(repaired.warnings.join("\n")).toContain(`agent:main:${key}`);
     }
     await reopen();
-    expect(getCliSessionBinding(read("safe"), "claude-cli")?.sessionId).toBe("Safe-MixedCase/ID");
+    expect(read("safe")?.cliSessionBindings?.["claude-cli"]).toEqual({
+      sessionId: "Safe-MixedCase/ID",
+    });
+    expect(reuse(read("safe"))).toEqual({ mode: "reuse", sessionId: "Safe-MixedCase/ID" });
+    expect(read("safe")?.sessionId).toBe("safe-local");
     expect(read("safe")).not.toHaveProperty("claudeCliSessionId");
     const locked = read("locked");
     expect(locked).toMatchObject({

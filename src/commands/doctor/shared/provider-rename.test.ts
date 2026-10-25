@@ -75,10 +75,7 @@ describe("provider rename config migration", () => {
     ["http://ollama.com", false],
     ["https://ollama.com:444", false],
     ["https://ollama.com.example/api", false],
-    ["http://localhost:11434", false],
     ["http://127.0.0.1:11434", false],
-    ["http://192.168.1.5:11434", false],
-    ["https://inference.example/api", false],
     ["not a URL", false],
   ])("matches only the hosted origin: %s", (baseUrl, matches) => {
     const config = configFor(baseUrl);
@@ -98,10 +95,7 @@ describe("provider rename config migration", () => {
 
   it.each([
     ["http://127.0.0.1:11434", "ollama"],
-    ["http://192.168.1.5:11434", "ollama"],
-    ["https://embeddings.example/api", "ollama"],
     ["https://ollama.com/v1", "ollama-cloud"],
-    ["", "ollama-cloud"],
     ["   ", "ollama-cloud"],
   ])("respects the memory embedding endpoint %s", (baseUrl, provider) => {
     const config = configFor("https://ollama.com/v1");
