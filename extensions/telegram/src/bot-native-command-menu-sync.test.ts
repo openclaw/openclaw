@@ -113,7 +113,7 @@ describe("bot-native-command-menu sync lifecycle", () => {
     expect(setMyCommands).toHaveBeenCalledTimes(4);
 
     expect(deleteMyCommands).toHaveBeenCalledTimes(2);
-    expect(setMyCommands.mock.calls.map(([commands, options]) => [commands, options])).toEqual([
+    expect(setMyCommands.mock.calls.map(([payload, options]) => [payload, options])).toEqual([
       [[{ command: "cmd", description: "Default" }], undefined],
       [[{ command: "cmd", description: "Default" }], { scope: { type: "all_group_chats" } }],
       [[{ command: "cmd", description: "한국어" }], { language_code: "ko" }],
