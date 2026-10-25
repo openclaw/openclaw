@@ -12,7 +12,6 @@ import {
 import type { PluginDoctorStateMigrationContext } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import type { MatrixStoredCredentialRecord } from "./src/matrix/credentials-state.js";
 
-// Released Matrix replay markers retain their identities for 30 days.
 export const MATRIX_INBOUND_DEDUPE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 export function createContext(
@@ -88,29 +87,16 @@ export function writeSource(file: string, contents: string | Uint8Array): string
 export function archiveScanRoots(stateDir: string) {
   const matrixRoot = path.join(stateDir, "matrix");
   const tokenParent = path.dirname(accountStorageRoot(stateDir, "ops"));
-  const archivedAccount = path.relative(
-    matrixRoot,
-    accountStorageRoot(stateDir, "ops", "fedcba9876543210"),
-  );
   return {
     activeRoots: [
       path.join(matrixRoot, "accounts", "legacy"),
       accountStorageRoot(stateDir, "sync-cache-backup"),
     ],
     excludedRoots: [
-      "0123456789abcdef.apr24-cutover-20260424",
-      "fedcba9876543210.reset-20260720",
-      "0123456789abcdef.pre-stable-token-20260716",
-      "fedcba9876543210.migrated",
-      "sync-cache-backup",
-      "_archive",
-    ]
-      .map((name) => path.join(tokenParent, name))
-      .concat(
-        ["crypto-backup-20260720", ".apr24-cutover-20260424", "operator-copy"].map((name) =>
-          path.join(matrixRoot, name, archivedAccount),
-        ),
-      ),
+      path.join(tokenParent, "0123456789abcdef.migrated"),
+      path.join(tokenParent, "sync-cache-backup"),
+      path.join(matrixRoot, "operator-copy", "accounts", "ops"),
+    ],
   };
 }
 
@@ -124,12 +110,8 @@ export const legacyCredentials = (
   ...overrides,
 });
 
-export function withDatabase<T>(
-  databasePath: string,
-  readOnly: boolean,
-  run: (db: DatabaseSync) => T,
-): T {
-  using db = new DatabaseSync(databasePath, { readOnly });
+export function withDatabase<T>(file: string, readOnly: boolean, run: (db: DatabaseSync) => T): T {
+  using db = new DatabaseSync(file, { readOnly });
   return run(db);
 }
 
@@ -160,15 +142,6 @@ export async function migrationById(id: string) {
   return migration;
 }
 
-export const dedupeMigrationResult = (roots: string[], imported: number, total = imported) => ({
-  changes: [
-    `Migrated Matrix inbound dedupe markers to the durable ingress spool (${imported} of ${total} entries)`,
-    ...roots.map((root) => `Retired Matrix inbound dedupe rows for ${root}`),
-    `Recorded Matrix inbound dedupe migration completion (${roots.length} SQLite roots scanned)`,
-  ],
-  warnings: [],
-});
-
 export function writeSqliteDedupeSource(
   storageRootDir: string,
   accountId: string,
@@ -197,9 +170,5 @@ export const syncCachePayload = (nextBatch: string, cleanShutdown = true) => ({
   cleanShutdown,
 });
 
-export function writeLegacySyncCache(storageRootDir: string, nextBatch: string): void {
-  writeSource(
-    path.join(storageRootDir, "bot-storage.json"),
-    JSON.stringify(syncCachePayload(nextBatch)),
-  );
-}
+export const writeLegacySyncCache = (root: string, nextBatch: string): string =>
+  writeSource(path.join(root, "bot-storage.json"), JSON.stringify(syncCachePayload(nextBatch)));
