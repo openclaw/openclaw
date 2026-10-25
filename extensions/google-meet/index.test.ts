@@ -790,6 +790,9 @@ describe("google-meet plugin", () => {
 
   it("requires explicit Meet URLs", () => {
     expect(normalizeMeetUrl(MEET_URL)).toBe(MEET_URL);
+    expect(normalizeMeetUrl("https://meet.google.com/meet/abc-defg-hij?authuser=1&hl=en")).toBe(
+      "https://meet.google.com/abc-defg-hij?authuser=1&hl=en",
+    );
     expect(() => normalizeMeetUrl("https://example.com/abc-defg-hij")).toThrow("meet.google.com");
     expect(() => normalizeMeetUrl("https://user@meet.google.com/abc-defg-hij")).toThrow(
       "meet.google.com",

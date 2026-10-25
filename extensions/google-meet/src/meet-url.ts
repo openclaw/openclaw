@@ -18,6 +18,8 @@ export function normalizeMeetUrl(input: unknown): string {
   ) {
     throw new Error("url must be an explicit https://meet.google.com/... URL");
   }
+  // Meet moves admitted call tabs to /meet/<code>; keep /<code> as the canonical path.
+  url.pathname = url.pathname.replace(/^\/meet(?=\/[a-z]{3}-[a-z]{4}-[a-z]{3}(?:$|\/))/i, "");
   if (!/^\/[a-z]{3}-[a-z]{4}-[a-z]{3}(?:$|[/?#])/i.test(url.pathname)) {
     throw new Error("url must include a Google Meet meeting code");
   }

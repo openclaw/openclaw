@@ -16,7 +16,8 @@ export function normalizeMeetUrlForReuse(url: string | undefined): string | unde
   if (parsed?.protocol !== "https:" || parsed.hostname.toLowerCase() !== "meet.google.com") {
     return undefined;
   }
-  const match = parsed.pathname.match(/^\/([a-z]{3}-[a-z]{4}-[a-z]{3})(?:\/)?$/i);
+  // Meet moves admitted call tabs from /<code> to /meet/<code>; both are one meeting.
+  const match = parsed.pathname.match(/^\/(?:meet\/)?([a-z]{3}-[a-z]{4}-[a-z]{3})(?:\/)?$/i);
   if (!match?.[1]) {
     return undefined;
   }

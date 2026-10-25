@@ -37,7 +37,7 @@ export class CaptionNode {
   }
 }
 
-export function createCaptionPage(initialRows: CaptionNode[]) {
+export function createCaptionPage(initialRows: CaptionNode[], href = MEETING_URL) {
   let rows = initialRows;
   let now = 1_000;
   let nextTimer = 0;
@@ -58,7 +58,7 @@ export function createCaptionPage(initialRows: CaptionNode[]) {
       querySelectorAll: (selector: string) =>
         selector === "button" ? [leaveButton] : selector.includes("aria-live") ? rows : [],
     },
-    location: { href: MEETING_URL, hostname: "meet.google.com" },
+    location: { href, hostname: "meet.google.com" },
     MutationObserver: class {
       constructor(private callback: () => void) {}
 

@@ -12,7 +12,11 @@ const adapter = GOOGLE_MEET_PLATFORM_ADAPTER.browser;
 const ready = (health: Parameters<typeof MeetingPlatformAdapter.isRealtimeRouteReady>[1]) =>
   MeetingPlatformAdapter.isRealtimeRouteReady("agent", health);
 
-it.each([true, false])("requires current Meet capture ownership (%s)", async (owns) => {
+it.each([
+  [true, MEETING_URL],
+  [true, "https://meet.google.com/meet/abc-defg-hij?hl=en"],
+  [false, MEETING_URL],
+])("requires current Meet capture ownership (%s, %s)", async (owns, href) => {
   const source = adapter.buildAudioCaptureScript?.({
     action: "start",
     captureId: "capture-1",
@@ -21,7 +25,7 @@ it.each([true, false])("requires current Meet capture ownership (%s)", async (ow
   });
   const result = runInNewContext(`(${source})()`, {
     URL,
-    location: { href: MEETING_URL },
+    location: { href },
     window: { __openclawMeetAudioSession: owns ? "session-1" : "session-2" },
     document: { querySelectorAll: () => [pageNode("Leave call")] },
     AudioContext: function AudioContext() {
