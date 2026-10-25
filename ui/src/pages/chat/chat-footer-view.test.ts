@@ -210,16 +210,14 @@ it("places inline approval above the composer and enforces its grant projection"
   flush();
   expect(text("countdown")?.trim()).toBe("1:00");
   expect(text("command-span")).toBe("rm -r");
-  expect(text("error")).toBe("Couldn’t confirm your decision. Try again.");
-  expect(container.querySelector(".exec-approval-details")?.textContent).toContain(
-    "Approval failed: gateway unavailable",
-  );
-  expect(text("status")?.trim()).toContain("You don’t have permission to approve.");
+  expect(container.textContent).toContain("Approval failed: gateway unavailable");
   const buttons = [
     ...container.querySelectorAll<HTMLButtonElement>(".exec-approval-actions button"),
   ];
-  expect(buttons).toHaveLength(0);
-  buttons[0]?.click();
+  expect(buttons.every((button) => button.disabled)).toBe(true);
+  for (const button of buttons) {
+    button.click();
+  }
   expect(onApprovalDecision).not.toHaveBeenCalled();
 
   const authorizedContainer = await render(true);

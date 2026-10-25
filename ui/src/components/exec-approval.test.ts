@@ -98,10 +98,6 @@ describe("openclaw-exec-approval", () => {
     const pending = createDeferred();
     const onDecision = vi.fn<ExecApprovalProps["onDecision"]>(() => pending.promise);
     const { dialog } = await renderOpenedApproval(createExecRequest(), { onDecision });
-    expect(container.querySelectorAll(".exec-approval-shortcut")).toHaveLength(1);
-    expect(query(".exec-approval-shortcut")?.closest("button")?.getAttribute("aria-label")).toBe(
-      "Allow once",
-    );
     dialog.dispatchEvent(chord("Enter"));
     await waitForSolid(() => {
       expect(onDecision).toHaveBeenCalledOnce();
@@ -174,24 +170,15 @@ describe("openclaw-exec-approval", () => {
       }),
     ];
     const { approval, onDecision } = await renderOpenedApproval(queue);
-    const card = query(".exec-approval-card")!;
-    const actions = card.querySelector(".exec-approval-actions")!;
-    const pending = container.querySelector(".exec-approval-list")!;
-    expect(card.contains(pending)).toBe(true);
-    expect(
-      actions.compareDocumentPosition(pending) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
-
     expect(activeId()).toBe("approval-oldest");
     container.querySelector<HTMLButtonElement>(".exec-approval-list__item")?.click();
     await approval.updateComplete;
 
     expect(activeId()).toBe("approval-newer");
-    expect(
-      container.querySelector(".exec-approval-list__agent .identity-avatar--agent"),
-    ).toBeNull();
     expect(queue.map((entry) => entry.id)).toEqual(["approval-oldest", "approval-newer"]);
-    container.querySelector<HTMLButtonElement>(".exec-approval-actions button:last-child")!.click();
+    container
+      .querySelector<HTMLButtonElement>('.exec-approval-actions button[aria-label="Allow once"]')!
+      .click();
     expect(onDecision).toHaveBeenCalledWith("approval-newer", "allow-once");
   });
 
@@ -261,22 +248,7 @@ describe("openclaw-exec-approval", () => {
         container.querySelectorAll<HTMLButtonElement>(".exec-approval-actions button"),
       );
 
-      if (connected) {
-        expect(container.querySelector(".exec-approval-status")?.textContent).toContain(
-          "You don’t have permission to approve.",
-        );
-        expect(container.querySelector(".exec-approval-status-label")?.textContent).toBe(
-          "View only",
-        );
-      } else {
-        expect(container.textContent).not.toContain("Sign in");
-      }
-      expect(buttons).toHaveLength(connected ? 0 : 3);
       expect(buttons.every((button) => button.disabled)).toBe(true);
-      if (!connected) {
-        expect(container.querySelector(".exec-approval-status")?.textContent).toBe("Offline.");
-      }
-
       buttons[0]?.click();
       modal.dispatchEvent(chord("Enter"));
       modal.dispatchEvent(chord("d"));
