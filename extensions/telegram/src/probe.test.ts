@@ -1,5 +1,6 @@
 import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
 import { probeTelegram } from "./probe.js";
 
 const resolveTelegramTransport = vi.hoisted(() => vi.fn());
@@ -13,58 +14,40 @@ describe("probeTelegram retry logic", () => {
   const timeoutMs = 5000;
   let tokenIndex = 0;
   let token = "";
+  let fetchMock: Mock;
   let forceFallbackMock: Mock;
-  const transport = (proxyFetch?: typeof fetch, close = async () => {}) => ({
-    fetch: proxyFetch ?? fetch,
-    sourceFetch: proxyFetch ?? fetch,
+  const transport = (close = async () => {}) => ({
+    fetch,
+    sourceFetch: fetch,
     forceFallback: forceFallbackMock,
     close,
   });
 
-  const installFetchMock = (fetchMock: Mock = vi.fn()): Mock => {
-    vi.stubGlobal("fetch", withFetchPreconnect(fetchMock));
-    forceFallbackMock = vi.fn().mockReturnValue(true);
-    resolveTelegramTransport.mockImplementation((proxyFetch?: typeof fetch) =>
-      transport(proxyFetch),
-    );
-    return fetchMock;
-  };
-
-  function mockResponse(fetchMock: Mock, result: unknown) {
+  function mockResponse(result: unknown) {
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ ok: true, result })));
   }
-  function mockSuccess(fetchMock: Mock) {
-    mockResponse(fetchMock, {
-      id: 123,
-      is_bot: true,
-      first_name: "Test",
-      username: "test_bot",
-      can_join_groups: true,
-      can_read_all_group_messages: false,
-      can_manage_bots: false,
-      supports_inline_queries: false,
-      can_connect_to_business: false,
-      has_main_web_app: false,
-      has_topics_enabled: false,
-      allows_users_to_create_topics: false,
-    });
-    mockResponse(fetchMock, { url: "" });
+  function mockSuccess() {
+    mockResponse(telegramBotInfoForTest);
+    mockResponse({ url: "" });
   }
 
   beforeEach(() => {
     token = `test-token-${++tokenIndex}`;
+    fetchMock = vi.fn();
+    vi.stubGlobal("fetch", withFetchPreconnect(fetchMock));
+    forceFallbackMock = vi.fn().mockReturnValue(true);
+    resolveTelegramTransport.mockImplementation(() => transport());
   });
 
   afterEach(() => {
     resolveTelegramTransport.mockReset();
     vi.clearAllMocks();
     vi.unstubAllGlobals();
+    vi.useRealTimers();
   });
 
   it("refuses an unrepaired bot endpoint before fetching", async () => {
     const apiRoot = "https://proxy.example.test/custom/bot123456:ABC_def";
-    const fetchMock = installFetchMock();
-
     expect(await probeTelegram(token, timeoutMs, { apiRoot })).toMatchObject({
       ok: false,
       error:
@@ -74,34 +57,25 @@ describe("probeTelegram retry logic", () => {
   });
 
   it("respects timeout budget across retries", async () => {
-    const fetchMock = installFetchMock(
-      vi.fn(
-        (_input: RequestInfo | URL, init?: RequestInit) =>
-          new Promise<Response>((_resolve, reject) => {
-            const abort = () => reject(new Error("Request aborted"));
-            if (init?.signal?.aborted) {
-              abort();
-            } else {
-              init?.signal?.addEventListener("abort", abort, { once: true });
-            }
-          }),
-      ),
+    fetchMock.mockImplementation(
+      (_input: RequestInfo | URL, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          const abort = () => reject(new Error("Request aborted"));
+          if (init?.signal?.aborted) {
+            abort();
+          } else {
+            init?.signal?.addEventListener("abort", abort, { once: true });
+          }
+        }),
     );
     vi.useFakeTimers();
-    try {
-      const probePromise = probeTelegram(`${token}-budget`, 500);
-      await vi.advanceTimersByTimeAsync(600);
-      const result = await probePromise;
-
-      expect(result.ok).toBe(false);
-      expect(fetchMock).toHaveBeenCalledTimes(1);
-    } finally {
-      vi.useRealTimers();
-    }
+    const probePromise = probeTelegram(`${token}-budget`, 500);
+    await vi.advanceTimersByTimeAsync(600);
+    expect((await probePromise).ok).toBe(false);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("should NOT retry if getMe returns a 401 Unauthorized", async () => {
-    const fetchMock = installFetchMock();
     fetchMock.mockResolvedValueOnce(
       new Response(JSON.stringify({ ok: false, description: "Unauthorized" }), { status: 401 }),
     );
@@ -113,8 +87,7 @@ describe("probeTelegram retry logic", () => {
   });
 
   it("preserves boolean diagnostics and reports non-boolean flags as unknown", async () => {
-    const fetchMock = installFetchMock();
-    mockResponse(fetchMock, {
+    mockResponse({
       id: 123,
       is_bot: true,
       can_join_groups: false,
@@ -143,15 +116,14 @@ describe("probeTelegram retry logic", () => {
   });
 
   it("closes evicted cached probe transports", async () => {
-    const fetchMock = installFetchMock();
     const closeSpies: Array<ReturnType<typeof vi.fn>> = [];
-    resolveTelegramTransport.mockImplementation((proxyFetch?: typeof fetch) => {
+    resolveTelegramTransport.mockImplementation(() => {
       const close = vi.fn(async () => undefined);
       closeSpies.push(close);
-      return transport(proxyFetch, close);
+      return transport(close);
     });
     for (let i = 0; i < 65; i += 1) {
-      mockSuccess(fetchMock);
+      mockSuccess();
       await probeTelegram(`${token}-cache-${i}`, timeoutMs, {
         accountId: `account-${i}`,
         network: {
@@ -167,26 +139,16 @@ describe("probeTelegram retry logic", () => {
   });
 
   it("calls forceFallback on the transport when getMe times out so subsequent probes use IPv4", async () => {
-    const fetchMock = installFetchMock();
-
-    // First call: timeout (simulate IPv6 hang)
     const timeoutError = new Error("request timed out");
     timeoutError.name = "TimeoutError";
     fetchMock.mockRejectedValueOnce(timeoutError);
-    mockResponse(fetchMock, { id: 1, is_bot: true, first_name: "Bot", username: "bot" });
-    mockResponse(fetchMock, { url: "" });
+    mockSuccess();
 
     vi.useFakeTimers();
-    try {
-      const probePromise = probeTelegram(token, 30_000);
-      await vi.advanceTimersByTimeAsync(1000);
-
-      const result = await probePromise;
-      expect(result.ok).toBe(true);
-      expect(forceFallbackMock).toHaveBeenCalledWith("check timeout/network error", timeoutError);
-      expect(fetchMock).toHaveBeenCalledTimes(3);
-    } finally {
-      vi.useRealTimers();
-    }
+    const probePromise = probeTelegram(token, 30_000);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect((await probePromise).ok).toBe(true);
+    expect(forceFallbackMock).toHaveBeenCalledWith("check timeout/network error", timeoutError);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 });
