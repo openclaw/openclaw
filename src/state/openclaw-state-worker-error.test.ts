@@ -67,12 +67,24 @@ function remoteError(payload: OpenClawStateWorkerErrorPayload | undefined): Erro
   return retained;
 }
 
-function roundTrip(error: Error): Error {
-  const payload = encodeOpenClawStateWorkerError(error);
+function errorGroup(errors: unknown[], cause?: unknown) {
+  return new AggregateError(errors, "aggregate", cause === undefined ? undefined : { cause });
+}
+
+function transport(
+  error: Error,
+  options: Parameters<typeof encodeOpenClawStateWorkerError>[1] = {},
+) {
+  const payload = encodeOpenClawStateWorkerError(error, options);
   assert(payload, "expected a canonical shared-state error payload");
   const retained = remoteError(structuredClone(payload));
-  const decoded = hydrateOpenClawStateWorkerError(retained);
+  const decoded = hydrateOpenClawStateWorkerError(retained, options);
   expect(decoded).not.toBe(retained);
+  return decoded;
+}
+
+function roundTrip(error: Error): Error {
+  const decoded = transport(error);
   expect(decoded).toBeInstanceOf(error.constructor);
   expect(decoded).toMatchObject({ name: error.name, message: error.message });
   return decoded;
@@ -128,10 +140,7 @@ it("retains canonical uncertainty on an ordinary diagnostic wrapper", () => {
     new Error("Synthetic wrapper"),
     new SqliteWorkerError("Synthetic outcome", "outcome-unknown"),
   );
-  const payload = encodeOpenClawStateWorkerError(error);
-  expect(payload).toBeDefined();
-  const decoded = hydrateOpenClawStateWorkerError(remoteError(structuredClone(payload)));
-  expect(isSqliteWorkerError(decoded, "outcome-unknown")).toBe(true);
+  expect(isSqliteWorkerError(transport(error), "outcome-unknown")).toBe(true);
 });
 
 it("preserves pre-execution admission-relay unavailability through the broker reply", () => {
@@ -177,9 +186,7 @@ it.each([
       new SqliteWorkerError("Synthetic outcome", code),
     );
     const options = { includeOrdinary };
-    const payload = encodeOpenClawStateWorkerError(original, options);
-    assert(payload);
-    const decoded = hydrateOpenClawStateWorkerError(remoteError(structuredClone(payload)), options);
+    const decoded = transport(original, options);
     expect(decoded).toBeInstanceOf(AggregateError);
     expect(hasSqliteWorkerOutcomeUnknown(decoded)).toBe(code === "outcome-unknown");
     expect(hasSqliteWorkerErrorCode(decoded, code)).toBe(true);
@@ -192,9 +199,7 @@ it.each([false, true])(
   (nested) => {
     const primary = new SqliteWorkerError("Synthetic lost acknowledgment", "outcome-unknown");
     const error = nested
-      ? new AggregateError([primary, new Error("Synthetic cleanup failure")], "Operation failed", {
-          cause: primary,
-        })
+      ? errorGroup([primary, new Error("Synthetic cleanup failure")], primary)
       : primary;
     const decoded = roundTrip(error);
     expect(hasSqliteWorkerOutcomeUnknown(decoded)).toBe(true);
@@ -221,11 +226,7 @@ it.each([
         : new Error("Synthetic provider failure"),
       { name: "SqliteWorkerError", code },
     );
-    const payload = encodeOpenClawStateWorkerError(ordinary, { includeOrdinary: true });
-    assert(payload);
-    const decoded = hydrateOpenClawStateWorkerError(remoteError(structuredClone(payload)), {
-      includeOrdinary: true,
-    });
+    const decoded = transport(ordinary, { includeOrdinary: true });
     expect(hasSqliteWorkerOutcomeUnknown(decoded)).toBe(false);
     expect(hasSqliteWorkerErrorCode(decoded, code)).toBe(false);
     expect(isSqliteWorkerError(decoded, code)).toBe(false);
@@ -322,7 +323,6 @@ describe("shared-state worker error transport", () => {
       error: verification,
       fields: {
         code: "OPENCLAW_STATE_LEASE_STORAGE_FAILED",
-        message: "failed to verify test lease test/read",
         cause: { message: verificationCause.message },
       },
       causeType: Error,
@@ -397,9 +397,6 @@ describe("shared-state worker error transport", () => {
         );
         expect(isSqliteNativeOpenFailure(decoded)).toBe(true);
       }
-      if (error instanceof OpenClawStateOwnershipError) {
-        expect(decoded).toBeInstanceOf(OpenClawStateOwnershipError);
-      }
       if (error instanceof StartupMaintenanceRequiredError) {
         expect(findStartupMaintenanceRequiredError(decoded)).toBe(decoded);
         expect(decoded).toMatchObject({ code: "gateway.maintenance_required" });
@@ -419,9 +416,7 @@ describe("shared-state worker error transport", () => {
       }),
     });
     const cleanup = new Error("Synthetic cleanup failure");
-    const combined = new AggregateError([primary, cleanup, primary], "read and cleanup", {
-      cause: primary,
-    });
+    const combined = errorGroup([primary, cleanup, primary], primary);
     combined.errors.push(combined);
     const decoded = roundTrip(combined);
     assert(decoded instanceof AggregateError);
@@ -477,9 +472,7 @@ describe("shared-state worker error transport", () => {
     expect(Object.keys(remote)).toEqual([]);
     expect(JSON.stringify(remote)).toBe("{}");
     const untouched = new Error("local cleanup");
-    const original = new AggregateError([remote, remote, untouched], "open and cleanup failed", {
-      cause: remote,
-    });
+    const original = errorGroup([remote, remote, untouched], remote);
     original.errors.push(original);
     const first = hydrateOpenClawStateWorkerError(original);
     const second = hydrateOpenClawStateWorkerError(original);
@@ -499,11 +492,11 @@ describe("shared-state worker error transport", () => {
 
   it("leaves ordinary and already-current error graphs identical", () => {
     const local = new Error("caller rejected");
-    const ordinary = new AggregateError([local], "caller and cleanup", { cause: local });
+    const ordinary = errorGroup([local], local);
     local.cause = ordinary;
     expect(hydrateOpenClawStateWorkerError(ordinary)).toBe(ordinary);
     const current = roundTrip(new SqliteSchemaVersionError("current caller"));
-    const wrapped = new AggregateError([current], "current graph", { cause: current });
+    const wrapped = errorGroup([current], current);
     expect(hydrateOpenClawStateWorkerError(wrapped)).toBe(wrapped);
     expect(hydrateOpenClawStateWorkerError("caller rejection")).toBe("caller rejection");
   });
@@ -517,9 +510,7 @@ describe("shared-state worker error transport", () => {
     const wrapper = Object.assign(new Error("operation failed", { cause: repair }), {
       code: "EWRAPPED",
     });
-    const root = new AggregateError([wrapper, repair, newer], "operation and cleanup failed", {
-      cause: wrapper,
-    });
+    const root = errorGroup([wrapper, repair, newer], wrapper);
     repair.cause = root;
 
     const decoded = roundTrip(root);
@@ -542,19 +533,16 @@ describe("shared-state worker error transport", () => {
       code: 17,
       privateState: { token: "fixture-not-for-transport" },
     });
-    const original = new AggregateError(
-      [
-        new OpenClawStateOwnershipError("canonical refusal"),
-        custom,
-        "plain failure",
-        2,
-        true,
-        null,
-        undefined,
-        { token: "fixture-not-for-transport" },
-      ],
-      "multiple errors",
-    );
+    const original = errorGroup([
+      new OpenClawStateOwnershipError("canonical refusal"),
+      custom,
+      "plain failure",
+      2,
+      true,
+      null,
+      undefined,
+      { token: "fixture-not-for-transport" },
+    ]);
     const payload = encodeOpenClawStateWorkerError(original);
     expect(JSON.stringify(payload)).not.toContain("fixture-not-for-transport");
     expect(payload?.nodes.every((node) => !("stack" in node))).toBe(true);
@@ -574,17 +562,14 @@ describe("shared-state worker error transport", () => {
       privateState: "not-for-transport",
     };
     const blockedByRun = { worktreeId: "fixture", pid: 456, privateState: "not-for-transport" };
-    const original = new AggregateError(
-      [
-        new PluginStateStoreError("fixture plugin error", {
-          code: "PLUGIN_STATE_READ_FAILED",
-          operation: "lookup",
-          owner: pluginOwner,
-        }),
-        new WorktreeRemovalContentionError("busy", "fixture contention", blockedByRun),
-      ],
-      "typed metadata",
-    );
+    const original = errorGroup([
+      new PluginStateStoreError("fixture plugin error", {
+        code: "PLUGIN_STATE_READ_FAILED",
+        operation: "lookup",
+        owner: pluginOwner,
+      }),
+      new WorktreeRemovalContentionError("busy", "fixture contention", blockedByRun),
+    ]);
     expect(JSON.stringify(encodeOpenClawStateWorkerError(original))).not.toContain(
       "not-for-transport",
     );
@@ -600,10 +585,7 @@ describe("shared-state worker error transport", () => {
     const unredacted = Object.assign(new SessionTranscriptWriterClaimReboundError(), {
       cause: { ...cause, sessionKeyHash: "fixture-not-for-transport" },
     });
-    const original = new AggregateError(
-      [primary, new Error("ordinary wrapper", { cause }), unredacted],
-      "transcript failures",
-    );
+    const original = errorGroup([primary, new Error("ordinary wrapper", { cause }), unredacted]);
     const payload = encodeOpenClawStateWorkerError(original);
     expect(JSON.stringify(payload)).not.toContain("fixture-not-for-transport");
     const decoded = roundTrip(original);
@@ -647,9 +629,7 @@ describe("shared-state worker error transport", () => {
       name: "SqliteIntegrityError",
     });
     markOpenClawStateDatabaseFailure(failure, "/isolated/state.sqlite");
-    const original = new AggregateError([failure, new Error("cleanup failed")], "open failed", {
-      cause: failure,
-    });
+    const original = errorGroup([failure, new Error("cleanup failed")], failure);
     const decoded = roundTrip(original);
     expect(findOpenClawStateDatabaseFailure(decoded, "/isolated/other.sqlite")).toBeUndefined();
     expect(findOpenClawStateDatabaseFailure(decoded, "/isolated/state.sqlite")).toMatchObject({
@@ -669,9 +649,7 @@ describe("shared-state worker error transport", () => {
       name: "SqliteIntegrityError",
     });
     const imitation = Object.assign(new Error("name only"), { name: "SqliteSchemaVersionError" });
-    const original = new AggregateError([integrity, native, imitation], "read and cleanup", {
-      cause: integrity,
-    });
+    const original = errorGroup([integrity, native, imitation], integrity);
     original.errors.push(original);
     const options = { includeOrdinary: true };
     expect(encodeOpenClawStateWorkerError(original)).toBeUndefined();

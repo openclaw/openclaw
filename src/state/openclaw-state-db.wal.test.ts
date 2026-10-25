@@ -481,78 +481,71 @@ it("joins private timer cancellation after publisher failure", async () => {
   ).toEqual({ value_json: "true" });
 });
 
-it("keeps periodic WAL after parent adoption", async ({ signal }) => {
-  const pathname = makeDatabasePath("adopted-owner");
-  const parent = createOpenClawDatabaseMaintenanceScope();
-  const child = parent.run(() => createOpenClawDatabaseMaintenanceScope());
-  const { database, periodic } = child.run(() => openWithPeriodicMaintenance(pathname));
-  const sql = observeHostSql(database.db);
-  try {
-    const adopt = () => openOpenClawStateDatabase({ path: pathname });
-    expect(parent.run(adopt)).toBe(database);
-    await child.close();
-    expect(database.db.isOpen).toBe(true);
-    sql.clear();
-    await expectPeriodicCheckpoint(database, periodic, signal, () => {
-      expect(database.walMaintenance.health).toMatchObject({ state: "complete", warning: false });
-      sql.assertIdle();
-    });
-  } finally {
-    await child.close();
-    await parent.close();
-    await closeOpenClawStateDatabaseByPathAsync(database.path);
-  }
-});
-
-it("refuses adoption once cached-handle retirement starts", async () => {
-  const pathname = makeDatabasePath("closing-owner");
-  const parent = createOpenClawDatabaseMaintenanceScope();
-  const child = parent.run(() => createOpenClawDatabaseMaintenanceScope());
-  const { database } = child.run(() => openWithPeriodicMaintenance(pathname));
-  const entered = createDeferred();
-  const released = createDeferred();
-  const adopt = () => {
+it.each([false, true])(
+  "admits parent adoption only before retirement (retiring: %s)",
+  async (retiring, { signal }) => {
+    const pathname = makeDatabasePath("adoption");
+    const parent = createOpenClawDatabaseMaintenanceScope();
+    const child = parent.run(() => createOpenClawDatabaseMaintenanceScope());
+    const { database, periodic } = child.run(() => openWithPeriodicMaintenance(pathname));
+    await using cleanup = new AsyncDisposableStack();
+    cleanup.defer(() => closeOpenClawStateDatabaseByPathAsync(database.path));
+    cleanup.defer(() => parent.close());
+    cleanup.defer(() => child.close());
     const open = () => openOpenClawStateDatabase({ path: pathname });
-    return runOutsideOpenClawDatabaseMaintenanceScope(open);
-  };
-  let synchronousAdmission: unknown;
-  let inspected = false;
-  const cancel = walAdmission.cancelSqliteWalWriteAdmission;
-  const cancellation = vi
-    .spyOn(walAdmission, "cancelSqliteWalWriteAdmission")
-    .mockImplementation(async (target) => {
-      if (target === database.db) {
-        if (!inspected) {
-          inspected = true;
-          try {
-            synchronousAdmission = adopt();
-          } catch (error) {
-            synchronousAdmission = error;
+    if (!retiring) {
+      const sql = observeHostSql(database.db);
+      expect(parent.run(open)).toBe(database);
+      await child.close();
+      expect(database.db.isOpen).toBe(true);
+      sql.clear();
+      await expectPeriodicCheckpoint(database, periodic, signal, () => {
+        expect(database.walMaintenance.health).toMatchObject({ state: "complete", warning: false });
+        sql.assertIdle();
+      });
+      return;
+    }
+    const entered = createDeferred();
+    const released = createDeferred();
+    const adopt = () => runOutsideOpenClawDatabaseMaintenanceScope(open);
+    let synchronousAdmission: unknown;
+    let inspected = false;
+    const cancel = walAdmission.cancelSqliteWalWriteAdmission;
+    const cancellation = vi
+      .spyOn(walAdmission, "cancelSqliteWalWriteAdmission")
+      .mockImplementation(async (target) => {
+        if (target === database.db) {
+          if (!inspected) {
+            inspected = true;
+            try {
+              synchronousAdmission = adopt();
+            } catch (error) {
+              synchronousAdmission = error;
+            }
           }
+          entered.resolve();
+          await released.promise;
         }
-        entered.resolve();
-        await released.promise;
-      }
-      await cancel(target);
-    });
-  const closing = child.close();
-  try {
-    await entered.promise;
-    expect(synchronousAdmission).toMatchObject({
-      message: expect.stringMatching(/maintenance.*closed/i),
-    });
-    expect(adopt).toThrow(/maintenance.*closed/i);
-    released.resolve();
-    await closing;
-    expect(database.db.isOpen).toBe(false);
-    expect(openOpenClawStateDatabase({ path: pathname }).db.isOpen).toBe(true);
-  } finally {
-    released.resolve();
-    await closing;
-    cancellation.mockRestore();
-    await parent.close();
-  }
-});
+        await cancel(target);
+      });
+    const closing = child.close();
+    try {
+      await entered.promise;
+      expect(synchronousAdmission).toMatchObject({
+        message: expect.stringMatching(/maintenance.*closed/i),
+      });
+      expect(adopt).toThrow(/maintenance.*closed/i);
+      released.resolve();
+      await closing;
+      expect(database.db.isOpen).toBe(false);
+      expect(openOpenClawStateDatabase({ path: pathname }).db.isOpen).toBe(true);
+    } finally {
+      released.resolve();
+      await closing;
+      cancellation.mockRestore();
+    }
+  },
+);
 
 it("does not borrow a timer caller's maintenance authority", async ({ signal }) => {
   const { database, periodic } = openWithPeriodicMaintenance(makeDatabasePath("authority"));
