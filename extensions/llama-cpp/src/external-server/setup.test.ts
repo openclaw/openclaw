@@ -264,6 +264,10 @@ it("skips guided detection when configured auth cannot be resolved", async () =>
 it("prepares only the exact discovered model", async () => {
   const result = await prepare({ config: {}, env: {}, modelRef: MODEL_REF });
   expect(result).toMatchObject({ profiles: [], defaultModel: MODEL_REF });
+  expect(result && configuredProvider(result)).toMatchObject({
+    baseUrl: LOCAL_BASE_URL,
+    api: "openai-completions",
+  });
   await expect(prepare({ config: {}, env: {}, modelRef: "llama-cpp/missing" })).resolves.toBeNull();
 });
 

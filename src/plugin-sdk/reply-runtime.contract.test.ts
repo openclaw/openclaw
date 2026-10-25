@@ -41,8 +41,15 @@ it("retains released lifecycle callback arguments and synchronous completion ack
   type Deferral = Present<Present<Options["turnAdoptionLifecycle"]>["onDeferred"]>;
   expectTypeOf<Deferral>().toEqualTypeOf<() => boolean | void>();
   type AgentRunStart = NonNullable<Options["onAgentRunStart"]>;
+  type LegacyAgentRunStart = (
+    runId: string,
+    executionIdentityToken?: Parameters<AgentRunStart>[1],
+    options?: Parameters<AgentRunStart>[2],
+  ) => unknown;
   expectTypeOf<[string]>().toExtend<Parameters<AgentRunStart>>();
-  expectTypeOf<Parameters<AgentRunStart>[0]>().toEqualTypeOf<string>();
+  expectTypeOf<Parameters<LegacyAgentRunStart>>().toExtend<Parameters<AgentRunStart>>();
+  expectTypeOf<LegacyAgentRunStart>().toExtend<AgentRunStart>();
+  expectTypeOf<AgentRunStart>().toExtend<LegacyAgentRunStart>();
   expectTypeOf<AgentRunStart>().returns.toEqualTypeOf<unknown>();
 });
 

@@ -1,11 +1,13 @@
 // @vitest-environment node
 import { expect, it } from "vitest";
 import {
+  SIDEBAR_NAV_ROUTES,
   formatDocumentTitle,
   isPluginsHubRoute,
   navigationIconForRoute,
   subtitleForRoute,
   titleForRoute,
+  visibleSettingsNavigationGroups,
 } from "./app-navigation.ts";
 import {
   activityPersonFromPath,
@@ -49,11 +51,29 @@ it.each([
   expect(formatDocumentTitle(options)).toBe(title);
 });
 
-it("resolves a navigation title and lazy subtitle in English", async () => {
+it("keeps every navigation title and subtitle backed by an English translation", async () => {
   const { registerRouteSubtitlesEnglish } = await import("./i18n/locales/en-route-subtitles.ts");
   registerRouteSubtitlesEnglish();
-  expect(titleForRoute("usage")).toBe("Usage");
-  expect(subtitleForRoute("usage")).toBe("API usage and costs.");
+  const routes: RouteId[] = [
+    "chat",
+    "custodian",
+    "claws",
+    ...SIDEBAR_NAV_ROUTES,
+    "workboard",
+    "skills",
+    "skill-workshop",
+    "worktrees",
+    "memory-import",
+    "ai-agents",
+    "model-setup",
+    "lobsterdex",
+    ...visibleSettingsNavigationGroups(true).flatMap((group) => group.routes),
+  ];
+  const rawI18nKey = /^[a-z][a-zA-Z0-9]*\.[a-zA-Z]/;
+  for (const routeId of routes) {
+    expect(titleForRoute(routeId), routeId).not.toMatch(rawI18nKey);
+    expect(subtitleForRoute(routeId), routeId).not.toMatch(rawI18nKey);
+  }
 });
 
 it("normalizes base paths and trailing route slashes", () => {
