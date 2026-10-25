@@ -132,7 +132,7 @@ export function parseFeishuMessageEvent(
   return ctx;
 }
 
-export function parseMessageContent(content: string, messageType: string): string {
+function parseMessageContent(content: string, messageType: string): string {
   if (messageType === "post") {
     return parsePostContent(content, {
       renderMediaPlaceholders: false,
