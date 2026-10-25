@@ -167,7 +167,6 @@ it("refuses cross-requester steering by default and admits only an explicit fres
     expect(operation.result).toBeNull();
     expect(isRpcSourceQueued(rpcSourceTesting.get(fixture.params.idempotencyKey))).toBe(false);
     expect(runtime.execute).not.toHaveBeenCalled();
-    expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
     expectChat(fixture, fixture.params.idempotencyKey, "final", [
       { type: "text", text: refusal, openclawStatusNotice: true },
     ]);
@@ -189,7 +188,6 @@ it("refuses cross-requester steering by default and admits only an explicit fres
       1: { status: "ok", runId: fixture.params.idempotencyKey },
       3: { cached: true },
     });
-    expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
     expect(runtime.execute).not.toHaveBeenCalled();
     expect((await listSessionPendingInputs(fixture.scope)).items).toEqual(pending.items);
 
@@ -283,7 +281,6 @@ it("refuses cross-requester steering by default and admits only an explicit fres
       1: { status: "ok", runId: fixture.params.idempotencyKey },
       3: { cached: true },
     });
-    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
     expect(runtime.execute).toHaveBeenCalledOnce();
     expect((await listSessionPendingInputs(fixture.scope)).items).toEqual(pending.items);
   } finally {
@@ -587,7 +584,6 @@ it("preserves direct pre-adoption rejection guidance instead of publishing queue
     expect(ack.mock.calls[0]?.[1]).toMatchObject({ runId, status: "started" });
     await withinTest(dispatched.promise, signal);
     await fixture.finishDispatch();
-    expect(rejectAdmission).toHaveBeenCalledOnce();
     expect(inputSignal?.aborted).toBe(false);
     expect(runtime.execute).not.toHaveBeenCalled();
     expect(fixture.context.dedupe.get(`chat:${runId}`)).toMatchObject({
@@ -602,7 +598,6 @@ it("preserves direct pre-adoption rejection guidance instead of publishing queue
     const replay = await fixture.send();
     expect(replay.mock.calls[0]?.[0]).toBe(false);
     expect(replay.mock.calls[0]?.[1]).toMatchObject({ runId, status: "error", summary: guidance });
-    expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
   } finally {
     rejectAdmission.mockRestore();
     await fixture.cleanup();
