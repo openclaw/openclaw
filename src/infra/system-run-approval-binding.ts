@@ -6,7 +6,7 @@ import type {
   SystemRunApprovalBinding,
   SystemRunApprovalFileOperand,
 } from "./exec-approvals-core.js";
-import { planShellAuthorization } from "./exec-authorization-plan.js";
+import { isCuratedUnbindableReason, planShellAuthorization } from "./exec-authorization-plan.js";
 import {
   type ExecutableResolution,
   resolveCommandResolutionFromArgv,
@@ -36,6 +36,16 @@ import { analyzeWindowsShellCommand } from "./windows-shell-command.js";
 
 export const APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE =
   "SYSTEM_RUN_DENIED: approval script operand changed before execution";
+
+const SYSTEM_RUN_UNBINDABLE_COMMAND_MESSAGE =
+  "SYSTEM_RUN_DENIED: approval cannot safely bind this command";
+
+// Only name reasons from the planner's known risk/shape sets; anything else stays generic.
+function formatSystemRunUnbindableCommandMessage(reason: string | undefined): string {
+  return reason && isCuratedUnbindableReason(reason)
+    ? `${SYSTEM_RUN_UNBINDABLE_COMMAND_MESSAGE} (${reason})`
+    : SYSTEM_RUN_UNBINDABLE_COMMAND_MESSAGE;
+}
 
 type NormalizedSystemRunEnvEntry = [key: string, value: string];
 
@@ -292,7 +302,7 @@ function prepareMutableFileBindingsForSegments(params: {
   if (params.segments.length === 0) {
     return {
       ok: false,
-      message: "SYSTEM_RUN_DENIED: approval cannot safely bind this command",
+      message: SYSTEM_RUN_UNBINDABLE_COMMAND_MESSAGE,
     };
   }
   const ordinaryCommands: string[][] = [];
@@ -504,7 +514,7 @@ export async function prepareSystemRunMutableFileBinding(params: {
     if (!analysis.ok || analysis.segments.length === 0) {
       return {
         ok: false,
-        message: "SYSTEM_RUN_DENIED: approval cannot safely bind this command",
+        message: formatSystemRunUnbindableCommandMessage(analysis.ok ? undefined : analysis.reason),
       };
     }
     return prepareMutableFileBindingsForSegments({
@@ -523,7 +533,7 @@ export async function prepareSystemRunMutableFileBinding(params: {
   if (!plan.ok) {
     return {
       ok: false,
-      message: "SYSTEM_RUN_DENIED: approval cannot safely bind this command",
+      message: formatSystemRunUnbindableCommandMessage(plan.reason),
     };
   }
   if (plan.groups.some((group) => group.candidates.length > 1)) {
