@@ -48,6 +48,7 @@ const { values } = parseArgs({
     warmup: { type: "string", default: "2" },
     "rtt-ms": { type: "string", default: "0" },
     "remote-ingress": { type: "boolean", default: false },
+    "no-counters": { type: "boolean", default: false },
     providers: { type: "string", default: "10" },
     models: { type: "string", default: "100" },
     "history-key": { type: "string", default: "agent:main:team-shape-session-0" },
@@ -65,6 +66,7 @@ if (values.help) {
   --samples 10 --warmup 2           Serial requests; cold first, warmup and measured kept separate.
   --rtt-ms 0|100                    TCP proxy delays each direction by half the RTT.
   --remote-ingress                 Paired token auth through trusted loopback proxy attribution; asserts compression.
+  --no-counters                    Keep JSON/socket counters off except the separate first sample.
   --providers 10 --models 100       Synthetic config catalog: models per provider; no credentials.
   --history-key <key> --history-limit 80  Existing 2,000-message fixture; protocol pagination retained.
   --method <case>                  Repeatable case filter (case names appear in result JSON).
@@ -180,11 +182,11 @@ type Event = {
 };
 type Metrics = {
   events: Event[];
-  jsonStringifyMs: number;
-  jsonStringifyCount: number;
-  socketWriteMs: number;
-  socketWriteCount: number;
-  socketWriteBytes: number;
+  jsonStringifyMs?: number;
+  jsonStringifyCount?: number;
+  socketWriteMs?: number;
+  socketWriteCount?: number;
+  socketWriteBytes?: number;
   processCpuMs: number;
   mainThreadCpuMs: number;
   windowMs: number;
@@ -333,6 +335,7 @@ if (values.sync) {
             warmup,
             rttMs,
             remoteIngress,
+            noCounters: values["no-counters"],
             profile: values.profile,
             profileSamples,
             providerCount,
@@ -514,7 +517,7 @@ async function connectPeer(
   };
 }
 async function measure(id: string, method: string, params: unknown, peer: Peer, phase: string) {
-  await control("begin");
+  await control("begin", { countOps: !values["no-counters"] || phase === "first" });
   const started = performance.now();
   let response: Awaited<ReturnType<Peer["request"]>>;
   try {
@@ -913,6 +916,7 @@ try {
       warmup,
       rttMs,
       remoteIngress,
+      operationCounters: values["no-counters"] ? "first-sample-only" : "every-timed-window",
       profileSamples: values.profile ? profileSamples : 0,
       providerCount,
       modelsPerProvider,
@@ -928,8 +932,9 @@ try {
         "existing gateway.rpc response duration: admitted frame receipt through socket acceptance; no TCP delivery wait",
       cpuScope:
         "whole per-request IPC window, including event-loop work and worker CPU; not only the handler",
-      jsonScope:
-        "all synchronous main-isolate JSON.stringify calls in each request window, including shaping",
+      jsonScope: values["no-counters"]
+        ? "first sample only; JSON/socket operation counters omitted from warm samples"
+        : "all synchronous main-isolate JSON.stringify calls in each request window, including shaping",
       framingScope:
         "socketWrite is native enqueue only; use CPU profiles for compression/header/segmentation attribution",
       profile: values.profile

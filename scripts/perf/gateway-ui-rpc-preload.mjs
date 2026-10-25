@@ -88,7 +88,7 @@ function installObserver() {
     });
   }
   const stringify = JSON.stringify;
-  JSON.stringify = function (...args) {
+  const countedStringify = function (...args) {
     if (!active) {
       return Reflect.apply(stringify, JSON, args);
     }
@@ -100,8 +100,9 @@ function installObserver() {
       active.jsonStringifyCount++;
     }
   };
+  // Captured for restoration; Reflect.apply preserves the socket receiver.
   const write = Socket.prototype.write;
-  Socket.prototype.write = function (...args) {
+  const countedWrite = function (...args) {
     if (!active || this.localPort !== port) {
       return Reflect.apply(write, this, args);
     }
@@ -129,13 +130,20 @@ function installObserver() {
           if (active) {
             throw new Error("overlapping RPC measurement windows");
           }
+          const countOps = message.countOps !== false;
+          JSON.stringify = countOps ? countedStringify : stringify;
+          Socket.prototype.write = countOps ? countedWrite : write;
           active = {
             events: [],
-            jsonStringifyMs: 0,
-            jsonStringifyCount: 0,
-            socketWriteMs: 0,
-            socketWriteCount: 0,
-            socketWriteBytes: 0,
+            ...(countOps
+              ? {
+                  jsonStringifyMs: 0,
+                  jsonStringifyCount: 0,
+                  socketWriteMs: 0,
+                  socketWriteCount: 0,
+                  socketWriteBytes: 0,
+                }
+              : {}),
             startedAt: performance.now(),
             processStart: process.cpuUsage(),
             threadStart: process.threadCpuUsage(),
@@ -146,6 +154,8 @@ function installObserver() {
           }
           const captured = active;
           active = undefined;
+          JSON.stringify = stringify;
+          Socket.prototype.write = write;
           const processCpu = process.cpuUsage(captured.processStart);
           const threadCpu = process.threadCpuUsage(captured.threadStart);
           const {
