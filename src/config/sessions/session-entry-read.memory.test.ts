@@ -27,6 +27,7 @@ import {
   readSessionEntryReadOnlyInWorker,
 } from "./session-entry-read-runtime.js";
 import { readSessionEntryInWorker } from "./session-entry-read-writable.js";
+import type { SessionEntry } from "./types.js";
 
 const authority = { assertCurrent() {}, authorize() {} };
 const lifetime = { assertCurrent() {}, assertReadable() {} };
@@ -42,6 +43,11 @@ function fixture() {
   };
 }
 
+const create = (entry: SessionEntry) =>
+  ({ type: "session.entry.create", input: { entry } }) as const;
+const patchFields = (patch: Partial<SessionEntry>) =>
+  ({ type: "session.entry.patch", input: { operation: { kind: "fields", patch } } }) as const;
+
 it("unbound child readers observe memory lineage writes without opening SQLite", async () => {
   const { scope, database } = fixture();
   const owner = memorySessionActorOwners.get(database);
@@ -49,27 +55,16 @@ it("unbound child readers observe memory lineage writes without opening SQLite",
   const actor = await owner.acquire({ database: owner.identity, sessionKey: childKey }, lifetime);
   try {
     await actor.storage!.mutate(
-      {
-        type: "session.entry.create",
-        input: {
-          entry: {
-            sessionId: "child",
-            updatedAt: 1,
-            incognito: true,
-            skillsSnapshot: { prompt: "private instructions", skills: [] },
-          },
-        },
-      },
+      create({
+        sessionId: "child",
+        updatedAt: 1,
+        incognito: true,
+        skillsSnapshot: { prompt: "private instructions", skills: [] },
+      }),
       authority,
     );
     expect(await listSessionChildEntriesReadOnly(scope)).toEqual([]);
-    await actor.storage!.mutate(
-      {
-        type: "session.entry.patch",
-        input: { operation: { kind: "fields", patch: { parentSessionKey: scope.sessionKey } } },
-      },
-      authority,
-    );
+    await actor.storage!.mutate(patchFields({ parentSessionKey: scope.sessionKey }), authority);
     const children = await listSessionChildEntriesReadOnly({ ...scope, projection: "list" });
     expect(children).toMatchObject([{ sessionKey: childKey, entry: { sessionId: "child" } }]);
     expect(children[0]?.entry).not.toHaveProperty("skillsSnapshot");
@@ -121,29 +116,21 @@ it("unbound readers observe committed entry and sharing changes without replacin
     const commit = async (command: Parameters<typeof storage.mutate>[0]) => {
       expect((await storage.mutate(command, authority)).kind).toBe("committed");
     };
-    await commit({
-      type: "session.entry.create",
-      input: {
-        entry: {
-          sessionId: "memory-read",
-          updatedAt: 1,
-          incognito: true,
-          modelSelectionLocked: false,
-        },
-      },
-    });
+    await commit(
+      create({
+        sessionId: "memory-read",
+        updatedAt: 1,
+        incognito: true,
+        modelSelectionLocked: false,
+      }),
+    );
     const current = captureNativeSessionEntryCurrentRead(scope);
     const list = createSessionEntryListReader(scope);
     expect(current.readCurrent()?.modelSelectionLocked).toBe(false);
     expect((await list()).entries[0]?.entry.updatedAt).toBe(1);
     using now = vi.spyOn(Date, "now");
     now.mockReturnValue(2);
-    await commit({
-      type: "session.entry.patch",
-      input: {
-        operation: { kind: "fields", patch: { updatedAt: 2, modelSelectionLocked: true } },
-      },
-    });
+    await commit(patchFields({ updatedAt: 2, modelSelectionLocked: true }));
     await commit({
       type: "session.collaboration.add",
       input: { params: { identityId: "fixture-reader", addedBy: "fixture-owner", addedAt: 3 } },

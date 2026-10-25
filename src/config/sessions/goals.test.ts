@@ -91,6 +91,7 @@ describe("session goals", () => {
 
     const resumed = await setStatus("active", 30);
     expect(resumed).toMatchObject({ status: "active", tokenStart: 125, tokensUsed: 0 });
+    expect(resumed.budgetLimitedAt).toBeUndefined();
     expect((await snapshot(40)).goal).toMatchObject({ status: "active", tokensUsed: 0 });
   });
 
@@ -164,17 +165,6 @@ describe("session goals", () => {
     expect(resumed).toMatchObject({ status: "active", lastStatusNote: "waiting on CI" });
   });
 
-  it("resumes paused goals with a fresh budget window after usage passes the budget", async () => {
-    await startGoal(0, { tokenBudget: 20 });
-    await setStatus("paused", 20);
-    await patchEntry({ totalTokens: 100 });
-
-    const resumed = await setStatus("active", 30);
-
-    expect(resumed).toMatchObject({ status: "active", tokenStart: 100, tokensUsed: 0 });
-    expect(resumed.budgetLimitedAt).toBeUndefined();
-  });
-
   it("formats a readable status summary with command hints", () => {
     const text = formatSessionGoalStatus(
       goalState({
@@ -239,8 +229,7 @@ describe("session goals", () => {
 
   it("clears goal state", async () => {
     await startGoal();
-
-    await expect(clearSessionGoal({ ...scope() })).resolves.toBe(true);
+    await expect(clearSessionGoal(scope())).resolves.toBe(true);
     expect(readEntry()?.goal).toBeUndefined();
   });
 });
