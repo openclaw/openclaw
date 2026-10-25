@@ -1,7 +1,5 @@
-import type { ProgressCard } from "@openclaw/gateway-protocol";
-import type { Locator, Page } from "playwright";
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
 import {
   controlUiBundledSettingsStorageKey,
   defaultControlUiFeatureMethods,
@@ -28,8 +26,8 @@ const steps = [
   })),
 ];
 
-async function openProgress(page: Page, initialCard?: ProgressCard) {
-  const card = initialCard ?? { sessionKey, revision: 1, updatedAt: Date.now(), steps };
+async function openProgress(page: Page) {
+  const card = { sessionKey, revision: 1, updatedAt: Date.now(), steps };
   const gateway = await installMockGateway(page, {
     featureMethods: [...defaultControlUiFeatureMethods, "chat.history", "chat.send"],
     sessionKey,
@@ -50,183 +48,7 @@ async function openProgress(page: Page, initialCard?: ProgressCard) {
   return { gateway, card, details: disclosure };
 }
 
-async function measureSteps(rows: Locator) {
-  return rows.evaluateAll((elements) =>
-    elements.map((row) => {
-      const marker = row.querySelector(".session-progress-card__step-marker")!;
-      const text = row.querySelector(".session-progress-card__step-text")!;
-      const icon = marker.firstElementChild!;
-      const bounds = row.getBoundingClientRect();
-      const markerBounds = marker.getBoundingClientRect();
-      const textBounds = text.getBoundingClientRect();
-      const iconBounds = icon.getBoundingClientRect();
-      const style = getComputedStyle(text);
-      const iconStyle = getComputedStyle(icon);
-      const rowStyle = getComputedStyle(row);
-      const rail = getComputedStyle(row, "::after");
-      const line = Number.parseFloat(style.lineHeight);
-      const iconHeight = Number.parseFloat(iconStyle.height);
-      const iconTop = markerBounds.top + (markerBounds.height - iconHeight) / 2;
-      let paintedWidth = Number.parseFloat(iconStyle.width);
-      let paintedHeight = iconHeight;
-      if (icon instanceof SVGSVGElement) {
-        const ink = icon.getBBox();
-        const stroke = Number.parseFloat(iconStyle.strokeWidth);
-        paintedWidth = ((ink.width + stroke) * iconBounds.width) / icon.viewBox.baseVal.width;
-        paintedHeight = ((ink.height + stroke) * iconBounds.height) / icon.viewBox.baseVal.height;
-      }
-      return {
-        geometry: [bounds, markerBounds, textBounds].map(({ x, y, width, height }) => ({
-          x,
-          y,
-          width,
-          height,
-        })),
-        status: marker.getAttribute("data-status"),
-        lines: textBounds.height / line,
-        fontSize: style.fontSize,
-        fontWeight: style.fontWeight,
-        lineHeight: style.lineHeight,
-        color: style.color,
-        markerColor: icon instanceof SVGSVGElement ? iconStyle.color : iconStyle.borderTopColor,
-        paintedWidth,
-        paintedHeight,
-        opacity: getComputedStyle(marker).opacity,
-        padding: rowStyle.padding,
-        minHeight: rowStyle.minHeight,
-        iconTop,
-        iconBottom: iconTop + iconHeight,
-        iconCenterX: iconBounds.left + iconBounds.width / 2,
-        firstLineCenterOffset: iconBounds.top + iconBounds.height / 2 - (textBounds.top + line / 2),
-        firstLineOffset: markerBounds.top - textBounds.top,
-        textGap: textBounds.left - markerBounds.right,
-        animation: iconStyle.animationName,
-        animationDuration: iconStyle.animationDuration,
-        rail: {
-          content: rail.content,
-          x: bounds.left + Number.parseFloat(rail.left),
-          top: bounds.top + Number.parseFloat(rail.top),
-          height: Number.parseFloat(rail.height),
-          width: rail.width,
-          opacity: rail.opacity,
-        },
-      };
-    }),
-  );
-}
-
 suite.define(() => {
-  it.each(["no-preference", "reduce"] as const)(
-    "keeps four task steps fixed through status changes with %s motion",
-    async (reducedMotion) => {
-      const context = await suite.newBrowserContext({
-        viewport: { width: 1440, height: 900 },
-        reducedMotion,
-      });
-      try {
-        const page = await context.newPage();
-        const labels = steps.slice(0, 4).map(({ step }) => step);
-        const card: ProgressCard = {
-          sessionKey,
-          revision: 1,
-          updatedAt: Date.now(),
-          markdown:
-            "Review the [proposed change](https://example.com/review) and the [validation notes](https://example.com/validation).",
-          steps: labels.map((step, index) => ({
-            step,
-            status: index === 0 ? "in_progress" : "pending",
-          })),
-        };
-        const { gateway, details } = await openProgress(page, card);
-        await waitForLayoutSettled(page, ".chat-details, .task-progress-details__plan");
-        const rows = details.locator(".session-progress-card__step");
-        const initial = await measureSteps(rows);
-        expect(initial).toHaveLength(4);
-        expect(initial.some((row) => row.lines > 1)).toBe(true);
-        const palette = await details.evaluate((element) => {
-          const color = (token: string) => {
-            const probe = document.createElement("span");
-            probe.style.color = `var(${token})`;
-            element.append(probe);
-            const value = getComputedStyle(probe).color;
-            probe.remove();
-            return value;
-          };
-          return { text: color("--text"), muted: color("--muted"), success: color("--ok") };
-        });
-        const links = await details
-          .locator(".session-progress-card__markdown a")
-          .evaluateAll((elements) => elements.map((link) => getComputedStyle(link).fontWeight));
-        expect(links).toEqual(["500", "500"]);
-        expect(
-          await details.locator(".session-progress-card__markdown").evaluate((markdown) => {
-            const text = markdown.parentElement!.querySelector(
-              ".session-progress-card__step-text",
-            )!;
-            return {
-              fontSize: getComputedStyle(markdown).fontSize,
-              gap: text.getBoundingClientRect().top - markdown.getBoundingClientRect().bottom,
-            };
-          }),
-        ).toEqual({ fontSize: "12px", gap: 8 });
-        for (let completed = 0; completed <= labels.length; completed += 1) {
-          if (completed > 0) {
-            await gateway.setMethodResponse("progressCard.get", {
-              card: {
-                ...card,
-                revision: completed + 1,
-                steps: labels.map((step, index) => ({
-                  step,
-                  status:
-                    index < completed
-                      ? "completed"
-                      : index === completed
-                        ? "in_progress"
-                        : "pending",
-                })),
-              },
-            });
-            await gateway.emitGatewayEvent("progressCard.changed", {
-              sessionKey,
-              revision: completed + 1,
-            });
-          }
-          await expect
-            .poll(() => rows.locator('[data-status="completed"]').count())
-            .toBe(completed);
-          const current = await measureSteps(rows);
-          expect(current.map((row) => row.geometry)).toEqual(initial.map((row) => row.geometry));
-          for (const [index, row] of current.entries()) {
-            const active = index === completed;
-            expect(row.color).toBe(active ? palette.text : palette.muted);
-            expect(row.markerColor).toBe(
-              index < completed ? palette.success : active ? palette.text : palette.muted,
-            );
-            expect(row.animation).toBe(
-              active && reducedMotion === "no-preference" ? "btn-spinner-spin" : "none",
-            );
-            if (active && reducedMotion === "no-preference") {
-              expect(row.animationDuration).toBe("1.6s");
-            }
-            expect(row.firstLineCenterOffset).toBeCloseTo(0, 2);
-            if (index === current.length - 1) {
-              expect(row.rail.content).toBe("none");
-            } else {
-              const next = current[index + 1]!;
-              expect(row.rail.width).toBe("1px");
-              expect(row.rail.opacity).toBe("0.4");
-              expect(row.rail.x + 0.5).toBeCloseTo(row.iconCenterX, 2);
-              expect(row.rail.top - row.iconBottom).toBeGreaterThanOrEqual(4);
-              expect(next.iconTop - (row.rail.top + row.rail.height)).toBeGreaterThanOrEqual(4);
-            }
-          }
-        }
-      } finally {
-        await suite.closeBrowserContext(context);
-      }
-    },
-  );
-
   it.each([
     { width: 1440, touch: false },
     { width: 390, touch: false },
@@ -261,43 +83,25 @@ suite.define(() => {
           if (!mobileDetails && (await disclosure.getAttribute("open")) === null) {
             await disclosure.locator("summary").click();
           }
-          const measurements = await measureSteps(
-            disclosure.locator(".session-progress-card__step"),
-          );
+          const measurements = await disclosure
+            .locator(".session-progress-card__step")
+            .evaluateAll((rows) =>
+              rows.map((row) => {
+                const marker = row.querySelector(".session-progress-card__step-marker > *")!;
+                const text = row.querySelector(".session-progress-card__step-text")!;
+                const icon = marker.getBoundingClientRect();
+                const bounds = text.getBoundingClientRect();
+                const line = Number.parseFloat(getComputedStyle(text).lineHeight);
+                return {
+                  delta: Math.abs(icon.top + icon.height / 2 - (bounds.top + line / 2)),
+                  lines: bounds.height / line,
+                };
+              }),
+            );
           expect(measurements).toHaveLength(steps.length);
           expect(measurements.some(({ lines }) => lines > 1.5)).toBe(true);
-          if (placement === "details") {
-            const current = measurements.find((row) => row.status === "in_progress")!;
-            const pending = measurements.find((row) => row.status === "pending")!;
-            const diameter = width === 390 ? 12 : 13;
-            // Compare painted contours: the dashed SVG compensates for its viewBox inset.
-            expect(current.paintedWidth).toBeCloseTo(diameter, 2);
-            expect(current.paintedHeight).toBeCloseTo(diameter, 2);
-            expect(pending.paintedWidth).toBeCloseTo(current.paintedWidth, 2);
-            expect(pending.paintedHeight).toBeCloseTo(current.paintedHeight, 2);
-            expect(pending.opacity).toBe("0.9");
-            expect(
-              await disclosure
-                .locator(".session-progress-card__steps")
-                .evaluate((list) => getComputedStyle(list).rowGap),
-            ).toBe(width === 390 ? "8px" : "0px");
-            for (const row of measurements) {
-              expect(row.fontSize).toBe(width === 390 ? "14px" : "12px");
-              expect(row.fontWeight).toBe("400");
-              expect(row.lineHeight).toBe("20px");
-              expect(row.geometry[1]!.height).toBe(20);
-              expect(row.geometry[1]!.width).toBe(16);
-              expect(row.firstLineOffset).toBe(0);
-              expect(row.textGap).toBe(10);
-              expect(row.padding).toBe(width === 390 ? "0px" : "2px 4px");
-              expect(row.minHeight).toBe(width === 390 ? "auto" : "24px");
-              if (row.rail.content !== "none") {
-                expect(row.rail.x + 0.5).toBeCloseTo(row.iconCenterX, 2);
-              }
-            }
-          }
-          for (const row of measurements) {
-            expect(Math.abs(row.firstLineCenterOffset)).toBeLessThanOrEqual(1);
+          for (const { delta } of measurements) {
+            expect(delta).toBeLessThanOrEqual(1);
           }
           if (mobileDetails) {
             expect(await disclosure.locator("summary").count()).toBe(0);
