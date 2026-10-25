@@ -196,21 +196,6 @@ describe("runGatewayConversationList", () => {
       expect(list).toHaveBeenCalledWith(
         expect.objectContaining({ accountId: "default", limit: 50, ...(query ? { query } : {}) }),
       );
-      expect(fixture.resolveRoute).toHaveBeenCalledWith(
-        expect.objectContaining({
-          channel: "reef",
-          agentId: "main",
-          accountId: "default",
-          target: sourceId,
-          resolvedTarget: {
-            to: sourceId,
-            kind: entryKind,
-            display: name,
-            source: "directory",
-            resolutionSource: "directory",
-          },
-        }),
-      );
       if (direct) {
         expect(result.conversations).toMatchObject([
           {

@@ -264,12 +264,14 @@ it("reads current incognito context without creating missing sessions", async ()
   expect(await reader.currentSessionId(scope)).toBeUndefined();
 });
 
-it("reads a bounded active SQLite tail without decoding old transcript rows", async () => {
+it("bounds a tool-heavy tail without decoding excluded old rows or losing the latest user turn", async () => {
   const scope = await seedScope(
-    "companion-context-tail",
-    chain(201, (i) => [i % 2 === 0 ? "user" : "assistant", `message ${i}`]),
+    "companion-context-tools",
+    chain(551, (i) => [
+      i === 550 ? "user" : i >= 150 ? "toolResult" : i % 2 ? "assistant" : "user",
+      i === 550 ? "visible latest question" : `${i < 150 ? "useful" : "tool result"} ${i}`,
+    ]),
   );
-
   const database = openOpenClawAgentDatabase({ agentId: scope.agentId, env: scope.env });
   database.db
     .prepare("UPDATE transcript_events SET event_json = '{' WHERE session_id = ? AND seq = 1")
@@ -278,23 +280,9 @@ it("reads a bounded active SQLite tail without decoding old transcript rows", as
   const messages = await readReady(scope);
   expect(messages).toHaveLength(40);
   expect([messages.at(0), messages.at(-1)]).toEqual([
-    { role: "assistant", text: "message 161", ts: 161 },
-    { role: "user", text: "message 200", ts: 200 },
+    { role: "assistant", text: "useful 111", ts: 111 },
+    { role: "user", text: "visible latest question", ts: 550 },
   ]);
-});
-
-it("pages past a tool-heavy tail while retaining the selected session's latest user turn", async () => {
-  const scope = await seedScope(
-    "companion-context-tools",
-    chain(451, (i) => [
-      i === 450 ? "user" : i >= 50 ? "toolResult" : i % 2 ? "assistant" : "user",
-      i === 450 ? "visible latest question" : `${i < 50 ? "useful" : "tool result"} ${i}`,
-    ]),
-  );
-
-  const messages = await readReady(scope);
-  expect(messages).toHaveLength(40);
-  expect(messages.at(-1)?.text).toBe("visible latest question");
   expect(messages.some((message) => message.text.startsWith("tool result"))).toBe(false);
 });
 

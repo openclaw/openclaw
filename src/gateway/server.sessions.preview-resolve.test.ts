@@ -6,14 +6,12 @@ import {
 } from "../state/openclaw-agent-db.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { gatewayConnect, gatewayProfile } from "./server/client-fixtures.test-support.js";
-import { readSessionPreviewItemsFromTranscriptAsync } from "./session-transcript-preview.js";
 import type { SessionsPreviewResult } from "./session-utils.types.js";
 import { rpcReq, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
   sessionStoreEntry,
   directSessionReq,
-  seedSessionTranscript,
 } from "./test/server-sessions.test-helpers.js";
 
 const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
@@ -28,22 +26,6 @@ function resolveSession(params: Record<string, unknown>, client: GatewayClient) 
 const expectResolved = (result: unknown, key: string) =>
   expect(result).toMatchObject({ ok: true, payload: { ok: true, key } });
 
-async function seedPreviewTail(
-  sessionId: string,
-  messages: Array<{ role: string; content: string }>,
-) {
-  const { storePath } = await createSessionStoreDir();
-  await writeSessionStore({
-    entries: { "agent:main:main": sessionStoreEntry(sessionId) },
-  });
-  const scope = { agentId: "main", sessionId, sessionKey: "agent:main:main", storePath };
-  await sessionAccessor.persistSessionTranscriptTurn(scope, {
-    messages: messages.map((message) => ({ message })),
-    touchSessionEntry: false,
-  });
-  return { ...scope, sessionEntry: { sessionId } };
-}
-
 function identifiedClient(profileId: string, scopes: string[] = ["operator.read"]): GatewayClient {
   return {
     connect: gatewayConnect(scopes),
@@ -52,21 +34,26 @@ function identifiedClient(profileId: string, scopes: string[] = ["operator.read"
   };
 }
 
-test("sessions.preview returns transcript previews within the requested text budget", async () => {
+test("sessions.preview widens past filtered tool rows within the requested text budget", async () => {
   const { storePath } = await createSessionStoreDir();
   const sessionId = "sess-preview";
   await writeSessionStore({ entries: { "agent:main:main": sessionStoreEntry(sessionId) } });
-  await seedSessionTranscript({
-    sessionId,
-    sessionKey: "agent:main:main",
-    storePath,
-    messages: [
-      { role: "user", content: "Long preview input crosses the requested character budget." },
-      { role: "assistant", content: "Hi" },
-      { role: "assistant", content: [{ type: "toolcall", name: "weather" }] },
-      { role: "assistant", content: "Forecast ready" },
-    ],
-  });
+  await sessionAccessor.persistSessionTranscriptTurn(
+    { agentId: "main", sessionId, sessionKey: "agent:main:main", storePath },
+    {
+      updateMode: "none",
+      messages: [
+        { role: "user", content: "Long preview input crosses the requested character budget." },
+        { role: "assistant", content: "Hi" },
+        { role: "assistant", content: [{ type: "toolcall", name: "weather" }] },
+        ...Array.from({ length: 320 }, (_, index) => ({
+          role: "toolResult",
+          content: `tool ${index}`,
+        })),
+        { role: "assistant", content: "Forecast ready" },
+      ].map((message) => ({ message })),
+    },
+  );
 
   const preview = await directSessionReq<SessionsPreviewResult>("sessions.preview", {
     keys: ["main"],
@@ -81,26 +68,6 @@ test("sessions.preview returns transcript previews within the requested text bud
     { role: "assistant", text: "Hi" },
     { role: "assistant", text: "Forecast ready" },
   ]);
-});
-
-test("session preview reader widens its bounded tail past filtered tool-result rows", async () => {
-  const scope = await seedPreviewTail("sess-preview-sparse-tail", [
-    ...Array.from({ length: 64 }, (_, index) => ({
-      role: "assistant",
-      content: `visible ${String(index)}`,
-    })),
-    ...Array.from({ length: 320 }, (_, index) => ({
-      role: "toolResult",
-      content: `tool ${String(index)}`,
-    })),
-  ]);
-  const items = await readSessionPreviewItemsFromTranscriptAsync(scope, 12, 120);
-  expect(items).toEqual(
-    Array.from({ length: 12 }, (_, index) => ({
-      role: "assistant",
-      text: `visible ${String(52 + index)}`,
-    })),
-  );
 });
 
 test("sessions.resolve filters discovery selectors with sessions.list visibility", async () => {

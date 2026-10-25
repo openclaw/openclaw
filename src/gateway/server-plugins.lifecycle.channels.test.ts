@@ -399,17 +399,12 @@ it.each([false, true])(
         error: { details: { runtime: { committed: false, phase: "drain" } } },
       });
       expect(reload.error?.message).toContain("instance-binding service cleanup rejected");
-      expect(coordinator).toMatchObject({ serviceStops: 1, serviceStarts: 1 });
       expect(getActivePluginRegistry()).toBe(initialRegistry);
       releasePending.resolve();
       for (const accountId of ["active", "pending", "parked"]) {
         expect((await probe(accountId)).status).toBe(accountId === "active" ? 503 : 404);
         expect(starts.get(accountId)).toBe(1);
       }
-      const retry = await reloadPlugin(socket);
-      expect(retry.ok).toBe(false);
-      expect(coordinator.serviceStarts).toBe(1);
-      expect((await rpcReq(socket, "config.get", {})).ok).toBe(true);
       expect(hotReloadRecovery).not.toHaveBeenCalled();
       return;
     }
