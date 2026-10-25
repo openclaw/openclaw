@@ -5,6 +5,7 @@ import type { WebSocket } from "../../packages/gateway-client/src/websocket.test
 import type { PresenceUpdate } from "../../packages/gateway-protocol/src/presence-deltas.js";
 import type { PresenceEntry } from "../../packages/gateway-protocol/src/schema/snapshot.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createGatewayPresenceObserver } from "../../ui/src/app/gateway-store.presence.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import {
   connectReq,
@@ -18,30 +19,6 @@ import {
 
 installGatewayTestHooks({ scope: "suite" });
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-// The web connect plan advertises these capabilities for browser-owned device identities.
-const webCapabilities = [
-  "agent-kind",
-  "approvals",
-  "task-suggestions",
-  "terminal-offset-seq",
-  "terminal-session-metadata",
-  "terminal-upload-path-style",
-  "tool-events",
-  "chat-only-assistant-text",
-  "hello-health-on-demand",
-  "health-summary",
-  "hello-presence-self",
-  "session-scoped-events",
-  "presence-deltas",
-  "session-row-deltas",
-  "inline-widgets",
-  "model-selection-policy",
-  "model-wait-status",
-  "ui-commands",
-  "ultrafast",
-  "usage-refreshing",
-];
-
 type Frame = {
   type: "event";
   event: "presence";
@@ -61,8 +38,17 @@ async function request(ws: WebSocket, method: string, params: Record<string, unk
 
 function observePresence(ws: WebSocket) {
   const observations: Observation[] = [];
-  let entries = new Map<string, PresenceEntry>();
-  let previousVersion: number | undefined;
+  // Independent wire reconstruction lives in server.auth.presence-deltas.test.ts.
+  const observer = createGatewayPresenceObserver({
+    requestSnapshot: async () => {
+      throw new Error("Unexpected presence recovery");
+    },
+    publish: () => {},
+    onError: (error) => {
+      throw error;
+    },
+  });
+  observer.synchronize({});
   ws.on("message", (data) => {
     const serialized = rawDataToString(data);
     const frame = JSON.parse(serialized) as Frame;
@@ -71,38 +57,9 @@ function observePresence(ws: WebSocket) {
     }
     const payload = frame.payload;
     const mode = "reset" in payload ? "reset" : "upsert" in payload ? "delta" : "legacy";
-    if ("presence" in payload) {
-      entries = new Map(
-        payload.presence.map((row, index) => [
-          ("keys" in payload ? payload.keys[index] : undefined) ??
-            row.connectionId ??
-            row.instanceId ??
-            "gateway",
-          row,
-        ]),
-      );
-    } else {
-      expect(payload.base, "deltas chain from the last delivered frame").toBe(previousVersion);
-      for (const key of payload.remove) {
-        entries.delete(key);
-      }
-      for (const update of payload.upsert) {
-        if ("presence" in update) {
-          entries.set(update.key, update.presence);
-        } else {
-          const existing = entries.get(update.key);
-          expect(existing, "field patches require a previously delivered row").toBeDefined();
-          const next = { ...existing!, ...update.set };
-          for (const field of update.unset) {
-            delete next[field as keyof PresenceEntry];
-          }
-          entries.set(update.key, next);
-        }
-      }
-    }
-    const rows =
-      "order" in payload ? payload.order.map((key) => entries.get(key)!) : [...entries.values()];
-    previousVersion = frame.stateVersion.presence;
+    const normalized = mode === "legacy" ? frame : observer.receive(frame);
+    expect(normalized, "every presence frame is consumable without recovery").toBeDefined();
+    const rows = (normalized!.payload as { presence: PresenceEntry[] }).presence;
     observations.push({
       version: frame.stateVersion.presence,
       mode,
@@ -127,13 +84,8 @@ test("keeps multi-client presence compact through heartbeat, activity, and watch
         clients.push({ ws, observations, capable });
         const result = await connectReq(ws, {
           client: { ...CONTROL_UI_CLIENT, instanceId: `presence-browser-${index}` },
-          caps: capable ? webCapabilities : [],
-          deviceIdentityPath: path.join(
-            identityDir,
-            `browser-${index}`,
-            "client",
-            "credentials.sqlite",
-          ),
+          caps: capable ? ["hello-presence-self", "presence-deltas"] : [],
+          deviceIdentityPath: path.join(identityDir, `browser-${index}`, "credentials.sqlite"),
           browserOrigin: origin,
           prePairDevice: true,
         });

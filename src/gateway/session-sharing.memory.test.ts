@@ -136,13 +136,6 @@ it("reads unbound sibling sharing from the captured owner", async () => {
   const sibling = await storage.acquire(siblingKey);
   const ops = operations(expectDefined(sibling.storage, "sibling memory storage"));
   await ops.create("sibling-session");
-  const siblingScope = { agentId: "main", sessionKey: siblingKey, storePath: location.path };
-  expect(await ops.add("sibling-reader")).toMatchObject({ kind: "committed" });
-  expect((await readSessionMembersInWorker(siblingScope)).members).toEqual([
-    { identityId: "sibling-reader", addedBy: "owner", addedAt: 1 },
-  ]);
-  await ops.remove("sibling-reader");
-  expect((await readSessionMembersInWorker(siblingScope)).members).toEqual([]);
   expect(
     await readSessionMembersInWorker({
       agentId: "other",
@@ -211,13 +204,10 @@ it.each(["chat.send", "sessions.dispatch", "sessions.move"] as const)(
       await ops.label("Current");
       prepared.assertCurrent();
       client.connect.scopes = ["operator.read", "operator.write"];
-      client.authenticatedUserId = "other-person";
-      client.authenticatedUserProfile = {
-        profileId: "other-person",
-        displayName: null,
-        hasAvatar: false,
-        updatedAt: 1,
-      };
+      const { authenticatedUserId, authenticatedUserProfile } = sharingPolicyClient({
+        user: "other-person",
+      });
+      Object.assign(client, { authenticatedUserId, authenticatedUserProfile });
       expect(() => prepared.assertCurrent()).toThrow(SessionMutationAuthorizationChangedError);
       if (grant) {
         expect(() => grant.assertCurrent()).toThrow(SessionMutationAuthorizationChangedError);

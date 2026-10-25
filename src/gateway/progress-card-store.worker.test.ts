@@ -2,8 +2,6 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
-import * as gateway from "../agents/tools/in-process-gateway.js";
-import { createProgressCardTool } from "../agents/tools/progress-card-tool.js";
 import { setRuntimeConfigSnapshot } from "../config/io.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { readSessionTranscriptIndexStatus } from "../config/sessions/session-transcript-projection-writer.js";
@@ -56,16 +54,14 @@ function withCardSession(custom: boolean, run: (cfg: OpenClawConfig) => Promise<
 }
 
 it.each([false, true])(
-  "persists tool and conditional RPC clears without caller SQL (custom=%s)",
+  "persists cards and conditional RPC clears without caller SQL (custom=%s)",
   async (custom) => {
     await withCardSession(custom, async (cfg) => {
-      const target = { agentId: "main", path: cfg.session?.store };
-      const db = openOpenClawAgentDatabase(target).db;
-      const handlers = progressCardHandlers;
+      const db = openOpenClawAgentDatabase({ agentId: "main", path: cfg.session?.store }).db;
       const broadcast = vi.fn();
       const invoke = async (params: unknown) => {
         const respond = vi.fn<RespondFn>();
-        await handlers["progressCard.put"]!({
+        await progressCardHandlers["progressCard.put"]!({
           params,
           respond,
           context: { getRuntimeConfig: () => cfg, broadcast } as unknown as GatewayRequestContext,
@@ -73,22 +69,19 @@ it.each([false, true])(
         expect(respond).toHaveBeenCalledWith(true, expect.any(Object), undefined);
         return respond.mock.calls[0]?.[1];
       };
-      vi.spyOn(gateway, "callInProcessGatewayTool").mockImplementation(
-        async <T>(_method: string, params: Record<string, unknown>) => (await invoke(params)) as T,
-      );
-      const tool = createProgressCardTool({ agentSessionKey: sessionKey });
       const sql = observeHostDataSql();
       try {
-        await tool.execute("create", {
+        await invoke({
+          sessionKey,
           markdown: "First",
           plan: [{ step: "Persist", status: "in_progress" }],
         });
-        await tool.execute("replace", { markdown: "Second" });
+        await invoke({ sessionKey, markdown: "Second" });
         expect(await invoke({ sessionKey, expectedRevision: 1 })).toMatchObject({
           card: { revision: 2, markdown: "Second" },
         });
         expect(await invoke({ sessionKey, expectedRevision: 2 })).toEqual({ card: null });
-        await tool.execute("recreate", { plan: [{ step: "Done", status: "completed" }] });
+        await invoke({ sessionKey, plan: [{ step: "Done", status: "completed" }] });
         expect(sql.queries).toEqual([]);
       } finally {
         sql.restore();

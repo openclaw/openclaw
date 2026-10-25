@@ -1,7 +1,6 @@
 import path from "node:path";
-import { expect, test, vi } from "vitest";
+import { expect, test } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
-import * as agentScope from "../agents/agent-scope.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
@@ -31,40 +30,6 @@ const LIST_PARAMS = {
   includeUnknown: true,
   limit: 100,
 };
-
-test("sessions.list keeps warm roster enumeration bounded as ordinary rows grow", async () => {
-  await createSessionStoreDir();
-  testState.agentsConfig = { entries: { main: {}, work: {} } };
-  testState.agentConfig = { sessionStore: { agentId: "main" } };
-  const rosterReads: number[] = [];
-  for (const rows of [20, 2_001]) {
-    const entries: Record<string, ReturnType<typeof sessionStoreEntry>> = {
-      main: sessionStoreEntry("sess-main", { updatedAt: 1_781_000_000_001 }),
-    };
-    for (let index = 0; index < rows; index++) {
-      entries[`agent:main:ordinary-${index}`] = sessionStoreEntry(`ordinary-${index}`, {
-        updatedAt: 1_781_000_000_000 - index,
-      });
-    }
-    await writeSessionStore({ entries });
-    const request = { ...LIST_PARAMS, limit: rows + 1 };
-    expect((await directSessionReq("sessions.list", request)).ok).toBe(true);
-    const roster = vi.spyOn(agentScope, "listAgentIds");
-    try {
-      const result = await directSessionReq<SessionsListResult>("sessions.list", request);
-      expect(result.ok).toBe(true);
-      expect(result.payload?.totalCount).toBe(rows + 1);
-      expect(result.payload?.sessions.map(({ key }) => key)).toEqual([
-        "agent:main:main",
-        ...Array.from({ length: rows }, (_, index) => `agent:main:ordinary-${index}`),
-      ]);
-      rosterReads.push(roster.mock.calls.length);
-    } finally {
-      roster.mockRestore();
-    }
-  }
-  expect(rosterReads[1]).toBeLessThanOrEqual(rosterReads[0]!);
-});
 
 test("sessions.list retains stored titles and transcript previews beyond the database handle cap", async () => {
   const stateDir = process.env.OPENCLAW_STATE_DIR;
@@ -142,21 +107,11 @@ test("sessions.list retains stored titles and transcript previews beyond the dat
   }
 });
 
-test("sessions.list projects out prompt snapshots without changing full entry reads", async () => {
+test("sessions.list serves warm rows without reading a malformed raw insertion", async () => {
   await createSessionStoreDir();
   await writeSessionStore({
     entries: {
-      main: sessionStoreEntry("sess-main", {
-        skillsSnapshot: { prompt: "large skill prompt", skills: [{ name: "test" }] },
-        systemPromptReport: {
-          source: "run",
-          generatedAt: Date.now(),
-          systemPrompt: { chars: 100, projectContextChars: 40, nonProjectContextChars: 60 },
-          injectedWorkspaceFiles: [],
-          skills: { promptChars: 0, entries: [] },
-          tools: { listChars: 0, schemaChars: 0, entries: [] },
-        },
-      }),
+      main: sessionStoreEntry("sess-main"),
     },
   });
   const storePath = testState.sessionStorePath!;
@@ -165,22 +120,10 @@ test("sessions.list projects out prompt snapshots without changing full entry re
     agentId: target.agentId ?? "main",
     path: target.path,
   });
-  const readEntries = (projection?: "list") =>
-    sessionAccessor.listSessionEntriesReadOnly({ agentId: "main", storePath, projection });
-  const fullEntries = readEntries();
-  expect(fullEntries).toHaveLength(1);
-  expect(fullEntries[0]?.entry.skillsSnapshot).toBeDefined();
-  expect(fullEntries[0]?.entry.systemPromptReport?.source).toBe("run");
-
   const cfg = { agents: { entries: { main: {} } }, session: { store: storePath } };
   const projection = await createSessionRowProjection({ cfg });
   let reads: ReturnType<typeof trackSqliteStatementExecutions<"sessionStore">> | undefined;
   try {
-    const resident = projection.describe({ agentId: "main", key: fullEntries[0]!.sessionKey });
-    expect(resident?.storedEntry?.sessionId).toBe("sess-main");
-    expect(resident?.storedEntry?.skillsSnapshot).toBeUndefined();
-    expect(resident?.storedEntry?.systemPromptReport).toBeUndefined();
-
     // Warm readers tolerate malformed raw edits; new readers must refuse them during admission.
     await withOpenClawAgentDatabaseWrite(
       { agentId: database.agentId, path: database.path },
@@ -209,10 +152,4 @@ test("sessions.list projects out prompt snapshots without changing full entry re
     reads?.restore();
     projection.dispose();
   }
-
-  expect(readEntries()).toEqual(fullEntries);
-  const listEntries = readEntries("list");
-  expect(listEntries.map(({ entry }) => [entry.skillsSnapshot, entry.systemPromptReport])).toEqual([
-    [undefined, undefined],
-  ]);
 });

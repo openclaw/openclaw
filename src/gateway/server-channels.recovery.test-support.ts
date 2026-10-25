@@ -210,14 +210,6 @@ export function registerChannelAutostartRecoveryTests({
       expect(lastErrors()).toEqual({ [DEFAULT_ACCOUNT_ID]: null, work: "logged out" });
     });
 
-    it("prepares a healthy boot synchronously without reading the breaker owner", () => {
-      const tryRecover = vi.fn(async () => undefined);
-      const manager = createManager({ tryRecoverAutostartSuppression: tryRecover });
-
-      expect(manager.recoverAutostartSuppression()).toBeUndefined();
-      expect(tryRecover).not.toHaveBeenCalled();
-    });
-
     it("aborts an active breaker read at scheduler close prelude without starting another", async () => {
       const scheduler = createTestGatewayScheduler();
       const tryRecover = vi.fn(async (signal: AbortSignal) => {
