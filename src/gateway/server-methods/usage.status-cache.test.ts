@@ -35,6 +35,7 @@ vi.mock("../../infra/provider-usage.load.js", () => ({
 
 import {
   clearModelAuthStatusUsageCache,
+  observeProviderUsageMetrics,
   readProviderUsage,
 } from "./models-auth-status-usage-cache.js";
 import { getProviderUsageRuntimeSnapshot } from "./provider-usage-runtime.js";
@@ -73,19 +74,22 @@ function createStore(
   };
 }
 
-async function runUsageStatus(client: GatewayClient | null = null) {
+async function runUsageStatus(
+  client: GatewayClient | null = null,
+  runtimeConfig: OpenClawConfig = config,
+) {
   const [ok, payload] = usageReply(
-    await invokeUsage("usage.status", {}, config, {
+    await invokeUsage("usage.status", {}, runtimeConfig, {
       client,
-      context: { getRuntimeConfig: () => config },
+      context: { getRuntimeConfig: () => runtimeConfig },
     }),
   );
   expect(ok).toBe(true);
   return expectDefined(payload, "usage.status result");
 }
 
-function runCapableUsageStatus() {
-  return runUsageStatus(refreshingCapableClient);
+function runCapableUsageStatus(runtimeConfig = config) {
+  return runUsageStatus(refreshingCapableClient, runtimeConfig);
 }
 
 async function settledStatus(client: GatewayClient | null = refreshingCapableClient) {
@@ -281,6 +285,407 @@ describe("usage.status provider usage cache", () => {
     expect((await readAuthStatusUsage()).usageByProvider.get("openai")).toBeDefined();
     await expect(runCapableUsageStatus()).resolves.toMatchObject(visibleProvider);
     expect(mocks.loadSummary).toHaveBeenCalledTimes(2);
+  });
+
+  it("observes sanitized cache-owned allowance metrics and retains them across timeouts", async () => {
+    await runUsageStatus();
+    now = 61_000;
+    mocks.loadSummary.mockResolvedValueOnce({
+      updatedAt: now,
+      providers: [
+        {
+          provider: "openai",
+          displayName: "OpenAI",
+          windows: [],
+          accountEmail: "must-not-escape@example.com",
+          error: "Timeout",
+        },
+      ],
+    });
+
+    const snapshots: Parameters<
+      Parameters<typeof observeProviderUsageMetrics>[0]["listener"]
+    >[0][] = [];
+    const release = observeProviderUsageMetrics({
+      getConfig: () => config,
+      listener: (snapshot) => snapshots.push(snapshot),
+      refreshIntervalMs: 3_600_000,
+    });
+    try {
+      await vi.waitFor(() => {
+        expect(snapshots.at(-1)?.providers).toEqual([
+          {
+            provider: "openai",
+            windows: [{ window: "5h", usedRatio: 0.1 }],
+            lastAttemptTimestampSeconds: 61,
+            lastSuccessTimestampSeconds: 1,
+            refreshSuccess: false,
+            refreshOutcome: "timeout",
+          },
+        ]);
+      });
+      expect(JSON.stringify(snapshots)).not.toContain("must-not-escape@example.com");
+      expect(mocks.loadSummary).toHaveBeenCalledTimes(2);
+    } finally {
+      release();
+    }
+  });
+
+  it("preserves distinct bounded identities for colliding provider windows", async () => {
+    mocks.loadSummary.mockResolvedValue({
+      updatedAt: now,
+      providers: [
+        {
+          provider: "openai",
+          displayName: "OpenAI",
+          windows: [
+            { label: "Tokens (6h)", usedPercent: 32, resetAt: 1_700_003_600_000 },
+            { label: "Tokens (15m)", usedPercent: 8, resetAt: 1_700_000_900_000 },
+            { label: "Tokens (Limit)", usedPercent: 10 },
+            { label: "Tokens (Limit)", usedPercent: 20 },
+            { label: "Extra usage", usedPercent: 30 },
+            { label: "Team usage", usedPercent: 40 },
+            { label: "unknown_2", usedPercent: 50 },
+          ],
+        },
+      ],
+    });
+    const snapshots: Parameters<
+      Parameters<typeof observeProviderUsageMetrics>[0]["listener"]
+    >[0][] = [];
+    const release = observeProviderUsageMetrics({
+      getConfig: () => config,
+      listener: (snapshot) => snapshots.push(snapshot),
+      refreshIntervalMs: 3_600_000,
+    });
+    try {
+      await vi.waitFor(() => {
+        expect(snapshots.at(-1)?.providers[0]?.windows).toEqual([
+          {
+            window: "tokens_6h",
+            usedRatio: 0.32,
+            resetTimestampSeconds: 1_700_003_600,
+          },
+          {
+            window: "tokens_15m",
+            usedRatio: 0.08,
+            resetTimestampSeconds: 1_700_000_900,
+          },
+          { window: "tokens_limit", usedRatio: 0.1 },
+          { window: "tokens_limit_2", usedRatio: 0.2 },
+          { window: "unknown", usedRatio: 0.3 },
+          { window: "unknown_2", usedRatio: 0.4 },
+          { window: "unknown_2_2", usedRatio: 0.5 },
+        ]);
+      });
+    } finally {
+      release();
+    }
+  });
+
+  it("classifies a refresh exception as a failed provider observation", async () => {
+    mocks.loadSummary.mockRejectedValueOnce(new Error("401 Unauthorized"));
+    const snapshots: Parameters<
+      Parameters<typeof observeProviderUsageMetrics>[0]["listener"]
+    >[0][] = [];
+    const release = observeProviderUsageMetrics({
+      getConfig: () => config,
+      listener: (snapshot) => snapshots.push(snapshot),
+      refreshIntervalMs: 3_600_000,
+    });
+    try {
+      await vi.waitFor(() => {
+        expect(snapshots.at(-1)?.providers).toEqual([
+          {
+            provider: "openai",
+            windows: [],
+            lastAttemptTimestampSeconds: 1,
+            refreshSuccess: false,
+            refreshOutcome: "auth",
+          },
+        ]);
+      });
+    } finally {
+      release();
+    }
+  });
+
+  it("classifies a token rate-limit error as rate limiting", async () => {
+    mocks.loadSummary.mockRejectedValueOnce(new Error("token rate limit exceeded"));
+    const snapshots: Parameters<
+      Parameters<typeof observeProviderUsageMetrics>[0]["listener"]
+    >[0][] = [];
+    const release = observeProviderUsageMetrics({
+      getConfig: () => config,
+      listener: (snapshot) => snapshots.push(snapshot),
+      refreshIntervalMs: 3_600_000,
+    });
+    try {
+      await vi.waitFor(() => {
+        expect(snapshots.at(-1)?.providers[0]?.refreshOutcome).toBe("rate_limit");
+      });
+    } finally {
+      release();
+    }
+  });
+
+  it("withdraws allowance metrics until a changed credential selection succeeds", async () => {
+    const snapshots: Parameters<
+      Parameters<typeof observeProviderUsageMetrics>[0]["listener"]
+    >[0][] = [];
+    const release = observeProviderUsageMetrics({
+      getConfig: () => config,
+      listener: (snapshot) => snapshots.push(snapshot),
+      refreshIntervalMs: 3_600_000,
+    });
+    try {
+      await vi.waitFor(() => {
+        expect(snapshots.at(-1)?.providers[0]?.windows).toEqual([{ window: "5h", usedRatio: 0.1 }]);
+      });
+
+      const agentId = resolveDefaultAgentId(config);
+      const agentDir = resolveAgentDir(config, agentId);
+      store = createStore({ default: "access-two" });
+      replaceRuntimeAuthProfileStoreSnapshots([{ agentDir, store }]);
+      now += 1;
+      await runCapableUsageStatus();
+
+      expect(snapshots.some((snapshot) => snapshot.providers.length === 0)).toBe(true);
+      await vi.waitFor(() => {
+        expect(snapshots.at(-1)?.providers[0]?.windows).toEqual([{ window: "5h", usedRatio: 0.2 }]);
+      });
+    } finally {
+      release();
+    }
+  });
+
+  it("rejects metric publication from a superseded refresh generation", async () => {
+    const stale = createDeferredCore<UsageSummary>();
+    const current: UsageSummary = {
+      updatedAt: 2_000,
+      providers: [
+        {
+          provider: "openai",
+          displayName: "OpenAI",
+          windows: [{ label: "5h", usedPercent: 20 }],
+        },
+      ],
+    };
+    mocks.loadSummary.mockImplementationOnce(() => stale.promise).mockResolvedValueOnce(current);
+    const snapshots: Parameters<
+      Parameters<typeof observeProviderUsageMetrics>[0]["listener"]
+    >[0][] = [];
+    const release = observeProviderUsageMetrics({
+      getConfig: () => config,
+      listener: (snapshot) => snapshots.push(snapshot),
+      refreshIntervalMs: 3_600_000,
+    });
+    try {
+      await vi.waitFor(() => expect(mocks.loadSummary).toHaveBeenCalledTimes(1));
+      clearModelAuthStatusUsageCache();
+      await expect(runCapableUsageStatus()).resolves.toMatchObject({ refreshing: true });
+      await vi.waitFor(() => {
+        expect(snapshots.at(-1)?.providers[0]?.windows).toEqual([{ window: "5h", usedRatio: 0.2 }]);
+      });
+
+      stale.resolve({
+        updatedAt: 1_000,
+        providers: [
+          {
+            provider: "openai",
+            displayName: "OpenAI",
+            windows: [{ label: "5h", usedPercent: 90 }],
+          },
+        ],
+      });
+      await stale.promise;
+      await Promise.resolve();
+      expect(snapshots.at(-1)?.providers[0]?.windows).toEqual([{ window: "5h", usedRatio: 0.2 }]);
+    } finally {
+      release();
+      stale.resolve(current);
+    }
+  });
+
+  it("resolves current runtime configuration for each observer refresh", async () => {
+    const nextConfig = {
+      ...config,
+      models: { providers: { openai: { baseUrl: "https://next.example/v1", models: [] } } },
+    } as OpenClawConfig;
+    let currentConfig = config;
+    const release = observeProviderUsageMetrics({
+      getConfig: () => currentConfig,
+      listener: () => {},
+      refreshIntervalMs: 1,
+    });
+    try {
+      await vi.waitFor(() => expect(mocks.loadSummary).toHaveBeenCalledTimes(1));
+      currentConfig = nextConfig;
+      await vi.waitFor(() => {
+        expect(
+          mocks.loadSummary.mock.calls.some(([options]) => Object.is(options.config, nextConfig)),
+        ).toBe(true);
+      });
+    } finally {
+      release();
+    }
+  });
+
+  it("keeps the observer cadence anchored to refresh start time", async () => {
+    vi.useFakeTimers();
+    const firstRefresh = createDeferredCore<UsageSummary>();
+    mocks.loadSummary
+      .mockImplementationOnce(() => firstRefresh.promise)
+      .mockResolvedValue({ updatedAt: now, providers: [] });
+    const release = observeProviderUsageMetrics({
+      getConfig: () => config,
+      listener: () => {},
+      refreshIntervalMs: 1_000,
+    });
+    try {
+      await vi.waitFor(() => expect(mocks.loadSummary).toHaveBeenCalledOnce());
+      now += 750;
+      firstRefresh.resolve({ updatedAt: now, providers: [] });
+      await firstRefresh.promise;
+      await Promise.resolve();
+
+      await vi.advanceTimersByTimeAsync(249);
+      expect(mocks.loadSummary).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(1);
+      await vi.waitFor(() => expect(mocks.loadSummary).toHaveBeenCalledTimes(2));
+    } finally {
+      release();
+      firstRefresh.resolve({ updatedAt: now, providers: [] });
+      vi.useRealTimers();
+    }
+  });
+
+  it("continues refreshing after the startup async-work scope closes", async () => {
+    const startupScope = new AsyncWorkScope();
+    let release: (() => void) | undefined;
+    try {
+      await startupScope.track(async () => {
+        release = observeProviderUsageMetrics({
+          getConfig: () => config,
+          listener: () => {},
+          refreshIntervalMs: 50,
+        });
+        await vi.waitFor(() => expect(mocks.loadSummary).toHaveBeenCalledOnce());
+      });
+      await startupScope.drain();
+
+      await vi.waitFor(() => {
+        expect(mocks.loadSummary.mock.calls.length).toBeGreaterThanOrEqual(2);
+      });
+    } finally {
+      release?.();
+    }
+  });
+
+  it("does not schedule provider requests after the observer is released", async () => {
+    vi.useFakeTimers();
+    const release = observeProviderUsageMetrics({
+      getConfig: () => config,
+      listener: () => {},
+      refreshIntervalMs: 1_000,
+    });
+    try {
+      await vi.waitFor(() => expect(mocks.loadSummary).toHaveBeenCalledOnce());
+      const signal = mocks.loadSummary.mock.calls[0]?.[0].signal;
+      expect(signal?.aborted).toBe(false);
+      release();
+      expect(signal?.aborted).toBe(true);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(mocks.loadSummary).toHaveBeenCalledOnce();
+    } finally {
+      release();
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not register a listener when released during runtime snapshot loading", async () => {
+    const pendingStore = createDeferredCore<AuthProfileStore>();
+    mocks.ensureStore.mockImplementationOnce(() => pendingStore.promise);
+    const releasedListener = vi.fn();
+    const release = observeProviderUsageMetrics({
+      getConfig: () => config,
+      listener: releasedListener,
+      refreshIntervalMs: 3_600_000,
+    });
+
+    release();
+    pendingStore.resolve(store);
+    await pendingStore.promise;
+    await vi.waitFor(() => expect(mocks.ensureStore).toHaveBeenCalledOnce());
+
+    let releaseActive: (() => void) | undefined;
+    try {
+      releaseActive = observeProviderUsageMetrics({
+        getConfig: () => config,
+        listener: () => {},
+        refreshIntervalMs: 3_600_000,
+      });
+      await vi.waitFor(() => expect(mocks.loadSummary).toHaveBeenCalledOnce());
+      expect(releasedListener).not.toHaveBeenCalled();
+    } finally {
+      releaseActive?.();
+    }
+  });
+
+  it("preserves an independent usage.status refresh when observer authority is released", async () => {
+    const observerPending = createDeferredCore<UsageSummary>();
+    const rpcUsage: UsageSummary = {
+      updatedAt: now,
+      providers: [
+        {
+          provider: "openai",
+          displayName: "OpenAI",
+          windows: [{ label: "5h", usedPercent: 40 }],
+        },
+      ],
+    };
+    mocks.loadSummary
+      .mockImplementationOnce(() => observerPending.promise)
+      .mockResolvedValueOnce(rpcUsage);
+    const release = observeProviderUsageMetrics({
+      getConfig: () => config,
+      listener: () => {},
+      refreshIntervalMs: 3_600_000,
+    });
+    try {
+      await vi.waitFor(() => expect(mocks.loadSummary).toHaveBeenCalledOnce());
+      const observerSignal = mocks.loadSummary.mock.calls[0]?.[0].signal;
+      expect(observerSignal?.aborted).toBe(false);
+
+      await expect(runUsageStatus()).resolves.toEqual(rpcUsage);
+      expect(mocks.loadSummary).toHaveBeenCalledTimes(2);
+      expect(mocks.loadSummary.mock.calls[1]?.[0].signal).toBeUndefined();
+
+      release();
+      expect(observerSignal?.aborted).toBe(true);
+      expect((await runUsageStatus()) as UsageSummary).toEqual(rpcUsage);
+    } finally {
+      release();
+      observerPending.resolve(rpcUsage);
+      await observerPending.promise;
+    }
+  });
+
+  it("invalidates cached usage when the runtime config changes", async () => {
+    const configFor = (baseUrl: string) =>
+      ({ ...config, models: { providers: { openai: { baseUrl, models: [] } } } }) as OpenClawConfig;
+    const first = configFor("https://one.example/v1");
+    await expect(runCapableUsageStatus(first)).resolves.toMatchObject({ refreshing: true });
+    await vi.waitFor(async () => {
+      expect(
+        ((await runCapableUsageStatus(first)) as { providers: unknown[] }).providers,
+      ).toHaveLength(1);
+    });
+    expect(mocks.loadSummary).toHaveBeenCalledTimes(1);
+
+    const second = configFor("https://two.example/v1");
+    await expect(runCapableUsageStatus(second)).resolves.toMatchObject({ refreshing: true });
+    await vi.waitFor(() => expect(mocks.loadSummary).toHaveBeenCalledTimes(2));
   });
 
   it("shares the credential-bound snapshot and invalidates it on rotation", async () => {

@@ -8,6 +8,7 @@ import type { UsageSummary } from "./provider-usage.types.js";
 export const usageNow = Date.UTC(2026, 0, 7, 0, 0, 0);
 
 type ProviderUsageLoader = (params: {
+  now?: number;
   auth?: ProviderAuth[];
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -24,6 +25,7 @@ export async function loadUsageWithAuth<T extends ProviderUsageLoader>(
 ) {
   vi.spyOn(globalThis, "fetch").mockImplementation(mockFetch);
   return await loadProviderUsageSummary({
+    now: usageNow,
     auth,
     env: {},
     // Keep config minimal; bundled provider usage hooks own the provider-specific fetchers now.

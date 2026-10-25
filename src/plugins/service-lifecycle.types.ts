@@ -6,6 +6,7 @@ import type { PluginInstanceConsumer } from "./plugin-instance.types.js";
 import type { OpenClawPluginServiceContext } from "./plugin-registration.types.js";
 import type { PluginRegistry, PluginServiceRegistration } from "./registry-types.js";
 import type { PluginServiceCronHost } from "./service-cron.js";
+import type { ObserveProviderUsage } from "./service-diagnostics.js";
 import type { PluginServiceSchedulerOwner } from "./service-scheduler.js";
 
 export type PluginServicesHandle = {
@@ -25,6 +26,7 @@ export type StartPluginServicesParams = {
   startupTrace?: NonNullable<OpenClawPluginServiceContext["startupTrace"]>;
   broadcastPluginEvent?: GatewayPluginEventBroadcastFn;
   getCronService?: () => PluginServiceCronHost | null | undefined;
+  observeProviderUsage?: ObserveProviderUsage;
   oneShotStopTimeouts?: { eventDrainMs: number; serviceStopMs: number };
   previous?: PluginServicesHandle | null;
   deferStartForPluginIds?: ReadonlySet<string>;
@@ -47,6 +49,7 @@ export type OwnedPluginService = {
   stopping?: Promise<unknown>;
   reloading?: Promise<void>;
   pendingReload?: OpenClawConfig;
+  stopReason?: "reload" | "shutdown";
   cleaned: boolean;
   cleanupErrors: unknown[];
   cleanupReporting?: Promise<unknown>;

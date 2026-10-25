@@ -358,6 +358,8 @@ export type OpenClawPluginServiceHealth = {
 
 export type OpenClawPluginServiceContext = {
   config: OpenClawConfig;
+  /** Set only while stopping so services can distinguish replacement from terminal cleanup. */
+  stopReason?: "reload" | "shutdown";
   workspaceDir?: string;
   stateDir: string;
   logger: PluginLogger;

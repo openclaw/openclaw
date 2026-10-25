@@ -147,6 +147,11 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_gen_ai_client_token_usage`                      | histogram | `model`, `provider`, `token_type`                                                         |
 | `openclaw_model_cost_usd_total`                           | counter   | `agent`, `channel`, `model`, `provider`                                                   |
 | `openclaw_model_usage_duration_seconds`                   | histogram | `agent`, `channel`, `model`, `provider`                                                   |
+| `openclaw_provider_usage_used_ratio`                      | gauge     | `provider`, `window`                                                                      |
+| `openclaw_provider_usage_reset_timestamp_seconds`         | gauge     | `provider`, `window`                                                                      |
+| `openclaw_provider_usage_last_success_timestamp_seconds`  | gauge     | `provider`                                                                                |
+| `openclaw_provider_usage_last_attempt_timestamp_seconds`  | gauge     | `provider`                                                                                |
+| `openclaw_provider_usage_refresh_success`                 | gauge     | `provider`                                                                                |
 | `openclaw_skill_used_total`                               | counter   | `activation`, `agent`, `skill`, `source`                                                  |
 | `openclaw_tool_execution_total`                           | counter   | `error_category`, `outcome`, `params_kind`, `tool`, `tool_owner`, `tool_source`           |
 | `openclaw_tool_execution_duration_seconds`                | histogram | `error_category`, `outcome`, `params_kind`, `tool`, `tool_owner`, `tool_source`           |
@@ -747,6 +752,36 @@ counter intervals at process changes. It is not a health signal, a request ID,
 or an exporter epoch: restarting the exporter in the same process resets its
 counters while retaining the process identity. It cannot relabel older samples
 or establish complete diagnostic-loss coverage.
+
+### Provider allowance windows
+
+Provider allowance metrics use the same selected credential as the unscoped
+`usage.status` method for the resolved default agent. They never include account
+email, profile IDs, credential IDs, plan names, or billing details.
+
+The exporter acquires refresh interest from the Gateway-owned provider-usage
+cache only when `plugins.entries.diagnostics-prometheus.config.providerUsage.enabled`
+is `true`. The default is `false`. Enabling it causes the default-agent cache to
+send bounded background provider requests; a saved `true` is attached on Gateway
+startup and on exporter reload. Provider network requests run on that cache's
+bounded background schedule; serving `/api/diagnostics/prometheus` only renders
+retained facts and never calls a provider. A successful refresh replaces the provider's allowance windows. A
+transient failure keeps the last successful windows, advances
+`openclaw_provider_usage_last_attempt_timestamp_seconds`, and sets
+`openclaw_provider_usage_refresh_success` to `0`.
+
+Changing the selected credential or provider set immediately withdraws the old
+allowance series. New `used_ratio` and reset series appear only after a successful
+observation under the new selection. Derive remaining allowance in PromQL rather
+than exporting a duplicate gauge:
+
+```promql
+1 - openclaw_provider_usage_used_ratio
+```
+
+Refresh outcome details are retained internally as bounded categories; the
+Prometheus surface exports only the success gauge to avoid adding another label
+dimension.
 
 ### Event-loop observation windows
 

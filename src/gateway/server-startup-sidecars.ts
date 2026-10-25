@@ -218,11 +218,11 @@ export async function startGatewaySidecars(params: {
   // The startup producer is joined on shutdown; services publish their own cleanup handle.
   await measureStartup(params.startupTrace, "sidecars.plugin-services", async () => {
     try {
-      const { startPluginServices } = await import("../plugins/services.js");
+      const { startGatewayPluginServices } = await import("./server-plugin-services.js");
       if (params.shouldStartPluginServices?.() === false) {
         return;
       }
-      await startPluginServices({
+      await startGatewayPluginServices({
         registry: params.pluginRegistry,
         config: params.cfg,
         workspaceDir: params.defaultWorkspaceDir,

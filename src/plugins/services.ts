@@ -36,6 +36,7 @@ import { createPluginServiceNodeInvoker } from "./service-nodes.js";
 import { withPluginServiceScheduler } from "./service-scheduler-binding.js";
 import { createPluginServiceSchedulerRunner } from "./service-scheduler-context.js";
 import { createPluginServiceScheduler } from "./service-scheduler.js";
+import { PluginServiceStopPendingError, PluginServiceTimeoutError } from "./service-stop-errors.js";
 import { encodeStartupTraceSegment } from "./startup-trace-segment.js";
 import type { OpenClawPluginServiceContextV2 } from "./types.js";
 
@@ -43,46 +44,13 @@ export type { PluginServicesHandle } from "./service-lifecycle.types.js";
 
 const log = createSubsystemLogger("plugins");
 export const PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS = 5_000;
-
-class PluginServiceTimeoutError extends Error {}
-
-class PluginServiceStopPendingError extends Error {
-  constructor(
-    message: string,
-    readonly settled: Promise<void>,
-    cause: unknown,
-  ) {
-    super(message, { cause });
-    // The original stop remains owned even when no recovery observer is admitted.
-    void settled.catch(() => {});
-  }
-}
-
-/** Observe only an issued service stop; mixed or permanent failures remain barriers. */
-export function getPluginServiceCleanupSettlement(
-  error: unknown,
-): { error: AggregateError; settled: Promise<void> } | undefined {
-  if (
-    !(error instanceof AggregateError) ||
-    error.errors.length === 0 ||
-    !error.errors.every((failure) => failure instanceof PluginServiceStopPendingError)
-  ) {
-    return undefined;
-  }
-  const settled = Promise.all(
-    error.errors.map((failure: PluginServiceStopPendingError) => failure.settled),
-  ).then(() => {});
-  void settled.catch(() => {});
-  return { error, settled };
-}
+export { getPluginServiceCleanupSettlement } from "./service-stop-errors.js";
 
 const serviceOwners = new WeakMap<PluginServicesHandle, PluginServicesOwner>();
-
 function preparePluginServicesOwner(
   registry: PluginRegistry,
   previousHandle: PluginServicesHandle | null | undefined,
 ): PluginServicesOwner {
-  // Failed starts still own their cleanup and remain selectable for a later retry.
   const previous = previousHandle && serviceOwners.get(previousHandle);
   const owner: PluginServicesOwner = {
     services: [],
@@ -98,12 +66,9 @@ function preparePluginServicesOwner(
       if (!entry) {
         continue;
       }
-      // Rollback can reclaim an earlier attempt that the rejected candidate did not select.
       const source = entry.owner;
       source.registrations.delete(registration);
       source.services.splice(source.services.indexOf(entry), 1);
-      // Explicitly stopped, fully cleaned registrations can start again in a new
-      // generation. Failed attempts stay in the inventory until an explicit reload.
       if (source.stopped.has(registration) && entry.cleaned && !entry.startup) {
         owner.attempts.delete(registration);
         continue;
@@ -117,8 +82,6 @@ function preparePluginServicesOwner(
   }
   return owner;
 }
-
-// Long-lived callbacks must not capture the startup-only predecessor and publication callback.
 export function startPluginServices({
   previous,
   onHandle,
@@ -130,7 +93,6 @@ export function startPluginServices({
     publication: { callback: onHandle },
   });
 }
-
 async function startPreparedPluginServices({
   scheduler,
   registry,
@@ -139,6 +101,7 @@ async function startPreparedPluginServices({
   startupTrace,
   broadcastPluginEvent,
   getCronService,
+  observeProviderUsage,
   oneShotStopTimeouts,
   deferStartForPluginIds,
   throwOnStartError,
@@ -195,10 +158,12 @@ async function startPreparedPluginServices({
   };
   const stopService = async (
     entry: OwnedPluginService,
+    stopReason: "reload" | "shutdown",
     failures?: unknown[],
     deadline?: number,
     beforeStop?: Promise<unknown>,
   ) => {
+    entry.stopReason ??= stopReason;
     beginServiceStop(entry);
     const recordFailure = (error: unknown) => {
       if (!failures) {
@@ -238,7 +203,6 @@ async function startPreparedPluginServices({
         const ingress = entry.stopControlUiIngress?.();
         const cleanup = () =>
           withPluginHttpRouteRegistry(stopRegistry, () => entry.stop?.(), entry.lease);
-        // Cleanup releases transports needed by scheduled callbacks, so invoke it before joining.
         // The scheduler records callback failures; its join only observes physical settlement.
         // An idle scope must preserve the hook's raw result for zero-budget deadlines.
         return scheduled || ingress
@@ -320,6 +284,7 @@ async function startPreparedPluginServices({
   };
   const stopServices = async (
     reversed: OwnedPluginService[],
+    stopReason: "reload" | "shutdown",
     strict: boolean,
     failures: unknown[] | undefined,
     deadline?: number | (() => number),
@@ -332,7 +297,7 @@ async function startPreparedPluginServices({
       : reversed.filter((entry) => entry.diagnosticsExporter);
     const producers = oneShotTimeouts ? [] : reversed.filter((entry) => !entry.diagnosticsExporter);
     for (const entry of producers) {
-      await stopService(entry, failures, resolveDeadline());
+      await stopService(entry, stopReason, failures, resolveDeadline());
     }
     let exporterReady: Promise<unknown> | undefined;
     if (afterDrain.length > 0) {
@@ -371,7 +336,13 @@ async function startPreparedPluginServices({
     // Fresh one-shot flush budgets start after drain; absolute replacement deadlines span all phases.
     const stopDeadline = oneShotTimeouts ? Date.now() + oneShotTimeouts.serviceStopMs : undefined;
     for (const entry of afterDrain) {
-      await stopService(entry, failures, stopDeadline ?? resolveDeadline(), exporterReady);
+      await stopService(
+        entry,
+        stopReason,
+        failures,
+        stopDeadline ?? resolveDeadline(),
+        exporterReady,
+      );
     }
   };
   let reloadTail = Promise.resolve();
@@ -425,6 +396,7 @@ async function startPreparedPluginServices({
         try {
           await stopServices(
             selected.toReversed(),
+            "reload",
             true,
             undefined,
             () => Date.now() + PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS,
@@ -468,7 +440,7 @@ async function startPreparedPluginServices({
       const deadline = strict ? options.deadlineAtMs : undefined;
       return Promise.resolve().then(async () => {
         const failures: unknown[] = [];
-        await stopServices(selected.toReversed(), strict, failures, deadline);
+        await stopServices(selected.toReversed(), "shutdown", strict, failures, deadline);
         if (strict && failures.length > 0) {
           throw new AggregateError(failures, "plugin service replacement cleanup failed");
         }
@@ -480,7 +452,6 @@ async function startPreparedPluginServices({
   // The issued handle keeps retained services and failed cleanup even when startup rejects.
   publication.callback?.(handle);
   publication.callback = undefined;
-
   const startService = async (
     entry: PluginServiceRegistration,
     config: OpenClawConfig,
@@ -536,7 +507,7 @@ async function startPreparedPluginServices({
           isStopping: () => ownedService.owner.closed || ownedService.stopRequested,
         })
       : undefined;
-    const internalDiagnostics = createPluginServiceDiagnostics(entry, lease);
+    const internalDiagnostics = createPluginServiceDiagnostics(entry, lease, observeProviderUsage);
     const controlUiIngress = record
       ? createPluginServiceControlUiIngress({
           registry,
@@ -545,7 +516,6 @@ async function startPreparedPluginServices({
           isStopping: () => ownedService.owner.closed || ownedService.stopRequested,
         })
       : undefined;
-
     const scopeTraceName = (name: string) =>
       `${traceName}.${name.split(".").map(encodeStartupTraceSegment).join(".")}`;
     const serviceContext: OpenClawPluginServiceContextV2 = {
@@ -600,7 +570,10 @@ async function startPreparedPluginServices({
             runServiceCleanup(() => {
               try {
                 const result = withPluginServiceScheduler(scheduling.scheduler, () =>
-                  service.stop?.(serviceContext),
+                  service.stop?.({
+                    ...serviceContext,
+                    stopReason: ownedService.stopReason ?? "shutdown",
+                  }),
                 );
                 const completion = resolvePluginReturnPromise(result);
                 if (!completion) {
@@ -689,7 +662,7 @@ async function startPreparedPluginServices({
         ownedService.lease.revoke();
         // Detached cleanup already logs failures; its original entry.stopping
         // rejection remains owned by every later awaited stop.
-        void stopService(ownedService).catch(() => {});
+        void stopService(ownedService, "shutdown").catch(() => {});
         return false;
       }
       // A failed start can already own resources; revoke events only after its cleanup runs.
@@ -697,6 +670,7 @@ async function startPreparedPluginServices({
       // stop here would wedge plugin reload/startup forever.
       await stopService(
         ownedService,
+        "shutdown",
         failures,
         Date.now() + PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS,
       );
