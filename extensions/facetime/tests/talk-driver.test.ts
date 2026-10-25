@@ -52,24 +52,37 @@ describe("FaceTime talk driver lifecycle", () => {
     });
   });
 
-  it.each([false, true])(
-    "retains aborted provider-startup suppression until carrier closure is confirmed (%s)",
-    async (carrierClosed) => {
+  it.each([
+    ["abort", false],
+    ["abort", true],
+    ["capture", true],
+    ["provider", true],
+  ] as const)(
+    "fences %s startup failure until carrier closure (%s)",
+    async (source, carrierClosed) => {
       const connect = createDeferred<void>();
-      mocks.bridge.connect.mockReturnValueOnce(connect.promise);
       const carrierSafety = createDeferred<boolean>();
-      const onFailure = vi.fn(() => carrierSafety.promise);
       const controller = new AbortController();
-      const driver = await startFaceTimeTalkDriver(
-        startParams({ signal: controller.signal, onFailure }),
-      );
-      const ready = driver.readyForAudio();
-      const failed = expect(ready).rejects.toThrow("startup aborted");
-
+      const message = {
+        abort: "startup aborted",
+        capture: "capture failed during connect",
+        provider: "provider connect failed",
+      }[source];
+      const failure = new Error(message);
+      if (source === "provider") {
+        mocks.bridge.connect.mockRejectedValueOnce(failure);
+      } else {
+        mocks.bridge.connect.mockReturnValueOnce(connect.promise);
+      }
+      mocks.onFailure.mockReturnValueOnce(carrierSafety.promise);
+      const driver = await startFaceTimeTalkDriver(startParams({ signal: controller.signal }));
+      const failed = expect(driver.readyForAudio()).rejects.toThrow(message);
       await vi.waitFor(() => expect(mocks.bridge.connect).toHaveBeenCalledOnce());
-      controller.abort();
-
-      await vi.waitFor(() => expect(onFailure).toHaveBeenCalledOnce());
+      if (source === "abort") {
+        controller.abort();
+      }
+      const captureFailure = source === "capture" ? mocks.pumpParams?.onError(failure) : undefined;
+      await vi.waitFor(() => expect(mocks.onFailure).toHaveBeenCalledOnce());
       expectSuspended(0);
       expect(driver.processOutputSuppressed()).toBe(true);
 
@@ -83,11 +96,11 @@ describe("FaceTime talk driver lifecycle", () => {
       expect(mocks.pump.stop).not.toHaveBeenCalled();
 
       carrierSafety.resolve(carrierClosed);
-      await failed;
+      await Promise.all([failed, captureFailure]);
       expect(mocks.pump.stop).toHaveBeenCalledTimes(carrierClosed ? 1 : 0);
-
       await driver.close("carrier-closed");
       expect(mocks.pump.stop).toHaveBeenCalledOnce();
+      expect(mocks.bridge.close).toHaveBeenCalledOnce();
     },
   );
 
@@ -273,41 +286,8 @@ describe("FaceTime talk driver lifecycle", () => {
     expect(mocks.pump.stop).not.toHaveBeenCalled();
   });
 
-  it("rejects startup instead of returning a stopped driver after an audio failure", async () => {
-    mocks.bridge.connect.mockImplementation(() => new Promise<void>(() => {}));
-    const driver = await startFaceTimeTalkDriver(startParams());
-    const ready = driver.readyForAudio();
-
-    await vi.waitFor(() => expect(mocks.bridge.connect).toHaveBeenCalledOnce());
-    await mocks.pumpParams?.onError(new Error("capture failed during connect"));
-
-    await expect(ready).rejects.toThrow("capture failed during connect");
-    expect(mocks.onFailure).toHaveBeenCalledOnce();
-    expect(mocks.pump.stop).toHaveBeenCalledOnce();
-    expect(mocks.bridge.close).toHaveBeenCalledOnce();
-  });
-
-  it("retains process suppression until provider-startup carrier cleanup is safe", async () => {
-    mocks.bridge.connect.mockRejectedValue(new Error("provider connect failed"));
-    const carrierSafety = createDeferred<boolean>();
-    const onFailure = vi.fn(() => carrierSafety.promise);
-    const driver = await startFaceTimeTalkDriver(startParams({ onFailure }));
-    const ready = driver.readyForAudio();
-
-    await vi.waitFor(() => expect(onFailure).toHaveBeenCalledOnce());
-    expectSuspended(0);
-
-    carrierSafety.resolve(true);
-
-    await expect(ready).rejects.toThrow("provider connect failed");
-
-    expect(mocks.pump.stop).toHaveBeenCalledOnce();
-    expect(mocks.bridge.close).toHaveBeenCalledOnce();
-  });
-
-  it("greets after the answered call's media route settles despite raw VAD noise", async () => {
+  it.each(["", "I have a question"])("greets only without caller speech (%s)", async (speech) => {
     const driver = await startReadyFaceTimeTalkDriver();
-
     vi.useFakeTimers();
     try {
       expect(mocks.bridge.triggerGreeting).not.toHaveBeenCalled();
@@ -318,31 +298,17 @@ describe("FaceTime talk driver lifecycle", () => {
         type: "input_audio_buffer.speech_started",
       });
       await vi.advanceTimersByTimeAsync(50);
-      mocks.sessionParams?.onTranscript?.("user", "", true);
+      mocks.sessionParams?.onTranscript?.("user", speech, true);
       await vi.advanceTimersByTimeAsync(49);
       expect(mocks.bridge.triggerGreeting).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(1);
-
-      expect(mocks.bridge.triggerGreeting).toHaveBeenCalledWith(
-        "Greet the caller briefly, introduce yourself using your configured identity, and ask how you can help.",
-      );
+      if (!speech) {
+        expect(mocks.bridge.triggerGreeting).toHaveBeenCalledWith(
+          "Greet the caller briefly, introduce yourself using your configured identity, and ask how you can help.",
+        );
+      }
       await vi.advanceTimersByTimeAsync(50);
-      expect(mocks.bridge.triggerGreeting).toHaveBeenCalledOnce();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("does not talk over a caller who speaks during the settle window", async () => {
-    const driver = await startReadyFaceTimeTalkDriver();
-
-    vi.useFakeTimers();
-    try {
-      driver.activate();
-      mocks.sessionParams?.onTranscript?.("user", "I have a question", true);
-      await vi.advanceTimersByTimeAsync(100);
-
-      expect(mocks.bridge.triggerGreeting).not.toHaveBeenCalled();
+      expect(mocks.bridge.triggerGreeting).toHaveBeenCalledTimes(speech ? 0 : 1);
     } finally {
       try {
         await driver.close();
