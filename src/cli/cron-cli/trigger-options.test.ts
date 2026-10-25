@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { CRON_JOB_SCRATCH_MAX_BYTES } from "../../cron/scratch-contract.js";
 import { defaultRuntime } from "../../runtime.js";
 
@@ -20,6 +20,7 @@ const { registerCronScratchCommand } = await import("./register.cron-scratch.js"
 const { readCronPayloadScript, readCronTriggerScript, readCronScratchContent } =
   await import("./trigger-options.js");
 let fixtureRoot = "";
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 async function fixture(name: string, content: string | Buffer) {
   if (name !== name.trim()) {
@@ -65,14 +66,10 @@ describe("cron trigger CLI options", () => {
     const bytes = Buffer.from([0x78, 0xff, 0x79]);
     const file = await fixture("invalid.txt", bytes);
     await expect(read(file)).rejects.toThrow(`${label} must be valid UTF-8`);
-    const stdin = vi
-      .spyOn(process.stdin, Symbol.asyncIterator)
-      .mockImplementation(() => Readable.from([bytes])[Symbol.asyncIterator]());
-    try {
-      await expect(read("-")).rejects.toThrow(`${label} must be valid UTF-8`);
-    } finally {
-      stdin.mockRestore();
-    }
+    vi.spyOn(process.stdin, Symbol.asyncIterator).mockImplementation(() =>
+      Readable.from([bytes])[Symbol.asyncIterator](),
+    );
+    await expect(read("-")).rejects.toThrow(`${label} must be valid UTF-8`);
   });
 
   it("preserves exact scratch BOM, Unicode and CRLF while scripts retain trimming", async () => {
@@ -83,13 +80,9 @@ describe("cron trigger CLI options", () => {
     await expect(readCronPayloadScript(file)).resolves.toBe("中文 😀 \uFFFD");
   });
 
-  beforeEach(async () => {
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "cron-trigger-cli-"));
+  beforeEach(() => {
+    fixtureRoot = tempDirs.make("cron-trigger-cli-");
     callGatewayFromCli.mockReset().mockResolvedValue({ ok: true });
-  });
-
-  afterEach(async () => {
-    await fs.rm(fixtureRoot, { recursive: true, force: true });
   });
 
   it("reads the exact trigger path on add", async () => {

@@ -9,11 +9,7 @@ import {
   formatCliJsonFailure,
 } from "../failure-output.js";
 import { CronCliError } from "./cron-cli-error.js";
-import {
-  resolveCronCreateScheduleFromArgs as createSchedule,
-  resolveCronEditScheduleRequest as editSchedule,
-  applyExistingStreamSchedulePatch as applyStreamPatch,
-} from "./schedule-options.js";
+import { resolveCronCreateScheduleFromArgs as createSchedule } from "./schedule-options.js";
 import {
   coerceCronDeliveryPreviews,
   enrichCronJsonWithStatus,
@@ -463,44 +459,5 @@ describe("handleCronCliError", () => {
       cause: new Error("Runtime load failed"),
     });
     expect(renderJsonError(error, ["automations", "status"]).thrown).toBe(error);
-  });
-});
-
-const streamCommand = '["node","events.mjs"]';
-it.each([
-  [createSchedule, { streamCommand: "node events.mjs" }, "JSON array"],
-  [createSchedule, { streamCommand, streamMode: "match" }, "--stream-match is required"],
-  [createSchedule, { every: "1m", streamBatchMs: "250" }, "require --stream-command"],
-  [editSchedule, { streamBatchMs: "100", tz: "UTC" }, "not valid with stream schedule edits"],
-  [editSchedule, { streamMode: "line", exact: true }, "not valid with stream schedule edits"],
-] as const)("rejects invalid stream options %#", (resolve, options, message) => {
-  expect(() => resolve(options)).toThrow(message);
-});
-it.each([
-  [{ streamMode: "line" }, { mode: "line", match: undefined }],
-  [{ streamMatch: "^updated:" }, { mode: "match", match: "^updated:" }],
-] as const)("patches existing stream metadata %j", (options, patch) => {
-  const request = editSchedule(options);
-  if (request.kind !== "patch-existing-stream") {
-    throw new Error("expected stream patch");
-  }
-  expect(
-    applyStreamPatch(
-      {
-        kind: "stream",
-        command: ["node", "events.mjs"],
-        mode: "match",
-        match: "^ready:",
-        batchMs: 100,
-      },
-      request,
-    ),
-  ).toEqual({
-    kind: "stream",
-    command: ["node", "events.mjs"],
-    batchMs: 100,
-    cwd: undefined,
-    maxBatchBytes: undefined,
-    ...patch,
   });
 });

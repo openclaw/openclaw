@@ -29,6 +29,18 @@ async function edit(args: readonly string[], patch: Record<string, unknown>, ext
   await run(["edit", "job-1", ...args]);
   expectPatch(patch, extra);
 }
+const flags = (options: Record<string, string | true>) =>
+  Object.entries(options).flatMap(([key, value]) =>
+    value === true ? [`--${key}`] : [`--${key}`, value],
+  );
+async function add(args: readonly string[], expected: Record<string, unknown>) {
+  await run([...addMessage, ...args]);
+  expect(callGatewayFromCli).toHaveBeenCalledWith(
+    "cron.add",
+    expect.anything(),
+    expect.objectContaining(expected),
+  );
+}
 const addArgs = ["add", "--name", "fixture", "--agent", "main"];
 const messageArgs = ["--every", "1m", "--message", "hello"];
 const addMessage = [...addArgs, ...messageArgs];
@@ -142,6 +154,7 @@ it.each([
   ],
   [["--on-exit-cwd", "/repo"], "--on-exit-cwd requires --on-exit"],
   [["--on-exit", "./watch.sh", "--every", "5m"], "Choose at most one schedule change"],
+  [["--stream-batch-ms", "100", "--tz", "UTC"], "not valid with stream schedule edits"],
 ] as const)("rejects %j before Gateway access", rejectEdit);
 
 it.each([
@@ -271,30 +284,18 @@ it.each([
 );
 
 it.each([true, false])("creates an ordinary job with explicit %s policies", async (value) => {
-  await run([
-    ...addArgs,
-    "--every",
-    "30m",
-    "--message",
-    "Check the scratch",
-    "--active-hours-start",
-    "22:00",
-    "--active-hours-end",
-    "06:00",
-    "--active-hours-timezone",
-    "America/Los_Angeles",
-    value ? "--idle-only" : "--no-idle-only",
-    value ? "--skip-if-scratch-empty" : "--no-skip-if-scratch-empty",
-    value ? "--include-reasoning" : "--no-include-reasoning",
-    "--delivery-target",
-    "owner",
-    "--direct-policy",
-    "block",
-  ]);
-  expect(callGatewayFromCli).toHaveBeenCalledWith(
-    "cron.add",
-    expect.anything(),
-    expect.objectContaining({
+  await add(
+    flags({
+      "active-hours-start": "22:00",
+      "active-hours-end": "06:00",
+      "active-hours-timezone": "America/Los_Angeles",
+      [value ? "idle-only" : "no-idle-only"]: true,
+      [value ? "skip-if-scratch-empty" : "no-skip-if-scratch-empty"]: true,
+      [value ? "include-reasoning" : "no-include-reasoning"]: true,
+      "delivery-target": "owner",
+      "direct-policy": "block",
+    }),
+    {
       activeHours: { start: "22:00", end: "06:00", timezone: "America/Los_Angeles" },
       idleOnly: value,
       payload: expect.objectContaining({
@@ -308,25 +309,19 @@ it.each([true, false])("creates an ordinary job with explicit %s policies", asyn
         directPolicy: "block",
         channel: undefined,
       }),
-    }),
+    },
   );
 });
 
 it("creates a main-session agent turn with owner delivery", async () => {
-  await run([
-    ...addMessage,
-    "--session",
-    "main",
-    "--announce",
-    "--delivery-target",
-    "owner",
-    "--direct-policy",
-    "block",
-  ]);
-  expect(callGatewayFromCli).toHaveBeenCalledWith(
-    "cron.add",
-    expect.anything(),
-    expect.objectContaining({
+  await add(
+    flags({
+      session: "main",
+      announce: true,
+      "delivery-target": "owner",
+      "direct-policy": "block",
+    }),
+    {
       sessionTarget: "main",
       payload: expect.objectContaining({ kind: "agentTurn", message: "hello" }),
       delivery: expect.objectContaining({
@@ -334,17 +329,12 @@ it("creates a main-session agent turn with owner delivery", async () => {
         target: "owner",
         directPolicy: "block",
       }),
-    }),
+    },
   );
 });
 
 it("preserves the unflagged main-session agent-turn delivery default", async () => {
-  await run([...addMessage, "--session", "main"]);
-  expect(callGatewayFromCli).toHaveBeenCalledWith(
-    "cron.add",
-    expect.anything(),
-    expect.objectContaining({ sessionTarget: "main", delivery: undefined }),
-  );
+  await add(["--session", "main"], { sessionTarget: "main", delivery: undefined });
 });
 
 it.each([
@@ -379,12 +369,12 @@ it("preserves an existing active window when editing one field", async () => {
 it("clears ordinary policies without replacing the rest of the job", async () => {
   existing({ sessionTarget: "isolated" });
   await edit(
-    [
-      "--clear-active-hours",
-      "--clear-idle-only",
-      "--clear-delivery-target",
-      "--clear-direct-policy",
-    ],
+    flags({
+      "clear-active-hours": true,
+      "clear-idle-only": true,
+      "clear-delivery-target": true,
+      "clear-direct-policy": true,
+    }),
     {
       activeHours: null,
       idleOnly: null,
@@ -475,6 +465,12 @@ it.each([
     'Invalid cron expression "9am standup with the team today". Use 5 fields like "0 9 * * *" or 6 fields like "0 0 9 * * *".',
   ],
   [[...messageArgs, ...topicArgs, ""], "--thread-id must be a positive integer"],
+  [["--stream-command", "node events.mjs", "--message", "run"], "JSON array"],
+  [
+    ["--stream-command", '["node","events.mjs"]', "--stream-mode", "match", "--message", "run"],
+    "--stream-match is required",
+  ],
+  [["--every", "1m", "--stream-batch-ms", "250", "--message", "run"], "require --stream-command"],
 ] as const)("rejects invalid creation %j before RPC", (args, message) =>
   reject([...addArgs, ...args], message),
 );
@@ -497,20 +493,28 @@ it("preserves leading and trailing cwd whitespace on command-cwd edit", async ()
   await edit(["--command-cwd", " /repo "], { payload: { kind: "command", cwd: " /repo " } });
 });
 
-it.each([undefined, ""])("preserves stream cwd edit semantics for %j", async (value) => {
-  existing({
-    schedule: { kind: "stream", command: ["node", "events.mjs"], cwd: "/repo" },
-    payload: turn({ message: "run" }),
-  });
-  await edit(["--stream-mode", "line", ...(value === undefined ? [] : ["--stream-cwd", value])], {
+it.each([
+  [["--stream-mode", "line"], { cwd: "/repo", mode: "line", match: undefined }],
+  [
+    ["--stream-mode", "line", "--stream-cwd", ""],
+    { cwd: undefined, mode: "line", match: undefined },
+  ],
+  [["--stream-match", "^updated:"], { cwd: "/repo", mode: "match", match: "^updated:" }],
+] as const)("patches existing stream metadata with %j", async (args, patch) => {
+  const schedule = {
+    kind: "stream",
+    command: ["node", "events.mjs"],
+    cwd: "/repo",
+    mode: "match",
+    match: "^ready:",
+    batchMs: 100,
+  };
+  existing({ schedule, payload: turn({ message: "run" }) });
+  await edit(args, {
     schedule: {
-      kind: "stream",
-      command: ["node", "events.mjs"],
-      cwd: value === undefined ? "/repo" : undefined,
-      mode: "line",
-      match: undefined,
-      batchMs: undefined,
+      ...schedule,
       maxBatchBytes: undefined,
+      ...patch,
     },
   });
 });
