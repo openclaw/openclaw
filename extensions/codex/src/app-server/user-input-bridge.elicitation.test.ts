@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { claimPendingAgentQuestionAnswer } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { isJsonObject } from "./protocol.js";
 import { createCodexUserInputBridge } from "./user-input-bridge.js";
 import { createCodexUserInputTestParams as createParams } from "./user-input-bridge.test-support.js";
@@ -43,15 +43,15 @@ function createGateway(
     turnId: "turn-1",
     gatewayCall: gateway.call,
   });
+  onTestFinished(() => bridge.cancelPending());
   const request = (id: string, input = formParams(), signal?: AbortSignal) =>
     bridge.handleElicitationRequest({ id, params: input }, signal);
-  return { ...gateway, params, request, cancelPending: () => bridge.cancelPending() };
+  return { ...gateway, params, request };
 }
 
 function createAnsweringGateway(answerBatches: Array<Record<string, string[]>>) {
-  let answerIndex = 0;
   return createGateway(() => {
-    const answers = answerBatches[answerIndex++];
+    const answers = answerBatches.shift();
     assert(answers, "missing gateway answer batch");
     return { status: "answered", answers: { answers } };
   });
@@ -102,19 +102,15 @@ describe("Codex ordinary MCP elicitation adapter", () => {
     const response = gateway.request("empty", requestParams);
     const settled = vi.fn();
     void response.then(settled);
-    try {
-      await gateway.waitForAnswers(1);
-      expect(settled).not.toHaveBeenCalled();
-      await vi.waitFor(() =>
-        expect(vi.mocked(params.onBlockReply!).mock.calls[0]?.[0].text).toContain(
-          requestParams.message,
-        ),
-      );
-      await gateway.answer(1, testCase.choice);
-      await expectResult(response, testCase.action, testCase.action === "accept" ? {} : null);
-    } finally {
-      await gateway.cancelPending();
-    }
+    await gateway.waitForAnswers(1);
+    await vi.waitFor(() =>
+      expect(vi.mocked(params.onBlockReply!).mock.calls[0]?.[0].text).toContain(
+        requestParams.message,
+      ),
+    );
+    expect(settled).not.toHaveBeenCalled();
+    await gateway.answer(1, testCase.choice);
+    await expectResult(response, testCase.action, testCase.action === "accept" ? {} : null);
   });
 
   it("cancels an empty form without letting its late answer resolve the next queued form", async () => {
@@ -122,18 +118,14 @@ describe("Codex ordinary MCP elicitation adapter", () => {
     const controller = new AbortController();
     const confirmation = gateway.request("empty", emptyFormParams(), controller.signal);
     const successor = gateway.request("successor");
-    try {
-      await gateway.waitForAnswers(1);
-      const first = gateway.questions[0]!;
-      controller.abort();
-      await gateway.answer(1, "Allow");
-      await expectResult(confirmation, "cancel");
-      const second = await gateway.answer(2, "Ada");
-      expect(second.id).not.toBe(first.id);
-      await expectResult(successor, "accept", { name: "Ada" });
-    } finally {
-      await gateway.cancelPending();
-    }
+    await gateway.waitForAnswers(1);
+    const first = gateway.questions[0]!;
+    controller.abort();
+    await gateway.answer(1, "Allow");
+    await expectResult(confirmation, "cancel");
+    const second = await gateway.answer(2, "Ada");
+    expect(second.id).not.toBe(first.id);
+    await expectResult(successor, "accept", { name: "Ada" });
   });
 
   it("uses only direct isSecret metadata and never persists that field in Gateway questions", async () => {

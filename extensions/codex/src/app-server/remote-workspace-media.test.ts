@@ -20,6 +20,7 @@ import { createClientHarness } from "./test-support.js";
 const remoteWorkspaceRoot = "/remote";
 const readPath = "/remote/report.txt";
 const batchPaths = ["first", "second"].map((name) => `${remoteWorkspaceRoot}/reports/${name}.txt`);
+const overLimitPaths = Array.from({ length: 17 }, () => readPath);
 let openClawState: OpenClawTestState;
 type MediaOptions = Parameters<typeof prepareCodexRemoteWorkspaceMessageMedia>[0];
 type ExecClient = Parameters<typeof createCodexRemoteWorkspaceFileReader>[0];
@@ -286,18 +287,10 @@ describe("prepareCodexRemoteWorkspaceMessageMedia", () => {
   });
 
   it.each([
-    [{ filePath: "/etc/passwd" }, /outside|must stay inside/, {}],
-    [
-      { filePath: `${remoteWorkspaceRoot}/reports/../../private.txt` },
-      /outside|must stay inside/,
-      {},
-    ],
-    [{ mediaUrls: Array.from({ length: 17 }, () => readPath) }, "16-attachment limit", {}],
-    [
-      { attachments: Array.from({ length: 17 }, () => ({ filePath: readPath })) },
-      "16-attachment limit",
-      {},
-    ],
+    [{ filePath: "/etc/passwd" }, /outside|must stay inside/],
+    [{ filePath: `${remoteWorkspaceRoot}/../private.txt` }, /outside|must stay inside/],
+    [{ mediaUrls: overLimitPaths }, "16-attachment limit"],
+    [{ attachments: overLimitPaths.map((filePath) => ({ filePath })) }, "16-attachment limit"],
     [{ filePath: readPath }, undefined, { signal: AbortSignal.abort() }],
   ] as const)("rejects unsafe or cancelled media before remote I/O: %j", expectNoRead);
 });

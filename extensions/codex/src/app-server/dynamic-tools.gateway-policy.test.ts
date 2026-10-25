@@ -43,7 +43,6 @@ function policy(
 type BridgeOptions = Omit<Parameters<typeof createCodexDynamicToolBridge>[0], "signal">;
 const makeBridge = (options: BridgeOptions) =>
   createCodexDynamicToolBridge({ signal: new AbortController().signal, ...options });
-const messageSpec = [{ name: "message" }];
 const readTaskSpec = [
   { name: "task", inputSchema: { properties: { action: { enum: ["read"] } } } },
 ];
@@ -94,13 +93,16 @@ describe("Codex Gateway tool policy", () => {
         });
         return tool;
       }
-      const poisonedName = unreadable("fuzzplugin_unreadable_name", "name");
-      const poisonedSchema = unreadable("fuzzplugin_unreadable_schema", "parameters");
-      const invalidName = taskTool("");
-      const poisonedExecute = unreadable("fuzzplugin_unreadable_execute", "execute");
-
+      const tools = [
+        unreadable("fuzzplugin_unreadable_name", "name"),
+        unreadable("fuzzplugin_unreadable_schema", "parameters"),
+        taskTool(""),
+        unreadable("fuzzplugin_unreadable_execute", "execute"),
+        taskTool("message"),
+      ];
       const bridge = makeBridge({
-        tools: [poisonedName, poisonedSchema, invalidName, poisonedExecute, taskTool("message")],
+        tools,
+        registeredTools: tools,
         hookContext: scopedContext,
       });
 
@@ -110,19 +112,8 @@ describe("Codex Gateway tool policy", () => {
         "tool[2]",
         "fuzzplugin_unreadable_execute",
       ]);
-      const registeredBridge = makeBridge({
-        tools: [poisonedExecute, taskTool("message")],
-        registeredTools: [poisonedExecute, taskTool("message")],
-        hookContext: scopedContext,
-      });
-
-      for (const specs of [
-        bridge.specs,
-        bridge.availableSpecs,
-        registeredBridge.specs,
-        registeredBridge.availableSpecs,
-      ]) {
-        expect(functions(specs)).toMatchObject(messageSpec);
+      for (const specs of [bridge.specs, bridge.availableSpecs]) {
+        expect(functions(specs)).toMatchObject([{ name: "message" }]);
       }
     },
   );

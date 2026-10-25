@@ -3,18 +3,16 @@ import path from "node:path";
 import type { EmbeddedRunAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { expect, it, vi } from "vitest";
-import { CodexAppServerClient } from "./client.js";
 import type { CodexPluginConfig } from "./config.js";
 import { resolveCodexSupervisionAppServerRuntimeOptions } from "./config.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import {
   createTestParams,
-  getMockRuntimeIdentity,
+  createStartedThreadHarness,
   runCodexAppServerAttempt,
   setupRunAttemptTestHooks,
   tempDir,
   threadStartResult,
-  turnStartResult,
 } from "./run-attempt-test-harness.js";
 import { DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT } from "./run-attempt.context-engine.test-support.js";
 import {
@@ -25,7 +23,6 @@ import {
 } from "./session-binding.js";
 import { createCodexSqliteTestBindingStateStore } from "./session-binding.sqlite.test-helpers.js";
 import { attachSqliteSessionTarget } from "./sqlite-session.test-helpers.js";
-import { createRequestClientHarness } from "./test-support.js";
 import { codexDynamicToolsFingerprint } from "./thread-fingerprints.js";
 
 setupRunAttemptTestHooks();
@@ -113,46 +110,25 @@ it("attributes the ready model and accepts reroutes only for the active turn", a
     model: "ready-native-model",
     modelProvider: "openai",
   };
-  const responses: Record<string, () => unknown> = {
-    initialize: () => ({
-      userAgent: `codex-cli/${getMockRuntimeIdentity().serverVersion}`,
-      codexHome,
-    }),
-    "configRequirements/read": () => ({ requirements: null }),
-    "config/read": () => ({ config: { model_provider: "openai" }, origins: {} }),
-    "thread/read": () => ({
-      thread: { ...readyThread.thread, model: readyThread.model, path: rolloutPath },
-    }),
-    "thread/resume": () => {
-      transport.send({
+  const transport = createStartedThreadHarness(async (method) => {
+    if (method === "config/read") {
+      return { config: { model_provider: "openai" }, origins: {} };
+    }
+    if (method === "thread/read") {
+      return { thread: { ...readyThread.thread, model: readyThread.model, path: rolloutPath } };
+    }
+    if (method === "thread/resume") {
+      await transport.notify({
         method: "thread/status/changed",
         params: { threadId: "native-thread", status: { type: "notLoaded" } },
       });
       return readyThread;
-    },
-    "turn/start": turnStartResult,
-    "turn/interrupt": () => {
-      queueMicrotask(() => sendTurn("interrupted"));
-      return {};
-    },
-    "thread/backgroundTerminals/list": () => ({ data: [], nextCursor: null }),
-    "thread/unsubscribe": () => ({ status: "unsubscribed" }),
-  };
-  const transport = createRequestClientHarness((method, id, _params, send) => {
-    send({ id, result: responses[method]?.() ?? {} });
+    }
+    if (method === "thread/unsubscribe") {
+      return { status: "unsubscribed" };
+    }
+    return undefined;
   });
-  const sendTurn = (
-    status: string,
-    items: Array<{ type: string; id: string; text: string }> = [],
-  ) =>
-    transport.send({
-      method: "turn/completed",
-      params: {
-        threadId: "native-thread",
-        turn: { id: "turn-1", status, items },
-      },
-    });
-  vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(transport.client);
   const events: Array<Parameters<NonNullable<EmbeddedRunAttemptParamsV2["onAgentEvent"]>>[0]> = [];
   let modelPublished = createDeferred<void>();
   params.onAgentEvent = (event) => {
@@ -183,7 +159,7 @@ it("attributes the ready model and accepts reroutes only for the active turn", a
       ["native-thread", "foreign-turn", "foreign-turn-model"],
       ["native-thread", "turn-1", "rerouted-model"],
     ]) {
-      transport.send({
+      await transport.notify({
         method: "model/rerouted",
         params: { threadId, turnId, fromModel: "ready-native-model", toModel, reason: "other" },
       });
@@ -196,7 +172,17 @@ it("attributes the ready model and accepts reroutes only for the active turn", a
         data: { fromModel: "ready-native-model", toModel: "rerouted-model", reason: "other" },
       },
     ]);
-    sendTurn("completed", [{ type: "agentMessage", id: "answer", text: "Native answer." }]);
+    await transport.notify({
+      method: "turn/completed",
+      params: {
+        threadId: "native-thread",
+        turn: {
+          id: "turn-1",
+          status: "completed",
+          items: [{ type: "agentMessage", id: "answer", text: "Native answer." }],
+        },
+      },
+    });
     expect(await run).toEqual(
       expect.objectContaining({
         terminal: { kind: "ok" },

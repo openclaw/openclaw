@@ -144,13 +144,11 @@ describe("plugin read_only policy", () => {
       // Exercise serialized binding storage, not only an in-memory clone.
       const serialized = JSON.stringify(result.policyContext);
       const restored = readPluginAppPolicyContext(JSON.parse(serialized));
-      expect(restored).toBeDefined();
       for (const patch of [
         result.configPatch,
         buildCodexPluginAppsConfigPatchFromPolicyContext(restored!),
       ]) {
         const effective = mergeCodexThreadConfigs(f.nativeConfig, patch);
-        expect(effective).toBeDefined();
         expect(
           readCurrentToolPolicy(effective!, "sample-app", "browse", { title: "Browse" }),
         ).toEqual({ enabled, approvalMode: expected });
@@ -264,9 +262,7 @@ describe("plugin read_only policy", () => {
     expectApp(missing.configPatch, readOnlyTools([], ["browse", "new_read", "manage", "stale"]));
     expect(missing.policyContext.apps["sample-app"]).toBeDefined();
     expect(
-      Object.values(missing.policyContext.apps["sample-app"]?.readOnlyTools ?? {}).some(
-        (entry) => entry.enabled,
-      ),
-    ).toBe(false);
+      Object.values(missing.policyContext.apps["sample-app"]?.readOnlyTools ?? {}),
+    ).not.toContainEqual(expect.objectContaining({ enabled: true }));
   });
 });
