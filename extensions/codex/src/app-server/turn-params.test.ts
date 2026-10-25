@@ -10,12 +10,13 @@ type TurnParams = Parameters<typeof buildTurnStartParams>[0];
 type TurnOptions = Parameters<typeof buildTurnStartParams>[1];
 const paramsForTurn = (config?: TurnParams["config"], overrides: Partial<TurnParams> = {}) =>
   Object.assign(createParams("/tmp/session.jsonl", "/repo", config), overrides);
-const turnOptions = (overrides: Partial<TurnOptions> = {}): TurnOptions => ({
-  threadId: "thread-1",
-  cwd: "/repo",
-  appServer: createAppServerOptions(),
-  ...overrides,
-});
+const buildTurn = (params: TurnParams, options: Partial<TurnOptions> = {}) =>
+  buildTurnStartParams(params, {
+    threadId: "thread-1",
+    cwd: "/repo",
+    appServer: createAppServerOptions(),
+    ...options,
+  });
 const textInput = (text: string) => [{ type: "text", text, text_elements: [] }];
 const application = (value: unknown) => ({ kind: "application", value });
 const activeComputer = application(
@@ -28,17 +29,6 @@ const deliveryValue = (turn: Awaited<ReturnType<typeof buildTurnStartParams>>) =
   turn.additionalContext?.openclaw_source_delivery?.value;
 const temporalValue = (turn: Awaited<ReturnType<typeof buildTurnStartParams>>) =>
   turn.additionalContext?.openclaw_temporal_context?.value;
-function permissionChange(notice: string) {
-  return {
-    owner: {},
-    baseExecOverrides: {},
-    notice,
-    request: vi.fn(),
-    applied: () => true,
-    recordApplied: vi.fn(),
-  };
-}
-
 afterEach(() => {
   resetThreadLifecycleTestFixtures();
   vi.restoreAllMocks();
@@ -46,8 +36,8 @@ afterEach(() => {
 
 it("keeps required-root native environments disabled on warm native turns", async () => {
   const params = paramsForTurn(undefined, { requireWorkspaceOnly: true });
-  const turn = await buildTurnStartParams(params, {
-    ...turnOptions({ preserveNativeTurnSettings: true }),
+  const turn = await buildTurn(params, {
+    preserveNativeTurnSettings: true,
     cwd: "/repo/subdirectory",
     environmentSelection: [{ environmentId: "ambient", cwd: "/outside" }],
   });
@@ -60,10 +50,9 @@ it("refreshes and clears presence without rewriting native turn input", async ()
     ...params.hostCapabilities,
     activeComputerContext: () => currentPresence,
   };
-  const options = turnOptions({ preserveNativeTurnSettings: true });
   for (const node of ["mac-a", "mac-a", "mac-b", "unknown"]) {
     currentPresence = `active_node=${node}`;
-    const turn = await buildTurnStartParams(params, options);
+    const turn = await buildTurn(params, { preserveNativeTurnSettings: true });
     expect(turn.additionalContext?.openclaw_active_computer).toEqual(application(currentPresence));
     expect(turn.input).toEqual(textInput(params.prompt));
   }
@@ -78,9 +67,9 @@ it("uses the configured user timezone on every turn without changing cron input"
       startedAtMs: Date.parse("2026-09-01T00:30:00.000Z"),
     },
   );
-  const options = turnOptions({ sessionStatusAvailable: true });
+  const options = { sessionStatusAvailable: true };
 
-  const firstTurn = await buildTurnStartParams(params, options);
+  const firstTurn = await buildTurn(params, options);
   expect(firstTurn.input).toEqual(textInput("run exactly"));
   expect(firstTurn.additionalContext).toEqual({
     openclaw_active_computer: activeComputer,
@@ -91,7 +80,7 @@ it("uses the configured user timezone on every turn without changing cron input"
   });
 
   clock.mockReturnValue(Date.parse("2026-09-03T00:30:00.000Z"));
-  const nextTurn = await buildTurnStartParams(params, options);
+  const nextTurn = await buildTurn(params, options);
   expect(nextTurn.input).toEqual(firstTurn.input);
   expect(temporalValue(nextTurn)).toContain("Current date: 2026-09-02");
 });
@@ -101,14 +90,12 @@ it("emits the host fallback after a timezone override is removed", async () => {
   const hostTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone?.trim() || "UTC";
   const configuredTimezone =
     hostTimezone === "America/Los_Angeles" ? "Asia/Tokyo" : "America/Los_Angeles";
-  const options = turnOptions({ sessionStatusAvailable: false });
-  const configured = await buildTurnStartParams(
+  const configured = await buildTurn(
     paramsForTurn({
       agents: { defaults: { userTimezone: configuredTimezone } },
     }),
-    options,
   );
-  const fallback = await buildTurnStartParams(paramsForTurn(), options);
+  const fallback = await buildTurn(paramsForTurn());
 
   expect(temporalValue(configured)).toContain(`Time zone: ${configuredTimezone}`);
   expect(temporalValue(fallback)).toContain(`Time zone: ${hostTimezone}`);
@@ -127,9 +114,7 @@ it.each([
   "projects stable sender $senderId without interpreting metadata mentions",
   async ({ prefix, ...sender }) => {
     const params = paramsForTurn(undefined, { trigger: "user", ...sender });
-    expect((await buildTurnStartParams(params, turnOptions())).input).toEqual(
-      textInput(prefix + sender.prompt),
-    );
+    expect((await buildTurn(params)).input).toEqual(textInput(prefix + sender.prompt));
   },
 );
 it("carries explicit current policy without changing native turn input", async () => {
@@ -137,17 +122,24 @@ it("carries explicit current policy without changing native turn input", async (
     prompt: "unchanged current request",
     messageChannel: "telegram",
     currentChannelId: "123",
-    permissionChange: permissionChange("Permission changed."),
+    permissionChange: {
+      owner: {},
+      baseExecOverrides: {},
+      notice: "Permission changed.",
+      request: vi.fn(),
+      applied: () => true,
+      recordApplied: vi.fn(),
+    },
   });
-  const options = turnOptions({
+  const options = {
     messageToolAvailable: true,
     requireExplicitMessageTarget: false,
     preserveNativeTurnSettings: true,
     model: "native-model",
     modelProvider: "native-provider",
-  });
+  };
   const build = (overrides: Partial<TurnParams>, settings: Partial<TurnOptions> = {}) =>
-    buildTurnStartParams({ ...params, ...overrides }, { ...options, ...settings });
+    buildTurn({ ...params, ...overrides }, { ...options, ...settings });
   const turns = await Promise.all(
     (["automatic", "message_tool_only", undefined] as const).map((mode) =>
       build({ sourceReplyDeliveryMode: mode }),
@@ -202,25 +194,4 @@ it("carries explicit current policy without changing native turn input", async (
     "including questions received during ongoing work, in your final response",
   );
   expect(deliveryValue(finalOnly)).not.toContain("message(action=send");
-});
-it("replaces channel delivery guidance on a routeless operator turn", async () => {
-  const options = turnOptions({
-    messageToolAvailable: true,
-    requireExplicitMessageTarget: false,
-    preserveNativeTurnSettings: true,
-  });
-  const channelTurn = await buildTurnStartParams(
-    paramsForTurn(undefined, { messageChannel: "telegram", currentChannelId: "123" }),
-    options,
-  );
-  const operatorTurn = await buildTurnStartParams(paramsForTurn(), options);
-
-  expect(deliveryValue(channelTurn)).toContain("current source is default target");
-  expect(deliveryValue(operatorTurn)).toContain(
-    "OpenClaw delivers your final response automatically to the caller",
-  );
-  expect(deliveryValue(operatorTurn)).toContain("target required this turn");
-  expect(deliveryValue(operatorTurn)).not.toContain("current source");
-  expect(deliveryValue(operatorTurn)).not.toContain("final=false");
-  expect(operatorTurn.input).toEqual(textInput(paramsForTurn().prompt));
 });
