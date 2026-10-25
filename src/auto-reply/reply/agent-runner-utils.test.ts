@@ -16,15 +16,16 @@ vi.mock("../../agents/agent-scope.js", async () => ({
       "../../agents/agent-scope.js",
     )
   ).modelFallbackOverrideFromAvailability,
-  resolveModelFallbackAvailability: hoisted.resolveModelFallbackAvailabilityMock,
+  resolveModelFallbackAvailability: (...args: unknown[]) =>
+    hoisted.resolveModelFallbackAvailabilityMock(...args),
 }));
 
 vi.mock("../../channels/plugins/index.js", () => ({
-  getChannelPlugin: hoisted.getChannelPluginMock,
+  getChannelPlugin: (...args: unknown[]) => hoisted.getChannelPluginMock(...args),
 }));
 
 vi.mock("../../utils/provider-utils.js", () => ({
-  isReasoningTagProvider: hoisted.isReasoningTagProviderMock,
+  isReasoningTagProvider: (...args: unknown[]) => hoisted.isReasoningTagProviderMock(...args),
 }));
 
 const {
