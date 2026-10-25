@@ -28,6 +28,10 @@ const writeText = vi.fn<(text: string) => Promise<void>>();
 const fallback = vi.fn(() => true);
 const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
 const execCommandDescriptor = Object.getOwnPropertyDescriptor(document, "execCommand");
+async function settle() {
+  await vi.advanceTimersByTimeAsync(0);
+  flush();
+}
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -48,7 +52,7 @@ describe("GitHub identity view", () => {
   it("shows device request and cancellation progress before the server settles", async () => {
     const start = createDeferred<typeof authorizationCode>();
     const cancel = createDeferred<{ cancelled: boolean }>();
-    const { identity } = setupRequest({
+    const { identity, request } = setupRequest({
       "tools.github.authorize.start": () => start.promise,
       "tools.github.authorize.cancel": () => cancel.promise,
     });
@@ -59,16 +63,19 @@ describe("GitHub identity view", () => {
     expect(view.getByText("Requesting code…")).toBeTruthy();
     expect(view.queryByRole("button", { name: "Continue with GitHub" })).toBeNull();
     start.resolve(authorizationCode);
-    await vi.advanceTimersByTimeAsync(0);
-    flush();
+    await settle();
     expect(view.getByText("ABCD-1234")).toBeTruthy();
     view.getByRole("button", { name: "Cancel" }).click();
     flush();
     expect(view.getByText("Requesting cancellation…")).toBeTruthy();
     expect(view.queryByRole("button", { name: "Cancel" })).toBeNull();
+    await identity.cancelAuthorization();
+    expect(
+      request.mock.calls.filter(([method]) => method === "tools.github.authorize.cancel"),
+    ).toEqual([["tools.github.authorize.cancel", { requestId: authorizationCode.requestId }]]);
     cancel.resolve({ cancelled: true });
-    await vi.advanceTimersByTimeAsync(0);
-    flush();
+    await settle();
+    expect(identity.read().authorization).toEqual({ phase: "idle" });
     expect(view.getByRole("button", { name: "Continue with GitHub" })).toBeTruthy();
   });
 
@@ -96,47 +103,12 @@ describe("GitHub identity view", () => {
       retired = true;
     });
     flush();
+    expect(view.getByText("Checking connection…")).toBeTruthy();
     view.unmount();
     await vi.advanceTimersByTimeAsync(0);
     expect(retired).toBe(true);
     pending.resolve(availableStatus("system"));
     await reading;
-  });
-
-  it("shows a failed status read and clears it while retrying", async () => {
-    const first = createDeferred<ReturnType<typeof availableStatus>>();
-    const retry = createDeferred<ReturnType<typeof availableStatus>>();
-    const { identity } = setupRequest(
-      vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(retry.promise),
-    );
-    const view = mountSolid(() => (
-      <GitHubIdentity identity={identity} onOpenConnections={vi.fn()} />
-    ));
-    const reading = identity.verify();
-    flush();
-    expect(view.getByText("Checking connection…")).toBeTruthy();
-    first.reject(new Error("Synthetic GitHub status unavailable"));
-    await expect(reading).rejects.toThrow("Synthetic GitHub status unavailable");
-    await vi.advanceTimersByTimeAsync(0);
-    flush();
-    expect(view.getByRole("alert").textContent).toContain("Synthetic GitHub status unavailable");
-    expect(view.getByText("Connection status unavailable")).toBeTruthy();
-    identity.showPatFallback();
-    await identity.configure();
-    flush();
-    expect(view.getByRole("alert").textContent).toContain(
-      "Paste a fine-grained personal access token first.",
-    );
-    view.getByRole("button", { name: "Verify" }).click();
-    await vi.advanceTimersByTimeAsync(0);
-    flush();
-    expect(view.queryByRole("alert")).toBeNull();
-    expect(view.getByText("Checking connection…")).toBeTruthy();
-    retry.resolve(availableStatus("system"));
-    await vi.advanceTimersByTimeAsync(0);
-    flush();
-    expect(view.getByText("@managed-user")).toBeTruthy();
-    expect(view.getByText("Verified")).toBeTruthy();
   });
 
   it("shows one shared error when the other identity read is still pending", async () => {
@@ -150,14 +122,13 @@ describe("GitHub identity view", () => {
       />
     ));
     system.reject(new Error("Synthetic shared GitHub failure"));
-    await vi.advanceTimersByTimeAsync(0);
-    flush();
+    await settle();
     expect(view.getAllByRole("alert")).toHaveLength(1);
     expect(view.getByRole("alert").textContent).toContain("Synthetic shared GitHub failure");
     personal.resolve();
   });
 
-  it("retires saving presentation when a pending PAT command loses its scope", async () => {
+  it("preserves the focused PAT draft while saving and retires it when its scope changes", async () => {
     const oldSecret = createDeferred<unknown>();
     const newSecret = createDeferred<unknown>();
     const secrets = [oldSecret, newSecret];
@@ -174,14 +145,27 @@ describe("GitHub identity view", () => {
       { mutation: true, context: { scope: "agent" } },
     );
     identity.showPatFallback();
-    identity.setDraft("token", "synthetic-first-token");
     const view = mountSolid(() => (
       <GitHubIdentity identity={identity} onOpenConnections={vi.fn()} />
     ));
-    const oldSaving = identity.configure();
-    await vi.advanceTimersByTimeAsync(0);
+    await identity.configure();
     flush();
+    expect(view.getByRole("alert").textContent).toContain(
+      "Paste a fine-grained personal access token first.",
+    );
+    const input = view.container.querySelector<HTMLInputElement>(".settings-secret input")!;
+    input.focus();
+    input.value = "synthetic-first-token";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    flush();
+    expect(identity.read().draft.token).toBe("synthetic-first-token");
+    expect(view.container.querySelector(".settings-secret input")).toBe(input);
+    expect(document.activeElement).toBe(input);
+    const oldSaving = identity.configure();
+    await settle();
     expect(view.getByRole("button", { name: "Saving…" })).toHaveProperty("disabled", true);
+    expect(input).toMatchObject({ disabled: true, value: "synthetic-first-token" });
+    expect(view.container.querySelector(".settings-secret input")).toBe(input);
     sync({ agentId: "replacement" });
     await oldSaving;
     await vi.advanceTimersByTimeAsync(0);
@@ -189,17 +173,17 @@ describe("GitHub identity view", () => {
     identity.setDraft("token", "synthetic-new-token");
     flush();
     const saving = identity.configure();
-    await vi.advanceTimersByTimeAsync(0);
-    flush();
+    await settle();
     expect(view.getByRole("button", { name: "Saving…" })).toHaveProperty("disabled", true);
     oldSecret.resolve({ ok: true });
     await vi.advanceTimersByTimeAsync(0);
     expect(identity.read().status).toBeNull();
     newSecret.resolve({ ok: true });
     await saving;
-    await vi.advanceTimersByTimeAsync(0);
-    flush();
+    await settle();
     expect(view.queryByRole("button", { name: "Saving…" })).toBeNull();
+    expect(view.getByText("@managed-user")).toBeTruthy();
+    expect(view.getByText("Verified")).toBeTruthy();
   });
 
   it("leaves the GitHub panel while its admitted PAT command remains pending", async () => {
@@ -268,8 +252,7 @@ describe("GitHub identity view", () => {
     input.dispatchEvent(new Event("input", { bubbles: true }));
     flush();
     routed.getByRole("button", { name: "Save Identity" }).click();
-    await vi.advanceTimersByTimeAsync(0);
-    flush();
+    await settle();
     let destination: HTMLElement | undefined;
     try {
       expect(routed.getByRole("button", { name: "Saving…" })).toHaveProperty("disabled", true);
@@ -300,16 +283,16 @@ describe("GitHub identity view", () => {
   it("retires pending authorization-code copying only when its payload changes", async () => {
     const pending = createDeferred();
     writeText.mockReturnValueOnce(pending.promise);
-    type AuthorizationCode = Extract<GitHubAuthorizationState, { userCode: string }>;
-    let updateAuthorization: (patch: Partial<AuthorizationCode>) => void = () => {};
+    type Code = Extract<GitHubAuthorizationState, { userCode: string }>;
+    let update: (patch: Partial<Code>) => void = () => {};
     const view = mountSolid(() => {
-      const [authorization, setAuthorization] = createSignal<AuthorizationCode>({
+      const [authorization, setAuthorization] = createSignal<Code>({
         ...authorizationCode,
         phase: "code",
         userCode: "first",
         displayExpiresAtMs: 70_000,
       });
-      updateAuthorization = (patch) => setAuthorization((value) => ({ ...value, ...patch }));
+      update = (patch) => setAuthorization((value) => ({ ...value, ...patch }));
       const fixture = githubIdentityViewFixture({ authorizable: true, connectionReady: true });
       const identity = {
         ...fixture,
@@ -317,18 +300,22 @@ describe("GitHub identity view", () => {
       };
       return <GitHubConnectionSetup identity={identity} />;
     });
-    const button = view.container.querySelector<HTMLButtonElement>(".github-device-code + button")!;
+    const copyButton = () =>
+      view.container.querySelector<HTMLButtonElement>(".github-device-code + button")!;
+    const announcements = () =>
+      [...view.container.querySelectorAll('.github-device-code ~ [role="status"]')].map(
+        (node) => node.textContent,
+      );
+    const button = copyButton();
     button.click();
     expect(writeText).toHaveBeenCalledOnce();
-    updateAuthorization({ phase: "pending" });
+    update({ phase: "pending" });
     flush();
-    expect(view.container.querySelector(".github-device-code + button")).toBe(button);
+    expect(copyButton()).toBe(button);
     expect(view.getByText("Waiting for approval…")).toBeTruthy();
-    updateAuthorization({ userCode: "second" });
+    update({ userCode: "second" });
     flush();
-    const current = view.container.querySelector<HTMLButtonElement>(
-      ".github-device-code + button",
-    )!;
+    const current = copyButton();
     expect(current).not.toBe(button);
     expect(current.disabled).toBe(false);
     pending.reject(new Error("Synthetic clipboard rejection"));
@@ -339,67 +326,12 @@ describe("GitHub identity view", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(writeText.mock.calls.map(([text]) => text)).toEqual(["first", "second"]);
     expect(current.dataset.copyState).toBe("copied");
-  });
-
-  it("announces authorization-code copy outcomes in a status region", async () => {
-    const authorization: Extract<GitHubAuthorizationState, { userCode: string }> = {
-      ...authorizationCode,
-      phase: "code",
-      displayExpiresAtMs: 70_000,
-    };
-    const fixture = githubIdentityViewFixture({ authorizable: true, connectionReady: true });
-    const identity = { ...fixture, read: () => ({ ...fixture.read(), authorization }) };
-    const view = mountSolid(() => <GitHubConnectionSetup identity={identity} />);
-    const statusText = () =>
-      [...view.container.querySelectorAll('.github-device-code ~ [role="status"]')].map(
-        (node) => node.textContent,
-      );
-    const button = view.container.querySelector<HTMLButtonElement>(".github-device-code + button")!;
-    button.click();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(statusText()).toEqual(["Copied!"]);
-
+    expect(announcements()).toEqual(["Copied!"]);
     await vi.advanceTimersByTimeAsync(1500);
     writeText.mockRejectedValueOnce(new Error("Synthetic clipboard rejection"));
     fallback.mockReturnValueOnce(false);
-    button.click();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(statusText()).toEqual(["Copy failed"]);
-  });
-
-  it("keeps the focused PAT field across draft and mutation updates", async () => {
-    const stored = createDeferred<unknown>();
-    const { identity } = setupRequest(
-      async (method) => (method === "secrets.store.set" ? stored.promise : { ok: true }),
-      {
-        context: { scope: "agent" },
-        runExternalMutation: async () => ({
-          ok: false,
-          reason: "unavailable",
-          error: "Not dispatched in this view test.",
-        }),
-      },
-    );
-    identity.showPatFallback();
-    const view = mountSolid(() => (
-      <GitHubIdentity identity={identity} onOpenConnections={vi.fn()} />
-    ));
-    const input = view.container.querySelector<HTMLInputElement>(".settings-secret input")!;
-    input.focus();
-    input.value = "synthetic-pat";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    flush();
-    expect(identity.read().draft.token).toBe("synthetic-pat");
-    expect(view.container.querySelector(".settings-secret input")).toBe(input);
-    expect(document.activeElement).toBe(input);
-    const saving = identity.configure();
-    await vi.advanceTimersByTimeAsync(0);
-    flush();
-    expect(input.disabled).toBe(true);
-    expect(input.value).toBe("synthetic-pat");
-    expect(view.container.querySelector(".settings-secret input")).toBe(input);
-    identity.dispose();
-    stored.resolve({ ok: true });
-    await saving;
+    current.click();
+    await settle();
+    expect(announcements()).toEqual(["Copy failed"]);
   });
 });

@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 import { expect, it, vi } from "vitest";
+import type { UsersGitHubStatusResult } from "../../../../packages/gateway-protocol/src/schema/users.ts";
 import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ToolsGitHubStatusResult } from "../../api/types.ts";
@@ -100,6 +101,11 @@ function mount(
     waitText: (...args: Parameters<typeof text>) => waitForFast(() => text(...args)),
     row: (scope: string) => query(`[data-github-connection="${scope}"]`),
     button,
+    fill: (input: HTMLInputElement, value: string) => {
+      input.value = value;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      flush();
+    },
     openPat: () =>
       ["Change System GitHub", "Use a PAT instead"].forEach((label) => {
         button(label).click();
@@ -125,17 +131,14 @@ it.each([
   const request = statusRequest(sharedIdentity);
   const config = { tools: { github: { gitAuthor: { name: "Configured author" } } } };
   const harness = mount(["operator.admin"], "profile-a", request, config);
-  const { text, waitText, query, button, openPat } = harness;
+  const { text, waitText, query, button, openPat, fill } = harness;
   await waitText(["@admin-only-account"]);
   openPat();
   const input = () => query<HTMLInputElement>('input[aria-label="Author Name"]');
   const token = () => query<HTMLInputElement>(".settings-secret input");
   expect(input()).not.toBeNull();
-  input()!.value = "Draft author";
-  input()!.dispatchEvent(new Event("input", { bubbles: true }));
-  token()!.value = "synthetic-pat-draft";
-  token()!.dispatchEvent(new Event("input", { bubbles: true }));
-  flush();
+  fill(input()!, "Draft author");
+  fill(token()!, "synthetic-pat-draft");
   harness.context.runtimeConfig.state.configForm = null;
   harness.emit({ phase: "reconnecting" });
   const expectDraft = () => {
@@ -176,8 +179,15 @@ it.each([
   }
   await waitForFast(() => expect(input()?.disabled).toBe(false));
   expect(input()?.value).toBe(access === "unchanged" ? "Draft author" : "Configured author");
-  harness.emit({ selfUser: { id: "profile-b" } });
+  harness.replaceProfile("profile-b");
+  await waitForFast(() => expect(query("[data-github-setup]")).toBeNull());
   expect(input()).toBeNull();
+  await waitForFast(() => expect(button("Manage connections").disabled).toBe(false));
+  button("Manage connections").click();
+  await waitForFast(() =>
+    expect(query<HTMLInputElement>('input[type="radio"]:checked')?.value).toBe("personal"),
+  );
+  expect(token()).toBeNull();
 });
 
 it.each([null, "profile-a"])("separates GitHub scopes for profile %s", async (profileId) => {
@@ -225,13 +235,8 @@ it.each([null, "profile-a"])("separates GitHub scopes for profile %s", async (pr
 
 it("shows one status failure during setup and retries without reconnecting the account", async () => {
   const error = "GitHub status temporarily unavailable";
-  const request = vi
-    .fn()
-    .mockRejectedValueOnce(new Error(error))
-    .mockResolvedValue({
-      personal: { ...disconnected, state: "connected", account: { login: "personal-account" } },
-      system,
-    });
+  const retry = createDeferredCore<UsersGitHubStatusResult>();
+  const request = vi.fn().mockRejectedValueOnce(new Error(error)).mockReturnValue(retry.promise);
   const ui = mount(["operator.read"], "profile-a", request);
   await waitForFast(() => expect(ui.query('[role="alert"]')?.textContent).toContain(error));
   expect(request.mock.calls).toEqual([["users.github.status", {}]]);
@@ -244,6 +249,12 @@ it("shows one status failure during setup and retries without reconnecting the a
   await waitForFast(() => expect(ui.query("[data-github-setup]")).not.toBeNull());
   expect(ui.element.querySelectorAll('[role="alert"]')).toHaveLength(1);
   ui.button("Retry").click();
+  await ui.waitText(["Checking connection…"]);
+  expect(ui.query('[role="alert"]')).toBeNull();
+  retry.resolve({
+    personal: { ...disconnected, state: "connected", account: { login: "personal-account" } },
+    system,
+  });
   await ui.waitText(["@personal-account"]);
   expect(request.mock.calls).toEqual([
     ["users.github.status", {}],
@@ -285,22 +296,6 @@ it.each(["available", "unavailable"] as const)("loads native %s", async (credent
   expect(context.runtimeConfig.ensureLoaded).not.toHaveBeenCalled();
 });
 
-it("closes setup and resets its purpose when the same Gateway snapshot changes profile", async () => {
-  const { query, button, replaceProfile } = mount(["operator.admin"], "profile-a", statusRequest());
-  const purpose = () => query<HTMLInputElement>('input[type="radio"]:checked')?.value;
-  await waitForFast(() => expect(button("Change System GitHub").disabled).toBe(false));
-  button("Change System GitHub").click();
-  await waitForFast(() => expect(purpose()).toBe("system"));
-  button("Use a PAT instead").click();
-  await waitForFast(() => expect(query(".settings-secret input")).not.toBeNull());
-  replaceProfile("profile-b");
-  await waitForFast(() => expect(query("[data-github-setup]")).toBeNull());
-  await waitForFast(() => expect(button("Manage connections").disabled).toBe(false));
-  button("Manage connections").click();
-  await waitForFast(() => expect(purpose()).toBe("personal"));
-  expect(query(".settings-secret input")).toBeNull();
-});
-
 it("disables connection controls while a PAT save is pending", async () => {
   const stored = createDeferredCore<{ ok: boolean }>();
   const request = vi.fn(async (method: string) =>
@@ -317,9 +312,7 @@ it("disables connection controls while a PAT save is pending", async () => {
   await ui.waitText(["@system-account"]);
   ui.openPat();
   const token = ui.query<HTMLInputElement>(".settings-secret input")!;
-  token.value = "synthetic-pending-pat";
-  token.dispatchEvent(new Event("input", { bubbles: true }));
-  flush();
+  ui.fill(token, "synthetic-pending-pat");
   ui.button("Save Identity").click();
   flush();
   try {

@@ -83,8 +83,10 @@ it("keeps independent identity drafts isolated and clears only the inherited tar
   identity.setDraft("token", "agent-token");
   system.sync({ config });
   system.identity.setDraft("token", "system-token");
-  sync({ config, scope: "agent" });
-
+  identity.setDraft("name", "Active Agent Edit");
+  const updatedConfig = authorConfig("Updated System Author", "Updated Agent Author");
+  sync({ config: updatedConfig, scope: "agent" });
+  expect(identity.read().draft.name).toBe("Active Agent Edit");
   expect(identity.read().draft.token).toBe("agent-token");
   await identity.inherit();
   expect(confirmation.show).toHaveBeenCalled();
@@ -100,6 +102,8 @@ it("keeps independent identity drafts isolated and clears only the inherited tar
     token: "system-token",
   });
   expect(system.requests).toEqual([]);
+  sync({ config: updatedConfig });
+  expect(identity.read().draft.name).toBe("Updated System Author");
 });
 
 it.each(["access", "profile"] as const)(
@@ -114,7 +118,7 @@ it.each(["access", "profile"] as const)(
 
     await identity.configure();
 
-    expect(requests.map((entry) => entry.method)).toEqual([
+    expect(requests.map(({ method }) => method)).toEqual([
       "secrets.store.set",
       "secrets.store.delete",
     ]);
@@ -135,7 +139,7 @@ it("keeps a consumed handoff successful while surfacing its refresh warning", as
 
   await identity.configure();
 
-  expect(requests.map((entry) => entry.method)).toEqual([
+  expect(requests.map(({ method }) => method)).toEqual([
     "secrets.store.set",
     "tools.github.configure",
   ]);
@@ -186,7 +190,7 @@ it("config.set drains drafts before managed and refreshes both edits", async () 
     }
     throw new Error(`unexpected method ${method}`);
   });
-  const client = { request } as unknown as GatewayBrowserClient;
+  const client = createTestGatewayClient(request);
   const runtimeConfig = createRuntimeConfig(client);
   await runtimeConfig.ensureLoaded();
   order.length = 0;
@@ -251,16 +255,6 @@ it("does not dispatch without the required operator scopes", async () => {
   await identity.configure();
   await identity.inherit();
   expect(requests).toEqual([]);
-});
-
-it("refreshes clean drafts without overwriting active edits", () => {
-  const { identity, sync } = createController();
-  sync({ config: authorConfig("System One", "Agent One"), scope: "agent" });
-  identity.setDraft("name", "Active Agent Edit");
-  sync({ config: authorConfig("System Two", "Agent Two"), scope: "agent" });
-  expect(identity.read().draft.name).toBe("Active Agent Edit");
-  sync({ config: authorConfig("System Two", "Agent Two") });
-  expect(identity.read().draft.name).toBe("System Two");
 });
 
 it("requires the explicit new-run disclosure before removing a selected identity", async () => {
@@ -355,10 +349,9 @@ it.each(["unused", "pending", "loaded", "failed"])(
     sync({ clientRevision: 3 });
     await Promise.resolve();
     if (initialState !== "unused") {
-      await waitForFast(() => {
-        expect(identity.read().loading).toBe(false);
-        expect(identity.read().status).toEqual(currentStatus);
-      });
+      await waitForFast(() =>
+        expect(identity.read()).toMatchObject({ loading: false, status: currentStatus }),
+      );
     }
 
     const statusCall = ["tools.github.status", { agentId: "main", selectedScope: "system" }];
@@ -410,7 +403,7 @@ it("waits for each authoritative poll deadline and adopts successful OAuth statu
     }
     throw new Error(`unexpected method ${method}`);
   });
-  const client = { request } as unknown as GatewayBrowserClient;
+  const client = createTestGatewayClient(request);
   const runtimeConfig = createRuntimeConfig(client);
   await runtimeConfig.ensureLoaded();
   request.mockClear();
@@ -443,17 +436,12 @@ it.each([
   { label: "connection generation changes", overrides: { clientRevision: 2 } },
   { label: "administrator access is lost", overrides: { authorizable: false } },
   { label: "selected scope changes", overrides: { scope: "agent" as const } },
-  {
-    label: "shared profile changes",
-    overrides: { target: sharedTarget() },
-  },
+  { label: "shared profile changes", overrides: { target: sharedTarget() } },
 ])("cancels the exact authorization when $label", async ({ overrides }) => {
   vi.useFakeTimers();
-  const { request, sync, identity } = setupRequest(async (method) => {
-    if (method === "tools.github.authorize.start") {
-      return authorizationCode;
-    }
-    return { cancelled: true };
+  const { request, sync, identity } = setupRequest({
+    "tools.github.authorize.start": () => authorizationCode,
+    "tools.github.authorize.cancel": () => ({ cancelled: true }),
   });
   await identity.startAuthorization();
 
@@ -470,36 +458,14 @@ it.each([
   );
 });
 
-it("cancels the exact request once when cancellation is repeated", async () => {
-  vi.useFakeTimers();
-  const { request, identity } = setupRequest(async (method) =>
-    method === "tools.github.authorize.start" ? authorizationCode : { cancelled: true },
-  );
-  await identity.startAuthorization();
-
-  await Promise.all([identity.cancelAuthorization(), identity.cancelAuthorization()]);
-
-  expect(
-    request.mock.calls.filter(([method]) => method === "tools.github.authorize.cancel"),
-  ).toEqual([["tools.github.authorize.cancel", { requestId: authorizationCode.requestId }]]);
-  expect(identity.read().authorization).toEqual({ phase: "idle" });
-});
-
 it("keeps a too-late cancellation alive and adopts the in-flight success", async () => {
   vi.useFakeTimers();
   const poll = createDeferredCore<unknown>();
   const { request, identity } = setupRequest(
-    async (method) => {
-      if (method === "tools.github.authorize.start") {
-        return { ...authorizationCode, pollAfterMs: 1_000 };
-      }
-      if (method === "tools.github.authorize.poll") {
-        return await poll.promise;
-      }
-      if (method === "tools.github.authorize.cancel") {
-        return { cancelled: false };
-      }
-      throw new Error(`unexpected method ${method}`);
+    {
+      "tools.github.authorize.start": () => ({ ...authorizationCode, pollAfterMs: 1_000 }),
+      "tools.github.authorize.poll": () => poll.promise,
+      "tools.github.authorize.cancel": () => ({ cancelled: false }),
     },
     { mutation: true },
   );
@@ -524,17 +490,12 @@ it("keeps a too-late cancellation alive and adopts the in-flight success", async
 it("keeps authorization pending and surfaces a cancellation network failure", async () => {
   vi.useFakeTimers();
   const { request, identity } = setupRequest(
-    async (method) => {
-      if (method === "tools.github.authorize.start") {
-        return authorizationCode;
-      }
-      if (method === "tools.github.authorize.cancel") {
+    {
+      "tools.github.authorize.start": () => authorizationCode,
+      "tools.github.authorize.cancel": () => {
         throw new Error("Gateway unavailable");
-      }
-      if (method === "tools.github.authorize.poll") {
-        return { status: "pending", retryAfterMs: 5_000 };
-      }
-      throw new Error(`unexpected method ${method}`);
+      },
+      "tools.github.authorize.poll": () => ({ status: "pending", retryAfterMs: 5_000 }),
     },
     { mutation: true },
   );
