@@ -86,6 +86,42 @@ function peerFixture(
     storeTarget,
     requester: endpoint("main", targetKey, target),
     peerEndpoint: endpoint(peerAgentId, sourceKey, source),
+    flow: {
+      targetSessionKey: sourceKey,
+      targetAgentId: peerAgentId,
+      displayKey: "peer",
+      replyTimeoutMs: 10_000,
+      requesterSessionKey: targetKey,
+      requesterAgentId: "main",
+    },
+    step: {
+      agentId: "main",
+      sessionKey: targetKey,
+      sourceAgentId: peerAgentId,
+      sourceSessionKey: sourceKey,
+      expectedSession: target,
+      expectedSourceSession: source,
+      timeoutMs: 10_000,
+    },
+    accept: (
+      runId: string,
+      callGateway: AgentToolGatewayRequestCaller = async <T>() => ({ runId }) as T,
+    ) =>
+      acceptRequest(
+        {
+          config,
+          source: endpoint("main", targetKey, target),
+          target: endpoint(peerAgentId, sourceKey, source),
+          message: "original request",
+          inputProvenance: {
+            kind: "inter_session",
+            sourceTool: "sessions_send",
+            sourceSessionKey: targetKey,
+          },
+          callGateway,
+        },
+        runId,
+      ),
   };
 }
 
@@ -130,33 +166,13 @@ afterEach(() => {
 
 it("surfaces a failed accepted requester continuation without redispatching the peer result", async () => {
   const failure = "Codex thread synthetic-thread is claimed by active work; stop it first.";
-  const config = communicationConfig();
-  const {
-    targetKey: requesterKey,
-    sourceKey: peerKey,
-    target: requester,
-    source: recipient,
-    requester: requesterEndpoint,
-    peerEndpoint,
-  } = peerFixture(config);
-  const provenance = {
-    kind: "inter_session" as const,
-    sourceTool: "sessions_send",
-    sourceSessionKey: requesterKey,
-  };
-  const replyAdmission = await acceptRequest(
-    {
-      config,
-      source: requesterEndpoint,
-      target: peerEndpoint,
-      message: "original request",
-      inputProvenance: provenance,
-      callGateway: async <T>(request: Parameters<AgentToolGatewayRequestCaller>[0]) => {
-        request.sessionMutationCommitGuard?.();
-        return { runId: "completed-peer-run" } as T;
-      },
-    },
+  const fixture = peerFixture(communicationConfig());
+  const replyAdmission = await fixture.accept(
     "completed-peer-run",
+    async <T>(request: Parameters<AgentToolGatewayRequestCaller>[0]) => {
+      request.sessionMutationCommitGuard?.();
+      return { runId: "completed-peer-run" } as T;
+    },
   );
   const gatewayCalls: CallGatewayOptions[] = [];
   const callGateway = async <T = unknown>(opts: CallGatewayOptions): Promise<T> => {
@@ -172,16 +188,11 @@ it("surfaces a failed accepted requester continuation without redispatching the 
 
   await expect(
     runSessionsSendA2AFlow({
+      ...fixture.flow,
       callGateway,
-      targetSessionKey: "agent:main:peer",
-      targetAgentId: "main",
-      displayKey: "peer",
       runId: "completed-peer-run",
-      replyTimeoutMs: 10_000,
-      requesterSessionKey: requesterKey,
-      requesterAgentId: "main",
-      requesterSession: requester,
-      targetSession: recipient,
+      requesterSession: fixture.target,
+      targetSession: fixture.source,
       replyAdmission,
       reply: {
         status: "ok",
@@ -191,14 +202,8 @@ it("surfaces a failed accepted requester continuation without redispatching the 
       deliverRequesterReply: (reply) =>
         runAgentStep({
           ...reply,
-          agentId: "main",
-          sessionKey: requesterKey,
-          sourceAgentId: "main",
-          sourceSessionKey: peerKey,
-          expectedSession: requester,
-          expectedSourceSession: recipient,
+          ...fixture.step,
           replyAdmission,
-          timeoutMs: 10_000,
           callGateway,
         }),
     }),
@@ -289,8 +294,9 @@ it.each(["direct", "cron-fallback", "receive-only", "ask-send", "send-only"] as 
     }
     const peerAgentId = route === "send-only" ? "research" : "main";
     const restricted = route === "receive-only" || route === "ask-send";
+    const fixture = peerFixture(config, peerAgentId, restricted ? route : undefined);
     const { sourceKey, targetKey, source, target, rows, storeTarget, requester, peerEndpoint } =
-      peerFixture(config, peerAgentId, restricted ? route : undefined);
+      fixture;
     const inputProvenance = {
       kind: "inter_session" as const,
       sourceTool: "sessions_send",
@@ -301,17 +307,7 @@ it.each(["direct", "cron-fallback", "receive-only", "ask-send", "send-only"] as 
       replyText: "completed peer result",
       terminalReply: { disposition: "visible" as const, text: "completed peer result" },
     };
-    const replyAdmission = await acceptRequest(
-      {
-        config,
-        source: requester,
-        target: peerEndpoint,
-        message: "original request",
-        inputProvenance,
-        callGateway: async <T>() => ({ runId: "peer-run" }) as T,
-      },
-      "peer-run",
-    );
+    const replyAdmission = await fixture.accept("peer-run");
     const admitted: SessionSendDelivery[] = [];
     const callGateway: AgentToolGatewayRequestCaller = async <T>(
       request: Parameters<AgentToolGatewayRequestCaller>[0],
@@ -357,14 +353,10 @@ it.each(["direct", "cron-fallback", "receive-only", "ask-send", "send-only"] as 
         route === "cron-fallback" ? { ...source, sessionId: "expired-cron-run" } : source,
       requesterTarget: { ...storeTarget(targetKey), storeKeys: [targetKey] },
       context: {
+        ...fixture.flow,
         callGateway,
-        targetSessionKey: sourceKey,
-        targetAgentId: peerAgentId,
         replyAdmission,
         displayKey: sourceKey,
-        replyTimeoutMs: 10_000,
-        requesterSessionKey: targetKey,
-        requesterAgentId: "main",
       },
     });
     if (route === "cron-fallback") {
@@ -459,16 +451,11 @@ it.each(["direct", "cron-fallback", "receive-only", "ask-send", "send-only"] as 
     rows[sourceKey] = { ...source, lifecycleRevision: "peer-v2" };
     await expect(
       runAgentStep({
-        agentId: "main",
-        sessionKey: targetKey,
+        ...fixture.step,
         expectedSession: context.requesterSession,
-        sourceAgentId: peerAgentId,
-        sourceSessionKey: sourceKey,
         replyAdmission,
-        expectedSourceSession: source,
         message: "stale result",
         extraSystemPrompt: "Consume once",
-        timeoutMs: 10_000,
         callGateway,
       }),
     ).rejects.toThrow("session changed before admission");

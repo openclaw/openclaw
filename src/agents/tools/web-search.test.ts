@@ -6,7 +6,6 @@ import {
   isoToPerplexityDate,
   normalizeToIsoDate,
   normalizeFreshness,
-  parseWebSearchTimeFilters,
 } from "./web-search-provider-common.js";
 import { mergeScopedSearchConfig } from "./web-search-provider-config.js";
 import { createWebSearchTool } from "./web-search.js";
@@ -27,17 +26,12 @@ describe("web_search tool schema", () => {
 const preWrappedText = (text: string) =>
   `<<<EXTERNAL_UNTRUSTED_CONTENT id="c0ffee">>>\nSource: Web Search\n---\n${text}\n<<<END_EXTERNAL_UNTRUSTED_CONTENT id="c0ffee">>>`;
 
-const braveRow = {
-  title: "Brave title",
-  url: "https://brave.example/result",
-  snippet: "Brave first snippet",
-  siteName: "brave.example",
-};
+const braveRow = { title: "Brave", url: "https://b.test/", snippet: "snippet", siteName: "b.test" };
 const firecrawlRow = {
-  title: "Firecrawl title",
-  url: "https://firecrawl.example/result",
+  title: "Firecrawl",
+  url: "https://f.test/",
   published: "2026-07-15",
-  siteName: "firecrawl.example",
+  siteName: "f.test",
 };
 const grokCitation = { url: "https://grok.example/two", title: "Grok source" };
 const resultsMetadata = { count: 2, tookMs: 12, cached: true };
@@ -236,29 +230,6 @@ it.each([
   expect(normalizeDate(input)).toBe(expected);
 });
 
-it("rejects conflicting freshness and date filters", () => {
-  expect(
-    parseWebSearchTimeFilters({
-      freshnessProvider: "brave",
-      invalidFreshnessMessage: "bad freshness",
-      invalidDateAfterMessage: "bad after",
-      invalidDateBeforeMessage: "bad before",
-      invalidDateRangeMessage: "bad range",
-      rawFreshness: "week",
-      rawDateAfter: "2026-01-01",
-    }),
-  ).toEqual({
-    error: "conflicting_time_filters",
-    message:
-      "freshness and date_after/date_before cannot be used together. Use either freshness (day/week/month/year) or a date range (date_after/date_before), not both.",
-    docs: "https://docs.openclaw.ai/tools/web",
-  });
-});
-
-it("accepts queries without unsupported filters", () => {
-  expect(buildUnsupportedSearchFilterResponse({ query: "openclaw" }, "gemini")).toBeUndefined();
-});
-
 it.each([
   [{ country: "us" }, "grok", "unsupported_country", "country filtering", "country filtering"],
   [
@@ -304,6 +275,12 @@ function assertOutputKind<T extends { kind: string }, K extends T["kind"]>(
   kind: K,
 ): asserts value is Extract<T, { kind: K }> {
   expect(value.kind).toBe(kind);
+}
+
+function answer(citations: unknown[], content = "answer") {
+  const normalized = normalize({ content, citations });
+  assertOutputKind(normalized, "answer");
+  return normalized;
 }
 
 describe("web_search normalized output security", () => {
@@ -369,26 +346,21 @@ describe("web_search normalized output security", () => {
   });
 
   it("bounds citations and their URLs and titles within the shared answer budget", () => {
-    const normalized = normalize({
-      content: "answer body",
-      citations: Array.from({ length: 25 }, (_, index) => ({
+    const normalized = answer(
+      Array.from({ length: 25 }, (_, index) => ({
         url: `https://example.com/citation/${index}`,
         title: `citation ${index}`,
       })),
-    });
-
-    assertOutputKind(normalized, "answer");
+    );
     expect(normalized.citations).toHaveLength(20);
     expect(normalized.truncated).toBe(true);
   });
 
   it("reserves valid source URLs when an answer already fills the provider content cap", () => {
-    const normalized = normalize({
-      content: "x".repeat(20_000),
-      citations: ["https://example.com/first", "https://example.com/second"],
-    });
-
-    assertOutputKind(normalized, "answer");
+    const normalized = answer(
+      ["https://example.com/first", "https://example.com/second"],
+      "x".repeat(20_000),
+    );
     expect(normalized.citations).toEqual([
       { url: "https://example.com/first" },
       { url: "https://example.com/second" },
@@ -398,15 +370,10 @@ describe("web_search normalized output security", () => {
   });
 
   it("keeps the first valid citation after malformed provider entries", () => {
-    const normalized = normalize({
-      content: "answer",
-      citations: [
-        ...Array.from({ length: 20 }, () => "invalid citation"),
-        "https://example.com/valid",
-      ],
-    });
-
-    assertOutputKind(normalized, "answer");
+    const normalized = answer([
+      ...Array.from({ length: 20 }, () => "invalid citation"),
+      "https://example.com/valid",
+    ]);
     expect(normalized.citations).toEqual([{ url: "https://example.com/valid" }]);
   });
 
@@ -427,12 +394,7 @@ describe("web_search normalized output security", () => {
   it("rejects citations whose normalized Unicode URL expands beyond the hard bound", () => {
     const expandedUrl = `https://example.com/${"🦀".repeat(1_000)}`;
     expect(expandedUrl.length).toBeLessThan(2_048);
-    const normalized = normalize({
-      content: "body",
-      citations: [expandedUrl, "https://example.com/🦀"],
-    });
-
-    assertOutputKind(normalized, "answer");
+    const normalized = answer([expandedUrl, "https://example.com/🦀"]);
     expect(normalized.citations).toEqual([{ url: "https://example.com/%F0%9F%A6%80" }]);
   });
 

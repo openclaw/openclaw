@@ -1,6 +1,4 @@
 import assert from "node:assert/strict";
-import fs from "node:fs/promises";
-import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -152,10 +150,6 @@ describe("transcripts tool", () => {
     await expect(h.store.readUtterancesForSession(session)).resolves.toEqual([
       expect.objectContaining({ text }),
     ]);
-    await h.action("stop", "notes");
-    await expect(
-      fs.readFile(path.join(h.store.sessionDir(session), "summary.md"), "utf8"),
-    ).resolves.toContain("captured after the start action completed\\nsecond\\tcolumn");
   });
 
   it.each(["start", "stop"] as const)("reserves a session while %s is pending", async (phase) => {

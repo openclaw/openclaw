@@ -88,7 +88,6 @@ it.for(["prepared", "failed", "stop", "undelivered", "reset"] as const)(
               default: "guest",
               definitions: {
                 guest: { scopes, agents: ["main"], sessions: { others: "none" } },
-                blocked: { scopes: [], agents: [], sessions: { others: "none" } },
               },
             },
           },
@@ -164,18 +163,13 @@ it.for(["prepared", "failed", "stop", "undelivered", "reset"] as const)(
             admitted.release();
           }
         });
-        const inspect = vi.fn<GatewayRequestHandler>(async ({ respond }) =>
-          respond(true, { admitted: true }),
-        );
-        const admin = vi.fn<GatewayRequestHandler>(async ({ respond }) =>
-          respond(true, { unexpectedAdminAccess: true }),
-        );
+        const forbidden = vi.fn<GatewayRequestHandler>(async ({ respond }) => respond(true, {}));
         const context = createContext(
           [
             ["sessions.github.action", "operator.sessions.write", "sessions", endpoint],
             ["sessions.github.publish", "operator.sessions.write", "sessions", publish],
-            ["tools.effective", "operator.read", "tools", inspect],
-            ["plugins.reload", "operator.admin", "plugins", admin],
+            ["tools.effective", "operator.read", "tools", forbidden],
+            ["plugins.reload", "operator.admin", "plugins", forbidden],
           ],
           () => config,
         );
@@ -352,9 +346,8 @@ it.for(["prepared", "failed", "stop", "undelivered", "reset"] as const)(
                 executionStarted: true,
               });
               expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
-              expect(inspect).not.toHaveBeenCalled();
+              expect(forbidden).not.toHaveBeenCalled();
               expect(publish).toHaveBeenCalledOnce();
-              expect(admin).not.toHaveBeenCalled();
             }
           }
           if (outcome === "undelivered" || outcome === "reset") {
