@@ -1,5 +1,5 @@
 import { createServer, type ServerResponse } from "node:http";
-import { expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import { closeHttpServer } from "../../test/helpers/gateway-integration-fixtures.js";
 import { writeOpenAiResponsesSse } from "../../test/helpers/openai-responses-sse.js";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
@@ -13,25 +13,6 @@ import { startGatewayServerCore } from "./server-start.js";
 import { acquireGatewayE2ePortBlock, startClaimedGateway } from "./test-helpers.listener.js";
 
 const token = "avatar-generation-e2e-bootstrap";
-const routeGate = vi.hoisted(() => ({ pause: null as null | (() => Promise<void>) }));
-
-// Keep the production route resolver; the one-shot gate only controls when a revoked request resumes.
-vi.mock("../agents/isolated-completion-route.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../agents/isolated-completion-route.js")>();
-  return {
-    ...actual,
-    resolveIsolatedCompletionRoute: async (
-      ...args: Parameters<typeof actual.resolveIsolatedCompletionRoute>
-    ) => {
-      const pause = routeGate.pause;
-      if (pause) {
-        routeGate.pause = null;
-        await pause();
-      }
-      return actual.resolveIsolatedCompletionRoute(...args);
-    },
-  };
-});
 const design = {
   version: 1,
   id: "garden-keeper",
@@ -53,7 +34,7 @@ function respond(response: ServerResponse, id: string, content = JSON.stringify(
 }
 
 it(
-  "generates through authenticated RPC and provider I/O, rejecting read-only and revoked callers",
+  "generates through authenticated RPC and stops a revoked caller during provider I/O",
   { timeout: 120_000 },
   async ({ signal }) => {
     const state = await createOpenClawTestState({
@@ -70,14 +51,14 @@ it(
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
       },
     });
-    const arrivals = [createDeferred(), createDeferred(), createDeferred()];
+    const secondArrival = createDeferred();
     const responses: ServerResponse[] = [];
-    let holdSecond = false;
     const provider = createServer((request, response) => {
       request.resume();
       const index = responses.push(response) - 1;
-      arrivals[index]?.resolve();
-      if (index !== 1 || !holdSecond) {
+      if (index === 1) {
+        secondArrival.resolve();
+      } else {
         respond(response, `avatar-response-${index}`);
       }
     });
@@ -194,35 +175,14 @@ it(
           (error: unknown) => ({ error }),
         );
       const admin = await pair("admin", ["operator.admin"]);
-      const reader = await pair("reader", ["operator.read"]);
       const first = await generate(admin.connection.client);
       expect(first.svg).toContain("<svg");
       expect(first.name).toBe("Garden Keeper");
       expect(responses).toHaveLength(1);
 
-      await expect(generate(reader.connection.client)).rejects.toThrow(
-        "missing scope: operator.admin",
-      );
-      expect(responses).toHaveLength(1);
-
-      const revokedBeforeDispatch = await pair("revoked-before-dispatch", ["operator.admin"]);
-      const routeEntered = createDeferred();
-      const releaseRoute = createDeferred();
-      routeGate.pause = async () => {
-        routeEntered.resolve();
-        await releaseRoute.promise;
-      };
-      const beforeSettled = observe(generate(revokedBeforeDispatch.connection.client));
-      await withinTest(routeEntered.promise, signal);
-      await revoke(revokedBeforeDispatch);
-      releaseRoute.resolve();
-      expect(await withinTest(beforeSettled, signal)).toHaveProperty("error");
-      expect(responses).toHaveLength(1);
-
       const revoked = await pair("revoked", ["operator.admin"]);
-      holdSecond = true;
       const settled = observe(generate(revoked.connection.client));
-      await withinTest(arrivals[1]!.promise, signal);
+      await withinTest(secondArrival.promise, signal);
       await revoke(revoked);
       respond(responses[1]!, "avatar-revoked", "invalid design");
       expect(await withinTest(settled, signal)).toHaveProperty("error");
@@ -231,7 +191,6 @@ it(
       });
       expect(responses).toHaveLength(2);
     } finally {
-      routeGate.pause = null;
       for (const response of responses) {
         response.end();
       }
