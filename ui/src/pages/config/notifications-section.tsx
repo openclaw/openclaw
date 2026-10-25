@@ -104,7 +104,7 @@ const NativeTestStatus = (props: { state: "pending" | "sent" | "error"; message?
   <SettingsRow
     title={t("configView.notifications.testOutcome")}
     description={props.message}
-    role={props.state === "error" ? "alert" : props.state === "sent" ? "status" : undefined}
+    role={props.state === "error" ? "alert" : undefined}
     control={
       <SettingsStatus
         kind={props.state === "pending" ? "accent" : props.state === "sent" ? "ok" : "danger"}
@@ -125,6 +125,10 @@ function NativeNotificationSection(props: {
   actions: NotificationsSectionProps;
 }) {
   const status = () => nativeNotificationsStatus(props.native.permission);
+  const testAnnouncement = () =>
+    props.native.test?.state === "sent"
+      ? (props.native.test.message ?? t("configView.notifications.testQueued"))
+      : "";
   const [sending, setSending] = createOptimistic(false);
   const testPending = () => sending() || props.native.test?.state === "pending";
   const presentTest = action(function* (pending: Promise<unknown> | void, retired: Promise<void>) {
@@ -145,6 +149,9 @@ function NativeNotificationSection(props: {
       title={t("configView.notifications.nativeTitle")}
       status={<SettingsStatus kind={status().kind} label={status().label} />}
     >
+      <span class="sr-only" role="status" aria-live="polite">
+        {testAnnouncement()}
+      </span>
       <SettingsRow
         title={t("configView.notifications.permission")}
         control={<SettingsValue value={status().label} />}

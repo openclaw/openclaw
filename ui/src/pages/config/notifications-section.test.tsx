@@ -125,6 +125,34 @@ describe("native notification test outcome", () => {
     }
   });
 
+  it("establishes the polite live region before announcing a successful test", async () => {
+    const [native, setNative] = createSignal<NonNullable<NotificationProps["nativeNotifications"]>>(
+      { permission: "granted", test: { state: "pending" } },
+    );
+    const { container } = renderSection({
+      get nativeNotifications() {
+        return native();
+      },
+    });
+    const live = expectDefined(
+      container.querySelector<HTMLElement>('.sr-only[role="status"][aria-live="polite"]'),
+      "live status",
+    );
+    expect(live.textContent).toBe("");
+
+    setNative({ permission: "granted", test: { state: "sent" } });
+    await waitForSolid(() => {
+      expect(live.textContent).toContain("Test notification queued");
+    });
+
+    expect(container.querySelector('.sr-only[role="status"]')).toBe(live);
+    expect(
+      Array.from(container.querySelectorAll<HTMLElement>(".settings-row[role]")).some((row) =>
+        ["status", "alert"].includes(row.getAttribute("role") ?? ""),
+      ),
+    ).toBe(false);
+  });
+
   it("retires a failed receipt during retry and preserves the send control", async () => {
     const message = "Open System Settings and try again.";
     const [native, setNative] = createSignal<NonNullable<NotificationProps["nativeNotifications"]>>(
