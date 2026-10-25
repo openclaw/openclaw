@@ -15,6 +15,10 @@ installation, but the executable and its sidecar must stay together.
 Use this path to prepare application or deployment artifacts from a source
 checkout. For a normal CLI installation, start with [Install](/install).
 
+For a manually enabled, unsigned macOS 27-only CI artifact, see
+[Experimental AOT Actions builds](/install/standalone-aot-actions). This experiment
+does not replace the Mac app release or qualify macOS 15 support.
+
 ## Build the default JIT executable
 
 Use the repository's pinned package manager and the production Bun pin in
