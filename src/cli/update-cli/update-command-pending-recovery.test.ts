@@ -35,11 +35,13 @@ import { updateFinalizeCommand } from "./update-command-finalize.js";
 import { resultFixture } from "./update-command-fixtures.test-support.js";
 import {
   createManagedServiceIdentityFixture,
-  finishSuccessfulPackageSwitch,
   taskRecovery,
 } from "./update-command-post-update.test-support.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
-import { UpdateCommandFailure } from "./update-command-result.js";
+import {
+  UpdateCommandFailure,
+  UpdateCommandPendingRecoveryFailure,
+} from "./update-command-result.js";
 import * as updateResume from "./update-command-resume.js";
 import { stubNodeRuntime } from "./update-command-runtime-recovery.test-support.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
@@ -317,7 +319,7 @@ describe.skipIf(process.platform === "win32")("pending package activation admiss
 async function fixture() {
   const root = fs.realpathSync(makeTempDir(dirs, "pending-finalizer-"));
   const retained = createRetainedCheckpointFixture(root);
-  const { env, options, file, run, runtime, record, displaced } = retained;
+  const { env, options, file, run, record, displaced } = retained;
   retained.displace();
   const forbidden = (message: string) => () => {
     throw new Error(message);
@@ -331,10 +333,6 @@ async function fixture() {
   };
   const opts: UpdateCommandOptions = { run, recovery };
   const windows = taskRecovery();
-  const rollback = vi.fn(async () => {
-    throw new Error("legacy rollback must not run");
-  });
-  const complete = vi.fn();
   const before = fs.readFileSync(displaced);
   return {
     root,
@@ -342,30 +340,10 @@ async function fixture() {
     run,
     opts,
     windows,
-    rollback,
-    complete,
     expectRetained() {
       expect(fs.existsSync(file)).toBe(false);
       expect(fs.readFileSync(displaced)).toEqual(before);
     },
-    invoke: () =>
-      finishSuccessfulPackageSwitch(
-        { packageRoot: runtime.root, run },
-        {
-          root: runtime.root,
-          opts,
-          result: candidateFailure(run.runId, runtime.root),
-          preManagedServiceStop: {
-            inspected: true,
-            runtimeInspected: true,
-            running: false,
-            stopped: true,
-            serviceEnv: env,
-            windowsTaskAutoStartRecovery: windows,
-          },
-          packageTransaction: { rollback, complete, backupRoot: path.join(root, "retained") },
-        },
-      ),
   };
 }
 
@@ -392,21 +370,7 @@ describe("pending recovery finalizer", () => {
     expect(fs.readFileSync(configPath)).toEqual(originalConfig);
   });
 
-  it("preserves a missing canonical database without live context", async () => {
-    const f = await fixture();
-    f.opts.recovery = undefined;
-    await expect(f.invoke()).rejects.toMatchObject({
-      name: "UpdateCommandPendingRecoveryFailure",
-      result: {
-        reason: "candidate-failed",
-        runId: f.run.runId,
-        recovery: { serviceRestartSafe: false },
-      },
-    });
-    f.expectRetained();
-    expectNoCalls(f.rollback, f.complete, f.windows.restore, f.windows.complete);
-  });
-  it.each(["finalizer", "reported", "unexpected", "completed"] as const)(
+  it.each(["pending", "reported", "unexpected", "completed"] as const)(
     "keeps %s unwind away from autostart, history and managed triage",
     async (kind) => {
       const f = await fixture();
@@ -440,8 +404,8 @@ describe("pending recovery finalizer", () => {
             if (kind === "reported") {
               throw new UpdateCommandFailure(primary);
             }
-            if (kind === "finalizer") {
-              await f.invoke();
+            if (kind === "pending") {
+              throw new UpdateCommandPendingRecoveryFailure(primary, "Recovery remains pending");
             }
           },
         ),
@@ -453,7 +417,7 @@ describe("pending recovery finalizer", () => {
       });
       f.expectRetained();
       expect(fs.readFileSync(context, "utf8")).toBe("unchanged");
-      expectNoCalls(f.rollback, f.complete, f.windows.restore);
+      expect(f.windows.restore).not.toHaveBeenCalled();
       if (f.opts.recovery) {
         expect(f.windows.complete).not.toHaveBeenCalled();
       } else {

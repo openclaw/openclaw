@@ -116,7 +116,6 @@ async function preparedOwnershipMismatch() {
     journal,
     helper,
     retained: `${f.anchor}.superseded-${f.operationId}`,
-    helperBytes: fs.readFileSync(helper),
     descriptor: record.descriptor,
   };
 }
@@ -254,8 +253,7 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
         );
         expect(() => assertNoPendingPackageActivation(f.packageRoot)).toThrow();
       }
-      const bytes = fs.readFileSync(f.journal);
-      const identity = packageActivationIdentity(f.journal, false);
+      const control = fixtures.snapshotControl(f.anchor);
       if (failure === "live executor") {
         await withUpdateCommandExecutor(randomUUID(), async (executor) => {
           await executor.enter(f.packageRoot);
@@ -264,9 +262,7 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
       } else {
         await expect(repair()).rejects.toThrow();
       }
-      expect(fs.readFileSync(f.journal)).toEqual(bytes);
-      expect(packageActivationIdentity(f.journal, false)).toBe(identity);
-      expect(fs.readFileSync(f.helper)).toEqual(f.helperBytes);
+      expect(fixtures.snapshotControl(f.anchor)).toEqual(control);
       expect(mocks.finalize).not.toHaveBeenCalled();
     },
   );
@@ -335,9 +331,9 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
         exports: { ".": { import: "./dist/index.js", default: "./missing.js" } },
       }),
     );
-    const journal = fs.readFileSync(resolvePackageActivationJournalPath(f.anchor));
+    const control = fixtures.snapshotControl(f.anchor);
     await expect(repair()).rejects.toThrow("package.json");
-    expect(fs.readFileSync(resolvePackageActivationJournalPath(f.anchor))).toEqual(journal);
+    expect(fixtures.snapshotControl(f.anchor)).toEqual(control);
     expect(f.journal.read().phase).toBe("publishing");
     expect(mocks.finalize).not.toHaveBeenCalled();
   });
@@ -403,10 +399,9 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
       );
       await writePackageDistInventory(f.packageRoot);
     }
-    const journal = fs.readFileSync(resolvePackageActivationJournalPath(f.anchor));
+    const control = fixtures.snapshotControl(f.anchor);
     await expect(repair()).rejects.toThrow(error);
-    expect(fs.readFileSync(resolvePackageActivationJournalPath(f.anchor))).toEqual(journal);
-    expect(fs.existsSync(f.anchor)).toBe(true);
+    expect(fixtures.snapshotControl(f.anchor)).toEqual(control);
     expect(mocks.finalize).not.toHaveBeenCalled();
   });
 
@@ -479,14 +474,13 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
     fs.unlinkSync(databasePath);
     const target = `${databasePath}.absent`;
     fs.symlinkSync(target, databasePath);
-    const journal = fs.readFileSync(f.journal);
+    const control = fixtures.snapshotControl(f.anchor);
 
     await expect(repair()).rejects.toThrow(/ENOENT/);
 
     expect(fs.readlinkSync(databasePath)).toBe(target);
     expect(fs.existsSync(target)).toBe(false);
-    expect(fs.readFileSync(f.journal)).toEqual(journal);
-    expect(fs.readFileSync(f.helper)).toEqual(f.helperBytes);
+    expect(fixtures.snapshotControl(f.anchor)).toEqual(control);
     expect(fs.existsSync(f.retained)).toBe(false);
     expect(mocks.finalize).not.toHaveBeenCalled();
   });

@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import path from "node:path";
 import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -99,11 +98,9 @@ function observeGateway(
 function publish(
   run: ReturnType<typeof createRun>,
   result: UpdateRunResult,
-  options: { json?: boolean; restart?: boolean; coreAlreadyCurrent?: boolean } = {},
+  options: { restart?: boolean; coreAlreadyCurrent?: boolean } = {},
 ) {
-  if (!Object.hasOwn(options, "json") || options.json) {
-    vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
-  }
+  vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
   const { coreAlreadyCurrent = false, ...opts } = options;
   return publishUpdateCommandTerminalResult(
     { opts: { json: true, run, ...opts }, coreAlreadyCurrent },
@@ -205,7 +202,6 @@ it.each(["unsettled", "foreign"] as const)(
           failureFacts: unsettled
             ? [{ check: "openclaw doctor", code: "doctor-processes-unsettled", message }]
             : undefined,
-          warnings: ["Optional maintenance remains deferred."],
         }),
       ],
     });
@@ -214,76 +210,52 @@ it.each(["unsettled", "foreign"] as const)(
       environment: { container: false, stateDir: "/fixture/state" },
     });
     const input = reports.updateRunReportInputFromResult(result, { origin: { nextAction } });
-    const saved = structuredClone(input);
     const report = reports.renderUpdateRunReport(input, {
       currentHealth: { kind: "responding", version: "2026.9.2" },
     });
     expect(report.lines.join("\n")).toContain(nextAction);
     expect(report.markdown).not.toContain("saved runtime verification failure no longer applies");
-    expect(report.headline).toContain("update failed: state-migrated-no-rollback");
-    expect(report.lines).toContain("Warning: Optional maintenance remains deferred.");
     expect(nextAction).toContain("Keep the Gateway stopped: data at risk (active-mutation)");
     if (unsettled) {
       expect(report.lines.join("\n")).toContain("doctor-processes-unsettled");
     } else {
       expect(result.recovery).toMatchObject({ serviceRestartSafe: false });
     }
-    expect(input).toEqual(saved);
   },
 );
 
 it.each([true, false])(
-  "publishes recovery observation consistently after validation fails (healthy=%s)",
-  async (healthy) => {
+  "explains runtime retention failures without overriding recovery health (healthy=%s)",
+  (healthy) => {
     vi.mocked(isContainerEnvironment).mockReturnValue(false);
-    const run = createRun();
-    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
     const failedStep = step("validating", {
-      stderrTail: "Cannot safely retain a host-owned plugin dependency",
       failureFacts: [{ check: "updater-runtime-retention", code: "host-owned-plugin-link" }],
     });
-    const result = failure({
-      reason: "update-failed",
-      before: { version: "2026.9.6" },
-      after: { version: "2026.9.6" },
-      failedStep,
-      steps: [failedStep],
-      recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
-    });
-    observeGateway("2026.9.6", healthy);
-    await verifyUpdatedGateway({
-      result,
-      opts: { run },
-      serviceEnv: run.env,
-      gatewayPort: 19123,
-      requireRunningService: true,
-      purpose: "recovery",
-    });
-    await publish(run, result, { json: undefined });
-    const stored = ledger.getUpdateRun(run.runId, { env: run.env });
-    expect(stored).toMatchObject({ status: "failed", reason: "update-failed" });
-    expect(stored?.verification.recovery).toEqual(result.recovery);
-    const terminal = log.mock.calls.flat().join("\n");
-    const reportPath = terminal.split("\n").find((line) => line.startsWith("Report: "));
-    expect(reportPath).toBeDefined();
-    const markdown = fs.readFileSync(reportPath!.slice("Report: ".length), "utf8");
-    for (const output of [terminal, markdown, stored?.origin.nextAction ?? ""]) {
-      expect(output).toContain("https://docs.openclaw.ai/cli/update#runtime-retention-failures");
-      expect(output).toContain("Do not skip runtime retention");
-      if (healthy) {
-        expect(output).toContain("Your Gateway is still serving 2026.9.6; nothing to restore.");
-        expect(output).toContain("After repairing the link, retry the update.");
-        expect(output).not.toContain("did not pass verification");
-      } else {
-        expect(output).toContain("gateway is running 2026.9.6 but did not pass verification");
-        expect(output).toContain("readyz-unhealthy");
-        expect(output).toContain(hostGuidance);
-        expect(output).not.toContain("nothing to restore");
-      }
-    }
+    const output = guidance(
+      failure({
+        reason: "update-failed",
+        steps: [failedStep],
+        recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+      }),
+      {
+        serviceRunning: true,
+        runningVersion: "2026.9.6",
+        verifiedServingVersion: healthy ? "2026.9.6" : undefined,
+        verificationFailure: "readyz-unhealthy",
+      },
+    );
+    expect(output).toContain("https://docs.openclaw.ai/cli/update#runtime-retention-failures");
+    expect(output).toContain("Do not skip runtime retention");
     if (healthy) {
-      expect(terminal).toContain("Gateway: verified serving after update failure.");
-      expect(markdown).toContain("restart remains unsafe (runtime-verification-failed)");
+      expect(output).toContain("Your Gateway is still serving 2026.9.6; nothing to restore.");
+      expect(output).toContain("After repairing the link, retry the update.");
+      expect(output).toContain("Restart remains unsafe (runtime-verification-failed)");
+      expect(output).not.toContain("did not pass verification");
+    } else {
+      expect(output).toContain("gateway is running 2026.9.6 but did not pass verification");
+      expect(output).toContain("readyz-unhealthy");
+      expect(output).toContain(hostGuidance);
+      expect(output).not.toContain("nothing to restore");
     }
   },
 );

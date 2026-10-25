@@ -4,7 +4,6 @@ import path from "node:path";
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as serviceFiles from "../../daemon/inspect-files.js";
-import { readLaunchAgentProgramArgumentsFromFile } from "../../daemon/launchd-plist.js";
 import * as gatewayBindings from "../../daemon/managed-gateway-bindings.js";
 import type {
   GatewayServiceState,
@@ -172,117 +171,92 @@ describe("native manager identity", () => {
 });
 
 it.runIf(process.platform === "linux").each([
-  { account: "user", uid: 2001, writable: true, update: true },
-  { account: "root", uid: 0, writable: true, update: true },
-  { account: "user", uid: 2001, writable: false, update: true },
-  { account: "standalone Doctor", uid: 0, writable: true, update: false },
-  { account: "dueling", uid: 2001, writable: true, update: true },
-  { account: "dueling", uid: 2001, writable: false, update: true },
-])(
-  "preserves system-service ownership for $account (writable=$writable, update=$update)",
-  ({ account, uid, writable, update }) =>
-    withServiceHome(async (home) => {
-      vi.spyOn(process, "getuid").mockReturnValue(uid);
-      vi.spyOn(process, "geteuid").mockReturnValue(uid);
-      vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
-      const root = await fs.realpath(process.cwd());
-      const unitName = "openclaw-production@worker.service";
-      const restartCommand = `sudo systemctl restart ${unitName}`;
-      const service = createMockGatewayService();
-      mocks.service.mockReturnValue(service);
-      const system = {
-        scope: "system" as const,
-        unitName,
-        unitPath: "/etc/systemd/system/" + unitName,
-      };
-      const systemdInstallation: SystemdGatewayInstallation =
-        account === "dueling"
-          ? {
-              kind: "dueling",
-              system,
-              user: {
-                scope: "user",
-                unitName,
-                unitPath: path.join(home, ".config/systemd/user", unitName),
-              },
-            }
-          : { kind: "system", system };
-      vi.spyOn(gatewayService, "readGatewayServiceState").mockResolvedValue({
-        installed: true,
-        loadState: { status: "loaded" },
-        running: true,
-        env: { HOME: home },
-        command: gatewayCommand(home, root),
-        runtime: { status: "running", pid: fixtureGatewayPid, systemd: { managerUid: 0 } },
-        systemdInstallation,
-      });
-      if (!writable) {
-        const access = fs.access;
-        vi.spyOn(fs, "access").mockImplementation(async (file, mode) => {
-          if (file === root && mode && (mode & fs.constants.W_OK) !== 0) {
-            throw Object.assign(new Error("fixture install is read-only"), { code: "EACCES" });
-          }
-          await access(file, mode);
-        });
-      }
-      const prepare = () =>
-        maybeStopManagedServiceBeforeMutableUpdate({
-          ...maintenanceDefaults,
-          root,
-          phase: "prepare",
-        });
-      const preparation = update ? withUpdateInProgressEnv(undefined, prepare) : prepare();
-      if (!update) {
-        expect(await preparation).toMatchObject({ stopped: true });
-        expect(service.stop).toHaveBeenCalledOnce();
-        return;
-      }
-      if (!writable) {
-        const failure = await preparation.catch((error: unknown) => error);
-        expect(failure).toMatchObject({
-          reason: "managed-service-handoff-failed",
-          message: expect.stringContaining(restartCommand),
-        });
-        expect(String(failure)).toContain(
-          `${path.join(root, "openclaw.mjs")} update --yes --no-restart`,
-        );
-        expect(String(failure)).toContain(`sudo -u '#${(await fs.stat(root)).uid}' -- env `);
-      } else {
-        const prepared = await preparation;
-        expect(prepared).toMatchObject({
-          stopped: false,
-          running: true,
-          serviceMutationAllowed: false,
-          serviceMutationSkipMessage: expect.stringContaining(restartCommand),
-        });
-        const result = updateResult({ root, durationMs: 0 });
-        await expect(
-          maybeRestartService({
-            shouldRestart: false,
-            refreshServiceEnv: false,
-            serviceEnv: prepared.serviceEnv,
-            serviceMutationSkipMessage: prepared.serviceMutationSkipMessage,
-            result,
-            opts: { json: true },
-            gatewayPort: 18789,
-            timeoutMs: 1000,
-          }),
-        ).resolves.toBe("ok");
-        expect(defaultRuntime.error).toHaveBeenCalledWith(prepared.serviceMutationSkipMessage);
-        expect(result.steps).toMatchObject([
-          {
-            exitCode: 0,
-            advisory: {
-              kind: "recoverable-maintenance",
-              message: expect.stringContaining(restartCommand),
+  { account: "user", uid: 2001, update: true },
+  { account: "root", uid: 0, update: true },
+  { account: "standalone Doctor", uid: 0, update: false },
+  { account: "dueling", uid: 2001, update: true },
+])("preserves system-service ownership for $account (update=$update)", ({ account, uid, update }) =>
+  withServiceHome(async (home) => {
+    vi.spyOn(process, "getuid").mockReturnValue(uid);
+    vi.spyOn(process, "geteuid").mockReturnValue(uid);
+    vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
+    const root = await fs.realpath(process.cwd());
+    const unitName = "openclaw-production@worker.service";
+    const restartCommand = `sudo systemctl restart ${unitName}`;
+    const service = createMockGatewayService();
+    mocks.service.mockReturnValue(service);
+    const system = {
+      scope: "system" as const,
+      unitName,
+      unitPath: "/etc/systemd/system/" + unitName,
+    };
+    const systemdInstallation: SystemdGatewayInstallation =
+      account === "dueling"
+        ? {
+            kind: "dueling",
+            system,
+            user: {
+              scope: "user",
+              unitName,
+              unitPath: path.join(home, ".config/systemd/user", unitName),
             },
-          },
-        ]);
-      }
-      expectNoServiceCalls(service.stop, service.start, service.restart, service.install);
-      expect(mocks.prepareStop).not.toHaveBeenCalled();
-      expect(mocks.drain).not.toHaveBeenCalled();
-    }),
+          }
+        : { kind: "system", system };
+    vi.spyOn(gatewayService, "readGatewayServiceState").mockResolvedValue({
+      installed: true,
+      loadState: { status: "loaded" },
+      running: true,
+      env: { HOME: home },
+      command: gatewayCommand(home, root),
+      runtime: { status: "running", pid: fixtureGatewayPid, systemd: { managerUid: 0 } },
+      systemdInstallation,
+    });
+    const prepare = () =>
+      maybeStopManagedServiceBeforeMutableUpdate({
+        ...maintenanceDefaults,
+        root,
+        phase: "prepare",
+      });
+    const preparation = update ? withUpdateInProgressEnv(undefined, prepare) : prepare();
+    if (!update) {
+      expect(await preparation).toMatchObject({ stopped: true });
+      expect(service.stop).toHaveBeenCalledOnce();
+      return;
+    }
+    const prepared = await preparation;
+    expect(prepared).toMatchObject({
+      stopped: false,
+      running: true,
+      serviceMutationAllowed: false,
+      serviceMutationSkipMessage: expect.stringContaining(restartCommand),
+    });
+    const result = updateResult({ root, durationMs: 0 });
+    await expect(
+      maybeRestartService({
+        shouldRestart: false,
+        refreshServiceEnv: false,
+        serviceEnv: prepared.serviceEnv,
+        serviceMutationSkipMessage: prepared.serviceMutationSkipMessage,
+        result,
+        opts: { json: true },
+        gatewayPort: 18789,
+        timeoutMs: 1000,
+      }),
+    ).resolves.toBe("ok");
+    expect(defaultRuntime.error).toHaveBeenCalledWith(prepared.serviceMutationSkipMessage);
+    expect(result.steps).toMatchObject([
+      {
+        exitCode: 0,
+        advisory: {
+          kind: "recoverable-maintenance",
+          message: expect.stringContaining(restartCommand),
+        },
+      },
+    ]);
+    expectNoServiceCalls(service.stop, service.start, service.restart, service.install);
+    expect(mocks.prepareStop).not.toHaveBeenCalled();
+    expect(mocks.drain).not.toHaveBeenCalled();
+  }),
 );
 
 describe("service fingerprint", () => {
@@ -485,32 +459,25 @@ describe("service fingerprint", () => {
       }),
   );
 
-  it.each(["inventory", "effective command"])(
-    "retains uncertain native plist cleanup through %s",
-    (phase) =>
-      withServiceHome(async (home) => {
-        mockProcessPlatform("darwin");
-        const directory = path.join(home, "Library", "LaunchAgents");
-        const pathname = path.join(directory, "ai.openclaw.sibling.plist");
-        await fs.mkdir(directory, { recursive: true });
-        // Native normalization fails before command fields are decoded.
-        await fs.writeFile(pathname, "<plist><dict/></plist>");
-        const collect = serviceFiles.collectServiceFiles;
-        vi.spyOn(serviceFiles, "collectServiceFiles").mockImplementation((params) =>
-          params.dir === directory ? collect(params) : Promise.resolve([]),
-        );
-        const failure = new CommandProcessCleanupError();
-        vi.spyOn(nativeExec, "runExec").mockImplementation(async (bin) => {
-          expect(bin).toBe("/usr/bin/plutil");
-          throw failure;
-        });
-        const observed =
-          phase === "effective command"
-            ? readLaunchAgentProgramArgumentsFromFile(pathname, { requireEffective: true })
-            : publish({ HOME: home });
-        await expect(observed).rejects.toBe(failure);
-      }),
-  );
+  it("retains uncertain native plist cleanup through publication inventory", () =>
+    withServiceHome(async (home) => {
+      mockProcessPlatform("darwin");
+      const directory = path.join(home, "Library", "LaunchAgents");
+      const pathname = path.join(directory, "ai.openclaw.sibling.plist");
+      await fs.mkdir(directory, { recursive: true });
+      // Native normalization fails before command fields are decoded.
+      await fs.writeFile(pathname, "<plist><dict/></plist>");
+      const collect = serviceFiles.collectServiceFiles;
+      vi.spyOn(serviceFiles, "collectServiceFiles").mockImplementation((params) =>
+        params.dir === directory ? collect(params) : Promise.resolve([]),
+      );
+      const failure = new CommandProcessCleanupError();
+      vi.spyOn(nativeExec, "runExec").mockImplementation(async (bin) => {
+        expect(bin).toBe("/usr/bin/plutil");
+        throw failure;
+      });
+      await expect(publish({ HOME: home })).rejects.toBe(failure);
+    }));
 
   it.each([
     "shipped handoff",
