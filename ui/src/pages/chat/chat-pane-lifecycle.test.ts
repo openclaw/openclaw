@@ -161,6 +161,13 @@ const SKIP_REWIND_CONFIRM_PREFERENCE = "openclaw:skip-rewind-confirm";
 const confirmationOwners = new Set<HTMLElement>();
 const runtimePanes = new Set<TestChatPane>();
 
+async function settleStartupFrames() {
+  for (let pass = 0; pass < 2; pass++) {
+    await vi.dynamicImportSettled();
+    await vi.advanceTimersByTimeAsync(160);
+  }
+}
+
 it("discovers an assigned desktop when only runner inventory becomes available", async () => {
   vi.useFakeTimers();
   const key = "agent:main:inventory-desktop";
@@ -194,11 +201,7 @@ it("discovers an assigned desktop when only runner inventory becomes available",
   await vi.waitFor(() => expect(pane.state.chatLoading).toBe(false));
   await vi.dynamicImportSettled();
   await pane.updateComplete;
-  // Isolate inventory publication from deferred startup frames.
-  for (let pass = 0; pass < 2; pass++) {
-    await vi.dynamicImportSettled();
-    await vi.advanceTimersByTimeAsync(160);
-  }
+  await settleStartupFrames();
   expect(isSidebarSlotVisible(pane.state.sidebarLayout, "desktop")).toBe(false);
 
   available = true;
@@ -216,10 +219,7 @@ it("publishes queued-edit retention changes while its pane is parked", async () 
   const pane = fixture.mount(key);
   const updates = vi.spyOn(pane, "render");
   await pane.updateComplete;
-  for (let pass = 0; pass < 2; pass++) {
-    await vi.dynamicImportSettled();
-    await vi.advanceTimersByTimeAsync(160);
-  }
+  await settleStartupFrames();
   expect(pane.querySelector(".agent-chat__composer-combobox textarea")).not.toBeNull();
   expect(pane.state.chatLoading).toBe(false);
 
@@ -470,7 +470,7 @@ it("coalesces overlapping refreshes and applies the event-invalidated follow-up"
   expect(request).toHaveBeenCalledTimes(2);
 });
 
-it("clears cached suggestions until a rotated session instance list resolves", async () => {
+it("clears suggestions and typing on session rotation until the fresh list resolves", async () => {
   const listed = createDeferred<SessionSuggestionsListResult>();
   const request = vi.fn(() => listed.promise);
   const { pane, state } = createSuggestionPane(request);
@@ -481,23 +481,7 @@ it("clears cached suggestions until a rotated session instance list resolves", a
   pane.syncSessionSuggestionTarget("main", row("session-a"));
   await pane.refreshSessionSuggestions();
   pane.collaboration.suggestions = [stale];
-  state.sessionsResultAgentId = "main";
-  selectSuggestionRows(state, row("session-b"));
-
-  pane.syncSessionSuggestionTarget("main", row("session-b"));
-
-  expect(pane.collaboration.suggestions).toEqual([]);
-  expect(request).toHaveBeenCalledTimes(1);
-  listed.resolve({ suggestions: [fresh], role: "owner" });
-  await vi.waitFor(() => expect(pane.collaboration.suggestions).toEqual([fresh]));
-});
-
-it("clears displayed typing actors when the session instance rotates", () => {
-  const { pane, state } = createSuggestionPane();
-  const row = (sessionId: string) => suggestionRow(state, sessionId);
-  const sessionA = row("session-a");
-  selectSuggestionRows(state, sessionA);
-  pane.syncSessionSuggestionTarget("main", sessionA);
+  selectSuggestionRows(state, row("session-a"));
   pane.handleSessionTypingEvent({
     sessionKey: state.sessionKey,
     sessionId: "session-a",
@@ -508,11 +492,15 @@ it("clears displayed typing actors when the session instance rotates", () => {
   });
   expect(pane.typingActors.size).toBe(1);
 
-  const sessionB = row("session-b");
-  selectSuggestionRows(state, sessionB);
-  pane.syncSessionSuggestionTarget("main", sessionB);
+  state.sessionsResultAgentId = "main";
+  selectSuggestionRows(state, row("session-b"));
+  pane.syncSessionSuggestionTarget("main", row("session-b"));
 
+  expect(pane.collaboration.suggestions).toEqual([]);
   expect(pane.typingActors.size).toBe(0);
+  expect(request).toHaveBeenCalledTimes(1);
+  listed.resolve({ suggestions: [fresh], role: "owner" });
+  await vi.waitFor(() => expect(pane.collaboration.suggestions).toEqual([fresh]));
 });
 
 it("keeps an owner's self-authored resolved suggestion through the following list", async () => {

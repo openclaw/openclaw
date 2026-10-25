@@ -58,6 +58,12 @@ function transcript(callbacks: RealtimeTalkCallbacks, text: string) {
   callbacks.onTranscript?.({ role: "user", text, final: true, itemId: "same", order: 0 });
 }
 
+async function microphoneRecovery() {
+  startSpy.mockRejectedValueOnce(new RealtimeTalkSelectedMicrophoneError());
+  await state.toggleRealtimeTalk();
+  return read().realtimeTalkUseSystemDefault!;
+}
+
 function read() {
   return state.realtimeTalk.snapshot;
 }
@@ -147,8 +153,8 @@ it.each([false, true])(
     const old = inspectSession();
     transcript(old.callbacks, "Old speech");
     old.callbacks.onTranscript?.({ role: "assistant", text: "Still speaking", final: false });
-    state.realtimeTalk.update({ realtimeTalkVideoStream: {} as MediaStream });
     state.realtimeTalk.update({
+      realtimeTalkVideoStream: {} as MediaStream,
       realtimeTalkCameraDevices: [{ deviceId: "old-camera", label: "Old camera" }],
     });
     for (const listener of listeners) {
@@ -191,9 +197,7 @@ it.each([false, true])(
     expect(request.mock.calls).toEqual(
       Array.from({ length: useSystemDefault ? 2 : 1 }, () => ["talk.config", {}]),
     );
-    replacement.callbacks.onTalkEvent?.({
-      type: "session.ready",
-    });
+    replacement.callbacks.onTalkEvent?.({ type: "session.ready" });
     await vi.waitFor(() =>
       expect(request).toHaveBeenCalledWith(
         "talk.voice.complete",
@@ -220,17 +224,19 @@ it.each([false, true])("launches with persisted devices (blocked storage: %s)", 
     videoDeviceId: "desk-camera",
   });
   expect(startSpy).toHaveBeenCalledOnce();
+  await state.toggleRealtimeTalk();
+  configure({ realtimeTalkInputDeviceId: "newer-mic" });
+  await state.toggleRealtimeTalk();
+  expect(inspectSession().localOptions.inputDeviceId).toBe("newer-mic");
 });
 
 it("requires explicit one-shot consent and preserves the saved microphone for later calls", async () => {
   configure({ realtimeTalkInputDeviceId: "usb-mic" });
-  startSpy.mockRejectedValueOnce(new RealtimeTalkSelectedMicrophoneError());
-  await state.toggleRealtimeTalk();
-  const retry = read().realtimeTalkUseSystemDefault;
+  const retry = await microphoneRecovery();
   expect(retry).toBeTypeOf("function");
   expect(startSpy).toHaveBeenCalledOnce();
   expect(read().realtimeTalkActive).toBe(false);
-  await Promise.all([retry!(), retry!()]);
+  await Promise.all([retry(), retry()]);
   expect(startSpy).toHaveBeenCalledTimes(2);
   expect(inspectSession().localOptions.inputDeviceId).toBeUndefined();
   expect(read().realtimeTalkUseSystemDefault).toBeNull();
@@ -243,9 +249,7 @@ it("requires explicit one-shot consent and preserves the saved microphone for la
 it.each(["dismiss", "route", "disconnect", "reconnect", "replacement"] as const)(
   "revokes retained microphone recovery after %s",
   async (event) => {
-    startSpy.mockRejectedValueOnce(new RealtimeTalkSelectedMicrophoneError());
-    await state.toggleRealtimeTalk();
-    const retry = read().realtimeTalkUseSystemDefault!;
+    const retry = await microphoneRecovery();
     if (event === "dismiss") {
       dismissRealtimeTalkError(state);
     } else if (event === "route") {
@@ -272,8 +276,7 @@ it.each(["failed", "cancelled", "succeeded"] as const)(
   "does not overwrite a newer preference when explicit recovery %s",
   async (outcome) => {
     configure({ realtimeTalkInputDeviceId: "usb-mic" });
-    startSpy.mockRejectedValueOnce(new RealtimeTalkSelectedMicrophoneError());
-    await state.toggleRealtimeTalk();
+    const recover = await microphoneRecovery();
     let finish!: () => void;
     startSpy.mockImplementationOnce(
       () =>
@@ -282,7 +285,7 @@ it.each(["failed", "cancelled", "succeeded"] as const)(
             outcome === "failed" ? reject(new Error("Microphone access is blocked")) : resolve();
         }),
     );
-    const retry = read().realtimeTalkUseSystemDefault!();
+    const retry = recover();
     await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
     expect(inspectSession().localOptions.inputDeviceId).toBeUndefined();
     configure({ realtimeTalkInputDeviceId: "newer-mic" });
@@ -309,10 +312,13 @@ it("does not infer microphone recovery from error text", async () => {
 });
 
 it("enables camera only after a video-capable voice session starts", async () => {
+  const switchCamera = vi.spyOn(RealtimeTalkSession.prototype, "switchCamera");
   const setVideoEnabled = mockVideo();
   const session = await startVideo();
   const stream = {} as MediaStream;
+  configure({ realtimeTalkVideoDeviceId: "back-camera" });
   await state.toggleRealtimeTalkCamera();
+  expect(switchCamera).toHaveBeenCalledWith("back-camera");
   session.callbacks.onVideoStream?.(stream);
 
   expect(session.options.provider).toBeUndefined();
@@ -320,7 +326,10 @@ it("enables camera only after a video-capable voice session starts", async () =>
   expect(setVideoEnabled).toHaveBeenCalledWith(true);
   expect(read().realtimeTalkVideoStream).toBe(stream);
   expect(loadSettings().talkCameraAutoEnable).toBe(true);
-
+  session.callbacks.onVideoStream?.(null);
+  expect(read().realtimeTalkVideoStream).toBeNull();
+  expect(loadSettings().talkCameraAutoEnable).toBe(true);
+  session.callbacks.onVideoStream?.(stream);
   await state.toggleRealtimeTalkCamera();
   expect(setVideoEnabled).toHaveBeenLastCalledWith(false);
   session.callbacks.onVideoStream?.(null);
@@ -360,17 +369,6 @@ it.each([
   },
 );
 
-it("uses the latest Settings camera choice on the next enable", async () => {
-  const switchCamera = vi.spyOn(RealtimeTalkSession.prototype, "switchCamera");
-  mockVideo();
-
-  await startVideo();
-  configure({ realtimeTalkVideoDeviceId: "back-camera" });
-  await state.toggleRealtimeTalkCamera();
-
-  expect(switchCamera).toHaveBeenCalledWith("back-camera");
-});
-
 it.each([false, true])(
   "surfaces camera failure without ending voice (automatic: %s)",
   async (automatic) => {
@@ -398,20 +396,6 @@ it.each([false, true])(
     expect(read().realtimeTalkDetail).toBe("Camera access is blocked");
   },
 );
-
-it("does not change the remembered preference when the camera track ends", async () => {
-  mockVideo();
-
-  const session = await startVideo();
-  await state.toggleRealtimeTalkCamera();
-  session.callbacks.onVideoStream?.({} as MediaStream);
-  expect(loadSettings().talkCameraAutoEnable).toBe(true);
-
-  session.callbacks.onVideoStream?.(null);
-
-  expect(read().realtimeTalkVideoStream).toBeNull();
-  expect(loadSettings().talkCameraAutoEnable).toBe(true);
-});
 
 it("does not let a stale camera-off completion overwrite a newer camera stream", async () => {
   const cameraOff = createDeferred();
@@ -513,17 +497,6 @@ it.each(["before toggle", "during rejection", "during stream"] as const)(
   },
 );
 
-it("re-reads the persisted microphone on every launch instead of caching it", async () => {
-  await start();
-  expect(inspectSession().localOptions.inputDeviceId).toBeUndefined();
-  await state.toggleRealtimeTalk();
-
-  configure({ realtimeTalkInputDeviceId: "usb-mic" });
-  await state.toggleRealtimeTalk();
-
-  expect(inspectSession().localOptions.inputDeviceId).toBe("usb-mic");
-});
-
 it("publishes call transitions and transcript changes through the owner projection", async () => {
   const observed: Array<{ status: string; text: string; notice: string | null }> = [];
   const dispose = createRoot((stop) => {
@@ -546,6 +519,7 @@ it("publishes call transitions and transcript changes through the owner projecti
   try {
     flush();
     await state.toggleRealtimeTalk();
+    expect(inspectSession().localOptions.inputDeviceId).toBeUndefined();
     const { callbacks } = inspectSession();
     callbacks.onStatus?.("listening");
     callbacks.onTranscript?.({ role: "user", text: "Hello", final: true });

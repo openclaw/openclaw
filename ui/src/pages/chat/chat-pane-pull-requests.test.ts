@@ -194,9 +194,6 @@ function createPublicationPane(
     });
     return pane.chatProps!.githubPublication!;
   };
-  const emitGatewayEvent = (event: string, payload: unknown) => {
-    events.publishEvent({ type: "event", event, payload });
-  };
   const publications = () =>
     request.mock.calls.filter(([method]) => method === "sessions.github.publish");
   return {
@@ -208,7 +205,6 @@ function createPublicationPane(
     responses,
     publications,
     settled,
-    emitGatewayEvent,
   };
 }
 
