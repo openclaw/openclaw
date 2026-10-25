@@ -1,7 +1,7 @@
 import fs from "node:fs";
-import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
@@ -31,11 +31,10 @@ import type {
   DeliveryQueueEntryState,
 } from "./delivery-queue-sqlite.types.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
-import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 
 describe("delivery queue pending terminal transition", () => {
-  let rootDir: string;
   let stateDir: string;
+  const tempDirs = createTempDirTracker();
   const queueName = "terminal-test";
   const openTestDatabase = () =>
     openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } });
@@ -114,14 +113,12 @@ describe("delivery queue pending terminal transition", () => {
   }
 
   beforeEach(() => {
-    rootDir = fs.mkdtempSync(path.join(resolvePreferredOpenClawTmpDir(), "openclaw-dq-terminal-"));
-    stateDir = path.join(rootDir, "state");
-    fs.mkdirSync(stateDir, { recursive: true });
+    stateDir = tempDirs.make("openclaw-dq-terminal-");
   });
 
   afterEach(async () => {
     await closeOpenClawStateDatabaseAsync();
-    fs.rmSync(rootDir, { recursive: true, force: true });
+    tempDirs.cleanup();
   });
 
   it("rejects mismatched terminal custody before creating state", () => {

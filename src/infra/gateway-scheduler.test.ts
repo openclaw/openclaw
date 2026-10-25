@@ -78,8 +78,7 @@ describe("Gateway timed work", () => {
     job("second", { delayMs: 30_000, everyMs: 30_000, phase: "maintenance" }, second, scope);
     expect(scheduler.nextWakeAtMs).toBe(30_000);
     const wake = time.advanceTo(30_000);
-    expect(first).toHaveBeenCalledOnce();
-    expect(second).toHaveBeenCalledOnce();
+    expectCalls([first, 1], [second, 1]);
     await at(95_000, [first, 1], [second, 2]);
     gate.resolve();
     await wake;
@@ -91,11 +90,9 @@ describe("Gateway timed work", () => {
 
   it("leaves exact expiry and liveness cadences outside the maintenance phase", async () => {
     const { scheduler, job, at } = fixture();
-    const expiry = vi.fn();
-    const keepalive = vi.fn();
     job("maintenance", { delayMs: 30_000, everyMs: 30_000, phase: "maintenance" });
-    job("expiry", { atMs: 31_001 }, expiry);
-    job("keepalive", { delayMs: 25_000, everyMs: 25_000 }, keepalive);
+    const expiry = job("expiry", { atMs: 31_001 });
+    const keepalive = job("keepalive", { delayMs: 25_000, everyMs: 25_000 });
     await at(26_000, [keepalive, 1]);
     await at(30_000, [expiry, 0]);
     await at(31_001, [expiry, 1]);
@@ -208,14 +205,14 @@ describe("Gateway timed work", () => {
   });
 
   it("preserves equal-deadline dispatch order when replacing a waiting registration", async () => {
-    const { time, scheduler } = fixture();
+    const { time, scheduler, job } = fixture();
     const seen: string[] = [];
     const record = (value: string) => () => {
       seen.push(value);
     };
-    scheduler.schedule({ id: "first", delayMs: 100, run: record("retired") });
-    scheduler.schedule({ id: "second", delayMs: 100, run: record("second") });
-    scheduler.schedule({ id: "first", delayMs: 100, run: record("replacement") });
+    job("first", { delayMs: 100 }, record("retired"));
+    job("second", { delayMs: 100 }, record("second"));
+    job("first", { delayMs: 100 }, record("replacement"));
     await time.advanceBy(100);
     expect(seen).toEqual(["replacement", "second"]);
     await scheduler.stop();
@@ -263,7 +260,7 @@ describe("Gateway timed work", () => {
       scope,
     );
     const secondWake = time.wake();
-    scope.schedule({ id: "waiting", delayMs: 100, run });
+    job("waiting", { delayMs: 100 }, run, scope);
     const stopped = vi.fn();
     const stop = scope.stop().then(stopped);
     expect(scope.signal.aborted).toBe(true);
@@ -293,10 +290,8 @@ describe("Gateway timed work", () => {
 
   it("coalesces sleep and forward jumps into one pass while retaining absolute deadlines", async () => {
     const { scheduler, job, at } = fixture();
-    const periodic = vi.fn();
-    const deadline = vi.fn();
-    job("approval", { atMs: 5_000 }, deadline);
-    job("health", { atMs: 2_000, everyMs: 1_000 }, periodic);
+    const deadline = job("approval", { atMs: 5_000 });
+    const periodic = job("health", { atMs: 2_000, everyMs: 1_000 });
     await at(301_000, [periodic, 1], [deadline, 1]);
     expect(periodic).toHaveBeenCalledBefore(deadline);
     expect(scheduler.nextWakeAtMs).toBe(302_000);
@@ -394,10 +389,8 @@ describe("Gateway timed work", () => {
 
   it("keeps cadence on a backward host wake without expiring durable deadlines early", async () => {
     const { time, scheduler, job, at } = fixture();
-    const cadence = vi.fn();
-    const deadline = vi.fn();
-    job("sample", { atMs: 2_000, everyMs: 1_000 }, cadence);
-    job("lease-expiry", { atMs: 2_000 }, deadline);
+    const cadence = job("sample", { atMs: 2_000, everyMs: 1_000 });
+    const deadline = job("lease-expiry", { atMs: 2_000 });
     time.setTime(1_500);
     await time.wake();
     expect(cadence).toHaveBeenCalledTimes(1);
@@ -437,31 +430,22 @@ describe("Gateway timed work", () => {
     job("late", { atMs: 1_100 }, other);
     child.resolve();
     await Promise.all([stop, firstWake]);
-    expect(stopped).toHaveBeenCalledTimes(1);
-    expect(other).toHaveBeenCalledTimes(1);
+    expectCalls([stopped, 1], [other, 1]);
   });
 
   it("preserves registration context and permits a deadline owner to rearm while running", async () => {
-    const { time, scheduler } = fixture();
+    const { time, scheduler, job } = fixture();
     const context = new AsyncLocalStorage<string>();
     const gate = createDeferredCore();
     const seen: Array<string | undefined> = [];
     context.run("cron-owner", () =>
-      scheduler.schedule({
-        id: "cron",
-        atMs: 1_000,
-        run: async () => {
+      job("cron", { atMs: 1_000 }, async () => {
+        seen.push(context.getStore());
+        job("cron", { atMs: 1_100 }, () => {
           seen.push(context.getStore());
-          scheduler.schedule({
-            id: "cron",
-            atMs: 1_100,
-            run: () => {
-              seen.push(context.getStore());
-            },
-          });
-          await gate.promise;
-          throw new Error("run failed");
-        },
+        });
+        await gate.promise;
+        throw new Error("run failed");
       }),
     );
     const initial = time.wake();
