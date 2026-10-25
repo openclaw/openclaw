@@ -22,11 +22,20 @@ function requestParams(overrides: Record<string, unknown> = {}, secret = false) 
         question: secret ? "Enter token" : "Pick a mode",
         isOther: secret,
         isSecret: secret,
-        options: secret ? null : [{ label: "Deep", description: "Use more reasoning" }],
+        options: secret
+          ? null
+          : [
+              { label: "Fast", description: "Use less reasoning" },
+              { label: "Deep", description: "Use more reasoning" },
+            ],
       },
     ],
     ...overrides,
   };
+}
+
+function secretRequestParams(overrides: Record<string, unknown> = {}) {
+  return requestParams(overrides, true);
 }
 
 function setup(
@@ -50,11 +59,7 @@ function setup(
     bridge.handleRequest({ id, params: input });
   const answerText = (text: string) =>
     claimPendingAgentQuestionAnswer({ sessionKey: params.sessionKey, text });
-  const prompt = async (count = 1) => {
-    await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledTimes(count));
-    return vi.mocked(params.onBlockReply!).mock.calls[count - 1]![0];
-  };
-  return { params, gateway, onOrdinaryResponse, bridge, request, answerText, prompt };
+  return { params, gateway, onOrdinaryResponse, bridge, request, answerText };
 }
 
 function expectCancelled(gateway: ReturnType<typeof createGatewayStub>) {
@@ -67,27 +72,22 @@ function expectCancelled(gateway: ReturnType<typeof createGatewayStub>) {
 }
 
 describe("Codex app-server user input bridge", () => {
-  it.each([false, true])("cancels the gateway record (already resolved: %s)", async (resolved) => {
+  it("cancels the gateway record on run abort", async () => {
     const controller = new AbortController();
-    const { prompt, gateway, onOrdinaryResponse, bridge } = setup({
-      signal: resolved ? undefined : controller.signal,
-    });
-    const response = bridge.handleRequest(
-      { id: resolved ? 42 : "input-abort", params: requestParams() },
-      resolved ? controller.signal : undefined,
+    const { params, gateway, onOrdinaryResponse, bridge } = setup({ signal: controller.signal });
+    const response = bridge.handleRequest({ id: "input-abort", params: requestParams() });
+    await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledOnce());
+    const lateAnswer = gateway.call(
+      "question.resolve",
+      {},
+      { answers: { answers: { choice: ["Late answer"] } } },
     );
-    await prompt();
-    const lateAnswer =
-      !resolved &&
-      gateway.call("question.resolve", {}, { answers: { answers: { choice: ["Late answer"] } } });
-    controller.abort(resolved ? new CodexServerRequestResolvedError() : undefined);
+    controller.abort();
     await lateAnswer;
     const returned = await response;
     expect(returned).toEqual({ answers: {} });
-    expect(onOrdinaryResponse).toHaveBeenCalledTimes(resolved ? 0 : 1);
-    if (!resolved) {
-      expect(onOrdinaryResponse.mock.calls[0]?.[0].response).toBe(returned);
-    }
+    expect(onOrdinaryResponse).toHaveBeenCalledOnce();
+    expect(onOrdinaryResponse.mock.calls[0]?.[0].response).toBe(returned);
     expectCancelled(gateway);
   });
 
@@ -101,11 +101,11 @@ describe("Codex app-server user input bridge", () => {
       firstPending = false;
       return await firstWait.promise;
     });
-    const { prompt, onOrdinaryResponse, request } = setup({
+    const { params, onOrdinaryResponse, request } = setup({
       gatewayCall: gateway.call,
     });
     const first = request("first", requestParams({ itemId: "first" }));
-    await prompt();
+    await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledOnce());
     const second = request("second", requestParams({ itemId: "second" }));
     expect(gateway.calls.filter(({ method }) => method === "question.request")).toHaveLength(1);
     firstWait.reject(new Error("Gateway wait failed"));
@@ -129,55 +129,79 @@ describe("Codex app-server user input bridge", () => {
     expect(params.onBlockReply).not.toHaveBeenCalled();
   });
 
-  it.each([true, false])(
-    "uses warned text-only input only for own isSecret (%s)",
-    async (secret) => {
-      const { prompt, gateway, onOrdinaryResponse, request, answerText } = setup();
-      const { isSecret, ...question } = requestParams({}, true).questions[0]!;
-      const response = request(
-        "input-secret",
-        requestParams({
-          questions: [
-            secret
-              ? { ...question, isSecret }
-              : Object.assign(Object.create({ isSecret }), question),
-          ],
-        }),
-      );
-      const payload = await prompt();
-      expect(payload.text?.includes("This channel may show your reply")).toBe(secret);
-      if (secret) {
-        expect(payload.channelData).toBeUndefined();
-        expect(gateway.calls).toHaveLength(0);
-      } else {
-        expect(gateway.calls.some((entry) => entry.method === "question.request")).toBe(true);
-      }
-      await expect(answerText("private")).resolves.toBe(true);
-      await expect(response).resolves.toEqual({ answers: { token: { answers: ["private"] } } });
-      expect(onOrdinaryResponse).toHaveBeenCalledTimes(secret ? 0 : 1);
-    },
-  );
+  it("keeps secret questions on the warned text-only path", async () => {
+    const { params, gateway, onOrdinaryResponse, request, answerText } = setup();
+    const response = request("input-secret", secretRequestParams());
+    await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledOnce());
+
+    const payload = vi.mocked(params.onBlockReply!).mock.calls[0]![0];
+    expect(payload.text).toContain("This channel may show your reply");
+    expect(payload.channelData).toBeUndefined();
+    expect(gateway.calls).toHaveLength(0);
+    await expect(answerText("private")).resolves.toBe(true);
+    await expect(response).resolves.toEqual({ answers: { token: { answers: ["private"] } } });
+    expect(onOrdinaryResponse).not.toHaveBeenCalled();
+  });
+
+  it("requires isSecret to be an own input property", async () => {
+    const { params, gateway, request, answerText } = setup();
+    const question = Object.assign(Object.create({ isSecret: true }), {
+      id: "token",
+      header: "Token",
+      question: "Enter token",
+      isOther: true,
+      options: null,
+    });
+
+    const response = request("input-inherited-secret", requestParams({ questions: [question] }));
+    await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledOnce());
+
+    expect(gateway.calls.some((entry) => entry.method === "question.request")).toBe(true);
+    expect(vi.mocked(params.onBlockReply!).mock.calls[0]![0].text).not.toContain(
+      "This channel may show your reply",
+    );
+    await answerText("public");
+    await expect(response).resolves.toEqual({ answers: { token: { answers: ["public"] } } });
+  });
 
   it("queues a replacement secret request when an earlier prompt later fails", async () => {
     const firstDelivery = createDeferred<void>();
-    const { params, prompt, request, answerText } = setup({ gatewayCall: undefined });
+    const { params, request, answerText } = setup({ gatewayCall: undefined });
     params.onBlockReply = vi
       .fn()
       .mockReturnValueOnce(firstDelivery.promise)
       .mockResolvedValue(undefined);
 
-    const first = request("input-secret-replaced", requestParams({}, true));
-    const replacement = request("input-secret-current", requestParams({}, true));
-    expect((await prompt()).text).toContain("may show your reply");
+    const first = request("input-secret-replaced", secretRequestParams());
+    const replacement = request("input-secret-current", secretRequestParams());
+    await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledTimes(1));
 
     firstDelivery.reject(new Error("previous prompt delivery failed"));
     await expect(first).resolves.toEqual({ answers: {} });
-    expect((await prompt(2)).text).toContain("may show your reply");
+    await vi.waitFor(() =>
+      expect(
+        vi
+          .mocked(params.onBlockReply!)
+          .mock.calls.filter(([payload]) => payload.text?.includes("may show your reply")),
+      ).toHaveLength(2),
+    );
 
     await expect(answerText("replacement secret")).resolves.toBe(true);
     await expect(replacement).resolves.toEqual({
       answers: { token: { answers: ["replacement secret"] } },
     });
+  });
+
+  it("dismisses a resolved inbound request without recording an invented empty answer", async () => {
+    const controller = new AbortController();
+    const { params, gateway, onOrdinaryResponse, bridge } = setup();
+    const response = bridge.handleRequest({ id: 42, params: requestParams() }, controller.signal);
+    await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledOnce());
+    controller.abort(new CodexServerRequestResolvedError());
+
+    await expect(response).resolves.toEqual({ answers: {} });
+    expect(onOrdinaryResponse).not.toHaveBeenCalled();
+    expectCancelled(gateway);
   });
 
   it("auto-resolves nonblocking gateway questions after exactly 120 seconds", async () => {

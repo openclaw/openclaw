@@ -40,12 +40,8 @@ async function readTail(
   const response = await rpcReq<LogTailPayload>(ws, "logs.tail", params);
   expect(response.ok).toBe(true);
   assert(response.payload);
-  expect(response.payload.lines.join("\n")).not.toContain(pem[1]);
   if (stored !== undefined) {
-    expect(response.payload).toMatchObject({
-      cursor: Buffer.byteLength(stored),
-      size: Buffer.byteLength(stored),
-    });
+    expect(response.payload.cursor).toBe(Buffer.byteLength(stored));
     expect(await fs.readFile(file, "utf8")).toBe(stored);
   }
   return response.payload;
@@ -53,33 +49,41 @@ async function readTail(
 
 it("logs.tail masks complete stored batches while preserving JSON records and byte cursors", async () => {
   const cases = [
+    pem.map((message) => record(message)),
     [record(pem.join("\n"))],
+    pem,
     [record(pem[0]), pem[1], record(pem[2])],
+    [record(pem[0]), pem[1], pem[1], pem[1], record(pem[2])],
     pem.map((message, index) => record(message, { ordinary: `keep-${index}`, sequence: index })),
+    [record("Authorization: Basic c2VjcmV0OnBhc3M=")],
     ["before", "[[],[],[]]", "Authorization: Basic c2VjcmV0OnBhc3M="],
+    [record("token=synthetic-credential-123456")],
   ];
   for (const lines of cases) {
     const stored = `${lines.join("\n")}\n`;
     await fs.writeFile(file, stored);
     const tail = await readTail({ limit: 100 }, stored);
+    expect(tail.size).toBe(Buffer.byteLength(stored));
     expect(tail.lines).toHaveLength(lines.length);
-    expect(tail.lines.join("\n")).not.toMatch(/ABCDEF1234567890|c2VjcmV0OnBhc3M=/);
+    for (const secret of [pem[1], "c2VjcmV0OnBhc3M=", "synthetic-credential-123456"]) {
+      expect(tail.lines.join("\n")).not.toContain(secret);
+    }
     for (const [index, originalLine] of lines.entries()) {
       if (!originalLine.startsWith("{") && !originalLine.startsWith("[")) {
         continue;
       }
+      const line = tail.lines[index];
+      assert(line !== undefined);
+      const masked = JSON.parse(line);
       const original = JSON.parse(originalLine);
-      expect(JSON.parse(tail.lines[index]!)).toEqual(
-        Array.isArray(original)
-          ? original
-          : {
-              ...original,
-              message:
-                original.message === pem[0] || original.message === pem[2]
-                  ? original.message
-                  : expect.stringMatching(/\S/),
-            },
-      );
+      if (!Array.isArray(original)) {
+        expect(Object.keys(masked)).toEqual(Object.keys(original));
+        expect(masked.message).toEqual(expect.any(String));
+        expect(masked.message.trim()).not.toBe("");
+        if (original.message === pem[0] || original.message === pem[2]) {
+          expect(masked.message).toBe(original.message);
+        }
+      }
     }
     const next = await readTail({ cursor: tail.cursor });
     expect(next.lines).toEqual([]);
@@ -163,6 +167,7 @@ it.each(["raw", "JSON"])(
     ]) {
       const response = await readTail(selection, stored);
       expect(response).toMatchObject({
+        size: Buffer.byteLength(stored),
         truncated: true,
         reset: false,
       });
@@ -170,21 +175,34 @@ it.each(["raw", "JSON"])(
         expect.stringMatching(/^(?:\*\*\*|…redacted…)$/),
         pem[2],
       ]);
+      expect(response.lines.join("\n")).not.toContain(pem[1]);
     }
 
-    let cursor = 0;
-    let written = "";
-    await fs.writeFile(file, "");
-    for (const [index, line] of lines.entries()) {
-      written += `${line}\n`;
-      await fs.appendFile(file, `${line}\n`);
-      const response = await readTail({ cursor }, written);
-      expect(response).toMatchObject({ truncated: false, reset: false });
-      expect(messages(response)).toEqual([
-        index === 1 ? expect.stringMatching(/^(?:\*\*\*|…redacted…)$/) : pem[index],
-      ]);
-      cursor = response.cursor;
-      expect(await readTail({ cursor })).toMatchObject({ lines: [], cursor });
+    for (const chunks of [[lines.slice(0, 2), lines.slice(2)], lines.map((line) => [line])]) {
+      let cursor = 0;
+      let written = "";
+      let sourceIndex = 0;
+      await fs.writeFile(file, "");
+      for (const chunk of chunks) {
+        const appended = `${chunk.join("\n")}\n`;
+        written += appended;
+        await fs.appendFile(file, appended);
+        const response = await readTail({ cursor }, written);
+        expect(response).toMatchObject({
+          size: Buffer.byteLength(written),
+          truncated: false,
+          reset: false,
+        });
+        const expected = chunk.map(() => {
+          const message = pem[sourceIndex++];
+          return message === pem[1] ? expect.stringMatching(/^(?:\*\*\*|…redacted…)$/) : message;
+        });
+        expect(messages(response)).toEqual(expected);
+        expect(response.lines.join("\n")).not.toContain(pem[1]);
+        cursor = response.cursor;
+        const repeated = await readTail({ cursor });
+        expect(repeated).toMatchObject({ lines: [], cursor });
+      }
     }
   },
 );

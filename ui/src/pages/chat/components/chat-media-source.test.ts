@@ -103,11 +103,11 @@ describe("ChatMediaSourceOwner", () => {
       const boundary = kind === "authentication" || kind === "identity";
       const old = "/media/voice?mediaTicket=old";
       const initial = () => sync(old, "media:voice", "native", "principal-a");
-      initial();
+      await initial();
       if (!boundary) {
         expect(controller.handleError(media)).toBe(false);
         if (kind === "usable") {
-          initial();
+          await initial();
         }
       }
       const pending = sync(

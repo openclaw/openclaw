@@ -56,17 +56,20 @@ async function fixture() {
 }
 
 function operations(storage: NonNullable<SessionActorStorageBinding["actor"]["storage"]>) {
-  const { commit } = memoryStorage(storage, authority);
+  const prepared = memoryStorage(storage, authority);
   return {
     create: (sessionId: string) =>
-      commit("session.entry.create", { entry: { sessionId, updatedAt: 1 }, cwd: "/synthetic" }),
+      prepared.commit("session.entry.create", {
+        entry: { sessionId, updatedAt: 1 },
+        cwd: "/synthetic",
+      }),
     add: (identityId: string) =>
-      commit("session.collaboration.add", {
+      prepared.commit("session.collaboration.add", {
         params: { identityId, addedBy: "owner", addedAt: 1 },
       }),
-    remove: (identityId: string) => commit("session.collaboration.remove", { identityId }),
+    remove: (identityId: string) => prepared.commit("session.collaboration.remove", { identityId }),
     label: (label: string) =>
-      commit("session.entry.patch", {
+      prepared.commit("session.entry.patch", {
         operation: { kind: "fields", patch: { label } },
       }),
   };

@@ -117,7 +117,7 @@ const opaqueWorker = {
   ...identity(peer + 10),
   executable: "C:\\Windows\\DefenderSessionHelper.exe",
 };
-const denied = { accessDenied: true };
+const denied = { accessDenied: true } as const;
 const differentAccount = { sid: "S-1-5-21-200" };
 const exited = { familyExited: true };
 const reused = { parents: reusedParent };

@@ -45,7 +45,7 @@ it.each([false, true])("refreshes date and timezone; session_status=%s", async (
     ["2026-09-01T06:59:59Z", "America/Los_Angeles", "2026-08-31"],
     ["2026-09-01T07:00:00Z", "America/Los_Angeles", "2026-09-01"],
     ["2026-09-01T07:00:00Z", "Pacific/Honolulu", "2026-08-31"],
-  ]) {
+  ] as const) {
     clock.mockReturnValue(Date.parse(time));
     cfg.agents.defaults.userTimezone = zone;
     await expectContext(input, [

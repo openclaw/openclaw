@@ -45,8 +45,7 @@ describe("config path own-property traversal", () => {
     ["agents.entries.worker.utilityModel", "fallbacks", ["local/backup"], ""],
   ] as const)(
     "keeps the authored primary when setting %s.%s",
-    (path, member, value, configuredPrimary) => {
-      const primary = configuredPrimary ?? "openai/gpt-4o-mini";
+    (path, member, value, primary = "openai/gpt-4o-mini") => {
       const parent = path.split(".");
       const root: Record<string, unknown> = {};
       setConfigValueAtPath(root, parent, primary);

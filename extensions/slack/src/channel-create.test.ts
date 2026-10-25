@@ -129,6 +129,7 @@ describe("Slack channel-create", () => {
           active = false;
           return { ok: true, channel: createdChannel };
         }
+        return undefined;
       },
       async () => {
         const result = await create({ assertDirectAdapterHandoff });

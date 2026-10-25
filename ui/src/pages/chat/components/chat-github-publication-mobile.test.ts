@@ -15,9 +15,8 @@ import { publication, sessionBranch } from "./chat-pull-requests.test-support.ts
 
 describe("mobile publication review", () => {
   let view: ReturnType<typeof mountSolid>;
-  const query = <T extends HTMLElement = HTMLElement>(selector: string) =>
-    view.container.querySelector<T>(selector);
-  const action = () => query<HTMLButtonElement>(".chat-pr__create")!;
+  const query = (selector: string) => view.container.querySelector<HTMLElement>(selector);
+  const action = () => view.container.querySelector<HTMLButtonElement>(".chat-pr__create")!;
   const onDismissBranch = vi.fn();
   function text(included: string[], excluded: string[] = []) {
     for (const value of included) {
@@ -132,7 +131,7 @@ describe("mobile publication review", () => {
       branch: sessionBranch(),
     });
     locked();
-    const link = query<HTMLAnchorElement>("a.chat-pr__create")!;
+    const link = view.container.querySelector<HTMLAnchorElement>("a.chat-pr__create")!;
     expect(link.href).toBe(result.url);
     for (const modifier of [undefined, "metaKey", "ctrlKey", "shiftKey", "altKey"]) {
       let handled: boolean | undefined;

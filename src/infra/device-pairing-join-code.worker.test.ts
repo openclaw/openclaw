@@ -47,12 +47,15 @@ function mint(context = captureContext(), assertCurrent?: () => void) {
   });
 }
 
-function afterCommand(effect: () => void | Promise<void>, once = false) {
+function afterCommand(
+  effect: (command: Parameters<Parameters<typeof probe.command>[1]>[0]) => void | Promise<void>,
+  once = false,
+) {
   return probe.command(
     stateWorker,
     async (command, options, scope) => {
       const result = await scope.execute(command, options);
-      await effect();
+      await effect(command);
       return result;
     },
     { once },

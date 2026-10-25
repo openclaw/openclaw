@@ -5,7 +5,6 @@ import type { WebSocket } from "../../packages/gateway-client/src/websocket.test
 import type { PresenceUpdate } from "../../packages/gateway-protocol/src/presence-deltas.js";
 import type { PresenceEntry } from "../../packages/gateway-protocol/src/schema/snapshot.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { createGatewayPresenceObserver } from "../../ui/src/app/gateway-store.presence.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import {
   connectReq,
@@ -19,6 +18,30 @@ import {
 
 installGatewayTestHooks({ scope: "suite" });
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+// The web connect plan advertises these capabilities for browser-owned device identities.
+const webCapabilities = [
+  "agent-kind",
+  "approvals",
+  "task-suggestions",
+  "terminal-offset-seq",
+  "terminal-session-metadata",
+  "terminal-upload-path-style",
+  "tool-events",
+  "chat-only-assistant-text",
+  "hello-health-on-demand",
+  "health-summary",
+  "hello-presence-self",
+  "session-scoped-events",
+  "presence-deltas",
+  "session-row-deltas",
+  "inline-widgets",
+  "model-selection-policy",
+  "model-wait-status",
+  "ui-commands",
+  "ultrafast",
+  "usage-refreshing",
+];
+
 type Frame = {
   type: "event";
   event: "presence";
@@ -32,23 +55,10 @@ type Observation = {
   rows: PresenceEntry[];
 };
 
-async function request(ws: WebSocket, method: string, params: Record<string, unknown>) {
-  expect((await rpcReq(ws, method, params)).ok).toBe(true);
-}
-
 function observePresence(ws: WebSocket) {
   const observations: Observation[] = [];
-  // Independent wire reconstruction lives in server.auth.presence-deltas.test.ts.
-  const observer = createGatewayPresenceObserver({
-    requestSnapshot: async () => {
-      throw new Error("Unexpected presence recovery");
-    },
-    publish: () => {},
-    onError: (error) => {
-      throw error;
-    },
-  });
-  observer.synchronize({});
+  let entries = new Map<string, PresenceEntry>();
+  let previousVersion: number | undefined;
   ws.on("message", (data) => {
     const serialized = rawDataToString(data);
     const frame = JSON.parse(serialized) as Frame;
@@ -57,9 +67,38 @@ function observePresence(ws: WebSocket) {
     }
     const payload = frame.payload;
     const mode = "reset" in payload ? "reset" : "upsert" in payload ? "delta" : "legacy";
-    const normalized = mode === "legacy" ? frame : observer.receive(frame);
-    expect(normalized, "every presence frame is consumable without recovery").toBeDefined();
-    const rows = (normalized!.payload as { presence: PresenceEntry[] }).presence;
+    if ("presence" in payload) {
+      entries = new Map(
+        payload.presence.map((row, index) => [
+          ("keys" in payload ? payload.keys[index] : undefined) ??
+            row.connectionId ??
+            row.instanceId ??
+            "gateway",
+          row,
+        ]),
+      );
+    } else {
+      expect(payload.base, "deltas chain from the last delivered frame").toBe(previousVersion);
+      for (const key of payload.remove) {
+        entries.delete(key);
+      }
+      for (const update of payload.upsert) {
+        if ("presence" in update) {
+          entries.set(update.key, update.presence);
+        } else {
+          const existing = entries.get(update.key);
+          expect(existing, "field patches require a previously delivered row").toBeDefined();
+          const next = { ...existing!, ...update.set };
+          for (const field of update.unset) {
+            delete next[field as keyof PresenceEntry];
+          }
+          entries.set(update.key, next);
+        }
+      }
+    }
+    const rows =
+      "order" in payload ? payload.order.map((key) => entries.get(key)!) : [...entries.values()];
+    previousVersion = frame.stateVersion.presence;
     observations.push({
       version: frame.stateVersion.presence,
       mode,
@@ -84,8 +123,13 @@ test("keeps multi-client presence compact through heartbeat, activity, and watch
         clients.push({ ws, observations, capable });
         const result = await connectReq(ws, {
           client: { ...CONTROL_UI_CLIENT, instanceId: `presence-browser-${index}` },
-          caps: capable ? ["hello-presence-self", "presence-deltas"] : [],
-          deviceIdentityPath: path.join(identityDir, `browser-${index}`, "credentials.sqlite"),
+          caps: capable ? webCapabilities : [],
+          deviceIdentityPath: path.join(
+            identityDir,
+            `browser-${index}`,
+            "client",
+            "credentials.sqlite",
+          ),
           browserOrigin: origin,
           prePairDevice: true,
         });
@@ -118,43 +162,59 @@ test("keeps multi-client presence compact through heartbeat, activity, and watch
       };
       // Establish a delivered baseline before touching every live browser row.
       await publication(
-        () => request(clients[0]!.ws, "sessions.viewers.set", { sessionKeys: [sessionKey] }),
+        async () => {
+          expect(
+            (await rpcReq(clients[0]!.ws, "sessions.viewers.set", { sessionKeys: [sessionKey] }))
+              .ok,
+          ).toBe(true);
+        },
         ({ rows }) =>
           rows.some(
             (row) =>
               row.instanceId === "presence-browser-0" && row.watchedSessions?.includes(sessionKey),
           ),
       );
+      const rounds: Observation[][] = [];
       for (let round = 0; round < 3; round += 1) {
         clock.mockReturnValue(Date.now() + 31_000);
         const now = Date.now();
         const watched = round % 2 === 0 ? [] : [sessionKey];
-        const latest = await publication(
-          async () => {
-            await Promise.all(
-              clients.map(async ({ ws }) => {
-                // A pong is the real socket liveness boundary that renews stored presence.ts.
-                ws.pong();
-                await request(ws, "presence.activity", {});
-                await request(ws, "sessions.viewers.set", { sessionKeys: watched });
-              }),
-            );
-          },
-          ({ rows }) =>
-            rows
-              .filter((row) => row.instanceId?.startsWith("presence-browser-"))
-              .every(
-                (row) =>
-                  row.ts === now &&
-                  row.lastActivityAt === now &&
-                  row.connectionLastActivityAt === now &&
-                  JSON.stringify(row.watchedSessions ?? []) === JSON.stringify(watched),
-              ),
+        rounds.push(
+          await publication(
+            async () => {
+              await Promise.all(
+                clients.map(async ({ ws }) => {
+                  // A pong is the real socket liveness boundary that renews stored presence.ts.
+                  ws.pong();
+                  expect((await rpcReq(ws, "presence.activity", {})).ok).toBe(true);
+                  expect(
+                    (
+                      await rpcReq(ws, "sessions.viewers.set", {
+                        sessionKeys: watched,
+                      })
+                    ).ok,
+                  ).toBe(true);
+                }),
+              );
+            },
+            ({ rows }) =>
+              rows
+                .filter((row) => row.instanceId?.startsWith("presence-browser-"))
+                .every(
+                  (row) =>
+                    row.ts === now &&
+                    row.lastActivityAt === now &&
+                    row.connectionLastActivityAt === now &&
+                    JSON.stringify(row.watchedSessions ?? []) === JSON.stringify(watched),
+                ),
+          ),
         );
-        for (const [index, observation] of latest.entries()) {
+      }
+      for (const round of rounds) {
+        for (const [index, observation] of round.entries()) {
           expect(observation.mode).toBe(clients[index]!.capable ? "delta" : "legacy");
           if (clients[index]!.capable) {
-            expect(observation.bytes).toBeLessThan(latest[0]!.bytes / 2);
+            expect(observation.bytes).toBeLessThan(round[0]!.bytes / 2);
           }
         }
       }

@@ -1,5 +1,6 @@
 import type { AcpServerOptions } from "@openclaw/acp-core/types";
 import { expect, it, vi } from "vitest";
+import type { GatewayClient } from "../gateway/client.js";
 import type { GatewaySessionRow } from "../gateway/session-utils.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createTestAcpEventLedger } from "./event-ledger.test-support.js";
@@ -10,6 +11,11 @@ import {
   expectConfigOption,
 } from "./translator.bridge-test-helpers.js";
 import { createTranslatorScenario } from "./translator.scenario.test-support.js";
+import {
+  createAcpConnection,
+  createAcpGateway,
+  createAcpGatewayAgent,
+} from "./translator.test-helpers.js";
 
 type RequestHandler = (method: string, params?: Record<string, unknown>) => Promise<unknown>;
 const sessionKey = "agent:main:work";
@@ -315,11 +321,16 @@ it("drains only its own pending work and sessions during shutdown", async () => 
     }
     return method === "sessions.list" ? sessions([]) : { ok: true };
   });
-  const { agent: agentA } = createTranslatorScenario(request, {
-    sessions: [],
-    eventLedger: ledger,
-  });
-  const { agent: agentB } = createTranslatorScenario(request, { sessions: [] });
+  // Both owners must see the shared store to prove shutdown isolation.
+  const agentA = createAcpGatewayAgent(
+    createAcpConnection(),
+    createAcpGateway(request as GatewayClient["request"]),
+    { eventLedger: ledger },
+  );
+  const agentB = createAcpGatewayAgent(
+    createAcpConnection(),
+    createAcpGateway(request as GatewayClient["request"]),
+  );
   const sessionA = await agentA.newSession(createNewSessionRequest(cwd));
   const sessionB = await agentB.newSession(createNewSessionRequest(cwd));
   const pending = agentA.prompt(createPromptRequest(sessionA.sessionId, "hello"));
