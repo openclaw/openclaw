@@ -497,7 +497,7 @@ async function settingsSection(
 ) {
   const sidebar = page.locator(".settings-sidebar");
   await sidebar.waitFor({ state: "attached" });
-  if (!(await inViewport(sidebar))) {
+  if (await page.locator(".shell--mobile-nav:not(.shell--nav-drawer-open)").count()) {
     await openNavigationDrawer(page);
   }
   await sidebar.locator(`a[href="${path}"]`).click();
