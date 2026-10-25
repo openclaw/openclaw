@@ -27,11 +27,22 @@ export function registerGatewayCallDispatchPreparationTests(
   }
 
   it.each([
-    ["secrets.resolve", undefined],
-    ["agent", CAPS.AGENT_SESSION_ID_CREATE],
-  ] as const)("requires %s support before dispatch", async (method, capability) => {
+    ["secrets.resolve", undefined, undefined],
+    ["gateway.restart.request", "gateway-restart-target-safe-v1", undefined],
+    ["agent", CAPS.AGENT_SESSION_ID_CREATE, undefined],
+    [
+      "models.authSetApiKey",
+      CAPS.MODELS_AUTH_SET_API_KEY_OWNER,
+      { provider: "fixture", apiKey: "synthetic-api-key", expectedOwnerId: "owner" },
+    ],
+    [
+      "models.authLogin",
+      CAPS.MODELS_AUTH_LOGIN_OWNER,
+      { authChoice: "fixture/device", sessionId: "login", expectedOwnerId: "owner" },
+    ],
+  ] as const)("requires %s support before dispatch", async (method, capability, params) => {
     const { call, request, setFeatures } = setup();
-    setFeatures(["health"], []);
+    setFeatures(params ? [method] : ["health"], params ? [CAPS.LOCAL_STATE_OWNER_ROUTING] : []);
     const feature = (capability ?? method).replaceAll(".", "\\.");
     const error = new RegExp(
       `does not support required ${capability ? "capability" : "method"} "${feature}".*update or restart the active gateway`,
@@ -40,7 +51,8 @@ export function registerGatewayCallDispatchPreparationTests(
     await expect(
       call({
         method,
-        requiredMethods: capability ? undefined : [method],
+        params,
+        requiredMethods: !capability || params ? [method] : undefined,
         requiredCapabilities: capability ? [capability] : undefined,
       }),
     ).rejects.toThrow(error);
@@ -128,11 +140,11 @@ export function registerGatewayCallDispatchPreparationTests(
     const controller = new AbortController();
     const onSignalAbort = vi.fn();
     let current = false;
-    const assertCurrent = () => {
+    const assertCurrent = vi.fn(() => {
       if (!current) {
         throw new Error("dispatch owner revoked");
       }
-    };
+    });
     const { call, entered, prepared, request, close } = preparing({
       assertDispatchCurrent: assertCurrent,
       ...(interrupted ? { timeoutMs: 50, signal: controller.signal, onSignalAbort } : {}),
@@ -144,6 +156,7 @@ export function registerGatewayCallDispatchPreparationTests(
 
     await entered.promise;
     expect(request()).toBeNull();
+    expect(assertCurrent).not.toHaveBeenCalled();
     current = outcome === "current";
     if (outcome === "abort") {
       controller.abort();
@@ -165,6 +178,7 @@ export function registerGatewayCallDispatchPreparationTests(
     } else {
       expect(request()?.method).toBe(outcome === "current" ? "agent" : undefined);
     }
+    expect(assertCurrent).toHaveBeenCalledTimes(interrupted || outcome === "rejected" ? 0 : 1);
   });
 
   it.each(["resolve", "reject"])("ignores stale %s after replacement hello", async (outcome) => {

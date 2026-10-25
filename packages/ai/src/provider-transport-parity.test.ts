@@ -1,10 +1,13 @@
-import type { Model } from "@openclaw/llm-core";
+import path from "node:path";
+import { APIError as AnthropicAPIError } from "@anthropic-ai/sdk/core/error.js";
+import type { AssistantMessageEventStreamLike, Model } from "@openclaw/llm-core";
 import { describe, expect, it, vi } from "vitest";
+import { configureAiTransportHost, getAiTransportHost } from "./host.js";
 import {
   anthropicModel,
   context,
   anthropicEvents,
-  captureAnthropicExchange,
+  createAnthropicResponse,
   registerParityHostLifecycle,
 } from "./provider-transport-parity.test-support.js";
 import { makeProviderModel } from "./providers/provider-model.test-support.js";
@@ -12,6 +15,7 @@ import { makeProviderModel } from "./providers/provider-model.test-support.js";
 type OpenAIChunk = Record<string, unknown>;
 
 const openAiMockState = vi.hoisted(() => ({
+  error: undefined as Error | undefined,
   streamError: undefined as Error | undefined,
   chunks: [] as OpenAIChunk[],
   payloads: [] as unknown[],
@@ -23,6 +27,9 @@ vi.mock("openai", () => ({
       completions: {
         create: (payload: unknown) => {
           openAiMockState.payloads.push(payload);
+          if (openAiMockState.error) {
+            throw openAiMockState.error;
+          }
           const createIterable = () => ({
             async *[Symbol.asyncIterator]() {
               for (const item of openAiMockState.chunks) {
@@ -42,6 +49,20 @@ vi.mock("openai", () => ({
     };
   },
 }));
+
+type ParityOutput = {
+  payload?: unknown;
+  eventTrace: unknown[];
+  terminal: Record<string, unknown>;
+  errorFields: Record<string, unknown>;
+};
+
+type ParityFixture = {
+  name: string;
+  provider: "anthropic" | "openai";
+  outcome: "success" | "error";
+  snapshot?: string;
+};
 
 const openAiModel = makeProviderModel("openai-completions", "openai", "gpt-5.5", {
   name: "GPT-5.5",
@@ -87,6 +108,20 @@ const stopped = (...deltas: Record<string, unknown>[]) => [
   ...deltas.map((delta) => chunk(delta)),
   chunk({}, "stop"),
 ];
+const openAiChunks = [
+  chunk({ reasoning_content: "Think." }),
+  chunk({ content: "Answer." }),
+  {
+    ...chunk({}, "stop"),
+    usage: {
+      prompt_tokens: 8,
+      completion_tokens: 4,
+      total_tokens: 12,
+      prompt_tokens_details: { cached_tokens: 2 },
+      completion_tokens_details: { reasoning_tokens: 1 },
+    },
+  },
+];
 const interleaved = [
   { reasoning_content: "First thought." },
   { content: "Interim." },
@@ -99,17 +134,26 @@ const visibleDetails = [
   { type: "response.text", text: " Visible third." },
 ];
 const nativeChunks = stopped(...interleaved);
-const coalescedChunks = stopped(
-  ...interleaved.slice(0, 2),
-  {
-    content: "Final.",
-    reasoning_content: "Second thought.",
-  },
-  { reasoning_content: "Trailing thought." },
+const coalescedChunks = stopped(...interleaved.slice(0, 2), {
+  content: "Final.",
+  reasoning_content: "Second thought.",
+});
+const typedChunks = stopped(
+  { content: { type: "reasoning", text: "First thought." } },
+  { content: "Interim." },
+  { content: { type: "reasoning", text: "Second thought." } },
+  { content: "Final." },
 );
+const structuredChunks = stopped(
+  { reasoning_details: [{ type: "reasoning.text", text: "First thought." }] },
+  { content: "Interim." },
+  { reasoning_details: [{ type: "reasoning.text", text: "Second thought." }] },
+  { content: "Final." },
+);
+const orderedChunks = stopped({ reasoning_details: visibleDetails });
+const splitChunks = stopped(...visibleDetails.map((detail) => ({ reasoning_details: [detail] })));
 const interruptedChunks = stopped(
-  { reasoning_details: visibleDetails.slice(0, 2) },
-  { reasoning_details: visibleDetails.slice(2) },
+  ...visibleDetails.slice(0, 2).map((detail) => ({ reasoning_details: [detail] })),
   { content: "Interim." },
   { reasoning_content: "Hidden fourth." },
   { content: "Final." },
@@ -120,7 +164,19 @@ const trailingChunks = stopped(
   { reasoning_content: "Trailing thought." },
   { content: " " },
 );
+const nativeTrailingChunks = stopped(...interleaved, {
+  reasoning_content: "Trailing thought.",
+});
 const errorChunks = interleaved.slice(0, 3).map((delta) => chunk(delta));
+
+const anthropicFailure = {
+  status: 429,
+  body: {
+    type: "error",
+    error: { type: "rate_limit_error", message: "synthetic Anthropic rejection" },
+  },
+  headers: { "content-type": "application/json", "retry-after": "2" },
+} as const;
 
 function usage(input_tokens: number, output_tokens: number, cacheRead = 0, cacheWrite = 0) {
   return {
@@ -135,33 +191,58 @@ function messageStart(id: string, tokens: Record<string, unknown>) {
   return { type: "message_start", message: { id, model: anthropicModel.id, usage: tokens } };
 }
 
-const blockStart = (index: number, content_block: Record<string, unknown>) => ({
-  type: "content_block_start",
-  index,
-  content_block,
-});
-const blockDelta = (index: number, delta: Record<string, unknown>) => ({
-  type: "content_block_delta",
-  index,
-  delta,
-});
-const blockStop = (index: number) => ({ type: "content_block_stop", index });
-const messageDelta = (stop_reason?: string, tokens?: unknown) => ({
-  type: "message_delta",
-  delta: stop_reason ? { stop_reason } : {},
-  usage: tokens,
-});
-const messageStop = { type: "message_stop" };
+function normalizeRecord(value: Record<string, unknown>, keys: readonly string[]) {
+  return Object.fromEntries(
+    keys.flatMap((key) => (value[key] === undefined ? [] : [[key, value[key]]])),
+  );
+}
+
+async function observeStream(stream: AssistantMessageEventStreamLike): Promise<ParityOutput> {
+  const eventTrace: unknown[] = [];
+  for await (const rawEvent of stream) {
+    const event = rawEvent as unknown as Record<string, unknown>;
+    eventTrace.push(normalizeRecord(event, ["type", "contentIndex", "delta", "content", "reason"]));
+  }
+  const result = (await stream.result()) as unknown as Record<string, unknown>;
+  return {
+    eventTrace,
+    terminal: normalizeRecord(
+      result,
+      "role content api provider model responseId responseModel openclawDelivery usage stopReason diagnostics".split(
+        " ",
+      ),
+    ),
+    errorFields: normalizeRecord(result, ["errorMessage", "errorCode", "errorType", "errorBody"]),
+  };
+}
+
+function resetOpenAiMock(
+  outcome: ParityFixture["outcome"],
+  chunks: readonly OpenAIChunk[] = openAiChunks,
+): void {
+  openAiMockState.payloads = [];
+  openAiMockState.streamError = undefined;
+  openAiMockState.chunks = outcome === "success" ? [...chunks] : [];
+  openAiMockState.error =
+    outcome === "error"
+      ? Object.assign(new Error("synthetic OpenAI rejection"), {
+          status: 429,
+          code: "rate_limit_exceeded",
+          type: "rate_limit_error",
+          error: { code: "rate_limit_exceeded", type: "rate_limit_error" },
+        })
+      : undefined;
+}
 
 async function runOpenAi(
   implementation: "provider" | "transport",
-  chunks: readonly OpenAIChunk[],
+  outcome: ParityFixture["outcome"],
+  chunks: readonly OpenAIChunk[] = openAiChunks,
   emitReasoning = true,
   modelOverride?: Model<"openai-completions">,
   streamError?: Error,
-) {
-  openAiMockState.payloads = [];
-  openAiMockState.chunks = [...chunks];
+): Promise<ParityOutput> {
+  resetOpenAiMock(outcome, chunks);
   openAiMockState.streamError = streamError;
   const baseModel = modelOverride ?? openAiModel;
   const model = emitReasoning ? baseModel : { ...baseModel, reasoning: false };
@@ -177,7 +258,75 @@ async function runOpenAi(
     implementation === "provider"
       ? providerStream(model, context, options)
       : await createTransport()(model, context, options as never);
-  return { terminal: await stream.result() };
+  const observed = await observeStream(stream);
+  return {
+    ...(outcome === "success" ? { payload: openAiMockState.payloads[0] } : {}),
+    ...observed,
+  };
+}
+
+async function runAnthropic(
+  implementation: "provider" | "transport",
+  outcome: ParityFixture["outcome"],
+  events: readonly Record<string, unknown>[] = anthropicEvents,
+): Promise<ParityOutput> {
+  let payload: unknown;
+  let stream: AssistantMessageEventStreamLike;
+  const [{ streamAnthropic }, { createAnthropicMessagesTransportStreamFn: createTransport }] =
+    await Promise.all([
+      import("./providers/anthropic.js"),
+      import("./transports/anthropic-transport-stream.js"),
+    ]);
+  const options = {
+    apiKey: "sk-test",
+    thinkingEnabled: true,
+    thinkingBudgetTokens: 1024,
+    effort: "low",
+  } as const;
+  if (implementation === "provider") {
+    const client = {
+      messages: {
+        create: (nextPayload: unknown) => {
+          payload = nextPayload;
+          return {
+            asResponse: async () => {
+              if (outcome === "error") {
+                throw AnthropicAPIError.generate(
+                  anthropicFailure.status,
+                  anthropicFailure.body,
+                  undefined,
+                  new Headers(anthropicFailure.headers),
+                );
+              }
+              return createAnthropicResponse(events);
+            },
+          };
+        },
+      },
+    };
+    stream = streamAnthropic(anthropicModel, context, {
+      ...options,
+      client: client as never,
+    });
+  } else {
+    const fetchMock: typeof fetch = async (_input, init) => {
+      payload = typeof init?.body === "string" ? JSON.parse(init.body) : init?.body;
+      if (outcome === "error") {
+        return new Response(JSON.stringify(anthropicFailure.body), {
+          status: anthropicFailure.status,
+          headers: anthropicFailure.headers,
+        });
+      }
+      return createAnthropicResponse(events);
+    };
+    configureAiTransportHost({ ...getAiTransportHost(), buildModelFetch: () => fetchMock });
+    stream = await createTransport()(anthropicModel, context, options as never);
+  }
+  const observed = await observeStream(stream);
+  return {
+    ...(outcome === "success" ? { payload } : {}),
+    ...observed,
+  };
 }
 
 type ContentCase = [
@@ -195,6 +344,19 @@ const routerCase = (name: string, chunks: OpenAIChunk[], content: unknown[]): Co
   true,
   openRouterModel,
 ];
+
+const fixtures = (["anthropic", "openai"] as const).flatMap<ParityFixture>((provider) => {
+  const label = provider === "anthropic" ? "Anthropic" : "OpenAI";
+  return [
+    {
+      name: `${label} successful request and event trace`,
+      provider,
+      outcome: "success",
+      snapshot: `${provider}-success.snap.txt`,
+    },
+    { name: `${label} structured request failure`, provider, outcome: "error" },
+  ];
+});
 
 describe("provider and transport observable parity fixtures", () => {
   registerParityHostLifecycle();
@@ -221,18 +383,53 @@ describe("provider and transport observable parity fixtures", () => {
     const answer = `${seeded ? "Hello" : ""}${deltas ? " world" : ""}`;
     const signature = deltas ? "final-signature" : "seed-signature";
     for (const implementation of ["provider", "transport"] as const) {
-      const result = await captureAnthropicExchange(implementation, { events });
+      const result = await runAnthropic(implementation, "success", events);
       expect(result.terminal).toMatchObject({
         stopReason: "stop",
         content: [thinking(thought, signature), text(answer)],
       });
-      expect(result.eventTrace).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ type: "thinking_end", contentIndex: 0, content: thought }),
-          expect.objectContaining({ type: "text_end", contentIndex: 1, content: answer }),
-        ]),
-      );
+      expect(result.eventTrace).toContainEqual({
+        type: "thinking_end",
+        contentIndex: 0,
+        content: thought,
+      });
+      expect(result.eventTrace).toContainEqual({
+        type: "text_end",
+        contentIndex: 1,
+        content: answer,
+      });
     }
+  });
+
+  it.each(fixtures)("$name", async ({ provider, outcome, snapshot }) => {
+    const run = provider === "anthropic" ? runAnthropic : runOpenAi;
+    const providerResult = await run("provider", outcome);
+    const transportResult = await run("transport", outcome);
+    if (outcome === "error") {
+      for (const result of [providerResult, transportResult]) {
+        expect(result.terminal.stopReason).toBe("error");
+        expect(result.errorFields.errorMessage).toEqual(expect.any(String));
+      }
+      if (provider === "openai") {
+        expect(providerResult.errorFields).toEqual(transportResult.errorFields);
+      } else {
+        expect(providerResult.errorFields).toMatchObject({
+          errorCode: "429",
+          errorType: "rate_limit_error",
+          errorBody: expect.stringContaining("synthetic Anthropic rejection"),
+        });
+        expect(transportResult.errorFields.errorMessage).toContain("Retry-After: 2 seconds");
+      }
+      return;
+    }
+    if (!snapshot) {
+      throw new Error("success parity fixture requires a snapshot");
+    }
+    await expect(
+      `${JSON.stringify({ provider: providerResult, transport: transportResult }, null, 2)}\n`,
+    ).toMatchFileSnapshot(
+      path.join(import.meta.dirname, "../test/fixtures/provider-transport-parity", snapshot),
+    );
   });
 
   it.each([
@@ -248,8 +445,14 @@ describe("provider and transport observable parity fixtures", () => {
       updates: [
         {
           iterations: [
-            { type: "compaction", ...usage(10, 3, 2, 1) },
-            { type: "message", ...usage(4, 5, 6, 7) },
+            {
+              type: "compaction",
+              ...usage(10, 3, 2, 1),
+            },
+            {
+              type: "message",
+              ...usage(4, 5, 6, 7),
+            },
           ],
         },
       ],
@@ -269,25 +472,22 @@ describe("provider and transport observable parity fixtures", () => {
     async ({ updates, final, billing, contextUsage }) => {
       const events = [
         messageStart("msg_usage_parity", usage(37, 2, 11, 5)),
-        blockStart(0, { type: "text", text: "" }),
-        blockDelta(0, { type: "text_delta", text: "Done." }),
-        blockStop(0),
-        ...updates.map((tokens) => messageDelta(undefined, tokens)),
-        messageDelta("end_turn", final),
-        messageStop,
+        { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+        { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Done." } },
+        { type: "content_block_stop", index: 0 },
+        ...updates.map((tokens) => ({ type: "message_delta", delta: {}, usage: tokens })),
+        { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: final },
+        { type: "message_stop" },
       ];
       for (const implementation of ["provider", "transport"] as const) {
-        const result = await captureAnthropicExchange(implementation, { events });
+        const result = await runAnthropic(implementation, "success", events);
         expect(result.terminal).toMatchObject({
           stopReason: "stop",
           content: [{ type: "text", text: "Done." }],
           usage: { ...billing, contextUsage },
         });
         expect(result.eventTrace.at(-1)).toMatchObject({ type: "done" });
-        const errorKeys = ["errorMessage", "errorCode", "errorType", "errorBody"] as const;
-        expect(errorKeys.map((key) => result.terminal[key])).toEqual(
-          errorKeys.map(() => undefined),
-        );
+        expect(result.errorFields).toEqual({});
       }
     },
   );
@@ -308,19 +508,29 @@ describe("provider and transport observable parity fixtures", () => {
   ])("preserves Anthropic terminal tool validation for $name", async (fixture) => {
     const events = [
       messageStart("msg_seeded", { input_tokens: 1, output_tokens: 0 }),
-      blockStart(0, { type: "tool_use", id: "call_seed", name: "lookup", input: fixture.input }),
+      {
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "tool_use", id: "call_seed", name: "lookup", input: fixture.input },
+      },
       ...(fixture.delta
-        ? [blockDelta(0, { type: "input_json_delta", partial_json: fixture.delta })]
+        ? [
+            {
+              type: "content_block_delta",
+              index: 0,
+              delta: { type: "input_json_delta", partial_json: fixture.delta },
+            },
+          ]
         : []),
-      blockStop(0),
-      messageDelta("tool_use"),
-      messageStop,
+      { type: "content_block_stop", index: 0 },
+      { type: "message_delta", delta: { stop_reason: "tool_use" } },
+      { type: "message_stop" },
     ];
     for (const implementation of ["provider", "transport"] as const) {
-      const result = await captureAnthropicExchange(implementation, { events });
+      const result = await runAnthropic(implementation, "success", events);
       if (implementation === "provider" && fixture.providerError) {
         expect(result.terminal.stopReason).toBe("error");
-        expect(result.terminal.errorMessage).toContain("malformed JSON arguments");
+        expect(result.errorFields.errorMessage).toContain("malformed JSON arguments");
         expect(result.terminal.content).toEqual([]);
         expect(result.eventTrace).not.toContainEqual(
           expect.objectContaining({ type: "toolcall_end" }),
@@ -342,11 +552,10 @@ describe("provider and transport observable parity fixtures", () => {
   });
 
   it.each<ContentCase>([
-    [
-      "separated, coalesced, and trailing reasoning",
-      coalescedChunks,
-      [...interleavedContent("reasoning_content"), nativeThought("Trailing thought.")],
-    ],
+    ["interleaved reasoning", nativeChunks, interleavedContent("reasoning_content")],
+    ["coalesced reasoning", coalescedChunks, interleavedContent("reasoning_content")],
+    ["typed reasoning", typedChunks, interleavedContent()],
+    ["structured reasoning", structuredChunks, interleavedContent("reasoning_details")],
     ["hidden reasoning", nativeChunks, [text("Interim."), text("Final.")], false],
     [
       "trailing reasoning",
@@ -358,16 +567,25 @@ describe("provider and transport observable parity fixtures", () => {
         text(" "),
       ],
     ],
-    routerCase("visible details before interrupted content", interruptedChunks, [
+    [
+      "interleaved then trailing reasoning",
+      nativeTrailingChunks,
+      [...interleavedContent("reasoning_content"), nativeThought("Trailing thought.")],
+    ],
+    routerCase("ordered visible details", orderedChunks, [
       ...visibleContent,
       text(" Visible third."),
+    ]),
+    routerCase("split visible details", splitChunks, [...visibleContent, text(" Visible third.")]),
+    routerCase("visible details before interrupted content", interruptedChunks, [
+      ...visibleContent,
       text("Interim."),
       nativeThought("Hidden fourth."),
       text("Final."),
     ]),
   ])("preserves %s", async (_name, chunks, content, emitReasoning, model) => {
     for (const implementation of ["provider", "transport"] as const) {
-      const result = await runOpenAi(implementation, chunks, emitReasoning, model);
+      const result = await runOpenAi(implementation, "success", chunks, emitReasoning, model);
       expect(result.terminal.content).toEqual(content);
       if (emitReasoning === false) {
         expect(result.terminal.openclawDelivery).toBeUndefined();
@@ -379,6 +597,7 @@ describe("provider and transport observable parity fixtures", () => {
     for (const implementation of ["provider", "transport"] as const) {
       const result = await runOpenAi(
         implementation,
+        "success",
         errorChunks,
         true,
         undefined,
@@ -398,13 +617,14 @@ describe("provider and transport observable parity fixtures", () => {
     for (const implementation of ["provider", "transport"] as const) {
       const result = await runOpenAi(
         implementation,
-        stopped({ content: "Answer." }),
+        "success",
+        openAiChunks,
         true,
         openRouterModelWithoutBaseUrl,
       );
 
       expect(result.terminal.stopReason).toBe("error");
-      expect(result.terminal.errorMessage).toContain(
+      expect(result.errorFields.errorMessage).toContain(
         'Provider "openrouter" requires an explicit base URL',
       );
       expect(openAiMockState.payloads).toEqual([]);

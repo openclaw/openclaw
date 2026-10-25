@@ -47,12 +47,13 @@ const committedKeys = (changes: StateDomainChange<Row>[]) =>
     change.kind === "committed" ? [...change.receipt.facts.keys()] : [],
   );
 
-function fixture(publishPending = true, publication = domain()) {
+function fixture(publishPending = true) {
   const db = openTrackedStateDatabase(
     path.join(dirs.make("state-domain-receipts-"), "state.sqlite"),
   );
   cleanup.push(() => db.close());
   db.exec("CREATE TABLE facts (id TEXT PRIMARY KEY, version INTEGER NOT NULL)");
+  const publication = domain();
   const transaction = <T>(write: () => T) =>
     withSqlitePostCommitPublications(db, () => runSqliteImmediateTransactionSync(db, write));
   const capture = <T>(write: () => T, owner = publication) =>
@@ -74,14 +75,11 @@ function fixture(publishPending = true, publication = domain()) {
   return { db, publication, transaction, capture, write, begin };
 }
 
-it("shares nested captures across facades, excludes rollback, and waits for outer commit", () => {
-  const name = `shared-receipt-test-${randomUUID()}`;
-  const { db, publication, transaction, capture, write } = fixture(true, domain(name));
-  const siblingFacade = domain(name);
+it("captures only committed postimages across nested rollback and waits for the outer commit", () => {
+  const { db, publication, transaction, capture, write } = fixture();
   const changes = observe(publication);
   const kept = { id: "kept", version: 1 };
   const sibling = { id: "sibling", version: 3 };
-  const after = { id: "after", version: 4 };
   const captured = capture(() => {
     write(kept);
     expect(() =>
@@ -91,18 +89,28 @@ it("shares nested captures across facades, excludes rollback, and waits for oute
         throw new Error("rollback");
       }),
     ).toThrow("rollback");
-    const nested = siblingFacade.capture(db, () =>
-      transaction(() => write(sibling, siblingFacade)),
-    );
-    expect(nested.receipt.facts).toEqual(postimages(kept, sibling));
-    write(after);
+    transaction(() => write(sibling));
     expect(changes).toEqual([]);
-    return "written";
   });
-  expect(captured.result).toBe("written");
-  expect(captured.receipt.facts).toEqual(postimages(kept, sibling, after));
-  expect(db.prepare("SELECT * FROM facts ORDER BY id").all()).toEqual([after, kept, sibling]);
+  expect(captured.receipt.facts).toEqual(postimages(kept, sibling));
+  expect(db.prepare("SELECT * FROM facts ORDER BY id").all()).toEqual([kept, sibling]);
   expect(changes).toHaveLength(2);
+});
+
+it("shares nested captures across facades for the same domain and database", () => {
+  const { db, capture, write } = fixture();
+  const name = `shared-receipt-test-${randomUUID()}`;
+  const first = domain(name);
+  const second = domain(name);
+  const captured = capture(() => {
+    write({ id: "before", version: 1 }, first);
+    const nested = second.capture(db, () => write({ id: "nested", version: 2 }, second));
+    expect([...nested.receipt.facts.keys()]).toEqual(["before", "nested"]);
+    write({ id: "after", version: 3 }, first);
+    return "written";
+  }, first);
+  expect(captured.result).toBe("written");
+  expect([...captured.receipt.facts.keys()]).toEqual(["before", "nested", "after"]);
 });
 
 it.each([false, true])(
