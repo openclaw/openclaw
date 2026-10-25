@@ -215,6 +215,20 @@ describe("resolveClaudeCliExecutionArgs", () => {
     expect(forAgent("ask", "full", "compact")).not.toContain("bypassPermissions");
   });
 
+  it("keeps restrictive global exec security when a partial agent block omits it", () => {
+    const forAgentExec = (agentExec: Record<string, string>) =>
+      executionArgs({
+        agentId: "worker",
+        config: {
+          tools: { exec: { security: "deny", ask: "off" } },
+          agents: { entries: { worker: { tools: { exec: agentExec } } } },
+        },
+      });
+
+    expect(forAgentExec({ ask: "off" })).not.toContain("bypassPermissions");
+    expect(forAgentExec({ mode: "full" })).toContain("bypassPermissions");
+  });
+
   it.each([false, true])(
     "keeps yolo bypass on ordinary turns but omits it for manual compaction (resume=%s)",
     (useResume) => {
