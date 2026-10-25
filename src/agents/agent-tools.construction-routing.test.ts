@@ -143,7 +143,9 @@ describe("createOpenClawCodingTools cron scope", () => {
     const runId = "remote-management-tools";
     const { operationalRunInstance } = createTestAdmittedRunContext(runId);
     const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
-    onTestFinished(() => releaseAgentRunDelegatedAuthority(authority));
+    onTestFinished(() => {
+      releaseAgentRunDelegatedAuthority(authority);
+    });
     const capability = createCronCreatorAuthorityCapability(
       runId,
       { kind: "unknown" },

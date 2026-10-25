@@ -19,41 +19,6 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function mountAttachment(initialSource: string) {
-  let src = initialSource;
-  let update: (() => void) | undefined;
-  const container = document.createElement("div");
-  container.className = "side-panel__panel";
-  container.style.cssText = "display:flex;width:480px;height:600px;";
-  const panel = document.createElement("openclaw-chat-detail-panel");
-  panel.className = "chat-sidebar";
-  panel.content = {
-    kind: "attachment",
-    title: "notes.md",
-    mimeType: "text/markdown",
-    sourceIdentity: "attachment:notes",
-    resolveSource: (onChange) => {
-      update = onChange;
-      return { status: "ready", src };
-    },
-  };
-  container.append(panel);
-  document.body.append(container);
-  return {
-    container,
-    panel,
-    refresh(next = src) {
-      src = next;
-      expectDefined(update, "Source resolution callback")();
-    },
-    setSource(next: string) {
-      src = next;
-    },
-    get: <T extends Element = HTMLElement>(selector: string) =>
-      expectDefined(panel.querySelector<T>(selector), selector),
-  };
-}
-
 describe.runIf(browserMode)("Markdown attachment controls", () => {
   it("keeps native raw-reader focus and scrolling through a transport refresh", async () => {
     const text = Array.from(
@@ -66,7 +31,25 @@ describe.runIf(browserMode)("Markdown attachment controls", () => {
       .mockResolvedValueOnce(new Response(text))
       .mockReturnValueOnce(refreshed.promise);
     vi.stubGlobal("fetch", fetchMock);
-    const { container, panel, refresh, get } = mountAttachment("/notes.md?ticket=first");
+    let src = "/notes.md?ticket=first";
+    let requestSourceUpdate: (() => void) | undefined;
+    const container = document.createElement("div");
+    container.className = "side-panel__panel";
+    container.style.cssText = "display:flex;width:480px;height:600px;";
+    const panel = document.createElement("openclaw-chat-detail-panel");
+    panel.className = "chat-sidebar";
+    panel.content = {
+      kind: "attachment",
+      title: "notes.md",
+      mimeType: "text/markdown",
+      sourceIdentity: "attachment:notes",
+      resolveSource: (update) => {
+        requestSourceUpdate = update;
+        return { status: "ready", src };
+      },
+    };
+    container.append(panel);
+    document.body.append(container);
     const keys: { key: string; target: EventTarget | null; trusted: boolean }[] = [];
     const onKey = (event: KeyboardEvent) => {
       keys.push({ key: event.key, target: event.target, trusted: event.isTrusted });
@@ -74,8 +57,9 @@ describe.runIf(browserMode)("Markdown attachment controls", () => {
     document.addEventListener("keydown", onKey);
     try {
       await panel.updateComplete;
-      const attachment = get<HTMLElementTagNameMap["openclaw-chat-text-attachment"]>(
-        "openclaw-chat-text-attachment",
+      const attachment = expectDefined(
+        panel.querySelector("openclaw-chat-text-attachment"),
+        "Text attachment",
       );
       await attachment.updateComplete;
       await expect.poll(() => panel.querySelector("article")).not.toBeNull();
@@ -87,31 +71,38 @@ describe.runIf(browserMode)("Markdown attachment controls", () => {
       );
       await userEvent.click(raw);
       await expect.poll(() => panel.querySelector("pre")).not.toBeNull();
-      const reader = get("pre");
-      const scroller = get(".sidebar-content");
-      const pageDown = async () => {
-        const before = scroller.scrollTop;
-        const ended = new Promise<void>((resolve) => {
-          scroller.addEventListener("scrollend", () => resolve(), { once: true });
-        });
-        await userEvent.keyboard("{PageDown}");
-        await ended;
-        expect(scroller.scrollTop).toBeGreaterThan(before);
-        expect(keys.at(-1)).toEqual({ key: "PageDown", target: reader, trusted: true });
-      };
+      const reader = expectDefined(panel.querySelector("pre"), "Raw reader");
+      const scroller = expectDefined(
+        panel.querySelector<HTMLElement>(".sidebar-content"),
+        "Sidebar scroller",
+      );
       expect(scroller.scrollHeight).toBeGreaterThan(scroller.clientHeight);
       await userEvent.click(reader);
       expect(document.activeElement).toBe(reader);
-      await pageDown();
-      refresh();
+      const initialScrollEnd = new Promise<void>((resolve) => {
+        scroller.addEventListener("scrollend", () => resolve(), { once: true });
+      });
+      await userEvent.keyboard("{PageDown}");
+      await initialScrollEnd;
+      expect(scroller.scrollTop).toBeGreaterThan(0);
+      expect(keys.at(-1)).toEqual({ key: "PageDown", target: reader, trusted: true });
+      expectDefined(requestSourceUpdate, "Source resolution callback")();
       await panel.updateComplete;
       expect(document.activeElement).toBe(reader);
       expect(fetchMock).toHaveBeenCalledOnce();
-      refresh("/notes.md?ticket=second");
+      src = "/notes.md?ticket=second";
+      expectDefined(requestSourceUpdate, "Source resolution callback")();
       await expect.poll(() => fetchMock.mock.calls.length).toBe(2);
       expect(reader.isConnected).toBe(true);
       expect(document.activeElement).toBe(reader);
-      await pageDown();
+      const beforePendingKey = scroller.scrollTop;
+      const pendingScrollEnd = new Promise<void>((resolve) => {
+        scroller.addEventListener("scrollend", () => resolve(), { once: true });
+      });
+      await userEvent.keyboard("{PageDown}");
+      await pendingScrollEnd;
+      expect(scroller.scrollTop).toBeGreaterThan(beforePendingKey);
+      expect(keys.at(-1)).toEqual({ key: "PageDown", target: reader, trusted: true });
       const refreshResponse = new Response(text);
       refreshed.resolve(refreshResponse);
       await expect.poll(() => refreshResponse.bodyUsed && !refreshResponse.body?.locked).toBe(true);
@@ -165,7 +156,25 @@ describe.runIf(browserMode)("Markdown attachment controls", () => {
         .mockReturnValueOnce(refreshed.promise)
         .mockReturnValueOnce(recovered.promise);
       vi.stubGlobal("fetch", fetchMock);
-      const { container, panel, refresh, setSource, get } = mountAttachment("/notes.md");
+      let source = "/notes.md";
+      let requestSourceUpdate: (() => void) | undefined;
+      const container = document.createElement("div");
+      container.className = "side-panel__panel";
+      container.style.cssText = "display:flex;width:480px;height:600px;";
+      const panel = document.createElement("openclaw-chat-detail-panel");
+      panel.className = "chat-sidebar";
+      panel.content = {
+        kind: "attachment",
+        title: "notes.md",
+        mimeType: "text/markdown",
+        sourceIdentity: "attachment:notes",
+        resolveSource: (onSourceChange) => {
+          requestSourceUpdate = onSourceChange;
+          return { status: "ready", src: source };
+        },
+      };
+      container.append(panel);
+      document.body.append(container);
       await panel.updateComplete;
       await expect.poll(() => fetchMock.mock.calls.length).toBe(1);
       expect(panel.querySelector(".code-block-wrapper")).toBeNull();
@@ -180,9 +189,20 @@ describe.runIf(browserMode)("Markdown attachment controls", () => {
       await expect
         .poll(() => panel.querySelector(".code-block-wrapper.has-horizontal-overflow"))
         .not.toBeNull();
-      const viewport = get(".code-block-viewport");
-      const expand = get<HTMLButtonElement>(".code-block-expand");
-      const wrap = get<HTMLButtonElement>(".code-block-wrap");
+      const viewport = expectDefined(
+        panel.querySelector<HTMLElement>(".code-block-viewport"),
+        "Code viewport",
+      );
+      const expand = expectDefined(
+        panel.querySelector<HTMLButtonElement>(".code-block-expand"),
+        "Expand control",
+      );
+      const wrap = expectDefined(
+        panel.querySelector<HTMLButtonElement>(".code-block-wrap"),
+        "Wrap control",
+      );
+      expect(viewport.id).not.toBe("");
+      expect(expand.getAttribute("aria-controls")).toBe(viewport.id);
       expand.click();
       expect(expand.getAttribute("aria-expanded")).toBe("true");
       expect(getComputedStyle(wrap).display).not.toBe("none");
@@ -190,7 +210,7 @@ describe.runIf(browserMode)("Markdown attachment controls", () => {
       expect(wrap.getAttribute("aria-pressed")).toBe("true");
       expect(panel.querySelector(".code-block-wrapper.is-wrapped")).not.toBeNull();
 
-      const reader = get("article");
+      const reader = expectDefined(panel.querySelector("article"), "Loaded reader");
       let observedViewport = viewport;
       const nextText = change === "contents" ? text.replace("longLine", "updatedLine") : text;
       try {
@@ -202,11 +222,11 @@ describe.runIf(browserMode)("Markdown attachment controls", () => {
           expect(isObserved(viewport)).toBe(false);
           panel.content = { ...panel.content, sizeBytes: undefined };
         } else {
-          setSource("/refreshed-notes.md");
+          source = "/refreshed-notes.md";
           if (change === "identity") {
             panel.content = { ...panel.content, sourceIdentity: "attachment:other-notes" };
           }
-          refresh();
+          expectDefined(requestSourceUpdate, "Source update callback")();
         }
         await expect.poll(() => fetchMock.mock.calls.length).toBe(2);
         const retainsPendingReader = change !== "identity" && change !== "oversized metadata";
@@ -222,7 +242,8 @@ describe.runIf(browserMode)("Markdown attachment controls", () => {
           await expect.poll(() => panel.textContent).toContain("Download it to read the full file");
           expect(reader.checkVisibility()).toBe(false);
           expect(isObserved(viewport)).toBe(false);
-          refresh("/retried-notes.md");
+          source = "/retried-notes.md";
+          expectDefined(requestSourceUpdate, "Source update callback")();
           await expect.poll(() => fetchMock.mock.calls.length).toBe(3);
           expect(reader.checkVisibility()).toBe(false);
           expect(isObserved(viewport)).toBe(false);
@@ -242,23 +263,36 @@ describe.runIf(browserMode)("Markdown attachment controls", () => {
         await expect
           .poll(() => panel.querySelector("article code")?.textContent)
           .toContain(change === "contents" ? "updatedLine" : "longLine");
-        const nextReader = get("article");
+        const nextReader = expectDefined(panel.querySelector("article"), "Refreshed reader");
         const retained = change === "transport";
         expect(nextReader === reader).toBe(retained);
-        const nextExpand = get<HTMLButtonElement>("article .code-block-expand");
-        const nextWrap = get<HTMLButtonElement>("article .code-block-wrap");
+        const nextExpand = expectDefined(
+          nextReader.querySelector<HTMLButtonElement>(".code-block-expand"),
+          "Refreshed expand control",
+        );
+        const nextWrap = expectDefined(
+          nextReader.querySelector<HTMLButtonElement>(".code-block-wrap"),
+          "Refreshed wrap control",
+        );
         expect(nextExpand.getAttribute("aria-expanded")).toBe(String(retained));
         expect(nextWrap.getAttribute("aria-pressed")).toBe(String(retained));
-        const classes = nextReader.querySelector(".code-block-wrapper")!.classList;
-        expect([classes.contains("is-expanded"), classes.contains("is-wrapped")]).toEqual([
-          retained,
-          retained,
-        ]);
-        const nextViewport = get("article .code-block-viewport");
+        expect(
+          nextReader.querySelector(".code-block-wrapper")?.classList.contains("is-expanded"),
+        ).toBe(retained);
+        expect(
+          nextReader.querySelector(".code-block-wrapper")?.classList.contains("is-wrapped"),
+        ).toBe(retained);
+        const nextViewport = expectDefined(
+          nextReader.querySelector<HTMLElement>(".code-block-viewport"),
+          "Refreshed code viewport",
+        );
         observedViewport = nextViewport;
         await expect.poll(() => isObserved(nextViewport)).toBe(true);
         await expect.poll(() => nextViewport.id).not.toBe("");
         expect(nextExpand.getAttribute("aria-controls")).toBe(nextViewport.id);
+        expect(nextReader.querySelector("code")?.textContent).toContain(
+          change === "contents" ? "updatedLine" : "longLine",
+        );
         nextExpand.click();
         nextWrap.click();
         expect(nextWrap.getAttribute("aria-pressed")).toBe(String(!retained));

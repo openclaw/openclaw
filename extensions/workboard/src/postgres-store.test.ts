@@ -25,7 +25,9 @@ describe.skipIf(!postgresUrl)("experimental PostgreSQL workboard admission and r
   const owners: Array<{ close: () => Promise<void> }> = [];
   const schemas = new Set<string>();
 
-  beforeAll(() => observer.connect());
+  beforeAll(async () => {
+    await observer.connect();
+  });
 
   afterEach(async () => {
     try {
@@ -40,7 +42,9 @@ describe.skipIf(!postgresUrl)("experimental PostgreSQL workboard admission and r
     }
   });
 
-  afterAll(() => observer.end());
+  afterAll(async () => {
+    await observer.end();
+  });
 
   function databasePath(): string {
     return path.join(tempDirs.make("openclaw-workboard-postgres-"), "workboard.sqlite");
@@ -72,10 +76,10 @@ describe.skipIf(!postgresUrl)("experimental PostgreSQL workboard admission and r
     return { fixture, schema, close };
   }
 
-  const insertBoard = (id: string, name: string | null = null) => ({
-    sql: "INSERT INTO workboard_boards (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)",
+  const insertBoard = (id: string) => ({
+    sql: "INSERT INTO workboard_boards (id, created_at, updated_at) VALUES (?, ?, ?)",
     method: "run" as const,
-    args: [id, name, 1, 2],
+    args: [id, 1, 2],
   });
 
   const get = (sql: string, args: string[] = []) => ({ sql, args, method: "get" as const });
@@ -104,6 +108,37 @@ describe.skipIf(!postgresUrl)("experimental PostgreSQL workboard admission and r
     expect(
       anchor.prepare("SELECT name FROM sqlite_schema WHERE name LIKE 'workboard_%'").all(),
     ).toEqual([]);
+  });
+
+  it("retains a real SQLite anchor and reopens the same PostgreSQL schema", async () => {
+    const dbPath = databasePath();
+    const first = await openDatabase(dbPath);
+    await first.fixture.statements(
+      [
+        {
+          sql: "INSERT INTO workboard_boards (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)",
+          method: "run",
+          args: ["board", "Persisted remotely", 1, 2],
+        },
+      ],
+      true,
+    );
+    const persisted = await observer.query<{ name: string }>(
+      `SELECT name FROM ${quoteIdentifier(first.schema)}.workboard_boards WHERE id = $1`,
+      ["board"],
+    );
+    expect(persisted.rows).toEqual([{ name: "Persisted remotely" }]);
+    const schema = first.schema;
+    await first.close();
+    const reopened = await openDatabase(dbPath);
+    expect(reopened.schema).toBe(schema);
+    expect(await readName(reopened.fixture, "board")).toEqual([{ name: "Persisted remotely" }]);
+    await reopened.close();
+    using anchor = new DatabaseSync(dbPath, { readOnly: true });
+    expect(anchor.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+    expect(
+      anchor.prepare("SELECT name FROM sqlite_schema WHERE name = 'workboard_boards'").get(),
+    ).toBeUndefined();
   });
 
   it("invalidates anchor revisions for attempted writes while retaining only committed rows", async () => {
@@ -144,12 +179,17 @@ describe.skipIf(!postgresUrl)("experimental PostgreSQL workboard admission and r
     const { fixture, schema } = await openDatabase(dbPath);
     const [process] = await fixture.statements([get("SELECT pg_backend_pid() AS pid")]);
     const pid = (process as { pid: number }).pid;
+    expect(typeof pid).toBe("number");
     const token = readSqliteDatabaseWriteTokenForPath(dbPath);
     await fixture.statements([
       { sql: "BEGIN ISOLATION LEVEL READ COMMITTED" },
       insertBoard("discarded"),
     ]);
-    await observer.query("SELECT pg_terminate_backend($1, 5000) AS terminated", [pid]);
+    const terminated = await observer.query<{ terminated: boolean }>(
+      "SELECT pg_terminate_backend($1, 5000) AS terminated",
+      [pid],
+    );
+    expect(terminated.rows).toEqual([{ terminated: true }]);
     const reply = await fixture.request({ kind: "statements", statements: [{ sql: statement }] });
     const message = unknown
       ? "PostgreSQL connection lost; outcome unknown"
@@ -196,31 +236,37 @@ describe.skipIf(!postgresUrl)("experimental PostgreSQL workboard admission and r
     const dbPath = databasePath();
     const opened = await openDatabase(dbPath);
     const schema = opened.schema;
-    await opened.fixture.statements([insertBoard("remote", "Keep remote data")], true);
-    expect(await rows(`SELECT name FROM ${quoteIdentifier(schema)}.workboard_boards`)).toEqual([
-      { name: "Keep remote data" },
-    ]);
+    await opened.fixture.statements(
+      [
+        {
+          sql: "INSERT INTO workboard_boards (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)",
+          method: "run",
+          args: ["remote", "Keep remote data", 1, 2],
+        },
+      ],
+      true,
+    );
     await opened.close();
     const snapshotAnchor = () => {
       using anchor = new DatabaseSync(dbPath, { readOnly: true });
       return {
         schema: anchor.prepare("SELECT type, name, sql FROM sqlite_schema ORDER BY name").all(),
         rows: anchor.prepare("SELECT * FROM openclaw_engine_anchor").all(),
+        workboardTables: anchor
+          .prepare(
+            "SELECT name FROM sqlite_schema WHERE type = 'table' AND name LIKE 'workboard_%'",
+          )
+          .all(),
       };
     };
     const before = snapshotAnchor();
+    expect(before.workboardTables).toEqual([]);
     expect(() => createWorkboardDatabase(dbPath)).toThrow(schema);
     expect(() => createWorkboardDatabase(dbPath)).toThrow("database.families.workboard.engine");
     expect(snapshotAnchor()).toEqual(before);
     const reopened = await openDatabase(dbPath);
     expect(reopened.schema).toBe(schema);
     expect(await readName(reopened.fixture, "remote")).toEqual([{ name: "Keep remote data" }]);
-    await reopened.close();
-    using anchor = new DatabaseSync(dbPath, { readOnly: true });
-    expect(anchor.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-    expect(
-      anchor.prepare("SELECT name FROM sqlite_schema WHERE name = 'workboard_boards'").get(),
-    ).toBeUndefined();
   });
 
   // External metadata changes are visible on the next physical-store admission, not warm reopen.
@@ -280,33 +326,66 @@ describe.skipIf(!postgresUrl)("experimental PostgreSQL workboard admission and r
     expect(await indexRows()).toEqual(after);
   });
 
-  it.each(["version", "store_id"] as const)(
-    "refuses mismatched PostgreSQL %s without changing metadata",
-    async (field) => {
-      const dbPath = databasePath();
-      const { schema, close } = await openDatabase(dbPath);
-      await close();
-      const table = `${quoteIdentifier(schema)}.openclaw_schema_meta`;
-      const read = () =>
-        rows<{ value: string }>(
-          `SELECT ${field}::text AS value FROM ${table} WHERE store = 'workboard'`,
-        );
-      const before = await read();
-      expect(before).toHaveLength(1);
-      const replacement =
-        field === "version" ? String(SCHEMA_VERSION + 1) : "00000000-0000-4000-8000-000000000001";
-      await observer.query(`UPDATE ${table} SET ${field} = $1 WHERE store = 'workboard'`, [
-        replacement,
-      ]);
-      replaceAnchorForFreshAdmission(dbPath);
-      expect(() => createWorkboardDatabase(dbPath, undefined, postgresInput)).toThrow(
-        field === "version"
-          ? new RegExp(`expected.*${SCHEMA_VERSION}`, "i")
-          : new RegExp(`${before[0]!.value}.*${replacement}|${replacement}.*${before[0]!.value}`),
-      );
-      expect(await read()).toEqual([{ value: replacement }]);
-    },
-  );
+  it("refuses a PostgreSQL schema version mismatch without migrating it", async () => {
+    const dbPath = databasePath();
+    const opened = await openDatabase(dbPath);
+    const schema = opened.schema;
+    await opened.close();
+    await observer.query(
+      `UPDATE ${quoteIdentifier(schema)}.openclaw_schema_meta SET version = ${SCHEMA_VERSION + 1} WHERE store = 'workboard'`,
+    );
+    replaceAnchorForFreshAdmission(dbPath);
+    expect(() => createWorkboardDatabase(dbPath, undefined, postgresInput)).toThrow(
+      new RegExp(`expected.*${SCHEMA_VERSION}`, "i"),
+    );
+    expect(
+      await rows<{ version: number }>(
+        `SELECT version::integer FROM ${quoteIdentifier(schema)}.openclaw_schema_meta WHERE store = 'workboard'`,
+      ),
+    ).toEqual([{ version: SCHEMA_VERSION + 1 }]);
+  });
+
+  it("refuses PostgreSQL metadata belonging to a different anchor", async () => {
+    const dbPath = databasePath();
+    const opened = await openDatabase(dbPath);
+    const schema = opened.schema;
+    await opened.close();
+    const metadata = await observer.query<{ store_id: string }>(
+      `SELECT store_id FROM ${quoteIdentifier(schema)}.openclaw_schema_meta WHERE store = 'workboard'`,
+    );
+    expect(metadata.rows).toHaveLength(1);
+    const originalId = metadata.rows[0]!.store_id;
+    const otherId = "00000000-0000-4000-8000-000000000001";
+    await observer.query(
+      `UPDATE ${quoteIdentifier(schema)}.openclaw_schema_meta SET store_id = $1 WHERE store = 'workboard'`,
+      [otherId],
+    );
+    replaceAnchorForFreshAdmission(dbPath);
+    expect(() => createWorkboardDatabase(dbPath, undefined, postgresInput)).toThrow(
+      new RegExp(`${originalId}.*${otherId}|${otherId}.*${originalId}`),
+    );
+    expect(
+      await rows<{ store_id: string }>(
+        `SELECT store_id FROM ${quoteIdentifier(schema)}.openclaw_schema_meta WHERE store = 'workboard'`,
+      ),
+    ).toEqual([{ store_id: otherId }]);
+  });
+
+  it("refuses an existing SQLite workboard without replacing its data", () => {
+    const dbPath = databasePath();
+    {
+      using existing = new DatabaseSync(dbPath);
+      existing.exec("CREATE TABLE workboard_boards (id TEXT PRIMARY KEY, name TEXT)");
+      existing.prepare("INSERT INTO workboard_boards VALUES (?, ?)").run("local", "Keep me");
+    }
+    expect(() => createWorkboardDatabase(dbPath, undefined, postgresInput)).toThrow(
+      "Existing SQLite workboard data cannot switch engines",
+    );
+    using preserved = new DatabaseSync(dbPath, { readOnly: true });
+    expect(preserved.prepare("SELECT * FROM workboard_boards").all()).toEqual([
+      { id: "local", name: "Keep me" },
+    ]);
+  });
 });
 
 function quoteIdentifier(value: string): string {

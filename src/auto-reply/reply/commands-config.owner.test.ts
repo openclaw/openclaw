@@ -70,8 +70,8 @@ function blockCommand<T>(start: (pause: () => Promise<void>) => Promise<T>) {
   };
 }
 
-const resolveAccount = (cfg: OpenClawConfig, accountId = "team") =>
-  cfg.channels?.discord?.accounts?.[accountId] ?? {};
+const resolveAccount = (cfg: OpenClawConfig, accountId?: string | null) =>
+  cfg.channels?.discord?.accounts?.[accountId ?? "team"] ?? {};
 const discord: ChannelPlugin = {
   ...createChannelTestPluginBase({
     id: "discord",
